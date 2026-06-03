@@ -4,6 +4,7 @@
   "buildCommand": "npm run build:web",
   "outputDirectory": "web/dist",
   "installCommand": "npm install",
+  "regions": ["iad1"],
   "headers": [
     {
       "source": "/((?!assets/).*)",

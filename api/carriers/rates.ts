@@ -23,7 +23,7 @@ import {
   verifySupabaseJwt,
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
-import { sendInternalServerError } from '../_lib/safe-error.js';
+import { sendInternalServerError, logServerError } from '../_lib/safe-error.js';
 import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
 import { filterEligibleShippingServices } from '../../src/lib/shipping-service-eligibility.js';
 
@@ -102,6 +102,32 @@ function filterDirectCarrierRatesForEligibility(
   );
 }
 
+// Hardening: cap each upstream carrier rate quote so a hung provider
+// (UPS / Walmart / ShipStation / etc.) returns a clean "timed out" error
+// instead of letting the whole Vercel function run to the platform limit and
+// crash with FUNCTION_INVOCATION_FAILED. The underlying request can't be truly
+// cancelled without per-connector AbortSignal support, but the function always
+// responds. PS-071 then renders the clean error as "Rate unavailable · Retry".
+const RATE_QUOTE_TIMEOUT_MS = 20_000;
+function withRateTimeout<T>(promise: Promise<T>, provider: string, ms = RATE_QUOTE_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Rate request to ${provider} timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  const wrapped = Promise.resolve(promise).then(
+    (value) => { clearTimeout(timer); return value; },
+    (error) => { clearTimeout(timer); throw error; },
+  );
+  // If the timeout wins the race, the underlying request may still reject
+  // later — swallow that so it can't surface as an unhandled rejection (which
+  // would itself crash the function).
+  wrapped.catch(() => {});
+  return Promise.race([wrapped, timeout]);
+}
+
 async function quoteCarrierRates(provider: string | null | undefined, input: Record<string, unknown>) {
   const normalized = normalizeDirectRateProvider(provider);
   if (!normalized) {
@@ -137,7 +163,7 @@ async function quoteCarrierRates(provider: string | null | undefined, input: Rec
 
   return {
     provider: normalized,
-    rates: await connector.getRates(input),
+    rates: await withRateTimeout(connector.getRates(input), normalized),
   };
 }
 
@@ -201,7 +227,17 @@ export default async function handler(req: any, res: any): Promise<void> {
     req.headers?.authorization || req.headers?.Authorization
   );
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
-  const verified = await verifySupabaseJwt(token);
+  // verifySupabaseJwt does a remote JWKS fetch and can THROW on a network blip.
+  // It runs BEFORE the main try/catch below, so an unguarded throw here crashed
+  // the function as FUNCTION_INVOCATION_FAILED. Guard it -> clean 401/503.
+  let verified;
+  try {
+    verified = await verifySupabaseJwt(token);
+  } catch (authErr) {
+    logServerError('carriers/rates:auth', authErr);
+    res.status(503).json({ ok: false, error: 'Auth verification temporarily unavailable' });
+    return;
+  }
   if (!verified.ok) {
     console.warn('[direct-carrier-rates] Invalid token:', verified.reason);
     res.status(401).json({ error: 'Invalid token' });
@@ -211,7 +247,15 @@ export default async function handler(req: any, res: any): Promise<void> {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) { res.status(500).json({ error: 'DATABASE_URL not configured' }); return; }
 
-  const body = (await readBody(req)) as Record<string, unknown>;
+  // readBody can reject on a malformed/aborted request stream; guard it (also
+  // pre-try) so a bad body is a clean 400, never a function crash.
+  let body: Record<string, unknown>;
+  try {
+    body = (await readBody(req)) as Record<string, unknown>;
+  } catch {
+    res.status(400).json({ ok: false, error: 'Invalid JSON body' });
+    return;
+  }
   const carrierAccountId = body?.carrierAccountId != null ? Number(body.carrierAccountId) : null;
   const storeAccountId = body?.storeAccountId != null ? Number(body.storeAccountId) : null;
   const hasCarrierAccountId = carrierAccountId != null && Number.isFinite(carrierAccountId) && carrierAccountId > 0;
