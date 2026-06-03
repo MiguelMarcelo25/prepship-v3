@@ -1544,6 +1544,24 @@ function drawHeader(
     return `${t}...`;
   };
 
+  // PS — shrink the font so the FULL text fits maxW (no ellipsis), down to a
+  // floor; only ellipsize if it still doesn't fit at the floor. Used for the
+  // product name so a long name stays COMPLETELY visible instead of being cut
+  // off with "...".
+  const fitTextShrink = (
+    text: string,
+    maxSize: number,
+    minSize: number,
+    f: typeof font,
+    maxW: number,
+  ): { text: string; size: number } => {
+    const t = safePdfText(text);
+    let size = maxSize;
+    while (size > minSize && f.widthOfTextAtSize(t, size) > maxW) size -= 0.5;
+    if (f.widthOfTextAtSize(t, size) <= maxW) return { text: t, size };
+    return { text: fitText(t, size, f, maxW), size };
+  };
+
   // ── 1) Item/pick cards (top): product name left, xN right, sku below.
   // Every SKU in a multi-SKU combo gets its own outlined card; a single
   // SKU still renders as one card so the layout is consistent.
@@ -1602,8 +1620,16 @@ function drawHeader(
     // confident "sku: UNKNOWN SKU".
     const titleBaseline = y - Math.round(cardH * 0.46);
     const skuBaseline = y - cardH + Math.round(skuSize * 0.7) + 5;
-    const title = fitText(item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL, titleSize, font, boxW - 24 - qtyW - 8);
-    page.drawText(title, { x: pad + 12, y: titleBaseline, size: titleSize, font, color: ink });
+    // PS — shrink the product name to fit so it stays COMPLETELY visible (down
+    // to a 9pt floor) rather than being truncated with "...".
+    const fittedTitle = fitTextShrink(
+      item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL,
+      titleSize,
+      9,
+      font,
+      boxW - 24 - qtyW - 8,
+    );
+    page.drawText(fittedTitle.text, { x: pad + 12, y: titleBaseline, size: fittedTitle.size, font, color: ink });
     page.drawText(qtyText, { x: pad + boxW - 12 - qtyW, y: titleBaseline, size: qtySize, font, color: ink });
     page.drawText(fitText(item.skuLineText || (item.sku ? `sku: ${item.sku}` : NO_SKU_PICK_NOTE), skuSize, fontReg, boxW - 24), {
       x: pad + 12,
@@ -1639,49 +1665,45 @@ function drawHeader(
 
   // ── Decide names placement (header list vs manifest pointer) ──
   const regionTop = y;
-  const regionBottom = 12;
+  const regionBottom = 14; // floor above the footer line at y=4
   const plan = planBatchNamesDisplay(recipients.length, threshold);
   const nameRowH = 11.5;
   const namesTitleH = 18;
   const listBoxPad = 8;
   const cols = 2;
+  const dividerGap = 14;
 
   let renderNamesOnHeader = plan.onHeader && recipients.length > 0;
-  let namesZoneH = 0;
-  if (renderNamesOnHeader) {
-    const rows = Math.ceil(recipients.length / cols);
-    namesZoneH = namesTitleH + rows * nameRowH + listBoxPad;
-  }
+  const nameRows = Math.ceil(recipients.length / cols);
+  let namesZoneH = renderNamesOnHeader ? namesTitleH + nameRows * nameRowH + listBoxPad : 0;
   let manifestPointer = plan.needsManifest;
   const pointerH = 22;
 
-  // Fit check: keep the ORDERS count prominent. If names would crush it
-  // below a legible floor, spill the whole list to a Batch Manifest page
-  // and show a pointer instead — this honours "do not shrink primary
-  // picking/order-count text to make names fit".
-  const MIN_COUNT_REGION = 56;
-  let reservedBottom = (renderNamesOnHeader ? namesZoneH : 0) + (manifestPointer ? pointerH : 0);
-  let countRegionBottom = regionBottom + reservedBottom + (reservedBottom > 0 ? 6 : 0);
-  if (renderNamesOnHeader && regionTop - countRegionBottom < MIN_COUNT_REGION) {
+  // ── 3) Big ORDERS count — top-anchored, sized to leave room for the names
+  // section DIRECTLY below it (matches the approved 2nd-image mock). The count
+  // font is capped so the count + names stay compact at the top and the leftover
+  // space falls to the BOTTOM of the page, instead of pinning names to the page
+  // floor with a big gap between the count and the list.
+  const labelSize = 15;
+  const available = regionTop - regionBottom;
+  const reservedBelowCount = renderNamesOnHeader ? namesZoneH + dividerGap : manifestPointer ? pointerH : 0;
+  const MIN_COUNT_FONT = 40;
+  const MAX_COUNT_FONT = 60;
+  let countFontSize = Math.floor(available - reservedBelowCount - labelSize - 4 - 10);
+  if (renderNamesOnHeader && countFontSize < MIN_COUNT_FONT) {
+    // names would crush the count below the legible floor -> spill to a manifest.
     renderNamesOnHeader = false;
     manifestPointer = true;
     namesZoneH = 0;
-    reservedBottom = pointerH;
-    countRegionBottom = regionBottom + pointerH + 6;
+    countFontSize = Math.floor(available - (manifestPointer ? pointerH : 0) - labelSize - 16);
   }
+  countFontSize = Math.max(MIN_COUNT_FONT, Math.min(MAX_COUNT_FONT, countFontSize));
   const manifestNeeded = manifestPointer;
 
-  // ── 3) Big ORDERS count, centered in the space above the names zone ──
-  const labelSize = 15;
-  const countRegionH = regionTop - countRegionBottom;
-  const countFontSize = Math.max(40, Math.min(78, countRegionH - labelSize - 12));
   const countStr = String(totalOrders);
   const countW = font.widthOfTextAtSize(countStr, countFontSize);
   const countBlockH = countFontSize + 4 + labelSize;
-  // PS-073 — anchor the ORDERS count near the TOP of the region (just below the
-  // QTY line) like the approved mock, instead of floating it dead-center with
-  // big gaps above/below. Clamp so the block can't drop below the names zone.
-  const countBlockTop = Math.max(regionTop - 6, countRegionBottom + countBlockH);
+  const countBlockTop = regionTop - 6;
   page.drawText(countStr, {
     x: cx - countW / 2,
     y: countBlockTop - countFontSize,
@@ -1697,15 +1719,15 @@ function drawHeader(
     font,
     color: rgb(0.4, 0.4, 0.4),
   });
+  const countBlockBottom = countBlockTop - countBlockH;
 
-  // ── 4) Names reference area (secondary; never overrides picking) ──
+  // ── 4) Names reference area — DIRECTLY below the ORDERS count ──
   if (renderNamesOnHeader) {
-    const zoneTop = regionBottom + namesZoneH;
-    // PS-073 — thin divider between the ORDERS count and the names section
-    // (matches the approved mock), sitting in the reserved gap above the title.
+    const zoneTop = countBlockBottom - dividerGap;
+    // thin divider between the count and the names section.
     page.drawLine({
-      start: { x: pad, y: zoneTop + 3 },
-      end: { x: width - pad, y: zoneTop + 3 },
+      start: { x: pad, y: zoneTop + 6 },
+      end: { x: width - pad, y: zoneTop + 6 },
       thickness: 0.75,
       color: rgb(0.85, 0.85, 0.85),
     });
@@ -1717,10 +1739,7 @@ function drawHeader(
       color: ink,
     });
     const listTop = zoneTop - namesTitleH;
-    const rows = Math.ceil(recipients.length / cols);
-    const listBoxH = rows * nameRowH + listBoxPad;
-    // PS-073 — rounded names box (matches the approved mock). drawSvgPath takes
-    // the TOP-edge y and fills downward, so pass `listTop` (the box's top).
+    const listBoxH = nameRows * nameRowH + listBoxPad;
     page.drawSvgPath(roundedRectSvgPath(width - pad * 2, listBoxH, 6), {
       x: pad,
       y: listTop,
@@ -1746,7 +1765,7 @@ function drawHeader(
   } else if (manifestPointer && recipients.length > 0) {
     page.drawText(safePdfText(`Names: see Batch Manifest page (${recipients.length}) >`), {
       x: pad,
-      y: regionBottom + 5,
+      y: countBlockBottom - 16,
       size: 11,
       font,
       color: rgb(0.2, 0.2, 0.2),
