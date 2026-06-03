@@ -809,6 +809,21 @@ export function isDirectCarrierId(value: unknown): boolean {
   return directAccountRefFromProviderId(toProviderAccountId(value)) != null;
 }
 
+// PS-078 req 7: deliberate label-endpoint routing by provider id. A direct
+// carrier_accounts rate (10M offset) buys via the Vercel /carriers/labels
+// function; a ShipStation provider id buys via Render /labels; a direct
+// store_accounts rate (20M offset) is a MARKETPLACE store account that cannot
+// create a label on either endpoint — it must be BLOCKED before postage rather
+// than silently posting a bogus `se-20000xxx` id to ShipStation /labels.
+export type LabelEndpointRoute = 'carrier-direct' | 'store-account-blocked' | 'shipstation';
+
+export function classifyLabelEndpoint(shippingProviderId: number | null): LabelEndpointRoute {
+  const ref = directAccountRefFromProviderId(shippingProviderId);
+  if (ref?.sourceTable === 'carrier_accounts') return 'carrier-direct';
+  if (ref?.sourceTable === 'store_accounts') return 'store-account-blocked';
+  return 'shipstation';
+}
+
 function directAccountKey(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceTable'>): string {
   return `${account.sourceTable ?? 'carrier_accounts'}:${account.id}`;
 }
@@ -2423,12 +2438,25 @@ export const apiClient = {
       : {};
     const shippingProviderId = parseFiniteNumber(body.shippingProviderId);
     const directRef = directAccountRefFromProviderId(shippingProviderId);
+    const route = classifyLabelEndpoint(shippingProviderId);
+
+    // PS-078 req 7: a direct store_accounts (marketplace store) selected rate
+    // cannot create a label on either endpoint. BLOCK before any postage with a
+    // clear reason instead of falling through to ShipStation /labels as a bogus
+    // `se-20000xxx` id (which silently fails or hits the wrong carrier).
+    if (route === 'store-account-blocked') {
+      return Promise.reject(
+        new Error(
+          'This rate comes from a marketplace store account and can’t create a shipping label. Select a carrier-account rate (UPS / EasyPost / Shipp / Walmart Shipping) or a ShipStation rate.',
+        ),
+      );
+    }
 
     // Direct carrier accounts use synthetic provider ids (10,000,000 + row id),
     // not ShipStation carrier ids. Always route those labels through the
     // Vercel direct-carrier label endpoint so ShipStation never receives
     // non-existent ids like `se-10000025` or service codes like `shipp_*`.
-    if (directRef?.sourceTable === 'carrier_accounts') {
+    if (route === 'carrier-direct' && directRef) {
       return callVercelFunction<any>('/carriers/labels', {
         method: 'POST',
         body: {

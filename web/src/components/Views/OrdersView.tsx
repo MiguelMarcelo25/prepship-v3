@@ -4804,12 +4804,18 @@ export default function OrdersView({
       orderNumber: order.orderNumber ?? undefined,
       carrierCode: isTest ? testCarrierCode : account.code,
       serviceCode: isTest ? testServiceCode : panelForm.serviceCode,
+      // PS-078 req 2/invariant "display best-rate and label-payload selected-rate
+      // must not diverge": the non-test label name/type come ONLY from the
+      // CURRENT panel rate preview or the operator's selected serviceCode — never
+      // from the (possibly stale) saved order.bestRate. The charged tuple
+      // (carrierCode/serviceCode/shippingProviderId/dims) is already the panel
+      // selection above; this keeps the human-readable strings consistent with it.
       serviceName: isTest
         ? toStringValue(testSelectedRate?.serviceName) ?? testServiceCode
-        : toStringValue(panelRatePreview[0]?.serviceName) ?? order.bestRate?.serviceName ?? panelForm.serviceCode,
+        : toStringValue(panelRatePreview[0]?.serviceName) ?? panelForm.serviceCode,
       serviceType: isTest
         ? toStringValue((testSelectedRate as any)?.serviceType) ?? toStringValue((testSelectedRate as any)?.service_type) ?? testServiceCode
-        : toStringValue((panelRatePreview[0] as any)?.serviceType) ?? toStringValue((panelRatePreview[0] as any)?.service_type) ?? order.bestRate?.serviceType ?? order.bestRate?.serviceName ?? panelForm.serviceCode,
+        : toStringValue((panelRatePreview[0] as any)?.serviceType) ?? toStringValue((panelRatePreview[0] as any)?.service_type) ?? panelForm.serviceCode,
       shippingProviderId: isTest ? null : shippingProviderId,
       packageCode: 'package',
       customPackageId: selectedPackage && selectedPackage.source !== 'ss_carrier' ? selectedPackage.packageId : null,

@@ -56,7 +56,27 @@ assert(
 assert(
   renderBestRatePriceBlock.includes("renderAwaitingRateFallback(order, displayOrder, 'full')") &&
     !/if\s*\(\s*isCalculatingBestRate\s*\)\s*\{\s*return\s*<div className="spin-center"><span className="spin-sm" \/><\/div>/.test(renderBestRatePriceBlock),
-  'Best Rate cell uses the same bounded/actionable fallback as Carrier and Margin cells instead of an open-coded spinner'
+  // PS-078 wording: renderAwaitingRateFallback is the bounded/actionable DISPLAY
+  // renderer (pending/calculating/error/unavailable) — it is NOT a rate
+  // substitution. It never promotes a stale/cached rate to a final/selected
+  // rate; it only shows a safe non-final state until the exact current rate
+  // resolves. Rate SELECTION for labels happens elsewhere and is asserted below.
+  'Best Rate cell renders the bounded/actionable non-final state (no open-coded spinner); it never displays a stale rate as final'
+);
+
+// PS-078 req 10: stale/cached saved best-rate data must NOT be selectable into
+// the label payload. The non-test label name/type are derived from the CURRENT
+// panel rate preview or the operator's selected serviceCode — never from the
+// saved order.bestRate (which can be stale relative to current dims/options).
+const createLabelPayloadBlock = ordersView.slice(
+  ordersView.indexOf('const payload: CreateLabelRequestDto = {'),
+  ordersView.indexOf('const labelPopup = mode ='),
+);
+assert(
+  createLabelPayloadBlock.length > 0 &&
+    !createLabelPayloadBlock.includes('order.bestRate?.serviceName') &&
+    !createLabelPayloadBlock.includes('order.bestRate?.serviceType'),
+  'stale saved order.bestRate cannot be selected into the label payload (no fallback to saved best-rate strings)'
 );
 
 assert(
