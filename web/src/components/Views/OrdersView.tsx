@@ -147,6 +147,7 @@ interface PersistentQueueJob {
 const QUEUE_ACTION_JOB_STORAGE_KEY = 'prepship.queueActionJob.v1'
 const QUEUE_ACTION_JOB_MAX_AGE_MS = 30 * 60 * 1000
 const QUEUE_UI_YIELD_MS = 25
+const AUTO_BEST_RATE_WATCHDOG_MS = 45_000
 let persistentQueueJobCache: PersistentQueueJob | null | undefined
 
 function createQueueOrderSnapshot(order: OrderSummaryDto): OrderSummaryDto {
@@ -2193,6 +2194,7 @@ export default function OrdersView({
     error?: string | null
   }>>({})
   const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
+  const autoBestRateTimeoutsRef = useRef<Map<string, number>>(new Map())
   // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
   // auto-rating effect for an order whose rate came back unavailable.
   const [rateRetryNonce, setRateRetryNonce] = useState(0)
@@ -2235,6 +2237,37 @@ export default function OrdersView({
       startedAt: Date.now(),
       tick: 0,
     })
+  }
+
+  function clearAutoBestRateWatchdog(key: string) {
+    const timeoutId = autoBestRateTimeoutsRef.current.get(key)
+    if (timeoutId == null) return
+    window.clearTimeout(timeoutId)
+    autoBestRateTimeoutsRef.current.delete(key)
+  }
+
+  function startAutoBestRateWatchdog(
+    order: OrderSummaryDto,
+    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+  ) {
+    clearAutoBestRateWatchdog(request.key)
+    const timeoutId = window.setTimeout(() => {
+      autoBestRateTimeoutsRef.current.delete(request.key)
+      setAutoBestRateEntries((current) => {
+        const existing = current[order.orderId]
+        if (existing?.key === request.key && (existing.rate || existing.error)) return current
+        return {
+          ...current,
+          [order.orderId]: {
+            key: request.key,
+            rate: null,
+            // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; resolve stuck passive best-rate loading to a retryable UI error, without changing shipped/cancelled edit protections.
+            error: 'Passive rate lookup timed out. Click Retry to fetch the current best rate again.',
+          },
+        }
+      })
+    }, AUTO_BEST_RATE_WATCHDOG_MS)
+    autoBestRateTimeoutsRef.current.set(request.key, timeoutId)
   }
 
   const setQueueActionProgressLabel = (label: string) => {
@@ -2281,6 +2314,10 @@ export default function OrdersView({
         window.clearTimeout(transitionalRefetchTimerRef.current)
         transitionalRefetchTimerRef.current = null
       }
+      for (const timeoutId of autoBestRateTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId)
+      }
+      autoBestRateTimeoutsRef.current.clear()
     }
   }, [])
 
@@ -5006,7 +5043,7 @@ export default function OrdersView({
     if (!request) return false
     const entry = autoBestRateEntries[order.orderId]
     if (entry?.key === request.key && entry.rate) return true
-    return hasSavedBestRateForRequest(order, request, { requireEligibilityVersion: false })
+    return hasSavedBestRateForRequest(order, request)
   }
 
   function getRateBaseAmount(rate: Record<string, unknown>) {
@@ -5089,7 +5126,7 @@ export default function OrdersView({
     if (
       autoRequest &&
       order.orderStatus === 'awaiting_shipment' &&
-      !hasSavedBestRateForRequest(order, autoRequest, { requireEligibilityVersion: false })
+      !hasSavedBestRateForRequest(order, autoRequest)
     ) {
       return withoutStaleBestRate(order)
     }
@@ -5175,6 +5212,7 @@ export default function OrdersView({
 
     async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
       autoBestRateRequestedRef.current.add(request.key)
+      startAutoBestRateWatchdog(order, request)
 
       try {
         if (isTestOrder(order, request.detail)) {
@@ -5196,6 +5234,7 @@ export default function OrdersView({
               [order.orderId]: { key: request.key, rate: testRateWithMetadata },
             }))
           }
+          clearAutoBestRateWatchdog(request.key)
           return
         }
 
@@ -5262,6 +5301,7 @@ export default function OrdersView({
             }
           }
         }
+        clearAutoBestRateWatchdog(request.key)
       } catch (error) {
         // PS-075 — record a TERMINAL error entry for this request key instead of
         // deleting it. Deleting let the effect re-fetch -> error -> re-fetch,
@@ -5276,6 +5316,7 @@ export default function OrdersView({
             [order.orderId]: { key: request.key, rate: null, error: sanitized || 'Rate lookup failed' },
           }))
         }
+        clearAutoBestRateWatchdog(request.key)
         console.warn(
           '[OrdersView] auto best-rate refresh failed:',
           error instanceof Error ? error.message : error,
@@ -5369,6 +5410,7 @@ export default function OrdersView({
       }))
       const autoRequest = getAutoBestRateRequest(order)
       if (autoRequest) {
+        clearAutoBestRateWatchdog(autoRequest.key)
         setAutoBestRateEntries((current) => ({
           ...current,
           [order.orderId]: { key: autoRequest.key, rate: testRate },
@@ -5423,6 +5465,7 @@ export default function OrdersView({
       const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
 
       if (bestRate) {
+        clearAutoBestRateWatchdog(autoRequest.key)
         bestRate.confirmation = shippingOptions.confirmation
         bestRate.insuranceProvider = shippingOptions.insuranceProvider
         bestRate.insuredValue = shippingOptions.insuredValue
@@ -6691,7 +6734,10 @@ export default function OrdersView({
   // the cache-first/bulk passive path runs again for this row. No force-live.
   function retryOrderRate(order: OrderSummaryDto) {
     const request = getAutoBestRateRequest(order)
-    if (request) autoBestRateRequestedRef.current.delete(request.key)
+    if (request) {
+      autoBestRateRequestedRef.current.delete(request.key)
+      clearAutoBestRateWatchdog(request.key)
+    }
     setAutoBestRateEntries((current) => {
       if (!(order.orderId in current)) return current
       const next = { ...current }
@@ -6822,9 +6868,6 @@ export default function OrdersView({
   }
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
-    const autoRequest = getAutoBestRateRequest(order)
-    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
-    const hasMatchingAutoEntry = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
     const displayOrder = getOrderWithAutoBestRate(order)
 
 
@@ -6885,27 +6928,12 @@ export default function OrdersView({
       return renderRateAmountWithMarkup(selectedRateBase, displayMarked)
     }
 
-    const dims = getDimensions(displayOrder, null)
-    const hasDims = hasCompleteDims(dims)
-    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
-    if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
-      return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
+    if (!hasDisplayableBestRate || bestRateBaseCost == null) {
+      // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
+      return renderAwaitingRateFallback(order, displayOrder, 'full')
+        ?? <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
-    if (hasMatchingAutoEntry && !autoEntry?.rate) {
-      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
-    }
-    if (!hasDisplayableBestRate && !isCalculatingBestRate) {
-      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
-    }
-    if (isCalculatingBestRate) {
-      return <div className="spin-center"><span className="spin-sm" /></div>
-    }
-    if (bestRateBaseCost == null) {
-      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
-    }
-
     const markedAmount = applyCarrierMarkup({
       shippingProviderId: getBestRateShippingProviderId(displayOrder),
       carrierCode: displayOrder.bestRate.carrierCode ?? '',
@@ -10503,6 +10531,7 @@ export default function OrdersView({
                 setPanelRatePreview([testRate])
                 const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
                 if (autoRequest) {
+                  clearAutoBestRateWatchdog(autoRequest.key)
                   setAutoBestRateEntries((current) => ({
                     ...current,
                     [panelOrderId]: { key: autoRequest.key, rate: testRate },
@@ -10527,6 +10556,7 @@ export default function OrdersView({
               setPanelRatePreview([best])
               const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
               if (autoRequest) {
+                clearAutoBestRateWatchdog(autoRequest.key)
                 setAutoBestRateEntries((current) => ({
                   ...current,
                   [panelOrderId]: { key: autoRequest.key, rate: best },

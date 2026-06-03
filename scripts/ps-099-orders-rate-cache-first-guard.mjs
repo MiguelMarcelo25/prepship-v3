@@ -5,6 +5,12 @@ const root = process.cwd();
 const ordersView = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersView.tsx'), 'utf8');
 const v2ApiClient = fs.readFileSync(path.join(root, 'web/src/lib/v2-apiClient.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const renderBestRatePriceStart = ordersView.indexOf('const renderBestRatePrice = (order: OrderSummaryDto) => {');
+const renderMarginStart = ordersView.indexOf('const renderMargin = (order: OrderSummaryDto) => {');
+const renderBestRatePriceBlock =
+  renderBestRatePriceStart >= 0 && renderMarginStart > renderBestRatePriceStart
+    ? ordersView.slice(renderBestRatePriceStart, renderMarginStart)
+    : '';
 
 function assert(condition, message) {
   if (!condition) {
@@ -45,6 +51,21 @@ assert(
     ordersView.includes('className="spin-center"') &&
     ordersView.includes('spin-sm'),
   'stale saved rates show a bounded loading spinner (calculating/pending) via classifyAwaitingRateCellState until recalculation returns the exact current best rate'
+);
+
+assert(
+  renderBestRatePriceBlock.includes("renderAwaitingRateFallback(order, displayOrder, 'full')") &&
+    !/if\s*\(\s*isCalculatingBestRate\s*\)\s*\{\s*return\s*<div className="spin-center"><span className="spin-sm" \/><\/div>/.test(renderBestRatePriceBlock),
+  'Best Rate cell uses the same bounded/actionable fallback as Carrier and Margin cells instead of an open-coded spinner'
+);
+
+assert(
+  ordersView.includes('AUTO_BEST_RATE_WATCHDOG_MS') &&
+    ordersView.includes('autoBestRateTimeoutsRef') &&
+    ordersView.includes('startAutoBestRateWatchdog') &&
+    ordersView.includes('Passive rate lookup timed out') &&
+    ordersView.includes('clearAutoBestRateWatchdog(request.key)'),
+  'passive best-rate requests have a watchdog that resolves stuck pending rows to a retryable error'
 );
 
 assert(
