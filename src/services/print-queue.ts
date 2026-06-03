@@ -1650,6 +1650,21 @@ function drawHeader(
   const skuSize = n <= 3 ? 10.5 : 9;
   const qtySize = n <= 2 ? 19 : n <= 5 ? 16 : 15;
 
+  // PS-073 — adaptive product-name font. A short/normal name keeps the bold
+  // default size (the design default — e.g. "Leeds Line V2"); only a LONG name
+  // steps the font down so the full name stays visible without ballooning into
+  // an oversized multi-line block. The driver is the name's NATURAL wrapped
+  // line count at the default size (measured with a high cap so it never
+  // ellipsizes here), not the SKU count. Floor keeps it legible.
+  const TITLE_MIN_SIZE = n <= 2 ? 11 : 10;
+  const fitTitleSize = (text: string, maxW: number): number => {
+    const naturalLines = wrapText(text, titleSize, font, maxW, 99).length;
+    if (naturalLines <= 2) return titleSize; // short/normal -> default, no shrink
+    // Long name: drop ~1.5pt per extra line beyond 2, clamped to [min, default].
+    const stepped = titleSize - (naturalLines - 2) * 1.5;
+    return Math.max(TITLE_MIN_SIZE, Math.min(titleSize, stepped));
+  };
+
   let y = height - 40 - 12;
   for (const item of visibleCards) {
     const boxW = width - pad * 2;
@@ -1665,14 +1680,17 @@ function drawHeader(
     const titleMaxW = boxW - 24 - qtyW - 8;
     const titleText =
       item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL;
-    const titleLines = wrapText(titleText, titleSize, font, titleMaxW, maxTitleLines);
+    // Shrink only when the name is genuinely long (see fitTitleSize); short
+    // names render at the default size unchanged.
+    const itemTitleSize = fitTitleSize(titleText, titleMaxW);
+    const titleLines = wrapText(titleText, itemTitleSize, font, titleMaxW, maxTitleLines);
 
     // Dynamic card height: keep the original fixed height for a single-line
     // title (so single-line cards — and the recipient-names vertical budget —
     // are byte-identical to before) and add ONE line-height per EXTRA wrapped
     // line. This is what stops a wrapped name from silently stealing space
     // from the names list when it isn't needed.
-    const titleLineH = Math.round(titleSize * 1.18);
+    const titleLineH = Math.round(itemTitleSize * 1.18);
     const dynCardH = cardH + Math.max(0, titleLines.length - 1) * titleLineH;
 
     // PS-073 — rounded item card (matches the approved mock). drawSvgPath takes
@@ -1693,7 +1711,7 @@ function drawHeader(
     const firstTitleBaseline = y - Math.round(cardH * 0.46);
     let ty = firstTitleBaseline;
     for (const line of titleLines) {
-      page.drawText(line, { x: pad + 12, y: ty, size: titleSize, font, color: ink });
+      page.drawText(line, { x: pad + 12, y: ty, size: itemTitleSize, font, color: ink });
       ty -= titleLineH;
     }
     // QTY stays aligned with the first title line, top-right.
