@@ -1585,14 +1585,14 @@ function drawHeader(
   let y = height - 40 - 12;
   for (const item of visibleCards) {
     const boxW = width - pad * 2;
-    page.drawRectangle({
+    // PS-073 — rounded item card (matches the approved mock). drawSvgPath takes
+    // the TOP-edge y and fills downward, so pass `y` (the card's top).
+    page.drawSvgPath(roundedRectSvgPath(boxW, cardH, 6), {
       x: pad,
-      y: y - cardH,
-      width: boxW,
-      height: cardH,
+      y,
+      color: rgb(0.94, 0.98, 1),
       borderColor: rgb(0.55, 0.7, 0.9),
       borderWidth: 1.25,
-      color: rgb(0.94, 0.98, 1),
     });
     const qtyText = `x${item.qty}`;
     const qtyW = font.widthOfTextAtSize(qtyText, qtySize);
@@ -1678,7 +1678,10 @@ function drawHeader(
   const countStr = String(totalOrders);
   const countW = font.widthOfTextAtSize(countStr, countFontSize);
   const countBlockH = countFontSize + 4 + labelSize;
-  const countBlockTop = countRegionBottom + (countRegionH + countBlockH) / 2;
+  // PS-073 — anchor the ORDERS count near the TOP of the region (just below the
+  // QTY line) like the approved mock, instead of floating it dead-center with
+  // big gaps above/below. Clamp so the block can't drop below the names zone.
+  const countBlockTop = Math.max(regionTop - 6, countRegionBottom + countBlockH);
   page.drawText(countStr, {
     x: cx - countW / 2,
     y: countBlockTop - countFontSize,
