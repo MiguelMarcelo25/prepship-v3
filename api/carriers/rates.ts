@@ -43,6 +43,16 @@ async function ensureRateDeps(): Promise<void> {
   _rateDepsLoaded = true;
 }
 
+// Safe, non-sensitive error classifier for the response: the error CODE/NAME
+// only (e.g. ERR_MODULE_NOT_FOUND, ECONNREFUSED, 57014/statement_timeout), never
+// the message or stack (which can carry connection strings, tokens, or PII).
+// Lets us see WHICH boundary failed from the network response, without logs.
+function safeErrType(e: unknown): string {
+  const code = (e as any)?.code;
+  const name = (e as any)?.name;
+  return String(code ?? name ?? 'Error').slice(0, 48);
+}
+
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
 // connector registry here pulls a wider src/ tree into the serverless bundle;
 // other carrier functions already hit FUNCTION_INVOCATION_FAILED from similar
@@ -244,7 +254,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(200).json({
       ok: true,
       endpoint: 'carriers/rates',
-      build: 'rates-coldstart-fix-2026-06-03',
+      build: 'rates-diag-2026-06-03',
       node: process.version,
     });
     return;
@@ -256,7 +266,13 @@ export default async function handler(req: any, res: any): Promise<void> {
   try {
   // Load the deferred src/ helpers HERE (not at module top) so a bundling/
   // resolution failure is a clean 500, not a cold-start function crash.
-  await ensureRateDeps();
+  try {
+    await ensureRateDeps();
+  } catch (depErr) {
+    logServerError('carriers/rates:deps', depErr);
+    res.status(500).json({ ok: false, error: 'Internal server error', stage: 'deps', type: safeErrType(depErr) });
+    return;
+  }
   const token = _extractBearerToken(
     req.headers?.authorization || req.headers?.Authorization
   );
@@ -1034,7 +1050,13 @@ export default async function handler(req: any, res: any): Promise<void> {
       error: `Rate quoter for "${provider}" is not implemented yet.`,
     });
   } catch (err) {
-    sendInternalServerError(res, 'carriers/rates', err);
+    // DB / provider-setup error (the per-provider branches catch their own
+    // connector errors and return 200 ok:false, so reaching here means the
+    // failure was the order/account lookup or request setup).
+    logServerError('carriers/rates:request', err);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: 'Internal server error', stage: 'request', type: safeErrType(err) });
+    }
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }
@@ -1044,7 +1066,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     // becomes a clean JSON 500 — never a Vercel FUNCTION_INVOCATION_FAILED.
     logServerError('carriers/rates:fatal', fatalErr);
     if (!res.headersSent) {
-      res.status(500).json({ ok: false, error: 'Internal server error' });
+      res.status(500).json({ ok: false, error: 'Internal server error', stage: 'fatal', type: safeErrType(fatalErr) });
     }
   }
 }
