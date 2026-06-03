@@ -1972,12 +1972,18 @@ export default function OrdersView({
   // boss directive. The previous high-cap options (500/1000/2000)
   // were retired — at those sizes the browser struggled with DOM
   // size and operators rarely needed more than 200 visible at once.
-  // The 5-row option is new and useful for QA/demo flows where a
-  // small page makes screenshots and bulk-action testing easier.
   // Returning users who had 1000/2000 saved fall back to the 50
   // default on next load because the clamp below rejects unknown
   // values.
-  const ALLOWED_PAGE_SIZES = [5, 20, 50, 100, 200] as const
+  //
+  // Per user override unlock shipped data on 2026-06-03: removed the
+  // small 5 and 20 per-page options from the Orders pagination
+  // (Awaiting Shipment / Shipped / Cancelled) per operator request.
+  // Anyone who had 5 or 20 saved in localStorage falls back to 50
+  // automatically via the ALLOWED_PAGE_SIZES.includes() clamp below.
+  // Display-only: no shipped/cancelled data, isReadOnly gating, or
+  // batch-mutation behavior changed.
+  const ALLOWED_PAGE_SIZES = [50, 100, 200] as const
   const PAGE_SIZE_STORAGE_KEY = 'prepship_orders_page_size'
   const [pageSize, setPageSize] = useState<number>(() => {
     if (typeof window === 'undefined') return 50
