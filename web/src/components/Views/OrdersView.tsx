@@ -9311,7 +9311,7 @@ export default function OrdersView({
               <span className="font-mono tabular-nums">
                 {visibleSelectedCount > 0
                   ? `${visibleSelectedCount}/${visibleOrderIds.length}`
-                  : `Select page ${visibleOrderIds.length || ''}`.trim()}
+                  : 'This Page'}
               </span>
             </label>
             <button
@@ -9333,7 +9333,7 @@ export default function OrdersView({
               aria-label={`Select all ${total.toLocaleString()} matching orders across pages`}
             >
               {selectingAllMatching ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <CheckSquare size={12.5} strokeWidth={2.25} aria-hidden />}
-              <span className="font-mono tabular-nums">Select all {total.toLocaleString()} matching</span>
+              <span className="font-mono tabular-nums">All Matches</span>
             </button>
           </div>
           )}
