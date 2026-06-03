@@ -653,3 +653,44 @@ function escapeHtml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 }
+
+// ── PS-071 — bounded/actionable Awaiting-Shipment rate cell state ──────────────
+// The Carrier / Shipping Account / Best Rate / Ship Margin cells used to render
+// an infinite spinner whenever an awaiting order had dims+weight but no
+// displayable best rate — so if carrier accounts hadn't loaded, auto-rating was
+// skipped, or a rate genuinely came back empty, the cell spun forever and the
+// operator had to open Browse Rates to unstick it. This pure classifier gives
+// every cell a TERMINAL, actionable state instead. Unit-tested in
+// scripts/ps-071-rate-cell-state-guard.ts.
+export type AwaitingRateCellState =
+  | 'ready' // a displayable best rate exists -> render the rate
+  | 'add-dims' // not rateable yet: missing dims/weight
+  | 'unavailable' // auto-rating resolved for this request with no rate -> Retry/Browse
+  | 'loading-carriers' // carrier accounts still loading (bounded)
+  | 'no-carrier-account' // accounts loaded but none available -> actionable
+  | 'calculating' // a stale saved rate is being refreshed (bounded spinner)
+  | 'pending' // rate request queued / in flight (bounded spinner)
+
+export function classifyAwaitingRateCellState(input: {
+  hasDims: boolean
+  hasWeight: boolean
+  hasDisplayableBestRate: boolean
+  isCalculatingBestRate: boolean
+  resolvedNoRate: boolean
+  hasCarrierContext: boolean
+  accountsLoading: boolean
+}): AwaitingRateCellState {
+  if (input.hasDisplayableBestRate) return 'ready'
+  if (!input.hasDims || !input.hasWeight) return 'add-dims'
+  if (input.resolvedNoRate) return 'unavailable'
+  if (!input.hasCarrierContext) {
+    return input.accountsLoading ? 'loading-carriers' : 'no-carrier-account'
+  }
+  if (input.isCalculatingBestRate) return 'calculating'
+  return 'pending'
+}
+
+/** States that still show a (bounded) spinner vs. a terminal/actionable label. */
+export function awaitingRateCellIsSpinner(state: AwaitingRateCellState): boolean {
+  return state === 'calculating' || state === 'pending'
+}

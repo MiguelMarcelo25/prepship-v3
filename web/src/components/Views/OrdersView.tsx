@@ -81,9 +81,11 @@ import {
   buildColumnPrefsForStatus,
   buildPicklistPrintHtml,
   buildQueueAddPayload,
+  classifyAwaitingRateCellState,
   getColumnMinWidth,
   groupPrintQueueEntries,
   resolveColumnPrefs,
+  type AwaitingRateCellState,
   type ColumnPrefs,
   type PrintQueueGroup,
 } from './orders-parity'
@@ -2181,6 +2183,9 @@ export default function OrdersView({
     rate: Record<string, unknown> | null
   }>>({})
   const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
+  // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
+  // auto-rating effect for an order whose rate came back unavailable.
+  const [rateRetryNonce, setRateRetryNonce] = useState(0)
   // Tracks whether the user has *manually* edited weight or any dim in the
   // panel since the current order was loaded. The auto-rate-refresh effect
   // only fires when this is true. Reset to false whenever panelOrderId
@@ -2395,7 +2400,7 @@ export default function OrdersView({
     sortState.key === 'custcarrier' ||
     passiveRatingAccountsEnabled
   const { locations } = useLocations({ enabled: ordersSupportDataEnabled })
-  const { accounts: shippingAccounts } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
+  const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
   const { markups } = useMarkups()
 
   const orderDetailsById = useMemo(() => (
@@ -5313,7 +5318,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, markups, shippingAccounts])
+  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, markups, shippingAccounts, rateRetryNonce])
 
   async function refreshPanelBestRate(options: {
     order: OrderSummaryDto
@@ -6655,6 +6660,119 @@ export default function OrdersView({
         }
       : null
 
+  // PS-071 — re-run passive auto-rating for one order whose rate came back
+  // unavailable (or got stuck) WITHOUT requiring the operator to open Browse
+  // Rates. Clears the request fingerprint + entry and bumps the effect nonce so
+  // the cache-first/bulk passive path runs again for this row. No force-live.
+  function retryOrderRate(order: OrderSummaryDto) {
+    const request = getAutoBestRateRequest(order)
+    if (request) autoBestRateRequestedRef.current.delete(request.key)
+    setAutoBestRateEntries((current) => {
+      if (!(order.orderId in current)) return current
+      const next = { ...current }
+      delete next[order.orderId]
+      return next
+    })
+    setRateRetryNonce((nonce) => nonce + 1)
+  }
+
+  // PS-071 — render the bounded/actionable fallback for an awaiting rate cell.
+  // Returns null for 'ready' (the caller then renders the real rate). The
+  // historically-infinite no-rate cases now resolve to a terminal label instead
+  // of an endless <span className="spin-sm" />.
+  function renderRateCellFallback(
+    state: AwaitingRateCellState,
+    order: OrderSummaryDto,
+    variant: 'full' | 'compact',
+  ) {
+    const muted: React.CSSProperties = { fontSize: 10.5, color: 'var(--text3)' }
+    const linkBtn: React.CSSProperties = {
+      fontSize: 10.5,
+      color: 'var(--ss-blue)',
+      background: 'none',
+      border: 'none',
+      padding: 0,
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+    }
+    switch (state) {
+      case 'add-dims':
+        return <span data-rate-state="add-dims" style={muted}>— add dims</span>
+      case 'loading-carriers':
+        return (
+          <span data-rate-state="loading-carriers" title="Loading carrier accounts…" style={muted}>
+            Loading carriers…
+          </span>
+        )
+      case 'no-carrier-account':
+        return variant === 'compact' ? (
+          <span data-rate-state="no-carrier-account" title="No carrier account connected" style={muted}>—</span>
+        ) : (
+          <button
+            type="button"
+            data-rate-state="no-carrier-account"
+            title="No carrier account connected — open Browse Rates / connect a carrier in Settings"
+            style={linkBtn}
+            onClick={() => setRateBrowserOpen(true)}
+          >
+            No carrier account
+          </button>
+        )
+      case 'unavailable':
+        return variant === 'compact' ? (
+          <span data-rate-state="unavailable" title="No rate found for this order" style={muted}>—</span>
+        ) : (
+          <button
+            type="button"
+            data-rate-state="unavailable"
+            title="No rate found for this order — retry rating"
+            style={linkBtn}
+            onClick={() => retryOrderRate(order)}
+          >
+            Rate unavailable · Retry
+          </button>
+        )
+      case 'calculating':
+      case 'pending':
+      default:
+        return (
+          <div className="spin-center" data-rate-state={state} title="Fetching rate…">
+            <span className="spin-sm" />
+          </div>
+        )
+    }
+  }
+
+  // PS-071 — compute the bounded state for an awaiting order's rate cell. Returns
+  // null when a real rate is displayable (caller renders it); otherwise returns
+  // the terminal/loading fallback element.
+  function renderAwaitingRateFallback(
+    order: OrderSummaryDto,
+    displayOrder: OrderSummaryDto,
+    variant: 'full' | 'compact',
+  ) {
+    const dims = getDimensions(displayOrder, null)
+    const hasDims = hasCompleteDims(dims)
+    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
+    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
+    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
+    const autoRequest = getAutoBestRateRequest(order)
+    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
+    const resolvedNoRate = Boolean(autoRequest && autoEntry?.key === autoRequest.key && !autoEntry?.rate)
+    const hasCarrierContext = isTestOrder(displayOrder) || getRateCarrierIdsForAccounts().length > 0
+    const state = classifyAwaitingRateCellState({
+      hasDims,
+      hasWeight,
+      hasDisplayableBestRate,
+      isCalculatingBestRate,
+      resolvedNoRate,
+      hasCarrierContext,
+      accountsLoading,
+    })
+    if (state === 'ready') return null
+    return renderRateCellFallback(state, order, variant)
+  }
+
   const renderBestRatePrice = (order: OrderSummaryDto) => {
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
@@ -6778,24 +6896,26 @@ export default function OrdersView({
       return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
     }
 
-    const bestRateBaseCost = getBestRateBaseCost(order)
-    if (!order.bestRate || bestRateBaseCost == null) {
-      return order.weight?.value && getDimensions(order, null) ? (
-        <div className="spin-center"><span className="spin-sm" /></div>
-      ) : (
-        <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-      )
+    // PS-071 — consume the SAME auto-best-rate source as the Carrier / Shipping
+    // Account / Best Rate cells, so a rate found by passive auto-rating updates
+    // Margin too instead of leaving it spinning until a manual refetch.
+    const displayOrder = getOrderWithAutoBestRate(order)
+    const bestRateBaseCost = getBestRateBaseCost(displayOrder)
+    if (!displayOrder.bestRate || bestRateBaseCost == null) {
+      // Bounded/terminal fallback (compact) instead of an indefinite spinner.
+      return renderAwaitingRateFallback(order, displayOrder, 'compact')
+        ?? <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
     }
 
     const markedAmount = applyCarrierMarkup({
-      shippingProviderId: getBestRateShippingProviderId(order),
-      carrierCode: order.bestRate.carrierCode ?? '',
-      serviceCode: getBestRateServiceCode(order) ?? '',
-      serviceName: order.bestRate.serviceName ?? '',
+      shippingProviderId: getBestRateShippingProviderId(displayOrder),
+      carrierCode: displayOrder.bestRate.carrierCode ?? '',
+      serviceCode: getBestRateServiceCode(displayOrder) ?? '',
+      serviceName: displayOrder.bestRate.serviceName ?? '',
       amount: bestRateBaseCost,
       shipmentCost: bestRateBaseCost,
       otherCost: 0,
-      carrierNickname: getBestRateCarrierNickname(order),
+      carrierNickname: getBestRateCarrierNickname(displayOrder),
     }, markups)
     const diff = getMarkupAmount(bestRateBaseCost, markedAmount)
     if (diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
@@ -6846,20 +6966,9 @@ export default function OrdersView({
       )
     }
 
-    const dims = getDimensions(displayOrder, null)
-    const hasDims = hasCompleteDims(dims)
-    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
-    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
-    if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
-      return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
-    }
-    if (!hasDisplayableBestRate && !isCalculatingBestRate) {
-      return <div className="spin-center"><span className="spin-sm" /></div>
-    }
-    if (isCalculatingBestRate) {
-      return <div className="spin-center"><span className="spin-sm" /></div>
-    }
+    // PS-071 — bounded/actionable state instead of an indefinite spinner.
+    const fallback = renderAwaitingRateFallback(order, displayOrder, 'full')
+    if (fallback) return fallback
 
     // Keep carrier logos readable in the Orders table. Awaiting, shipped,
     // and cancelled rows all share this renderer.
@@ -6912,20 +7021,9 @@ export default function OrdersView({
       )
     }
 
-    const dims = getDimensions(displayOrder, null)
-    const hasDims = hasCompleteDims(dims)
-    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
-    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
-    if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
-      return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
-    }
-    if (!hasDisplayableBestRate && !isCalculatingBestRate) {
-      return <div className="spin-center"><span className="spin-sm" /></div>
-    }
-    if (isCalculatingBestRate) {
-      return <div className="spin-center"><span className="spin-sm" /></div>
-    }
+    // PS-071 — bounded/actionable state instead of an indefinite spinner.
+    const fallback = renderAwaitingRateFallback(order, displayOrder, 'full')
+    if (fallback) return fallback
 
     return (
         <div

@@ -30,10 +30,21 @@ assert(
   'awaiting rows detect stale saved rates as calculating until exact best rate is ready'
 );
 
+// PS-071: the awaiting Carrier / Shipping Account / Ship Margin cells now route
+// their no-displayable-rate branch through classifyAwaitingRateCellState /
+// renderAwaitingRateFallback (instead of three open-coded spinner divs), so a
+// stale/recalculating rate shows a BOUNDED loading spinner (the 'calculating' /
+// 'pending' states) while still never presenting the stale rate as final, and a
+// genuinely-empty/no-carrier case becomes a terminal actionable state rather
+// than an indefinite spinner. The intent (stale rate -> loading, never final)
+// is unchanged; the assertion tracks the new bounded implementation.
 assert(
-  (ordersView.match(/!hasDisplayableBestRate && !isCalculatingBestRate/g) ?? []).length >= 3 &&
-    (ordersView.match(/<div className="spin-center"><span className="spin-sm" \/><\/div>/g) ?? []).length >= 3,
-  'stale saved rates show loading/spinner until recalculation returns the exact current best rate'
+  (ordersView.match(/renderAwaitingRateFallback\(order, displayOrder/g) ?? []).length >= 3 &&
+    ordersView.includes('classifyAwaitingRateCellState') &&
+    ordersView.includes('const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)') &&
+    ordersView.includes('className="spin-center"') &&
+    ordersView.includes('spin-sm'),
+  'stale saved rates show a bounded loading spinner (calculating/pending) via classifyAwaitingRateCellState until recalculation returns the exact current best rate'
 );
 
 assert(
