@@ -118,6 +118,18 @@ check('label payload selected tuple comes from panel (account.code / panelForm.s
 check('req-4 "proceed with current operator selection" decision is documented at the label payload',
   /PS-078 req 4 — DECISION[\s\S]{0,400}?proceed with current operator/.test(labelPayloadBlock));
 
+// ── (6) Direct-carrier label must PROCESS the source confirmation in-request ──
+// Vercel freezes the function after the response, so a Shipp/UPS/EasyPost label
+// on a ShipStation- or eBay-sourced order must process the confirmation outbox
+// synchronously (like ShipStation's Render path) — not merely enqueue it — or the
+// marketplace is never notified.
+check('direct-carrier labels function loads the outbox processor (deferred)',
+  /processFulfillmentOutboxOnce = \(await import\('\.\.\/\.\.\/src\/services\/fulfillment\/outbox\.js'\)\)/.test(labelsSrc));
+check('direct-carrier labels function defines an in-request confirmation processor',
+  /async function processOrderConfirmationNow\(/.test(labelsSrc) && /processFulfillmentOutboxOnce\(\{ orderId/.test(labelsSrc));
+check('all 3 direct return paths (shipp / walmart_shipping / ups+easypost) fire confirmation processing',
+  (labelsSrc.match(/await processOrderConfirmationNow\(orderId\)/g) ?? []).length >= 3);
+
 // ── Print the certification table ──────────────────────────────────────────
 const rows = buildCompatibilityMatrix();
 const pad = (s: string, n: number) => (s + ' '.repeat(n)).slice(0, n);

@@ -44,6 +44,7 @@ let confirmStoreShipment: any;
 let lookupWalmartOrderByCustomerOrderIdForLabels: any;
 let normalizeShippingOptions: any;
 let assertShippingServiceEligible: any;
+let processFulfillmentOutboxOnce: any;
 let _labelDepsLoaded = false;
 async function ensureLabelDeps(): Promise<void> {
   if (_labelDepsLoaded) return;
@@ -54,7 +55,35 @@ async function ensureLabelDeps(): Promise<void> {
   lookupWalmartOrderByCustomerOrderIdForLabels = (await import('../../src/connectors/store/walmart.js')).lookupWalmartOrderByCustomerOrderId;
   normalizeShippingOptions = (await import('../../src/lib/shipping-options.js')).normalizeShippingOptions;
   assertShippingServiceEligible = (await import('../../src/lib/shipping-service-eligibility.js')).assertShippingServiceEligible;
+  processFulfillmentOutboxOnce = (await import('../../src/services/fulfillment/outbox.js')).processFulfillmentOutboxOnce;
   _labelDepsLoaded = true;
+}
+
+// PS-078 / direct-carrier end-to-end: after a direct-carrier label is bought and
+// its source confirmation is ENQUEUED, the marketplace notification must actually
+// FIRE in-request (Vercel freezes the function after the response, so it cannot be
+// backgrounded). ShipStation's Render path already does this via
+// processFulfillmentOutboxOnce; this mirrors it for the direct carriers so a
+// Shipp/UPS/EasyPost label on a ShipStation- or eBay-sourced order still notifies
+// the upstream marketplace and marks it shipped. Idempotent (succeeded outbox
+// rows are skipped, so the Walmart immediate-confirm is not double-sent). Never
+// throws — the label/postage is already real, so a confirmation hiccup is
+// surfaced in meta and left as a retryable outbox row, not a 500.
+async function processOrderConfirmationNow(
+  orderId: number,
+): Promise<{ processed: number; succeeded: number; failed: number } | null> {
+  if (!Number.isFinite(orderId) || orderId <= 0) return null;
+  try {
+    const summary = await processFulfillmentOutboxOnce({ orderId, limit: 5 });
+    return {
+      processed: Number(summary?.processed ?? 0) || 0,
+      succeeded: Number(summary?.succeeded ?? 0) || 0,
+      failed: Number(summary?.failed ?? 0) || 0,
+    };
+  } catch (err) {
+    console.warn('[carriers/labels] confirmation outbox processing failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -1093,6 +1122,11 @@ export default async function handler(req: any, res: any): Promise<void> {
         }
       }
 
+      // Fire the source-provider confirmation NOW so the marketplace is notified
+      // in-request (ShipStation/eBay sources rely on this; Walmart already did the
+      // immediate confirm above and its outbox row is skipped as succeeded).
+      const confirmProcessed = await processOrderConfirmationNow(orderId);
+
       res.status(200).json({
         ok: true,
         provider: providerKey,
@@ -1115,6 +1149,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           confirmationQueued: confirmation.queued,
           confirmationProvider: confirmation.provider,
           confirmationError: confirmation.error ?? null,
+          marketplaceConfirmationProcessed: confirmProcessed,
           marketplaceShipmentConfirmed,
           marketplaceShipmentConfirmError,
           marketplaceStoreAccountId,
@@ -1238,6 +1273,10 @@ export default async function handler(req: any, res: any): Promise<void> {
         });
       }
 
+      // Idempotent safety net: Walmart already confirmed immediately above; this
+      // processes the outbox (skips the succeeded row, retries a failed one).
+      const confirmProcessed = await processOrderConfirmationNow(orderId);
+
       res.status(200).json({
         ok: true,
         provider: providerKey,
@@ -1262,6 +1301,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           hasRawOrder: result.context.rawOrder != null,
           carrierAccountId,
           confirmationQueued: confirmation.queued,
+          marketplaceConfirmationProcessed: confirmProcessed,
           confirmationProvider: confirmation.provider,
           confirmationError: confirmation.error ?? null,
           selectedServiceCode: result.serviceCode,
@@ -1399,6 +1439,11 @@ export default async function handler(req: any, res: any): Promise<void> {
       return { queued: false, provider: inferStoreProviderFromExternalId(externalOrderId), error: err instanceof Error ? err.message : String(err) };
     });
 
+    // Fire the source-provider confirmation NOW so a UPS/EasyPost label on a
+    // ShipStation- or eBay-sourced order actually notifies the marketplace and
+    // marks it shipped in-request (Vercel cannot background this).
+    const confirmProcessed = await processOrderConfirmationNow(orderId);
+
     res.status(200).json({
       ok: true,
       provider,
@@ -1417,6 +1462,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         carrierAccountId,
         carrierShipmentId: result.shipmentId ?? null,
         confirmationQueued: confirmation.queued,
+        marketplaceConfirmationProcessed: confirmProcessed,
         confirmationProvider: confirmation.provider,
         confirmationError: confirmation.error ?? null,
         connectorCapabilities,
