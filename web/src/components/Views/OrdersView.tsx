@@ -4810,6 +4810,15 @@ export default function OrdersView({
       // from the (possibly stale) saved order.bestRate. The charged tuple
       // (carrierCode/serviceCode/shippingProviderId/dims) is already the panel
       // selection above; this keeps the human-readable strings consistent with it.
+      //
+      // PS-078 req 4 — DECISION (DJ, 2026-06-04): "proceed with current operator
+      // selection." Label creation is NOT hard-blocked when the displayed rate is
+      // mid-recalculation/stale, BECAUSE the charged tuple here is the operator's
+      // explicit current panel selection (account.code / panelForm.serviceCode /
+      // shippingProviderId / current dims), NOT a saved/cached/alternate rate. The
+      // saved best rate is only a display signal (shown as calculating/unresolved
+      // when stale via classifyAwaitingRateCellState) and can never become the
+      // selected rate. Do NOT add a stale-rate block here without DJ's sign-off.
       serviceName: isTest
         ? toStringValue(testSelectedRate?.serviceName) ?? testServiceCode
         : toStringValue(panelRatePreview[0]?.serviceName) ?? panelForm.serviceCode,

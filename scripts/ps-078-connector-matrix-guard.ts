@@ -111,6 +111,13 @@ check('label payload selected tuple comes from panel (account.code / panelForm.s
   /carrierCode: isTest \? testCarrierCode : account\.code/.test(labelPayloadBlock) &&
   /serviceCode: isTest \? testServiceCode : panelForm\.serviceCode/.test(labelPayloadBlock));
 
+// PS-078 req 4 — the "proceed with current operator selection" decision (no
+// stale-rate hard block) must stay documented at the label payload, so the
+// rationale (safe BECAUSE the charged tuple is the operator's current selection,
+// not a saved/cached rate) isn't silently lost or reverted.
+check('req-4 "proceed with current operator selection" decision is documented at the label payload',
+  /PS-078 req 4 — DECISION[\s\S]{0,400}?proceed with current operator/.test(labelPayloadBlock));
+
 // ── Print the certification table ──────────────────────────────────────────
 const rows = buildCompatibilityMatrix();
 const pad = (s: string, n: number) => (s + ' '.repeat(n)).slice(0, n);
