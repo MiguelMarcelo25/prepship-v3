@@ -1701,6 +1701,14 @@ function drawHeader(
   // ── 4) Names reference area (secondary; never overrides picking) ──
   if (renderNamesOnHeader) {
     const zoneTop = regionBottom + namesZoneH;
+    // PS-073 — thin divider between the ORDERS count and the names section
+    // (matches the approved mock), sitting in the reserved gap above the title.
+    page.drawLine({
+      start: { x: pad, y: zoneTop + 3 },
+      end: { x: width - pad, y: zoneTop + 3 },
+      thickness: 0.75,
+      color: rgb(0.85, 0.85, 0.85),
+    });
     page.drawText(safePdfText(`Names in this batch (${recipients.length})`), {
       x: pad,
       y: zoneTop - 13,
@@ -1711,14 +1719,14 @@ function drawHeader(
     const listTop = zoneTop - namesTitleH;
     const rows = Math.ceil(recipients.length / cols);
     const listBoxH = rows * nameRowH + listBoxPad;
-    page.drawRectangle({
+    // PS-073 — rounded names box (matches the approved mock). drawSvgPath takes
+    // the TOP-edge y and fills downward, so pass `listTop` (the box's top).
+    page.drawSvgPath(roundedRectSvgPath(width - pad * 2, listBoxH, 6), {
       x: pad,
-      y: listTop - listBoxH,
-      width: width - pad * 2,
-      height: listBoxH,
+      y: listTop,
+      color: rgb(0.99, 0.99, 0.99),
       borderColor: rgb(0.85, 0.85, 0.85),
       borderWidth: 1,
-      color: rgb(0.99, 0.99, 0.99),
     });
     const colW = (width - pad * 2) / cols;
     const nameSize = 9;
