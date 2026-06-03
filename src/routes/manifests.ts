@@ -6,15 +6,38 @@ import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
+import { coerceCaliforniaIsoDay } from '../lib/time/california';
 
 const app = new Hono();
 
+// Accept BOTH the v4 (dateFrom/dateTo) and v2 (startDate/endDate) param names,
+// and a date-only `YYYY-MM-DD` (what the Manifest Export <input type="date">
+// sends) OR a full ISO datetime. The old GET schema required dateFrom/dateTo as
+// strict z.string().datetime(), so the frontend's `?startDate=2026-05-04…`
+// failed with "invalid_type … path: dateFrom" and the modal could never export.
 const query = z.object({
-  dateFrom: z.string().datetime(),
-  dateTo: z.string().datetime(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
   carrierCode: z.string().optional(),
+  carrierId: z.string().optional(),
   clientId: z.coerce.number().int().optional(),
 });
+
+// Normalize either naming convention into the inclusive California-day ISO range
+// loadManifest expects. Returns null when no usable from/to was supplied.
+export function resolveManifestDateRange(input: {
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+}): { dateFrom: string; dateTo: string } | null {
+  const dateFrom = coerceCaliforniaIsoDay(input.dateFrom ?? input.startDate ?? undefined, false);
+  const dateTo = coerceCaliforniaIsoDay(input.dateTo ?? input.endDate ?? undefined, true);
+  if (!dateFrom || !dateTo) return null;
+  return { dateFrom, dateTo };
+}
 
 // v2 parity: POST accepts {startDate, endDate, carrierId?, clientId?} — the
 // v2 body shape — while v4's GET keeps the native {dateFrom, dateTo,
@@ -128,10 +151,14 @@ async function loadManifest(filters: ManifestFilters) {
 
 app.get('/generate', zValidator('query', query), async (c) => {
   const q = c.req.valid('query');
+  const range = resolveManifestDateRange(q);
+  if (!range) {
+    return c.json({ error: 'dateFrom/startDate and dateTo/endDate are required' }, 400);
+  }
   const result = await loadManifest({
-    dateFrom: q.dateFrom,
-    dateTo: q.dateTo,
-    carrierCode: q.carrierCode,
+    dateFrom: range.dateFrom,
+    dateTo: range.dateTo,
+    carrierCode: q.carrierCode ?? q.carrierId,
     clientId: q.clientId,
     scope: manifestScopeFromContext(c),
     canViewFinancials: canViewManifestFinancials(c),
@@ -141,14 +168,13 @@ app.get('/generate', zValidator('query', query), async (c) => {
 
 app.post('/generate', zValidator('json', postBody), async (c) => {
   const b = c.req.valid('json');
-  const dateFrom = b.dateFrom ?? b.startDate;
-  const dateTo = b.dateTo ?? b.endDate;
-  if (!dateFrom || !dateTo) {
+  const range = resolveManifestDateRange(b);
+  if (!range) {
     return c.json({ error: 'startDate and endDate required' }, 400);
   }
   const result = await loadManifest({
-    dateFrom,
-    dateTo,
+    dateFrom: range.dateFrom,
+    dateTo: range.dateTo,
     // v2 used `carrierId`; the v4 schema keys off `carrierCode`. Accept
     // either — no translation table exists, so callers passing the legacy
     // carrier id string can still filter against shipments.carrierCode

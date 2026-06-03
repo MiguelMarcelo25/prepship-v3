@@ -143,6 +143,7 @@
     "test:print-queue-signed-pdf": "node scripts/print-queue-signed-pdf-guard.mjs",
     "test:ps-073-test-order-names": "tsx scripts/ps-073-test-order-names-cert.ts",
     "test:carriers-rates-hardening": "node scripts/carriers-rates-function-hardening-guard.mjs",
+    "test:manifest-date-range": "tsx scripts/manifest-date-range-guard.ts",
     "test:queue-label-diagnostics": "npm run test:test-order-queue-label && npm run test:print-queue-invalid-label && node scripts/detailed-guard-output-guard.mjs",
     "test:marketplace-reconciliation": "tsx scripts/marketplace-status-reconciliation-guard.ts",
     "test:shipstation-awaiting-parity": "tsx scripts/shipstation-awaiting-parity-guard.ts",
