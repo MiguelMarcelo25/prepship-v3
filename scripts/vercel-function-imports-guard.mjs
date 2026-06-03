@@ -47,6 +47,32 @@ if (directCarrierLabels.includes('src/connectors/carrier-resolution')) {
   pass('direct carrier labels avoid connector-resolution runtime import');
 }
 
+// labels.ts must lazy-load the connector/label trees for the SAME reason
+// rates.ts does: a STATIC top-level import of the carrier/store orchestrators +
+// shipping-eligibility tree pulls a wide src/ bundle that throws at Vercel COLD
+// START, crashing the whole function (FUNCTION_INVOCATION_FAILED) before the
+// handler runs. That made every direct-carrier label (shipp/ups/easypost/
+// walmart) fail uniformly while ShipStation (a separate Render path) worked.
+// These must be loaded via dynamic import() inside the handler, not `from`.
+const FORBIDDEN_LABEL_STATIC_IMPORTS = [
+  "from '../../src/services/carrier-connector-orchestrator.js'",
+  "from '../../src/services/store-connector-orchestrator.js'",
+  "from '../../src/connectors/store/walmart.js'",
+  "from '../../src/services/direct-label-persistence.js'",
+  "from '../../src/services/fulfillment/schema-readiness.js'",
+  "from '../../src/lib/shipping-options.js'",
+  "from '../../src/lib/shipping-service-eligibility.js'",
+];
+const labelStaticOffenders = FORBIDDEN_LABEL_STATIC_IMPORTS.filter((spec) => directCarrierLabels.includes(spec));
+if (labelStaticOffenders.length) {
+  fail(
+    'api/carriers/labels.ts must lazy-load connector/label trees (Vercel cold-start crash); ' +
+    `move these to dynamic import() inside the handler:\n${labelStaticOffenders.join('\n')}`,
+  );
+} else {
+  pass('direct carrier labels lazy-load connector/label trees after request validation');
+}
+
 const directCarrierRates = fs.readFileSync(path.join(root, 'api/carriers/rates.ts'), 'utf8');
 if (
   directCarrierRates.includes("from '../../src/connectors/carrier/direct-rates.js'") ||

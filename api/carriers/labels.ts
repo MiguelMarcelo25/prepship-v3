@@ -28,13 +28,34 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
-import { assertFulfillmentSchemaReady } from '../../src/services/fulfillment/schema-readiness.js';
-import { createCarrierLabel } from '../../src/services/carrier-connector-orchestrator.js';
-import { confirmStoreShipment } from '../../src/services/store-connector-orchestrator.js';
-import { lookupWalmartOrderByCustomerOrderId as lookupWalmartOrderByCustomerOrderIdForLabels } from '../../src/connectors/store/walmart.js';
-import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
-import { assertShippingServiceEligible } from '../../src/lib/shipping-service-eligibility.js';
+
+// ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
+// module top. On Vercel, importing the carrier/store connector orchestrators +
+// the shipping-eligibility tree pulls a wide src/ bundle that threw at COLD
+// START, crashing the WHOLE function as FUNCTION_INVOCATION_FAILED *before the
+// handler ran* — so EVERY direct-carrier label (shipp/ups/easypost/walmart)
+// failed uniformly while ShipStation (a different, Render-side path) kept
+// working. Defer them to request time (via ensureLabelDeps below) so a load
+// failure becomes a clean, catchable 500 instead of an uncatchable crash.
+let persistDirectCarrierLabel: any;
+let assertFulfillmentSchemaReady: any;
+let createCarrierLabel: any;
+let confirmStoreShipment: any;
+let lookupWalmartOrderByCustomerOrderIdForLabels: any;
+let normalizeShippingOptions: any;
+let assertShippingServiceEligible: any;
+let _labelDepsLoaded = false;
+async function ensureLabelDeps(): Promise<void> {
+  if (_labelDepsLoaded) return;
+  persistDirectCarrierLabel = (await import('../../src/services/direct-label-persistence.js')).persistDirectCarrierLabel;
+  assertFulfillmentSchemaReady = (await import('../../src/services/fulfillment/schema-readiness.js')).assertFulfillmentSchemaReady;
+  createCarrierLabel = (await import('../../src/services/carrier-connector-orchestrator.js')).createCarrierLabel;
+  confirmStoreShipment = (await import('../../src/services/store-connector-orchestrator.js')).confirmStoreShipment;
+  lookupWalmartOrderByCustomerOrderIdForLabels = (await import('../../src/connectors/store/walmart.js')).lookupWalmartOrderByCustomerOrderId;
+  normalizeShippingOptions = (await import('../../src/lib/shipping-options.js')).normalizeShippingOptions;
+  assertShippingServiceEligible = (await import('../../src/lib/shipping-service-eligibility.js')).assertShippingServiceEligible;
+  _labelDepsLoaded = true;
+}
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -869,6 +890,9 @@ export default async function handler(req: any, res: any): Promise<void> {
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
 
   try {
+    // Load the deferred src/ connector + eligibility tree now (request time).
+    // A failure here is a catchable 500, not an uncatchable cold-start crash.
+    await ensureLabelDeps();
     const body = (await readBody(req)) as Record<string, any>;
     const carrierAccountId = Number(body?.carrierAccountId);
     const shippingOptions = normalizeShippingOptions(body);
