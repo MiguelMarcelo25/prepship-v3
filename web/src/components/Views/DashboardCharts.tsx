@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -29,21 +30,10 @@ type DashboardChartsProps = {
   // wide rows: { day, [series.key]: revenue, ... }.
   clientTrend?: Array<Record<string, number | string>>
   clientSeries?: ClientSeries[]
-  // Clicking a client line OR its bottom-legend label filters the dashboard to
-  // that client. Series keys are `c_<clientId>`; null is passed for the
-  // "Unassigned" series (no filter applied).
-  onSelectClient?: (clientId: number | null) => void
 }
 
-// Series keys are minted as `c_<clientId>` (or `c_none` for unassigned) in
-// DashboardView. Map a key back to the numeric client id, or null when it's
-// not a real client (so the click is a no-op).
-function seriesKeyToClientId(key: string | undefined): number | null {
-  if (!key || !key.startsWith('c_')) return null
-  const raw = key.slice(2)
-  const id = Number(raw)
-  return Number.isFinite(id) && id > 0 ? id : null
-}
+// Color a non-focused line is washed out to when another series is focused.
+const MUTED_STROKE = 'var(--text3)'
 
 // Distinct, reasonably color-blind-friendly palette. Cycles if there are
 // more clients than colors.
@@ -76,16 +66,33 @@ function formatDayLabel(day: string) {
 function MultiClientChart({
   data,
   series,
-  onSelectClient,
 }: {
   data: Array<Record<string, number | string>>
   series: ClientSeries[]
-  onSelectClient?: (clientId: number | null) => void
 }) {
-  const selectFromKey = (key: string | undefined) => {
-    const clientId = seriesKeyToClientId(key)
-    if (clientId != null) onSelectClient?.(clientId)
+  // Which client line is "focused". When set, that line keeps its color and
+  // every other line is washed out to gray. Clicking the same series again (or
+  // its legend label) clears the focus and restores all colors. This is a
+  // purely visual, in-chart highlight — it does NOT filter the dashboard.
+  const [focusedKey, setFocusedKey] = useState<string | null>(null)
+  const toggleFocus = (key: string | undefined) => {
+    if (!key) return
+    setFocusedKey((current) => (current === key ? null : key))
   }
+  // Stable legend entries in the ORIGINAL series order. We render this
+  // explicitly (rather than letting recharts derive it from child order) so the
+  // labels don't reshuffle when the focused line is re-ordered to paint on top.
+  // The icon color is grayed for non-focused series to mirror the lines.
+  const legendPayload = series.map((s, index) => {
+    const dimmed = focusedKey != null && focusedKey !== s.key
+    return {
+      value: s.name,
+      id: s.key,
+      dataKey: s.key,
+      type: 'plainline' as const,
+      color: dimmed ? MUTED_STROKE : CLIENT_PALETTE[index % CLIENT_PALETTE.length],
+    }
+  })
   return (
     <div className="h-full min-h-0 w-full overflow-hidden rounded-md [&_.recharts-wrapper]:!overflow-hidden [&_.recharts-surface]:!overflow-hidden">
       <ResponsiveContainer width="100%" height="100%">
@@ -121,43 +128,79 @@ function MultiClientChart({
             }}
           />
           <Legend
-            wrapperStyle={{ fontSize: 11, paddingTop: 6, cursor: onSelectClient ? 'pointer' : undefined }}
+            wrapperStyle={{ fontSize: 11, paddingTop: 6, cursor: 'pointer' }}
             iconType="plainline"
+            payload={legendPayload}
             onClick={(entry: { dataKey?: unknown; value?: unknown }) => {
-              // Click a bottom-legend label -> filter to that client. Resolve the
-              // series key from the payload's dataKey, falling back to matching
-              // the displayed name.
+              // Click a bottom-legend label -> focus that line (gray out the
+              // rest). Resolve the series key from the payload's dataKey,
+              // falling back to matching the displayed name.
               const fromDataKey = typeof entry?.dataKey === 'string' ? entry.dataKey : undefined
               const fromName = series.find((s) => s.name === entry?.value)?.key
-              selectFromKey(fromDataKey ?? fromName)
+              toggleFocus(fromDataKey ?? fromName)
+            }}
+            formatter={(value: unknown, entry: { dataKey?: unknown } | undefined) => {
+              // Dim the labels of non-focused series so the legend mirrors the
+              // grayscale state of the lines themselves.
+              const key =
+                typeof entry?.dataKey === 'string'
+                  ? entry.dataKey
+                  : series.find((s) => s.name === value)?.key
+              const dimmed = focusedKey != null && key !== focusedKey
+              return (
+                <span
+                  style={{
+                    color: dimmed ? 'var(--text3)' : 'var(--text2)',
+                    opacity: dimmed ? 0.55 : 1,
+                    fontWeight: focusedKey != null && key === focusedKey ? 600 : 400,
+                  }}
+                >
+                  {String(value ?? '')}
+                </span>
+              )
             }}
           />
-          {series.map((s, index) => (
-            <Line
-              key={s.key}
-              type="linear"
-              dataKey={s.key}
-              name={s.name}
-              stroke={CLIENT_PALETTE[index % CLIENT_PALETTE.length]}
-              strokeWidth={1.75}
-              dot={false}
-              activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface)' }}
-              isAnimationActive={false}
-              // Click a client line -> filter the dashboard to that client.
-              onClick={() => selectFromKey(s.key)}
-              style={onSelectClient ? { cursor: 'pointer' } : undefined}
-            />
-          ))}
+          {series
+            // Draw the focused series LAST so it paints on top of the grayed
+            // lines. Keep each series' palette color keyed to its ORIGINAL index
+            // so colors stay stable regardless of paint order.
+            .map((s, index) => ({ s, index }))
+            .sort((a, b) => {
+              const aFocused = a.s.key === focusedKey
+              const bFocused = b.s.key === focusedKey
+              return aFocused === bFocused ? 0 : aFocused ? 1 : -1
+            })
+            .map(({ s, index }) => {
+              const isFocused = focusedKey === s.key
+              const isDimmed = focusedKey != null && !isFocused
+              return (
+                <Line
+                  key={s.key}
+                  type="linear"
+                  dataKey={s.key}
+                  name={s.name}
+                  stroke={isDimmed ? MUTED_STROKE : CLIENT_PALETTE[index % CLIENT_PALETTE.length]}
+                  strokeWidth={isFocused ? 2.75 : 1.75}
+                  strokeOpacity={isDimmed ? 0.25 : 1}
+                  dot={false}
+                  activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface)' }}
+                  isAnimationActive={false}
+                  // Click a client line -> focus it (gray out the rest).
+                  onClick={() => toggleFocus(s.key)}
+                  style={{ cursor: 'pointer' }}
+                />
+              )
+            })}
         </LineChart>
       </ResponsiveContainer>
     </div>
   )
 }
 
-export default function DashboardCharts({ trend, clientTrend, clientSeries, onSelectClient }: DashboardChartsProps) {
+export default function DashboardCharts({ trend, clientTrend, clientSeries }: DashboardChartsProps) {
   // Multi-client revenue mode (the "All Clients" breakdown).
   if (clientSeries && clientSeries.length > 0 && clientTrend && clientTrend.length > 0) {
-    return <MultiClientChart data={clientTrend} series={clientSeries} onSelectClient={onSelectClient} />
+    return <MultiClientChart data={clientTrend} series={clientSeries} />
   }
 
   return (

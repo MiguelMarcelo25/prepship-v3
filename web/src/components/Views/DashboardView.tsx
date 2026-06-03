@@ -2950,7 +2950,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 trend={trend}
                 clientTrend={clientTrend}
                 clientSeries={clientSeries}
-                onSelectClient={(clientId) => setSelectedClientId(clientId)}
               />
             </Suspense>
             )}
