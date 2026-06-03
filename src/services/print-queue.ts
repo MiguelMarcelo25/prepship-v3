@@ -1544,22 +1544,72 @@ function drawHeader(
     return `${t}...`;
   };
 
-  // PS — shrink the font so the FULL text fits maxW (no ellipsis), down to a
-  // floor; only ellipsize if it still doesn't fit at the floor. Used for the
-  // product name so a long name stays COMPLETELY visible instead of being cut
-  // off with "...".
-  const fitTextShrink = (
+  // PS — wrap the FULL text across multiple lines so a long product name is
+  // shown COMPLETELY instead of being shrunk + cut off with "...". Greedy
+  // word-wrap at the given size; a single word wider than the column is
+  // hard-broken. Only the LAST kept line is ellipsized, and only if the text
+  // exceeds `maxLines` (a safety cap so a many-SKU combo can't overrun the
+  // 4x6). Per user override unlock shipped data on 2026-06-02: display-only
+  // change to the PS-073 batch header — reads no new fields, mutates nothing.
+  const wrapText = (
     text: string,
-    maxSize: number,
-    minSize: number,
+    size: number,
     f: typeof font,
     maxW: number,
-  ): { text: string; size: number } => {
-    const t = safePdfText(text);
-    let size = maxSize;
-    while (size > minSize && f.widthOfTextAtSize(t, size) > maxW) size -= 0.5;
-    if (f.widthOfTextAtSize(t, size) <= maxW) return { text: t, size };
-    return { text: fitText(t, size, f, maxW), size };
+    maxLines: number,
+  ): string[] => {
+    const clean = safePdfText(text).replace(/\s+/g, ' ').trim();
+    if (!clean) return [''];
+    if (f.widthOfTextAtSize(clean, size) <= maxW) return [clean];
+
+    // Hard-break a single word that is itself wider than the column.
+    const breakLongWord = (word: string, out: string[]): string => {
+      let w = word;
+      while (w.length > 1 && f.widthOfTextAtSize(w, size) > maxW) {
+        let lo = 1;
+        let hi = w.length;
+        let fit = 1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (f.widthOfTextAtSize(w.slice(0, mid), size) <= maxW) {
+            fit = mid;
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
+        }
+        out.push(w.slice(0, fit));
+        w = w.slice(fit);
+      }
+      return w;
+    };
+
+    const lines: string[] = [];
+    let current = '';
+    for (const word of clean.split(' ')) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (f.widthOfTextAtSize(candidate, size) <= maxW) {
+        current = candidate;
+        continue;
+      }
+      if (current) {
+        lines.push(current);
+        current = '';
+      }
+      current = f.widthOfTextAtSize(word, size) > maxW ? breakLongWord(word, lines) : word;
+    }
+    if (current) lines.push(current);
+
+    if (lines.length <= maxLines) return lines;
+
+    // Over the cap: keep the first maxLines lines, ellipsize the last kept one.
+    const kept = lines.slice(0, maxLines);
+    let last = kept.pop() ?? '';
+    while (last.length > 1 && f.widthOfTextAtSize(`${last}...`, size) > maxW) {
+      last = last.slice(0, -1);
+    }
+    kept.push(`${last}...`);
+    return kept;
   };
 
   // ── 1) Item/pick cards (top): product name left, xN right, sku below.
@@ -1603,34 +1653,54 @@ function drawHeader(
   let y = height - 40 - 12;
   for (const item of visibleCards) {
     const boxW = width - pad * 2;
+    const qtyText = `x${item.qty}`;
+    const qtyW = font.widthOfTextAtSize(qtyText, qtySize);
+
+    // PS — show the FULL product name. Wrap it across as many lines as needed
+    // and grow the card to fit, instead of shrinking to one line and cutting
+    // it off with "...". `maxTitleLines` caps height per SKU count so a
+    // many-SKU combo still fits a 4x6; the common 1-2 SKU case (lots of free
+    // space) gets enough lines to show everything.
+    const maxTitleLines = n <= 2 ? 6 : n === 3 ? 3 : n <= 5 ? 2 : 1;
+    const titleMaxW = boxW - 24 - qtyW - 8;
+    const titleText =
+      item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL;
+    const titleLines = wrapText(titleText, titleSize, font, titleMaxW, maxTitleLines);
+
+    // Dynamic card height: keep the original fixed height for a single-line
+    // title (so single-line cards — and the recipient-names vertical budget —
+    // are byte-identical to before) and add ONE line-height per EXTRA wrapped
+    // line. This is what stops a wrapped name from silently stealing space
+    // from the names list when it isn't needed.
+    const titleLineH = Math.round(titleSize * 1.18);
+    const dynCardH = cardH + Math.max(0, titleLines.length - 1) * titleLineH;
+
     // PS-073 — rounded item card (matches the approved mock). drawSvgPath takes
     // the TOP-edge y and fills downward, so pass `y` (the card's top).
-    page.drawSvgPath(roundedRectSvgPath(boxW, cardH, 6), {
+    page.drawSvgPath(roundedRectSvgPath(boxW, dynCardH, 6), {
       x: pad,
       y,
       color: rgb(0.94, 0.98, 1),
       borderColor: rgb(0.55, 0.7, 0.9),
       borderWidth: 1.25,
     });
-    const qtyText = `x${item.qty}`;
-    const qtyW = font.widthOfTextAtSize(qtyText, qtySize);
+
     // Product NAME is the prominent card title; sku sits smaller below.
     // PS-070 — cardTitle prefers the product title; skuLineText is either a real
     // "sku: X" or a safe "no SKU — eBay item" / UNRESOLVED note, never a
-    // confident "sku: UNKNOWN SKU".
-    const titleBaseline = y - Math.round(cardH * 0.46);
-    const skuBaseline = y - cardH + Math.round(skuSize * 0.7) + 5;
-    // PS — shrink the product name to fit so it stays COMPLETELY visible (down
-    // to a 9pt floor) rather than being truncated with "...".
-    const fittedTitle = fitTextShrink(
-      item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL,
-      titleSize,
-      9,
-      font,
-      boxW - 24 - qtyW - 8,
-    );
-    page.drawText(fittedTitle.text, { x: pad + 12, y: titleBaseline, size: fittedTitle.size, font, color: ink });
-    page.drawText(qtyText, { x: pad + boxW - 12 - qtyW, y: titleBaseline, size: qtySize, font, color: ink });
+    // confident "sku: UNKNOWN SKU". The first title line keeps the original
+    // baseline; extra wrapped lines flow downward into the grown card.
+    const firstTitleBaseline = y - Math.round(cardH * 0.46);
+    let ty = firstTitleBaseline;
+    for (const line of titleLines) {
+      page.drawText(line, { x: pad + 12, y: ty, size: titleSize, font, color: ink });
+      ty -= titleLineH;
+    }
+    // QTY stays aligned with the first title line, top-right.
+    page.drawText(qtyText, { x: pad + boxW - 12 - qtyW, y: firstTitleBaseline, size: qtySize, font, color: ink });
+    // sku line sits at the bottom of the (possibly taller) card — same offset
+    // from the bottom edge as the original layout.
+    const skuBaseline = y - dynCardH + Math.round(skuSize * 0.7) + 5;
     page.drawText(fitText(item.skuLineText || (item.sku ? `sku: ${item.sku}` : NO_SKU_PICK_NOTE), skuSize, fontReg, boxW - 24), {
       x: pad + 12,
       y: skuBaseline,
@@ -1638,7 +1708,7 @@ function drawHeader(
       font: fontReg,
       color: sub,
     });
-    y -= cardH + cardGap;
+    y -= dynCardH + cardGap;
   }
   if (hiddenCardCount > 0) {
     page.drawText(safePdfText(`+${hiddenCardCount} more SKU${hiddenCardCount === 1 ? '' : 's'} (full combo on manifest)`), {
