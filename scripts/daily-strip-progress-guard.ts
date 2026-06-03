@@ -174,10 +174,32 @@ assert.equal(normalizeTzLabel('May 29, 12pm PDT'), 'May 29, 12pm CA');
 }
 
 // --- self-wiring -------------------------------------------------------------
+const pkg = readFileSync('package.json', 'utf8');
 assert.match(
-  readFileSync('package.json', 'utf8'),
+  pkg,
   /test:daily-strip-progress/,
   'package.json must expose the daily-strip progress guard',
 );
+
+// PS-076 — the strip's loading/failure/visibility resilience needs BROWSER
+// coverage, not just this static guard. Assert the Playwright spec exists and
+// is wired so it can't be silently dropped.
+assert.match(
+  pkg,
+  /test:orders-daily-strip:browser/,
+  'package.json must expose the PS-076 daily-strip resilience browser test',
+);
+const dailyStripSpec = readFileSync('web/e2e/orders-daily-strip-resilience.spec.js', 'utf8');
+for (const probe of [
+  '/orders/daily-stats',
+  "summary:", // exercises the { summary: ... } compat shape
+  'Daily stats unavailable', // first-failure fallback assertion
+  'without a page refresh', // retry-without-refresh assertion
+]) {
+  assert.ok(
+    dailyStripSpec.includes(probe),
+    `daily-strip resilience spec must cover: ${probe}`,
+  );
+}
 
 console.log('PASS daily-strip progress guard');

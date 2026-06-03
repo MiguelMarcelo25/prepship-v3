@@ -197,6 +197,7 @@
     "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
     "test:orders-column-integrity:browser": "playwright test web/e2e/orders-column-integrity.spec.js --reporter=line",
     "test:orders-expedited:browser": "playwright test web/e2e/orders-expedited.spec.js --reporter=line",
+    "test:orders-daily-strip:browser": "playwright test web/e2e/orders-daily-strip-resilience.spec.js --reporter=line",
     "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line",
     "test:site-actions:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
     "test:workflow-certification:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
