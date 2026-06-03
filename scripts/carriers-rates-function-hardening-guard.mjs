@@ -24,12 +24,24 @@ const assert = (cond, msg) => {
   }
 };
 
+// 0) ROOT CAUSE: the wider-src/ helpers (jose auth + shipping-eligibility) are
+//    DEFERRED to request time, not statically imported at module top — a static
+//    import threw at COLD START on Vercel and crashed the function before any
+//    handler/try-catch ran (even a token-free GET crashed).
+assert(
+  !/^import\s+\{[^}]*verifySupabaseJwt/m.test(rates) &&
+    rates.includes('async function ensureRateDeps') &&
+    rates.includes("await import('../../src/lib/auth/verify-supabase-jwt.js')") &&
+    rates.includes('await ensureRateDeps();'),
+  'wider-src/ helpers are deferred (lazy import) so a load failure is a clean 500, not a cold-start crash',
+);
+
 // 1) Auth verification is guarded AND bounded by a timeout (it runs before the
 //    main try and does a remote JWKS fetch that can throw OR hang).
 assert(
-  /verified = await withRateTimeout\(verifySupabaseJwt\(token\)/.test(rates) &&
+  /verified = await withRateTimeout\(_verifySupabaseJwt\(token\)/.test(rates) &&
     rates.includes("logServerError('carriers/rates:auth'"),
-  'verifySupabaseJwt is wrapped in try/catch + timeout (JWKS throw OR hang -> clean 503, not a crash)',
+  'verifySupabaseJwt (deferred) is wrapped in try/catch + timeout (throw OR hang -> clean 503)',
 );
 
 // 1b) Outermost fatal guard: nothing can escape as FUNCTION_INVOCATION_FAILED.
@@ -41,7 +53,7 @@ assert(
 
 // 1c) Token-free GET version marker so a deploy can be verified from a browser.
 assert(
-  /req\.method === 'GET'/.test(rates) && /build: 'rates-hardened-/.test(rates),
+  /req\.method === 'GET'/.test(rates) && /build: 'rates-/.test(rates),
   'GET returns a build/version marker for deploy verification',
 );
 

@@ -18,14 +18,30 @@
 //     simulated: boolean, fetchedAt: ISO }
 
 import postgres from 'postgres';
-import {
-  extractBearerToken,
-  verifySupabaseJwt,
-} from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { sendInternalServerError, logServerError } from '../_lib/safe-error.js';
-import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
-import { filterEligibleShippingServices } from '../../src/lib/shipping-service-eligibility.js';
+
+// ROOT CAUSE FIX: these helpers were STATIC imports at module top. On Vercel,
+// loading verify-supabase-jwt (jose) + the shipping-eligibility tree pulled a
+// wider src/ bundle that threw at COLD START, crashing the whole function as
+// FUNCTION_INVOCATION_FAILED *before the handler ran* (even a token-free GET
+// crashed) — so no in-handler try/catch could ever help. Defer them to request
+// time (the connectors below are already lazy for the same reason): now a load
+// failure is a clean, catchable 500 instead of an uncatchable function crash.
+let _extractBearerToken: (header: unknown) => string | null;
+let _verifySupabaseJwt: (token: string, options?: any) => Promise<{ ok: boolean; reason?: string }>;
+let _normalizeShippingOptions: (body: any) => any;
+let _filterEligibleShippingServices: (rates: any[], ctx: any, descriptor: any, opts: any) => any[];
+let _rateDepsLoaded = false;
+async function ensureRateDeps(): Promise<void> {
+  if (_rateDepsLoaded) return;
+  const auth = await import('../../src/lib/auth/verify-supabase-jwt.js');
+  _extractBearerToken = auth.extractBearerToken;
+  _verifySupabaseJwt = auth.verifySupabaseJwt;
+  _normalizeShippingOptions = (await import('../../src/lib/shipping-options.js')).normalizeShippingOptions;
+  _filterEligibleShippingServices = (await import('../../src/lib/shipping-service-eligibility.js')).filterEligibleShippingServices;
+  _rateDepsLoaded = true;
+}
 
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
 // connector registry here pulls a wider src/ tree into the serverless bundle;
@@ -90,7 +106,7 @@ function filterDirectCarrierRatesForEligibility(
   context: Record<string, unknown> | null,
   body: Record<string, unknown>,
 ) {
-  return filterEligibleShippingServices(
+  return _filterEligibleShippingServices(
     rates,
     {
       clientId: body.clientId ?? context?.client_id ?? null,
@@ -98,7 +114,7 @@ function filterDirectCarrierRatesForEligibility(
       storeId: body.storeId ?? context?.store_id ?? null,
     },
     (rate) => directRateServiceDescriptor(rate, provider),
-    normalizeShippingOptions(body),
+    _normalizeShippingOptions(body),
   );
 }
 
@@ -228,7 +244,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(200).json({
       ok: true,
       endpoint: 'carriers/rates',
-      build: 'rates-hardened-3-2026-06-03',
+      build: 'rates-coldstart-fix-2026-06-03',
       node: process.version,
     });
     return;
@@ -238,7 +254,10 @@ export default async function handler(req: any, res: any): Promise<void> {
   // Final safety net: wrap the ENTIRE request so NOTHING — an unguarded throw, a
   // hang, or any unexpected error — can escape as a Vercel FUNCTION_INVOCATION_FAILED.
   try {
-  const token = extractBearerToken(
+  // Load the deferred src/ helpers HERE (not at module top) so a bundling/
+  // resolution failure is a clean 500, not a cold-start function crash.
+  await ensureRateDeps();
+  const token = _extractBearerToken(
     req.headers?.authorization || req.headers?.Authorization
   );
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
@@ -248,7 +267,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   // platform limit and crashing as FUNCTION_INVOCATION_FAILED.
   let verified;
   try {
-    verified = await withRateTimeout(verifySupabaseJwt(token), 'auth-verify', 8_000);
+    verified = await withRateTimeout(_verifySupabaseJwt(token), 'auth-verify', 8_000);
   } catch (authErr) {
     logServerError('carriers/rates:auth', authErr);
     res.status(503).json({ ok: false, error: 'Auth verification temporarily unavailable' });
@@ -343,7 +362,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     const dimsL = typeof body?.dimsL === 'number' && body.dimsL > 0 ? body.dimsL : undefined;
     const dimsW = typeof body?.dimsW === 'number' && body.dimsW > 0 ? body.dimsW : undefined;
     const dimsH = typeof body?.dimsH === 'number' && body.dimsH > 0 ? body.dimsH : undefined;
-    const shippingOptions = normalizeShippingOptions(body);
+    const shippingOptions = _normalizeShippingOptions(body);
 
     if (provider === 'simulator') {
       const rates = simulatorRates({ weightOz, toZip });
