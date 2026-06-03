@@ -2946,7 +2946,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <PanelError message={panelErrors.trend} className="min-h-full" />
             ) : (
             <Suspense fallback={<PanelSkeleton className="min-h-full" />}>
-              <DashboardCharts trend={trend} clientTrend={clientTrend} clientSeries={clientSeries} />
+              <DashboardCharts
+                trend={trend}
+                clientTrend={clientTrend}
+                clientSeries={clientSeries}
+                onSelectClient={(clientId) => setSelectedClientId(clientId)}
+              />
             </Suspense>
             )}
           </div>

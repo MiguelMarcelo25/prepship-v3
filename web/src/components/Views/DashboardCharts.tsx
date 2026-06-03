@@ -29,6 +29,20 @@ type DashboardChartsProps = {
   // wide rows: { day, [series.key]: revenue, ... }.
   clientTrend?: Array<Record<string, number | string>>
   clientSeries?: ClientSeries[]
+  // Clicking a client line OR its bottom-legend label filters the dashboard to
+  // that client. Series keys are `c_<clientId>`; null is passed for the
+  // "Unassigned" series (no filter applied).
+  onSelectClient?: (clientId: number | null) => void
+}
+
+// Series keys are minted as `c_<clientId>` (or `c_none` for unassigned) in
+// DashboardView. Map a key back to the numeric client id, or null when it's
+// not a real client (so the click is a no-op).
+function seriesKeyToClientId(key: string | undefined): number | null {
+  if (!key || !key.startsWith('c_')) return null
+  const raw = key.slice(2)
+  const id = Number(raw)
+  return Number.isFinite(id) && id > 0 ? id : null
 }
 
 // Distinct, reasonably color-blind-friendly palette. Cycles if there are
@@ -62,10 +76,16 @@ function formatDayLabel(day: string) {
 function MultiClientChart({
   data,
   series,
+  onSelectClient,
 }: {
   data: Array<Record<string, number | string>>
   series: ClientSeries[]
+  onSelectClient?: (clientId: number | null) => void
 }) {
+  const selectFromKey = (key: string | undefined) => {
+    const clientId = seriesKeyToClientId(key)
+    if (clientId != null) onSelectClient?.(clientId)
+  }
   return (
     <div className="h-full min-h-0 w-full overflow-hidden rounded-md [&_.recharts-wrapper]:!overflow-hidden [&_.recharts-surface]:!overflow-hidden">
       <ResponsiveContainer width="100%" height="100%">
@@ -101,8 +121,16 @@ function MultiClientChart({
             }}
           />
           <Legend
-            wrapperStyle={{ fontSize: 11, paddingTop: 6 }}
+            wrapperStyle={{ fontSize: 11, paddingTop: 6, cursor: onSelectClient ? 'pointer' : undefined }}
             iconType="plainline"
+            onClick={(entry: { dataKey?: unknown; value?: unknown }) => {
+              // Click a bottom-legend label -> filter to that client. Resolve the
+              // series key from the payload's dataKey, falling back to matching
+              // the displayed name.
+              const fromDataKey = typeof entry?.dataKey === 'string' ? entry.dataKey : undefined
+              const fromName = series.find((s) => s.name === entry?.value)?.key
+              selectFromKey(fromDataKey ?? fromName)
+            }}
           />
           {series.map((s, index) => (
             <Line
@@ -115,6 +143,9 @@ function MultiClientChart({
               dot={false}
               activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface)' }}
               isAnimationActive={false}
+              // Click a client line -> filter the dashboard to that client.
+              onClick={() => selectFromKey(s.key)}
+              style={onSelectClient ? { cursor: 'pointer' } : undefined}
             />
           ))}
         </LineChart>
@@ -123,10 +154,10 @@ function MultiClientChart({
   )
 }
 
-export default function DashboardCharts({ trend, clientTrend, clientSeries }: DashboardChartsProps) {
+export default function DashboardCharts({ trend, clientTrend, clientSeries, onSelectClient }: DashboardChartsProps) {
   // Multi-client revenue mode (the "All Clients" breakdown).
   if (clientSeries && clientSeries.length > 0 && clientTrend && clientTrend.length > 0) {
-    return <MultiClientChart data={clientTrend} series={clientSeries} />
+    return <MultiClientChart data={clientTrend} series={clientSeries} onSelectClient={onSelectClient} />
   }
 
   return (
