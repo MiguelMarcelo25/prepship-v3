@@ -707,17 +707,25 @@ function createEditSkuFormState(item: InventoryItemDto): EditSkuFormState {
   }
 }
 
+// PS-074 — the chart height MUST be a fixed constant, never derived from the
+// canvas's own measured height. Reading getBoundingClientRect().height and
+// writing it back created a measure->write feedback loop: a single large
+// measured height (drawer/layout open timing) locked a huge canvas in and each
+// redraw re-measured the now-huge element, so it never shrank. Width is still
+// responsive (CSS width:100% is bounded by the parent); height is fixed + capped.
+const SKU_SALES_CHART_HEIGHT = 160
 function drawSkuSalesChart(canvas: HTMLCanvasElement, dailySales: InventorySkuOrdersDto['dailySales']) {
   const dpr = window.devicePixelRatio || 1
   const rect = canvas.getBoundingClientRect()
   const parentWidth = canvas.parentElement?.clientWidth ?? 0
   const width = Math.max(260, Math.floor(rect.width || parentWidth || 320))
-  const height = Math.max(140, Math.floor(rect.height || 160))
+  const height = SKU_SALES_CHART_HEIGHT
   canvas.width = width * dpr
   canvas.height = height * dpr
   canvas.style.width = '100%'
   canvas.style.maxWidth = '100%'
-  canvas.style.height = `${height}px`
+  canvas.style.height = `${SKU_SALES_CHART_HEIGHT}px`
+  canvas.style.maxHeight = `${SKU_SALES_CHART_HEIGHT}px`
 
   const context = canvas.getContext('2d')
   if (!context) return

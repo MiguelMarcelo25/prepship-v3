@@ -289,6 +289,18 @@ for (const viewport of [
     await page.locator('.ps-data-table-scroll tbody tr').first().click()
     await expect(page.locator('.inventory-drawer-panel')).toBeVisible()
     await expect(page.locator('.inventory-drawer-panel')).toContainText('Recent Orders')
+
+    // PS-074 — the "Units Sold — Last 30 Days" chart must stay capped (~160px)
+    // and never explode vertically. Guards the measure->write feedback loop that
+    // locked a huge canvas height from a stray layout measurement.
+    const chartCanvas = page.locator('.inventory-sku-chart-canvas')
+    await expect(chartCanvas).toBeVisible()
+    const chartCanvasBox = await chartCanvas.boundingBox()
+    expect(chartCanvasBox).toBeTruthy()
+    expect(chartCanvasBox.height).toBeLessThanOrEqual(180)
+    const chartCardBox = await page.locator('.inventory-sku-chart-card').boundingBox()
+    expect(chartCardBox).toBeTruthy()
+    expect(chartCardBox.height).toBeLessThanOrEqual(230)
     const overlayBox = await page.locator('.inventory-drawer-overlay').boundingBox()
     expect(overlayBox).toBeTruthy()
     if (viewport.width > 768) {
