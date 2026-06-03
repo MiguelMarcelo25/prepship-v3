@@ -2999,7 +2999,10 @@ export default function OrdersView({
       if (!resizeState) return
 
       const prefs = getLatestColumnPrefs()
-      const nextWidth = Math.max(getColumnMinWidth(resizeState.key), resizeState.startWidth + (event.clientX - resizeState.startX))
+      // PS-077: status-aware floor — Shipped/Cancelled "Selected Rate" (key
+      // 'bestrate') can shrink below the Awaiting "Best Rate" 175 floor. Read the
+      // status from the always-fresh ref (this listener lives in a [] effect).
+      const nextWidth = Math.max(getColumnMinWidth(resizeState.key, currentStatusRef.current), resizeState.startWidth + (event.clientX - resizeState.startX))
       const nextWidths = {
         ...prefs.widths,
         [resizeState.key]: nextWidth,
@@ -4225,7 +4228,7 @@ export default function OrdersView({
     const currentWidth = prefs.widths[column.key] ?? column.width
     const nextWidths = {
       ...prefs.widths,
-      [column.key]: Math.max(getColumnMinWidth(column.key), currentWidth + delta),
+      [column.key]: Math.max(getColumnMinWidth(column.key, currentStatusRef.current), currentWidth + delta),
     }
     void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
   }

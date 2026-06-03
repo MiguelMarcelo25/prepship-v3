@@ -482,3 +482,51 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     test_shippingAccount: { notContains: 'ups' }, // Acct Nickname must NEVER be the carrier code
   })
 })
+
+// PS-077 — Shipped "Selected Rate" (internal `bestrate`) must resize compactly
+// below the old 175px Best Rate floor, with header/body staying aligned.
+test('PS-077: Shipped Selected Rate column resizes below 175px and stays aligned', async ({ page }) => {
+  await page.setViewportSize({ width: 1680, height: 950 })
+  await setup(page)
+  await page.goto(`${baseUrl}/orders/shipped`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+
+  const header = page.locator('#ordersTable thead th[data-col="bestrate"]')
+  await expect(header).toHaveCount(1)
+  await expect(header).toContainText('Selected Rate') // relabeled in Shipped/Cancelled
+
+  const before = await header.boundingBox()
+  expect(before).not.toBeNull()
+  expect(before.width).toBeGreaterThanOrEqual(170) // started at the old ~175 floor
+
+  // Resize via the keyboard path (Shift+ArrowLeft → resizeColumnByKeyboard, −10px
+  // each). It hits the SAME status-aware getColumnMinWidth as drag, and is used
+  // here instead of a synthetic drag because the header is `draggable`, which
+  // races the native HTML5 drag under Playwright. 12 presses drives 175 → the
+  // compact floor (88) for Shipped.
+  await header.focus()
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press('Shift+ArrowLeft')
+  }
+
+  const headerWidth = async () => {
+    const b = await header.boundingBox()
+    return b ? b.width : Number.POSITIVE_INFINITY
+  }
+  // Width updates via setColumnPrefs re-render, so poll. It shrank below the OLD
+  // 175 clamp (down toward the 88 compact floor).
+  await expect.poll(headerWidth, { timeout: 5000 }).toBeLessThan(175)
+  expect(await headerWidth()).toBeLessThan(before.width)
+
+  // Header and body cell widths stay aligned (table-layout: fixed shares width).
+  const after = await header.boundingBox()
+  const bodyCell = page.locator(`#row-${shippedPersisted.orderId} td[data-col="bestrate"]`)
+  const cellBox = await bodyCell.boundingBox()
+  expect(cellBox).not.toBeNull()
+  expect(Math.abs(cellBox.width - after.width)).toBeLessThan(2)
+
+  // Compact, but the amount is still rendered (no blanking/overflow break).
+  await expect(bodyCell).toContainText('9.86')
+
+  await page.screenshot({ path: path.join(screenshotDir, 'shipped-selected-rate-compact.png'), fullPage: true })
+})

@@ -169,6 +169,7 @@
     "test:date-time-standard": "tsx scripts/date-time-standard-guard.ts",
     "test:daily-stats-window": "tsx scripts/daily-stats-window-guard.ts",
     "test:daily-strip-progress": "tsx scripts/daily-strip-progress-guard.ts",
+    "test:ps-077-selected-rate-width": "tsx scripts/ps-077-selected-rate-width-guard.ts",
     "test:direct-carrier-queue-route": "tsx scripts/direct-carrier-queue-route-guard.ts",
     "test:ps-078-connector-matrix": "tsx scripts/ps-078-connector-matrix-guard.ts",
     "test:ps-078-shipstation-direct-carrier-confirm": "tsx scripts/ps-078-shipstation-direct-carrier-confirm-guard.ts",

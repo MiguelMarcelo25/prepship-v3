@@ -76,13 +76,36 @@ const COLUMN_MIN_WIDTHS: Partial<Record<TableColumnKey, number>> = {
   test_bestRate: 175,
 }
 
-export function getColumnMinWidth(key: TableColumnKey) {
+// PS-077: in Shipped/Cancelled views the internal `bestrate` column is relabeled
+// "Selected Rate" and its content is compact ($9.91 / optional $8.62 / — /
+// Ext. Label / Missing shipment sync), so it may shrink well below the wider
+// Awaiting "Best Rate" floor. The min width is therefore STATUS-AWARE: the wide
+// 175 floor applies only to Awaiting Shipment; Shipped/Cancelled use a compact
+// floor so the column can be dragged narrow (and saved that way).
+const BESTRATE_COMPACT_MIN_WIDTH = 88
+
+export function getColumnMinWidth(
+  key: TableColumnKey,
+  currentStatus?: 'awaiting_shipment' | 'shipped' | 'cancelled',
+) {
+  if (
+    (key === 'bestrate' || key === 'test_bestRate') &&
+    currentStatus != null &&
+    currentStatus !== 'awaiting_shipment'
+  ) {
+    return BESTRATE_COMPACT_MIN_WIDTH
+  }
   return COLUMN_MIN_WIDTHS[key] ?? 40
 }
 
-function normalizeColumnWidth(key: TableColumnKey, width: unknown, fallback: number) {
+function normalizeColumnWidth(
+  key: TableColumnKey,
+  width: unknown,
+  fallback: number,
+  currentStatus?: 'awaiting_shipment' | 'shipped' | 'cancelled',
+) {
   const numericWidth = typeof width === 'number' && Number.isFinite(width) ? width : fallback
-  return Math.max(getColumnMinWidth(key), numericWidth)
+  return Math.max(getColumnMinWidth(key, currentStatus), numericWidth)
 }
 
 function shouldUseCanonicalColumnOrder(prefs?: ColumnPrefs | null) {
@@ -332,7 +355,7 @@ export function resolveColumnPrefs(
   const widths = Object.fromEntries(
     columns.map((column) => {
       const savedWidth = statusPrefs?.widths?.[column.key]
-      return [column.key, normalizeColumnWidth(column.key, savedWidth, column.width)]
+      return [column.key, normalizeColumnWidth(column.key, savedWidth, column.width, currentStatus)]
     }),
   ) as Record<TableColumnKey, number>
 
@@ -352,11 +375,16 @@ export function resolveColumnPrefs(
   }
 }
 
-export function buildColumnPrefs(columns: TableColumnConfig[], hiddenColumns: Set<TableColumnKey>, widths: Record<TableColumnKey, number>): ColumnPrefs {
+export function buildColumnPrefs(
+  columns: TableColumnConfig[],
+  hiddenColumns: Set<TableColumnKey>,
+  widths: Record<TableColumnKey, number>,
+  currentStatus?: 'awaiting_shipment' | 'shipped' | 'cancelled',
+): ColumnPrefs {
   const normalizedWidths = Object.fromEntries(
     columns.map((column) => [
       column.key,
-      normalizeColumnWidth(column.key, widths[column.key], column.width),
+      normalizeColumnWidth(column.key, widths[column.key], column.width, currentStatus),
     ]),
   )
 
@@ -374,7 +402,7 @@ export function buildColumnPrefsForStatus(
   hiddenColumns: Set<TableColumnKey>,
   widths: Record<TableColumnKey, number>,
 ): ColumnPrefs {
-  const nextStatusPrefs = buildColumnPrefs(columns, hiddenColumns, widths)
+  const nextStatusPrefs = buildColumnPrefs(columns, hiddenColumns, widths, currentStatus)
   const views = {
     ...(currentPrefs?.views ?? {}),
   }
