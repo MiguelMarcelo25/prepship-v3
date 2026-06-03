@@ -221,18 +221,34 @@ export default async function handler(req: any, res: any): Promise<void> {
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
 
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+  // Token-free version/health marker so a deploy can be verified from a browser:
+  // GET /api/carriers/rates -> if it returns this build tag, the hardened code is
+  // live. (If it 405s or crashes instead, the deployment is stale.)
+  if (req.method === 'GET') {
+    res.status(200).json({
+      ok: true,
+      endpoint: 'carriers/rates',
+      build: 'rates-hardened-3-2026-06-03',
+      node: process.version,
+    });
+    return;
+  }
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return; }
 
+  // Final safety net: wrap the ENTIRE request so NOTHING — an unguarded throw, a
+  // hang, or any unexpected error — can escape as a Vercel FUNCTION_INVOCATION_FAILED.
+  try {
   const token = extractBearerToken(
     req.headers?.authorization || req.headers?.Authorization
   );
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
-  // verifySupabaseJwt does a remote JWKS fetch and can THROW on a network blip.
-  // It runs BEFORE the main try/catch below, so an unguarded throw here crashed
-  // the function as FUNCTION_INVOCATION_FAILED. Guard it -> clean 401/503.
+  // verifySupabaseJwt does a remote JWKS fetch that can THROW *or HANG* on a
+  // network blip. A try/catch only catches throws, so also bound it with a
+  // timeout -> a hang becomes a clean 503 instead of running the function to the
+  // platform limit and crashing as FUNCTION_INVOCATION_FAILED.
   let verified;
   try {
-    verified = await verifySupabaseJwt(token);
+    verified = await withRateTimeout(verifySupabaseJwt(token), 'auth-verify', 8_000);
   } catch (authErr) {
     logServerError('carriers/rates:auth', authErr);
     res.status(503).json({ ok: false, error: 'Auth verification temporarily unavailable' });
@@ -992,5 +1008,14 @@ export default async function handler(req: any, res: any): Promise<void> {
     sendInternalServerError(res, 'carriers/rates', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
+  }
+  } catch (fatalErr) {
+    // Outermost safety net: anything that escaped the inner handling
+    // (pre-DB auth/body/param work, connection setup, or any unexpected throw)
+    // becomes a clean JSON 500 — never a Vercel FUNCTION_INVOCATION_FAILED.
+    logServerError('carriers/rates:fatal', fatalErr);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: 'Internal server error' });
+    }
   }
 }

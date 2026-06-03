@@ -24,12 +24,25 @@ const assert = (cond, msg) => {
   }
 };
 
-// 1) Auth verification is guarded (it runs before the main try and does a
-//    remote JWKS fetch that can throw).
+// 1) Auth verification is guarded AND bounded by a timeout (it runs before the
+//    main try and does a remote JWKS fetch that can throw OR hang).
 assert(
-  /try\s*{\s*\n\s*verified = await verifySupabaseJwt\(token\);/.test(rates) &&
+  /verified = await withRateTimeout\(verifySupabaseJwt\(token\)/.test(rates) &&
     rates.includes("logServerError('carriers/rates:auth'"),
-  'verifySupabaseJwt is wrapped in try/catch (JWKS network throw -> clean 503, not a crash)',
+  'verifySupabaseJwt is wrapped in try/catch + timeout (JWKS throw OR hang -> clean 503, not a crash)',
+);
+
+// 1b) Outermost fatal guard: nothing can escape as FUNCTION_INVOCATION_FAILED.
+assert(
+  rates.includes("logServerError('carriers/rates:fatal'") &&
+    rates.includes('res.headersSent'),
+  'an outermost try/catch turns any unexpected throw into a clean JSON 500',
+);
+
+// 1c) Token-free GET version marker so a deploy can be verified from a browser.
+assert(
+  /req\.method === 'GET'/.test(rates) && /build: 'rates-hardened-/.test(rates),
+  'GET returns a build/version marker for deploy verification',
 );
 
 // 2) Body parsing is guarded.
