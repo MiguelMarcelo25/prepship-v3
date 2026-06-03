@@ -1740,25 +1740,36 @@ function drawHeader(
   const nameRowH = 11.5;
   const namesTitleH = 18;
   const listBoxPad = 8;
-  const cols = 2;
   const dividerGap = 14;
+  const labelSize = 15;
+  const MIN_COUNT_FONT = 40;
+  const MAX_COUNT_FONT = 60;
+  const available = regionTop - regionBottom;
+  const pointerH = 22;
 
   let renderNamesOnHeader = plan.onHeader && recipients.length > 0;
+  let manifestPointer = plan.needsManifest;
+
+  // Adaptive column count for the names list. Small batches keep the approved
+  // 2-column look; larger batches (e.g. 20-30 names) widen to 3-4 columns so
+  // the list stays SHORT enough to fit on the header without crushing the
+  // ORDERS count below MIN_COUNT_FONT. Without this a header-sized batch
+  // (<= threshold) could still spill to a manifest purely because 2 columns
+  // made the list too tall. Cols never exceed 4 so names stay legible on the
+  // 256pt-wide content area (≈64pt/col at 4).
+  const maxNamesZoneH = available - dividerGap - labelSize - 4 - 10 - MIN_COUNT_FONT;
+  const maxNameRows = Math.max(1, Math.floor((maxNamesZoneH - namesTitleH - listBoxPad) / nameRowH));
+  let cols = 2;
+  while (cols < 4 && Math.ceil(recipients.length / cols) > maxNameRows) cols += 1;
   const nameRows = Math.ceil(recipients.length / cols);
   let namesZoneH = renderNamesOnHeader ? namesTitleH + nameRows * nameRowH + listBoxPad : 0;
-  let manifestPointer = plan.needsManifest;
-  const pointerH = 22;
 
   // ── 3) Big ORDERS count — top-anchored, sized to leave room for the names
   // section DIRECTLY below it (matches the approved 2nd-image mock). The count
   // font is capped so the count + names stay compact at the top and the leftover
   // space falls to the BOTTOM of the page, instead of pinning names to the page
   // floor with a big gap between the count and the list.
-  const labelSize = 15;
-  const available = regionTop - regionBottom;
   const reservedBelowCount = renderNamesOnHeader ? namesZoneH + dividerGap : manifestPointer ? pointerH : 0;
-  const MIN_COUNT_FONT = 40;
-  const MAX_COUNT_FONT = 60;
   let countFontSize = Math.floor(available - reservedBelowCount - labelSize - 4 - 10);
   if (renderNamesOnHeader && countFontSize < MIN_COUNT_FONT) {
     // names would crush the count below the legible floor -> spill to a manifest.
