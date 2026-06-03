@@ -2675,8 +2675,35 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </>
           ) : null}
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h3 className="text-sm font-extrabold text-ink">Daily Orders Trend</h3>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h3 className="text-sm font-extrabold text-ink">Daily Orders Trend</h3>
+                {/* PS — client filter on the chart's left. "All Clients" shows
+                    the aggregate of every client; selecting one re-renders the
+                    lines for that client. Bound to the dashboard-wide client
+                    filter so the chart and the rest of the dashboard stay in
+                    sync (the trend already re-fetches per `cid`). */}
+                <div className="relative">
+                  <select
+                    value={selectedClientId ?? ''}
+                    onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
+                    className="h-7 max-w-[12rem] appearance-none rounded-card border border-line bg-surface pl-2.5 pr-7 text-2xs font-bold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
+                    aria-label="Filter Daily Orders Trend by client"
+                  >
+                    <option value="">All Clients</option>
+                    {clients.map((client) => (
+                      <option key={client.clientId} value={client.clientId}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    size={13}
+                    strokeWidth={2.5}
+                    className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-3"
+                  />
+                </div>
+              </div>
               {/* 2026-05-13: removed the "Same day, last month"
                   legend entry per operator request. The prior-period
                   data is still fetched (priorSales, priorAgg) because
@@ -2695,11 +2722,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </div>
             </div>
             <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
-              {selectedClient ? (
-                <span className="rounded-full bg-brand-bg px-2 py-1 text-2xs font-bold text-brand">
-                  {selectedClient.name}
-                </span>
-              ) : null}
+              {/* PS — the on-chart client dropdown (left) now shows the active
+                  client, so the redundant client chip here was removed. */}
               {/* 2026-05-13: quick range toggles — 7 / 30 / 90 / 180
                   days. Clicking sets the dashboard-wide dateRange so
                   every panel (trend, heatmap, KPIs) reflects the
