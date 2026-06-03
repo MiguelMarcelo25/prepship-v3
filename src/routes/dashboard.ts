@@ -406,6 +406,49 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
   return c.json(payload);
 });
 
+// Per-client daily order VALUE for the Daily Orders Trend multi-line
+// ("All Clients") view. Read-only analytics — sums orders.orderTotal per
+// (day, client), excluding cancelled to match the dashboard "Order value"
+// line. Returns long rows; the frontend pivots to one line per client.
+app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), async (c) => {
+  const q = c.req.valid('query');
+  const fromDate = californiaDayStart(q.from);
+  const toDate = californiaDayEnd(q.to);
+  const scope = dashboardScopeFromContext(c);
+  const where = orderVisibilityWhere(c, q, fromDate, toDate, scope, { excludeCancelled: true });
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  type DashboardDailyRevenueByClientPayload = {
+    data: Array<{ day: string; clientId: number | null; revenue: number }>;
+  };
+  const cacheKey = analyticsCacheKey('dashboard.daily-revenue-by-client.v1', {
+    from: q.from,
+    to: q.to,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    includeInactiveClients,
+    hideTestOrders: q.hideTestOrders === true,
+    caller: dashboardCallerCacheScope(c, scope),
+  });
+
+  const cached = await getAnalyticsCache<DashboardDailyRevenueByClientPayload>(cacheKey);
+  if (cached) return c.json(cached);
+
+  const rows = await db.execute<{ day: string; clientId: number | null; revenue: number }>(sql`
+    select
+      to_char(date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
+      ${orders.clientId} as "clientId",
+      coalesce(sum(${orders.orderTotal}), 0)::float8 as revenue
+    from ${orders}
+    where ${where}
+    group by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), ${orders.clientId}
+    order by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles') asc
+  `);
+
+  const payload = { data: rows };
+  void setAnalyticsCache(cacheKey, payload, 60);
+  return c.json(payload);
+});
+
 app.get('/summary', zValidator('query', dashboardSummaryQuery), async (c) => {
   return c.json(await loadDashboardSummary(c, c.req.valid('query')));
 });

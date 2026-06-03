@@ -4243,6 +4243,26 @@ export const apiClient = {
     );
   },
 
+  // Per-client daily order value for the Daily Orders Trend multi-line
+  // ("All Clients") view. Returns long rows; the caller pivots to one
+  // line per client.
+  fetchDashboardDailyRevenueByClient(query: { from: string; to: string; storeId?: number; hideTestOrders?: boolean }): Promise<{
+    data: Array<{ day: string; clientId: number | null; revenue: number }>;
+  }> {
+    return safe(
+      'fetchDashboardDailyRevenueByClient',
+      async () => {
+        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        const res: any = await api.get<any>(`/dashboard/daily-revenue-by-client${qs(q)}`);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        return { data };
+      },
+      { data: [] as Array<{ day: string; clientId: number | null; revenue: number }> }
+    );
+  },
+
   fetchDashboardSummary(query: { from: string; to: string; sevenFrom?: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
     revenue: number;
     units: number;

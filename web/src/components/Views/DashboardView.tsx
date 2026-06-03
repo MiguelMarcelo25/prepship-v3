@@ -1222,6 +1222,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [trendDailyCounts, setTrendDailyCounts] = useState<DailyOrderCount[]>([])
   const [trendPriorDailyCounts, setTrendPriorDailyCounts] = useState<DailyOrderCount[]>([])
   const [trendRevenueByDay, setTrendRevenueByDay] = useState<Map<string, number>>(() => new Map())
+  // Per-client daily order value for the "All Clients" multi-line view —
+  // one line per client. Only fetched when the chart is on "All Clients"
+  // (trendClientId == null).
+  const [clientRevenueRows, setClientRevenueRows] = useState<
+    Array<{ day: string; clientId: number | null; revenue: number }>
+  >([])
   const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
   const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
   const [currentOrderAgg, setCurrentOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
@@ -2053,6 +2059,32 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trendClientId, selectedClientId, dateRange.from, dateRange.to])
 
+  // PS — per-client daily order value for the "All Clients" multi-line
+  // view. Independent of the dashboard-wide filter: "All Clients" always
+  // means every client. Skipped entirely when a single client is picked
+  // on the chart (that uses the dual-axis Orders + Order value view).
+  useEffect(() => {
+    if (trendClientId != null) {
+      setClientRevenueRows([])
+      return
+    }
+    let cancelled = false
+    apiClient
+      .fetchDashboardDailyRevenueByClient({ from: dateRange.from, to: dateRange.to, hideTestOrders: true })
+      .then((res) => {
+        if (cancelled) return
+        setClientRevenueRows(safeArray<{ day: string; clientId: number | null; revenue: number }>(res?.data))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setClientRevenueRows([])
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trendClientId, dateRange.from, dateRange.to])
+
   // Daily revenue comes from /orders/dashboard-sales so the
   // Daily Orders Trend chart can render a second line for total order
   // value on a separate right-side Y-axis. Aggregation: sum
@@ -2098,6 +2130,56 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     trendPriorDailyCounts,
     trendRevenueByDay,
   ])
+
+  // Multi-line "All Clients" view: pivot the long per-client revenue rows
+  // into recharts' wide format (one column per client) and a `series`
+  // list (key + display name). Every date bucket is filled with 0 so the
+  // lines stay continuous. Series are sorted by total revenue (desc) so
+  // the legend leads with the biggest clients. Empty when a single client
+  // is selected — that path uses the dual-axis `trend` instead.
+  const { clientSeries, clientTrend } = useMemo(() => {
+    if (trendClientId != null || clientRevenueRows.length === 0) {
+      return {
+        clientSeries: [] as Array<{ key: string; name: string }>,
+        clientTrend: [] as Array<Record<string, number | string>>,
+      }
+    }
+    const nameById = new Map(clients.map((client) => [client.clientId, client.name]))
+    const days = buildDateBuckets(dateRange.from, dateRange.to)
+    // day|clientKey -> revenue, plus the set of clients actually present.
+    const revenue = new Map<string, number>()
+    const presentKeys: string[] = []
+    const seen = new Set<string>()
+    for (const row of clientRevenueRows) {
+      const clientKey = row.clientId == null ? 'none' : String(row.clientId)
+      if (!seen.has(clientKey)) {
+        seen.add(clientKey)
+        presentKeys.push(clientKey)
+      }
+      revenue.set(`${row.day}|${clientKey}`, num(row.revenue))
+    }
+    const series = presentKeys.map((clientKey) => ({
+      clientKey,
+      key: `c_${clientKey}`,
+      name:
+        clientKey === 'none'
+          ? 'Unassigned'
+          : nameById.get(Number(clientKey)) ?? `Client ${clientKey}`,
+      total: days.reduce((sum, day) => sum + (revenue.get(`${day}|${clientKey}`) ?? 0), 0),
+    }))
+    series.sort((left, right) => right.total - left.total)
+    const rows = days.map((day) => {
+      const row: Record<string, number | string> = { day }
+      for (const entry of series) {
+        row[entry.key] = revenue.get(`${day}|${entry.clientKey}`) ?? 0
+      }
+      return row
+    })
+    return {
+      clientSeries: series.map(({ key, name }) => ({ key, name })),
+      clientTrend: rows,
+    }
+  }, [trendClientId, clientRevenueRows, clients, dateRange.from, dateRange.to])
   const heatmap = useMemo(
     () => buildHeatmap(currentSales, priorSales, heatmapLimit),
     [currentSales, priorSales, heatmapLimit],
@@ -2799,16 +2881,21 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   the heatmap baseline + KPI vs-prior arrows depend on
                   it elsewhere on the dashboard — we just stopped
                   rendering it on this chart. */}
-              <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3 flex-wrap">
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-0.5 w-8 rounded-full bg-brand" />
-                  Orders
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-0.5 w-8 rounded-full bg-emerald-500" />
-                  Order value ($)
-                </span>
-              </div>
+              {/* In the "All Clients" multi-line view the chart renders
+                  its own per-client legend, so this static Orders/Order
+                  value legend only applies to the single-client view. */}
+              {clientSeries.length === 0 ? (
+                <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3 flex-wrap">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-0.5 w-8 rounded-full bg-brand" />
+                    Orders
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-0.5 w-8 rounded-full bg-emerald-500" />
+                    Order value ($)
+                  </span>
+                </div>
+              ) : null}
             </div>
             <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
               {/* PS — the on-chart client dropdown (left) now shows the active
@@ -2859,7 +2946,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <PanelError message={panelErrors.trend} className="min-h-full" />
             ) : (
             <Suspense fallback={<PanelSkeleton className="min-h-full" />}>
-              <DashboardCharts trend={trend} />
+              <DashboardCharts trend={trend} clientTrend={clientTrend} clientSeries={clientSeries} />
             </Suspense>
             )}
           </div>
