@@ -4503,8 +4503,9 @@ export default function OrdersView({
       finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
     }
 
+    const backendResults = (finalStatus?.results ?? []) as Array<Record<string, unknown>>
     const successOrderIds = new Set(
-      ((finalStatus?.results ?? []) as Array<Record<string, unknown>>)
+      backendResults
         .filter((result) => result.success === true)
         .map((result) => toNumberValue(result.orderId ?? result.order_id))
         .filter((orderId): orderId is number => orderId != null),
@@ -4513,11 +4514,30 @@ export default function OrdersView({
       .filter((entry) => successOrderIds.has(entry.order.orderId))
       .flatMap((entry) => entry.items)
 
+    // Per user override unlock shipped data on 2026-05-23: surface the backend's
+    // per-order queue-send failure reason instead of swallowing it. Without this
+    // a real reason ("Missing label payload", a create-label/rate error, or a
+    // non-queueable label URL) collapsed into a generic "Label was not added to
+    // the print queue" toast and the operator had no way to see why. Read-only:
+    // this only reads results[].error already returned by the queue-send job.
+    const backendErrors = backendResults
+      .filter((result) => result.success === false)
+      .map((result) => {
+        const orderId = toNumberValue(result.orderId ?? result.order_id)
+        const reason = toStringValue(result.error)
+        if (!reason) return null
+        const orderNumber = prepared.find((entry) => entry.order.orderId === orderId)?.order.orderNumber
+        return orderNumber ? `Order ${orderNumber}: ${reason}` : reason
+      })
+      .filter((message): message is string => Boolean(message))
+
     return {
       queued: toNumberValue(finalStatus?.queued) ?? 0,
       failed: skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
       queuedItems,
-      skippedErrors,
+      // Client-side skips first (they short-circuit before the job), then the
+      // backend's per-order reasons. The toasts show skippedErrors[0].
+      skippedErrors: [...skippedErrors, ...backendErrors],
     }
   }
 
