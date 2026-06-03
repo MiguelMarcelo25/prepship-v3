@@ -281,7 +281,17 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
+  // statement_timeout bounds the LAST unbounded path: a hung/locked DB query
+  // (connect_timeout only covers connecting). With it, a slow query aborts with
+  // an error -> caught below -> clean 500, instead of running the function to
+  // the platform limit and crashing as FUNCTION_INVOCATION_FAILED.
+  const sql = postgres(dbUrl, {
+    max: 1,
+    prepare: false,
+    idle_timeout: 5,
+    connect_timeout: 5,
+    connection: { statement_timeout: 15_000 },
+  });
   try {
     const useStoreTable = hasStoreAccountId;
     const lookupId = useStoreTable ? storeAccountId! : carrierAccountId!;
