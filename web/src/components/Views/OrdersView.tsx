@@ -51,7 +51,7 @@ import type { NewOrderPayload } from '../NewOrderModal'
 // carrier-badge spans throughout the orders table + side panel.
 import CarrierBadge from '../CarrierBadge'
 import { apiClient } from '../../api/client'
-import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
+import { TEST_CLIENT_IDS, isDirectCarrierId } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 const NewOrderModal = lazy(() => import('../NewOrderModal'))
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
@@ -82,6 +82,7 @@ import {
   buildPicklistPrintHtml,
   buildQueueAddPayload,
   classifyAwaitingRateCellState,
+  classifyQueueOrderRoute,
   getColumnMinWidth,
   groupPrintQueueEntries,
   resolveColumnPrefs,
@@ -4443,6 +4444,71 @@ export default function OrdersView({
     }
   }
 
+  // Resolve the provider id the order would ship on (best rate → selected rate
+  // → any existing label), used to detect a direct carrier_accounts carrier.
+  function resolveOrderShippingProviderId(order: OrderSummaryDto): number | null {
+    return (
+      toNumberValue(order.bestRate?.shippingProviderId) ??
+      order.selectedRate?.shippingProviderId ??
+      order.label?.shippingProviderId ??
+      null
+    )
+  }
+
+  // Per user override unlock shipped data on 2026-05-23: direct-carrier queue
+  // support. The Render queue job's createLabelV2 is ShipStation-only, so a
+  // direct carrier (Shipp/EasyPost/Walmart Shipping/UPS) order that still needs
+  // a label is bought here via the Vercel /carriers/labels path (apiClient
+  // .createLabel — fixed for cold start) and the created label is added to the
+  // queue with the SAME addToQueue primitive the per-order Create+Print flow
+  // uses. Test/test-mode orders never reach this (they stay on the backend mock
+  // path), so no real postage is spent on test rows.
+  async function createDirectCarrierLabelThenQueue(
+    order: OrderSummaryDto,
+  ): Promise<{ queued: boolean; items: ReturnType<typeof getActiveItems>; error?: string }> {
+    if (order.clientId == null) return { queued: false, items: [], error: 'Missing client id' }
+    const orderDetail = orderDetailsById.get(order.orderId) ?? null
+    const bestRate = order.bestRate
+    const selectedRate = order.selectedRate
+    const shippingProviderId = resolveOrderShippingProviderId(order)
+    const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
+    const serviceName = toStringValue(bestRate?.serviceName) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
+    const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
+    const carrierName = toStringValue(bestRate?.carrierName) ?? selectedRate?.carrierName
+    const dims = getDimensions(order, orderDetail)
+    const weightOz = getOrderWeightOz(order, orderDetail)
+    const shippingOptions = buildOrderShippingOptionsPayload(order)
+    const payload: Record<string, unknown> = {
+      orderId: order.orderId,
+      orderNumber: order.orderNumber ?? undefined,
+      serviceCode,
+      serviceName: serviceName ?? undefined,
+      carrierCode,
+      carrierName: carrierName ?? undefined,
+      packageCode: 'package',
+      weightOz: weightOz > 0 ? weightOz : undefined,
+      length: dims?.length,
+      width: dims?.width,
+      height: dims?.height,
+      confirmation: shippingOptions.confirmation,
+      insuranceProvider: shippingOptions.insuranceProvider,
+      insuredValue: shippingOptions.insuredValue,
+    }
+    if (shippingProviderId != null) payload.shippingProviderId = shippingProviderId
+    // createLabel throws on failure; the caller wraps this in try/catch.
+    const response = await apiClient.createLabel(payload)
+    const queueableLabelUrl = getQueueableLabelUrl(response?.labelUrl)
+    if (!queueableLabelUrl) {
+      return {
+        queued: false,
+        items: [],
+        error: response?.labelUrl ? 'Label URL is not queueable' : 'Label created but no PDF URL returned',
+      }
+    }
+    await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
+    return { queued: true, items: getActiveItems(order, orderDetail) }
+  }
+
   async function sendOrdersToQueueBackend(
     jobOrders: OrderSummaryDto[],
     options: {
@@ -4457,7 +4523,47 @@ export default function OrdersView({
       label: options.label ?? 'Sending to queue',
       batchTestMode: options.batchTestMode,
     })
-    const prepared = jobOrders.map((order) => buildQueueSendOrderPayload(order, options))
+
+    // Split direct-carrier orders that still need a label (the Render queue job
+    // can't create those) from everything else. Direct ones buy + queue via the
+    // Vercel path; the rest flow through the backend create/recover job below.
+    const directQueuedItems: ReturnType<typeof getActiveItems> = []
+    const directErrors: string[] = []
+    let directQueued = 0
+    const backendJobOrders: OrderSummaryDto[] = []
+    for (const order of jobOrders) {
+      const route = classifyQueueOrderRoute(
+        {
+          hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
+          isTest: isTestOrder(order, orderDetailsById.get(order.orderId) ?? null),
+          isDirectCarrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
+        },
+        options,
+      )
+      if (route !== 'direct-create') {
+        backendJobOrders.push(order)
+        continue
+      }
+      try {
+        const outcome = await createDirectCarrierLabelThenQueue(order)
+        if (outcome.queued) {
+          directQueued += 1
+          directQueuedItems.push(...outcome.items)
+          markPersistentQueueJobOrder(queueJobId, order.orderId, false)
+          advanceQueueActionProgress()
+        } else {
+          directErrors.push(`Order ${order.orderNumber ?? order.orderId}: ${outcome.error ?? 'label not queued'}`)
+          markPersistentQueueJobOrder(queueJobId, order.orderId, true)
+          advanceQueueActionProgress(1)
+        }
+      } catch (err) {
+        directErrors.push(`Order ${order.orderNumber ?? order.orderId}: ${err instanceof Error ? err.message : 'Direct label failed'}`)
+        markPersistentQueueJobOrder(queueJobId, order.orderId, true)
+        advanceQueueActionProgress(1)
+      }
+    }
+
+    const prepared = backendJobOrders.map((order) => buildQueueSendOrderPayload(order, options))
     const skipped = prepared.filter((entry) => !entry.payload)
     const skippedErrors = skipped
       .map((entry) => toStringValue(entry.error))
@@ -4499,7 +4605,7 @@ export default function OrdersView({
     } finally {
       setQueueLoading(false)
       finishPersistentQueueJob(queueJobId)
-      const queued = toNumberValue(finalStatus?.queued) ?? 0
+      const queued = (toNumberValue(finalStatus?.queued) ?? 0) + directQueued
       finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
     }
 
@@ -4532,12 +4638,13 @@ export default function OrdersView({
       .filter((message): message is string => Boolean(message))
 
     return {
-      queued: toNumberValue(finalStatus?.queued) ?? 0,
-      failed: skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
-      queuedItems,
-      // Client-side skips first (they short-circuit before the job), then the
-      // backend's per-order reasons. The toasts show skippedErrors[0].
-      skippedErrors: [...skippedErrors, ...backendErrors],
+      // Direct-carrier orders bought + queued via the Vercel path count too.
+      queued: directQueued + (toNumberValue(finalStatus?.queued) ?? 0),
+      failed: directErrors.length + skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
+      queuedItems: [...directQueuedItems, ...queuedItems],
+      // Direct-carrier failures first, then client-side skips, then the backend's
+      // per-order reasons. The toasts show skippedErrors[0].
+      skippedErrors: [...directErrors, ...skippedErrors, ...backendErrors],
     }
   }
 
@@ -6165,7 +6272,7 @@ export default function OrdersView({
         if (result.queued > 0) {
           showToast(formatQueuedOrdersToast(result.queued, result.queuedItems, result.failed), 'success')
         } else {
-          showToast('No orders added to queue', 'error')
+          showToast(result.skippedErrors[0] ?? 'No orders added to queue', 'error')
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')

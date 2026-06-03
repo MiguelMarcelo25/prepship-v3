@@ -701,3 +701,35 @@ export function classifyAwaitingRateCellState(input: {
 export function awaitingRateCellIsSpinner(state: AwaitingRateCellState): boolean {
   return state === 'calculating' || state === 'pending'
 }
+
+// ─── Send-to-Queue routing (direct carriers vs ShipStation) ─────────────────
+// The Render queue job's label creator (createLabelV2) is ShipStation-only —
+// it sends `se-<providerId>` to ShipStation, which rejects a direct carrier's
+// synthetic id. So a direct-carrier order that still needs a label must be
+// routed to the Vercel /carriers/labels path (buy the label there, then add the
+// created label to the queue). Everything else stays on the backend create/
+// recover job. This is the pure decision the queue action consumes so it can be
+// unit-tested without buying real postage.
+export type QueueOrderRoute = 'direct-create' | 'backend'
+
+export function classifyQueueOrderRoute(
+  input: {
+    /** The order already has a queueable (non-[object Object]) label URL. */
+    hasQueueableLabel: boolean
+    /** Test-client order — must never buy real postage; backend forces a mock. */
+    isTest: boolean
+    /** Selected/best rate resolves to a direct carrier_accounts synthetic id. */
+    isDirectCarrier: boolean
+  },
+  options: { existingLabelOnly?: boolean; batchTestMode?: boolean } = {},
+): QueueOrderRoute {
+  // Never create a label in these cases — defer to the backend job:
+  if (options.existingLabelOnly) return 'backend' // caller only wants existing labels queued
+  if (options.batchTestMode) return 'backend' // test run → backend mock, no real postage
+  if (input.isTest) return 'backend' // test-client order → backend mock
+  if (input.hasQueueableLabel) return 'backend' // already bought → backend queues it as-is
+  // A direct-carrier order that still needs a label is the ONLY case the backend
+  // can't handle. Buy it via the Vercel direct path, then queue.
+  if (input.isDirectCarrier) return 'direct-create'
+  return 'backend' // ShipStation provider → backend createLabelV2
+}

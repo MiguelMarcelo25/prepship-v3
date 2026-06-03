@@ -805,7 +805,7 @@ function directAccountRefFromProviderId(providerId: number | null): DirectAccoun
   return null;
 }
 
-function isDirectCarrierId(value: unknown): boolean {
+export function isDirectCarrierId(value: unknown): boolean {
   return directAccountRefFromProviderId(toProviderAccountId(value)) != null;
 }
 
