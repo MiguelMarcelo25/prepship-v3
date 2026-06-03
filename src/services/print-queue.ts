@@ -1449,6 +1449,26 @@ function drawMockFallbackLabel(
   page.drawText(safePdfText(reason).slice(0, 70), { x: pad, y: 70, size: 7, font: fontReg, color: gray });
 }
 
+// PS-073 — SVG path for a filled rounded rectangle, used for the prominent
+// "BATCH HEADER" pill (the approved mock shows a rounded bar, not a full-bleed
+// strip). pdf-lib's drawSvgPath places (0,0) at the given (x,y) and draws with
+// y increasing DOWNWARD, so pass the pill's TOP-edge y and it fills downward.
+function roundedRectSvgPath(w: number, h: number, r: number): string {
+  const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+  return [
+    `M ${rad} 0`,
+    `H ${w - rad}`,
+    `Q ${w} 0 ${w} ${rad}`,
+    `V ${h - rad}`,
+    `Q ${w} ${h} ${w - rad} ${h}`,
+    `H ${rad}`,
+    `Q 0 ${h} 0 ${h - rad}`,
+    `V ${rad}`,
+    `Q 0 0 ${rad} 0`,
+    'Z',
+  ].join(' ');
+}
+
 function drawHeader(
   page: ReturnType<import('pdf-lib').PDFDocument['addPage']>,
   entry: PrintQueueEntry,
@@ -1477,30 +1497,35 @@ function drawHeader(
   const pad = 16;
 
   page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(1, 1, 1) });
-  page.drawRectangle({
-    x: 0,
-    y: height - 40,
-    width,
-    height: 40,
+  // PS-073 — prominent rounded "BATCH HEADER" pill (matches the approved mock)
+  // instead of a full-bleed strip. Inset with side margins + a small top margin;
+  // the pill still occupies the top ~40pt band so content below is unchanged.
+  const barH = 30;
+  const barTop = height - 6; // PDF y of the pill's top edge
+  const barW = width - pad * 2;
+  page.drawSvgPath(roundedRectSvgPath(barW, barH, 8), {
+    x: pad,
+    y: barTop,
     color: rgb(0.1, 0.1, 0.1),
   });
-  page.drawText('BATCH HEADER', {
-    x: cx - font.widthOfTextAtSize('BATCH HEADER', 13) / 2,
-    y: height - 27,
-    size: 13,
+  const headerTitle = 'BATCH HEADER';
+  const headerTitleSize = 15;
+  const headerBaseline = barTop - barH / 2 - headerTitleSize / 2 + 2;
+  page.drawText(headerTitle, {
+    x: cx - font.widthOfTextAtSize(headerTitle, headerTitleSize) / 2,
+    y: headerBaseline,
+    size: headerTitleSize,
     font,
     color: rgb(1, 1, 1),
   });
-  // Test-mode stamp: small red "TEST" on the right side of the
-  // BATCH HEADER bar. Doesn't shift any other content — the bar is
-  // a fixed-height strip and "TEST" sits in the otherwise-empty
-  // right gutter of that strip.
+  // Test-mode stamp: small red "TEST" at the right end of the pill. Doesn't
+  // shift any other content.
   if (isTest) {
     const testLabel = 'TEST';
     const testSize = 11;
     page.drawText(testLabel, {
-      x: width - pad - font.widthOfTextAtSize(testLabel, testSize),
-      y: height - 26,
+      x: pad + barW - 12 - font.widthOfTextAtSize(testLabel, testSize),
+      y: barTop - barH / 2 - testSize / 2 + 1,
       size: testSize,
       font,
       color: rgb(1, 0.45, 0.45),
@@ -1716,6 +1741,19 @@ function drawHeader(
       color: rgb(0.2, 0.2, 0.2),
     });
   }
+
+  // PS-073 footer (matches the approved mock): the names list is a secondary
+  // rescue/reference surface — primary picking info stays at the top. Sits below
+  // the names region floor (regionBottom) so it never overlaps the list.
+  const footerText = 'Reference only - primary picking info stays at top';
+  const footerSize = 7.5;
+  page.drawText(safePdfText(footerText), {
+    x: cx - fontReg.widthOfTextAtSize(footerText, footerSize) / 2,
+    y: 4,
+    size: footerSize,
+    font: fontReg,
+    color: rgb(0.55, 0.55, 0.55),
+  });
 
   return { manifestNeeded };
 }

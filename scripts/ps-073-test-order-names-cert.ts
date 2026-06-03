@@ -79,6 +79,9 @@ async function main(): Promise<void> {
     { name: 'Order TEST-9003', orderNumber: 'TEST-9003' }, // missing-name fallback
   ]);
   check('TEST batch stamps the header as TEST', small.includes('TEST'));
+  // PS-073 mock-match: rounded BATCH HEADER pill + secondary-reference footer.
+  check('TEST batch renders the BATCH HEADER title', small.includes('BATCH HEADER'));
+  check('TEST batch renders the reference footer', /Reference only/.test(small));
   check('TEST batch shows "Names in this batch (3)"', /Names in this batch \(3\)/.test(small));
   // Names are rendered upper-cased for the warehouse rescue list.
   check('TEST batch lists a recipient name', small.includes('ALEX KIM') && small.includes('BAILEY PARK'));
