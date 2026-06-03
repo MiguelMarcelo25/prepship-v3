@@ -60,6 +60,7 @@ if (
 }
 
 const lazilyLoadedRuntimeFiles = [
+  'src/lib/shipping-service-eligibility.ts',
   'src/connectors/store/walmart.ts',
   'src/connectors/carrier/amazon-shipping.ts',
   'src/connectors/carrier/easypost.ts',

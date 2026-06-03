@@ -1,4 +1,4 @@
-import { normalizeInsurance, type NormalizedInsuranceProvider } from './shipping-options';
+import { normalizeInsurance, type NormalizedInsuranceProvider } from './shipping-options.js';
 
 export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1';
 
