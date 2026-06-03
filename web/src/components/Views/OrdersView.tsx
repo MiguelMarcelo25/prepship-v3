@@ -2181,6 +2181,10 @@ export default function OrdersView({
   const [autoBestRateEntries, setAutoBestRateEntries] = useState<Record<number, {
     key: string
     rate: Record<string, unknown> | null
+    // PS-075: a sanitized error message when passive rating FAILED for this
+    // request key. Distinguishes a terminal error from a genuine no-rate result
+    // so the cell shows "rate error" instead of an endless spinner.
+    error?: string | null
   }>>({})
   const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
   // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
@@ -2400,7 +2404,10 @@ export default function OrdersView({
     sortState.key === 'custcarrier' ||
     passiveRatingAccountsEnabled
   const { locations } = useLocations({ enabled: ordersSupportDataEnabled })
-  const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
+  // PS-075 — also capture the carrier-accounts load error so a FAILED accounts
+  // fetch doesn't masquerade as "loading carriers…" forever.
+  const { accounts: shippingAccounts, isLoading: accountsLoadingRaw, error: accountsError } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
+  const accountsLoading = accountsLoadingRaw && !accountsError
   const { markups } = useMarkups()
 
   const orderDetailsById = useMemo(() => (
@@ -5250,7 +5257,19 @@ export default function OrdersView({
           }
         }
       } catch (error) {
-        autoBestRateRequestedRef.current.delete(request.key)
+        // PS-075 — record a TERMINAL error entry for this request key instead of
+        // deleting it. Deleting let the effect re-fetch -> error -> re-fetch,
+        // leaving the Carrier/Account cells spinning forever (e.g. while
+        // /api/carriers/rates is 500ing). Keeping the key + an error entry makes
+        // the cell show a terminal "rate error" with a Retry path (retryOrderRate
+        // clears both). The stored message is sanitized — no raw provider payload.
+        const sanitized = error instanceof Error ? error.message.replace(/\s+/g, ' ').trim().slice(0, 140) : 'Rate lookup failed'
+        if (!cancelled) {
+          setAutoBestRateEntries((current) => ({
+            ...current,
+            [order.orderId]: { key: request.key, rate: null, error: sanitized || 'Rate lookup failed' },
+          }))
+        }
         console.warn(
           '[OrdersView] auto best-rate refresh failed:',
           error instanceof Error ? error.message : error,
@@ -6718,6 +6737,25 @@ export default function OrdersView({
             No carrier account
           </button>
         )
+      case 'error': {
+        // PS-075 — terminal error (passive rating failed for this order). Show a
+        // Retry affordance; tooltip carries the sanitized message.
+        const autoReq = getAutoBestRateRequest(order)
+        const errMsg = autoReq ? autoBestRateEntries[order.orderId]?.error : null
+        return variant === 'compact' ? (
+          <span data-rate-state="error" title={errMsg ? `Rate error: ${errMsg}` : 'Rate lookup failed'} style={{ ...muted, color: 'var(--red)' }}>—</span>
+        ) : (
+          <button
+            type="button"
+            data-rate-state="error"
+            title={errMsg ? `Rate error: ${errMsg} — click to retry` : 'Rate lookup failed — click to retry'}
+            style={{ ...linkBtn, color: 'var(--red)' }}
+            onClick={() => retryOrderRate(order)}
+          >
+            Rate error · Retry
+          </button>
+        )
+      }
       case 'unavailable':
         return variant === 'compact' ? (
           <span data-rate-state="unavailable" title="No rate found for this order" style={muted}>—</span>
@@ -6758,7 +6796,10 @@ export default function OrdersView({
     const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
-    const resolvedNoRate = Boolean(autoRequest && autoEntry?.key === autoRequest.key && !autoEntry?.rate)
+    const resolvedForKey = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
+    // PS-075 — distinguish a terminal ERROR from a genuine no-rate result.
+    const resolvedError = resolvedForKey && Boolean(autoEntry?.error)
+    const resolvedNoRate = resolvedForKey && !autoEntry?.rate && !autoEntry?.error
     const hasCarrierContext = isTestOrder(displayOrder) || getRateCarrierIdsForAccounts().length > 0
     const state = classifyAwaitingRateCellState({
       hasDims,
@@ -6766,6 +6807,7 @@ export default function OrdersView({
       hasDisplayableBestRate,
       isCalculatingBestRate,
       resolvedNoRate,
+      resolvedError,
       hasCarrierContext,
       accountsLoading,
     })

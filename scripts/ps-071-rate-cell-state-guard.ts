@@ -32,6 +32,7 @@ const base = {
   hasDisplayableBestRate: false,
   isCalculatingBestRate: false,
   resolvedNoRate: false,
+  resolvedError: false,
   hasCarrierContext: true,
   accountsLoading: false,
 };
@@ -47,6 +48,13 @@ check('missing weight => add-dims', S({ hasWeight: false }), 'add-dims');
 
 // THE BUG: rate request finished with no rate must be terminal, not a spinner.
 check('resolved no rate => unavailable', S({ resolvedNoRate: true }), 'unavailable');
+
+// PS-075: a passive fetch that ERRORED must be a terminal 'error', never a
+// spinner — even with carrier context present (the repeated-500 case).
+check('resolved error => error', S({ resolvedError: true }), 'error');
+check('error wins over no-rate', S({ resolvedError: true, resolvedNoRate: true }), 'error');
+check('error is terminal even with carrier context', S({ resolvedError: true, hasCarrierContext: true }), 'error');
+check('error is NOT a spinner', awaitingRateCellIsSpinner('error'), false);
 
 // Accounts gating must surface, not spin.
 check('no carrier ctx + loading => loading-carriers', S({ hasCarrierContext: false, accountsLoading: true }), 'loading-carriers');
@@ -69,6 +77,7 @@ check('calculating is a (bounded) spinner', awaitingRateCellIsSpinner('calculati
 // terminal state UNLESS a request is genuinely in flight (carrier ctx present,
 // not yet resolved). This proves "no Browse Rates required to escape a spinner".
 for (const resolvedNoRate of [true, false]) {
+ for (const resolvedError of [true, false]) {
   for (const hasCarrierContext of [true, false]) {
     for (const accountsLoading of [true, false]) {
       for (const isCalculatingBestRate of [true, false]) {
@@ -78,21 +87,24 @@ for (const resolvedNoRate of [true, false]) {
           hasDisplayableBestRate: false,
           isCalculatingBestRate,
           resolvedNoRate,
+          resolvedError,
           hasCarrierContext,
           accountsLoading,
         });
         // A spinner is only acceptable when carrier context exists AND the rate
-        // hasn't resolved to "no rate" — i.e. a request can still complete.
+        // hasn't resolved to "no rate" OR "error" — i.e. a request can still
+        // complete. A resolved error/no-rate is always terminal.
         if (awaitingRateCellIsSpinner(state)) {
           check(
-            `spinner only when resolvable (ctx=${hasCarrierContext}, resolvedNoRate=${resolvedNoRate})`,
-            hasCarrierContext && !resolvedNoRate,
+            `spinner only when resolvable (ctx=${hasCarrierContext}, noRate=${resolvedNoRate}, err=${resolvedError})`,
+            hasCarrierContext && !resolvedNoRate && !resolvedError,
             true,
           );
         }
       }
     }
   }
+ }
 }
 
 if (failures > 0) {

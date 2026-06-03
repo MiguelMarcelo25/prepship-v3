@@ -665,6 +665,7 @@ function escapeHtml(value: string) {
 export type AwaitingRateCellState =
   | 'ready' // a displayable best rate exists -> render the rate
   | 'add-dims' // not rateable yet: missing dims/weight
+  | 'error' // PS-075: passive rating finished with an ERROR for this request key
   | 'unavailable' // auto-rating resolved for this request with no rate -> Retry/Browse
   | 'loading-carriers' // carrier accounts still loading (bounded)
   | 'no-carrier-account' // accounts loaded but none available -> actionable
@@ -677,11 +678,17 @@ export function classifyAwaitingRateCellState(input: {
   hasDisplayableBestRate: boolean
   isCalculatingBestRate: boolean
   resolvedNoRate: boolean
+  /** PS-075: passive rating resolved for THIS request key with an error. */
+  resolvedError?: boolean
   hasCarrierContext: boolean
   accountsLoading: boolean
 }): AwaitingRateCellState {
   if (input.hasDisplayableBestRate) return 'ready'
   if (!input.hasDims || !input.hasWeight) return 'add-dims'
+  // A resolved error/no-rate is TERMINAL — never a spinner. Error is checked
+  // first so a repeatedly-failing passive fetch shows "rate error", not an
+  // endless 'pending' spinner.
+  if (input.resolvedError) return 'error'
   if (input.resolvedNoRate) return 'unavailable'
   if (!input.hasCarrierContext) {
     return input.accountsLoading ? 'loading-carriers' : 'no-carrier-account'
