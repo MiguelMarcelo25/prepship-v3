@@ -76,25 +76,22 @@ const COLUMN_MIN_WIDTHS: Partial<Record<TableColumnKey, number>> = {
   test_bestRate: 175,
 }
 
-// PS-077: in Shipped/Cancelled views the internal `bestrate` column is relabeled
-// "Selected Rate" and its content is compact ($9.91 / optional $8.62 / — /
-// Ext. Label / Missing shipment sync), so it may shrink well below the wider
-// Awaiting "Best Rate" floor. The min width is therefore STATUS-AWARE: the wide
-// 175 floor applies only to Awaiting Shipment; Shipped/Cancelled use a compact
-// floor so the column can be dragged narrow (and saved that way).
+// PS-077 (+ follow-up): the internal `bestrate` column — shown as "Best Rate" in
+// Awaiting and relabeled "Selected Rate" in Shipped/Cancelled — has compact
+// content ($9.91 / optional $8.62 / — / Ext. Label / Missing shipment sync), so
+// it may shrink well below the old 175px floor in EVERY view. The min width here
+// is just the RESIZE floor; the default DISPLAY width stays wide (TABLE_COLUMNS
+// bestrate.width = 175), so the column looks unchanged until the operator drags
+// it narrow (and that compact width is saved).
 const BESTRATE_COMPACT_MIN_WIDTH = 88
 
 export function getColumnMinWidth(
   key: TableColumnKey,
-  currentStatus?: 'awaiting_shipment' | 'shipped' | 'cancelled',
+  // Retained for call-site symmetry / future per-status tuning; both Awaiting
+  // "Best Rate" and Shipped/Cancelled "Selected Rate" now share the compact floor.
+  _currentStatus?: 'awaiting_shipment' | 'shipped' | 'cancelled',
 ) {
-  if (
-    (key === 'bestrate' || key === 'test_bestRate') &&
-    currentStatus != null &&
-    currentStatus !== 'awaiting_shipment'
-  ) {
-    return BESTRATE_COMPACT_MIN_WIDTH
-  }
+  if (key === 'bestrate' || key === 'test_bestRate') return BESTRATE_COMPACT_MIN_WIDTH
   return COLUMN_MIN_WIDTHS[key] ?? 40
 }
 

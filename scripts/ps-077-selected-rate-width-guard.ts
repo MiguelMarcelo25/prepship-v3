@@ -18,13 +18,14 @@ function check(name: string, cond: boolean) {
   }
 }
 
-// ── (1) status-aware min width ──────────────────────────────────────────────
-check('bestrate min defaults to 175 when no status (back-compat)', getColumnMinWidth('bestrate') === 175);
-check('Awaiting "Best Rate" keeps the 175 floor', getColumnMinWidth('bestrate', 'awaiting_shipment') === 175);
+// ── (1) compact min width in EVERY view (Best Rate + Selected Rate) ──────────
+check('bestrate uses the compact floor with no status (back-compat)', getColumnMinWidth('bestrate') === 88);
+check('Awaiting "Best Rate" can shrink to the compact floor (< 175)', getColumnMinWidth('bestrate', 'awaiting_shipment') < 175);
+check('Awaiting "Best Rate" compact floor is 88', getColumnMinWidth('bestrate', 'awaiting_shipment') === 88);
 check('Shipped "Selected Rate" uses a compact floor (< 175)', getColumnMinWidth('bestrate', 'shipped') < 175);
 check('Shipped "Selected Rate" compact floor is 88', getColumnMinWidth('bestrate', 'shipped') === 88);
 check('Cancelled "Selected Rate" uses the compact floor', getColumnMinWidth('bestrate', 'cancelled') === 88);
-check('test_bestRate (test client) also compacts in Shipped', getColumnMinWidth('test_bestRate', 'shipped') === 88);
+check('test_bestRate (test client) also compacts in every view', getColumnMinWidth('test_bestRate', 'shipped') === 88 && getColumnMinWidth('test_bestRate', 'awaiting_shipment') === 88);
 check('compact floor is in the 80–95px target range', getColumnMinWidth('bestrate', 'shipped') >= 80 && getColumnMinWidth('bestrate', 'shipped') <= 95);
 
 // ── (2) other columns are unaffected by status ──────────────────────────────
@@ -41,7 +42,9 @@ const cancelled = resolveColumnPrefs(columns, 'cancelled', { views: { cancelled:
 check('Cancelled: a saved 88px Selected Rate width is preserved', cancelled.widths.bestrate === 88);
 
 const awaiting = resolveColumnPrefs(columns, 'awaiting_shipment', { views: { awaiting_shipment: { widths: { bestrate: 90 } } } } as never);
-check('Awaiting: a sub-175 saved width is clamped back to 175 (Best Rate floor preserved)', awaiting.widths.bestrate === 175);
+check('Awaiting: a saved 90px Best Rate width is preserved (no longer clamped to 175)', awaiting.widths.bestrate === 90);
+const awaitingBelowFloor = resolveColumnPrefs(columns, 'awaiting_shipment', { views: { awaiting_shipment: { widths: { bestrate: 40 } } } } as never);
+check('Awaiting: a width below the 88 floor is clamped UP to 88 (not 175)', awaitingBelowFloor.widths.bestrate === 88);
 
 // ── (4) wiring: resize callers pass current status (no hard clamp) ───────────
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
@@ -50,9 +53,9 @@ check('drag resize passes current status to getColumnMinWidth',
 check('keyboard resize passes current status to getColumnMinWidth',
   /getColumnMinWidth\(column\.key,\s*currentStatusRef\.current\)/.test(ordersView));
 const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
-check('getColumnMinWidth is status-aware (signature) and resolver threads status',
-  /export function getColumnMinWidth\(\s*key: TableColumnKey,\s*currentStatus\?/.test(parity) &&
-  /normalizeColumnWidth\(column\.key, savedWidth, column\.width, currentStatus\)/.test(parity));
+check('bestrate/test_bestRate use the compact floor in getColumnMinWidth',
+  /if \(key === 'bestrate' \|\| key === 'test_bestRate'\) return BESTRATE_COMPACT_MIN_WIDTH/.test(parity) &&
+  /const BESTRATE_COMPACT_MIN_WIDTH = 88/.test(parity));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-077 selected-rate width guard (${failures} failing)`);

@@ -530,3 +530,41 @@ test('PS-077: Shipped Selected Rate column resizes below 175px and stays aligned
 
   await page.screenshot({ path: path.join(screenshotDir, 'shipped-selected-rate-compact.png'), fullPage: true })
 })
+
+// PS-077 follow-up — Awaiting "Best Rate" must shrink below 175px too.
+test('PS-077: Awaiting Best Rate column resizes below 175px and stays aligned', async ({ page }) => {
+  await page.setViewportSize({ width: 1680, height: 950 })
+  await setup(page)
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+
+  const header = page.locator('#ordersTable thead th[data-col="bestrate"]')
+  await expect(header).toHaveCount(1)
+  await expect(header).toContainText('Best Rate') // NOT relabeled in Awaiting
+
+  const before = await header.boundingBox()
+  expect(before).not.toBeNull()
+  expect(before.width).toBeGreaterThanOrEqual(170) // started at the old ~175 floor
+
+  // Same keyboard resize path as the Shipped test; hits getColumnMinWidth.
+  await header.focus()
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press('Shift+ArrowLeft')
+  }
+
+  const headerWidth = async () => {
+    const b = await header.boundingBox()
+    return b ? b.width : Number.POSITIVE_INFINITY
+  }
+  await expect.poll(headerWidth, { timeout: 5000 }).toBeLessThan(175)
+  expect(await headerWidth()).toBeLessThan(before.width)
+
+  // Header and body cell stay aligned.
+  const after = await header.boundingBox()
+  const bodyCell = page.locator('#ordersTable tbody tr.order-row td[data-col="bestrate"]').first()
+  const cellBox = await bodyCell.boundingBox()
+  expect(cellBox).not.toBeNull()
+  expect(Math.abs(cellBox.width - after.width)).toBeLessThan(2)
+
+  await page.screenshot({ path: path.join(screenshotDir, 'awaiting-best-rate-compact.png'), fullPage: true })
+})
