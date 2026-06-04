@@ -21,10 +21,10 @@ Last reviewed on 2026-06-05 against `prepshipv4-stable` after:
 | Ticket | Current Percent | Status | Evidence / Notes |
 |---|---:|---|---|
 | PS-084 Direct-Carrier Print-to-Queue Ship-To + Existing Label Recovery | 100% | Complete and verified. | Direct-carrier labels now resolve local order ship-to fallback and direct-carrier print-to-queue sends canonical `shipTo`; existing-label recovery remains duplicate-postage-safe. See `docs/ps-084-direct-carrier-print-queue-completion-report.md`. |
-| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 20% | Saved/planned; PS-084 and PS-098 now closed with evidence. | Broad closeout/meta ticket; should run after PS-099 and the PS-094/PS-095 closeout decisions are complete. |
+| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 40% | Saved/planned; PS-084, PS-094, PS-095, and PS-098 now closed with evidence. | Broad closeout/meta ticket; should run after PS-099 is complete. |
 | PS-093 Direct-Carrier Scope Guard for Rates + Labels | 100% | Functionally complete and verified. | `src/lib/direct-carrier-scope.ts`; `api/carriers/rates.ts`; `api/carriers/labels.ts`; `npm run test:ps-083-direct-carrier-scope`; `npm run test:direct-carrier-labels`; `npm run test:direct-carrier-queue-route`; `npm run test:carriers-rates-hardening`. |
-| PS-094 Backend Selected-Rate Proof/Fingerprint Primitive | 90% | Functionally present via PS-085 `rate-fingerprint.ts`, but task asked for a no-enforcement phase and file name `rate-selection-proof.ts`. | Need decide whether to add compatibility alias/doc or mark superseded by `rate-fingerprint.ts` + enforcement. |
-| PS-095 Frontend Selected-Rate Proof Pass-Through + Stale-Rate UX | 85% | Proof pass-through is implemented. Stale UX needs final review against task wording. | `web/src/components/Views/OrdersView.tsx` passes `selectedRateProof`; existing rate-sync UI handles stale/unavailable states. |
+| PS-094 Backend Selected-Rate Proof/Fingerprint Primitive | 100% | Complete and verified. | Compatibility module `src/services/shipping-workflow/rate-selection-proof.ts` re-exports canonical `rate-fingerprint.ts`; see `docs/ps-094-rate-selection-proof-completion-report.md`. |
+| PS-095 Frontend Selected-Rate Proof Pass-Through + Stale-Rate UX | 100% | Complete and verified. | `web/src/components/Views/OrdersView.tsx` passes `selectedRateProof`; stale proof/rate behavior is certified by `scripts/ps-095-selected-rate-proof-pass-through-guard.ts`; see `docs/ps-095-selected-rate-proof-pass-through-completion-report.md`. |
 | PS-096 Enforce Selected-Rate Proof on ShipStation Label Purchase | 100% | Complete and verified. | `src/routes/labels.ts`; `src/services/labels.ts`; `npm run test:selected-rate-proof-boundary`; `npm run test:shipping-roundtrip-certification`; `npm run test:full-site-certification`. |
 | PS-097 Enforce Selected-Rate Proof on Direct-Carrier Label Purchase | 100% | Complete and verified. | `api/carriers/labels.ts`; `npm run test:selected-rate-proof-boundary`; `npm run test:direct-carrier-labels`; `npm run test:shipping-roundtrip-certification`. |
 | PS-098 Shipping Purchase-Boundary Certification | 100% | Complete and verified. | Dedicated certification guard and report map PS-093 through PS-097 allowed/blocked paths. See `docs/ps-098-shipping-purchase-boundary-certification.md`. |
@@ -153,16 +153,16 @@ PS-093 status: 100%.
 - Optional Create: `src/services/shipping-workflow/rate-selection-proof.ts`
 - Modify/Test: `scripts/ps-085-shipping-workflow-guard.ts` or add a narrow alias guard.
 
-- [ ] **Step 1: Decide compatibility strategy**
+- [x] **Step 1: Decide compatibility strategy**
 
 Because PS-085 already created `rate-fingerprint.ts`, choose one:
 
 - Option A: Keep `rate-fingerprint.ts` as canonical and document PS-094 as superseded/fulfilled by PS-085.
 - Option B: Add `rate-selection-proof.ts` as a small re-export/alias module so the board task name maps to code without duplicating logic.
 
-Recommended: Option B, a re-export module, because it gives the ticket the requested file without a rewrite.
+Decision: Option B. `src/services/shipping-workflow/rate-selection-proof.ts` is a small re-export module that maps the board task name to the canonical `rate-fingerprint.ts` implementation without duplicating logic.
 
-- [ ] **Step 2: Add guard assertion for safe proof primitive**
+- [x] **Step 2: Add guard assertion for safe proof primitive**
 
 Guard must prove:
 
@@ -178,9 +178,9 @@ npm run test:ps-079-best-rate-source-of-truth
 npm run test:ps-081-rate-sync
 ```
 
-- [ ] **Step 3: Mark PS-094 100%**
+- [x] **Step 3: Mark PS-094 100%**
 
-Only after alias/doc decision is committed and verification passes.
+PS-094 is 100% as of the commit containing `src/services/shipping-workflow/rate-selection-proof.ts`, `scripts/ps-094-rate-selection-proof-guard.ts`, and `docs/ps-094-rate-selection-proof-completion-report.md`.
 
 ---
 
@@ -197,11 +197,11 @@ Only after alias/doc decision is committed and verification passes.
 
 `OrdersView.tsx` builds and passes `selectedRateProof` into single, batch, direct-carrier queue, and backend queue label payloads.
 
-- [ ] **Step 2: Certify stale proof UX wording**
+- [x] **Step 2: Certify stale proof UX wording**
 
 Confirm the UI clearly nudges operators to re-rate when proof is missing/stale and does not imply stale rates are acceptable.
 
-- [ ] **Step 3: Add focused guard only if existing certification misses stale UX**
+- [x] **Step 3: Add focused guard only if existing certification misses stale UX**
 
 Prefer static/browser-safe assertion rather than broad UI rewrite.
 
@@ -214,7 +214,7 @@ npm run test:selected-rate-proof-boundary
 npm run test:full-site-certification
 ```
 
-Mark PS-095 100% after stale UX is explicitly certified.
+PS-095 is 100% as of the commit containing `scripts/ps-095-selected-rate-proof-pass-through-guard.ts` and `docs/ps-095-selected-rate-proof-pass-through-completion-report.md`.
 
 ---
 
@@ -435,4 +435,4 @@ Follow-up risks/blockers:
 
 ## Current Recommended Next Step
 
-Do **PS-099 next** for Create+Print separation and SHIPP 4x6 output normalization. After PS-099, close the remaining PS-094/PS-095 compatibility/certification gaps, then use PS-087 as the final unfinished-task closeout.
+Do **PS-099 next** for Create+Print separation and SHIPP 4x6 output normalization. After PS-099, use PS-087 as the final unfinished-task closeout.

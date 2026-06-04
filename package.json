@@ -83,6 +83,8 @@
     "test:ps-084-label-size-normalize": "tsx scripts/ps-084-label-size-normalize-guard.ts",
     "test:ps-084-direct-carrier-print-queue": "tsx scripts/ps-084-direct-carrier-print-queue-guard.ts",
     "test:ps-085-shipping-workflow": "tsx scripts/ps-085-shipping-workflow-guard.ts",
+    "test:ps-094-rate-selection-proof": "tsx scripts/ps-094-rate-selection-proof-guard.ts",
+    "test:ps-095-selected-rate-proof-pass-through": "tsx scripts/ps-095-selected-rate-proof-pass-through-guard.ts",
     "test:selected-rate-proof-boundary": "tsx scripts/selected-rate-proof-purchase-boundary-guard.ts",
     "test:ps-098-shipping-purchase-boundary": "tsx scripts/ps-098-shipping-purchase-boundary-certification-guard.ts",
     "test:ps-067-billing-external-fulfilled": "node scripts/ps-067-billing-external-fulfilled-guard.mjs",
