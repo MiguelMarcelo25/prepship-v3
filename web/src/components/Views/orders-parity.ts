@@ -768,6 +768,55 @@ export function planSettledAutoRate(input: {
   return { entry, applyPanelPreview }
 }
 
+/**
+ * PS-082 — decide how clicking Browse Rates reconciles the Awaiting table's
+ * Best Rate (and the selected service) to the LIVE best rate.
+ *
+ * Operator behaviour: opening Browse Rates re-quotes live; if the live best
+ * differs from the table's cached best, the table adopts the live best (Best
+ * Rate column + selected ship account/service). Equal -> nothing changes.
+ *
+ * Returns:
+ *  - shouldUpdate: persist the live best + change the selection (only when the
+ *    live best is a usable rate AND differs from the cached best by >= 1 cent).
+ *  - entry: the row entry to record (keyed by the EXACT request fingerprint), so
+ *    the table shows the verified-current rate even when it matched. null when
+ *    there is no usable live rate.
+ *  - selection: the ship account/service to select, or null when the live rate
+ *    lacks a provider/service.
+ *
+ * Safety (PS-078): the caller re-quotes with the table's exact request params
+ * before calling this, and the entry is keyed by that fingerprint — so the
+ * adopted rate is always the live best for the conditions the label will use.
+ * Sub-cent float noise is ignored so carrier rounding can't churn the row.
+ */
+export function planBrowseRateReconcile(input: {
+  requestKey: string
+  liveBest: Record<string, unknown> | null
+  liveBestAmount: number | null
+  currentBestAmount: number | null
+  providerAccountId: number | null
+  serviceCode: string | null
+}): {
+  shouldUpdate: boolean
+  entry: AutoBestRateEntry | null
+  selection: { shipAccountId: string; serviceCode: string } | null
+} {
+  if (!input.liveBest || input.liveBestAmount == null || input.liveBestAmount <= 0) {
+    return { shouldUpdate: false, entry: null, selection: null }
+  }
+  const cents = (value: number) => Math.round(value * 100)
+  const shouldUpdate =
+    input.currentBestAmount == null ||
+    input.currentBestAmount <= 0 ||
+    cents(input.liveBestAmount) !== cents(input.currentBestAmount)
+  const selection =
+    input.providerAccountId != null && input.serviceCode
+      ? { shipAccountId: String(input.providerAccountId), serviceCode: input.serviceCode }
+      : null
+  return { shouldUpdate, entry: { key: input.requestKey, rate: input.liveBest }, selection }
+}
+
 // ─── Send-to-Queue routing (direct carriers vs ShipStation) ─────────────────
 // The Render queue job's label creator (createLabelV2) is ShipStation-only —
 // it sends `se-<providerId>` to ShipStation, which rejects a direct carrier's

@@ -76,6 +76,7 @@
     "test:ps-060-combo-save-defaults": "tsx scripts/ps-060-combo-save-defaults-guard.ts",
     "test:ps-099-orders-rate-cache-first": "node scripts/ps-099-orders-rate-cache-first-guard.mjs",
     "test:ps-081-rate-sync": "tsx scripts/ps-081-rate-sync-guard.ts",
+    "test:ps-082-browse-rate-reconcile": "tsx scripts/ps-082-browse-rate-reconcile-guard.ts",
     "test:ps-067-billing-external-fulfilled": "node scripts/ps-067-billing-external-fulfilled-guard.mjs",
     "test:print-queue-sku-grouping": "tsx scripts/print-queue-sku-grouping-guard.ts",
     "test:ups-direct-accessorial": "node scripts/ups-direct-accessorial-guard.mjs",
