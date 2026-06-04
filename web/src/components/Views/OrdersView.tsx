@@ -10634,8 +10634,19 @@ export default function OrdersView({
                 className="pq-group mb-3 overflow-hidden rounded-xl bg-surface ring-1 ring-line shadow-sm"
               >
                 <div className="pq-group-header flex items-center gap-2 px-3 py-2.5 bg-surface-2 border-b border-line">
-                  <span className="pq-group-label flex-1 min-w-0 truncate font-semibold text-ink text-[12.5px]">
-                    {group.label}{group.description ? ` — ${group.description}` : ''}
+                  <span
+                    className={`pq-group-label truncate font-semibold text-ink text-[12.5px] ${
+                      group.isMultiSku ? 'shrink-0' : 'flex-1 min-w-0'
+                    }`}
+                  >
+                    {/* Multi-SKU groups show just "MULTI-SKU" — the SKU chips
+                        beside it already list the items, so the truncated
+                        "— Booster-gel-001…" description was redundant noise.
+                        shrink-0 keeps the label at its natural width so the
+                        chips sit right next to it. */}
+                    {group.isMultiSku
+                      ? group.label
+                      : `${group.label}${group.description ? ` — ${group.description}` : ''}`}
                   </span>
                   {group.isMultiSku ? (
                     <span className="flex flex-1 flex-wrap gap-1.5">
