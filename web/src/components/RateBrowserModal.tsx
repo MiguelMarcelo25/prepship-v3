@@ -103,6 +103,14 @@ type RateConfirmation =
   | 'adult_signature'
   | 'direct_signature';
 
+// POLICY (DJ, 2026-06-04): Delivery Confirmation is ALWAYS on — there is
+// deliberately NO 'None' option, and normalizeConfirmationForRates() forces any
+// other value back to 'delivery'. This is why a PrepShip UPS Ground rate is
+// ~$2.42 higher than ShipStation's no-confirmation quote (UPS charges for
+// delivery confirmation on Ground but includes it free on air services, so air
+// rates match exactly). This is intentional (proof of delivery on every label),
+// NOT a rate bug — do NOT add a 'None' option to "match ShipStation" without
+// DJ's sign-off.
 const CONFIRMATION_OPTIONS: Array<{ value: RateConfirmation; label: string }> = [
   { value: 'delivery', label: 'Delivery' },
   { value: 'signature', label: 'Signature' },
