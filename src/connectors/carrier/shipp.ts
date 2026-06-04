@@ -2,6 +2,19 @@ import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 import { PDFDocument } from 'pdf-lib';
+import { createRequire } from 'node:module';
+import UPNG from '@pdf-lib/upng';
+
+const require = createRequire(import.meta.url);
+const UPNG_API = (UPNG as any).default ?? (UPNG as any);
+const { GifReader } = require('omggif') as {
+  GifReader: new (buffer: Uint8Array) => {
+    width: number;
+    height: number;
+    numFrames: () => number;
+    decodeAndBlitFrameRGBA: (frameIndex: number, pixels: Uint8Array) => void;
+  };
+};
 
 function shippSplitSetCookie(header: string): string[] {
   if (!header) return [];
@@ -522,6 +535,62 @@ function shippTrackingFromLabel(label: any): string {
   );
 }
 
+const SHIPP_LABEL_PAGE_WIDTH = 288;
+const SHIPP_LABEL_PAGE_HEIGHT = 432;
+
+function shippPngBytesFromGifBytes(gifBytes: Uint8Array): Uint8Array {
+  const reader = new GifReader(gifBytes);
+  if (!reader.numFrames()) {
+    throw new Error('Shipp GIF label contained no frames.');
+  }
+  const rgba = new Uint8Array(reader.width * reader.height * 4);
+  reader.decodeAndBlitFrameRGBA(0, rgba);
+  const rgbaBuffer = rgba.buffer.slice(rgba.byteOffset, rgba.byteOffset + rgba.byteLength);
+  return new Uint8Array(UPNG_API.encode([rgbaBuffer], reader.width, reader.height, 0));
+}
+
+function shippPdfDataUrl(bytes: Uint8Array): string {
+  return `data:application/pdf;base64,${Buffer.from(bytes).toString('base64')}`;
+}
+
+async function appendShippPdfPages(output: PDFDocument, bytes: Uint8Array): Promise<number> {
+  const src = await PDFDocument.load(bytes);
+  let pages = 0;
+  for (const pageIndex of src.getPageIndices()) {
+    const [embedded] = await output.embedPages([src.getPage(pageIndex)!]);
+    if (!embedded) continue;
+    const scale = Math.min(SHIPP_LABEL_PAGE_WIDTH / embedded.width, SHIPP_LABEL_PAGE_HEIGHT / embedded.height);
+    const drawWidth = embedded.width * scale;
+    const drawHeight = embedded.height * scale;
+    const page = output.addPage([SHIPP_LABEL_PAGE_WIDTH, SHIPP_LABEL_PAGE_HEIGHT]);
+    page.drawPage(embedded, {
+      x: (SHIPP_LABEL_PAGE_WIDTH - drawWidth) / 2,
+      y: (SHIPP_LABEL_PAGE_HEIGHT - drawHeight) / 2,
+      width: drawWidth,
+      height: drawHeight,
+    });
+    pages += 1;
+  }
+  return pages;
+}
+
+async function appendShippImagePage(output: PDFDocument, bytes: Uint8Array, format: string): Promise<number> {
+  const image = format === 'image/png' || format === 'png'
+    ? await output.embedPng(bytes)
+    : await output.embedPng(shippPngBytesFromGifBytes(bytes));
+  const scale = Math.min(SHIPP_LABEL_PAGE_WIDTH / image.width, SHIPP_LABEL_PAGE_HEIGHT / image.height);
+  const drawWidth = image.width * scale;
+  const drawHeight = image.height * scale;
+  const page = output.addPage([SHIPP_LABEL_PAGE_WIDTH, SHIPP_LABEL_PAGE_HEIGHT]);
+  page.drawImage(image, {
+    x: (SHIPP_LABEL_PAGE_WIDTH - drawWidth) / 2,
+    y: (SHIPP_LABEL_PAGE_HEIGHT - drawHeight) / 2,
+    width: drawWidth,
+    height: drawHeight,
+  });
+  return 1;
+}
+
 async function pdfDataUrlFromParts(parts: Array<{ base64: string; format?: string }>): Promise<string | null> {
   const pdf = await PDFDocument.create();
   let pages = 0;
@@ -532,27 +601,17 @@ async function pdfDataUrlFromParts(parts: Array<{ base64: string; format?: strin
     const format = String(part.format ?? 'application/pdf').toLowerCase();
     const bytes = Uint8Array.from(Buffer.from(base64, 'base64'));
     if (format === 'application/pdf' || format === 'pdf') {
-      const src = await PDFDocument.load(bytes);
-      const copied = await pdf.copyPages(src, src.getPageIndices());
-      copied.forEach((page) => {
-        pdf.addPage(page);
-        pages += 1;
-      });
+      pages += await appendShippPdfPages(pdf, bytes);
     } else if (format === 'image/png' || format === 'png') {
-      const image = await pdf.embedPng(bytes);
-      pdf.addPage([image.width, image.height]).drawImage(image, {
-        x: 0,
-        y: 0,
-        width: image.width,
-        height: image.height,
-      });
-      pages += 1;
+      pages += await appendShippImagePage(pdf, bytes, format);
+    } else if (format === 'image/gif' || format === 'gif') {
+      pages += await appendShippImagePage(pdf, bytes, format);
     }
   }
 
   if (!pages) return null;
   const merged = await pdf.save();
-  return `data:application/pdf;base64,${Buffer.from(merged).toString('base64')}`;
+  return shippPdfDataUrl(merged);
 }
 
 async function shippLabelUrl(label: any, carrierCode: string | null): Promise<string | null> {
@@ -579,14 +638,19 @@ async function shippLabelUrl(label: any, carrierCode: string | null): Promise<st
     const packages = Array.isArray(label.ShipmentResponse.ShipmentResults.PackageResults)
       ? label.ShipmentResponse.ShipmentResults.PackageResults
       : [label.ShipmentResponse.ShipmentResults.PackageResults];
-    const firstGraphic = packages
-      .map((pkg: any) => String(pkg?.ShippingLabel?.GraphicImage ?? ''))
-      .find(Boolean);
-    return firstGraphic ? `data:image/gif;base64,${firstGraphic}` : null;
+    const parts = packages
+      .map((pkg: any) => ({
+        base64: String(pkg?.ShippingLabel?.GraphicImage ?? ''),
+        format: 'image/gif',
+      }));
+    return pdfDataUrlFromParts(parts);
   }
 
   return null;
 }
+
+export const __test_normalizeShippLabelPartsToPdfDataUrl = pdfDataUrlFromParts;
+export const __test_shippLabelUrl = shippLabelUrl;
 
 async function createLabelShipp(input: Record<string, unknown>): Promise<Record<string, unknown>> {
   if (!input.dimsL || !input.dimsW || !input.dimsH) {

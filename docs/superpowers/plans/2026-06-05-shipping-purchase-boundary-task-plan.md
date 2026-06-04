@@ -21,14 +21,14 @@ Last reviewed on 2026-06-05 against `prepshipv4-stable` after:
 | Ticket | Current Percent | Status | Evidence / Notes |
 |---|---:|---|---|
 | PS-084 Direct-Carrier Print-to-Queue Ship-To + Existing Label Recovery | 100% | Complete and verified. | Direct-carrier labels now resolve local order ship-to fallback and direct-carrier print-to-queue sends canonical `shipTo`; existing-label recovery remains duplicate-postage-safe. See `docs/ps-084-direct-carrier-print-queue-completion-report.md`. |
-| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 40% | Saved/planned; PS-084, PS-094, PS-095, and PS-098 now closed with evidence. | Broad closeout/meta ticket; should run after PS-099 is complete. |
+| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 80% | All child tasks in this saved lane are complete; final closeout report remains. | Broad closeout/meta ticket; should create the final unfinished-task inventory and closeout report next. |
 | PS-093 Direct-Carrier Scope Guard for Rates + Labels | 100% | Functionally complete and verified. | `src/lib/direct-carrier-scope.ts`; `api/carriers/rates.ts`; `api/carriers/labels.ts`; `npm run test:ps-083-direct-carrier-scope`; `npm run test:direct-carrier-labels`; `npm run test:direct-carrier-queue-route`; `npm run test:carriers-rates-hardening`. |
 | PS-094 Backend Selected-Rate Proof/Fingerprint Primitive | 100% | Complete and verified. | Compatibility module `src/services/shipping-workflow/rate-selection-proof.ts` re-exports canonical `rate-fingerprint.ts`; see `docs/ps-094-rate-selection-proof-completion-report.md`. |
 | PS-095 Frontend Selected-Rate Proof Pass-Through + Stale-Rate UX | 100% | Complete and verified. | `web/src/components/Views/OrdersView.tsx` passes `selectedRateProof`; stale proof/rate behavior is certified by `scripts/ps-095-selected-rate-proof-pass-through-guard.ts`; see `docs/ps-095-selected-rate-proof-pass-through-completion-report.md`. |
 | PS-096 Enforce Selected-Rate Proof on ShipStation Label Purchase | 100% | Complete and verified. | `src/routes/labels.ts`; `src/services/labels.ts`; `npm run test:selected-rate-proof-boundary`; `npm run test:shipping-roundtrip-certification`; `npm run test:full-site-certification`. |
 | PS-097 Enforce Selected-Rate Proof on Direct-Carrier Label Purchase | 100% | Complete and verified. | `api/carriers/labels.ts`; `npm run test:selected-rate-proof-boundary`; `npm run test:direct-carrier-labels`; `npm run test:shipping-roundtrip-certification`. |
 | PS-098 Shipping Purchase-Boundary Certification | 100% | Complete and verified. | Dedicated certification guard and report map PS-093 through PS-097 allowed/blocked paths. See `docs/ps-098-shipping-purchase-boundary-certification.md`. |
-| PS-099 Separate Create+Print from Print Queue + Normalize SHIPP 4x6 Label Output | 0% | Saved/planned only. | Needs implementation after PS-098 certification, unless DJ prioritizes label-output bug first. |
+| PS-099 Separate Create+Print from Print Queue + Normalize SHIPP 4x6 Label Output | 100% | Complete and verified. | Create+Print/Queue separation is certified and SHIPP PDF/PNG/GIF output normalizes to 4x6 PDF. See `docs/ps-099-create-print-shipp-label-output-completion-report.md`. |
 
 ## Global Safety Rules
 
@@ -335,7 +335,7 @@ PS-098 is 100% as of the commit containing `scripts/ps-098-shipping-purchase-bou
 - Inspect: `src/services/print-queue.ts`
 - Test: add focused guard for Create+Print not queueing and SHIPP label size normalization.
 
-- [ ] **Step 1: Write failing guard for Create+Print separation**
+- [x] **Step 1: Write failing guard for Create+Print separation**
 
 Assert:
 
@@ -343,7 +343,7 @@ Assert:
 - Create+Print does not add the label to print queue.
 - Print-to-Queue still adds a queue entry.
 
-- [ ] **Step 2: Write failing guard for SHIPP 4x6 output**
+- [x] **Step 2: Write failing guard for SHIPP 4x6 output**
 
 Assert:
 
@@ -351,11 +351,11 @@ Assert:
 - Returned/queued label URL is a printable PDF or safe converted representation.
 - No raw provider label payload is exposed.
 
-- [ ] **Step 3: Implement minimal behavior**
+- [x] **Step 3: Implement minimal behavior**
 
 Keep Create+Print and Print-to-Queue as separate commands. Normalize SHIPP output at the connector/label boundary, not by adding UI-only workarounds.
 
-- [ ] **Step 4: Verify PS-099**
+- [x] **Step 4: Verify PS-099**
 
 Run:
 
@@ -368,7 +368,7 @@ npm run test:shipping-roundtrip-certification
 npm run test:full-site-certification
 ```
 
-Mark PS-099 100% only after proof that Create+Print does not queue and SHIPP 4x6 output is normalized.
+PS-099 is 100% as of the commit containing `src/connectors/carrier/shipp.ts`, `scripts/ps-099-create-print-shipp-label-output-guard.ts`, and `docs/ps-099-create-print-shipp-label-output-completion-report.md`.
 
 ---
 
@@ -435,4 +435,4 @@ Follow-up risks/blockers:
 
 ## Current Recommended Next Step
 
-Do **PS-099 next** for Create+Print separation and SHIPP 4x6 output normalization. After PS-099, use PS-087 as the final unfinished-task closeout.
+Do **PS-087 next** as the final unfinished-task closeout/report for this saved lane.
