@@ -178,6 +178,7 @@
     "test:ps-079-best-rate-source-of-truth": "tsx scripts/ps-079-best-rate-source-of-truth-guard.ts",
     "connector:health": "tsx scripts/connector-health-report.ts",
     "order:confirm-status": "tsx scripts/order-confirmation-status.ts",
+    "ship-from:report": "tsx scripts/default-ship-from-report.ts",
     "test:direct-carrier-queue-route": "tsx scripts/direct-carrier-queue-route-guard.ts",
     "test:ps-078-connector-matrix": "tsx scripts/ps-078-connector-matrix-guard.ts",
     "test:ps-078-shipstation-direct-carrier-confirm": "tsx scripts/ps-078-shipstation-direct-carrier-confirm-guard.ts",
