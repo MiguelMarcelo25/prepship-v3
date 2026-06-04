@@ -21,7 +21,7 @@ Last reviewed on 2026-06-05 against `prepshipv4-stable` after:
 | Ticket | Current Percent | Status | Evidence / Notes |
 |---|---:|---|---|
 | PS-084 Direct-Carrier Print-to-Queue Ship-To + Existing Label Recovery | 100% | Complete and verified. | Direct-carrier labels now resolve local order ship-to fallback and direct-carrier print-to-queue sends canonical `shipTo`; existing-label recovery remains duplicate-postage-safe. See `docs/ps-084-direct-carrier-print-queue-completion-report.md`. |
-| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 80% | All child tasks in this saved lane are complete; final closeout report remains. | Broad closeout/meta ticket; should create the final unfinished-task inventory and closeout report next. |
+| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 100% | Complete and verified. | Final unfinished-task inventory and closeout report saved at `docs/ps-087-unfinished-prepship-v4-closeout.md`. |
 | PS-093 Direct-Carrier Scope Guard for Rates + Labels | 100% | Functionally complete and verified. | `src/lib/direct-carrier-scope.ts`; `api/carriers/rates.ts`; `api/carriers/labels.ts`; `npm run test:ps-083-direct-carrier-scope`; `npm run test:direct-carrier-labels`; `npm run test:direct-carrier-queue-route`; `npm run test:carriers-rates-hardening`. |
 | PS-094 Backend Selected-Rate Proof/Fingerprint Primitive | 100% | Complete and verified. | Compatibility module `src/services/shipping-workflow/rate-selection-proof.ts` re-exports canonical `rate-fingerprint.ts`; see `docs/ps-094-rate-selection-proof-completion-report.md`. |
 | PS-095 Frontend Selected-Rate Proof Pass-Through + Stale-Rate UX | 100% | Complete and verified. | `web/src/components/Views/OrdersView.tsx` passes `selectedRateProof`; stale proof/rate behavior is certified by `scripts/ps-095-selected-rate-proof-pass-through-guard.ts`; see `docs/ps-095-selected-rate-proof-pass-through-completion-report.md`. |
@@ -380,23 +380,23 @@ PS-099 is 100% as of the commit containing `src/connectors/carrier/shipp.ts`, `s
 - Inspect: package scripts and guard results.
 - Optional Create: `docs/ps-087-unfinished-prepship-v4-closeout.md`
 
-- [ ] **Step 1: Build unfinished-task inventory**
+- [x] **Step 1: Build unfinished-task inventory**
 
 List every active task from this plan with status, commit, verification, and blocker.
 
-- [ ] **Step 2: Close completed tickets**
+- [x] **Step 2: Close completed tickets**
 
 Only mark tickets 100% if their definition of done is met and safety confirmation is present.
 
-- [ ] **Step 3: Convert remaining work into small follow-ups**
+- [x] **Step 3: Convert remaining work into small follow-ups**
 
 No giant PS-086-style umbrella implementation. Keep each follow-up small, named from the existing board where possible.
 
-- [ ] **Step 4: Verify and report**
+- [x] **Step 4: Verify and report**
 
 Run the relevant final commands from PS-098 plus any PS-084/PS-099-specific guards.
 
-Mark PS-087 100% after the closeout doc/report exists and all remaining open tickets have either a completion report or a concrete blocker.
+PS-087 is 100% as of the commit containing `docs/ps-087-unfinished-prepship-v4-closeout.md`; all saved-lane tickets are either complete with evidence or closed by the final inventory.
 
 ---
 
@@ -435,4 +435,4 @@ Follow-up risks/blockers:
 
 ## Current Recommended Next Step
 
-Do **PS-087 next** as the final unfinished-task closeout/report for this saved lane.
+This saved lane is complete. No follow-up PS task is required for PS-084, PS-087, or PS-093 through PS-099.
