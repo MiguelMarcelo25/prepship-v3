@@ -79,6 +79,7 @@
     "test:ps-099-orders-rate-cache-first": "node scripts/ps-099-orders-rate-cache-first-guard.mjs",
     "test:ps-081-rate-sync": "tsx scripts/ps-081-rate-sync-guard.ts",
     "test:ps-082-browse-rate-reconcile": "tsx scripts/ps-082-browse-rate-reconcile-guard.ts",
+    "test:rate-browser-carrier-account-click": "node scripts/rate-browser-carrier-account-click-guard.mjs",
     "test:ps-083-shipp-insurance": "tsx scripts/ps-083-shipp-insurance-guard.ts",
     "test:ps-084-label-size-normalize": "tsx scripts/ps-084-label-size-normalize-guard.ts",
     "test:ps-084-direct-carrier-print-queue": "tsx scripts/ps-084-direct-carrier-print-queue-guard.ts",
