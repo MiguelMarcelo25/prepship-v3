@@ -85,6 +85,7 @@ import {
   classifyQueueOrderRoute,
   getColumnMinWidth,
   groupPrintQueueEntries,
+  planSettledAutoRate,
   resolveColumnPrefs,
   type AwaitingRateCellState,
   type ColumnPrefs,
@@ -5426,11 +5427,17 @@ export default function OrdersView({
             request,
             metadata: { isComplete: true, rateCount: 1, matchType: 'test' },
           })
-          if (!cancelled) {
-            setAutoBestRateEntries((current) => ({
-              ...current,
-              [order.orderId]: { key: request.key, rate: testRateWithMetadata },
-            }))
+          // PS-081 — always record the keyed entry (even if this run was
+          // superseded by a re-render), so a cancelled-mid-flight fetch can't
+          // strand the row on an infinite spinner.
+          {
+            const settled = planSettledAutoRate({
+              requestKey: request.key,
+              rate: testRateWithMetadata,
+              cancelled,
+              isPanelOrder: panelOrderId === order.orderId,
+            })
+            setAutoBestRateEntries((current) => ({ ...current, [order.orderId]: settled.entry }))
           }
           clearAutoBestRateWatchdog(request.key)
           return
@@ -5480,13 +5487,22 @@ export default function OrdersView({
           await apiClient.saveOrderBestRate(order.orderId, null, request.dimsLabel)
         }
 
-        if (!cancelled) {
-          setAutoBestRateEntries((current) => ({
-            ...current,
-            [order.orderId]: { key: request.key, rate: bestRate ? withRateRequestMetadata(bestRate, request, { isComplete: true, rateCount: rates.length, matchType: 'live' }) : null },
-          }))
-
-          if (panelOrderId === order.orderId) {
+        // PS-081 — the row entry is recorded UNCONDITIONALLY (keyed by the
+        // request fingerprint); only the panel preview is gated on `cancelled`.
+        // This is the core deadlock fix: selecting an order re-runs this effect
+        // and cancels the in-flight fetch, but the row must still resolve.
+        {
+          const settledRate = bestRate
+            ? withRateRequestMetadata(bestRate, request, { isComplete: true, rateCount: rates.length, matchType: 'live' })
+            : null
+          const settled = planSettledAutoRate({
+            requestKey: request.key,
+            rate: settledRate,
+            cancelled,
+            isPanelOrder: panelOrderId === order.orderId,
+          })
+          setAutoBestRateEntries((current) => ({ ...current, [order.orderId]: settled.entry }))
+          if (settled.applyPanelPreview) {
             setPanelRatePreview(bestRate ? [bestRate] : [])
             const shippingProviderId = bestRate ? toProviderAccountId(bestRate.shippingProviderId) : null
             const serviceCode = bestRate ? toStringValue(bestRate.serviceCode) : null
@@ -5508,11 +5524,18 @@ export default function OrdersView({
         // the cell show a terminal "rate error" with a Retry path (retryOrderRate
         // clears both). The stored message is sanitized — no raw provider payload.
         const sanitized = error instanceof Error ? error.message.replace(/\s+/g, ' ').trim().slice(0, 140) : 'Rate lookup failed'
-        if (!cancelled) {
-          setAutoBestRateEntries((current) => ({
-            ...current,
-            [order.orderId]: { key: request.key, rate: null, error: sanitized || 'Rate lookup failed' },
-          }))
+        // PS-081 — record the terminal error entry even if the run was
+        // superseded, so a cancelled-mid-flight failure still resolves the cell
+        // to a retryable 'error' state instead of an endless spinner.
+        {
+          const settled = planSettledAutoRate({
+            requestKey: request.key,
+            rate: null,
+            error: sanitized || 'Rate lookup failed',
+            cancelled,
+            isPanelOrder: panelOrderId === order.orderId,
+          })
+          setAutoBestRateEntries((current) => ({ ...current, [order.orderId]: settled.entry }))
         }
         clearAutoBestRateWatchdog(request.key)
         console.warn(
@@ -5557,11 +5580,16 @@ export default function OrdersView({
           request: item.request,
           metadata: exact,
         })
-        if (!cancelled) {
-          setAutoBestRateEntries((current) => ({
-            ...current,
-            [item.order.orderId]: { key: item.request.key, rate: cachedRate },
-          }))
+        // PS-081 — record the cache-hit entry unconditionally (keyed by request
+        // fingerprint) so a superseded run can't strand the row on a spinner.
+        {
+          const settled = planSettledAutoRate({
+            requestKey: item.request.key,
+            rate: cachedRate,
+            cancelled,
+            isPanelOrder: panelOrderId === item.order.orderId,
+          })
+          setAutoBestRateEntries((current) => ({ ...current, [item.order.orderId]: settled.entry }))
         }
         autoBestRateRequestedRef.current.add(item.request.key)
         queue.splice(index, 1)

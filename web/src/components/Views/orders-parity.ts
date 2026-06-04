@@ -727,6 +727,47 @@ export function awaitingRateCellIsSpinner(state: AwaitingRateCellState): boolean
   return state === 'calculating' || state === 'pending'
 }
 
+/** A resolved passive auto-rate entry for one order row, keyed by request fingerprint. */
+export type AutoBestRateEntry = {
+  key: string
+  rate: Record<string, unknown> | null
+  error?: string
+}
+
+/**
+ * PS-081 — reduce a SETTLED passive auto-rate fetch (success, no-rate, or error)
+ * into (a) the row entry to record and (b) whether the open panel preview may
+ * also be updated.
+ *
+ * The row entry is ALWAYS produced — even when the triggering effect run was
+ * superseded (`cancelled`). This is the fix for the infinite-spinner deadlock:
+ * the passive effect re-runs whenever an order is selected (its detail loads),
+ * which cancelled the in-flight fetch; the old code then skipped the entry write
+ * (`if (!cancelled)`) while clearing the watchdog and leaving the request key in
+ * `requestedRef`, stranding the row on `calculating` forever. Always recording
+ * the keyed entry guarantees the cell resolves to ready / unavailable / error.
+ *
+ * Safety (PS-078): the entry is keyed by the EXACT request fingerprint. The row
+ * only treats it as displayable when that key matches the CURRENT request, so a
+ * superseded/stale entry can never be presented as the authoritative rate or
+ * widen label authority. Only the PANEL preview side effects are gated on
+ * cancellation, so a superseded run can't clobber the panel for an order the
+ * operator has since switched away from (and an error never previews a rate).
+ */
+export function planSettledAutoRate(input: {
+  requestKey: string
+  rate: Record<string, unknown> | null
+  error?: string | null
+  cancelled: boolean
+  isPanelOrder: boolean
+}): { entry: AutoBestRateEntry; applyPanelPreview: boolean } {
+  const entry: AutoBestRateEntry = input.error
+    ? { key: input.requestKey, rate: null, error: input.error }
+    : { key: input.requestKey, rate: input.rate }
+  const applyPanelPreview = !input.cancelled && input.isPanelOrder && !input.error
+  return { entry, applyPanelPreview }
+}
+
 // ─── Send-to-Queue routing (direct carriers vs ShipStation) ─────────────────
 // The Render queue job's label creator (createLabelV2) is ShipStation-only —
 // it sends `se-<providerId>` to ShipStation, which rejects a direct carrier's
