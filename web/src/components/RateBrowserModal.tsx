@@ -1970,7 +1970,7 @@ export default function RateBrowserModal({
           boxShadow: '0 8px 40px rgba(0,0,0,.3)',
           width: 1280,
           maxWidth: '97vw',
-          height: 720,
+          height: 730,
           maxHeight: '93vh',
           display: 'flex',
           flexDirection: 'column',
@@ -2059,7 +2059,7 @@ export default function RateBrowserModal({
                 padding: '0 14px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 12,
+                gap: 10,
                 flex: 1,
               }}
             >
