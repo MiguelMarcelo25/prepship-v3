@@ -1,6 +1,6 @@
-import { env } from './env';
-import type { Address } from './shipstation/types';
-import { getDefaultLocation } from '../services/locations';
+import { env } from './env.js';
+import type { Address } from './shipstation/types.js';
+import { getDefaultLocation } from '../services/locations.js';
 
 const FALLBACK_SHIP_FROM_PHONE = '3103295555';
 

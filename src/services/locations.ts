@@ -1,6 +1,6 @@
 import { and, eq, ne } from 'drizzle-orm';
-import { db } from '../db/client';
-import { locations, type Location } from '../db/schema/locations';
+import { db } from '../db/client.js';
+import { locations, type Location } from '../db/schema/locations.js';
 
 export async function setDefaultLocation(id: number): Promise<Location> {
   return db.transaction(async (tx) => {

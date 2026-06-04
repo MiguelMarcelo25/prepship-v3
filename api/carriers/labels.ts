@@ -45,6 +45,7 @@ let lookupWalmartOrderByCustomerOrderIdForLabels: any;
 let normalizeShippingOptions: any;
 let assertShippingServiceEligible: any;
 let processFulfillmentOutboxOnce: any;
+let getDefaultShipFrom: any;
 let _labelDepsLoaded = false;
 async function ensureLabelDeps(): Promise<void> {
   if (_labelDepsLoaded) return;
@@ -56,7 +57,34 @@ async function ensureLabelDeps(): Promise<void> {
   normalizeShippingOptions = (await import('../../src/lib/shipping-options.js')).normalizeShippingOptions;
   assertShippingServiceEligible = (await import('../../src/lib/shipping-service-eligibility.js')).assertShippingServiceEligible;
   processFulfillmentOutboxOnce = (await import('../../src/services/fulfillment/outbox.js')).processFulfillmentOutboxOnce;
+  getDefaultShipFrom = (await import('../../src/lib/ship-from.js')).getDefaultShipFrom;
   _labelDepsLoaded = true;
+}
+
+// POLICY (DJ, 2026-06-04): direct-carrier labels (shipp/ups/easypost/walmart)
+// must use the default Location (Settings -> Location) as the authoritative
+// ship-from — same source the ShipStation path already uses via
+// getDefaultShipFrom(). Every direct connector reads creds.shipFrom* FIRST, so
+// we overwrite those keys here, before any carrier branch runs. This kills the
+// stale "SHIPPHQ WAREHOUSE" and the 'Seller'/'Warehouse'/'Carson' placeholders
+// uniformly. If no default Location / SHIP_FROM_* env is configured,
+// getDefaultShipFrom() throws and we leave creds untouched (prior behavior),
+// so label creation never breaks because of this.
+async function applyDefaultLocationShipFrom(creds: Record<string, unknown>): Promise<void> {
+  try {
+    const loc = await getDefaultShipFrom();
+    if (!loc || !loc.address_line1 || !loc.city_locality || !loc.state_province || !loc.postal_code) return;
+    creds.shipFromName = loc.name ?? creds.shipFromName;
+    creds.shipFromCompany = loc.company_name ?? loc.name ?? creds.shipFromCompany;
+    creds.shipFromAddress1 = loc.address_line1;
+    creds.shipFromAddress2 = loc.address_line2 ?? '';
+    creds.shipFromCity = loc.city_locality;
+    creds.shipFromState = loc.state_province;
+    creds.shipFromZip = loc.postal_code;
+    if (loc.phone) creds.shipFromPhone = loc.phone;
+  } catch {
+    // No default Location / SHIP_FROM_* env configured — keep existing creds.
+  }
 }
 
 // PS-078 / direct-carrier end-to-end: after a direct-carrier label is bought and
@@ -957,6 +985,10 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
     const creds = (credentials ?? {}) as Record<string, unknown>;
+    // Make the default Location (Settings -> Location) the authoritative
+    // ship-from for ALL direct carriers. Overwrites creds.shipFrom* before any
+    // carrier branch reads them. No-op if no default Location/env is configured.
+    await applyDefaultLocationShipFrom(creds);
 
     // Fetch the saved order's raw payload to derive ship-to (when caller
     // didn't pass an explicit shipTo override).
