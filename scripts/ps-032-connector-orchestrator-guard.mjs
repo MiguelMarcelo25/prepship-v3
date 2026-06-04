@@ -59,7 +59,8 @@ const amazonShippingCarrierConnector = read('src/connectors/carrier/amazon-shipp
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
-  fulfillmentTypes.includes("from '../../connectors/types'"),
+  fulfillmentTypes.includes("from '../../connectors/types'") ||
+    fulfillmentTypes.includes("from '../../connectors/types.js'"),
   'fulfillment domain types must re-export the canonical connector contracts from src/connectors/types.ts',
 );
 assert(
@@ -84,11 +85,12 @@ for (const symbol of [
 }
 
 assert(
-  storeResolution.includes("from './types'") && !storeResolution.includes('../domain/fulfillment/types'),
+  (storeResolution.includes("from './types'") || storeResolution.includes("from './types.js'")) &&
+    !storeResolution.includes('../domain/fulfillment/types'),
   'store connector resolver must use canonical connector types directly',
 );
 assert(
-  carrierResolution.includes("from './types'"),
+  carrierResolution.includes("from './types'") || carrierResolution.includes("from './types.js'"),
   'carrier connector resolver must use canonical connector types directly',
 );
 

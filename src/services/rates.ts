@@ -13,6 +13,7 @@ import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
 import { normalizeConfirmation, normalizeInsurance, normalizeShippingOptions } from '../lib/shipping-options';
+import { buildShippingRateRequestFingerprint } from './shipping-workflow/rate-fingerprint';
 import {
   HUGRAB_DEFAULT_INSURED_VALUE,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -386,36 +387,30 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
 }
 
 export function rateCacheKey(input: RateInput): string {
-  const parts: string[] = [
-    `v=${RATE_CACHE_VERSION}`,
-    `d=${shipDateBucket()}`,
-    `w=${Math.round(input.weightOz * 10)}`,
-    `z=${normalizeZip(input.toZip)}`,
-    `co=${(input.toCountry ?? 'US').toUpperCase()}`,
-  ];
-  if (input.toState) parts.push(`st=${input.toState.trim().toUpperCase()}`);
-  if (input.toCity) parts.push(`ci=${input.toCity.trim().toLowerCase().replace(/\s+/g, '-')}`);
-  if (input.residential === true) parts.push('r=1');
-  else if (input.residential === false) parts.push('r=0');
-  if (input.clientId != null) parts.push(`cl=${input.clientId}`);
-  else if (input.storeId != null) parts.push(`st=${input.storeId}`);
-  if (input.sourceClientId != null) parts.push(`src=${input.sourceClientId}`);
-  else if (input.apiKeyV2) parts.push(`ak=${apiKeyCacheKey(input.apiKeyV2)}`);
-  if (input.dimsL) parts.push(`l=${Math.round(input.dimsL * 10)}`);
-  if (input.dimsW) parts.push(`dw=${Math.round(input.dimsW * 10)}`);
-  if (input.dimsH) parts.push(`h=${Math.round(input.dimsH * 10)}`);
   const confirmation = normalizeRateConfirmation(input.confirmation);
-  if (confirmation) parts.push(`cf=${confirmation}`);
   const options = normalizeShippingOptions(input);
-  if (options.insuranceProvider !== 'none') {
-    parts.push(`ip=${options.insuranceProvider}`);
-    parts.push(`iv=${Math.round((options.insuredValue ?? 0) * 100)}`);
-  }
-  if (Array.isArray(input.carrierIds)) {
-    parts.push(`c=${[...input.carrierIds].sort().join(',')}`);
-  }
-  if (input.automationRulesVersion) parts.push(`ar=${input.automationRulesVersion}`);
-  return parts.join('|');
+  return buildShippingRateRequestFingerprint({
+    version: RATE_CACHE_VERSION,
+    shipDateBucket: shipDateBucket(),
+    weightOz: input.weightOz,
+    toZip: input.toZip,
+    toCountry: input.toCountry,
+    toState: input.toState,
+    toCity: input.toCity,
+    residential: input.residential,
+    clientId: input.clientId,
+    storeId: input.storeId,
+    sourceClientId: input.sourceClientId,
+    apiKeyFingerprint: input.apiKeyV2 ? apiKeyCacheKey(input.apiKeyV2) : null,
+    dimsL: input.dimsL,
+    dimsW: input.dimsW,
+    dimsH: input.dimsH,
+    confirmation,
+    insuranceProvider: options.insuranceProvider,
+    insuredValue: options.insuredValue,
+    carrierIds: input.carrierIds,
+    automationRulesVersion: input.automationRulesVersion,
+  });
 }
 
 function rateTotal(rate: Rate): number {

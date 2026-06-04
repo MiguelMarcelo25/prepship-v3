@@ -43,7 +43,7 @@ const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1'
 
 // Canonical rate payload — base cost 9.86, no markup rules are mocked so the
 // grid renders the base amount verbatim.
-function ps050Fingerprint({ weightOz, zip, country = 'US', state, city, dims, clientId, carrierIds = [], confirmation = 'delivery' }) {
+function ps050Fingerprint({ weightOz, zip, country = 'US', state, city, dims, clientId, carrierIds = [], confirmation = 'none' }) {
   const parts = [
     `v=ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}`,
     `d=${new Date().toISOString().slice(0, 10)}`,
