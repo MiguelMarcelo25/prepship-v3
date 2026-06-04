@@ -98,20 +98,23 @@ export type RbAppliedRate = {
 };
 
 type RateConfirmation =
+  | 'none'
   | 'delivery'
   | 'signature'
   | 'adult_signature'
   | 'direct_signature';
 
-// POLICY (DJ, 2026-06-04): Delivery Confirmation is ALWAYS on — there is
-// deliberately NO 'None' option, and normalizeConfirmationForRates() forces any
-// other value back to 'delivery'. This is why a PrepShip UPS Ground rate is
-// ~$2.42 higher than ShipStation's no-confirmation quote (UPS charges for
-// delivery confirmation on Ground but includes it free on air services, so air
-// rates match exactly). This is intentional (proof of delivery on every label),
-// NOT a rate bug — do NOT add a 'None' option to "match ShipStation" without
-// DJ's sign-off.
+// POLICY (DJ, 2026-06-04, superseding the earlier same-day always-on rule):
+// Delivery Confirmation now DEFAULTS TO 'None'. 'None' is a selectable option and
+// is the default, so a PrepShip UPS Ground rate matches ShipStation's
+// no-confirmation quote out of the box (UPS charges for delivery confirmation on
+// Ground but bundles it free on air services). The operator can still opt INTO
+// Delivery / Signature / Adult / Direct Signature per order. The backend already
+// treats 'none' as "send no confirmation" (rates.ts normalizeRateConfirmation
+// returns undefined for 'none'), and the UPS connector only maps explicit
+// signature confirmations to accessorial codes (ups-direct-accessorial-guard).
 const CONFIRMATION_OPTIONS: Array<{ value: RateConfirmation; label: string }> = [
+  { value: 'none', label: 'None' },
   { value: 'delivery', label: 'Delivery' },
   { value: 'signature', label: 'Signature' },
   { value: 'adult_signature', label: 'Adult Signature' },
@@ -122,7 +125,7 @@ function normalizeConfirmationForRates(value?: string | null): RateConfirmation 
   const normalized = String(value ?? '').trim().toLowerCase();
   return CONFIRMATION_OPTIONS.some((option) => option.value === normalized)
     ? (normalized as RateConfirmation)
-    : 'delivery';
+    : 'none';
 }
 
 export type RateBrowserModalProps = {
@@ -839,7 +842,7 @@ export default function RateBrowserModal({
   const [lenStr, setLen] = useState('0');
   const [widStr, setWid] = useState('0');
   const [hgtStr, setHgt] = useState('0');
-  const [confirmation, setConfirmation] = useState<RateConfirmation>('delivery');
+  const [confirmation, setConfirmation] = useState<RateConfirmation>('none');
   const [insuranceProvider, setInsuranceProvider] = useState('none');
   const [insuredValue, setInsuredValue] = useState('');
   const [svcClass, setSvcClass] = useState<'' | 'ground' | 'express'>('');
@@ -2304,12 +2307,12 @@ export default function RateBrowserModal({
                     style={{
                       display: 'block',
                       fontSize: 10,
-                      color: 'var(--green)',
-                      fontWeight: 700,
+                      color: 'var(--text3)',
+                      fontWeight: 600,
                       marginTop: 2,
                     }}
                   >
-                    ✓ Always Enabled
+                    Defaults to None
                   </span>
                 </div>
                 <select

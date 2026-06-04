@@ -319,15 +319,19 @@ interface PanelFormState {
 }
 
 const CONFIRMATION_OPTIONS = [
+  { value: 'none', label: 'None' },
   { value: 'delivery', label: 'Delivery' },
   { value: 'signature', label: 'Signature' },
   { value: 'adult_signature', label: 'Adult Signature' },
   { value: 'direct_signature', label: 'Direct Signature' },
 ] as const
 
+// POLICY (DJ, 2026-06-04): confirmation DEFAULTS TO 'none' so PrepShip rates
+// match ShipStation's no-confirmation quote out of the box. 'none' is a real,
+// selectable option; the operator can opt into Delivery/Signature per order.
 function normalizeConfirmationForRates(value: string | null | undefined) {
   const normalized = (value ?? '').trim().toLowerCase()
-  return normalized && normalized !== 'none' ? normalized : 'delivery'
+  return CONFIRMATION_OPTIONS.some((option) => option.value === normalized) ? normalized : 'none'
 }
 
 // PS-072: infer carrier from a service code so resolveEffectiveInsurance can tell
@@ -2171,7 +2175,7 @@ export default function OrdersView({
     width: '',
     height: '',
     packageId: '',
-    confirmation: 'delivery',
+    confirmation: 'none',
     insurance: 'none',
     insuranceValue: '',
   })
@@ -3791,7 +3795,7 @@ export default function OrdersView({
     )
     return {
       confirmation: normalizeConfirmationForRates(
-        toStringValue(rate?.confirmation) ?? toStringValue(getShippingModel(order)?.confirmation) ?? 'delivery',
+        toStringValue(rate?.confirmation) ?? toStringValue(getShippingModel(order)?.confirmation) ?? 'none',
       ),
       insuranceProvider: insurance.insuranceProvider,
       insuredValue: insurance.insuredValue,
@@ -5157,7 +5161,7 @@ export default function OrdersView({
     const confirmation = normalizeConfirmationForRates(
       toStringValue(order.selectedRate?.confirmation) ??
       toStringValue(getShippingModel(order)?.confirmation) ??
-      'delivery'
+      'none'
     )
     const carrierIds = getRateCarrierIdsForAccounts()
     const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
@@ -6482,11 +6486,10 @@ export default function OrdersView({
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
-          // v2-parity: batch labels default to 'delivery' confirmation (signed
-          // on delivery, cheapest level that's still tracked). Without this,
-          // v4 falls through to 'none' at src/lib/shipstation/labels.ts:152 →
-          // no signature tracking and different carrier billing vs v2.
-          // Single-order path at line ~1309 already does this conversion.
+          // POLICY (DJ, 2026-06-04): batch labels inherit the confirmation from
+          // shippingOptions, which now defaults to 'none' (no confirmation
+          // surcharge — matches ShipStation). The operator opts into
+          // Delivery/Signature per order when they want proof of delivery.
           confirmation: shippingOptions.confirmation,
           insuranceProvider: shippingOptions.insuranceProvider,
           insuredValue: shippingOptions.insuredValue,

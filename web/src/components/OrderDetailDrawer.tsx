@@ -498,7 +498,7 @@ export default function OrderDetailDrawer({
       raw.packageCode,
       rawRecord.packageCode,
     );
-    const confirmationText = textValue(raw.confirmation, rawRecord.confirmation, 'delivery');
+    const confirmationText = textValue(raw.confirmation, rawRecord.confirmation, 'none');
     const tracking = textValue(shipmentRecord.trackingNumber, rawRecord.trackingNumber);
     const shipFrom = textValue(
       rawRecord.shipFrom?.name,

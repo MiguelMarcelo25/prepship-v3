@@ -518,7 +518,10 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
       }, {
-        confirmation: 'delivery',
+        // POLICY (DJ, 2026-06-04): default confirmation is 'none' (matches the
+        // awaiting/modal default). Eligibility-only here; cached prices are
+        // already baked, and the 'none' cache key never collides with old 'delivery' rows.
+        confirmation: 'none',
         insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
         insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
       }, automationRules);
@@ -541,7 +544,10 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
       }, {
-        confirmation: 'delivery',
+        // POLICY (DJ, 2026-06-04): default confirmation is 'none' (matches the
+        // awaiting/modal default). Eligibility-only here; cached prices are
+        // already baked, and the 'none' cache key never collides with old 'delivery' rows.
+        confirmation: 'none',
         insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
         insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
       }, automationRules);

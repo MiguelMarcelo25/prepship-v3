@@ -54,7 +54,12 @@ function normalizedKey(value: unknown) {
   return String(value ?? '').trim().toLowerCase();
 }
 
-export function normalizeConfirmation(value?: unknown, fallback: NormalizedConfirmation = 'delivery') {
+// POLICY (DJ, 2026-06-04): the system-wide default confirmation is 'none' (no
+// confirmation surcharge — matches ShipStation's default quote). Any path that
+// does not explicitly pass a confirmation now falls through to 'none'; callers
+// that need a different default pass an explicit `fallback`. Operators opt into
+// Delivery/Signature/Adult/Direct per order.
+export function normalizeConfirmation(value?: unknown, fallback: NormalizedConfirmation = 'none') {
   if (value == null || String(value).trim() === '') return fallback;
   return CONFIRMATION_ALIASES.get(normalizedKey(value).replace(/[\s-]+/g, '_')) ??
     CONFIRMATION_ALIASES.get(normalizedKey(value)) ??

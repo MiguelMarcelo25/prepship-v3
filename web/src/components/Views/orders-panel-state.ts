@@ -88,8 +88,9 @@ export function getPanelRequestedService(order: OrderSummaryDto, detail: OrderFu
 export function getPanelConfirmation(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const advancedOptions = getAdvancedOptions(order, detail)
   const confirmation = toStringValue(advancedOptions?.deliveryConfirmation)
-  if (!confirmation || confirmation === 'none') return 'delivery'
-  return confirmation
+  // POLICY (DJ, 2026-06-04): default confirmation is 'none' (no surcharge,
+  // matches ShipStation). Honor an explicit source-order confirmation if set.
+  return confirmation || 'none'
 }
 
 export function getPanelInsurance(order: OrderSummaryDto, detail: OrderFullDto | null) {
