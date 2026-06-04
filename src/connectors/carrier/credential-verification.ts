@@ -870,6 +870,24 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   endicia: verifyEndicia,
 };
 
+// Reusable credential-verify dispatcher (same verifiers the HTTP handler uses).
+// Used by tooling (e.g. the connector health report) to confirm a saved
+// credential still AUTHENTICATES. These are READ-ONLY auth checks — the
+// verifiers above never create labels, buy postage, send notifications, or touch
+// orders. Returns { ok, error?, accountIdentifier?, accountLabel?, meta? }.
+export async function verifyProviderCredentials(
+  provider: string,
+  credentials: Record<string, unknown>,
+): Promise<VerifyResult> {
+  const key = String(provider ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_') as ProviderType;
+  const verifier = VERIFIERS[key];
+  if (!verifier) {
+    const note = STUBBED_NOTES[key] ?? 'Provider not implemented yet.';
+    return { ok: false, error: `${provider} verification not implemented`, meta: { note } };
+  }
+  return verifier(credentials);
+}
+
 function readBody(req: any): Promise<unknown> {
   // Mirror the body-parsing approach in api/carrier-accounts.ts so behaviour
   // is consistent across endpoints.
