@@ -20,12 +20,23 @@ const optionalBooleanFlag = z
     return normalized === 'true' || normalized === '1' || normalized === 'yes';
   });
 
+// On Vercel/Lambda serverless functions (e.g. /api/carriers/*) the Render-only
+// Supabase ADMIN secrets are not provisioned — those functions only need
+// DATABASE_URL (+ their own request-time auth). Hard-requiring them there made
+// loading the db/connector tree call process.exit(1) below, which surfaces as an
+// uncatchable FUNCTION_INVOCATION_FAILED. In serverless, don't require them (the
+// label path never uses them); the long-running Render server stays strict.
+const isServerless = Boolean(
+  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.AWS_REGION,
+);
+const renderOnlySecret = isServerless ? z.string().default('') : z.string().min(1);
+
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   SUPABASE_URL: z.string().url(),
-  SUPABASE_ANON_KEY: z.string().min(1),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
-  SUPABASE_JWT_SECRET: z.string().min(1),
+  SUPABASE_ANON_KEY: renderOnlySecret,
+  SUPABASE_SERVICE_ROLE_KEY: renderOnlySecret,
+  SUPABASE_JWT_SECRET: renderOnlySecret,
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   WEB_ORIGIN: z.string().optional(),
@@ -74,8 +85,16 @@ const schema = z.object({
 const parsed = schema.safeParse(process.env);
 
 if (!parsed.success) {
+  const fieldErrors = parsed.error.flatten().fieldErrors;
   console.error('Invalid environment variables:');
-  console.error(parsed.error.flatten().fieldErrors);
+  console.error(fieldErrors);
+  // NEVER process.exit() in a serverless function — it kills the request with an
+  // uncatchable FUNCTION_INVOCATION_FAILED. Throw so the caller's try/catch
+  // returns a clean, actionable 500 listing the missing vars. The Render server
+  // keeps fail-fast on startup.
+  if (isServerless) {
+    throw new Error(`Invalid environment variables: ${JSON.stringify(fieldErrors)}`);
+  }
   process.exit(1);
 }
 
