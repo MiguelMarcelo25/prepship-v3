@@ -26,6 +26,13 @@ import {
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
 // pills for FedEx/etc. Replaces the local carrier-class switch below.
 import CarrierBadge from './CarrierBadge';
+// PS-083: the scoped-carrier cache lives in its own module so Settings can
+// invalidate it after an assign/unassign (see clearScopedCarrierAccountsCache).
+import {
+  getScopedCarrierAccounts,
+  hasScopedCarrierAccounts,
+  setScopedCarrierAccounts,
+} from './rate-browser-carrier-cache';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
 export type RbLocationDto = {
@@ -200,8 +207,6 @@ function RateLoadingSpinner({ text = 'Fetching rates…' }: { text?: string }): 
     </span>
   );
 }
-
-const scopedCarrierAccountsCache = new Map<string, RbCarrierAccountDto[]>();
 
 function carrierAccountScopeKey(order: RbOrderSummaryDto | null): string {
   return [
@@ -898,8 +903,8 @@ export default function RateBrowserModal({
 
     let cancelled = false;
     const scopeKey = carrierAccountScopeKey(order);
-    const hasCachedScope = scopedCarrierAccountsCache.has(scopeKey);
-    const cached = scopedCarrierAccountsCache.get(scopeKey) ?? [];
+    const hasCachedScope = hasScopedCarrierAccounts(scopeKey);
+    const cached = getScopedCarrierAccounts(scopeKey) ?? [];
     setScopedShippingAccounts(cached);
     setScopedAccountsLoading(!hasCachedScope);
     setScopedAccountsError(null);
@@ -909,7 +914,7 @@ export default function RateBrowserModal({
       .then((res) => {
         if (cancelled) return;
         const carriers = Array.isArray(res?.carriers) ? res.carriers : [];
-        scopedCarrierAccountsCache.set(scopeKey, carriers);
+        setScopedCarrierAccounts(scopeKey, carriers);
         setScopedShippingAccounts(carriers);
       })
       .catch((err) => {

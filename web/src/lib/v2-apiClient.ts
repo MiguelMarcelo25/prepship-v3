@@ -16,6 +16,10 @@ import { API_BASE } from './api-base';
 import { getCachedAuthToken } from './auth-session-cache';
 import { callVercelFunction } from './vercelFunction';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
+// PS-083: shared "is this direct carrier usable for this scope?" decision —
+// the SAME module the backend `/carriers/rates` + `/carriers/labels` gates use,
+// so Rate Browser hiding and server-side rejection can never drift apart.
+import { directCarrierVisibleForScope } from '../../../src/lib/direct-carrier-scope';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const accessToken = await getCachedAuthToken();
@@ -57,10 +61,8 @@ const STORE_PROVIDER_KEYS = new Set([
   'woocommerce',
   'bigcommerce',
 ]);
-const STORE_SCOPED_SHIPPING_PROVIDERS = new Set([
-  'walmart_shipping',
-  'ebay_shipping',
-]);
+// PS-083: store-scoped provider handling now lives in the shared
+// src/lib/direct-carrier-scope module (isStoreScopedShippingProvider).
 const SYNTHETIC_STORE_ID_OFFSETS: Record<string, number> = {
   walmart_shipping: 9_000_000,
   amazon_shipping: 9_100_000,
@@ -853,31 +855,26 @@ function directCarrierAccountVisibleForOrder(
   row: DirectCarrierAccountRow,
   context: { storeId?: unknown; clientId?: unknown; includeAllDirectCarriers?: unknown }
 ): boolean {
-  const provider = normalizeProviderKey(row.provider);
+  // Marketplace store accounts (eBay/Walmart Shipping) match by store/client
+  // identity, not by carrier assignment — handled separately.
   if ((row.sourceTable ?? 'carrier_accounts') === 'store_accounts') {
     return storeAccountMatchesOrder(row, context);
   }
 
-  const contextClientId = parseFiniteNumber(context.clientId);
-  if (context.includeAllDirectCarriers === true && contextClientId == null && context.storeId == null) {
-    return !STORE_SCOPED_SHIPPING_PROVIDERS.has(provider);
-  }
-
-  const assignedClientIds = normalizeClientIdList(row.assignedClientIds);
-  if (assignedClientIds.length > 0) {
-    return contextClientId != null && assignedClientIds.includes(contextClientId);
-  }
-
-  const rowClientId = parseFiniteNumber(row.clientId);
-  if (rowClientId != null) {
-    return contextClientId != null && rowClientId === contextClientId;
-  }
-
-  // Marketplace-owned shipping APIs are not globally shared carriers. Without
-  // a client/store match they would leak into unrelated clients like KFG.
-  if (STORE_SCOPED_SHIPPING_PROVIDERS.has(provider)) return false;
-
-  return true;
+  // PS-083: direct carrier_accounts rows are governed by the shared assignment
+  // rule. An active carrier with NO client assignment (no junction rows AND no
+  // legacy client_id) is HIDDEN — not treated as globally visible. Previously
+  // this function fell through to `return true`, which leaked unassigned SHIPP
+  // into every Rate Browser scope. "Available to all clients" must now come
+  // from an explicit assignment, never from a blank assignment list.
+  return directCarrierVisibleForScope(
+    {
+      provider: row.provider,
+      clientId: row.clientId,
+      assignedClientIds: row.assignedClientIds,
+    },
+    context,
+  );
 }
 
 function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {

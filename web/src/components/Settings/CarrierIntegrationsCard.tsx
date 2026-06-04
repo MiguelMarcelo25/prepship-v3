@@ -23,6 +23,9 @@ import {
   EyeOff,
 } from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
+// PS-083: drop the Rate Browser scoped-carrier cache after an assignment change
+// so an unassigned carrier (e.g. SHIPP) cannot resurrect from a stale scope.
+import { clearScopedCarrierAccountsCache } from '../rate-browser-carrier-cache'
 import { formatCaDateShort } from '../../lib/ca-time'
 import { useAllClients } from '../../hooks'
 import ShippLogo from '../../utils/logo/shipp'
@@ -975,8 +978,10 @@ interface SavedRow {
    * Many-to-many: which client(s) can use this carrier account.
    * The legacy single-client `clientId` above stays as a backward-
    * compat anchor; this array is the authoritative source going
-   * forward. Empty array = unassigned (admin-global). Populated via
-   * the new `Assign Clients` popover on each saved row.
+   * forward. PS-083: an empty array means UNASSIGNED → the carrier is
+   * hidden from the Rate Browser / best-rate selection (NOT an implicit
+   * admin-global). "Available to all clients" must be an explicit
+   * assignment. Populated via the `Assign Clients` popover on each row.
    */
   assignedClientIds: number[]
 }
@@ -1251,6 +1256,10 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const refreshAccountsCache = () => {
     void queryClient.invalidateQueries({ queryKey: ['v2-hooks:carrier-accounts'] })
     void queryClient.invalidateQueries({ queryKey: ['v2-hooks:carriers'] })
+    // PS-083: the react-query keys above feed rate-shop pickers, but the Rate
+    // Browser sidebar keeps its own session-lived scoped cache. Clear it too so
+    // an unassign is reflected the next time the Rate Browser opens.
+    clearScopedCarrierAccountsCache()
   }
 
   const [saved, setSaved] = useState<SavedRow[]>([])
@@ -1462,7 +1471,6 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       })
       const fresh = res?.data?.assignedClientIds ?? ids
       const newSource = res?.data?.source ?? d.source
-      const promoted = !!res?.data?.promotedFromPortal
       setSaved((prev) =>
         prev.map((row) =>
           row.id === d.id
@@ -1470,12 +1478,13 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             : row,
         ),
       )
-      if (promoted) {
-        // Bust the carrier-list cache so the just-promoted row appears
-        // in rate-shop pickers (which read useShippingAccounts) without
-        // waiting for the 60s staleTime.
-        refreshAccountsCache()
-      }
+      // PS-083: ALWAYS refresh after an assignment change — not only when the
+      // row was promoted portal→admin. Unassigning an already-admin carrier
+      // (removing every client) leaves `promoted` false, and previously skipped
+      // the cache bust, so the Rate Browser kept showing the now-unassigned
+      // carrier until a full reload. refreshAccountsCache() also clears the Rate
+      // Browser scoped cache (see above).
+      refreshAccountsCache()
       closeAssignPopover()
     } catch (err) {
       alert(`Failed to save assignments: ${err instanceof Error ? err.message : 'Unknown error'}`)

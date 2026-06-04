@@ -62,6 +62,7 @@
     "test:client-redaction": "node scripts/client-redaction-guard.mjs",
     "test:credential-accounts": "node scripts/credential-accounts-guard.mjs",
     "test:rate-system-hardening": "node scripts/rate-system-hardening-guard.mjs",
+    "test:ps-083-direct-carrier-scope": "tsx scripts/ps-083-direct-carrier-assignment-scope-guard.ts",
     "test:ps-050-rate-accuracy": "node scripts/ps-050-rate-accuracy-guard.mjs",
     "test:ps-050-rate-exactness": "node scripts/ps-050-rate-exactness-and-limiter-guard.mjs",
     "test:ps-051-shipping-options": "node scripts/ps-051-shipping-options-guard.mjs",

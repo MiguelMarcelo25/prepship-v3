@@ -28,6 +28,10 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
+// PS-083: assignment-scope gate (same rule as Rate Browser + /carriers/rates).
+// Pure leaf module with no transitive deps, so a static import here is cold-
+// start safe (unlike the wide connector/eligibility tree, which stays deferred).
+import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
 
 // ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
 // module top. On Vercel, importing the carrier/store connector orchestrators +
@@ -966,8 +970,18 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    const carrierRows = await sql<Array<{ provider: string; credentials: any; label: string | null }>>`
-      SELECT provider, credentials, label FROM carrier_accounts
+    const carrierRows = await sql<Array<{ provider: string; credentials: any; label: string | null; client_id: number | null; assigned_client_ids: number[] | null }>>`
+      SELECT
+        provider, credentials, label, client_id,
+        COALESCE(
+          (
+            SELECT array_agg(cac.client_id ORDER BY cac.client_id)
+            FROM carrier_account_clients cac
+            WHERE cac.carrier_account_id = carrier_accounts.id
+          ),
+          '{}'::int[]
+        ) AS assigned_client_ids
+      FROM carrier_accounts
       WHERE id = ${carrierAccountId} LIMIT 1
     `;
     if (carrierRows.length === 0) {
@@ -975,6 +989,10 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
     const { provider, credentials, label } = carrierRows[0];
+    const carrierAssignment = {
+      clientId: carrierRows[0].client_id ?? null,
+      assignedClientIds: carrierRows[0].assigned_client_ids ?? [],
+    };
     const providerKey = normalizeProviderKey(provider);
     const connectorCapabilities = labelCreateConnectorCapabilities(providerKey);
     if (!connectorCapabilities) {
@@ -1018,6 +1036,24 @@ export default async function handler(req: any, res: any): Promise<void> {
         rawOrder = orderRow?.raw ?? null;
       } catch (err) {
         orderLookupError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // PS-083: gate label purchase on assignment scope BEFORE any postage is
+    // bought. An unassigned direct carrier, or one assigned to a different
+    // client than this order's, must be rejected here — frontend hiding alone
+    // is not sufficient. Existing labels/shipments are untouched (this runs on
+    // the awaiting-shipment buy path, ahead of carrier dispatch). The simulator
+    // demo provider is exempt.
+    if (providerKey !== 'simulator') {
+      const scopeDecision = evaluateDirectCarrierScope(carrierAssignment, {
+        clientId: orderRow?.client_id ?? body?.clientId ?? null,
+        storeId: orderRow?.store_id ?? body?.storeId ?? null,
+        orderId: body?.orderId ?? null,
+      });
+      if (!scopeDecision.allowed) {
+        res.status(403).json({ ok: false, error: scopeDecision.reason, code: 'carrier_not_assigned' });
+        return;
       }
     }
 

@@ -20,6 +20,11 @@
 import postgres from 'postgres';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { sendInternalServerError, logServerError } from '../_lib/safe-error.js';
+// PS-083: assignment-scope gate shared with the Rate Browser FE filter and the
+// label-purchase function. A direct carrier with no client assignment must not
+// quote rates for a scoped order, even if a stale/synthetic provider id reaches
+// this endpoint. Pure module (no transitive deps) so it's cold-start safe.
+import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
 
 // ROOT CAUSE FIX: these helpers were STATIC imports at module top. On Vercel,
 // loading verify-supabase-jwt (jose) + the shipping-eligibility tree pulled a
@@ -346,8 +351,18 @@ export default async function handler(req: any, res: any): Promise<void> {
       ? await sql<Array<{ provider: string; credentials: unknown }>>`
           SELECT provider, credentials FROM store_accounts WHERE id = ${lookupId} LIMIT 1
         `
-      : await sql<Array<{ provider: string; credentials: unknown }>>`
-          SELECT provider, credentials FROM carrier_accounts WHERE id = ${lookupId} LIMIT 1
+      : await sql<Array<{ provider: string; credentials: unknown; client_id: number | null; assigned_client_ids: number[] | null }>>`
+          SELECT
+            provider, credentials, client_id,
+            COALESCE(
+              (
+                SELECT array_agg(cac.client_id ORDER BY cac.client_id)
+                FROM carrier_account_clients cac
+                WHERE cac.carrier_account_id = carrier_accounts.id
+              ),
+              '{}'::int[]
+            ) AS assigned_client_ids
+          FROM carrier_accounts WHERE id = ${lookupId} LIMIT 1
         `;
     const row = rows[0];
     if (!row) {
@@ -355,6 +370,30 @@ export default async function handler(req: any, res: any): Promise<void> {
         error: `${useStoreTable ? 'store_accounts' : 'carrier_accounts'} row #${lookupId} not found`,
       });
       return;
+    }
+
+    // PS-083: enforce assignment scope for DIRECT carrier_accounts rows. An
+    // unassigned carrier (no junction rows, no legacy client_id) must not quote
+    // for a scoped order/client/store; an assigned carrier must match the
+    // order's client. The simulator is a credential-free demo provider and is
+    // exempt. store_accounts (marketplace) rows are matched by store identity
+    // elsewhere, so they skip this gate.
+    if (!useStoreTable && String((row as any).provider).toLowerCase() !== 'simulator') {
+      const scopeDecision = evaluateDirectCarrierScope(
+        {
+          clientId: (row as any).client_id ?? null,
+          assignedClientIds: (row as any).assigned_client_ids ?? [],
+        },
+        {
+          clientId: body?.clientId ?? orderContext?.client_id ?? null,
+          storeId: body?.storeId ?? orderContext?.store_id ?? null,
+          orderId: body?.orderId ?? null,
+        },
+      );
+      if (!scopeDecision.allowed) {
+        res.status(403).json({ ok: false, error: scopeDecision.reason, code: 'carrier_not_assigned' });
+        return;
+      }
     }
 
     const requestedProvider = String(body?.provider ?? '').toLowerCase();
