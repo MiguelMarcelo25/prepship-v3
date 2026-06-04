@@ -17,6 +17,54 @@ import {
   type CollapsedQueueLine,
 } from './print-queue-identity';
 
+// Per user override unlock shipped data on 2026-06-02: display-only print
+// layout. Append a label PDF's pages to the merged print document, normalizing
+// each onto the standard 4x6 (288x432) print page so an oversized carrier label
+// (e.g. FedEx Home Delivery, which returns a larger page) prints the SAME size
+// as the USPS/UPS labels instead of dwarfing them.
+//
+//  - A page already at 4x6 (within tolerance) is copied byte-for-byte — zero
+//    risk to the working USPS/UPS labels.
+//  - A rotated page is also copied as-is so its orientation is never altered.
+//  - Only an oversized, un-rotated page is embedded and scaled to FIT the 4x6
+//    page (aspect-ratio preserved, centered).
+//
+// Mutates nothing but the in-memory merged print PDF — no label bytes, postage,
+// shipments, or shipped/cancelled order data are touched.
+export async function appendNormalizedLabelPages(
+  merged: import('pdf-lib').PDFDocument,
+  labelDoc: import('pdf-lib').PDFDocument,
+): Promise<void> {
+  const TARGET_W = 288;
+  const TARGET_H = 432;
+  const SIZE_TOL = 8;
+  const labelPages = labelDoc.getPages();
+  const indices = labelDoc.getPageIndices();
+  for (const [i, src] of labelPages.entries()) {
+    const { width, height } = src.getSize();
+    const rotation = (((src.getRotation().angle ?? 0) % 360) + 360) % 360;
+    const isStandard =
+      Math.abs(width - TARGET_W) <= SIZE_TOL && Math.abs(height - TARGET_H) <= SIZE_TOL;
+    if (isStandard || rotation !== 0) {
+      const [copied] = await merged.copyPages(labelDoc, [indices[i]!]);
+      if (copied) merged.addPage(copied);
+      continue;
+    }
+    const [embedded] = await merged.embedPages([src]);
+    if (!embedded) continue;
+    const scale = Math.min(TARGET_W / embedded.width, TARGET_H / embedded.height);
+    const drawWidth = embedded.width * scale;
+    const drawHeight = embedded.height * scale;
+    const page = merged.addPage([TARGET_W, TARGET_H]);
+    page.drawPage(embedded, {
+      x: (TARGET_W - drawWidth) / 2,
+      y: (TARGET_H - drawHeight) / 2,
+      width: drawWidth,
+      height: drawHeight,
+    });
+  }
+}
+
 export type AddToQueueInput = {
   clientId: number;
   orderId: string;
@@ -1131,13 +1179,16 @@ async function runMergeJob(
 
       try {
         const labelDoc = await PDFDocument.load(pdfBytes!);
-        const indices = labelDoc.getPageIndices();
-        if (indices.length === 0) {
+        if (labelDoc.getPageCount() === 0) {
           throw new Error('PDF contained no pages');
         }
-        const pages = await merged.copyPages(labelDoc, indices);
         addGroupHeaderIfNeeded();
-        for (const p of pages) merged.addPage(p);
+        // Per user override unlock shipped data on 2026-06-02: display-only —
+        // normalize each label onto the standard 4x6 print page (see
+        // appendNormalizedLabelPages) so an oversized carrier label (e.g. FedEx
+        // Home Delivery) prints the same size as USPS/UPS instead of dwarfing
+        // them. No label bytes, postage, or shipped/cancelled data are mutated.
+        await appendNormalizedLabelPages(merged, labelDoc);
         successfulEntryIds.push(e.id);
       } catch (err) {
         if (isMockLabel) {
