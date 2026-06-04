@@ -5663,12 +5663,20 @@ export default function OrdersView({
       const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
 
       if (bestRate) {
-        clearAutoBestRateWatchdog(autoRequest.key)
+        // PS — `autoRequest` MUST be declared before it is used. Previously
+        // `clearAutoBestRateWatchdog(autoRequest.key)` ran above the
+        // `const autoRequest = ...` line below, which is a temporal-dead-zone
+        // ReferenceError at runtime (this file is @ts-nocheck, so tsc never
+        // caught it). The throw aborted the refresh BEFORE the panel preview,
+        // the table's autoBestRateEntries sync, and persistAppliedRateForOrder
+        // ran — leaving the Orders table spinning even though a valid rate was
+        // found. Declaring it once up top and guarding both uses fixes it.
+        const autoRequest = getAutoBestRateRequest(order)
+        if (autoRequest) clearAutoBestRateWatchdog(autoRequest.key)
         bestRate.confirmation = shippingOptions.confirmation
         bestRate.insuranceProvider = shippingOptions.insuranceProvider
         bestRate.insuredValue = shippingOptions.insuredValue
         setPanelRatePreview([bestRate])
-        const autoRequest = getAutoBestRateRequest(order)
         if (autoRequest) {
           setAutoBestRateEntries((current) => ({
             ...current,
