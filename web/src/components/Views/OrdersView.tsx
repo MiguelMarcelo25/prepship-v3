@@ -109,7 +109,11 @@ import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, isHugrabShippingContext, HUGRAB_D
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
-type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total'
+// Per user override `unlock shipped data` (2026-06-04): every data column is
+// now sortable across Awaiting / Shipped / Cancelled. This only adds DISPLAY
+// sorting (client-side, same path as the existing keys) — it does not modify,
+// edit, or weaken any shipped/cancelled order data or protection.
+type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_shippingAccount' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal'
 type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
 type PanelSectionKey = 'shipping' | 'items' | 'recipient'
 type DailyStatsStatus = 'idle' | 'loading' | 'success' | 'error'
@@ -445,17 +449,17 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: 'carrier', label: 'Carrier', width: 145, sort: 'carrier' },
   { key: 'custcarrier', label: 'Shipping Account', width: 140, sort: 'custcarrier' },
   { key: 'total', label: 'Order Total', width: 85, sort: 'total' },
-  { key: 'bestrate', label: 'Best Rate', width: 175, sort: null },
-  { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: null },
-  { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: null },
-  { key: 'test_clientID', label: 'Client ID', width: 90, sort: null },
-  { key: 'test_shippingAccount', label: 'Acct Nickname', width: 120, sort: null },
-  { key: 'test_serviceCode', label: 'Service Code', width: 130, sort: null },
-  { key: 'test_bestRate', label: 'Best Rate (awaiting)', width: 200, sort: null },
-  { key: 'test_orderLocal', label: 'Order Local', width: 140, sort: null },
-  { key: 'labelcreated', label: 'Label Created', width: 115, sort: null },
-  { key: 'margin', label: 'Ship Margin', width: 90, sort: null },
-  { key: 'tracking', label: 'Tracking #', width: 160, sort: null },
+  { key: 'bestrate', label: 'Best Rate', width: 175, sort: 'bestrate' },
+  { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: 'test_carrierCode' },
+  { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: 'test_shippingProviderID' },
+  { key: 'test_clientID', label: 'Client ID', width: 90, sort: 'test_clientID' },
+  { key: 'test_shippingAccount', label: 'Acct Nickname', width: 120, sort: 'test_shippingAccount' },
+  { key: 'test_serviceCode', label: 'Service Code', width: 130, sort: 'test_serviceCode' },
+  { key: 'test_bestRate', label: 'Best Rate (awaiting)', width: 200, sort: 'test_bestRate' },
+  { key: 'test_orderLocal', label: 'Order Local', width: 140, sort: 'test_orderLocal' },
+  { key: 'labelcreated', label: 'Label Created', width: 115, sort: 'labelcreated' },
+  { key: 'margin', label: 'Ship Margin', width: 90, sort: 'margin' },
+  { key: 'tracking', label: 'Tracking #', width: 160, sort: 'tracking' },
   { key: 'age', label: 'Age', width: 50, sort: 'age' },
 ]
 
@@ -1831,7 +1835,13 @@ function getVisibleColumns(currentStatus: OrderStatus) {
   ))
 }
 
-function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: SortKey, accounts: CarrierAccountDto[]) {
+function getSortValue(
+  order: OrderSummaryDto,
+  detail: OrderFullDto | null,
+  key: SortKey,
+  accounts: CarrierAccountDto[],
+  markups: Parameters<typeof applyCarrierMarkup>[1],
+): string | number {
   switch (key) {
     case 'date':
     case 'age':
@@ -1863,6 +1873,49 @@ function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: 
       return String(getShipAccountDisplay(order, accounts)).toLowerCase()
     case 'total':
       return order.orderTotal ?? 0
+    // Per user override `unlock shipped data` (2026-06-04): display-only sort
+    // values for the remaining columns. Numeric columns return numbers
+    // (missing → -1 so blanks group together); text columns return lowercased
+    // strings. No order data is mutated.
+    case 'bestrate':
+    case 'test_bestRate':
+      return getBestRateBaseCost(order) ?? -1
+    case 'margin': {
+      // Mirrors renderMargin's core: markup applied to the best-rate base.
+      // Only awaiting orders show a margin (shipped/cancelled render '—').
+      if (order.orderStatus !== 'awaiting_shipment') return -1
+      const base = getBestRateBaseCost(order)
+      if (base == null || !order.bestRate) return -1
+      const marked = applyCarrierMarkup({
+        shippingProviderId: getBestRateShippingProviderId(order),
+        carrierCode: order.bestRate.carrierCode ?? '',
+        serviceCode: getBestRateServiceCode(order) ?? '',
+        serviceName: order.bestRate.serviceName ?? '',
+        amount: base,
+        shipmentCost: base,
+        otherCost: 0,
+        carrierNickname: getBestRateCarrierNickname(order),
+      }, markups)
+      return getMarkupAmount(base, marked)
+    }
+    case 'tracking':
+      return (toStringValue(order.label?.trackingNumber) ?? '').toLowerCase()
+    case 'labelcreated':
+      return order.label?.createdAt ?? ''
+    case 'test_carrierCode':
+      return (getShippingString(order, 'carrierCode') ?? toStringValue(order.bestRate?.carrierCode) ?? '').toLowerCase()
+    case 'test_serviceCode':
+      return (getShippingString(order, 'serviceCode') ?? toStringValue(order.bestRate?.serviceCode) ?? '').toLowerCase()
+    case 'test_shippingProviderID':
+      return (toStringValue(order.bestRate?.shippingProviderId) ?? toStringValue(getBestRateShippingProviderId(order)) ?? '').toLowerCase()
+    case 'test_clientID':
+      return Number(order.clientId ?? -1)
+    case 'test_shippingAccount':
+      return (getBestRateCarrierNickname(order) ?? '').toLowerCase()
+    case 'test_orderLocal':
+      return Number(order.weight?.value ?? -1)
+    default:
+      return ''
   }
 }
 
@@ -2670,8 +2723,8 @@ export default function OrdersView({
     next.sort((left, right) => {
       const leftDetail = orderDetailsById.get(left.orderId) ?? null
       const rightDetail = orderDetailsById.get(right.orderId) ?? null
-      const leftValue = getSortValue(left, leftDetail, sortState.key, shippingAccounts)
-      const rightValue = getSortValue(right, rightDetail, sortState.key, shippingAccounts)
+      const leftValue = getSortValue(left, leftDetail, sortState.key, shippingAccounts, markups)
+      const rightValue = getSortValue(right, rightDetail, sortState.key, shippingAccounts, markups)
       const direction = sortState.dir === 'asc' ? 1 : -1
       if (leftValue < rightValue) return -direction
       if (leftValue > rightValue) return direction
@@ -2679,7 +2732,7 @@ export default function OrdersView({
     })
 
     return next
-  }, [searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts])
+  }, [searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts, markups])
   const skuOrderGroups = useMemo(
     () => (
       skuSortActive
