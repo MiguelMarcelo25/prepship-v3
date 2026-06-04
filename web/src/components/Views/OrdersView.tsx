@@ -4463,6 +4463,7 @@ export default function OrdersView({
         confirmation: shippingOptions.confirmation,
         insuranceProvider: shippingOptions.insuranceProvider,
         insuredValue: shippingOptions.insuredValue,
+        selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
         testLabel: Boolean(options.batchTestMode) || orderIsTest,
       }
     }
@@ -4574,6 +4575,7 @@ export default function OrdersView({
       confirmation: shippingOptions.confirmation,
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue,
+      selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
     }
     if (shippingProviderId != null) payload.shippingProviderId = shippingProviderId
     // createLabel throws on failure; the caller wraps this in try/catch.
@@ -4916,6 +4918,7 @@ export default function OrdersView({
       confirmation: shippingOptions.confirmation,
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue ?? undefined,
+      selectedRateProof: buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate),
       testLabel: isTest || mode === 'test',
       shipTo: {
         name: shipTo.name ?? '',
@@ -5266,6 +5269,32 @@ export default function OrdersView({
       toRecord(getShippingModel(order)?.bestRate) ??
       toRecord(toRecord(order.overrides)?.bestRateJson)
     )
+  }
+
+  function rateProofFingerprint(rate: Record<string, unknown> | null) {
+    const raw = toRecord(rate?.raw)
+    const metadata = toRecord(rate?.metadata)
+    return (
+      toStringValue(rate?.requestFingerprint) ??
+      toStringValue(rate?.rateRequestFingerprint) ??
+      toStringValue(rate?.cacheKey) ??
+      toStringValue(metadata?.requestFingerprint) ??
+      toStringValue(metadata?.cacheKey) ??
+      toStringValue(raw?.requestFingerprint) ??
+      toStringValue(raw?.cacheKey) ??
+      null
+    )
+  }
+
+  function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown) {
+    const selectedRate =
+      toRecord(candidate) ??
+      toRecord(order.bestRate) ??
+      toRecord(order.selectedRate) ??
+      getSavedBestRateRecord(order)
+    const requestFingerprint = rateProofFingerprint(selectedRate)
+    if (!selectedRate || !requestFingerprint) return undefined
+    return { requestFingerprint, selectedRate }
   }
 
   function hasAnySavedBestRateForDisplay(order: OrderSummaryDto) {
@@ -6546,6 +6575,7 @@ export default function OrdersView({
           confirmation: shippingOptions.confirmation,
           insuranceProvider: shippingOptions.insuranceProvider,
           insuredValue: shippingOptions.insuredValue,
+          selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
           testLabel: batchTestMode || orderIsTest,
         }
         if (shippingProviderId != null) {
@@ -6888,6 +6918,7 @@ export default function OrdersView({
           confirmation: shippingOptions.confirmation,
           insuranceProvider: shippingOptions.insuranceProvider,
           insuredValue: shippingOptions.insuredValue,
+          selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
           testLabel: Boolean(job.batchTestMode) || orderIsTest,
         }
         if (shippingProviderId != null) {

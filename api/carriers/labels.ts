@@ -32,6 +32,7 @@ import postgres from 'postgres';
 // Pure leaf module with no transitive deps, so a static import here is cold-
 // start safe (unlike the wide connector/eligibility tree, which stays deferred).
 import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
+import { assertSelectedRateProofForLabelPurchase } from '../../src/services/shipping-workflow/rate-fingerprint.js';
 
 // ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
 // module top. On Vercel, importing the carrier/store connector orchestrators +
@@ -1056,6 +1057,10 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
     }
+    // Per user override unlock shipped data on 2026-06-05: enforce the
+    // selected-rate proof/fingerprint boundary before any direct-carrier
+    // postage purchase. This guards all provider branches below.
+    assertSelectedRateProofForLabelPurchase(body?.selectedRateProof);
 
     const explicitExternalOrderId = typeof body?.externalOrderId === 'string'
       ? body.externalOrderId
@@ -1540,6 +1545,10 @@ export default async function handler(req: any, res: any): Promise<void> {
     const msg = err instanceof Error ? err.message : String(err);
     if ((err as any)?.code === 'SHIPPING_SERVICE_NOT_ELIGIBLE') {
       res.status(400).json({ ok: false, error: msg });
+      return;
+    }
+    if ((err as any)?.code === 'SELECTED_RATE_PROOF_INVALID') {
+      res.status(400).json({ ok: false, error: msg, code: (err as any).code, details: (err as any).details ?? null });
       return;
     }
     console.error('[carriers/labels]', msg);

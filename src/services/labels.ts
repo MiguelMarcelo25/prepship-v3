@@ -33,6 +33,10 @@ import {
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
 import { addMockLabelSignature } from '../lib/mock-label-access';
+import {
+  assertSelectedRateProofForLabelPurchase,
+  type SelectedRateProofInput,
+} from './shipping-workflow/rate-fingerprint';
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
@@ -284,6 +288,7 @@ export type CreateLabelInputDto = {
   testLabel?: boolean;
   shipTo?: AddressInputDto;
   shipFrom?: AddressInputDto;
+  selectedRateProof?: SelectedRateProofInput;
 };
 
 export type CreateLabelResponseDto = {
@@ -1111,6 +1116,10 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }
 
   // ── Real ShipStation flow ───────────────────────────────────────────────────
+  // Per user override unlock shipped data on 2026-06-05: enforce the
+  // selected-rate proof/fingerprint boundary before any real ShipStation
+  // postage call. Test labels returned above remain offline-only.
+  assertSelectedRateProofForLabelPurchase(body.selectedRateProof);
   const creds = await loadClientCredentials(clientId);
   const apiKeyV2 = creds.apiKeyV2 ?? undefined;
   if (!body.shippingProviderId) {

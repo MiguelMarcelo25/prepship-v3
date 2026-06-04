@@ -32,6 +32,14 @@ const addressInput = z
   })
   .optional();
 
+const selectedRateProofInput = z
+  .object({
+    requestFingerprint: z.string().min(1).optional(),
+    selectedRate: z.unknown().optional(),
+    eligibleRates: z.array(z.unknown()).optional(),
+  })
+  .optional();
+
 const createBody = z.object({
   orderId: z.number().int().positive(),
   orderNumber: z.string().optional(),
@@ -52,6 +60,7 @@ const createBody = z.object({
   testLabel: z.boolean().optional(),
   shipTo: addressInput,
   shipFrom: addressInput,
+  selectedRateProof: selectedRateProofInput,
 });
 
 const batchBody = z.object({
@@ -66,6 +75,7 @@ const batchBody = z.object({
   insuranceValue: z.union([z.number(), z.string()]).nullable().optional(),
   testLabel: z.boolean().optional(),
   shippingProviderId: z.number().int().positive(),
+  selectedRateProof: selectedRateProofInput,
 });
 
 const returnBody = z
@@ -86,6 +96,9 @@ function handleCreateError(c: Context, err: unknown): Response {
       { error: message, retryAfter, rateLimited: true, ...details },
       429
     );
+  }
+  if (e.code === 'SELECTED_RATE_PROOF_INVALID') {
+    return c.json({ error: message, code: e.code, ...details }, 400);
   }
   const invalid = [
     'orderId and serviceCode required',

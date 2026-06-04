@@ -41,6 +41,23 @@ export type SelectedRateValidationResult =
       selectedAuthorityKey: string | null;
     };
 
+export class SelectedRateProofError extends Error {
+  code = 'SELECTED_RATE_PROOF_INVALID';
+  details: SelectedRateValidationResult;
+
+  constructor(message: string, details: SelectedRateValidationResult) {
+    super(message);
+    this.name = 'SelectedRateProofError';
+    this.details = details;
+  }
+}
+
+export type SelectedRateProofInput = {
+  requestFingerprint?: string | null;
+  selectedRate?: unknown;
+  eligibleRates?: unknown[] | null;
+};
+
 function normalizeZip(zip: string): string {
   const digits = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
   return digits || String(zip ?? '').trim().toUpperCase();
@@ -215,4 +232,19 @@ export function validateExactSelectedRate(input: {
   }
 
   return { ok: true, reason: 'ok', selectedAuthorityKey };
+}
+
+export function assertSelectedRateProofForLabelPurchase(proof: SelectedRateProofInput | null | undefined): SelectedRateValidationResult {
+  const result = validateExactSelectedRate({
+    currentRequestFingerprint: proof?.requestFingerprint,
+    selectedRate: proof?.selectedRate,
+    eligibleRates: proof?.eligibleRates,
+  });
+  if (!result.ok) {
+    throw new SelectedRateProofError(
+      `Selected rate proof is required before label purchase (${result.reason})`,
+      result,
+    );
+  }
+  return result;
 }
