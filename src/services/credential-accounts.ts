@@ -238,15 +238,32 @@ export async function patchCredentialAccount(
   let row: CredentialAccountRow | null = null;
 
   // Credentials merge ("Reconnect"): shallow-merge the supplied keys over the
-  // stored JSONB (|| operator), so unspecified fields (apiKey/email) survive
-  // when only the password is re-entered. Runs first so a combined patch still
-  // returns the post-update row from the source/label branches below.
+  // stored credentials so unspecified fields (apiKey/email) survive when only
+  // the password is re-entered. Read-merge-write the OBJECT — the same shape the
+  // upsert uses (`${object}` straight into the jsonb column). Do NOT pre-stringify
+  // and `|| $1::jsonb`: postgres.js double-encodes a pre-stringified value, which
+  // mis-stores the object under numeric keys (0,1,2,3). Runs first so a combined
+  // patch still returns the post-update row from the source/label branches below.
   if (patch.hasCredentials && patch.credentials && Object.keys(patch.credentials).length > 0) {
-    const mergeJson = JSON.stringify(patch.credentials);
+    const existingRows = (await sql`
+      SELECT credentials FROM ${sql(table)} WHERE id = ${id} LIMIT 1
+    `) as Array<{ credentials: unknown }>;
+    const existingRaw = existingRows[0]?.credentials;
+    const existing =
+      existingRaw && typeof existingRaw === 'object' && !Array.isArray(existingRaw)
+        ? (existingRaw as Record<string, unknown>)
+        : {};
+    // Drop purely-numeric keys — real credential fields are always named
+    // (apiKey/email/password/...), so numeric keys can only be corruption
+    // artifacts from the earlier double-encode bug. This self-heals affected rows.
+    const cleanedExisting: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(existing)) {
+      if (!/^\d+$/.test(key)) cleanedExisting[key] = value;
+    }
+    const merged: Record<string, unknown> = { ...cleanedExisting, ...patch.credentials };
     const rows = (await sql`
       UPDATE ${sql(table)}
-      SET credentials = COALESCE(credentials, '{}'::jsonb) || ${mergeJson}::jsonb,
-          updated_at = NOW()
+      SET credentials = ${merged}, updated_at = NOW()
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",
