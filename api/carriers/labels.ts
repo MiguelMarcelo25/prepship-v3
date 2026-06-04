@@ -292,9 +292,45 @@ function readBody(req: any): Promise<unknown> {
 // ─── Resolve a ship-to address from various sources ──────────────────
 // Order of preference: explicit body.shipTo → marketplace order's saved
 // raw payload → throw (we genuinely need an address).
-function resolveShipTo(body: any, rawOrder: any) {
+function validateResolvedShipTo(input: any, source: string) {
+  const shipTo = {
+    name: String(input?.name ?? 'Buyer').trim() || 'Buyer',
+    street1: String(input?.street1 ?? '').trim(),
+    street2: String(input?.street2 ?? '').trim(),
+    city: String(input?.city ?? '').trim(),
+    state: String(input?.state ?? '').trim(),
+    zip: String(input?.zip ?? input?.postalCode ?? '').trim(),
+    country: String(input?.country ?? input?.countryCode ?? 'US').trim() || 'US',
+    phone: String(input?.phone ?? '0000000000').trim() || '0000000000',
+  };
+  if (!shipTo.name || !shipTo.street1 || !shipTo.city || !shipTo.state || !shipTo.zip || !shipTo.country) {
+    throw new Error(`Could not resolve complete ship-to address from ${source}; no postage was purchased`);
+  }
+  return shipTo;
+}
+
+function resolveLocalOrderShipTo(orderRow: any) {
+  const rawShipTo = orderRow?.raw?.shipTo ?? orderRow?.raw?.ship_to ?? {};
+  const street1 = rawShipTo?.street1 ?? rawShipTo?.address1 ?? rawShipTo?.addressLine1 ?? rawShipTo?.address_line1;
+  if (!orderRow && !street1) return null;
+  return validateResolvedShipTo(
+    {
+      name: rawShipTo?.name ?? orderRow?.ship_to_name ?? orderRow?.shipToName,
+      street1,
+      street2: rawShipTo?.street2 ?? rawShipTo?.address2 ?? rawShipTo?.addressLine2 ?? rawShipTo?.address_line2,
+      city: rawShipTo?.city ?? orderRow?.ship_to_city ?? orderRow?.shipToCity,
+      state: rawShipTo?.state ?? rawShipTo?.stateOrProvince ?? orderRow?.ship_to_state ?? orderRow?.shipToState,
+      zip: rawShipTo?.postalCode ?? rawShipTo?.zip ?? rawShipTo?.postal_code ?? orderRow?.ship_to_postal_code ?? orderRow?.shipToPostalCode,
+      country: rawShipTo?.country ?? rawShipTo?.countryCode ?? rawShipTo?.country_code ?? 'US',
+      phone: rawShipTo?.phone,
+    },
+    'local order',
+  );
+}
+
+function resolveShipTo(body: any, rawOrder: any, orderRow: any) {
   if (body?.shipTo && typeof body.shipTo === 'object') {
-    return {
+    return validateResolvedShipTo({
       name: String(body.shipTo.name ?? 'Buyer'),
       street1: String(body.shipTo.street1 ?? body.shipTo.address1 ?? ''),
       street2: String(body.shipTo.street2 ?? body.shipTo.address2 ?? ''),
@@ -303,12 +339,12 @@ function resolveShipTo(body: any, rawOrder: any) {
       zip: String(body.shipTo.zip ?? body.shipTo.postalCode ?? ''),
       country: String(body.shipTo.country ?? body.shipTo.countryCode ?? 'US'),
       phone: String(body.shipTo.phone ?? '0000000000'),
-    };
+    }, 'request payload');
   }
   // Walmart order shape
   const wmAddr = rawOrder?.shippingInfo?.postalAddress;
   if (wmAddr) {
-    return {
+    return validateResolvedShipTo({
       name: wmAddr.name ?? 'Buyer',
       street1: wmAddr.address1 ?? '',
       street2: wmAddr.address2 ?? '',
@@ -317,13 +353,13 @@ function resolveShipTo(body: any, rawOrder: any) {
       zip: wmAddr.postalCode ?? '',
       country: wmAddr.country ?? 'US',
       phone: rawOrder?.shippingInfo?.phone ?? '0000000000',
-    };
+    }, 'Walmart order payload');
   }
   // eBay order shape
   const ebAddr = rawOrder?.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo?.contactAddress;
   const ebFullName = rawOrder?.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo?.fullName;
   if (ebAddr) {
-    return {
+    return validateResolvedShipTo({
       name: ebFullName ?? 'Buyer',
       street1: ebAddr.addressLine1 ?? '',
       street2: ebAddr.addressLine2 ?? '',
@@ -332,12 +368,12 @@ function resolveShipTo(body: any, rawOrder: any) {
       zip: ebAddr.postalCode ?? '',
       country: ebAddr.countryCode ?? 'US',
       phone: rawOrder?.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo?.primaryPhone?.phoneNumber ?? '0000000000',
-    };
+    }, 'eBay order payload');
   }
   // Amazon order shape
   if (rawOrder?.ShippingAddress) {
     const a = rawOrder.ShippingAddress;
-    return {
+    return validateResolvedShipTo({
       name: a.Name ?? 'Buyer',
       street1: a.AddressLine1 ?? '',
       street2: a.AddressLine2 ?? '',
@@ -346,8 +382,10 @@ function resolveShipTo(body: any, rawOrder: any) {
       zip: a.PostalCode ?? '',
       country: a.CountryCode ?? 'US',
       phone: a.Phone ?? '0000000000',
-    };
+    }, 'Amazon order payload');
   }
+  const localShipTo = resolveLocalOrderShipTo(orderRow);
+  if (localShipTo) return localShipTo;
   throw new Error('Could not resolve ship-to address — pass body.shipTo explicitly or use an externalOrderId from a marketplace pull');
 }
 
@@ -1025,9 +1063,17 @@ export default async function handler(req: any, res: any): Promise<void> {
           order_number: string | null;
           external_order_id: string | null;
           order_status: string | null;
+          ship_to_name: string | null;
+          ship_to_city: string | null;
+          ship_to_state: string | null;
+          ship_to_postal_code: string | null;
           raw: any;
         }>>`
-          SELECT o.id, o.client_id, o.store_id, c.name as client_name, o.order_number, o.external_order_id, o.order_status, o.raw
+          SELECT
+            o.id, o.client_id, o.store_id, c.name as client_name,
+            o.order_number, o.external_order_id, o.order_status,
+            o.ship_to_name, o.ship_to_city, o.ship_to_state, o.ship_to_postal_code,
+            o.raw
           FROM orders o
           LEFT JOIN clients c ON c.id = o.client_id
           WHERE o.id = ${Math.trunc(orderId)}
@@ -1388,7 +1434,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    const shipTo = resolveShipTo(body, rawOrder);
+    const shipTo = resolveShipTo(body, rawOrder, orderRow);
     const shipFrom = resolveShipFrom(creds);
 
     let result: any = null;

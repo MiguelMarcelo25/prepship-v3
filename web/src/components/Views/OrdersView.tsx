@@ -4560,6 +4560,10 @@ export default function OrdersView({
     const dims = getDimensions(order, orderDetail)
     const weightOz = getOrderWeightOz(order, orderDetail)
     const shippingOptions = buildOrderShippingOptionsPayload(order)
+    const shipTo = getShipTo(order, orderDetail)
+    if (!shipTo.street1 || !shipTo.city || !shipTo.state || !shipTo.postalCode) {
+      return { queued: false, items: [], error: 'Missing ship-to address - no postage was purchased' }
+    }
     const payload: Record<string, unknown> = {
       orderId: order.orderId,
       orderNumber: order.orderNumber ?? undefined,
@@ -4576,6 +4580,17 @@ export default function OrdersView({
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue,
       selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
+      shipTo: {
+        name: shipTo.name ?? '',
+        company: shipTo.company ?? '',
+        street1: shipTo.street1 ?? '',
+        street2: shipTo.street2 ?? '',
+        city: shipTo.city ?? '',
+        state: shipTo.state ?? '',
+        postalCode: shipTo.postalCode ?? '',
+        country: shipTo.country ?? 'US',
+        phone: shipTo.phone ?? '',
+      },
     }
     if (shippingProviderId != null) payload.shippingProviderId = shippingProviderId
     // createLabel throws on failure; the caller wraps this in try/catch.

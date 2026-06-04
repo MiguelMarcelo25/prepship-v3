@@ -20,8 +20,8 @@ Last reviewed on 2026-06-05 against `prepshipv4-stable` after:
 
 | Ticket | Current Percent | Status | Evidence / Notes |
 |---|---:|---|---|
-| PS-084 Direct-Carrier Print-to-Queue Ship-To + Existing Label Recovery | 25% | Saved/planned; some supporting route behavior exists, but not fully certified against this task text. | Needs focused proof that direct-carrier print-to-queue resolves ship-to from local orders and reuses/recover existing labels. |
-| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 10% | Saved/planned only. | Broad closeout/meta ticket; should run after the purchase-boundary lane is complete. |
+| PS-084 Direct-Carrier Print-to-Queue Ship-To + Existing Label Recovery | 100% | Complete and verified. | Direct-carrier labels now resolve local order ship-to fallback and direct-carrier print-to-queue sends canonical `shipTo`; existing-label recovery remains duplicate-postage-safe. See `docs/ps-084-direct-carrier-print-queue-completion-report.md`. |
+| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 15% | Saved/planned; PS-084 now closed with evidence. | Broad closeout/meta ticket; should run after the purchase-boundary lane and PS-099 are complete. |
 | PS-093 Direct-Carrier Scope Guard for Rates + Labels | 100% | Functionally complete and verified. | `src/lib/direct-carrier-scope.ts`; `api/carriers/rates.ts`; `api/carriers/labels.ts`; `npm run test:ps-083-direct-carrier-scope`; `npm run test:direct-carrier-labels`; `npm run test:direct-carrier-queue-route`; `npm run test:carriers-rates-hardening`. |
 | PS-094 Backend Selected-Rate Proof/Fingerprint Primitive | 90% | Functionally present via PS-085 `rate-fingerprint.ts`, but task asked for a no-enforcement phase and file name `rate-selection-proof.ts`. | Need decide whether to add compatibility alias/doc or mark superseded by `rate-fingerprint.ts` + enforcement. |
 | PS-095 Frontend Selected-Rate Proof Pass-Through + Stale-Rate UX | 85% | Proof pass-through is implemented. Stale UX needs final review against task wording. | `web/src/components/Views/OrdersView.tsx` passes `selectedRateProof`; existing rate-sync UI handles stale/unavailable states. |
@@ -64,7 +64,7 @@ Last reviewed on 2026-06-05 against `prepshipv4-stable` after:
 - Inspect: `src/routes/print-queue.ts`
 - Modify/Test: `scripts/direct-carrier-queue-route-guard.ts` or add `scripts/direct-carrier-print-queue-recovery-guard.ts`
 
-- [ ] **Step 1: Write a failing guard for local ship-to resolution**
+- [x] **Step 1: Write a failing guard for local ship-to resolution**
 
 Guard should assert that direct-carrier print-to-queue sends `orderId` and lets `api/carriers/labels.ts` load local `orders.raw`/store order data before provider label purchase.
 
@@ -76,7 +76,7 @@ npm run test:direct-carrier-queue-route
 
 Expected before implementation if missing: FAIL on missing local-order lookup assertion.
 
-- [ ] **Step 2: Write a failing guard for existing-label recovery**
+- [x] **Step 2: Write a failing guard for existing-label recovery**
 
 Guard should assert that print-to-queue reuses an existing active label URL when present and does not purchase another direct-carrier label.
 
@@ -89,7 +89,7 @@ npm run test:direct-carrier-queue-route
 
 Expected before implementation if missing: FAIL on existing-label reuse/recovery assertion.
 
-- [ ] **Step 3: Implement minimal recovery behavior**
+- [x] **Step 3: Implement minimal recovery behavior**
 
 Only touch the print-to-queue path needed to:
 
@@ -98,7 +98,7 @@ Only touch the print-to-queue path needed to:
 - return safe errors when local ship-to is missing,
 - avoid buying a duplicate label.
 
-- [ ] **Step 4: Verify PS-084**
+- [x] **Step 4: Verify PS-084**
 
 Run:
 
@@ -109,7 +109,7 @@ npm run test:print-queue-invalid-label
 npm run test:shipping-roundtrip-certification
 ```
 
-Mark PS-084 to 100% only when all pass and the report confirms zero real labels/postage.
+PS-084 is 100% as of commit containing `scripts/ps-084-direct-carrier-print-queue-guard.ts` and `docs/ps-084-direct-carrier-print-queue-completion-report.md`.
 
 ---
 
@@ -435,7 +435,4 @@ Follow-up risks/blockers:
 
 ## Current Recommended Next Step
 
-Do **PS-098 certification artifact/report next**, because PS-093, PS-096, and PS-097 are already functionally complete and verified. After PS-098 is saved, proceed to PS-084 or PS-099 depending on DJ priority:
-
-- Choose PS-084 first if Print-to-Queue recovery is blocking operations.
-- Choose PS-099 first if Create+Print accidentally queueing or SHIPP label size is blocking label printing.
+Do **PS-098 certification artifact/report next**, because PS-084, PS-093, PS-096, and PS-097 are now functionally complete and verified. After PS-098 is saved, proceed to PS-099 for Create+Print separation and SHIPP 4x6 output normalization, then use PS-087 as the final unfinished-task closeout.
