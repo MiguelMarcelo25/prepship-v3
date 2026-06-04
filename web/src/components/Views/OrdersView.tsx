@@ -1373,21 +1373,40 @@ function isStrictShippedOrder(order: OrderSummaryDto) {
 function getCarrierCodeForDisplay(order: OrderSummaryDto) {
   if (isTestOrder(order)) return TEST_CARRIER_CODE
 
-  const canonicalCarrierCode = getShippingString(order, 'carrierCode')
-  if (canonicalCarrierCode) return canonicalCarrierCode
-
+  // PS-079: the Awaiting Shipment carrier column represents the CURRENT Best Rate,
+  // so prefer the bestRate carrier over (possibly stale) canonical/selected
+  // metadata. Fresh auto-rates already mirror bestRate into canonical, so this
+  // only changes the divergent/stale case — which must show the best rate.
   if (order.orderStatus === 'awaiting_shipment') {
     return (
       toStringValue(order.bestRate?.carrierCode) ??
+      getShippingString(order, 'carrierCode') ??
       toStringValue(order.selectedRate?.carrierCode)
     )
   }
+
+  const canonicalCarrierCode = getShippingString(order, 'carrierCode')
+  if (canonicalCarrierCode) return canonicalCarrierCode
 
   return toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode)
 }
 
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
   if (isTestOrder(order)) return TEST_SHIPPING_ACCOUNT_LABEL
+
+  // PS-079: the Awaiting Shipment shipping-account column shows the nickname tied
+  // to the EXACT current Best Rate — not stale selected/canonical/label account
+  // metadata. (Shipped/history rows keep the canonical/selected/label semantics
+  // below.) Fresh auto-rates mirror bestRate into canonical, so this only changes
+  // the divergent/stale case, which must show the best-rate account.
+  if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
+    const bestRateRecord = toRecord(order.bestRate)
+    const bestRateNickname =
+      normalizeShippingAccountName(order.bestRate.carrierNickname) ??
+      normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
+      normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname))
+    if (bestRateNickname) return bestRateNickname
+  }
 
   const canonicalNickname = normalizeShippingAccountName(getShippingString(order, 'accountNickname'))
   if (canonicalNickname) return canonicalNickname

@@ -168,6 +168,33 @@ const awaitingSingleQuantity = baseRow(970004, 'awaiting_shipment', 1, {
   ],
 })
 
+// PS-079 — Awaiting row where a divergent selectedRate account ("STALE ACCT 999")
+// disagrees with the current best-rate account ("BEST ACCT 111"). The Awaiting
+// shipping-account column must show the BEST RATE account, never the stale
+// selected/canonical one.
+const bestRateDivergent = {
+  ...rate,
+  carrierNickname: 'BEST ACCT 111',
+  providerAccountNickname: 'BEST ACCT 111',
+}
+const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
+  orderNumber: 'ORD-970005',
+  overrides: { rateWeightOz: 60, rateDimsL: 11, rateDimsW: 8, rateDimsH: 6, bestRateDims: '11x8x6', bestRateJson: bestRateDivergent },
+  bestRate: bestRateDivergent,
+  selectedRate: {
+    carrierCode: 'ups',
+    serviceCode: 'ups_ground',
+    serviceName: 'UPS Ground',
+    carrierNickname: 'STALE ACCT 999',
+    providerAccountNickname: 'STALE ACCT 999',
+    shippingProviderId: 9999,
+    amount: 9.86,
+    cost: 9.86,
+    shipmentCost: 9.86,
+    otherCost: 0,
+  },
+})
+
 // 3) Shipped, real local shipment data persisted.
 const shippedPersisted = baseRow(980001, 'shipped', 1, {
   orderNumber: 'SHIPPED-980001',
@@ -235,7 +262,7 @@ const shippedNoNickname = baseRow(980004, 'shipped', 1, {
 })
 
 const ordersByStatus = {
-  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem, awaitingSingleQuantity],
+  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem, awaitingSingleQuantity, awaitingBestRateDivergent],
   shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname],
   cancelled: [],
 }
@@ -391,6 +418,13 @@ test('Awaiting grid columns render every required field from source of truth', a
     custcarrier: { contains: 'ROCEL C81F70' },
     bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },
     test_bestRate: { contains: ['ups', '9.86'] },
+  })
+
+  // PS-079 — divergent account: best rate account is "BEST ACCT 111" while a
+  // stale selectedRate carries "STALE ACCT 999". Awaiting shipping-account column
+  // must show the BEST RATE account, never the stale selected one.
+  await assertColumns(page, awaitingBestRateDivergent.orderId, {
+    custcarrier: { contains: 'BEST ACCT 111', notContains: 'STALE ACCT 999' },
   })
 
   // Missing-dims awaiting row — rate-dependent columns MUST surface the

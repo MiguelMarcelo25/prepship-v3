@@ -27,12 +27,16 @@ assert(
   'Orders UI validates saved rates against current complete request fingerprint/freshness/completeness',
 )
 
-// PS-071: the real guard rows are `if (!hasDisplayableBestRate && ...)` (the
-// original `if (!hasDisplayableBestRate)` literal never existed — brittle pin).
-// The awaiting cells still hide stale rates and prompt "add dims" — now also via
-// the bounded classifyAwaitingRateCellState 'add-dims' fallback.
+// PS-071/PS-079: the awaiting cell still GATES display on hasDisplayableBestRate
+// and prompts "add dims" via the bounded classifyAwaitingRateCellState 'add-dims'
+// fallback. The exact `if (!hasDisplayableBestRate && ...)` literal was refactored
+// by c13748cf ("Fix awaiting best-rate auto display") to
+// `if (!hasDisplayableBestRate || bestRateBaseCost == null)` and the
+// `isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay`
+// stale-rate gate — same behavior, less brittle pin.
 assert(
-  ordersView.includes('if (!hasDisplayableBestRate &&') &&
+  /\bif \(!hasDisplayableBestRate\b/.test(ordersView) &&
+    ordersView.includes('!hasDisplayableBestRate && hasAnySavedBestRateForDisplay') &&
     (ordersView.includes('return <span style={{ fontSize: 10.5, color:') ||
       ordersView.includes("data-rate-state=\"add-dims\"")) &&
     ordersView.includes('add dims'),
