@@ -9,10 +9,10 @@ import {
   timestamp,
   unique,
 } from 'drizzle-orm/pg-core';
-import { clients } from './clients';
-import { orders } from './orders';
-import { shipments } from './shipments';
-import { packages } from './packages';
+import { clients } from './clients.js';
+import { orders } from './orders.js';
+import { shipments } from './shipments.js';
+import { packages } from './packages.js';
 
 // Source-of-truth note: billing_config owns mutable billing rules. Generated
 // billing_line_items should be treated as frozen billable records.

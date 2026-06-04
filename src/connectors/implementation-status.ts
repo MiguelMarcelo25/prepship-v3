@@ -1,4 +1,4 @@
-import type { ConnectorProvider } from './types';
+import type { ConnectorProvider } from './types.js';
 
 export type ConnectorImplementationStatus = 'live' | 'registered_stub' | 'blocked_external_contract';
 

@@ -8,8 +8,8 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { clients } from './clients';
-import { packages } from './packages';
+import { clients } from './clients.js';
+import { packages } from './packages.js';
 
 // PS-037 — Per-client package defaults keyed by the EXACT SKU+qty combination
 // of an order (not by individual SKU). Lets mixed-SKU clients (e.g. Hugrab:

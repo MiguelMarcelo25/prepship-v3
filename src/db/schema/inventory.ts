@@ -9,8 +9,8 @@ import {
   timestamp,
   unique,
 } from 'drizzle-orm/pg-core';
-import { clients } from './clients';
-import { orders } from './orders';
+import { clients } from './clients.js';
+import { orders } from './orders.js';
 
 export const inventory = pgTable(
   'inventory',

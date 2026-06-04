@@ -5,8 +5,8 @@ import type {
   ShipmentConfirmationInput,
   StoreOrderImportInput,
   StoreConnector,
-} from '../../domain/fulfillment/types';
-import { timedFetch } from '../../lib/http/timing';
+} from '../../domain/fulfillment/types.js';
+import { timedFetch } from '../../lib/http/timing.js';
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {

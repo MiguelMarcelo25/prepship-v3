@@ -1,7 +1,7 @@
-import { sql as pg } from '../../db/client';
-import { loadClientCredentials } from '../../lib/shipstation/credentials';
-import { resolveStoreConnector } from '../../connectors/store-resolution';
-import { assertFulfillmentSchemaReady } from './schema-readiness';
+import { sql as pg } from '../../db/client.js';
+import { loadClientCredentials } from '../../lib/shipstation/credentials.js';
+import { resolveStoreConnector } from '../../connectors/store-resolution.js';
+import { assertFulfillmentSchemaReady } from './schema-readiness.js';
 
 type OrderForConfirmation = {
   id: number;

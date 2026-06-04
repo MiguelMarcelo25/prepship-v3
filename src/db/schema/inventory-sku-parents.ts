@@ -8,8 +8,8 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { inventory } from './inventory';
-import { parentSkus } from './parent-skus';
+import { inventory } from './inventory.js';
+import { parentSkus } from './parent-skus.js';
 
 // v2-parity: multi-parent SKU membership. One inventory row can belong to
 // many parent bundles (and vice versa). v4 previously modeled this as a

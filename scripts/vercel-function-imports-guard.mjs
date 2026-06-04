@@ -124,6 +124,58 @@ if (extensionlessRuntimeImports.length) {
   pass('Vercel lazy-loaded connector files use runtime-safe .js specifiers');
 }
 
+// ── Transitive check: EVERY relative import reachable from a Vercel function
+// must carry a .js/.json runtime extension. Node ESM on Vercel resolves these
+// files individually at runtime (e.g. carrier-connector-orchestrator.js ->
+// ../connectors/carrier-resolution), so an extensionless specifier anywhere in
+// the reachable graph throws "Cannot find module" the moment that code runs.
+// A static file list missed the orchestrator/resolution/registry/db tree; this
+// walk is self-maintaining and would have caught it.
+function vercelFunctionEntryPoints() {
+  const carriersDir = path.join(apiRoot, 'carriers');
+  return walk(carriersDir).map((p) => path.relative(root, p).replaceAll(path.sep, '/'));
+}
+function resolveRelativeTs(fromFileRel, spec) {
+  const base = path.dirname(fromFileRel);
+  const p = path.normalize(path.join(base, spec)).replaceAll(path.sep, '/');
+  const candidates = [p.replace(/\.js$/, '.ts'), `${p}.ts`, `${p}/index.ts`];
+  for (const c of candidates) {
+    if (c.endsWith('.ts') && fs.existsSync(path.join(root, c))) return c;
+  }
+  return null;
+}
+const reachableSeen = new Set();
+const transitiveOffenders = [];
+function walkImports(fileRel) {
+  if (reachableSeen.has(fileRel)) return;
+  reachableSeen.add(fileRel);
+  let src;
+  try { src = fs.readFileSync(path.join(root, fileRel), 'utf8'); } catch { return; }
+  const specs = new Set();
+  let m;
+  const fromRe = /\sfrom\s+["'](\.{1,2}\/[^"']+)["']/g;
+  while ((m = fromRe.exec(src))) specs.add(m[1]);
+  const dynRe = /import\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
+  while ((m = dynRe.exec(src))) specs.add(m[1]);
+  for (const spec of specs) {
+    const target = resolveRelativeTs(fileRel, spec);
+    if (target && !spec.endsWith('.js') && !spec.endsWith('.json')) {
+      transitiveOffenders.push(`${fileRel}: ${spec}`);
+    }
+    if (target) walkImports(target);
+  }
+}
+for (const entry of vercelFunctionEntryPoints()) walkImports(entry);
+if (transitiveOffenders.length) {
+  fail(
+    'Vercel functions reach relative imports without a .js/.json runtime extension ' +
+    '(Node ESM will throw "Cannot find module" when this code runs):\n' +
+    [...new Set(transitiveOffenders)].sort().join('\n'),
+  );
+} else {
+  pass(`every relative import reachable from Vercel functions uses a runtime extension (${reachableSeen.size} files)`);
+}
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

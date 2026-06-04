@@ -11,8 +11,8 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { clients } from './clients';
-import { orders } from './orders';
+import { clients } from './clients.js';
+import { orders } from './orders.js';
 
 // Source-of-truth note: shipments owns durable label/shipment records.
 // Selected rate, provider, account, tracking, and cost fields are frozen

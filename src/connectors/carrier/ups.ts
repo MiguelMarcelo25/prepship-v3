@@ -1,4 +1,4 @@
-import type { CarrierConnector } from '../../domain/fulfillment/types';
+import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { normalizeShippingOptions } from '../../lib/shipping-options.js';
 

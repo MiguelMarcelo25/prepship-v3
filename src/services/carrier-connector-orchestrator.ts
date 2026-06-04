@@ -1,7 +1,7 @@
-import { resolveCarrierConnector } from '../connectors/carrier-resolution';
-import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility';
-import { normalizeShippingOptions } from '../lib/shipping-options';
-import { loadShippingAutomationRules } from './shipping-automation';
+import { resolveCarrierConnector } from '../connectors/carrier-resolution.js';
+import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility.js';
+import { normalizeShippingOptions } from '../lib/shipping-options.js';
+import { loadShippingAutomationRules } from './shipping-automation.js';
 import type {
   CarrierLabelInput,
   CarrierAccountListInput,
@@ -14,7 +14,7 @@ import type {
   NormalizedCarrierRateQuoteResult,
   NormalizedCarrierVoidResult,
   NormalizedTrackingStatus,
-} from '../connectors/types';
+} from '../connectors/types.js';
 
 function missingCarrierConnector(provider: string | null | undefined, capability: ConnectorCapability): Error {
   return new Error(`No carrier connector registered for ${provider ?? '(missing)'} with capability ${capability}`);

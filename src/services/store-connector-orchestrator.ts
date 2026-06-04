@@ -1,4 +1,4 @@
-import { resolveStoreConnector } from '../connectors/store-resolution';
+import { resolveStoreConnector } from '../connectors/store-resolution.js';
 import type {
   ConfirmationResult,
   ConnectorCapability,
@@ -9,7 +9,7 @@ import type {
   StoreOrderFetchInput,
   StoreOrderImportInput,
   StoreOrderStatusSyncInput,
-} from '../connectors/types';
+} from '../connectors/types.js';
 
 function missingStoreConnector(provider: string | null | undefined, capability: ConnectorCapability): Error {
   return new Error(`No store connector registered for ${provider ?? '(missing)'} with capability ${capability}`);

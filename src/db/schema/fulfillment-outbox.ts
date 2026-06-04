@@ -8,8 +8,8 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { orders } from './orders';
-import { shipments } from './shipments';
+import { orders } from './orders.js';
+import { shipments } from './shipments.js';
 
 export const fulfillmentOutbox = pgTable(
   'fulfillment_outbox',

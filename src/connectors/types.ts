@@ -1,4 +1,4 @@
-import type { NormalizedShippingOptions } from '../lib/shipping-options';
+import type { NormalizedShippingOptions } from '../lib/shipping-options.js';
 
 export type ConnectorProvider =
   | 'shipstation'

@@ -2,7 +2,7 @@ import type {
   ConfirmationResult,
   ShipmentConfirmationInput,
   StoreConnector,
-} from '../../domain/fulfillment/types';
+} from '../../domain/fulfillment/types.js';
 
 export function createShopifyStoreConnector(): StoreConnector {
   return {

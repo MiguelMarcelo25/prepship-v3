@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { db } from '../../db/client';
-import { clients } from '../../db/schema/clients';
+import { db } from '../../db/client.js';
+import { clients } from '../../db/schema/clients.js';
 
 export type ClientCredentials = {
   apiKeyV2: string | null;

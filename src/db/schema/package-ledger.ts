@@ -8,7 +8,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { packages } from './packages';
+import { packages } from './packages.js';
 
 export const packageLedger = pgTable(
   'package_ledger',

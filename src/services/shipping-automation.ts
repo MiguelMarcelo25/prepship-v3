@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
-import { db } from '../db/client';
-import { settings } from '../db/schema/settings';
+import { db } from '../db/client.js';
+import { settings } from '../db/schema/settings.js';
 import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
   isHugrabShippingContext,
@@ -9,7 +9,7 @@ import {
   type ShippingAutomationRule,
   type ShippingServiceDescriptor,
   type ShippingServiceEligibilityContext,
-} from '../lib/shipping-service-eligibility';
+} from '../lib/shipping-service-eligibility.js';
 
 export const SHIPPING_AUTOMATION_RULES_KEY = 'shipping_automation_rules';
 

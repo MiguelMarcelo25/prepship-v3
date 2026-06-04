@@ -9,8 +9,8 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { clients } from './clients';
-import { orders } from './orders';
+import { clients } from './clients.js';
+import { orders } from './orders.js';
 
 // Source-of-truth note: order_items is the canonical table for SKU/item
 // analytics. orders.items remains raw import compatibility.

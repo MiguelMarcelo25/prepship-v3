@@ -8,7 +8,7 @@ export type {
   ShipmentConfirmationInput,
   StoreOrderImportInput,
   StoreConnector,
-} from '../../connectors/types';
+} from '../../connectors/types.js';
 
 export type ConfirmationStatus =
   | 'not_required'

@@ -1,4 +1,4 @@
-import type { CarrierConnector } from '../../domain/fulfillment/types';
+import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 import { PDFDocument } from 'pdf-lib';

@@ -11,7 +11,7 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { clients } from './clients';
+import { clients } from './clients.js';
 
 export const orders = pgTable(
   'orders',

@@ -6,7 +6,7 @@ import {
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
-import { shipments } from './shipments';
+import { shipments } from './shipments.js';
 
 // v2-parity: return labels as a first-class row. v4 also stores
 // isReturn/returnForShipmentId/returnReason directly on `shipments` — this

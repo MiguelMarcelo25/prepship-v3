@@ -6,7 +6,7 @@ import {
 } from '../../lib/shipstation/labels.js';
 import { ssRequest } from '../../lib/shipstation/client.js';
 import type { CarriersResponse, Label } from '../../lib/shipstation/types.js';
-import type { CarrierConnector } from '../../domain/fulfillment/types';
+import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 
 type ShipStationRateEstimateInput = {
   body?: Record<string, unknown>;

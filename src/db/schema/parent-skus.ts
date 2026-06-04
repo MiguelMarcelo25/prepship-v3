@@ -6,7 +6,7 @@ import {
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
-import { clients } from './clients';
+import { clients } from './clients.js';
 
 export const parentSkus = pgTable(
   'parent_skus',

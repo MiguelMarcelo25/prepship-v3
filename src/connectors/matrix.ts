@@ -1,4 +1,4 @@
-import type { ConnectorCapability, ConnectorProvider } from './types';
+import type { ConnectorCapability, ConnectorProvider } from './types.js';
 
 export const connectorCapabilityMatrix: Record<ConnectorProvider, ConnectorCapability[]> = {
   shipstation: [

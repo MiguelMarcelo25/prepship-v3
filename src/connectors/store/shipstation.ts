@@ -1,10 +1,10 @@
 import {
   asSSUpstreamOrderId,
   ssMarkOrderShippedV1,
-} from '../../lib/shipstation/labels';
-import { ssV1Request } from '../../lib/shipstation/v1-client';
-import { formatShipStationV1DateParam, parseShipStationV1Date } from '../../lib/shipstation/v1-date';
-import { buildShipStationOrderSource } from '../../services/normalized-order-persistence';
+} from '../../lib/shipstation/labels.js';
+import { ssV1Request } from '../../lib/shipstation/v1-client.js';
+import { formatShipStationV1DateParam, parseShipStationV1Date } from '../../lib/shipstation/v1-date.js';
+import { buildShipStationOrderSource } from '../../services/normalized-order-persistence.js';
 import type {
   ConfirmationResult,
   NormalizedOrder,
@@ -12,7 +12,7 @@ import type {
   ShipmentConfirmationInput,
   StoreOrderImportInput,
   StoreConnector,
-} from '../../domain/fulfillment/types';
+} from '../../domain/fulfillment/types.js';
 
 type SSOrder = {
   orderId: number;
