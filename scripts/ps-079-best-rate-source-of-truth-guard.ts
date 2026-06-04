@@ -76,7 +76,10 @@ check('getRates returns an explicit bestRate selected via pickBestRate',
   /bestRate: pickBestRate\(/.test(rates));
 check('best rate is selected from ELIGIBILITY-FILTERED rates (filter present before pick)',
   /filterRatesForShippingServiceEligibility/.test(rates));
-check('best rate is selected POST-markup (applyMarkups runs before pickBestRate)',
+// DECISION (DJ, 2026-06-04): Best Rate is the cheapest CUSTOMER price (selected
+// POST-markup), so the displayed Best Rate and the selected rate stay consistent.
+// Do NOT switch selection to raw carrier cost without DJ's sign-off.
+check('DECISION: best rate is selected POST-markup / cheapest customer price (applyMarkups before pickBestRate)',
   /const rates = applyMarkups\(/.test(rates) || /applyMarkups\(cachedRaw/.test(rates));
 check('cache key embeds the eligibility version (rules change → cache invalidates)',
   /eligibility=\$\{SHIPPING_SERVICE_ELIGIBILITY_VERSION\}/.test(rates));
@@ -89,7 +92,10 @@ check('Awaiting carrier column prefers the bestRate carrier over canonical/selec
   /order\.orderStatus === 'awaiting_shipment'\)\s*\{\s*return \(\s*toStringValue\(order\.bestRate\?\.carrierCode\)/.test(ordersView));
 check('Awaiting shipping-account column prefers the bestRate account nickname',
   /order\.orderStatus === 'awaiting_shipment' && order\.bestRate\)\s*\{[\s\S]{0,260}?order\.bestRate\.carrierNickname/.test(ordersView));
-check('passive auto-rating does not spin forever with no carrier accounts (bounded skip)',
+// DECISION (DJ, 2026-06-04): keep the BOUNDED SKIP when carrier accounts aren't
+// loaded yet (it re-rates once they load; it is not an infinite spinner). Do NOT
+// switch to "call backend without carrierIds" without DJ's sign-off.
+check('DECISION: passive auto-rating is a bounded skip with no carrier accounts (no infinite spinner)',
   /carrierIds\.length === 0\) return null/.test(ordersView));
 
 if (failures > 0) {
