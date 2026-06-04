@@ -1,9 +1,10 @@
 /**
- * Guard: Rate Browser carrier-account clicks must apply a usable rate, not only
- * filter the right-hand list.
+ * Guard: Rate Browser carrier-account clicks must browse/filter within the
+ * modal. Applying a rate is reserved for actual rate rows.
  *
  * This is a static UI wiring guard for the operator flow:
- * Browse Rates -> click "EasyPost Carrier" in Carrier Accounts -> panel adopts
+ * Browse Rates -> click "EasyPost Carrier" in Carrier Accounts -> modal stays
+ * open and shows EasyPost rates. Click an EasyPost rate row -> panel adopts
  * that carrier/account via the normal apply-rate path.
  *
  * Read-only: no DB, no network, no provider calls.
@@ -16,26 +17,26 @@ const source = readFileSync(file, 'utf8');
 
 const checks = [
   {
-    name: 'carrier-account click helper exists',
-    ok: source.includes('function handleCarrierAccountClick('),
-  },
-  {
-    name: 'helper picks the cheapest unblocked account rate',
+    name: 'carrier-account click is filter-only',
     ok:
-      source.includes('.filter((rate) => !isBlockedRate(rate, order, currentRateShippingOptions))') &&
-      source.includes('.sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0]'),
+      /onClick=\{\(\) => \{\s*setSelectedPid\(c\.shippingProviderId\);\s*setViewMode\('carriers'\);\s*\}\}/.test(source) &&
+      !source.includes('onClick={() => handleCarrierAccountClick(c, rates)}'),
   },
   {
-    name: 'helper applies the selected carrier rate through handleRateClick',
-    ok: /if \(bestRate\) \{[\s\S]*handleRateClick\(\{[\s\S]*shippingProviderId:[\s\S]*carrierNickname:[\s\S]*\}\);[\s\S]*return;[\s\S]*\}/.test(source),
+    name: 'carrier-account click does not call rate apply path',
+    ok: !/function handleCarrierAccountClick[\s\S]*handleRateClick/.test(source),
   },
   {
-    name: 'carrier account row is wired to apply helper',
-    ok: source.includes('onClick={() => handleCarrierAccountClick(c, rates)}'),
+    name: 'rate row click applies through handleRateClick',
+    ok: source.includes('onClick={blocked ? undefined : () => handleRateClick(r)}'),
   },
   {
-    name: 'no-rate carrier account still opens carrier-filter view',
-    ok: /function handleCarrierAccountClick[\s\S]*setViewMode\('carriers'\);/.test(source),
+    name: 'rate row apply path closes the modal after onApplyRate',
+    ok: /function handleRateClick[\s\S]*onApplyRate\(\{[\s\S]*\}\);\s*onClose\(\);/.test(source),
+  },
+  {
+    name: 'account count still reflects only available rates when hidden rates are filtered',
+    ok: source.includes('rates.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions)).length'),
   },
 ];
 

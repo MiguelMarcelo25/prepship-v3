@@ -1499,27 +1499,6 @@ export default function RateBrowserModal({
     onClose();
   }
 
-  function handleCarrierAccountClick(
-    account: RbCarrierAccountDto,
-    accountRates: RateRow[] | undefined
-  ): void {
-    setSelectedPid(account.shippingProviderId);
-    const bestRate = [...(accountRates ?? [])]
-      .filter((rate) => !isBlockedRate(rate, order, currentRateShippingOptions))
-      .sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0];
-
-    if (bestRate) {
-      handleRateClick({
-        ...bestRate,
-        shippingProviderId: bestRate.shippingProviderId ?? account.shippingProviderId,
-        carrierNickname: bestRate.carrierNickname ?? formatAccountDisplay(account, ''),
-      });
-      return;
-    }
-
-    setViewMode('carriers');
-  }
-
   function toAppliedRate(r: RateRow): RbAppliedRate | null {
     const pid =
       typeof r.shippingProviderId === 'number'
@@ -2484,7 +2463,10 @@ export default function RateBrowserModal({
               return (
                 <div
                   key={c.shippingProviderId}
-                  onClick={() => handleCarrierAccountClick(c, rates)}
+                  onClick={() => {
+                    setSelectedPid(c.shippingProviderId);
+                    setViewMode('carriers');
+                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'center',

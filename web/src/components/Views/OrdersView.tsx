@@ -8429,8 +8429,13 @@ export default function OrdersView({
     const prevOrderId = panelIndex > 0 ? orderedFilteredOrders[panelIndex - 1]?.orderId ?? null : null
     const nextOrderId = panelIndex >= 0 && panelIndex < orderedFilteredOrders.length - 1 ? orderedFilteredOrders[panelIndex + 1]?.orderId ?? null : null
     const currentWeight = panelOrder.weight?.value ?? 0
-    const serviceOptions = getServiceOptionsForAccount(panelForm.shipAccountId)
     const panelIsTestOrder = isTestOrder(panelOrder, panelDetail)
+    const serviceOptions = getServiceOptionsForAccount(panelForm.shipAccountId)
+    const serviceCodeMissingFromOptions = Boolean(
+      panelForm.serviceCode &&
+      !panelIsTestOrder &&
+      !serviceOptions.some((option) => option.code === panelForm.serviceCode)
+    )
     const selectedPanelAccountLabel = panelIsTestOrder
       ? TEST_SHIPPING_ACCOUNT_LABEL
       : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelOrder, shippingAccounts)
@@ -8876,6 +8881,9 @@ export default function OrdersView({
                       <option value={panelForm.serviceCode}>{formatServiceCode(panelForm.serviceCode)}</option>
                     ) : null}
                     {panelIsTestOrder ? <option value={TEST_SERVICE_CODE}>PrepShip Test Standard</option> : null}
+                    {serviceCodeMissingFromOptions ? (
+                      <option value={panelForm.serviceCode}>{formatServiceCode(panelForm.serviceCode)}</option>
+                    ) : null}
                     <option value="">{panelForm.serviceCode ? formatServiceCode(panelForm.serviceCode) : 'Select Service'}</option>
                     {serviceOptions.map((option) => (
                       <option key={option.code} value={option.code}>{option.label}</option>
