@@ -245,9 +245,9 @@ export default async function handler(req: any, res: any): Promise<void> {
 
       // Reject empty bodies up-front so the caller gets a clear
       // error instead of a successful no-op UPDATE.
-      if (!patch.hasSource && !patch.hasLabel && !patch.hasCredentials) {
+      if (!patch.hasSource && !patch.hasLabel && !patch.hasCredentials && !patch.hasActive) {
         res.status(400).json({
-          error: 'PATCH body must include at least one of: source, label, credentials',
+          error: 'PATCH body must include at least one of: source, label, credentials, active',
         });
         return;
       }

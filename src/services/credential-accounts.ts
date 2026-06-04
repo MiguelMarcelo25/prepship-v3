@@ -37,6 +37,8 @@ export type CredentialAccountPatchInput = {
   labelGoesNull: boolean;
   hasCredentials?: boolean;
   credentials?: Record<string, unknown> | null;
+  hasActive?: boolean;
+  active?: boolean | null;
 };
 
 const SYNTHETIC_STORE_OFFSETS: Record<string, number> = {
@@ -270,6 +272,20 @@ export async function patchCredentialAccount(
                 source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
     row = rows[0] ?? null;
+  }
+
+  // Active toggle (hide/show in Rate Browser). Composes with the other fields;
+  // assigns `row` and falls through so a combined patch still returns the row.
+  if (patch.hasActive && typeof patch.active === 'boolean') {
+    const rows = (await sql`
+      UPDATE ${sql(table)}
+      SET active = ${patch.active}, updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, client_id AS "clientId", provider, label,
+                account_identifier AS "accountIdentifier",
+                source, active, created_at AS "createdAt"
+    `) as CredentialAccountRow[];
+    row = rows[0] ?? row;
   }
 
   if (patch.hasSource && patch.hasLabel) {

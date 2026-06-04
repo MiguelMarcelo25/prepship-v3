@@ -19,6 +19,8 @@ import {
   Loader2,
   AlertCircle,
   KeyRound,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
@@ -1113,6 +1115,19 @@ async function reconnectCarrierCredentials(
   )
 }
 
+// PATCH /carrier-accounts?id=N { active } — hide/show a carrier in the Rate
+// Browser without deleting it. active=false is filtered out client-side
+// (fetchDirectCarrierAccountRows), so the carrier stops appearing for any order.
+async function setCarrierActive(rowId: number, active: boolean): Promise<void> {
+  await callVercelFunction<{ data: Record<string, unknown> | null }>(
+    `/carrier-accounts?id=${rowId}`,
+    {
+      method: 'PATCH',
+      body: { active },
+    },
+  )
+}
+
 interface WalmartOrdersResult {
   ok: boolean
   fetched?: number
@@ -1252,6 +1267,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [reconnectValues, setReconnectValues] = useState<Record<string, string>>({})
   const [reconnectSaving, setReconnectSaving] = useState(false)
   const [reconnectError, setReconnectError] = useState<string | null>(null)
+  // Per-row in-flight state for the Hide/Show (active) toggle.
+  const [togglingActive, setTogglingActive] = useState<Record<number, boolean>>({})
   const [deleting, setDeleting] = useState<Record<number, boolean>>({})
   const [pulling, setPulling] = useState<Record<number, boolean>>({})
   const [pullResults, setPullResults] = useState<Record<number, WalmartOrdersResult>>({})
@@ -1646,6 +1663,22 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     } finally {
       setReconnectSaving(false)
       setTesting((prev) => ({ ...prev, [d.id]: false }))
+    }
+  }
+
+  // Hide/Show a carrier in the Rate Browser (active toggle). active=false is
+  // filtered out everywhere a direct carrier is offered, so it stops appearing
+  // for any order — without deleting the account or its credentials.
+  const runToggleActive = async (d: SavedRow) => {
+    const nextActive = d.active === false // hidden → show (true); active → hide (false)
+    setTogglingActive((prev) => ({ ...prev, [d.id]: true }))
+    try {
+      await setCarrierActive(d.accountId, nextActive)
+      setSaved((prev) => prev.map((row) => (row.id === d.id ? { ...row, active: nextActive } : row)))
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : 'Failed to update carrier visibility.')
+    } finally {
+      setTogglingActive((prev) => ({ ...prev, [d.id]: false }))
     }
   }
 
@@ -2222,6 +2255,23 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               variant="subtle"
               onClick={() => toggleReconnect(d)}
               title="Re-enter login credentials (e.g. after a password change) and verify"
+            />
+          ) : null}
+          {/* Hide / Show — toggles the carrier's `active` flag. A hidden carrier
+              is filtered out of the Rate Browser for every order (it stops being
+              offered) but keeps its account + credentials, so you can re-show it
+              anytime. Carriers only, not ShipStation. */}
+          {d.kind === 'carrier' && !isShipStation ? (
+            <ActionButton
+              icon={d.active === false ? <Eye size={11} strokeWidth={2.5} /> : <EyeOff size={11} strokeWidth={2.5} />}
+              label={d.active === false ? 'Show' : 'Hide'}
+              loadingLabel={d.active === false ? 'Showing…' : 'Hiding…'}
+              loading={!!togglingActive[d.id]}
+              variant="subtle"
+              onClick={() => runToggleActive(d)}
+              title={d.active === false
+                ? 'Show this carrier in the Rate Browser again'
+                : 'Hide this carrier from the Rate Browser (keeps the account + credentials)'}
             />
           ) : null}
           {/* Approve — only rendered for portal-source carrier rows.

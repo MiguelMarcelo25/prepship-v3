@@ -28,6 +28,11 @@ export type CredentialAccountPatchBody = {
   hasCredentials: boolean;
   credentials: Record<string, unknown> | null;
   credentialKeys: string[];
+  // Active toggle: hide/show a carrier in the Rate Browser. active=false is
+  // filtered out client-side (fetchDirectCarrierAccountRows) so the carrier
+  // stops appearing for any order without deleting it.
+  hasActive: boolean;
+  active: boolean | null;
 };
 
 export async function readJsonRequestBody(req: any): Promise<Record<string, unknown>> {
@@ -132,7 +137,10 @@ export function normalizeCredentialAccountPatchBody(
   }
   const hasCredentials = credentials != null;
 
-  return { hasSource, hasLabel, source, label, labelGoesNull, hasCredentials, credentials, credentialKeys };
+  const hasActive = typeof body?.active === 'boolean';
+  const active = hasActive ? Boolean(body.active) : null;
+
+  return { hasSource, hasLabel, source, label, labelGoesNull, hasCredentials, credentials, credentialKeys, hasActive, active };
 }
 
 export function maskAccountIdentifier(value: string | null): string | null {
