@@ -22,6 +22,12 @@ export type CredentialAccountPatchBody = {
   source: CredentialAccountSource | null;
   label: string | null;
   labelGoesNull: boolean;
+  // Credential re-entry ("Reconnect"): merge these keys into the stored
+  // credentials JSONB. Only non-empty values are kept so a blank field never
+  // wipes an existing secret (e.g. change the password, keep the apiKey/email).
+  hasCredentials: boolean;
+  credentials: Record<string, unknown> | null;
+  credentialKeys: string[];
 };
 
 export async function readJsonRequestBody(req: any): Promise<Record<string, unknown>> {
@@ -108,7 +114,25 @@ export function normalizeCredentialAccountPatchBody(
     }
   }
 
-  return { hasSource, hasLabel, source, label, labelGoesNull };
+  // Credentials merge — keep only fields the caller actually supplied. Blank
+  // strings/nulls are treated as "leave unchanged" so re-entering just the
+  // password never clears the stored apiKey/email.
+  let credentials: Record<string, unknown> | null = null;
+  let credentialKeys: string[] = [];
+  const rawCredentials = body?.credentials;
+  if (rawCredentials && typeof rawCredentials === 'object' && !Array.isArray(rawCredentials)) {
+    const filtered: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rawCredentials as Record<string, unknown>)) {
+      if (value == null) continue;
+      if (typeof value === 'string' && value.trim() === '') continue;
+      filtered[key] = value;
+    }
+    credentialKeys = Object.keys(filtered).sort();
+    if (credentialKeys.length > 0) credentials = filtered;
+  }
+  const hasCredentials = credentials != null;
+
+  return { hasSource, hasLabel, source, label, labelGoesNull, hasCredentials, credentials, credentialKeys };
 }
 
 export function maskAccountIdentifier(value: string | null): string | null {

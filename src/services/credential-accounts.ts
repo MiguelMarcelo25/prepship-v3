@@ -35,6 +35,8 @@ export type CredentialAccountPatchInput = {
   hasLabel: boolean;
   label: string | null;
   labelGoesNull: boolean;
+  hasCredentials?: boolean;
+  credentials?: Record<string, unknown> | null;
 };
 
 const SYNTHETIC_STORE_OFFSETS: Record<string, number> = {
@@ -233,6 +235,26 @@ export async function patchCredentialAccount(
   id: number,
   patch: CredentialAccountPatchInput,
 ): Promise<CredentialAccountRow | null> {
+  let row: CredentialAccountRow | null = null;
+
+  // Credentials merge ("Reconnect"): shallow-merge the supplied keys over the
+  // stored JSONB (|| operator), so unspecified fields (apiKey/email) survive
+  // when only the password is re-entered. Runs first so a combined patch still
+  // returns the post-update row from the source/label branches below.
+  if (patch.hasCredentials && patch.credentials && Object.keys(patch.credentials).length > 0) {
+    const mergeJson = JSON.stringify(patch.credentials);
+    const rows = (await sql`
+      UPDATE ${sql(table)}
+      SET credentials = COALESCE(credentials, '{}'::jsonb) || ${mergeJson}::jsonb,
+          updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, client_id AS "clientId", provider, label,
+                account_identifier AS "accountIdentifier",
+                source, active, created_at AS "createdAt"
+    `) as CredentialAccountRow[];
+    row = rows[0] ?? null;
+  }
+
   if (patch.hasSource && patch.hasLabel) {
     const rows = (await sql`
       UPDATE ${sql(table)}
@@ -244,7 +266,7 @@ export async function patchCredentialAccount(
                 account_identifier AS "accountIdentifier",
                 source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
-    return rows[0] ?? null;
+    return rows[0] ?? row;
   }
 
   if (patch.hasSource) {
@@ -256,7 +278,7 @@ export async function patchCredentialAccount(
                 account_identifier AS "accountIdentifier",
                 source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
-    return rows[0] ?? null;
+    return rows[0] ?? row;
   }
 
   if (patch.hasLabel) {
@@ -268,10 +290,10 @@ export async function patchCredentialAccount(
                 account_identifier AS "accountIdentifier",
                 source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
-    return rows[0] ?? null;
+    return rows[0] ?? row;
   }
 
-  return null;
+  return row;
 }
 
 export async function replaceCarrierAccountClientAssignments(

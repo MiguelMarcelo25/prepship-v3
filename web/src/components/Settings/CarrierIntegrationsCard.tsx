@@ -18,6 +18,7 @@ import {
   X as XIcon,
   Loader2,
   AlertCircle,
+  KeyRound,
 } from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
@@ -1094,6 +1095,24 @@ async function renameCarrierIntegration(
   }
 }
 
+// PATCH /carrier-accounts?id=N { credentials: {...} } — re-enter auth
+// credentials (e.g. after a carrier password change) and JSONB-merge them into
+// the stored credentials. Only non-empty fields are sent, so unchanged secrets
+// (apiKey/email) are preserved when, say, only the password changed. Carriers
+// only — store_accounts uses a separate table/handler.
+async function reconnectCarrierCredentials(
+  rowId: number,
+  credentials: Record<string, string>,
+): Promise<void> {
+  await callVercelFunction<{ data: Record<string, unknown> | null }>(
+    `/carrier-accounts?id=${rowId}`,
+    {
+      method: 'PATCH',
+      body: { credentials },
+    },
+  )
+}
+
 interface WalmartOrdersResult {
   ok: boolean
   fetched?: number
@@ -1227,6 +1246,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [listError, setListError] = useState<string | null>(null)
   const [testing, setTesting] = useState<Record<number, boolean>>({})
   const [testResults, setTestResults] = useState<Record<number, VerifyResult>>({})
+  // Reconnect (re-enter credentials after a password change). `reconnectingId`
+  // holds the SavedRow.id of the open form (or null = closed).
+  const [reconnectingId, setReconnectingId] = useState<number | null>(null)
+  const [reconnectValues, setReconnectValues] = useState<Record<string, string>>({})
+  const [reconnectSaving, setReconnectSaving] = useState(false)
+  const [reconnectError, setReconnectError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Record<number, boolean>>({})
   const [pulling, setPulling] = useState<Record<number, boolean>>({})
   const [pullResults, setPullResults] = useState<Record<number, WalmartOrdersResult>>({})
@@ -1575,6 +1600,51 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         [d.id]: { ok: false, error: err instanceof Error ? err.message : String(err) },
       }))
     } finally {
+      setTesting((prev) => ({ ...prev, [d.id]: false }))
+    }
+  }
+
+  // Toggle the inline "Reconnect" credential form for a row.
+  const toggleReconnect = (d: SavedRow) => {
+    setReconnectError(null)
+    setReconnectValues({})
+    setReconnectingId((cur) => (cur === d.id ? null : d.id))
+  }
+  const cancelReconnect = () => {
+    setReconnectingId(null)
+    setReconnectValues({})
+    setReconnectError(null)
+  }
+  // Save the re-entered credentials (merge — only non-empty fields), then
+  // immediately verify so the operator sees pass/fail without a second click.
+  const submitReconnect = async (d: SavedRow) => {
+    const credentials: Record<string, string> = {}
+    for (const [key, value] of Object.entries(reconnectValues)) {
+      if (typeof value === 'string' && value.trim() !== '') credentials[key] = value.trim()
+    }
+    if (Object.keys(credentials).length === 0) {
+      setReconnectError('Enter at least one field to update (e.g. the new password).')
+      return
+    }
+    setReconnectSaving(true)
+    setReconnectError(null)
+    try {
+      await reconnectCarrierCredentials(d.accountId, credentials)
+      // Auto-verify with the freshly-saved credentials.
+      setTesting((prev) => ({ ...prev, [d.id]: true }))
+      const result = await verifyConnection(d.accountId, d.provider)
+      setTestResults((prev) => ({ ...prev, [d.id]: result }))
+      if (result.ok) {
+        cancelReconnect()
+      } else {
+        setReconnectError(
+          result.error || result.reason || 'Saved, but the carrier rejected the login. Double-check the values.',
+        )
+      }
+    } catch (err) {
+      setReconnectError(err instanceof Error ? err.message : 'Failed to update credentials.')
+    } finally {
+      setReconnectSaving(false)
       setTesting((prev) => ({ ...prev, [d.id]: false }))
     }
   }
@@ -2141,6 +2211,19 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               title="Rename this carrier account"
             />
           ) : null}
+          {/* Reconnect — re-enter the carrier's login credentials (e.g. after a
+              password change) and verify in one step. Carriers only, and not
+              ShipStation (whose creds live on the Clients tab). Merges only the
+              fields you fill in, so unchanged secrets survive. */}
+          {d.kind === 'carrier' && !isShipStation ? (
+            <ActionButton
+              icon={<KeyRound size={11} strokeWidth={2.5} />}
+              label="Reconnect"
+              variant="subtle"
+              onClick={() => toggleReconnect(d)}
+              title="Re-enter login credentials (e.g. after a password change) and verify"
+            />
+          ) : null}
           {/* Approve — only rendered for portal-source carrier rows.
               Promotes the row to admin source so rate-shop and other
               downstream consumers (which filter ?source=admin) can see
@@ -2206,6 +2289,78 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             title={isShipStation ? `Clear credentials in Clients tab to remove · ${SHIPSTATION_MANAGE_HINT}` : 'Delete integration'}
           />
         </div>
+
+        {/* Reconnect form — inline credential re-entry. Renders the provider's
+            required auth fields (apiKey/email/password), blank. Only fields the
+            operator fills are merged server-side, so leaving a box empty keeps
+            its stored value. Saving auto-verifies and shows pass/fail. */}
+        {reconnectingId === d.id ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 12,
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              background: 'var(--surface2)',
+            }}
+          >
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>
+              Reconnect {PROVIDER_DEFS.find((p) => p.key === d.provider)?.label ?? d.provider}
+            </div>
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginBottom: 10, lineHeight: 1.4 }}>
+              Re-enter what changed (e.g. the new password). Blank fields keep their saved value. Saving verifies the login automatically.
+            </div>
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+              {(PROVIDER_DEFS.find((p) => p.key === d.provider)?.fields ?? [])
+                .filter((f) => f.required !== false && !f.name.startsWith('shipFrom'))
+                .map((f) => (
+                  <label key={f.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>{f.label}</span>
+                    <input
+                      type={f.type ?? 'text'}
+                      value={reconnectValues[f.name] ?? ''}
+                      placeholder={f.type === 'password' ? '•••••• (unchanged if blank)' : f.placeholder}
+                      autoComplete="off"
+                      onChange={(e) =>
+                        setReconnectValues((prev) => ({ ...prev, [f.name]: e.target.value }))
+                      }
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 3,
+                        padding: '6px 8px',
+                        fontSize: 12,
+                        fontFamily: f.type === 'password' ? 'monospace' : 'inherit',
+                        background: 'var(--surface)',
+                        color: 'var(--text)',
+                      }}
+                    />
+                  </label>
+                ))}
+            </div>
+            {reconnectError ? (
+              <div style={{ fontSize: 11, color: 'var(--danger, #e11d48)', marginTop: 8, lineHeight: 1.4 }}>
+                {reconnectError}
+              </div>
+            ) : null}
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <ActionButton
+                icon={<Wifi size={11} strokeWidth={2.5} />}
+                label="Save & Verify"
+                loadingLabel="Verifying…"
+                loading={reconnectSaving}
+                variant="primary"
+                onClick={() => submitReconnect(d)}
+                title="Save the new credentials and verify the login"
+              />
+              <ActionButton
+                icon={<XIcon size={11} strokeWidth={2.5} />}
+                label="Cancel"
+                variant="subtle"
+                onClick={cancelReconnect}
+              />
+            </div>
+          </div>
+        ) : null}
 
         {/* Assign-clients popover — anchored modal-style overlay.
             AnimatePresence handles enter/exit; backdrop click +

@@ -245,11 +245,21 @@ export default async function handler(req: any, res: any): Promise<void> {
 
       // Reject empty bodies up-front so the caller gets a clear
       // error instead of a successful no-op UPDATE.
-      if (!patch.hasSource && !patch.hasLabel) {
+      if (!patch.hasSource && !patch.hasLabel && !patch.hasCredentials) {
         res.status(400).json({
-          error: 'PATCH body must include at least one of: source, label',
+          error: 'PATCH body must include at least one of: source, label, credentials',
         });
         return;
+      }
+
+      // Credential re-entry ("Reconnect") — log which KEYS are being merged,
+      // never the values, so a stale-creds save can be traced without leaking
+      // secrets. Mirrors the POST path's diagnostic.
+      if (patch.hasCredentials) {
+        console.log('[carrier-accounts:PATCH] credentials merge', JSON.stringify({
+          id,
+          credentialKeys: patch.credentialKeys,
+        }));
       }
 
       if (patch.hasSource && patch.source == null) {
