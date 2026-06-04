@@ -19,8 +19,8 @@ import {
   Loader2,
   AlertCircle,
   KeyRound,
-  Eye,
-  EyeOff,
+  Power,
+  PowerOff,
 } from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 // PS-083: drop the Rate Browser scoped-carrier cache after an assignment change
@@ -59,6 +59,13 @@ function ModernCheckbox({
         disabled={disabled}
         className="sr-only"
       />
+      {/* Decorative fill box. aria-hidden because the real control is the
+          sr-only <input> above (and the whole row is a <label>). NOTE: do NOT
+          add a Framer gesture prop (whileTap/whileHover/onTap) here — Motion
+          auto-injects tabindex="0" on gesture-enabled non-interactive elements,
+          which made this aria-hidden span focusable and triggered Chrome's
+          "aria-hidden on a focused element" a11y warning. The check/uncheck
+          spring below is animation-only (no gesture), so it stays accessible. */}
       <motion.span
         aria-hidden
         animate={{
@@ -70,7 +77,6 @@ function ModernCheckbox({
             : 'rgb(var(--border-rgb, 225 228 232))',
           scale: checked ? 1.05 : 1,
         }}
-        whileTap={disabled ? undefined : { scale: 0.9 }}
         transition={{ type: 'spring', stiffness: 500, damping: 28 }}
         className="absolute inset-0 rounded-[5px] border-2"
         style={{
@@ -2074,6 +2080,27 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           ) : (
             <span style={{ fontSize: 10, color: 'var(--text3)', flexShrink: 0 }}>{formatCaDateShort(d.createdAt)}</span>
           )}
+          {/* Activate / Deactivate — toggles the carrier's `active` flag,
+              moved up into the title row so the on/off state lives next to
+              the carrier name. A deactivated carrier is filtered out of the
+              Rate Browser for every order (it stops being offered) but keeps
+              its account + credentials, so you can re-activate it anytime.
+              Carriers only, not ShipStation. */}
+          {d.kind === 'carrier' && !isShipStation ? (
+            <span style={{ flexShrink: 0 }}>
+              <ActionButton
+                icon={d.active === false ? <Power size={11} strokeWidth={2.5} /> : <PowerOff size={11} strokeWidth={2.5} />}
+                label={d.active === false ? 'Activate' : 'Deactivate'}
+                loadingLabel={d.active === false ? 'Activating…' : 'Deactivating…'}
+                loading={!!togglingActive[d.id]}
+                variant="subtle"
+                onClick={() => runToggleActive(d)}
+                title={d.active === false
+                  ? 'Activate this carrier — show it in the Rate Browser again'
+                  : 'Deactivate this carrier — hide it from the Rate Browser (keeps the account + credentials)'}
+              />
+            </span>
+          ) : null}
         </div>
 
         {/* ── ZONE 2: ACCOUNT IDENTIFIER ─────────────────────────────
@@ -2266,23 +2293,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               title="Re-enter login credentials (e.g. after a password change) and verify"
             />
           ) : null}
-          {/* Hide / Show — toggles the carrier's `active` flag. A hidden carrier
-              is filtered out of the Rate Browser for every order (it stops being
-              offered) but keeps its account + credentials, so you can re-show it
-              anytime. Carriers only, not ShipStation. */}
-          {d.kind === 'carrier' && !isShipStation ? (
-            <ActionButton
-              icon={d.active === false ? <Eye size={11} strokeWidth={2.5} /> : <EyeOff size={11} strokeWidth={2.5} />}
-              label={d.active === false ? 'Show' : 'Hide'}
-              loadingLabel={d.active === false ? 'Showing…' : 'Hiding…'}
-              loading={!!togglingActive[d.id]}
-              variant="subtle"
-              onClick={() => runToggleActive(d)}
-              title={d.active === false
-                ? 'Show this carrier in the Rate Browser again'
-                : 'Hide this carrier from the Rate Browser (keeps the account + credentials)'}
-            />
-          ) : null}
+          {/* Activate / Deactivate moved UP into the title row (next to the
+              carrier name) — see ZONE 1 above. */}
           {/* Approve — only rendered for portal-source carrier rows.
               Promotes the row to admin source so rate-shop and other
               downstream consumers (which filter ?source=admin) can see
