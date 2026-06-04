@@ -21,13 +21,13 @@ Last reviewed on 2026-06-05 against `prepshipv4-stable` after:
 | Ticket | Current Percent | Status | Evidence / Notes |
 |---|---:|---|---|
 | PS-084 Direct-Carrier Print-to-Queue Ship-To + Existing Label Recovery | 100% | Complete and verified. | Direct-carrier labels now resolve local order ship-to fallback and direct-carrier print-to-queue sends canonical `shipTo`; existing-label recovery remains duplicate-postage-safe. See `docs/ps-084-direct-carrier-print-queue-completion-report.md`. |
-| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 15% | Saved/planned; PS-084 now closed with evidence. | Broad closeout/meta ticket; should run after the purchase-boundary lane and PS-099 are complete. |
+| PS-087 Diagnose, Recover, and Close All Unfinished PrepShip V4 Tasks | 20% | Saved/planned; PS-084 and PS-098 now closed with evidence. | Broad closeout/meta ticket; should run after PS-099 and the PS-094/PS-095 closeout decisions are complete. |
 | PS-093 Direct-Carrier Scope Guard for Rates + Labels | 100% | Functionally complete and verified. | `src/lib/direct-carrier-scope.ts`; `api/carriers/rates.ts`; `api/carriers/labels.ts`; `npm run test:ps-083-direct-carrier-scope`; `npm run test:direct-carrier-labels`; `npm run test:direct-carrier-queue-route`; `npm run test:carriers-rates-hardening`. |
 | PS-094 Backend Selected-Rate Proof/Fingerprint Primitive | 90% | Functionally present via PS-085 `rate-fingerprint.ts`, but task asked for a no-enforcement phase and file name `rate-selection-proof.ts`. | Need decide whether to add compatibility alias/doc or mark superseded by `rate-fingerprint.ts` + enforcement. |
 | PS-095 Frontend Selected-Rate Proof Pass-Through + Stale-Rate UX | 85% | Proof pass-through is implemented. Stale UX needs final review against task wording. | `web/src/components/Views/OrdersView.tsx` passes `selectedRateProof`; existing rate-sync UI handles stale/unavailable states. |
 | PS-096 Enforce Selected-Rate Proof on ShipStation Label Purchase | 100% | Complete and verified. | `src/routes/labels.ts`; `src/services/labels.ts`; `npm run test:selected-rate-proof-boundary`; `npm run test:shipping-roundtrip-certification`; `npm run test:full-site-certification`. |
 | PS-097 Enforce Selected-Rate Proof on Direct-Carrier Label Purchase | 100% | Complete and verified. | `api/carriers/labels.ts`; `npm run test:selected-rate-proof-boundary`; `npm run test:direct-carrier-labels`; `npm run test:shipping-roundtrip-certification`. |
-| PS-098 Shipping Purchase-Boundary Certification | 75% | Commands pass, but dedicated certification table/report is not yet saved as a committed artifact. | Needs final certification doc/guard that explicitly maps PS-093 through PS-097 allowed/blocked paths. |
+| PS-098 Shipping Purchase-Boundary Certification | 100% | Complete and verified. | Dedicated certification guard and report map PS-093 through PS-097 allowed/blocked paths. See `docs/ps-098-shipping-purchase-boundary-certification.md`. |
 | PS-099 Separate Create+Print from Print Queue + Normalize SHIPP 4x6 Label Output | 0% | Saved/planned only. | Needs implementation after PS-098 certification, unless DJ prioritizes label-output bug first. |
 
 ## Global Safety Rules
@@ -292,7 +292,7 @@ PS-097 status: 100%.
 - Optional Create: `docs/ps-098-shipping-purchase-boundary-certification.md`
 - Optional Modify: `package.json` if adding an aggregate script.
 
-- [ ] **Step 1: Create certification table artifact**
+- [x] **Step 1: Create certification table artifact**
 
 Save a table with:
 
@@ -303,7 +303,7 @@ Save a table with:
 - PS-097 direct-carrier missing/stale/mismatched proof blocked before connector call.
 - Allowed exact-proof paths remain allowed in mocked/offline mode.
 
-- [ ] **Step 2: Run aggregate verification**
+- [x] **Step 2: Run aggregate verification**
 
 Run:
 
@@ -320,9 +320,9 @@ npm run test:shipping-roundtrip-certification
 npm run test:full-site-certification
 ```
 
-- [ ] **Step 3: Mark PS-098 100%**
+- [x] **Step 3: Mark PS-098 100%**
 
-Only after the certification artifact is saved and all commands pass.
+PS-098 is 100% as of the commit containing `scripts/ps-098-shipping-purchase-boundary-certification-guard.ts` and `docs/ps-098-shipping-purchase-boundary-certification.md`.
 
 ---
 
@@ -435,4 +435,4 @@ Follow-up risks/blockers:
 
 ## Current Recommended Next Step
 
-Do **PS-098 certification artifact/report next**, because PS-084, PS-093, PS-096, and PS-097 are now functionally complete and verified. After PS-098 is saved, proceed to PS-099 for Create+Print separation and SHIPP 4x6 output normalization, then use PS-087 as the final unfinished-task closeout.
+Do **PS-099 next** for Create+Print separation and SHIPP 4x6 output normalization. After PS-099, close the remaining PS-094/PS-095 compatibility/certification gaps, then use PS-087 as the final unfinished-task closeout.
