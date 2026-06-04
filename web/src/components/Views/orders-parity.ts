@@ -480,6 +480,19 @@ export function groupPrintQueueEntries(entries: PrintQueueEntryDto[]): PrintQueu
     })
   }
 
+  // Sort the orders WITHIN each group ascending by order number (natural sort,
+  // so 1231 < 1239 < 1247 and non-numeric ids like 18-14712-00854 still order
+  // sensibly). This drives both the displayed list and the order the labels are
+  // sent to print (Print Group sends group.orders.map(queue_entry_id)).
+  for (const group of groups.values()) {
+    group.orders.sort((a, b) =>
+      String(a.order_number ?? '').localeCompare(String(b.order_number ?? ''), undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }),
+    )
+  }
+
   return [...groups.values()].sort((left, right) => {
     const labelCompare = left.label.localeCompare(right.label)
     if (labelCompare !== 0) return labelCompare

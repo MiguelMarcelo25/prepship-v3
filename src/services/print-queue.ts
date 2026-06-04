@@ -1005,6 +1005,17 @@ export async function startPrintJob(input: {
   if (entries.length !== input.queueEntryIds.length) {
     throw new Error('One or more queue entries not found or unauthorized');
   }
+  // Print labels ascending by order number. `inArray` (IN (...)) does NOT
+  // preserve the caller's id order and the DB returns rows arbitrarily, so we
+  // sort here — this is what guarantees the merged PDF comes out in order
+  // (1231, 1239, 1247, …). Natural sort handles numeric and mixed-format
+  // order numbers; null/blank order numbers sort first, stably.
+  entries.sort((a, b) =>
+    String(a.orderNumber ?? '').localeCompare(String(b.orderNumber ?? ''), undefined, {
+      numeric: true,
+      sensitivity: 'base',
+    }),
+  );
   const invalidLabelErrors = collectInvalidLabelErrors(entries);
   if (invalidLabelErrors.length === entries.length) {
     throw new PrintQueueLabelUrlError(
