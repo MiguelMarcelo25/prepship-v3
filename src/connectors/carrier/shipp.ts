@@ -295,11 +295,34 @@ async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: str
   return { apiKey, cookieHeader, email };
 }
 
+/**
+ * PS-083 — the declared value Shipp insures the shipment for, mapped from the
+ * request's normalized insurance options into packageLineItems[].customsValue.
+ * Shipp's API accepts the insured/declared value on the PackageLineItem
+ * (customsValue); previously this was hard-coded to 0, so HUGRAB's $100 was
+ * never declared. Returns 0 when the order is not insured or the value is
+ * missing/invalid so we never declare a phantom value.
+ */
+export function shippDeclaredValue(options: {
+  insuranceProvider?: string | null;
+  insuredValue?: number | null;
+}): number {
+  if (!options || options.insuranceProvider == null || options.insuranceProvider === 'none') {
+    return 0;
+  }
+  const value = Number(options.insuredValue);
+  return Number.isFinite(value) && value > 0 ? Number(value.toFixed(2)) : 0;
+}
+
 async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   session: { apiKey: string; cookieHeader: string };
   rates: any[];
 }> {
-  assertUnsupportedShippingOptions('Shipp', input, { confirmation: ['delivery', 'none'], insurance: false });
+  // PS-083 — Shipp now supports declaring an insured value via the
+  // PackageLineItem customsValue, so insured orders (e.g. HUGRAB $100) are
+  // accepted instead of being dropped. Capture the normalized options the gate
+  // returns so the declared value stays in lockstep with what was validated.
+  const shippingOptions = assertUnsupportedShippingOptions('Shipp', input, { confirmation: ['delivery', 'none'], insurance: true });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
@@ -360,7 +383,9 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
         },
         description: String(creds?.packageDescription ?? 'Merchandise'),
         itemDescription: String(creds?.packageDescription ?? 'Merchandise'),
-        customsValue: { amount: 0, currency: 'USD' },
+        // PS-083 — declare the insured value here (Shipp reads customsValue as
+        // the declared/insured amount). 0 when the order is not insured.
+        customsValue: { amount: shippDeclaredValue(shippingOptions), currency: 'USD' },
         countryOfManufacture: 'US',
       },
     ],
