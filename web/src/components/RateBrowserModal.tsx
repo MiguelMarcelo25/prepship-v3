@@ -1968,9 +1968,9 @@ export default function RateBrowserModal({
           background: 'var(--surface)',
           borderRadius: 10,
           boxShadow: '0 8px 40px rgba(0,0,0,.3)',
-          width: 980,
+          width: 1280,
           maxWidth: '97vw',
-          height: 650,
+          height: 720,
           maxHeight: '93vh',
           display: 'flex',
           flexDirection: 'column',
@@ -2031,7 +2031,7 @@ export default function RateBrowserModal({
           {/* LEFT: Configure */}
           <div
             style={{
-              width: 220,
+              width: 280,
               flexShrink: 0,
               borderRight: '1px solid var(--border)',
               overflowY: 'auto',
@@ -2403,7 +2403,7 @@ export default function RateBrowserModal({
           {/* MIDDLE: Carrier accounts */}
           <div
             style={{
-              width: 190,
+              width: 260,
               flexShrink: 0,
               borderRight: '1px solid var(--border)',
               overflowY: 'auto',
@@ -2486,9 +2486,12 @@ export default function RateBrowserModal({
                       fontSize: 12,
                       fontWeight: 600,
                       flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      minWidth: 0,
+                      // PS: show the full carrier/account nickname (no ellipsis
+                      // clamp); long names wrap within the wider column.
+                      whiteSpace: 'normal',
+                      overflowWrap: 'anywhere',
+                      lineHeight: 1.25,
                     }}
                   >
                     {formatSidebarAccountDisplay(c)}
