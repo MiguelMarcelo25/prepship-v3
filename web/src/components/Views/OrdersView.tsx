@@ -7553,13 +7553,28 @@ export default function OrdersView({
     const runId = batchRecalculateRunRef.current + 1
     batchRecalculateRunRef.current = runId
     const finalRows: Record<number, BatchRecalculateRowState> = {}
+    const queueableOrders: OrderSummaryDto[] = []
     for (const order of targetOrders) {
+      if (isTestOrder(order)) {
+        finalRows[order.orderId] = { status: 'skipped', message: 'Test order uses mock rates.' }
+        continue
+      }
+      const request = getAutoBestRateRequest(order)
+      if (!request) {
+        finalRows[order.orderId] = { status: 'skipped', message: 'Missing weight, dimensions, or ship-to postal code.' }
+        continue
+      }
       finalRows[order.orderId] = { status: 'pending' }
+      queueableOrders.push(order)
     }
     setBatchRecalculateRows({ ...finalRows })
+    if (queueableOrders.length === 0) {
+      showToast('No rateable awaiting orders found. Add dims, weight, and ship-to postal codes first.', 'info')
+      return
+    }
     setBatchRecalculateBusy(true)
 
-    const queue = [...targetOrders]
+    const queue = [...queueableOrders]
     const workerCount = Math.min(BATCH_RECALCULATE_CONCURRENCY, queue.length)
     async function worker() {
       while (queue.length > 0 && batchRecalculateRunRef.current === runId) {
@@ -7618,6 +7633,9 @@ export default function OrdersView({
       cursor: 'pointer',
       whiteSpace: 'nowrap',
     }
+    if (state === 'add-dims') {
+      return <span data-rate-state="add-dims" style={muted}>&mdash; add dims</span>
+    }
     const batchRow = batchRecalculateRows[order.orderId]
     if (batchRow?.status === 'pending' || batchRow?.status === 'running') {
       return (
@@ -7659,8 +7677,6 @@ export default function OrdersView({
       )
     }
     switch (state) {
-      case 'add-dims':
-        return <span data-rate-state="add-dims" style={muted}>— add dims</span>
       case 'loading-carriers':
         return (
           <span data-rate-state="loading-carriers" title="Loading carrier accounts…" style={muted}>

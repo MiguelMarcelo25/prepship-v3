@@ -100,12 +100,22 @@ check('batch Recalculate reuses strict order runner', /runStrictBestRateRecalcul
 check('batch Recalculate avoids fetchRates fallback', !/apiClient\.fetchRates/.test(batchBlock));
 check('batch Recalculate avoids pickBestPanelRate fallback', !/pickBestPanelRate/.test(batchBlock));
 check('batch Recalculate tracks progress rows', /setBatchRecalculateRows/.test(batchBlock));
+check('batch Recalculate skips missing-dims rows before pending state', /queueableOrders/.test(batchBlock) && /getAutoBestRateRequest\(order\)[\s\S]*status:\s*'skipped'[\s\S]*queueableOrders\.push\(order\)/.test(batchBlock));
 check('batch Recalculate has page button', /Recalculate Page/.test(ordersView));
 check('batch Recalculate has selected button', /Recalculate Selected/.test(ordersView));
 check('batch Recalculate shows percentage progress', /batchRecalculateProgress\.percent/.test(ordersView));
 check('batch Recalculate has per-order retry action', /retryBatchRecalculateOrder/.test(ordersView) && /data-batch-recalculate-retry/.test(ordersView));
 check('batch Recalculate has timeout guard', /BATCH_RECALCULATE_TIMEOUT_MS/.test(ordersView));
 check('batch Recalculate keeps strict live flags', /forceLive:\s*true/.test(ordersView) && /forceRefresh:\s*true/.test(ordersView));
+
+const fallbackStart = ordersView.indexOf('function renderRateCellFallback(');
+const fallbackEnd = ordersView.indexOf('\n  // PS-071', fallbackStart + 1);
+const fallbackBlock = fallbackStart >= 0 && fallbackEnd > fallbackStart
+  ? ordersView.slice(fallbackStart, fallbackEnd)
+  : '';
+check('add-dims fallback wins over batch pending state',
+  fallbackBlock.indexOf("state === 'add-dims'") >= 0 &&
+  fallbackBlock.indexOf("state === 'add-dims'") < fallbackBlock.indexOf('const batchRow = batchRecalculateRows'));
 
 if (failures > 0) {
   console.error(`\nFAIL batch recalculate best-rate guard (${failures} failing)`);
