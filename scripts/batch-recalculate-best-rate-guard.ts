@@ -108,6 +108,43 @@ check('batch Recalculate has per-order retry action', /retryBatchRecalculateOrde
 check('batch Recalculate has timeout guard', /BATCH_RECALCULATE_TIMEOUT_MS/.test(ordersView));
 check('batch Recalculate keeps strict live flags', /forceLive:\s*true/.test(ordersView) && /forceRefresh:\s*true/.test(ordersView));
 
+const bestRateProviderStart = ordersView.indexOf('function getBestRateShippingProviderId(');
+const bestRateProviderEnd = ordersView.indexOf('\nfunction getBestRateServiceCode', bestRateProviderStart);
+const bestRateProviderBlock = bestRateProviderStart >= 0 && bestRateProviderEnd > bestRateProviderStart
+  ? ordersView.slice(bestRateProviderStart, bestRateProviderEnd)
+  : '';
+check('awaiting best-rate provider id wins over stale shipping metadata',
+  /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateProviderBlock) &&
+  /return\s+rateProviderId\s*\?\?\s*getShippingProviderAccountId\(order\)/.test(bestRateProviderBlock));
+
+const shippingDisplayStart = ordersView.indexOf('function getShipAccountDisplay(');
+const shippingDisplayEnd = ordersView.indexOf('\nfunction getShipAccountLabelById', shippingDisplayStart);
+const shippingDisplayBlock = shippingDisplayStart >= 0 && shippingDisplayEnd > shippingDisplayStart
+  ? ordersView.slice(shippingDisplayStart, shippingDisplayEnd)
+  : '';
+check('awaiting account display resolves best-rate provider id through loaded accounts',
+  /const bestRateProviderId = getBestRateShippingProviderId\(order\)/.test(shippingDisplayBlock) &&
+  /getCarrierAccountLabelByProviderId\(accounts,\s*bestRateProviderId\)/.test(shippingDisplayBlock));
+
+const overlayStart = ordersView.indexOf('function withBestRateOverride(');
+const overlayEnd = ordersView.indexOf('\n  function withoutStaleBestRate', overlayStart);
+const overlayBlock = overlayStart >= 0 && overlayEnd > overlayStart
+  ? ordersView.slice(overlayStart, overlayEnd)
+  : '';
+check('auto-rate overlay resolves account label by provider id',
+  /getCarrierAccountLabelByProviderId\(shippingAccounts,\s*shippingProviderId\)/.test(overlayBlock) &&
+  /accountNickname:\s*rateAccountNickname/.test(overlayBlock));
+
+const panelStart = ordersView.indexOf('const renderSinglePanel = () => {');
+const panelEnd = ordersView.length;
+const panelBlock = panelStart >= 0 && panelEnd > panelStart
+  ? ordersView.slice(panelStart, panelEnd)
+  : '';
+check('side panel rate display consumes auto best-rate overlay',
+  /const panelDisplayOrder = getOrderWithAutoBestRate\(panelOrder\)/.test(panelBlock) &&
+  /getShipAccountDisplay\(panelDisplayOrder,\s*shippingAccounts\)/.test(panelBlock) &&
+  /panelDisplayOrder\.bestRate/.test(panelBlock));
+
 const fallbackStart = ordersView.indexOf('function renderRateCellFallback(');
 const fallbackEnd = ordersView.indexOf('\n  // PS-071', fallbackStart + 1);
 const fallbackBlock = fallbackStart >= 0 && fallbackEnd > fallbackStart

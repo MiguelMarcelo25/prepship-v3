@@ -1330,6 +1330,29 @@ function getCarrierAccountDisplay(account: CarrierAccountDto | null | undefined)
   )
 }
 
+function getCarrierAccountByProviderId(accounts: CarrierAccountDto[], providerAccountId: number | null | undefined) {
+  if (providerAccountId == null) return null
+  return accounts.find((candidate) => (
+    toProviderAccountId(candidate.shippingProviderId) === providerAccountId ||
+    toProviderAccountId(candidate.carrierId) === providerAccountId
+  )) ?? null
+}
+
+function getCarrierAccountLabelByProviderId(accounts: CarrierAccountDto[], providerAccountId: number | null | undefined) {
+  return getCarrierAccountDisplay(getCarrierAccountByProviderId(accounts, providerAccountId))
+}
+
+function getRateProviderAccountId(rate: Record<string, unknown> | null | undefined) {
+  if (!rate) return null
+  const raw = toRecord(rate.raw)
+  return (
+    toProviderAccountId(rate.shippingProviderId) ??
+    toProviderAccountId(rate.providerAccountId) ??
+    toProviderAccountId(raw?.carrier_id) ??
+    toProviderAccountId(raw?.shippingProviderId)
+  )
+}
+
 function resolveV2CarrierAccount(
   providerAccountId: number | null,
   carrierCode: string | null,
@@ -1419,10 +1442,12 @@ function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountD
   // the divergent/stale case, which must show the best-rate account.
   if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
     const bestRateRecord = toRecord(order.bestRate)
+    const bestRateProviderId = getBestRateShippingProviderId(order)
     const bestRateNickname =
       normalizeShippingAccountName(order.bestRate.carrierNickname) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
-      normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname))
+      normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname)) ??
+      getCarrierAccountLabelByProviderId(accounts, bestRateProviderId)
     if (bestRateNickname) return bestRateNickname
   }
 
@@ -1455,8 +1480,7 @@ function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountD
 
 function getShipAccountLabelById(accounts: CarrierAccountDto[], accountId: string) {
   if (!accountId) return null
-  const account = accounts.find((candidate) => String(candidate.shippingProviderId) === accountId)
-  return getCarrierAccountDisplay(account)
+  return getCarrierAccountLabelByProviderId(accounts, toProviderAccountId(accountId))
 }
 
 function getBestRateBaseCost(order: OrderSummaryDto) {
@@ -1477,7 +1501,11 @@ function getBestRateBaseCost(order: OrderSummaryDto) {
 }
 
 function getBestRateShippingProviderId(order: OrderSummaryDto) {
-  return getShippingProviderAccountId(order) ?? (order.bestRate ? toProviderAccountId(order.bestRate.shippingProviderId) ?? undefined : undefined)
+  const rateProviderId = getRateProviderAccountId(toRecord(order.bestRate))
+  if (order.orderStatus === 'awaiting_shipment') {
+    return rateProviderId ?? getShippingProviderAccountId(order) ?? undefined
+  }
+  return getShippingProviderAccountId(order) ?? rateProviderId ?? undefined
 }
 
 function getBestRateServiceCode(order: OrderSummaryDto) {
@@ -1486,10 +1514,12 @@ function getBestRateServiceCode(order: OrderSummaryDto) {
 
 function getBestRateCarrierNickname(order: OrderSummaryDto) {
   const bestRateRecord = toRecord(order.bestRate)
-  return getShippingString(order, 'accountNickname') ??
+  const rateNickname =
     (order.bestRate ? toStringValue(order.bestRate.carrierNickname) : null) ??
     toStringValue(bestRateRecord?.providerAccountNickname) ??
     toStringValue(bestRateRecord?.accountNickname)
+  if (order.orderStatus === 'awaiting_shipment') return rateNickname
+  return getShippingString(order, 'accountNickname') ?? rateNickname
 }
 
 function getSelectedRateBaseCost(order: OrderSummaryDto) {
@@ -2274,6 +2304,7 @@ export default function OrdersView({
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
   const autoPackageDimsKeyRef = useRef<string | null>(null)
   const panelFormInitKeyRef = useRef<string | null>(null)
+  const panelRateSelectionSyncKeyRef = useRef<string | null>(null)
   const shipmentAutoSaveTimerRef = useRef<number | null>(null)
   const shipmentLastSavedKeyRef = useRef<string | null>(null)
   const bestRateRefreshSeqRef = useRef(0)
@@ -3355,6 +3386,37 @@ export default function OrdersView({
       .catch(() => {})
   }, [panelOrderId, panelOrder, panelDetail, locations, packages])
 
+  useEffect(() => {
+    if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment' || isTestOrder(panelOrder, panelDetail)) {
+      panelRateSelectionSyncKeyRef.current = null
+      return
+    }
+
+    const displayOrder = getOrderWithAutoBestRate(panelOrder)
+    const providerId = getBestRateShippingProviderId(displayOrder)
+    const serviceCode = getBestRateServiceCode(displayOrder)
+    const fingerprint = rateProofFingerprint(toRecord(displayOrder.bestRate))
+    if (providerId == null && !serviceCode) return
+
+    const syncKey = `${displayOrder.orderId}:${providerId ?? ''}:${serviceCode ?? ''}:${fingerprint ?? ''}`
+    if (panelRateSelectionSyncKeyRef.current === syncKey) return
+    panelRateSelectionSyncKeyRef.current = syncKey
+
+    setPanelForm((current) => {
+      const nextShipAccountId = providerId != null ? String(providerId) : current.shipAccountId
+      const nextServiceCode = serviceCode || current.serviceCode
+      if (current.shipAccountId === nextShipAccountId && current.serviceCode === nextServiceCode) {
+        return current
+      }
+      const next = {
+        ...current,
+        shipAccountId: nextShipAccountId,
+        serviceCode: nextServiceCode,
+      }
+      shipmentLastSavedKeyRef.current = getShipmentDetailsKey(displayOrder.orderId, next)
+      return next
+    })
+  }, [panelOrderId, panelOrder, panelDetail, autoBestRateEntries])
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment' || !packagesLoaded) return
 
@@ -5376,6 +5438,12 @@ export default function OrdersView({
     const serviceCode = toStringValue(rate.serviceCode)
     const carrierCode = toStringValue(rate.carrierCode)
     const carrierNickname = toStringValue(rate.carrierNickname)
+    const rateRecord = toRecord(rate)
+    const rateAccountNickname =
+      normalizeShippingAccountName(carrierNickname) ??
+      normalizeShippingAccountName(toStringValue(rateRecord?.providerAccountNickname)) ??
+      normalizeShippingAccountName(toStringValue(rateRecord?.accountNickname)) ??
+      getCarrierAccountLabelByProviderId(shippingAccounts, shippingProviderId)
     const bestRateDims = getCurrentBestRateDimsLabel(order)
     const shippingModel = toRecord(getShippingModel(order)) ?? {}
     const canonicalOrder = toRecord(order.canonicalOrder)
@@ -5388,7 +5456,7 @@ export default function OrdersView({
       providerAccountId: shippingProviderId ?? toProviderAccountId(shippingModel.providerAccountId) ?? toProviderAccountId(canonicalShipping.providerAccountId),
       serviceCode: serviceCode ?? toStringValue(shippingModel.serviceCode) ?? toStringValue(canonicalShipping.serviceCode),
       carrierCode: carrierCode ?? toStringValue(shippingModel.carrierCode) ?? toStringValue(canonicalShipping.carrierCode),
-      accountNickname: carrierNickname ?? toStringValue(shippingModel.accountNickname) ?? toStringValue(canonicalShipping.accountNickname),
+      accountNickname: rateAccountNickname ?? toStringValue(shippingModel.accountNickname) ?? toStringValue(canonicalShipping.accountNickname),
       bestRateDims,
     }
 
@@ -8919,6 +8987,7 @@ export default function OrdersView({
   const renderSinglePanel = () => {
     if (!panelOrder) return buildEmptyPanel(onHideEmptyPanelChange ? () => onHideEmptyPanelChange(true) : undefined)
 
+    const panelDisplayOrder = getOrderWithAutoBestRate(panelOrder)
     const items = getActiveItems(panelOrder, panelDetail)
     const mergedItems = getMergedItems(panelOrder, panelDetail)
     const shipTo = getShipTo(panelOrder, panelDetail)
@@ -8941,7 +9010,10 @@ export default function OrdersView({
     )
     const selectedPanelAccountLabel = panelIsTestOrder
       ? TEST_SHIPPING_ACCOUNT_LABEL
-      : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelOrder, shippingAccounts)
+      : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelDisplayOrder, shippingAccounts)
+    const panelBestRateAccountLabel = panelIsTestOrder
+      ? TEST_SHIPPING_ACCOUNT_LABEL
+      : getShipAccountDisplay(panelDisplayOrder, shippingAccounts)
     const panelPreviewRate = panelRatePreview[0] ?? null
     const panelPreviewProviderId = panelPreviewRate ? toProviderAccountId(panelPreviewRate.shippingProviderId) : null
     const panelPreviewAccountLabel = panelPreviewRate
@@ -9681,22 +9753,22 @@ export default function OrdersView({
                         {panelPreviewAccountLabel} · {formatServiceCode(toStringValue(panelPreviewRate.serviceCode))}
                       </span>
                     </>
-                  ) : panelOrder.bestRate ? (
+                  ) : panelDisplayOrder.bestRate ? (
                     <>
                       <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
                         {formatMoney(applyCarrierMarkup({
-                          shippingProviderId: getBestRateShippingProviderId(panelOrder),
-                          carrierCode: panelOrder.bestRate.carrierCode ?? '',
-                          serviceCode: getBestRateServiceCode(panelOrder) ?? '',
-                          serviceName: panelOrder.bestRate.serviceName ?? '',
-                          amount: typeof panelOrder.bestRate.amount === 'number' ? panelOrder.bestRate.amount : 0,
-                          shipmentCost: typeof panelOrder.bestRate.shipmentCost === 'number' ? panelOrder.bestRate.shipmentCost : undefined,
-                          otherCost: typeof panelOrder.bestRate.otherCost === 'number' ? panelOrder.bestRate.otherCost : undefined,
-                          carrierNickname: getBestRateCarrierNickname(panelOrder),
+                          shippingProviderId: getBestRateShippingProviderId(panelDisplayOrder),
+                          carrierCode: panelDisplayOrder.bestRate.carrierCode ?? '',
+                          serviceCode: getBestRateServiceCode(panelDisplayOrder) ?? '',
+                          serviceName: panelDisplayOrder.bestRate.serviceName ?? '',
+                          amount: typeof panelDisplayOrder.bestRate.amount === 'number' ? panelDisplayOrder.bestRate.amount : 0,
+                          shipmentCost: typeof panelDisplayOrder.bestRate.shipmentCost === 'number' ? panelDisplayOrder.bestRate.shipmentCost : undefined,
+                          otherCost: typeof panelDisplayOrder.bestRate.otherCost === 'number' ? panelDisplayOrder.bestRate.otherCost : undefined,
+                          carrierNickname: getBestRateCarrierNickname(panelDisplayOrder),
                         }, markups))}
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
-                        {selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelOrder))}
+                        {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}
                       </span>
                     </>
                   ) : (
