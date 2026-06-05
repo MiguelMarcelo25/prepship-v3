@@ -181,7 +181,22 @@ const viaAbsentWorkflow = classifyAwaitingRateCellStateWithWorkflow(null, {
   accountsLoading: false,
 });
 check('absent workflow falls back to existing classifier', viaAbsentWorkflow, fallback);
-check('fresh workflow maps to ready', classifyAwaitingRateCellStateWithWorkflow(fresh, {
+// A backend-"fresh" rate only maps to 'ready' when the FRONTEND can actually
+// display it. When the persisted rate fails the frontend freshness/proof
+// contract (e.g. metadata stripped on persist, or right after a page reload
+// before re-rating), the cell must show a loading spinner while it re-rates —
+// NOT a "ready" cell that renders an empty rate (the "—" / blank Best Rate bug).
+check('fresh + frontend-displayable maps to ready', classifyAwaitingRateCellStateWithWorkflow(fresh, {
+  hasDims: true,
+  hasWeight: true,
+  hasDisplayableBestRate: true,
+  isCalculatingBestRate: false,
+  resolvedNoRate: false,
+  resolvedError: false,
+  hasCarrierContext: true,
+  accountsLoading: false,
+}), 'ready');
+check('fresh but NOT frontend-displayable shows a spinner (reload re-rate)', classifyAwaitingRateCellStateWithWorkflow(fresh, {
   hasDims: true,
   hasWeight: true,
   hasDisplayableBestRate: false,
@@ -190,7 +205,7 @@ check('fresh workflow maps to ready', classifyAwaitingRateCellStateWithWorkflow(
   resolvedError: false,
   hasCarrierContext: true,
   accountsLoading: false,
-}), 'ready');
+}), 'pending');
 check('partial workflow maps to error', classifyAwaitingRateCellStateWithWorkflow(partial, {
   hasDims: true,
   hasWeight: true,

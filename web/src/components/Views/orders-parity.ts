@@ -756,7 +756,15 @@ export function classifyAwaitingRateCellStateWithWorkflow(
   if (!workflow?.bestRateState) return classifyAwaitingRateCellState(fallbackInput)
   switch (workflow.bestRateState) {
     case 'fresh':
-      return 'ready'
+      // A backend-"fresh" rate only renders when the FRONTEND can also display
+      // it (the saved rate passes its freshness/proof contract). When it can't —
+      // e.g. metadata stripped on persist, or right after a page reload before
+      // the row has been re-rated — fall through to the live classifier so the
+      // cell shows a loading spinner while it re-rates, instead of a "ready"
+      // cell that renders an empty rate (the "—" / blank Best Rate symptom).
+      return fallbackInput.hasDisplayableBestRate
+        ? 'ready'
+        : classifyAwaitingRateCellState(fallbackInput)
     case 'partial_carrier_failure':
     case 'blocked':
       return 'error'
