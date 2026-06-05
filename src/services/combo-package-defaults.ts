@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client';
-import { orders } from '../db/schema/orders';
+import { orderOverrides, orders } from '../db/schema/orders';
 import { orderItems } from '../db/schema/order-items';
 import {
   clientComboPackageDefaults,
@@ -65,6 +65,69 @@ export interface SaveComboDefaultResult {
   reason?: string;
   clientId?: number;
   comboKey?: string;
+  appliedMutableOrderCount?: number;
+}
+
+function selectedPackageIdFromComboInput(input: SaveComboDefaultInput): string | null {
+  if (input.packageId != null && Number.isFinite(Number(input.packageId))) {
+    return String(Math.trunc(Number(input.packageId)));
+  }
+  const packageCode = typeof input.packageCode === 'string' ? input.packageCode.trim() : '';
+  return packageCode || null;
+}
+
+async function applyComboPackageDefaultToMatchingMutableOrders(
+  clientId: number,
+  comboKey: string,
+  input: SaveComboDefaultInput,
+): Promise<number> {
+  const candidates = await db
+    .select({ id: orders.id, items: orders.items })
+    .from(orders)
+    .where(
+      and(
+        eq(orders.clientId, clientId),
+        eq(orders.orderStatus, 'awaiting_shipment'),
+      ),
+    );
+
+  let appliedMutableOrderCount = 0;
+  const selectedPackageId = selectedPackageIdFromComboInput(input);
+  const rateWeightOz =
+    typeof input.weightOz === 'number' && Number.isFinite(input.weightOz) && input.weightOz > 0
+      ? input.weightOz
+      : null;
+
+  for (const candidate of candidates) {
+    const items = await loadComboItems(candidate.id, candidate.items);
+    if (computeComboKey(items) !== comboKey) continue;
+
+    await db
+      .insert(orderOverrides)
+      .values({
+        orderId: candidate.id,
+        selectedPackageId,
+        rateDimsL: input.length ?? null,
+        rateDimsW: input.width ?? null,
+        rateDimsH: input.height ?? null,
+        rateWeightOz,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: orderOverrides.orderId,
+        set: {
+          selectedPackageId,
+          rateDimsL: input.length ?? null,
+          rateDimsW: input.width ?? null,
+          rateDimsH: input.height ?? null,
+          rateWeightOz,
+          updatedAt: new Date(),
+        },
+      });
+    appliedMutableOrderCount += 1;
+  }
+
+  return appliedMutableOrderCount;
 }
 
 /**
@@ -107,7 +170,13 @@ export async function saveComboPackageDefault(
       },
     });
 
-  return { saved: true, clientId, comboKey };
+  const appliedMutableOrderCount = await applyComboPackageDefaultToMatchingMutableOrders(
+    clientId,
+    comboKey,
+    input,
+  );
+
+  return { saved: true, clientId, comboKey, appliedMutableOrderCount };
 }
 
 export interface ComboPackageDefaultDto {

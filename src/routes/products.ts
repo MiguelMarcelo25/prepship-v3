@@ -4,7 +4,10 @@ import { z } from 'zod';
 import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory } from '../db/schema/inventory';
+import { orderItems } from '../db/schema/order-items';
+import { orderOverrides, orders } from '../db/schema/orders';
 import { products } from '../db/schema/products';
+import { normalizeComboItems, type ComboItemInput } from '../lib/package-combo';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 
 const app = new Hono();
@@ -113,6 +116,87 @@ const saveDefaultsBody = z.object({
   defaultPackageCode: z.string().nullable().optional(),
 });
 
+async function loadSingleSkuCandidateItems(orderId: number, fallbackItems: unknown): Promise<ComboItemInput[]> {
+  const rows = await db
+    .select({ sku: orderItems.sku, quantity: orderItems.quantity })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, orderId));
+  if (rows.length) return rows.map((row) => ({ sku: row.sku, quantity: row.quantity }));
+  return Array.isArray(fallbackItems) ? (fallbackItems as ComboItemInput[]) : [];
+}
+
+function selectedPackageIdFromProductDefault(value: string | null | undefined): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || null;
+}
+
+async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
+  sku: string;
+  clientId?: number | null;
+  weightOz?: number;
+  length?: number;
+  width?: number;
+  height?: number;
+  defaultPackageCode?: string | null;
+}): Promise<number> {
+  if (input.clientId === undefined) return 0;
+  const normalizedSku = input.sku.trim().toLowerCase();
+  if (!normalizedSku) return 0;
+
+  const candidates = await db
+    .select({ id: orders.id, items: orders.items })
+    .from(orders)
+    .where(
+      and(
+        input.clientId === null ? isNull(orders.clientId) : eq(orders.clientId, input.clientId),
+        eq(orders.orderStatus, 'awaiting_shipment'),
+      ),
+    );
+
+  let appliedMutableOrderCount = 0;
+  const selectedPackageId = selectedPackageIdFromProductDefault(input.defaultPackageCode);
+  const perUnitWeightOz =
+    typeof input.weightOz === 'number' && Number.isFinite(input.weightOz) && input.weightOz > 0
+      ? input.weightOz
+      : null;
+
+  for (const candidate of candidates) {
+    const items = await loadSingleSkuCandidateItems(candidate.id, candidate.items);
+    const normalizedItems = normalizeComboItems(items);
+    if (normalizedItems.length !== 1 || normalizedItems[0]?.sku !== normalizedSku) continue;
+    const qty = normalizedItems[0]?.qty ?? 1;
+    const rateWeightOz = perUnitWeightOz != null
+      ? Number((perUnitWeightOz * qty).toFixed(2))
+      : null;
+
+    await db
+      .insert(orderOverrides)
+      .values({
+        orderId: candidate.id,
+        selectedPackageId,
+        rateDimsL: input.length ?? null,
+        rateDimsW: input.width ?? null,
+        rateDimsH: input.height ?? null,
+        rateWeightOz,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: orderOverrides.orderId,
+        set: {
+          selectedPackageId,
+          rateDimsL: input.length ?? null,
+          rateDimsW: input.width ?? null,
+          rateDimsH: input.height ?? null,
+          rateWeightOz,
+          updatedAt: new Date(),
+        },
+      });
+    appliedMutableOrderCount += 1;
+  }
+
+  return appliedMutableOrderCount;
+}
+
 app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
   const v = c.req.valid('json');
   const { clientId: inventoryClientId, ...productValues } = v;
@@ -197,7 +281,17 @@ app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
     console.warn('[products] inventory defaults mirror failed:', err);
   }
 
-  return c.json(row);
+  const appliedMutableOrderCount = await applySingleSkuDefaultsToMatchingMutableOrders({
+    sku: v.sku,
+    clientId: inventoryClientId,
+    weightOz: v.weightOz,
+    length: v.length,
+    width: v.width,
+    height: v.height,
+    defaultPackageCode: v.defaultPackageCode,
+  });
+
+  return c.json({ ...row, appliedMutableOrderCount });
 });
 
 app.delete('/:id{[0-9]+}', async (c) => {

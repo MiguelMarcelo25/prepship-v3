@@ -79,6 +79,7 @@
     "test:ps-099-orders-rate-cache-first": "node scripts/ps-099-orders-rate-cache-first-guard.mjs",
     "test:ps-081-rate-sync": "tsx scripts/ps-081-rate-sync-guard.ts",
     "test:ps-082-browse-rate-reconcile": "tsx scripts/ps-082-browse-rate-reconcile-guard.ts",
+    "test:ps-082-combo-default-unshipped-only": "tsx scripts/ps-082-combo-default-unshipped-only-guard.ts",
     "test:rate-browser-carrier-account-click": "node scripts/rate-browser-carrier-account-click-guard.mjs",
     "test:rate-browser-dynamic-service-selection": "node scripts/rate-browser-dynamic-service-selection-guard.mjs",
     "test:rate-browser-manual-selection-table-sync": "node scripts/rate-browser-manual-selection-table-sync-guard.mjs",
