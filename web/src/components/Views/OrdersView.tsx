@@ -4964,7 +4964,7 @@ export default function OrdersView({
   // the operator can immediately review the current rate and click Print again.
   // Deliberately does NOT auto-buy — the boundary exists so a human confirms the
   // current rate before postage is purchased.
-  async function refreshStaleRateForOrder(order: OrderSummaryDto) {
+  async function refreshStaleRateForOrder(order: OrderSummaryDto, nextActionLabel = 'Create + Print Label') {
     const request = getAutoBestRateRequest(order)
     if (!request) {
       showToast('This order’s rate is out of date. Add dimensions/weight, then Recalculate and print.', 'error')
@@ -4977,7 +4977,7 @@ export default function OrdersView({
         refetch: true,
       })
       if (result.status === 'updated') {
-        showToast('Rate refreshed — review it and click Create + Print Label again.', 'success')
+        showToast(`Rate refreshed — review it and click ${nextActionLabel} again.`, 'success')
       } else if (result.status === 'cleared') {
         showToast('No rates are available for this order right now. Adjust the package/dimensions and try again.', 'error')
       } else {
@@ -5142,7 +5142,12 @@ export default function OrdersView({
             'success',
           )
         } else {
-          showToast(result.skippedErrors[0] ?? 'Label was not added to the print queue', 'error')
+          const queueErrorMessage = result.skippedErrors[0]
+          if (isSelectedRateProofError(queueErrorMessage)) {
+            await refreshStaleRateForOrder(order, 'Print to Queue')
+          } else {
+            showToast(queueErrorMessage ?? 'Label was not added to the print queue', 'error')
+          }
         }
         return schedulePostLabelFollowups({ orderStatus: 'shipped' })
       }
