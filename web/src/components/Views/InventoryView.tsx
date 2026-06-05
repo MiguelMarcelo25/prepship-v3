@@ -4488,6 +4488,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 defaultSort={{ key: 'date', direction: 'desc' }}
                 density="compact"
                 stickyHeader={false}
+                paginated
+                pageSizeOptions={[50, 100, 200]}
+                defaultPageSize={50}
                 emptyMessage="No movements found"
               />
             </div>
