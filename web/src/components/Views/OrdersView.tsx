@@ -751,6 +751,8 @@ const TEST_PACK_DIMS = { length: 5, width: 3, height: 1, units: 'inches' }
 const TEST_SHIPPING_ACCOUNT_LABEL = 'PrepShip Test'
 const TEST_CARRIER_CODE = 'prepship_test'
 const TEST_SERVICE_CODE = 'prepship_test_standard'
+const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'
+const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
 const TEST_RATE_BROWSER_ACCOUNTS = [
   { shippingProviderId: 900001, carrierId: 'se-prepship-test-a', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Standard', accountNumber: 'MOCK-PT-A', name: 'PrepShip Test Standard', _label: 'PrepShip Test Standard' },
   { shippingProviderId: 900002, carrierId: 'se-prepship-test-b', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Saver', accountNumber: 'MOCK-PT-B', name: 'PrepShip Test Saver', _label: 'PrepShip Test Saver' },
@@ -1493,6 +1495,18 @@ function getShipAccountLabelById(accounts: CarrierAccountDto[], accountId: strin
 }
 
 function getBestRateBaseCost(order: OrderSummaryDto) {
+  if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
+    const hasShipmentCost = typeof order.bestRate.shipmentCost === 'number'
+    const hasOtherCost = typeof order.bestRate.otherCost === 'number'
+    const hasAmount = typeof order.bestRate.amount === 'number'
+    const shipmentCost = hasShipmentCost ? order.bestRate.shipmentCost as number : 0
+    const otherCost = hasOtherCost ? order.bestRate.otherCost as number : 0
+    const amount = hasAmount ? order.bestRate.amount as number : 0
+    const total = shipmentCost + otherCost
+    if (total > 0) return total
+    if (hasAmount) return amount
+  }
+
   const canonicalAmount = getShippingNumber(order, 'bestRateAmount')
   if (canonicalAmount && canonicalAmount > 0) return canonicalAmount
 
@@ -1518,6 +1532,10 @@ function getBestRateShippingProviderId(order: OrderSummaryDto) {
 }
 
 function getBestRateServiceCode(order: OrderSummaryDto) {
+  if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
+    const serviceCode = toStringValue(order.bestRate.serviceCode)
+    if (serviceCode) return serviceCode
+  }
   return getShippingString(order, 'serviceCode') ?? (order.bestRate ? toStringValue(order.bestRate.serviceCode) : null)
 }
 
@@ -4967,7 +4985,7 @@ export default function OrdersView({
   async function refreshStaleRateForOrder(order: OrderSummaryDto, nextActionLabel = 'Create + Print Label') {
     const request = getAutoBestRateRequest(order)
     if (!request) {
-      showToast('This order’s rate is out of date. Add dimensions/weight, then Recalculate and print.', 'error')
+      showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
       return
     }
     showToast('Rate is out of date — recalculating…', 'info')
@@ -4981,13 +4999,11 @@ export default function OrdersView({
       } else if (result.status === 'cleared') {
         showToast('No rates are available for this order right now. Adjust the package/dimensions and try again.', 'error')
       } else {
-        showToast(result.message || 'Could not refresh the rate. Use Recalculate, then print.', 'error')
+        showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
       }
     } catch (refreshError) {
-      showToast(
-        refreshError instanceof Error ? refreshError.message : 'Could not refresh the rate. Use Recalculate, then print.',
-        'error',
-      )
+      console.warn('[rate-proof] refresh before label failed:', refreshError instanceof Error ? refreshError.message : refreshError)
+      showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
     }
   }
 
@@ -5190,6 +5206,7 @@ export default function OrdersView({
           'Rate is out of date',
           'This order’s saved rate is out of date, so no label was purchased. Refreshing the rate now — review it and click Create + Print Label again.',
         )
+        showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
         void refreshStaleRateForOrder(order)
         return null
       }
@@ -5239,32 +5256,6 @@ export default function OrdersView({
     }
   }
 
-  function getRateTotalForSort(rate: Record<string, unknown>) {
-    const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
-    const otherCost = toNumberValue(rate.otherCost) ?? 0
-    return applyCarrierMarkup({
-      shippingProviderId: toNumberValue(rate.shippingProviderId) ?? undefined,
-      carrierCode: toStringValue(rate.carrierCode) ?? '',
-      serviceCode: toStringValue(rate.serviceCode) ?? '',
-      serviceName: toStringValue(rate.serviceName) ?? '',
-      amount: shipmentCost + otherCost,
-      shipmentCost,
-      otherCost,
-      carrierNickname: toStringValue(rate.carrierNickname) ?? undefined,
-    }, markups)
-  }
-
-  function pickBestPanelRate(rates: Array<Record<string, unknown>>) {
-    return [...rates]
-      .filter((rate) => {
-        const serviceCode = toStringValue(rate.serviceCode)
-        const carrierCode = toStringValue(rate.carrierCode)
-        const hasAmount = toNumberValue(rate.shipmentCost) != null || toNumberValue(rate.amount) != null
-        return Boolean(serviceCode && carrierCode && hasAmount)
-      })
-      .sort((left, right) => getRateTotalForSort(left) - getRateTotalForSort(right))[0] ?? null
-  }
-
   function getRateCarrierIdsForAccounts() {
     return [...new Set(
       shippingAccounts
@@ -5283,7 +5274,7 @@ export default function OrdersView({
     return date.toISOString().slice(0, 10)
   }
 
-  function buildRateRequestFingerprint(input: {
+  function buildRateRequestDraftKey(input: {
     weightOz: number
     dims: { length: number; width: number; height: number }
     shipTo: ReturnType<typeof getShipTo>
@@ -5321,7 +5312,7 @@ export default function OrdersView({
 
   function savedRateIsFreshAndComplete(
     rate: Record<string, unknown>,
-    requestFingerprint: string,
+    requestKey: string,
     options: { requireEligibilityVersion?: boolean } = {},
   ) {
     if (
@@ -5330,8 +5321,8 @@ export default function OrdersView({
     ) {
       return false
     }
-    const fingerprint = toStringValue(rate.requestFingerprint) ?? toStringValue(rate.cacheKey)
-    if (!fingerprint || fingerprint !== requestFingerprint) return false
+    if (toStringValue(rate.clientRequestKey) !== requestKey) return false
+    if (!hasBackendIssuedRateProof(rate) && toStringValue(rate.matchType) !== 'test') return false
     if (rate.isComplete !== true) return false
     const expiresAt = toStringValue(rate.cacheExpiresAt)
     if (!expiresAt) return false
@@ -5339,19 +5330,49 @@ export default function OrdersView({
     return Number.isFinite(expiresMs) && expiresMs > Date.now()
   }
 
+  function getBackendRateResponseFingerprint(
+    response: Record<string, unknown> | null | undefined,
+    rate?: Record<string, unknown> | null,
+  ) {
+    const workflow = toRecord(response?.bestRateWorkflow)
+    const rateFingerprint = hasBackendIssuedRateProof(rate ?? null) ? rateProofFingerprint(rate ?? null) : null
+    return (
+      toStringValue(response?.requestFingerprint) ??
+      toStringValue(response?.cacheKey) ??
+      toStringValue(response?.requestKey) ??
+      toStringValue(workflow?.requestFingerprint) ??
+      toStringValue(workflow?.backendRequestKey) ??
+      rateFingerprint
+    )
+  }
+
   function withRateRequestMetadata(
     rate: Record<string, unknown>,
     request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
     metadata: Record<string, unknown> = {},
   ) {
+    const backendRequestFingerprint = getBackendRateResponseFingerprint(metadata, rate)
+    const {
+      requestFingerprint: _requestFingerprint,
+      rateRequestFingerprint: _rateRequestFingerprint,
+      cacheKey: _cacheKey,
+      proofSource: _proofSource,
+      ...rateWithoutProof
+    } = rate
     const createdAt = toStringValue(metadata.cacheCreatedAt) ?? new Date().toISOString()
     const expiresAt =
       toStringValue(metadata.cacheExpiresAt) ??
       new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
     return {
-      ...rate,
-      requestFingerprint: toStringValue(metadata.requestFingerprint) ?? request.fingerprint,
-      cacheKey: toStringValue(metadata.cacheKey) ?? request.fingerprint,
+      ...rateWithoutProof,
+      ...(backendRequestFingerprint
+        ? {
+          requestFingerprint: backendRequestFingerprint,
+          cacheKey: backendRequestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+        }
+        : {}),
+      clientRequestKey: request.key,
       cacheCreatedAt: createdAt,
       cacheExpiresAt: expiresAt,
       confirmation: request.confirmation,
@@ -5390,7 +5411,7 @@ export default function OrdersView({
     const confirmation = normalizeConfirmationForRates(input.confirmation)
     const insuranceProvider = input.insuranceProvider ?? 'none'
     const insuredValue = input.insuredValue ?? null
-    const fingerprint = buildRateRequestFingerprint({
+    const draftKey = buildRateRequestDraftKey({
       weightOz,
       dims,
       shipTo: input.shipTo,
@@ -5402,7 +5423,7 @@ export default function OrdersView({
       insuranceProvider,
       insuredValue,
     })
-    const key = `${order.orderId}|${fingerprint}`
+    const key = `${order.orderId}|${draftKey}`
 
     return {
       detail: input.detail ?? null,
@@ -5414,7 +5435,7 @@ export default function OrdersView({
       carrierIds,
       insuranceProvider,
       insuredValue,
-      fingerprint,
+      draftKey,
       key,
     }
   }
@@ -5460,7 +5481,7 @@ export default function OrdersView({
     const savedRate = getSavedBestRateRecord(order)
     if (!savedRate) return false
     if (getRateBaseAmount(savedRate) <= 0) return false
-    return savedRateIsFreshAndComplete(savedRate, request.fingerprint, options)
+    return savedRateIsFreshAndComplete(savedRate, request.key, options)
   }
 
   function getSavedBestRateRecord(order: OrderSummaryDto) {
@@ -5468,6 +5489,24 @@ export default function OrdersView({
       toRecord(order.bestRate) ??
       toRecord(getShippingModel(order)?.bestRate) ??
       toRecord(toRecord(order.overrides)?.bestRateJson)
+    )
+  }
+
+  function proofMetadataRecord(rate: Record<string, unknown> | null) {
+    return toRecord(rate?.metadata)
+  }
+
+  function proofRawRecord(rate: Record<string, unknown> | null) {
+    return toRecord(rate?.raw)
+  }
+
+  function hasBackendIssuedRateProof(rate: Record<string, unknown> | null) {
+    const metadata = proofMetadataRecord(rate)
+    const raw = proofRawRecord(rate)
+    return (
+      toStringValue(rate?.proofSource) === BACKEND_RATE_PROOF_SOURCE ||
+      toStringValue(metadata?.proofSource) === BACKEND_RATE_PROOF_SOURCE ||
+      toStringValue(raw?.proofSource) === BACKEND_RATE_PROOF_SOURCE
     )
   }
 
@@ -5493,7 +5532,7 @@ export default function OrdersView({
       toRecord(order.selectedRate),
       getSavedBestRateRecord(order),
     ].filter(Boolean) as Record<string, unknown>[]
-    const selectedRate = candidates.find((rate) => rateProofFingerprint(rate)) ?? null
+    const selectedRate = candidates.find((rate) => hasBackendIssuedRateProof(rate) && rateProofFingerprint(rate)) ?? null
     const requestFingerprint = rateProofFingerprint(selectedRate)
     if (!selectedRate || !requestFingerprint) return undefined
     return { requestFingerprint, selectedRate }
@@ -5736,13 +5775,14 @@ export default function OrdersView({
     }
 
     const rateCount = Array.isArray(response?.rates) ? response.rates.length : 1
+    const backendRequestFingerprint = getBackendRateResponseFingerprint(response) ?? getBackendRateResponseFingerprint(null, decision.rate)
     const rateWithMetadata = withRateRequestMetadata(decision.rate, request, {
       isComplete: true,
       rateCount,
       matchType: 'strict-live',
       cacheCreatedAt: response?.fetchedAt,
-      requestFingerprint: request.fingerprint,
-      cacheKey: request.fingerprint,
+      requestFingerprint: backendRequestFingerprint,
+      cacheKey: backendRequestFingerprint,
     })
     await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
       selectedPid: decision.selectedPid,
@@ -5937,7 +5977,7 @@ export default function OrdersView({
           return
         }
 
-        const rates = await apiClient.fetchRates({
+        const response = await apiClient.browseRates({
           weightOz: request.weightOz,
           toZip: request.shipTo.postalCode,
           toCountry: request.shipTo.country ?? 'US',
@@ -5966,15 +6006,18 @@ export default function OrdersView({
           // matches the Rate Browser drawer instead of showing a ShipStation-only
           // winner.
           includeVisibleDirectCarriers: true,
-        }) as Array<Record<string, unknown>>
+        }) as Record<string, unknown>
+        const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
 
-        const responseBestRate = toRecord((rates as Array<Record<string, unknown>> & { bestRate?: unknown }).bestRate)
-        const bestRate = responseBestRate ?? pickBestPanelRate(rates)
+        const bestRate = toRecord(response?.bestRate)
         if (bestRate) {
           const bestRateWithMetadata = withRateRequestMetadata(bestRate, request, {
             isComplete: true,
             rateCount: rates.length,
             matchType: 'live',
+            requestFingerprint: getBackendRateResponseFingerprint(response, bestRate),
+            cacheKey: getBackendRateResponseFingerprint(response, bestRate),
+            cacheCreatedAt: response?.fetchedAt,
           })
           await persistAppliedRateForOrder(order.orderId, bestRateWithMetadata, {
             fallbackDims: request.dims,
@@ -6158,7 +6201,7 @@ export default function OrdersView({
 
     try {
       const carrierIds = getRateCarrierIdsForAccounts()
-      const rates = await apiClient.fetchRates({
+      const response = await apiClient.browseRates({
         weightOz,
         toZip: shipTo.postalCode,
         toCountry: shipTo.country ?? 'US',
@@ -6181,12 +6224,14 @@ export default function OrdersView({
           order.external_order_id ??
           order.orderNumber ??
           undefined,
+        forceLive: true,
         forceRefresh: true,
-      }) as Array<Record<string, unknown>>
+      }) as Record<string, unknown>
+      const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
 
       if (bestRateRefreshSeqRef.current !== runId) return null
 
-      const bestRate = pickBestPanelRate(rates)
+      const bestRate = toRecord(response?.bestRate)
       const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
 
       if (bestRate) {
@@ -6207,6 +6252,9 @@ export default function OrdersView({
           isComplete: true,
           rateCount: rates.length,
           matchType: 'panel-live',
+          requestFingerprint: getBackendRateResponseFingerprint(response, bestRate),
+          cacheKey: getBackendRateResponseFingerprint(response, bestRate),
+          cacheCreatedAt: response?.fetchedAt,
         }) : bestRate
         setPanelRatePreview([bestRateWithMetadata])
         if (autoRequest) {
@@ -6602,7 +6650,7 @@ export default function OrdersView({
     const shippingOptions = buildPanelShippingOptionsPayload(panelForm)
     const confirmation = normalizeConfirmationForRates(shippingOptions.confirmation)
     const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
-    const fingerprint = buildRateRequestFingerprint({
+    const draftKey = buildRateRequestDraftKey({
       weightOz,
       dims,
       shipTo,
@@ -6624,8 +6672,8 @@ export default function OrdersView({
       carrierIds,
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue,
-      fingerprint,
-      key: `${panelOrder.orderId}|${fingerprint}`,
+      draftKey,
+      key: `${panelOrder.orderId}|${draftKey}`,
     }
 
     const runId = bestRateRefreshSeqRef.current + 1

@@ -178,7 +178,8 @@ check('passive auto-rating cannot persist from legacy fetchRates fallback',
   passiveStart >= 0 &&
   !/apiClient\.fetchRates/.test(passiveBlock) &&
   !/pickBestPanelRate/.test(passiveBlock) &&
-  /runStrictBestRateRecalculation/.test(passiveBlock));
+  /apiClient\.browseRates/.test(passiveBlock) &&
+  /response\?\.bestRate/.test(passiveBlock));
 
 const bestRateBaseStart = ordersView.indexOf('function getBestRateBaseCost(');
 const bestRateBaseEnd = ordersView.indexOf('\nfunction getBestRateShippingProviderId', bestRateBaseStart);

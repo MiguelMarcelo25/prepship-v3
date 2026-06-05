@@ -459,6 +459,7 @@ async function safe<T>(
 
 const WARN_THROTTLE_MS = 60_000;
 const warnLastSeen = new Map<string, number>();
+const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response';
 
 function warnThrottled(key: string, ...args: unknown[]): void {
   const now = Date.now();
@@ -740,6 +741,14 @@ type DirectCarrierRateResult = {
   carrierCode?: string | null;
   carrierName?: string | null;
   carrierType?: string | null;
+  requestFingerprint?: string | null;
+  cacheKey?: string | null;
+  cacheCreatedAt?: string | null;
+  cacheExpiresAt?: string | null;
+  proofSource?: string | null;
+  isComplete?: boolean | null;
+  rateCount?: number | null;
+  matchType?: string | null;
 };
 
 export type DirectCarrierRateError = {
@@ -1007,6 +1016,11 @@ function translateDirectRateToV2Shape(
     shipping_amount: { amount, currency },
     other_amount: { amount: 0, currency },
     delivery_days: Number(rate.days ?? 0) || null,
+    requestFingerprint: rate.requestFingerprint,
+    cacheKey: rate.cacheKey ?? rate.requestFingerprint,
+    cacheCreatedAt: rate.cacheCreatedAt,
+    cacheExpiresAt: rate.cacheExpiresAt,
+    proofSource: rate.proofSource,
   };
   return {
     carrierCode,
@@ -1022,6 +1036,14 @@ function translateDirectRateToV2Shape(
     shipmentCost: amount,
     otherCost: 0,
     deliveryDays: raw.delivery_days,
+    requestFingerprint: rate.requestFingerprint,
+    cacheKey: rate.cacheKey ?? rate.requestFingerprint,
+    cacheCreatedAt: rate.cacheCreatedAt,
+    cacheExpiresAt: rate.cacheExpiresAt,
+    proofSource: rate.proofSource,
+    isComplete: rate.isComplete,
+    rateCount: rate.rateCount,
+    matchType: rate.matchType,
     raw,
   };
 }
@@ -1343,6 +1365,14 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       amount: shipmentCost + otherCost,
       shipmentCost,
       otherCost,
+      requestFingerprint: obj.requestFingerprint ?? null,
+      cacheKey: obj.cacheKey ?? obj.requestFingerprint ?? null,
+      cacheCreatedAt: obj.cacheCreatedAt ?? null,
+      cacheExpiresAt: obj.cacheExpiresAt ?? null,
+      proofSource: obj.proofSource ?? null,
+      isComplete: obj.isComplete ?? null,
+      rateCount: obj.rateCount ?? null,
+      matchType: obj.matchType ?? null,
       raw: obj,
     };
   }
@@ -4077,9 +4107,24 @@ export const apiClient = {
                   : Array.isArray(res?.rates)
                     ? res.rates
                     : [];
-                const translatedRates = rawRates.map(translateRateToV2Shape);
+                const responseFingerprint =
+                  !Array.isArray(res)
+                    ? res?.requestFingerprint ?? res?.cacheKey ?? res?.requestKey
+                    : null;
+                const responseMetadata = responseFingerprint
+                  ? {
+                    requestFingerprint: responseFingerprint,
+                    cacheKey: responseFingerprint,
+                    cacheCreatedAt: !Array.isArray(res) ? res?.fetchedAt : null,
+                    proofSource: BACKEND_RATE_PROOF_SOURCE,
+                  }
+                  : {};
+                const translatedRates = rawRates.map((rate: unknown) => ({
+                  ...translateRateToV2Shape(rate),
+                  ...responseMetadata,
+                }));
                 const responseBestRate = !Array.isArray(res) && res?.bestRate
-                  ? translateRateToV2Shape(res.bestRate)
+                  ? { ...translateRateToV2Shape(res.bestRate), ...responseMetadata }
                   : null;
                 if (responseBestRate) {
                   Object.defineProperty(translatedRates, 'bestRate', {
@@ -4216,8 +4261,23 @@ export const apiClient = {
               ? fetchDirectCarrierRates(body, directCarrierIds)
               : Promise.resolve({ rates: [], errors: [], metas: [] }),
           ]);
+          const shipStationFingerprint =
+            shipStationResult?.requestFingerprint ??
+            shipStationResult?.cacheKey ??
+            shipStationResult?.requestKey;
+          const shipStationProofMetadata = shipStationFingerprint
+            ? {
+              requestFingerprint: shipStationFingerprint,
+              cacheKey: shipStationFingerprint,
+              cacheCreatedAt: shipStationResult?.fetchedAt ?? null,
+              proofSource: BACKEND_RATE_PROOF_SOURCE,
+            }
+            : {};
           const shipStationRates = Array.isArray(shipStationResult?.rates)
-            ? shipStationResult.rates.map(translateRateToV2Shape)
+            ? shipStationResult.rates.map((rate: unknown) => ({
+                ...translateRateToV2Shape(rate),
+                ...shipStationProofMetadata,
+              }))
             : [];
           const combined = dedupeRateResults([...shipStationRates, ...directRates.rates]).sort((left, right) => {
             const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
@@ -4228,7 +4288,7 @@ export const apiClient = {
           });
           const bestRate = combined[0] ?? (
             shipStationResult?.bestRate
-              ? translateRateToV2Shape(shipStationResult.bestRate)
+              ? { ...translateRateToV2Shape(shipStationResult.bestRate), ...shipStationProofMetadata }
               : null
           );
           const directCarrierStatuses = directCarrierIds.map((carrierId) => {

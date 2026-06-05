@@ -18,6 +18,7 @@
 //     simulated: boolean, fetchedAt: ISO }
 
 import postgres from 'postgres';
+import { createHash } from 'node:crypto';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { sendInternalServerError, logServerError } from '../_lib/safe-error.js';
 // PS-083: assignment-scope gate shared with the Rate Browser FE filter and the
@@ -25,6 +26,8 @@ import { sendInternalServerError, logServerError } from '../_lib/safe-error.js';
 // quote rates for a scoped order, even if a stale/synthetic provider id reaches
 // this endpoint. Pure module (no transitive deps) so it's cold-start safe.
 import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
+
+const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response';
 
 // ROOT CAUSE FIX: these helpers were STATIC imports at module top. On Vercel,
 // loading verify-supabase-jwt (jose) + the shipping-eligibility tree pulled a
@@ -131,6 +134,67 @@ function filterDirectCarrierRatesForEligibility(
     (rate) => directRateServiceDescriptor(rate, provider),
     _normalizeShippingOptions(body),
   );
+}
+
+function stableProofValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableProofValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined && entry !== null && entry !== '')
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableProofValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function buildDirectCarrierRateRequestFingerprint(args: {
+  provider: string;
+  accountId: unknown;
+  sourceTable: unknown;
+  body: Record<string, unknown>;
+}): string {
+  const payload = stableProofValue({
+    v: 'direct-carrier-rate-v1',
+    provider: args.provider,
+    accountId: args.accountId,
+    sourceTable: args.sourceTable,
+    weightOz: args.body.weightOz,
+    fromZip: args.body.fromZip,
+    toZip: args.body.toZip,
+    dimsL: args.body.dimsL,
+    dimsW: args.body.dimsW,
+    dimsH: args.body.dimsH,
+    orderId: args.body.orderId,
+    clientId: args.body.clientId,
+    storeId: args.body.storeId,
+    externalOrderId: args.body.externalOrderId,
+    orderNumber: args.body.orderNumber,
+    purchaseOrderId: args.body.purchaseOrderId,
+    confirmation: args.body.confirmation,
+    insuranceProvider: args.body.insuranceProvider,
+    insuredValue: args.body.insuredValue,
+  });
+  return `direct-rate:${createHash('sha256').update(JSON.stringify(payload)).digest('hex')}`;
+}
+
+function withDirectCarrierProof(
+  rates: Array<Record<string, unknown>>,
+  requestFingerprint: string,
+  fetchedAt: string,
+): Array<Record<string, unknown>> {
+  return rates.map((rate) => ({
+    ...rate,
+    requestFingerprint,
+    cacheKey: requestFingerprint,
+    cacheCreatedAt: fetchedAt,
+    cacheExpiresAt: new Date(Date.parse(fetchedAt) + 6 * 60 * 60 * 1000).toISOString(),
+    proofSource: BACKEND_RATE_PROOF_SOURCE,
+    isComplete: true,
+    rateCount: rates.length,
+    matchType: 'direct-live',
+  }));
 }
 
 // Hardening: cap each upstream carrier rate quote so a hung provider
@@ -418,6 +482,13 @@ export default async function handler(req: any, res: any): Promise<void> {
     const dimsW = typeof body?.dimsW === 'number' && body.dimsW > 0 ? body.dimsW : undefined;
     const dimsH = typeof body?.dimsH === 'number' && body.dimsH > 0 ? body.dimsH : undefined;
     const shippingOptions = _normalizeShippingOptions(body);
+    const fetchedAt = new Date().toISOString();
+    const requestFingerprint = buildDirectCarrierRateRequestFingerprint({
+      provider,
+      accountId: (row as any).id,
+      sourceTable: useStoreTable ? 'store_accounts' : 'carrier_accounts',
+      body,
+    });
 
     if (provider === 'simulator') {
       const rates = simulatorRates({ weightOz, toZip });
@@ -425,8 +496,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: true,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { connectorCapabilities },
         });
       return;
@@ -449,8 +523,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { connectorCapabilities },
         });
       } catch (err) {
@@ -480,8 +557,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { connectorCapabilities },
         });
       } catch (err) {
@@ -511,8 +591,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { connectorCapabilities },
         });
       } catch (err) {
@@ -579,8 +662,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { externalOrderId, orderNumber, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {
@@ -788,8 +874,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null, rateCount: rates.length },
         });
       } catch (err) {
@@ -839,8 +928,12 @@ export default async function handler(req: any, res: any): Promise<void> {
         });
         const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
-          ok: true, provider, simulated: false, rates,
-          fetchedAt: new Date().toISOString(),
+          ok: true, provider, simulated: false,
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { externalOrderId, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {
@@ -910,8 +1003,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { externalOrderId, orderNumber, ebayOrderId, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {
@@ -960,8 +1056,12 @@ export default async function handler(req: any, res: any): Promise<void> {
         });
         const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
-          ok: true, provider, simulated: false, rates,
-          fetchedAt: new Date().toISOString(),
+          ok: true, provider, simulated: false,
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { externalOrderId, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {
@@ -1053,8 +1153,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           ok: true,
           provider,
           simulated: false,
-          rates,
-          fetchedAt: new Date().toISOString(),
+          rates: withDirectCarrierProof(rates, requestFingerprint, fetchedAt),
+          requestFingerprint,
+          cacheKey: requestFingerprint,
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+          fetchedAt,
           meta: { orderId, externalOrderId, orderNumber, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {

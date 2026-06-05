@@ -156,9 +156,9 @@ check('Recalculate uses browseRates strict live endpoint', /apiClient\.browseRat
 check('Recalculate does not use fetchRates', !/apiClient\.fetchRates/.test(strictPathBlock));
 check('Recalculate does not pick a client-side fallback best rate', !/pickBestPanelRate/.test(strictPathBlock));
 check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(applierBlock) && /decision\.entry/.test(applierBlock));
-check('Selected-rate proof skips unfingerprinted panel candidates and uses a fingerprinted fallback',
+check('Selected-rate proof only accepts backend-issued proof metadata',
   /const candidates = \[/.test(proofBuilderBlock) &&
-    /\.find\(\(rate\) => rateProofFingerprint\(rate\)\)/.test(proofBuilderBlock));
+    /hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)/.test(proofBuilderBlock));
 check('Panel refreshed best rate is stamped with request fingerprint metadata before label proof',
   /const bestRateWithMetadata = autoRequest\s*\?\s*withRateRequestMetadata\(bestRate, autoRequest/.test(panelRefreshBlock) &&
     /setPanelRatePreview\(\[bestRateWithMetadata\]\)/.test(panelRefreshBlock) &&
