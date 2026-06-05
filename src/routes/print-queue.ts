@@ -380,6 +380,21 @@ const queueSendLabelBody = z.object({
   insuranceProvider: z.string().nullable().optional(),
   insuredValue: z.number().nullable().optional(),
   testLabel: z.boolean().optional(),
+  // The backend-issued selected-rate proof the frontend captured for this order.
+  // Without this field zValidator strips it from the body, the durable queue
+  // worker calls createLabelV2 with selectedRateProof: undefined, and
+  // assertSelectedRateProofForLabelPurchase rejects with
+  // missing_current_fingerprint -> the user's recurring "Rate changed or
+  // expired" loop on real orders. .passthrough() preserves the full selectedRate
+  // object so the backend can recompute its fingerprint at the purchase boundary.
+  selectedRateProof: z
+    .object({
+      requestFingerprint: z.string().nullable().optional(),
+      selectedRate: z.unknown().optional(),
+      eligibleRates: z.array(z.unknown()).nullable().optional(),
+    })
+    .passthrough()
+    .optional(),
 });
 
 const queueSendBody = z.object({
@@ -440,6 +455,10 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
               insuranceProvider: order.label.insuranceProvider ?? undefined,
               insuredValue: order.label.insuredValue ?? undefined,
               testLabel: order.label.testLabel,
+              // Forward the selected-rate proof so the durable queue worker can
+              // satisfy assertSelectedRateProofForLabelPurchase. Omitting it here
+              // is what dropped the proof and produced missing_current_fingerprint.
+              selectedRateProof: order.label.selectedRateProof,
             }
           : undefined,
         skuGroupId: order.sku_group_id,

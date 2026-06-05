@@ -98,6 +98,7 @@
     "test:selected-rate-proof-boundary": "tsx scripts/selected-rate-proof-purchase-boundary-guard.ts",
     "test:ps-098-shipping-purchase-boundary": "tsx scripts/ps-098-shipping-purchase-boundary-certification-guard.ts",
     "test:print-to-queue-selected-rate-proof": "tsx scripts/print-to-queue-selected-rate-proof-guard.ts",
+    "test:batch-send-proof-forwarding": "tsx scripts/batch-send-selected-rate-proof-forwarding-guard.ts",
     "test:ps-103-remove-frontend-fingerprint-authority": "tsx scripts/ps-103-remove-frontend-fingerprint-authority-guard.ts",
     "test:ps-067-billing-external-fulfilled": "node scripts/ps-067-billing-external-fulfilled-guard.mjs",
     "test:print-queue-sku-grouping": "tsx scripts/print-queue-sku-grouping-guard.ts",
