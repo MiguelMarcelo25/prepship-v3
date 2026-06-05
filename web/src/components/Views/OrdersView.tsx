@@ -4243,6 +4243,9 @@ export default function OrdersView({
       name: target.name,
       clientId,
       defaultPackageCode: packageCode,
+      // Scope the weight/dims push to this order's qty so saving a default for
+      // one qty (e.g. a 1-pack) never overwrites another qty's box/weight.
+      appliesToQty: target.qty,
     }
     if (skuWeightOz > 0) payload.weightOz = skuWeightOz
     if (hasCompleteDims(dims)) {

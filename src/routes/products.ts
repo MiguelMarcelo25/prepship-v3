@@ -114,6 +114,11 @@ const saveDefaultsBody = z.object({
   width: z.number().nonnegative().optional(),
   height: z.number().nonnegative().optional(),
   defaultPackageCode: z.string().nullable().optional(),
+  // The qty of the order this default was saved from. When present, the
+  // weight/dims push only touches awaiting single-SKU orders with the SAME
+  // qty, so saving a 1-pack default never changes a 2-pack order (whose box
+  // size differs). Omitted = legacy behavior (apply across all quantities).
+  appliesToQty: z.number().int().positive().optional(),
 });
 
 async function loadSingleSkuCandidateItems(orderId: number, fallbackItems: unknown): Promise<ComboItemInput[]> {
@@ -138,6 +143,9 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
   width?: number;
   height?: number;
   defaultPackageCode?: string | null;
+  // When set, only push to awaiting single-SKU orders with this exact qty, so a
+  // saved default for one qty never overwrites another qty's weight/box.
+  appliesToQty?: number | null;
 }): Promise<number> {
   if (input.clientId === undefined) return 0;
   const normalizedSku = input.sku.trim().toLowerCase();
@@ -165,6 +173,9 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
     const normalizedItems = normalizeComboItems(items);
     if (normalizedItems.length !== 1 || normalizedItems[0]?.sku !== normalizedSku) continue;
     const qty = normalizedItems[0]?.qty ?? 1;
+    // Scope to the saving order's qty: a 1-pack default must not change a
+    // 2-pack order (different box), and vice versa.
+    if (input.appliesToQty != null && qty !== input.appliesToQty) continue;
     const rateWeightOz = perUnitWeightOz != null
       ? Number((perUnitWeightOz * qty).toFixed(2))
       : null;
@@ -199,7 +210,9 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
 
 app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
   const v = c.req.valid('json');
-  const { clientId: inventoryClientId, ...productValues } = v;
+  // appliesToQty governs the per-order push scope only — it is not a `products`
+  // column, so keep it out of the upsert values.
+  const { clientId: inventoryClientId, appliesToQty: _appliesToQty, ...productValues } = v;
   const [row] = await db
     .insert(products)
     .values(productValues)
@@ -289,6 +302,7 @@ app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
     width: v.width,
     height: v.height,
     defaultPackageCode: v.defaultPackageCode,
+    appliesToQty: v.appliesToQty ?? null,
   });
 
   return c.json({ ...row, appliedMutableOrderCount });
