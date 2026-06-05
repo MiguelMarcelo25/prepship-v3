@@ -4647,6 +4647,7 @@ export default function OrdersView({
   // path), so no real postage is spent on test rows.
   async function createDirectCarrierLabelThenQueue(
     order: OrderSummaryDto,
+    overridePayload?: Record<string, unknown> | null,
   ): Promise<{ queued: boolean; items: ReturnType<typeof getActiveItems>; error?: string }> {
     if (order.clientId == null) return { queued: false, items: [], error: 'Missing client id' }
     const orderDetail = orderDetailsById.get(order.orderId) ?? null
@@ -4679,7 +4680,15 @@ export default function OrdersView({
       confirmation: shippingOptions.confirmation,
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue,
-      selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
+      // Print-to-Queue loop fix: when the caller supplies a payload override
+      // (the side-panel Print to Queue retry hands us the freshly re-rated
+      // proof here), honor its selectedRateProof instead of rebuilding from the
+      // captured order's stale bestRate. Direct-carrier orders route here and
+      // ignored labelPayloadOverrides, so the refreshed proof was discarded and
+      // the purchase boundary rejected every retry ("Rate changed or expired").
+      selectedRateProof:
+        (overridePayload?.selectedRateProof as Record<string, unknown> | undefined) ??
+        buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
       shipTo: {
         name: shipTo.name ?? '',
         company: shipTo.company ?? '',
@@ -4743,7 +4752,10 @@ export default function OrdersView({
         continue
       }
       try {
-        const outcome = await createDirectCarrierLabelThenQueue(order)
+        const outcome = await createDirectCarrierLabelThenQueue(
+          order,
+          options.labelPayloadOverrides?.get(order.orderId) ?? null,
+        )
         if (outcome.queued) {
           directQueued += 1
           directQueuedItems.push(...outcome.items)

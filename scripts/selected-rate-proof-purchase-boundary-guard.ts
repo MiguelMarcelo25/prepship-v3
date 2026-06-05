@@ -47,7 +47,11 @@ check(
 check(
   'Orders single/batch/queue label payloads pass selectedRateProof',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 4,
+    // Each label payload sources its selectedRateProof from buildSelectedRateProofPayload.
+    // The direct-carrier queue path additionally prefers a caller override
+    // (overridePayload?.selectedRateProof ?? buildSelectedRateProofPayload(order, ...)),
+    // so allow that wrapper form when counting the payload sites.
+    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4,
 );
 
 check(
