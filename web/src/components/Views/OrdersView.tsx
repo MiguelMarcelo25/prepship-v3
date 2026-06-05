@@ -84,6 +84,7 @@ import {
   buildQueueAddPayload,
   canRetryBatchRecalculateRow,
   classifyAwaitingRateCellState,
+  classifyAwaitingRateCellStateWithWorkflow,
   classifyQueueOrderRoute,
   getColumnMinWidth,
   groupPrintQueueEntries,
@@ -1278,6 +1279,10 @@ function getCanonicalRecord(order: OrderSummaryDto, key: string) {
 
 function getShippingModel(order: OrderSummaryDto) {
   return getCanonicalRecord(order, 'shipping') ?? toRecord(order.shipping)
+}
+
+function getBestRateWorkflowModel(order: OrderSummaryDto) {
+  return toRecord(getShippingModel(order)?.bestRateWorkflow) ?? toRecord(order.bestRateWorkflow)
 }
 
 function getShippingString(order: OrderSummaryDto, key: string) {
@@ -7932,7 +7937,7 @@ export default function OrdersView({
     const resolvedError = resolvedForKey && Boolean(autoEntry?.error)
     const resolvedNoRate = resolvedForKey && !autoEntry?.rate && !autoEntry?.error
     const hasCarrierContext = isTestOrder(displayOrder) || getRateCarrierIdsForAccounts().length > 0
-    const state = classifyAwaitingRateCellState({
+    const stateInput = {
       hasDims,
       hasWeight,
       hasDisplayableBestRate,
@@ -7941,7 +7946,11 @@ export default function OrdersView({
       resolvedError,
       hasCarrierContext,
       accountsLoading,
-    })
+    }
+    const state = classifyAwaitingRateCellStateWithWorkflow(
+      getBestRateWorkflowModel(displayOrder),
+      stateInput,
+    )
     if (state === 'ready') return null
     return renderRateCellFallback(state, order, variant)
   }

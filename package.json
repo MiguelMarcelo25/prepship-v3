@@ -78,6 +78,7 @@
     "test:ps-058-select-all-matching": "tsx scripts/ps-058-select-all-matching-guard.ts",
     "test:ps-060-combo-save-defaults": "tsx scripts/ps-060-combo-save-defaults-guard.ts",
     "test:ps-099-orders-rate-cache-first": "node scripts/ps-099-orders-rate-cache-first-guard.mjs",
+    "test:ps-102-best-rate-workflow-dto": "tsx scripts/ps-102-best-rate-workflow-dto-guard.ts",
     "test:ps-081-rate-sync": "tsx scripts/ps-081-rate-sync-guard.ts",
     "test:ps-082-browse-rate-reconcile": "tsx scripts/ps-082-browse-rate-reconcile-guard.ts",
     "test:ps-082-combo-default-unshipped-only": "tsx scripts/ps-082-combo-default-unshipped-only-guard.ts",

@@ -1,0 +1,218 @@
+export type BestRateWorkflowState =
+  | 'missing'
+  | 'fresh'
+  | 'stale'
+  | 'mismatched_request'
+  | 'partial_carrier_failure'
+  | 'blocked'
+  | 'unknown';
+
+export type BestRateWorkflowSourceConfidence =
+  | 'live'
+  | 'cache_fresh'
+  | 'cache_stale'
+  | 'saved_override'
+  | 'partial'
+  | 'none';
+
+export type BestRateWorkflowCarrierStatusValue =
+  | 'live'
+  | 'cached'
+  | 'unavailable'
+  | 'loading'
+  | 'error'
+  | 'blocked'
+  | 'unknown';
+
+export type BestRateWorkflowCarrierStatus = {
+  carrierId: string;
+  carrierName?: string | null;
+  carrierCode?: string | null;
+  nickname?: string | null;
+  status: BestRateWorkflowCarrierStatusValue;
+  rateCount: number;
+  durationMs?: number;
+  error?: string;
+};
+
+export type BestRateWorkflowAllowedActions = {
+  canUseSavedRate: boolean;
+  requiresRerate: boolean;
+  canCreateLabel: boolean;
+};
+
+export type BestRateSelectedRateState = 'matches_best_rate' | 'mismatched_best_rate' | 'missing' | 'unknown';
+
+export type BestRateWorkflowDto = {
+  bestRateState: BestRateWorkflowState;
+  requestFingerprint: string | null;
+  backendRequestKey: string | null;
+  sourceConfidence: BestRateWorkflowSourceConfidence;
+  carrierStatuses: BestRateWorkflowCarrierStatus[];
+  selectedRateState?: BestRateSelectedRateState;
+  allowedActions: BestRateWorkflowAllowedActions;
+};
+
+export type BuildBestRateWorkflowInput = {
+  currentRequestFingerprint?: string | null;
+  backendRequestKey?: string | null;
+  savedBestRate?: unknown | null;
+  selectedRateState?: BestRateSelectedRateState;
+  source?: 'live' | 'cache' | 'saved_override' | 'none' | null;
+  carrierStatuses?: BestRateWorkflowCarrierStatus[];
+  now?: Date;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function amountIsPositive(rate: Record<string, unknown> | null): boolean {
+  if (!rate) return false;
+  const amount = finiteNumberOrNull(rate.amount);
+  if (amount != null) return amount > 0;
+  const shipmentCost = finiteNumberOrNull(rate.shipmentCost) ?? finiteNumberOrNull(rate.cost) ?? 0;
+  const otherCost = finiteNumberOrNull(rate.otherCost) ?? 0;
+  return shipmentCost + otherCost > 0;
+}
+
+function savedRateFingerprint(rate: Record<string, unknown> | null): string | null {
+  if (!rate) return null;
+  const metadata = isRecord(rate.metadata) ? rate.metadata : null;
+  const raw = isRecord(rate.raw) ? rate.raw : null;
+  return (
+    stringOrNull(rate.requestFingerprint) ??
+    stringOrNull(rate.rateRequestFingerprint) ??
+    stringOrNull(rate.cacheKey) ??
+    stringOrNull(metadata?.requestFingerprint) ??
+    stringOrNull(metadata?.cacheKey) ??
+    stringOrNull(raw?.requestFingerprint) ??
+    stringOrNull(raw?.cacheKey)
+  );
+}
+
+function savedRateIsComplete(rate: Record<string, unknown> | null): boolean {
+  if (!rate) return false;
+  if (rate.isComplete === true) return true;
+  const metadata = isRecord(rate.metadata) ? rate.metadata : null;
+  return metadata?.isComplete === true;
+}
+
+function savedRateExpiresAt(rate: Record<string, unknown> | null): string | null {
+  if (!rate) return null;
+  const metadata = isRecord(rate.metadata) ? rate.metadata : null;
+  return stringOrNull(rate.cacheExpiresAt) ?? stringOrNull(metadata?.cacheExpiresAt);
+}
+
+function isFreshAt(expiresAt: string | null, now: Date): boolean {
+  if (!expiresAt) return false;
+  const expiresMs = Date.parse(expiresAt);
+  return Number.isFinite(expiresMs) && expiresMs > now.getTime();
+}
+
+function sanitizeCarrierStatus(status: BestRateWorkflowCarrierStatus): BestRateWorkflowCarrierStatus {
+  const safeStatus: BestRateWorkflowCarrierStatusValue =
+    status.status === 'live' ||
+    status.status === 'cached' ||
+    status.status === 'unavailable' ||
+    status.status === 'loading' ||
+    status.status === 'error' ||
+    status.status === 'blocked' ||
+    status.status === 'unknown'
+      ? status.status
+      : 'unknown';
+  const rateCount = Number.isFinite(status.rateCount) ? Math.max(0, Math.trunc(status.rateCount)) : 0;
+  const durationMs = Number.isFinite(status.durationMs) ? Math.max(0, Math.round(status.durationMs!)) : undefined;
+  const error = stringOrNull(status.error);
+  return {
+    carrierId: String(status.carrierId ?? '').trim(),
+    carrierName: status.carrierName ?? null,
+    carrierCode: status.carrierCode ?? null,
+    nickname: status.nickname ?? null,
+    status: safeStatus,
+    rateCount,
+    ...(durationMs != null ? { durationMs } : {}),
+    ...(error ? { error: error.slice(0, 160) } : {}),
+  };
+}
+
+function sourceConfidenceFor(input: {
+  state: BestRateWorkflowState;
+  source: BuildBestRateWorkflowInput['source'];
+}): BestRateWorkflowSourceConfidence {
+  if (input.state === 'missing') return 'none';
+  if (input.state === 'partial_carrier_failure') return 'partial';
+  if (input.state === 'blocked') return input.source === 'none' ? 'none' : 'partial';
+  if (input.state === 'stale') return 'cache_stale';
+  if (input.state === 'fresh') {
+    if (input.source === 'live') return 'live';
+    if (input.source === 'cache') return 'cache_fresh';
+    return 'saved_override';
+  }
+  if (input.state === 'mismatched_request') {
+    return input.source === 'cache' ? 'cache_stale' : 'saved_override';
+  }
+  return input.source === 'cache' ? 'cache_stale' : input.source === 'live' ? 'live' : 'none';
+}
+
+function actionsFor(state: BestRateWorkflowState): BestRateWorkflowAllowedActions {
+  const canUseSavedRate = state === 'fresh';
+  return {
+    canUseSavedRate,
+    requiresRerate: state !== 'fresh',
+    canCreateLabel: canUseSavedRate,
+  };
+}
+
+export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): BestRateWorkflowDto {
+  const now = input.now ?? new Date();
+  const savedRate = isRecord(input.savedBestRate) ? input.savedBestRate : null;
+  const savedFingerprint = savedRateFingerprint(savedRate);
+  const currentFingerprint = stringOrNull(input.currentRequestFingerprint) ?? savedFingerprint;
+  const backendRequestKey = stringOrNull(input.backendRequestKey) ?? currentFingerprint;
+  const carrierStatuses = (input.carrierStatuses ?? [])
+    .map(sanitizeCarrierStatus)
+    .filter((status) => status.carrierId);
+  const hasCarrierFailure = carrierStatuses.some(
+    (status) => status.status === 'error' || status.status === 'blocked',
+  );
+  const hasSavedRate = amountIsPositive(savedRate);
+  const matchesRequest =
+    Boolean(currentFingerprint && savedFingerprint && currentFingerprint === savedFingerprint) ||
+    Boolean(savedFingerprint && !input.currentRequestFingerprint);
+  const complete = savedRateIsComplete(savedRate);
+  const fresh = isFreshAt(savedRateExpiresAt(savedRate), now);
+
+  let bestRateState: BestRateWorkflowState;
+  if (!hasSavedRate) {
+    bestRateState = hasCarrierFailure ? 'blocked' : 'missing';
+  } else if (currentFingerprint && savedFingerprint && currentFingerprint !== savedFingerprint) {
+    bestRateState = 'mismatched_request';
+  } else if (hasCarrierFailure) {
+    bestRateState = 'partial_carrier_failure';
+  } else if (matchesRequest && complete && fresh) {
+    bestRateState = 'fresh';
+  } else if (matchesRequest && complete && !fresh) {
+    bestRateState = 'stale';
+  } else {
+    bestRateState = 'unknown';
+  }
+
+  return {
+    bestRateState,
+    requestFingerprint: currentFingerprint,
+    backendRequestKey,
+    sourceConfidence: sourceConfidenceFor({ state: bestRateState, source: input.source ?? null }),
+    carrierStatuses,
+    ...(input.selectedRateState ? { selectedRateState: input.selectedRateState } : {}),
+    allowedActions: actionsFor(bestRateState),
+  };
+}

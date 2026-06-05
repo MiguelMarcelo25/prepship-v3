@@ -24,6 +24,10 @@ import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
 import { hasAppPermission } from '../middleware/auth';
 import { loadShippingAutomationRules } from '../services/shipping-automation';
+import {
+  buildBestRateWorkflowDto,
+  type BestRateWorkflowCarrierStatus,
+} from '../services/shipping-workflow/best-rate-workflow-dto';
 
 const app = new Hono();
 
@@ -335,6 +339,43 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   const statusWhenFound = result.cached ? 'cached' : 'live';
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const missingStatus = isCachedOnlyLookup ? 'loading' : 'unavailable';
+  const carrierStatuses: BestRateWorkflowCarrierStatus[] = statusCarrierIds.map((id) => {
+    const diagnostic = diagnosticsByCarrierId.get(id);
+    const hasRates = carriersWithRates.has(id);
+    const status: BestRateWorkflowCarrierStatus['status'] = hasRates
+      ? statusWhenFound
+      : diagnostic?.status === 'failed'
+        ? 'error'
+        : diagnostic?.status === 'empty'
+          ? 'unavailable'
+          : diagnostic?.status === 'loading'
+            ? 'loading'
+            : missingStatus;
+    return {
+      carrierId: id,
+      carrierName: accountNameByCarrierId.get(id) ?? diagnostic?.nickname ?? id,
+      carrierCode: diagnostic?.carrierCode,
+      nickname: diagnostic?.nickname,
+      status,
+      rateCount: hasRates ? filtered.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
+      durationMs: diagnostic?.durationMs,
+      error: diagnostic?.error,
+    };
+  });
+  const bestRateMetadata = cheapest
+    ? {
+        ...cheapest,
+        requestFingerprint: result.cacheKey,
+        cacheKey: result.cacheKey,
+        cacheCreatedAt: result.fetchedAt,
+        cacheExpiresAt: new Date(
+          new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
+        ).toISOString(),
+        isComplete: true,
+        rateCount: filtered.length,
+        matchType: result.cached ? 'cache' : 'live',
+      }
+    : null;
   const payload = {
     ...result,
     requestKey: result.cacheKey,
@@ -342,28 +383,13 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     cacheAgeMs: result.cacheAgeMs,
     rates: filtered,
     bestRate: cheapest,
-    carrierStatuses: statusCarrierIds.map((id) => {
-      const diagnostic = diagnosticsByCarrierId.get(id);
-      const hasRates = carriersWithRates.has(id);
-      const status = hasRates
-        ? statusWhenFound
-        : diagnostic?.status === 'failed'
-          ? 'error'
-          : diagnostic?.status === 'empty'
-            ? 'unavailable'
-            : diagnostic?.status === 'loading'
-              ? 'loading'
-              : missingStatus;
-      return {
-        carrierId: id,
-        carrierName: accountNameByCarrierId.get(id) ?? diagnostic?.nickname ?? id,
-        carrierCode: diagnostic?.carrierCode,
-        nickname: diagnostic?.nickname,
-        status,
-        rateCount: hasRates ? filtered.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
-        durationMs: diagnostic?.durationMs,
-        error: diagnostic?.error,
-      };
+    carrierStatuses,
+    bestRateWorkflow: buildBestRateWorkflowDto({
+      currentRequestFingerprint: result.cacheKey,
+      backendRequestKey: result.cacheKey,
+      savedBestRate: bestRateMetadata,
+      source: cheapest ? (result.cached ? 'cache' : 'live') : 'none',
+      carrierStatuses,
     }),
   };
   return c.json(publicRatesResult(payload, canViewFinancials));

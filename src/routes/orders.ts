@@ -45,6 +45,7 @@ import {
   evaluateShippingServiceEligibility,
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
+import { buildBestRateWorkflowDto } from '../services/shipping-workflow/best-rate-workflow-dto';
 
 const app = new Hono();
 
@@ -112,6 +113,16 @@ function isLikelyDbTimeout(err: unknown): boolean {
 function dbErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   return String(err);
+}
+
+function inferBestRateWorkflowSource(rate: Record<string, unknown> | null) {
+  const matchType = stringOrNull(rate?.matchType)?.toLowerCase() ?? '';
+  if (!rate) return 'none' as const;
+  if (matchType.includes('cache') || matchType === 'exact') return 'cache' as const;
+  if (matchType.includes('live') || matchType === 'strict-live' || matchType === 'browse') {
+    return 'live' as const;
+  }
+  return 'saved_override' as const;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1671,6 +1682,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const bestRateRecord = recordOrNull(bestRate);
     const v2BestRateRecord = overrideBestRate ? bestRateRecord : null;
     const selectedRateRecord = recordOrNull(selectedRate);
+    const bestRateRequestFingerprint =
+      stringOrNull(bestRateRecord?.requestFingerprint) ??
+      stringOrNull(bestRateRecord?.cacheKey);
+    const bestRateWorkflow = !isShippedBucket
+      ? buildBestRateWorkflowDto({
+          currentRequestFingerprint: bestRateRequestFingerprint,
+          backendRequestKey: bestRateRequestFingerprint,
+          savedBestRate: bestRateRecord,
+          source: inferBestRateWorkflowSource(bestRateRecord),
+        })
+      : null;
     const carrierPick = pickStringSource([
       {
         value: hasV2SelectedRateJson ? selectedRateRecord?.carrierCode : null,
@@ -1847,6 +1869,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       source: ship ? 'shipment' : overrideBestRate ? 'order_override' : null,
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
+      bestRateWorkflow,
       sourceMap: {
         'shipping.carrierCode': carrierPick.source,
         'shipping.serviceCode': servicePick.source,
@@ -1915,6 +1938,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         : null,
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
+      bestRateWorkflow,
       shipping,
       canonicalOrder,
       sourceLink: walmartSourceLink,

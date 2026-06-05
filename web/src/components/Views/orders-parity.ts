@@ -735,6 +735,39 @@ export function classifyAwaitingRateCellState(input: {
   return 'pending'
 }
 
+export type AwaitingBestRateWorkflowInput = {
+  bestRateState?: string | null
+  allowedActions?: {
+    canUseSavedRate?: boolean | null
+    requiresRerate?: boolean | null
+    canCreateLabel?: boolean | null
+  } | null
+} | null
+
+export type AwaitingRateCellStateInput = Parameters<typeof classifyAwaitingRateCellState>[0]
+
+export function classifyAwaitingRateCellStateWithWorkflow(
+  workflow: AwaitingBestRateWorkflowInput,
+  fallbackInput: AwaitingRateCellStateInput,
+): AwaitingRateCellState {
+  if (!workflow?.bestRateState) return classifyAwaitingRateCellState(fallbackInput)
+  switch (workflow.bestRateState) {
+    case 'fresh':
+      return 'ready'
+    case 'partial_carrier_failure':
+    case 'blocked':
+      return 'error'
+    case 'missing':
+      return 'unavailable'
+    case 'stale':
+    case 'mismatched_request':
+      return fallbackInput.hasDims && fallbackInput.hasWeight ? 'calculating' : 'add-dims'
+    case 'unknown':
+    default:
+      return classifyAwaitingRateCellState(fallbackInput)
+  }
+}
+
 /** States that still show a (bounded) spinner vs. a terminal/actionable label. */
 export function awaitingRateCellIsSpinner(state: AwaitingRateCellState): boolean {
   return state === 'calculating' || state === 'pending'
