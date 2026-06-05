@@ -123,12 +123,19 @@ const recalcEnd = ordersView.indexOf('\n  function applyRateSelection', recalcSt
 const recalcBlock = recalcStart >= 0 && recalcEnd > recalcStart
   ? ordersView.slice(recalcStart, recalcEnd)
   : '';
+const runnerStart = ordersView.indexOf('async function runStrictBestRateRecalculation(');
+const runnerEnd = ordersView.indexOf('\n  function getAppliedRateDims', runnerStart);
+const runnerBlock = runnerStart >= 0 && runnerEnd > runnerStart
+  ? ordersView.slice(runnerStart, runnerEnd)
+  : '';
+const strictPathBlock = `${recalcBlock}\n${runnerBlock}`;
 
 check('OrdersView has a Recalculate action', recalcStart >= 0);
-check('Recalculate uses browseRates strict live endpoint', /apiClient\.browseRates\(\{[\s\S]*forceLive:\s*true[\s\S]*forceRefresh:\s*true/.test(recalcBlock));
-check('Recalculate does not use fetchRates', !/apiClient\.fetchRates/.test(recalcBlock));
-check('Recalculate does not pick a client-side fallback best rate', !/pickBestPanelRate/.test(recalcBlock));
-check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(recalcBlock) && /decision\.entry/.test(recalcBlock));
+check('Recalculate delegates to reusable strict runner', /runStrictBestRateRecalculation/.test(recalcBlock));
+check('Recalculate uses browseRates strict live endpoint', /apiClient\.browseRates\(\{[\s\S]*forceLive:\s*true[\s\S]*forceRefresh:\s*true/.test(strictPathBlock));
+check('Recalculate does not use fetchRates', !/apiClient\.fetchRates/.test(strictPathBlock));
+check('Recalculate does not pick a client-side fallback best rate', !/pickBestPanelRate/.test(strictPathBlock));
+check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(runnerBlock) && /decision\.entry/.test(runnerBlock));
 check('Rate card button is labeled Recalculate', />Recalculate</.test(ordersView));
 check('Rate card Recalculate button calls recalculateBestRate, not openRateBrowser', /onClick=\{\(\) => void recalculateBestRate\(\)\}/.test(ordersView));
 

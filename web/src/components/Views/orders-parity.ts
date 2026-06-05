@@ -830,6 +830,95 @@ export function planBrowseRateReconcile(input: {
   return { shouldUpdate, entry: { key: input.requestKey, rate: input.liveBest }, selection }
 }
 
+export type BatchRecalculateScope = 'selected' | 'page'
+
+export type BatchRecalculateRowStatus =
+  | 'pending'
+  | 'running'
+  | 'updated'
+  | 'cleared'
+  | 'blocked'
+  | 'timed-out'
+  | 'skipped'
+
+export type BatchRecalculateRowState = {
+  status: BatchRecalculateRowStatus
+  message?: string | null
+}
+
+export function batchRecalculateStatusIsTerminal(status: BatchRecalculateRowStatus): boolean {
+  return status === 'updated' ||
+    status === 'cleared' ||
+    status === 'blocked' ||
+    status === 'timed-out' ||
+    status === 'skipped'
+}
+
+export function buildBatchRecalculateProgress(rows: Record<number, BatchRecalculateRowState>) {
+  const values = Object.values(rows)
+  const total = values.length
+  const completed = values.filter((row) => batchRecalculateStatusIsTerminal(row.status)).length
+  const updated = values.filter((row) => row.status === 'updated').length
+  const cleared = values.filter((row) => row.status === 'cleared').length
+  const blocked = values.filter((row) => row.status === 'blocked').length
+  const timedOut = values.filter((row) => row.status === 'timed-out').length
+  const skipped = values.filter((row) => row.status === 'skipped').length
+  const running = values.filter((row) => row.status === 'running').length
+  const pending = values.filter((row) => row.status === 'pending').length
+  return {
+    total,
+    completed,
+    percent: total > 0 ? Math.round((completed / total) * 100) : 0,
+    updated,
+    cleared,
+    blocked,
+    timedOut,
+    skipped,
+    running,
+    pending,
+  }
+}
+
+export function canRetryBatchRecalculateRow(row: Pick<BatchRecalculateRowState, 'status'>): boolean {
+  return row.status === 'timed-out' || row.status === 'blocked' || row.status === 'cleared'
+}
+
+export function selectBatchRecalculateOrderIds(input: {
+  currentStatus?: string | null
+  scope: BatchRecalculateScope
+  orders: Array<{ orderId: number; orderStatus?: string | null }>
+  selectedOrderIds: number[]
+  visibleOrderIds: number[]
+}): { orderIds: number[]; skippedImmutable: number; blockedReason?: string } {
+  if (input.currentStatus !== 'awaiting_shipment') {
+    return {
+      orderIds: [],
+      skippedImmutable: 0,
+      blockedReason: 'Batch Recalculate is only available in Awaiting Shipment.',
+    }
+  }
+
+  const orderById = new Map(input.orders.map((order) => [order.orderId, order]))
+  const sourceIds = input.scope === 'selected' ? input.selectedOrderIds : input.visibleOrderIds
+  const seen = new Set<number>()
+  const orderIds: number[] = []
+  let skippedImmutable = 0
+
+  for (const orderId of sourceIds) {
+    if (seen.has(orderId)) continue
+    seen.add(orderId)
+    const order = orderById.get(orderId)
+    if (!order) continue
+    if (order.orderStatus !== 'awaiting_shipment') {
+      skippedImmutable += 1
+      continue
+    }
+    orderIds.push(orderId)
+  }
+
+  return { orderIds, skippedImmutable }
+}
+
 // ─── Send-to-Queue routing (direct carriers vs ShipStation) ─────────────────
 // The Render queue job's label creator (createLabelV2) is ShipStation-only —
 // it sends `se-<providerId>` to ShipStation, which rejects a direct carrier's

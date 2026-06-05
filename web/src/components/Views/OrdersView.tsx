@@ -78,9 +78,11 @@ import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import {
   buildDailyStripProgress,
+  buildBatchRecalculateProgress,
   buildColumnPrefsForStatus,
   buildPicklistPrintHtml,
   buildQueueAddPayload,
+  canRetryBatchRecalculateRow,
   classifyAwaitingRateCellState,
   classifyQueueOrderRoute,
   getColumnMinWidth,
@@ -89,7 +91,10 @@ import {
   planStrictBestRateRecalculate,
   planSettledAutoRate,
   resolveColumnPrefs,
+  selectBatchRecalculateOrderIds,
   type AwaitingRateCellState,
+  type BatchRecalculateRowState,
+  type BatchRecalculateScope,
   type ColumnPrefs,
   type PrintQueueGroup,
 } from './orders-parity'
@@ -157,6 +162,8 @@ const QUEUE_ACTION_JOB_STORAGE_KEY = 'prepship.queueActionJob.v1'
 const QUEUE_ACTION_JOB_MAX_AGE_MS = 30 * 60 * 1000
 const QUEUE_UI_YIELD_MS = 25
 const AUTO_BEST_RATE_WATCHDOG_MS = 45_000
+const BATCH_RECALCULATE_TIMEOUT_MS = 45_000
+const BATCH_RECALCULATE_CONCURRENCY = 3
 let persistentQueueJobCache: PersistentQueueJob | null | undefined
 
 function createQueueOrderSnapshot(order: OrderSummaryDto): OrderSummaryDto {
@@ -2278,6 +2285,13 @@ export default function OrdersView({
     // so the cell shows "rate error" instead of an endless spinner.
     error?: string | null
   }>>({})
+  const [batchRecalculateRows, setBatchRecalculateRows] = useState<Record<number, BatchRecalculateRowState>>({})
+  const [batchRecalculateBusy, setBatchRecalculateBusy] = useState(false)
+  const batchRecalculateRunRef = useRef(0)
+  const batchRecalculateProgress = useMemo(
+    () => buildBatchRecalculateProgress(batchRecalculateRows),
+    [batchRecalculateRows],
+  )
   const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
   const autoBestRateTimeoutsRef = useRef<Map<string, number>>(new Map())
   // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
@@ -5450,6 +5464,174 @@ export default function OrdersView({
     })
   }
 
+  function setBatchRecalculateRow(orderId: number, row: BatchRecalculateRowState) {
+    setBatchRecalculateRows((current) => ({
+      ...current,
+      [orderId]: row,
+    }))
+  }
+
+  function sanitizeRecalculateError(error: unknown, fallback = 'Failed to recalculate best rate') {
+    return error instanceof Error
+      ? error.message.replace(/\s+/g, ' ').trim().slice(0, 160) || fallback
+      : fallback
+  }
+
+  function withRecalculateTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        const error = new Error('Live rate lookup timed out. Retry this order.')
+        ;(error as Error & { code?: string }).code = 'BATCH_RECALCULATE_TIMEOUT'
+        reject(error)
+      }, timeoutMs)
+      promise.then(
+        (value) => {
+          window.clearTimeout(timeout)
+          resolve(value)
+        },
+        (error) => {
+          window.clearTimeout(timeout)
+          reject(error)
+        },
+      )
+    })
+  }
+
+  function isBatchRecalculateTimeout(error: unknown) {
+    return error instanceof Error && (error as Error & { code?: string }).code === 'BATCH_RECALCULATE_TIMEOUT'
+  }
+
+  async function runStrictBestRateRecalculation(
+    order: OrderSummaryDto,
+    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+    options: {
+      timeoutMs?: number
+      updatePanel?: boolean
+      refetch?: boolean
+      shouldContinue?: () => boolean
+    } = {},
+  ): Promise<{ status: 'updated' | 'cleared' | 'blocked'; message: string; rate?: Record<string, unknown> | null }> {
+    const browsePromise = apiClient.browseRates({
+      weightOz: request.weightOz,
+      toZip: request.shipTo.postalCode,
+      toCountry: request.shipTo.country ?? 'US',
+      toState: request.shipTo.state ?? undefined,
+      toCity: request.shipTo.city ?? undefined,
+      dimsL: request.dims.length,
+      dimsW: request.dims.width,
+      dimsH: request.dims.height,
+      residential: true,
+      carrierIds: request.carrierIds,
+      storeId: order.storeId,
+      clientId: order.clientId,
+      confirmation: request.confirmation,
+      insuranceProvider: request.insuranceProvider,
+      insuredValue: request.insuredValue,
+      orderId: order.orderId,
+      orderNumber: order.orderNumber ?? undefined,
+      externalOrderId:
+        order.externalOrderId ??
+        order.external_order_id ??
+        order.orderNumber ??
+        undefined,
+      forceLive: true,
+      forceRefresh: true,
+    })
+    const response = options.timeoutMs
+      ? await withRecalculateTimeout(browsePromise, options.timeoutMs)
+      : await browsePromise
+    if (options.shouldContinue && !options.shouldContinue()) {
+      const error = new Error('Recalculate superseded')
+      ;(error as Error & { code?: string }).code = 'RECALCULATE_SUPERSEDED'
+      throw error
+    }
+
+    const liveBest = toRecord(response?.bestRate)
+    const liveBestAmount = liveBest ? getRateBaseAmount(liveBest) : null
+    const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
+    const serviceCode = liveBest ? toStringValue(liveBest.serviceCode) : null
+    const carrierStatuses = Array.isArray(response?.carrierStatuses) ? response.carrierStatuses : []
+    const decision = planStrictBestRateRecalculate({
+      requestKey: request.key,
+      liveBest,
+      liveBestAmount,
+      providerAccountId,
+      serviceCode,
+      carrierStatuses,
+    })
+
+    if (decision.action === 'blocked') {
+      setAutoBestRateEntries((current) => ({
+        ...current,
+        [order.orderId]: decision.entry,
+      }))
+      clearAutoBestRateWatchdog(request.key)
+      return { status: 'blocked', message: decision.message }
+    }
+
+    await apiClient.saveOrderDimsStrict(order.orderId, {
+      length: request.dims.length,
+      width: request.dims.width,
+      height: request.dims.height,
+      weightOz: request.weightOz,
+    })
+
+    if (decision.action === 'clear') {
+      await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
+        bestRateJson: null,
+        bestRateDims: null,
+      })
+      setAutoBestRateEntries((current) => ({
+        ...current,
+        [order.orderId]: decision.entry,
+      }))
+      if (options.updatePanel && panelOrderId === order.orderId) {
+        setPanelRatePreview([])
+      }
+      clearAutoBestRateWatchdog(request.key)
+      if (options.refetch) await refetchOrders()
+      return { status: 'cleared', message: decision.message, rate: null }
+    }
+
+    const rateCount = Array.isArray(response?.rates) ? response.rates.length : 1
+    const rateWithMetadata = withRateRequestMetadata(decision.rate, request, {
+      isComplete: true,
+      rateCount,
+      matchType: 'strict-live',
+      cacheCreatedAt: response?.fetchedAt,
+      requestFingerprint: request.fingerprint,
+      cacheKey: request.fingerprint,
+    })
+    await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
+      selectedPid: decision.selectedPid,
+      bestRateJson: rateWithMetadata,
+      bestRateDims: request.dimsLabel,
+    })
+    clearAutoBestRateWatchdog(request.key)
+    setAutoBestRateEntries((current) => ({
+      ...current,
+      [order.orderId]: { key: request.key, rate: rateWithMetadata },
+    }))
+    if (options.updatePanel && panelOrderId === order.orderId) {
+      setPanelForm((current) => {
+        const next = {
+          ...current,
+          shipAccountId: String(decision.selectedPid),
+          serviceCode: decision.serviceCode,
+        }
+        shipmentLastSavedKeyRef.current = getShipmentDetailsKey(order.orderId, next)
+        return next
+      })
+      setPanelRatePreview([rateWithMetadata])
+    }
+    if (options.refetch) await refetchOrders()
+    return {
+      status: 'updated',
+      message: 'Best rate recalculated from live carrier responses',
+      rate: rateWithMetadata,
+    }
+  }
+
   function getAppliedRateDims(rate: Record<string, unknown>) {
     const dims = toRecord(rate.dims)
     const length = toNumberValue(dims?.length) ?? toNumberValue(rate.length) ?? toNumberValue(rate.dimsL)
@@ -6298,110 +6480,19 @@ export default function OrdersView({
     setPanelRatePreview([])
 
     try {
-      const response = await apiClient.browseRates({
-        weightOz,
-        toZip: shipTo.postalCode,
-        toCountry: shipTo.country ?? 'US',
-        toState: shipTo.state ?? undefined,
-        toCity: shipTo.city ?? undefined,
-        dimsL: dims.length,
-        dimsW: dims.width,
-        dimsH: dims.height,
-        residential: true,
-        carrierIds,
-        storeId: panelOrder.storeId,
-        clientId: panelOrder.clientId,
-        confirmation,
-        insuranceProvider: shippingOptions.insuranceProvider,
-        insuredValue: shippingOptions.insuredValue,
-        orderId: panelOrder.orderId,
-        orderNumber: panelOrder.orderNumber ?? undefined,
-        externalOrderId:
-          panelOrder.externalOrderId ??
-          panelOrder.external_order_id ??
-          panelOrder.orderNumber ??
-          undefined,
-        forceLive: true,
-        forceRefresh: true,
+      const result = await runStrictBestRateRecalculation(panelOrder, request, {
+        updatePanel: true,
+        refetch: true,
+        shouldContinue: () => bestRateRefreshSeqRef.current === runId,
       })
       if (bestRateRefreshSeqRef.current !== runId) return null
-
-      const liveBest = toRecord(response?.bestRate)
-      const liveBestAmount = liveBest ? getRateBaseAmount(liveBest) : null
-      const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
-      const serviceCode = liveBest ? toStringValue(liveBest.serviceCode) : null
-      const carrierStatuses = Array.isArray(response?.carrierStatuses) ? response.carrierStatuses : []
-      const decision = planStrictBestRateRecalculate({
-        requestKey: request.key,
-        liveBest,
-        liveBestAmount,
-        providerAccountId,
-        serviceCode,
-        carrierStatuses,
-      })
-
-      if (decision.action === 'blocked') {
-        setAutoBestRateEntries((current) => ({
-          ...current,
-          [panelOrder.orderId]: decision.entry,
-        }))
-        showToast(decision.message, 'error')
-        return null
-      }
-
-      await apiClient.saveOrderDimsStrict(panelOrder.orderId, {
-        length: dims.length,
-        width: dims.width,
-        height: dims.height,
-        weightOz,
-      })
-
-      if (decision.action === 'clear') {
-        await apiClient.updateOrderBestRateSelectionStrict(panelOrder.orderId, {
-          bestRateJson: null,
-          bestRateDims: null,
-        })
-        setAutoBestRateEntries((current) => ({
-          ...current,
-          [panelOrder.orderId]: decision.entry,
-        }))
-        setPanelRatePreview([])
-        await refetchOrders()
-        showToast(decision.message, 'error')
-        return null
-      }
-
-      const rateCount = Array.isArray(response?.rates) ? response.rates.length : 1
-      const rateWithMetadata = withRateRequestMetadata(decision.rate, request, {
-        isComplete: true,
-        rateCount,
-        matchType: 'strict-live',
-        cacheCreatedAt: response?.fetchedAt,
-        requestFingerprint: request.fingerprint,
-        cacheKey: request.fingerprint,
-      })
-      await apiClient.updateOrderBestRateSelectionStrict(panelOrder.orderId, {
-        selectedPid: decision.selectedPid,
-        bestRateJson: rateWithMetadata,
-        bestRateDims: request.dimsLabel,
-      })
-      clearAutoBestRateWatchdog(request.key)
-      setAutoBestRateEntries((current) => ({
-        ...current,
-        [panelOrder.orderId]: { key: request.key, rate: rateWithMetadata },
-      }))
-      setPanelForm((current) => ({
-        ...current,
-        shipAccountId: String(decision.selectedPid),
-        serviceCode: decision.serviceCode,
-      }))
-      setPanelRatePreview([rateWithMetadata])
-      shipmentLastSavedKeyRef.current = getShipmentDetailsKey(panelOrder.orderId, panelForm)
-      await refetchOrders()
-      showToast('Best rate recalculated from live carrier responses', 'success')
-      return rateWithMetadata
+      showToast(result.message, result.status === 'updated' ? 'success' : 'error')
+      return result.rate ?? null
     } catch (error) {
       if (bestRateRefreshSeqRef.current === runId) {
+        if (error instanceof Error && (error as Error & { code?: string }).code === 'RECALCULATE_SUPERSEDED') {
+          return null
+        }
         const message = error instanceof Error ? error.message : 'Failed to recalculate best rate'
         setAutoBestRateEntries((current) => ({
           ...current,
@@ -7379,6 +7470,139 @@ export default function OrdersView({
   // Returns null for 'ready' (the caller then renders the real rate). The
   // historically-infinite no-rate cases now resolve to a terminal label instead
   // of an endless <span className="spin-sm" />.
+  function getBatchRecalculateOrders(scope: BatchRecalculateScope) {
+    const selection = selectBatchRecalculateOrderIds({
+      currentStatus,
+      scope,
+      orders,
+      selectedOrderIds,
+      visibleOrderIds,
+    })
+    const orderById = new Map(orders.map((order) => [order.orderId, order]))
+    return {
+      selection,
+      targetOrders: selection.orderIds
+        .map((orderId) => orderById.get(orderId))
+        .filter((order): order is OrderSummaryDto => Boolean(order)),
+    }
+  }
+
+  async function runBatchRecalculateOrder(order: OrderSummaryDto): Promise<BatchRecalculateRowState> {
+    if (order.orderStatus !== 'awaiting_shipment') {
+      return { status: 'skipped', message: 'Only awaiting orders can be recalculated.' }
+    }
+    if (isTestOrder(order)) {
+      return { status: 'skipped', message: 'Test order uses mock rates.' }
+    }
+
+    const request = getAutoBestRateRequest(order)
+    if (!request) {
+      return { status: 'skipped', message: 'Missing weight, dimensions, or ship-to postal code.' }
+    }
+    if (accountsLoading) {
+      setAutoBestRateEntry(order.orderId, {
+        key: request.key,
+        rate: null,
+        error: 'Carrier accounts are still loading.',
+      })
+      return { status: 'blocked', message: 'Carrier accounts are still loading.' }
+    }
+    if (!request.carrierIds.length) {
+      const message = 'No carrier accounts are available for this order scope.'
+      setAutoBestRateEntry(order.orderId, { key: request.key, rate: null, error: message })
+      return { status: 'blocked', message }
+    }
+
+    try {
+      const result = await runStrictBestRateRecalculation(order, request, {
+        timeoutMs: BATCH_RECALCULATE_TIMEOUT_MS,
+        updatePanel: panelOrderId === order.orderId,
+      })
+      if (result.status === 'updated') return { status: 'updated', message: result.message }
+      if (result.status === 'cleared') return { status: 'cleared', message: result.message }
+      return { status: 'blocked', message: result.message }
+    } catch (error) {
+      const message = sanitizeRecalculateError(error)
+      setAutoBestRateEntry(order.orderId, {
+        key: request.key,
+        rate: null,
+        error: message,
+      })
+      if (isBatchRecalculateTimeout(error)) return { status: 'timed-out', message }
+      return { status: 'blocked', message }
+    }
+  }
+
+  async function startBatchRecalculateBestRates(scope: BatchRecalculateScope) {
+    if (batchRecalculateBusy) return
+    const { selection, targetOrders } = getBatchRecalculateOrders(scope)
+    if (selection.blockedReason) {
+      showToast(selection.blockedReason, 'error')
+      return
+    }
+    if (targetOrders.length === 0) {
+      showToast(
+        scope === 'selected'
+          ? 'Select one or more awaiting orders to recalculate'
+          : 'No awaiting orders on this page can be recalculated',
+        'error',
+      )
+      return
+    }
+
+    const runId = batchRecalculateRunRef.current + 1
+    batchRecalculateRunRef.current = runId
+    const finalRows: Record<number, BatchRecalculateRowState> = {}
+    for (const order of targetOrders) {
+      finalRows[order.orderId] = { status: 'pending' }
+    }
+    setBatchRecalculateRows({ ...finalRows })
+    setBatchRecalculateBusy(true)
+
+    const queue = [...targetOrders]
+    const workerCount = Math.min(BATCH_RECALCULATE_CONCURRENCY, queue.length)
+    async function worker() {
+      while (queue.length > 0 && batchRecalculateRunRef.current === runId) {
+        const order = queue.shift()
+        if (!order) return
+        setBatchRecalculateRow(order.orderId, { status: 'running', message: 'Fetching strict live rates.' })
+        const row = await runBatchRecalculateOrder(order)
+        finalRows[order.orderId] = row
+        if (batchRecalculateRunRef.current === runId) setBatchRecalculateRow(order.orderId, row)
+      }
+    }
+
+    try {
+      await Promise.all(Array.from({ length: workerCount }, () => worker()))
+      await refetchOrders()
+      const summary = buildBatchRecalculateProgress(finalRows)
+      const skippedText = selection.skippedImmutable > 0 ? `, ${selection.skippedImmutable} immutable skipped` : ''
+      showToast(
+        `Recalculate finished: ${summary.updated} updated, ${summary.cleared} unavailable, ${summary.blocked + summary.timedOut} need retry${skippedText}`,
+        summary.updated > 0 ? 'success' : 'info',
+      )
+    } finally {
+      if (batchRecalculateRunRef.current === runId) setBatchRecalculateBusy(false)
+    }
+  }
+
+  async function retryBatchRecalculateOrder(order: OrderSummaryDto) {
+    if (batchRecalculateBusy) {
+      showToast('Batch Recalculate is still running. Retry after it finishes.', 'error')
+      return
+    }
+    setBatchRecalculateBusy(true)
+    setBatchRecalculateRow(order.orderId, { status: 'running', message: 'Retrying strict live rates.' })
+    try {
+      const row = await runBatchRecalculateOrder(order)
+      setBatchRecalculateRow(order.orderId, row)
+      await refetchOrders()
+      showToast(row.message ?? 'Recalculate retry finished', row.status === 'updated' ? 'success' : 'info')
+    } finally {
+      setBatchRecalculateBusy(false)
+    }
+  }
+
   function renderRateCellFallback(
     state: AwaitingRateCellState,
     order: OrderSummaryDto,
@@ -7393,6 +7617,46 @@ export default function OrdersView({
       padding: 0,
       cursor: 'pointer',
       whiteSpace: 'nowrap',
+    }
+    const batchRow = batchRecalculateRows[order.orderId]
+    if (batchRow?.status === 'pending' || batchRow?.status === 'running') {
+      return (
+        <div className="spin-center" data-rate-state={`batch-${batchRow.status}`} title={batchRow.message ?? 'Recalculating strict live rate...'}>
+          <span className="spin-sm" />
+          {variant === 'full' ? <span style={{ ...muted, marginLeft: 4 }}>Recalculating</span> : null}
+        </div>
+      )
+    }
+    if (batchRow && canRetryBatchRecalculateRow(batchRow)) {
+      const label =
+        batchRow.status === 'timed-out'
+          ? 'Timed out'
+          : batchRow.status === 'cleared'
+            ? 'Unavailable'
+            : 'Blocked'
+      if (variant === 'compact') {
+        return (
+          <span
+            data-rate-state={`batch-${batchRow.status}`}
+            title={`${label}: ${batchRow.message ?? 'Retry strict live recalculation'}`}
+            style={{ ...muted, color: batchRow.status === 'cleared' ? 'var(--text3)' : 'var(--red)' }}
+          >
+            —
+          </span>
+        )
+      }
+      return (
+        <button
+          type="button"
+          data-batch-recalculate-retry
+          data-rate-state={`batch-${batchRow.status}`}
+          title={`${label}: ${batchRow.message ?? 'Retry strict live recalculation'}`}
+          style={{ ...linkBtn, color: batchRow.status === 'cleared' ? 'var(--ss-blue)' : 'var(--red)' }}
+          onClick={() => void retryBatchRecalculateOrder(order)}
+        >
+          {label} · Retry
+        </button>
+      )
     }
     switch (state) {
       case 'add-dims':
@@ -10002,6 +10266,68 @@ export default function OrdersView({
             </button>
           </div>
           )}
+
+          {currentStatus === 'awaiting_shipment' ? (
+            <div className="inline-flex items-center gap-1.5" aria-label="Strict live best-rate recalculation">
+              <button
+                type="button"
+                onClick={() => void startBatchRecalculateBestRates('selected')}
+                disabled={batchRecalculateBusy || selectedOrderIds.length === 0}
+                title="Recalculate strict live best rates for selected awaiting orders"
+                className={`
+                  inline-flex items-center gap-1.5
+                  h-8 px-2.5 rounded-lg ring-1
+                  text-[12px] font-medium
+                  transition-all duration-150
+                  ${batchRecalculateBusy || selectedOrderIds.length === 0
+                    ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
+                    : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+                `}
+              >
+                {batchRecalculateBusy ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <RefreshCcw size={12.5} strokeWidth={2.25} />}
+                Recalculate Selected
+              </button>
+              <button
+                type="button"
+                onClick={() => void startBatchRecalculateBestRates('page')}
+                disabled={batchRecalculateBusy || visibleOrderIds.length === 0}
+                title="Recalculate strict live best rates for this awaiting page"
+                className={`
+                  inline-flex items-center gap-1.5
+                  h-8 px-2.5 rounded-lg ring-1
+                  text-[12px] font-medium
+                  transition-all duration-150
+                  ${batchRecalculateBusy || visibleOrderIds.length === 0
+                    ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
+                    : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
+                `}
+              >
+                <Zap size={12.5} strokeWidth={2.25} />
+                Recalculate Page
+              </button>
+              {batchRecalculateProgress.total > 0 ? (
+                <div
+                  data-batch-recalculate-progress
+                  className="inline-flex items-center gap-2 h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] text-ink-2"
+                  title="Strict live only: no cached or stale fallback rates are accepted"
+                >
+                  <span className="font-mono font-semibold tabular-nums">{batchRecalculateProgress.percent}%</span>
+                  <span className="relative w-20 h-1.5 rounded-full bg-line overflow-hidden" aria-hidden>
+                    <span
+                      className="absolute inset-y-0 left-0 rounded-full bg-brand transition-all duration-200"
+                      style={{ width: `${batchRecalculateProgress.percent}%` }}
+                    />
+                  </span>
+                  <span className="font-mono tabular-nums">
+                    {batchRecalculateProgress.completed}/{batchRecalculateProgress.total}
+                  </span>
+                  <span className="text-ink-3">
+                    Updated {batchRecalculateProgress.updated} · Retry {batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <button
             id="btnSkuSort"
