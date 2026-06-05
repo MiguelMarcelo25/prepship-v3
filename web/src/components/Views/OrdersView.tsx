@@ -1095,6 +1095,31 @@ function getPrimaryItem(order: OrderSummaryDto, detail: OrderFullDto | null) {
   return getActiveItems(order, detail)[0] ?? null
 }
 
+// eBay listings frequently ship without a custom SKU, so their lines would
+// otherwise collapse into a single "Missing SKU" group. For eBay orders only we
+// fall back to the item title for SKU grouping/labeling (awaiting + shipped),
+// mirroring the print-queue PS-070 behavior. Detection follows the app
+// convention (CarrierBadge / InventoryView): the client/store name carries the
+// marketplace (e.g. "eBay - DJC"); we also honor explicit source fields and the
+// backend's `ebay-` externalOrderId prefix.
+function isEbayOrder(order: OrderSummaryDto): boolean {
+  const clientName = (toStringValue(order.clientName) ?? '').toLowerCase()
+  if (clientName.includes('ebay')) return true
+  const raw = toRecord(order.raw)
+  const source = (
+    toStringValue(order.sourceProvider) ??
+    toStringValue(raw?.source_provider) ??
+    toStringValue(raw?.sourceProvider) ??
+    toStringValue(raw?.source) ??
+    toStringValue(raw?.provider) ??
+    toStringValue(raw?.marketplace) ??
+    ''
+  ).toLowerCase()
+  if (source.includes('ebay')) return true
+  const externalOrderId = (toStringValue(order.externalOrderId) ?? '').toLowerCase()
+  return externalOrderId.startsWith('ebay-')
+}
+
 function getMergedItems(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const grouped = new Map<string, OrderLineItem>()
   for (const item of getActiveItems(order, detail)) {
@@ -2769,8 +2794,8 @@ export default function OrdersView({
       next.sort((left, right) => {
         const leftDetail = orderDetailsById.get(left.orderId) ?? null
         const rightDetail = orderDetailsById.get(right.orderId) ?? null
-        const leftKey = buildSkuCompositionKey(getActiveItems(left, leftDetail)).key
-        const rightKey = buildSkuCompositionKey(getActiveItems(right, rightDetail)).key
+        const leftKey = buildSkuCompositionKey(getActiveItems(left, leftDetail), { titleFallback: isEbayOrder(left) }).key
+        const rightKey = buildSkuCompositionKey(getActiveItems(right, rightDetail), { titleFallback: isEbayOrder(right) }).key
         if (leftKey < rightKey) return -1
         if (leftKey > rightKey) return 1
         const dateDelta = getOrderSortTimeMs(right) - getOrderSortTimeMs(left)
@@ -2809,6 +2834,7 @@ export default function OrdersView({
           (order) => getPrimarySkuLabel(order, orderDetailsById.get(order.orderId) ?? null),
           (order) => getTotalQuantity(order, orderDetailsById.get(order.orderId) ?? null),
           (order) => getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
+          (order) => isEbayOrder(order),
         )
         : []
     ),

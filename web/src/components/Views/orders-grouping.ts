@@ -2,6 +2,17 @@
 export interface SkuCompositionInput {
   sku?: string | null
   quantity?: number | null
+  // Item title (eBay listings expose this as `name`/`title`). Used as the
+  // identity + display fallback for no-SKU lines when titleFallback is enabled.
+  title?: string | null
+  name?: string | null
+}
+
+export interface SkuCompositionOptions {
+  // When true, no-SKU lines that carry a title are identified and labeled by
+  // that title (so distinct titles form distinct groups) instead of collapsing
+  // into a single "Missing SKU" group. Enabled per-order for eBay only.
+  titleFallback?: boolean
 }
 
 export interface SkuCompositionPart {
@@ -35,14 +46,41 @@ function normalizeQuantity(quantity: number | null | undefined) {
     : 1
 }
 
-export function buildSkuCompositionKey(items: SkuCompositionInput[] | null | undefined) {
+export function buildSkuCompositionKey(
+  items: SkuCompositionInput[] | null | undefined,
+  options?: SkuCompositionOptions,
+) {
+  const titleFallback = options?.titleFallback === true
   const grouped = new Map<string, SkuCompositionPart>()
 
   for (const item of items ?? []) {
     const displaySku = normalizeSkuForDisplay(item?.sku)
     const normalizedSku = normalizeSkuForKey(item?.sku)
-    const missingSku = normalizedSku === ''
-    const key = missingSku ? '__missing_sku__' : normalizedSku
+    const hasSku = normalizedSku !== ''
+    const displayTitle = normalizeSkuForDisplay(item?.title ?? item?.name)
+    const normalizedTitle = normalizeSkuForKey(item?.title ?? item?.name)
+
+    // SKU wins. For no-SKU lines, eBay (titleFallback) lines are identified and
+    // labeled by their title — distinct titles → distinct groups, so the group
+    // header shows the product name instead of "Missing SKU". Non-eBay no-SKU
+    // lines keep the "Missing SKU" data-quality flag.
+    let key: string
+    let sku: string
+    let missingSku: boolean
+    if (hasSku) {
+      key = normalizedSku
+      sku = displaySku
+      missingSku = false
+    } else if (titleFallback && normalizedTitle !== '') {
+      key = `title:${normalizedTitle}`
+      sku = displayTitle
+      missingSku = false
+    } else {
+      key = '__missing_sku__'
+      sku = 'Missing SKU'
+      missingSku = true
+    }
+
     const quantity = normalizeQuantity(item?.quantity)
     const existing = grouped.get(key)
 
@@ -53,7 +91,7 @@ export function buildSkuCompositionKey(items: SkuCompositionInput[] | null | und
 
     grouped.set(key, {
       key,
-      sku: missingSku ? 'Missing SKU' : displaySku,
+      sku,
       quantity,
       missingSku,
     })
@@ -92,13 +130,15 @@ export function groupOrdersBySku<T>(
   getSku: (order: T) => string | null | undefined,
   getQuantity: (order: T) => number | null | undefined,
   getItems?: (order: T) => SkuCompositionInput[] | null | undefined,
+  getTitleFallback?: (order: T) => boolean,
 ): GroupedOrdersBySku<T>[] {
   const groups = new Map<string, GroupedOrdersBySku<T>>()
 
   for (const order of orders) {
+    const titleFallback = getTitleFallback?.(order) ?? false
     const composition = getItems
-      ? buildSkuCompositionKey(getItems(order))
-      : buildSkuCompositionKey([{ sku: getSku(order), quantity: getQuantity(order) }])
+      ? buildSkuCompositionKey(getItems(order), { titleFallback })
+      : buildSkuCompositionKey([{ sku: getSku(order), quantity: getQuantity(order) }], { titleFallback })
     const groupKey = composition.key
     const existing = groups.get(groupKey)
 
