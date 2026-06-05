@@ -7674,7 +7674,16 @@ export default function OrdersView({
         summary.updated > 0 ? 'success' : 'info',
       )
     } finally {
-      if (batchRecalculateRunRef.current === runId) setBatchRecalculateBusy(false)
+      if (batchRecalculateRunRef.current === runId) {
+        setBatchRecalculateBusy(false)
+        // Show the completed 100% summary briefly, then auto-clear the progress
+        // bar — it is redundant with the "Recalculate finished" toast and would
+        // otherwise linger forever. Guarded on runId so a newer run's rows are
+        // never wiped out by a stale timer.
+        window.setTimeout(() => {
+          if (batchRecalculateRunRef.current === runId) setBatchRecalculateRows({})
+        }, 3000)
+      }
     }
   }
 
