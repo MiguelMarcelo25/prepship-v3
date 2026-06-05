@@ -174,12 +174,22 @@ const passiveEnd = ordersView.indexOf('\n    async function runPassiveAutoRating
 const passiveBlock = passiveStart >= 0 && passiveEnd > passiveStart
   ? ordersView.slice(passiveStart, passiveEnd)
   : '';
+const passiveRunnerStart = ordersView.indexOf('async function runPassiveAutoRating()');
+const passiveRunnerEnd = ordersView.indexOf('\n    void runPassiveAutoRating()', passiveRunnerStart);
+const passiveRunnerBlock = passiveRunnerStart >= 0 && passiveRunnerEnd > passiveRunnerStart
+  ? ordersView.slice(passiveRunnerStart, passiveRunnerEnd)
+  : '';
 check('passive auto-rating cannot persist from legacy fetchRates fallback',
   passiveStart >= 0 &&
   !/apiClient\.fetchRates/.test(passiveBlock) &&
   !/pickBestPanelRate/.test(passiveBlock) &&
   /apiClient\.browseRates/.test(passiveBlock) &&
   /response\?\.bestRate/.test(passiveBlock));
+check('passive auto-rating caps live browse fallback after cache sweep',
+  /PASSIVE_LIVE_BEST_RATE_LIMIT/.test(ordersView) &&
+  /const liveQueue = queue\.splice\(0, PASSIVE_LIVE_BEST_RATE_LIMIT\)/.test(passiveRunnerBlock) &&
+  /const workerCount = Math\.min\(2, liveQueue\.length\)/.test(passiveRunnerBlock) &&
+  /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock));
 
 const bestRateBaseStart = ordersView.indexOf('function getBestRateBaseCost(');
 const bestRateBaseEnd = ordersView.indexOf('\nfunction getBestRateShippingProviderId', bestRateBaseStart);

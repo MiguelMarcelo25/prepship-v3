@@ -35,6 +35,7 @@ const base = {
   resolvedError: false,
   hasCarrierContext: true,
   accountsLoading: false,
+  isAutoRatingActive: true,
 };
 const S = (over: Partial<typeof base>): AwaitingRateCellState =>
   classifyAwaitingRateCellState({ ...base, ...over });
@@ -59,6 +60,11 @@ check('error is NOT a spinner', awaitingRateCellIsSpinner('error'), false);
 // Accounts gating must surface, not spin.
 check('no carrier ctx + loading => loading-carriers', S({ hasCarrierContext: false, accountsLoading: true }), 'loading-carriers');
 check('no carrier ctx + loaded => no-carrier-account', S({ hasCarrierContext: false, accountsLoading: false }), 'no-carrier-account');
+
+// PS-104: page-load auto-rating is cache-first and visible-first. Rows that are
+// rateable but not currently in the live auto-rating slice must not spin.
+check('rateable but not active => deferred', S({ isAutoRatingActive: false }), 'deferred');
+check('deferred is not a spinner', awaitingRateCellIsSpinner('deferred' as AwaitingRateCellState), false);
 
 // Bounded spinners (a real request is in flight / refreshing).
 check('stale saved rate refreshing => calculating', S({ isCalculatingBestRate: true }), 'calculating');

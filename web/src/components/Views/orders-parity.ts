@@ -707,6 +707,7 @@ export type AwaitingRateCellState =
   | 'unavailable' // auto-rating resolved for this request with no rate -> Retry/Browse
   | 'loading-carriers' // carrier accounts still loading (bounded)
   | 'no-carrier-account' // accounts loaded but none available -> actionable
+  | 'deferred' // rateable, but not currently in the visible live auto-rating slice
   | 'calculating' // a stale saved rate is being refreshed (bounded spinner)
   | 'pending' // rate request queued / in flight (bounded spinner)
 
@@ -720,6 +721,7 @@ export function classifyAwaitingRateCellState(input: {
   resolvedError?: boolean
   hasCarrierContext: boolean
   accountsLoading: boolean
+  isAutoRatingActive?: boolean
 }): AwaitingRateCellState {
   if (input.hasDisplayableBestRate) return 'ready'
   if (!input.hasDims || !input.hasWeight) return 'add-dims'
@@ -731,6 +733,7 @@ export function classifyAwaitingRateCellState(input: {
   if (!input.hasCarrierContext) {
     return input.accountsLoading ? 'loading-carriers' : 'no-carrier-account'
   }
+  if (input.isAutoRatingActive === false) return 'deferred'
   if (input.isCalculatingBestRate) return 'calculating'
   return 'pending'
 }
@@ -761,7 +764,11 @@ export function classifyAwaitingRateCellStateWithWorkflow(
       return 'unavailable'
     case 'stale':
     case 'mismatched_request':
-      return fallbackInput.hasDims && fallbackInput.hasWeight ? 'calculating' : 'add-dims'
+      return fallbackInput.hasDims && fallbackInput.hasWeight
+        ? fallbackInput.isAutoRatingActive === false
+          ? 'deferred'
+          : 'calculating'
+        : 'add-dims'
     case 'unknown':
     default:
       return classifyAwaitingRateCellState(fallbackInput)
@@ -778,6 +785,7 @@ export type AutoBestRateEntry = {
   key: string
   rate: Record<string, unknown> | null
   error?: string
+  pending?: boolean
 }
 
 /**

@@ -93,6 +93,7 @@ import {
   resolveColumnPrefs,
   selectBatchRecalculateOrderIds,
   type AwaitingRateCellState,
+  type AutoBestRateEntry,
   type BatchRecalculateRowState,
   type BatchRecalculateScope,
   type ColumnPrefs,
@@ -753,6 +754,7 @@ const TEST_CARRIER_CODE = 'prepship_test'
 const TEST_SERVICE_CODE = 'prepship_test_standard'
 const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
+const PASSIVE_LIVE_BEST_RATE_LIMIT = 12
 const TEST_RATE_BROWSER_ACCOUNTS = [
   { shippingProviderId: 900001, carrierId: 'se-prepship-test-a', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Standard', accountNumber: 'MOCK-PT-A', name: 'PrepShip Test Standard', _label: 'PrepShip Test Standard' },
   { shippingProviderId: 900002, carrierId: 'se-prepship-test-b', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Saver', accountNumber: 'MOCK-PT-B', name: 'PrepShip Test Saver', _label: 'PrepShip Test Saver' },
@@ -2335,14 +2337,7 @@ export default function OrdersView({
   const shipmentAutoSaveTimerRef = useRef<number | null>(null)
   const shipmentLastSavedKeyRef = useRef<string | null>(null)
   const bestRateRefreshSeqRef = useRef(0)
-  const [autoBestRateEntries, setAutoBestRateEntries] = useState<Record<number, {
-    key: string
-    rate: Record<string, unknown> | null
-    // PS-075: a sanitized error message when passive rating FAILED for this
-    // request key. Distinguishes a terminal error from a genuine no-rate result
-    // so the cell shows "rate error" instead of an endless spinner.
-    error?: string | null
-  }>>({})
+  const [autoBestRateEntries, setAutoBestRateEntries] = useState<Record<number, AutoBestRateEntry>>({})
   const [batchRecalculateRows, setBatchRecalculateRows] = useState<Record<number, BatchRecalculateRowState>>({})
   const [batchRecalculateBusy, setBatchRecalculateBusy] = useState(false)
   const batchRecalculateRunRef = useRef(0)
@@ -5667,7 +5662,7 @@ export default function OrdersView({
     return order
   }
 
-  function setAutoBestRateEntry(orderId: number, entry: { key: string; rate: unknown; error?: string }) {
+  function setAutoBestRateEntry(orderId: number, entry: AutoBestRateEntry) {
     setAutoBestRateEntries((current) => {
       const existing = current[orderId]
       const existingRate = toRecord(existing?.rate)
@@ -5941,7 +5936,6 @@ export default function OrdersView({
     if (candidates.length === 0) return
 
     const queue = [...candidates]
-    const workerCount = Math.min(2, queue.length)
 
     async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
       autoBestRateRequestedRef.current.add(request.key)
@@ -5976,6 +5970,8 @@ export default function OrdersView({
           clearAutoBestRateWatchdog(request.key)
           return
         }
+
+        setAutoBestRateEntry(order.orderId, { key: request.key, rate: null, pending: true })
 
         const response = await apiClient.browseRates({
           weightOz: request.weightOz,
@@ -6137,9 +6133,11 @@ export default function OrdersView({
         queue.splice(index, 1)
       }
 
+      const liveQueue = queue.splice(0, PASSIVE_LIVE_BEST_RATE_LIMIT)
+      const workerCount = Math.min(2, liveQueue.length)
       const workers = Array.from({ length: workerCount }, async () => {
-        while (!cancelled && queue.length > 0) {
-          const next = queue.shift()
+        while (!cancelled && liveQueue.length > 0) {
+          const next = liveQueue.shift()
           if (!next) continue
           await refreshVisibleBestRate(next.order, next.request)
         }
@@ -7964,6 +7962,16 @@ export default function OrdersView({
             Rate unavailable · Retry
           </button>
         )
+      case 'deferred':
+        return (
+          <span
+            data-rate-state="deferred"
+            title="Best rate not loaded yet. Use Recalculate for a live rate."
+            style={muted}
+          >
+            —
+          </span>
+        )
       case 'calculating':
       case 'pending':
       default:
@@ -7999,7 +8007,8 @@ export default function OrdersView({
     const resolvedForKey = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
     // PS-075 — distinguish a terminal ERROR from a genuine no-rate result.
     const resolvedError = resolvedForKey && Boolean(autoEntry?.error)
-    const resolvedNoRate = resolvedForKey && !autoEntry?.rate && !autoEntry?.error
+    const resolvedNoRate = resolvedForKey && autoEntry?.pending !== true && !autoEntry?.rate && !autoEntry?.error
+    const isAutoRatingActive = resolvedForKey && autoEntry?.pending === true
     const hasCarrierContext = isTestOrder(displayOrder) || getRateCarrierIdsForAccounts().length > 0
     const stateInput = {
       hasDims,
@@ -8010,6 +8019,7 @@ export default function OrdersView({
       resolvedError,
       hasCarrierContext,
       accountsLoading,
+      isAutoRatingActive,
     }
     const state = classifyAwaitingRateCellStateWithWorkflow(
       getBestRateWorkflowModel(displayOrder),
