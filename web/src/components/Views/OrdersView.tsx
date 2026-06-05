@@ -4973,15 +4973,20 @@ export default function OrdersView({
   }
 
   // One-click re-rate: when a purchase is refused for a stale/unproven rate,
-  // refresh the order's best rate (which re-stamps the request fingerprint) so
-  // the operator can immediately review the current rate and click Print again.
-  // Deliberately does NOT auto-buy — the boundary exists so a human confirms the
-  // current rate before postage is purchased.
-  async function refreshStaleRateForOrder(order: OrderSummaryDto, nextActionLabel = 'Create + Print Label') {
+  // refresh the order's best rate (which re-stamps the request fingerprint).
+  // Create + Print still asks the operator to review/click again; Print to Queue
+  // may continue the original queue click with the freshly returned backend
+  // proof so it does not get stuck in a stale-proof retry loop.
+  async function refreshStaleRateForOrder(
+    order: OrderSummaryDto,
+    nextActionLabel = 'Create + Print Label',
+    options: { promptForRetry?: boolean } = {},
+  ) {
+    const promptForRetry = options.promptForRetry ?? true
     const request = getAutoBestRateRequest(order)
     if (!request) {
       showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
-      return
+      return null
     }
     showToast('Rate is out of date — recalculating…', 'info')
     try {
@@ -4990,7 +4995,13 @@ export default function OrdersView({
         refetch: true,
       })
       if (result.status === 'updated') {
-        showToast(`Rate refreshed — review it and click ${nextActionLabel} again.`, 'success')
+        showToast(
+          promptForRetry
+            ? `Rate refreshed — review it and click ${nextActionLabel} again.`
+            : `Rate refreshed — continuing ${nextActionLabel}.`,
+          promptForRetry ? 'success' : 'info',
+        )
+        return result.rate ?? null
       } else if (result.status === 'cleared') {
         showToast('No rates are available for this order right now. Adjust the package/dimensions and try again.', 'error')
       } else {
@@ -5000,6 +5011,7 @@ export default function OrdersView({
       console.warn('[rate-proof] refresh before label failed:', refreshError instanceof Error ? refreshError.message : refreshError)
       showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
     }
+    return null
   }
 
   async function createOrQueueLabel(mode: 'print' | 'queue' | 'test', order = panelOrder) {
@@ -5155,7 +5167,38 @@ export default function OrdersView({
         } else {
           const queueErrorMessage = result.skippedErrors[0]
           if (isSelectedRateProofError(queueErrorMessage)) {
-            await refreshStaleRateForOrder(order, 'Print to Queue')
+            const refreshedRate = await refreshStaleRateForOrder(order, 'Print to Queue', { promptForRetry: false })
+            const refreshedRateProof = refreshedRate ? buildSelectedRateProofPayload(order, refreshedRate) : undefined
+            if (refreshedRate && refreshedRateProof) {
+              const retryPayload = {
+                ...(payload as unknown as Record<string, unknown>),
+                selectedRateProof: refreshedRateProof,
+              }
+              const retryResult = await sendOrdersToQueueBackend([order], {
+                kind: 'existing-labels',
+                label: 'Sending to queue',
+                labelPayloadOverrides: new Map([[order.orderId, retryPayload]]),
+              })
+              if (retryResult.queued > 0) {
+                showToast(
+                  formatQueuedOrderToast(
+                    order.orderNumber ?? order.orderId,
+                    getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
+                  ),
+                  'success',
+                )
+              } else {
+                const retryErrorMessage = retryResult.skippedErrors[0]
+                showToast(
+                  isSelectedRateProofError(retryErrorMessage)
+                    ? RATE_PROOF_RETRY_MESSAGE
+                    : retryErrorMessage ?? 'Label was not added to the print queue',
+                  'error',
+                )
+              }
+            } else {
+              showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
+            }
           } else {
             showToast(queueErrorMessage ?? 'Label was not added to the print queue', 'error')
           }

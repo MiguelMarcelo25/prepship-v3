@@ -34,7 +34,14 @@ check(
 );
 check(
   'proof failure refreshes stale rate instead of showing raw queue error',
-  /await refreshStaleRateForOrder\(order, 'Print to Queue'\)/.test(createOrQueue),
+  /await refreshStaleRateForOrder\(order, 'Print to Queue'/.test(createOrQueue),
+);
+check(
+  'proof failure retries queue with refreshed backend proof in the same user action',
+  /const refreshedRate = await refreshStaleRateForOrder\(order, 'Print to Queue'/.test(createOrQueue) &&
+    /buildSelectedRateProofPayload\(order, refreshedRate\)/.test(createOrQueue) &&
+    /selectedRateProof: refreshedRateProof/.test(createOrQueue) &&
+    /const retryResult = await sendOrdersToQueueBackend/.test(createOrQueue),
 );
 check(
   'raw missing_current_fingerprint is not shown from the queue skipped error path',
