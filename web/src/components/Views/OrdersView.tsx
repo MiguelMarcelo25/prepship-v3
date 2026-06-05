@@ -7868,9 +7868,14 @@ export default function OrdersView({
     const batchRow = batchRecalculateRows[order.orderId]
     if (batchRow?.status === 'pending' || batchRow?.status === 'running') {
       return (
-        <div className="spin-center" data-rate-state={`batch-${batchRow.status}`} title={batchRow.message ?? 'Recalculating strict live rate...'}>
+        <div
+          className="spin-center"
+          data-rate-state={`batch-${batchRow.status}`}
+          title={batchRow.message ?? 'Recalculating strict live rate...'}
+          role="status"
+          aria-label="Loading best rate"
+        >
           <span className="spin-sm" />
-          {variant === 'full' ? <span style={{ ...muted, marginLeft: 4 }}>Recalculating</span> : null}
         </div>
       )
     }
@@ -7963,7 +7968,13 @@ export default function OrdersView({
       case 'pending':
       default:
         return (
-          <div className="spin-center" data-rate-state={state} title="Fetching rate…">
+          <div
+            className="spin-center"
+            data-rate-state={state}
+            title="Fetching rate..."
+            role="status"
+            aria-label="Loading best rate"
+          >
             <span className="spin-sm" />
           </div>
         )
@@ -9904,9 +9915,13 @@ export default function OrdersView({
                       </>
                     )
                   ) : panelRateLoading ? (
-                    <div className="flex items-center gap-2 py-1">
-                      <Loader2 size={13} strokeWidth={2.5} className="animate-spin text-brand" />
-                      <span className="text-[12px] font-semibold text-brand">Calculating best rate…</span>
+                    <div
+                      className="flex items-center py-1"
+                      title="Loading best rate"
+                      role="status"
+                      aria-label="Loading best rate"
+                    >
+                      <Loader2 size={15} strokeWidth={2.5} className="animate-spin text-brand" />
                     </div>
                   ) : panelPreviewRate ? (
                     <>
