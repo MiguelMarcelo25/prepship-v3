@@ -5434,6 +5434,20 @@ export default function OrdersView({
     return order
   }
 
+  function setAutoBestRateEntry(orderId: number, entry: { key: string; rate: unknown; error?: string }) {
+    setAutoBestRateEntries((current) => {
+      const existing = current[orderId]
+      const existingRate = toRecord(existing?.rate)
+      if (
+        existing?.key === entry.key &&
+        toStringValue(existingRate?.matchType) === 'manual'
+      ) {
+        return current
+      }
+      return { ...current, [orderId]: entry }
+    })
+  }
+
   function getAppliedRateDims(rate: Record<string, unknown>) {
     const dims = toRecord(rate.dims)
     const length = toNumberValue(dims?.length) ?? toNumberValue(rate.length) ?? toNumberValue(rate.dimsL)
@@ -5539,7 +5553,7 @@ export default function OrdersView({
               cancelled,
               isPanelOrder: panelOrderId === order.orderId,
             })
-            setAutoBestRateEntries((current) => ({ ...current, [order.orderId]: settled.entry }))
+            setAutoBestRateEntry(order.orderId, settled.entry)
           }
           clearAutoBestRateWatchdog(request.key)
           return
@@ -5603,7 +5617,7 @@ export default function OrdersView({
             cancelled,
             isPanelOrder: panelOrderId === order.orderId,
           })
-          setAutoBestRateEntries((current) => ({ ...current, [order.orderId]: settled.entry }))
+          setAutoBestRateEntry(order.orderId, settled.entry)
           if (settled.applyPanelPreview) {
             setPanelRatePreview(bestRate ? [bestRate] : [])
             const shippingProviderId = bestRate ? toProviderAccountId(bestRate.shippingProviderId) : null
@@ -5637,7 +5651,7 @@ export default function OrdersView({
             cancelled,
             isPanelOrder: panelOrderId === order.orderId,
           })
-          setAutoBestRateEntries((current) => ({ ...current, [order.orderId]: settled.entry }))
+          setAutoBestRateEntry(order.orderId, settled.entry)
         }
         clearAutoBestRateWatchdog(request.key)
         console.warn(
@@ -6246,16 +6260,38 @@ export default function OrdersView({
     const serviceCode = toStringValue(rate.serviceCode)
     if (!panelOrderId || shippingProviderId == null || !serviceCode) return
 
+    const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
+    const rateForTable = autoRequest
+      ? withRateRequestMetadata(rate, autoRequest, {
+          isComplete: true,
+          rateCount: 1,
+          matchType: 'manual',
+        })
+      : rate
+
     setPanelForm((current) => ({
       ...current,
       shipAccountId: String(shippingProviderId),
       serviceCode,
     }))
-    setPanelRatePreview([rate])
+    setPanelRatePreview([rateForTable])
+    if (autoRequest) {
+      clearAutoBestRateWatchdog(autoRequest.key)
+      setAutoBestRateEntries((current) => ({
+        ...current,
+        [panelOrderId]: { key: autoRequest.key, rate: rateForTable },
+      }))
+    }
     setRateBrowserOpen(false)
     void persistAppliedRateForOrder(panelOrderId ?? 0, rate, {
       fallbackDims: getPanelDims(),
       fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+      ...(autoRequest
+        ? {
+            request: autoRequest,
+            metadata: { isComplete: true, rateCount: 1, matchType: 'manual' },
+          }
+        : {}),
       refetch: true,
     }).catch((error) => {
       showToast(error instanceof Error ? error.message : 'Failed to save selected rate', 'error')
