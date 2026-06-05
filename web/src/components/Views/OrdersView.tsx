@@ -5604,6 +5604,10 @@ export default function OrdersView({
         undefined,
       forceLive: true,
       forceRefresh: true,
+      // PS-083 follow-up: Recalculate must consider the order's visible direct
+      // carriers (Walmart Shipping / SHIPP), not just ShipStation — otherwise it
+      // overwrites the cheaper direct best rate the Rate Browser found.
+      includeVisibleDirectCarriers: true,
     })
     const response = options.timeoutMs
       ? await withRecalculateTimeout(browsePromise, options.timeoutMs)
@@ -5835,6 +5839,11 @@ export default function OrdersView({
             order.orderNumber ??
             undefined,
           forceRefresh: false,
+          // PS-083 follow-up: include the order's visible direct carriers
+          // (Walmart Shipping / SHIPP) so the passively-rated BEST RATE column
+          // matches the Rate Browser drawer instead of showing a ShipStation-only
+          // winner.
+          includeVisibleDirectCarriers: true,
         }) as Array<Record<string, unknown>>
 
         const responseBestRate = toRecord((rates as Array<Record<string, unknown>> & { bestRate?: unknown }).bestRate)
@@ -11709,6 +11718,17 @@ export default function OrdersView({
               void persistAppliedRateForOrder(panelOrderId, best, {
                 fallbackDims: dims ?? getPanelDims(),
                 fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+                // PS-083 follow-up: stamp the browse-resolved best rate with the
+                // order's request metadata (fingerprint + freshness) exactly like
+                // applyRateSelection — otherwise the saved rate fails the reload
+                // freshness gate (savedRateIsFreshAndComplete) and the row reverts
+                // to the auto/recalc value on refresh ("browse rate not saved").
+                ...(autoRequest
+                  ? {
+                      request: autoRequest,
+                      metadata: { isComplete: true, rateCount: 1, matchType: 'browse' },
+                    }
+                  : {}),
                 refetch: true,
               })
                 .catch((error) => {

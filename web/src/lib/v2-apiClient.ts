@@ -631,6 +631,11 @@ function translateRatePayloadToV4(
     out.preferredCarrierId = input.preferredCarrierId;
   }
   if (typeof input.includeAllDirectCarriers === 'boolean') out.includeAllDirectCarriers = input.includeAllDirectCarriers;
+  // PS-083 follow-up: opt-in for best-rate paths (Recalculate + passive auto-rate)
+  // to include the order's VISIBLE/assigned direct carriers (Walmart Shipping,
+  // SHIPP, …) even when an explicit ShipStation-only carrierIds list is passed —
+  // so the best rate matches what the Rate Browser drawer shows.
+  if (typeof input.includeVisibleDirectCarriers === 'boolean') out.includeVisibleDirectCarriers = input.includeVisibleDirectCarriers;
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
   const numericOrderId = typeof input.orderId === 'number'
     ? input.orderId
@@ -4031,7 +4036,16 @@ export const apiClient = {
           ? requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId))
           : null;
         let directCarrierIds = requestedCarrierIds?.filter(isDirectCarrierId) ?? [];
-        if (requestedCarrierIds == null) {
+        // Include the order's VISIBLE/assigned direct carriers when either no
+        // carrier list was provided (legacy auto path) OR the caller opted in via
+        // includeVisibleDirectCarriers while passing a ShipStation-only list
+        // (Recalculate / passive best-rate). Without this, a ShipStation-only
+        // carrierIds list silently excludes Walmart Shipping / SHIPP from the best
+        // rate even though the Rate Browser drawer surfaces (and wins on) them.
+        if (
+          requestedCarrierIds == null ||
+          (body.includeVisibleDirectCarriers === true && directCarrierIds.length === 0)
+        ) {
           const directRows = await fetchDirectCarrierAccountRows().catch((err) => {
             console.warn(
               '[v2-apiClient] automatic direct-carrier lookup failed:',
@@ -4039,11 +4053,12 @@ export const apiClient = {
             );
             return [] as DirectCarrierAccountRow[];
           });
-          directCarrierIds = [...new Set(
-            directRows
+          directCarrierIds = [...new Set([
+            ...directCarrierIds,
+            ...directRows
               .filter((row) => directCarrierAccountVisibleForOrder(row, body))
-              .map((row) => `se-${directProviderIdFromAccount(row)}`)
-          )];
+              .map((row) => `se-${directProviderIdFromAccount(row)}`),
+          ])];
         }
 
         const shouldFetchShipStation =
@@ -4147,7 +4162,7 @@ export const apiClient = {
           ? body.carrierIds.map((value) => String(value)).filter(Boolean)
           : [];
         const shipStationCarrierIds = requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId));
-        const directCarrierIds = requestedCarrierIds.filter(isDirectCarrierId);
+        let directCarrierIds = requestedCarrierIds.filter(isDirectCarrierId);
         const preferredCarrierId =
           typeof body.preferredCarrierId === 'string'
             ? body.preferredCarrierId
@@ -4161,6 +4176,24 @@ export const apiClient = {
         if (existing) return existing;
 
         const inFlight = (async () => {
+          // PS-083 follow-up: when the Recalculate / best-rate caller opts in and
+          // passed a ShipStation-only carrier list, fold in the order's VISIBLE
+          // direct carriers (Walmart Shipping / SHIPP) so the recalc best rate
+          // matches the Rate Browser drawer. Mirrors fetchRates' auto-include.
+          if (body.includeVisibleDirectCarriers === true && directCarrierIds.length === 0) {
+            const directRows = await fetchDirectCarrierAccountRows().catch((err) => {
+              console.warn(
+                '[v2-apiClient] browseRates direct-carrier auto-include failed:',
+                err instanceof Error ? err.message : err
+              );
+              return [] as DirectCarrierAccountRow[];
+            });
+            directCarrierIds = [...new Set(
+              directRows
+                .filter((row) => directCarrierAccountVisibleForOrder(row, body))
+                .map((row) => `se-${directProviderIdFromAccount(row)}`)
+            )];
+          }
           const shouldFetchShipStation =
             requestedCarrierIds.length === 0 || shipStationCarrierIds.length > 0;
           const shouldFetchDirect = directCarrierIds.length > 0 && body.cachedOnly !== true;
