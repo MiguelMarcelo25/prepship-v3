@@ -1081,6 +1081,7 @@ async function runMergeJob(
     // single render-time join to orders.shipToName (client-scoped). Used
     // only for the names reference / Batch Manifest; never mutates orders.
     const recipientsByGroup = await loadBatchRecipientsByGroup(entriesByGroup);
+    const packageDimsByOrderId = await loadPackageDimsByOrderId(entriesByGroup);
     let lastGroup: string | null = null;
     const successfulEntryIds: string[] = [];
     const failedEntryIds = new Set<string>();
@@ -1118,7 +1119,9 @@ async function runMergeJob(
             fontReg,
             rgb,
             isMockLabel,
-            groupRecipients
+            groupRecipients,
+            BATCH_NAMES_HEADER_THRESHOLD,
+            packageDimsByOrderId.get(Number(e.orderId)) ?? null
           );
           // PS-073: large/overflow batches get a dedicated Batch Manifest
           // page inserted immediately after the header (before this group's
@@ -1461,6 +1464,67 @@ async function loadBatchRecipientsByGroup(
   return result;
 }
 
+// Format shipment dimensions into a compact "LxWxH" packer hint (e.g. 11x8x6).
+// Trailing ".0" is dropped but real fractions (8.5) are kept. Returns null if
+// any dimension is missing/non-positive so the header simply omits the line.
+export function formatPackageDims(
+  l: number | null | undefined,
+  w: number | null | undefined,
+  h: number | null | undefined,
+): string | null {
+  const fmt = (n: number | null | undefined): string | null => {
+    if (n == null || !Number.isFinite(n) || n <= 0) return null;
+    return Number.isInteger(n) ? String(n) : String(Number(Number(n).toFixed(2)));
+  };
+  const L = fmt(l);
+  const W = fmt(w);
+  const H = fmt(h);
+  if (!L || !W || !H) return null;
+  return `${L}x${W}x${H}`;
+}
+
+// Render-time join: map each batched order to the package dimensions actually
+// used for its label (latest active shipment). Mirrors loadBatchRecipientsByGroup
+// — read-only, display-only. Per user override unlock shipped data on
+// 2026-05-23: reads shipped dims for the batch-header packer hint; no writes.
+async function loadPackageDimsByOrderId(
+  entriesByGroup: Map<string, PrintQueueEntry[]>
+): Promise<Map<number, string>> {
+  const ids = new Set<number>();
+  for (const list of entriesByGroup.values()) {
+    for (const e of list) {
+      const idNum = Number(e.orderId);
+      if (Number.isFinite(idNum)) ids.add(idNum);
+    }
+  }
+  const result = new Map<number, string>();
+  if (ids.size === 0) return result;
+
+  const rows = await db
+    .select({
+      orderId: shipments.orderId,
+      dimsL: shipments.dimsL,
+      dimsW: shipments.dimsW,
+      dimsH: shipments.dimsH,
+      createdAt: shipments.createdAt,
+    })
+    .from(shipments)
+    .where(and(
+      inArray(shipments.orderId, [...ids]),
+      eq(shipments.voided, false),
+      eq(shipments.isReturn, false),
+    ))
+    .orderBy(desc(shipments.createdAt));
+
+  for (const row of rows) {
+    const idNum = Number(row.orderId);
+    if (!Number.isFinite(idNum) || result.has(idNum)) continue; // keep newest dims
+    const dims = formatPackageDims(row.dimsL, row.dimsW, row.dimsH);
+    if (dims) result.set(idNum, dims);
+  }
+  return result;
+}
+
 function drawMockFallbackLabel(
   page: ReturnType<import('pdf-lib').PDFDocument['addPage']>,
   entry: PrintQueueEntry,
@@ -1552,7 +1616,10 @@ function drawHeader(
   // manifest. Returns whether a Batch Manifest page is still required
   // (i.e. names did not fit on the header).
   recipients: BatchRecipient[] = [],
-  threshold = BATCH_NAMES_HEADER_THRESHOLD
+  threshold = BATCH_NAMES_HEADER_THRESHOLD,
+  // Compact "LxWxH" package hint (e.g. 11x8x6) drawn under the QTY line so the
+  // packer knows what size box to use. null/empty omits the line entirely.
+  packageDims: string | null = null
 ): { manifestNeeded: boolean } {
   const { width, height } = page.getSize();
   const cx = width / 2;
@@ -1812,6 +1879,20 @@ function drawHeader(
     color: ink,
   });
   y -= 24;
+
+  // ── 2b) Package size hint (helps the packer pick the right box) ──
+  // Drawn directly under the QTY line. Omitted when no dimensions are known so
+  // the layout below (ORDERS count + names) reflows exactly as before.
+  if (packageDims) {
+    page.drawText(safePdfText(`Package: ${packageDims}`), {
+      x: pad,
+      y: y - 11,
+      size: 11.5,
+      font: fontReg,
+      color: sub,
+    });
+    y -= 18;
+  }
 
   // ── Decide names placement (header list vs manifest pointer) ──
   const regionTop = y;
@@ -2151,6 +2232,7 @@ export async function renderBatchHeaderPdfForTest(input: {
   recipients: BatchRecipient[];
   isTest?: boolean;
   threshold?: number;
+  packageDims?: string | null;
 }): Promise<Uint8Array> {
   const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
   const doc = await PDFDocument.create();
@@ -2168,7 +2250,8 @@ export async function renderBatchHeaderPdfForTest(input: {
     rgb,
     input.isTest ?? false,
     sortedRecipients,
-    input.threshold ?? BATCH_NAMES_HEADER_THRESHOLD
+    input.threshold ?? BATCH_NAMES_HEADER_THRESHOLD,
+    input.packageDims ?? null
   );
 
   if (manifestNeeded) {
