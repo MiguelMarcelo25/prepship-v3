@@ -86,6 +86,7 @@ import {
   getColumnMinWidth,
   groupPrintQueueEntries,
   planBrowseRateReconcile,
+  planStrictBestRateRecalculate,
   planSettledAutoRate,
   resolveColumnPrefs,
   type AwaitingRateCellState,
@@ -5344,6 +5345,7 @@ export default function OrdersView({
     if (!request) return false
     const entry = autoBestRateEntries[order.orderId]
     if (entry?.key === request.key && entry.rate) return true
+    if (entry?.key === request.key && (entry.error || entry.rate === null)) return false
     return hasSavedBestRateForRequest(order, request)
   }
 
@@ -6225,6 +6227,191 @@ export default function OrdersView({
       setRateBrowserRates([])
     } finally {
       setRateBrowserLoading(false)
+    }
+  }
+
+  async function recalculateBestRate() {
+    if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return null
+    if (isTestOrder(panelOrder, panelDetail)) {
+      showToast('Test orders use mock rates and do not need live recalculation')
+      return null
+    }
+
+    const dims = getPanelDims()
+    const weightOz = getPanelWeightOz()
+    const shipTo = getShipTo(panelOrder, panelDetail)
+    const carrierIds = getRateCarrierIdsForAccounts()
+
+    if (!hasCompleteDims(dims)) {
+      showToast('Enter complete shipment size before recalculating', 'error')
+      return null
+    }
+    if (weightOz <= 0) {
+      showToast('Enter shipment weight before recalculating', 'error')
+      return null
+    }
+    if (!shipTo.postalCode) {
+      showToast('Ship-to postal code is required before recalculating', 'error')
+      return null
+    }
+    if (accountsLoading) {
+      showToast('Carrier accounts are still loading. Try Recalculate again in a moment.', 'error')
+      return null
+    }
+    if (carrierIds.length === 0) {
+      showToast('No carrier accounts are available for this order scope', 'error')
+      return null
+    }
+
+    const shippingOptions = buildPanelShippingOptionsPayload(panelForm)
+    const confirmation = normalizeConfirmationForRates(shippingOptions.confirmation)
+    const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
+    const fingerprint = buildRateRequestFingerprint({
+      weightOz,
+      dims,
+      shipTo,
+      residential: true,
+      carrierIds,
+      storeId: panelOrder.storeId,
+      clientId: panelOrder.clientId,
+      confirmation,
+      insuranceProvider: shippingOptions.insuranceProvider,
+      insuredValue: shippingOptions.insuredValue,
+    })
+    const request = {
+      detail: panelDetail,
+      dims,
+      dimsLabel,
+      weightOz,
+      shipTo,
+      confirmation,
+      carrierIds,
+      insuranceProvider: shippingOptions.insuranceProvider,
+      insuredValue: shippingOptions.insuredValue,
+      fingerprint,
+      key: `${panelOrder.orderId}|${fingerprint}`,
+    }
+
+    const runId = bestRateRefreshSeqRef.current + 1
+    bestRateRefreshSeqRef.current = runId
+    setPanelRateLoading(true)
+    setPanelRatePreview([])
+
+    try {
+      const response = await apiClient.browseRates({
+        weightOz,
+        toZip: shipTo.postalCode,
+        toCountry: shipTo.country ?? 'US',
+        toState: shipTo.state ?? undefined,
+        toCity: shipTo.city ?? undefined,
+        dimsL: dims.length,
+        dimsW: dims.width,
+        dimsH: dims.height,
+        residential: true,
+        carrierIds,
+        storeId: panelOrder.storeId,
+        clientId: panelOrder.clientId,
+        confirmation,
+        insuranceProvider: shippingOptions.insuranceProvider,
+        insuredValue: shippingOptions.insuredValue,
+        orderId: panelOrder.orderId,
+        orderNumber: panelOrder.orderNumber ?? undefined,
+        externalOrderId:
+          panelOrder.externalOrderId ??
+          panelOrder.external_order_id ??
+          panelOrder.orderNumber ??
+          undefined,
+        forceLive: true,
+        forceRefresh: true,
+      })
+      if (bestRateRefreshSeqRef.current !== runId) return null
+
+      const liveBest = toRecord(response?.bestRate)
+      const liveBestAmount = liveBest ? getRateBaseAmount(liveBest) : null
+      const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
+      const serviceCode = liveBest ? toStringValue(liveBest.serviceCode) : null
+      const carrierStatuses = Array.isArray(response?.carrierStatuses) ? response.carrierStatuses : []
+      const decision = planStrictBestRateRecalculate({
+        requestKey: request.key,
+        liveBest,
+        liveBestAmount,
+        providerAccountId,
+        serviceCode,
+        carrierStatuses,
+      })
+
+      if (decision.action === 'blocked') {
+        setAutoBestRateEntries((current) => ({
+          ...current,
+          [panelOrder.orderId]: decision.entry,
+        }))
+        showToast(decision.message, 'error')
+        return null
+      }
+
+      await apiClient.saveOrderDimsStrict(panelOrder.orderId, {
+        length: dims.length,
+        width: dims.width,
+        height: dims.height,
+        weightOz,
+      })
+
+      if (decision.action === 'clear') {
+        await apiClient.updateOrderBestRateSelectionStrict(panelOrder.orderId, {
+          bestRateJson: null,
+          bestRateDims: null,
+        })
+        setAutoBestRateEntries((current) => ({
+          ...current,
+          [panelOrder.orderId]: decision.entry,
+        }))
+        setPanelRatePreview([])
+        await refetchOrders()
+        showToast(decision.message, 'error')
+        return null
+      }
+
+      const rateCount = Array.isArray(response?.rates) ? response.rates.length : 1
+      const rateWithMetadata = withRateRequestMetadata(decision.rate, request, {
+        isComplete: true,
+        rateCount,
+        matchType: 'strict-live',
+        cacheCreatedAt: response?.fetchedAt,
+        requestFingerprint: request.fingerprint,
+        cacheKey: request.fingerprint,
+      })
+      await apiClient.updateOrderBestRateSelectionStrict(panelOrder.orderId, {
+        selectedPid: decision.selectedPid,
+        bestRateJson: rateWithMetadata,
+        bestRateDims: request.dimsLabel,
+      })
+      clearAutoBestRateWatchdog(request.key)
+      setAutoBestRateEntries((current) => ({
+        ...current,
+        [panelOrder.orderId]: { key: request.key, rate: rateWithMetadata },
+      }))
+      setPanelForm((current) => ({
+        ...current,
+        shipAccountId: String(decision.selectedPid),
+        serviceCode: decision.serviceCode,
+      }))
+      setPanelRatePreview([rateWithMetadata])
+      shipmentLastSavedKeyRef.current = getShipmentDetailsKey(panelOrder.orderId, panelForm)
+      await refetchOrders()
+      showToast('Best rate recalculated from live carrier responses', 'success')
+      return rateWithMetadata
+    } catch (error) {
+      if (bestRateRefreshSeqRef.current === runId) {
+        const message = error instanceof Error ? error.message : 'Failed to recalculate best rate'
+        setAutoBestRateEntries((current) => ({
+          ...current,
+          [panelOrder.orderId]: { key: request.key, rate: null, error: message },
+        }))
+        showToast(message, 'error')
+      }
+      return null
+    } finally {
+      if (bestRateRefreshSeqRef.current === runId) setPanelRateLoading(false)
     }
   }
 
@@ -9237,20 +9424,21 @@ export default function OrdersView({
                   )}
                 </div>
 
-                {/* Refresh button — only when awaiting a label.
-                    Opens the Rate Browser modal so the operator can
-                    re-fetch / compare rates across carriers. Renamed
-                    from "Scout" 2026-05-12 — the icon was already
-                    RefreshCcw, the visible label now matches. */}
+                {/* Recalculate button - strict live best-rate update for the selected order. */}
                 {!panelIsTestOrder && !shipped ? (
                   <button
                     type="button"
-                    onClick={() => void openRateBrowser()}
-                    title="Browse rates from all carriers"
-                    className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-md text-[10.5px] font-semibold text-ink-3 hover:text-brand hover:bg-brand/5 transition"
+                    onClick={() => void recalculateBestRate()}
+                    disabled={panelRateLoading}
+                    title="Recalculate the live cheapest rate"
+                    className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-md text-[10.5px] font-semibold text-ink-3 hover:text-brand hover:bg-brand/5 transition disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <RefreshCcw size={11} strokeWidth={2.5} />
-                    <span className="hidden sm:inline">Refresh</span>
+                    {panelRateLoading ? (
+                      <Loader2 size={11} strokeWidth={2.5} className="animate-spin" />
+                    ) : (
+                      <RefreshCcw size={11} strokeWidth={2.5} />
+                    )}
+                    <span className="hidden sm:inline">Recalculate</span>
                   </button>
                 ) : null}
               </div>

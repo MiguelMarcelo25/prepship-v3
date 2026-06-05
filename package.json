@@ -84,6 +84,7 @@
     "test:rate-browser-dynamic-service-selection": "node scripts/rate-browser-dynamic-service-selection-guard.mjs",
     "test:rate-browser-manual-selection-table-sync": "node scripts/rate-browser-manual-selection-table-sync-guard.mjs",
     "test:side-panel-hover-image-preview": "node scripts/side-panel-hover-image-preview-guard.mjs",
+    "test:recalculate-best-rate-strict": "tsx scripts/recalculate-best-rate-strict-guard.ts",
     "test:ps-083-shipp-insurance": "tsx scripts/ps-083-shipp-insurance-guard.ts",
     "test:ps-084-label-size-normalize": "tsx scripts/ps-084-label-size-normalize-guard.ts",
     "test:ps-084-direct-carrier-print-queue": "tsx scripts/ps-084-direct-carrier-print-queue-guard.ts",

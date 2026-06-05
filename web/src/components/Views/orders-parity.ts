@@ -838,6 +838,85 @@ export function planBrowseRateReconcile(input: {
 // created label to the queue). Everything else stays on the backend create/
 // recover job. This is the pure decision the queue action consumes so it can be
 // unit-tested without buying real postage.
+export type StrictBestRateCarrierStatus = {
+  carrierId?: string | null
+  carrierName?: string | null
+  status?: string | null
+  rateCount?: number | null
+  error?: string | null
+}
+
+export type StrictBestRateRecalculateDecision =
+  | {
+      action: 'apply'
+      entry: AutoBestRateEntry
+      selectedPid: number
+      serviceCode: string
+      rate: Record<string, unknown>
+    }
+  | {
+      action: 'clear'
+      entry: AutoBestRateEntry
+      message: string
+    }
+  | {
+      action: 'blocked'
+      entry: AutoBestRateEntry
+      message: string
+    }
+
+function strictCarrierStatusLabel(status: StrictBestRateCarrierStatus): string {
+  return String(status.carrierName ?? status.carrierId ?? 'Carrier').trim() || 'Carrier'
+}
+
+/**
+ * Strict Recalculate decision:
+ * - every in-scope carrier must be live or a clean no-service unavailable
+ * - cached/loading/error/unknown statuses block the update
+ * - clean no-rate responses clear saved best rate so stale rates never survive
+ */
+export function planStrictBestRateRecalculate(input: {
+  requestKey: string
+  liveBest: Record<string, unknown> | null
+  liveBestAmount: number | null
+  providerAccountId: number | null
+  serviceCode: string | null
+  carrierStatuses: StrictBestRateCarrierStatus[]
+}): StrictBestRateRecalculateDecision {
+  if (!Array.isArray(input.carrierStatuses) || input.carrierStatuses.length === 0) {
+    const message = 'Recalculate could not confirm carrier completion. Try again.'
+    return { action: 'blocked', entry: { key: input.requestKey, rate: null, error: message }, message }
+  }
+
+  const blockedStatus = input.carrierStatuses.find((carrier) => {
+    const status = String(carrier.status ?? '').toLowerCase()
+    return status !== 'live' && status !== 'unavailable'
+  })
+  if (blockedStatus) {
+    const status = String(blockedStatus.status ?? 'unknown').toLowerCase()
+    const message = `${strictCarrierStatusLabel(blockedStatus)} did not complete live recalculation (${status}). No rate was updated.`
+    return { action: 'blocked', entry: { key: input.requestKey, rate: null, error: message }, message }
+  }
+
+  if (!input.liveBest || input.liveBestAmount == null || input.liveBestAmount <= 0) {
+    const message = 'No live rates were returned for this shipment.'
+    return { action: 'clear', entry: { key: input.requestKey, rate: null }, message }
+  }
+
+  if (input.providerAccountId == null || !input.serviceCode) {
+    const message = 'Live best rate is missing account or service identity. No rate was updated.'
+    return { action: 'blocked', entry: { key: input.requestKey, rate: null, error: message }, message }
+  }
+
+  return {
+    action: 'apply',
+    entry: { key: input.requestKey, rate: input.liveBest },
+    selectedPid: input.providerAccountId,
+    serviceCode: input.serviceCode,
+    rate: input.liveBest,
+  }
+}
+
 export type QueueOrderRoute = 'direct-create' | 'backend'
 
 export function classifyQueueOrderRoute(

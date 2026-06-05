@@ -1292,6 +1292,8 @@ function stableRateBrowseKey(body: Record<string, unknown>): string {
     'confirmation',
     'carrierIds',
     'preferredCarrierId',
+    'insuranceProvider',
+    'insuredValue',
     'forceRefresh',
     'forceLive',
     'cachedOnly',
@@ -2221,6 +2223,21 @@ export const apiClient = {
     );
   },
 
+  updateOrderBestRateSelectionStrict(
+    orderId: number,
+    payload: {
+      selectedPid?: number | null;
+      bestRateJson: unknown | null;
+      bestRateDims?: string | null;
+    }
+  ): Promise<any> {
+    return api.patch<any>(`/orders/${orderId}`, {
+      ...(payload.selectedPid !== undefined ? { selectedPid: payload.selectedPid } : {}),
+      bestRateJson: payload.bestRateJson,
+      bestRateDims: payload.bestRateDims ?? null,
+    });
+  },
+
   createManualOrder(payload: Record<string, unknown>): Promise<any> {
     return api.post<any>('/orders/manual', payload);
   },
@@ -2429,6 +2446,32 @@ export const apiClient = {
   // Throws on failure — callers (OrdersView) use try/catch to surface toasts
   // and keep flow-control semantics intact. Other methods in this file return
   // safe fallbacks, but labels MUST surface errors to the UI.
+  saveOrderDimsStrict(
+    orderId: number,
+    dims:
+      | { l?: number; w?: number; h?: number; weightOz?: number }
+      | { length?: number; width?: number; height?: number; weightOz?: number }
+      | Record<string, unknown>
+  ): Promise<any> {
+    const anyDims = dims as Record<string, unknown>;
+    const rawL = anyDims.l ?? anyDims.length;
+    const rawW = anyDims.w ?? anyDims.width;
+    const rawH = anyDims.h ?? anyDims.height;
+    const l = parseFiniteNumber(rawL);
+    const w = parseFiniteNumber(rawW);
+    const h = parseFiniteNumber(rawH);
+    const weightOz =
+      anyDims.weightOz === undefined ? undefined : parseFiniteNumber(anyDims.weightOz);
+    const payload: Record<string, number> = {};
+    if (rawL != null && l != null) payload.l = l;
+    if (rawW != null && w != null) payload.w = w;
+    if (rawH != null && h != null) payload.h = h;
+    if (weightOz !== undefined && weightOz != null) payload.weightOz = weightOz;
+    return api
+      .post<{ data: any }>(`/orders/${orderId}/save-dims`, payload)
+      .then((r) => r.data);
+  },
+
   createLabel(payload: unknown): Promise<any> {
     const body = payload && typeof payload === 'object'
       ? (payload as Record<string, unknown>)
