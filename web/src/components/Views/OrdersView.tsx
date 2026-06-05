@@ -4936,6 +4936,51 @@ export default function OrdersView({
     }
   }
 
+  // Detects a label-purchase rejection from the shipping purchase boundary
+  // (PS-095/PS-098). Every reason here means the same thing for an operator: the
+  // order's saved rate is stale/unproven and must be re-rated before postage is
+  // bought. We surface a friendly "recalculate then print" flow instead of the
+  // raw reason code (e.g. "missing_current_fingerprint").
+  function isSelectedRateProofError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+    return (
+      /rate proof is required before label purchase/i.test(message) ||
+      /\b(missing_current_fingerprint|missing_fingerprint|fingerprint_mismatch|missing_selected_rate|not_in_current_eligible_rates)\b/i.test(message)
+    )
+  }
+
+  // One-click re-rate: when a purchase is refused for a stale/unproven rate,
+  // refresh the order's best rate (which re-stamps the request fingerprint) so
+  // the operator can immediately review the current rate and click Print again.
+  // Deliberately does NOT auto-buy — the boundary exists so a human confirms the
+  // current rate before postage is purchased.
+  async function refreshStaleRateForOrder(order: OrderSummaryDto) {
+    const request = getAutoBestRateRequest(order)
+    if (!request) {
+      showToast('This order’s rate is out of date. Add dimensions/weight, then Recalculate and print.', 'error')
+      return
+    }
+    showToast('Rate is out of date — recalculating…', 'info')
+    try {
+      const result = await runStrictBestRateRecalculation(order, request, {
+        updatePanel: panelOrderId === order.orderId,
+        refetch: true,
+      })
+      if (result.status === 'updated') {
+        showToast('Rate refreshed — review it and click Create + Print Label again.', 'success')
+      } else if (result.status === 'cleared') {
+        showToast('No rates are available for this order right now. Adjust the package/dimensions and try again.', 'error')
+      } else {
+        showToast(result.message || 'Could not refresh the rate. Use Recalculate, then print.', 'error')
+      }
+    } catch (refreshError) {
+      showToast(
+        refreshError instanceof Error ? refreshError.message : 'Could not refresh the rate. Use Recalculate, then print.',
+        'error',
+      )
+    }
+  }
+
   async function createOrQueueLabel(mode: 'print' | 'queue' | 'test', order = panelOrder) {
     if (!order) {
       showToast('No order selected', 'error')
@@ -5121,6 +5166,17 @@ export default function OrdersView({
           showToast(queueError instanceof Error ? queueError.message : 'Failed to queue existing label', 'error')
           return null
         }
+      }
+      if (isSelectedRateProofError(error)) {
+        // Stale/unproven rate — don't show the raw reason code. Auto-refresh the
+        // rate and prompt the operator to print again (they confirm the buy).
+        showLabelPdfPlaceholderMessage(
+          labelPopup,
+          'Rate is out of date',
+          'This order’s saved rate is out of date, so no label was purchased. Refreshing the rate now — review it and click Create + Print Label again.',
+        )
+        void refreshStaleRateForOrder(order)
+        return null
       }
       showLabelPdfPlaceholderMessage(labelPopup, 'Label creation failed', error instanceof Error ? error.message : 'Label creation failed')
       showToast(error instanceof Error ? error.message : 'Label creation failed', 'error')
