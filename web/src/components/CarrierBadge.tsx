@@ -75,7 +75,7 @@ const SIZES: Record<CarrierBadgeSize, SizeConfig> = {
   md: { slot: { w: 78, h: 48 }, ups: 46, usps: 32, fedex: 20, shipp: 19, easypost: 38, walmart: 39, pillFontSize: 13, pillPaddingX: 9 },
 }
 
-function classifyCarrier(code: string): 'ups' | 'usps' | 'fedex' | 'shipp' | 'easypost' | 'walmart' | 'other' {
+export function classifyCarrier(code: string): 'ups' | 'usps' | 'fedex' | 'shipp' | 'easypost' | 'walmart' | 'other' {
   const lower = code.toLowerCase().trim()
   if (
     lower === 'shipp' ||

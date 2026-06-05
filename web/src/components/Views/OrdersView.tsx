@@ -49,7 +49,7 @@ import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
 // fallback pills for FedEx/DHL/etc. Replaces the previous text-only
 // carrier-badge spans throughout the orders table + side panel.
-import CarrierBadge from '../CarrierBadge'
+import CarrierBadge, { classifyCarrier } from '../CarrierBadge'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS, isDirectCarrierId } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -1461,11 +1461,21 @@ function getCarrierCodeForDisplay(order: OrderSummaryDto) {
   // metadata. Fresh auto-rates already mirror bestRate into canonical, so this
   // only changes the divergent/stale case — which must show the best rate.
   if (order.orderStatus === 'awaiting_shipment') {
-    return (
+    const carrierCode =
       toStringValue(order.bestRate?.carrierCode) ??
       getShippingString(order, 'carrierCode') ??
       toStringValue(order.selectedRate?.carrierCode)
-    )
+    if (carrierCode) return carrierCode
+    // PS — direct-carrier aggregator rates (EasyPost / Shipp) can resolve a
+    // best-rate account NICKNAME but leave carrierCode blank, which made the
+    // Carrier column render the empty CarrierBadge "—" box even though the rate
+    // is fully resolved (the Shipping Account column shows the carrier). Derive
+    // the carrier from the same nickname — but only when it maps to a KNOWN
+    // carrier, so generic account names (e.g. "ORI Account") don't pollute the
+    // carrier column.
+    const nickname = getBestRateCarrierNickname(order)
+    if (nickname && classifyCarrier(nickname) !== 'other') return nickname
+    return carrierCode
   }
 
   const canonicalCarrierCode = getShippingString(order, 'carrierCode')
