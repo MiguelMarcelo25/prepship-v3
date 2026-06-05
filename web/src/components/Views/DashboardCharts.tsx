@@ -24,10 +24,10 @@ type ClientSeries = {
 
 type DashboardChartsProps = {
   trend: TrendPoint[]
-  // Optional multi-client revenue mode. When `clientSeries` is non-empty
-  // the chart renders one line per client (daily order value) instead of
-  // the default Orders + Order value dual-axis view. `clientTrend` holds
-  // wide rows: { day, [series.key]: revenue, ... }.
+  // Optional multi-client mode. When `clientSeries` is non-empty the chart
+  // renders one line per client (daily order COUNT — this panel is "Daily
+  // Orders Trend") instead of the default Orders + Order value dual-axis view.
+  // `clientTrend` holds wide rows: { day, [series.key]: orderCount, ... }.
   clientTrend?: Array<Record<string, number | string>>
   clientSeries?: ClientSeries[]
 }
@@ -118,11 +118,11 @@ function MultiClientChart({
             allowDecimals={false}
             domain={[0, 'dataMax']}
             width={56}
-            tickFormatter={(value: number) => `$${formatInt(value)}`}
+            tickFormatter={(value: number) => formatInt(value)}
           />
           <Tooltip
             labelFormatter={formatDayLabel}
-            formatter={(value: number, name: string) => [`$${formatInt(num(value))}`, name]}
+            formatter={(value: number, name: string) => [formatInt(num(value)), name]}
             itemSorter={(item: { value?: number }) => -num(item?.value)}
             contentStyle={{
               background: 'var(--surface)',

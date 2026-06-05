@@ -4446,11 +4446,12 @@ export const apiClient = {
     );
   },
 
-  // Per-client daily order value for the Daily Orders Trend multi-line
-  // ("All Clients") view. Returns long rows; the caller pivots to one
-  // line per client.
+  // Per-client daily order COUNT (and value) for the Daily Orders Trend
+  // multi-line ("All Clients") view. Returns long rows; the caller pivots to
+  // one line per client. The chart plots `count` (order count) — `revenue` is
+  // returned too for tooltips/future use.
   fetchDashboardDailyRevenueByClient(query: { from: string; to: string; storeId?: number; hideTestOrders?: boolean }): Promise<{
-    data: Array<{ day: string; clientId: number | null; revenue: number }>;
+    data: Array<{ day: string; clientId: number | null; revenue: number; count: number }>;
   }> {
     return safe(
       'fetchDashboardDailyRevenueByClient',
@@ -4462,7 +4463,7 @@ export const apiClient = {
         const data = Array.isArray(res?.data) ? res.data : [];
         return { data };
       },
-      { data: [] as Array<{ day: string; clientId: number | null; revenue: number }> }
+      { data: [] as Array<{ day: string; clientId: number | null; revenue: number; count: number }> }
     );
   },
 

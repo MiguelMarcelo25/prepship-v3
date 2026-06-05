@@ -418,9 +418,9 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
   const where = orderVisibilityWhere(c, q, fromDate, toDate, scope, { excludeCancelled: true });
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   type DashboardDailyRevenueByClientPayload = {
-    data: Array<{ day: string; clientId: number | null; revenue: number }>;
+    data: Array<{ day: string; clientId: number | null; revenue: number; count: number }>;
   };
-  const cacheKey = analyticsCacheKey('dashboard.daily-revenue-by-client.v1', {
+  const cacheKey = analyticsCacheKey('dashboard.daily-revenue-by-client.v2', {
     from: q.from,
     to: q.to,
     clientId: q.clientId ?? null,
@@ -433,11 +433,12 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
   const cached = await getAnalyticsCache<DashboardDailyRevenueByClientPayload>(cacheKey);
   if (cached) return c.json(cached);
 
-  const rows = await db.execute<{ day: string; clientId: number | null; revenue: number }>(sql`
+  const rows = await db.execute<{ day: string; clientId: number | null; revenue: number; count: number }>(sql`
     select
       to_char(date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
       ${orders.clientId} as "clientId",
-      coalesce(sum(${orders.orderTotal}), 0)::float8 as revenue
+      coalesce(sum(${orders.orderTotal}), 0)::float8 as revenue,
+      count(*)::int as count
     from ${orders}
     where ${where}
     group by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), ${orders.clientId}
