@@ -775,9 +775,12 @@ export function classifyAwaitingRateCellStateWithWorkflow(
   }
 }
 
-/** States that still show a (bounded) spinner vs. a terminal/actionable label. */
+/** States that show a (bounded) spinner vs. a terminal/actionable label.
+ * 'deferred' now spins too: passive auto-rating drains the FULL visible queue,
+ * so a deferred row is simply awaiting its turn and is guaranteed to resolve —
+ * it shows a loading spinner instead of a parked "—". */
 export function awaitingRateCellIsSpinner(state: AwaitingRateCellState): boolean {
-  return state === 'calculating' || state === 'pending'
+  return state === 'calculating' || state === 'pending' || state === 'deferred'
 }
 
 /** A resolved passive auto-rate entry for one order row, keyed by request fingerprint. */

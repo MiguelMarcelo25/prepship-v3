@@ -185,10 +185,10 @@ check('passive auto-rating cannot persist from legacy fetchRates fallback',
   !/pickBestPanelRate/.test(passiveBlock) &&
   /apiClient\.browseRates/.test(passiveBlock) &&
   /response\?\.bestRate/.test(passiveBlock));
-check('passive auto-rating caps live browse fallback after cache sweep',
-  /PASSIVE_LIVE_BEST_RATE_LIMIT/.test(ordersView) &&
-  /const liveQueue = queue\.splice\(0, PASSIVE_LIVE_BEST_RATE_LIMIT\)/.test(passiveRunnerBlock) &&
-  /const workerCount = Math\.min\(2, liveQueue\.length\)/.test(passiveRunnerBlock) &&
+check('passive auto-rating drains the full queue at bounded concurrency after cache sweep',
+  /PASSIVE_LIVE_BEST_RATE_CONCURRENCY/.test(ordersView) &&
+  /const liveQueue = queue\.splice\(0\)/.test(passiveRunnerBlock) &&
+  /const workerCount = Math\.min\(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue\.length\)/.test(passiveRunnerBlock) &&
   /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock));
 
 const bestRateBaseStart = ordersView.indexOf('function getBestRateBaseCost(');

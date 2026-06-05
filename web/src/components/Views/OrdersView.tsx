@@ -754,7 +754,11 @@ const TEST_CARRIER_CODE = 'prepship_test'
 const TEST_SERVICE_CODE = 'prepship_test_standard'
 const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
-const PASSIVE_LIVE_BEST_RATE_LIMIT = 12
+// Passive auto-rating now rates EVERY visible rateable awaiting order (so each
+// row shows a spinner until it resolves, never a parked "—"). This is the
+// bounded concurrency of live rate fetches that drain the full queue — keeps
+// carrier-API load in check while still resolving every row.
+const PASSIVE_LIVE_BEST_RATE_CONCURRENCY = 4
 const TEST_RATE_BROWSER_ACCOUNTS = [
   { shippingProviderId: 900001, carrierId: 'se-prepship-test-a', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Standard', accountNumber: 'MOCK-PT-A', name: 'PrepShip Test Standard', _label: 'PrepShip Test Standard' },
   { shippingProviderId: 900002, carrierId: 'se-prepship-test-b', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Saver', accountNumber: 'MOCK-PT-B', name: 'PrepShip Test Saver', _label: 'PrepShip Test Saver' },
@@ -6217,8 +6221,13 @@ export default function OrdersView({
         queue.splice(index, 1)
       }
 
-      const liveQueue = queue.splice(0, PASSIVE_LIVE_BEST_RATE_LIMIT)
-      const workerCount = Math.min(2, liveQueue.length)
+      // Drain the ENTIRE remaining queue (no count cap) so every rateable row
+      // is live-rated and its spinner resolves to a real rate / "unavailable" /
+      // error — instead of parking off-slice rows on a terminal "—". Concurrency
+      // stays bounded by PASSIVE_LIVE_BEST_RATE_CONCURRENCY so carrier APIs are
+      // not hammered; rows simply resolve progressively.
+      const liveQueue = queue.splice(0)
+      const workerCount = Math.min(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue.length)
       const workers = Array.from({ length: workerCount }, async () => {
         while (!cancelled && liveQueue.length > 0) {
           const next = liveQueue.shift()
@@ -8046,16 +8055,11 @@ export default function OrdersView({
             Rate unavailable · Retry
           </button>
         )
+      // 'deferred' = rateable but not yet reached by the live drain. Passive
+      // auto-rating now drains the full queue, so every deferred row WILL be
+      // rated and resolve; show a loading spinner (not a parked "—") while it
+      // waits its turn. Mirrors the calculating/pending spinner exactly.
       case 'deferred':
-        return (
-          <span
-            data-rate-state="deferred"
-            title="Best rate not loaded yet. Use Recalculate for a live rate."
-            style={muted}
-          >
-            —
-          </span>
-        )
       case 'calculating':
       case 'pending':
       default:
