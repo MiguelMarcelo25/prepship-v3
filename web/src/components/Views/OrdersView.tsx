@@ -87,7 +87,6 @@ import {
   classifyQueueOrderRoute,
   getColumnMinWidth,
   groupPrintQueueEntries,
-  planBrowseRateReconcile,
   planStrictBestRateRecalculate,
   planSettledAutoRate,
   resolveColumnPrefs,
@@ -98,6 +97,11 @@ import {
   type ColumnPrefs,
   type PrintQueueGroup,
 } from './orders-parity'
+import {
+  buildFilteredAwaitingRecalculateQuery,
+  formatBatchRecalculateFinishedMessage,
+  prepareBatchRecalculateRows,
+} from './awaiting-rate-recalculate'
 import {
   getComboDefaultPackageId,
   getInitialPanelServiceCode,
@@ -346,8 +350,8 @@ function normalizeConfirmationForRates(value: string | null | undefined) {
   return CONFIRMATION_OPTIONS.some((option) => option.value === normalized) ? normalized : 'none'
 }
 
-// PS-072: infer carrier from a service code so resolveEffectiveInsurance can tell
-// UPS Ground (carrier) from USPS Ground/Ground Advantage (parcelguard).
+// PS-072: infer carrier from a service code so resolveEffectiveInsurance can
+// apply the ParcelGuard defaults to UPS/USPS ground services.
 function inferCarrierFromServiceCode(serviceCode: string | null | undefined): string {
   const s = String(serviceCode ?? '').toLowerCase()
   if (s.includes('usps') || s.includes('stamps') || s.includes('ground_advantage') || s.includes('groundadvantage') || s.includes('parcel_select')) return 'usps'
@@ -495,7 +499,7 @@ function writeLocalColumnPrefs(prefs: ColumnPrefs) {
 }
 
 function scheduleNonCriticalOrdersWork(callback: () => void, delayMs = 2500) {
-  if (typeof window === 'undefined') return () => {}
+  if (typeof window === 'undefined') return () => { }
   let cancelled = false
   const run = () => {
     if (cancelled || document.visibilityState !== 'visible') return
@@ -2407,11 +2411,11 @@ export default function OrdersView({
   const advanceQueueActionProgress = (failedDelta = 0, completedDelta = 1) => {
     setQueueActionProgress((current) => current
       ? {
-          ...current,
-          completed: Math.min(current.total, current.completed + completedDelta),
-          failed: current.failed + failedDelta,
-          tick: current.tick + 1,
-        }
+        ...current,
+        completed: Math.min(current.total, current.completed + completedDelta),
+        failed: current.failed + failedDelta,
+        tick: current.tick + 1,
+      }
       : current
     )
   }
@@ -2471,18 +2475,18 @@ export default function OrdersView({
 
   const dateRange = dateFilter === 'custom'
     ? {
-        start: customDateFrom || undefined,
-        end: customDateTo || undefined,
-      }
+      start: customDateFrom || undefined,
+      end: customDateTo || undefined,
+    }
     : (() => {
-        const range = getOrdersDateRange(dateFilter)
-        if (!range) return { start: undefined, end: undefined }
+      const range = getOrdersDateRange(dateFilter)
+      if (!range) return { start: undefined, end: undefined }
 
-        return {
-          start: range.start.toISOString().split('T')[0],
-          end: range.end.toISOString().split('T')[0],
-        }
-      })()
+      return {
+        start: range.start.toISOString().split('T')[0],
+        end: range.end.toISOString().split('T')[0],
+      }
+    })()
 
   // Hide Test Orders client across every status tab (Awaiting / Shipped /
   // Cancelled), not just Awaiting. Toggle in the sidebar still controls the
@@ -2515,9 +2519,9 @@ export default function OrdersView({
       ...(isGlobalSearch
         ? {}
         : {
-            orderStatus: currentStatus,
-            storeId: activeStore ?? undefined,
-          }),
+          orderStatus: currentStatus,
+          storeId: activeStore ?? undefined,
+        }),
       dateStart: dateRange.start,
       dateEnd: dateRange.end,
       hideTestOrders: hideTestOrdersInAllAwaiting,
@@ -2783,11 +2787,11 @@ export default function OrdersView({
     () => (
       skuSortActive
         ? groupOrdersBySku(
-            orderedFilteredOrders,
-            (order) => getPrimarySkuLabel(order, orderDetailsById.get(order.orderId) ?? null),
-            (order) => getTotalQuantity(order, orderDetailsById.get(order.orderId) ?? null),
-            (order) => getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
-          )
+          orderedFilteredOrders,
+          (order) => getPrimarySkuLabel(order, orderDetailsById.get(order.orderId) ?? null),
+          (order) => getTotalQuantity(order, orderDetailsById.get(order.orderId) ?? null),
+          (order) => getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
+        )
         : []
     ),
     [orderedFilteredOrders, orderDetailsById, skuSortActive],
@@ -3298,8 +3302,8 @@ export default function OrdersView({
     panelFormInitKeyRef.current = initKey
     bestRateRefreshSeqRef.current += 1
     const initialServiceCode = panelIsTestOrder ? TEST_SERVICE_CODE : getInitialPanelServiceCode(panelOrder, panelDetail)
-    // PS-072: default the panel Insurance to the HUGRAB ground policy (Carrier $100
-    // for UPS Ground, Parcel Guard $100 for USPS Ground/Ground Advantage) when the
+    // PS-072: default the panel Insurance to the HUGRAB ground policy (Parcel Guard
+    // $100 for UPS Ground and USPS Ground/Ground Advantage) when the
     // operator has not explicitly chosen insurance — so the UI visibly shows what
     // the backend will charge. resolveEffectiveInsurance never touches Ground
     // Saver/SurePost (PS-057) or non-HUGRAB orders.
@@ -3307,17 +3311,17 @@ export default function OrdersView({
       insurance.type && insurance.type !== 'none'
         ? { type: insurance.type, value: insurance.value }
         : (() => {
-            const effective = resolveEffectiveInsurance(
-              { clientId: panelOrder.clientId, storeId: panelOrder.storeId },
-              {
-                carrierCode: inferCarrierFromServiceCode(initialServiceCode),
-                serviceCode: initialServiceCode,
-                serviceName: initialServiceCode,
-              },
-              { insuranceProvider: insurance.type, insuredValue: insurance.value },
-            )
-            return { type: effective.insuranceProvider, value: effective.insuredValue }
-          })()
+          const effective = resolveEffectiveInsurance(
+            { clientId: panelOrder.clientId, storeId: panelOrder.storeId },
+            {
+              carrierCode: inferCarrierFromServiceCode(initialServiceCode),
+              serviceCode: initialServiceCode,
+              serviceName: initialServiceCode,
+            },
+            { insuranceProvider: insurance.type, insuredValue: insurance.value },
+          )
+          return { type: effective.insuranceProvider, value: effective.insuredValue }
+        })()
     const initialPanelForm: PanelFormState = {
       locationId: locationId != null ? String(locationId) : '',
       shipAccountId: panelIsTestOrder ? TEST_CARRIER_CODE : selectedAccountValue != null ? String(selectedAccountValue) : '',
@@ -3364,10 +3368,10 @@ export default function OrdersView({
             || getMatchedPackageIdByDimensions(
               nextLength && nextWidth && nextHeight
                 ? {
-                    length: Number.parseFloat(nextLength) || 0,
-                    width: Number.parseFloat(nextWidth) || 0,
-                    height: Number.parseFloat(nextHeight) || 0,
-                  }
+                  length: Number.parseFloat(nextLength) || 0,
+                  width: Number.parseFloat(nextWidth) || 0,
+                  height: Number.parseFloat(nextHeight) || 0,
+                }
                 : null,
               packages,
             )
@@ -3383,7 +3387,7 @@ export default function OrdersView({
           }
         })
       })
-      .catch(() => {})
+      .catch(() => { })
   }, [panelOrderId, panelOrder, panelDetail, locations, packages])
 
   useEffect(() => {
@@ -3417,6 +3421,7 @@ export default function OrdersView({
       return next
     })
   }, [panelOrderId, panelOrder, panelDetail, autoBestRateEntries])
+
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment' || !packagesLoaded) return
 
@@ -3749,12 +3754,12 @@ export default function OrdersView({
           ? `First ${selectedCount.toLocaleString()} matching orders selected across pages.`
           : `${selectedCount.toLocaleString()} matching orders selected across pages.`
         : currentStatus === 'awaiting_shipment'
-        ? selectedCount === 1
-          ? 'Order panel active.'
-          : 'Batch Actions panel active.'
-        : currentStatus === 'shipped'
-          ? 'Shipped review active.'
-          : 'Cancelled orders can be selected for review or copy only.'
+          ? selectedCount === 1
+            ? 'Order panel active.'
+            : 'Batch Actions panel active.'
+          : currentStatus === 'shipped'
+            ? 'Shipped review active.'
+            : 'Cancelled orders can be selected for review or copy only.'
 
     return (
       <AnimatePresence initial={false}>
@@ -4127,12 +4132,12 @@ export default function OrdersView({
         current.packageId === packageId
           ? current
           : {
-              ...current,
-              packageId,
-              length: String(dims.length),
-              width: String(dims.width),
-              height: String(dims.height),
-            }
+            ...current,
+            packageId,
+            length: String(dims.length),
+            width: String(dims.width),
+            height: String(dims.height),
+          }
       ))
       if (weightOz > 0) {
         await refreshPanelBestRate({ order: sourceOrder, dims, weightOz, silent: true })
@@ -4484,11 +4489,11 @@ export default function OrdersView({
     const queuePayload = buildQueueAddPayload(order, labelUrl ?? '')
     const multiSkuData = Array.isArray(queuePayload.multi_sku_data)
       ? queuePayload.multi_sku_data
-          .map((item) => ({
-            sku: toStringValue(item?.sku) ?? '',
-            qty: toNumberValue(item?.qty) ?? 1,
-          }))
-          .filter((item) => item.sku)
+        .map((item) => ({
+          sku: toStringValue(item?.sku) ?? '',
+          qty: toNumberValue(item?.qty) ?? 1,
+        }))
+        .filter((item) => item.sku)
       : null
     const payload: Record<string, unknown> = {
       order_id: order.orderId,
@@ -4567,12 +4572,12 @@ export default function OrdersView({
       const failedOffset = offsets.failed ?? 0
       setQueueActionProgress((active) => active
         ? {
-            ...active,
-            label: status.status === 'done' ? 'Refreshing queue' : 'Sending to queue',
-            total: progressTotal,
-            completed: Math.min(progressTotal, completedOffset + current),
-            failed: failedOffset + failed,
-          }
+          ...active,
+          label: status.status === 'done' ? 'Refreshing queue' : 'Sending to queue',
+          total: progressTotal,
+          completed: Math.min(progressTotal, completedOffset + current),
+          failed: failedOffset + failed,
+        }
         : active
       )
 
@@ -4754,10 +4759,10 @@ export default function OrdersView({
     if (skippedFailed > 0) {
       setQueueActionProgress((active) => active
         ? {
-            ...active,
-            completed: Math.min(active.total, skippedFailed),
-            failed: active.failed + skippedFailed,
-          }
+          ...active,
+          completed: Math.min(active.total, skippedFailed),
+          failed: active.failed + skippedFailed,
+        }
         : active
       )
     }
@@ -5352,35 +5357,33 @@ export default function OrdersView({
     }
   }
 
-  function getAutoBestRateRequest(order: OrderSummaryDto) {
+  function buildStrictBestRateRequest(
+    order: OrderSummaryDto,
+    input: {
+      detail?: OrderFullDto | null
+      dims: { length: number; width: number; height: number } | null
+      weightOz: number
+      shipTo: ReturnType<typeof getShipTo>
+      confirmation: string
+      insuranceProvider?: string | null
+      insuredValue?: number | null
+    },
+  ) {
     if (order.orderStatus !== 'awaiting_shipment') return null
-    const detail = orderDetailsById.get(order.orderId) ?? null
-    const dims = getDimensions(order, detail)
-    const weightOz = getOrderWeightOz(order, detail)
+    const dims = input.dims
+    const weightOz = input.weightOz
     if (!dims || !hasCompleteDims(dims) || weightOz <= 0) return null
+    if (!input.shipTo.postalCode) return null
 
-    const shipTo = getShipTo(order, detail)
-    if (!shipTo.postalCode) return null
-
-    const confirmation = normalizeConfirmationForRates(
-      toStringValue(order.selectedRate?.confirmation) ??
-      toStringValue(getShippingModel(order)?.confirmation) ??
-      'none'
-    )
     const carrierIds = getRateCarrierIdsForAccounts()
     const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
-    // PS-072: HUGRAB ground orders default to $100 insurance. The auto best-rate
-    // shop is multi-service, so we quote with carrier/$100 (the backend refines
-    // USPS Ground to Parcel Guard at label time and enforces the default
-    // regardless). Including it in the fingerprint + request keeps the UI in sync
-    // with the insured backend rate so a stale no-insurance rate is not reused.
-    const hugrab = isHugrabShippingContext({ clientId: order.clientId, storeId: order.storeId })
-    const insuranceProvider = hugrab ? 'carrier' : 'none'
-    const insuredValue = hugrab ? HUGRAB_DEFAULT_INSURED_VALUE : null
+    const confirmation = normalizeConfirmationForRates(input.confirmation)
+    const insuranceProvider = input.insuranceProvider ?? 'none'
+    const insuredValue = input.insuredValue ?? null
     const fingerprint = buildRateRequestFingerprint({
       weightOz,
       dims,
-      shipTo,
+      shipTo: input.shipTo,
       residential: true,
       carrierIds,
       storeId: order.storeId,
@@ -5391,7 +5394,46 @@ export default function OrdersView({
     })
     const key = `${order.orderId}|${fingerprint}`
 
-    return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, carrierIds, insuranceProvider, insuredValue, fingerprint, key }
+    return {
+      detail: input.detail ?? null,
+      dims,
+      dimsLabel,
+      weightOz,
+      shipTo: input.shipTo,
+      confirmation,
+      carrierIds,
+      insuranceProvider,
+      insuredValue,
+      fingerprint,
+      key,
+    }
+  }
+
+  function getAutoBestRateRequest(order: OrderSummaryDto) {
+    const detail = orderDetailsById.get(order.orderId) ?? null
+    const dims = getDimensions(order, detail)
+    const weightOz = getOrderWeightOz(order, detail)
+    const shipTo = getShipTo(order, detail)
+    const confirmation = normalizeConfirmationForRates(
+      toStringValue(order.selectedRate?.confirmation) ??
+      toStringValue(getShippingModel(order)?.confirmation) ??
+      'none'
+    )
+    // PS-072: HUGRAB ground orders default to $100 insurance. The auto best-rate
+    // shop is multi-service, so we quote with carrier/$100 (the backend refines
+    // USPS Ground to Parcel Guard at label time and enforces the default
+    // regardless). Including it in the fingerprint + request keeps the UI in sync
+    // with the insured backend rate so a stale no-insurance rate is not reused.
+    const hugrab = isHugrabShippingContext({ clientId: order.clientId, storeId: order.storeId })
+    return buildStrictBestRateRequest(order, {
+      detail,
+      dims,
+      weightOz,
+      shipTo,
+      confirmation,
+      insuranceProvider: hugrab ? 'carrier' : 'none',
+      insuredValue: hugrab ? HUGRAB_DEFAULT_INSURED_VALUE : null,
+    })
   }
 
   function normalizeDimsLabel(value: unknown) {
@@ -5435,11 +5477,13 @@ export default function OrdersView({
   }
 
   function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown) {
-    const selectedRate =
-      toRecord(candidate) ??
-      toRecord(order.bestRate) ??
-      toRecord(order.selectedRate) ??
-      getSavedBestRateRecord(order)
+    const candidates = [
+      toRecord(candidate),
+      toRecord(order.bestRate),
+      toRecord(order.selectedRate),
+      getSavedBestRateRecord(order),
+    ].filter(Boolean) as Record<string, unknown>[]
+    const selectedRate = candidates.find((rate) => rateProofFingerprint(rate)) ?? null
     const requestFingerprint = rateProofFingerprint(selectedRate)
     if (!selectedRate || !requestFingerprint) return undefined
     return { requestFingerprint, selectedRate }
@@ -5523,9 +5567,9 @@ export default function OrdersView({
       shipping,
       canonicalOrder: canonicalOrder
         ? {
-            ...canonicalOrder,
-            shipping,
-          }
+          ...canonicalOrder,
+          shipping,
+        }
         : order.canonicalOrder,
     }
   }
@@ -5551,9 +5595,9 @@ export default function OrdersView({
       shipping,
       canonicalOrder: canonicalOrder
         ? {
-            ...canonicalOrder,
-            shipping,
-          }
+          ...canonicalOrder,
+          shipping,
+        }
         : order.canonicalOrder,
     }
   }
@@ -5605,7 +5649,7 @@ export default function OrdersView({
     return new Promise<T>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         const error = new Error('Live rate lookup timed out. Retry this order.')
-        ;(error as Error & { code?: string }).code = 'BATCH_RECALCULATE_TIMEOUT'
+          ; (error as Error & { code?: string }).code = 'BATCH_RECALCULATE_TIMEOUT'
         reject(error)
       }, timeoutMs)
       promise.then(
@@ -5625,55 +5669,15 @@ export default function OrdersView({
     return error instanceof Error && (error as Error & { code?: string }).code === 'BATCH_RECALCULATE_TIMEOUT'
   }
 
-  async function runStrictBestRateRecalculation(
+  async function applyStrictBestRateResponse(
     order: OrderSummaryDto,
     request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+    response: Record<string, unknown> | null | undefined,
     options: {
-      timeoutMs?: number
       updatePanel?: boolean
       refetch?: boolean
-      shouldContinue?: () => boolean
     } = {},
   ): Promise<{ status: 'updated' | 'cleared' | 'blocked'; message: string; rate?: Record<string, unknown> | null }> {
-    const browsePromise = apiClient.browseRates({
-      weightOz: request.weightOz,
-      toZip: request.shipTo.postalCode,
-      toCountry: request.shipTo.country ?? 'US',
-      toState: request.shipTo.state ?? undefined,
-      toCity: request.shipTo.city ?? undefined,
-      dimsL: request.dims.length,
-      dimsW: request.dims.width,
-      dimsH: request.dims.height,
-      residential: true,
-      carrierIds: request.carrierIds,
-      storeId: order.storeId,
-      clientId: order.clientId,
-      confirmation: request.confirmation,
-      insuranceProvider: request.insuranceProvider,
-      insuredValue: request.insuredValue,
-      orderId: order.orderId,
-      orderNumber: order.orderNumber ?? undefined,
-      externalOrderId:
-        order.externalOrderId ??
-        order.external_order_id ??
-        order.orderNumber ??
-        undefined,
-      forceLive: true,
-      forceRefresh: true,
-      // PS-083 follow-up: Recalculate must consider the order's visible direct
-      // carriers (Walmart Shipping / SHIPP), not just ShipStation — otherwise it
-      // overwrites the cheaper direct best rate the Rate Browser found.
-      includeVisibleDirectCarriers: true,
-    })
-    const response = options.timeoutMs
-      ? await withRecalculateTimeout(browsePromise, options.timeoutMs)
-      : await browsePromise
-    if (options.shouldContinue && !options.shouldContinue()) {
-      const error = new Error('Recalculate superseded')
-      ;(error as Error & { code?: string }).code = 'RECALCULATE_SUPERSEDED'
-      throw error
-    }
-
     const liveBest = toRecord(response?.bestRate)
     const liveBestAmount = liveBest ? getRateBaseAmount(liveBest) : null
     const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
@@ -5758,6 +5762,58 @@ export default function OrdersView({
       message: 'Best rate recalculated from live carrier responses',
       rate: rateWithMetadata,
     }
+  }
+
+  async function runStrictBestRateRecalculation(
+    order: OrderSummaryDto,
+    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+    options: {
+      timeoutMs?: number
+      updatePanel?: boolean
+      refetch?: boolean
+      shouldContinue?: () => boolean
+    } = {},
+  ): Promise<{ status: 'updated' | 'cleared' | 'blocked'; message: string; rate?: Record<string, unknown> | null }> {
+    const browsePromise = apiClient.browseRates({
+      weightOz: request.weightOz,
+      toZip: request.shipTo.postalCode,
+      toCountry: request.shipTo.country ?? 'US',
+      toState: request.shipTo.state ?? undefined,
+      toCity: request.shipTo.city ?? undefined,
+      dimsL: request.dims.length,
+      dimsW: request.dims.width,
+      dimsH: request.dims.height,
+      residential: true,
+      carrierIds: request.carrierIds,
+      storeId: order.storeId,
+      clientId: order.clientId,
+      confirmation: request.confirmation,
+      insuranceProvider: request.insuranceProvider,
+      insuredValue: request.insuredValue,
+      orderId: order.orderId,
+      orderNumber: order.orderNumber ?? undefined,
+      externalOrderId:
+        order.externalOrderId ??
+        order.external_order_id ??
+        order.orderNumber ??
+        undefined,
+      forceLive: true,
+      forceRefresh: true,
+      // PS-083 follow-up: Recalculate must consider the order's visible direct
+      // carriers (Walmart Shipping / SHIPP), not just ShipStation - otherwise it
+      // overwrites the cheaper direct best rate the Rate Browser found.
+      includeVisibleDirectCarriers: true,
+    })
+    const response = options.timeoutMs
+      ? await withRecalculateTimeout(browsePromise, options.timeoutMs)
+      : await browsePromise
+    if (options.shouldContinue && !options.shouldContinue()) {
+      const error = new Error('Recalculate superseded')
+        ; (error as Error & { code?: string }).code = 'RECALCULATE_SUPERSEDED'
+      throw error
+    }
+
+    return applyStrictBestRateResponse(order, request, response, options)
   }
 
   function getAppliedRateDims(rate: Record<string, unknown>) {
@@ -6029,11 +6085,11 @@ export default function OrdersView({
       }
 
       const workers = Array.from({ length: workerCount }, async () => {
-      while (!cancelled && queue.length > 0) {
-        const next = queue.shift()
-        if (!next) continue
-        await refreshVisibleBestRate(next.order, next.request)
-      }
+        while (!cancelled && queue.length > 0) {
+          const next = queue.shift()
+          if (!next) continue
+          await refreshVisibleBestRate(next.order, next.request)
+        }
       })
       await Promise.all(workers)
     }
@@ -6137,15 +6193,20 @@ export default function OrdersView({
         bestRate.confirmation = shippingOptions.confirmation
         bestRate.insuranceProvider = shippingOptions.insuranceProvider
         bestRate.insuredValue = shippingOptions.insuredValue
-        setPanelRatePreview([bestRate])
+        const bestRateWithMetadata = autoRequest ? withRateRequestMetadata(bestRate, autoRequest, {
+          isComplete: true,
+          rateCount: rates.length,
+          matchType: 'panel-live',
+        }) : bestRate
+        setPanelRatePreview([bestRateWithMetadata])
         if (autoRequest) {
           setAutoBestRateEntries((current) => ({
             ...current,
-            [order.orderId]: { key: autoRequest.key, rate: bestRate },
+            [order.orderId]: { key: autoRequest.key, rate: bestRateWithMetadata },
           }))
         }
-        const shippingProviderId = toProviderAccountId(bestRate.shippingProviderId)
-        const serviceCode = toStringValue(bestRate.serviceCode)
+        const shippingProviderId = toProviderAccountId(bestRateWithMetadata.shippingProviderId)
+        const serviceCode = toStringValue(bestRateWithMetadata.serviceCode)
         if (shippingProviderId != null && serviceCode) {
           setPanelForm((current) => ({
             ...current,
@@ -6154,11 +6215,13 @@ export default function OrdersView({
           }))
           void apiClient.setOrderSelectedPid(order.orderId, shippingProviderId)
         }
-        await persistAppliedRateForOrder(order.orderId, bestRate, {
+        await persistAppliedRateForOrder(order.orderId, bestRateWithMetadata, {
           fallbackDims: dims,
           fallbackWeightOz: weightOz,
+          request: autoRequest ?? undefined,
+          metadata: autoRequest ? bestRateWithMetadata : undefined,
         })
-        return bestRate
+        return bestRateWithMetadata
       }
 
       await apiClient.saveOrderBestRate(order.orderId, null, dimsLabel)
@@ -6445,7 +6508,7 @@ export default function OrdersView({
       const width = request?.dims.width || fallbackDims.width || payload.dims?.width || getDimensions(panelOrder, panelDetail)?.width || 0
       const height = request?.dims.height || fallbackDims.height || payload.dims?.height || getDimensions(panelOrder, panelDetail)?.height || 0
       const shipTo = request?.shipTo ?? getShipTo(panelOrder, panelDetail)
-      const rawRates = await apiClient.fetchRates({
+      const response = await apiClient.browseRates({
         weightOz,
         toZip: shipTo.postalCode ?? '',
         toCountry: shipTo.country ?? 'US',
@@ -6461,25 +6524,16 @@ export default function OrdersView({
         insuredValue: request?.insuredValue,
         orderId: panelOrder.orderId,
         orderNumber: panelOrder.orderNumber ?? undefined,
+        externalOrderId:
+          panelOrder.externalOrderId ??
+          panelOrder.external_order_id ??
+          panelOrder.orderNumber ??
+          undefined,
+        forceLive: true,
         forceRefresh: true,
       })
       // Remap ShipStation v2 rate shape → v2-legacy shape the panel expects.
-      const rates = (rawRates ?? []).map((r: any) => {
-        const shipmentCost = r.shipmentCost ?? r.shipping_amount?.amount ?? 0
-        const confirmationCost = r.confirmationAmount ?? r.confirmation_amount?.amount ?? 0
-        const otherCost = (r.otherCost ?? r.other_amount?.amount ?? 0) + confirmationCost
-        return {
-          carrierCode: r.carrierCode ?? r.carrier_code ?? null,
-          serviceCode: r.serviceCode ?? r.service_code ?? null,
-          serviceName: r.serviceName ?? r.service_type ?? null,
-          carrierNickname: r.carrierNickname ?? r.carrier_nickname ?? null,
-          shippingProviderId: toProviderAccountId(r.shippingProviderId ?? r.carrier_id),
-          amount: shipmentCost + otherCost,
-          shipmentCost,
-          otherCost,
-          raw: r,
-        }
-      })
+      const rates = Array.isArray(response?.rates) ? response.rates : []
       setRateBrowserRates(rates)
 
       // PS-082 — reconcile the table's Best Rate + selected service to the LIVE
@@ -6487,55 +6541,12 @@ export default function OrdersView({
       // table's exact request fingerprint so it shows immediately, survives
       // reload, and won't get re-flipped by the next passive pass. Only writes
       // when the live best is a usable rate AND differs from the cached best.
-      const usableRates = rates.filter((rate) => Number(rate.amount) > 0)
-      if (request && usableRates.length) {
-        const liveBest = usableRates.reduce((best, candidate) => (candidate.amount < best.amount ? candidate : best))
-        const inMemEntry = autoBestRateEntries[panelOrder.orderId]
-        const savedRecord = getSavedBestRateRecord(panelOrder)
-        const currentBestAmount =
-          inMemEntry?.key === request.key && inMemEntry.rate
-            ? getRateBaseAmount(inMemEntry.rate)
-            : savedRecord
-              ? getRateBaseAmount(savedRecord)
-              : null
-        const reconcile = planBrowseRateReconcile({
-          requestKey: request.key,
-          liveBest,
-          liveBestAmount: getRateBaseAmount(liveBest),
-          currentBestAmount,
-          providerAccountId: toProviderAccountId(liveBest.shippingProviderId),
-          serviceCode: toStringValue(liveBest.serviceCode),
+      if (request) {
+        const strictResponse = { ...(response ?? {}), bestRate: response?.bestRate }
+        await applyStrictBestRateResponse(panelOrder, request, strictResponse, {
+          updatePanel: true,
+          refetch: true,
         })
-        if (reconcile.entry) {
-          const liveBestWithMeta = withRateRequestMetadata(liveBest, request, {
-            isComplete: true,
-            rateCount: rates.length,
-            matchType: 'live',
-          })
-          setAutoBestRateEntries((current) => ({
-            ...current,
-            [panelOrder.orderId]: { key: request.key, rate: liveBestWithMeta },
-          }))
-          if (reconcile.shouldUpdate) {
-            const selection = reconcile.selection
-            if (selection) {
-              setPanelForm((current) => ({
-                ...current,
-                shipAccountId: selection.shipAccountId,
-                serviceCode: selection.serviceCode,
-              }))
-              void apiClient.setOrderSelectedPid(panelOrder.orderId, Number(selection.shipAccountId))
-            }
-            setPanelRatePreview([liveBest])
-            await persistAppliedRateForOrder(panelOrder.orderId, liveBestWithMeta, {
-              fallbackDims: request.dims,
-              fallbackWeightOz: request.weightOz,
-              request,
-              metadata: { isComplete: true, rateCount: rates.length, matchType: 'live' },
-              refetch: true,
-            })
-          }
-        }
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to browse rates', 'error')
@@ -6674,10 +6685,10 @@ export default function OrdersView({
     const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
     const rateForTable = autoRequest
       ? withRateRequestMetadata(rate, autoRequest, {
-          isComplete: true,
-          rateCount: 1,
-          matchType: 'manual',
-        })
+        isComplete: true,
+        rateCount: 1,
+        matchType: 'manual',
+      })
       : rate
 
     setPanelForm((current) => ({
@@ -6699,9 +6710,9 @@ export default function OrdersView({
       fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
       ...(autoRequest
         ? {
-            request: autoRequest,
-            metadata: { isComplete: true, rateCount: 1, matchType: 'manual' },
-          }
+          request: autoRequest,
+          metadata: { isComplete: true, rateCount: 1, matchType: 'manual' },
+        }
         : {}),
       refetch: true,
     }).catch((error) => {
@@ -6914,9 +6925,9 @@ export default function OrdersView({
     const target = assignTo === 'unassign'
       ? { userId: null, email: null, label: 'Unassigned' }
       : (() => {
-          const u = assignableUsers.find((cand) => cand.id === assignTo)
-          return u ? { userId: u.id, email: u.email, label: u.email } : null
-        })()
+        const u = assignableUsers.find((cand) => cand.id === assignTo)
+        return u ? { userId: u.id, email: u.email, label: u.email } : null
+      })()
     if (!target) {
       showToast('User not found in list — refresh the page', 'error')
       return
@@ -6981,11 +6992,11 @@ export default function OrdersView({
     const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
 
     const processOrder = async (order: OrderSummaryDto) => {
-      const bestRate = order.bestRate
+      let bestRate = order.bestRate
       const selectedRate = order.selectedRate
-      const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-      const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
-      const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
+      let shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
+      let serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
+      let carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
       const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
@@ -6995,28 +7006,46 @@ export default function OrdersView({
       // endpoint with a serviceCode + carrierCode. Use the order's stored
       // defaults when no rate has been shopped.
       const orderIsTest = isTestOrder(order, orderDetail)
-      const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
-      const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
+      let effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
+      let effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
       const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
-
-      // Real-postage path still requires shippingProviderId. For test orders
-      // the backend never makes that call, so we omit the field entirely
-      // rather than try to sneak a 0 past Zod's .positive() validator.
-      if (!orderIsTest && shippingProviderId == null) {
-        failed += 1
-        if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-        if (mode === 'queue') advanceQueueActionProgress(1)
-        return
-      }
-      if (!effectiveServiceCode || !effectiveCarrierCode) {
-        failed += 1
-        if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-        if (mode === 'queue') advanceQueueActionProgress(1)
-        return
-      }
 
       try {
         const shippingOptions = buildOrderShippingOptionsPayload(order)
+        let proofRate = bestRate ?? selectedRate
+        let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)
+        if (!selectedRateProof && !orderIsTest) {
+          const proofRequest = getAutoBestRateRequest(order)
+          if (!proofRequest) {
+            throw new Error('Recalculate current best rate before label purchase')
+          }
+          const proofResult = await runStrictBestRateRecalculation(order, proofRequest, {
+            timeoutMs: BATCH_RECALCULATE_TIMEOUT_MS,
+          })
+          if (proofResult.status !== 'updated' || !proofResult.rate) {
+            throw new Error(proofResult.message || 'Current best rate could not be proven before label purchase')
+          }
+          proofRate = proofResult.rate
+          bestRate = proofResult.rate
+          selectedRateProof = buildSelectedRateProofPayload(order, proofRate)
+          shippingProviderId = toNumberValue(proofRate.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
+          serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(proofRate.serviceCode) ?? selectedRate?.serviceCode
+          carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(proofRate.carrierCode) ?? selectedRate?.carrierCode
+          effectiveServiceCode = serviceCode
+          effectiveCarrierCode = carrierCode
+        }
+        if (!selectedRateProof && !orderIsTest) {
+          throw new Error('Selected rate proof is missing after live best-rate recalculation')
+        }
+        // Real-postage path still requires shippingProviderId. For test orders
+        // the backend never makes that call, so we omit the field entirely
+        // rather than try to sneak a 0 past Zod's .positive() validator.
+        if (!orderIsTest && shippingProviderId == null) {
+          throw new Error('Select a carrier account')
+        }
+        if (!effectiveServiceCode || !effectiveCarrierCode) {
+          throw new Error('Select a shipping service')
+        }
         const payload: Record<string, unknown> = {
           orderId: order.orderId,
           // v2-parity: pass orderNumber so ShipStation's external_order_id
@@ -7037,7 +7066,7 @@ export default function OrdersView({
           confirmation: shippingOptions.confirmation,
           insuranceProvider: shippingOptions.insuranceProvider,
           insuredValue: shippingOptions.insuredValue,
-          selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
+          selectedRateProof,
           testLabel: batchTestMode || orderIsTest,
         }
         if (shippingProviderId != null) {
@@ -7566,18 +7595,18 @@ export default function OrdersView({
     : 0
   const queueToolbarProgress = queueActionProgress
     ? {
-        label: queueActionProgress.label,
-        detail: `${queueActionProgress.completed}/${queueActionProgress.total}${queueActionProgress.completed < queueActionProgress.total ? ` - working ${queueActionElapsedSeconds}s` : ''}${queueActionProgress.failed > 0 ? ` - ${queueActionProgress.failed} failed` : ''}`,
-        pct: queueActionProgressPct,
-        tone: queueActionProgress.failed > 0 ? '#f59e0b' : 'var(--ss-blue)',
-      }
+      label: queueActionProgress.label,
+      detail: `${queueActionProgress.completed}/${queueActionProgress.total}${queueActionProgress.completed < queueActionProgress.total ? ` - working ${queueActionElapsedSeconds}s` : ''}${queueActionProgress.failed > 0 ? ` - ${queueActionProgress.failed} failed` : ''}`,
+      pct: queueActionProgressPct,
+      tone: queueActionProgress.failed > 0 ? '#f59e0b' : 'var(--ss-blue)',
+    }
     : queuePrintInFlight && queuePrintMessage
       ? {
-          label: 'Print queue',
-          detail: queuePrintMessage,
-          pct: queuePrintProgress ?? 0,
-          tone: 'var(--ss-blue)',
-        }
+        label: 'Print queue',
+        detail: queuePrintMessage,
+        pct: queuePrintProgress ?? 0,
+        tone: 'var(--ss-blue)',
+      }
       : null
 
   // PS-071 — re-run passive auto-rating for one order whose rate came back
@@ -7603,15 +7632,22 @@ export default function OrdersView({
   // Returns null for 'ready' (the caller then renders the real rate). The
   // historically-infinite no-rate cases now resolve to a terminal label instead
   // of an endless <span className="spin-sm" />.
-  function getBatchRecalculateOrders(scope: BatchRecalculateScope) {
+  async function getBatchRecalculateOrders(scope: BatchRecalculateScope) {
+    const targetOrders =
+      scope === 'selected'
+        ? await hydrateSelectedOrdersForActions()
+        : await apiClient.fetchMatchingOrdersForSelection(
+          buildFilteredAwaitingRecalculateQuery(matchingSelectionQuery),
+        )
     const selection = selectBatchRecalculateOrderIds({
       currentStatus,
       scope,
-      orders,
+      orders: targetOrders,
       selectedOrderIds,
       visibleOrderIds,
+      matchingOrderIds: targetOrders.map((order) => order.orderId),
     })
-    const orderById = new Map(orders.map((order) => [order.orderId, order]))
+    const orderById = new Map(targetOrders.map((order) => [order.orderId, order]))
     return {
       selection,
       targetOrders: selection.orderIds
@@ -7668,7 +7704,7 @@ export default function OrdersView({
 
   async function startBatchRecalculateBestRates(scope: BatchRecalculateScope) {
     if (batchRecalculateBusy) return
-    const { selection, targetOrders } = getBatchRecalculateOrders(scope)
+    const { selection, targetOrders } = await getBatchRecalculateOrders(scope)
     if (selection.blockedReason) {
       showToast(selection.blockedReason, 'error')
       return
@@ -7677,7 +7713,7 @@ export default function OrdersView({
       showToast(
         scope === 'selected'
           ? 'Select one or more awaiting orders to recalculate'
-          : 'No awaiting orders on this page can be recalculated',
+          : 'No filtered awaiting orders can be recalculated',
         'error',
       )
       return
@@ -7685,21 +7721,18 @@ export default function OrdersView({
 
     const runId = batchRecalculateRunRef.current + 1
     batchRecalculateRunRef.current = runId
-    const finalRows: Record<number, BatchRecalculateRowState> = {}
-    const queueableOrders: OrderSummaryDto[] = []
-    for (const order of targetOrders) {
+    const prepared = prepareBatchRecalculateRows(targetOrders, (order) => {
       if (isTestOrder(order)) {
-        finalRows[order.orderId] = { status: 'skipped', message: 'Test order uses mock rates.' }
-        continue
+        return { queueable: false, row: { status: 'skipped', message: 'Test order uses mock rates.' } }
       }
       const request = getAutoBestRateRequest(order)
       if (!request) {
-        finalRows[order.orderId] = { status: 'skipped', message: 'Missing weight, dimensions, or ship-to postal code.' }
-        continue
+        return { queueable: false, row: { status: 'skipped', message: 'Missing weight, dimensions, or ship-to postal code.' } }
       }
-      finalRows[order.orderId] = { status: 'pending' }
-      queueableOrders.push(order)
-    }
+      return { queueable: true }
+    })
+    const finalRows: Record<number, BatchRecalculateRowState> = { ...prepared.rows }
+    const queueableOrders = prepared.queueableOrders
     setBatchRecalculateRows({ ...finalRows })
     if (queueableOrders.length === 0) {
       showToast('No rateable awaiting orders found. Add dims, weight, and ship-to postal codes first.', 'info')
@@ -7723,12 +7756,8 @@ export default function OrdersView({
     try {
       await Promise.all(Array.from({ length: workerCount }, () => worker()))
       await refetchOrders()
-      const summary = buildBatchRecalculateProgress(finalRows)
-      const skippedText = selection.skippedImmutable > 0 ? `, ${selection.skippedImmutable} immutable skipped` : ''
-      showToast(
-        `Recalculate finished: ${summary.updated} updated, ${summary.cleared} unavailable, ${summary.blocked + summary.timedOut} need retry${skippedText}`,
-        summary.updated > 0 ? 'success' : 'info',
-      )
+      const { summary, message } = formatBatchRecalculateFinishedMessage(finalRows, selection.skippedImmutable)
+      showToast(message, summary.updated > 0 ? 'success' : 'info')
     } finally {
       if (batchRecalculateRunRef.current === runId) {
         setBatchRecalculateBusy(false)
@@ -8152,80 +8181,80 @@ export default function OrdersView({
     if (fallback) return fallback
 
     return (
-        <div
-          data-rate-state="ready"
-          style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}
-        >
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            {truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22)}
-          </div>
+      <div
+        data-rate-state="ready"
+        style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
+        <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
+          {truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22)}
         </div>
-      )
+      </div>
+    )
   }
 
   const renderOrderCell = (order: OrderSummaryDto) => {
     const testOrder = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
     const isShipping = transitionalShippedIds.has(order.orderId)
     return (
-    <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
-      {testOrder && (
-        <span
-          title="Sandbox / test order — no real postage, billing, or inventory impact"
-          style={{
-            display: 'inline-block',
-            padding: '1px 6px',
-            fontSize: 9,
-            fontWeight: 700,
-            letterSpacing: 0.5,
-            color: '#fff',
-            background: '#d97706',
-            borderRadius: 3,
-            flexShrink: 0,
-          }}
-        >
-          TEST
-        </span>
-      )}
-      {/* Shipping-in-progress pill — only renders during the 30 s
+      <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
+        {testOrder && (
+          <span
+            title="Sandbox / test order — no real postage, billing, or inventory impact"
+            style={{
+              display: 'inline-block',
+              padding: '1px 6px',
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              color: '#fff',
+              background: '#d97706',
+              borderRadius: 3,
+              flexShrink: 0,
+            }}
+          >
+            TEST
+          </span>
+        )}
+        {/* Shipping-in-progress pill — only renders during the 30 s
           fade transition (Create + Print Label flow). Animated truck
           icon + pulsing background give the operator a clear,
           persistent signal that the order is in flight to Shipped.
           See .ps-shipping-pill in app-shell.css for the styles. */}
-      {isShipping && (
-        <span className="ps-shipping-pill" title="Order is being shipped — will move to Shipped in 30 seconds">
-          <Truck size={9} strokeWidth={2.5} />
-          Shipping…
+        {isShipping && (
+          <span className="ps-shipping-pill" title="Order is being shipped — will move to Shipped in 30 seconds">
+            <Truck size={9} strokeWidth={2.5} />
+            Shipping…
+          </span>
+        )}
+        <span
+          className="od-order-link"
+          title="Open order detail"
+          style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
+          onClick={(event) => {
+            event.stopPropagation()
+            openDetailDrawer(order.orderId ?? null)
+          }}
+        >
+          {order.orderNumber ?? `#${order.orderId}`}
         </span>
-      )}
-      <span
-        className="od-order-link"
-        title="Open order detail"
-        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
-        onClick={(event) => {
-          event.stopPropagation()
-          openDetailDrawer(order.orderId ?? null)
-        }}
-      >
-        {order.orderNumber ?? `#${order.orderId}`}
-      </span>
-      <span
-        title="Copy"
-        style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6, transition: 'opacity .1s', flexShrink: 0 }}
-        onClick={(event) => {
-          event.stopPropagation()
-          copyText(order.orderNumber ?? String(order.orderId))
-        }}
-        onMouseEnter={(event) => {
-          event.currentTarget.style.opacity = '1'
-        }}
-        onMouseLeave={(event) => {
-          event.currentTarget.style.opacity = '0.6'
-        }}
-      >
-        ⎘
-      </span>
-    </div>
+        <span
+          title="Copy"
+          style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6, transition: 'opacity .1s', flexShrink: 0 }}
+          onClick={(event) => {
+            event.stopPropagation()
+            copyText(order.orderNumber ?? String(order.orderId))
+          }}
+          onMouseEnter={(event) => {
+            event.currentTarget.style.opacity = '1'
+          }}
+          onMouseLeave={(event) => {
+            event.currentTarget.style.opacity = '0.6'
+          }}
+        >
+          ⎘
+        </span>
+      </div>
     )
   }
 
@@ -8513,39 +8542,39 @@ export default function OrdersView({
         return renderMargin(order)
       case 'tracking':
         {
-        const trackingNumber = toStringValue(order.label?.trackingNumber)
-        if (!trackingNumber) {
-          return <span style={{ color: 'var(--text4)', fontFamily: 'monospace', fontSize: 11 }}>—</span>
-        }
-        return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: 'monospace' }}>
-            <span
-              style={{ color: 'var(--ss-blue)', cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
-              onClick={(event) => {
-                event.stopPropagation()
-                setTrackingModal({
-                  tracking: trackingNumber,
-                  carrierCode: toStringValue(order.label?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode) ?? toStringValue(order.carrierCode),
-                })
-              }}
-              title="Track package"
-            >
-              {trackingNumber}
+          const trackingNumber = toStringValue(order.label?.trackingNumber)
+          if (!trackingNumber) {
+            return <span style={{ color: 'var(--text4)', fontFamily: 'monospace', fontSize: 11 }}>—</span>
+          }
+          return (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: 'monospace' }}>
+              <span
+                style={{ color: 'var(--ss-blue)', cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setTrackingModal({
+                    tracking: trackingNumber,
+                    carrierCode: toStringValue(order.label?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode) ?? toStringValue(order.carrierCode),
+                  })
+                }}
+                title="Track package"
+              >
+                {trackingNumber}
+              </span>
+              <span
+                onClick={(event) => {
+                  event.stopPropagation()
+                  copyText(trackingNumber)
+                }}
+                style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6 }}
+                title="Copy tracking number"
+                onMouseEnter={(event) => { event.currentTarget.style.opacity = '1' }}
+                onMouseLeave={(event) => { event.currentTarget.style.opacity = '0.6' }}
+              >
+                ⎘
+              </span>
             </span>
-            <span
-              onClick={(event) => {
-                event.stopPropagation()
-                copyText(trackingNumber)
-              }}
-              style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6 }}
-              title="Copy tracking number"
-              onMouseEnter={(event) => { event.currentTarget.style.opacity = '1' }}
-              onMouseLeave={(event) => { event.currentTarget.style.opacity = '0.6' }}
-            >
-              ⎘
-            </span>
-          </span>
-        )
+          )
         }
       case 'labelcreated':
         return (
@@ -8879,11 +8908,10 @@ export default function OrdersView({
                               })
                             }}
                             title={`Click to copy ${orderNum}`}
-                            className={`group/pill inline-flex items-center gap-1 px-2 py-1 rounded-md font-mono text-[10.5px] font-semibold tabular-nums ring-1 transition ${
-                              wasCopied
+                            className={`group/pill inline-flex items-center gap-1 px-2 py-1 rounded-md font-mono text-[10.5px] font-semibold tabular-nums ring-1 transition ${wasCopied
                                 ? 'bg-emerald-50 text-emerald-700 ring-emerald-300 shadow-sm'
                                 : 'bg-surface-2 text-ink-2 ring-line hover:ring-brand/40 hover:bg-brand/5 hover:text-brand'
-                            }`}
+                              }`}
                           >
                             <span className="truncate max-w-[180px]">{orderNum}</span>
                             <AnimatePresence mode="wait" initial={false}>
@@ -9092,10 +9120,10 @@ export default function OrdersView({
     const panelPreviewProviderId = panelPreviewRate ? toProviderAccountId(panelPreviewRate.shippingProviderId) : null
     const panelPreviewAccountLabel = panelPreviewRate
       ? normalizeShippingAccountName(panelPreviewRate.carrierNickname) ??
-        (panelPreviewProviderId != null
-          ? getShipAccountLabelById(shippingAccounts, String(panelPreviewProviderId))
-          : null) ??
-        formatCarrierCode(toStringValue(panelPreviewRate.carrierCode))
+      (panelPreviewProviderId != null
+        ? getShipAccountLabelById(shippingAccounts, String(panelPreviewProviderId))
+        : null) ??
+      formatCarrierCode(toStringValue(panelPreviewRate.carrierCode))
       : null
     const panelTestRate = panelIsTestOrder ? (panelRatePreview[0] ?? panelOrder.bestRate ?? buildTestMockRate()) : null
     const panelTestRateAmount = panelTestRate
@@ -9583,10 +9611,10 @@ export default function OrdersView({
                         packageId,
                         ...(selectedDims
                           ? {
-                              length: String(selectedDims.length),
-                              width: String(selectedDims.width),
-                              height: String(selectedDims.height),
-                            }
+                            length: String(selectedDims.length),
+                            width: String(selectedDims.width),
+                            height: String(selectedDims.height),
+                          }
                           : {}),
                       }))
                       void apiClient.setOrderSelectedPackageId(panelOrder.orderId, packageId ? Number.parseInt(packageId, 10) : null)
@@ -10364,69 +10392,69 @@ export default function OrdersView({
               checkboxes, but Select All operates on visibleOrderIds
               regardless of cell visibility). */}
           {isReadOnly ? null : (
-          <div className="inline-flex items-center gap-1.5" aria-label="Order selection scope">
-            <label
-              id="btnSelectAll"
-              title={
-                visibleOrderIds.length === 0
-                  ? 'No visible orders to select'
-                  : allVisibleSelected
-                    ? 'Clear current page selected orders'
-                    : 'Select current page orders'
-              }
-              className={`
+            <div className="inline-flex items-center gap-1.5" aria-label="Order selection scope">
+              <label
+                id="btnSelectAll"
+                title={
+                  visibleOrderIds.length === 0
+                    ? 'No visible orders to select'
+                    : allVisibleSelected
+                      ? 'Clear current page selected orders'
+                      : 'Select current page orders'
+                }
+                className={`
                 inline-flex items-center gap-1.5
                 h-8 px-2.5 rounded-lg ring-1 select-none
                 text-[12px] font-medium
                 transition-all duration-150
                 ${visibleOrderIds.length > 0 ? 'cursor-pointer' : 'cursor-default opacity-50'}
                 ${allVisibleSelected || someVisibleSelected
-                  ? 'bg-brand-bg ring-brand text-brand'
-                  : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+                    ? 'bg-brand-bg ring-brand text-brand'
+                    : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
               `}
-            >
-              <input
-                ref={selectAllCheckboxRef}
-                type="checkbox"
-                checked={allVisibleSelected}
-                disabled={visibleOrderIds.length === 0}
-                onClick={(event) => event.stopPropagation()}
-                onChange={(event) => {
-                  event.stopPropagation()
-                  toggleVisibleSelection(event.target.checked)
-                }}
-                style={{ accentColor: 'var(--ss-blue)' }}
-                className="w-3.5 h-3.5 cursor-pointer"
-                aria-label="Select current page orders"
-              />
-              <span className="font-mono tabular-nums">
-                {visibleSelectedCount > 0
-                  ? `${visibleSelectedCount}/${visibleOrderIds.length}`
-                  : 'This Page'}
-              </span>
-            </label>
-            <button
-              id="btnSelectAllMatching"
-              type="button"
-              title={total > 0 ? `Select all ${total.toLocaleString()} matching orders across pages` : 'No matching orders to select'}
-              disabled={total === 0 || selectingAllMatching}
-              onClick={() => void selectAllMatchingOrders()}
-              className={`
+              >
+                <input
+                  ref={selectAllCheckboxRef}
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  disabled={visibleOrderIds.length === 0}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => {
+                    event.stopPropagation()
+                    toggleVisibleSelection(event.target.checked)
+                  }}
+                  style={{ accentColor: 'var(--ss-blue)' }}
+                  className="w-3.5 h-3.5 cursor-pointer"
+                  aria-label="Select current page orders"
+                />
+                <span className="font-mono tabular-nums">
+                  {visibleSelectedCount > 0
+                    ? `${visibleSelectedCount}/${visibleOrderIds.length}`
+                    : 'This Page'}
+                </span>
+              </label>
+              <button
+                id="btnSelectAllMatching"
+                type="button"
+                title={total > 0 ? `Select all ${total.toLocaleString()} matching orders across pages` : 'No matching orders to select'}
+                disabled={total === 0 || selectingAllMatching}
+                onClick={() => void selectAllMatchingOrders()}
+                className={`
                 inline-flex items-center gap-1.5
                 h-8 px-2.5 rounded-lg ring-1
                 text-[12px] font-medium
                 transition-all duration-150
                 ${allMatchingSelection?.active && allMatchingSelection.scopeKey === selectionScopeKey
-                  ? 'bg-brand-bg ring-brand text-brand'
-                  : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+                    ? 'bg-brand-bg ring-brand text-brand'
+                    : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
                 ${total === 0 || selectingAllMatching ? 'opacity-60 cursor-not-allowed' : ''}
               `}
-              aria-label={`Select all ${total.toLocaleString()} matching orders across pages`}
-            >
-              {selectingAllMatching ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <CheckSquare size={12.5} strokeWidth={2.25} aria-hidden />}
-              <span className="font-mono tabular-nums">All Matches</span>
-            </button>
-          </div>
+                aria-label={`Select all ${total.toLocaleString()} matching orders across pages`}
+              >
+                {selectingAllMatching ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <CheckSquare size={12.5} strokeWidth={2.25} aria-hidden />}
+                <span className="font-mono tabular-nums">All Matches</span>
+              </button>
+            </div>
           )}
 
           {currentStatus === 'awaiting_shipment' ? (
@@ -10451,21 +10479,21 @@ export default function OrdersView({
               </button>
               <button
                 type="button"
-                onClick={() => void startBatchRecalculateBestRates('page')}
-                disabled={batchRecalculateBusy || visibleOrderIds.length === 0}
-                title="Recalculate strict live best rates for this awaiting page"
+                onClick={() => void startBatchRecalculateBestRates('filtered')}
+                disabled={batchRecalculateBusy || total === 0}
+                title="Recalculate strict live best rates for all filtered awaiting orders across pages"
                 className={`
                   inline-flex items-center gap-1.5
                   h-8 px-2.5 rounded-lg ring-1
                   text-[12px] font-medium
                   transition-all duration-150
-                  ${batchRecalculateBusy || visibleOrderIds.length === 0
+                  ${batchRecalculateBusy || total === 0
                     ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                     : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
                 `}
               >
                 <Zap size={12.5} strokeWidth={2.25} />
-                Recalculate Page
+                Recalculate All
               </button>
               {batchRecalculateProgress.total > 0 ? (
                 <div
@@ -10699,117 +10727,117 @@ export default function OrdersView({
               <div className="flex flex-wrap min-h-[50px] items-center gap-y-2 gap-x-4 sm:gap-x-8 text-[12px]">
                 {dailyStatsForStrip ? (
                   <>
-                {/* Date range — full width on mobile so stats can spread below */}
-                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 text-[11.5px] sm:text-[12px] w-full sm:w-auto min-w-0">
-                  <span className="text-[14px] sm:text-[15px] leading-none" aria-hidden="true">📅</span>
-                  <span className="text-ink-2 font-semibold truncate">{dailyStatsFromLabel}</span>
-                  <span className="text-ink-4">→</span>
-                  <span className="text-ink-2 font-semibold truncate">{dailyStatsToLabel}</span>
-                  <span className="hidden sm:inline text-ink-4 italic text-[11px]">(shifts at 6 PM CA)</span>
-                </div>
+                    {/* Date range — full width on mobile so stats can spread below */}
+                    <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 text-[11.5px] sm:text-[12px] w-full sm:w-auto min-w-0">
+                      <span className="text-[14px] sm:text-[15px] leading-none" aria-hidden="true">📅</span>
+                      <span className="text-ink-2 font-semibold truncate">{dailyStatsFromLabel}</span>
+                      <span className="text-ink-4">→</span>
+                      <span className="text-ink-2 font-semibold truncate">{dailyStatsToLabel}</span>
+                      <span className="hidden sm:inline text-ink-4 italic text-[11px]">(shifts at 6 PM CA)</span>
+                    </div>
 
-                <div className="hidden sm:block h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+                    <div className="hidden sm:block h-7 w-px shrink-0 bg-line" aria-hidden="true" />
 
-                {/* Stats group — equal-width tiles on mobile so all three
+                    {/* Stats group — equal-width tiles on mobile so all three
                     numbers stay on screen together; collapses to inline
                     flex on desktop to preserve the original strip look. */}
-                <div className="flex items-center justify-around sm:justify-start gap-3 sm:gap-8 w-full sm:w-auto">
-                  {/* Total Orders */}
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
-                    <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">📦</span>
-                    <div className="flex flex-col items-start leading-none">
-                      <motion.span
-                        key={dailyStatsForStrip.totalOrders}
-                        initial={{ opacity: 0, y: 3 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="font-bold text-ink tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
-                      >
-                        {dailyStatsForStrip.totalOrders}
-                      </motion.span>
-                      <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Total Orders</span>
-                    </div>
-                  </div>
+                    <div className="flex items-center justify-around sm:justify-start gap-3 sm:gap-8 w-full sm:w-auto">
+                      {/* Total Orders */}
+                      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                        <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">📦</span>
+                        <div className="flex flex-col items-start leading-none">
+                          <motion.span
+                            key={dailyStatsForStrip.totalOrders}
+                            initial={{ opacity: 0, y: 3 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="font-bold text-ink tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
+                          >
+                            {dailyStatsForStrip.totalOrders}
+                          </motion.span>
+                          <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Total Orders</span>
+                        </div>
+                      </div>
 
-                  {/* Need to Ship */}
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
-                    <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🚚</span>
-                    <div className="flex flex-col items-start leading-none">
-                      <motion.span
-                        key={dailyStatsForStrip.needToShip}
-                        initial={{ opacity: 0, y: 3 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
-                        style={{ color: dailyStripProgress?.needToShipColor }}
-                      >
-                        {dailyStatsForStrip.needToShip}
-                      </motion.span>
-                      <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Need to Ship</span>
-                    </div>
-                  </div>
+                      {/* Need to Ship */}
+                      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                        <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🚚</span>
+                        <div className="flex flex-col items-start leading-none">
+                          <motion.span
+                            key={dailyStatsForStrip.needToShip}
+                            initial={{ opacity: 0, y: 3 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
+                            style={{ color: dailyStripProgress?.needToShipColor }}
+                          >
+                            {dailyStatsForStrip.needToShip}
+                          </motion.span>
+                          <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Need to Ship</span>
+                        </div>
+                      </div>
 
-                  {/* Upcoming */}
-                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
-                    <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🔔</span>
-                    <div className="flex flex-col items-start leading-none">
-                      <motion.span
-                        key={dailyStatsForStrip.upcomingOrders}
-                        initial={{ opacity: 0, y: 3 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
-                        style={{ color: dailyStripProgress?.upcomingColor }}
-                      >
-                        {dailyStatsForStrip.upcomingOrders}
-                      </motion.span>
-                      <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Upcoming</span>
+                      {/* Upcoming */}
+                      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                        <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🔔</span>
+                        <div className="flex flex-col items-start leading-none">
+                          <motion.span
+                            key={dailyStatsForStrip.upcomingOrders}
+                            initial={{ opacity: 0, y: 3 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
+                            style={{ color: dailyStripProgress?.upcomingColor }}
+                          >
+                            {dailyStatsForStrip.upcomingOrders}
+                          </motion.span>
+                          <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Upcoming</span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
 
-                {/* Progress — full width on mobile (third row), inline
+                    {/* Progress — full width on mobile (third row), inline
                     on desktop with min-w to match prior layout.
                     Vertical layout per boss directive 2026-05-08:
                     "58 of 63 shipped" sits on top, bar + percentage
                     on the bottom row. */}
-                <div className="flex flex-col w-full sm:w-auto sm:shrink-0 sm:min-w-[285px]">
-                  <span className="text-ink-3 text-[12px] sm:text-[13px] tabular-nums font-medium">
-                    {dailyStripProgress?.shipped} of {dailyStatsForStrip.totalOrders} shipped
-                  </span>
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex-1 sm:flex-none sm:w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
-                      <motion.div
-                        className="h-full rounded-sm"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
-                        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-                        style={{
-                          background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
-                          boxShadow: `0 0 6px ${dailyStripProgress?.barColor}40`,
-                        }}
-                      />
+                    <div className="flex flex-col w-full sm:w-auto sm:shrink-0 sm:min-w-[285px]">
+                      <span className="text-ink-3 text-[12px] sm:text-[13px] tabular-nums font-medium">
+                        {dailyStripProgress?.shipped} of {dailyStatsForStrip.totalOrders} shipped
+                      </span>
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex-1 sm:flex-none sm:w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
+                          <motion.div
+                            className="h-full rounded-sm"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
+                            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                            style={{
+                              background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
+                              boxShadow: `0 0 6px ${dailyStripProgress?.barColor}40`,
+                            }}
+                          />
+                        </div>
+                        <motion.span
+                          key={dailyStripProgress?.pct}
+                          initial={{ scale: 0.85, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+                          className="font-bold tabular-nums text-[13px] shrink-0 font-mono"
+                          style={{ color: dailyStripProgress?.barColor }}
+                        >
+                          {dailyStripProgress?.pct}%
+                        </motion.span>
+                      </div>
+                      {dailyStatsRefreshFailedWithData ? (
+                        <button
+                          type="button"
+                          onClick={() => void loadDailyStats()}
+                          title={dailyStatsError || 'Daily stats unavailable'}
+                          className="mt-1 inline-flex w-fit items-center gap-1 rounded-sm border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-100"
+                        >
+                          <RefreshCcw size={10} strokeWidth={2.4} aria-hidden />
+                          Refresh failed - retry
+                        </button>
+                      ) : null}
                     </div>
-                    <motion.span
-                      key={dailyStripProgress?.pct}
-                      initial={{ scale: 0.85, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-                      className="font-bold tabular-nums text-[13px] shrink-0 font-mono"
-                      style={{ color: dailyStripProgress?.barColor }}
-                    >
-                      {dailyStripProgress?.pct}%
-                    </motion.span>
-                  </div>
-                  {dailyStatsRefreshFailedWithData ? (
-                    <button
-                      type="button"
-                      onClick={() => void loadDailyStats()}
-                      title={dailyStatsError || 'Daily stats unavailable'}
-                      className="mt-1 inline-flex w-fit items-center gap-1 rounded-sm border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-100"
-                    >
-                      <RefreshCcw size={10} strokeWidth={2.4} aria-hidden />
-                      Refresh failed - retry
-                    </button>
-                  ) : null}
-                </div>
                   </>
                 ) : (
                   <>
@@ -11026,20 +11054,20 @@ export default function OrdersView({
                                   on Shipped/Cancelled. Same reason as the
                                   per-row checkbox: no bulk-modify pathway. */}
                               {isReadOnly ? null : (
-                              <input
-                                type="checkbox"
-                                checked={allGroupSelected}
-                                aria-label={`Select current page SKU group ${group.label}`}
-                                ref={(node) => {
-                                  if (node) node.indeterminate = someGroupSelected
-                                }}
-                                style={{ width: 16, height: 16, accentColor: 'var(--ss-blue)', cursor: 'pointer', flexShrink: 0 }}
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) => {
-                                  event.stopPropagation()
-                                  toggleSkuGroupSelection(groupOrderIds, event.target.checked)
-                                }}
-                              />
+                                <input
+                                  type="checkbox"
+                                  checked={allGroupSelected}
+                                  aria-label={`Select current page SKU group ${group.label}`}
+                                  ref={(node) => {
+                                    if (node) node.indeterminate = someGroupSelected
+                                  }}
+                                  style={{ width: 16, height: 16, accentColor: 'var(--ss-blue)', cursor: 'pointer', flexShrink: 0 }}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onChange={(event) => {
+                                    event.stopPropagation()
+                                    toggleSkuGroupSelection(groupOrderIds, event.target.checked)
+                                  }}
+                                />
                               )}
                               <span style={{ fontSize: 13 }}>📦</span>
                               <span className="sku-link" style={{ fontSize: 11.5 }} title={group.label}>{group.label}</span>
@@ -11349,9 +11377,9 @@ export default function OrdersView({
                   queueScope === 'client' && queueClientId != null
                     ? window.confirm('This removes all unprinted labels from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?')
                       ? void apiClient
-                          .clearQueue(queueClientId)
-                          .then(() => hydrateQueue())
-                          .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error'))
+                        .clearQueue(queueClientId)
+                        .then(() => hydrateQueue())
+                        .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error'))
                       : undefined
                     : undefined
                 }
@@ -11454,9 +11482,8 @@ export default function OrdersView({
               >
                 <div className="pq-group-header flex items-center gap-2 px-3 py-2.5 bg-surface-2 border-b border-line">
                   <span
-                    className={`pq-group-label truncate font-semibold text-ink text-[12.5px] ${
-                      group.isMultiSku ? 'shrink-0' : 'flex-1 min-w-0'
-                    }`}
+                    className={`pq-group-label truncate font-semibold text-ink text-[12.5px] ${group.isMultiSku ? 'shrink-0' : 'flex-1 min-w-0'
+                      }`}
                   >
                     {/* Multi-SKU groups show just "MULTI-SKU" — the SKU chips
                         beside it already list the items, so the truncated
@@ -11607,8 +11634,8 @@ export default function OrdersView({
                 from the active queue, which is irrelevant in history view). */}
             {!queueHistoryVisible ? (
               <>
-              <button
-                className="
+                <button
+                  className="
                   inline-flex items-center justify-center gap-1.5
                   h-8 px-3 rounded-lg
                   text-[12px] font-bold text-white
@@ -11619,16 +11646,16 @@ export default function OrdersView({
                   disabled:cursor-not-allowed disabled:opacity-55
                   disabled:shadow-none disabled:active:scale-100
                 "
-                id="pq-print-all-btn"
-                type="button"
-                disabled={queueCount === 0 || queuePrintInFlight}
-                onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
-              >
-                <FcPrint size={16} aria-hidden className="shrink-0 drop-shadow-sm" />
-                Print All
-              </button>
-              <button
-                className="
+                  id="pq-print-all-btn"
+                  type="button"
+                  disabled={queueCount === 0 || queuePrintInFlight}
+                  onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
+                >
+                  <FcPrint size={16} aria-hidden className="shrink-0 drop-shadow-sm" />
+                  Print All
+                </button>
+                <button
+                  className="
                   inline-flex items-center justify-center gap-1.5
                   h-8 px-3 rounded-lg
                   text-[12px] font-bold text-white
@@ -11639,14 +11666,14 @@ export default function OrdersView({
                   disabled:cursor-not-allowed disabled:opacity-55
                   disabled:shadow-none disabled:active:scale-100
                 "
-                type="button"
-                title={queueConfirmPrintedReady ? 'Confirm all printed labels' : 'Print all queued labels before confirming printed'}
-                disabled={queueCount === 0 || queuePrintInFlight || !queueConfirmPrintedReady}
-                onClick={() => void confirmQueueEntriesPrinted(queuedEntries.map((entry) => entry.queue_entry_id))}
-              >
-                <CheckIcon size={12.5} strokeWidth={2.75} />
-                Confirm Printed
-              </button>
+                  type="button"
+                  title={queueConfirmPrintedReady ? 'Confirm all printed labels' : 'Print all queued labels before confirming printed'}
+                  disabled={queueCount === 0 || queuePrintInFlight || !queueConfirmPrintedReady}
+                  onClick={() => void confirmQueueEntriesPrinted(queuedEntries.map((entry) => entry.queue_entry_id))}
+                >
+                  <CheckIcon size={12.5} strokeWidth={2.75} />
+                  Confirm Printed
+                </button>
               </>
             ) : (
               <div className="text-[11px] text-ink-3 italic px-1">

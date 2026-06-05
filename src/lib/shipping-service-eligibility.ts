@@ -236,7 +236,7 @@ export type EffectiveInsurance = {
  *
  * Rules:
  *  - Non-HUGRAB context: pass the operator's selection through untouched.
- *  - HUGRAB + UPS Ground            -> carrier, $100 (or higher operator value).
+ *  - HUGRAB + UPS Ground            -> parcelguard, $100 (or higher operator value).
  *  - HUGRAB + USPS Ground/Advantage -> parcelguard, $100 (or higher operator value).
  *  - HUGRAB + Ground Saver/SurePost -> NEVER defaulted (PS-057); operator value
  *    passed through (evaluateShippingServiceEligibility blocks insurance there).
@@ -269,7 +269,7 @@ export function resolveEffectiveInsurance(
   const uspsGround = isUspsGroundService(service);
   if (!upsGround && !uspsGround) return passthrough;
 
-  const provider: NormalizedInsuranceProvider = upsGround ? 'carrier' : 'parcelguard';
+  const provider: NormalizedInsuranceProvider = 'parcelguard';
   const operatorValue = operator.insuredValue ?? 0;
   const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
   const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
@@ -279,7 +279,7 @@ export function resolveEffectiveInsurance(
     insuredValue,
     source: keptOperatorHigher ? 'operator' : 'hugrab-default',
     reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance via ${
-      upsGround ? 'carrier (UPS Ground)' : 'Parcel Guard (USPS Ground)'
+      upsGround ? 'Parcel Guard (UPS Ground)' : 'Parcel Guard (USPS Ground)'
     }`,
   };
 }

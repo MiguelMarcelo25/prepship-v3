@@ -931,7 +931,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     serviceType: body.serviceType ?? null,
   };
   // PS-072: backend source of truth for effective insurance. Applies the HUGRAB
-  // default (carrier/$100 for UPS Ground, parcelguard/$100 for USPS Ground),
+  // default (ParcelGuard/$100 for UPS Ground and USPS Ground),
   // preserves an operator-selected higher value, and NEVER touches Ground
   // Saver/SurePost (PS-057). The UI cannot bypass this — single, batch, and
   // print-queue label creation all funnel through createLabelV2. Run BEFORE the

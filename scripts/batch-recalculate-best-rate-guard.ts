@@ -42,24 +42,27 @@ const mixedOrders = [
 }
 
 {
-  const page = selectBatchRecalculateOrderIds({
+  const filtered = selectBatchRecalculateOrderIds({
     currentStatus: 'awaiting_shipment',
-    scope: 'page',
+    scope: 'filtered',
     orders: mixedOrders,
     selectedOrderIds: [],
-    visibleOrderIds: [10, 11, 12, 13, 14],
+    visibleOrderIds: [10],
+    matchingOrderIds: [10, 11, 12, 13, 14],
   });
-  check('page batch scope keeps only visible awaiting orders', page.orderIds.join(',') === '10,12,14');
-  check('page batch scope reports immutable skips', page.skippedImmutable === 2);
+  check('filtered batch scope keeps matching awaiting orders across pages', filtered.orderIds.join(',') === '10,12,14');
+  check('filtered batch scope is not limited to visible order ids', filtered.orderIds.includes(12) && filtered.orderIds.includes(14));
+  check('filtered batch scope reports immutable skips', filtered.skippedImmutable === 2);
 }
 
 {
   const blocked = selectBatchRecalculateOrderIds({
     currentStatus: 'shipped',
-    scope: 'page',
+    scope: 'filtered',
     orders: mixedOrders,
     selectedOrderIds: [],
     visibleOrderIds: [10, 12, 14],
+    matchingOrderIds: [10, 12, 14],
   });
   check('batch recalculation is unavailable outside awaiting shipment', blocked.orderIds.length === 0 && Boolean(blocked.blockedReason));
 }
@@ -100,13 +103,25 @@ check('batch Recalculate reuses strict order runner', /runStrictBestRateRecalcul
 check('batch Recalculate avoids fetchRates fallback', !/apiClient\.fetchRates/.test(batchBlock));
 check('batch Recalculate avoids pickBestPanelRate fallback', !/pickBestPanelRate/.test(batchBlock));
 check('batch Recalculate tracks progress rows', /setBatchRecalculateRows/.test(batchBlock));
-check('batch Recalculate skips missing-dims rows before pending state', /queueableOrders/.test(batchBlock) && /getAutoBestRateRequest\(order\)[\s\S]*status:\s*'skipped'[\s\S]*queueableOrders\.push\(order\)/.test(batchBlock));
-check('batch Recalculate has page button', /Recalculate Page/.test(ordersView));
+check('batch Recalculate skips missing-dims rows before pending state',
+  /prepareBatchRecalculateRows/.test(batchBlock) &&
+  /getAutoBestRateRequest\(order\)[\s\S]*status:\s*'skipped'[\s\S]*Missing weight, dimensions, or ship-to postal code/.test(batchBlock));
+check('batch Recalculate removed page-only button', !/Recalculate Page/.test(ordersView));
+check('batch Recalculate has filtered all button', /Recalculate All/.test(ordersView));
 check('batch Recalculate has selected button', /Recalculate Selected/.test(ordersView));
 check('batch Recalculate shows percentage progress', /batchRecalculateProgress\.percent/.test(ordersView));
 check('batch Recalculate has per-order retry action', /retryBatchRecalculateOrder/.test(ordersView) && /data-batch-recalculate-retry/.test(ordersView));
 check('batch Recalculate has timeout guard', /BATCH_RECALCULATE_TIMEOUT_MS/.test(ordersView));
 check('batch Recalculate keeps strict live flags', /forceLive:\s*true/.test(ordersView) && /forceRefresh:\s*true/.test(ordersView));
+
+const rateBrowserStart = ordersView.indexOf('async function openRateBrowser()');
+const rateBrowserEnd = ordersView.indexOf('\n  async function recalculateBestRate()', rateBrowserStart);
+const rateBrowserBlock = rateBrowserStart >= 0 && rateBrowserEnd > rateBrowserStart
+  ? ordersView.slice(rateBrowserStart, rateBrowserEnd)
+  : '';
+check('Browse Rates uses strict browseRates source', /apiClient\.browseRates/.test(rateBrowserBlock));
+check('Browse Rates no longer uses fetchRates fallback source', !/apiClient\.fetchRates/.test(rateBrowserBlock));
+check('Browse Rates reconciles from backend response bestRate', /response\?\.bestRate/.test(rateBrowserBlock));
 
 const bestRateProviderStart = ordersView.indexOf('function getBestRateShippingProviderId(');
 const bestRateProviderEnd = ordersView.indexOf('\nfunction getBestRateServiceCode', bestRateProviderStart);
@@ -153,6 +168,35 @@ const fallbackBlock = fallbackStart >= 0 && fallbackEnd > fallbackStart
 check('add-dims fallback wins over batch pending state',
   fallbackBlock.indexOf("state === 'add-dims'") >= 0 &&
   fallbackBlock.indexOf("state === 'add-dims'") < fallbackBlock.indexOf('const batchRow = batchRecalculateRows'));
+
+const passiveStart = ordersView.indexOf('async function refreshVisibleBestRate(');
+const passiveEnd = ordersView.indexOf('\n    async function runPassiveAutoRating()', passiveStart);
+const passiveBlock = passiveStart >= 0 && passiveEnd > passiveStart
+  ? ordersView.slice(passiveStart, passiveEnd)
+  : '';
+check('passive auto-rating cannot persist from legacy fetchRates fallback',
+  passiveStart >= 0 &&
+  !/apiClient\.fetchRates/.test(passiveBlock) &&
+  !/pickBestPanelRate/.test(passiveBlock) &&
+  /runStrictBestRateRecalculation/.test(passiveBlock));
+
+const bestRateBaseStart = ordersView.indexOf('function getBestRateBaseCost(');
+const bestRateBaseEnd = ordersView.indexOf('\nfunction getBestRateShippingProviderId', bestRateBaseStart);
+const bestRateBaseBlock = bestRateBaseStart >= 0 && bestRateBaseEnd > bestRateBaseStart
+  ? ordersView.slice(bestRateBaseStart, bestRateBaseEnd)
+  : '';
+check('awaiting best-rate amount reads saved bestRate before stale canonical amount',
+  /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateBaseBlock) &&
+  bestRateBaseBlock.indexOf("order.orderStatus === 'awaiting_shipment'") < bestRateBaseBlock.indexOf("getShippingNumber(order, 'bestRateAmount')"));
+
+const bestRateServiceStart = ordersView.indexOf('function getBestRateServiceCode(');
+const bestRateServiceEnd = ordersView.indexOf('\nfunction getBestRateCarrierNickname', bestRateServiceStart);
+const bestRateServiceBlock = bestRateServiceStart >= 0 && bestRateServiceEnd > bestRateServiceStart
+  ? ordersView.slice(bestRateServiceStart, bestRateServiceEnd)
+  : '';
+check('awaiting best-rate service reads saved bestRate before stale canonical service',
+  /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateServiceBlock) &&
+  bestRateServiceBlock.indexOf("order.orderStatus === 'awaiting_shipment'") < bestRateServiceBlock.indexOf("getShippingString(order, 'serviceCode')"));
 
 if (failures > 0) {
   console.error(`\nFAIL batch recalculate best-rate guard (${failures} failing)`);

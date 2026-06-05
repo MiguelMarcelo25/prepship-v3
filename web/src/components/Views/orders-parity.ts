@@ -830,7 +830,7 @@ export function planBrowseRateReconcile(input: {
   return { shouldUpdate, entry: { key: input.requestKey, rate: input.liveBest }, selection }
 }
 
-export type BatchRecalculateScope = 'selected' | 'page'
+export type BatchRecalculateScope = 'selected' | 'filtered'
 
 export type BatchRecalculateRowStatus =
   | 'pending'
@@ -889,6 +889,7 @@ export function selectBatchRecalculateOrderIds(input: {
   orders: Array<{ orderId: number; orderStatus?: string | null }>
   selectedOrderIds: number[]
   visibleOrderIds: number[]
+  matchingOrderIds?: number[]
 }): { orderIds: number[]; skippedImmutable: number; blockedReason?: string } {
   if (input.currentStatus !== 'awaiting_shipment') {
     return {
@@ -899,7 +900,10 @@ export function selectBatchRecalculateOrderIds(input: {
   }
 
   const orderById = new Map(input.orders.map((order) => [order.orderId, order]))
-  const sourceIds = input.scope === 'selected' ? input.selectedOrderIds : input.visibleOrderIds
+  const sourceIds =
+    input.scope === 'selected'
+      ? input.selectedOrderIds
+      : input.matchingOrderIds ?? input.visibleOrderIds
   const seen = new Set<number>()
   const orderIds: number[] = []
   let skippedImmutable = 0

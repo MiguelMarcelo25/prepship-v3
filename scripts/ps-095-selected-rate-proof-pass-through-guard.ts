@@ -44,7 +44,9 @@ check(
 
 check(
   'frontend passes selectedRateProof through all single, batch, backend-queue, and direct-carrier payload paths',
-  (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 5 &&
+  (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 4 &&
+    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)') &&
+    ordersView.includes('selectedRateProof,') &&
     proofBoundaryGuard.includes('Orders single/batch/queue label payloads pass selectedRateProof'),
 );
 

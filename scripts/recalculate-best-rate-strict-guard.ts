@@ -128,20 +128,53 @@ const runnerEnd = ordersView.indexOf('\n  function getAppliedRateDims', runnerSt
 const runnerBlock = runnerStart >= 0 && runnerEnd > runnerStart
   ? ordersView.slice(runnerStart, runnerEnd)
   : '';
-const strictPathBlock = `${recalcBlock}\n${runnerBlock}`;
+const applierStart = ordersView.indexOf('async function applyStrictBestRateResponse(');
+const applierEnd = ordersView.indexOf('\n  async function runStrictBestRateRecalculation', applierStart);
+const applierBlock = applierStart >= 0 && applierEnd > applierStart
+  ? ordersView.slice(applierStart, applierEnd)
+  : '';
+const proofBuilderStart = ordersView.indexOf('function buildSelectedRateProofPayload(');
+const proofBuilderEnd = ordersView.indexOf('\n  function hasAnySavedBestRateForDisplay', proofBuilderStart);
+const proofBuilderBlock = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
+  ? ordersView.slice(proofBuilderStart, proofBuilderEnd)
+  : '';
+const panelRefreshStart = ordersView.indexOf('async function refreshPanelBestRate(');
+const panelRefreshEnd = ordersView.indexOf('\n  async function persistShipmentDetails', panelRefreshStart);
+const panelRefreshBlock = panelRefreshStart >= 0 && panelRefreshEnd > panelRefreshStart
+  ? ordersView.slice(panelRefreshStart, panelRefreshEnd)
+  : '';
+const batchActionStart = ordersView.indexOf("async function handleBatchAction(mode: 'print' | 'queue')");
+const batchActionEnd = ordersView.indexOf('\n  // Batch Mark-as-Shipped', batchActionStart);
+const batchActionBlock = batchActionStart >= 0 && batchActionEnd > batchActionStart
+  ? ordersView.slice(batchActionStart, batchActionEnd)
+  : '';
+const strictPathBlock = `${recalcBlock}\n${runnerBlock}\n${applierBlock}`;
 
 check('OrdersView has a Recalculate action', recalcStart >= 0);
 check('Recalculate delegates to reusable strict runner', /runStrictBestRateRecalculation/.test(recalcBlock));
 check('Recalculate uses browseRates strict live endpoint', /apiClient\.browseRates\(\{[\s\S]*forceLive:\s*true[\s\S]*forceRefresh:\s*true/.test(strictPathBlock));
 check('Recalculate does not use fetchRates', !/apiClient\.fetchRates/.test(strictPathBlock));
 check('Recalculate does not pick a client-side fallback best rate', !/pickBestPanelRate/.test(strictPathBlock));
-check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(runnerBlock) && /decision\.entry/.test(runnerBlock));
+check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(applierBlock) && /decision\.entry/.test(applierBlock));
+check('Selected-rate proof skips unfingerprinted panel candidates and uses a fingerprinted fallback',
+  /const candidates = \[/.test(proofBuilderBlock) &&
+    /\.find\(\(rate\) => rateProofFingerprint\(rate\)\)/.test(proofBuilderBlock));
+check('Panel refreshed best rate is stamped with request fingerprint metadata before label proof',
+  /const bestRateWithMetadata = autoRequest\s*\?\s*withRateRequestMetadata\(bestRate, autoRequest/.test(panelRefreshBlock) &&
+    /setPanelRatePreview\(\[bestRateWithMetadata\]\)/.test(panelRefreshBlock) &&
+    /persistAppliedRateForOrder\(order\.orderId, bestRateWithMetadata/.test(panelRefreshBlock));
+check('Batch Create + Print recalculates missing selected-rate proof before label purchase',
+  /let proofRate = bestRate \?\? selectedRate/.test(batchActionBlock) &&
+    /if \(!selectedRateProof && !orderIsTest\)/.test(batchActionBlock) &&
+    /runStrictBestRateRecalculation\(order, proofRequest/.test(batchActionBlock) &&
+    /selectedRateProof = buildSelectedRateProofPayload\(order, proofRate\)/.test(batchActionBlock) &&
+    /selectedRateProof,/.test(batchActionBlock));
 check('Rate card button is labeled Recalculate', />Recalculate</.test(ordersView));
 check('Rate card Recalculate button calls recalculateBestRate, not openRateBrowser', /onClick=\{\(\) => void recalculateBestRate\(\)\}/.test(ordersView));
 
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const strictStart = apiClient.indexOf('updateOrderBestRateSelectionStrict(');
-const strictEnd = apiClient.indexOf('\n\n  createManualOrder', strictStart);
+const strictEnd = apiClient.indexOf('createManualOrder(', strictStart);
 const strictBlock = strictStart >= 0 && strictEnd > strictStart
   ? apiClient.slice(strictStart, strictEnd)
   : '';

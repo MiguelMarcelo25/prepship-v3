@@ -352,11 +352,9 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
       carrierName: carrier.nickname,
     }),
   );
-  // PS-072: HUGRAB ground services carry a $100 default insurance. The rate
-  // estimate is multi-service (a single insurance provider per request), so we
-  // quote with carrier insurance at $100 when the operator selected none; the
-  // label path (createLabelV2 -> resolveEffectiveInsurance) refines the provider
-  // per service (carrier for UPS Ground, Parcel Guard for USPS Ground). This
+  // PS-072: HUGRAB ground services carry a $100 default insurance. ShipEngine
+  // carriers require ParcelGuard, so rate requests use ParcelGuard when the
+  // operator selected none; createLabelV2 uses the same effective provider. This
   // keeps the cache fingerprint + displayed rate insured so a stale no-insurance
   // rate can never be reused for an order that will be insured at label time.
   // An operator-selected value is preserved.
@@ -367,7 +365,7 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
     operatorInsurance.insuranceProvider === 'none' &&
     isHugrabShippingContext({ clientId: context.clientId, storeId: context.storeId })
   ) {
-    insuranceProvider = 'carrier';
+    insuranceProvider = 'parcelguard';
     insuredValue = HUGRAB_DEFAULT_INSURED_VALUE;
   }
 

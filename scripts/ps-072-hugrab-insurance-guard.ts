@@ -13,6 +13,7 @@ import {
 import { normalizeInsurance } from '../src/lib/shipping-options';
 import { buildSsLabelRequestBody } from '../src/lib/shipstation/labels';
 import { rateCacheKey } from '../src/services/rates';
+import { readFileSync } from 'node:fs';
 
 let failures = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -45,10 +46,10 @@ check('SurePost is detected as GroundSaver/SurePost', isUpsGroundSaverOrSurePost
 check('UPS 2nd Day is not ground', isUpsGroundService(ups2day), false);
 
 // --- resolver: HUGRAB defaults ---
-check('HUGRAB + UPS Ground, no operator -> carrier/100', pick(resolveEffectiveInsurance(HUGRAB, upsGround, null)), { p: 'carrier', v: 100, s: 'hugrab-default' });
+check('HUGRAB + UPS Ground, no operator -> parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, upsGround, null)), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
 check('HUGRAB + USPS Ground, no operator -> parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, null)), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
-check('HUGRAB + UPS Ground, operator none -> forced carrier/100', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'none', insuredValue: null })), { p: 'carrier', v: 100, s: 'hugrab-default' });
-check('HUGRAB + UPS Ground, operator $250 -> preserved carrier/250', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'carrier', insuredValue: 250 })), { p: 'carrier', v: 250, s: 'operator' });
+check('HUGRAB + UPS Ground, operator none -> forced parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'none', insuredValue: null })), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
+check('HUGRAB + UPS Ground, operator $250 -> parcelguard/250 (provider forced, value kept)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'carrier', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
 check('HUGRAB + USPS Ground, operator $250 -> parcelguard/250 (provider forced, value kept)', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, { insuranceProvider: 'shipsurance', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
 
 // --- PS-057: Ground Saver/SurePost never defaulted ---
@@ -103,11 +104,18 @@ check('label: no package insured_value when none', noneBody.shipment.packages[0]
 // --- rate cache fingerprint differs for none / $100 / $250 ---
 const baseRate = { weightOz: 16, toZip: '90001' };
 const keyNone = rateCacheKey({ ...baseRate, insuranceProvider: 'none', insuredValue: null });
-const key100 = rateCacheKey({ ...baseRate, insuranceProvider: 'carrier', insuredValue: 100 });
-const key250 = rateCacheKey({ ...baseRate, insuranceProvider: 'carrier', insuredValue: 250 });
+const key100 = rateCacheKey({ ...baseRate, insuranceProvider: 'parcelguard', insuredValue: 100 });
+const key250 = rateCacheKey({ ...baseRate, insuranceProvider: 'parcelguard', insuredValue: 250 });
 check('rate key: none != $100', keyNone !== key100, true);
 check('rate key: $100 != $250', key100 !== key250, true);
-check('rate key: $100 includes ip+iv', key100.includes('ip=carrier') && key100.includes('iv=10000'), true);
+check('rate key: $100 includes ip+iv', key100.includes('ip=parcelguard') && key100.includes('iv=10000'), true);
+
+const ratesServiceSource = readFileSync('src/services/rates.ts', 'utf8');
+check(
+  'ShipStation rate default uses ParcelGuard when HUGRAB operator insurance is none',
+  /operatorInsurance\.insuranceProvider === 'none'[\s\S]{0,300}insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
+  true,
+);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-072 HUGRAB insurance guard (${failures} failing)`);

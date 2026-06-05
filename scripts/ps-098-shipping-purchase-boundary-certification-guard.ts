@@ -99,7 +99,9 @@ check(
 check(
   'frontend passes backend-issued selectedRateProof through label and queue payloads',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 5,
+    (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 4 &&
+    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)') &&
+    ordersView.includes('selectedRateProof,'),
 );
 
 check(
