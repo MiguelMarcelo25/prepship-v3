@@ -92,6 +92,7 @@ import {
   planSettledAutoRate,
   resolveColumnPrefs,
   savedBestRateCanDisplayForCurrentRequest,
+  resolveSkuDisplayLines,
   selectBatchRecalculateOrderIds,
   type AwaitingRateCellState,
   type AutoBestRateEntry,
@@ -8559,6 +8560,13 @@ export default function OrdersView({
       ? items.find((item) => (item.sku ?? '').trim().toLowerCase() === skuNeedleForRow)
       : items[0]) ?? items[0] ?? null
     const multiSku = new Set(items.map((item) => item.sku).filter(Boolean)).size > 1
+    const skuDisplayByItemKey = new Map(
+      resolveSkuDisplayLines(items, { titleFallback: isEbayOrder(order) })
+        .map((line, index) => [`${items[index]?.sku ?? 'unknown'}-${items[index]?.name ?? 'item'}`, line] as const),
+    )
+    const primarySkuDisplay = primaryItem
+      ? resolveSkuDisplayLines([primaryItem], { titleFallback: isEbayOrder(order) })[0] ?? null
+      : null
     const renderSkuQuantityBadge = (quantity: number) => (
       quantity > 1 ? (
         <span
@@ -8734,23 +8742,26 @@ export default function OrdersView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '3px 0' }}>
               {visibleItems.map((item) => (
                 <div key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`} style={{ display: 'flex', alignItems: 'center', height: 22, gap: 3, minWidth: 0 }}>
-                  {item.sku ? (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, overflow: 'hidden' }} title={`${item.sku}${item.quantity > 1 ? ` quantity ${item.quantity}` : ''}`}>
-                      <span className="sku-link" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={item.sku}>{item.sku}</span>
-                      {renderSkuQuantityBadge(item.quantity)}
-                    </span>
-                  ) : <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>}
+                  {(() => {
+                    const display = skuDisplayByItemKey.get(`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`)
+                    return display?.label ? (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, overflow: 'hidden' }} title={`${display.label}${item.quantity > 1 ? ` quantity ${item.quantity}` : ''}`}>
+                        <span className="sku-link" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={display.label}>{display.label}</span>
+                        {renderSkuQuantityBadge(item.quantity)}
+                      </span>
+                    ) : <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
+                  })()}
                 </div>
               ))}
               {overflow > 0 ? <div style={{ height: 14 }} /> : null}
             </div>
           )
         }
-        if (!primaryItem?.sku) return '—'
+        if (!primarySkuDisplay?.label) return '—'
         const totalQuantity = getTotalQuantity(order, detail)
         return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: column.width + 60, minWidth: 0, overflow: 'hidden' }} title={`${primaryItem.sku}${totalQuantity > 1 ? ` quantity ${totalQuantity}` : ''}`}>
-            <span className="sku-link" title={primaryItem.sku} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{primaryItem.sku}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: column.width + 60, minWidth: 0, overflow: 'hidden' }} title={`${primarySkuDisplay.label}${totalQuantity > 1 ? ` quantity ${totalQuantity}` : ''}`}>
+            <span className="sku-link" title={primarySkuDisplay.label} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{primarySkuDisplay.label}</span>
             {renderSkuQuantityBadge(totalQuantity)}
           </span>
         )

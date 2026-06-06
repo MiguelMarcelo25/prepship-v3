@@ -816,6 +816,38 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   return input.backendWorkflowCanUseSavedRate === true
 }
 
+export type SkuDisplayLineInput = {
+  sku?: string | null
+  name?: string | null
+  quantity?: number | null
+}
+
+export type SkuDisplayLine = {
+  label: string | null
+  sku: string | null
+  title: string | null
+  quantity: number
+  kind: 'sku' | 'title' | 'missing'
+}
+
+export function resolveSkuDisplayLines(
+  items: SkuDisplayLineInput[],
+  options: { titleFallback?: boolean } = {},
+): SkuDisplayLine[] {
+  return items.map((item) => {
+    const sku = String(item.sku ?? '').trim()
+    const title = String(item.name ?? '').trim()
+    const quantity = Math.max(1, Math.trunc(Number(item.quantity ?? 1) || 1))
+    if (sku) {
+      return { label: sku, sku, title: title || null, quantity, kind: 'sku' }
+    }
+    if (options.titleFallback && title) {
+      return { label: title, sku: null, title, quantity, kind: 'title' }
+    }
+    return { label: null, sku: null, title: title || null, quantity, kind: 'missing' }
+  })
+}
+
 /** States that show a (bounded) spinner vs. a terminal/actionable label.
  * 'deferred' now spins too: passive auto-rating drains the FULL visible queue,
  * so a deferred row is simply awaiting its turn and is guaranteed to resolve —

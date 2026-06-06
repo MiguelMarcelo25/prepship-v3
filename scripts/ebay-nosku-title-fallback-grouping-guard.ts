@@ -11,6 +11,7 @@
  * this via PS-070; this guard covers the orders list (awaiting + shipped).
  */
 import { buildSkuCompositionKey, groupOrdersBySku } from '../web/src/components/Views/orders-grouping';
+import { resolveSkuDisplayLines } from '../web/src/components/Views/orders-parity';
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -60,6 +61,21 @@ const labels = groups.map((g) => g.label).sort();
 check('two distinct eBay titles → two title-labeled groups', labels.includes('Yohimbine x1') && labels.includes('Vitamin C x1'));
 check('same eBay title collapses to one group of 2 orders', (groups.find((g) => g.label === 'Yohimbine x1')?.count ?? 0) === 2);
 check('non-eBay no-SKU order stays "Missing SKU"', labels.includes('Missing SKU x1'));
+
+// 6. The visible awaiting table SKU column must also show the title for eBay
+// no-SKU items. This is separate from grouping: production showed the item name
+// in Item Name while the SKU column still rendered a dash.
+const ebaySkuDisplay = resolveSkuDisplayLines(
+  [{ sku: '', name: 'Nutricost Vitamin C with Rose Hips 1025mg, 240 Capsules', quantity: 1 }],
+  { titleFallback: true },
+);
+check('eBay table SKU cell falls back to item title', ebaySkuDisplay[0]?.label === 'Nutricost Vitamin C with Rose Hips 1025mg, 240 Capsules');
+check('eBay table SKU cell title fallback is marked as fallback', ebaySkuDisplay[0]?.kind === 'title');
+const nonEbaySkuDisplay = resolveSkuDisplayLines(
+  [{ sku: '', name: 'Should not show for non-eBay', quantity: 1 }],
+  { titleFallback: false },
+);
+check('non-eBay table SKU cell with no SKU stays blank/dash', nonEbaySkuDisplay[0]?.label === null);
 
 if (failures > 0) {
   console.error(`\nFAIL eBay no-SKU title fallback grouping guard (${failures} failing)`);
