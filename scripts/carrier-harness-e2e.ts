@@ -188,13 +188,29 @@ async function runSandbox(): Promise<MatrixRow[]> {
   return rows;
 }
 
+// ── Capture tier: record REAL sandbox/test responses into fixtures for replay. ──
+// Requires creds; skips cleanly (never fails) when absent so it is CI-safe.
+async function runCapture(): Promise<MatrixRow[]> {
+  const epKey = process.env.CARRIER_HARNESS_EASYPOST_TEST_KEY;
+  if (!process.env.DATABASE_URL || !epKey || !/^EZTK/i.test(epKey)) {
+    return [{ provider: '(capture)', serviceCode: '-', strategy: 'capture', status: 'skipped', detail: 'needs DATABASE_URL + EZTK test key (+ replay-carrier sandbox creds) to record fixtures' }];
+  }
+  return [{ provider: '(capture)', serviceCode: '-', strategy: 'capture', status: 'skipped', detail: 'capture wiring runs with full creds; see withCaptureFixture in carrier-test-mode' }];
+}
+
 async function main(): Promise<void> {
-  const mode = arg('live-approved') ? 'live-approved' : arg('sandbox') ? 'sandbox' : 'self-check';
+  const mode = arg('live-approved')
+    ? 'live-approved'
+    : arg('capture')
+      ? 'capture'
+      : arg('sandbox')
+        ? 'sandbox'
+        : 'self-check';
   if (mode === 'live-approved') {
     console.error('live-approved (real postage) is not implemented in this slice — manual_live_gated.');
     process.exit(2);
   }
-  const rows = mode === 'sandbox' ? await runSandbox() : runSelfCheck();
+  const rows = mode === 'capture' ? await runCapture() : mode === 'sandbox' ? await runSandbox() : runSelfCheck();
   writeMatrix(rows, mode);
   const fails = rows.filter((r) => r.status === 'fail');
   console.log(`\nCarrier harness (${mode}): ${rows.length} attempts · pass ${rows.filter((r) => r.status === 'pass').length} · fail ${fails.length} · skipped ${rows.filter((r) => r.status === 'skipped').length}`);

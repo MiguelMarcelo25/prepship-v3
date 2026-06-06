@@ -6,7 +6,7 @@ import {
   isCarrierTestMode,
   resolveCarrierTestStrategy,
   assertNoLivePostageOrMarketplace,
-  replayCarrierLabel,
+  withReplayFixture,
 } from './carrier-test-mode.js';
 import type {
   CarrierLabelInput,
@@ -96,7 +96,7 @@ export async function createCarrierLabel(
     assertNoLivePostageOrMarketplace(resolved.provider, input, strategy);
     label =
       strategy === 'replay'
-        ? await replayCarrierLabel(resolved.provider, input)
+        ? await withReplayFixture(resolved.provider, input, () => resolved.connector!.createLabel!(input))
         : await resolved.connector.createLabel(input);
   } else {
     label = await resolved.connector.createLabel(input);

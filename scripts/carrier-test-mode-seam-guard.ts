@@ -74,11 +74,14 @@ check('easypost sandbox with TEST key (EZTK) is allowed',
 check('replay tier ignores api-key prefix (no live HTTP anyway)',
   !throwsSafety(() => assertNoLivePostageOrMarketplace('shipp', { __sourceProvider: 'internal' } as any, replay)));
 
-// ── module purity: leaf import only (cold-start safe) ──
+// ── module purity: no heavy static imports (cold-start safe) ──
 const seamSrc = readFileSync('src/services/carrier-test-mode.ts', 'utf8');
 const seamImports = seamSrc.match(/^import .*$/gm) ?? [];
-check('seam module imports ONLY types (cold-start safe leaf)',
-  seamImports.every((l) => /import type/.test(l)));
+check('seam makes no heavy VALUE static imports (db/connectors/orchestrator) → cold-start safe',
+  seamImports.every((l) => /^import type /.test(l) || (!/from '\.\.\/(db|connectors)\//.test(l) && !/orchestrator/.test(l) && !/postgres|drizzle/.test(l))));
+check('seam loads fixtures via DYNAMIC import only (top-level stays light)',
+  /await import\('\.\/carrier-fixture-schema\.js'\)/.test(seamSrc) &&
+    !/^import .*carrier-fixture-schema/m.test(seamSrc));
 const seamCode = seamSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '');
 check('seam adds no force/bypass flag that could skip safety',
   !/(force|bypass|skipSafety|allowLive)\s*[:=]/i.test(seamCode));
@@ -89,7 +92,9 @@ check('orchestrator gates test path on isCarrierTestMode(input)',
   /if \(isCarrierTestMode\(input\)\)/.test(orch));
 check('orchestrator runs the strict safety assertion before any test provider call',
   /assertNoLivePostageOrMarketplace\(/.test(orch) &&
-    orch.indexOf('assertNoLivePostageOrMarketplace(') < orch.indexOf('replayCarrierLabel('));
+    orch.indexOf('assertNoLivePostageOrMarketplace(') < orch.indexOf('withReplayFixture('));
+check('replay tier runs the REAL connector under the fixture (parser exercised, not bypassed)',
+  /withReplayFixture\(resolved\.provider, input, \(\) => resolved\.connector!\.createLabel!\(input\)\)/.test(orch));
 check('production (non-test) branch still calls connector.createLabel(input) directly',
   /else \{\s*label = await resolved\.connector\.createLabel\(input\);\s*\}/.test(orch));
 check('test mode wraps ONLY createLabel — rates/void/track paths untouched',
