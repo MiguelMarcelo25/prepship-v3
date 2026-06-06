@@ -224,6 +224,61 @@ async function runSandbox(): Promise<MatrixRow[]> {
   return rows;
 }
 
+// ── Shipp rates-only tier: call the REAL Shipp quote endpoint (FREE, read-only,
+// no label, no money, no DB writes). Validates Shipp login + quoting + our rate
+// parsing against the live account. Loads the saved Shipp carrier credentials. ──
+async function runShippRates() {
+  const rows = []
+  const dbUrl = process.env.DATABASE_URL
+  if (!dbUrl) {
+    rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'skipped', detail: 'DATABASE_URL not set (needed to load the saved Shipp credentials)' })
+    return rows
+  }
+  const postgres = (await import('postgres')).default
+  const { quoteCarrierRates } = await import('../src/services/carrier-connector-orchestrator.js')
+  const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 10 })
+  try {
+    const accounts = (await sql`
+      SELECT id, label, credentials FROM carrier_accounts WHERE lower(provider) = 'shipp' ORDER BY id LIMIT 1
+    `)
+    if (!accounts[0]) {
+      rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'skipped', detail: 'no Shipp carrier account found in carrier_accounts' })
+      return rows
+    }
+    const creds = accounts[0].credentials || {}
+    // FREE quote: real destination, fixed box. No label is ever created.
+    const input = {
+      credentials: creds,
+      dimsL: 8, dimsW: 6, dimsH: 4, weightOz: 16,
+      toName: 'Carrier Harness Tester', toAddress: '1318 S Reno Ave', toCity: 'El Reno', toState: 'OK', toZip: '73036', toCountry: 'US',
+      rawOrder: { shipTo: { name: 'Carrier Harness Tester', street1: '1318 S Reno Ave', city: 'El Reno', state: 'OK', postalCode: '73036', country: 'US', phone: '4053686063' } },
+    }
+    let quote
+    try {
+      quote = await quoteCarrierRates('shipp', input)
+    } catch (err) {
+      rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'fail', detail: `quote failed: ${err instanceof Error ? err.message : String(err)}` })
+      return rows
+    }
+    const rates = Array.isArray(quote?.rates) ? quote.rates : []
+    if (rates.length === 0) {
+      rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'fail', detail: 'Shipp returned zero rates' })
+      return rows
+    }
+    for (const r of rates) {
+      const code = String(r.serviceCode ?? r.service_code ?? r.serviceName ?? '')
+      const carrier = String(r.carrierName ?? r.carrierCode ?? r.carrier ?? '')
+      const price = Number(r.price ?? r.cost ?? r.amount ?? r.totalCost ?? 0)
+      const serialized = JSON.stringify(r)
+      const ok = code.length > 0 && Number.isFinite(price) && !/\[object Object\]/.test(serialized)
+      rows.push({ provider: 'shipp', serviceCode: code || '(unnamed)', strategy: 'rates-only', status: ok ? 'pass' : 'fail', detail: ok ? `${carrier || 'Shipp'} — $${price.toFixed(2)} (quote only, $0 spent)` : `unparseable rate: code=${!!code} price=${price} objObj=${/\[object Object\]/.test(serialized)}` })
+    }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+  return rows
+}
+
 // ── Capture tier: record REAL sandbox/test responses into fixtures for replay. ──
 // Requires creds; skips cleanly (never fails) when absent so it is CI-safe.
 async function runCapture(): Promise<MatrixRow[]> {
@@ -237,16 +292,24 @@ async function runCapture(): Promise<MatrixRow[]> {
 async function main(): Promise<void> {
   const mode = arg('live-approved')
     ? 'live-approved'
-    : arg('capture')
-      ? 'capture'
-      : arg('sandbox')
-        ? 'sandbox'
-        : 'self-check';
+    : arg('shipp-rates')
+      ? 'shipp-rates'
+      : arg('capture')
+        ? 'capture'
+        : arg('sandbox')
+          ? 'sandbox'
+          : 'self-check';
   if (mode === 'live-approved') {
     console.error('live-approved (real postage) is not implemented in this slice — manual_live_gated.');
     process.exit(2);
   }
-  const rows = mode === 'capture' ? await runCapture() : mode === 'sandbox' ? await runSandbox() : runSelfCheck();
+  const rows = mode === 'shipp-rates'
+    ? await runShippRates()
+    : mode === 'capture'
+      ? await runCapture()
+      : mode === 'sandbox'
+        ? await runSandbox()
+        : runSelfCheck();
   writeMatrix(rows, mode);
   const fails = rows.filter((r) => r.status === 'fail');
   console.log(`\nCarrier harness (${mode}): ${rows.length} attempts · pass ${rows.filter((r) => r.status === 'pass').length} · fail ${fails.length} · skipped ${rows.filter((r) => r.status === 'skipped').length}`);
