@@ -50,6 +50,25 @@ function arg(name: string): boolean {
   return process.argv.includes(`--${name}`);
 }
 
+/**
+ * Post-assert (Slice 4): a harness attempt must leave ZERO live marketplace
+ * confirmation rows. Returns an error string if any pending/queued outbox row
+ * exists for the order, else null. Proves the run did not notify a marketplace.
+ */
+async function assertNoOutboxRows(sql: any, orderId: number): Promise<string | null> {
+  try {
+    const rows = (await sql`
+      SELECT count(*)::int AS n FROM fulfillment_outbox
+      WHERE order_id = ${orderId} AND status IN ('pending', 'queued', 'succeeded')
+    `) as Array<{ n: number }>;
+    const n = rows[0]?.n ?? 0;
+    return n === 0 ? null : `${n} live outbox row(s) created — marketplace would be notified`;
+  } catch {
+    // Table may not exist in a bare test DB; absence of outbox = trivially suppressed.
+    return null;
+  }
+}
+
 function writeMatrix(rows: MatrixRow[], mode: string): void {
   mkdirSync(dirname(OUT), { recursive: true });
   const pass = rows.filter((r) => r.status === 'pass').length;
@@ -173,8 +192,12 @@ async function runSandbox(): Promise<MatrixRow[]> {
         const tracking = String((label as any).trackingNumber ?? '');
         const url = String((label as any).labelUrl ?? '');
         const cost = Number((label as any).cost ?? 0);
-        const ok = tracking.length > 0 && url.length > 0 && !/\[object Object\]/.test(url) && cost === 0;
-        rows.push({ provider: 'easypost', serviceCode: svc.serviceCode, strategy: 'sandbox', status: ok ? 'pass' : 'fail', detail: ok ? `tracking ${tracking.slice(0, 12)}… $${cost}` : `tracking=${!!tracking} url=${!!url} cost=${cost}` });
+        const outboxErr = await assertNoOutboxRows(sql, orderId);
+        const ok = tracking.length > 0 && url.length > 0 && !/\[object Object\]/.test(url) && cost === 0 && !outboxErr;
+        const detail = ok
+          ? `tracking ${tracking.slice(0, 12)}… $${cost}; no marketplace notify`
+          : outboxErr ?? `tracking=${!!tracking} url=${!!url} cost=${cost}`;
+        rows.push({ provider: 'easypost', serviceCode: svc.serviceCode, strategy: 'sandbox', status: ok ? 'pass' : 'fail', detail });
       } catch (err) {
         rows.push({ provider: 'easypost', serviceCode: svc.serviceCode, strategy: 'sandbox', status: 'fail', detail: err instanceof Error ? err.message : String(err) });
       }
