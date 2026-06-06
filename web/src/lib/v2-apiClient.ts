@@ -1879,6 +1879,29 @@ export const apiClient = {
     );
   },
 
+  // ─── PS-106: direct-store vs ShipStation carrier-family policy ───────────────
+  // Reads/writes the `block_shipstation_for_direct_store` setting via the generic
+  // settings endpoints. The backend defaults to (and fails safe to) audit_only.
+  fetchCarrierEligibilityPolicy(): Promise<'enforce' | 'audit_only' | 'disabled'> {
+    return safe(
+      'fetchCarrierEligibilityPolicy',
+      async () => {
+        const row = await api.get<{ value?: string | null }>('/settings/block_shipstation_for_direct_store', { timeoutMs: 8_000 });
+        const v = (row?.value ?? '').trim().toLowerCase();
+        return v === 'enforce' || v === 'disabled' ? v : 'audit_only';
+      },
+      'audit_only' as const,
+    );
+  },
+
+  saveCarrierEligibilityPolicy(mode: 'enforce' | 'audit_only' | 'disabled'): Promise<any> {
+    return safe(
+      'saveCarrierEligibilityPolicy',
+      () => api.put<any>('/settings/block_shipstation_for_direct_store', { value: mode }),
+      {},
+    );
+  },
+
   // ─── Sync status ────────────────────────────────────────────────────────────
   fetchLegacySyncStatus(): Promise<any> {
     return cachedSafe(

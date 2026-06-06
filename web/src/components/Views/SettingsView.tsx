@@ -77,6 +77,7 @@ import {
   parseSettingsMarkupInput,
 } from './settings-parity'
 import { CarrierIntegrationsCard } from '../Settings/CarrierIntegrationsCard'
+import { CarrierEligibilityPolicyCard } from '../Settings/CarrierEligibilityPolicyCard'
 import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrationsCard'
 
 // Drawer sections — each represents one icon on the rail and one
@@ -1572,7 +1573,11 @@ export default function SettingsView() {
 
               {/* ─── CARRIERS panel ────────────────────────────── */}
               {activeSection === 'carriers' ? (
-                <CarrierIntegrationsCard view="carriers" />
+                <div className="flex flex-col gap-4">
+                  {/* PS-106: direct-store vs ShipStation carrier policy control. */}
+                  <CarrierEligibilityPolicyCard />
+                  <CarrierIntegrationsCard view="carriers" />
+                </div>
               ) : null}
 
               {/* ─── PENDING panel ─────────────────────────────── */}

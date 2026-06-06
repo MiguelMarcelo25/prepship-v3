@@ -110,6 +110,21 @@ async function sliceTwoChecks() {
     /return 'audit_only';/.test(policy) && policy.includes(CARRIER_ELIGIBILITY_SETTING_KEY));
   check('policy adds no force/bypass flag code',
     !/(force|bypass|allowAnyway|skipEligibility)\s*[:=?]/i.test(policy.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')));
+  check('mode read fails safe to audit_only on settings error',
+    /catch[\s\S]{0,160}?return 'audit_only'|try \{[\s\S]{0,400}?\} catch/.test(policy) && /defaulting to audit_only/.test(policy));
+
+  // slice 3: Settings UI + apiClient policy methods.
+  const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+  const settingsView = readFileSync('web/src/components/Views/SettingsView.tsx', 'utf8');
+  const card = readFileSync('web/src/components/Settings/CarrierEligibilityPolicyCard.tsx', 'utf8');
+  check('apiClient reads/writes the carrier-eligibility setting',
+    /fetchCarrierEligibilityPolicy/.test(apiClient) && /saveCarrierEligibilityPolicy/.test(apiClient) &&
+      /\/settings\/block_shipstation_for_direct_store/.test(apiClient));
+  check('Settings tab renders the carrier eligibility policy control',
+    /CarrierEligibilityPolicyCard/.test(settingsView));
+  check('policy card offers enforce / audit_only / disabled with audit_only default',
+    /'enforce'/.test(card) && /'audit_only'/.test(card) && /'disabled'/.test(card) &&
+      /useState<Mode>\('audit_only'\)/.test(card));
 }
 
 await sliceTwoChecks();
