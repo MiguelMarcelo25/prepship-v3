@@ -106,6 +106,7 @@
     "test:carrier-enable-disable-label": "tsx scripts/carrier-enable-disable-label-guard.ts",
     "test:ps-104-print-queue-selected-rate-proof-pass-through": "tsx scripts/batch-send-selected-rate-proof-forwarding-guard.ts",
     "test:ps-105-backend-rate-snapshot-id": "tsx scripts/ps-105-backend-rate-snapshot-id-guard.ts",
+    "test:ps-106-carrier-family-eligibility": "tsx scripts/ps-106-carrier-family-eligibility-guard.ts",
     "test:master:manifest": "node scripts/prepship-master-test-manifest-guard.mjs",
     "test:master:quick": "node scripts/prepship-master-test.mjs quick",
     "test:master": "node scripts/prepship-master-test.mjs master",
