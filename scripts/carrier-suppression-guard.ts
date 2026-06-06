@@ -79,6 +79,22 @@ check('runner drives createCarrierLabel (confirmation-free), NOT the handler con
 check('runner asserts zero live outbox rows after an attempt (post-assert helper present)',
   /assertNoOutboxRows/.test(runner));
 
+// ── ShipStation 5th path: existing testLabel mode is $0 + never calls the real
+//    provider; outbox suppresses internal source (no marketplace notify) ──
+const labelsSvc = readFileSync('src/services/labels.ts', 'utf8');
+const testLabelIdx = labelsSvc.indexOf('if (body.testLabel === true)');
+// The createLabelV2 real ShipStation call is the first one AFTER the testLabel
+// branch opens (earlier occurrences belong to other functions). testLabel returns
+// before reaching it, so testLabel mode never hits the real provider.
+const realSsIdx = labelsSvc.indexOf("createCarrierLabel('shipstation'", testLabelIdx);
+check('ShipStation testLabel branch short-circuits BEFORE the real ShipStation provider call',
+  testLabelIdx >= 0 && realSsIdx > testLabelIdx);
+check('ShipStation testLabel mode is $0 (no postage)',
+  /testLabel === true[\s\S]{0,2600}?cost: '0\.00'/.test(labelsSvc));
+const outbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
+check('outbox suppresses internal/manual/none source → no marketplace notify',
+  /isNoMarketplaceProvider[\s\S]*?'internal'/.test(outbox) && /if \(isNoMarketplaceProvider\(sourceProvider\)\) return null/.test(outbox));
+
 // ── cleanup never mutates shipped/cancelled (lockdown) ──
 const factory = readFileSync('scripts/lib/carrier-test-order-factory.ts', 'utf8');
 check('cleanup excludes shipped/cancelled orders (lockdown-safe)',

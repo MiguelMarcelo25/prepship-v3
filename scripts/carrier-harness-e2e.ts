@@ -122,6 +122,19 @@ function runSelfCheck(): MatrixRow[] {
       }
     }
   }
+  // ShipStation — the 5th path. It does NOT use the direct-carrier seam; it uses
+  // createLabelV2's existing testLabel offline mode ($0 mock + mark-shipped), and an
+  // internal-source order is suppressed by outbox.ts so no marketplace is notified.
+  for (const serviceCode of ['usps_priority', 'ups_ground']) {
+    try {
+      const seed = buildCarrierTestOrderSeed({ provider: 'shipstation', serviceCode });
+      assertSeedIsSafe(seed);
+      rows.push({ provider: 'shipstation', serviceCode, strategy: 'offline-test', status: 'pass', detail: 'seed safe; createLabelV2 testLabel ($0 mock, mark-shipped, internal-source → no notify)' });
+    } catch (err) {
+      rows.push({ provider: 'shipstation', serviceCode, strategy: 'offline-test', status: 'fail', detail: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   // Negative controls: unsafe shapes MUST be refused.
   try {
     assertSeedIsSafe({ ...buildCarrierTestOrderSeed({ provider: 'shipp', serviceCode: 'x' }), externalOrderId: 'walmart-123' } as any);
