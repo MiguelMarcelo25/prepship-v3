@@ -9,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { TOTAL_TREND_SERIES_KEY } from './dashboard-trend-constants'
 
 type TrendPoint = {
   day: string
@@ -35,6 +36,10 @@ type DashboardChartsProps = {
 // Color a non-focused line is washed out to when another series is focused.
 const MUTED_STROKE = 'var(--text3)'
 
+// The aggregate line is rendered in a thick dark stroke so it reads as the
+// "sum of everything" rather than just another client in the palette.
+const TOTAL_STROKE = '#0f172a'
+
 // Distinct, reasonably color-blind-friendly palette. Cycles if there are
 // more clients than colors.
 const CLIENT_PALETTE = [
@@ -43,6 +48,23 @@ const CLIENT_PALETTE = [
   '#9333ea', '#ca8a04', '#0284c7', '#e11d48', '#15803d', '#9a3412',
   '#6d28d9', '#4d7c0f',
 ]
+
+// Stable color per series: the Total line is always dark; clients keep their
+// palette color by their index AMONG CLIENTS (so adding the Total line at the
+// front doesn't shift every client's color).
+function buildSeriesColorMap(series: ClientSeries[]): Map<string, string> {
+  const map = new Map<string, string>()
+  let clientIndex = 0
+  for (const s of series) {
+    if (s.key === TOTAL_TREND_SERIES_KEY) {
+      map.set(s.key, TOTAL_STROKE)
+    } else {
+      map.set(s.key, CLIENT_PALETTE[clientIndex % CLIENT_PALETTE.length] ?? '#2563eb')
+      clientIndex += 1
+    }
+  }
+  return map
+}
 
 function num(value: unknown, fallback = 0) {
   const parsed = typeof value === 'number' ? value : Number(value)
@@ -79,18 +101,21 @@ function MultiClientChart({
     if (!key) return
     setFocusedKey((current) => (current === key ? null : key))
   }
+  const colorByKey = buildSeriesColorMap(series)
   // Stable legend entries in the ORIGINAL series order. We render this
   // explicitly (rather than letting recharts derive it from child order) so the
   // labels don't reshuffle when the focused line is re-ordered to paint on top.
-  // The icon color is grayed for non-focused series to mirror the lines.
-  const legendPayload = series.map((s, index) => {
-    const dimmed = focusedKey != null && focusedKey !== s.key
+  // The icon color is grayed for non-focused series to mirror the lines. The
+  // Total line is never dimmed — it's the aggregate reference.
+  const legendPayload = series.map((s) => {
+    const isTotal = s.key === TOTAL_TREND_SERIES_KEY
+    const dimmed = !isTotal && focusedKey != null && focusedKey !== s.key
     return {
       value: s.name,
       id: s.key,
       dataKey: s.key,
       type: 'plainline' as const,
-      color: dimmed ? MUTED_STROKE : CLIENT_PALETTE[index % CLIENT_PALETTE.length],
+      color: dimmed ? MUTED_STROKE : (colorByKey.get(s.key) ?? MUTED_STROKE),
       // recharts' plainline legend icon reads `entry.payload.strokeDasharray`.
       // A custom `payload` array MUST include this nested `payload` object or
       // recharts throws "Cannot read properties of undefined (reading
@@ -166,31 +191,34 @@ function MultiClientChart({
             }}
           />
           {series
-            // Draw the focused series LAST so it paints on top of the grayed
-            // lines. Keep each series' palette color keyed to its ORIGINAL index
-            // so colors stay stable regardless of paint order.
+            // Paint order (low → high): normal clients, then the focused line,
+            // then the Total line on top so the aggregate is always readable.
+            // Colors come from colorByKey (stable per client) regardless of
+            // paint order.
             .map((s, index) => ({ s, index }))
             .sort((a, b) => {
-              const aFocused = a.s.key === focusedKey
-              const bFocused = b.s.key === focusedKey
-              return aFocused === bFocused ? 0 : aFocused ? 1 : -1
+              const rank = (x: { s: ClientSeries }) =>
+                x.s.key === TOTAL_TREND_SERIES_KEY ? 2 : x.s.key === focusedKey ? 1 : 0
+              return rank(a) - rank(b)
             })
-            .map(({ s, index }) => {
+            .map(({ s }) => {
+              const isTotal = s.key === TOTAL_TREND_SERIES_KEY
               const isFocused = focusedKey === s.key
-              const isDimmed = focusedKey != null && !isFocused
+              // The Total line is never dimmed — it's the aggregate reference.
+              const isDimmed = !isTotal && focusedKey != null && !isFocused
               return (
                 <Line
                   key={s.key}
                   type="linear"
                   dataKey={s.key}
                   name={s.name}
-                  stroke={isDimmed ? MUTED_STROKE : CLIENT_PALETTE[index % CLIENT_PALETTE.length]}
-                  strokeWidth={isFocused ? 2.75 : 1.75}
+                  stroke={isDimmed ? MUTED_STROKE : (colorByKey.get(s.key) ?? MUTED_STROKE)}
+                  strokeWidth={isTotal ? (isFocused ? 3.25 : 2.75) : (isFocused ? 2.75 : 1.75)}
                   strokeOpacity={isDimmed ? 0.25 : 1}
                   dot={false}
                   activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--surface)' }}
                   isAnimationActive={false}
-                  // Click a client line -> focus it (gray out the rest).
+                  // Click a line -> focus it (gray out the rest, except Total).
                   onClick={() => toggleFocus(s.key)}
                   style={{ cursor: 'pointer' }}
                 />

@@ -36,6 +36,7 @@ import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
 import { formatCaDateTime } from '../../lib/ca-time'
 import { FilterSelect } from '../FilterSelect'
 import { getAnalysisPresetRange } from './analysis-parity'
+import { TOTAL_TREND_SERIES_KEY } from './dashboard-trend-constants'
 
 const DashboardCharts = lazy(() => import('./DashboardCharts'))
 
@@ -2172,13 +2173,22 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     series.sort((left, right) => right.total - left.total)
     const rows = days.map((day) => {
       const row: Record<string, number | string> = { day }
+      let dayTotal = 0
       for (const entry of series) {
-        row[entry.key] = countByDayClient.get(`${day}|${entry.clientKey}`) ?? 0
+        const value = countByDayClient.get(`${day}|${entry.clientKey}`) ?? 0
+        row[entry.key] = value
+        dayTotal += value
       }
+      // Aggregate line: total orders that day across ALL clients/stores.
+      row[TOTAL_TREND_SERIES_KEY] = dayTotal
       return row
     })
     return {
-      clientSeries: series.map(({ key, name }) => ({ key, name })),
+      // Lead with the Total line so it anchors the legend, then per-client.
+      clientSeries: [
+        { key: TOTAL_TREND_SERIES_KEY, name: 'Total (all stores)' },
+        ...series.map(({ key, name }) => ({ key, name })),
+      ],
       clientTrend: rows,
     }
   }, [trendClientId, clientRevenueRows, clients, dateRange.from, dateRange.to])
