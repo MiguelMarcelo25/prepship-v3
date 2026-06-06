@@ -125,6 +125,21 @@ async function sliceTwoChecks() {
   check('policy card offers enforce / audit_only / disabled with audit_only default',
     /'enforce'/.test(card) && /'audit_only'/.test(card) && /'disabled'/.test(card) &&
       /useState<Mode>\('audit_only'\)/.test(card));
+
+  // slice 4: /rates/browse read-path wiring — audit/enforce on rating, best-effort + fail-open.
+  const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+  check('rates route imports the non-throwing evaluator + mode reader',
+    /evaluateOrderCarrierEligibility/.test(ratesRoute) && /getCarrierEligibilityMode/.test(ratesRoute));
+  check('browse accepts an optional orderId to resolve the source',
+    /orderId:\s*z\.number\(\)\.int\(\)\.positive\(\)\.nullable\(\)\.optional\(\)/.test(ratesRoute));
+  check('browse evaluates ShipStation eligibility for the order',
+    /evaluateOrderCarrierEligibility\(\{\s*carrierFamily:\s*'shipstation'/.test(ratesRoute));
+  check('browse drops ShipStation rates only when enforce blocks (shipStationBlocked)',
+    /shipStationBlocked/.test(ratesRoute) && /filtered\s*=\s*shipStationBlocked\s*\?\s*\[\]/.test(ratesRoute));
+  check('browse surfaces carrierEligibility on the response payload',
+    /carrierEligibility,/.test(ratesRoute));
+  check('browse eligibility is best-effort / fail-open (wrapped in try-catch)',
+    /if \(body\.orderId\)[\s\S]{0,400}?try \{[\s\S]{0,800}?\} catch/.test(ratesRoute));
 }
 
 await sliceTwoChecks();

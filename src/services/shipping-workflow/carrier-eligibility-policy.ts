@@ -48,6 +48,25 @@ export class CarrierFamilyEligibilityError extends Error {
   }
 }
 
+/** Non-throwing evaluation for read paths (e.g. /rates/browse) — returns the result
+ * plus the resolved order source so callers can flag/filter + audit. */
+export function evaluateOrderCarrierEligibility(input: {
+  carrierFamily: CarrierFamily;
+  order: { sourceProvider?: string | null; raw?: unknown };
+  mode: CarrierEligibilityMode;
+}) {
+  const orderSource = classifyOrderSource({
+    sourceProvider: input.order.sourceProvider ?? null,
+    rawSource: rawSourceText(input.order.raw),
+  });
+  const result = evaluateCarrierFamilyEligibility({
+    orderSource,
+    carrierFamily: input.carrierFamily,
+    mode: input.mode,
+  });
+  return { ...result, orderSource };
+}
+
 function rawSourceText(raw: unknown): string | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -70,15 +89,8 @@ export async function assertCarrierFamilyEligibleForPurchase(input: {
   modeOverride?: CarrierEligibilityMode;
 }): Promise<void> {
   const mode = input.modeOverride ?? await getCarrierEligibilityMode();
-  const orderSource = classifyOrderSource({
-    sourceProvider: input.order.sourceProvider ?? null,
-    rawSource: rawSourceText(input.order.raw),
-  });
-  const result = evaluateCarrierFamilyEligibility({
-    orderSource,
-    carrierFamily: input.carrierFamily,
-    mode,
-  });
+  const result = evaluateOrderCarrierEligibility({ carrierFamily: input.carrierFamily, order: input.order, mode });
+  const orderSource = result.orderSource;
   if (!result.wouldBlock) return;
   if (result.allowed) {
     // audit_only / disabled — report only. No order PII; just ids/rule/source.

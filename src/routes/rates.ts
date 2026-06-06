@@ -33,6 +33,11 @@ import {
   withSelectedRateKeys,
   selectedRateOpaqueKey,
 } from '../services/shipping-workflow/rate-quote-snapshot-store';
+import {
+  getCarrierEligibilityMode,
+  evaluateOrderCarrierEligibility,
+} from '../services/shipping-workflow/carrier-eligibility-policy';
+import { orders } from '../db/schema/orders';
 
 const app = new Hono();
 
@@ -243,6 +248,9 @@ const browseBody = rateBody.extend({
   preferredCarrierId: z.string().min(1).optional(),
   forceLive: z.boolean().optional(),
   cachedOnly: z.boolean().optional(),
+  // PS-106: order context so /browse can apply carrier-family eligibility (these
+  // rates are ShipStation-only; direct carriers are merged client-side).
+  orderId: z.number().int().positive().nullable().optional(),
 });
 
 function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number }; insurance_amount?: { amount?: number } }): number {
@@ -317,10 +325,41 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
     }
   );
+  // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family
+  // eligibility. These /browse rates are ShipStation-only (direct carriers merge
+  // client-side), so for a direct-store order the whole set is ineligible. In
+  // `enforce` we drop them (the operator then sees only their direct carriers); in
+  // `audit_only` we keep them and log a would-block. Best-effort: any failure (no
+  // order, settings outage) simply allows the rates. The label purchase boundary is
+  // the authoritative block regardless.
+  let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
+  let shipStationBlocked = false;
+  if (body.orderId) {
+    try {
+      const [ord] = await db
+        .select({ sourceProvider: orders.sourceProvider, raw: orders.raw })
+        .from(orders)
+        .where(eq(orders.id, body.orderId))
+        .limit(1);
+      if (ord) {
+        const mode = await getCarrierEligibilityMode();
+        const elig = evaluateOrderCarrierEligibility({ carrierFamily: 'shipstation', order: ord, mode });
+        carrierEligibility = { mode, wouldBlock: elig.wouldBlock, ...(elig.ruleId ? { ruleId: elig.ruleId } : {}) };
+        if (elig.wouldBlock) {
+          if (!elig.allowed) shipStationBlocked = true;
+          else console.warn(`[carrier-eligibility] AUDIT would-block browse: order=${body.orderId} source=${elig.orderSource} mode=${mode} rule=${elig.ruleId}`);
+        }
+      }
+    } catch {
+      /* best-effort: allow; purchase boundary remains authoritative */
+    }
+  }
   const requestedSet = requestedCarrierIds?.length ? new Set(requestedCarrierIds) : null;
-  const filtered = requestedSet
-    ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
-    : result.rates;
+  const filtered = shipStationBlocked
+    ? []
+    : requestedSet
+      ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
+      : result.rates;
   const cheapest = [...filtered].sort(
     (a, b) => rateTotal(a) - rateTotal(b)
   )[0] ?? null;
@@ -404,6 +443,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     ...result,
     requestKey: result.cacheKey,
     rateQuoteId,
+    carrierEligibility,
     source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
     cacheAgeMs: result.cacheAgeMs,
     rates: responseRates,
