@@ -2090,14 +2090,14 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             <span style={{ flexShrink: 0 }}>
               <ActionButton
                 icon={d.active === false ? <Power size={11} strokeWidth={2.5} /> : <PowerOff size={11} strokeWidth={2.5} />}
-                label={d.active === false ? 'Activate' : 'Deactivate'}
-                loadingLabel={d.active === false ? 'Activating…' : 'Deactivating…'}
+                label={d.active === false ? 'Enable' : 'Disable'}
+                loadingLabel={d.active === false ? 'Enabling…' : 'Disabling…'}
                 loading={!!togglingActive[d.id]}
                 variant="subtle"
                 onClick={() => runToggleActive(d)}
                 title={d.active === false
-                  ? 'Activate this carrier — show it in the Rate Browser again'
-                  : 'Deactivate this carrier — hide it from the Rate Browser (keeps the account + credentials)'}
+                  ? 'Enable this carrier — show it in the Rate Browser again'
+                  : 'Disable this carrier — hide it from the Rate Browser (keeps the account + credentials)'}
               />
             </span>
           ) : null}

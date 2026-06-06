@@ -103,6 +103,7 @@
     "test:batch-header-package-size": "tsx scripts/batch-header-package-size-guard.ts",
     "test:daily-orders-trend-count": "tsx scripts/daily-orders-trend-count-not-value-guard.ts",
     "test:daily-orders-trend-total-line": "tsx scripts/daily-orders-trend-total-line-guard.ts",
+    "test:carrier-enable-disable-label": "tsx scripts/carrier-enable-disable-label-guard.ts",
     "test:single-sku-default-qty-scope": "tsx scripts/single-sku-default-qty-scope-guard.ts",
     "test:awaiting-carrier-badge-nickname-fallback": "tsx scripts/awaiting-carrier-badge-nickname-fallback-guard.ts",
     "test:inventory-history-table-pagination": "tsx scripts/inventory-history-table-pagination-guard.ts",
