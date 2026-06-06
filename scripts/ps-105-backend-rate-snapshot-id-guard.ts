@@ -14,11 +14,11 @@ import {
   resolveRateQuoteForPurchase,
   assertRateQuoteForLabelPurchase,
   buildSelectedRateProofFromSnapshot,
+  selectedRateOpaqueKey,
   RATE_QUOTE_STALE_MESSAGE,
 } from '../src/services/shipping-workflow/rate-quote-snapshot';
 import {
   assertSelectedRateProofForLabelPurchase,
-  selectedRateAuthorityKey,
 } from '../src/services/shipping-workflow/rate-fingerprint';
 
 let failures = 0;
@@ -32,8 +32,8 @@ const cacheKey =
   'v=ground-saver-v2|eligibility=ps-057-hugrab-ground-saver-v1|d=2026-06-06|w=510|z=77422|co=US|st=TX|ci=brazoria|r=1|cl=10|l=90|dw=60|h=30|c=se-433542,se-595995';
 const rateA = { carrierCode: 'ups', serviceCode: 'ups_ground', shippingProviderId: 595995, shipmentCost: 6.89, otherCost: 0, packageCode: 'package' };
 const rateB = { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shippingProviderId: 433542, shipmentCost: 9.21, otherCost: 0, packageCode: 'package' };
-const keyA = selectedRateAuthorityKey(rateA);
-const keyB = selectedRateAuthorityKey(rateB);
+const keyA = selectedRateOpaqueKey(rateA);
+const keyB = selectedRateOpaqueKey(rateB);
 const freshSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() };
 const expiredSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() - 7 * 60 * 60 * 1000 };
 
@@ -93,6 +93,29 @@ check('snapshot module adds no force/bypass/skip-proof flag code',
   !/(force|bypass|skipProof|skipValidation|allowStale|disableProof)\s*[:=?]/i.test(codeOnly));
 check('snapshot module delegates final authority to validateExactSelectedRate',
   /validateExactSelectedRate/.test(moduleSrc) && /assertSelectedRateProofForLabelPurchase/.test(moduleSrc));
+
+// ── 8. selectedRateKey is opaque (hashed) — no cost/money digest leaks. ──
+check('selectedRateKey is opaque (srk_ prefix)', keyA.startsWith('srk_') && keyA !== keyB);
+check('selectedRateKey leaks no cost', !/6\.89|9\.21|6890|9210/.test(keyA) && !/6\.89|9\.21/.test(keyB));
+
+// ── 9. Slice-2 wiring: emit on the rate path, accept (prefer + fallback) at purchase. ──
+const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const labelsService = readFileSync('src/services/labels.ts', 'utf8');
+const labelsRoute = readFileSync('src/routes/labels.ts', 'utf8');
+const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
+check('rates /browse emits rateQuoteId + stamps selectedRateKeys',
+  /storeRateQuoteSnapshot\(/.test(ratesRoute) && /withSelectedRateKeys\(/.test(ratesRoute) && /rateQuoteId,/.test(ratesRoute));
+check('createLabelV2 boundary uses the unified rate-selection resolver',
+  /await assertLabelPurchaseRateSelection\(/.test(labelsService));
+check('createLabelV2 input accepts rateQuoteId + selectedRateKey',
+  /rateQuoteId\?: string \| null;/.test(labelsService) && /selectedRateKey\?: string \| null;/.test(labelsService));
+check('labels route schema accepts rateQuoteId + selectedRateKey',
+  /rateQuoteId: z\.string\(\)/.test(labelsRoute) && /selectedRateKey: z\.string\(\)/.test(labelsRoute));
+check('purchase resolver PREFERS snapshot id but FALLS BACK to legacy proof (never weaker)',
+  /body\.rateQuoteId && body\.selectedRateKey/.test(store) &&
+    /assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof \?\? null\)/.test(store));
+check('snapshot persistence is backed by analytics_cache (no migration)',
+  /from '\.\.\/analytics-cache'/.test(store) && /rate_quote:/.test(store));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-105 backend rate snapshot id guard (${failures} failing)`);

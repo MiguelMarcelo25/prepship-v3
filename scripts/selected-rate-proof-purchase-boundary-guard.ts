@@ -30,11 +30,19 @@ check(
     labelsRoute.includes('z.unknown()'),
 );
 
+// PS-105 (Per user override unlock shipped data on 2026-06-06): the ShipStation
+// boundary now enforces the selected-rate proof via the unified resolver
+// assertLabelPurchaseRateSelection (prefers the backend-owned rateQuoteId snapshot,
+// falls back to the carried selectedRateProof). The resolver delegates to the SAME
+// strict validator (assertSelectedRateProofForLabelPurchase), so this is a refactor,
+// not a weakening — the proof is still required before any real postage.
+const proofResolver = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
 check(
-  'ShipStation label service enforces selectedRateProof before real postage',
-  labelsService.includes('assertSelectedRateProofForLabelPurchase') &&
+  'ShipStation label service enforces the selected-rate boundary before real postage',
+  labelsService.includes('await assertLabelPurchaseRateSelection(') &&
     labelsService.includes('body.selectedRateProof') &&
-    labelsService.includes('Per user override unlock shipped data on 2026-06-05'),
+    labelsService.includes('Per user override unlock shipped data on 2026-06-06') &&
+    proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 
 check(

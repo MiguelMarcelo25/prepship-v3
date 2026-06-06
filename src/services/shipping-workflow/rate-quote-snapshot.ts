@@ -86,7 +86,17 @@ export function isRateQuoteSnapshotFresh(
   return ms + ttlMs > now;
 }
 
-/** Find the snapshot rate whose authority key matches the operator's selection. */
+/**
+ * The OPAQUE per-rate selection key sent to the frontend. The raw authority key
+ * embeds a money digest (cost), so we hash it for transport — that hides the cost
+ * from non-financial viewers (no redactRateMoneyFields bypass) while still
+ * uniquely identifying the chosen rate within its snapshot. Deterministic.
+ */
+export function selectedRateOpaqueKey(rate: unknown): string {
+  return `srk_${createHash('sha256').update(`rate-key:${selectedRateAuthorityKey(rate)}`).digest('hex').slice(0, 24)}`;
+}
+
+/** Find the snapshot rate whose OPAQUE selection key matches the operator's choice. */
 export function findSnapshotRateByKey(
   snapshot: Pick<RateQuoteSnapshot, 'rates'>,
   selectedRateKey: string,
@@ -94,7 +104,7 @@ export function findSnapshotRateByKey(
   const target = String(selectedRateKey ?? '').trim();
   if (!target || !Array.isArray(snapshot.rates)) return null;
   for (const rate of snapshot.rates) {
-    if (selectedRateAuthorityKey(rate) === target) {
+    if (selectedRateOpaqueKey(rate) === target) {
       return (rate && typeof rate === 'object' ? rate : {}) as Record<string, unknown>;
     }
   }

@@ -82,7 +82,12 @@ check(
     directProviderCalls.every((index) => index > directLabelProofIndex),
 );
 
-const shipStationProofIndex = indexAfter(labelsService, 'assertSelectedRateProofForLabelPurchase(body.selectedRateProof)');
+// PS-105 (Per user override unlock shipped data on 2026-06-06): the ShipStation
+// boundary now enforces the selected-rate proof via the unified resolver
+// assertLabelPurchaseRateSelection (prefers backend-owned rateQuoteId snapshot,
+// falls back to carried selectedRateProof; delegates to the SAME strict validator).
+// The invariant is unchanged: enforcement must precede the real postage connector call.
+const shipStationProofIndex = indexAfter(labelsService, 'await assertLabelPurchaseRateSelection(');
 const shipStationProviderIndex = indexAfter(labelsService, "createCarrierLabel('shipstation'", shipStationProofIndex);
 check(
   'ShipStation label path checks selected-rate proof before real postage connector call',
@@ -99,7 +104,10 @@ check(
 check(
   'frontend passes backend-issued selectedRateProof through label and queue payloads',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 4 &&
+    // PS-104 direct-carrier path uses the override-wrapper form, so count the
+    // wrapper-aware pattern (matches the boundary guard) — the proof IS passed on
+    // all 4 single/batch/queue/direct-carrier paths.
+    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4 &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)') &&
     ordersView.includes('selectedRateProof,'),
 );

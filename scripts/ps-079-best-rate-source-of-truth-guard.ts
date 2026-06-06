@@ -88,8 +88,13 @@ check('cache key embeds the eligibility version (rules change → cache invalida
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('frontend prefers the backend bestRate (response.bestRate ?? pickBestPanelRate)',
   /responseBestRate \?\? pickBestPanelRate\(rates\)/.test(ordersView));
+// PS-105/carrier-nickname refactor: getCarrierCodeForDisplay now resolves the
+// awaiting carrier into a `const carrierCode = toStringValue(order.bestRate?.carrierCode) ?? …`
+// (bestRate carrier still FIRST/preferred), then falls back to a known-carrier
+// nickname for blank-carrierCode aggregator rates. The bestRate-first preference
+// is unchanged; only the surrounding shape changed.
 check('Awaiting carrier column prefers the bestRate carrier over canonical/selected',
-  /order\.orderStatus === 'awaiting_shipment'\)\s*\{\s*return \(\s*toStringValue\(order\.bestRate\?\.carrierCode\)/.test(ordersView));
+  /order\.orderStatus === 'awaiting_shipment'\)\s*\{\s*const carrierCode =\s*toStringValue\(order\.bestRate\?\.carrierCode\)/.test(ordersView));
 check('Awaiting shipping-account column prefers the bestRate account nickname',
   /order\.orderStatus === 'awaiting_shipment' && order\.bestRate\)\s*\{[\s\S]{0,260}?order\.bestRate\.carrierNickname/.test(ordersView));
 // DECISION (DJ, 2026-06-04): keep the BOUNDED SKIP when carrier accounts aren't

@@ -61,6 +61,9 @@ const createBody = z.object({
   shipTo: addressInput,
   shipFrom: addressInput,
   selectedRateProof: selectedRateProofInput,
+  // PS-105: backend-owned rate quote snapshot id + chosen rate authority key.
+  rateQuoteId: z.string().min(1).nullable().optional(),
+  selectedRateKey: z.string().min(1).nullable().optional(),
 });
 
 const batchBody = z.object({

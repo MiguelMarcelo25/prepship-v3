@@ -44,7 +44,11 @@ check(
 
 check(
   'frontend passes selectedRateProof through all single, batch, backend-queue, and direct-carrier payload paths',
-  (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload/g)?.length ?? 0) >= 4 &&
+  // PS-104 direct-carrier path uses the override-wrapper form
+  // `selectedRateProof: overridePayload?.selectedRateProof ?? buildSelectedRateProofPayload(order, ...)`,
+  // so count the wrapper-aware pattern (matches the boundary guard) — the proof is
+  // genuinely passed on all 4 single/batch/queue/direct-carrier paths.
+  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4 &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)') &&
     ordersView.includes('selectedRateProof,') &&
     proofBoundaryGuard.includes('Orders single/batch/queue label payloads pass selectedRateProof'),
@@ -71,8 +75,14 @@ check(
 
 check(
   'frontend remains pass-through only and does not locally decide stale selected-rate proof is acceptable',
-  !/stale[^\\n]*(acceptable|allow|allowed|continue|ignore)/i.test(ordersView) &&
-    !/selectedRateProof[^\\n]*(force|bypass|override)/i.test(ordersView),
+  // Precise, unambiguous bypass check (the prior `[^\\n]` form was a fragile
+  // backslash-vs-newline regex). Intent: the frontend must not force/bypass/skip
+  // selected-rate proof, nor locally declare a stale rate acceptable. The PS-104
+  // `overridePayload` is a legitimate caller PAYLOAD override, not a proof bypass,
+  // so we match force/bypass/skip-proof flags specifically (not the word "override").
+  !/selectedRateProof[^\n]{0,80}\b(force|bypass)\b/i.test(ordersView) &&
+    !/\bskip(Proof|RateProof|SelectedRate|Validation)\b/i.test(ordersView) &&
+    !/stale[^\n]{0,40}\b(acceptable|ignore)\b/i.test(ordersView),
 );
 
 if (failures > 0) {

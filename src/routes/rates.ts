@@ -28,6 +28,10 @@ import {
   buildBestRateWorkflowDto,
   type BestRateWorkflowCarrierStatus,
 } from '../services/shipping-workflow/best-rate-workflow-dto';
+import {
+  storeRateQuoteSnapshot,
+  withSelectedRateKeys,
+} from '../services/shipping-workflow/rate-quote-snapshot-store';
 
 const app = new Hono();
 
@@ -376,12 +380,25 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         matchType: result.cached ? 'cache' : 'live',
       }
     : null;
+  // PS-105 (Per user override unlock shipped data on 2026-06-06): stamp each rate
+  // with an opaque selection key and persist a backend-owned quote snapshot keyed
+  // by an opaque rateQuoteId, so a later label purchase can validate the operator's
+  // selection server-side WITHOUT the frontend carrying full proof internals. The
+  // snapshot expires with the analytics-cache TTL; selectedRateProof stays as the
+  // compatibility fallback until the frontend migrates.
+  const ratesWithKeys = withSelectedRateKeys(filtered);
+  const rateQuoteId = await storeRateQuoteSnapshot({
+    cacheKey: result.cacheKey,
+    rates: ratesWithKeys,
+    fetchedAt: result.fetchedAt,
+  });
   const payload = {
     ...result,
     requestKey: result.cacheKey,
+    rateQuoteId,
     source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
     cacheAgeMs: result.cacheAgeMs,
-    rates: filtered,
+    rates: ratesWithKeys,
     bestRate: cheapest,
     carrierStatuses,
     bestRateWorkflow: buildBestRateWorkflowDto({

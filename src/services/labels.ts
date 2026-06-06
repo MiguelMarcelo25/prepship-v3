@@ -34,9 +34,9 @@ import {
 } from './fulfillment/outbox';
 import { addMockLabelSignature } from '../lib/mock-label-access';
 import {
-  assertSelectedRateProofForLabelPurchase,
   type SelectedRateProofInput,
 } from './shipping-workflow/rate-fingerprint';
+import { assertLabelPurchaseRateSelection } from './shipping-workflow/rate-quote-snapshot-store';
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
@@ -289,6 +289,11 @@ export type CreateLabelInputDto = {
   shipTo?: AddressInputDto;
   shipFrom?: AddressInputDto;
   selectedRateProof?: SelectedRateProofInput;
+  // PS-105: backend-owned rate quote snapshot id + the chosen rate's authority
+  // key. Preferred over selectedRateProof at the purchase boundary; selectedRateProof
+  // remains a compatibility fallback during migration.
+  rateQuoteId?: string | null;
+  selectedRateKey?: string | null;
 };
 
 export type CreateLabelResponseDto = {
@@ -1119,7 +1124,14 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   // Per user override unlock shipped data on 2026-06-05: enforce the
   // selected-rate proof/fingerprint boundary before any real ShipStation
   // postage call. Test labels returned above remain offline-only.
-  assertSelectedRateProofForLabelPurchase(body.selectedRateProof);
+  // Per user override unlock shipped data on 2026-06-06 (PS-105): prefer the
+  // backend-owned rate quote snapshot id; fall back to the carried proof. Both run
+  // the SAME strict validator — identical to legacy when no rateQuoteId is sent.
+  await assertLabelPurchaseRateSelection({
+    rateQuoteId: body.rateQuoteId,
+    selectedRateKey: body.selectedRateKey,
+    selectedRateProof: body.selectedRateProof,
+  });
   const creds = await loadClientCredentials(clientId);
   const apiKeyV2 = creds.apiKeyV2 ?? undefined;
   if (!body.shippingProviderId) {
