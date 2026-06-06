@@ -108,6 +108,8 @@
     "test:ps-105-backend-rate-snapshot-id": "tsx scripts/ps-105-backend-rate-snapshot-id-guard.ts",
     "test:ps-106-carrier-family-eligibility": "tsx scripts/ps-106-carrier-family-eligibility-guard.ts",
     "test:carrier-test-mode-seam": "tsx scripts/carrier-test-mode-seam-guard.ts",
+    "test:carrier-harness": "tsx scripts/carrier-harness-e2e.ts --self-check",
+    "carrier-harness:sandbox": "tsx scripts/carrier-harness-e2e.ts --sandbox",
     "test:master:manifest": "node scripts/prepship-master-test-manifest-guard.mjs",
     "test:master:quick": "node scripts/prepship-master-test.mjs quick",
     "test:master": "node scripts/prepship-master-test.mjs master",

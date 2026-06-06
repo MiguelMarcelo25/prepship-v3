@@ -1,0 +1,207 @@
+#!/usr/bin/env tsx
+/**
+ * Carrier harness — backend end-to-end runner (Slice 2 skeleton; grows in Slices 3/4/7).
+ * Plan: ~/.claude/plans/zany-spinning-hennessy.md
+ *
+ * Proves printing an order to the queue succeeds across carrier paths WITHOUT
+ * spending money or notifying a marketplace, producing a provider × sub-carrier
+ * pass/fail matrix.
+ *
+ * MODES (default = --self-check):
+ *   --self-check   Offline. No DB, no network. Validates seam + factory + matrix
+ *                  wiring and the safety invariants. This is what `test:carrier-harness`
+ *                  runs in CI — it can never touch the production DB or buy anything.
+ *   --sandbox      Real DB + real-carrier SANDBOX (EasyPost test key). $0, no
+ *                  marketplace. Requires DATABASE_URL + an EZTK test key
+ *                  (CARRIER_HARNESS_EASYPOST_TEST_KEY). Tiers without creds are
+ *                  reported as SKIPPED, never failed.
+ *   --live-approved  Real postage. Refused unless the flag AND creds are present
+ *                  (manual_live_gated). Not implemented in this slice.
+ *
+ * Output: test-results/carrier-harness/latest.{json,md}. Continues past failures.
+ */
+import 'dotenv/config';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import {
+  buildCarrierTestOrderSeed,
+  assertSeedIsSafe,
+  CarrierTestOrderSafetyError,
+} from './lib/carrier-test-order-factory.js';
+import {
+  isCarrierTestMode,
+  resolveCarrierTestStrategy,
+  assertNoLivePostageOrMarketplace,
+  CarrierTestModeSafetyError,
+} from '../src/services/carrier-test-mode.js';
+
+const DIRECT_PROVIDERS = ['easypost', 'shipp', 'ups', 'walmart_shipping'] as const;
+const OUT = 'test-results/carrier-harness/latest';
+
+type MatrixRow = {
+  provider: string;
+  serviceCode: string;
+  strategy: string;
+  status: 'pass' | 'fail' | 'skipped';
+  detail: string;
+};
+
+function arg(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
+
+function writeMatrix(rows: MatrixRow[], mode: string): void {
+  mkdirSync(dirname(OUT), { recursive: true });
+  const pass = rows.filter((r) => r.status === 'pass').length;
+  const fail = rows.filter((r) => r.status === 'fail').length;
+  const skip = rows.filter((r) => r.status === 'skipped').length;
+  writeFileSync(`${OUT}.json`, JSON.stringify({ mode, pass, fail, skip, rows }, null, 2));
+  const md = [
+    `# Carrier harness — ${mode}`,
+    '',
+    `Total ${rows.length} · pass ${pass} · fail ${fail} · skipped ${skip}`,
+    '',
+    '| Provider | Sub-carrier / service | Tier | Result | Detail |',
+    '|---|---|---|---|---|',
+    ...rows.map((r) => `| ${r.provider} | ${r.serviceCode} | ${r.strategy} | ${r.status} | ${r.detail} |`),
+    '',
+  ].join('\n');
+  writeFileSync(`${OUT}.md`, md);
+}
+
+// ── Offline self-check: validate the harness wiring without DB/network ──
+function runSelfCheck(): MatrixRow[] {
+  const rows: MatrixRow[] = [];
+  const sampleServices: Record<string, string[]> = {
+    easypost: ['usps_priority', 'usps_first', 'ups_ground'],
+    shipp: ['shipp_ups_ground', 'shipp_usps_priority'],
+    ups: ['ups_ground', 'ups_2nd_day_air'],
+    walmart_shipping: ['walmart_fedex_ground', 'walmart_usps_priority'],
+  };
+  for (const provider of DIRECT_PROVIDERS) {
+    const strategy = resolveCarrierTestStrategy(provider);
+    for (const serviceCode of sampleServices[provider]) {
+      try {
+        const seed = buildCarrierTestOrderSeed({ provider, serviceCode });
+        assertSeedIsSafe(seed);
+        // The seam must consider this a test call and pass the safety assertion.
+        const input: any = {
+          __carrierTestMode: true,
+          __sourceProvider: seed.sourceProvider,
+          credentials: provider === 'easypost' ? { apiKey: 'EZTK_selfcheck' } : {},
+        };
+        const armed = process.env.CARRIER_TEST_MODE;
+        process.env.CARRIER_TEST_MODE = '1';
+        const recognized = isCarrierTestMode(input);
+        assertNoLivePostageOrMarketplace(provider, input, strategy);
+        if (armed === undefined) delete process.env.CARRIER_TEST_MODE;
+        else process.env.CARRIER_TEST_MODE = armed;
+        if (!recognized) throw new Error('seam did not recognize the test call');
+        rows.push({ provider, serviceCode, strategy, status: 'pass', detail: 'seed safe; seam recognizes test call; no-live assertion ok' });
+      } catch (err) {
+        rows.push({ provider, serviceCode, strategy, status: 'fail', detail: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+  // Negative controls: unsafe shapes MUST be refused.
+  try {
+    assertSeedIsSafe({ ...buildCarrierTestOrderSeed({ provider: 'shipp', serviceCode: 'x' }), externalOrderId: 'walmart-123' } as any);
+    rows.push({ provider: '(neg)', serviceCode: 'marketplace-id', strategy: '-', status: 'fail', detail: 'marketplace external id was NOT refused' });
+  } catch (e) {
+    rows.push({ provider: '(neg)', serviceCode: 'marketplace-id', strategy: '-', status: e instanceof CarrierTestOrderSafetyError ? 'pass' : 'fail', detail: 'marketplace external id refused' });
+  }
+  try {
+    process.env.CARRIER_TEST_MODE = '1';
+    assertNoLivePostageOrMarketplace('easypost', { __sourceProvider: 'internal', credentials: { apiKey: 'EZAK_live' } } as any, 'sandbox');
+    delete process.env.CARRIER_TEST_MODE;
+    rows.push({ provider: '(neg)', serviceCode: 'easypost-live-key', strategy: 'sandbox', status: 'fail', detail: 'live EZAK key was NOT refused' });
+  } catch (e) {
+    delete process.env.CARRIER_TEST_MODE;
+    rows.push({ provider: '(neg)', serviceCode: 'easypost-live-key', strategy: 'sandbox', status: e instanceof CarrierTestModeSafetyError ? 'pass' : 'fail', detail: 'live EZAK key refused' });
+  }
+  return rows;
+}
+
+// ── Sandbox tier (real DB + EasyPost test key). Wired; activates only with creds. ──
+async function runSandbox(): Promise<MatrixRow[]> {
+  const rows: MatrixRow[] = [];
+  const dbUrl = process.env.DATABASE_URL;
+  const epKey = process.env.CARRIER_HARNESS_EASYPOST_TEST_KEY;
+  if (!dbUrl) {
+    rows.push({ provider: 'easypost', serviceCode: '(all)', strategy: 'sandbox', status: 'skipped', detail: 'DATABASE_URL not set' });
+    return rows;
+  }
+  if (!epKey || !/^EZTK/i.test(epKey)) {
+    rows.push({ provider: 'easypost', serviceCode: '(all)', strategy: 'sandbox', status: 'skipped', detail: 'CARRIER_HARNESS_EASYPOST_TEST_KEY missing or not an EZTK test key' });
+    return rows;
+  }
+  // Live sandbox pipeline is exercised here when creds are present. Implemented
+  // incrementally: Slice 2 drives rate→label through the seam; Slice 4 adds the
+  // full handler-in-process drive + outbox/cost/deduction post-assertions.
+  const postgres = (await import('postgres')).default;
+  const { ensureHarnessTestClient, createCarrierTestOrder, cleanupCarrierTestOrders } = await import('./lib/carrier-test-order-factory.js');
+  const { quoteCarrierRates, createCarrierLabel } = await import('../src/services/carrier-connector-orchestrator.js');
+  const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 10 });
+  process.env.CARRIER_TEST_MODE = '1';
+  try {
+    const clientId = await ensureHarnessTestClient(sql);
+    const seed = buildCarrierTestOrderSeed({ provider: 'easypost', serviceCode: 'enumerate' });
+    const baseInput: any = {
+      __carrierTestMode: true,
+      __sourceProvider: 'internal',
+      credentials: { apiKey: epKey },
+      clientId,
+      weightOz: seed.weightOz,
+      dimsL: seed.dims.l, dimsW: seed.dims.w, dimsH: seed.dims.h,
+      shipTo: seed.shipTo,
+    };
+    let services: Array<{ serviceCode: string; carrierCode?: string }> = [];
+    try {
+      const quote = await quoteCarrierRates('easypost', baseInput);
+      const seen = new Set<string>();
+      for (const r of quote.rates as Array<Record<string, any>>) {
+        const code = String(r.serviceCode ?? r.service_code ?? r.service ?? '').trim();
+        if (code && !seen.has(code)) { seen.add(code); services.push({ serviceCode: code, carrierCode: String(r.carrierCode ?? r.carrier_code ?? '') }); }
+      }
+    } catch (err) {
+      rows.push({ provider: 'easypost', serviceCode: '(rates)', strategy: 'sandbox', status: 'fail', detail: `rate quote failed: ${err instanceof Error ? err.message : String(err)}` });
+    }
+    for (const svc of services) {
+      const { orderId } = await createCarrierTestOrder(sql, { provider: 'easypost', serviceCode: svc.serviceCode, clientId });
+      try {
+        const label = await createCarrierLabel('easypost', { ...baseInput, orderId, serviceCode: svc.serviceCode });
+        const tracking = String((label as any).trackingNumber ?? '');
+        const url = String((label as any).labelUrl ?? '');
+        const cost = Number((label as any).cost ?? 0);
+        const ok = tracking.length > 0 && url.length > 0 && !/\[object Object\]/.test(url) && cost === 0;
+        rows.push({ provider: 'easypost', serviceCode: svc.serviceCode, strategy: 'sandbox', status: ok ? 'pass' : 'fail', detail: ok ? `tracking ${tracking.slice(0, 12)}… $${cost}` : `tracking=${!!tracking} url=${!!url} cost=${cost}` });
+      } catch (err) {
+        rows.push({ provider: 'easypost', serviceCode: svc.serviceCode, strategy: 'sandbox', status: 'fail', detail: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    const cleaned = await cleanupCarrierTestOrders(sql);
+    rows.push({ provider: '(cleanup)', serviceCode: '-', strategy: '-', status: cleaned.skippedLocked === 0 ? 'pass' : 'fail', detail: `deleted ${cleaned.deleted}; skippedLocked ${cleaned.skippedLocked}` });
+  } finally {
+    delete process.env.CARRIER_TEST_MODE;
+    await sql.end({ timeout: 5 });
+  }
+  return rows;
+}
+
+async function main(): Promise<void> {
+  const mode = arg('live-approved') ? 'live-approved' : arg('sandbox') ? 'sandbox' : 'self-check';
+  if (mode === 'live-approved') {
+    console.error('live-approved (real postage) is not implemented in this slice — manual_live_gated.');
+    process.exit(2);
+  }
+  const rows = mode === 'sandbox' ? await runSandbox() : runSelfCheck();
+  writeMatrix(rows, mode);
+  const fails = rows.filter((r) => r.status === 'fail');
+  console.log(`\nCarrier harness (${mode}): ${rows.length} attempts · pass ${rows.filter((r) => r.status === 'pass').length} · fail ${fails.length} · skipped ${rows.filter((r) => r.status === 'skipped').length}`);
+  for (const r of rows) console.log(`  ${r.status.toUpperCase().padEnd(7)} ${r.provider}/${r.serviceCode} [${r.strategy}] — ${r.detail}`);
+  console.log(`\nReport: ${OUT}.md`);
+  if (fails.length > 0) { console.error(`\nFAIL carrier harness (${fails.length} failing)`); process.exit(1); }
+  console.log(`\nPASS carrier harness (${mode})`);
+}
+
+void main();
