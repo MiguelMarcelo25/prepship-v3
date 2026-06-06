@@ -224,54 +224,73 @@ async function runSandbox(): Promise<MatrixRow[]> {
   return rows;
 }
 
-// ── Shipp rates-only tier: call the REAL Shipp quote endpoint (FREE, read-only,
-// no label, no money, no DB writes). Validates Shipp login + quoting + our rate
-// parsing against the live account. Loads the saved Shipp carrier credentials. ──
-async function runShippRates() {
+// ── Rates-only tier: call REAL carrier QUOTE endpoints (FREE, read-only, no label,
+// no money, no DB writes). Validates login + quoting + our rate parsing against the
+// live account. Loads saved carrier credentials. Shipp + UPS support free address-
+// based quotes; Walmart Shipping cannot (its estimate is bound to a real Walmart PO). ──
+const RATES_DEST = { name: 'Carrier Harness Tester', street1: '1318 S Reno Ave', city: 'El Reno', state: 'OK', zip: '73036', country: 'US', phone: '4053686063' }
+
+function ratesInputFor(provider, creds) {
+  const box = { dimsL: 8, dimsW: 6, dimsH: 4, weightOz: 16 }
+  if (provider === 'ups') {
+    return {
+      credentials: creds, ...box,
+      toZip: RATES_DEST.zip,
+      fromZip: String(creds?.shipFromZip ?? creds?.shipFromPostalCode ?? '90248'),
+      shipFrom: { postalCode: String(creds?.shipFromZip ?? '90248'), country: 'US' },
+      shipTo: { name: RATES_DEST.name, street1: RATES_DEST.street1, city: RATES_DEST.city, state: RATES_DEST.state, postalCode: RATES_DEST.zip, country: 'US', phone: RATES_DEST.phone },
+    }
+  }
+  // shipp
+  return {
+    credentials: creds, ...box,
+    toName: RATES_DEST.name, toAddress: RATES_DEST.street1, toCity: RATES_DEST.city, toState: RATES_DEST.state, toZip: RATES_DEST.zip, toCountry: 'US',
+    rawOrder: { shipTo: { name: RATES_DEST.name, street1: RATES_DEST.street1, city: RATES_DEST.city, state: RATES_DEST.state, postalCode: RATES_DEST.zip, country: 'US', phone: RATES_DEST.phone } },
+  }
+}
+
+async function runRatesOnly(providers = ['shipp', 'ups', 'walmart_shipping']) {
   const rows = []
   const dbUrl = process.env.DATABASE_URL
   if (!dbUrl) {
-    rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'skipped', detail: 'DATABASE_URL not set (needed to load the saved Shipp credentials)' })
+    rows.push({ provider: '(rates)', serviceCode: '-', strategy: 'rates-only', status: 'skipped', detail: 'DATABASE_URL not set (needed to load saved carrier credentials)' })
     return rows
   }
   const postgres = (await import('postgres')).default
   const { quoteCarrierRates } = await import('../src/services/carrier-connector-orchestrator.js')
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 10 })
   try {
-    const accounts = (await sql`
-      SELECT id, label, credentials FROM carrier_accounts WHERE lower(provider) = 'shipp' ORDER BY id LIMIT 1
-    `)
-    if (!accounts[0]) {
-      rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'skipped', detail: 'no Shipp carrier account found in carrier_accounts' })
-      return rows
-    }
-    const creds = accounts[0].credentials || {}
-    // FREE quote: real destination, fixed box. No label is ever created.
-    const input = {
-      credentials: creds,
-      dimsL: 8, dimsW: 6, dimsH: 4, weightOz: 16,
-      toName: 'Carrier Harness Tester', toAddress: '1318 S Reno Ave', toCity: 'El Reno', toState: 'OK', toZip: '73036', toCountry: 'US',
-      rawOrder: { shipTo: { name: 'Carrier Harness Tester', street1: '1318 S Reno Ave', city: 'El Reno', state: 'OK', postalCode: '73036', country: 'US', phone: '4053686063' } },
-    }
-    let quote
-    try {
-      quote = await quoteCarrierRates('shipp', input)
-    } catch (err) {
-      rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'fail', detail: `quote failed: ${err instanceof Error ? err.message : String(err)}` })
-      return rows
-    }
-    const rates = Array.isArray(quote?.rates) ? quote.rates : []
-    if (rates.length === 0) {
-      rows.push({ provider: 'shipp', serviceCode: '(rates)', strategy: 'rates-only', status: 'fail', detail: 'Shipp returned zero rates' })
-      return rows
-    }
-    for (const r of rates) {
-      const code = String(r.serviceCode ?? r.service_code ?? r.serviceName ?? '')
-      const carrier = String(r.carrierName ?? r.carrierCode ?? r.carrier ?? '')
-      const price = Number(r.price ?? r.cost ?? r.amount ?? r.totalCost ?? 0)
-      const serialized = JSON.stringify(r)
-      const ok = code.length > 0 && Number.isFinite(price) && !/\[object Object\]/.test(serialized)
-      rows.push({ provider: 'shipp', serviceCode: code || '(unnamed)', strategy: 'rates-only', status: ok ? 'pass' : 'fail', detail: ok ? `${carrier || 'Shipp'} — $${price.toFixed(2)} (quote only, $0 spent)` : `unparseable rate: code=${!!code} price=${price} objObj=${/\[object Object\]/.test(serialized)}` })
+    for (const provider of providers) {
+      if (provider === 'walmart_shipping') {
+        rows.push({ provider, serviceCode: '(rates)', strategy: 'rates-only', status: 'skipped', detail: 'Walmart shipping estimates are bound to a real Walmart purchaseOrderId — no generic free quote. Test from a real Walmart order.' })
+        continue
+      }
+      const accounts = (await sql`SELECT id, label, credentials FROM carrier_accounts WHERE lower(provider) = ${provider} ORDER BY id LIMIT 1`)
+      if (!accounts[0]) {
+        rows.push({ provider, serviceCode: '(rates)', strategy: 'rates-only', status: 'skipped', detail: `no ${provider} carrier account found in carrier_accounts` })
+        continue
+      }
+      const creds = accounts[0].credentials || {}
+      let quote
+      try {
+        quote = await quoteCarrierRates(provider, ratesInputFor(provider, creds))
+      } catch (err) {
+        rows.push({ provider, serviceCode: '(rates)', strategy: 'rates-only', status: 'fail', detail: `quote failed: ${err instanceof Error ? err.message : String(err)}` })
+        continue
+      }
+      const rates = Array.isArray(quote?.rates) ? quote.rates : []
+      if (rates.length === 0) {
+        rows.push({ provider, serviceCode: '(rates)', strategy: 'rates-only', status: 'fail', detail: `${provider} returned zero rates` })
+        continue
+      }
+      for (const r of rates) {
+        const code = String(r.serviceCode ?? r.service_code ?? r.serviceName ?? r.service ?? '')
+        const carrier = String(r.carrierName ?? r.carrierCode ?? r.carrier ?? (provider === 'ups' ? 'UPS' : ''))
+        const price = Number(r.price ?? r.cost ?? r.amount ?? r.totalCost ?? 0)
+        const serialized = JSON.stringify(r)
+        const ok = code.length > 0 && Number.isFinite(price) && !/\[object Object\]/.test(serialized)
+        rows.push({ provider, serviceCode: code || '(unnamed)', strategy: 'rates-only', status: ok ? 'pass' : 'fail', detail: ok ? `${carrier || provider} — $${price.toFixed(2)} (quote only, $0 spent)` : `unparseable rate: code=${!!code} price=${price} objObj=${/\[object Object\]/.test(serialized)}` })
+      }
     }
   } finally {
     await sql.end({ timeout: 5 })
@@ -292,24 +311,28 @@ async function runCapture(): Promise<MatrixRow[]> {
 async function main(): Promise<void> {
   const mode = arg('live-approved')
     ? 'live-approved'
-    : arg('shipp-rates')
-      ? 'shipp-rates'
-      : arg('capture')
-        ? 'capture'
-        : arg('sandbox')
-          ? 'sandbox'
-          : 'self-check';
+    : arg('rates')
+      ? 'rates'
+      : arg('shipp-rates')
+        ? 'shipp-rates'
+        : arg('capture')
+          ? 'capture'
+          : arg('sandbox')
+            ? 'sandbox'
+            : 'self-check';
   if (mode === 'live-approved') {
     console.error('live-approved (real postage) is not implemented in this slice — manual_live_gated.');
     process.exit(2);
   }
-  const rows = mode === 'shipp-rates'
-    ? await runShippRates()
-    : mode === 'capture'
-      ? await runCapture()
-      : mode === 'sandbox'
-        ? await runSandbox()
-        : runSelfCheck();
+  const rows = mode === 'rates'
+    ? await runRatesOnly(['shipp', 'ups', 'walmart_shipping'])
+    : mode === 'shipp-rates'
+      ? await runRatesOnly(['shipp'])
+      : mode === 'capture'
+        ? await runCapture()
+        : mode === 'sandbox'
+          ? await runSandbox()
+          : runSelfCheck();
   writeMatrix(rows, mode);
   const fails = rows.filter((r) => r.status === 'fail');
   console.log(`\nCarrier harness (${mode}): ${rows.length} attempts · pass ${rows.filter((r) => r.status === 'pass').length} · fail ${fails.length} · skipped ${rows.filter((r) => r.status === 'skipped').length}`);
