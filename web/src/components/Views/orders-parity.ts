@@ -783,6 +783,39 @@ export function classifyAwaitingRateCellStateWithWorkflow(
   }
 }
 
+export function savedBestRateCanDisplayForCurrentRequest(input: {
+  clientRequestKey?: string | null
+  requestKey: string
+  hasBackendIssuedRateProof: boolean
+  isComplete: boolean
+  cacheExpiresAt?: string | null
+  nowMs?: number
+  eligibilityVersion?: string | null
+  requiredEligibilityVersion?: string | null
+  requireEligibilityVersion?: boolean
+  matchType?: string | null
+  baseAmount: number
+  backendWorkflowCanUseSavedRate?: boolean | null
+}): boolean {
+  if (input.baseAmount <= 0) return false
+  if (
+    input.requireEligibilityVersion !== false &&
+    input.requiredEligibilityVersion &&
+    input.eligibilityVersion !== input.requiredEligibilityVersion
+  ) {
+    return false
+  }
+  if (!input.hasBackendIssuedRateProof && input.matchType !== 'test') return false
+  if (input.isComplete !== true) return false
+  const expiresAt = input.cacheExpiresAt
+  if (!expiresAt) return false
+  const expiresMs = Date.parse(expiresAt)
+  if (!Number.isFinite(expiresMs) || expiresMs <= (input.nowMs ?? Date.now())) return false
+
+  if (input.clientRequestKey === input.requestKey) return true
+  return input.backendWorkflowCanUseSavedRate === true
+}
+
 /** States that show a (bounded) spinner vs. a terminal/actionable label.
  * 'deferred' now spins too: passive auto-rating drains the FULL visible queue,
  * so a deferred row is simply awaiting its turn and is guaranteed to resolve —

@@ -61,6 +61,7 @@ const requiredRegressions = [
   'test:inventory-history-table-pagination',
   'test:inventory-history-date-range-total',
   'test:multi-sku-product-dims-rate-fallback',
+  'test:best-rate-saved-display-contract',
   'test:carrier-enable-disable-label',
 ];
 for (const cmd of requiredRegressions) {

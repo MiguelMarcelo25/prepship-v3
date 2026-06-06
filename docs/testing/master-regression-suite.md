@@ -72,7 +72,7 @@ PS-104 (`/print-queue/batch-send` proof forwarding), selected-rate purchase
 boundary, best-rate workflow DTO, plus this branch's UI/data fixes
 (eBay no-SKU title, batch-header package size, daily-trend count + total line,
 single-SKU qty scope, awaiting carrier nickname, inventory-history pagination,
-carrier enable/disable).
+carrier enable/disable, saved best-rate display metadata).
 
 ## Known pre-existing failure (surfaced, not caused by this runner)
 

@@ -91,6 +91,7 @@ import {
   planStrictBestRateRecalculate,
   planSettledAutoRate,
   resolveColumnPrefs,
+  savedBestRateCanDisplayForCurrentRequest,
   selectBatchRecalculateOrderIds,
   type AwaitingRateCellState,
   type AutoBestRateEntry,
@@ -5450,26 +5451,6 @@ export default function OrdersView({
     return parts.join('|')
   }
 
-  function savedRateIsFreshAndComplete(
-    rate: Record<string, unknown>,
-    requestKey: string,
-    options: { requireEligibilityVersion?: boolean } = {},
-  ) {
-    if (
-      options.requireEligibilityVersion !== false &&
-      toStringValue(rate.eligibilityVersion) !== SHIPPING_SERVICE_ELIGIBILITY_VERSION
-    ) {
-      return false
-    }
-    if (toStringValue(rate.clientRequestKey) !== requestKey) return false
-    if (!hasBackendIssuedRateProof(rate) && toStringValue(rate.matchType) !== 'test') return false
-    if (rate.isComplete !== true) return false
-    const expiresAt = toStringValue(rate.cacheExpiresAt)
-    if (!expiresAt) return false
-    const expiresMs = Date.parse(expiresAt)
-    return Number.isFinite(expiresMs) && expiresMs > Date.now()
-  }
-
   function getBackendRateResponseFingerprint(
     response: Record<string, unknown> | null | undefined,
     rate?: Record<string, unknown> | null,
@@ -5620,8 +5601,20 @@ export default function OrdersView({
   ) {
     const savedRate = getSavedBestRateRecord(order)
     if (!savedRate) return false
-    if (getRateBaseAmount(savedRate) <= 0) return false
-    return savedRateIsFreshAndComplete(savedRate, request.key, options)
+    const workflow = getBestRateWorkflowModel(order)
+    return savedBestRateCanDisplayForCurrentRequest({
+      clientRequestKey: toStringValue(savedRate.clientRequestKey),
+      requestKey: request.key,
+      hasBackendIssuedRateProof: hasBackendIssuedRateProof(savedRate),
+      isComplete: savedRate.isComplete === true,
+      cacheExpiresAt: toStringValue(savedRate.cacheExpiresAt),
+      eligibilityVersion: toStringValue(savedRate.eligibilityVersion),
+      requiredEligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+      requireEligibilityVersion: options.requireEligibilityVersion,
+      matchType: toStringValue(savedRate.matchType),
+      baseAmount: getRateBaseAmount(savedRate),
+      backendWorkflowCanUseSavedRate: toRecord(workflow?.allowedActions)?.canUseSavedRate === true,
+    })
   }
 
   function getSavedBestRateRecord(order: OrderSummaryDto) {

@@ -36,6 +36,10 @@ export interface OrderBestRateDto {
   isComplete: boolean | null;
   rateCount: number | null;
   matchType: string | null;
+  clientRequestKey: string | null;
+  proofSource: string | null;
+  rateQuoteId: string | null;
+  selectedRateKey: string | null;
 }
 
 export interface OrderSelectedRateDto {
@@ -210,6 +214,10 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
     isComplete: record.isComplete == null ? null : readBoolean(record.isComplete, `${path}.isComplete`),
     rateCount: readNullableNumber(record.rateCount ?? null, `${path}.rateCount`),
     matchType: readNullableString(record.matchType ?? null, `${path}.matchType`),
+    clientRequestKey: readNullableString(record.clientRequestKey ?? null, `${path}.clientRequestKey`),
+    proofSource: readNullableString(record.proofSource ?? null, `${path}.proofSource`),
+    rateQuoteId: readNullableString(record.rateQuoteId ?? null, `${path}.rateQuoteId`),
+    selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
   };
 
   return hasAnyMeaningfulRateField(rate) ? rate : null;
