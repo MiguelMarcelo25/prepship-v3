@@ -62,6 +62,7 @@ const BROWSER_COMMANDS = new Set([
   'test:inventory-ux:browser', 'test:site-actions:browser',
   'test:workflow-certification:browser', 'test:rate-browser-carrier-account-click',
   'test:rate-browser-dynamic-service-selection', 'test:rate-browser-manual-selection-table-sync',
+  'test:carrier-print-to-queue:browser',
 ]);
 
 const CERTIFICATION_COMMANDS = new Set([
