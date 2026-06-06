@@ -24,6 +24,9 @@ import {
   type RateQuoteSnapshot,
 } from './rate-quote-snapshot';
 
+// Re-export so route code can import all rate-quote helpers from one module.
+export { selectedRateOpaqueKey } from './rate-quote-snapshot';
+
 const RATE_QUOTE_SNAPSHOT_TTL_SECONDS = Math.floor(RATE_QUOTE_SNAPSHOT_TTL_MS / 1000);
 const snapshotCacheKey = (rateQuoteId: string) => `rate_quote:${rateQuoteId}`;
 

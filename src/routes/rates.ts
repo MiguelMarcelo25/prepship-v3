@@ -31,6 +31,7 @@ import {
 import {
   storeRateQuoteSnapshot,
   withSelectedRateKeys,
+  selectedRateOpaqueKey,
 } from '../services/shipping-workflow/rate-quote-snapshot-store';
 
 const app = new Hono();
@@ -392,14 +393,21 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     rates: ratesWithKeys,
     fetchedAt: result.fetchedAt,
   });
+  // Stamp the opaque rateQuoteId onto each rate + the best rate so the frontend can
+  // pass back { rateQuoteId, selectedRateKey } at label/queue time instead of full
+  // proof internals (selectedRateProof remains as the compatibility fallback).
+  const responseRates = rateQuoteId ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId })) : ratesWithKeys;
+  const bestRateOut = cheapest
+    ? { ...cheapest, selectedRateKey: selectedRateOpaqueKey(cheapest), ...(rateQuoteId ? { rateQuoteId } : {}) }
+    : cheapest;
   const payload = {
     ...result,
     requestKey: result.cacheKey,
     rateQuoteId,
     source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
     cacheAgeMs: result.cacheAgeMs,
-    rates: ratesWithKeys,
-    bestRate: cheapest,
+    rates: responseRates,
+    bestRate: bestRateOut,
     carrierStatuses,
     bestRateWorkflow: buildBestRateWorkflowDto({
       currentRequestFingerprint: result.cacheKey,
