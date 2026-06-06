@@ -11,21 +11,21 @@
 // rateQuoteId is supplied (today's frontend), purchase behavior is byte-identical to
 // the legacy path — nothing can break — while the new path is never weaker.
 
-import { getAnalyticsCache, setAnalyticsCache } from '../analytics-cache';
+import { getAnalyticsCache, setAnalyticsCache } from '../analytics-cache.js';
 import {
   assertSelectedRateProofForLabelPurchase,
   type SelectedRateProofInput,
-} from './rate-fingerprint';
+} from './rate-fingerprint.js';
 import {
   deriveRateQuoteId,
   resolveRateQuoteForPurchase,
   selectedRateOpaqueKey,
   RATE_QUOTE_SNAPSHOT_TTL_MS,
   type RateQuoteSnapshot,
-} from './rate-quote-snapshot';
+} from './rate-quote-snapshot.js';
 
 // Re-export so route code can import all rate-quote helpers from one module.
-export { selectedRateOpaqueKey } from './rate-quote-snapshot';
+export { selectedRateOpaqueKey } from './rate-quote-snapshot.js';
 
 const RATE_QUOTE_SNAPSHOT_TTL_SECONDS = Math.floor(RATE_QUOTE_SNAPSHOT_TTL_MS / 1000);
 const snapshotCacheKey = (rateQuoteId: string) => `rate_quote:${rateQuoteId}`;

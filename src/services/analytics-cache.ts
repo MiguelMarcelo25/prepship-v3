@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { db } from '../db/client';
-import { ensureOrderItemsStorage } from './order-items';
+import { db } from '../db/client.js';
+import { ensureOrderItemsStorage } from './order-items.js';
 
 export function analyticsCacheKey(scope: string, input: Record<string, unknown>): string {
   const stableInput = Object.keys(input)

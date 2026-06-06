@@ -27,7 +27,7 @@ import {
   validateExactSelectedRate,
   type SelectedRateProofInput,
   type SelectedRateValidationResult,
-} from './rate-fingerprint';
+} from './rate-fingerprint.js';
 
 /** Short-lived snapshot freshness window (matches the saved best-rate cache TTL). */
 export const RATE_QUOTE_SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;

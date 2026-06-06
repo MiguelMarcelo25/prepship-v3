@@ -115,7 +115,7 @@ check('purchase resolver PREFERS snapshot id but FALLS BACK to legacy proof (nev
   /body\.rateQuoteId && body\.selectedRateKey/.test(store) &&
     /assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof \?\? null\)/.test(store));
 check('snapshot persistence is backed by analytics_cache (no migration)',
-  /from '\.\.\/analytics-cache'/.test(store) && /rate_quote:/.test(store));
+  /from '\.\.\/analytics-cache\.js'/.test(store) && /rate_quote:/.test(store));
 
 // ── 10. Frontend EMIT: passes { rateQuoteId, selectedRateKey } alongside the proof. ──
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');

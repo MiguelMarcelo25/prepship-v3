@@ -1,7 +1,7 @@
 import { inArray, sql } from 'drizzle-orm';
-import { db } from '../db/client';
-import { orderItems, type NewOrderItem } from '../db/schema/order-items';
-import { orders } from '../db/schema/orders';
+import { db } from '../db/client.js';
+import { orderItems, type NewOrderItem } from '../db/schema/order-items.js';
+import { orders } from '../db/schema/orders.js';
 
 type SourceOrder = {
   id: number;
