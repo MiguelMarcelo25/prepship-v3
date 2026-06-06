@@ -41,10 +41,10 @@ check(
 
 // DashboardCharts: distinct styling, never dimmed.
 check(
-  'chart maps a stable color per series (total dark, clients palette)',
+  'chart maps a stable color per series (total teal, clients palette)',
   /function buildSeriesColorMap/.test(charts) &&
     /s\.key === TOTAL_TREND_SERIES_KEY/.test(charts) &&
-    /const TOTAL_STROKE = '#0f172a'/.test(charts),
+    /const TOTAL_STROKE = '#0d9488'/.test(charts),
 );
 check(
   'total line is never dimmed by per-client focus',

@@ -36,9 +36,9 @@ type DashboardChartsProps = {
 // Color a non-focused line is washed out to when another series is focused.
 const MUTED_STROKE = 'var(--text3)'
 
-// The aggregate line is rendered in a thick dark stroke so it reads as the
+// The aggregate line is rendered in a thick teal stroke so it reads as the
 // "sum of everything" rather than just another client in the palette.
-const TOTAL_STROKE = '#0f172a'
+const TOTAL_STROKE = '#0d9488'
 
 // Distinct, reasonably color-blind-friendly palette. Cycles if there are
 // more clients than colors.
