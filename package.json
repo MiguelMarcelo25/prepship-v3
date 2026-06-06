@@ -113,6 +113,7 @@
     "test:carrier-suppression": "tsx scripts/carrier-suppression-guard.ts",
     "carrier-harness:sandbox": "tsx scripts/carrier-harness-e2e.ts --sandbox",
     "carrier-harness:capture": "tsx scripts/carrier-harness-e2e.ts --capture",
+    "smoke:carrier-harness:real-label": "tsx scripts/carrier-harness-e2e.ts --live-approved",
     "test:master:manifest": "node scripts/prepship-master-test-manifest-guard.mjs",
     "test:master:quick": "node scripts/prepship-master-test.mjs quick",
     "test:master": "node scripts/prepship-master-test.mjs master",

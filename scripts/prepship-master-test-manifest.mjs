@@ -40,6 +40,7 @@ export const DANGEROUS_COMMANDS = new Set([
   'shipstation:external-shipped:apply',
   'best-rate:dims:apply',
   'smoke:shipping:real-label',
+  'smoke:carrier-harness:real-label',
   'test:inventory-repair-plan',
   'billing:repair-shipment-linkage',
   'shipstation:timestamps:repair',
@@ -87,6 +88,8 @@ export const QUICK_COMMANDS = new Set([
   'test:inventory-history-table-pagination',
   'test:inventory-history-date-range-total',
   'test:carrier-enable-disable-label',
+  'test:carrier-test-mode-seam',
+  'test:carrier-suppression',
 ]);
 
 // Bug/regression IDs each command protects (seeds the bug-capture policy).
@@ -108,6 +111,10 @@ const PROTECTS = {
   'test:inventory-history-table-pagination': ['inventory-history-pagination'],
   'test:inventory-history-date-range-total': ['inventory-history-date-range-total'],
   'test:carrier-enable-disable-label': ['carrier-enable-disable'],
+  'test:carrier-test-mode-seam': ['carrier-harness', 'carrier-test-mode-seam'],
+  'test:carrier-harness': ['carrier-harness'],
+  'test:carrier-fixture-schema': ['carrier-harness', 'carrier-fixture-replay'],
+  'test:carrier-suppression': ['carrier-harness', 'carrier-marketplace-suppression'],
 };
 
 function classifyCoverage(command, script) {
