@@ -2,6 +2,12 @@ import { resolveCarrierConnector } from '../connectors/carrier-resolution.js';
 import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility.js';
 import { normalizeShippingOptions } from '../lib/shipping-options.js';
 import { loadShippingAutomationRules } from './shipping-automation.js';
+import {
+  isCarrierTestMode,
+  resolveCarrierTestStrategy,
+  assertNoLivePostageOrMarketplace,
+  replayCarrierLabel,
+} from './carrier-test-mode.js';
 import type {
   CarrierLabelInput,
   CarrierAccountListInput,
@@ -80,7 +86,21 @@ export async function createCarrierLabel(
     throw missingCarrierConnector(provider, 'labels.create');
   }
 
-  const label = await resolved.connector.createLabel(input);
+  // Carrier test-mode seam (double-gated; inert in production). When armed AND the
+  // per-call __carrierTestMode flag is set, route through a $0, no-marketplace path:
+  // sandbox = real HTTP with a TEST key; replay = recorded response through the real
+  // parser. Otherwise the production call below runs UNCHANGED.
+  let label;
+  if (isCarrierTestMode(input)) {
+    const strategy = resolveCarrierTestStrategy(resolved.provider);
+    assertNoLivePostageOrMarketplace(resolved.provider, input, strategy);
+    label =
+      strategy === 'replay'
+        ? await replayCarrierLabel(resolved.provider, input)
+        : await resolved.connector.createLabel(input);
+  } else {
+    label = await resolved.connector.createLabel(input);
+  }
   return {
     provider: resolved.provider,
     ...label,
