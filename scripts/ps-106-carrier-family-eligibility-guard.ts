@@ -15,6 +15,11 @@ import {
   type CarrierFamily,
   type CarrierEligibilityMode,
 } from '../src/services/shipping-workflow/carrier-family-eligibility';
+import {
+  assertCarrierFamilyEligibleForPurchase,
+  CarrierFamilyEligibilityError,
+  CARRIER_ELIGIBILITY_SETTING_KEY,
+} from '../src/services/shipping-workflow/carrier-eligibility-policy';
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -70,6 +75,44 @@ for (const os of ['shipstation', 'direct_store', 'manual_unknown'] as OrderSourc
   const expectBlock = os !== 'shipstation';
   check(`sweep: ShipStation carrier on ${os} -> ${expectBlock ? 'blocked' : 'allowed'}`, r.allowed === !expectBlock);
 }
+
+// ── slice 2: settings-backed policy + purchase-boundary wiring (audit-first) ──
+async function throwsEligibility(fn: () => Promise<unknown>): Promise<boolean> {
+  try { await fn(); return false; } catch (e) { return e instanceof CarrierFamilyEligibilityError; }
+}
+async function sliceTwoChecks() {
+  const directStoreOrder = { sourceProvider: 'walmart', raw: { source_provider: 'walmart' } };
+  const shipstationOrder = { sourceProvider: 'shipstation', raw: {} };
+
+  check('enforce: direct-store + ShipStation purchase THROWS (blocks before provider call)',
+    await throwsEligibility(() => assertCarrierFamilyEligibleForPurchase({ carrierFamily: 'shipstation', order: directStoreOrder, orderId: 1, modeOverride: 'enforce' })));
+  check('audit_only: direct-store + ShipStation purchase does NOT throw (reports only)',
+    !(await throwsEligibility(() => assertCarrierFamilyEligibleForPurchase({ carrierFamily: 'shipstation', order: directStoreOrder, orderId: 1, modeOverride: 'audit_only' }))));
+  check('enforce: ShipStation-source order + ShipStation carrier is allowed',
+    !(await throwsEligibility(() => assertCarrierFamilyEligibleForPurchase({ carrierFamily: 'shipstation', order: shipstationOrder, orderId: 1, modeOverride: 'enforce' }))));
+  check('enforce: direct carrier is always allowed',
+    !(await throwsEligibility(() => assertCarrierFamilyEligibleForPurchase({ carrierFamily: 'direct', order: directStoreOrder, orderId: 1, modeOverride: 'enforce' }))));
+  check('thrown error carries the CARRIER_FAMILY_NOT_ELIGIBLE code',
+    new CarrierFamilyEligibilityError('x').code === 'CARRIER_FAMILY_NOT_ELIGIBLE');
+
+  // structural wiring: createLabelV2 enforces before the ShipStation provider call;
+  // route maps the error; default mode is audit_only.
+  const labelsService = readFileSync('src/services/labels.ts', 'utf8');
+  const labelsRoute = readFileSync('src/routes/labels.ts', 'utf8');
+  const policy = readFileSync('src/services/shipping-workflow/carrier-eligibility-policy.ts', 'utf8');
+  const eligIdx = labelsService.indexOf('await assertCarrierFamilyEligibleForPurchase(');
+  const providerIdx = labelsService.indexOf("createCarrierLabel('shipstation'", eligIdx);
+  check('createLabelV2 enforces carrier-family eligibility BEFORE the ShipStation provider call',
+    eligIdx >= 0 && providerIdx > eligIdx);
+  check('labels route maps CARRIER_FAMILY_NOT_ELIGIBLE to a safe 400',
+    /e\.code === 'CARRIER_FAMILY_NOT_ELIGIBLE'/.test(labelsRoute));
+  check('policy default mode is the SAFE audit_only',
+    /return 'audit_only';/.test(policy) && policy.includes(CARRIER_ELIGIBILITY_SETTING_KEY));
+  check('policy adds no force/bypass flag code',
+    !/(force|bypass|allowAnyway|skipEligibility)\s*[:=?]/i.test(policy.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '')));
+}
+
+await sliceTwoChecks();
 
 if (failures > 0) {
   console.error(`\nFAIL PS-106 carrier-family eligibility guard (${failures} failing)`);

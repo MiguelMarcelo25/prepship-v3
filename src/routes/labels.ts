@@ -103,6 +103,10 @@ function handleCreateError(c: Context, err: unknown): Response {
   if (e.code === 'SELECTED_RATE_PROOF_INVALID') {
     return c.json({ error: message, code: e.code, ...details }, 400);
   }
+  // PS-106: direct-store order blocked from a ShipStation carrier (enforce mode).
+  if (e.code === 'CARRIER_FAMILY_NOT_ELIGIBLE') {
+    return c.json({ error: message, code: e.code }, 400);
+  }
   const invalid = [
     'orderId and serviceCode required',
     'shippingProviderId required for v2 label creation',

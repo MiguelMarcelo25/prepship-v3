@@ -37,6 +37,7 @@ import {
   type SelectedRateProofInput,
 } from './shipping-workflow/rate-fingerprint';
 import { assertLabelPurchaseRateSelection } from './shipping-workflow/rate-quote-snapshot-store';
+import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
@@ -1131,6 +1132,16 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     rateQuoteId: body.rateQuoteId,
     selectedRateKey: body.selectedRateKey,
     selectedRateProof: body.selectedRateProof,
+  });
+  // Per user override unlock shipped data on 2026-06-06 (PS-106): carrier-family
+  // eligibility — a direct-store order must not buy postage through a ShipStation
+  // carrier account. This IS the ShipStation flow, so family = 'shipstation'. The
+  // policy defaults to audit_only (logs a would-block, never blocks); only when an
+  // operator sets the policy to `enforce` does this throw before the provider call.
+  await assertCarrierFamilyEligibleForPurchase({
+    carrierFamily: 'shipstation',
+    order,
+    orderId: order.id,
   });
   const creds = await loadClientCredentials(clientId);
   const apiKeyV2 = creds.apiKeyV2 ?? undefined;
