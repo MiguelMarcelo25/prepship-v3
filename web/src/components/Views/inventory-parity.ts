@@ -181,7 +181,7 @@ export function buildReceiveItems(rows: ReceiveDraftRow[], lookups: Record<strin
 }
 
 export function buildInventoryLedgerQuery(filters: InventoryHistoryFilters): ListInventoryLedgerQuery {
-  const query: ListInventoryLedgerQuery = { limit: 200 }
+  const query: ListInventoryLedgerQuery = {}
   if (filters.clientId) query.clientId = Number.parseInt(filters.clientId, 10)
   if (filters.sku?.trim()) query.sku = filters.sku.trim()
   if (filters.type) query.type = filters.type

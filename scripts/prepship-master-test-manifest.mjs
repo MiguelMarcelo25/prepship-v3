@@ -85,6 +85,7 @@ export const QUICK_COMMANDS = new Set([
   'test:single-sku-default-qty-scope',
   'test:awaiting-carrier-badge-nickname-fallback',
   'test:inventory-history-table-pagination',
+  'test:inventory-history-date-range-total',
   'test:carrier-enable-disable-label',
 ]);
 
@@ -105,6 +106,7 @@ const PROTECTS = {
   'test:single-sku-default-qty-scope': ['single-sku-qty-scope'],
   'test:awaiting-carrier-badge-nickname-fallback': ['awaiting-carrier-nickname'],
   'test:inventory-history-table-pagination': ['inventory-history-pagination'],
+  'test:inventory-history-date-range-total': ['inventory-history-date-range-total'],
   'test:carrier-enable-disable-label': ['carrier-enable-disable'],
 };
 

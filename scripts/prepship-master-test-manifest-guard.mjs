@@ -59,6 +59,7 @@ const requiredRegressions = [
   'test:single-sku-default-qty-scope',
   'test:awaiting-carrier-badge-nickname-fallback',
   'test:inventory-history-table-pagination',
+  'test:inventory-history-date-range-total',
   'test:carrier-enable-disable-label',
 ];
 for (const cmd of requiredRegressions) {

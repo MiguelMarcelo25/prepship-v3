@@ -3236,18 +3236,37 @@ export const apiClient = {
   },
 
   fetchInventoryLedger(query: Record<string, unknown>): Promise<any[]> {
-    const ledgerQuery = { ...(query as Record<string, unknown>) };
-    if (ledgerQuery.limit != null && ledgerQuery.pageSize == null) {
-      ledgerQuery.pageSize = Math.min(200, Number(ledgerQuery.limit) || 200);
-    }
-    if (ledgerQuery.pageSize != null) {
-      ledgerQuery.pageSize = Math.min(200, Number(ledgerQuery.pageSize) || 200);
-    }
-    delete ledgerQuery.limit;
-    return api.get<any>(`/inventory/ledger${qs(ledgerQuery as any)}`).then((res) => {
-      if (Array.isArray(res)) return res;
-      if (Array.isArray(res?.data)) return res.data;
-      return [];
+    const PAGE_SIZE = 2000;
+    const firstQuery: Record<string, unknown> = { ...(query ?? {}), pageSize: PAGE_SIZE, page: 1 };
+    delete firstQuery.limit;
+
+    return api.get<any>(`/inventory/ledger${qs(firstQuery as any)}`).then(async (first) => {
+      const firstRows = Array.isArray(first)
+        ? first
+        : Array.isArray(first?.data)
+          ? first.data
+          : [];
+      const pagination = first?.pagination ?? {};
+      const totalPages =
+        Number(pagination.totalPages ?? first?.totalPages ?? first?.pages) ||
+        Math.max(1, Math.ceil((Number(pagination.total ?? firstRows.length) || firstRows.length) / PAGE_SIZE));
+      const pageCap = Math.max(1, Math.trunc(totalPages));
+      if (pageCap <= 1) return firstRows;
+
+      const remainingRequests: Array<Promise<any>> = [];
+      for (let page = 2; page <= pageCap; page += 1) {
+        remainingRequests.push(
+          api.get<any>(`/inventory/ledger${qs({ ...(query ?? {}), pageSize: PAGE_SIZE, page } as any)}`)
+        );
+      }
+
+      const remainingPages = await Promise.all(remainingRequests);
+      const remainingRows = remainingPages.flatMap((res) => {
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      });
+      return [...firstRows, ...remainingRows];
     });
   },
 

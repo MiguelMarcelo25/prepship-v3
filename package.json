@@ -116,6 +116,7 @@
     "test:single-sku-default-qty-scope": "tsx scripts/single-sku-default-qty-scope-guard.ts",
     "test:awaiting-carrier-badge-nickname-fallback": "tsx scripts/awaiting-carrier-badge-nickname-fallback-guard.ts",
     "test:inventory-history-table-pagination": "tsx scripts/inventory-history-table-pagination-guard.ts",
+    "test:inventory-history-date-range-total": "tsx scripts/inventory-history-date-range-total-guard.ts",
     "test:ps-103-remove-frontend-fingerprint-authority": "tsx scripts/ps-103-remove-frontend-fingerprint-authority-guard.ts",
     "test:ps-067-billing-external-fulfilled": "node scripts/ps-067-billing-external-fulfilled-guard.mjs",
     "test:print-queue-sku-grouping": "tsx scripts/print-queue-sku-grouping-guard.ts",
