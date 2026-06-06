@@ -60,6 +60,7 @@ const requiredRegressions = [
   'test:awaiting-carrier-badge-nickname-fallback',
   'test:inventory-history-table-pagination',
   'test:inventory-history-date-range-total',
+  'test:multi-sku-product-dims-rate-fallback',
   'test:carrier-enable-disable-label',
 ];
 for (const cmd of requiredRegressions) {

@@ -3400,29 +3400,39 @@ export default function OrdersView({
 
     const activeItems = getActiveItems(panelOrder, panelDetail).filter((item) => item.sku)
     const uniqueSkus = [...new Set(activeItems.map((item) => item.sku).filter(Boolean))]
-    if (uniqueSkus.length !== 1) {
-      return
-    }
+    if (!uniqueSkus.length) return
 
-    void apiClient.fetchProductsBySku(uniqueSkus[0]!)
-      .then((payload) => {
-        if (!payload) return
+    void Promise.all(
+      uniqueSkus.map((sku) => apiClient.fetchProductsBySku(sku).then((payload) => ({ sku, payload }))),
+    )
+      .then((results) => {
+        const defaultsBySku = new Map<string, Record<string, unknown>>()
+        for (const result of results) {
+          if (result.payload && typeof result.payload === 'object') {
+            defaultsBySku.set(result.sku.trim().toLowerCase(), result.payload as Record<string, unknown>)
+          }
+        }
+        const payload = uniqueSkus.length === 1
+          ? defaultsBySku.get(uniqueSkus[0]!.trim().toLowerCase()) ?? null
+          : null
+        const derivedDims = deriveShipmentDimsFromProductDefaults(activeItems, defaultsBySku)
+        if (!payload && !derivedDims) return
         setPanelForm((current) => {
           const nextWeightLb = current.weightLb || current.weightOz
             ? current.weightLb
-            : payload.weightOz > 0
+            : payload && payload.weightOz > 0
               ? String(Math.floor(payload.weightOz / 16))
               : ''
           const nextWeightOz = current.weightLb || current.weightOz
             ? current.weightOz
-            : payload.weightOz > 0
+            : payload && payload.weightOz > 0
               ? String(Math.round(payload.weightOz % 16))
               : ''
-          const nextLength = current.length || payload.length <= 0 ? current.length : String(payload.length)
-          const nextWidth = current.width || payload.width <= 0 ? current.width : String(payload.width)
-          const nextHeight = current.height || payload.height <= 0 ? current.height : String(payload.height)
+          const nextLength = current.length || !derivedDims?.length ? current.length : String(derivedDims.length)
+          const nextWidth = current.width || !derivedDims?.width ? current.width : String(derivedDims.width)
+          const nextHeight = current.height || !derivedDims?.height ? current.height : String(derivedDims.height)
           const nextPackageId = current.packageId
-            || getProductDefaultPackageId(payload, packages)
+            || (payload ? getProductDefaultPackageId(payload, packages) : '')
             || getMatchedPackageIdByDimensions(
               nextLength && nextWidth && nextHeight
                 ? {
@@ -4048,6 +4058,41 @@ export default function OrdersView({
       ? packages.find((candidate) => getPackageIdentifier(candidate) === selectedPackageId)
       : null
     return getPackageDims(selectedPackage) ?? panelDims
+  }
+
+  function deriveShipmentDimsFromProductDefaults(
+    items: Array<{ sku?: string | null; quantity?: number | null }>,
+    defaultsBySku: Map<string, Record<string, unknown>>,
+  ) {
+    const readPositive = (value: unknown) => {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+      if (typeof value === 'string' && value.trim()) {
+        const parsed = Number.parseFloat(value)
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+      }
+      return null
+    }
+
+    const resolved = items
+      .map((item) => {
+        const sku = (item.sku ?? '').trim().toLowerCase()
+        const defaults = sku ? defaultsBySku.get(sku) : null
+        const quantity = Math.max(1, Number(item.quantity ?? 1) || 1)
+        const length = readPositive(defaults?.length)
+        const width = readPositive(defaults?.width)
+        const height = readPositive(defaults?.height)
+        if (!length || !width || !height) return null
+        return { length, width, height, quantity }
+      })
+      .filter((item): item is { length: number; width: number; height: number; quantity: number } => Boolean(item))
+
+    if (resolved.length !== items.length || resolved.length === 0) return null
+
+    return {
+      length: Number(Math.max(...resolved.map((item) => item.length)).toFixed(2)),
+      width: Number(Math.max(...resolved.map((item) => item.width)).toFixed(2)),
+      height: Number(resolved.reduce((sum, item) => sum + item.height * item.quantity, 0).toFixed(2)),
+    }
   }
 
   function assertSavedProductDefaults(
