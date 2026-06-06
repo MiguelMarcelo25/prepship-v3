@@ -24,3 +24,6 @@ ShipStation_API_Fieldr.md
 # Local dev artifacts
 ruvector.db
 web/ruvector.db
+
+# PS-107 master regression runner artifacts
+test-results/
