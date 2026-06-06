@@ -25,10 +25,16 @@ import {
 
 export const CARRIER_ELIGIBILITY_SETTING_KEY = 'block_shipstation_for_direct_store';
 
-/** Read the policy mode. Default is the SAFE `audit_only` (report, never block). */
+/** Read the policy mode. Default is the SAFE `audit_only` (report, never block).
+ * Fails safe: if the setting can't be read (DB hiccup), returns audit_only so a
+ * settings outage can NEVER block legitimate label creation. */
 export async function getCarrierEligibilityMode(): Promise<CarrierEligibilityMode> {
-  const raw = (await getSetting(CARRIER_ELIGIBILITY_SETTING_KEY))?.trim().toLowerCase();
-  if (raw === 'enforce' || raw === 'disabled' || raw === 'audit_only') return raw;
+  try {
+    const raw = (await getSetting(CARRIER_ELIGIBILITY_SETTING_KEY))?.trim().toLowerCase();
+    if (raw === 'enforce' || raw === 'disabled' || raw === 'audit_only') return raw;
+  } catch (err) {
+    console.warn('[carrier-eligibility] setting read failed; defaulting to audit_only:', err instanceof Error ? err.message : err);
+  }
   return 'audit_only';
 }
 
