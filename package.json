@@ -116,6 +116,7 @@
     "carrier-harness:capture": "tsx scripts/carrier-harness-e2e.ts --capture",
     "carrier-harness:shipp-rates": "tsx scripts/carrier-harness-e2e.ts --shipp-rates",
     "carrier-harness:rates": "tsx scripts/carrier-harness-e2e.ts --rates",
+    "preflight:print-queue": "tsx scripts/print-to-queue-preflight.ts",
     "smoke:carrier-harness:real-label": "tsx scripts/carrier-harness-e2e.ts --live-approved",
     "test:master:manifest": "node scripts/prepship-master-test-manifest-guard.mjs",
     "test:master:quick": "node scripts/prepship-master-test.mjs quick",
