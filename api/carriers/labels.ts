@@ -32,7 +32,7 @@ import postgres from 'postgres';
 // Pure leaf module with no transitive deps, so a static import here is cold-
 // start safe (unlike the wide connector/eligibility tree, which stays deferred).
 import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
-import { assertSelectedRateProofForLabelPurchase } from '../../src/services/shipping-workflow/rate-fingerprint.js';
+import { assertLabelPurchaseRateSelection } from '../../src/services/shipping-workflow/rate-quote-snapshot-store.js';
 
 // ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
 // module top. On Vercel, importing the carrier/store connector orchestrators +
@@ -1106,7 +1106,14 @@ export default async function handler(req: any, res: any): Promise<void> {
     // Per user override unlock shipped data on 2026-06-05: enforce the
     // selected-rate proof/fingerprint boundary before any direct-carrier
     // postage purchase. This guards all provider branches below.
-    assertSelectedRateProofForLabelPurchase(body?.selectedRateProof);
+    // Per user override unlock shipped data on 2026-06-06 (PS-105): prefer the
+    // backend-owned rateQuoteId snapshot; fall back to the carried proof. Both run
+    // the SAME strict validator — identical to legacy when no rateQuoteId is sent.
+    await assertLabelPurchaseRateSelection({
+      rateQuoteId: typeof body?.rateQuoteId === 'string' ? body.rateQuoteId : null,
+      selectedRateKey: typeof body?.selectedRateKey === 'string' ? body.selectedRateKey : null,
+      selectedRateProof: body?.selectedRateProof,
+    });
 
     const explicitExternalOrderId = typeof body?.externalOrderId === 'string'
       ? body.externalOrderId

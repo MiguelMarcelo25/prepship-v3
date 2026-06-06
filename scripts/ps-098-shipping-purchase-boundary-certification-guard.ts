@@ -68,7 +68,11 @@ check(
 );
 
 const directLabelScopeIndex = indexAfter(directLabels, 'const scopeDecision = evaluateDirectCarrierScope');
-const directLabelProofIndex = indexAfter(directLabels, 'assertSelectedRateProofForLabelPurchase(body?.selectedRateProof)', directLabelScopeIndex);
+// PS-105 (Per user override unlock shipped data on 2026-06-06): direct-carrier
+// boundary enforces via the unified resolver (prefers rateQuoteId, falls back to
+// carried proof; same strict validator). The scope -> proof -> provider ordering
+// invariant is unchanged.
+const directLabelProofIndex = indexAfter(directLabels, 'await assertLabelPurchaseRateSelection(', directLabelScopeIndex);
 const directProviderCalls = [
   "createCarrierLabel('shipp'",
   "createCarrierLabel('walmart_shipping'",

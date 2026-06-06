@@ -395,6 +395,10 @@ const queueSendLabelBody = z.object({
     })
     .passthrough()
     .optional(),
+  // PS-105: backend-owned rate quote snapshot id + chosen rate authority key.
+  // Preferred over selectedRateProof when a missing label must be created to queue.
+  rateQuoteId: z.string().min(1).nullable().optional(),
+  selectedRateKey: z.string().min(1).nullable().optional(),
 });
 
 const queueSendBody = z.object({
@@ -459,6 +463,11 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
               // satisfy assertSelectedRateProofForLabelPurchase. Omitting it here
               // is what dropped the proof and produced missing_current_fingerprint.
               selectedRateProof: order.label.selectedRateProof,
+              // PS-105: forward the backend-owned snapshot id + rate key too, so the
+              // worker's createLabelV2 can prefer it (selectedRateProof stays as
+              // the compatibility fallback). Dropping these would force legacy-only.
+              rateQuoteId: order.label.rateQuoteId,
+              selectedRateKey: order.label.selectedRateKey,
             }
           : undefined,
         skuGroupId: order.sku_group_id,

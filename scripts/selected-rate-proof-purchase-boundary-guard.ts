@@ -45,11 +45,15 @@ check(
     proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 
+// PS-105 (Per user override unlock shipped data on 2026-06-06): the direct-carrier
+// boundary also enforces via the unified resolver (prefers rateQuoteId snapshot,
+// falls back to carried selectedRateProof; delegates to the SAME strict validator).
 check(
-  'direct-carrier label function enforces selectedRateProof before carrier purchase',
-  directLabels.includes('assertSelectedRateProofForLabelPurchase') &&
+  'direct-carrier label function enforces the selected-rate boundary before carrier purchase',
+  directLabels.includes('await assertLabelPurchaseRateSelection(') &&
     directLabels.includes('body?.selectedRateProof') &&
-    directLabels.includes('SELECTED_RATE_PROOF_INVALID'),
+    directLabels.includes('SELECTED_RATE_PROOF_INVALID') &&
+    proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 
 check(
