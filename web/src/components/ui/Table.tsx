@@ -164,6 +164,11 @@ export interface TableProps<Row> {
   /** Initial page size. Must be one of pageSizeOptions. Defaults to
    *  50 (or the first option if 50 isn't in the list). */
   defaultPageSize?: number
+  /** When true, the pagination bar sticks to the bottom of the page
+   *  scroll (position: sticky; bottom: 0) so it stays visible while the
+   *  operator scrolls a long table. Opt-in — most tables are short
+   *  enough that a normal in-flow bar is fine. */
+  stickyPagination?: boolean
   serverPagination?: {
     page: number
     pageSize: number
@@ -340,6 +345,7 @@ export function Table<Row>({
   paginated,
   pageSizeOptions,
   defaultPageSize,
+  stickyPagination = false,
   serverPagination,
   rowClassName,
   renderRowExpansion,
@@ -1198,7 +1204,17 @@ export function Table<Row>({
           Only renders when there's at least one row, so empty-state
           messages stay clean. */}
       {paginated && !loading && paginationTotalItems > 0 ? (
-        <div className="data-table-pagination-bar border-t border-line bg-surface-2/40 px-3 py-2">
+        <div
+          className={
+            stickyPagination
+              // Sticky to the bottom of the page scroll. Opaque bg + top shadow
+              // so the row list scrolls cleanly UNDER the bar. z-20 keeps it
+              // above body cells but below the sticky <thead> (z-10 on th, but
+              // the header sits at the top so they never overlap).
+              ? 'data-table-pagination-bar sticky bottom-0 z-20 border-t border-line bg-surface px-3 py-2 shadow-[0_-1px_3px_rgba(15,23,42,0.06)]'
+              : 'data-table-pagination-bar border-t border-line bg-surface-2/40 px-3 py-2'
+          }
+        >
           {/* totalItems counts only UNPINNED rows so the pagination
               math ("Showing 1-50 of 200 rows") reflects what's
               actually being paginated. Pinned rows live as a footer

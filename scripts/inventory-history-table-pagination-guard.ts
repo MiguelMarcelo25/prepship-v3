@@ -32,6 +32,7 @@ check('History Table persists sort + column widths via storageKey', /storageKey=
 check('History Table is paginated', /\bpaginated\b/.test(block));
 check('History pagination options are 50 / 100 / 200', /pageSizeOptions=\{\[50, 100, 200\]\}/.test(block));
 check('History default page size is 50', /defaultPageSize=\{50\}/.test(block));
+check('History pagination bar is sticky', /\bstickyPagination\b/.test(block));
 
 // historyColumns must declare sortable columns with widths (sort + resize).
 const colsStart = view.indexOf('const historyColumns = useMemo');

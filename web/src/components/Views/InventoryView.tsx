@@ -4491,6 +4491,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 paginated
                 pageSizeOptions={[50, 100, 200]}
                 defaultPageSize={50}
+                stickyPagination
                 emptyMessage="No movements found"
               />
             </div>
