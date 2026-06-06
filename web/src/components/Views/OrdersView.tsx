@@ -4607,6 +4607,7 @@ export default function OrdersView({
         insuranceProvider: shippingOptions.insuranceProvider,
         insuredValue: shippingOptions.insuredValue,
         selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
+        ...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate),
         testLabel: Boolean(options.batchTestMode) || orderIsTest,
       }
     }
@@ -5144,6 +5145,7 @@ export default function OrdersView({
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue ?? undefined,
       selectedRateProof: buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate),
+      ...buildRateQuoteRefForOrder(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate),
       testLabel: isTest || mode === 'test',
       shipTo: {
         name: shipTo.name ?? '',
@@ -5629,6 +5631,28 @@ export default function OrdersView({
     const requestFingerprint = rateProofFingerprint(selectedRate)
     if (!selectedRate || !requestFingerprint) return undefined
     return { requestFingerprint, selectedRate }
+  }
+
+  // PS-105: the backend-owned rate quote reference for label/queue payloads. Mirrors
+  // buildSelectedRateProofPayload's candidate selection so the id/key match the proof's
+  // rate. The backend PREFERS { rateQuoteId, selectedRateKey } and falls back to
+  // selectedRateProof, so this is additive — emitting it never breaks a purchase, and
+  // when the rate carries no backend snapshot id we simply omit it (proof path is used).
+  function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown): { rateQuoteId?: string; selectedRateKey?: string } {
+    const candidates = [
+      toRecord(candidate),
+      toRecord(order.bestRate),
+      toRecord(order.selectedRate),
+      getSavedBestRateRecord(order),
+    ].filter(Boolean) as Record<string, unknown>[]
+    const rate = candidates.find((r) => hasBackendIssuedRateProof(r) && rateProofFingerprint(r)) ?? null
+    if (!rate) return {}
+    const rateQuoteId = toStringValue(rate.rateQuoteId)
+    const selectedRateKey = toStringValue(rate.selectedRateKey)
+    const ref: { rateQuoteId?: string; selectedRateKey?: string } = {}
+    if (rateQuoteId) ref.rateQuoteId = rateQuoteId
+    if (selectedRateKey) ref.selectedRateKey = selectedRateKey
+    return ref
   }
 
   function hasAnySavedBestRateForDisplay(order: OrderSummaryDto) {
@@ -7569,6 +7593,7 @@ export default function OrdersView({
           insuranceProvider: shippingOptions.insuranceProvider,
           insuredValue: shippingOptions.insuredValue,
           selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
+        ...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate),
           testLabel: Boolean(job.batchTestMode) || orderIsTest,
         }
         if (shippingProviderId != null) {

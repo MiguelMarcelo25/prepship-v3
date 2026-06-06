@@ -117,6 +117,19 @@ check('purchase resolver PREFERS snapshot id but FALLS BACK to legacy proof (nev
 check('snapshot persistence is backed by analytics_cache (no migration)',
   /from '\.\.\/analytics-cache'/.test(store) && /rate_quote:/.test(store));
 
+// ── 10. Frontend EMIT: passes { rateQuoteId, selectedRateKey } alongside the proof. ──
+const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection',
+  /function buildRateQuoteRefForOrder/.test(ordersView) &&
+    /hasBackendIssuedRateProof\(r\) && rateProofFingerprint\(r\)/.test(ordersView));
+check('frontend emits the rate quote ref on the primary create/queue/batch payloads (>= 3)',
+  (ordersView.match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 3);
+check('frontend does NOT pass a stale ref on the direct-carrier retry/override path',
+  // site 2 keeps the override-wrapper proof only; no buildRateQuoteRefForOrder next to it.
+  !/overridePayload\?\.selectedRateProof[\s\S]{0,200}?buildRateQuoteRefForOrder/.test(ordersView));
+check('frontend ref is additive (proof still passed at every site)',
+  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4);
+
 if (failures > 0) {
   console.error(`\nFAIL PS-105 backend rate snapshot id guard (${failures} failing)`);
   process.exit(1);
