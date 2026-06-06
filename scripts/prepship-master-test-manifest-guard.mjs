@@ -45,6 +45,19 @@ for (const profile of ['quick', 'master', 'shipping']) {
   check(`profile "${profile}" has commands`, n > 0);
 }
 
+// 4b. Runner scripts must remain manually callable but never selected by the
+// runner profiles themselves, otherwise `test:master` can recursively spawn
+// `test:master` / `test:master:quick` / etc. and never certify.
+for (const entry of manifest.filter((e) => /^test:master(?::|$)/.test(e.command))) {
+  check(`runner command "${entry.command}" is in NO default profile`, entry.profiles.length === 0);
+}
+
+const marketplaceSmoke = byCommand.get('smoke:marketplace-confirm');
+check(
+  'parameter-required marketplace smoke is excluded from default profiles',
+  Boolean(marketplaceSmoke && marketplaceSmoke.profiles.length === 0),
+);
+
 // 5. Bug-capture policy: recent regression guards are present + protected.
 const requiredRegressions = [
   'test:batch-send-proof-forwarding',               // PS-104

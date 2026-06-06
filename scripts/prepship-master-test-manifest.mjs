@@ -71,6 +71,20 @@ const CERTIFICATION_COMMANDS = new Set([
   'certify:external-shipped', 'guard:shipping-certification',
 ]);
 
+const PROFILE_EXCLUDED_COMMANDS = new Set([
+  // The runner scripts are entrypoints, not runnable children. Including them
+  // in any profile lets `test:master` recursively spawn itself.
+  'test:master',
+  'test:master:quick',
+  'test:master:manifest',
+  'test:master:shipping',
+  'test:master:browser',
+  'test:master:all-safe',
+  // Requires --order-id or --mock-process-once. Keep it manually callable, but
+  // do not run the bare smoke command from default profiles.
+  'smoke:marketplace-confirm',
+]);
+
 // Curated fast set for between-commit runs (typecheck + critical static guards).
 export const QUICK_COMMANDS = new Set([
   'typecheck',
@@ -155,6 +169,7 @@ function classifyGroup(command) {
 }
 
 function profilesFor(command, coverage) {
+  if (PROFILE_EXCLUDED_COMMANDS.has(command)) return [];
   if (coverage === 'manual_live_gated') return []; // never default
   const profiles = ['all-safe'];
   const isBrowser = coverage === 'browser_e2e';
