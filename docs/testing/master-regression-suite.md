@@ -82,6 +82,18 @@ warns if its wall time drifts over the 5-minute target.
 The runner **exits nonzero** if any executed command failed, but only **after**
 running them all (so you see every failure, not just the first).
 
+### Triage a failed run
+
+```bash
+npm run test:master:audit          # reads test-results/master/latest.json
+npm run test:master:audit <path>   # or a specific run-<stamp>.json
+```
+
+The audit reads the last report and **classifies each failure** so you triage fast —
+*real code regression candidate* vs *test-infra / profile issue* vs *browser/E2E* vs
+*live/order/provider-data required* — grouped by domain, with a focused `npm run …`
+rerun command per failure. It runs no tests itself.
+
 ## What runs (and what never does)
 
 The manifest (`scripts/prepship-master-test-manifest.mjs`) is **derived from

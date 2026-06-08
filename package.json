@@ -233,6 +233,7 @@
     "test:ps-079-best-rate-source-of-truth": "tsx scripts/ps-079-best-rate-source-of-truth-guard.ts",
     "test:ps-111-backend-rate-authority": "tsx scripts/ps-111-backend-rate-authority-guard.ts",
     "check:architecture-source-of-truth": "tsx scripts/check-source-of-truth-canonical-fields.ts",
+    "test:master:audit": "node scripts/prepship-master-test-audit.mjs",
     "connector:health": "tsx scripts/connector-health-report.ts",
     "order:confirm-status": "tsx scripts/order-confirmation-status.ts",
     "ship-from:report": "tsx scripts/default-ship-from-report.ts",

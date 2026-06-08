@@ -94,6 +94,18 @@ checkTrue(
   /\.filter\(\(item\)\s*=>\s*item\.sku\s*\|\|\s*item\.description\)/.test(ordersViewSrc),
 );
 
+// ── 2b) Backend resolves legacy-row names from canonical order_items (static) ─
+const printQueueSrc = readFileSync('src/services/print-queue.ts', 'utf8');
+checkTrue(
+  'batch render enriches entries from canonical order_items before drawing headers',
+  /enrichEntriesWithCanonicalItemNames\(entries\)/.test(printQueueSrc)
+    && /from\(orderItems\)/.test(printQueueSrc),
+);
+checkTrue(
+  'canonical resolver only fills a name when the line has just a SKU (no real name)',
+  /function lineNeedsName/.test(printQueueSrc),
+);
+
 // ── 3) Grouping is unchanged: a 2-SKU combo with names keeps both, qty merges ─
 const combo = collapseIdentityLines([
   { sku: 'spanish-100', description: 'My First 100 Spanish Words', qty: 1 },
