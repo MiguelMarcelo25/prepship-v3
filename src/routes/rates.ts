@@ -421,6 +421,11 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         cacheExpiresAt: new Date(
           new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
         ).toISOString(),
+        effectiveInsuranceProvider: result.effectiveInsuranceProvider,
+        effectiveInsuredValue: result.effectiveInsuredValue,
+        effectiveInsuranceSource: result.effectiveInsuranceSource,
+        insuranceProvider: result.effectiveInsuranceProvider,
+        insuredValue: result.effectiveInsuredValue,
         isComplete: bestRateComplete,
         rateCount: filtered.length,
         matchType: result.cached ? 'cache' : 'live',
@@ -443,11 +448,24 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // proof internals (selectedRateProof remains as the compatibility fallback).
   const responseRates = rateQuoteId ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId })) : ratesWithKeys;
   const bestRateOut = cheapest
-    ? { ...cheapest, selectedRateKey: selectedRateOpaqueKey(cheapest), isComplete: bestRateComplete, ...(rateQuoteId ? { rateQuoteId } : {}) }
+    ? {
+        ...cheapest,
+        selectedRateKey: selectedRateOpaqueKey(cheapest),
+        isComplete: bestRateComplete,
+        effectiveInsuranceProvider: result.effectiveInsuranceProvider,
+        effectiveInsuredValue: result.effectiveInsuredValue,
+        effectiveInsuranceSource: result.effectiveInsuranceSource,
+        insuranceProvider: result.effectiveInsuranceProvider,
+        insuredValue: result.effectiveInsuredValue,
+        ...(rateQuoteId ? { rateQuoteId } : {}),
+      }
     : cheapest;
   const payload = {
     ...result,
     requestKey: result.cacheKey,
+    effectiveInsuranceProvider: result.effectiveInsuranceProvider,
+    effectiveInsuredValue: result.effectiveInsuredValue,
+    effectiveInsuranceSource: result.effectiveInsuranceSource,
     rateQuoteId,
     carrierEligibility,
     source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
@@ -550,8 +568,24 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const canViewFinancials = canViewRateFinancials(c);
   const automationRules = await loadShippingAutomationRules();
   const itemsWithKeys = await Promise.all(items.map(async (it) => {
-    if (it.cacheKey) return { item: it, computedCacheKey: it.cacheKey };
-    if (it.weightOz === undefined || it.toZip === undefined) return { item: it, computedCacheKey: null };
+    if (it.cacheKey) {
+      return {
+        item: it,
+        computedCacheKey: it.cacheKey,
+        effectiveInsuranceProvider: null,
+        effectiveInsuredValue: null,
+        effectiveInsuranceSource: null,
+      };
+    }
+    if (it.weightOz === undefined || it.toZip === undefined) {
+      return {
+        item: it,
+        computedCacheKey: null,
+        effectiveInsuranceProvider: null,
+        effectiveInsuredValue: null,
+        effectiveInsuranceSource: null,
+      };
+    }
     if (
       it.dimsL === undefined &&
       it.dimsW === undefined &&
@@ -568,7 +602,13 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       it.insuranceValue === undefined &&
       it.toCountry === undefined
     ) {
-      return { item: it, computedCacheKey: null };
+      return {
+        item: it,
+        computedCacheKey: null,
+        effectiveInsuranceProvider: null,
+        effectiveInsuredValue: null,
+        effectiveInsuranceSource: null,
+      };
     }
     const resolved = await resolveRateInput({
       weightOz: it.weightOz,
@@ -586,7 +626,13 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       insuranceProvider: it.insuranceProvider ?? it.insurance,
       insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue,
     });
-    return { item: it, computedCacheKey: rateCacheKey(resolved) };
+    return {
+      item: it,
+      computedCacheKey: rateCacheKey(resolved),
+      effectiveInsuranceProvider: resolved.effectiveInsuranceProvider ?? resolved.insuranceProvider ?? null,
+      effectiveInsuredValue: resolved.effectiveInsuredValue ?? resolved.insuredValue ?? null,
+      effectiveInsuranceSource: resolved.effectiveInsuranceSource ?? null,
+    };
   }));
   const exactKeys = [
     ...new Set(
@@ -608,7 +654,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
     const rows = await selectRateCachePublicRowsByWeightZip(it.weightOz!, it.toZip!);
     roughRowsByWeightZip.set(key, rows[0] ?? null);
   }));
-  const results = itemsWithKeys.map(({ item: it, computedCacheKey }) => {
+  const results = itemsWithKeys.map(({ item: it, computedCacheKey, effectiveInsuranceProvider, effectiveInsuredValue, effectiveInsuranceSource }) => {
     const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
     if (exactHit) {
       const eligibleHit = sanitizeRateCacheRowForEligibility(exactHit, {
@@ -619,13 +665,16 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         // awaiting/modal default). Eligibility-only here; cached prices are
         // already baked, and the 'none' cache key never collides with old 'delivery' rows.
         confirmation: 'none',
-        insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
-        insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
+        insuranceProvider: effectiveInsuranceProvider ?? (it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none'),
+        insuredValue: effectiveInsuredValue ?? (typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null),
       }, automationRules);
       const meta = cacheMetadata(eligibleHit, 'exact');
       return {
         orderId: it.orderId,
         cacheKey: computedCacheKey,
+        effectiveInsuranceProvider,
+        effectiveInsuredValue,
+        effectiveInsuranceSource,
         weightOz: it.weightOz,
         toZip: it.toZip,
         hit: publicRateCacheRow(eligibleHit, canViewFinancials),
@@ -645,14 +694,17 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         // awaiting/modal default). Eligibility-only here; cached prices are
         // already baked, and the 'none' cache key never collides with old 'delivery' rows.
         confirmation: 'none',
-        insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
-        insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
+        insuranceProvider: effectiveInsuranceProvider ?? (it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none'),
+        insuredValue: effectiveInsuredValue ?? (typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null),
       }, automationRules);
       const meta = cacheMetadata(eligibleHit, 'rough');
       return {
         orderId: it.orderId,
         cacheKey: computedCacheKey,
         fallbackCacheKey: roughHit.cacheKey,
+        effectiveInsuranceProvider,
+        effectiveInsuredValue,
+        effectiveInsuranceSource,
         weightOz: it.weightOz,
         toZip: it.toZip,
         hit: publicRateCacheRow(eligibleHit, canViewFinancials),
@@ -662,6 +714,9 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
     const meta = cacheMetadata(null, 'miss');
     return {
       orderId: it.orderId,
+      effectiveInsuranceProvider,
+      effectiveInsuredValue,
+      effectiveInsuranceSource,
       weightOz: it.weightOz,
       toZip: it.toZip,
       cacheKey: computedCacheKey,

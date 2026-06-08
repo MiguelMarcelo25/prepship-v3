@@ -120,7 +120,7 @@ import {
   getProductDefaultPackageId,
 } from './orders-panel-state'
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
-import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, isHugrabShippingContext, HUGRAB_DEFAULT_INSURED_VALUE, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
+import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -3380,6 +3380,9 @@ export default function OrdersView({
     panelFormInitKeyRef.current = initKey
     bestRateRefreshSeqRef.current += 1
     const initialServiceCode = panelIsTestOrder ? TEST_SERVICE_CODE : getInitialPanelServiceCode(panelOrder, panelDetail)
+    // PS-123: non-authoritative UX seed only. The backend/shared resolver owns the
+    // effective HUGRAB provider/value used for quote fingerprints, proof, and labels.
+    // This keeps the panel display aligned without letting the frontend decide rates.
     // PS-072: default the panel Insurance to the HUGRAB ground policy (Parcel Guard
     // $100 for UPS Ground and USPS Ground/Ground Advantage) when the
     // operator has not explicitly chosen insurance — so the UI visibly shows what
@@ -5543,11 +5546,22 @@ export default function OrdersView({
       cacheCreatedAt: createdAt,
       cacheExpiresAt: expiresAt,
       confirmation: request.confirmation,
-      // PS-072: fall back to the request's resolved insurance (HUGRAB ground
-      // default) so the saved best-rate records the insurance it was quoted with
-      // and any label built from this saved rate inherits it.
-      insuranceProvider: toStringValue(metadata.insuranceProvider) ?? request.insuranceProvider ?? 'none',
-      insuredValue: toNumberValue(metadata.insuredValue) ?? request.insuredValue ?? null,
+      // PS-123: backend effective insurance is authoritative. The request fallback
+      // is only for old/test responses that do not stamp backend workflow metadata.
+      insuranceProvider:
+        toStringValue(metadata.effectiveInsuranceProvider) ??
+        toStringValue(metadata.insuranceProvider) ??
+        toStringValue(rateWithoutProof.effectiveInsuranceProvider) ??
+        toStringValue(rateWithoutProof.insuranceProvider) ??
+        request.insuranceProvider ??
+        'none',
+      insuredValue:
+        toNumberValue(metadata.effectiveInsuredValue) ??
+        toNumberValue(metadata.insuredValue) ??
+        toNumberValue(rateWithoutProof.effectiveInsuredValue) ??
+        toNumberValue(rateWithoutProof.insuredValue) ??
+        request.insuredValue ??
+        null,
       eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
       isComplete: metadata.isComplete === true,
       rateCount: toNumberValue(metadata.rateCount) ?? 1,
@@ -5617,20 +5631,17 @@ export default function OrdersView({
       toStringValue(getShippingModel(order)?.confirmation) ??
       'none'
     )
-    // PS-072: HUGRAB ground orders default to $100 insurance. The auto best-rate
-    // shop is multi-service, so we quote with carrier/$100 (the backend refines
-    // USPS Ground to Parcel Guard at label time and enforces the default
-    // regardless). Including it in the fingerprint + request keeps the UI in sync
-    // with the insured backend rate so a stale no-insurance rate is not reused.
-    const hugrab = isHugrabShippingContext({ clientId: order.clientId, storeId: order.storeId })
+    // PS-123: auto/table Best Rate sends only operator intent. HUGRAB effective
+    // insurance is resolved by the backend rate service and returned as proof
+    // metadata so table, panel, batch recalc, and label paths share one owner.
     return buildStrictBestRateRequest(order, {
       detail,
       dims,
       weightOz,
       shipTo,
       confirmation,
-      insuranceProvider: hugrab ? 'carrier' : 'none',
-      insuredValue: hugrab ? HUGRAB_DEFAULT_INSURED_VALUE : null,
+      insuranceProvider: 'none',
+      insuredValue: null,
     })
   }
 
@@ -6475,8 +6486,14 @@ export default function OrdersView({
         const autoRequest = getAutoBestRateRequest(order)
         if (autoRequest) clearAutoBestRateWatchdog(autoRequest.key)
         bestRate.confirmation = shippingOptions.confirmation
-        bestRate.insuranceProvider = shippingOptions.insuranceProvider
-        bestRate.insuredValue = shippingOptions.insuredValue
+        bestRate.insuranceProvider =
+          toStringValue(bestRate.effectiveInsuranceProvider) ??
+          toStringValue(bestRate.insuranceProvider) ??
+          shippingOptions.insuranceProvider
+        bestRate.insuredValue =
+          toNumberValue(bestRate.effectiveInsuredValue) ??
+          toNumberValue(bestRate.insuredValue) ??
+          shippingOptions.insuredValue
         const bestRateWithMetadata = autoRequest ? withRateRequestMetadata(bestRate, autoRequest, {
           isComplete: true,
           rateCount: rates.length,

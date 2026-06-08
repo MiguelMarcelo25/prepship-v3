@@ -310,6 +310,9 @@ export type RateInput = {
   confirmation?: string | null;
   insuranceProvider?: string | null;
   insuredValue?: number | null;
+  effectiveInsuranceProvider?: string | null;
+  effectiveInsuredValue?: number | null;
+  effectiveInsuranceSource?: string | null;
   automationRulesVersion?: string | null;
 };
 
@@ -359,22 +362,22 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
       carrierName: carrier.nickname,
     }),
   );
-  // PS-072: HUGRAB ground services carry a $100 default insurance. ShipEngine
-  // carriers require ParcelGuard, so rate requests use ParcelGuard when the
-  // operator selected none; createLabelV2 uses the same effective provider. This
-  // keeps the cache fingerprint + displayed rate insured so a stale no-insurance
-  // rate can never be reused for an order that will be insured at label time.
-  // An operator-selected value is preserved.
+  // PS-123: backend owns the effective HUGRAB insurance used for rate shopping,
+  // cache fingerprints, saved best-rate proof, and label parity. Frontend callers
+  // pass operator intent only; this service resolves the final provider/value.
   const operatorInsurance = normalizeInsurance(input);
   let insuranceProvider = operatorInsurance.insuranceProvider as string;
   let insuredValue = operatorInsurance.insuredValue;
+  let effectiveInsuranceSource = operatorInsurance.insuranceProvider === 'none' ? 'none' : 'operator';
   if (isHugrabShippingContext({ clientId: context.clientId, storeId: context.storeId })) {
     if (operatorInsurance.insuranceProvider === 'none') {
       insuranceProvider = 'parcelguard';
       insuredValue = HUGRAB_DEFAULT_INSURED_VALUE;
+      effectiveInsuranceSource = 'hugrab-default';
     } else {
       insuranceProvider = 'parcelguard';
       insuredValue = operatorInsurance.insuredValue;
+      effectiveInsuranceSource = 'operator';
     }
   }
 
@@ -388,6 +391,9 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
     sourceClientId: context.sourceClientId,
     insuranceProvider,
     insuredValue,
+    effectiveInsuranceProvider: insuranceProvider,
+    effectiveInsuredValue: insuredValue,
+    effectiveInsuranceSource,
     automationRulesVersion: shippingAutomationRulesFingerprint(automationRules),
     carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
   };
@@ -1022,6 +1028,9 @@ export type GetRatesResult = {
   fetchedAt: string;
   cacheAgeMs?: number;
   carrierDiagnostics: CarrierRateDiagnostic[];
+  effectiveInsuranceProvider: string | null;
+  effectiveInsuredValue: number | null;
+  effectiveInsuranceSource: string | null;
 };
 
 type GetRatesOptions = {
@@ -1261,6 +1270,9 @@ export async function getRates(
           fetchedAt: cached.fetchedAt.toISOString(),
           cacheAgeMs,
           carrierDiagnostics: cachedDiagnosticsFromCache(cached.diagnostics, cachedRates),
+          effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
+          effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
+          effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
         };
       }
     }
@@ -1276,6 +1288,9 @@ export async function getRates(
       fetchedAt: now.toISOString(),
       cacheAgeMs: undefined,
       carrierDiagnostics: [],
+      effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
+      effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
+      effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
     };
   }
 
@@ -1296,5 +1311,8 @@ export async function getRates(
     cacheKey: key,
     fetchedAt: now.toISOString(),
     carrierDiagnostics: liveResult.carrierDiagnostics,
+    effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
+    effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
+    effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
   };
 }

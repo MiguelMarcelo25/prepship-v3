@@ -20,6 +20,8 @@ function check(name: string, ok: boolean) {
 const hooks = readFileSync('web/src/hooks/v2Hooks.ts', 'utf8');
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 
 const normalizeStart = hooks.indexOf('function normalizeRateForV2(');
 const normalizeEnd = hooks.indexOf('\nfunction normalizeLabelForV2', normalizeStart);
@@ -61,6 +63,30 @@ const openStart = ordersView.indexOf('async function openRateBrowser()');
 const openEnd = ordersView.indexOf('\n  async function recalculateBestRate()', openStart);
 const openBlock = openStart >= 0 && openEnd > openStart
   ? ordersView.slice(openStart, openEnd)
+  : '';
+
+const autoRequestStart = ordersView.indexOf('function getAutoBestRateRequest(');
+const autoRequestEnd = ordersView.indexOf('\n  function normalizeDimsLabel', autoRequestStart);
+const autoRequestBlock = autoRequestStart >= 0 && autoRequestEnd > autoRequestStart
+  ? ordersView.slice(autoRequestStart, autoRequestEnd)
+  : '';
+
+const metadataStart = ordersView.indexOf('function withRateRequestMetadata(');
+const metadataEnd = ordersView.indexOf('\n  function buildStrictBestRateRequest', metadataStart);
+const metadataBlock = metadataStart >= 0 && metadataEnd > metadataStart
+  ? ordersView.slice(metadataStart, metadataEnd)
+  : '';
+
+const getRatesResultStart = ratesService.indexOf('export type GetRatesResult = {');
+const getRatesResultEnd = ratesService.indexOf('\n};', getRatesResultStart);
+const getRatesResultBlock = getRatesResultStart >= 0 && getRatesResultEnd > getRatesResultStart
+  ? ratesService.slice(getRatesResultStart, getRatesResultEnd)
+  : '';
+
+const browsePayloadStart = ratesRoute.indexOf('const payload = {');
+const browsePayloadEnd = ratesRoute.indexOf('\n  return c.json(publicRatesResult(payload', browsePayloadStart);
+const browsePayloadBlock = browsePayloadStart >= 0 && browsePayloadEnd > browsePayloadStart
+  ? ratesRoute.slice(browsePayloadStart, browsePayloadEnd)
   : '';
 
 check(
@@ -112,6 +138,39 @@ check(
 check(
   'OrdersView openRateBrowser no longer starts its own live browse request',
   !/apiClient\.browseRates\(/.test(openBlock),
+);
+
+check(
+  'auto/table Best Rate no longer infers HUGRAB insurance on the frontend',
+  autoRequestBlock.length > 0 &&
+    !/isHugrabShippingContext/.test(autoRequestBlock) &&
+    !/HUGRAB_DEFAULT_INSURED_VALUE/.test(autoRequestBlock) &&
+    !/insuranceProvider:\s*hugrab\s*\?\s*['"]carrier['"]/.test(autoRequestBlock) &&
+    /insuranceProvider:\s*['"]none['"]/.test(autoRequestBlock) &&
+    /insuredValue:\s*null/.test(autoRequestBlock),
+);
+
+check(
+  'saved best-rate metadata prefers backend effective insurance over frontend request defaults',
+  /effectiveInsuranceProvider/.test(metadataBlock) &&
+    /effectiveInsuredValue/.test(metadataBlock) &&
+    /toStringValue\(metadata\.effectiveInsuranceProvider\)[\s\S]{0,220}toStringValue\(metadata\.insuranceProvider\)/.test(metadataBlock) &&
+    /toNumberValue\(metadata\.effectiveInsuredValue\)[\s\S]{0,220}toNumberValue\(metadata\.insuredValue\)/.test(metadataBlock),
+);
+
+check(
+  'getRates result exposes backend-resolved effective insurance context',
+  /effectiveInsuranceProvider/.test(getRatesResultBlock) &&
+    /effectiveInsuredValue/.test(getRatesResultBlock) &&
+    /effectiveInsuranceSource/.test(getRatesResultBlock),
+);
+
+check(
+  'Browse Rates response stamps effective insurance onto payload, bestRate, and saved workflow metadata',
+  /effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(browsePayloadBlock) &&
+    /effectiveInsuredValue:\s*result\.effectiveInsuredValue/.test(browsePayloadBlock) &&
+    /bestRateMetadata[\s\S]{0,500}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute) &&
+    /bestRateOut[\s\S]{0,300}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute),
 );
 
 if (failures > 0) {
