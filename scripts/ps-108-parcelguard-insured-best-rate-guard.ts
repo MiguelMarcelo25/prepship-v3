@@ -10,10 +10,13 @@ import { readFileSync } from 'node:fs';
 import {
   enrichRatesWithInsuranceCost,
   resolveRateInsurancePremium,
-  parcelGuardScheduledPremium,
   insuranceCostConfigFingerprint,
   isRateInsuranceResolved,
 } from '../src/services/shipping-workflow/insurance-cost';
+import {
+  normalizeOrderBestRateDto,
+  normalizeOrderSelectedRateDto,
+} from '../src/services/order-rate-dto';
 import { planParcelGuardBackfillRow } from '../src/services/shipping-workflow/parcelguard-backfill';
 import { selectedRateAuthorityKey } from '../src/services/shipping-workflow/rate-fingerprint';
 
@@ -46,10 +49,10 @@ function pickBest(rates: any[]): any {
 }
 
 // ── Observed seed: USPS Ground Advantage, $6.67 postage, estimate insurance_amount=0 ──
-// ShipStation's documented ParcelGuard schedule is carrier/category-specific. The
-// runtime must not depend on a flat .env premium: USPS domestic is $1.09/$100, while
-// non-USPS domestic (UPS/FedEx) is $0.99/$100 and international is $1.39/$100.
-process.env.PARCELGUARD_RATE_TIME_SOURCE = 'schedule';
+// ShipStation is the only source of truth for insurance premiums. A zero/missing
+// rate-time insurance amount must block the insured rate instead of filling a local
+// ParcelGuard schedule. Purchased labels still use ShipStation's billed insurance_cost.
+delete process.env.PARCELGUARD_RATE_TIME_SOURCE;
 delete process.env.PARCELGUARD_PREMIUM_PER_100;
 delete process.env.PARCELGUARD_PREMIUM_MIN;
 
@@ -65,17 +68,16 @@ const groundAdvantage = () => ({
 
 const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
 
-// 1. Enrichment populates the authoritative premium → total becomes $7.76, not $6.67.
+// 1. Enrichment blocks a zero-premium insured estimate instead of calculating one.
 {
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
-  check('enriched: rate is resolved (not blocked)', resolved.length === 1 && unresolved.length === 0, true);
-  check('enriched: insurance_amount populated to $1.09', resolved[0]!.insurance_amount?.amount, 1.09);
-  check('enriched: insured total via rateTotal = $7.76', Number(rateTotal(resolved[0]).toFixed(2)), 7.76);
-  check('enriched: audit provenance present', resolved[0]!.insuranceCost?.provenance, 'parcelguard_schedule');
-  check('enriched: not flagged unresolved', isRateInsuranceResolved(resolved[0]), true);
+  check('enriched: zero ShipStation insurance amount is unresolved', resolved.length === 0 && unresolved.length === 1, true);
+  check('enriched: unresolved rate is not selectable', isRateInsuranceResolved(unresolved[0]), false);
+  check('enriched: no local insurance amount is stamped', unresolved[0]?.insurance_amount?.amount, 0);
+  check('enriched: unresolved reason tells operator to re-rate from ShipStation truth', /ShipStation/i.test(unresolved[0]?.insuranceCostError ?? ''), true);
 }
 
-// 1b. ParcelGuard schedule is carrier/category-aware and does not rely on .env.
+// 1b. A non-zero ShipStation estimate premium is trusted for every carrier.
 {
   const upsGround = {
     ...groundAdvantage(),
@@ -93,17 +95,19 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
     service_code: 'fedex_ground',
     service_type: 'FedEx Ground',
   };
-  const { resolved } = enrichRatesWithInsuranceCost([groundAdvantage(), upsGround, fedexGround], ctx100);
-  check('schedule: USPS domestic $100 -> $1.09', resolved.find((r) => r.carrier_code === 'stamps_com')?.insurance_amount?.amount, 1.09);
-  check('schedule: UPS domestic $100 -> $0.99', resolved.find((r) => r.carrier_code === 'ups')?.insurance_amount?.amount, 0.99);
-  check('schedule: FedEx domestic $100 -> $0.99', resolved.find((r) => r.carrier_code === 'fedex')?.insurance_amount?.amount, 0.99);
-
-  const international = enrichRatesWithInsuranceCost([groundAdvantage()], { ...ctx100, toCountry: 'CA' });
-  check('schedule: international $100 -> $1.39', international.resolved[0]?.insurance_amount?.amount, 1.39);
+  const shipstationPriced = [groundAdvantage(), upsGround, fedexGround].map((rate, index) => ({
+    ...rate,
+    insurance_amount: { currency: 'usd', amount: [1.09, 0.99, 0.99][index] },
+  }));
+  const { resolved, unresolved } = enrichRatesWithInsuranceCost(shipstationPriced, ctx100);
+  check('shipstation estimate: all non-zero premiums resolve', resolved.length === 3 && unresolved.length === 0, true);
+  check('shipstation estimate: USPS premium is API value', resolved.find((r) => r.carrier_code === 'stamps_com')?.insurance_amount?.amount, 1.09);
+  check('shipstation estimate: UPS premium is API value', resolved.find((r) => r.carrier_code === 'ups')?.insurance_amount?.amount, 0.99);
+  check('shipstation estimate: FedEx premium is API value', resolved.find((r) => r.carrier_code === 'fedex')?.insurance_amount?.amount, 0.99);
+  check('shipstation estimate: provenance is ShipStation', resolved.every((r) => r.insuranceCost?.provenance === 'shipstation_estimate'), true);
 }
 
-// 2. pickBestRate must NOT pick a raw postage-only insured rate over the insured total.
-//    A competing carrier returns $7.00 postage WITH a real estimate premium already → $7.00.
+// 2. pickBestRate must NOT pick a raw postage-only insured rate over an API-priced total.
 {
   const cheapPostageNoPremium = groundAdvantage(); // $6.67 postage, ParcelGuard, premium hidden
   const competitor = {
@@ -115,31 +119,29 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
     shipping_amount: { currency: 'usd', amount: 7.0 },
     insurance_amount: { currency: 'usd', amount: 0.5 }, // estimate already had a premium
   };
-  const { resolved } = enrichRatesWithInsuranceCost([cheapPostageNoPremium, competitor], ctx100);
+  const { resolved, unresolved } = enrichRatesWithInsuranceCost([cheapPostageNoPremium, competitor], ctx100);
   const best = pickBest(resolved);
-  // ground advantage insured total = 7.76; competitor insured total = 7.50 → competitor wins.
-  check('best rate compares INSURED totals (competitor $7.50 < $7.76)', best.carrier_code, 'ups');
+  check('best rate excludes zero-premium insured rate', unresolved.length, 1);
+  check('best rate uses API-priced insured total', best.carrier_code, 'ups');
   check('best rate is NOT the raw-postage $6.67 illusion', Number(rateTotal(best).toFixed(2)), 7.5);
 }
 
 // 3. Selected-rate proof authority key carries the insured total (changes vs postage-only).
 {
   const postageOnly = groundAdvantage();
-  const { resolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
+  const { resolved } = enrichRatesWithInsuranceCost([{ ...groundAdvantage(), insurance_amount: { currency: 'usd', amount: 1.09 } }], ctx100);
   const keyPostageOnly = selectedRateAuthorityKey(postageOnly);
   const keyInsured = selectedRateAuthorityKey(resolved[0]);
   check('proof key differs once insured total is included', keyPostageOnly !== keyInsured, true);
-  check('proof key encodes the $1.09 insurance component', keyInsured.includes('1.0900'), true);
+  check('proof key encodes ShipStation insurance component', keyInsured.includes('1.0900'), true);
 }
 
-// 4. Unprovable insurance BLOCKS the rate (no raw-postage fallback) — requirement #6.
+// 4. Unprovable insurance BLOCKS the rate (no raw-postage fallback).
 {
-  process.env.PARCELGUARD_RATE_TIME_SOURCE = 'block';
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
-  check('block mode: insured rate is unresolved, not selectable', resolved.length === 0 && unresolved.length === 1, true);
-  check('block mode: pickBest returns null (blocked, not raw postage)', pickBest(resolved), null);
-  check('block mode: unresolved carries an explicit error', typeof unresolved[0]!.insuranceCostError === 'string' && unresolved[0]!.insuranceCostError.length > 0, true);
-  process.env.PARCELGUARD_RATE_TIME_SOURCE = 'schedule';
+  check('insured rate is unresolved, not selectable', resolved.length === 0 && unresolved.length === 1, true);
+  check('pickBest returns null (blocked, not raw postage)', pickBest(resolved), null);
+  check('unresolved carries an explicit error', typeof unresolved[0]?.insuranceCostError === 'string' && unresolved[0]!.insuranceCostError.length > 0, true);
 }
 
 // 5. Non-insured rates are untouched; estimate-provided premiums are trusted.
@@ -153,16 +155,9 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('non-zero estimate premium is trusted (shipstation_estimate)', trusted.status === 'resolved' && (trusted as any).amount === 2.25 && (trusted as any).provenance === 'shipstation_estimate', true);
 }
 
-// 6. Schedule math + cache-bust fingerprint.
+// 6. Cache fingerprint reflects the API-truth insurance policy, not a schedule/env price.
 {
-  check('schedule: USPS $100 -> 1 increment @1.09', parcelGuardScheduledPremium(100, { carrier_code: 'stamps_com' }), 1.09);
-  check('schedule: UPS $250 -> 3 increments @0.99', parcelGuardScheduledPremium(250, { carrier_code: 'ups' }), Number((3 * 0.99).toFixed(2)));
-  check('schedule: international $250 -> 3 increments @1.39', parcelGuardScheduledPremium(250, { carrier_code: 'ups' }, 'CA'), Number((3 * 1.39).toFixed(2)));
-  const fpA = insuranceCostConfigFingerprint();
-  process.env.PARCELGUARD_RATE_TIME_SOURCE = 'block';
-  const fpB = insuranceCostConfigFingerprint();
-  check('config fingerprint busts cache when source mode changes', fpA !== fpB, true);
-  process.env.PARCELGUARD_RATE_TIME_SOURCE = 'schedule';
+  check('insurance fingerprint is stable API-truth policy', insuranceCostConfigFingerprint(), 'shipstation-api-insurance-v1');
 }
 
 // 7. Backfill planner — seed order #1247 / se-292074298, idempotent.
@@ -191,11 +186,50 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('backfill: no premium -> not affected', noPremium.affected, false);
 }
 
-// 8. Guardrail: runtime must not read one flat premium env var for all carriers.
+// 8. Guardrail: runtime must not contain local ParcelGuard pricing.
 {
   const enricherSrc = readFileSync('src/services/shipping-workflow/insurance-cost.ts', 'utf8');
   check('runtime no longer reads flat PARCELGUARD_PREMIUM_PER_100', /PARCELGUARD_PREMIUM_PER_100/.test(enricherSrc), false);
   check('runtime no longer reads flat PARCELGUARD_PREMIUM_MIN', /PARCELGUARD_PREMIUM_MIN/.test(enricherSrc), false);
+  check('runtime has no ParcelGuard schedule provenance', /parcelguard_schedule/.test(enricherSrc), false);
+  check('runtime has no scheduled premium helper', /parcelGuardScheduledPremium/.test(enricherSrc), false);
+  check('runtime has no hardcoded 1.09 premium', /1\.09/.test(enricherSrc), false);
+  check('runtime has no hardcoded 0.99 premium', /0\.99/.test(enricherSrc), false);
+  check('runtime has no hardcoded 1.39 premium', /1\.39/.test(enricherSrc), false);
+}
+
+// 9. Backend DTOs expose ShipStation insurance add-ons for frontend display.
+{
+  const bestRateDto = normalizeOrderBestRateDto({
+    carrier_code: 'stamps_com',
+    service_code: 'usps_ground_advantage',
+    shipping_amount: { currency: 'usd', amount: 6.67 },
+    insurance_amount: { currency: 'usd', amount: 1.09 },
+    insuranceCost: {
+      amount: 1.09,
+      provenance: 'shipstation_estimate',
+      confirmed: true,
+      unresolved: false,
+    },
+  });
+  check('best-rate DTO preserves backend insurance add-on amount', bestRateDto?.insuranceCost, 1.09);
+  check('best-rate DTO preserves backend insurance provenance', bestRateDto?.insuranceProvenance, 'shipstation_estimate');
+
+  const selectedRateDto = normalizeOrderSelectedRateDto({
+    providerAccountId: 123,
+    carrierCode: 'stamps_com',
+    serviceCode: 'usps_ground_advantage',
+    shipmentCost: 6.67,
+    otherCost: 1.09,
+    insuranceCost: 1.09,
+    insuranceProvenance: 'shipstation_v2_label',
+    totalCost: 7.76,
+  });
+  check('selected-rate DTO preserves backend billed insurance add-on', selectedRateDto?.insuranceCost, 1.09);
+  check('selected-rate DTO preserves backend billed total', selectedRateDto?.totalCost, 7.76);
+
+  const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  check('OrdersView renders insurance add-on from backend DTO field', /insuranceCost/.test(ordersViewSrc) && /Insurance/.test(ordersViewSrc), true);
 }
 
 if (failures > 0) {

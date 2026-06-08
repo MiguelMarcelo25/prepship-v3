@@ -19,6 +19,9 @@ export interface OrderBestRateDto {
   packageType: string | null;
   shipmentCost: number;
   otherCost: number;
+  insuranceCost: number | null;
+  insuranceProvenance: string | null;
+  totalCost: number | null;
   rateDetails: unknown[];
   carrierCode: string | null;
   shippingProviderId: number | null;
@@ -52,6 +55,9 @@ export interface OrderSelectedRateDto {
   cost: number | null;
   shipmentCost: number | null;
   otherCost: number | null;
+  insuranceCost: number | null;
+  insuranceProvenance: string | null;
+  totalCost: number | null;
 }
 
 // ── Local 400-class error (v4 has no contracts/input-validation module) ──────
@@ -103,6 +109,11 @@ function readNumber(value: unknown, path: string): number {
 function readNullableNumber(value: unknown, path: string): number | null {
   if (value == null) return null;
   return readNumber(value, path);
+}
+
+function readMoneyAmount(value: unknown): number | null {
+  if (isRecord(value)) return readNullableNumber(value.amount ?? null, 'money.amount');
+  return readNullableNumber(value ?? null, 'money');
 }
 
 function readNullableProviderAccountId(value: unknown, path: string): number | null {
@@ -191,6 +202,20 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
       : typeof insuranceAmount?.amount === 'number' && Number.isFinite(insuranceAmount.amount)
         ? insuranceAmount.amount
         : 0;
+  const insuranceMeta = isRecord(record.insuranceCost) ? record.insuranceCost : null;
+  const insuranceCost =
+    readMoneyAmount(insuranceMeta?.amount ?? record.insuranceCost ?? record.insuranceAmount ?? insuranceAmount) ??
+    null;
+  const insuranceProvenance = readNullableString(
+    insuranceMeta?.provenance ?? record.insuranceProvenance ?? (insuranceCost != null && insuranceCost > 0 ? 'shipstation_estimate' : null),
+    `${path}.insuranceProvenance`,
+  );
+  const shipmentCost = readNumber(
+    record.shipmentCost ?? shippingAmount?.amount ?? record.cost ?? record.amount ?? 0,
+    `${path}.shipmentCost`,
+  );
+  const otherCost =
+    readNumber(record.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`) + insurancePremium;
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(
@@ -198,12 +223,11 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
       `${path}.serviceName`,
     ),
     packageType: readNullableString(record.packageType ?? record.package_type ?? null, `${path}.packageType`),
-    shipmentCost: readNumber(
-      record.shipmentCost ?? shippingAmount?.amount ?? record.cost ?? record.amount ?? 0,
-      `${path}.shipmentCost`,
-    ),
-    otherCost:
-      readNumber(record.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`) + insurancePremium,
+    shipmentCost,
+    otherCost,
+    insuranceCost,
+    insuranceProvenance,
+    totalCost: readNullableNumber(record.totalCost ?? record.total_cost ?? null, `${path}.totalCost`) ?? shipmentCost + otherCost,
     rateDetails: readArray(record.rateDetails ?? record.rate_details ?? [], `${path}.rateDetails`),
     carrierCode: readNullableString(
       record.carrierCode ?? record.carrier_code ?? record.carrier ?? null,
@@ -281,6 +305,11 @@ export function normalizeOrderSelectedRateDto(
   const fallbackOtherCost =
     shipmentCost != null || fallback?.otherCost != null ? (fallback?.otherCost ?? 0) : null;
   const otherCost = readNullableNumber(record.otherCost ?? fallbackOtherCost, `${path}.otherCost`);
+  const insuranceCost = readMoneyAmount(record.insuranceCost ?? record.insuranceAmount ?? null);
+  const insuranceProvenance = readNullableString(
+    record.insuranceProvenance ?? (insuranceCost != null && insuranceCost > 0 ? 'shipstation_v2_label' : null),
+    `${path}.insuranceProvenance`,
+  );
   const rate: OrderSelectedRateDto = {
     providerAccountId,
     providerAccountNickname: readNullableString(
@@ -300,6 +329,9 @@ export function normalizeOrderSelectedRateDto(
     cost: readNullableNumber(record.cost ?? shipmentCost ?? null, `${path}.cost`),
     shipmentCost,
     otherCost,
+    insuranceCost,
+    insuranceProvenance,
+    totalCost: readNullableNumber(record.totalCost ?? record.total_cost ?? null, `${path}.totalCost`),
   };
 
   return hasAnyMeaningfulSelectedRateField(rate) ? rate : null;

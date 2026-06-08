@@ -1671,19 +1671,36 @@ function getMarkupAmount(baseAmount: number, markedAmount: number) {
   return markedAmount - baseAmount
 }
 
-function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: number | null) {
+function getBackendInsuranceAddOn(rate: unknown): number | null {
+  const record = toRecord(rate)
+  const direct = toNumberValue(record?.insuranceCost)
+  if (direct != null && direct > 0) return direct
+  const nested = toRecord(record?.insuranceCost)
+  const nestedAmount = toNumberValue(nested?.amount)
+  return nestedAmount != null && nestedAmount > 0 ? nestedAmount : null
+}
+
+function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: number | null, insuranceAddOn?: number | null) {
   const displayAmount = markedAmount ?? baseAmount
   if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'\u2014'}</span>
 
   const markupAmount = baseAmount != null && markedAmount != null ? Math.max(0, markedAmount - baseAmount) : null
   const hasMarkup = markupAmount != null && markupAmount >= 0.005
+  const hasInsurance = insuranceAddOn != null && insuranceAddOn >= 0.005
   const breakdownTitle =
-    baseAmount != null && markupAmount != null && hasMarkup
-      ? `Label Cost ${formatMoney(displayAmount)} | Base ${formatMoney(baseAmount)} + Markup ${formatMoney(markupAmount)}`
+    hasInsurance
+      ? `Backend insurance add-on ${formatMoney(insuranceAddOn)}`
+      : baseAmount != null && markupAmount != null && hasMarkup
+        ? `Label Cost ${formatMoney(displayAmount)} | Base ${formatMoney(baseAmount)} + Markup ${formatMoney(markupAmount)}`
       : undefined
   return (
     <div style={{ lineHeight: 1.15 }} title={breakdownTitle}>
       <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(displayAmount)}</strong>
+      {hasInsurance ? (
+        <div style={{ fontSize: 10, color: 'var(--text3)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          Insurance {formatMoney(insuranceAddOn)}
+        </div>
+      ) : null}
       {baseAmount != null && markupAmount != null && hasMarkup ? (
         <div style={{ fontSize: 10, color: '#111827', fontWeight: 600, whiteSpace: 'nowrap' }}>
           {formatMoney(baseAmount)}
@@ -8314,7 +8331,7 @@ export default function OrdersView({
           : labelCost ?? selectedRateBase
       // PS — Selected Rate shows only the amount. The carrier badge lives
       // solely in the dedicated Carrier column; duplicating it here was noisy.
-      return renderRateAmountWithMarkup(selectedRateBase, displayMarked)
+      return renderRateAmountWithMarkup(selectedRateBase, displayMarked, getBackendInsuranceAddOn(displayOrder.selectedRate))
     }
 
     const awaitingFallback = renderAwaitingRateFallback(order, displayOrder, 'full')
@@ -8349,7 +8366,7 @@ export default function OrdersView({
         data-rate-state="ready"
         style={{ display: 'flex', alignItems: 'center', gap: 6 }}
       >
-        {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount)}
+        {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount, getBackendInsuranceAddOn(displayOrder.bestRate))}
       </div>
     )
   }
