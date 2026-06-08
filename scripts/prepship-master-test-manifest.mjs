@@ -85,6 +85,70 @@ const PROFILE_EXCLUDED_COMMANDS = new Set([
   'smoke:marketplace-confirm',
 ]);
 
+// PS-110 — Nested AGGREGATE commands chain many other npm scripts (often the
+// whole suite, incl. typecheck/build/browser). Running them inside a default
+// master profile duplicates large portions of the run and re-introduces browser
+// + recursion through the back door. They stay DOCUMENTED in the manifest but are
+// modelled as profiles/groups, never as leaf children of a default profile.
+const NESTED_AGGREGATE_COMMANDS = new Set([
+  'test:full-site-certification',
+  'test:full-workflow-certification',
+]);
+
+// A script that chains 3+ `npm run` invocations is treated as a nested aggregate
+// even if it is not in the explicit set above (auto-catches future aggregates).
+export function isNestedAggregate(command, script = '') {
+  if (NESTED_AGGREGATE_COMMANDS.has(command)) return true;
+  const chained = (String(script).match(/\bnpm run\b/g) ?? []).length;
+  return chained >= 3;
+}
+
+// PS-110 — commands that need a real order id / live provider account / live DB
+// state. These are NEVER part of a default fast gate. requiresOrderId commands are
+// parameter-required (the bare command can't run safely); requiresLiveData (read
+// only) commands belong to the opt-in `live-readonly` profile.
+const REQUIRES_ORDER_ID = new Set([
+  'smoke:marketplace-confirm',
+  'smoke:shipping:preflight',
+]);
+const REQUIRES_PROVIDER_ACCESS = new Set([
+  'smoke:shipping:preflight',
+]);
+const REQUIRES_LIVE_DATA = new Set([
+  'certify:external-shipped',
+  'smoke:shipping:preflight',
+]);
+
+// PS-110 — safe args that turn a parameter-required command into a default-safe,
+// offline/mocked run (the "safe wrapper" path). The runner appends them as
+// `npm run <command> -- <args...>`.
+const SAFE_ARGS = {
+  // Offline fixture-only label smoke (refuses real labels / postage / provider).
+  'smoke:shipping:test-label': ['--fixture'],
+};
+
+// PS-110 — resource locks: commands sharing a lock are serialised against each
+// other (everything else runs in parallel up to --concurrency).
+function resourceLocksFor(command, coverage, script = '') {
+  if (coverage === 'browser_e2e') return ['browser'];
+  if (coverage === 'workflow_certification') return ['browser', 'build'];
+  if (REQUIRES_LIVE_DATA.has(command)) return ['db'];
+  if (command === 'typecheck' || command === 'build:web' || command.startsWith('build')
+      || /\bnpm run build:web\b|\bvite build\b/.test(script)) return ['build'];
+  return [];
+}
+
+// Coarse runtime estimate (ms) used to schedule slow/locked work first and to
+// warn when a `quick` selection drifts over its 5-minute target.
+function estimatedMsFor(command, coverage) {
+  if (coverage === 'workflow_certification') return 180_000;
+  if (coverage === 'browser_e2e') return 40_000;
+  if (command === 'typecheck') return 35_000;
+  if (command === 'build:web' || command.startsWith('build')) return 15_000;
+  if (coverage === 'mocked_smoke') return 8_000;
+  return 3_000; // static_guard / unit_or_logic leaf
+}
+
 // Curated fast set for between-commit runs (typecheck + critical static guards).
 export const QUICK_COMMANDS = new Set([
   'typecheck',
@@ -168,9 +232,21 @@ function classifyGroup(command) {
   return 'misc';
 }
 
-function profilesFor(command, coverage) {
+function profilesFor(command, coverage, script = '') {
   if (PROFILE_EXCLUDED_COMMANDS.has(command)) return [];
   if (coverage === 'manual_live_gated') return []; // never default
+  // PS-110 — nested aggregates duplicate the suite; never a leaf of a default profile.
+  if (isNestedAggregate(command, script)) return [];
+  // PS-110 — order-required commands cannot run safely without a real order id
+  // UNLESS a safe-args wrapper makes them offline. Keep them out of default gates.
+  if ((REQUIRES_ORDER_ID.has(command) || REQUIRES_PROVIDER_ACCESS.has(command)) && !SAFE_ARGS[command]) {
+    return [];
+  }
+  // PS-110 — read-only live-DB commands belong ONLY to the opt-in live-readonly
+  // profile, never to a default fast gate.
+  if (REQUIRES_LIVE_DATA.has(command) && !SAFE_ARGS[command]) {
+    return ['live-readonly'];
+  }
   const profiles = ['all-safe'];
   const isBrowser = coverage === 'browser_e2e';
   if (!isBrowser) profiles.push('master'); // master = safe non-browser
@@ -183,7 +259,9 @@ function profilesFor(command, coverage) {
   return profiles;
 }
 
-export const PROFILES = ['quick', 'master', 'shipping', 'browser', 'all-safe'];
+// `live-readonly` is OPT-IN only — it runs real configured DB/provider read-only
+// certification and is never part of the default master gate.
+export const PROFILES = ['quick', 'master', 'shipping', 'browser', 'all-safe', 'live-readonly'];
 
 export function buildManifest() {
   const scripts = loadPackageScripts();
@@ -198,14 +276,24 @@ export function buildManifest() {
     if (!isTestish && !isDangerous(command, script)) continue;
     const coverage = classifyCoverage(command, script);
     const safety = classifySafety(command, script, coverage);
+    const resourceLocks = resourceLocksFor(command, coverage, script);
     entries.push({
       command,
       script,
       group: classifyGroup(command),
       coverage,
       safety,
-      profiles: profilesFor(command, coverage),
+      profiles: profilesFor(command, coverage, script),
       protects: PROTECTS[command] ?? [],
+      // PS-110 scheduler/classification metadata.
+      args: SAFE_ARGS[command] ?? [],
+      resourceLocks,
+      concurrencySafe: resourceLocks.length === 0 && coverage !== 'browser_e2e' && coverage !== 'workflow_certification',
+      estimatedMs: estimatedMsFor(command, coverage),
+      requiresLiveData: REQUIRES_LIVE_DATA.has(command) && !SAFE_ARGS[command],
+      requiresProviderAccess: REQUIRES_PROVIDER_ACCESS.has(command) && !SAFE_ARGS[command],
+      requiresOrderId: REQUIRES_ORDER_ID.has(command) && !SAFE_ARGS[command],
+      isNestedAggregate: isNestedAggregate(command, script),
     });
   }
   entries.sort((a, b) => a.group.localeCompare(b.group) || a.command.localeCompare(b.command));

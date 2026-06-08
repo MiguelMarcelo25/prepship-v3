@@ -1,33 +1,83 @@
-# Master Regression Suite (PS-107)
+# Master Regression Suite (PS-107 / PS-110 v2)
 
 One runner to execute PrepShip's many guard/smoke/certification scripts between
 commits and after bug fixes — in **one report**, classified by coverage type, that
-**continues past failures** instead of hiding later gates behind `&&`.
+**continues past failures** instead of hiding later gates behind `&&`. PS-110 made
+it a reliable certification gate: **leaf-only** profiles (no recursion, no nested
+aggregates), a **lock-aware parallel scheduler**, **live-test isolation**, and
+**durable shard reports** that survive failures and interrupts.
+
+## Tiered profiles
+
+| Profile | What it runs | Use when |
+|---|---|---|
+| `test:master:quick` | typecheck + critical static/source-of-truth/proof/print-queue guards. **Target < 5 min.** No browser/provider/live/nested work. | Between commits — fast local gate. |
+| `test:master` | Default confidence gate: all safe non-browser leaf guards/smokes. No recursion, no nested aggregate duplication, no live mutation. | Pre-push / PR confidence. |
+| `test:master:shipping` | Rates / labels / proof / print-queue / marketplace-confirmation critical path. Mocked/offline/sandbox only — no real label purchase or marketplace notification. | Shipping-area changes. |
+| `test:master:browser` | Browser / workflow E2E only, safe fixtures. Uses a `browser` resource-lock so dev-server/E2E runs don't collide. | UI/workflow changes. |
+| `test:master:all-safe` | The full safe suite incl. browser + mocked smokes. Slower; nightly / pre-release. Still no live mutation. | Release candidate. |
+| `test:master:live-readonly` | **Opt-in only.** Real configured DB/provider **read-only** certification (e.g. `certify:external-shipped`). Never part of any default gate. | Deliberate live verification. |
+| `test:master:manifest` | Validates manifest ↔ package.json: no recursion, no nested aggregates, no live/order/provider command in a default gate. | CI preflight (non-recursive). |
 
 ## Run it
 
 ```bash
-npm run test:master:quick          # typecheck + critical static guards (fast, between commits)
-npm run test:master                # quick + all safe non-browser guards/smokes
-npm run test:master:shipping       # rates / labels / proof / print-queue / marketplace
-npm run test:master:browser        # browser_e2e workflow tests
-npm run test:master:all-safe       # everything safe (incl. browser + mocked smokes)
-npm run test:master:manifest       # validate manifest ↔ package.json consistency
+npm run test:master:quick -- --concurrency 8     # fast local gate (< 5 min target)
+npm run test:master -- --concurrency 8           # default confidence gate
+npm run test:master:shipping -- --concurrency 4
+npm run test:master:browser
+npm run test:master:all-safe
+npm run test:master:manifest                     # consistency/safety guard
 ```
 
 Flags (pass after `--`):
 
 ```bash
-npm run test:master:quick -- --dry-run        # list what would run; run nothing
-npm run test:master -- --fail-fast            # stop at first failure (default: continue)
-npm run test:master -- --skip-browser
-npm run test:master:all-safe -- --include-browser
-npm run test:master -- --group rates-labels-proof
+--concurrency <n>     # max parallel commands (default: min(8, cpus-2))
+--dry-run             # list what would run (with lock/args/live tags); run nothing
+--fail-fast           # stop launching new commands after the first failure
+--skip-browser        # drop browser_e2e commands
+--include-browser     # add browser_e2e commands even if the profile excludes them
+--group <name>        # only commands in that domain group
 ```
 
+## Parallel scheduler + live isolation
+
+Commands run through a **lock-aware worker pool**. Each manifest entry carries
+scheduling metadata: `concurrencySafe`, `resourceLocks`, `estimatedMs`, and
+`requiresLiveData` / `requiresProviderAccess` / `requiresOrderId`.
+
+- Static/offline guards run fully in parallel up to `--concurrency`.
+- Commands sharing a `resourceLock` are **serialised** against each other:
+  `browser` (dev-server/E2E), `build` (typecheck / `build:web`), `db` (read-only
+  live-DB). So browser specs never fight over the dev server, and the slow build
+  lock doesn't block the fast guards.
+- Slowest/locked work is launched first so the long tail starts early.
+- **Manual/live-mutating commands are never scheduled** — a hard safety net filters
+  `manual_live_gated` out even if a profile ever listed one.
+
+### What can / cannot be certified without real orders
+
+Default gates (`quick`/`master`/`shipping`/`browser`/`all-safe`) are **fully
+offline/mocked** — they certify static contracts, unit/logic, mocked smokes, and
+browser workflows against fixtures. They **cannot** certify a real shipped order,
+a live provider account, or live DB state. Those require `live-readonly` (read-only)
+or the manual, approval-gated `:apply` commands — run separately, never through a
+default gate. The report's coverage column tells you which kind of green you got.
+
+## Reports
+
 Artifacts are written to `test-results/master/`:
-- `latest.json` / `latest.md` — most recent run
-- `run-<stamp>.json` / `.md` — history
+- `latest.json` / `latest.md` — most recent run (profile summary by group, slowest
+  commands, per-command coverage/safety/locks/runtime, and a failure section).
+- `run-<stamp>.json` / `.md` — history.
+- `run-<stamp>/shards/<command>.json` — **one isolated shard per command**, written
+  the moment it finishes. Parallel workers never clobber each other or `latest.*`.
+
+Reports are **always written** — after passing runs, after failing runs, and (best
+effort) on `SIGINT` interrupt — because the aggregator runs in a finalize step
+before the nonzero exit, and shards are flushed incrementally. The `quick` profile
+warns if its wall time drifts over the 5-minute target.
 
 The runner **exits nonzero** if any executed command failed, but only **after**
 running them all (so you see every failure, not just the first).
@@ -74,11 +124,22 @@ boundary, best-rate workflow DTO, plus this branch's UI/data fixes
 single-SKU qty scope, awaiting carrier nickname, inventory-history pagination,
 carrier enable/disable, saved best-rate display metadata).
 
-## Known pre-existing failure (surfaced, not caused by this runner)
+## Reading failures honestly (PS-110)
 
-- `test:ps-098-shipping-purchase-boundary` — fails on "frontend passes
-  backend-issued selectedRateProof through label and queue payloads." This is a
-  **pre-existing** failure in the locked selected-rate purchase-boundary area
-  (documented as a known blocker in the PS-106 brief). It's a candidate fix for
-  PS-105/PS-106 once the `unlock shipped data` override is granted — not a
-  PS-107 (test-infra) change.
+When a default gate is red, classify each failure rather than hiding it. The report
+groups by domain and shows coverage type so you can triage:
+
+- **test-infra / profile issue** — a command that needs args/mocks it didn't get,
+  or a wrongly-classified command. Fix the manifest, not the product. The manifest
+  guard (`test:master:manifest`) now fails the build for recursion, nested
+  aggregates, or a live/order/provider command leaking into a default gate, so these
+  should be caught before a run.
+- **real code regression** — a static guard / mocked smoke / browser workflow that
+  fails because behavior actually broke. Owned by the relevant feature/PS ticket.
+- **live/order/provider required** — moved out of default gates into
+  `live-readonly` or the manual `:apply` commands; never run by a default gate.
+
+Failures are **reclassified, never deleted** from all profiles to make the suite
+green. A command that needs a real order/provider/DB is moved to `live-readonly` or
+given a safe-args wrapper (e.g. `smoke:shipping:test-label --fixture`) — it is not
+silently dropped.
