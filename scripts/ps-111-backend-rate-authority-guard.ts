@@ -110,6 +110,22 @@ check('any carrier ERROR -> NOT complete',
   const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
   check('backend backfill derives isComplete from carrier diagnostics (not hardcoded true)',
     /isComplete:\s*result\.carrierDiagnostics\.every\(/.test(backfill), true);
+
+  // ── 6) HUGRAB insured-total certification (PS-111 ↔ PS-108) ────────────────
+  // The backend pre-rating path must produce INSURED HUGRAB totals: backfill -> getRates
+  // -> resolveRateInput applies the HUGRAB ParcelGuard $100 default -> the live-rate fan
+  // enriches the premium BEFORE pickBestRate. This certifies PS-111's requirement that
+  // HUGRAB insured totals are handled via PS-108 before best-rate selection — without a
+  // browser session.
+  check('backend pre-rating rates HUGRAB orders through getRates (the insured path)',
+    /getRates\(/.test(backfill), true);
+  const ratesSrc = readFileSync('src/services/rates.ts', 'utf8');
+  check('resolveRateInput applies the HUGRAB ParcelGuard default insurance',
+    /isHugrabShippingContext\(/.test(ratesSrc) && /insuranceProvider = 'parcelguard'/.test(ratesSrc), true);
+  check('the live-rate fan enriches the ParcelGuard premium before best-rate selection',
+    /enrichRatesWithInsuranceCost\(/.test(ratesSrc) && /pickBestRate/.test(ratesSrc), true);
+  check('rate cache busts when the insurance config changes (no stale insured premium)',
+    /insuranceCostConfigFingerprint\(\)/.test(ratesSrc), true);
 }
 
 if (failures > 0) {
