@@ -12,7 +12,7 @@
 | PS-108 | ParcelGuard cost source + insured best-rate + HUGRAB backfill | 98% | ✅ live (backfill apply-mode wired; one operational run left) |
 | PS-109 | Preserve multi-SKU item names in print queue batch headers | 100% | ✅ live (legacy rows resolve names from order_items) |
 | PS-110 | Master Test Runner v2 — fast parallel gates + live-test isolation | 100% | ✅ live (`test:master:audit` added) |
-| PS-111 | Backend-owned awaiting best-rate completeness + pre-rating-on-sync | 70% | ✅ live (needs `ENABLE_RATE_BACKFILL_SCHEDULER=true` in prod env) |
+| PS-111 | Backend-owned best-rate completeness + pre-rating-on-sync + HUGRAB insured cert | 85% | ✅ live (needs `ENABLE_RATE_BACKFILL_SCHEDULER=true`; `pending`/`rating` states → PS-120) |
 | PS-112 | Install architecture-first standard | 100% | ✅ live (via 114-117) |
 | PS-113 | Architecture-first MD standards umbrella | 100% | ✅ live |
 | PS-114 | Slice 1 — core docs | 100% | ✅ live |
