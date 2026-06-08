@@ -173,6 +173,24 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
   const record = expectRecord(value, path);
   const shippingAmount = isRecord(record.shipping_amount) ? record.shipping_amount : null;
   const otherAmount = isRecord(record.other_amount) ? record.other_amount : null;
+  // PS-108: the insured total must include the ParcelGuard/insurance premium. The
+  // raw backend rate stores it as a separate `insurance_amount` (postage lives in
+  // `other_amount`), and the backend rateTotal + Rate Browser both count it. Fold
+  // it into otherCost so OrderBestRateDto.shipmentCost + otherCost equals the true
+  // insured total shown in the Rate Browser (otherwise the Best Rate column reads
+  // postage-only and undershoots an insured order by the premium).
+  //
+  // Guard against double-counting: a pre-summed camelCase `otherCost` (our own DTO
+  // and the applied-rate shape) already includes the premium, so only the raw
+  // snake_case shape — which has `other_amount` + a separate `insurance_amount` —
+  // needs the premium folded in here. No persisted shape carries both.
+  const insuranceAmount = isRecord(record.insurance_amount) ? record.insurance_amount : null;
+  const insurancePremium =
+    typeof record.otherCost === 'number'
+      ? 0
+      : typeof insuranceAmount?.amount === 'number' && Number.isFinite(insuranceAmount.amount)
+        ? insuranceAmount.amount
+        : 0;
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(
@@ -184,7 +202,8 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
       record.shipmentCost ?? shippingAmount?.amount ?? record.cost ?? record.amount ?? 0,
       `${path}.shipmentCost`,
     ),
-    otherCost: readNumber(record.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`),
+    otherCost:
+      readNumber(record.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`) + insurancePremium,
     rateDetails: readArray(record.rateDetails ?? record.rate_details ?? [], `${path}.rateDetails`),
     carrierCode: readNullableString(
       record.carrierCode ?? record.carrier_code ?? record.carrier ?? null,
