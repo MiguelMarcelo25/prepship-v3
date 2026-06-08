@@ -143,6 +143,30 @@ Any commit containing such a change must mention:
 
 ---
 
+## 🏛️ Architecture-first — fix the source of truth, not the symptom
+
+Before any non-trivial change, follow **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
+Core rule:
+
+> Do not fix only where the bug appears. Find where the truth should live. Fix it
+> there. Make callers use that truth. Add tests at that boundary. Then adjust
+> UI/adapters as thin consumers.
+
+- Identify the canonical owner/source of truth before coding; place the rule at the
+  authoritative layer and make callers delegate to it.
+- **The frontend must not own backend-critical decisions** for rates, labels,
+  inventory, fulfillment, billing, auth/scope, marketplace notifications, or
+  shipped/cancelled locks. Routes stay thin (validate → call service → return DTO);
+  adapters translate provider data, they do not own cross-workflow policy.
+- Add a boundary/source-of-truth test at the owner and remove duplicate logic when
+  practical. Frontend-only patches for the business-critical areas above are rejected.
+
+This standard does NOT relax the shipped/cancelled lockdown above — it adds *where*
+business logic must live. The lockdown still governs *what* may be touched.
+
+---
+
 ## Sync step (run if AGENTS.md changes)
 
 After editing this file, mirror to the other agent surfaces so all
