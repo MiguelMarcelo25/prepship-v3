@@ -7,6 +7,8 @@ dist/
 .DS_Store
 .vercel
 .claude/settings.local.json
+.claude/skills/
+.gitnexus/
 undefined/
 cron-inventory.csv
 PARITY_PLAN_ORDER_LIST.md
