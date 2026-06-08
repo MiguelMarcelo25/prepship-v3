@@ -86,8 +86,13 @@ check('cache key embeds the eligibility version (rules change → cache invalida
 
 // ── (3) Frontend consumes backend bestRate + Awaiting shows the exact rate ───
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('frontend prefers the backend bestRate (response.bestRate ?? pickBestPanelRate)',
-  /responseBestRate \?\? pickBestPanelRate\(rates\)/.test(ordersView));
+// PS-111 supersede: the frontend now consumes the backend bestRate DIRECTLY as the
+// source of truth (no divergent client-side pick at all — stronger than the prior
+// `responseBestRate ?? pickBestPanelRate` fallback), and completeness is backend-owned.
+check('frontend uses the backend bestRate as source of truth (no divergent client pick)',
+  /const bestRate = toRecord\(response\?\.bestRate\)/.test(ordersView));
+check('PS-111: passive auto-rating derives completeness from the backend, not hardcoded true',
+  /isComplete: backendComplete/.test(ordersView) && /deriveBackendBestRateComplete\(response/.test(ordersView));
 // PS-105/carrier-nickname refactor: getCarrierCodeForDisplay now resolves the
 // awaiting carrier into a `const carrierCode = toStringValue(order.bestRate?.carrierCode) ?? …`
 // (bestRate carrier still FIRST/preferred), then falls back to a known-carrier

@@ -26,6 +26,7 @@ import { hasAppPermission } from '../middleware/auth';
 import { loadShippingAutomationRules } from '../services/shipping-automation';
 import {
   buildBestRateWorkflowDto,
+  isBestRateComplete,
   type BestRateWorkflowCarrierStatus,
 } from '../services/shipping-workflow/best-rate-workflow-dto';
 import {
@@ -406,6 +407,11 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       error: diagnostic?.error,
     };
   });
+  // PS-111: completeness is BACKEND-OWNED and derived from carrier diagnostics — a
+  // best rate is complete only when every eligible carrier reached a terminal result
+  // (none loading, none errored). Never hardcode true: a rate found while a carrier is
+  // still loading or failed is PARTIAL, and the workflow DTO + frontend must see that.
+  const bestRateComplete = isBestRateComplete(carrierStatuses);
   const bestRateMetadata = cheapest
     ? {
         ...cheapest,
@@ -415,7 +421,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         cacheExpiresAt: new Date(
           new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
         ).toISOString(),
-        isComplete: true,
+        isComplete: bestRateComplete,
         rateCount: filtered.length,
         matchType: result.cached ? 'cache' : 'live',
       }
@@ -437,7 +443,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // proof internals (selectedRateProof remains as the compatibility fallback).
   const responseRates = rateQuoteId ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId })) : ratesWithKeys;
   const bestRateOut = cheapest
-    ? { ...cheapest, selectedRateKey: selectedRateOpaqueKey(cheapest), ...(rateQuoteId ? { rateQuoteId } : {}) }
+    ? { ...cheapest, selectedRateKey: selectedRateOpaqueKey(cheapest), isComplete: bestRateComplete, ...(rateQuoteId ? { rateQuoteId } : {}) }
     : cheapest;
   const payload = {
     ...result,
