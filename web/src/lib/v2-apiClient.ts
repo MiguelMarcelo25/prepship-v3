@@ -1348,12 +1348,17 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
     const originalShipping = obj.original_amount as { amount?: unknown } | undefined;
     const other = obj.other_amount as { amount?: unknown } | undefined;
     const confirmation = obj.confirmation_amount as { amount?: unknown } | undefined;
+    const insurance = obj.insurance_amount as { amount?: unknown } | undefined;
     const shipmentCost =
       typeof originalShipping?.amount === 'number' ? originalShipping.amount :
       typeof shipping?.amount === 'number' ? shipping.amount : 0;
+    // PS-108: include the ParcelGuard/insurance premium in the displayed total so the
+    // Rate Browser/selected total matches the backend's insured rateTotal used to pick
+    // best rate. Backend populates insurance_amount before selection.
     const otherCost =
       (typeof other?.amount === 'number' ? other.amount : 0) +
-      (typeof confirmation?.amount === 'number' ? confirmation.amount : 0);
+      (typeof confirmation?.amount === 'number' ? confirmation.amount : 0) +
+      (typeof insurance?.amount === 'number' ? insurance.amount : 0);
     return {
       carrierCode: obj.carrier_code ?? null,
       serviceCode: obj.service_code ?? null,
@@ -1373,6 +1378,10 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       isComplete: obj.isComplete ?? null,
       rateCount: obj.rateCount ?? null,
       matchType: obj.matchType ?? null,
+      // PS-108: carry insurance provenance/unresolved state for display + audit.
+      insuranceCost: obj.insuranceCost ?? null,
+      insuranceCostUnresolved: obj.insuranceCostUnresolved ?? false,
+      insuranceCostError: obj.insuranceCostError ?? null,
       raw: obj,
     };
   }
