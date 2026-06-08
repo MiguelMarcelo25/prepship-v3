@@ -1087,7 +1087,18 @@ export default function RateBrowserModal({
     if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
     void (async () => {
+      // Instant paint from cache first — this is often just the order's saved
+      // best rate (a single carrier), which is why opening the Rate Browser used
+      // to show only one carrier until the operator clicked "Refresh Live Rates".
       await browseRates(undefined, { cachedOnly: true });
+      // Then immediately fetch LIVE across every carrier so opening Browse Rates
+      // always surfaces all available carriers automatically (no manual second
+      // click). Guard against the modal moving to another order / closing while
+      // the cached pass was in flight; browseRates also supersedes stale updates
+      // internally via its sequence ref.
+      if (autoFetchedRef.current === orderId) {
+        await browseRates(undefined, { forceLive: true });
+      }
     })();
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
