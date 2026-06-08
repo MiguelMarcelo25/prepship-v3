@@ -93,6 +93,25 @@ check('any carrier ERROR -> NOT complete',
     /const bestRate = toRecord\(response\?\.bestRate\)/.test(ordersView), true);
 }
 
+// ── 5) Backend pre-rates NEW awaiting orders after sync (no browser needed) ──
+{
+  const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
+  check('order sync triggers the rate backfill when new orders land (enqueue-on-sync)',
+    /result\.synced > 0 && isRateBackfillSchedulerEnabled\(\)/.test(scheduler)
+    && /runBackfillTick\(\)/.test(scheduler), true);
+  check('rate backfill is idempotent (skips when a job is already running)',
+    /getActiveBackfillJob\(\)/.test(scheduler) && /startBackfillBestRates\(/.test(scheduler), true);
+  check('enqueue-on-sync is gated by ENABLE_RATE_BACKFILL_SCHEDULER (opt-in, bounded)',
+    /env\.ENABLE_RATE_BACKFILL_SCHEDULER && !env\.DISABLE_RATE_BACKFILL_SCHEDULER/.test(scheduler), true);
+
+  // The backend backfill stamps completeness from carrier diagnostics — same rule as
+  // /browse — so backend-pre-rated orders are never marked complete while a carrier
+  // failed/loaded.
+  const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
+  check('backend backfill derives isComplete from carrier diagnostics (not hardcoded true)',
+    /isComplete:\s*result\.carrierDiagnostics\.every\(/.test(backfill), true);
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-111 backend rate authority guard (${failures} failing)`);
   process.exit(1);

@@ -12,7 +12,7 @@
 | PS-108 | ParcelGuard cost source + insured best-rate + HUGRAB backfill | 98% | ✅ live (backfill apply-mode wired; one operational run left) |
 | PS-109 | Preserve multi-SKU item names in print queue batch headers | 100% | ✅ live (legacy rows resolve names from order_items) |
 | PS-110 | Master Test Runner v2 — fast parallel gates + live-test isolation | 100% | ✅ live (`test:master:audit` added) |
-| PS-111 | Backend-owned awaiting best-rate completeness (status authority) | 55% | ✅ live |
+| PS-111 | Backend-owned awaiting best-rate completeness + pre-rating-on-sync | 70% | ✅ live (needs `ENABLE_RATE_BACKFILL_SCHEDULER=true` in prod env) |
 | PS-112 | Install architecture-first standard | 100% | ✅ live (via 114-117) |
 | PS-113 | Architecture-first MD standards umbrella | 100% | ✅ live |
 | PS-114 | Slice 1 — core docs | 100% | ✅ live |
@@ -116,6 +116,23 @@
 | `bb110866` | Merge PS-118 |
 | `13549f59` | Merge PS-108 |
 | `afcaf60d` | Batch report + gitignore (current tip) |
+
+## PS-111 — production enablement (config, not code)
+
+The backend **pre-rates new Awaiting orders after each 3-minute sync without a browser**
+— `runOrderSync()` triggers `runBackfillTick()` when a sync inserts orders. This is
+**gated by env** and is currently OFF in production. To turn it on (recommended for the
+enterprise model), set on Render `prepshipv4-api` + `prepshipv4-worker`:
+
+```
+ENABLE_RATE_BACKFILL_SCHEDULER=true
+```
+
+Bounded + safe by design: `RATE_FETCH_CONCURRENCY` (default 4, cap 8), ShipStation rate
+limiter (160/min, burst 20), idempotent job guard, and 6-hour rate-cache TTL — so
+thousands of orders won't hammer ShipStation. Remaining PS-111 work (the ~30%):
+`pending`/`rating` in-progress UI states and a formal HUGRAB insured-total certification
+(now unblocked by PS-108) — a sized follow-up ticket.
 
 ## Outstanding (all optional / follow-up)
 
