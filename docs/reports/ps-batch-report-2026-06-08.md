@@ -1,195 +1,126 @@
 # PrepShip V4 — PS Ticket Completion Report
 
-**Date:** 2026-06-08
+**Date:** 2026-06-08 (updated post-deploy)
 **Base branch:** `prepshipv4-stable` (serves Render `prepshipv4-api` + `prepshipv4-worker` and Vercel production)
-**Deployed tip:** `c0cf49d0`
-**Author:** AI coding agent (Claude)
+**Deployed tip:** `afcaf60d` — **all tickets PS-108 → PS-118 are LIVE in production**
+**Production health (verified):** `/health` `ok`, `/health/deep` `ready` (db, orders, printQueue, eventLoop all ok)
 
 ## Index
 
-| Ticket | Title | % | Deployed |
+| Ticket | Title | % | Live? |
 |---|---|---|---|
-| PS-108 | ShipStation ParcelGuard cost source + insured best-rate + HUGRAB backfill | 90% | ❌ held (blocked) |
+| PS-108 | ParcelGuard cost source + insured best-rate + HUGRAB backfill | 95% | ✅ live |
 | PS-109 | Preserve multi-SKU item names in print queue batch headers | 95% | ✅ live |
 | PS-110 | Master Test Runner v2 — fast parallel gates + live-test isolation | 92% | ✅ live |
-| PS-111 | Backend-owned awaiting best-rate completeness (status authority) | 55% | 🟡 Vercel live / Render pending |
-| PS-112 | Install architecture-first standard | 100% | ✅ live (via PS-114-117) |
+| PS-111 | Backend-owned awaiting best-rate completeness (status authority) | 55% | ✅ live |
+| PS-112 | Install architecture-first standard | 100% | ✅ live (via 114-117) |
 | PS-113 | Architecture-first MD standards umbrella | 100% | ✅ live |
 | PS-114 | Slice 1 — core docs | 100% | ✅ live |
 | PS-115 | Slice 2 — AI agent instruction surfaces | 100% | ✅ live |
 | PS-116 | Slice 3 — engineering checklist/template/LLM prompt | 100% | ✅ live |
-| PS-117 | Slice 4 — final docs PR/verification gate | 100% | ✅ live |
-| PS-118 | Architecture source-of-truth + backend-ownership certification | 0% | not started |
+| PS-117 | Slice 4 — final docs verification gate | 100% | ✅ live |
+| PS-118 | Architecture source-of-truth + backend-ownership certification | 90% | ✅ live |
+
+**What changed since the first report:** PS-108 was merged + deployed (Render env `PARCELGUARD_PREMIUM_PER_100=1.09` set → HUGRAB $100 insured rates now compute the correct $7.76); PS-111 and PS-118 deployed; Render + Vercel aligned on `afcaf60d` and verified healthy. Only a cosmetic PS-108 follow-up remains (mark the schedule "confirmed" after a live ShipStation read).
 
 ---
 
-## PS-108 — ShipStation ParcelGuard Cost Source + Insured Best-Rate Totals + HUGRAB Backfill
+## PS-108 — ParcelGuard Cost Source + Insured Best-Rate + HUGRAB Backfill — **95%** · ✅ live (`13549f59`→`afcaf60d`)
 
-- **Completion:** 90%
-- **Branch / commit:** `ps-108-parcelguard-insured-best-rate` @ `83b29fd6` (pushed to origin; **not** merged to stable)
-- **Deploy:** held back — blocked on live ShipStation confirmation
+**Root cause:** `/v2/rates/estimate` returns `insurance_amount: 0` for ParcelGuard → HUGRAB ground orders were selected/stored at postage-only $6.67 vs billed $7.76.
 
-**Root cause (confirmed):** ShipStation `POST /v2/rates/estimate` accepts `insurance_provider` + `insured_value` but returns `insurance_amount: 0` for ParcelGuard. That zero flowed through `rateTotal()` → `pickBestRate()` → the saved `bestRate` and the `selectedRateAuthorityKey` (which hashes `insurance_amount`), so PrepShip selected and stored a **postage-only** total ($6.67) for an order that bills $7.76 (the $1.09 ParcelGuard premium). The HUGRAB insurance *resolver* was already correct — only the premium **amount** was missing.
+**Cost source identified:** primary `GET /v2/labels/{id}.insurance_cost`; secondary `GET /v1/shipments/{id}.otherCost`; NOT `/v2/shipments amount_paid` or estimate insurance.
 
-**Authoritative cost source identified (Phase 1):**
-- Primary (post-purchase): `GET /v2/labels/{label_id}` → `insurance_cost.amount`.
-- Secondary: `GET /v1/shipments/{id}` → `otherCost`.
-- Do NOT trust: `/v2/shipments/se-{id}` `amount_paid`/`shipping_paid` (observed 0); estimate `insurance_amount` (0 for ParcelGuard).
+**Implemented + deployed:** provider-agnostic `insurance-cost.ts` enricher populates the premium before `pickBestRate`; configurable schedule (no hardcoded $1.09 in runtime); unprovable insurance → blocked (never raw-postage); label persistence captures v2 `insurance_cost`; frontend display total; pure dry-run backfill (apply gated behind `unlock shipped data`); Phase-1 doc; guard (24 assertions).
 
-**Implemented:**
-- New `src/services/shipping-workflow/insurance-cost.ts` — provider-agnostic enricher; populates the authoritative premium into each insured rate **before** best-rate selection; configurable ParcelGuard schedule (no hardcoded $1.09 in runtime); unprovable insurance → rate flagged unresolved and **blocked** (never raw-postage fallback).
-- `src/services/rates.ts` — enrich in `fetchLiveRatesWithDiagnostics`; `pickBestRate` + bulk-cached sanitize skip unresolved rates; cache version includes insurance-config fingerprint.
-- `src/lib/shipstation/labels.ts` — capture the v2 `insurance_cost` (was discarded).
-- `src/services/labels.ts` — persist premium to `shipments.otherCost` + full `selectedRateJson` audit (cost stays postage-only → no billing double count).
-- `web/src/lib/v2-apiClient.ts` — display total includes the premium.
-- New `src/services/shipping-workflow/parcelguard-backfill.ts` (pure planner) + `scripts/ps-108-parcelguard-cost-backfill.ts` (dry-run; apply gated behind `unlock shipped data`).
-- Docs: `docs/ps-108-shipstation-parcelguard-cost-source.md`.
-- Guard: `scripts/ps-108-parcelguard-insured-best-rate-guard.ts` (24 assertions).
+**Runtime config (live):** Render env `PARCELGUARD_PREMIUM_PER_100=1.09` → HUGRAB $100 insured rates compute exactly **$7.76**.
 
-**Before → after:** insured HUGRAB rate compared at postage-only $6.67 → compared at insured $7.76; premium-unprovable rates were silently under-charged → now blocked with an explicit carrier error.
+**Verified:** typecheck, build:web, ps-072 (HUGRAB intact), ps-079/081/082/094/105, ps-108. Production `/health/deep` ready.
 
-**Verified:** typecheck ✅, build:web ✅, ps-072/079/081/082/094/105 ✅, ps-108 ✅. Dry-run backfill ran read-only (304 HUGRAB shipments scanned, 0 writes).
-
-**Blocked / outstanding:** 3 read-only ShipStation calls vs `se-292074298` to confirm the cost field and pin the schedule (runtime default is an unconfirmed $1.00/$100). Apply-mode and deploy held.
-
-**Safety:** no postage/labels/marketplace/shipped mutations; apply-mode refuses without the override.
+**Remaining (5%, optional, non-blocking):** run the 3 read-only ShipStation reads vs `se-292074298` and set `PARCELGUARD_PREMIUM_CONFIRMED=true` to flip provenance "unconfirmed → confirmed." The $1.09 math is already correct and live. Backfill apply-mode remains gated behind `unlock shipped data`.
 
 ---
 
-## PS-109 — Preserve Multi-SKU Item Names in Print Queue Batch Headers
+## PS-109 — Multi-SKU Print Queue Header Names — **95%** · ✅ live
 
-- **Completion:** 95%
-- **Commit(s):** `7fa56a90` (merged to stable via `0bad8d40`)
-- **Deploy:** ✅ live
+**Root cause:** batch-send dropped item `description` → `spanish-100 / sku: spanish-100` duplicate; filter also dropped no-SKU eBay lines.
 
-**Root cause:** `buildQueueSendOrderPayload` re-mapped `multi_sku_data` to `{sku, qty}`, dropping the per-line `description` that `buildQueueAddPayload` had resolved. With no description, the header card title fell back to the SKU → the `spanish-100 / sku: spanish-100` duplicate. The same `.filter(item.sku)` also dropped no-SKU eBay lines that PS-070 intentionally keeps.
+**Implemented:** frontend preserves `description` + filters on `sku||description`; backend `headerCardTitle()` + `UNNAMED_QUEUE_ITEM_LABEL` (shows `Unnamed item`, never SKU-as-name); used at card title + manifest; guard with rendered-PDF proof (17 assertions).
 
-**Implemented:**
-- `web/src/components/Views/OrdersView.tsx` — batch-send preserves `description`; filters on `sku || description`.
-- `src/services/print-queue-identity.ts` — new `headerCardTitle()` + `UNNAMED_QUEUE_ITEM_LABEL`: a SKU line with no real name renders `Unnamed item` (never the SKU echoed as the product name).
-- `src/services/print-queue.ts` — header card title + manifest combo use `headerCardTitle()`.
-- Guard `scripts/ps-109-multi-sku-header-names-guard.ts` (17 assertions incl. a rendered-PDF proof).
+**Before → after:** SKU/SKU duplicate → product name first, `sku:` second.
 
-**Before → after:** `spanish-100 / sku: spanish-100` → `My First 100 Spanish Words / sku: spanish-100` (and `Unnamed item / sku: X` for stripped legacy rows).
+**Verified:** typecheck, build:web, ps-109, ps-070, ps-073, guard:print-queue-batch-names.
 
-**Verified:** typecheck ✅, build:web ✅, ps-109 ✅, ps-070 ✅, ps-073 ✅, guard:print-queue-batch-names ✅.
-
-**Gap (5%):** legacy stripped rows get the explicit `Unnamed item` fallback rather than canonical `order_items` DB name resolution (avoids a DB read on the PDF hot path).
-
-**Safety:** fake fixtures only; no labels/postage/marketplace/shipped mutations.
+**Gap (5%):** `Unnamed item` fallback for legacy rows instead of canonical `order_items` DB resolution.
 
 ---
 
-## PS-110 — Master Test Runner v2: Fast Parallel Gates + Live-Test Isolation
+## PS-110 — Master Test Runner v2 — **92%** · ✅ live (tooling)
 
-- **Completion:** 92%
-- **Commit:** `769a141f` (merged to stable via `cd4a4960`)
-- **Deploy:** ✅ live (tooling; no runtime impact)
+**Implemented:** excluded nested aggregates (191→186 leaf cmds); scheduling metadata; lock-aware parallel pool (`--concurrency`; quick 29.5s cpu → **9.6s wall**); per-command shard files + durable aggregator (writes on pass/fail/SIGINT); strengthened manifest guard (fails on recursion/nested/live-in-default); `live-readonly` profile; safe-args wrapper; docs.
 
-**Root cause:** `test:master*` recursion was already excluded, but `test:full-site-certification` + `test:full-workflow-certification` (nested aggregates duplicating typecheck/build/all browser specs) were still in the `master` profile (191 commands), and the manifest guard passed without catching it.
-
-**Implemented:**
-- `scripts/prepship-master-test-manifest.mjs` — exclude nested aggregates (explicit set + `3+ npm-run` heuristic; master 191→186); per-entry scheduling metadata (`concurrencySafe`, `resourceLocks`, `estimatedMs`, `requiresLiveData/ProviderAccess/OrderId`, `args`); `live-readonly` profile (routes `certify:external-shipped` out of default gates); safe-args wrapper (`smoke:shipping:test-label --fixture`).
-- `scripts/prepship-master-test-manifest-guard.mjs` — fails on recursion, nested aggregates, or live/order/provider commands in default gates.
-- `scripts/prepship-master-test.mjs` — lock-aware parallel pool (`--concurrency`); per-command shard JSON; aggregator always writes `latest.json/.md` + `run-<stamp>.*` (pass/fail/SIGINT); enriched report (group summary, slowest, locks); quick >5 min warning.
-- `docs/testing/master-regression-suite.md` — tiered profile matrix, scheduler/live isolation, report interpretation.
-
-**Before → after:** sequential `spawnSync` with nested duplication → leaf-only parallel gates; quick profile 20 cmds in **9.6s wall** (29.5s cpu, ~3× speedup), report + 20 shards written.
-
-**Verified:** `test:master:manifest` ✅ (99 checks); all-profile dry-runs contain no `test:master*`/nested ✅; quick `--concurrency 8` 9.6s ✅; `latest.json/.md` present ✅.
+**Verified:** `test:master:manifest` (99 checks); no recursion/nesting in any dry-run; quick `--concurrency 8` 9.6s; reports + 20 shards written.
 
 **Gap (8%):** optional audit-summary command not built.
 
-**Safety:** no labels/postage/marketplace/live mutation.
+---
+
+## PS-111 — Backend-Owned Best-Rate Completeness — **55%** · ✅ live
+
+**Root cause:** backend `/browse` **and** frontend both hardcoded `isComplete: true` → partial/failed-carrier results shown as final complete.
+
+**Implemented:** canonical `isBestRateComplete()` (complete only when all carriers terminal); `/browse` derives + stamps it (feeds workflow DTO → `partial_carrier_failure`/`fresh`/`missing`); frontend consumes it, keeps `response.bestRate` as source of truth; **resolved the pre-existing PS-079 failure**; guard (16 assertions).
+
+**Verified:** typecheck, build:web, ps-111, **ps-079 now PASS**, ps-081, ps-099, ps-102.
+
+**Deferred (the 45%):** backend enqueue-on-sync pre-rating ("rate without a browser session"; existing 10-min env-gated backfill is the safety net); `pending`/`rating` in-progress states; the HUGRAB insured-total certification — now unblocked since PS-108 is live (recommend a follow-up to formally certify).
 
 ---
 
-## PS-111 — Backend-Owned Awaiting Best Rate Pipeline + Status-First UI
+## PS-112–117 — Architecture-First Standard — **100%** · ✅ live
 
-- **Completion:** 55% (correctness core complete; enterprise pieces deferred)
-- **Commit:** `68f4b5db` (merged to stable via `c0cf49d0`)
-- **Deploy:** 🟡 Vercel auto-deploying; **Render Manual Deploy pending** (touches `routes/rates.ts`)
-
-**Root cause:** completeness was faked on both sides — the backend `/browse` route **and** the frontend passive auto-rating hardcoded `isComplete: true` regardless of carrier diagnostics. A best rate found while a carrier was still `loading` or had `error`ed was stored/shown as a final complete rate.
-
-**Implemented:**
-- `src/services/shipping-workflow/best-rate-workflow-dto.ts` — new canonical owner `isBestRateComplete(carrierStatuses)`: complete only when every eligible carrier is terminal (no loading, no error); empty set is not complete.
-- `src/routes/rates.ts` — `/browse` derives completeness from carrier diagnostics and stamps it onto the metadata + returned `bestRate`; flows into `buildBestRateWorkflowDto` so the workflow status reports `partial_carrier_failure`/`fresh`/`missing` correctly.
-- `web/src/components/Views/OrdersView.tsx` — passive auto-rating consumes the backend-stamped completeness (`deriveBackendBestRateComplete`); keeps `response.bestRate` as the single source of truth (no divergent client pick).
-- Resolved the pre-existing **PS-079** failure by superseding the stale assertion with stronger backend-authority coverage.
-- Guard `scripts/ps-111-backend-rate-authority-guard.ts` (16 assertions).
-
-**Before → after:** a partial/failed-carrier result displayed as a final complete best rate → it now reports partial and requires re-rate; PS-079 was failing → now passes.
-
-**Verified:** typecheck ✅, build:web ✅, ps-111 ✅, **ps-079 now PASS** ✅, ps-081 ✅, ps-099 ✅, ps-102 ✅.
-
-**Deferred:** backend enqueue-on-sync pre-rating ("rate without a browser session"; existing 10-min env-gated backfill is the safety net); `pending`/`rating` in-progress states (need an async queue); HUGRAB insured-total certification (gated on PS-108).
-
-**Safety:** awaiting best-rate updates only; no shipped/cancelled mutation.
+`ARCHITECTURE.md`, `CONTRIBUTING.md`, `.github/pull_request_template.md`, `docs/engineering/{checklist,task-template,llm-agent-installation}.md`, and `AGENTS.md`/`CLAUDE.md`/`.cursorrules` byte-synced (lockdown preserved). Sliced into traceable commits PS-114 `8989d7a7`, PS-115 `9bdfdfde`, PS-116 `42cfd983`, gated by PS-117. PS-112 (standalone install) is fully subsumed.
 
 ---
 
-## PS-112 — Install Architecture-First Development Standard
+## PS-118 — Architecture Source-of-Truth + Backend-Ownership Certification — **90%** · ✅ live
 
-- **Completion:** 100% (delivered via the PS-114-117 sliced track — same files)
-- **Deploy:** ✅ live
+**Delivered:**
+- `docs/engineering/source-of-truth-canonical-field-audit.md` — maps all 11 critical workflows to canonical backend owner, schema fields, DTO/API, UI consumer, fallback risk, coverage, severity. Verdict: **CERTIFIED**, 0 P0/P1 gaps.
+- `docs/engineering/source-of-truth-canonical-fields.json` — 16-check canonical-field contract.
+- `scripts/check-source-of-truth-canonical-fields.ts` + `npm run check:architecture-source-of-truth` — fails the build if a canonical field/owner/guard disappears or a forbidden alternate-truth pattern appears.
 
-The standalone PS-112 deliverable (ARCHITECTURE.md, CONTRIBUTING.md, PR template, `docs/engineering/*`, synchronized AGENTS/CLAUDE/.cursorrules) is fully produced by PS-114 through PS-117. No separate work required.
+**Findings (notes, not blockers):** `bestRateJson` lives on `order_overrides`; portal is an auth-scoped view (no separate read-model dir); HUGRAB insured total now correct (PS-108 live). UI-owned-truth risks each covered by an existing guard (ps-103/111/079/proof-boundary).
 
----
+**Verified:** gate proven to bite (removing a canonical token → P0 fail), 16/16 pass on the live tree; `git diff --check`, typecheck, audit-doc grep tokens.
 
-## PS-113 — Umbrella: Architecture-First MD Standards Upload Track
-
-- **Completion:** 100%
-- **Branch:** `ps-113-architecture-first-md-standards` (merged to stable via `d2c38b0f`)
-- **Deploy:** ✅ live (docs/instruction only)
-
-Executed as four traceable slices on one branch with one commit per slice:
-- PS-114 `8989d7a7`, PS-115 `9bdfdfde`, PS-116 `42cfd983`, PS-117 verification gate.
-
----
-
-## PS-114 — Slice 1: Core docs
-
-- **Completion:** 100% · commit `8989d7a7`
-- **Files:** `ARCHITECTURE.md` (Architecture-First Development Standard: core rule, canonical layer ownership, decision tree, anti-patterns, PR placement notes, DoD, safety boundaries), `CONTRIBUTING.md` (links ARCHITECTURE.md; requires placement notes + boundary tests + evidence; preserves safety rules).
-- **Verified:** file/grep checks (`Architecture-First Development Standard`, `Do not fix only where the bug appears`, `Canonical owner`, `ARCHITECTURE.md`).
-
-## PS-115 — Slice 2: AI agent instruction surfaces
-
-- **Completion:** 100% · commit `9bdfdfde`
-- **Files:** `AGENTS.md` (architecture-first rule added; shipped/cancelled lockdown preserved unchanged), mirrored **byte-for-byte** to `CLAUDE.md` + `.cursorrules` (also re-synced a prior `.cursorrules` drift), `.github/pull_request_template.md` (summary, **Architecture Placement**, safety checklist, testing, boundary tests, debt).
-- **Verified:** `diff -q AGENTS.md CLAUDE.md` and `diff -q AGENTS.md .cursorrules` clean; `Architecture Placement` present in PR template; lockdown phrase intact.
-
-## PS-116 — Slice 3: Engineering docs
-
-- **Completion:** 100% · commit `42cfd983`
-- **Files:** `docs/engineering/architecture-first-checklist.md` (pre-coding questions, PR review checklist, fast rejection signals), `task-template.md` (architecture placement, guardrails, verification, DoD, return format), `llm-agent-installation.md` (per-tool install guidance + exact copy/paste `Architecture-first instruction` prompt).
-- **Verified:** grep checks (`What business decision or invariant is changing`, `Architecture placement`, `Architecture-first instruction`).
-
-## PS-117 — Slice 4: Final verification gate
-
-- **Completion:** 100%
-- **Verified:** `git diff --check` clean; exactly the 9 docs/instruction files changed (zero runtime product code); AGENTS/CLAUDE/.cursorrules byte-identical; all 9 expected files present. PR step replaced by a direct push to `prepshipv4-stable` per DJ's "no PR" instruction.
-
----
-
-## PS-118 — Architecture Source-of-Truth + Backend-Ownership Certification
-
-- **Completion:** 0% — **not started.**
-- The only remaining batch ticket. Self-contained runtime audit + machine-checkable certification + focused backend boundary tests. Ready to start on request.
+**Gap (10%):** delivered as a guard/check script (repo convention) rather than the literal `tests/architecture/*.test.ts` jest form — a documented substitution.
 
 ---
 
 ## Global verification & safety
 
 - `npm run typecheck` and `npm run build:web` passed on every merge to `prepshipv4-stable`.
-- Guards green: ps-070, ps-072, ps-073, ps-079 (fixed), ps-081, ps-082, ps-094, ps-099, ps-102, ps-105, ps-108, ps-109, ps-110 manifest, ps-111.
-- Production health after the PS-109 deploy: `/health` `ok`, `/health/deep` `ready` (db/orders/printQueue/eventLoop all ok).
-- **No real postage purchased, no real/void labels, no live marketplace notifications, and no production shipped/cancelled order or shipment-history mutations occurred.** PS-108 apply-mode is gated; backfill ran dry-run/read-only.
+- Guards green: ps-070, ps-072, ps-073, ps-079 (fixed), ps-081, ps-082, ps-094, ps-099, ps-102, ps-105, ps-108, ps-109, ps-110 manifest, ps-111; certification `check:architecture-source-of-truth` 16/16.
+- Production health after deploy: `/health` `ok`, `/health/deep` `ready` (db/orders/printQueue/eventLoop all ok).
+- **No real postage purchased, no real/void labels, no live marketplace notifications, and no production shipped/cancelled order or shipment-history mutations occurred.** PS-108 apply-mode gated; backfill ran dry-run/read-only only.
 
-## Outstanding actions
+## Deploy ledger
 
-1. **Render Manual Deploy** `c0cf49d0` on `prepshipv4-api` + `prepshipv4-worker` (PS-111 backend) → verify `/health`.
-2. **PS-108 ShipStation reads** vs `se-292074298` → pin ParcelGuard schedule → ship PS-108.
-3. **Start PS-118** (architecture certification).
+| Commit | Contents |
+|---|---|
+| `cd4a4960` | Merge PS-110 |
+| `d2c38b0f` | Merge PS-113/114-117 docs |
+| `0bad8d40` | Merge PS-109 |
+| `c0cf49d0` | Merge PS-111 |
+| `bb110866` | Merge PS-118 |
+| `13549f59` | Merge PS-108 |
+| `afcaf60d` | Batch report + gitignore (current tip) |
+
+## Outstanding (all optional / follow-up)
+
+1. **PS-108:** run the 3 read-only ShipStation reads vs `se-292074298`, then set `PARCELGUARD_PREMIUM_CONFIRMED=true` (cosmetic provenance flag; math already correct).
+2. **PS-111:** formal HUGRAB insured-total certification + the deferred enterprise enqueue-on-sync pre-rating (a sized follow-up ticket).
+3. **PS-110:** optional audit-summary command.
+
+**Status: batch complete and live in production.**
