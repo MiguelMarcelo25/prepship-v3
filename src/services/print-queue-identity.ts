@@ -29,6 +29,31 @@
 export const UNRESOLVED_QUEUE_ITEM_LABEL = 'UNRESOLVED EBAY ITEM';
 export const UNRESOLVED_QUEUE_ITEM_PICK_NOTE = 'UNRESOLVED EBAY ITEM — review order details';
 export const NO_SKU_PICK_NOTE = 'no SKU — eBay item';
+// PS-109: shown as the batch-header card TITLE when a line has a SKU but no real
+// product name. A warehouse pick header must never render the SKU as the product
+// name (it duplicates the "sku: X" line below); show this explicit fallback instead.
+export const UNNAMED_QUEUE_ITEM_LABEL = 'Unnamed item';
+
+/**
+ * PS-109 — resolve the product NAME to show as a batch-header card title.
+ * A real name is a title that is NOT just the SKU echoed back. When the only text
+ * available is the SKU itself (description was stripped before enqueue, or the order
+ * genuinely has no product name), return an explicit "Unnamed item" fallback so the
+ * header never prints "spanish-100 / sku: spanish-100". A line with no SKU keeps its
+ * resolved card title (eBay title or the UNRESOLVED label).
+ */
+export function headerCardTitle(
+  line: { sku?: string | null; description?: string | null; cardTitle?: string | null },
+): string {
+  const sku = String(line.sku ?? '').trim();
+  const candidates = [line.cardTitle, line.description]
+    .map((value) => String(value ?? '').trim())
+    .filter((value) => value.length > 0);
+  const realName = candidates.find((value) => value.toLowerCase() !== sku.toLowerCase());
+  if (realName) return realName;
+  if (sku) return UNNAMED_QUEUE_ITEM_LABEL;
+  return candidates[0] ?? UNRESOLVED_QUEUE_ITEM_LABEL;
+}
 
 export function normalizeQueueSkuKey(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');

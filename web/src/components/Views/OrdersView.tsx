@@ -4595,13 +4595,19 @@ export default function OrdersView({
 
     const labelUrl = getQueueableLabelUrl(order.label?.labelUrl)
     const queuePayload = buildQueueAddPayload(order, labelUrl ?? '')
+    // PS-109: preserve the per-line description (product name) through batch-send.
+    // buildQueueAddPayload already resolves it; re-mapping to {sku, qty} dropped it,
+    // which made multi-SKU batch headers fall back to SKU as the card title (the
+    // "spanish-100 / sku: spanish-100" duplicate). Keep no-SKU eBay lines too
+    // (sku may be '' — filter on sku OR description so PS-070 lines survive).
     const multiSkuData = Array.isArray(queuePayload.multi_sku_data)
       ? queuePayload.multi_sku_data
         .map((item) => ({
           sku: toStringValue(item?.sku) ?? '',
+          description: toStringValue(item?.description) ?? '',
           qty: toNumberValue(item?.qty) ?? 1,
         }))
-        .filter((item) => item.sku)
+        .filter((item) => item.sku || item.description)
       : null
     const payload: Record<string, unknown> = {
       order_id: order.orderId,

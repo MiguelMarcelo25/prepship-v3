@@ -26,6 +26,7 @@
     "guard:shipping-certification": "node scripts/shipping-certification-guard.mjs",
     "guard:site-actions": "node scripts/site-action-functionality-guard.mjs",
     "guard:print-queue-batch-names": "node scripts/print-queue-batch-names-guard.mjs && tsx scripts/print-queue-batch-names-behavior.ts",
+    "test:ps-109-multi-sku-header-names": "tsx scripts/ps-109-multi-sku-header-names-guard.ts",
     "watchdog:production": "node scripts/production-watchdog.mjs",
     "diagnose:production-timing": "tsx scripts/capture-production-timing.ts",
     "test:web-bundle-budget": "npm run build:web && node scripts/web-bundle-budget-guard.mjs",

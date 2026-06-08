@@ -12,8 +12,8 @@ import { createLabelV2, type CreateLabelInputDto } from './labels';
 import {
   collapseIdentityLines,
   resolveQueueLineIdentity,
+  headerCardTitle,
   NO_SKU_PICK_NOTE,
-  UNRESOLVED_QUEUE_ITEM_LABEL,
   type CollapsedQueueLine,
 } from './print-queue-identity';
 
@@ -1807,8 +1807,9 @@ function drawHeader(
     // space) gets enough lines to show everything.
     const maxTitleLines = n <= 2 ? 6 : n === 3 ? 3 : n <= 5 ? 2 : 1;
     const titleMaxW = boxW - 24 - qtyW - 8;
-    const titleText =
-      item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL;
+    // PS-109: never render the SKU as the product name; show "Unnamed item" when no
+    // real name is available, with the real "sku: X" still on the line below.
+    const titleText = headerCardTitle(item);
     // Shrink only when the name is genuinely long (see fitTitleSize); short
     // names render at the default size unchanged.
     const itemTitleSize = fitTitleSize(titleText, titleMaxW);
@@ -2215,7 +2216,7 @@ function buildComboSummaryLine(entry: PrintQueueEntry): { comboLine: string; tot
       }];
   const comboLine = cards
     // PS-070 — show the title for no-SKU lines, never a bare "UNKNOWN SKU".
-    .map((c) => `${c.cardTitle || c.description || c.sku || UNRESOLVED_QUEUE_ITEM_LABEL} x${c.qty}`)
+    .map((c) => `${headerCardTitle(c)} x${c.qty}`)
     .join(' + ');
   const totalUnits = cards.reduce((sum, c) => sum + c.qty, 0);
   return { comboLine, totalUnits };
