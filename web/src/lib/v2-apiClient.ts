@@ -1514,7 +1514,7 @@ export const apiClient = {
       async () => {
         if (hasDate) {
           const legacyCounts = await api.get<any>(`/init/counts${qs({ dateFrom, dateTo })}`, {
-            timeoutMs: 8_000,
+            timeoutMs: 25_000,
           });
           return {
             byStatus: Array.isArray(legacyCounts?.byStatus)
@@ -1530,7 +1530,7 @@ export const apiClient = {
           };
         }
 
-        const legacyCounts = await api.get<any>('/init/counts', { timeoutMs: 8_000 });
+        const legacyCounts = await api.get<any>('/init/counts', { timeoutMs: 25_000 });
         return {
           byStatus: Array.isArray(legacyCounts?.byStatus)
             ? legacyCounts.byStatus
@@ -1660,8 +1660,8 @@ export const apiClient = {
       10 * 60_000,
       async () => {
         const [storesRes, clientRowsRes] = await Promise.all([
-          api.get<any>('/init/stores', { timeoutMs: 8_000 }).catch(() => ({ data: [] })),
-          api.get<any>('/clients?includeInactive=true', { timeoutMs: 8_000 }).catch(() => []),
+          api.get<any>('/init/stores', { timeoutMs: 25_000 }).catch(() => ({ data: [] })),
+          api.get<any>('/clients?includeInactive=true', { timeoutMs: 25_000 }).catch(() => []),
         ]);
         const clientRows = Array.isArray(clientRowsRes) ? clientRowsRes : [];
         const clientsById = new Map<number, any>();
@@ -1723,7 +1723,7 @@ export const apiClient = {
       5 * 60_000,
       30 * 60_000,
       async () => {
-        const res = await api.get<any>(`/clients${qs({ activeOnly: true })}`, { timeoutMs: 8_000 });
+        const res = await api.get<any>(`/clients${qs({ activeOnly: true })}`, { timeoutMs: 25_000 });
         return normalizeClientDtoRows(Array.isArray(res) ? res : []);
       },
       [],
@@ -1800,7 +1800,7 @@ export const apiClient = {
       60_000,
       10 * 60_000,
       async () => {
-        const res = await api.get<any>('/init/carrier-accounts', { timeoutMs: 8_000 });
+        const res = await api.get<any>('/init/carrier-accounts', { timeoutMs: 25_000 });
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.carriers)) return res.carriers;
         return [];
@@ -1862,7 +1862,7 @@ export const apiClient = {
       5 * 60_000,
       30 * 60_000,
       async () => {
-        const row = await api.get<SettingsRow>('/settings/orders.columnPrefs', { timeoutMs: 8_000 });
+        const row = await api.get<SettingsRow>('/settings/orders.columnPrefs', { timeoutMs: 25_000 });
         try {
           return JSON.parse(row.value);
         } catch {
@@ -1895,7 +1895,7 @@ export const apiClient = {
     return safe(
       'fetchCarrierEligibilityPolicy',
       async () => {
-        const row = await api.get<{ value?: string | null }>('/settings/block_shipstation_for_direct_store', { timeoutMs: 8_000 });
+        const row = await api.get<{ value?: string | null }>('/settings/block_shipstation_for_direct_store', { timeoutMs: 25_000 });
         const v = (row?.value ?? '').trim().toLowerCase();
         return v === 'enforce' || v === 'disabled' ? v : 'audit_only';
       },
@@ -1918,7 +1918,7 @@ export const apiClient = {
       'fetchLegacySyncStatus',
       90_000,
       10 * 60_000,
-      () => api.get<any>('/sync/status', { timeoutMs: 6_000 }),
+      () => api.get<any>('/sync/status', { timeoutMs: 25_000 }),
       {},
       { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
     );
@@ -1930,7 +1930,7 @@ export const apiClient = {
       'fetchSyncWorkerStatus',
       90_000,
       10 * 60_000,
-      () => api.get<any>('/worker/status', { timeoutMs: 6_000 }),
+      () => api.get<any>('/worker/status', { timeoutMs: 25_000 }),
       { enabled: false },
       { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
     );
@@ -2144,7 +2144,7 @@ export const apiClient = {
       15 * 60_000,
       async () => {
         const res = await api.get<{ skus: string[] }>(`/orders/distinct-skus${queryString}`, {
-          timeoutMs: 8_000,
+          timeoutMs: 25_000,
         })
         return Array.isArray(res?.skus) ? res.skus : []
       },
@@ -2334,7 +2334,7 @@ export const apiClient = {
       try {
         // V2 parity: the daily stats endpoint applies only the configured
         // excluded store IDs server-side.
-        const res = await api.get<unknown>(`/orders/daily-stats${queryString}`, { timeoutMs: 8_000 });
+        const res = await api.get<unknown>(`/orders/daily-stats${queryString}`, { timeoutMs: 25_000 });
         const parsed = parseDailyStatsSummary(res);
         const settledAt = Date.now();
         cachedReads.set(cacheKey, {
@@ -3573,7 +3573,7 @@ export const apiClient = {
       60_000,
       10 * 60_000,
       async () => {
-        const res = await api.get<any>('/locations', { timeoutMs: 8_000 });
+        const res = await api.get<any>('/locations', { timeoutMs: 25_000 });
         const rows = Array.isArray(res)
           ? res
           : Array.isArray(res?.data)
@@ -3644,7 +3644,7 @@ export const apiClient = {
       5 * 60_000,
       30 * 60_000,
       async () => {
-        const res = await api.get<any>(`/packages${qs({ source })}`, { timeoutMs: 8_000 });
+        const res = await api.get<any>(`/packages${qs({ source })}`, { timeoutMs: 25_000 });
         if (Array.isArray(res)) return res.map(normalizePackageDto);
         if (Array.isArray(res?.data)) return res.data.map(normalizePackageDto);
         return [];
