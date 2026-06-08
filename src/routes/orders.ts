@@ -2189,9 +2189,15 @@ app.get(
     // totalOrders: all non-cancelled orders received inside the current
     // fulfillment intake window. The strip derives shipped as
     // totalOrders - needToShip, matching v2 daily-strip.js.
-    const windowedRows = await db.execute<{
-      total_orders: number;
-    }>(sql`
+    // Run the three count aggregates CONCURRENTLY so a single daily-stats request
+    // holds DB connections for ~1x wall-clock instead of 3x sequential — this
+    // reduces cold-start pool contention (the main cause of post-restart slowness).
+    // - totalOrders: all non-cancelled orders received inside the current intake
+    //   window (strip derives shipped as totalOrders - needToShip, v2 parity).
+    // - needToShip: remaining same-day fulfillment work inside the intake window.
+    // - upcomingOrders: non-cancelled orders dated after the window.
+    const [windowedRows, backlogRows, upcomingRows] = await Promise.all([
+      db.execute<{ total_orders: number }>(sql`
       select count(*)::int as total_orders
       from orders o
       left join clients c on c.id = o.client_id
@@ -2200,10 +2206,8 @@ app.get(
         and o.order_date <= ${toIso}::timestamptz
         and ${visibleOrderPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
-    `);
-    // needToShip: remaining same-day fulfillment work inside the intake
-    // window. Bucket/external-shipped rules stay in the order list query.
-    const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
+    `),
+      db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
       from orders o
       left join clients c on c.id = o.client_id
@@ -2213,8 +2217,8 @@ app.get(
         and ${visibleOrderPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
         and ${visibleAwaitingOrdersPredicate('o')}
-    `);
-    const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
+    `),
+      db.execute<{ upcoming_orders: number }>(sql`
       select count(*)::int as upcoming_orders
       from orders o
       left join clients c on c.id = o.client_id
@@ -2222,7 +2226,8 @@ app.get(
         and o.order_status <> 'cancelled'
         and ${visibleOrderPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
-    `);
+    `),
+    ]);
     const w = windowedRows[0];
     const b = backlogRows[0];
     const u = upcomingRows[0];
