@@ -1711,11 +1711,13 @@ export default function RateBrowserModal({
             </div>
           )}
           {(() => {
-            // PS-108: surface the per-rate insurance breakdown the backend already
-            // resolved (insuranceCost meta / insurance_amount). Display-only — the
-            // premium is owned by the backend and never recomputed here. The amount
-            // is already included in the row total (otherCost), so this line is a
-            // breakdown of what the price already contains.
+            // PS-125: surface the per-rate insurance add-on the backend already
+            // resolved (insuranceCost meta). Display-only — the premium is owned by
+            // the backend and never recomputed here. A $0 add-on is VALID and must be
+            // shown as "Insurance incl. +$0.00", not hidden, so the operator can see
+            // insurance was requested/applied with no add-on (real cost reconciles at
+            // purchase). The line renders only for INSURED rates (those carrying the
+            // backend insuranceCost meta) so non-insured rates stay clean.
             const meta = r.raw?.insuranceCost as
               | {
                   insuranceProvider?: string;
@@ -1729,7 +1731,7 @@ export default function RateBrowserModal({
               r.raw?.insuranceCostUnresolved === true || meta?.unresolved === true;
             const provider = formatInsuranceProviderLabel(meta?.insuranceProvider);
 
-            // Insured rate whose premium could not be proven — warn instead of price.
+            // Genuinely unresolved (rare under PS-125) — warn instead of pricing.
             if (unresolved) {
               return (
                 <div style={{ fontSize: 10.5, color: 'var(--red)', marginTop: 2, lineHeight: 1.4 }}>
@@ -1738,14 +1740,10 @@ export default function RateBrowserModal({
               );
             }
 
-            const amount =
-              typeof meta?.amount === 'number'
-                ? meta.amount
-                : typeof r.raw?.insurance_amount?.amount === 'number'
-                  ? (r.raw.insurance_amount.amount as number)
-                  : null;
-            // No insurance on this rate -> no indicator.
-            if (amount == null || amount <= 0) return null;
+            // Only insured rates carry the backend insuranceCost meta. Non-insured
+            // rates have no meta -> no line.
+            if (!meta) return null;
+            const amount = typeof meta.amount === 'number' ? meta.amount : 0;
 
             return (
               <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>

@@ -1,8 +1,11 @@
 /**
- * PS-108 guard — ParcelGuard premium is included in the rate total BEFORE best-rate
- * selection, the selected-rate proof carries the insured total, unprovable insurance
- * blocks rather than selecting raw postage, and the shipped-cost backfill planner is
- * correct + idempotent. Pure logic — no DB, no network, no postage.
+ * PS-108 guard (updated for PS-125) — ShipStation is the source of truth for the
+ * insurance add-on; a positive estimate premium is included in the rate total before
+ * best-rate selection and carried into the selected-rate proof. PS-125 supersedes the
+ * earlier "block a zero-premium insured rate" rule: a $0 (or omitted) ShipStation
+ * insurance add-on is now a VALID resolved $0.00 premium, so the insured rate stays
+ * selectable and the real billed cost is reconciled by the shipped-cost backfill
+ * planner (still correct + idempotent). Pure logic — no DB, no network, no postage.
  *
  *   npx tsx scripts/ps-108-parcelguard-insured-best-rate-guard.ts
  */
@@ -49,9 +52,10 @@ function pickBest(rates: any[]): any {
 }
 
 // ── Observed seed: USPS Ground Advantage, $6.67 postage, estimate insurance_amount=0 ──
-// ShipStation is the only source of truth for insurance premiums. A zero/missing
-// rate-time insurance amount must block the insured rate instead of filling a local
-// ParcelGuard schedule. Purchased labels still use ShipStation's billed insurance_cost.
+// ShipStation is the only source of truth for insurance premiums. PS-125: a zero/missing
+// rate-time insurance amount is a VALID $0 add-on (not a block, and never a local
+// ParcelGuard schedule). The insured rate stays selectable; purchased labels still use
+// ShipStation's billed insurance_cost via the backfill reconciliation path.
 delete process.env.PARCELGUARD_RATE_TIME_SOURCE;
 delete process.env.PARCELGUARD_PREMIUM_PER_100;
 delete process.env.PARCELGUARD_PREMIUM_MIN;
@@ -68,13 +72,13 @@ const groundAdvantage = () => ({
 
 const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
 
-// 1. Enrichment blocks a zero-premium insured estimate instead of calculating one.
+// 1. PS-125: a zero-premium insured estimate is RESOLVED at $0.00 (valid), not blocked.
 {
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
-  check('enriched: zero ShipStation insurance amount is unresolved', resolved.length === 0 && unresolved.length === 1, true);
-  check('enriched: unresolved rate is not selectable', isRateInsuranceResolved(unresolved[0]), false);
-  check('enriched: no local insurance amount is stamped', unresolved[0]?.insurance_amount?.amount, 0);
-  check('enriched: unresolved reason tells operator to re-rate from ShipStation truth', /ShipStation/i.test(unresolved[0]?.insuranceCostError ?? ''), true);
+  check('enriched: zero ShipStation insurance amount is resolved (PS-125)', resolved.length === 1 && unresolved.length === 0, true);
+  check('enriched: zero-premium rate stays selectable', isRateInsuranceResolved(resolved[0]), true);
+  check('enriched: zero add-on is stamped as $0.00', resolved[0]?.insurance_amount?.amount, 0);
+  check('enriched: insuranceCost meta records resolved $0 add-on', resolved[0]?.insuranceCost?.amount === 0 && resolved[0]?.insuranceCost?.unresolved === false, true);
 }
 
 // 1b. A non-zero ShipStation estimate premium is trusted for every carrier.
@@ -107,9 +111,9 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('shipstation estimate: provenance is ShipStation', resolved.every((r) => r.insuranceCost?.provenance === 'shipstation_estimate'), true);
 }
 
-// 2. pickBestRate must NOT pick a raw postage-only insured rate over an API-priced total.
+// 2. PS-125: a $0-add-on insured rate is valid and competes on total — cheapest wins.
 {
-  const cheapPostageNoPremium = groundAdvantage(); // $6.67 postage, ParcelGuard, premium hidden
+  const cheapZeroPremium = groundAdvantage(); // $6.67 postage + $0 ParcelGuard add-on = $6.67
   const competitor = {
     rate_id: 'r-comp',
     carrier_id: 'se-565326',
@@ -119,11 +123,11 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
     shipping_amount: { currency: 'usd', amount: 7.0 },
     insurance_amount: { currency: 'usd', amount: 0.5 }, // estimate already had a premium
   };
-  const { resolved, unresolved } = enrichRatesWithInsuranceCost([cheapPostageNoPremium, competitor], ctx100);
+  const { resolved, unresolved } = enrichRatesWithInsuranceCost([cheapZeroPremium, competitor], ctx100);
   const best = pickBest(resolved);
-  check('best rate excludes zero-premium insured rate', unresolved.length, 1);
-  check('best rate uses API-priced insured total', best.carrier_code, 'ups');
-  check('best rate is NOT the raw-postage $6.67 illusion', Number(rateTotal(best).toFixed(2)), 7.5);
+  check('best rate keeps zero-premium insured rate selectable (PS-125)', unresolved.length, 0);
+  check('best rate is the cheapest insured total', best.carrier_code, 'stamps_com');
+  check('best rate total is postage + $0 insurance', Number(rateTotal(best).toFixed(2)), 6.67);
 }
 
 // 3. Selected-rate proof authority key carries the insured total (changes vs postage-only).
@@ -136,12 +140,13 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('proof key encodes ShipStation insurance component', keyInsured.includes('1.0900'), true);
 }
 
-// 4. Unprovable insurance BLOCKS the rate (no raw-postage fallback).
+// 4. PS-125: a $0 insurance add-on resolves and stays selectable (no block).
 {
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
-  check('insured rate is unresolved, not selectable', resolved.length === 0 && unresolved.length === 1, true);
-  check('pickBest returns null (blocked, not raw postage)', pickBest(resolved), null);
-  check('unresolved carries an explicit error', typeof unresolved[0]?.insuranceCostError === 'string' && unresolved[0]!.insuranceCostError.length > 0, true);
+  check('insured zero-premium rate is resolved and selectable', resolved.length === 1 && unresolved.length === 0, true);
+  const best = pickBest(resolved);
+  check('pickBest returns the resolved zero-premium rate', best?.carrier_code, 'stamps_com');
+  check('resolved rate carries a $0 insurance add-on', best?.insurance_amount?.amount, 0);
 }
 
 // 5. Non-insured rates are untouched; estimate-provided premiums are trusted.
@@ -157,7 +162,7 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
 
 // 6. Cache fingerprint reflects the API-truth insurance policy, not a schedule/env price.
 {
-  check('insurance fingerprint is stable API-truth policy', insuranceCostConfigFingerprint(), 'shipstation-api-insurance-v1');
+  check('insurance fingerprint reflects PS-125 zero-ok policy', insuranceCostConfigFingerprint(), 'shipstation-api-insurance-v2-zero-ok');
 }
 
 // 7. Backfill planner — seed order #1247 / se-292074298, idempotent.
