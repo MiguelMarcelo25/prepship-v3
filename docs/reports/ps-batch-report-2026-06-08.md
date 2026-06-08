@@ -2,16 +2,16 @@
 
 **Date:** 2026-06-08 (updated post-deploy)
 **Base branch:** `prepshipv4-stable` (serves Render `prepshipv4-api` + `prepshipv4-worker` and Vercel production)
-**Deployed tip:** `afcaf60d` — **all tickets PS-108 → PS-118 are LIVE in production**
+**Deployed tip:** `89cc9f9c` — **all tickets PS-108 → PS-118 are LIVE in production** (PS-108 backfill apply-mode wired under `unlock shipped data`; PS-109 + PS-110 brought to 100%)
 **Production health (verified):** `/health` `ok`, `/health/deep` `ready` (db, orders, printQueue, eventLoop all ok)
 
 ## Index
 
 | Ticket | Title | % | Live? |
 |---|---|---|---|
-| PS-108 | ParcelGuard cost source + insured best-rate + HUGRAB backfill | 95% | ✅ live |
-| PS-109 | Preserve multi-SKU item names in print queue batch headers | 95% | ✅ live |
-| PS-110 | Master Test Runner v2 — fast parallel gates + live-test isolation | 92% | ✅ live |
+| PS-108 | ParcelGuard cost source + insured best-rate + HUGRAB backfill | 98% | ✅ live (backfill apply-mode wired; one operational run left) |
+| PS-109 | Preserve multi-SKU item names in print queue batch headers | 100% | ✅ live (legacy rows resolve names from order_items) |
+| PS-110 | Master Test Runner v2 — fast parallel gates + live-test isolation | 100% | ✅ live (`test:master:audit` added) |
 | PS-111 | Backend-owned awaiting best-rate completeness (status authority) | 55% | ✅ live |
 | PS-112 | Install architecture-first standard | 100% | ✅ live (via 114-117) |
 | PS-113 | Architecture-first MD standards umbrella | 100% | ✅ live |
