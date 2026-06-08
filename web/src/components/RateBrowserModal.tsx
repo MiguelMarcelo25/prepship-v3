@@ -1087,16 +1087,17 @@ export default function RateBrowserModal({
     if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
     void (async () => {
-      // Instant paint from cache first — this is often just the order's saved
-      // best rate (a single carrier), which is why opening the Rate Browser used
-      // to show only one carrier until the operator clicked "Refresh Live Rates".
-      await browseRates(undefined, { cachedOnly: true });
-      // Then immediately fetch LIVE across every carrier so opening Browse Rates
-      // always surfaces all available carriers automatically (no manual second
-      // click). Guard against the modal moving to another order / closing while
-      // the cached pass was in flight; browseRates also supersedes stale updates
-      // internally via its sequence ref.
-      if (autoFetchedRef.current === orderId) {
+      // Instant paint from cache first — often just the order's saved best rate
+      // (a single carrier) when the cache is cold/thin.
+      const cachedCarrierCount = await browseRates(undefined, { cachedOnly: true });
+      // PS-123 reconciliation: fan out LIVE only when the cached probe is THIN
+      // (<= 1 carrier — cold cache or just the saved best rate). When the worker
+      // backfill / passive auto-rater has already warmed the full carrier set into
+      // the cache, the probe returns multiple carriers and we SKIP the live fanout
+      // — no duplicate fanout on open — while still always ending up showing every
+      // available carrier. Guard against the modal switching orders / closing
+      // mid-probe; browseRates also supersedes stale updates via its sequence ref.
+      if (autoFetchedRef.current === orderId && cachedCarrierCount <= 1) {
         await browseRates(undefined, { forceLive: true });
       }
     })();
@@ -1157,10 +1158,14 @@ export default function RateBrowserModal({
   async function browseRates(
     confirmationOverride?: RateConfirmation,
     options: BrowseRateOptions = {}
-  ): Promise<void> {
-    if (!zip || zip.length < 5 || !hasWeight || !hasDims) return;
-    if (!testMode && !rateShippingAccounts.length) return;
+  ): Promise<number> {
+    if (!zip || zip.length < 5 || !hasWeight || !hasDims) return 0;
+    if (!testMode && !rateShippingAccounts.length) return 0;
 
+    // Count of carrier accounts that ended up with >=1 rate — returned so the
+    // modal-open effect can tell whether a cached probe was complete enough to
+    // skip the live fanout (PS-123: no duplicate live fanout on open).
+    let carriersWithRates = 0;
     const requestSeq = browseSequenceRef.current + 1;
     browseSequenceRef.current = requestSeq;
     const totalOz = lbNum * 16 + ozNum;
@@ -1225,7 +1230,7 @@ export default function RateBrowserModal({
       }
       setPendingPids(new Set());
       setBrowsing(false);
-      return;
+      return carriersWithRates;
     }
 
     try {
@@ -1291,7 +1296,7 @@ export default function RateBrowserModal({
         forceLive: options.forceLive === true,
         forceRefresh: options.forceLive === true,
       });
-      if (browseSequenceRef.current !== requestSeq) return;
+      if (browseSequenceRef.current !== requestSeq) return carriersWithRates;
       const raw = (Array.isArray(browseResult)
         ? browseResult
         : Array.isArray(browseResult?.rates)
@@ -1402,8 +1407,11 @@ export default function RateBrowserModal({
       }
       setCarrierStatusByPid(nextStatusByPid);
       setRatesByPid(nextRatesByPid);
+      carriersWithRates = Object.values(nextRatesByPid).filter(
+        (rows) => Array.isArray(rows) && rows.length > 0,
+      ).length;
     } catch {
-      if (browseSequenceRef.current !== requestSeq) return;
+      if (browseSequenceRef.current !== requestSeq) return carriersWithRates;
       setRateErrorsByPid({});
       setCarrierStatusByPid({});
       setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
@@ -1432,6 +1440,7 @@ export default function RateBrowserModal({
     }
 
     setBrowsing(false);
+    return carriersWithRates;
   }
 
   function filterBySvcClass(rates: RateRow[]): RateRow[] {

@@ -131,8 +131,15 @@ check(
 );
 
 check(
-  'modal open uses cache probe only, avoiding duplicate automatic live fanout',
-  /cachedOnly:\s*true/.test(autoFetchBlock) && !/forceLive:\s*true/.test(autoFetchBlock),
+  // PS-123 (reconciled with the "show all carriers on open" requirement): the modal
+  // open must PROBE THE CACHE FIRST. A live fanout is permitted ONLY as a fallback
+  // gated by a thin-cache check (cachedCarrierCount <= 1), so a warm/complete cache
+  // (worker backfill or the passive auto-rater) is served without any duplicate
+  // live fanout. An UNCONDITIONAL forceLive on open is still forbidden.
+  'modal open probes cache first; any live fanout is gated by a thin-cache check (no unconditional/duplicate fanout)',
+  /cachedOnly:\s*true/.test(autoFetchBlock) &&
+    (!/forceLive:\s*true/.test(autoFetchBlock) ||
+      (/cachedCarrierCount/.test(autoFetchBlock) && /<=\s*1/.test(autoFetchBlock))),
 );
 
 check(
