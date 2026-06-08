@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
+import { orderItems } from '../db/schema/order-items';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
@@ -1016,6 +1017,11 @@ export async function startPrintJob(input: {
       sensitivity: 'base',
     }),
   );
+  // PS-109: fill any missing product names on these entries from the canonical
+  // order_items table BEFORE the headers render, so a legacy row (enqueued before the
+  // batch-send description fix) shows the real product name instead of "Unnamed item".
+  await enrichEntriesWithCanonicalItemNames(entries);
+
   const invalidLabelErrors = collectInvalidLabelErrors(entries);
   if (invalidLabelErrors.length === entries.length) {
     throw new PrintQueueLabelUrlError(
@@ -1045,6 +1051,72 @@ export async function startPrintJob(input: {
 
 export function getMergeJobStatus(jobId: string): MergeJob | null {
   return mergeJobs.get(jobId) ?? null;
+}
+
+// PS-109 — canonical product-name resolution for the batch header. When a queued
+// entry's multi_sku_data line (or the entry's primary item) has only a SKU and no real
+// product name — a legacy row enqueued before the batch-send description fix — resolve
+// the name from the canonical order_items table so the header shows the product name
+// instead of the "Unnamed item" fallback. Mutates entries in place; best-effort (a
+// lookup failure leaves the safe fallback intact).
+function queueSkuKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+function lineNeedsName(line: { sku?: unknown; description?: unknown } | null | undefined): boolean {
+  const sku = queueSkuKey(line?.sku);
+  const desc = queueSkuKey(line?.description);
+  return sku.length > 0 && (desc.length === 0 || desc === sku);
+}
+async function enrichEntriesWithCanonicalItemNames(entries: PrintQueueEntry[]): Promise<void> {
+  const orderIds = new Set<number>();
+  for (const entry of entries) {
+    const lines = Array.isArray(entry.multiSkuData) ? entry.multiSkuData : [];
+    const needs =
+      lineNeedsName({ sku: entry.primarySku, description: entry.itemDescription }) ||
+      lines.some((line) => lineNeedsName(line as { sku?: unknown; description?: unknown }));
+    if (!needs) continue;
+    const orderId = Number(entry.orderId);
+    if (Number.isFinite(orderId)) orderIds.add(orderId);
+  }
+  if (!orderIds.size) return;
+
+  let rows: Array<{ orderId: number; sku: string | null; name: string | null }> = [];
+  try {
+    rows = await db
+      .select({ orderId: orderItems.orderId, sku: orderItems.sku, name: orderItems.name })
+      .from(orderItems)
+      .where(inArray(orderItems.orderId, [...orderIds]));
+  } catch (err) {
+    console.warn('[print-queue] canonical item-name resolve failed:', err instanceof Error ? err.message : err);
+    return; // leave the safe "Unnamed item" fallback in place
+  }
+
+  const byOrder = new Map<number, Map<string, string>>();
+  for (const row of rows) {
+    const name = String(row.name ?? '').trim();
+    const key = queueSkuKey(row.sku);
+    if (!name || !key || queueSkuKey(name) === key) continue; // skip blanks + name===sku
+    if (!byOrder.has(row.orderId)) byOrder.set(row.orderId, new Map());
+    const map = byOrder.get(row.orderId)!;
+    if (!map.has(key)) map.set(key, name);
+  }
+
+  for (const entry of entries) {
+    const map = byOrder.get(Number(entry.orderId));
+    if (!map) continue;
+    if (Array.isArray(entry.multiSkuData)) {
+      entry.multiSkuData = entry.multiSkuData.map((line) => {
+        const row = line as { sku?: unknown; description?: unknown; qty?: unknown };
+        if (!lineNeedsName(row)) return line;
+        const name = map.get(queueSkuKey(row.sku));
+        return name ? { ...row, description: name } : line;
+      }) as PrintQueueEntry['multiSkuData'];
+    }
+    if (lineNeedsName({ sku: entry.primarySku, description: entry.itemDescription })) {
+      const name = map.get(queueSkuKey(entry.primarySku));
+      if (name) entry.itemDescription = name;
+    }
+  }
 }
 
 async function runMergeJob(
