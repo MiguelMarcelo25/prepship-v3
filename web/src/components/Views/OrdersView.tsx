@@ -8235,6 +8235,7 @@ export default function OrdersView({
     const resolvedNoRate = resolvedForKey && autoEntry?.pending !== true && !autoEntry?.rate && !autoEntry?.error
     const isAutoRatingActive = resolvedForKey && autoEntry?.pending === true
     const hasCarrierContext = isTestOrder(displayOrder) || getRateCarrierIdsForAccounts().length > 0
+    const batchRow = batchRecalculateRows[order.orderId]
     const stateInput = {
       hasDims,
       hasWeight,
@@ -8245,6 +8246,7 @@ export default function OrdersView({
       hasCarrierContext,
       accountsLoading,
       isAutoRatingActive,
+      batchRecalculateStatus: batchRow?.status,
     }
     const state = classifyAwaitingRateCellStateWithWorkflow(
       getBestRateWorkflowModel(displayOrder),
@@ -8315,11 +8317,13 @@ export default function OrdersView({
       return renderRateAmountWithMarkup(selectedRateBase, displayMarked)
     }
 
+    const awaitingFallback = renderAwaitingRateFallback(order, displayOrder, 'full')
+    if (awaitingFallback) return awaitingFallback
+
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
     if (!hasDisplayableBestRate || bestRateBaseCost == null) {
       // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
-      return renderAwaitingRateFallback(order, displayOrder, 'full')
-        ?? <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
+      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
     const markedAmount = applyCarrierMarkup({
       shippingProviderId: getBestRateShippingProviderId(displayOrder),

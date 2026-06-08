@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   buildBatchRecalculateProgress,
   canRetryBatchRecalculateRow,
+  classifyAwaitingRateCellState,
   selectBatchRecalculateOrderIds,
 } from '../web/src/components/Views/orders-parity';
 
@@ -90,6 +91,41 @@ check('blocked batch rows are retryable', canRetryBatchRecalculateRow({ status: 
 check('cleared no-rate batch rows are retryable', canRetryBatchRecalculateRow({ status: 'cleared' }));
 check('updated batch rows are not retryable', !canRetryBatchRecalculateRow({ status: 'updated' }));
 check('running batch rows are not retryable', !canRetryBatchRecalculateRow({ status: 'running' }));
+
+const displayableRateCellInput = {
+  hasDims: true,
+  hasWeight: true,
+  hasDisplayableBestRate: true,
+  isCalculatingBestRate: false,
+  resolvedNoRate: false,
+  resolvedError: false,
+  hasCarrierContext: true,
+  accountsLoading: false,
+  isAutoRatingActive: true,
+};
+
+check('batch pending hides stale saved awaiting best-rate values',
+  classifyAwaitingRateCellState({
+    ...displayableRateCellInput,
+    batchRecalculateStatus: 'pending',
+  }) === 'pending');
+check('batch running hides stale saved awaiting best-rate values',
+  classifyAwaitingRateCellState({
+    ...displayableRateCellInput,
+    batchRecalculateStatus: 'running',
+  }) === 'pending');
+check('add-dims wins over batch pending for non-rateable rows',
+  classifyAwaitingRateCellState({
+    ...displayableRateCellInput,
+    hasDisplayableBestRate: false,
+    hasDims: false,
+    batchRecalculateStatus: 'pending',
+  }) === 'add-dims');
+check('finalized batch rows can render their current displayable rate',
+  classifyAwaitingRateCellState({
+    ...displayableRateCellInput,
+    batchRecalculateStatus: 'updated',
+  }) === 'ready');
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const batchStart = ordersView.indexOf('async function runBatchRecalculateOrder(');

@@ -711,6 +711,19 @@ export type AwaitingRateCellState =
   | 'calculating' // a stale saved rate is being refreshed (bounded spinner)
   | 'pending' // rate request queued / in flight (bounded spinner)
 
+export type BatchRecalculateRowStatus =
+  | 'pending'
+  | 'running'
+  | 'updated'
+  | 'cleared'
+  | 'blocked'
+  | 'timed-out'
+  | 'skipped'
+
+export function batchRecalculateStatusIsInFlight(status?: BatchRecalculateRowStatus | null): boolean {
+  return status === 'pending' || status === 'running'
+}
+
 export function classifyAwaitingRateCellState(input: {
   hasDims: boolean
   hasWeight: boolean
@@ -722,7 +735,11 @@ export function classifyAwaitingRateCellState(input: {
   hasCarrierContext: boolean
   accountsLoading: boolean
   isAutoRatingActive?: boolean
+  batchRecalculateStatus?: BatchRecalculateRowStatus | null
 }): AwaitingRateCellState {
+  if (batchRecalculateStatusIsInFlight(input.batchRecalculateStatus)) {
+    return (!input.hasDims || !input.hasWeight) ? 'add-dims' : 'pending'
+  }
   if (input.hasDisplayableBestRate) return 'ready'
   if (!input.hasDims || !input.hasWeight) return 'add-dims'
   // A resolved error/no-rate is TERMINAL — never a spinner. Error is checked
@@ -775,10 +792,13 @@ export function classifyAwaitingRateCellStateWithWorkflow(
   fallbackInput: AwaitingRateCellStateInput,
 ): AwaitingRateCellState {
   if (!workflow?.bestRateState) return classifyAwaitingRateCellState(fallbackInput)
-  // PS-119: missing/incomplete dims or weight is an ACTIONABLE "Add Dims" state and must
-  // win over backend workflow states like 'missing' (-> unavailable) or 'blocked'
-  // (-> error). It should never read as "Rate unavailable" when the real problem is
-  // missing shipment inputs. A displayable best rate still wins (the order IS rateable).
+  // PS-122: during batch recalculation, missing/incomplete dims or weight is an
+  // actionable "Add Dims" state and must win over the per-row spinner.
+  if (batchRecalculateStatusIsInFlight(fallbackInput.batchRecalculateStatus)) {
+    return (!fallbackInput.hasDims || !fallbackInput.hasWeight) ? 'add-dims' : 'pending'
+  }
+  // PS-119: without an active batch, preserve the saved-rate display contract:
+  // a displayable proven rate still wins, but otherwise missing inputs are actionable.
   if (!fallbackInput.hasDisplayableBestRate && (!fallbackInput.hasDims || !fallbackInput.hasWeight)) {
     return 'add-dims'
   }
@@ -976,15 +996,6 @@ export function planBrowseRateReconcile(input: {
 }
 
 export type BatchRecalculateScope = 'selected' | 'filtered'
-
-export type BatchRecalculateRowStatus =
-  | 'pending'
-  | 'running'
-  | 'updated'
-  | 'cleared'
-  | 'blocked'
-  | 'timed-out'
-  | 'skipped'
 
 export type BatchRecalculateRowState = {
   status: BatchRecalculateRowStatus
