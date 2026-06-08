@@ -5474,6 +5474,27 @@ export default function OrdersView({
     )
   }
 
+  // PS-111: completeness is BACKEND-OWNED. Prefer the backend-stamped
+  // `bestRate.isComplete`; otherwise derive it from the backend carrier statuses
+  // (complete only when no carrier is still loading or errored). The frontend must
+  // NOT assert `isComplete: true` just because a rate exists — a rate found while a
+  // carrier failed/loaded is partial, and the workflow status must reflect that.
+  function deriveBackendBestRateComplete(
+    response: Record<string, unknown> | null | undefined,
+    rate?: Record<string, unknown> | null,
+  ): boolean {
+    const stamped = toRecord(rate)?.isComplete
+    if (typeof stamped === 'boolean') return stamped
+    const statuses = Array.isArray(response?.carrierStatuses)
+      ? response!.carrierStatuses as Array<Record<string, unknown>>
+      : []
+    if (!statuses.length) return false
+    return statuses.every((status) => {
+      const value = toStringValue(toRecord(status)?.status)
+      return value !== 'loading' && value !== 'error'
+    })
+  }
+
   function withRateRequestMetadata(
     rate: Record<string, unknown>,
     request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
@@ -6173,9 +6194,12 @@ export default function OrdersView({
         const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
 
         const bestRate = toRecord(response?.bestRate)
+        // PS-111: backend owns completeness — do not assert isComplete:true just
+        // because a rate exists. A rate found while a carrier failed/loaded is partial.
+        const backendComplete = deriveBackendBestRateComplete(response, bestRate)
         if (bestRate) {
           const bestRateWithMetadata = withRateRequestMetadata(bestRate, request, {
-            isComplete: true,
+            isComplete: backendComplete,
             rateCount: rates.length,
             matchType: 'live',
             requestFingerprint: getBackendRateResponseFingerprint(response, bestRate),
@@ -6198,7 +6222,7 @@ export default function OrdersView({
         // and cancels the in-flight fetch, but the row must still resolve.
         {
           const settledRate = bestRate
-            ? withRateRequestMetadata(bestRate, request, { isComplete: true, rateCount: rates.length, matchType: 'live' })
+            ? withRateRequestMetadata(bestRate, request, { isComplete: backendComplete, rateCount: rates.length, matchType: 'live' })
             : null
           const settled = planSettledAutoRate({
             requestKey: request.key,

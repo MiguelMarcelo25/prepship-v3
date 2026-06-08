@@ -118,6 +118,23 @@ function isFreshAt(expiresAt: string | null, now: Date): boolean {
   return Number.isFinite(expiresMs) && expiresMs > now.getTime();
 }
 
+/**
+ * PS-111 — canonical owner of "is the best rate COMPLETE?" A best rate is complete
+ * only when every eligible carrier reached a TERMINAL result (live / cached / empty
+ * /unavailable / blocked) — never while a carrier is still `loading`, and never when
+ * a carrier `error`ed. The backend stamps this onto the saved/returned best rate so
+ * the frontend consumes it instead of asserting completeness itself. Empty input is
+ * NOT complete (nothing was actually rated yet).
+ */
+export function isBestRateComplete(
+  carrierStatuses: ReadonlyArray<Pick<BestRateWorkflowCarrierStatus, 'status'>> | null | undefined,
+): boolean {
+  if (!Array.isArray(carrierStatuses) || carrierStatuses.length === 0) return false;
+  return carrierStatuses.every(
+    (status) => status.status !== 'loading' && status.status !== 'error',
+  );
+}
+
 function sanitizeCarrierStatus(status: BestRateWorkflowCarrierStatus): BestRateWorkflowCarrierStatus {
   const safeStatus: BestRateWorkflowCarrierStatusValue =
     status.status === 'live' ||
