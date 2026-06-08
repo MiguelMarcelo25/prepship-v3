@@ -8076,7 +8076,22 @@ export default function OrdersView({
       whiteSpace: 'nowrap',
     }
     if (state === 'add-dims') {
-      return <span data-rate-state="add-dims" style={muted}>&mdash; add dims</span>
+      // PS-119: missing/incomplete dims or weight is an ACTIONABLE input-needed state —
+      // never a carrier/rate failure. Route the operator straight to the order's
+      // detail panel (where dims/weight are edited) instead of a dead "Rate unavailable".
+      return variant === 'compact' ? (
+        <span data-rate-state="add-dims" title="Add dimensions / weight to rate this order" style={muted}>&mdash; add dims</span>
+      ) : (
+        <button
+          type="button"
+          data-rate-state="add-dims"
+          title="Add dimensions / weight to rate this order"
+          style={linkBtn}
+          onClick={() => onActiveOrderIdChange?.(order.orderId)}
+        >
+          Add dims
+        </button>
+      )
     }
     const batchRow = batchRecalculateRows[order.orderId]
     if (batchRow?.status === 'pending' || batchRow?.status === 'running') {

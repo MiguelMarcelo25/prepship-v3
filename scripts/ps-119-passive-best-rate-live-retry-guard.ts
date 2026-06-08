@@ -77,6 +77,8 @@ check('passive does a guarded live retry (cachedNegativeNeedsLiveRetry -> forceL
     && /\.\.\.baseRateRequest,\s*forceLive: true,\s*forceRefresh: true/.test(ordersView), true);
 check('passive still persists null only AFTER the (possibly retried) response',
   /apiClient\.saveOrderBestRate\(order\.orderId, null, request\.dimsLabel\)/.test(ordersView), true);
+check('add-dims cell is actionable (opens the order detail panel, not a dead state)',
+  /data-rate-state="add-dims"[\s\S]{0,200}onClick=\{\(\) => onActiveOrderIdChange\?\.\(order\.orderId\)\}/.test(ordersView), true);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-119 passive best-rate live-retry guard (${failures} failing)`);
