@@ -16,6 +16,7 @@ function check(name: string, ok: boolean) {
 }
 
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+const rateBrowserModal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 
@@ -35,6 +36,12 @@ const browseRouteStart = ratesRoute.indexOf("app.post('/browse'");
 const browseRouteEnd = ratesRoute.indexOf('\n// v2-parity:', browseRouteStart);
 const browseRouteBlock = browseRouteStart >= 0 && browseRouteEnd > browseRouteStart
   ? ratesRoute.slice(browseRouteStart, browseRouteEnd)
+  : '';
+
+const rateBrowserCallStart = rateBrowserModal.indexOf('const browseResult = await apiClient.browseRates({');
+const rateBrowserCallEnd = rateBrowserModal.indexOf('\n      });', rateBrowserCallStart);
+const rateBrowserCallBlock = rateBrowserCallStart >= 0 && rateBrowserCallEnd > rateBrowserCallStart
+  ? rateBrowserModal.slice(rateBrowserCallStart, rateBrowserCallEnd)
   : '';
 
 check(
@@ -75,6 +82,12 @@ check(
     /directCarrierDiagnostics/.test(browseRouteBlock) &&
     /directCarrierErrors/.test(browseRouteBlock) &&
     /directCarrierMetas/.test(browseRouteBlock),
+);
+
+check(
+  'manual Rate Browser opts into backend-visible direct carriers for table/panel parity',
+  rateBrowserCallBlock.length > 0 &&
+    /includeVisibleDirectCarriers:\s*true/.test(rateBrowserCallBlock),
 );
 
 if (failures > 0) {

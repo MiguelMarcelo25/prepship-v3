@@ -1275,6 +1275,7 @@ export default function RateBrowserModal({
           toOptionalString(order?.external_order_id) ??
           toOptionalString(order?.orderNumber) ??
           undefined,
+        includeVisibleDirectCarriers: true,
         cachedOnly: options.cachedOnly === true,
         forceLive: options.forceLive === true,
         forceRefresh: options.forceLive === true,
