@@ -6779,68 +6779,8 @@ export default function OrdersView({
     }
 
     setRateBrowserOpen(true)
-    setRateBrowserLoading(true)
-    try {
-      // PS-082 — quote Browse Rates under the table's EXACT request conditions
-      // (residential / HUGRAB insurance / carrier-account set) when available, so
-      // the modal best and the table Best Rate agree, and any rate we adopt is
-      // honest for the conditions the label will actually use (PS-078). Falls
-      // back to the panel/order context when there's no auto-request yet (e.g.
-      // dims/weight not set).
-      const request = getAutoBestRateRequest(panelOrder)
-      const fallbackDims = getPanelDims()
-      const payload = await apiClient.fetchOrderDims(panelOrder.orderId)
-      const weightOz = request?.weightOz || getPanelWeightOz() || (panelOrder.weight?.value ?? 0)
-      const length = request?.dims.length || fallbackDims.length || payload.dims?.length || getDimensions(panelOrder, panelDetail)?.length || 0
-      const width = request?.dims.width || fallbackDims.width || payload.dims?.width || getDimensions(panelOrder, panelDetail)?.width || 0
-      const height = request?.dims.height || fallbackDims.height || payload.dims?.height || getDimensions(panelOrder, panelDetail)?.height || 0
-      const shipTo = request?.shipTo ?? getShipTo(panelOrder, panelDetail)
-      const response = await apiClient.browseRates({
-        weightOz,
-        toZip: shipTo.postalCode ?? '',
-        toCountry: shipTo.country ?? 'US',
-        toState: shipTo.state ?? undefined,
-        toCity: shipTo.city ?? undefined,
-        dimsL: length, dimsW: width, dimsH: height,
-        residential: request ? true : Boolean(panelOrder.residential ?? panelOrder.sourceResidential),
-        carrierIds: request?.carrierIds.length ? request.carrierIds : undefined,
-        storeId: panelOrder.storeId,
-        clientId: panelOrder.clientId,
-        confirmation: request?.confirmation ?? normalizeConfirmationForRates(panelForm.confirmation),
-        insuranceProvider: request?.insuranceProvider,
-        insuredValue: request?.insuredValue,
-        orderId: panelOrder.orderId,
-        orderNumber: panelOrder.orderNumber ?? undefined,
-        externalOrderId:
-          panelOrder.externalOrderId ??
-          panelOrder.external_order_id ??
-          panelOrder.orderNumber ??
-          undefined,
-        forceLive: true,
-        forceRefresh: true,
-      })
-      // Remap ShipStation v2 rate shape → v2-legacy shape the panel expects.
-      const rates = Array.isArray(response?.rates) ? response.rates : []
-      setRateBrowserRates(rates)
-
-      // PS-082 — reconcile the table's Best Rate + selected service to the LIVE
-      // best (the cheapest rate just shown in the modal). Persisted under the
-      // table's exact request fingerprint so it shows immediately, survives
-      // reload, and won't get re-flipped by the next passive pass. Only writes
-      // when the live best is a usable rate AND differs from the cached best.
-      if (request) {
-        const strictResponse = { ...(response ?? {}), bestRate: response?.bestRate }
-        await applyStrictBestRateResponse(panelOrder, request, strictResponse, {
-          updatePanel: true,
-          refetch: true,
-        })
-      }
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to browse rates', 'error')
-      setRateBrowserRates([])
-    } finally {
-      setRateBrowserLoading(false)
-    }
+    setRateBrowserRates([])
+    setRateBrowserLoading(false)
   }
 
   async function recalculateBestRate() {

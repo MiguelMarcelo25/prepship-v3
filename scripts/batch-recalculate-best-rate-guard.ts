@@ -155,9 +155,13 @@ const rateBrowserEnd = ordersView.indexOf('\n  async function recalculateBestRat
 const rateBrowserBlock = rateBrowserStart >= 0 && rateBrowserEnd > rateBrowserStart
   ? ordersView.slice(rateBrowserStart, rateBrowserEnd)
   : '';
-check('Browse Rates uses strict browseRates source', /apiClient\.browseRates/.test(rateBrowserBlock));
+const rateBrowserModalStart = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+check('Browse Rates open avoids duplicate parent live browse source', !/apiClient\.browseRates/.test(rateBrowserBlock));
 check('Browse Rates no longer uses fetchRates fallback source', !/apiClient\.fetchRates/.test(rateBrowserBlock));
-check('Browse Rates reconciles from backend response bestRate', /response\?\.bestRate/.test(rateBrowserBlock));
+check('Browse Rates modal owns strict live browse trigger',
+  /onClick=\{\(\) => void browseRates\(undefined, \{ forceLive: true \}\)\}/.test(rateBrowserModalStart));
+check('Browse Rates modal applies backend best-rate callback',
+  /onBestRateResolved/.test(ordersView) && /const applied = best \? toAppliedRate\(best\) : null/.test(rateBrowserModalStart));
 
 const bestRateProviderStart = ordersView.indexOf('function getBestRateShippingProviderId(');
 const bestRateProviderEnd = ordersView.indexOf('\nfunction getBestRateServiceCode', bestRateProviderStart);

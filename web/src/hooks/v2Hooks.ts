@@ -121,12 +121,22 @@ function normalizeRateForV2(value: unknown): Record<string, unknown> | null {
   if (!rate) return null;
   const shipping = rate.shipping_amount as Record<string, unknown> | undefined;
   const other = rate.other_amount as Record<string, unknown> | undefined;
+  const confirmation = rate.confirmation_amount as Record<string, unknown> | undefined;
+  const insuranceAmount = rate.insurance_amount as Record<string, unknown> | undefined;
   const shipmentCost =
     toFiniteNumber(rate.shipmentCost) ??
     toFiniteNumber(shipping?.amount) ??
     toFiniteNumber(rate.cost) ??
     null;
-  const otherCost = toFiniteNumber(rate.otherCost) ?? toFiniteNumber(other?.amount) ?? 0;
+  const otherAmountCost = toFiniteNumber(other?.amount) ?? 0;
+  const confirmationAmountCost = toFiniteNumber(confirmation?.amount) ?? 0;
+  const insuranceAmountCost = toFiniteNumber(insuranceAmount?.amount) ?? 0;
+  const componentOtherCost = otherAmountCost + confirmationAmountCost + insuranceAmountCost;
+  const storedOtherCost = toFiniteNumber(rate.otherCost);
+  const otherCost =
+    storedOtherCost != null
+      ? Math.max(storedOtherCost, componentOtherCost)
+      : componentOtherCost;
   const cost = toFiniteNumber(rate.cost) ?? (shipmentCost != null ? shipmentCost + otherCost : null);
 
   return {
@@ -244,9 +254,19 @@ function transformOrderRowV4toV2(
     const num = (v: unknown) => (typeof v === 'number' ? v : null);
     const ship = bestRateJson.shipping_amount as Record<string, unknown> | undefined;
     const other = bestRateJson.other_amount as Record<string, unknown> | undefined;
+    const confirmationAmount = bestRateJson.confirmation_amount as Record<string, unknown> | undefined;
+    const insuranceAmount = bestRateJson.insurance_amount as Record<string, unknown> | undefined;
     const shipmentCost =
       num(ship?.amount) ?? num(bestRateJson.shipmentCost) ?? num(bestRateJson.cost) ?? 0;
-    const otherCost = num(other?.amount) ?? num(bestRateJson.otherCost) ?? 0;
+    const otherAmountCost = num(other?.amount) ?? 0;
+    const confirmationAmountCost = num(confirmationAmount?.amount) ?? 0;
+    const insuranceAmountCost = num(insuranceAmount?.amount) ?? 0;
+    const componentOtherCost = otherAmountCost + confirmationAmountCost + insuranceAmountCost;
+    const storedOtherCost = num(bestRateJson.otherCost);
+    const otherCost =
+      storedOtherCost != null
+        ? Math.max(storedOtherCost, componentOtherCost)
+        : componentOtherCost;
     return {
       carrierCode: (bestRateJson.carrier_code as string) ?? (bestRateJson.carrierCode as string) ?? null,
       serviceCode: (bestRateJson.service_code as string) ?? (bestRateJson.serviceCode as string) ?? null,
@@ -265,6 +285,8 @@ function transformOrderRowV4toV2(
       amount: shipmentCost + otherCost,
       shipmentCost,
       otherCost,
+      insuranceCost: bestRateJson.insuranceCost ?? (insuranceAmountCost > 0 ? insuranceAmountCost : undefined),
+      insuranceProvenance: bestRateJson.insuranceProvenance,
       // Keep the raw object under `raw` so anything that peeks at SS v2 fields still works.
       raw: bestRateJson,
     };

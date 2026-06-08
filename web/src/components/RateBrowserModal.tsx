@@ -96,10 +96,17 @@ export type RbAppliedRate = {
   shippingProviderId: number;
   shipmentCost: number;
   otherCost: number;
+  amount?: number;
   carrierNickname?: string;
   confirmation?: RateConfirmation;
   insuranceProvider?: string;
   insuredValue?: number | null;
+  insuranceCost?: unknown;
+  insuranceProvenance?: unknown;
+  insuranceCostUnresolved?: unknown;
+  insuranceCostError?: unknown;
+  insurance_amount?: unknown;
+  raw?: unknown;
   weight?: { lb: number; oz: number };
   dims?: { length: number; width: number; height: number };
 };
@@ -161,6 +168,11 @@ type RateRow = {
   shipmentCost: number;
   otherCost: number;
   amount: number;
+  insuranceCost?: unknown;
+  insuranceProvenance?: unknown;
+  insuranceCostUnresolved?: unknown;
+  insuranceCostError?: unknown;
+  insurance_amount?: unknown;
   raw?: any;
 };
 
@@ -181,6 +193,8 @@ type RateBrowseInfo = {
 type BrowseRateOptions = {
   cachedOnly?: boolean;
   forceLive?: boolean;
+  insuranceProviderOverride?: string;
+  insuredValueOverride?: string | number | null;
 };
 
 function formatCacheAge(ms: number | undefined): string | null {
@@ -501,6 +515,14 @@ function buildOrderBestRateSeed(
     raw.other_amount && typeof raw.other_amount === 'object'
       ? (raw.other_amount as Record<string, unknown>)
       : undefined;
+  const confirmationAmount =
+    raw.confirmation_amount && typeof raw.confirmation_amount === 'object'
+      ? (raw.confirmation_amount as Record<string, unknown>)
+      : undefined;
+  const insuranceAmount =
+    raw.insurance_amount && typeof raw.insurance_amount === 'object'
+      ? (raw.insurance_amount as Record<string, unknown>)
+      : undefined;
   const shipmentCost =
     toFiniteNumber(bestRate.shipmentCost) ??
     toFiniteNumber(raw.shipmentCost) ??
@@ -508,11 +530,15 @@ function buildOrderBestRateSeed(
     toFiniteNumber(raw.cost) ??
     toFiniteNumber(bestRate.amount) ??
     0;
+  const otherAmountCost = toFiniteNumber(otherAmount?.amount) ?? 0;
+  const confirmationAmountCost = toFiniteNumber(confirmationAmount?.amount) ?? 0;
+  const insuranceAmountCost = toFiniteNumber(insuranceAmount?.amount) ?? 0;
+  const componentOtherCost = otherAmountCost + confirmationAmountCost + insuranceAmountCost;
+  const storedOtherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost);
   const otherCost =
-    toFiniteNumber(bestRate.otherCost) ??
-    toFiniteNumber(raw.otherCost) ??
-    toFiniteNumber(otherAmount?.amount) ??
-    0;
+    storedOtherCost != null
+      ? Math.max(storedOtherCost, componentOtherCost)
+      : componentOtherCost;
   const shippingProviderId =
     toFiniteNumber(bestRate.shippingProviderId) ??
     toFiniteNumber(raw.shippingProviderId) ??
@@ -551,6 +577,11 @@ function buildOrderBestRateSeed(
     shipmentCost,
     otherCost,
     amount: shipmentCost + otherCost,
+    insuranceCost: bestRate.insuranceCost ?? raw.insuranceCost ?? (insuranceAmountCost > 0 ? insuranceAmountCost : undefined),
+    insuranceProvenance: bestRate.insuranceProvenance ?? raw.insuranceProvenance,
+    insuranceCostUnresolved: bestRate.insuranceCostUnresolved ?? raw.insuranceCostUnresolved,
+    insuranceCostError: bestRate.insuranceCostError ?? raw.insuranceCostError,
+    insurance_amount: bestRate.insurance_amount ?? raw.insurance_amount,
     raw: bestRate,
   };
 }
@@ -1057,8 +1088,6 @@ export default function RateBrowserModal({
     autoFetchedRef.current = orderId;
     void (async () => {
       await browseRates(undefined, { cachedOnly: true });
-      if (autoFetchedRef.current !== orderId) return;
-      await browseRates(undefined, { forceLive: true });
     })();
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
@@ -1125,11 +1154,13 @@ export default function RateBrowserModal({
     browseSequenceRef.current = requestSeq;
     const totalOz = lbNum * 16 + ozNum;
     const rateConfirmation = normalizeConfirmationForRates(confirmationOverride ?? confirmation);
-    const normalizedInsuranceProvider = insuranceProvider !== 'none' && Number(insuredValue) > 0
-      ? insuranceProvider
+    const effectiveInsuranceProvider = options.insuranceProviderOverride ?? insuranceProvider;
+    const effectiveInsuredValue = options.insuredValueOverride ?? insuredValue;
+    const normalizedInsuranceProvider = effectiveInsuranceProvider !== 'none' && Number(effectiveInsuredValue) > 0
+      ? effectiveInsuranceProvider
       : 'none';
     const normalizedInsuredValue = normalizedInsuranceProvider !== 'none'
-      ? Math.round(Number(insuredValue) * 100) / 100
+      ? Math.round(Number(effectiveInsuredValue) * 100) / 100
       : null;
     setBrowsing(true);
     const seededTestRates = testMode
@@ -1487,6 +1518,28 @@ export default function RateBrowserModal({
     return `${label} · ${suffix}`;
   }
 
+  function currentAppliedInsurance(): Pick<RbAppliedRate, 'insuranceProvider' | 'insuredValue'> {
+    const provider = insuranceProvider !== 'none' && Number(insuredValue) > 0 ? insuranceProvider : 'none';
+    return {
+      insuranceProvider: provider,
+      insuredValue: provider !== 'none' ? Math.round(Number(insuredValue) * 100) / 100 : null,
+    };
+  }
+
+  function rateInsuranceProof(r: RateRow): Pick<
+    RbAppliedRate,
+    'insuranceCost' | 'insuranceProvenance' | 'insuranceCostUnresolved' | 'insuranceCostError' | 'insurance_amount' | 'raw'
+  > {
+    return {
+      insuranceCost: r.insuranceCost ?? r.raw?.insuranceCost,
+      insuranceProvenance: r.insuranceProvenance ?? r.raw?.insuranceProvenance,
+      insuranceCostUnresolved: r.insuranceCostUnresolved ?? r.raw?.insuranceCostUnresolved,
+      insuranceCostError: r.insuranceCostError ?? r.raw?.insuranceCostError,
+      insurance_amount: r.insurance_amount ?? r.raw?.insurance_amount,
+      raw: r.raw ?? r,
+    };
+  }
+
   function handleRateClick(r: RateRow): void {
     const pid =
       typeof r.shippingProviderId === 'number'
@@ -1503,10 +1556,11 @@ export default function RateBrowserModal({
       shippingProviderId: pid,
       shipmentCost: r.shipmentCost,
       otherCost: r.otherCost,
+      amount: r.amount,
       carrierNickname: r.carrierNickname ?? undefined,
       confirmation: normalizeConfirmationForRates(confirmation),
-      insuranceProvider,
-      insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
+      ...currentAppliedInsurance(),
+      ...rateInsuranceProof(r),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     });
@@ -1526,10 +1580,11 @@ export default function RateBrowserModal({
       shippingProviderId: pid,
       shipmentCost: r.shipmentCost,
       otherCost: r.otherCost,
+      amount: r.amount,
       carrierNickname: r.carrierNickname ?? undefined,
       confirmation: normalizeConfirmationForRates(confirmation),
-      insuranceProvider,
-      insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
+      ...currentAppliedInsurance(),
+      ...rateInsuranceProof(r),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     };
@@ -2399,8 +2454,11 @@ export default function RateBrowserModal({
                   <select
                     value={insuranceProvider}
                     onChange={(e) => {
-                      setInsuranceProvider(e.target.value);
-                      if (anyFetched && !browsing) void browseRates(confirmation, { forceLive: true });
+                      const next = e.target.value;
+                      setInsuranceProvider(next);
+                      if (anyFetched && !browsing) {
+                        void browseRates(confirmation, { forceLive: true, insuranceProviderOverride: next });
+                      }
                     }}
                     className="ship-select"
                     style={{ flex: 1 }}
@@ -2416,8 +2474,11 @@ export default function RateBrowserModal({
                     step={0.01}
                     value={insuredValue}
                     onChange={(e) => {
-                      setInsuredValue(e.target.value);
-                      if (anyFetched && !browsing) void browseRates(confirmation, { forceLive: true });
+                      const next = e.target.value;
+                      setInsuredValue(next);
+                      if (anyFetched && !browsing) {
+                        void browseRates(confirmation, { forceLive: true, insuredValueOverride: next });
+                      }
                     }}
                     className="ship-input"
                     placeholder="$0"
