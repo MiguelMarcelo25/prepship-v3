@@ -229,6 +229,7 @@
     "test:ps-077-selected-rate-width": "tsx scripts/ps-077-selected-rate-width-guard.ts",
     "test:ps-079-best-rate-source-of-truth": "tsx scripts/ps-079-best-rate-source-of-truth-guard.ts",
     "test:ps-111-backend-rate-authority": "tsx scripts/ps-111-backend-rate-authority-guard.ts",
+    "check:architecture-source-of-truth": "tsx scripts/check-source-of-truth-canonical-fields.ts",
     "connector:health": "tsx scripts/connector-health-report.ts",
     "order:confirm-status": "tsx scripts/order-confirmation-status.ts",
     "ship-from:report": "tsx scripts/default-ship-from-report.ts",

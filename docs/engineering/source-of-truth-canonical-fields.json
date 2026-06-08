@@ -1,0 +1,128 @@
+{
+  "version": "ps-118-v1",
+  "description": "PS-118 — machine-checkable canonical source-of-truth contract. Each check asserts that a canonical field / owner / guard still lives at its authoritative file (mustContain) and that a forbidden alternate-truth pattern is absent (mustNotContain). Tokens are plain substrings unless prefixed with 're:' (regex). The check FAILS the build if a canonical identifier disappears from its owner or a forbidden UI/fallback pattern becomes the only source of truth.",
+  "checks": [
+    {
+      "id": "orders-tenant-identity",
+      "workflow": "Order identity & client/store scope",
+      "owner": "src/db/schema/orders.ts",
+      "severity": "P0",
+      "mustContain": ["orderNumber", "externalOrderId", "sourceProvider", "sourceAccountId", "clientId", "storeId", "orderStatus"]
+    },
+    {
+      "id": "order-item-identity",
+      "workflow": "Order items / SKU / quantity identity",
+      "owner": "src/db/schema/order-items.ts",
+      "severity": "P0",
+      "mustContain": ["sku", "name", "quantity", "orderId", "lineIndex"]
+    },
+    {
+      "id": "print-queue-multi-sku-identity",
+      "workflow": "Order items — multi-SKU print identity preserves name + qty",
+      "owner": "src/services/print-queue-identity.ts",
+      "severity": "P1",
+      "mustContain": ["headerCardTitle", "UNNAMED_QUEUE_ITEM_LABEL", "resolveQueueLineIdentity"],
+      "mustNotContain": []
+    },
+    {
+      "id": "package-identity",
+      "workflow": "Package / dimensions / defaults identity",
+      "owner": "src/db/schema/shipments.ts",
+      "severity": "P1",
+      "mustContain": ["selectedPackageId", "dimsL", "dimsW", "dimsH", "weightOz"]
+    },
+    {
+      "id": "rate-fingerprint-proof-authority",
+      "workflow": "Rate shopping / Best Rate / selected-rate proof",
+      "owner": "src/services/shipping-workflow/rate-fingerprint.ts",
+      "severity": "P0",
+      "mustContain": ["buildShippingRateRequestFingerprint", "selectedRateAuthorityKey", "validateExactSelectedRate", "assertSelectedRateProofForLabelPurchase", "SelectedRateProofError"]
+    },
+    {
+      "id": "rate-quote-snapshot-backend-owned",
+      "workflow": "Rate shopping — backend-owned quote snapshot",
+      "owner": "src/services/shipping-workflow/rate-quote-snapshot.ts",
+      "severity": "P0",
+      "mustContain": ["deriveRateQuoteId", "resolveRateQuoteForPurchase", "RATE_QUOTE_SNAPSHOT_TTL_MS"]
+    },
+    {
+      "id": "best-rate-completeness-backend-owned",
+      "workflow": "Best Rate — completeness is backend-owned (not UI)",
+      "owner": "src/services/shipping-workflow/best-rate-workflow-dto.ts",
+      "severity": "P0",
+      "mustContain": ["isBestRateComplete", "partial_carrier_failure", "buildBestRateWorkflowDto"]
+    },
+    {
+      "id": "best-rate-dto-fields",
+      "workflow": "Best Rate — DTO exposed to UI",
+      "owner": "src/services/order-rate-dto.ts",
+      "severity": "P1",
+      "mustContain": ["isComplete", "requestFingerprint", "rateQuoteId", "selectedRateKey", "carrierCode", "serviceCode"]
+    },
+    {
+      "id": "label-purchase-requires-proof",
+      "workflow": "Label purchase requires selected-rate proof",
+      "owner": "src/services/labels.ts",
+      "severity": "P0",
+      "mustContain": ["assertLabelPurchaseRateSelection", "re:body\\.testLabel === true", "findActiveLabelForOrder"]
+    },
+    {
+      "id": "shipment-persistence-links-tenant",
+      "workflow": "Shipment persistence + tracking linkage",
+      "owner": "src/db/schema/shipments.ts",
+      "severity": "P0",
+      "mustContain": ["orderId", "clientId", "trackingNumber", "labelShipmentId", "providerAccountId", "selectedRateJson", "carrierCode", "serviceCode"]
+    },
+    {
+      "id": "print-queue-durable-identity",
+      "workflow": "Print Queue durability + queued-label identity",
+      "owner": "src/db/schema/print-queue.ts",
+      "severity": "P1",
+      "mustContain": ["orderId", "clientId", "labelUrl", "skuGroupId", "multiSkuData", "status"]
+    },
+    {
+      "id": "fulfillment-outbox-lifecycle",
+      "workflow": "Fulfillment outbox / marketplace confirmation lifecycle",
+      "owner": "src/services/fulfillment/outbox.ts",
+      "severity": "P0",
+      "mustContain": ["enqueueShipmentConfirmation", "processFulfillmentOutboxOnce", "not_required", "not_supported", "succeeded", "failed"]
+    },
+    {
+      "id": "inventory-kill-switch-and-dedup",
+      "workflow": "Inventory deduction + ledger movements",
+      "owner": "src/services/fulfillment-deductions.ts",
+      "severity": "P0",
+      "mustContain": ["INVENTORY_AUTO_DEDUCT", "isInventoryAutoDeductEnabled", "inventoryLedger"]
+    },
+    {
+      "id": "inventory-ledger-canonical-source",
+      "workflow": "Inventory ledger links canonical order/source",
+      "owner": "src/db/schema/inventory.ts",
+      "severity": "P1",
+      "mustContain": ["inventoryLedger", "orderId", "sku"]
+    },
+    {
+      "id": "billing-line-links",
+      "workflow": "Billing line items linkage",
+      "owner": "src/services/billing.ts",
+      "severity": "P0",
+      "mustContain": ["billingLineItems", "shipmentId", "orderId", "clientId", "shipping_missing"]
+    },
+    {
+      "id": "tenant-scope-credentials",
+      "workflow": "Client / tenant scope + credentials",
+      "owner": "src/db/schema/clients.ts",
+      "severity": "P0",
+      "mustContain": ["storeIds", "ssApiKeyV2", "isTest", "rateSourceClientId"]
+    }
+  ],
+  "uiOwnedTruthGuards": {
+    "description": "Frontend must NOT own backend-critical truth. These are covered by dedicated guards; PS-118 references them so the gate notes their existence.",
+    "references": [
+      "test:ps-103-remove-frontend-fingerprint-authority (frontend does not mint rate fingerprints/proofs)",
+      "test:ps-111-backend-rate-authority (best-rate completeness is backend-owned)",
+      "test:ps-079-best-rate-source-of-truth (frontend consumes backend bestRate)",
+      "test:selected-rate-proof-boundary (label purchase requires backend-issued proof)"
+    ]
+  }
+}
