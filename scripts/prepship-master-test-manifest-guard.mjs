@@ -7,7 +7,11 @@
 //  - the known bug-capture regression entries are present and protected
 //  - profiles resolve to non-empty safe command sets
 
-import { buildManifest, loadPackageScripts, DANGEROUS_COMMANDS, PROFILES } from './prepship-master-test-manifest.mjs';
+import { buildManifest, loadPackageScripts, DANGEROUS_COMMANDS, PROFILES, isNestedAggregate } from './prepship-master-test-manifest.mjs';
+
+// PS-110 — the default fast/safe gates. `live-readonly` is opt-in and may contain
+// live-DB read-only commands, so it is NOT a default profile.
+const DEFAULT_PROFILES = ['quick', 'master', 'shipping', 'browser', 'all-safe'];
 
 let failures = 0;
 function check(name, condition) {
@@ -57,6 +61,44 @@ check(
   'parameter-required marketplace smoke is excluded from default profiles',
   Boolean(marketplaceSmoke && marketplaceSmoke.profiles.length === 0),
 );
+
+// ── PS-110 — leaf-only, no-recursion, no-nested-aggregate, live-isolation ─────
+for (const profile of DEFAULT_PROFILES) {
+  const inProfile = manifest.filter((e) => e.profiles.includes(profile));
+
+  // (a) No runner command (test:master*) may appear in a default profile.
+  const recursive = inProfile.filter((e) => /^test:master(?::|$)/.test(e.command)).map((e) => e.command);
+  check(`profile "${profile}" has NO recursive test:master* command`, recursive.length === 0);
+  if (recursive.length) console.error('   recursive:', recursive.join(', '));
+
+  // (b) No nested AGGREGATE (full-site / full-workflow / 3+ npm-run chains).
+  const nested = inProfile.filter((e) => e.isNestedAggregate || isNestedAggregate(e.command, e.script)).map((e) => e.command);
+  check(`profile "${profile}" has NO nested aggregate command`, nested.length === 0);
+  if (nested.length) console.error('   nested aggregates:', nested.join(', '));
+
+  // (c) No live/order/provider-dependent command runs in a default gate unless a
+  // safe-args wrapper makes it offline.
+  const live = inProfile
+    .filter((e) => (e.requiresLiveData || e.requiresOrderId || e.requiresProviderAccess) && (!e.args || e.args.length === 0))
+    .map((e) => e.command);
+  check(`profile "${profile}" has NO live/order/provider-dependent command`, live.length === 0);
+  if (live.length) console.error('   live-dependent:', live.join(', '));
+}
+
+// (d) A parameter-required command (order/provider) is default-safe ONLY when it
+// carries safe args; otherwise it must be in NO default profile.
+const paramRequiredLeaked = manifest.filter(
+  (e) => (e.requiresOrderId || e.requiresProviderAccess)
+    && (!e.args || e.args.length === 0)
+    && DEFAULT_PROFILES.some((p) => e.profiles.includes(p)),
+);
+check('no parameter-required command is default-safe without safe args', paramRequiredLeaked.length === 0);
+
+// (e) live-readonly commands never leak into a default profile.
+const liveReadonlyLeaked = manifest.filter(
+  (e) => e.profiles.includes('live-readonly') && DEFAULT_PROFILES.some((p) => e.profiles.includes(p)),
+);
+check('live-readonly commands are excluded from every default profile', liveReadonlyLeaked.length === 0);
 
 // 5. Bug-capture policy: recent regression guards are present + protected.
 const requiredRegressions = [
