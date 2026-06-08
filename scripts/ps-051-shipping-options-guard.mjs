@@ -17,6 +17,7 @@ const [
   ratesService,
   labelsService,
   shipstationLabels,
+  rateFingerprint,
   ordersView,
   rateBrowser,
   apiClient,
@@ -39,6 +40,7 @@ const [
   read('src/services/rates.ts'),
   read('src/services/labels.ts'),
   read('src/lib/shipstation/labels.ts'),
+  read('src/services/shipping-workflow/rate-fingerprint.ts'),
   read('web/src/components/Views/OrdersView.tsx'),
   read('web/src/components/RateBrowserModal.tsx'),
   read('web/src/lib/v2-apiClient.ts'),
@@ -67,11 +69,11 @@ assert(
 )
 
 assert(
-  ratesService.includes('normalizeShippingOptions') &&
+    ratesService.includes('normalizeShippingOptions') &&
     ratesService.includes('insuranceProvider') &&
     ratesService.includes('insuredValue') &&
-    ratesService.includes('ip=') &&
-    ratesService.includes('iv=') &&
+    rateFingerprint.includes('ip=') &&
+    rateFingerprint.includes('iv=') &&
     ratesService.includes('body.insurance_provider') &&
     ratesService.includes('body.insured_value') &&
     ratesService.includes('Number(rate.insurance_amount?.amount ?? 0)'),

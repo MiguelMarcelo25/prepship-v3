@@ -967,6 +967,7 @@ export async function fetchLiveRatesWithDiagnostics(
   const { resolved: filtered, unresolved } = enrichRatesWithInsuranceCost(eligible, {
     insuranceProvider: input.insuranceProvider,
     insuredValue: input.insuredValue,
+    toCountry: input.toCountry,
   });
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
   const filteredCounts = new Map<string, number>();

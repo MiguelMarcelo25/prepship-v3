@@ -63,7 +63,7 @@ export type RateInsuranceCostMeta = {
 
 // ── Configuration ──────────────────────────────────────────────────────────
 // Rate-time premium source. `schedule` (default) computes the premium from the
-// configurable ParcelGuard schedule when the estimate returns 0. `estimate_only`
+// backend-owned ParcelGuard carrier/category schedule when the estimate returns 0. `estimate_only`
 // trusts only a non-zero estimate and marks ParcelGuard zeros unresolved. `block`
 // forces every ParcelGuard rate that lacks a non-zero estimate premium to unresolved.
 export type ParcelGuardRateTimeSource = 'schedule' | 'estimate_only' | 'block';
@@ -79,26 +79,18 @@ export function parcelGuardRateTimeSource(): ParcelGuardRateTimeSource {
   return 'schedule';
 }
 
-// Documented InsureShield/ParcelGuard base rate: ~$1.00 per $100 of declared value,
-// with a per-shipment minimum. These are DEFAULTS — DJ pins the live-confirmed figure
-// via env once Phase-1 live confirmation is done. They are deliberately NOT the observed
-// billed premium, so no magic billed constant lives in runtime (the observed calibration
-// value appears only in the Phase-4 test fixture).
-const PARCELGUARD_DEFAULT_PER_HUNDRED = 1.0;
-const PARCELGUARD_DEFAULT_MINIMUM = 1.0;
+// ShipStation ParcelGuard schedule verified 2026-06-08:
+// USPS domestic: $1.09/$100; non-USPS domestic: $0.99/$100; international: $1.39/$100.
+// Keep this in code rather than a flat env var because one value cannot be correct for
+// USPS, UPS/FedEx, and international shipments at the same time.
+const PARCELGUARD_SCHEDULE_VERSION = 'shipstation-parcelguard-2026-06-08-v1';
+const PARCELGUARD_DOMESTIC_USPS_PER_HUNDRED = 1.09;
+const PARCELGUARD_DOMESTIC_NON_USPS_PER_HUNDRED = 0.99;
+const PARCELGUARD_INTERNATIONAL_PER_HUNDRED = 1.39;
 
 function finite(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
-}
-
-export function parcelGuardScheduleConfig(): { perHundred: number; minimum: number } {
-  const perHundred = finite(readEnv('PARCELGUARD_PREMIUM_PER_100')) ?? PARCELGUARD_DEFAULT_PER_HUNDRED;
-  const minimum = finite(readEnv('PARCELGUARD_PREMIUM_MIN')) ?? PARCELGUARD_DEFAULT_MINIMUM;
-  return {
-    perHundred: Math.max(0, perHundred),
-    minimum: Math.max(0, minimum),
-  };
 }
 
 /** Whether the active schedule has been pinned to a live-confirmed figure
@@ -107,17 +99,48 @@ export function parcelGuardScheduleConfirmed(): boolean {
   return (readEnv('PARCELGUARD_PREMIUM_CONFIRMED') ?? '').toLowerCase() === 'true';
 }
 
+type ParcelGuardScheduleRateLike = {
+  carrier_code?: string | null;
+  carrierCode?: string | null;
+};
+
+function normalizeCarrierCode(rate?: ParcelGuardScheduleRateLike | null): string {
+  return String(rate?.carrier_code ?? rate?.carrierCode ?? '').trim().toLowerCase();
+}
+
+function normalizeCountryCode(value?: string | null): string {
+  return String(value ?? 'US').trim().toUpperCase();
+}
+
+function isUspsCarrier(rate?: ParcelGuardScheduleRateLike | null): boolean {
+  const carrierCode = normalizeCarrierCode(rate);
+  return carrierCode === 'usps' || carrierCode === 'stamps_com';
+}
+
+function parcelGuardPerHundred(rate?: ParcelGuardScheduleRateLike | null, toCountry?: string | null): number | null {
+  const country = normalizeCountryCode(toCountry);
+  if (country && country !== 'US' && country !== 'USA') return PARCELGUARD_INTERNATIONAL_PER_HUNDRED;
+  const carrierCode = normalizeCarrierCode(rate);
+  if (!carrierCode) return null;
+  return isUspsCarrier(rate) ? PARCELGUARD_DOMESTIC_USPS_PER_HUNDRED : PARCELGUARD_DOMESTIC_NON_USPS_PER_HUNDRED;
+}
+
 /**
- * Compute the ParcelGuard premium for a declared value from the configurable schedule.
- * Formula: ceil(value / 100) increments * perHundred, floored at the minimum. Returns
- * null when the schedule cannot yield a positive premium (treated as unresolved).
+ * Compute the ParcelGuard premium for a declared value from the ShipStation schedule.
+ * Formula: ceil(value / 100) increments * the carrier/category rate. Returns null
+ * when the carrier/country cannot yield a proven premium (treated as unresolved).
  */
-export function parcelGuardScheduledPremium(insuredValue: number): number | null {
+export function parcelGuardScheduledPremium(
+  insuredValue: number,
+  rate?: ParcelGuardScheduleRateLike | null,
+  toCountry?: string | null,
+): number | null {
   const value = finite(insuredValue);
   if (value == null || value <= 0) return null;
-  const { perHundred, minimum } = parcelGuardScheduleConfig();
+  const perHundred = parcelGuardPerHundred(rate, toCountry);
+  if (perHundred == null || perHundred <= 0) return null;
   const increments = Math.max(1, Math.ceil(value / 100));
-  const premium = Math.max(minimum, increments * perHundred);
+  const premium = increments * perHundred;
   if (!(premium > 0)) return null;
   return Number(premium.toFixed(2));
 }
@@ -125,11 +148,9 @@ export function parcelGuardScheduledPremium(insuredValue: number): number | null
 /** Fingerprint of the active rate-time insurance config, so the rate cache busts when
  *  the schedule/source changes materially (PS-108 requirement #4). */
 export function insuranceCostConfigFingerprint(): string {
-  const { perHundred, minimum } = parcelGuardScheduleConfig();
   return [
     `src=${parcelGuardRateTimeSource()}`,
-    `p100=${perHundred}`,
-    `min=${minimum}`,
+    `schedule=${PARCELGUARD_SCHEDULE_VERSION}`,
     `cfm=${parcelGuardScheduleConfirmed() ? 1 : 0}`,
   ].join(',');
 }
@@ -143,6 +164,7 @@ function isParcelGuard(provider: string): boolean {
 type RateLike = {
   insurance_amount?: { currency?: string; amount?: number } | null;
   carrier_code?: string | null;
+  carrierCode?: string | null;
   service_code?: string | null;
 };
 
@@ -156,7 +178,7 @@ type RateLike = {
  *  - non-ParcelGuard + estimate 0 -> resolved 0 (out of PS-108 scope; unchanged behavior)
  */
 export function resolveRateInsurancePremium(
-  ctx: { insuranceProvider?: string | null; insuredValue?: number | null },
+  ctx: { insuranceProvider?: string | null; insuredValue?: number | null; toCountry?: string | null },
   rate: RateLike,
   now: number = Date.now(),
 ): InsuranceCostResolution {
@@ -194,7 +216,7 @@ export function resolveRateInsurancePremium(
 
   const mode = parcelGuardRateTimeSource();
   if (mode === 'schedule') {
-    const premium = parcelGuardScheduledPremium(insuredValue);
+    const premium = parcelGuardScheduledPremium(insuredValue, rate, ctx.toCountry);
     if (premium != null && premium > 0) {
       return {
         status: 'resolved',
@@ -271,7 +293,7 @@ export type EnrichRatesResult<T> = {
  */
 export function enrichRatesWithInsuranceCost<T extends RateLike>(
   rates: T[],
-  ctx: { insuranceProvider?: string | null; insuredValue?: number | null },
+  ctx: { insuranceProvider?: string | null; insuredValue?: number | null; toCountry?: string | null },
   now: number = Date.now(),
 ): EnrichRatesResult<T> {
   const resolved: EnrichedRate<T>[] = [];

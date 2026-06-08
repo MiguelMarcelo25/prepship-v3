@@ -46,11 +46,12 @@ function pickBest(rates: any[]): any {
 }
 
 // ── Observed seed: USPS Ground Advantage, $6.67 postage, estimate insurance_amount=0 ──
-// The observed $1.09 premium is a CALIBRATION fixture only — provided via env, never a
-// runtime constant. We pin the schedule to it to reproduce the exact $7.76 billed total.
+// ShipStation's documented ParcelGuard schedule is carrier/category-specific. The
+// runtime must not depend on a flat .env premium: USPS domestic is $1.09/$100, while
+// non-USPS domestic (UPS/FedEx) is $0.99/$100 and international is $1.39/$100.
 process.env.PARCELGUARD_RATE_TIME_SOURCE = 'schedule';
-process.env.PARCELGUARD_PREMIUM_PER_100 = '1.09';
-process.env.PARCELGUARD_PREMIUM_MIN = '1.09';
+delete process.env.PARCELGUARD_PREMIUM_PER_100;
+delete process.env.PARCELGUARD_PREMIUM_MIN;
 
 const groundAdvantage = () => ({
   rate_id: 'r-ground',
@@ -72,6 +73,33 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('enriched: insured total via rateTotal = $7.76', Number(rateTotal(resolved[0]).toFixed(2)), 7.76);
   check('enriched: audit provenance present', resolved[0]!.insuranceCost?.provenance, 'parcelguard_schedule');
   check('enriched: not flagged unresolved', isRateInsuranceResolved(resolved[0]), true);
+}
+
+// 1b. ParcelGuard schedule is carrier/category-aware and does not rely on .env.
+{
+  const upsGround = {
+    ...groundAdvantage(),
+    rate_id: 'r-ups-ground',
+    carrier_id: 'se-ups',
+    carrier_code: 'ups',
+    service_code: 'ups_ground',
+    service_type: 'UPS Ground',
+  };
+  const fedexGround = {
+    ...groundAdvantage(),
+    rate_id: 'r-fedex-ground',
+    carrier_id: 'se-fedex',
+    carrier_code: 'fedex',
+    service_code: 'fedex_ground',
+    service_type: 'FedEx Ground',
+  };
+  const { resolved } = enrichRatesWithInsuranceCost([groundAdvantage(), upsGround, fedexGround], ctx100);
+  check('schedule: USPS domestic $100 -> $1.09', resolved.find((r) => r.carrier_code === 'stamps_com')?.insurance_amount?.amount, 1.09);
+  check('schedule: UPS domestic $100 -> $0.99', resolved.find((r) => r.carrier_code === 'ups')?.insurance_amount?.amount, 0.99);
+  check('schedule: FedEx domestic $100 -> $0.99', resolved.find((r) => r.carrier_code === 'fedex')?.insurance_amount?.amount, 0.99);
+
+  const international = enrichRatesWithInsuranceCost([groundAdvantage()], { ...ctx100, toCountry: 'CA' });
+  check('schedule: international $100 -> $1.39', international.resolved[0]?.insurance_amount?.amount, 1.39);
 }
 
 // 2. pickBestRate must NOT pick a raw postage-only insured rate over the insured total.
@@ -127,13 +155,14 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
 
 // 6. Schedule math + cache-bust fingerprint.
 {
-  check('schedule: $100 -> 1 increment @1.09', parcelGuardScheduledPremium(100), 1.09);
-  check('schedule: $250 -> 3 increments @1.09', parcelGuardScheduledPremium(250), Number((3 * 1.09).toFixed(2)));
+  check('schedule: USPS $100 -> 1 increment @1.09', parcelGuardScheduledPremium(100, { carrier_code: 'stamps_com' }), 1.09);
+  check('schedule: UPS $250 -> 3 increments @0.99', parcelGuardScheduledPremium(250, { carrier_code: 'ups' }), Number((3 * 0.99).toFixed(2)));
+  check('schedule: international $250 -> 3 increments @1.39', parcelGuardScheduledPremium(250, { carrier_code: 'ups' }, 'CA'), Number((3 * 1.39).toFixed(2)));
   const fpA = insuranceCostConfigFingerprint();
-  process.env.PARCELGUARD_PREMIUM_PER_100 = '1.25';
+  process.env.PARCELGUARD_RATE_TIME_SOURCE = 'block';
   const fpB = insuranceCostConfigFingerprint();
-  check('config fingerprint busts cache when schedule changes', fpA !== fpB, true);
-  process.env.PARCELGUARD_PREMIUM_PER_100 = '1.09';
+  check('config fingerprint busts cache when source mode changes', fpA !== fpB, true);
+  process.env.PARCELGUARD_RATE_TIME_SOURCE = 'schedule';
 }
 
 // 7. Backfill planner — seed order #1247 / se-292074298, idempotent.
@@ -162,11 +191,11 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('backfill: no premium -> not affected', noPremium.affected, false);
 }
 
-// 8. Guardrail: the observed $1.09 must NOT be a hardcoded runtime constant.
+// 8. Guardrail: runtime must not read one flat premium env var for all carriers.
 {
   const enricherSrc = readFileSync('src/services/shipping-workflow/insurance-cost.ts', 'utf8');
-  check('runtime enricher contains no hardcoded 1.09 magic number', /\b1\.09\b/.test(enricherSrc), false);
-  check('runtime default schedule is configurable per-100 (not the observed value)', /PARCELGUARD_DEFAULT_PER_HUNDRED\s*=\s*1\.0\b/.test(enricherSrc), true);
+  check('runtime no longer reads flat PARCELGUARD_PREMIUM_PER_100', /PARCELGUARD_PREMIUM_PER_100/.test(enricherSrc), false);
+  check('runtime no longer reads flat PARCELGUARD_PREMIUM_MIN', /PARCELGUARD_PREMIUM_MIN/.test(enricherSrc), false);
 }
 
 if (failures > 0) {
