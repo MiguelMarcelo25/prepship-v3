@@ -116,6 +116,11 @@ check(
   /operatorInsurance\.insuranceProvider === 'none'[\s\S]{0,300}insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
   true,
 );
+check(
+  'ShipStation HUGRAB auto-rate normalizes carrier insurance to ParcelGuard before ShipStation',
+  /isHugrabShippingContext\(\{ clientId: context\.clientId, storeId: context\.storeId \}\)[\s\S]{0,420}else \{[\s\S]{0,120}insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
+  true,
+);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-072 HUGRAB insurance guard (${failures} failing)`);

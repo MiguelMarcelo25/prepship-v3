@@ -368,12 +368,14 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
   const operatorInsurance = normalizeInsurance(input);
   let insuranceProvider = operatorInsurance.insuranceProvider as string;
   let insuredValue = operatorInsurance.insuredValue;
-  if (
-    operatorInsurance.insuranceProvider === 'none' &&
-    isHugrabShippingContext({ clientId: context.clientId, storeId: context.storeId })
-  ) {
-    insuranceProvider = 'parcelguard';
-    insuredValue = HUGRAB_DEFAULT_INSURED_VALUE;
+  if (isHugrabShippingContext({ clientId: context.clientId, storeId: context.storeId })) {
+    if (operatorInsurance.insuranceProvider === 'none') {
+      insuranceProvider = 'parcelguard';
+      insuredValue = HUGRAB_DEFAULT_INSURED_VALUE;
+    } else {
+      insuranceProvider = 'parcelguard';
+      insuredValue = operatorInsurance.insuredValue;
+    }
   }
 
   return {
