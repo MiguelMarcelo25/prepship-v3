@@ -791,10 +791,20 @@ async function persistCreatedLabel(args: {
   height: number | null;
   selectedPackageId: string | null;
   source: string;
+  insuranceProvider?: string | null;
+  insuredValue?: number | null;
 }): Promise<number> {
   const { created } = args;
   const createdAt = new Date();
   const shipDate = created.shipDate ? new Date(created.shipDate) : createdAt;
+  // PS-108: ShipStation bills the ParcelGuard premium separately (created.insuranceCost,
+  // from the v2 label `insurance_cost`). Persist it in `otherCost` and record the full
+  // breakdown in `selectedRateJson` so the insured total is recoverable and auditable.
+  // `cost`/`labelCost` stay postage-only so existing billing semantics are unchanged;
+  // the billed total is cost + otherCost (mirrors ShipStation v1 shipmentCost+otherCost).
+  const insuranceCost = Number(created.insuranceCost ?? 0);
+  const insuranceProvider = String(args.insuranceProvider ?? 'none').trim().toLowerCase();
+  const insuredValue = Number(args.insuredValue ?? 0) || null;
   const [row] = await db
     .insert(shipments)
     .values({
@@ -811,6 +821,7 @@ async function persistCreatedLabel(args: {
       dimsW: args.width,
       dimsH: args.height,
       cost: created.cost.toFixed(2),
+      otherCost: insuranceCost.toFixed(2),
       labelUrl: created.labelUrl,
       labelCreatedAt: createdAt,
       labelFormat: created.labelFormat ?? 'pdf',
@@ -831,7 +842,13 @@ async function persistCreatedLabel(args: {
         serviceName: created.serviceCode,
         cost: created.cost,
         shipmentCost: created.cost,
-        otherCost: 0,
+        otherCost: insuranceCost,
+        // PS-108 insured-total audit: postage + ParcelGuard premium = billed total.
+        insuranceProvider,
+        insuredValue,
+        insuranceCost,
+        insuranceProvenance: 'shipstation_v2_label',
+        totalCost: Number((created.cost + insuranceCost).toFixed(2)),
       },
       voided: created.voided,
       source: args.source,
@@ -1184,6 +1201,8 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     height,
     selectedPackageId: body.customPackageId ? String(body.customPackageId) : null,
     source: 'prepship_v2',
+    insuranceProvider: options.insuranceProvider,
+    insuredValue: options.insuredValue,
   }));
 
   await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false }));

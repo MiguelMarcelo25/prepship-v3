@@ -40,7 +40,12 @@ export type CreatedExternalLabel = {
   trackingNumber: string | null;
   labelUrl: string | null;
   labelFormat: string | null;
+  /** Postage component only (ShipStation v2 `shipment_cost.amount`). */
   cost: number;
+  /** PS-108: ParcelGuard/insurance premium ShipStation billed for this label
+   *  (v2 `insurance_cost.amount`). Previously discarded, leaving stored cost
+   *  postage-only. Kept separate from `cost` so billing semantics are unchanged. */
+  insuranceCost: number;
   voided: boolean;
   carrierCode: string | null;
   serviceCode: string;
@@ -213,6 +218,10 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
 
   const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
   const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
+  // PS-108: ShipStation v2 returns the ParcelGuard premium as a separate
+  // `insurance_cost` field. Capture it (it was previously dropped, which left the
+  // persisted shipment cost postage-only even for insured HUGRAB labels).
+  const insuranceCost = payload.insurance_cost as Record<string, unknown> | undefined;
   const providerAccountId = stripSePrefix(input.carrierId);
   const shipmentId = stripSePrefix(payload.shipment_id) ?? 0;
   // Per user override `unlock shipped data` on 2026-05-22:
@@ -227,6 +236,7 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
     labelUrl,
     labelFormat: payload.label_format ? String(payload.label_format) : 'pdf',
     cost: Number(shipmentCost?.amount ?? 0),
+    insuranceCost: Number(insuranceCost?.amount ?? 0),
     voided: Boolean(payload.voided),
     carrierCode: payload.carrier_code ? String(payload.carrier_code) : null,
     serviceCode: payload.service_code ? String(payload.service_code) : input.serviceCode,

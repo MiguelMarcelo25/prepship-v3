@@ -31,6 +31,11 @@ import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
 } from './shipping-automation';
+import {
+  enrichRatesWithInsuranceCost,
+  insuranceCostConfigFingerprint,
+  isRateInsuranceResolved,
+} from './shipping-workflow/insurance-cost';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
 
@@ -162,7 +167,9 @@ const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
   60_000,
   Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
 );
-const RATE_CACHE_VERSION = `ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}`;
+// PS-108: include the insurance-cost config fingerprint so the cache busts when the
+// ParcelGuard schedule/source changes materially (no stale premium can be reused).
+const RATE_CACHE_VERSION = `ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}|ins=${insuranceCostConfigFingerprint()}`;
 const RATE_CONFIRMATIONS = new Set([
   'none',
   'delivery',
@@ -466,8 +473,12 @@ function dedupeRates(rates: Rate[], source: string): Rate[] {
 }
 
 function pickBestRate(rates: Rate[]): Rate | null {
-  if (!rates.length) return null;
-  return [...rates].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
+  // PS-108: never auto-select an insured rate whose ParcelGuard premium could not be
+  // proven. Such rates are flagged `insuranceCostUnresolved` by the enricher; excluding
+  // them here guarantees the saved bestRate is never a postage-only insured rate.
+  const selectable = rates.filter((rate) => isRateInsuranceResolved(rate));
+  if (!selectable.length) return null;
+  return [...selectable].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
 }
 
 function rateEligibilityContext(input: Pick<RateInput, 'clientId' | 'storeId'>): ShippingServiceEligibilityContext {
@@ -526,9 +537,10 @@ export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; 
   const bestRateAllowed =
     row.bestRate != null &&
     evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate), shippingOptions, automationRules).allowed;
-  const bestRate = bestRateAllowed
+  const selectable = rates.filter((rate) => isRateInsuranceResolved(rate));
+  const bestRate = bestRateAllowed && isRateInsuranceResolved(row.bestRate)
     ? row.bestRate
-    : [...rates].sort((a, b) => genericRateTotal(a) - genericRateTotal(b))[0] ?? null;
+    : [...selectable].sort((a, b) => genericRateTotal(a) - genericRateTotal(b))[0] ?? null;
   return {
     ...row,
     rates,
@@ -939,7 +951,7 @@ export async function fetchLiveRatesWithDiagnostics(
   // uses shipping_amount only since markups apply at read-time later).
   const eligibilityContext = rateEligibilityContext(input);
   const shippingOptionEligibility = rateShippingOptionEligibilityContext(input);
-  const filtered = dedupeRates(
+  const eligible = dedupeRates(
     filterRatesForShippingServiceEligibility(
       lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null)),
       eligibilityContext,
@@ -948,14 +960,37 @@ export async function fetchLiveRatesWithDiagnostics(
     ),
     'live'
   );
+  // PS-108: enrich insured rates with the authoritative ParcelGuard premium BEFORE
+  // best-rate selection so rateTotal/pickBestRate/cache/proof all see the insured total.
+  // Insured rates whose premium cannot be proven are split out (never selected as raw
+  // postage) and surfaced as an explicit carrier error diagnostic (requirement #6).
+  const { resolved: filtered, unresolved } = enrichRatesWithInsuranceCost(eligible, {
+    insuranceProvider: input.insuranceProvider,
+    insuredValue: input.insuredValue,
+  });
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
   const filteredCounts = new Map<string, number>();
   for (const rate of filtered) {
     filteredCounts.set(rate.carrier_id, (filteredCounts.get(rate.carrier_id) ?? 0) + 1);
   }
+  const unresolvedInsuranceByCarrier = new Map<string, string>();
+  for (const rate of unresolved) {
+    const carrierId = String(rate.carrier_id ?? '');
+    if (carrierId && !unresolvedInsuranceByCarrier.has(carrierId)) {
+      unresolvedInsuranceByCarrier.set(carrierId, rate.insuranceCostError);
+    }
+  }
   const carrierDiagnostics = batches.map(({ carrier, diagnostic }) => {
     if (diagnostic.status !== 'ok') return diagnostic;
     const rateCount = filteredCounts.get(carrier.carrier_id) ?? 0;
+    if (rateCount === 0 && unresolvedInsuranceByCarrier.has(carrier.carrier_id)) {
+      return {
+        ...diagnostic,
+        status: 'failed',
+        rateCount: 0,
+        error: unresolvedInsuranceByCarrier.get(carrier.carrier_id),
+      } satisfies CarrierRateDiagnostic;
+    }
     return {
       ...diagnostic,
       status: rateCount > 0 ? 'ok' : 'empty',
