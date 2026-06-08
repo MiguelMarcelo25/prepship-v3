@@ -73,8 +73,10 @@ check('any carrier ERROR -> NOT complete',
 // ── 3) Backend /browse no longer hardcodes completeness ──────────────────────
 {
   const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
-  check('backend /browse derives completeness via isBestRateComplete(carrierStatuses)',
-    /const bestRateComplete = isBestRateComplete\(carrierStatuses\)/.test(ratesRoute), true);
+  check('backend /browse combines ShipStation + direct-carrier statuses before completeness',
+    /const combinedCarrierStatuses = \[\.\.\.carrierStatuses, \.\.\.directCarrierStatuses\]/.test(ratesRoute), true);
+  check('backend /browse derives completeness via isBestRateComplete(combinedCarrierStatuses)',
+    /const bestRateComplete = isBestRateComplete\(combinedCarrierStatuses\)/.test(ratesRoute), true);
   check('backend /browse stamps the computed completeness onto bestRateMetadata',
     /isComplete: bestRateComplete/.test(ratesRoute), true);
   check('backend /browse no longer hardcodes isComplete: true in bestRateMetadata',

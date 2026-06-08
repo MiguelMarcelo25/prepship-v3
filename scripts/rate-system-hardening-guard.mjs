@@ -78,9 +78,10 @@ assert(
 
 assert(
   client.includes('carrierDiagnostics') &&
-    client.includes("source: 'direct'") &&
-    client.includes("source: 'shipstation'"),
-  'Rate Browser client returns normalized ShipStation and direct-carrier diagnostics',
+    route.includes('combinedCarrierDiagnostics') &&
+    route.includes("source: 'direct'") &&
+    route.includes("source: 'shipstation'"),
+  'Rate Browser preserves backend-normalized ShipStation and direct-carrier diagnostics',
 );
 
 assert(

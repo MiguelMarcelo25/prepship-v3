@@ -4,6 +4,7 @@ import path from 'node:path';
 const root = process.cwd();
 const ordersView = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersView.tsx'), 'utf8');
 const v2ApiClient = fs.readFileSync(path.join(root, 'web/src/lib/v2-apiClient.ts'), 'utf8');
+const ratesRoute = fs.readFileSync(path.join(root, 'src/routes/rates.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const renderBestRatePriceStart = ordersView.indexOf('const renderBestRatePrice = (order: OrderSummaryDto) => {');
 const renderMarginStart = ordersView.indexOf('const renderMargin = (order: OrderSummaryDto) => {');
@@ -95,10 +96,11 @@ assert(
 );
 
 assert(
-  v2ApiClient.includes('const combinedBestRate = combined[0] ?? responseBestRate') &&
-    v2ApiClient.includes("Object.defineProperty(combined, 'bestRate',") &&
-    v2ApiClient.includes('value: combinedBestRate'),
-  'Orders passive rating exposes the cheapest combined ShipStation/direct-carrier rate as bestRate'
+  ratesRoute.includes('combinedRates = dedupeBrowseRates([...filtered, ...directRates.rates])') &&
+    ratesRoute.includes('const cheapest = [...combinedRates].sort') &&
+    v2ApiClient.includes('res?.bestRate') &&
+    !v2ApiClient.includes('const combinedBestRate = combined[0]'),
+  'Orders passive rating preserves the backend-selected cheapest combined ShipStation/direct-carrier bestRate'
 );
 
 if (process.exitCode) {

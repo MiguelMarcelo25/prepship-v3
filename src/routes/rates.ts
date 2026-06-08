@@ -7,6 +7,7 @@ import { rateCache } from '../db/schema/rates';
 import {
   CACHE_TTL_MS,
   getCarrierAccountsForRateContext,
+  getDirectCarrierRatesForRateInput,
   getRates,
   rateCacheKey,
   resolveRateInput,
@@ -249,9 +250,14 @@ const browseBody = rateBody.extend({
   preferredCarrierId: z.string().min(1).optional(),
   forceLive: z.boolean().optional(),
   cachedOnly: z.boolean().optional(),
-  // PS-106: order context so /browse can apply carrier-family eligibility (these
-  // rates are ShipStation-only; direct carriers are merged client-side).
+  // PS-106/PS-124: order context so /browse can apply carrier-family eligibility
+  // and backend-owned direct-carrier combined Best Rate selection.
   orderId: z.number().int().positive().nullable().optional(),
+  externalOrderId: z.string().nullable().optional(),
+  orderNumber: z.string().nullable().optional(),
+  purchaseOrderId: z.string().nullable().optional(),
+  includeVisibleDirectCarriers: z.boolean().optional(),
+  includeAllDirectCarriers: z.boolean().optional(),
 });
 
 function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number }; insurance_amount?: { amount?: number } }): number {
@@ -267,6 +273,21 @@ function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?
   const unique = [...new Set((carrierIds ?? []).filter(Boolean))];
   if (!preferredCarrierId || !unique.includes(preferredCarrierId)) return unique.length ? unique : undefined;
   return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
+}
+
+function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[] {
+  const byKey = new Map<string, T>();
+  for (const rate of rates) {
+    const key = [
+      String(rate.carrier_id ?? rate.carrierId ?? '').toLowerCase(),
+      String(rate.service_code ?? rate.serviceCode ?? rate.service ?? '').toLowerCase(),
+      Number(rate.shipping_amount?.amount ?? rate.shipmentCost ?? rate.cost ?? rate.amount ?? 0).toFixed(4),
+      Number(rate.other_amount?.amount ?? rate.otherCost ?? 0).toFixed(4),
+      String(rate.requestFingerprint ?? rate.cacheKey ?? ''),
+    ].join('|');
+    if (!byKey.has(key)) byKey.set(key, rate);
+  }
+  return [...byKey.values()];
 }
 
 function cacheMetadata(row: typeof rateCachePublicColumns | any, matchQuality: 'exact' | 'rough' | 'miss') {
@@ -327,8 +348,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     }
   );
   // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family
-  // eligibility. These /browse rates are ShipStation-only (direct carriers merge
-  // client-side), so for a direct-store order the whole set is ineligible. In
+  // eligibility. ShipStation candidates are filtered separately from PS-124
+  // backend-owned direct-carrier candidates. In
   // `enforce` we drop them (the operator then sees only their direct carriers); in
   // `audit_only` we keep them and log a would-block. Best-effort: any failure (no
   // order, settings outage) simply allows the rates. The label purchase boundary is
@@ -361,7 +382,17 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     : requestedSet
       ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
       : result.rates;
-  const cheapest = [...filtered].sort(
+  const directRates = await getDirectCarrierRatesForRateInput({
+    ...rest,
+    confirmation: confirmation ?? signature ?? null,
+    carrierIds: requestedCarrierIds,
+  });
+  const combinedRates = dedupeBrowseRates([...filtered, ...directRates.rates]);
+  const directCarrierIds = [...new Set(directRates.diagnostics.map((diagnostic) => diagnostic.carrierId).filter(Boolean))];
+  const combinedRequestKey = directCarrierIds.length
+    ? `${result.cacheKey}:direct:${directCarrierIds.sort().join(',')}`
+    : result.cacheKey;
+  const cheapest = [...combinedRates].sort(
     (a, b) => rateTotal(a) - rateTotal(b)
   )[0] ?? null;
   const accounts = await getCarrierAccountsForRateContext({
@@ -377,7 +408,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   const statusCarrierIds = requestedCarrierIds?.length
     ? requestedCarrierIds
     : accounts.map((account) => account.carrier_id);
-  const carriersWithRates = new Set(filtered.map((rate) => rate.carrier_id));
+  const carriersWithRates = new Set(combinedRates.map((rate) => rate.carrier_id));
   const diagnosticsByCarrierId = new Map(
     (result.carrierDiagnostics ?? []).map((diagnostic) => [diagnostic.carrierId, diagnostic])
   );
@@ -402,21 +433,52 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       carrierCode: diagnostic?.carrierCode,
       nickname: diagnostic?.nickname,
       status,
-      rateCount: hasRates ? filtered.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
+      rateCount: hasRates ? combinedRates.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
       durationMs: diagnostic?.durationMs,
       error: diagnostic?.error,
     };
   });
+  const directCarrierStatuses: BestRateWorkflowCarrierStatus[] = directRates.diagnostics.map((diagnostic) => ({
+    carrierId: diagnostic.carrierId,
+    carrierName: diagnostic.nickname ?? diagnostic.carrierId,
+    carrierCode: diagnostic.carrierCode,
+    nickname: diagnostic.nickname,
+    status:
+      diagnostic.status === 'ok'
+        ? 'live'
+        : diagnostic.status === 'failed'
+          ? 'error'
+          : diagnostic.status === 'empty'
+            ? 'unavailable'
+            : diagnostic.status === 'cached'
+              ? 'cached'
+              : 'loading',
+    rateCount: diagnostic.rateCount,
+    durationMs: diagnostic.durationMs,
+    error: diagnostic.error,
+  }));
+  const combinedCarrierStatuses = [...carrierStatuses, ...directCarrierStatuses];
+  const directCarrierDiagnostics = directRates.diagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    source: 'direct',
+  }));
+  const combinedCarrierDiagnostics = [
+    ...(result.carrierDiagnostics ?? []).map((diagnostic) => ({
+      ...diagnostic,
+      source: 'shipstation',
+    })),
+    ...directCarrierDiagnostics,
+  ];
   // PS-111: completeness is BACKEND-OWNED and derived from carrier diagnostics — a
   // best rate is complete only when every eligible carrier reached a terminal result
   // (none loading, none errored). Never hardcode true: a rate found while a carrier is
   // still loading or failed is PARTIAL, and the workflow DTO + frontend must see that.
-  const bestRateComplete = isBestRateComplete(carrierStatuses);
+  const bestRateComplete = isBestRateComplete(combinedCarrierStatuses);
   const bestRateMetadata = cheapest
     ? {
         ...cheapest,
-        requestFingerprint: result.cacheKey,
-        cacheKey: result.cacheKey,
+        requestFingerprint: combinedRequestKey,
+        cacheKey: combinedRequestKey,
         cacheCreatedAt: result.fetchedAt,
         cacheExpiresAt: new Date(
           new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
@@ -427,7 +489,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         insuranceProvider: result.effectiveInsuranceProvider,
         insuredValue: result.effectiveInsuredValue,
         isComplete: bestRateComplete,
-        rateCount: filtered.length,
+        rateCount: combinedRates.length,
         matchType: result.cached ? 'cache' : 'live',
       }
     : null;
@@ -437,9 +499,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // selection server-side WITHOUT the frontend carrying full proof internals. The
   // snapshot expires with the analytics-cache TTL; selectedRateProof stays as the
   // compatibility fallback until the frontend migrates.
-  const ratesWithKeys = withSelectedRateKeys(filtered);
+  const ratesWithKeys = withSelectedRateKeys(combinedRates);
   const rateQuoteId = await storeRateQuoteSnapshot({
-    cacheKey: result.cacheKey,
+    cacheKey: combinedRequestKey,
     rates: ratesWithKeys,
     fetchedAt: result.fetchedAt,
   });
@@ -452,6 +514,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         ...cheapest,
         selectedRateKey: selectedRateOpaqueKey(cheapest),
         isComplete: bestRateComplete,
+        requestFingerprint: combinedRequestKey,
+        cacheKey: combinedRequestKey,
         effectiveInsuranceProvider: result.effectiveInsuranceProvider,
         effectiveInsuredValue: result.effectiveInsuredValue,
         effectiveInsuranceSource: result.effectiveInsuranceSource,
@@ -462,7 +526,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     : cheapest;
   const payload = {
     ...result,
-    requestKey: result.cacheKey,
+    requestKey: combinedRequestKey,
+    cacheKey: combinedRequestKey,
     effectiveInsuranceProvider: result.effectiveInsuranceProvider,
     effectiveInsuredValue: result.effectiveInsuredValue,
     effectiveInsuranceSource: result.effectiveInsuranceSource,
@@ -472,14 +537,18 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     cacheAgeMs: result.cacheAgeMs,
     rates: responseRates,
     bestRate: bestRateOut,
-    carrierStatuses,
+    carrierStatuses: combinedCarrierStatuses,
+    carrierDiagnostics: combinedCarrierDiagnostics,
     bestRateWorkflow: buildBestRateWorkflowDto({
-      currentRequestFingerprint: result.cacheKey,
-      backendRequestKey: result.cacheKey,
+      currentRequestFingerprint: combinedRequestKey,
+      backendRequestKey: combinedRequestKey,
       savedBestRate: bestRateMetadata,
       source: cheapest ? (result.cached ? 'cache' : 'live') : 'none',
-      carrierStatuses,
+      carrierStatuses: combinedCarrierStatuses,
     }),
+    directCarrierErrors: directRates.errors,
+    directCarrierMetas: directRates.metas,
+    directCarrierDiagnostics,
   };
   return c.json(publicRatesResult(payload, canViewFinancials));
 });

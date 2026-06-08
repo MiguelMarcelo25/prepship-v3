@@ -4110,115 +4110,35 @@ export const apiClient = {
   fetchRates(data: Record<string, unknown>): Promise<any[]> {
     return (async () => {
         const body = translateRatePayloadToV4(data);
-        const requestedCarrierIds = Array.isArray(body.carrierIds)
-          ? body.carrierIds.map((value) => String(value)).filter(Boolean)
-          : null;
-        const shipStationCarrierIds = requestedCarrierIds
-          ? requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId))
-          : null;
-        let directCarrierIds = requestedCarrierIds?.filter(isDirectCarrierId) ?? [];
-        // Include the order's VISIBLE/assigned direct carriers when either no
-        // carrier list was provided (legacy auto path) OR the caller opted in via
-        // includeVisibleDirectCarriers while passing a ShipStation-only list
-        // (Recalculate / passive best-rate). Without this, a ShipStation-only
-        // carrierIds list silently excludes Walmart Shipping / SHIPP from the best
-        // rate even though the Rate Browser drawer surfaces (and wins on) them.
-        if (
-          requestedCarrierIds == null ||
-          (body.includeVisibleDirectCarriers === true && directCarrierIds.length === 0)
-        ) {
-          const directRows = await fetchDirectCarrierAccountRows().catch((err) => {
-            console.warn(
-              '[v2-apiClient] automatic direct-carrier lookup failed:',
-              err instanceof Error ? err.message : err
-            );
-            return [] as DirectCarrierAccountRow[];
-          });
-          directCarrierIds = [...new Set([
-            ...directCarrierIds,
-            ...directRows
-              .filter((row) => directCarrierAccountVisibleForOrder(row, body))
-              .map((row) => `se-${directProviderIdFromAccount(row)}`),
-          ])];
-        }
-
-        const shouldFetchShipStation =
-          requestedCarrierIds == null || (shipStationCarrierIds?.length ?? 0) > 0;
-
-        const [shipStationRates, directRates] = await Promise.all([
-          shouldFetchShipStation
-            ? api.post<any>('/rates', {
-                ...body,
-                ...(shipStationCarrierIds
-                  ? { carrierIds: shipStationCarrierIds }
-                  : {}),
-              }).then((res) => {
-                const rawRates = Array.isArray(res)
-                  ? res
-                  : Array.isArray(res?.rates)
-                    ? res.rates
-                    : [];
-                const responseFingerprint =
-                  !Array.isArray(res)
-                    ? res?.requestFingerprint ?? res?.cacheKey ?? res?.requestKey
-                    : null;
-                const responseMetadata = responseFingerprint
-                  ? {
-                    requestFingerprint: responseFingerprint,
-                    cacheKey: responseFingerprint,
-                    cacheCreatedAt: !Array.isArray(res) ? res?.fetchedAt : null,
-                    proofSource: BACKEND_RATE_PROOF_SOURCE,
-                  }
-                  : {};
-                const translatedRates = rawRates.map((rate: unknown) => ({
-                  ...translateRateToV2Shape(rate),
-                  ...responseMetadata,
-                }));
-                const responseBestRate = !Array.isArray(res) && res?.bestRate
-                  ? { ...translateRateToV2Shape(res.bestRate), ...responseMetadata }
-                  : null;
-                if (responseBestRate) {
-                  Object.defineProperty(translatedRates, 'bestRate', {
-                    value: responseBestRate,
-                    enumerable: false,
-                  });
-                }
-                return translatedRates;
-              })
-            : Promise.resolve([]),
-          directCarrierIds.length
-            ? fetchDirectCarrierRates(body, directCarrierIds)
-            : Promise.resolve({ rates: [], errors: [], metas: [] }),
-        ]);
-
-        const combined = dedupeRateResults([...shipStationRates, ...directRates.rates]).sort((left, right) => {
-          const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
-            Number((left as any).otherCost ?? 0);
-          const rightAmount = Number((right as any).shipmentCost ?? (right as any).amount ?? 0) +
-            Number((right as any).otherCost ?? 0);
-          return leftAmount - rightAmount;
-        });
-        Object.defineProperty(combined, 'directCarrierErrors', {
-          value: directRates.errors,
-          enumerable: false,
-        });
-        // Fix 3 (2026-05-12): direct-carrier meta (e.g. purchaseOrderSource)
-        // is attached to the combined array the same way as errors. The
-        // Rate Browser pulls it via (raw as any).directCarrierMetas to
-        // render the "where did these rates come from" hint per carrier.
-        Object.defineProperty(combined, 'directCarrierMetas', {
-          value: directRates.metas,
-          enumerable: false,
-        });
-        const responseBestRate = (shipStationRates as any).bestRate;
-        const combinedBestRate = combined[0] ?? responseBestRate;
-        if (combinedBestRate) {
-          Object.defineProperty(combined, 'bestRate', {
-            value: combinedBestRate,
+        const res = await api.post<any>('/rates/browse', body);
+        const responseFingerprint = res?.requestFingerprint ?? res?.cacheKey ?? res?.requestKey;
+        const responseMetadata = responseFingerprint
+          ? {
+            requestFingerprint: responseFingerprint,
+            cacheKey: responseFingerprint,
+            cacheCreatedAt: res?.fetchedAt ?? null,
+            proofSource: BACKEND_RATE_PROOF_SOURCE,
+          }
+          : {};
+        const translatedRates = (Array.isArray(res?.rates) ? res.rates : []).map((rate: unknown) => ({
+          ...translateRateToV2Shape(rate),
+          ...responseMetadata,
+        }));
+        if (res?.bestRate) {
+          Object.defineProperty(translatedRates, 'bestRate', {
+            value: { ...translateRateToV2Shape(res.bestRate), ...responseMetadata },
             enumerable: false,
           });
         }
-        return combined;
+        Object.defineProperty(translatedRates, 'directCarrierErrors', {
+          value: Array.isArray(res?.directCarrierErrors) ? res.directCarrierErrors : [],
+          enumerable: false,
+        });
+        Object.defineProperty(translatedRates, 'directCarrierMetas', {
+          value: Array.isArray(res?.directCarrierMetas) ? res.directCarrierMetas : [],
+          enumerable: false,
+        });
+        return translatedRates;
       })();
   },
 
@@ -4257,8 +4177,6 @@ export const apiClient = {
         const requestedCarrierIds = Array.isArray(body.carrierIds)
           ? body.carrierIds.map((value) => String(value)).filter(Boolean)
           : [];
-        const shipStationCarrierIds = requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId));
-        let directCarrierIds = requestedCarrierIds.filter(isDirectCarrierId);
         const preferredCarrierId =
           typeof body.preferredCarrierId === 'string'
             ? body.preferredCarrierId
@@ -4272,139 +4190,41 @@ export const apiClient = {
         if (existing) return existing;
 
         const inFlight = (async () => {
-          // PS-083 follow-up: when the Recalculate / best-rate caller opts in and
-          // passed a ShipStation-only carrier list, fold in the order's VISIBLE
-          // direct carriers (Walmart Shipping / SHIPP) so the recalc best rate
-          // matches the Rate Browser drawer. Mirrors fetchRates' auto-include.
-          if (body.includeVisibleDirectCarriers === true && directCarrierIds.length === 0) {
-            const directRows = await fetchDirectCarrierAccountRows().catch((err) => {
-              console.warn(
-                '[v2-apiClient] browseRates direct-carrier auto-include failed:',
-                err instanceof Error ? err.message : err
-              );
-              return [] as DirectCarrierAccountRow[];
-            });
-            directCarrierIds = [...new Set(
-              directRows
-                .filter((row) => directCarrierAccountVisibleForOrder(row, body))
-                .map((row) => `se-${directProviderIdFromAccount(row)}`)
-            )];
-          }
-          const shouldFetchShipStation =
-            requestedCarrierIds.length === 0 || shipStationCarrierIds.length > 0;
-          const shouldFetchDirect = directCarrierIds.length > 0 && body.cachedOnly !== true;
-          const [shipStationResult, directRates] = await Promise.all([
-            shouldFetchShipStation
-              ? api.post<any>('/rates/browse', {
-                  ...body,
-                  ...(shipStationCarrierIds.length ? { carrierIds: shipStationCarrierIds } : {}),
-                  ...(preferredCarrierId ? { preferredCarrierId } : {}),
-                })
-              : Promise.resolve({
-                  rates: [],
-                  bestRate: null,
-                  cached: false,
-                  source: 'live',
-                  carrierStatuses: [],
-                  carrierDiagnostics: [],
-                }),
-            shouldFetchDirect
-              ? fetchDirectCarrierRates(body, directCarrierIds)
-              : Promise.resolve({ rates: [], errors: [], metas: [] }),
-          ]);
-          const shipStationFingerprint =
-            shipStationResult?.requestFingerprint ??
-            shipStationResult?.cacheKey ??
-            shipStationResult?.requestKey;
-          const shipStationProofMetadata = shipStationFingerprint
+          const backendResult = await api.post<any>('/rates/browse', {
+            ...body,
+            ...(requestedCarrierIds.length ? { carrierIds: requestedCarrierIds } : {}),
+            ...(preferredCarrierId ? { preferredCarrierId } : {}),
+          });
+          const backendFingerprint =
+            backendResult?.requestFingerprint ??
+            backendResult?.cacheKey ??
+            backendResult?.requestKey;
+          const backendProofMetadata = backendFingerprint
             ? {
-              requestFingerprint: shipStationFingerprint,
-              cacheKey: shipStationFingerprint,
-              cacheCreatedAt: shipStationResult?.fetchedAt ?? null,
+              requestFingerprint: backendFingerprint,
+              cacheKey: backendFingerprint,
+              cacheCreatedAt: backendResult?.fetchedAt ?? null,
               proofSource: BACKEND_RATE_PROOF_SOURCE,
             }
             : {};
-          const shipStationRates = Array.isArray(shipStationResult?.rates)
-            ? shipStationResult.rates.map((rate: unknown) => ({
+          const translatedRates = Array.isArray(backendResult?.rates)
+            ? backendResult.rates.map((rate: unknown) => ({
                 ...translateRateToV2Shape(rate),
-                ...shipStationProofMetadata,
+                ...backendProofMetadata,
               }))
             : [];
-          const combined = dedupeRateResults([...shipStationRates, ...directRates.rates]).sort((left, right) => {
-            const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
-              Number((left as any).otherCost ?? 0);
-            const rightAmount = Number((right as any).shipmentCost ?? (right as any).amount ?? 0) +
-              Number((right as any).otherCost ?? 0);
-            return leftAmount - rightAmount;
-          });
-          const bestRate = combined[0] ?? (
-            shipStationResult?.bestRate
-              ? { ...translateRateToV2Shape(shipStationResult.bestRate), ...shipStationProofMetadata }
-              : null
-          );
-          const directCarrierStatuses = directCarrierIds.map((carrierId) => {
-            const providerId = toProviderAccountId(carrierId);
-            const hasRate = combined.some((rate) => {
-              const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
-              return String(rate.shippingProviderId ?? raw.carrier_id) === String(providerId);
-            });
-            const error = directRates.errors.find((item) => String(item.shippingProviderId) === String(providerId));
-            const rateCount = directRates.rates.filter((rate) => {
-              const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
-              return String(rate.shippingProviderId ?? raw.carrier_id) === String(providerId);
-            }).length;
-            return {
-              carrierId,
-              carrierName: error?.label ?? carrierId,
-              status: hasRate
-                ? body.cachedOnly === true
-                  ? 'cached'
-                  : 'live'
-                : error
-                  ? 'error'
-                  : body.cachedOnly === true
-                  ? 'loading'
-                  : 'unavailable',
-              rateCount,
-              error: error?.message,
-            };
-          });
-          const shipStationDiagnostics = Array.isArray(shipStationResult?.carrierDiagnostics)
-            ? shipStationResult.carrierDiagnostics.map((diagnostic: Record<string, unknown>) => ({
-                ...diagnostic,
-                source: 'shipstation',
-              }))
-            : [];
-          const directCarrierDiagnostics = directCarrierStatuses.map((status) => ({
-            carrierId: status.carrierId,
-            nickname: status.carrierName,
-            source: 'direct',
-            status:
-              status.status === 'live'
-                ? 'ok'
-                : status.status === 'unavailable'
-                  ? 'empty'
-                  : status.status === 'error'
-                    ? 'failed'
-                    : status.status,
-            rateCount: status.rateCount,
-            error: status.error,
-          }));
+          const bestRate = backendResult?.bestRate
+            ? { ...translateRateToV2Shape(backendResult.bestRate), ...backendProofMetadata }
+            : null;
           return {
-            ...shipStationResult,
-            requestKey: shipStationResult?.requestKey ?? requestKey,
-            rates: combined,
+            ...backendResult,
+            requestKey: backendResult?.requestKey ?? requestKey,
+            rates: translatedRates,
             bestRate,
-            carrierStatuses: [
-              ...(Array.isArray(shipStationResult?.carrierStatuses) ? shipStationResult.carrierStatuses : []),
-              ...directCarrierStatuses,
-            ],
-            carrierDiagnostics: [
-              ...shipStationDiagnostics,
-              ...directCarrierDiagnostics,
-            ],
-            directCarrierErrors: directRates.errors,
-            directCarrierMetas: directRates.metas,
+            carrierStatuses: Array.isArray(backendResult?.carrierStatuses) ? backendResult.carrierStatuses : [],
+            carrierDiagnostics: Array.isArray(backendResult?.carrierDiagnostics) ? backendResult.carrierDiagnostics : [],
+            directCarrierErrors: Array.isArray(backendResult?.directCarrierErrors) ? backendResult.directCarrierErrors : [],
+            directCarrierMetas: Array.isArray(backendResult?.directCarrierMetas) ? backendResult.directCarrierMetas : [],
           };
         })();
 

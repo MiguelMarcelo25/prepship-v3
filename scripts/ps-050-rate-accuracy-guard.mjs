@@ -23,8 +23,11 @@ const [ordersView, ratesRoute, ratesService, ratesBackfill, orderRateDto, apiCli
 ])
 
 assert(
-  ordersView.includes('buildRateRequestFingerprint') &&
+  ordersView.includes('buildRateRequestDraftKey') &&
     ordersView.includes('hasValidSavedBestRateForRequest') &&
+    ordersView.includes('savedBestRateCanDisplayForCurrentRequest') &&
+    ordersView.includes('cacheExpiresAt') &&
+    ordersView.includes('isComplete') &&
     !ordersView.includes('function hasValidBestRateForCurrentDims(order: OrderSummaryDto)'),
   'Orders UI validates saved best rates with request fingerprint/freshness/completeness, not dims-only',
 )
@@ -54,8 +57,13 @@ assert(
 
 assert(
   ratesService.includes('shipDateBucket') &&
-    ratesService.includes('st=') &&
-    ratesService.includes('ci=') &&
+    ratesService.includes('clientId: input.clientId') &&
+    ratesService.includes('storeId: input.storeId') &&
+    ratesService.includes('sourceClientId: input.sourceClientId') &&
+    ratesService.includes('apiKeyFingerprint: input.apiKeyV2') &&
+    ratesService.includes('insuranceProvider: options.insuranceProvider') &&
+    ratesService.includes('insuredValue: options.insuredValue') &&
+    ratesService.includes('automationRulesVersion: input.automationRulesVersion') &&
     ratesService.includes('CACHE_TTL_MS'),
   'Backend rate cache key/fingerprint includes ship-date bucket and normalized destination/account context',
 )

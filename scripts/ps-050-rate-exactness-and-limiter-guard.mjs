@@ -120,10 +120,11 @@ assert(
 )
 
 assert(
-  v2ApiClient.includes('const combinedBestRate = combined[0] ?? responseBestRate') &&
-    v2ApiClient.includes("Object.defineProperty(combined, 'bestRate'") &&
-    v2ApiClient.includes('value: combinedBestRate'),
-  'v2 rate client exposes the cheapest combined ShipStation/direct-carrier rate as bestRate',
+  ratesRoute.includes('combinedRates = dedupeBrowseRates([...filtered, ...directRates.rates])') &&
+    ratesRoute.includes('const cheapest = [...combinedRates].sort') &&
+    v2ApiClient.includes('backendResult?.bestRate') &&
+    !v2ApiClient.includes('const combinedBestRate = combined[0]'),
+  'backend /rates/browse selects the cheapest combined ShipStation/direct-carrier rate and v2 client preserves backend bestRate',
 )
 
 assert(

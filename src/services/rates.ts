@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { eq, like, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
+import { carrierAccountClients, carrierAccounts } from '../db/schema/carrier-accounts';
 import { rateCache } from '../db/schema/rates';
 import { settings } from '../db/schema/settings';
 import {
@@ -13,6 +14,11 @@ import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
 import { normalizeConfirmation, normalizeInsurance, normalizeShippingOptions } from '../lib/shipping-options';
+import {
+  directCarrierVisibleForScope,
+  evaluateDirectCarrierScope,
+  normalizeProviderKey,
+} from '../lib/direct-carrier-scope';
 import { buildShippingRateRequestFingerprint } from './shipping-workflow/rate-fingerprint';
 import {
   HUGRAB_DEFAULT_INSURED_VALUE,
@@ -38,6 +44,8 @@ import {
 } from './shipping-workflow/insurance-cost';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
+const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
+const DIRECT_STORE_PROVIDER_ID_OFFSET = 20_000_000;
 
 async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
   const rows = await db
@@ -305,6 +313,12 @@ export type RateInput = {
   shipFrom?: Address;
   storeId?: number | null;
   clientId?: number | null;
+  orderId?: number | null;
+  externalOrderId?: string | null;
+  orderNumber?: string | null;
+  purchaseOrderId?: string | null;
+  includeVisibleDirectCarriers?: boolean;
+  includeAllDirectCarriers?: boolean;
   sourceClientId?: number | null;
   apiKeyV2?: string | null;
   confirmation?: string | null;
@@ -635,6 +649,42 @@ export type RateCarrierAccount = CarrierInfo & {
   source_client_name: string;
 };
 const scopedCarrierCache = new Map<string, { carriers: CarrierInfo[]; fetchedAt: number }>();
+
+type DirectCarrierAccountInfo = {
+  id: number;
+  clientId: number | null;
+  provider: string;
+  label: string | null;
+  accountIdentifier: string | null;
+  credentials: Record<string, unknown>;
+  sourceTable: 'carrier_accounts' | 'store_accounts';
+  assignedClientIds: number[];
+};
+
+export type DirectCarrierRateError = {
+  accountId: number;
+  shippingProviderId: number;
+  sourceTable: DirectCarrierAccountInfo['sourceTable'];
+  provider: string;
+  label: string;
+  message: string;
+  meta?: Record<string, unknown> | null;
+};
+
+export type DirectCarrierRateMeta = {
+  accountId: number;
+  shippingProviderId: number;
+  sourceTable: DirectCarrierAccountInfo['sourceTable'];
+  provider: string;
+  meta: Record<string, unknown>;
+};
+
+export type DirectCarrierRatesResult = {
+  rates: Rate[];
+  errors: DirectCarrierRateError[];
+  metas: DirectCarrierRateMeta[];
+  diagnostics: CarrierRateDiagnostic[];
+};
 
 const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<
   string,
@@ -1314,5 +1364,286 @@ export async function getRates(
     effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
     effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
     effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+  };
+}
+
+function directProviderIdFromAccount(account: Pick<DirectCarrierAccountInfo, 'id' | 'sourceTable'>): number {
+  return (account.sourceTable === 'store_accounts' ? DIRECT_STORE_PROVIDER_ID_OFFSET : DIRECT_CARRIER_PROVIDER_ID_OFFSET) + account.id;
+}
+
+function directAccountRefFromCarrierId(value: string): { accountId: number; sourceTable: DirectCarrierAccountInfo['sourceTable'] } | null {
+  const match = String(value ?? '').match(/^se-(\d+)$/i);
+  const providerId = Number.parseInt(match?.[1] ?? String(value ?? ''), 10);
+  if (!Number.isFinite(providerId)) return null;
+  if (providerId >= DIRECT_STORE_PROVIDER_ID_OFFSET) {
+    const accountId = providerId - DIRECT_STORE_PROVIDER_ID_OFFSET;
+    return accountId > 0 ? { accountId, sourceTable: 'store_accounts' } : null;
+  }
+  if (providerId >= DIRECT_CARRIER_PROVIDER_ID_OFFSET) {
+    const accountId = providerId - DIRECT_CARRIER_PROVIDER_ID_OFFSET;
+    return accountId > 0 ? { accountId, sourceTable: 'carrier_accounts' } : null;
+  }
+  return null;
+}
+
+function directRateServiceDescriptor(rate: Record<string, unknown>, provider: string) {
+  return {
+    provider,
+    carrierCode: String(rate.carrierCode ?? rate.carrierType ?? rate.carrierName ?? provider),
+    carrierName: rate.carrierName != null || rate.carrierType != null ? String(rate.carrierName ?? rate.carrierType) : null,
+    serviceCode: rate.serviceCode != null || rate.service_code != null || rate.service != null
+      ? String(rate.serviceCode ?? rate.service_code ?? rate.service)
+      : null,
+    serviceName: rate.serviceName != null || rate.service_type != null || rate.service != null
+      ? String(rate.serviceName ?? rate.service_type ?? rate.service)
+      : null,
+    serviceType: rate.service_type != null || rate.service != null ? String(rate.service_type ?? rate.service) : null,
+  };
+}
+
+function toDirectRate(
+  rate: Record<string, unknown>,
+  account: DirectCarrierAccountInfo,
+  requestFingerprint: string,
+  fetchedAt: string,
+  rateCount: number,
+): Rate | null {
+  const amount = Number(rate.cost ?? rate.price ?? rate.amount ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const provider = normalizeProviderKey(account.provider);
+  const shippingProviderId = directProviderIdFromAccount(account);
+  const service = String(rate.serviceCode ?? rate.service ?? rate.serviceName ?? rate.serviceType ?? provider).trim();
+  const serviceName = String(rate.serviceName ?? rate.service_type ?? rate.service ?? service).trim();
+  const carrierCode = String(rate.carrierCode ?? rate.carrierType ?? provider).trim();
+  const carrierName = String(rate.carrierName ?? account.label ?? provider).trim();
+  return {
+    ...rate,
+    rate_id: String(rate.rate_id ?? `${requestFingerprint}:${service}:${amount}`),
+    carrier_id: `se-${shippingProviderId}`,
+    carrier_code: carrierCode || provider,
+    carrier_nickname: account.label ?? account.accountIdentifier ?? carrierName,
+    service_code: service || provider,
+    service_type: serviceName || service || provider,
+    rate_type: serviceName || service || provider,
+    shipping_amount: { amount, currency: String(rate.currency ?? 'USD') },
+    other_amount: { amount: Number(rate.otherCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },
+    confirmation_amount: { amount: Number(rate.confirmationCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },
+    insurance_amount: { amount: Number(rate.insuranceCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },
+    requestFingerprint,
+    cacheKey: requestFingerprint,
+    cacheCreatedAt: fetchedAt,
+    cacheExpiresAt: new Date(Date.parse(fetchedAt) + CACHE_TTL_MS).toISOString(),
+    proofSource: 'backend_rate_response',
+    isComplete: true,
+    rateCount,
+    matchType: 'direct-live',
+    shippingProviderId,
+    directCarrierAccountId: account.id,
+    directCarrierSourceTable: account.sourceTable,
+    provider,
+  } as unknown as Rate;
+}
+
+async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<DirectCarrierAccountInfo[]> {
+  const requestedRefs = (input.carrierIds ?? [])
+    .map(directAccountRefFromCarrierId)
+    .filter((ref): ref is { accountId: number; sourceTable: DirectCarrierAccountInfo['sourceTable'] } => ref != null);
+  const includeVisible = input.includeVisibleDirectCarriers === true || input.includeAllDirectCarriers === true;
+  if (!requestedRefs.length && !includeVisible) return [];
+
+  const carrierRows = await db
+    .select({
+      id: carrierAccounts.id,
+      clientId: carrierAccounts.clientId,
+      provider: carrierAccounts.provider,
+      label: carrierAccounts.label,
+      accountIdentifier: carrierAccounts.accountIdentifier,
+      credentials: carrierAccounts.credentials,
+      active: carrierAccounts.active,
+    })
+    .from(carrierAccounts);
+  const assignments = await db
+    .select({
+      carrierAccountId: carrierAccountClients.carrierAccountId,
+      clientId: carrierAccountClients.clientId,
+    })
+    .from(carrierAccountClients);
+  const assignedByAccount = new Map<number, number[]>();
+  for (const row of assignments) {
+    const next = assignedByAccount.get(row.carrierAccountId) ?? [];
+    next.push(row.clientId);
+    assignedByAccount.set(row.carrierAccountId, next);
+  }
+
+  const directRows: DirectCarrierAccountInfo[] = carrierRows
+    .filter((row) => row.active !== false)
+    .map((row) => ({
+      id: row.id,
+      clientId: row.clientId ?? null,
+      provider: row.provider,
+      label: row.label ?? null,
+      accountIdentifier: row.accountIdentifier ?? null,
+      credentials: row.credentials ?? {},
+      sourceTable: 'carrier_accounts' as const,
+      assignedClientIds: assignedByAccount.get(row.id) ?? [],
+    }));
+
+  const storeRows = await db.execute(sql<{
+    id: number;
+    client_id: number | null;
+    provider: string;
+    label: string | null;
+    account_identifier: string | null;
+    credentials: Record<string, unknown>;
+    active: boolean;
+  }>`SELECT id, client_id, provider, label, account_identifier, credentials, active FROM store_accounts WHERE active = true`);
+  const storeList = Array.isArray(storeRows) ? storeRows : (storeRows as any).rows ?? [];
+  const storeAccounts: DirectCarrierAccountInfo[] = (storeList as Array<{
+    id: number;
+    client_id: number | null;
+    provider: string;
+    label: string | null;
+    account_identifier: string | null;
+    credentials: Record<string, unknown> | null;
+    active: boolean;
+  }>).map((row) => ({
+    id: Number(row.id),
+    clientId: row.client_id ?? null,
+    provider: row.provider,
+    label: row.label ?? null,
+    accountIdentifier: row.account_identifier ?? null,
+    credentials: row.credentials ?? {},
+    sourceTable: 'store_accounts' as const,
+    assignedClientIds: row.client_id != null ? [Number(row.client_id)] : [],
+  }));
+
+  const byKey = new Map([...directRows, ...storeAccounts].map((row) => [`${row.sourceTable}:${row.id}`, row]));
+  if (requestedRefs.length) {
+    return requestedRefs
+      .map((ref) => byKey.get(`${ref.sourceTable}:${ref.accountId}`))
+      .filter((row): row is DirectCarrierAccountInfo => Boolean(row));
+  }
+  return [...directRows, ...storeAccounts].filter((account) =>
+    directCarrierVisibleForScope(account, {
+      clientId: input.clientId,
+      storeId: input.storeId,
+      includeAllDirectCarriers: input.includeAllDirectCarriers,
+    })
+  );
+}
+
+export async function getDirectCarrierRatesForRateInput(input: RateInput): Promise<DirectCarrierRatesResult> {
+  const accounts = await loadVisibleDirectCarrierAccounts(input);
+  if (!accounts.length) return { rates: [], errors: [], metas: [], diagnostics: [] };
+  const shippingOptions = normalizeShippingOptions(input);
+  const fetchedAt = new Date().toISOString();
+  const calls = accounts.map(async (account) => {
+    const shippingProviderId = directProviderIdFromAccount(account);
+    const label = account.label || account.accountIdentifier || account.provider;
+    const scope = evaluateDirectCarrierScope(account, input);
+    if (!scope.allowed) {
+      return {
+        rates: [] as Rate[],
+        errors: [{
+          accountId: account.id,
+          shippingProviderId,
+          sourceTable: account.sourceTable,
+          provider: normalizeProviderKey(account.provider),
+          label,
+          message: scope.reason,
+          meta: null,
+        }],
+        metas: [] as DirectCarrierRateMeta[],
+        diagnostic: {
+          carrierId: `se-${shippingProviderId}`,
+          carrierCode: normalizeProviderKey(account.provider),
+          nickname: label,
+          status: 'failed' as CarrierRateDiagnosticStatus,
+          rateCount: 0,
+          error: scope.reason,
+        },
+      };
+    }
+    const requestFingerprint = `${rateCacheKey({ ...input, carrierIds: [`se-${shippingProviderId}`] })}:direct:${account.sourceTable}:${account.id}`;
+    try {
+      const quoted = await quoteCarrierRates(account.provider, {
+        credentials: account.credentials,
+        weightOz: input.weightOz,
+        toZip: input.toZip,
+        fromZip: (input.shipFrom as any)?.postal_code ?? (input.shipFrom as any)?.postalCode,
+        dimsL: input.dimsL,
+        dimsW: input.dimsW,
+        dimsH: input.dimsH,
+        orderId: input.orderId,
+        clientId: input.clientId,
+        storeId: input.storeId,
+        externalOrderId: input.externalOrderId ?? input.orderNumber,
+        orderNumber: input.orderNumber,
+        purchaseOrderId: input.purchaseOrderId,
+        shipFrom: input.shipFrom,
+        shippingOptions,
+      });
+      const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
+      const eligible = filterRatesForShippingServiceEligibility(
+        rawRates,
+        { clientId: input.clientId ?? null, storeId: input.storeId ?? null },
+        shippingOptions,
+      ).filter((rate) => evaluateShippingServiceEligibility(
+        { clientId: input.clientId ?? null, storeId: input.storeId ?? null },
+        directRateServiceDescriptor(rate as Record<string, unknown>, account.provider),
+        shippingOptions,
+      ).allowed);
+      const rates = eligible
+        .map((rate) => toDirectRate(rate as Record<string, unknown>, account, requestFingerprint, fetchedAt, eligible.length))
+        .filter((rate): rate is Rate => rate != null);
+      const meta = {
+        accountId: account.id,
+        sourceTable: account.sourceTable,
+        provider: normalizeProviderKey(quoted.provider ?? account.provider),
+        rateCount: rates.length,
+      };
+      return {
+        rates,
+        errors: [] as DirectCarrierRateError[],
+        metas: [{ accountId: account.id, shippingProviderId, sourceTable: account.sourceTable, provider: meta.provider, meta }],
+        diagnostic: {
+          carrierId: `se-${shippingProviderId}`,
+          carrierCode: meta.provider,
+          nickname: label,
+          status: rates.length ? 'ok' as CarrierRateDiagnosticStatus : 'empty' as CarrierRateDiagnosticStatus,
+          rateCount: rates.length,
+        },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        rates: [] as Rate[],
+        errors: [{
+          accountId: account.id,
+          shippingProviderId,
+          sourceTable: account.sourceTable,
+          provider: normalizeProviderKey(account.provider),
+          label,
+          message,
+          meta: null,
+        }],
+        metas: [] as DirectCarrierRateMeta[],
+        diagnostic: {
+          carrierId: `se-${shippingProviderId}`,
+          carrierCode: normalizeProviderKey(account.provider),
+          nickname: label,
+          status: 'failed' as CarrierRateDiagnosticStatus,
+          rateCount: 0,
+          error: message,
+        },
+      };
+    }
+  });
+  const settled = await Promise.all(calls);
+  return {
+    rates: settled.flatMap((item) => item.rates),
+    errors: settled.flatMap((item) => item.errors),
+    metas: settled.flatMap((item) => item.metas),
+    diagnostics: settled.map((item) => item.diagnostic),
   };
 }
