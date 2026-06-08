@@ -749,11 +749,39 @@ export type AwaitingBestRateWorkflowInput = {
 
 export type AwaitingRateCellStateInput = Parameters<typeof classifyAwaitingRateCellState>[0]
 
+// PS-119 — a cached/unproven NEGATIVE best-rate result is NOT authoritative for the
+// passive table. Only a LIVE current-fingerprint attempt that reports terminal carrier
+// statuses with no rate proves "no eligible rates". This returns true when the negative
+// response warrants one bounded live retry (forceLive + forceRefresh) before the row is
+// terminally marked unavailable. A response that already carries a bestRate -> false.
+export function cachedNegativeNeedsLiveRetry(response: Record<string, unknown> | null | undefined): boolean {
+  if (!response || typeof response !== 'object') return true
+  const best = response.bestRate
+  if (best && typeof best === 'object') return false
+  // Cache-sourced negatives (incl. the brief negative-result cache) are unproven.
+  const source = typeof response.source === 'string' ? response.source : ''
+  if (response.cached === true || source === 'cache' || typeof response.cacheAgeMs === 'number') return true
+  // No carrier attempt recorded, or any carrier still loading/cached -> unproven live empty.
+  const statuses = Array.isArray(response.carrierStatuses) ? response.carrierStatuses : []
+  if (statuses.length === 0) return true
+  return statuses.some((status) => {
+    const value = status && typeof status === 'object' ? (status as Record<string, unknown>).status : null
+    return value === 'loading' || value === 'cached'
+  })
+}
+
 export function classifyAwaitingRateCellStateWithWorkflow(
   workflow: AwaitingBestRateWorkflowInput,
   fallbackInput: AwaitingRateCellStateInput,
 ): AwaitingRateCellState {
   if (!workflow?.bestRateState) return classifyAwaitingRateCellState(fallbackInput)
+  // PS-119: missing/incomplete dims or weight is an ACTIONABLE "Add Dims" state and must
+  // win over backend workflow states like 'missing' (-> unavailable) or 'blocked'
+  // (-> error). It should never read as "Rate unavailable" when the real problem is
+  // missing shipment inputs. A displayable best rate still wins (the order IS rateable).
+  if (!fallbackInput.hasDisplayableBestRate && (!fallbackInput.hasDims || !fallbackInput.hasWeight)) {
+    return 'add-dims'
+  }
   switch (workflow.bestRateState) {
     case 'fresh':
       // A backend-"fresh" rate only renders when the FRONTEND can also display

@@ -82,6 +82,7 @@ import {
   buildColumnPrefsForStatus,
   buildPicklistPrintHtml,
   buildQueueAddPayload,
+  cachedNegativeNeedsLiveRetry,
   canRetryBatchRecalculateRow,
   classifyAwaitingRateCellState,
   classifyAwaitingRateCellStateWithWorkflow,
@@ -6161,7 +6162,10 @@ export default function OrdersView({
 
         setAutoBestRateEntry(order.orderId, { key: request.key, rate: null, pending: true })
 
-        const response = await apiClient.browseRates({
+        // PS-083 follow-up: include the order's visible direct carriers (Walmart
+        // Shipping / SHIPP) so the passively-rated BEST RATE column matches the Rate
+        // Browser drawer instead of showing a ShipStation-only winner.
+        const baseRateRequest = {
           weightOz: request.weightOz,
           toZip: request.shipTo.postalCode,
           toCountry: request.shipTo.country ?? 'US',
@@ -6184,13 +6188,27 @@ export default function OrdersView({
             order.external_order_id ??
             order.orderNumber ??
             undefined,
-          forceRefresh: false,
-          // PS-083 follow-up: include the order's visible direct carriers
-          // (Walmart Shipping / SHIPP) so the passively-rated BEST RATE column
-          // matches the Rate Browser drawer instead of showing a ShipStation-only
-          // winner.
           includeVisibleDirectCarriers: true,
+        } as const
+
+        // First pass: cache-allowed (fast). If it yields a best rate, use it.
+        let response = await apiClient.browseRates({
+          ...baseRateRequest,
+          forceRefresh: false,
         }) as Record<string, unknown>
+
+        // PS-119: a cached/unproven NEGATIVE is NOT authoritative for the passive table.
+        // Before terminally marking the row "Rate unavailable", do ONE bounded live retry
+        // (same request fingerprint, forceLive + forceRefresh) — exactly what manual
+        // Browse Rates does. Only a live current-fingerprint empty proves "no rate".
+        if (cachedNegativeNeedsLiveRetry(response)) {
+          response = await apiClient.browseRates({
+            ...baseRateRequest,
+            forceLive: true,
+            forceRefresh: true,
+          }) as Record<string, unknown>
+        }
+
         const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
 
         const bestRate = toRecord(response?.bestRate)
