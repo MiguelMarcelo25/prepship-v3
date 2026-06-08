@@ -1693,7 +1693,7 @@ export default function RateBrowserModal({
 
             return (
               <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>
-                Insurance Added: ${amount.toFixed(2)}
+                Insurance incl. +${amount.toFixed(2)}
               </div>
             );
           })()}
