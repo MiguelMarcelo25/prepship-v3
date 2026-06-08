@@ -784,6 +784,20 @@ function priceDisplay(
   );
 }
 
+// PS-108 display helper: pretty-print the insurance provider key the backend
+// stamps onto each enriched rate (lowercased, e.g. 'parcelguard'). Display-only —
+// the premium itself is computed and owned by the backend
+// (services/shipping-workflow/insurance-cost.ts) and merely surfaced here.
+function formatInsuranceProviderLabel(provider?: string | null): string {
+  const normalized = String(provider ?? '')
+    .replace(/[^a-z0-9]+/gi, '')
+    .toLowerCase();
+  if (normalized === 'parcelguard') return 'ParcelGuard';
+  if (normalized === 'shipsurance') return 'Shipsurance';
+  if (normalized === 'carrier') return 'Carrier';
+  return provider && provider.trim() ? provider.trim() : 'Insured';
+}
+
 // v2's isBlockedRate uses a per-store service-unblock list the server
 // maintains. Stubbed to never-blocked per task spec — safe default until the
 // per-client block list ports.
@@ -1640,6 +1654,49 @@ export default function RateBrowserModal({
               ))}
             </div>
           )}
+          {(() => {
+            // PS-108: surface the per-rate insurance breakdown the backend already
+            // resolved (insuranceCost meta / insurance_amount). Display-only — the
+            // premium is owned by the backend and never recomputed here. The amount
+            // is already included in the row total (otherCost), so this line is a
+            // breakdown of what the price already contains.
+            const meta = r.raw?.insuranceCost as
+              | {
+                  insuranceProvider?: string;
+                  insuredValue?: number;
+                  amount?: number | null;
+                  confirmed?: boolean;
+                  unresolved?: boolean;
+                }
+              | undefined;
+            const unresolved =
+              r.raw?.insuranceCostUnresolved === true || meta?.unresolved === true;
+            const provider = formatInsuranceProviderLabel(meta?.insuranceProvider);
+
+            // Insured rate whose premium could not be proven — warn instead of price.
+            if (unresolved) {
+              return (
+                <div style={{ fontSize: 10.5, color: 'var(--red)', marginTop: 2, lineHeight: 1.4 }}>
+                  Insurance: {provider} — premium unresolved (re-rate before selecting)
+                </div>
+              );
+            }
+
+            const amount =
+              typeof meta?.amount === 'number'
+                ? meta.amount
+                : typeof r.raw?.insurance_amount?.amount === 'number'
+                  ? (r.raw.insurance_amount.amount as number)
+                  : null;
+            // No insurance on this rate -> no indicator.
+            if (amount == null || amount <= 0) return null;
+
+            return (
+              <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>
+                Insurance Added: ${amount.toFixed(2)}
+              </div>
+            );
+          })()}
         </div>
         <div
           style={{
