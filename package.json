@@ -150,6 +150,7 @@
     "test:ps-153-dead-symbols": "tsx scripts/ps-153-dead-symbols-guard.ts",
     "test:ps-159-apiclient-deadmethods": "tsx scripts/ps-159-apiclient-deadmethods-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
+    "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",
     "test:ps-128-129-upstream-shipping-safety": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
     "test:ps-128-webhook-ingestion": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
     "test:ps-128-external-shipped-label-block": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",

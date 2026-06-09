@@ -231,6 +231,49 @@ export async function getCredentialAccountSnapshot(
   return rows[0] ?? null;
 }
 
+/**
+ * PS-163: backfill the awaiting-order rate snapshot when a carrier account's display label is renamed.
+ * AWAITING ORDERS ONLY (order_status = 'awaiting_shipment') — never shipped/cancelled. Updates both
+ * providerAccountNickname and carrierNickname inside order_overrides.best_rate_json so the saved
+ * best-rate snapshot keeps showing the account's current name. Returns the number of awaiting orders
+ * touched (max of the two passes). This SQL was previously inline in the carrier-accounts PATCH handler;
+ * the handler still owns WHEN to call it (only on a real label change), this owns the WHAT.
+ */
+export async function backfillAwaitingSnapshotNickname(
+  sql: SqlLike,
+  oldLabel: string,
+  newLabel: string,
+): Promise<number> {
+  const r1 = (await sql`
+    UPDATE order_overrides ovr
+    SET best_rate_json = jsonb_set(
+      best_rate_json,
+      '{providerAccountNickname}',
+      to_jsonb(${newLabel}::text)
+    )
+    FROM orders o
+    WHERE ovr.order_id = o.id
+      AND o.order_status = 'awaiting_shipment'
+      AND ovr.best_rate_json->>'providerAccountNickname' = ${oldLabel}
+  `) as unknown as { count?: number };
+  const r2 = (await sql`
+    UPDATE order_overrides ovr
+    SET best_rate_json = jsonb_set(
+      best_rate_json,
+      '{carrierNickname}',
+      to_jsonb(${newLabel}::text)
+    )
+    FROM orders o
+    WHERE ovr.order_id = o.id
+      AND o.order_status = 'awaiting_shipment'
+      AND ovr.best_rate_json->>'carrierNickname' = ${oldLabel}
+  `) as unknown as { count?: number };
+  return Math.max(
+    typeof r1.count === 'number' ? r1.count : 0,
+    typeof r2.count === 'number' ? r2.count : 0,
+  );
+}
+
 export async function patchCredentialAccount(
   sql: SqlLike,
   table: CredentialAccountTable,

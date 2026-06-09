@@ -29,6 +29,7 @@ import {
 import { corsHeaders } from '../http/cors';
 import { ensureCredentialAccountRuntimeSchema } from '../../services/credential-account-schema';
 import {
+  backfillAwaitingSnapshotNickname,
   deleteCredentialAccount,
   getCredentialAccountSnapshot,
   listCredentialAccounts,
@@ -224,34 +225,9 @@ export default async function handler(req: any, res: any): Promise<void> {
         patch.label !== before.label
       ) {
         try {
-          const r1 = (await sql`
-            UPDATE order_overrides ovr
-            SET best_rate_json = jsonb_set(
-              best_rate_json,
-              '{providerAccountNickname}',
-              to_jsonb(${patch.label}::text)
-            )
-            FROM orders o
-            WHERE ovr.order_id = o.id
-              AND o.order_status = 'awaiting_shipment'
-              AND ovr.best_rate_json->>'providerAccountNickname' = ${before.label}
-          `) as unknown as { count?: number };
-          const r2 = (await sql`
-            UPDATE order_overrides ovr
-            SET best_rate_json = jsonb_set(
-              best_rate_json,
-              '{carrierNickname}',
-              to_jsonb(${patch.label}::text)
-            )
-            FROM orders o
-            WHERE ovr.order_id = o.id
-              AND o.order_status = 'awaiting_shipment'
-              AND ovr.best_rate_json->>'carrierNickname' = ${before.label}
-          `) as unknown as { count?: number };
-          ordersUpdated = Math.max(
-            typeof r1.count === 'number' ? r1.count : 0,
-            typeof r2.count === 'number' ? r2.count : 0,
-          );
+          // PS-163: the awaiting-only nickname backfill SQL now lives in the credential-accounts
+          // service (single owner). This handler still decides WHEN to run it (real label change above).
+          ordersUpdated = await backfillAwaitingSnapshotNickname(sql, before.label, patch.label);
         } catch (err) {
           console.warn(
             '[carrier-accounts:PATCH] awaiting-snapshot backfill failed:',
