@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
+import { testOrInactiveClientPredicateSql } from '../lib/active-client-predicate';
 import { shipments } from '../db/schema/shipments';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
@@ -132,7 +133,7 @@ async function loadManifest(filters: ManifestFilters) {
         // ask for a single client (explicit clientId trusts the
         // caller — admin/diagnostic flow).
         filters.clientId === undefined
-          ? sql`not exists (select 1 from clients c where c.id = ${shipments.clientId} and (c.is_test = true or coalesce(c.active, true) = false))`
+          ? sql`not exists (select 1 from clients c where c.id = ${shipments.clientId} and ${sql.raw(testOrInactiveClientPredicateSql('c'))})`
           : undefined
       )
     )

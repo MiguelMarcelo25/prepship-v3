@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
@@ -79,7 +80,7 @@ const activeInventoryClientPredicate = sql`(
   or exists (
     select 1 from clients visible_client
     where visible_client.id = ${inventory.clientId}
-      and coalesce(visible_client.active, true) = true
+      and ${sql.raw(activeClientPredicateSql('visible_client'))}
   )
 )`;
 
@@ -849,7 +850,7 @@ app.get(
         or exists (
           select 1 from clients c
           where c.id = o.client_id
-            and coalesce(c.active, true) = true
+            and ${sql.raw(activeClientPredicateSql('c'))}
         )
       )
       and ${inventoryOrderScopePredicate(skuOrdersScope)}

@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { parentSkus } from '../db/schema/parent-skus';
 import { inventory } from '../db/schema/inventory';
 import { clients } from '../db/schema/clients';
@@ -31,7 +32,7 @@ const activeParentSkuClientPredicate = sql`(
   or exists (
     select 1 from ${clients} owner_client
     where owner_client.id = ${parentSkus.clientId}
-      and coalesce(owner_client.active, true) = true
+      and ${sql.raw(activeClientPredicateSql('owner_client'))}
   )
 )`;
 

@@ -9,6 +9,7 @@ import { orderItems } from '../db/schema/order-items';
 import { orders } from '../db/schema/orders';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
@@ -68,7 +69,7 @@ const activeOrderClientPredicate = sql`(
   or exists (
     select 1 from ${clients} owner_client
     where owner_client.id = ${orders.clientId}
-      and coalesce(owner_client.active, true) = true
+      and ${sql.raw(activeClientPredicateSql('owner_client'))}
   )
 )`;
 
@@ -90,7 +91,7 @@ const activeInventoryClientPredicate = sql`(
   or exists (
     select 1 from ${clients} owner_client
     where owner_client.id = ${inventory.clientId}
-      and coalesce(owner_client.active, true) = true
+      and ${sql.raw(activeClientPredicateSql('owner_client'))}
   )
 )`;
 

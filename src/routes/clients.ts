@@ -4,6 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
 import { listShipStationStores } from '../connectors/store/shipstation';
@@ -286,7 +287,7 @@ app.get(
       : sql`and exists (
           select 1 from clients visible_client
           where visible_client.id = o.client_id
-            and coalesce(visible_client.active, true) = true
+            and ${sql.raw(activeClientPredicateSql('visible_client'))}
         )`;
     const dateFilter = sql`
       ${q.dateFrom ? sql`and o.order_date >= ${q.dateFrom}::timestamptz` : sql``}
@@ -367,7 +368,7 @@ app.get('/unassigned-orphans', async (c) => {
     from orders o
     left join clients c
       on o.store_id = any(c.store_ids)
-      and coalesce(c.active, true) = true
+      and ${sql.raw(activeClientPredicateSql('c'))}
     where o.client_id is null
       and o.store_id is not null
       and c.id is null

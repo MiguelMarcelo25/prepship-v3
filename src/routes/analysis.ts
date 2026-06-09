@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { activeClientPredicateSql, testOrInactiveClientPredicateSql } from '../lib/active-client-predicate';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
 
@@ -51,27 +52,27 @@ app.get('/overview', async (c) => {
       (select count(*)::int from orders o
          where order_date >= date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisOrderScopePredicate(scope)}
-           and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_today,
+           and not exists (select 1 from clients c where c.id = o.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as orders_today,
       (select count(*)::int from orders o
          where order_date >= date_trunc('week', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisOrderScopePredicate(scope)}
-           and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_week,
+           and not exists (select 1 from clients c where c.id = o.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as orders_week,
       (select count(*)::int from orders o
          where order_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisOrderScopePredicate(scope)}
-           and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_month,
+           and not exists (select 1 from clients c where c.id = o.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as orders_month,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
-           and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_today,
+           and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as shipped_today,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('week', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
-           and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_week,
+           and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as shipped_week,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
-           and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_month,
+           and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as shipped_month,
       (select coalesce(sum(marked_cost),0)::text
          from (
            select
@@ -98,7 +99,7 @@ app.get('/overview', async (c) => {
            ) cost_model
            where s.voided = false and s.ship_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
              and ${analysisShipmentScopePredicate(scope)}
-             and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
+             and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})
          ) shipping_costs) as shipping_cost_month
   `);
   const r = rows[0] ?? {
@@ -170,7 +171,7 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
       -- 2026-05-12 visibility fix: also exclude inactive clients
       -- (operator disabled them in Settings → Clients) so the timeseries
       -- chart stops including their historical shipments.
-      and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
+      and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})
     group by date_trunc('day', s.ship_date at time zone 'America/Los_Angeles')
     order by date_trunc('day', s.ship_date at time zone 'America/Los_Angeles') desc
   `);
@@ -357,7 +358,7 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
           o.client_id is null
           or exists (
             select 1 from clients c
-            where c.id = o.client_id and coalesce(c.active, true) = true
+            where c.id = o.client_id and ${sql.raw(activeClientPredicateSql('c'))}
           )
         )
     )
@@ -402,7 +403,7 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
         o.client_id is null
         or exists (
           select 1 from clients c
-          where c.id = o.client_id and coalesce(c.active, true) = true
+          where c.id = o.client_id and ${sql.raw(activeClientPredicateSql('c'))}
         )
       )
       and oi.sku in (${skuList})
@@ -600,7 +601,7 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
         and ${analysisOrderScopePredicate(q)}
         and oi.quantity > 0
         and oi.sku <> ''
-        and (o.client_id is null or coalesce(c.active, true) = true)
+        and (o.client_id is null or ${sql.raw(activeClientPredicateSql('c'))})
     ),
     order_sku_rows as (
       select
@@ -708,7 +709,7 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
         o.client_id is null
         or exists (
           select 1 from clients c
-          where c.id = o.client_id and coalesce(c.active, true) = true
+          where c.id = o.client_id and ${sql.raw(activeClientPredicateSql('c'))}
         )
       )
   `);
@@ -791,7 +792,7 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
       and not exists (
         select 1 from clients c
         where c.id = o.client_id
-          and (c.is_test = true or coalesce(c.active, true) = false)
+          and ${sql.raw(testOrInactiveClientPredicateSql('c'))}
       )
     group by oi.sku
     order by total_qty desc

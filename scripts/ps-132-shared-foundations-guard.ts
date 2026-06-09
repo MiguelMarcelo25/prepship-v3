@@ -14,6 +14,10 @@ import {
   knownCarrierNickname,
   knownCarrierCode,
 } from '../src/lib/carrier-account-registry';
+import {
+  activeClientPredicateSql,
+  testOrInactiveClientPredicateSql,
+} from '../src/lib/active-client-predicate';
 
 let failures = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -84,6 +88,30 @@ function check(name: string, got: unknown, want: unknown) {
   const orders = readFileSync('src/routes/orders.ts', 'utf8');
   check('orders.ts derives refs from the registry', /KNOWN_CARRIER_ACCOUNTS\.map/.test(orders), true);
   check('orders.ts no longer hardcodes the 433542 ref literal', /shippingProviderId:\s*433542,\s*nickname:/.test(orders), false);
+}
+
+// ── Active-client visibility predicate: one source; renders byte-identical SQL ──
+{
+  // EXACT strings the inline raw SQL used before — behavior must be unchanged.
+  check('active predicate (c) renders identical SQL', activeClientPredicateSql('c'), 'coalesce(c.active, true) = true');
+  check('active predicate (owner_client) alias', activeClientPredicateSql('owner_client'), 'coalesce(owner_client.active, true) = true');
+  check('test-or-inactive predicate (c) renders identical SQL', testOrInactiveClientPredicateSql('c'), '(c.is_test = true or coalesce(c.active, true) = false)');
+
+  // No route still hardcodes the predicate (comments excluded).
+  const routes = [
+    'src/routes/analysis.ts', 'src/routes/clients.ts', 'src/routes/dashboard.ts',
+    'src/routes/init.ts', 'src/routes/inventory.ts', 'src/routes/manifests.ts',
+    'src/routes/orders.ts', 'src/routes/parent-skus.ts', 'src/routes/shipments.ts',
+  ];
+  for (const f of routes) {
+    const src = readFileSync(f, 'utf8');
+    const realInline = src
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//') && !line.includes('--') && !line.includes('←'))
+      .some((line) => /coalesce\([a-z_]+\.active, true\) = (true|false)/.test(line));
+    check(`${f} has no real inline active predicate`, realInline, false);
+    check(`${f} imports the active-client predicate helper`, /active-client-predicate/.test(src), true);
+  }
 }
 
 if (failures > 0) {

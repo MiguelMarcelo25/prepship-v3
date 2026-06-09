@@ -29,6 +29,7 @@ import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '.
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { detectExpeditedShipping } from '../lib/shipping/expedited';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import {
@@ -216,7 +217,7 @@ const activeOrderClientPredicate = sql`(
   or ${orders.clientId} in (
     select owner_client.id
     from ${clients} owner_client
-    where coalesce(owner_client.active, true) = true
+    where ${sql.raw(activeClientPredicateSql('owner_client'))}
   )
 )`;
 
@@ -2177,7 +2178,7 @@ app.get(
         o.store_id is not null
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       )
-    ) and coalesce(c.active, true) = true
+    ) and ${sql.raw(activeClientPredicateSql('c'))}
     and not exists (
       select 1 from clients hidden_client
       where hidden_client.id = o.client_id
@@ -2365,7 +2366,7 @@ app.get('/distinct-skus', async (c) => {
           select 1
           from clients owner_client
           where owner_client.id = o.client_id
-            and coalesce(owner_client.active, true) = true
+            and ${sql.raw(activeClientPredicateSql('owner_client'))}
         )
       )
       and (${status}::text is null or o.order_status = ${status}::text)

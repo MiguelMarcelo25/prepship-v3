@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { clients } from '../db/schema/clients';
 import { locations } from '../db/schema/locations';
 import { packages } from '../db/schema/packages';
@@ -134,7 +135,7 @@ app.get('/counts', async (c) => {
       o.store_id is not null
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
     )
-  ) and coalesce(c.active, true) = true`;
+  ) and ${sql.raw(activeClientPredicateSql('c'))}`;
   const visibleAwaitingOrdersPredicate = sql`not (
     coalesce(o.external_order_id, '') ilike 'ebay-%'
   )`;
@@ -208,7 +209,7 @@ app.get('/counts', async (c) => {
               or exists (
                 select 1 from clients inventory_client
                 where inventory_client.id = i.client_id
-                  and coalesce(inventory_client.active, true) = true
+                  and ${sql.raw(activeClientPredicateSql('inventory_client'))}
               )
             )
         ) as inventory

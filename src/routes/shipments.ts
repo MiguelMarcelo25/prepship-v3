@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { shipments } from '../db/schema/shipments';
 import { clients } from '../db/schema/clients';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
@@ -28,7 +29,7 @@ const activeShipmentClientPredicate = sql`(
   or exists (
     select 1 from ${clients} owner_client
     where owner_client.id = ${shipments.clientId}
-      and coalesce(owner_client.active, true) = true
+      and ${sql.raw(activeClientPredicateSql('owner_client'))}
   )
 )`;
 
