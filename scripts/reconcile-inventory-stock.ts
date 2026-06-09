@@ -305,6 +305,10 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
         ${clientFilter}
         ${skuFilter}
     ),
+    -- PS-133: this ledger_rows/ledger_summary balance is the raw-postgres form of the
+    -- canonical effective-stock owner in src/services/inventory-stock-math.ts
+    -- (inventoryLedgerBalance). This script uses the raw `postgres` driver (not Drizzle),
+    -- so it can't import the owner directly; the behavioral guard pins the shared formula.
     ledger_rows as (
       select l.inventory_id, l.qty
       from inventory_ledger l

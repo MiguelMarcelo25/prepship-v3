@@ -385,6 +385,10 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         where l.type = 'receive'
         group by l.inventory_id
       ),
+      -- PS-133: this ledger_balance CTE is the SQL form of the canonical effective-stock
+      -- owner in src/services/inventory-stock-math.ts (inventoryLedgerBalance /
+      -- computeEffectiveStockForIds). Kept inline here for the single-transaction bulk
+      -- upsert; the behavioral guard (test:ps-133-stock-math) pins the shared formula.
       ledger_balance as (
         select
           stock_rows.inventory_id,

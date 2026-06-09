@@ -10,6 +10,7 @@ import { orders } from '../db/schema/orders';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
+import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
@@ -623,73 +624,13 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
   );
 
-  const effectiveRows = ids.length && shouldRunLiveMetrics
-    ? await db.execute<{
-        inventory_id: number;
-        total_received: number;
-        total_sold: number;
-      }>(sql`
-        with ids as (
-          select unnest(array[${sql.join(ids.map((id) => sql`${id}`), sql`, `)}]::int[]) as id
-        ),
-        receives as (
-          select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as total_received
-          from ${inventoryLedger} l
-          where l.inventory_id in (select id from ids)
-            and l.type = 'receive'
-          group by l.inventory_id
-        ),
-        ledger_sells as (
-          select ship_rows.inventory_id as id, abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold
-          from (
-            select l.inventory_id, l.order_id, min(l.qty)::int as qty
-            from ${inventoryLedger} l
-            where l.inventory_id in (select id from ids)
-              and l.type = 'ship'
-              and l.order_id is not null
-            group by l.inventory_id, l.order_id
-          ) ship_rows
-          group by ship_rows.inventory_id
-        ),
-        sells as (
-          select i.id as id, coalesce(sum(oi.quantity), 0)::int as total_sold
-          from ${inventory} i
-          join ${orderItems} oi
-            on lower(oi.sku) = lower(i.sku)
-          join ${orders} o
-            on (
-              o.id = oi.order_id
-              and (
-                (i.client_id is null and o.client_id is null)
-                or i.client_id = o.client_id
-              )
-            )
-          where i.id in (select id from ids)
-            and oi.quantity > 0
-            and o.order_status = 'shipped'
-          group by i.id
-        )
-        select
-          ids.id as inventory_id,
-          coalesce(receives.total_received, 0)::int as total_received,
-          coalesce(ledger_sells.total_sold, sells.total_sold, 0)::int as total_sold
-        from ids
-        left join receives on receives.id = ids.id
-        left join ledger_sells on ledger_sells.id = ids.id
-        left join sells on sells.id = ids.id
-      `)
-    : [];
-
-  const effectiveByInventoryId = new Map(
-    effectiveRows.map((row) => [
-      row.inventory_id,
-      {
-        totalReceived: Number(row.total_received) || 0,
-        totalSold: Number(row.total_sold) || 0,
-        effectiveStock: (Number(row.total_received) || 0) - (Number(row.total_sold) || 0),
-      },
-    ])
-  );
+  // PS-133: delegate to the canonical effective-stock owner. This FIXES the prior drift bug
+  // where effectiveStock = total_received - total_sold, which IGNORED adjust/remove/damage/
+  // pick ledger rows. The owner uses the full ledger_balance (all non-ship rows + dedup ship
+  // rows) with a stock_qty fallback — identical to the inventory list + admin reconcile.
+  const effectiveByInventoryId = ids.length && shouldRunLiveMetrics
+    ? await computeEffectiveStockForIds(ids)
+    : new Map<number, EffectiveStockEntry>();
 
   const payload = {
     items: rows.map((row) => {

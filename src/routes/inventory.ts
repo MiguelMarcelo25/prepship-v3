@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
+import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
@@ -302,103 +303,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
-  const effectiveRows = rows.length
+  // PS-133: effective stock is owned by computeEffectiveStockForIds (src/services/
+  // inventory-stock-math.ts) so the inventory list, dashboard, and admin reconcile can never
+  // drift. Read-only analytics over inventory_ledger; no locked rows mutated.
+  const effectiveByInventoryId = rows.length
     ? await timedInventoryStep(timings, 'effectiveStock', () =>
-        db.execute<{
-          inventory_id: number
-          total_received: number
-          total_sold: number
-          effective_stock: number
-        }>(sql`
-        with ids as (
-          select unnest(array[${sql.join(rows.map((r) => sql`${r.id}`), sql`, `)}]::int[]) as id
-        ),
-        receives as (
-          select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as total_received
-          from ${inventoryLedger} l
-          where l.inventory_id in (select id from ids)
-            and l.type = 'receive'
-          group by l.inventory_id
-        ),
-        ledger_balance as (
-          select stock_rows.inventory_id as id, coalesce(sum(stock_rows.qty), 0)::int as effective_stock
-          from (
-            select l.inventory_id, l.qty
-            from ${inventoryLedger} l
-            where l.inventory_id in (select id from ids)
-              and (l.type <> 'ship' or l.order_id is null)
-            union all
-            select l.inventory_id, min(l.qty)::int as qty
-            from ${inventoryLedger} l
-            where l.inventory_id in (select id from ids)
-              and l.type = 'ship'
-              and l.order_id is not null
-            group by l.inventory_id, l.order_id
-          ) stock_rows
-          group by stock_rows.inventory_id
-        ),
-        ledger_sells as (
-          select ship_rows.inventory_id as id, abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold
-          from (
-            select l.inventory_id, l.order_id, min(l.qty)::int as qty
-            from ${inventoryLedger} l
-            where l.inventory_id in (select id from ids)
-              and l.type = 'ship'
-              and l.order_id is not null
-            group by l.inventory_id, l.order_id
-          ) ship_rows
-          group by ship_rows.inventory_id
-        ),
-        sells as (
-          select i.id as id, coalesce(sum(oi.quantity), 0)::int as total_sold
-          from ${inventory} i
-          join ${orderItems} oi
-            on lower(oi.sku) = lower(i.sku)
-          join ${orders} o
-            on (
-              o.id = oi.order_id
-              and (
-              (i.client_id is null and o.client_id is null)
-              or i.client_id = o.client_id
-              )
-            )
-          where i.id in (select id from ids)
-            and oi.quantity > 0
-            -- Only physically-shipped orders count toward sold.
-            -- awaiting_shipment = future commitment, not gone.
-            -- cancelled = never went out. shipped = left the floor.
-            -- (Revision (c): the created_at anchor that lived here
-            -- was removed — it backfired on auto-synced SKUs whose
-            -- created_at is TODAY but whose order history is
-            -- older. See the long comment block above for the
-            -- full reasoning.)
-            and o.order_status = 'shipped'
-          group by i.id
-        )
-        select
-          ids.id as inventory_id,
-          coalesce(receives.total_received, 0)::int as total_received,
-          coalesce(ledger_sells.total_sold, sells.total_sold, 0)::int as total_sold,
-          coalesce(ledger_balance.effective_stock, ${inventory.stockQty}, 0)::int as effective_stock
-        from ids
-        left join ${inventory} on ${inventory.id} = ids.id
-        left join receives on receives.id = ids.id
-        left join ledger_balance on ledger_balance.id = ids.id
-        left join ledger_sells on ledger_sells.id = ids.id
-        left join sells on sells.id = ids.id
-      `)
+        computeEffectiveStockForIds(rows.map((r) => r.id)),
       )
-    : [];
-  const effectiveByInventoryId = new Map(
-    effectiveRows.map((row) => [
-      row.inventory_id,
-      {
-        totalReceived: Number(row.total_received) || 0,
-        totalSold: Number(row.total_sold) || 0,
-        effectiveStock: Number(row.effective_stock) || 0,
-      },
-    ])
-  );
+    : new Map<number, EffectiveStockEntry>();
 
   const response = paginated(
     rows.map((row) => {

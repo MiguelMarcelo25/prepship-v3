@@ -81,6 +81,8 @@ const inventoryView = readFileSync('web/src/components/Views/InventoryView.tsx',
 const inventoryParity = readFileSync('web/src/components/Views/inventory-parity.ts', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const reconcileScript = readFileSync('scripts/reconcile-inventory-stock.ts', 'utf8');
+// PS-133: the effective-stock SQL moved to the canonical owner; the route delegates to it.
+const inventoryStockMath = readFileSync('src/services/inventory-stock-math.ts', 'utf8');
 
 assert(
   reportingMetrics.includes('ledger_balance') &&
@@ -97,12 +99,14 @@ assert(
 );
 
 assert(
-  inventoryRoute.includes('ledger_balance') &&
-    inventoryRoute.includes('const effectiveRows = rows.length') &&
-    inventoryRoute.includes('ledger_sells') &&
-    inventoryRoute.includes('soldByInventoryId.get(row.id) ?? metric.soldLast30Days') &&
-    inventoryRoute.includes('Number(row.effective_stock) || 0'),
-  'inventory list computes visible-row stock and sold metrics from the deduped ledger balance',
+  // PS-133: the deduped ledger_balance + sells SQL now lives in the canonical owner
+  // (inventory-stock-math.ts); the inventory list route delegates to it.
+  inventoryStockMath.includes('ledger_balance') &&
+    inventoryStockMath.includes('ledger_sells') &&
+    inventoryStockMath.includes('Number(row.effective_stock) || 0') &&
+    inventoryRoute.includes('computeEffectiveStockForIds') &&
+    inventoryRoute.includes('soldByInventoryId.get(row.id) ?? metric.soldLast30Days'),
+  'inventory list computes visible-row stock and sold metrics from the deduped ledger balance (via the canonical owner)',
 );
 
 assert(

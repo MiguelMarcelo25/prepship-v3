@@ -9,6 +9,8 @@ const sourceAudit = fs.readFileSync(path.join(root, 'SOURCE_OF_TRUTH_AND_DUPLICA
 const reconciliationPlan = fs.readFileSync(path.join(root, 'RECONCILIATION_REPORTS_PLAN.md'), 'utf8');
 const inventoryService = fs.readFileSync(path.join(root, 'src/services/inventory.ts'), 'utf8');
 const inventoryRoute = fs.readFileSync(path.join(root, 'src/routes/inventory.ts'), 'utf8');
+// PS-133: effective-stock SQL now lives in the canonical owner; the route delegates to it.
+const inventoryStockMath = fs.readFileSync(path.join(root, 'src/services/inventory-stock-math.ts'), 'utf8');
 const inventoryView = fs.readFileSync(path.join(root, 'web/src/components/Views/InventoryView.tsx'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -65,9 +67,11 @@ assert(
 );
 
 assert(
-  inventoryRoute.includes('ledger_balance') &&
+  // PS-133: the route delegates to the canonical owner, which holds the ledger_balance SQL.
+  inventoryRoute.includes('computeEffectiveStockForIds') &&
+    inventoryStockMath.includes('ledger_balance') &&
     inventoryRoute.includes('POST /admin/reconcile-inventory-stock'),
-  'inventory route uses ledger balance for effective stock and keeps existing reconciliation repair path',
+  'inventory route uses ledger balance (via the canonical effective-stock owner) for effective stock and keeps existing reconciliation repair path',
 );
 
 assert(

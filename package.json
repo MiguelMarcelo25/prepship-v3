@@ -141,6 +141,7 @@
     "test:ps-126-zip4-rate-parity": "tsx scripts/ps-126-zip4-rate-parity-guard.ts",
     "test:ps-127-address-classification-parity": "tsx scripts/ps-127-address-classification-parity-guard.ts",
     "test:ps-132-shared-foundations": "tsx scripts/ps-132-shared-foundations-guard.ts",
+    "test:ps-133-stock-math": "tsx scripts/ps-133-inventory-stock-math-guard.ts",
     "test:ps-128-129-upstream-shipping-safety": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
     "test:ps-128-webhook-ingestion": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
     "test:ps-128-external-shipped-label-block": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
