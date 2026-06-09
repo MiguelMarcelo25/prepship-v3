@@ -15,7 +15,14 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
 }
 
-const serviceSource = read('src/services/print-queue.ts');
+// PS-138: the PDF-rendering helpers (drawHeader, BatchRecipient, resolveRecipientDisplayName,
+// planBatchNamesDisplay, annotateDuplicateNames, BATCH_NAMES_HEADER_THRESHOLD, manifest draws)
+// moved to print-queue-pdf.ts. loadBatchRecipientsByGroup + the orders.shipToName read + the
+// runMergeJob override notes stay in print-queue.ts. Read print-queue.ts FIRST (so the
+// loadBatchRecipientsByGroup body slice below stays intra-file), then append the PDF module so
+// the moved-symbol substring checks resolve wherever the symbol now lives.
+const serviceSource =
+  read('src/services/print-queue.ts') + '\n' + read('src/services/print-queue-pdf.ts');
 
 const report = createGuardReport({
   title: 'Print Queue Batch Names + Manifest Guard',

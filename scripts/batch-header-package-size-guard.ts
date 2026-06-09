@@ -10,7 +10,12 @@ import { readFileSync } from 'node:fs';
 import zlib from 'node:zlib';
 import { formatPackageDims, renderBatchHeaderPdfForTest } from '../src/services/print-queue';
 
-const source = readFileSync('src/services/print-queue.ts', 'utf8');
+// PS-138: the drawHeader PDF renderer moved to print-queue-pdf.ts; the orchestration
+// (loadPackageDimsByOrderId + the shipments dims join) stays in print-queue.ts. Read BOTH so the
+// source assertions match wherever the asserted line now lives (the `Package: ${packageDims}` /
+// `total unit` / `packageDims: string | null = null` literals are in drawHeader, now in the PDF module).
+const source = readFileSync('src/services/print-queue.ts', 'utf8')
+  + '\n' + readFileSync('src/services/print-queue-pdf.ts', 'utf8');
 
 // Mirror scripts/ps-070-batch-pdf-cert.ts: inflate Flate streams and decode
 // pdf-lib's hex `<...> Tj` text so we can assert on the rendered PDF content.
