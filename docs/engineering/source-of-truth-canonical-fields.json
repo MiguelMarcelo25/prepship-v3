@@ -1,6 +1,6 @@
 {
-  "version": "ps-118-v1",
-  "description": "PS-118 — machine-checkable canonical source-of-truth contract. Each check asserts that a canonical field / owner / guard still lives at its authoritative file (mustContain) and that a forbidden alternate-truth pattern is absent (mustNotContain). Tokens are plain substrings unless prefixed with 're:' (regex). The check FAILS the build if a canonical identifier disappears from its owner or a forbidden UI/fallback pattern becomes the only source of truth.",
+  "version": "ps-130-v1",
+  "description": "PS-118/PS-130 — machine-checkable canonical source-of-truth contract. Each check asserts that a canonical field / owner / guard still lives at its authoritative file (mustContain) and that a forbidden alternate-truth pattern is absent (mustNotContain). Tokens are plain substrings unless prefixed with 're:' (regex). The check FAILS the build if a canonical identifier disappears from its owner or a forbidden UI/fallback pattern becomes the only source of truth. PS-130 hardening: added ACTIVE frontend (web/) owner checks so a regression that re-introduces FE-owned rate truth (a divergent client-side best-rate re-rank, a FE pickBestRate selector, or dropping the rate-proof lib delegation) is caught directly by the cert — not only by the referenced guards.",
   "checks": [
     {
       "id": "orders-tenant-identity",
@@ -114,6 +114,37 @@
       "owner": "src/db/schema/clients.ts",
       "severity": "P0",
       "mustContain": ["storeIds", "ssApiKeyV2", "isTest", "rateSourceClientId"]
+    },
+    {
+      "id": "frontend-rate-proof-lib-canonical",
+      "workflow": "PS-130 — frontend rate-proof + best-rate consumption lives in the canonical lib (no inline FE rate truth)",
+      "owner": "web/src/lib/rate-proof.ts",
+      "severity": "P0",
+      "mustContain": ["BACKEND_RATE_PROOF_SOURCE", "rateProofFingerprint", "selectProofFromCandidates", "findCanonicalBestRate", "canonicalRateKey"],
+      "mustNotContain": []
+    },
+    {
+      "id": "rate-browser-consumes-backend-bestrate",
+      "workflow": "PS-130/PS-135 — Rate Browser auto-applies the BACKEND bestRate, never a divergent client-side re-rank",
+      "owner": "web/src/components/RateBrowserModal.tsx",
+      "severity": "P0",
+      "mustContain": ["findCanonicalBestRate(canonicalBackendBest, available)", "from '../lib/rate-proof'"],
+      "mustNotContain": ["re:const best = available\\.sort\\("]
+    },
+    {
+      "id": "frontend-no-client-rate-selector",
+      "workflow": "PS-130/PS-135 — frontend has no parallel client-side best-rate selector (backend owns selection)",
+      "owner": "web/src/utils/markups.ts",
+      "severity": "P0",
+      "mustNotContain": ["export function pickBestRate"]
+    },
+    {
+      "id": "orders-view-consumes-backend-bestrate",
+      "workflow": "PS-130/PS-111/PS-135 — Orders view consumes the backend bestRate + backend-owned completeness, delegating proof to the canonical lib",
+      "owner": "web/src/components/Views/OrdersView.tsx",
+      "severity": "P1",
+      "mustContain": ["const bestRate = toRecord(response?.bestRate)", "from '../../lib/rate-proof'", "deriveBackendBestRateComplete"],
+      "mustNotContain": []
     }
   ],
   "uiOwnedTruthGuards": {
@@ -122,6 +153,7 @@
       "test:ps-103-remove-frontend-fingerprint-authority (frontend does not mint rate fingerprints/proofs)",
       "test:ps-111-backend-rate-authority (best-rate completeness is backend-owned)",
       "test:ps-079-best-rate-source-of-truth (frontend consumes backend bestRate)",
+      "test:ps-135-rate-browser-rerank (Rate Browser consumes backend bestRate; no FE re-rank leak)",
       "test:selected-rate-proof-boundary (label purchase requires backend-issued proof)"
     ]
   }
