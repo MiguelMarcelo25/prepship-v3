@@ -27,7 +27,32 @@ import {
   assertPersistedOrderBestRateDto,
   normalizeOrderBestRateDto,
   normalizeOrderSelectedRateDto,
+  normalizeListBestRate,
 } from '../services/order-rate-dto';
+// PS-137: pure orders DTO helpers extracted from this route into shared service modules
+// (behavior-preserving). Primitives + CSV formatters are consumed by the list row-map, /export,
+// and order-detail; co-locating them keeps the route a thinner consumer.
+import {
+  type CanonicalSourceVersion,
+  type CanonicalFieldSource,
+  recordOrNull,
+  stringOrNull,
+  booleanOrNull,
+  finiteNumberOrNull,
+  providerIdOrNull,
+  rateAmount,
+  sourceOf,
+  pickStringSource,
+  pickNumberSource,
+} from '../services/orders-dto-primitives';
+import {
+  csvEscape,
+  compactCsvValue,
+  formatCsvNumber,
+  formatCsvDimensions,
+  formatCsvItems,
+  formatCsvSkuList,
+} from '../services/orders-csv-format';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
@@ -364,14 +389,8 @@ type V2CarrierAccountRef = {
   accountNumber: string | null;
 };
 
-type CanonicalSourceVersion = 'v1' | 'v2' | 'local' | 'derived';
-
-type CanonicalFieldSource = {
-  version: CanonicalSourceVersion;
-  source: string;
-  via: string;
-  note?: string;
-};
+// PS-137: CanonicalSourceVersion / CanonicalFieldSource types + the coercion/provenance
+// primitives below now live in ../services/orders-dto-primitives (imported above).
 
 // PS-132: derived from the single backend carrier-account registry (src/lib/
 // carrier-account-registry.ts). Same fields/order as before; nickname for 433543 reconciled
@@ -436,23 +455,8 @@ function resolveV2CarrierAccountRef(
   return null;
 }
 
-function normalizeListBestRate(value: unknown) {
-  try {
-    const bestRate = normalizeOrderBestRateDto(value);
-    if (!bestRate) return null;
-    const amount = bestRate.shipmentCost + bestRate.otherCost;
-    if (!(amount > 0) && !(bestRate.carrierCode && bestRate.serviceCode)) return null;
-    return {
-      ...bestRate,
-      amount,
-      cost: amount,
-      providerAccountId: bestRate.shippingProviderId,
-      providerAccountNickname: bestRate.carrierNickname,
-    };
-  } catch {
-    return null;
-  }
-}
+// PS-137: normalizeListBestRate moved to ../services/order-rate-dto (co-located with its owner
+// normalizeOrderBestRateDto; imported above).
 
 function orderShippingEligibilityContext(row: {
   clientId?: number | string | null;
@@ -494,85 +498,9 @@ function sanitizeAwaitingOverridesForShippingEligibility(
   };
 }
 
-function recordOrNull(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function stringOrNull(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value : null;
-}
-
-function booleanOrNull(value: unknown): boolean | null {
-  return typeof value === 'boolean' ? value : null;
-}
-
-function finiteNumberOrNull(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number.parseFloat(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function providerIdOrNull(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string') return null;
-  const match = value.match(/^se-(\d+)$/i);
-  const parsed = Number.parseInt(match?.[1] ?? value, 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function rateAmount(value: unknown): number | null {
-  const rate = recordOrNull(value);
-  if (!rate) return null;
-  const shippingAmount = recordOrNull(rate.shipping_amount);
-  const otherAmount = recordOrNull(rate.other_amount);
-  const shipmentCost =
-    finiteNumberOrNull(rate.shipmentCost) ??
-    finiteNumberOrNull(shippingAmount?.amount) ??
-    finiteNumberOrNull(rate.cost) ??
-    finiteNumberOrNull(rate.amount);
-  const otherCost = finiteNumberOrNull(rate.otherCost) ?? finiteNumberOrNull(otherAmount?.amount) ?? 0;
-  return shipmentCost != null ? shipmentCost + otherCost : null;
-}
-
-function sourceOf(
-  version: CanonicalSourceVersion,
-  source: string,
-  via: string,
-  note?: string,
-): CanonicalFieldSource {
-  return note ? { version, source, via, note } : { version, source, via };
-}
-
-function pickStringSource(
-  candidates: Array<{ value: unknown; source: CanonicalFieldSource }>,
-): { value: string | null; source: CanonicalFieldSource } {
-  for (const candidate of candidates) {
-    const value = stringOrNull(candidate.value);
-    if (value != null) return { value, source: candidate.source };
-  }
-  return {
-    value: null,
-    source: sourceOf('local', 'null', 'no populated source field'),
-  };
-}
-
-function pickNumberSource(
-  candidates: Array<{ value: unknown; source: CanonicalFieldSource }>,
-): { value: number | null; source: CanonicalFieldSource } {
-  for (const candidate of candidates) {
-    const value = finiteNumberOrNull(candidate.value);
-    if (value != null) return { value, source: candidate.source };
-  }
-  return {
-    value: null,
-    source: sourceOf('local', 'null', 'no populated source field'),
-  };
-}
+// PS-137: recordOrNull / stringOrNull / booleanOrNull / finiteNumberOrNull / providerIdOrNull /
+// rateAmount / sourceOf / pickStringSource / pickNumberSource moved to
+// ../services/orders-dto-primitives (imported above). Pure relocation, no behavior change.
 
 function dateToIso(value: unknown): string | null {
   if (!value) return null;
@@ -3166,70 +3094,8 @@ const exportQuery = z.object({
   clientId: z.coerce.number().int().optional(),
 });
 
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const s = v instanceof Date ? v.toISOString() : String(v);
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function compactCsvValue(parts: unknown[], separator = ', '): string {
-  return parts
-    .map((part) => {
-      if (part === null || part === undefined) return '';
-      const value = String(part).trim();
-      return value === 'null' || value === 'undefined' ? '' : value;
-    })
-    .filter(Boolean)
-    .join(separator);
-}
-
-function formatCsvNumber(value: unknown, decimals = 2): string | number {
-  const n = finiteNumberOrNull(value);
-  if (n === null) return '';
-  return Number.isInteger(n) ? n : Number(n.toFixed(decimals));
-}
-
-function formatCsvDimensions(
-  length: unknown,
-  width: unknown,
-  height: unknown
-): string {
-  const dims = [
-    ['L', finiteNumberOrNull(length)],
-    ['W', finiteNumberOrNull(width)],
-    ['H', finiteNumberOrNull(height)],
-  ] as const;
-  if (dims.every(([, value]) => value !== null)) {
-    return dims.map(([, value]) => formatCsvNumber(value)).join(' x ');
-  }
-  return dims
-    .filter(([, value]) => value !== null)
-    .map(([label, value]) => `${label} ${formatCsvNumber(value)}`)
-    .join(' ');
-}
-
-function formatCsvItems(items: Array<Record<string, unknown>>): string {
-  return items
-    .map((item) => {
-      const qty = finiteNumberOrNull(item.quantity);
-      const sku = stringOrNull(item.sku);
-      const name = stringOrNull(item.name);
-      return compactCsvValue([qty !== null && qty > 0 ? `${qty}x` : '', sku, name], ' - ');
-    })
-    .filter(Boolean)
-    .join(' | ');
-}
-
-function formatCsvSkuList(items: Array<Record<string, unknown>>): string {
-  return [
-    ...new Set(
-      items
-        .map((item) => stringOrNull(item.sku))
-        .filter((sku): sku is string => Boolean(sku))
-    ),
-  ].join(', ');
-}
+// PS-137: csvEscape / compactCsvValue / formatCsvNumber / formatCsvDimensions / formatCsvItems /
+// formatCsvSkuList moved to ../services/orders-csv-format (imported above). Pure relocation.
 
 app.get('/export', zValidator('query', exportQuery), async (c) => {
   const q = c.req.valid('query');

@@ -336,3 +336,26 @@ export function normalizeOrderSelectedRateDto(
 
   return hasAnyMeaningfulSelectedRateField(rate) ? rate : null;
 }
+
+// PS-137: the Orders list/export bestRate normalizer, co-located with its owner
+// normalizeOrderBestRateDto (rate truth lives in this service per ARCHITECTURE.md). Thin wrapper:
+// normalize, reject an empty rate (no positive amount AND no carrier+service), then add the list
+// DTO aliases (amount/cost/providerAccountId/providerAccountNickname). Behavior-identical to the
+// prior inline routes/orders.ts version; consumed by GET '/' (list) and GET '/export'.
+export function normalizeListBestRate(value: unknown) {
+  try {
+    const bestRate = normalizeOrderBestRateDto(value);
+    if (!bestRate) return null;
+    const amount = bestRate.shipmentCost + bestRate.otherCost;
+    if (!(amount > 0) && !(bestRate.carrierCode && bestRate.serviceCode)) return null;
+    return {
+      ...bestRate,
+      amount,
+      cost: amount,
+      providerAccountId: bestRate.shippingProviderId,
+      providerAccountNickname: bestRate.carrierNickname,
+    };
+  } catch {
+    return null;
+  }
+}
