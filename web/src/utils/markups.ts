@@ -80,32 +80,10 @@ export function applyCarrierMarkup(
     : baseCost + markup.value;
 }
 
-/**
- * Pick best (cheapest) rate AFTER markup applied
- * Filters out blocked rates (based on storeId)
- */
-export function pickBestRate(
-  rates: Rate[] | null,
-  markupsMap: MarkupsMap,
-  storeId?: number
-): Rate | null {
-  if (!rates || rates.length === 0) return null;
-
-  // Filter to available rates (not blocked)
-  const available = rates.filter(r => {
-    const baseCost = (r.shipmentCost ?? r.amount ?? 0) + (r.otherCost ?? 0);
-    return baseCost > 0 && !isBlockedRate(r, storeId);
-  });
-
-  if (available.length === 0) return null;
-
-  // Find cheapest after markup applied
-  return available.reduce((best, current) => {
-    const bestPrice = applyCarrierMarkup(best, markupsMap);
-    const currentPrice = applyCarrierMarkup(current, markupsMap);
-    return currentPrice < bestPrice ? current : best;
-  });
-}
+// PS-135: the frontend pickBestRate() was removed — it had ZERO callers and was a parallel
+// client-side rate selector with no insurance/eligibility guard that would diverge from the
+// backend's authoritative pickBestRate (src/services/rates.ts). The backend owns best-rate
+// selection; the FE consumes response.bestRate.
 
 export function isBlockedRate(rate: Rate | null | undefined, storeId?: number): boolean {
   if (!rate) return false;

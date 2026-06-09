@@ -61,6 +61,14 @@ import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '..
 import { useMarkups } from '../../contexts/MarkupsContext'
 import { useAuth } from '../../lib/auth'
 import { api } from '../../lib/api'
+// PS-135: canonical FE rate-proof helpers (extracted from this file; pure backend-DTO reads).
+import {
+  BACKEND_RATE_PROOF_SOURCE,
+  hasBackendIssuedRateProof,
+  rateProofFingerprint,
+  selectProofFromCandidates,
+  rateQuoteRefFromCandidates,
+} from '../../lib/rate-proof'
 import { applyCarrierMarkup } from '../../utils/markups'
 import type {
   CarrierAccountDto,
@@ -755,7 +763,7 @@ const TEST_PACK_DIMS = { length: 5, width: 3, height: 1, units: 'inches' }
 const TEST_SHIPPING_ACCOUNT_LABEL = 'PrepShip Test'
 const TEST_CARRIER_CODE = 'prepship_test'
 const TEST_SERVICE_CODE = 'prepship_test_standard'
-const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'
+// PS-135: BACKEND_RATE_PROOF_SOURCE now imported from ../../lib/rate-proof (single source).
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
 // Passive auto-rating now rates EVERY visible rateable awaiting order (so each
 // row shows a spinner until it resolves, never a parked "—"). This is the
@@ -5739,72 +5747,27 @@ export default function OrdersView({
     )
   }
 
-  function proofMetadataRecord(rate: Record<string, unknown> | null) {
-    return toRecord(rate?.metadata)
-  }
-
-  function proofRawRecord(rate: Record<string, unknown> | null) {
-    return toRecord(rate?.raw)
-  }
-
-  function hasBackendIssuedRateProof(rate: Record<string, unknown> | null) {
-    const metadata = proofMetadataRecord(rate)
-    const raw = proofRawRecord(rate)
-    return (
-      toStringValue(rate?.proofSource) === BACKEND_RATE_PROOF_SOURCE ||
-      toStringValue(metadata?.proofSource) === BACKEND_RATE_PROOF_SOURCE ||
-      toStringValue(raw?.proofSource) === BACKEND_RATE_PROOF_SOURCE
-    )
-  }
-
-  function rateProofFingerprint(rate: Record<string, unknown> | null) {
-    const raw = toRecord(rate?.raw)
-    const metadata = toRecord(rate?.metadata)
-    return (
-      toStringValue(rate?.requestFingerprint) ??
-      toStringValue(rate?.rateRequestFingerprint) ??
-      toStringValue(rate?.cacheKey) ??
-      toStringValue(metadata?.requestFingerprint) ??
-      toStringValue(metadata?.cacheKey) ??
-      toStringValue(raw?.requestFingerprint) ??
-      toStringValue(raw?.cacheKey) ??
-      null
-    )
-  }
-
+  // PS-135: proof logic lives in ../../lib/rate-proof (hasBackendIssuedRateProof /
+  // rateProofFingerprint / selectProofFromCandidates / rateQuoteRefFromCandidates). These two
+  // wrappers keep every existing call site unchanged while delegating to the canonical lib.
   function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown) {
-    const candidates = [
+    return selectProofFromCandidates([
       toRecord(candidate),
       toRecord(order.bestRate),
       toRecord(order.selectedRate),
       getSavedBestRateRecord(order),
-    ].filter(Boolean) as Record<string, unknown>[]
-    const selectedRate = candidates.find((rate) => hasBackendIssuedRateProof(rate) && rateProofFingerprint(rate)) ?? null
-    const requestFingerprint = rateProofFingerprint(selectedRate)
-    if (!selectedRate || !requestFingerprint) return undefined
-    return { requestFingerprint, selectedRate }
+    ])
   }
 
-  // PS-105: the backend-owned rate quote reference for label/queue payloads. Mirrors
-  // buildSelectedRateProofPayload's candidate selection so the id/key match the proof's
-  // rate. The backend PREFERS { rateQuoteId, selectedRateKey } and falls back to
-  // selectedRateProof, so this is additive — emitting it never breaks a purchase, and
-  // when the rate carries no backend snapshot id we simply omit it (proof path is used).
+  // PS-105/PS-135: backend-owned rate-quote ref for label/queue payloads — mirrors the proof
+  // candidate selection so id/key match the proof's rate. Additive (omits absent fields).
   function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown): { rateQuoteId?: string; selectedRateKey?: string } {
-    const candidates = [
+    return rateQuoteRefFromCandidates([
       toRecord(candidate),
       toRecord(order.bestRate),
       toRecord(order.selectedRate),
       getSavedBestRateRecord(order),
-    ].filter(Boolean) as Record<string, unknown>[]
-    const rate = candidates.find((r) => hasBackendIssuedRateProof(r) && rateProofFingerprint(r)) ?? null
-    if (!rate) return {}
-    const rateQuoteId = toStringValue(rate.rateQuoteId)
-    const selectedRateKey = toStringValue(rate.selectedRateKey)
-    const ref: { rateQuoteId?: string; selectedRateKey?: string } = {}
-    if (rateQuoteId) ref.rateQuoteId = rateQuoteId
-    if (selectedRateKey) ref.selectedRateKey = selectedRateKey
-    return ref
+    ])
   }
 
   function hasAnySavedBestRateForDisplay(order: OrderSummaryDto) {

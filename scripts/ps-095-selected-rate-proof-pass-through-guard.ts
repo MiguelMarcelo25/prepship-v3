@@ -7,6 +7,8 @@
 import fs from 'node:fs';
 
 const ordersView = fs.readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-135: the proof helpers moved to the canonical lib; OrdersView delegates to it.
+const rateProof = fs.readFileSync('web/src/lib/rate-proof.ts', 'utf8');
 const rateSyncGuard = fs.readFileSync('scripts/ps-081-rate-sync-guard.ts', 'utf8');
 const proofBoundaryGuard = fs.readFileSync('scripts/selected-rate-proof-purchase-boundary-guard.ts', 'utf8');
 
@@ -28,18 +30,23 @@ const proofBuilder = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderSta
   : '';
 
 check(
+  // PS-135: extraction lives in the canonical lib (rate-proof.ts); OrdersView delegates to it.
   'frontend extracts only backend-issued proof fingerprints from rate metadata/cache keys',
-  ordersView.includes('function rateProofFingerprint') &&
-    ordersView.includes('rate?.requestFingerprint') &&
-    ordersView.includes('rate?.rateRequestFingerprint') &&
-    ordersView.includes('metadata?.requestFingerprint') &&
-    ordersView.includes('raw?.requestFingerprint'),
+  rateProof.includes('export function rateProofFingerprint') &&
+    rateProof.includes('rate?.requestFingerprint') &&
+    rateProof.includes('rate?.rateRequestFingerprint') &&
+    rateProof.includes('metadata?.requestFingerprint') &&
+    rateProof.includes('raw?.requestFingerprint') &&
+    ordersView.includes("from '../../lib/rate-proof'"),
 );
 
 check(
+  // PS-135: the "omit proof when no backend fingerprint" logic now lives in
+  // selectProofFromCandidates (rate-proof.ts); OrdersView's builder delegates to it.
   'frontend clears proof by omitting selectedRateProof when no backend fingerprint exists',
-  proofBuilder.includes('const requestFingerprint = rateProofFingerprint(selectedRate)') &&
-    proofBuilder.includes('if (!selectedRate || !requestFingerprint) return undefined'),
+  rateProof.includes('const requestFingerprint = rateProofFingerprint(selectedRate)') &&
+    rateProof.includes('if (!selectedRate || !requestFingerprint) return undefined') &&
+    proofBuilder.includes('selectProofFromCandidates('),
 );
 
 check(
