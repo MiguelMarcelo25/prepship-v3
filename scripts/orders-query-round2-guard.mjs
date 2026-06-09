@@ -18,7 +18,12 @@ assert(
   ordersRoute.includes('select test_client.id') &&
     ordersRoute.includes('select owner_client.id') &&
     ordersRoute.includes('where test_client.is_test = true') &&
-    ordersRoute.includes('where coalesce(owner_client.active, true) = true'),
+    // PS-132 (active-client-predicate single owner): the inline
+    // `coalesce(owner_client.active, true) = true` was replaced by the canonical
+    // activeClientPredicateSql('owner_client') helper (which emits the SAME SQL). The
+    // uncorrelated owner_client subquery + its active predicate are still present; assert the
+    // canonical helper instead of the old inline literal.
+    ordersRoute.includes("activeClientPredicateSql('owner_client')"),
   '/orders hot visibility predicates should use uncorrelated client-id subqueries instead of per-row correlated EXISTS checks',
 );
 
