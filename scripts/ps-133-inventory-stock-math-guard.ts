@@ -78,6 +78,12 @@ check('includes remove rows', inventoryLedgerBalance([
   check('reporting-metrics cross-references the owner', /inventory-stock-math/.test(reporting), true);
   const script = readFileSync('scripts/reconcile-inventory-stock.ts', 'utf8');
   check('reconcile script cross-references the owner', /inventory-stock-math/.test(script), true);
+
+  // admin /reconcile-inventory-stock is a WRITE path that keeps its ledger_balance CTE inline
+  // (it needs current_stock + received + sold + active/clientId in one transactional query) but
+  // must be cross-referenced as the SQL twin of the canonical owner so it can't silently drift.
+  const admin = readFileSync('src/routes/admin.ts', 'utf8');
+  check('admin reconcile cross-references the canonical effective-stock owner', /inventory-stock-math|computeEffectiveStockForIds/.test(admin), true);
 }
 
 if (failures > 0) {

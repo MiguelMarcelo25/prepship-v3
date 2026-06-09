@@ -1024,13 +1024,20 @@ app.post('/cleanup-stale-queue-entries', async (c) => {
   });
 });
 
-// One-time reconciliation: walk every active inventory row, compute
-//   effective_stock = total_received − total_sold_shipped_all_time
-// (the same formula the /inventory list route now uses to populate
-// the STOCK column — see the long comment block in inventory.ts for
-// the full semantics and revision history), and write that value
-// into inventory.stockQty
-// so the cached field aligns with what operators see. For each row
+// One-time reconciliation: walk every active inventory row, compute its
+// canonical effective_stock and write that value into inventory.stockQty so
+// the cached field aligns with what operators see.
+//
+// PS-133: effective_stock here is the SAME value the canonical owner returns
+// (src/services/inventory-stock-math.ts — inventoryLedgerBalance /
+// computeEffectiveStockForIds): SUM of all non-ship ledger rows + SUM of
+// min(qty)-per-order for ship rows. The ledger_balance CTE below is the SQL
+// twin of that owner, kept inline because this WRITE path needs current_stock
+// + received + sold + the active/clientId filter in ONE transactional query;
+// the behavioral guard (test:ps-133-stock-math) pins the shared formula.
+// NOTE: the received/sold figures are used ONLY for the human-readable ledger
+// note + dry-run sample — they do NOT determine the written stockQty.
+// For each row
 // that actually needed adjustment, insert a single `adjust`-type
 // inventory_ledger entry recording the delta so the History panel
 // shows the correction transparently.
@@ -1072,6 +1079,9 @@ app.post('/reconcile-inventory-stock', async (c) => {
       where l.type = 'receive'
       group by l.inventory_id
     ),
+    -- PS-133: SQL twin of the canonical effective-stock owner in
+    -- src/services/inventory-stock-math.ts (computeEffectiveStockForIds). MUST
+    -- stay in sync with it; behavioral parity is pinned by test:ps-133-stock-math.
     ledger_balance as (
       select stock_rows.inventory_id as id, coalesce(sum(stock_rows.qty), 0)::int as effective_stock
       from (
