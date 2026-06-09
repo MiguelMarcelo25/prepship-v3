@@ -1374,6 +1374,77 @@ export async function billingSummary(
   };
 }
 
+export type BillingInvoiceHeaderTotals = {
+  orderCount: number;
+  pickPackTotal: number;
+  additionalTotal: number;
+  pickPackFeeTotal: number;
+  packageTotal: number;
+  shippingTotal: number;
+  storageTotal: number;
+  grandTotal: number;
+  fulfillmentFeeTotal: number;
+};
+
+// PS-134 (slice 2): canonical owner of the per-client INVOICE header totals, co-located with
+// billingSummary in the billing service (one source of truth). Runs the invoice's EXACT aggregate
+// VERBATIM — client_id-only scope, full ::timestamptz window, the legacy alias IN-lists — so the
+// /invoice route delegates byte-identically. Intentionally NOT billingSummary(): that path filters
+// out inactive/system clients, uses single-canonical line_types, and reads a day-keyed cache, all
+// of which would CHANGE customer invoices. This sibling preserves the invoice's exact semantics.
+export async function billingInvoiceHeaderTotals(
+  clientId: number,
+  dateFrom: string,
+  dateTo: string,
+): Promise<BillingInvoiceHeaderTotals> {
+  const summaryRow = await db.execute<{
+    pickpack_total: string;
+    additional_total: string;
+    package_total: string;
+    shipping_total: string;
+    storage_total: string;
+    order_count: number;
+    grand_total: string;
+  }>(sql`
+    select
+      coalesce(sum(case when line_type in ('pick_pack', 'pickpack') then total_cost else 0 end), 0)::text as pickpack_total,
+      coalesce(sum(case when line_type in ('additional_unit', 'additional') then total_cost else 0 end), 0)::text as additional_total,
+      coalesce(sum(case when line_type in ('package_cost', 'package') then total_cost else 0 end), 0)::text as package_total,
+      coalesce(sum(case when line_type = 'shipping' then total_cost else 0 end), 0)::text as shipping_total,
+      coalesce(sum(case when line_type = 'storage' then total_cost else 0 end), 0)::text as storage_total,
+      count(distinct order_id)::int as order_count,
+      coalesce(sum(total_cost), 0)::text as grand_total
+    from billing_line_items
+    where client_id = ${clientId}
+      and ship_date >= ${dateFrom}::timestamptz
+      and ship_date <= ${dateTo}::timestamptz
+  `);
+  const s = summaryRow[0];
+
+  const orderCount = s?.order_count ?? 0;
+  const pickPackTotal = Number(s?.pickpack_total ?? 0);
+  const additionalTotal = Number(s?.additional_total ?? 0);
+  const pickPackFeeTotal = pickPackTotal + additionalTotal;
+  const packageTotal = Number(s?.package_total ?? 0);
+  const shippingTotal = Number(s?.shipping_total ?? 0);
+  const storageTotal = Number(s?.storage_total ?? 0);
+  const grandTotal = Number(s?.grand_total ?? 0);
+  const fulfillmentFeeTotal =
+    shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
+
+  return {
+    orderCount,
+    pickPackTotal,
+    additionalTotal,
+    pickPackFeeTotal,
+    packageTotal,
+    shippingTotal,
+    storageTotal,
+    grandTotal,
+    fulfillmentFeeTotal,
+  };
+}
+
 export async function billingDetails(input: GenerateInput & { limit?: number }) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);

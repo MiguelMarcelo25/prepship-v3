@@ -13,6 +13,7 @@ import { clients } from '../db/schema/clients';
 import {
   billingDetails,
   billingGenerationStatus,
+  billingInvoiceHeaderTotals,
   billingSummary,
   generateLineItems,
   upsertBillingConfig,
@@ -478,29 +479,11 @@ async function billingInvoiceData(
   );
   if (!clientRow.length) return null;
 
-  const summaryRow = await db.execute<{
-    pickpack_total: string;
-    additional_total: string;
-    package_total: string;
-    shipping_total: string;
-    storage_total: string;
-    order_count: number;
-    grand_total: string;
-  }>(sql`
-    select
-      coalesce(sum(case when line_type in ('pick_pack', 'pickpack') then total_cost else 0 end), 0)::text as pickpack_total,
-      coalesce(sum(case when line_type in ('additional_unit', 'additional') then total_cost else 0 end), 0)::text as additional_total,
-      coalesce(sum(case when line_type in ('package_cost', 'package') then total_cost else 0 end), 0)::text as package_total,
-      coalesce(sum(case when line_type = 'shipping' then total_cost else 0 end), 0)::text as shipping_total,
-      coalesce(sum(case when line_type = 'storage' then total_cost else 0 end), 0)::text as storage_total,
-      count(distinct order_id)::int as order_count,
-      coalesce(sum(total_cost), 0)::text as grand_total
-    from billing_line_items
-    where client_id = ${clientId}
-      and ship_date >= ${dateFrom}::timestamptz
-      and ship_date <= ${dateTo}::timestamptz
-  `);
-  const s = summaryRow[0];
+  // PS-134 (slice 2): the invoice HEADER totals are now owned by the billing service
+  // (billingInvoiceHeaderTotals — the same aggregate SQL, co-located with billingSummary as the
+  // single source of truth). Byte-identical to the prior inline query. The per-order breakdown
+  // below stays here (billingSummary/the service has no per-order representation to delegate to).
+  const totals = await billingInvoiceHeaderTotals(clientId, dateFrom, dateTo);
 
   const details = await db.execute<InvoiceDetailRow>(sql`
     select
@@ -528,30 +511,9 @@ async function billingInvoiceData(
     order by b.ship_date asc, b.order_id asc
   `);
 
-  const orderCount = s?.order_count ?? 0;
-  const pickPackTotal = Number(s?.pickpack_total ?? 0);
-  const additionalTotal = Number(s?.additional_total ?? 0);
-  const pickPackFeeTotal = pickPackTotal + additionalTotal;
-  const packageTotal = Number(s?.package_total ?? 0);
-  const shippingTotal = Number(s?.shipping_total ?? 0);
-  const storageTotal = Number(s?.storage_total ?? 0);
-  const grandTotal = Number(s?.grand_total ?? 0);
-  const fulfillmentFeeTotal =
-    shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
-
   return {
     clientName: clientRow[0]!.name,
-    totals: {
-      orderCount,
-      pickPackTotal,
-      additionalTotal,
-      pickPackFeeTotal,
-      packageTotal,
-      shippingTotal,
-      storageTotal,
-      grandTotal,
-      fulfillmentFeeTotal,
-    },
+    totals,
     details,
   };
 }
