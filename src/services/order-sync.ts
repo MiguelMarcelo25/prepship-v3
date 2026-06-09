@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
@@ -244,9 +244,20 @@ async function upsertMissingShippedOrdersBatch(
   return insertedRows.length;
 }
 
+// Per user override unlock shipped data on 2026-06-10: status catch-up now covers the non-awaiting,
+// non-shipped ShipStation states (on_hold / awaiting_payment / pending_fulfillment) in addition to
+// shipped/cancelled, so PrepShip's awaiting list converges to ShipStation's — orders SS puts On Hold /
+// Pending no longer rot in PrepShip's "Awaiting Shipment". Only 'shipped' triggers inventory deduction.
+type CatchUpOrderStatus =
+  | 'shipped'
+  | 'cancelled'
+  | 'on_hold'
+  | 'awaiting_payment'
+  | 'pending_fulfillment';
+
 async function updateExistingOrderStatusesBatch(
   ordersIn: NormalizedOrder[],
-  orderStatus: 'shipped' | 'cancelled'
+  orderStatus: CatchUpOrderStatus
 ): Promise<number> {
   const externalIds = Array.from(
     new Set(
@@ -269,7 +280,12 @@ async function updateExistingOrderStatusesBatch(
       .where(
         and(
           inArray(orders.externalOrderId, chunk),
-          eq(orders.orderStatus, 'awaiting_shipment')
+          // Transition from ANY non-terminal state to the ShipStation-reported status. Terminal rows
+          // (shipped/cancelled) are NEVER overwritten here — they stay locked/preserved (and the import
+          // upsert preserves them too). `ne` skips no-op rewrites (e.g. on_hold -> on_hold). This lets
+          // awaiting->on_hold AND a later on_hold->shipped both converge.
+          notInArray(orders.orderStatus, ['shipped', 'cancelled']),
+          ne(orders.orderStatus, orderStatus)
         )
       )
       .returning();
@@ -407,7 +423,7 @@ async function fetchOrdersPage(
     if (args.statusOnly) {
       total += await updateExistingOrderStatusesBatch(
         res.orders,
-        args.orderStatus === 'cancelled' ? 'cancelled' : 'shipped',
+        args.orderStatus as CatchUpOrderStatus,
       );
       if (args.orderStatus === 'shipped') {
         total += await upsertMissingShippedOrdersBatch(
@@ -458,18 +474,21 @@ async function syncOrdersForAccount(
   // awaiting_shipment to shipped/cancelled without that old awaiting row being
   // revisited by a narrow watermark. Use a 30-day catch-up window so stale DB
   // awaiting counts converge back to ShipStation's live sidebar counts.
+  const catchupSinceMs = Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS);
   const passes: Array<{ orderStatus: string; sinceMs: number }> = [
     ...(opts.skipStatusPasses
       ? []
       : [
-          {
-            orderStatus: 'shipped',
-            sinceMs: Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS),
-          },
-          {
-            orderStatus: 'cancelled',
-            sinceMs: Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS),
-          },
+          { orderStatus: 'shipped', sinceMs: catchupSinceMs },
+          { orderStatus: 'cancelled', sinceMs: catchupSinceMs },
+          // Per user override unlock shipped data on 2026-06-10: pull the non-awaiting/non-shipped SS
+          // states so PrepShip's awaiting list matches ShipStation's sidebar. These move awaiting ->
+          // on_hold / awaiting_payment / pending_fulfillment (NO inventory side effect); they auto-revert
+          // to awaiting via the import upsert when ShipStation un-holds them, and still convert to
+          // shipped/cancelled via those passes (the widened WHERE catches them).
+          { orderStatus: 'on_hold', sinceMs: catchupSinceMs },
+          { orderStatus: 'awaiting_payment', sinceMs: catchupSinceMs },
+          { orderStatus: 'pending_fulfillment', sinceMs: catchupSinceMs },
         ]),
   ];
 
