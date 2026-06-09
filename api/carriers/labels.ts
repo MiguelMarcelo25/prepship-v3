@@ -34,6 +34,10 @@ import postgres from 'postgres';
 import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
 import { assertLabelPurchaseRateSelection } from '../../src/services/shipping-workflow/rate-quote-snapshot-store.js';
 import { assertOrderSafeToShip, ShippingSafetyError } from '../../src/services/fulfillment/shipping-safety.js';
+// PS-135(a): the canonical backend residential classifier (PS-127). Pure leaf (no DB/heavy deps),
+// cold-start safe as a static import. Used to resolve residential server-side at the UPS label
+// boundary so the UPS label charge matches the rate quote (the FE is NOT the authority).
+import { classifyShippingAddress, residentialForShipping } from '../../src/services/shipping-workflow/address-classification.js';
 
 // ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
 // module top. On Vercel, importing the carrier/store connector orchestrators +
@@ -1092,6 +1096,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           ship_to_city: string | null;
           ship_to_state: string | null;
           ship_to_postal_code: string | null;
+          override_residential: boolean | null;
           raw: any;
         }>>`
           SELECT
@@ -1100,9 +1105,11 @@ export default async function handler(req: any, res: any): Promise<void> {
             o.canonical_status, o.externally_shipped, o.source_provider,
             o.source_order_id, o.source_order_number,
             o.ship_to_name, o.ship_to_city, o.ship_to_state, o.ship_to_postal_code,
+            ov.residential as override_residential,
             o.raw
           FROM orders o
           LEFT JOIN clients c ON c.id = o.client_id
+          LEFT JOIN order_overrides ov ON ov.order_id = o.id
           WHERE o.id = ${Math.trunc(orderId)}
           LIMIT 1
         `;
@@ -1525,10 +1532,34 @@ export default async function handler(req: any, res: any): Promise<void> {
       // serviceCode like "01" (Next Day Air), "02" (2nd Day Air), etc.
       directServiceCode = String(body?.serviceCode ?? '03');
       assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: body?.serviceName ?? directServiceCode });
+      // PS-135(a): resolve residential server-side from the PS-127 authority so the UPS label charge
+      // matches the rate quote (FE is NOT the authority). company comes from the RAW order
+      // (resolveShipTo strips it, so the company_heuristic branch would otherwise never fire);
+      // manual override from order_overrides.residential; sourceResidential from the marketplace raw shipTo.
+      const upsRawShipTo = (rawOrder?.shipTo ?? rawOrder?.ship_to ?? {}) as Record<string, unknown>;
+      const upsLabelClassification = classifyShippingAddress({
+        orderId: Math.trunc(orderId),
+        clientId: orderRow?.client_id ?? null,
+        storeId: orderRow?.store_id ?? null,
+        shipTo: {
+          name: shipTo.name,
+          company: (upsRawShipTo.company ?? upsRawShipTo.companyName ?? null) as string | null | undefined,
+          city: shipTo.city,
+          state: shipTo.state,
+          postalCode: shipTo.zip,
+          country: shipTo.country,
+        },
+        manualOverrideResidential:
+          typeof orderRow?.override_residential === 'boolean' ? orderRow.override_residential : null,
+        sourceResidential:
+          typeof upsRawShipTo.residential === 'boolean' ? (upsRawShipTo.residential as boolean) : null,
+      });
+      const upsLabelResidential = residentialForShipping(upsLabelClassification);
       result = await createCarrierLabel('ups', {
         credentials: creds,
         clientId: orderRow?.client_id ?? body?.clientId ?? null,
         storeId: orderRow?.store_id ?? body?.storeId ?? null,
+        residential: upsLabelResidential,
         weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, serviceName: body?.serviceName ?? directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else if (providerKey === 'easypost') {

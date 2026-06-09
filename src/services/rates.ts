@@ -377,6 +377,32 @@ async function resolveClientIdForStoreId(storeId?: number | null): Promise<numbe
   return row?.id ?? null;
 }
 
+// PS-127 / PS-135(a): the canonical residential classification for a rate request. DETERMINISTIC on
+// the request's to* fields + manual override + source flag — NO order load, so the cache key stays
+// stable between the cached-bulk lookup and the live fetch. Single source used by BOTH the ShipStation
+// path (resolveRateInput) and the direct-carrier path (getDirectCarrierRatesForRateInput), so a UPS/
+// direct quote uses the SAME residential as ShipStation; the label path re-classifies from the order's
+// authoritative evidence and enforces parity. clientId/storeId are passed for context only — they do
+// not affect the residential decision (classifyShippingAddress decides from shipTo/source/override).
+function classifyRateInputResidential(input: RateInput) {
+  return classifyShippingAddress({
+    orderId: input.orderId,
+    clientId: input.clientId ?? null,
+    storeId: input.storeId ?? null,
+    shipTo: {
+      name: input.toName,
+      company: input.toCompany ?? null,
+      city: input.toCity,
+      state: input.toState,
+      postalCode: input.toZip,
+      country: input.toCountry,
+    },
+    manualOverrideResidential: input.manualOverrideResidential ?? null,
+    sourceResidential:
+      input.sourceResidential ?? (typeof input.residential === 'boolean' ? input.residential : null),
+  });
+}
+
 export async function resolveRateInput(input: RateInput): Promise<RateInput> {
   const context = await resolveRateCredentialContext(input);
   const automationRules = await loadShippingAutomationRules();
@@ -422,21 +448,10 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
   // — no hidden order load — so the cache key is identical between the cached-bulk lookup
   // and the live fetch (a hidden load would diverge them and break rate caching). The
   // label path re-classifies from the order's authoritative evidence and enforces parity.
-  const residentialClassification = classifyShippingAddress({
-    orderId: input.orderId,
+  const residentialClassification = classifyRateInputResidential({
+    ...input,
     clientId: context.clientId,
     storeId: context.storeId,
-    shipTo: {
-      name: input.toName,
-      company: input.toCompany ?? null,
-      city: input.toCity,
-      state: input.toState,
-      postalCode: input.toZip,
-      country: input.toCountry,
-    },
-    manualOverrideResidential: input.manualOverrideResidential ?? null,
-    sourceResidential:
-      input.sourceResidential ?? (typeof input.residential === 'boolean' ? input.residential : null),
   });
   const residential = residentialForShipping(residentialClassification);
 
@@ -1571,6 +1586,10 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
   const accounts = await loadVisibleDirectCarrierAccounts(input);
   if (!accounts.length) return { rates: [], errors: [], metas: [], diagnostics: [] };
   const shippingOptions = normalizeShippingOptions(input);
+  // PS-135(a): resolve residential via the SAME canonical classifier the ShipStation path uses
+  // (classifyRateInputResidential), NOT the raw FE input.residential, so direct-carrier (UPS/etc.)
+  // quotes apply the SAME residential classification as ShipStation and match the label.
+  const resolvedResidential = residentialForShipping(classifyRateInputResidential(input));
   const fetchedAt = new Date().toISOString();
   const calls = accounts.map(async (account) => {
     const shippingProviderId = directProviderIdFromAccount(account);
@@ -1621,10 +1640,10 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
         orderNumber: input.orderNumber,
         purchaseOrderId: input.purchaseOrderId,
         shipFrom: input.shipFrom,
-        // PS-127: direct carriers must rate under the SAME backend-resolved residential
-        // classification as ShipStation (not a hardcoded 'yes'), so direct-vs-ShipStation
-        // quotes are comparable and the label matches.
-        residential: input.residential,
+        // PS-127/PS-135(a): direct carriers rate under the SAME backend-resolved residential
+        // classification as ShipStation (classifyRateInputResidential above), NOT the raw FE
+        // input.residential, so direct-vs-ShipStation quotes are comparable and the UPS label matches.
+        residential: resolvedResidential,
         shippingOptions,
       });
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];

@@ -127,6 +127,9 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
   const dimsW = Number(input.dimsW ?? 0);
   const dimsH = Number(input.dimsH ?? 0);
   const packageServiceOptions = upsPackageServiceOptions(input);
+  // PS-135(a): the PS-127 backend-classified residential flag, threaded via the connector input
+  // (residential-safe default upstream). UPS treats it as presence-based on ShipTo.Address.
+  const residential = input.residential === true;
 
   const dims = (dimsL > 0 && dimsW > 0 && dimsH > 0)
     ? {
@@ -152,7 +155,15 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
           Address: { PostalCode: fromZip, CountryCode: 'US' },
         },
         ShipTo: {
-          Address: { PostalCode: toZip, CountryCode: 'US' },
+          // PS-135(a): UPS ResidentialAddressIndicator is PRESENCE-based — the tag's mere existence
+          // marks the destination residential (any value, incl 'Y', is ignored). Commercial = OMIT
+          // the key entirely (there is NO 'N'/false form). Closes the UPS-native residential
+          // surcharge gap for rate quotes (rate<->label parity with createLabelUps below).
+          Address: {
+            PostalCode: toZip,
+            CountryCode: 'US',
+            ...(residential ? { ResidentialAddressIndicator: 'Y' } : {}),
+          },
         },
         Package: {
           PackagingType: { Code: '02' },
@@ -229,6 +240,10 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
   const shipFrom = input.shipFrom as Record<string, unknown>;
   const shipTo = input.shipTo as Record<string, unknown>;
   const packageServiceOptions = upsPackageServiceOptions(input);
+  // PS-135(a): accept the residential flag from the top-level input OR a stamped shipTo.residential
+  // (parity with the ShipStation connector idiom). The decision is the PS-127 backend classification
+  // resolved server-side at the label boundary; the connector is a thin consumer.
+  const residential = input.residential === true || (shipTo as { residential?: unknown } | null)?.residential === true;
 
   const body = {
     ShipmentRequest: {
@@ -262,6 +277,10 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
             StateProvinceCode: shipTo.state,
             PostalCode: shipTo.zip,
             CountryCode: shipTo.country,
+            // PS-135(a): presence-based residential flag — include 'Y' for residential, OMIT for
+            // commercial (no 'N'/false form). Changes the actual UPS label charge (residential
+            // surcharge). residential is the PS-127 server-side classification (api/carriers/labels.ts).
+            ...(residential ? { ResidentialAddressIndicator: 'Y' } : {}),
           },
         },
         ShipFrom: {
