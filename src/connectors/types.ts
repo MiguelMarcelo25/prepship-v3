@@ -193,7 +193,9 @@ export interface StoreConnector {
   syncOrderStatuses?(input: StoreOrderStatusSyncInput): Promise<void | NormalizedStoreOrderStatusSyncResult>;
   normalizeOrder?(raw: unknown): NormalizedOrder;
   confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult>;
-  cancelOrder?(input: { companyId: number; accountId: string; sourceOrderId: string }): Promise<void>;
+  // PS-153: removed dead optional `cancelOrder?` — it had zero implementations and zero callers across
+  // src/. Upstream cancellation is handled via the canonical-status / shipping-hold path, not a
+  // connector method. Re-add only when a connector actually needs to push a cancel to the source.
   fetchOrder?(input: StoreOrderFetchInput): Promise<NormalizedOrder | null>;
 }
 

@@ -147,6 +147,7 @@
     "test:ps-135a-ups-residential": "tsx scripts/ps-135a-ups-residential-guard.ts",
     "test:ps-135b-eligibility-fragmentation": "tsx scripts/ps-135b-eligibility-fragmentation-guard.ts",
     "test:ps-158-dead-component": "tsx scripts/ps-158-dead-component-guard.ts",
+    "test:ps-153-dead-symbols": "tsx scripts/ps-153-dead-symbols-guard.ts",
     "test:ps-128-129-upstream-shipping-safety": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
     "test:ps-128-webhook-ingestion": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",
     "test:ps-128-external-shipped-label-block": "tsx scripts/ps-128-129-upstream-shipping-safety-guard.ts",

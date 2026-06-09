@@ -22,6 +22,10 @@ export const products = pgTable('products', {
   updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 });
 
+// PS-153 audit (2026-06-09): `sku_qty_dims` is CODE-DEAD — no Drizzle reference and no raw-SQL access
+// anywhere in src/. RETAINED ON PURPOSE: the DB table exists and drizzle-kit generate diffs schema vs
+// DB, so deleting this definition would arm the next migration to DROP the table (data loss). Do NOT
+// remove without a deliberate, approval-gated DROP migration. Guard: scripts/ps-153-dead-symbols-guard.ts.
 export const skuQtyDims = pgTable(
   'sku_qty_dims',
   {
