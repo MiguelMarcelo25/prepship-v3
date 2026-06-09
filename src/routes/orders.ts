@@ -28,6 +28,7 @@ import {
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
 import { detectExpeditedShipping } from '../lib/shipping/expedited';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import {
@@ -368,24 +369,16 @@ type CanonicalFieldSource = {
   note?: string;
 };
 
-const V2_CARRIER_ACCOUNT_REFS: V2CarrierAccountRef[] = [
-  { carrierCode: 'stamps_com', shippingProviderId: 433542, nickname: 'USPS Chase x7439', clientId: null, accountNumber: 'djeon-952w77' },
-  { carrierCode: 'ups_walleted', shippingProviderId: 433543, nickname: 'UPS by SS - Chase x7439', clientId: null, accountNumber: 'ups_433543' },
-  { carrierCode: 'ups', shippingProviderId: 565326, nickname: 'GG6381', clientId: null, accountNumber: 'GG6381' },
-  { carrierCode: 'ups', shippingProviderId: 565377, nickname: 'G19Y32', clientId: null, accountNumber: 'G19Y32' },
-  { carrierCode: 'ups', shippingProviderId: 596001, nickname: 'ORION', clientId: null, accountNumber: 'R05H19' },
-  { carrierCode: 'ups', shippingProviderId: 604209, nickname: 'ROCEL', clientId: null, accountNumber: null },
-  { carrierCode: 'ups', shippingProviderId: 607855, nickname: 'ROCEL C81F70', clientId: null, accountNumber: 'C81F70' },
-  { carrierCode: 'fedex', shippingProviderId: 598840, nickname: 'FedEx', clientId: null, accountNumber: '208481048' },
-  { carrierCode: 'fedex_walleted', shippingProviderId: 585004, nickname: 'FedEx One Balance', clientId: null, accountNumber: null },
-  { carrierCode: 'stamps_com', shippingProviderId: 442006, nickname: 'GREG PAYABILITY 6/17', clientId: 10, accountNumber: null },
-  { carrierCode: 'ups', shippingProviderId: 461890, nickname: 'ROCEL C81F70', clientId: 10, accountNumber: 'C81F70' },
-  { carrierCode: 'ups', shippingProviderId: 565317, nickname: 'GG6381', clientId: 10, accountNumber: 'GG6381' },
-  { carrierCode: 'ups', shippingProviderId: 595995, nickname: 'ORI Account', clientId: 10, accountNumber: 'R05H19' },
-  { carrierCode: 'ups', shippingProviderId: 442007, nickname: 'GREG PAYABILITY 6/17', clientId: 10, accountNumber: null },
-  { carrierCode: 'fedex', shippingProviderId: 442013, nickname: 'FedEx', clientId: 10, accountNumber: '208481048' },
-  { carrierCode: 'fedex_walleted', shippingProviderId: 585334, nickname: 'FedEx One Balance', clientId: 10, accountNumber: null },
-];
+// PS-132: derived from the single backend carrier-account registry (src/lib/
+// carrier-account-registry.ts). Same fields/order as before; nickname for 433543 reconciled
+// to the canonical "UPS by SS - Chase x7439".
+const V2_CARRIER_ACCOUNT_REFS: V2CarrierAccountRef[] = KNOWN_CARRIER_ACCOUNTS.map((account) => ({
+  carrierCode: account.carrierCode,
+  shippingProviderId: account.shippingProviderId,
+  nickname: account.nickname,
+  clientId: account.clientId,
+  accountNumber: account.accountNumber,
+}));
 
 function resolveLegacyClientId(
   clientId: number | null | undefined,

@@ -26,6 +26,7 @@ import {
   residentialForShipping,
   type AddressClassificationSource,
 } from './shipping-workflow/address-classification';
+import { KNOWN_CARRIER_ACCOUNTS, carrierIdForProvider } from '../lib/carrier-account-registry';
 import {
   HUGRAB_DEFAULT_INSURED_VALUE,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -735,27 +736,14 @@ export type DirectCarrierRatesResult = {
   diagnostics: CarrierRateDiagnostic[];
 };
 
-const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<
-  string,
-  { carrier_code: string; nickname: string }
->([
-  ['se-433542', { carrier_code: 'stamps_com', nickname: 'USPS Chase x7439' }],
-  ['se-433543', { carrier_code: 'ups_walleted', nickname: 'Chase x7439' }],
-  ['se-565326', { carrier_code: 'ups', nickname: 'GG6381' }],
-  ['se-565377', { carrier_code: 'ups', nickname: 'G19Y32' }],
-  ['se-596001', { carrier_code: 'ups', nickname: 'ORION' }],
-  ['se-604209', { carrier_code: 'ups', nickname: 'ROCEL' }],
-  ['se-607855', { carrier_code: 'ups', nickname: 'ROCEL C81F70' }],
-  ['se-598840', { carrier_code: 'fedex', nickname: 'FedEx' }],
-  ['se-585004', { carrier_code: 'fedex_walleted', nickname: 'FedEx One Balance' }],
-  ['se-442006', { carrier_code: 'stamps_com', nickname: 'GREG PAYABILITY 6/17' }],
-  ['se-461890', { carrier_code: 'ups', nickname: 'ROCEL C81F70' }],
-  ['se-565317', { carrier_code: 'ups', nickname: 'GG6381' }],
-  ['se-595995', { carrier_code: 'ups', nickname: 'ORI Account' }],
-  ['se-442007', { carrier_code: 'ups', nickname: 'GREG PAYABILITY 6/17' }],
-  ['se-442013', { carrier_code: 'fedex', nickname: 'FedEx' }],
-  ['se-585334', { carrier_code: 'fedex_walleted', nickname: 'FedEx One Balance' }],
-]);
+// PS-132: derived from the single backend carrier-account registry (src/lib/
+// carrier-account-registry.ts) so the rate-carrier display can't drift from Orders/Settings.
+const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<string, { carrier_code: string; nickname: string }>(
+  KNOWN_CARRIER_ACCOUNTS.map((account) => [
+    carrierIdForProvider(account.shippingProviderId),
+    { carrier_code: account.carrierCode, nickname: account.nickname },
+  ]),
+);
 
 async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> {
   const cacheKey = apiKeyCacheKey(apiKeyV2);

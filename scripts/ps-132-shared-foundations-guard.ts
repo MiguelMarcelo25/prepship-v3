@@ -8,6 +8,12 @@
 import { readFileSync } from 'node:fs';
 import { SYNC_CADENCE_MS, SYNC_CADENCE_MINUTES } from '../src/lib/sync-cadence';
 import { SYSTEM_CLIENT_NAMES, isSystemClientName } from '../src/lib/system-clients';
+import {
+  KNOWN_CARRIER_ACCOUNTS,
+  resolveKnownCarrierAccount,
+  knownCarrierNickname,
+  knownCarrierCode,
+} from '../src/lib/carrier-account-registry';
 
 let failures = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -59,6 +65,25 @@ function check(name: string, got: unknown, want: unknown) {
   // The constant itself lives only in the shared module.
   const lib = readFileSync('src/lib/system-clients.ts', 'utf8');
   check('system-clients.ts holds the canonical list', literal.test(lib), true);
+}
+
+// ── Carrier-account registry: one source; drift reconciled; consumers delegate ──
+{
+  check('registry has the full known account set', KNOWN_CARRIER_ACCOUNTS.length, 16);
+  // The PS-132 drift: provider 433543 must resolve to ONE canonical nickname everywhere.
+  check('433543 nickname reconciled', knownCarrierNickname('se-433543'), 'UPS by SS - Chase x7439');
+  check('433543 resolvable by bare provider id', knownCarrierNickname(433543), 'UPS by SS - Chase x7439');
+  check('433543 carrier code', knownCarrierCode('se-433543'), 'ups_walleted');
+  check('resolve by provider id returns the account', resolveKnownCarrierAccount(596001)?.nickname, 'ORION');
+  check('unknown id resolves to null', resolveKnownCarrierAccount('se-000000'), null);
+
+  const rates = readFileSync('src/services/rates.ts', 'utf8');
+  check('rates.ts derives overrides from the registry', /KNOWN_CARRIER_ACCOUNTS\.map/.test(rates), true);
+  check('rates.ts no longer hardcodes the se-433543 nickname', /'se-433543',\s*\{[^}]*Chase x7439/.test(rates), false);
+
+  const orders = readFileSync('src/routes/orders.ts', 'utf8');
+  check('orders.ts derives refs from the registry', /KNOWN_CARRIER_ACCOUNTS\.map/.test(orders), true);
+  check('orders.ts no longer hardcodes the 433542 ref literal', /shippingProviderId:\s*433542,\s*nickname:/.test(orders), false);
 }
 
 if (failures > 0) {
