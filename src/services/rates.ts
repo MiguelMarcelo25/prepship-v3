@@ -39,6 +39,13 @@ import {
   type ShippingServiceEligibilityContext,
   type ShippingServiceDescriptor,
 } from '../lib/shipping-service-eligibility';
+import {
+  BLOCKED_SERVICE_CODES,
+  BLOCKED_PACKAGE_TYPES,
+  BLOCKED_NAME_RE,
+  MEDIA_MAIL_ALLOWED_STORES,
+  isServiceOrPackageBlocked,
+} from '../lib/rate-block-list';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
 import {
   loadShippingAutomationRules,
@@ -96,31 +103,15 @@ export const SS_BASELINE_CARRIER_CODES = new Set<string>([
   'ups_walleted',
 ]);
 
-export const BLOCKED_SERVICE_CODES = new Set<string>([
-  'usps_media_mail',
-  'usps_first_class_mail',
-  'usps_library_mail',
-  'usps_parcel_select',
-  'usps_parcel_select_lightweight',
-]);
-
-export const BLOCKED_PACKAGE_TYPES = new Set<string>([
-  'flat_rate_envelope',
-  'flat_rate_legal_envelope',
-  'flat_rate_padded_envelope',
-  'small_flat_rate_box',
-  'medium_flat_rate_box',
-  'large_flat_rate_box',
-  'regional_rate_box_a',
-  'regional_rate_box_b',
-]);
-
-export const BLOCKED_NAME_RE = /flat[\s-]?rate|flat rate|\bbox\b/i;
-export const MEDIA_MAIL_ALLOWED_STORES = new Set<number>([376759]);
+// PS-135(b): Policy-B block list moved to the canonical owner (src/lib/rate-block-list.ts) so this
+// backend authority and the FE (web/src/utils/markups.ts) cannot drift. Re-exported here to preserve
+// this module's historical public surface.
+export { BLOCKED_SERVICE_CODES, BLOCKED_PACKAGE_TYPES, BLOCKED_NAME_RE, MEDIA_MAIL_ALLOWED_STORES };
 
 // v4 Rate uses snake_case + `service_type` as the display name equivalent of
 // v2's `serviceName` (there's no separate serviceName field on the ShipStation
-// v2-API rate payload — service_type IS the human label).
+// v2-API rate payload — service_type IS the human label). Behavior is unchanged: the media-mail
+// store exception short-circuits, then the shared service/package/name predicate applies.
 export function isBlockedRate(
   rate: Pick<Rate, 'service_code' | 'package_type' | 'service_type'>,
   storeId: number | null = null,
@@ -132,11 +123,7 @@ export function isBlockedRate(
   ) {
     return false;
   }
-  return (
-    BLOCKED_SERVICE_CODES.has(rate.service_code ?? '') ||
-    BLOCKED_PACKAGE_TYPES.has(rate.package_type ?? '') ||
-    BLOCKED_NAME_RE.test(rate.service_type ?? '')
-  );
+  return isServiceOrPackageBlocked(rate.service_code, rate.package_type, rate.service_type);
 }
 
 function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {

@@ -10,34 +10,18 @@ import type { Markup, MarkupType, MarkupsMap } from '../types/markups';
 // Re-export MarkupType so callers can use it
 export type { MarkupType };
 
-export const BLOCKED_SERVICE_CODES = new Set([
-  'usps_media_mail',
-  'usps_first_class_mail',
-  'usps_library_mail',
-  'usps_parcel_select',
-  'usps_parcel_select_lightweight',
-]);
+// PS-135(b): Policy-B block list now lives in the canonical owner (src/lib/rate-block-list.ts), shared
+// with the backend (src/services/rates.ts) so the FE and backend copies cannot drift. Imported +
+// re-exported here to keep this module's surface stable.
+import {
+  BLOCKED_SERVICE_CODES,
+  BLOCKED_PACKAGE_TYPES,
+  BLOCKED_CARRIER_IDS,
+  MEDIA_MAIL_ALLOWED_STORES,
+  isServiceOrPackageBlocked,
+} from '../../../src/lib/rate-block-list';
 
-export const BLOCKED_PACKAGE_TYPES = new Set([
-  'flat_rate_envelope',
-  'flat_rate_legal_envelope',
-  'flat_rate_padded_envelope',
-  'small_flat_rate_box',
-  'medium_flat_rate_box',
-  'large_flat_rate_box',
-  'regional_rate_box_a',
-  'regional_rate_box_b',
-]);
-
-export const BLOCKED_CARRIER_IDS = new Set([
-  442017, // Amazon Buy Shipping
-  566344, // Sendle
-  593739, // Amazon Shipping US
-]);
-
-export const MEDIA_MAIL_ALLOWED_STORES = new Set([376759]);
-
-const BLOCKED_NAME_RE = /flat[\s-]?rate|\bbox\b/i;
+export { BLOCKED_SERVICE_CODES, BLOCKED_PACKAGE_TYPES, BLOCKED_CARRIER_IDS, MEDIA_MAIL_ALLOWED_STORES };
 
 /**
  * Get markup for a carrier by shippingProviderId or carrierCode
@@ -97,9 +81,7 @@ export function isBlockedRate(rate: Rate | null | undefined, storeId?: number): 
   }
 
   return BLOCKED_CARRIER_IDS.has(rate.shippingProviderId ?? -1) ||
-    BLOCKED_SERVICE_CODES.has(rate.serviceCode ?? '') ||
-    BLOCKED_PACKAGE_TYPES.has(rate.packageType ?? '') ||
-    BLOCKED_NAME_RE.test(rate.serviceName ?? '');
+    isServiceOrPackageBlocked(rate.serviceCode, rate.packageType, rate.serviceName);
 }
 
 /**
