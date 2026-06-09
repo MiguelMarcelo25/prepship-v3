@@ -11,6 +11,12 @@ import { orderItems } from '../db/schema/order-items';
 import { orders } from '../db/schema/orders';
 import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
+import {
+  type InventoryRouteTimings,
+  msSince,
+  timedInventoryStep,
+  logSlowInventoryRoute,
+} from '../lib/route-timing';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
 import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
@@ -31,40 +37,10 @@ const booleanQuery = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
-type InventoryRouteTimings = Record<string, number>;
-
-function msSince(startedAt: number): number {
-  return Math.round(performance.now() - startedAt);
-}
-
-async function timedInventoryStep<T>(
-  timings: InventoryRouteTimings,
-  name: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const startedAt = performance.now();
-  try {
-    return await fn();
-  } finally {
-    timings[name] = msSince(startedAt);
-  }
-}
-
-function logSlowInventoryRoute(
-  route: string,
-  timings: InventoryRouteTimings,
-  totalMs: number,
-  meta: Record<string, unknown>,
-): void {
-  const slowestStepMs = Math.max(0, ...Object.values(timings));
-  if (totalMs < 750 && slowestStepMs < 500) return;
-  console.info(`[inventory:${route}] completed`, {
-    ...meta,
-    totalMs,
-    timings,
-  });
-}
-
+// PS-133: route timing/logging helpers (InventoryRouteTimings / msSince / timedInventoryStep /
+// logSlowInventoryRoute) moved to ../lib/route-timing (imported below). The only guard-safe +
+// byte-identity-safe slice of the inventory analytics decomposition; the analytics query/DTO logic
+// stays here (guard-pinned + InventoryView-DTO critical).
 const EXPEDITED_SERVICES = [
   'ups_2nd_day_air', 'ups_2nd_day_air_am',
   'ups_next_day_air', 'ups_next_day_air_saver', 'ups_next_day_air_early_am',
