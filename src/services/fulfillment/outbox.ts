@@ -35,14 +35,10 @@ const DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS = 72;
 
 let schemaEnsured: Promise<void> | null = null;
 
-export type ShipmentConfirmationLifecycleStatus =
-  | 'not_required'
-  | 'not_supported'
-  | 'pending'
-  | 'processing'
-  | 'succeeded'
-  | 'failed';
-
+// PS-136 (Per user override unlock shipped data on 2026-06-09): removed the unused exported
+// type ShipmentConfirmationLifecycleStatus (0 repo-wide consumers). The live lifecycle status
+// strings are used inline; the sibling ShipmentConfirmationLifecycleCandidate below stays (it
+// IS consumed). Pure dead-type removal — no runtime/shipped-data behavior change.
 export type ShipmentConfirmationLifecycleCandidate = {
   orderId: number;
   orderNumber: string | null;

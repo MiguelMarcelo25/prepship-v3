@@ -470,20 +470,12 @@ async function loadClientCredentials(clientId: number | null | undefined): Promi
 
 // ── Legacy helpers kept for any internal callers ──────────────────────────────
 
-export type CreateFromRateInput = {
-  rateId: string;
-  orderId: number;
-  clientId?: number;
-};
-
-export async function createLabelFromRate(input: CreateFromRateInput) {
-  const label = await createCarrierLabel('shipstation', {
-    rateId: input.rateId,
-    body: { validate_address: 'no_validation' },
-    dedupeKey: `label:rate:${input.rateId}`,
-  }) as Label;
-  return persistLabelFromRate(label, input.orderId, input.clientId);
-}
+// PS-136 (Per user override unlock shipped data on 2026-06-09): removed the dead
+// createLabelFromRate() + CreateFromRateInput — 0 callers repo-wide, not under any keep-decision.
+// persistLabelFromRate (below) is RETAINED: it is still reachable from createLabelFromShipment /
+// createLabelFromOrderId, which carry recorded keep-decisions (parity/_v4-only.md:1227), so the
+// shipstation-label-url-guard still finds its asserted normalization string there. No behavior
+// change to any live path.
 
 async function assertLabelServiceEligibleForOrder(
   order: Pick<typeof orders.$inferSelect, 'clientId' | 'storeId'>,
