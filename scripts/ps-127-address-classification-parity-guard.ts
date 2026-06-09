@@ -5,7 +5,11 @@
  *   npx tsx scripts/ps-127-address-classification-parity-guard.ts
  */
 import { readFileSync } from 'node:fs';
-import { classifyShippingAddress } from '../src/services/shipping-workflow/address-classification';
+import {
+  classifyShippingAddress,
+  residentialForShipping,
+} from '../src/services/shipping-workflow/address-classification';
+import { residentialFromRequestFingerprint } from '../src/services/shipping-workflow/rate-fingerprint';
 
 let failures = 0;
 function check(name: string, got: unknown, want: unknown) {
@@ -78,6 +82,65 @@ const cls = (i: Parameters<typeof classifyShippingAddress>[0]) => classifyShippi
   const src = readFileSync('src/services/shipping-workflow/address-classification.ts', 'utf8');
   check('classifier reuses PS-126 postal helper (no competing zip logic)', /normalizeShippingPostalCode/.test(src), true);
   check('classifier never classifies commercial from ZIP+4 alone (nuance noted)', /never classify commercial from ZIP\+4 alone/i.test(src), true);
+}
+
+// 9. residentialForShipping policy: commercial ONLY on trusted evidence; residential-safe otherwise
+{
+  const trustedCommercial = cls({ sourceResidential: false });
+  check('trusted source commercial -> rate commercial', residentialForShipping(trustedCommercial), false);
+  const manualCommercial = cls({ manualOverrideResidential: false });
+  check('manual override commercial -> rate commercial', residentialForShipping(manualCommercial), false);
+  const validatedCommercial = cls({ addressValidation: { business: 'Y' } });
+  check('validated business commercial -> rate commercial', residentialForShipping(validatedCommercial), false);
+  const weakCommercial = cls({ shipTo: { company: 'Acme Corp', name: 'Jane Doe' } });
+  check('weak company heuristic commercial -> rate RESIDENTIAL-safe (never under-quote)', residentialForShipping(weakCommercial), true);
+  const fallback = cls({ shipTo: { name: 'Jane Doe' } });
+  check('fallback -> rate residential', residentialForShipping(fallback), true);
+  const trustedResidential = cls({ sourceResidential: true });
+  check('trusted residential -> rate residential', residentialForShipping(trustedResidential), true);
+}
+
+// 10. residentialFromRequestFingerprint parses r=1/r=0 for the label parity guard
+{
+  check('fingerprint r=1 -> residential true', residentialFromRequestFingerprint('v=1|z=11364|r=1|cl=4'), true);
+  check('fingerprint r=0 -> commercial false', residentialFromRequestFingerprint('v=1|z=11364|r=0|cl=4'), false);
+  check('fingerprint without r= -> null', residentialFromRequestFingerprint('v=1|z=11364|cl=4'), null);
+  check('empty fingerprint -> null', residentialFromRequestFingerprint(''), null);
+}
+
+// 11. Static: backend rate resolver delegates to the classifier (no blanket residential default)
+{
+  const rates = readFileSync('src/services/rates.ts', 'utf8');
+  check('resolveRateInput calls classifyShippingAddress', /classifyShippingAddress\(/.test(rates), true);
+  check('resolveRateInput applies residentialForShipping policy', /residentialForShipping\(/.test(rates), true);
+  check('resolveRateInput no longer defaults residential via input.residential !== false', /residential:\s*input\.residential\s*!==\s*false/.test(rates), false);
+  check('direct carriers receive the resolved residential', /residential:\s*input\.residential,/.test(rates), true);
+}
+
+// 12. Static: label purchase is the authoritative parity point
+{
+  const labels = readFileSync('src/services/labels.ts', 'utf8');
+  check('createLabelV2 classifies the order address', /classifyShippingAddress\(/.test(labels), true);
+  check('createLabelV2 stamps the label residential', /shipTo\.residential\s*=\s*labelResidential/.test(labels), true);
+  check('createLabelV2 enforces a rate/label residential mismatch block', /RATE_LABEL_RESIDENTIAL_MISMATCH/.test(labels), true);
+
+  const ssLabels = readFileSync('src/lib/shipstation/labels.ts', 'utf8');
+  check('label toAddress emits address_residential_indicator', /address_residential_indicator/.test(ssLabels), true);
+}
+
+// 13. Static: direct carriers honor residential; frontend no longer hardcodes residential:true in rate calls
+{
+  const shipengine = readFileSync('src/connectors/carrier/shipengine.ts', 'utf8');
+  check('shipengine ship-to honors residential (not hardcoded yes)', /residential === false \? 'no' : 'yes'/.test(shipengine), true);
+  const shipp = readFileSync('src/connectors/carrier/shipp.ts', 'utf8');
+  check('shipp ship-to honors residential (not hardcoded yes)', /residential === false \? 'no' : 'yes'/.test(shipp), true);
+
+  const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  check('OrdersView defines residentialForRate helper', /function residentialForRate\(/.test(ordersView), true);
+  check('OrdersView no longer hardcodes residential: true', /residential:\s*true,/.test(ordersView), false);
+
+  const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+  check('RateBrowserModal no longer hardcodes residential: true', /residential:\s*true,/.test(modal), false);
 }
 
 if (failures > 0) {

@@ -5453,6 +5453,30 @@ export default function OrdersView({
     return date.toISOString().slice(0, 10)
   }
 
+  // PS-127: mirror the BACKEND shipping consumption policy so the rate the operator sees
+  // (and the local r=1/r=0 cache key) matches what the backend resolveRateInput will quote
+  // and what the label will be billed under. Commercial ONLY on a trusted signal: an
+  // operator override (order.residential set, which the API already merges with the
+  // ShipStation source flag) or an explicit source-commercial flag. Everything else —
+  // including a company-name-only heuristic — stays residential-safe so we never under-quote
+  // the residential surcharge. The backend stays authoritative (resolveRateInput + the
+  // label parity guard); this is display/cache alignment, NOT the frontend owning the rule.
+  // Critically: today every site hardcodes `true`, so residential orders keep r=1 (no
+  // re-rate churn) and only genuinely-commercial orders correctly flip to r=0.
+  function residentialForRate(order: any): boolean {
+    const merged = order?.residential
+    if (typeof merged === 'boolean') return merged
+    const rawShipTo = (order?.raw?.shipTo ?? {}) as Record<string, any>
+    const source =
+      typeof order?.sourceResidential === 'boolean'
+        ? order.sourceResidential
+        : typeof rawShipTo.residential === 'boolean'
+          ? rawShipTo.residential
+          : null
+    if (source === false) return false
+    return true
+  }
+
   function buildRateRequestDraftKey(input: {
     weightOz: number
     dims: { length: number; width: number; height: number }
@@ -5606,7 +5630,7 @@ export default function OrdersView({
       weightOz,
       dims,
       shipTo: input.shipTo,
-      residential: true,
+      residential: residentialForRate(order),
       carrierIds,
       storeId: order.storeId,
       clientId: order.clientId,
@@ -6055,7 +6079,7 @@ export default function OrdersView({
       dimsL: request.dims.length,
       dimsW: request.dims.width,
       dimsH: request.dims.height,
-      residential: true,
+      residential: residentialForRate(order),
       carrierIds: request.carrierIds,
       storeId: order.storeId,
       clientId: order.clientId,
@@ -6237,7 +6261,7 @@ export default function OrdersView({
           dimsL: request.dims.length,
           dimsW: request.dims.width,
           dimsH: request.dims.height,
-          residential: true,
+          residential: residentialForRate(order),
           carrierIds: carrierIds.length ? carrierIds : undefined,
           storeId: order.storeId,
           clientId: order.clientId,
@@ -6370,7 +6394,7 @@ export default function OrdersView({
         dimsL: request.dims.length,
         dimsW: request.dims.width,
         dimsH: request.dims.height,
-        residential: true,
+        residential: residentialForRate(order),
         carrierIds: request.carrierIds.length ? request.carrierIds : undefined,
         storeId: order.storeId,
         clientId: order.clientId,
@@ -6489,7 +6513,7 @@ export default function OrdersView({
         dimsL: dims.length,
         dimsW: dims.width,
         dimsH: dims.height,
-        residential: true,
+        residential: residentialForRate(order),
         carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: order.storeId,
         clientId: order.clientId,
@@ -6879,7 +6903,7 @@ export default function OrdersView({
       weightOz,
       dims,
       shipTo,
-      residential: true,
+      residential: residentialForRate(panelOrder),
       carrierIds,
       storeId: panelOrder.storeId,
       clientId: panelOrder.clientId,

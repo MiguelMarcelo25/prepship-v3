@@ -176,7 +176,7 @@ function shippHasRawShipTo(rawOrder: any): boolean {
   return false;
 }
 
-function shippShipTo(rawOrder: any, toZip?: string, explicitShipTo?: any) {
+function shippShipTo(rawOrder: any, toZip?: string, explicitShipTo?: any, residential?: boolean) {
   const wmAddr = rawOrder?.shippingInfo?.postalAddress ?? null;
   const ebayContact = Array.isArray(rawOrder?.fulfillmentStartInstructions)
     ? rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
@@ -238,7 +238,9 @@ function shippShipTo(rawOrder: any, toZip?: string, explicitShipTo?: any) {
     ),
     postal_code: postalCode || '94601',
     country_code: String(addr?.country ?? addr?.countryCode ?? addr?.CountryCode ?? ssAddr?.country ?? 'US'),
-    address_residential_indicator: 'yes',
+    // PS-127: honor the backend-resolved residential (commercial only on a trusted signal);
+    // default residential-safe ('yes') when unknown, matching prior behavior.
+    address_residential_indicator: residential === false ? 'no' : 'yes',
   };
 }
 
@@ -346,7 +348,12 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   const session = await shippLogin(creds);
   const from = shippShipFrom(creds, { fromZip: input.fromZip, shipFrom: input.shipFrom });
   const rawOrder = input.rawOrder as any;
-  const to = shippShipTo(rawOrder, String(input.toZip ?? ''));
+  const to = shippShipTo(
+    rawOrder,
+    String(input.toZip ?? ''),
+    undefined,
+    typeof input.residential === 'boolean' ? input.residential : undefined,
+  );
   const hasRawShipTo = shippHasRawShipTo(rawOrder);
   const toZipPlace = await shippLookupUsZip(to.postal_code);
   const shipFrom = input.shipFrom as any;

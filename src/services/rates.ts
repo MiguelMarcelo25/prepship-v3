@@ -22,6 +22,11 @@ import {
 import { buildShippingRateRequestFingerprint } from './shipping-workflow/rate-fingerprint';
 import { normalizeShippingPostalCode } from './shipping-workflow/postal-code';
 import {
+  classifyShippingAddress,
+  residentialForShipping,
+  type AddressClassificationSource,
+} from './shipping-workflow/address-classification';
+import {
   HUGRAB_DEFAULT_INSURED_VALUE,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   describeShippingService,
@@ -306,7 +311,18 @@ export type RateInput = {
   toCity?: string;
   toAddress?: string;
   toName?: string;
+  toCompany?: string | null;
+  // PS-127 residential/commercial evidence. `residential` is the legacy resolved flag a
+  // caller may pass (treated as a trusted source signal for back-compat). The fields below
+  // let order-backed callers supply richer evidence the canonical classifier ranks.
   residential?: boolean;
+  /** Operator manual override (order_overrides.residential): true=residential, false=commercial. */
+  manualOverrideResidential?: boolean | null;
+  /** Trusted source flag (e.g. ShipStation raw shipTo.residential). */
+  sourceResidential?: boolean | null;
+  // PS-127 resolved classification (output of resolveRateInput, for DTO/diagnostics).
+  residentialClassification?: 'residential' | 'commercial';
+  residentialSource?: AddressClassificationSource;
   dimsL?: number;
   dimsW?: number;
   dimsH?: number;
@@ -396,13 +412,42 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
     }
   }
 
+  // PS-127: the backend owns residential/commercial classification. Stop blindly
+  // defaulting every request to residential (`input.residential !== false`). Run the
+  // canonical classifier on whatever evidence the caller supplied (manual override,
+  // trusted source flag, or — back-compat — an explicit `residential` boolean treated as
+  // a source signal), then apply the shipping consumption policy (commercial only on
+  // TRUSTED evidence; residential-safe otherwise). This stays DETERMINISTIC on the inputs
+  // — no hidden order load — so the cache key is identical between the cached-bulk lookup
+  // and the live fetch (a hidden load would diverge them and break rate caching). The
+  // label path re-classifies from the order's authoritative evidence and enforces parity.
+  const residentialClassification = classifyShippingAddress({
+    orderId: input.orderId,
+    clientId: context.clientId,
+    storeId: context.storeId,
+    shipTo: {
+      name: input.toName,
+      company: input.toCompany ?? null,
+      city: input.toCity,
+      state: input.toState,
+      postalCode: input.toZip,
+      country: input.toCountry,
+    },
+    manualOverrideResidential: input.manualOverrideResidential ?? null,
+    sourceResidential:
+      input.sourceResidential ?? (typeof input.residential === 'boolean' ? input.residential : null),
+  });
+  const residential = residentialForShipping(residentialClassification);
+
   return {
     ...input,
     // PS-126: canonical rate path keeps the EXACT postal (US ZIP+4 when present) so
     // ShipStation rate quotes match exactly. Falls back to legacy zip5 only if the
     // helper can't produce an exact value. Direct carriers get zip5 at their boundary.
     toZip: normalizeShippingPostalCode(input.toZip, input.toCountry).exact ?? normalizeZip(input.toZip),
-    residential: input.residential !== false,
+    residential,
+    residentialClassification: residentialClassification.classification,
+    residentialSource: residentialClassification.source,
     storeId: context.storeId,
     clientId: context.clientId,
     apiKeyV2: context.apiKeyV2,
@@ -1590,6 +1635,10 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
         orderNumber: input.orderNumber,
         purchaseOrderId: input.purchaseOrderId,
         shipFrom: input.shipFrom,
+        // PS-127: direct carriers must rate under the SAME backend-resolved residential
+        // classification as ShipStation (not a hardcoded 'yes'), so direct-vs-ShipStation
+        // quotes are comparable and the label matches.
+        residential: input.residential,
         shippingOptions,
       });
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];

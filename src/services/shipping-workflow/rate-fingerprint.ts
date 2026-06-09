@@ -146,6 +146,20 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
   return parts.join('|');
 }
 
+// PS-127: extract the residential bit a rate was quoted under from its request
+// fingerprint (`r=1`/`r=0`). Returns null when the fingerprint omits it (older rate or
+// unknown residential). Used at the label-purchase boundary to detect a rate↔label
+// residential mismatch before spending postage.
+export function residentialFromRequestFingerprint(fingerprint: string | null | undefined): boolean | null {
+  const fp = typeof fingerprint === 'string' ? fingerprint : '';
+  if (!fp) return null;
+  for (const part of fp.split('|')) {
+    if (part === 'r=1') return true;
+    if (part === 'r=0') return false;
+  }
+  return null;
+}
+
 export function selectedRateRequestFingerprint(rate: unknown): string | null {
   const row = record(rate);
   if (!row) return null;

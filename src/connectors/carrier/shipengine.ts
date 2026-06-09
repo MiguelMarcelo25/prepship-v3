@@ -27,7 +27,7 @@ async function shipEngineCarrierIds(creds: Record<string, unknown>): Promise<str
     .filter(Boolean);
 }
 
-function shipEngineShipTo(rawOrder: any, toZip?: string) {
+function shipEngineShipTo(rawOrder: any, toZip?: string, residential?: boolean) {
   const wmAddr = rawOrder?.shippingInfo?.postalAddress ?? null;
   const ebayContact = Array.isArray(rawOrder?.fulfillmentStartInstructions)
     ? rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
@@ -84,7 +84,9 @@ function shipEngineShipTo(rawOrder: any, toZip?: string) {
     ),
     postal_code: postalCode || '94601',
     country_code: String(addr?.country ?? addr?.countryCode ?? addr?.CountryCode ?? ssAddr?.country ?? 'US'),
-    address_residential_indicator: 'yes',
+    // PS-127: honor the backend-resolved residential (commercial only on a trusted signal);
+    // default residential-safe ('yes') when unknown, matching prior behavior.
+    address_residential_indicator: residential === false ? 'no' : 'yes',
   };
 }
 
@@ -149,7 +151,11 @@ async function ratesFromShipEngine(input: Record<string, unknown>): Promise<Arra
     },
     shipment: {
       validate_address: 'no_validation',
-      ship_to: shipEngineShipTo(input.rawOrder, typeof input.toZip === 'string' ? input.toZip : undefined),
+      ship_to: shipEngineShipTo(
+        input.rawOrder,
+        typeof input.toZip === 'string' ? input.toZip : undefined,
+        typeof input.residential === 'boolean' ? input.residential : undefined,
+      ),
       ship_from: shipEngineShipFrom(creds, {
         fromZip: typeof input.fromZip === 'string' ? input.fromZip : undefined,
         shipFrom: input.shipFrom,

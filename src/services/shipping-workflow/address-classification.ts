@@ -167,3 +167,27 @@ export function classifyShippingAddress(input: AddressClassificationInput): Addr
   // 6. Fallback: residential is the safe default when unknown.
   return decide(true, 'fallback_residential', 'fallback');
 }
+
+/**
+ * PS-127 shipping CONSUMPTION policy: how rating + labeling turn a classification into
+ * the `address_residential_indicator` they send to the carrier.
+ *
+ * This business is e-commerce / residential-heavy, and the carrier residential surcharge
+ * is only charged on residential delivery. The safe direction is therefore RESIDENTIAL:
+ * over-quoting a residential surcharge on a true commercial address is harmless, but
+ * UNDER-quoting (rating commercial, billed residential) loses money. So we only flip a
+ * rate/label to COMMERCIAL on TRUSTED evidence (operator manual override, an explicit
+ * provider/source flag, or a validated business marker). A weak company-name-only
+ * heuristic stays residential-safe.
+ *
+ * CRITICAL: the rate estimate, the cache fingerprint, AND the label purchase must all run
+ * the classification through THIS function so the quote equals the bill (rate↔label
+ * parity). Do not let one path use `result.residential` while another uses this — they
+ * can differ for the company-heuristic case.
+ */
+export function residentialForShipping(result: AddressClassificationResult): boolean {
+  const trustedCommercial =
+    !result.residential &&
+    (result.confidence === 'manual' || result.confidence === 'source' || result.confidence === 'validated');
+  return !trustedCommercial;
+}

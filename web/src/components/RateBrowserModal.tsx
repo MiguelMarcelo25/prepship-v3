@@ -1285,7 +1285,17 @@ export default function RateBrowserModal({
           width: widNum,
           height: hgtNum,
         },
-        residential: true,
+        // PS-127: reflect the order's backend-resolved residential instead of a hardcoded
+        // 'yes'. Commercial only on a trusted signal (operator override merged into
+        // order.residential, or an explicit source-commercial flag); residential-safe
+        // otherwise so we never under-quote the residential surcharge. The backend remains
+        // authoritative (resolveRateInput + the label parity guard / residentialForShipping).
+        residential:
+          typeof order?.residential === 'boolean'
+            ? order.residential
+            : order?.sourceResidential === false
+              ? false
+              : true,
         carrierIds: carrierIds.length ? carrierIds : undefined,
         preferredCarrierId: preferredAccount?.carrierId ?? undefined,
         storeId: toFiniteNumber(order?.storeId) ?? undefined,

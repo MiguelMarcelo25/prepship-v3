@@ -35,7 +35,13 @@ import {
 import { addMockLabelSignature } from '../lib/mock-label-access';
 import {
   type SelectedRateProofInput,
+  residentialFromRequestFingerprint,
+  selectedRateRequestFingerprint,
 } from './shipping-workflow/rate-fingerprint';
+import {
+  classifyShippingAddress,
+  residentialForShipping,
+} from './shipping-workflow/address-classification';
 import { assertLabelPurchaseRateSelection } from './shipping-workflow/rate-quote-snapshot-store';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
 import { normalizeShippingOptions } from '../lib/shipping-options';
@@ -1009,6 +1015,33 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
 
   const fallbackShipTo = orderShipToFromRaw(order);
   const shipTo = mergeAddress(body.shipTo, fallbackShipTo);
+  // PS-127: the label is the authoritative rate↔label parity point. Classify
+  // residential/commercial from the order's OWN evidence (operator override >
+  // ShipStation source flag > weak company heuristic) — never a frontend-sent value —
+  // then apply the shipping consumption policy and stamp the indicator so the label is
+  // billed under the SAME classification the rate was quoted under. `overrides` (with the
+  // manual residential override) and `order.raw.shipTo` are already loaded above, so this
+  // adds no DB round-trip.
+  const rawShipTo = ((order.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+  const labelClassification = classifyShippingAddress({
+    orderId: order.id,
+    clientId,
+    storeId: order.storeId ?? null,
+    shipTo: {
+      name: shipTo.name,
+      company: shipTo.company,
+      city: shipTo.city,
+      state: shipTo.state,
+      postalCode: shipTo.postalCode,
+      country: shipTo.country,
+    },
+    manualOverrideResidential:
+      typeof overrides?.residential === 'boolean' ? overrides.residential : null,
+    sourceResidential:
+      typeof rawShipTo.residential === 'boolean' ? (rawShipTo.residential as boolean) : null,
+  });
+  const labelResidential = residentialForShipping(labelClassification);
+  shipTo.residential = labelResidential;
   let shipFrom: ShipstationAddressInput;
   if (body.shipFrom?.street1) {
     shipFrom = mergeAddress(body.shipFrom, defaultShipFromAddress());
@@ -1150,6 +1183,29 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     selectedRateKey: body.selectedRateKey,
     selectedRateProof: body.selectedRateProof,
   });
+  // PS-127 rate↔label parity guard: if the order classifies as TRUSTED residential/commercial
+  // (operator override, provider/source flag, or validated business) but the selected rate
+  // was quoted under the OPPOSITE residential bit, the quote won't match the bill — block
+  // before spending postage and force a re-rate. Weak/auto/unknown cases align silently to
+  // the classification (no false blocks on the common residential path). Only the legacy
+  // carried proof exposes the per-rate fingerprint; the snapshot path is coherence-checked
+  // above and skipped here when no selectedRate fingerprint is present.
+  const quotedResidential = residentialFromRequestFingerprint(
+    selectedRateRequestFingerprint(body.selectedRateProof?.selectedRate),
+  );
+  const labelTrusted =
+    labelClassification.confidence === 'manual' ||
+    labelClassification.confidence === 'source' ||
+    labelClassification.confidence === 'validated';
+  if (labelTrusted && quotedResidential !== null && quotedResidential !== labelResidential) {
+    const err = new Error(
+      `Rate/label residential mismatch: address classifies ${labelClassification.classification} ` +
+        `(${labelClassification.source}) but the selected rate was quoted ` +
+        `${quotedResidential ? 'residential' : 'commercial'}. Re-rate this order before buying the label.`,
+    ) as Error & { code?: string };
+    err.code = 'RATE_LABEL_RESIDENTIAL_MISMATCH';
+    throw err;
+  }
   // Per user override unlock shipped data on 2026-06-06 (PS-106): carrier-family
   // eligibility — a direct-store order must not buy postage through a ShipStation
   // carrier account. This IS the ShipStation flow, so family = 'shipstation'. The

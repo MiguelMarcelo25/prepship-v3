@@ -13,6 +13,11 @@ export type ShipstationAddressInput = {
   postalCode?: string | null;
   country?: string | null;
   phone?: string | null;
+  // PS-127: residential/commercial for the LABEL must match what the rate was quoted
+  // under. true=residential, false=commercial, null/undefined=unknown (carrier decides).
+  // Previously omitted entirely, so labels silently let the carrier reclassify and could
+  // be billed differently than the residential-quoted rate.
+  residential?: boolean | null;
 };
 
 export type CreateExternalLabelInput = {
@@ -97,6 +102,10 @@ function toAddress(input: ShipstationAddressInput, fallbackPhone = '000-000-0000
     state_province: input.state ?? '',
     postal_code: input.postalCode ?? '',
     country_code: input.country ?? 'US',
+    // PS-127: send the SAME residential indicator the rate was quoted under so ShipStation
+    // bills the label exactly as quoted. Omit (carrier decides) only when truly unknown.
+    address_residential_indicator:
+      input.residential === true ? 'yes' : input.residential === false ? 'no' : 'unknown',
   };
 }
 
