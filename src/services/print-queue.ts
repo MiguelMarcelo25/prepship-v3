@@ -701,13 +701,18 @@ export async function listQueue(
   conds.push(printQueueScopePredicate(scope));
   const where = conds.length ? and(...conds) : undefined;
   const entries = await db.select().from(printQueue).where(where);
-  const totalQty = entries.reduce((s, e) => s + (e.orderQty ?? 1), 0);
-  // PS-129: surface a per-entry shipping hold (cancelled upstream / externally shipped) so
-  // the Print Queue UI can badge it and block printing. The merge job already EXCLUDES these
-  // server-side — this is the matching display signal. Read-only.
+  // PS-129: per-entry shipping hold (locally shipped/cancelled, cancelled upstream, externally shipped).
   const holds = await loadShippingHoldsForOrderIds(entries.map((e) => Number(e.orderId)));
+  // Per user override unlock shipped data on 2026-06-10: the merge/print job already EXCLUDES held
+  // entries server-side; align the ACTIVE queue display with it so already-shipped/blocked orders no
+  // longer clutter the queue or inflate the "labels not printed" count (operator confusion). The
+  // print_queue rows are untouched; history (includePrinted=true) still returns every entry.
+  const visibleEntries = includePrinted
+    ? entries
+    : entries.filter((e) => !holds.has(Number(e.orderId)));
+  const totalQty = visibleEntries.reduce((s, e) => s + (e.orderQty ?? 1), 0);
   return {
-    queuedOrders: entries.map((e) => ({
+    queuedOrders: visibleEntries.map((e) => ({
       queue_entry_id: e.id,
       order_id: e.orderId,
       order_number: e.orderNumber,
@@ -725,7 +730,7 @@ export async function listQueue(
       shipping_hold: holds.has(Number(e.orderId)),
       held_reason: holds.get(Number(e.orderId)) ?? null,
     })),
-    totalOrders: entries.length,
+    totalOrders: visibleEntries.length,
     totalQty,
   };
 }
