@@ -18,16 +18,19 @@ import {
   recordWorkerJobSuccess,
   setWorkerMode,
 } from './worker-status';
+import { SYNC_CADENCE_MS, SYNC_STARTUP_DELAY_MS } from '../lib/sync-cadence';
 
-const ORDER_SYNC_INTERVAL_MS = 3 * 60 * 1000;
-const SHIPMENT_SYNC_INTERVAL_MS = 3 * 60 * 1000;
-const RATE_BACKFILL_INTERVAL_MS = 10 * 60 * 1000;
-const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000;
-const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000;
-const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000;
-const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
-const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000;
-const STARTUP_DELAY_MS = 15 * 1000;
+// PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
+// endpoint). Local aliases keep the rest of this file unchanged.
+const ORDER_SYNC_INTERVAL_MS = SYNC_CADENCE_MS.orders;
+const SHIPMENT_SYNC_INTERVAL_MS = SYNC_CADENCE_MS.shipments;
+const RATE_BACKFILL_INTERVAL_MS = SYNC_CADENCE_MS.rateBackfill;
+const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = SYNC_CADENCE_MS.inventoryFromOrders;
+const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = SYNC_CADENCE_MS.productCatalog;
+const FULFILLMENT_OUTBOX_INTERVAL_MS = SYNC_CADENCE_MS.fulfillmentOutbox;
+const REPORTING_REFRESH_INTERVAL_MS = SYNC_CADENCE_MS.reportingMetrics;
+const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedClassifier;
+const STARTUP_DELAY_MS = SYNC_STARTUP_DELAY_MS;
 
 const JOBS = {
   orders: 'prepship.sync.orders',

@@ -20,14 +20,12 @@ import {
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { coerceCaliforniaIsoDay } from '../lib/time/california';
 import { requirePermission } from '../middleware/auth';
+// PS-132: synthetic/system clients excluded from Config + Summary grids — single source.
+import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 
 const app = new Hono();
 
 app.use('*', requirePermission('financials:read'));
-
-// v2 skips these synthetic/system clients from both the Config and Summary
-// grids (sqlite-billing-repository.ts listBillableClients / listSummary).
-const SYSTEM_CLIENT_NAMES = ['Manual Orders', 'Rate Browser', 'Api Shipments'];
 
 function normalizeScopeIds(values: number[] | undefined): number[] {
   if (!Array.isArray(values)) return [];

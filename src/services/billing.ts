@@ -17,6 +17,14 @@ import {
   refreshBillingSummaryMetrics,
 } from './reporting-metrics';
 import { summarizeBillingItemsForDetail } from './billing-detail-utils';
+import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
+
+// PS-132: synthetic/system clients excluded from billing summaries/details — single source.
+// Parameterized SQL fragment (same semantics as the prior inline literal list).
+const systemClientNamesSql = sql.join(
+  SYSTEM_CLIENT_NAMES.map((name) => sql`${name}`),
+  sql`, `,
+);
 
 export type GenerateInput = {
   clientId?: number;
@@ -231,7 +239,7 @@ export async function billingGenerationStatus(
       select 1
       from clients c
       where c.active = true
-        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        and c.name not in (${systemClientNamesSql})
         ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
         and ${billingClientScopePredicate(input)}
         and exists (
@@ -261,7 +269,7 @@ export async function billingGenerationStatus(
       select c.id, c.store_ids
       from clients c
       where c.active = true
-        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        and c.name not in (${systemClientNamesSql})
         ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
         and ${billingClientScopePredicate(input)}
     )
@@ -511,7 +519,7 @@ export async function generateLineItems(input: GenerateInput) {
     from clients c
     left join billing_config b on b.client_id = c.id
     where c.active = true
-      and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+      and c.name not in (${systemClientNamesSql})
       and coalesce(b.active, true) = true
       ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
       and ${billingClientScopePredicate(input)}
@@ -1242,7 +1250,7 @@ export async function billingSummary(
         c.name as client_name
       from clients c
       where c.active = true
-        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        and c.name not in (${systemClientNamesSql})
         ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
         and ${billingClientScopePredicate(input)}
       order by c.name asc
@@ -1316,7 +1324,7 @@ export async function billingSummary(
       and b.ship_date >= ${input.dateFrom}::timestamptz
       and b.ship_date <= ${input.dateTo}::timestamptz
     where c.active = true
-      and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+      and c.name not in (${systemClientNamesSql})
       ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
       and ${billingClientScopePredicate(input)}
     group by c.id, c.name

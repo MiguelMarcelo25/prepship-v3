@@ -9,6 +9,7 @@ import {
   getPersistedWorkerStatus,
 } from '../services/worker-status';
 import { getSyncJobQueueStatus } from '../services/sync-job-queue';
+import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
 
 const app = new Hono();
 
@@ -81,14 +82,9 @@ app.get('/status', async (c) => {
         ? Date.parse(orders.lastSyncedAt)
         : null,
     lastSyncAt: orders.lastSyncedAt,
-    cadenceMinutes: {
-      orders: 3,
-      shipments: 3,
-      rateBackfill: 10,
-      inventoryFromOrders: 30,
-      productCatalog: 60,
-      reportingMetrics: 30,
-    },
+    // PS-132: derived from the shared cadence source (src/lib/sync-cadence.ts) so the
+    // reported cadence can never drift from what the job queue actually schedules.
+    cadenceMinutes: SYNC_CADENCE_MINUTES,
     ratePrefetchRunning: false,
     ratePrefetchJob: null,
     orders,

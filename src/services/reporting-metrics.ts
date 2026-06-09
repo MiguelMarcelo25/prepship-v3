@@ -1,5 +1,12 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
+import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
+
+// PS-132: synthetic/system clients excluded from reporting metrics — single source.
+const systemClientNamesSql = sql.join(
+  SYSTEM_CLIENT_NAMES.map((name) => sql`${name}`),
+  sql`, `,
+);
 
 const DEFAULT_REFRESH_DAYS = 45;
 const DEFAULT_INVENTORY_LIMIT = 5000;
@@ -557,7 +564,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         and b.ship_date >= ${from.toISOString()}::timestamptz
         and b.ship_date <= ${to.toISOString()}::timestamptz
       where c.active = true
-        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        and c.name not in (${systemClientNamesSql})
       group by c.id
       on conflict (client_id, period_from, period_to)
       do update set
@@ -621,7 +628,7 @@ export async function pruneBillingSummaryMetrics(
       select 1 from clients c
       where c.id = m.client_id
         and c.active = true
-        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        and c.name not in (${systemClientNamesSql})
     )
   `;
   const stalePredicate = sql`m.updated_at < now() - (${retentionDays}::text || ' days')::interval`;
