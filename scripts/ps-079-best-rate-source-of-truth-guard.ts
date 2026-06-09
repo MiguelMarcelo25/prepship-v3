@@ -93,6 +93,12 @@ check('frontend uses the backend bestRate as source of truth (no divergent clien
   /const bestRate = toRecord\(response\?\.bestRate\)/.test(ordersView));
 check('PS-111: passive auto-rating derives completeness from the backend, not hardcoded true',
   /isComplete: backendComplete/.test(ordersView) && /deriveBackendBestRateComplete\(response/.test(ordersView));
+// PS-135: the panel-live (forceLive) refresh path also derives completeness from the backend
+// (its bestRate.isComplete stamp, else carrierStatuses) — a carrier that errors/loads during a
+// panel fetch must NOT be stamped complete, matching the passive path above.
+check('PS-135: panel-live best rate derives completeness from the backend (not hardcoded isComplete: true)',
+  ordersView.includes('isComplete: deriveBackendBestRateComplete(response, bestRate),') &&
+  ordersView.includes("matchType: 'panel-live'"));
 // PS-105/carrier-nickname refactor: getCarrierCodeForDisplay now resolves the
 // awaiting carrier into a `const carrierCode = toStringValue(order.bestRate?.carrierCode) ?? …`
 // (bestRate carrier still FIRST/preferred), then falls back to a known-carrier

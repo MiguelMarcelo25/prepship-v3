@@ -6544,7 +6544,10 @@ export default function OrdersView({
           toNumberValue(bestRate.insuredValue) ??
           shippingOptions.insuredValue
         const bestRateWithMetadata = autoRequest ? withRateRequestMetadata(bestRate, autoRequest, {
-          isComplete: true,
+          // PS-135: derive completeness from the backend (its bestRate.isComplete stamp, else
+          // carrierStatuses) instead of hardcoding true — a carrier that errors/loads during a
+          // panel forceLive fetch must NOT be stamped complete. Matches the passive path (above).
+          isComplete: deriveBackendBestRateComplete(response, bestRate),
           rateCount: rates.length,
           matchType: 'panel-live',
           requestFingerprint: getBackendRateResponseFingerprint(response, bestRate),
