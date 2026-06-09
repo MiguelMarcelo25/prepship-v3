@@ -79,4 +79,29 @@ assert.equal(
   'package.json must expose the order-editable lockdown guard',
 );
 
+// 8. PS-136 (extract-and-delegate): the manual mark-shipped-externally transition is owned by
+//    the canonical service, the route still calls assertOrderEditable BEFORE delegating, and the
+//    service adds a defense-in-depth forward-only WHERE order_status='awaiting_shipment' guard so
+//    the awaiting->shipped flip can never re-flip a shipped/cancelled order.
+const markShippedExternally = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
+assert(
+  /export async function markOrderShippedExternally\b/.test(markShippedExternally),
+  'mark-shipped-externally.ts must export the canonical markOrderShippedExternally() owner',
+);
+assert(
+  /eq\(orders\.orderStatus,\s*'awaiting_shipment'\)/.test(markShippedExternally),
+  'markOrderShippedExternally must gate the awaiting->shipped flip with a forward-only WHERE order_status=awaiting_shipment guard',
+);
+assert(
+  orders.includes('markOrderShippedExternally({'),
+  'the /shipped-external route must delegate to the canonical markOrderShippedExternally() service',
+);
+const shippedExternalIdx = orders.indexOf("'/:id{[0-9]+}/shipped-external'");
+const delegateIdx = orders.indexOf('markOrderShippedExternally({', shippedExternalIdx);
+const guardIdx = orders.indexOf('assertOrderEditable(c, id)', shippedExternalIdx);
+assert(
+  shippedExternalIdx >= 0 && guardIdx > shippedExternalIdx && delegateIdx > guardIdx,
+  'the /shipped-external route must call assertOrderEditable BEFORE delegating to markOrderShippedExternally',
+);
+
 console.log('PASS order-editable lockdown guard');

@@ -10,15 +10,18 @@ import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
 import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
-import { deductInventoryForOrder } from '../services/fulfillment-deductions';
+// PS-136: the manual mark-shipped-externally transition (status flip + inventory deduction +
+// ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
+import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
 import { replaceOrderItemsForOrders } from '../services/order-items';
 import {
   getComboPackageDefaultForOrder,
   saveComboPackageDefault,
 } from '../services/combo-package-defaults';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
-import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
-import { loadClientCredentials } from '../lib/shipstation/credentials';
+// PS-136: ssMarkOrderShippedV1 / asSSUpstreamOrderId / loadClientCredentials moved with the
+// shipped-external logic into src/services/fulfillment/mark-shipped-externally.ts (their only
+// consumer in this route). deductInventoryForOrder likewise — all now imported by that service.
 import {
   InputValidationError,
   assertPersistedOrderBestRateDto,
@@ -3046,99 +3049,29 @@ app.post(
       .limit(1);
     if (!existing) return c.json({ error: 'Order not found' }, 404);
 
-    // Flip both externallyShipped AND orderStatus when transitioning
-    // INTO the externally-shipped state. The previous version updated
-    // only externallyShipped, leaving order_status='awaiting_shipment'.
-    // Net effect: marked-shipped orders stayed in the Awaiting tab
-    // forever (the user's reported bug — 'i see 25 test orders and i
-    // expected is 23'). The Awaiting list query filters by
-    // order_status, not externallyShipped, so the flag was effectively
-    // invisible to the operator.
-    //
-    // assertOrderEditable above guards this transition — the order
-    // MUST be awaiting before this runs, so we're never overwriting
-    // a real shipment status.
-    //
-    // Per user override `unlock shipped data` (this is a forward-only
-    // awaiting → shipped transition, NOT a write to already-shipped
-    // data; assertOrderEditable structurally enforces that).
-    await db
-      .update(orders)
-      .set({
-        externallyShipped: flag,
-        // Forward transition only: setting flag=true moves to shipped.
-        // The hypothetical flag=false unmark path doesn't change
-        // status (we don't know what it was before the mark — could
-        // have been awaiting OR cancelled OR already shipped).
-        ...(flag ? { orderStatus: 'shipped' as const } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(orders.id, id));
+    // PS-136 (Per user override unlock shipped data on 2026-06-09): the mark-shipped-externally
+    // transition (forward-only awaiting->shipped flip + externally_shipped=true + inventory
+    // deduction + optional ShipStation markasshipped notify) is now owned by the canonical
+    // service markOrderShippedExternally(). assertOrderEditable (above) STAYS in this route as the
+    // shipped/cancelled lockdown guard; the service adds a defense-in-depth forward-only
+    // `WHERE order_status='awaiting_shipment'` guard so the transition can never re-flip a
+    // shipped/cancelled order. The externally_shipped_source override write stays here (it is a
+    // generic order_overrides concern and also assembles the response row). Behavior is preserved
+    // for this route; the only ordering change (source-override write now after deduct/notify) is
+    // immaterial — neither deduction nor the notify reads externally_shipped_source.
+    const { notify: notifyResult } = await markOrderShippedExternally({
+      order: existing,
+      flag,
+      source: body.source ?? null,
+      trackingNumber: body.trackingNumber ?? null,
+      carrierCode: body.carrierCode ?? null,
+      notifyCustomer: body.notifyCustomer,
+      notifyMarketplace: body.notifyMarketplace,
+    });
 
     const row = await applyOverridesPatch(id, {
       externallyShippedSource: body.source ?? null,
     });
-    if (flag) {
-      try {
-        await deductInventoryForOrder(existing, {
-          source: body.source ? `external:${body.source}` : 'external',
-        });
-      } catch (err) {
-        console.warn('[orders] external shipped inventory deduction failed:', err);
-      }
-    }
-
-    // Optional ShipStation v1 markasshipped call.
-    //
-    // We only invoke ShipStation when the user explicitly opted into
-    // at least one notify channel — most "Mark as Shipped" usage is
-    // pure local-state tracking ("I already shipped this somewhere
-    // else, just close the loop in PrepShip") and shouldn't generate
-    // duplicate marketplace pings. The frontend popover's Notify
-    // Customer / Notify Marketplace toggles drive this.
-    //
-    // Failure to notify is logged but does NOT fail the request — the
-    // local flag is already flipped, the inventory is already deducted,
-    // and re-running the call would just create a duplicate ack. Better
-    // to surface the warning in Render logs than to leave the order
-    // in a half-marked state on retry.
-    const shouldNotify =
-      flag && (body.notifyCustomer === true || body.notifyMarketplace === true);
-    let notifyResult: { ok: boolean; reason?: string } = { ok: false, reason: 'not requested' };
-
-    if (shouldNotify) {
-      const ssUpstreamOrderId = asSSUpstreamOrderId(existing.externalOrderId);
-      if (!ssUpstreamOrderId) {
-        notifyResult = { ok: false, reason: 'order has no upstream ShipStation ID — sync may be incomplete' };
-      } else {
-        try {
-          const creds = await loadClientCredentials(existing.clientId);
-          const shipDate = new Date().toISOString().slice(0, 10);
-          await ssMarkOrderShippedV1(
-            {
-              orderId: ssUpstreamOrderId,
-              carrierCode: body.carrierCode ?? null,
-              trackingNumber: body.trackingNumber ?? '',
-              shipDate,
-              notifyCustomer: body.notifyCustomer === true,
-              notifySalesChannel: body.notifyMarketplace === true,
-            },
-            { apiKey: creds.apiKey ?? undefined, apiSecret: creds.apiSecret ?? undefined }
-          );
-          notifyResult = { ok: true };
-          console.info(
-            `[orders] shipped-external notify ok orderId=${id} ssOrderId=${ssUpstreamOrderId} ` +
-              `customer=${body.notifyCustomer === true} marketplace=${body.notifyMarketplace === true}`
-          );
-        } catch (notifyErr) {
-          const msg = notifyErr instanceof Error ? notifyErr.message : String(notifyErr);
-          notifyResult = { ok: false, reason: msg };
-          console.warn(
-            `[orders] shipped-external notify FAILED orderId=${id} reason=${msg}`
-          );
-        }
-      }
-    }
 
     return c.json({ data: row, notify: notifyResult });
   }
