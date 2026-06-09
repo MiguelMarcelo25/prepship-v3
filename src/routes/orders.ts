@@ -1456,6 +1456,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     }
   }
 
+  // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
+  // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
+  // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
+  // buildBestRateWorkflowDto, detectExpeditedShipping, pick*Source, redactOrderFinancials). Extracting it is a
+  // cosmetic decomposition only, and its clean form needs a query-builder extraction to type `joined`'s custom
+  // projection (orderListSelect + computed `raw`) safely under strict mode. Per "minimize bugs", that risk on the
+  // main Orders screen is not worth a zero-behavior change. Leave inline unless a real SoT/test need arises.
   const rows = joined.map((r) => {
     const safeOverrides = sanitizeAwaitingOverridesForShippingEligibility(
       {
