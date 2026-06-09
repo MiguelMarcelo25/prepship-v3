@@ -203,12 +203,30 @@ async function enqueueShipmentConfirmationSql(
   },
 ): Promise<{ queued: boolean; provider: string }> {
   await ensureFulfillmentOutboxSql(sql);
-  const provider = args.confirmationProvider ?? inferStoreProviderFromExternalId(args.externalOrderId);
-  const supported = provider === 'shipstation' || provider === 'walmart' || provider === 'ebay';
+  // PS-136 (Per user override unlock shipped data on 2026-06-09): delegate the confirmation-
+  // provider decision AND the support check to the CANONICAL owners — one source of truth —
+  // instead of this file's local inferrer + a hardcoded provider list. Dynamic import keeps it
+  // cold-start safe (matches this file's deferred connector-import pattern; this runs only after
+  // a label is bought, never at module init). resolveShipmentConfirmationProvider returns null
+  // for manual/internal/no-marketplace orders (=> not_required, no spurious confirmation), and
+  // "supported" is the registry's LIVE shipment.confirm capability, NOT a hardcoded literal.
+  const { resolveShipmentConfirmationProvider } = await import('../../src/services/fulfillment/outbox.js');
+  const { resolveStoreConnector } = await import('../../src/connectors/store-resolution.js');
+  const resolvedProvider = resolveShipmentConfirmationProvider({
+    sourceProvider: args.confirmationProvider ?? null,
+    externalOrderId: args.externalOrderId,
+  });
+  const confirmConnector = resolvedProvider ? resolveStoreConnector(resolvedProvider, 'shipment.confirm') : null;
+  const supported = !!confirmConnector && confirmConnector.implementation.status === 'live';
+  const confirmationLastError = supported
+    ? null
+    : resolvedProvider
+      ? `${resolvedProvider} shipment confirmation connector is ${confirmConnector ? confirmConnector.implementation.status : 'unavailable'}`
+      : null;
   await sql`
     UPDATE orders
     SET
-      source_provider = COALESCE(source_provider, ${provider}),
+      source_provider = COALESCE(source_provider, ${resolvedProvider}),
       source_order_id = COALESCE(source_order_id, ${sourceOrderIdFromExternalId(args.externalOrderId)}),
       source_order_number = COALESCE(source_order_number, ${args.orderNumber}),
       canonical_status = CASE
@@ -223,13 +241,14 @@ async function enqueueShipmentConfirmationSql(
     SET
       carrier_provider = ${args.carrierProvider},
       carrier_account_id = ${args.carrierAccountId == null ? null : String(args.carrierAccountId)},
-      confirmation_provider = ${provider},
+      confirmation_provider = ${resolvedProvider},
       confirmation_status = ${supported ? 'pending' : 'not_required'},
-      confirmation_last_error = ${supported ? null : `${provider} confirmation connector is not implemented yet`},
+      confirmation_last_error = ${confirmationLastError},
       updated_at = NOW()
     WHERE id = ${args.shipmentId}
   `;
-  if (!supported) return { queued: false, provider };
+  if (!supported) return { queued: false, provider: resolvedProvider ?? 'none' };
+  const provider = resolvedProvider;
 
   const payload = {
     ...args.payload,

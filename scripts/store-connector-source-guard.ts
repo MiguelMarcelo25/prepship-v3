@@ -12,6 +12,7 @@ const normalized = read('src/services/normalized-order-persistence.ts');
 const storeOrderImport = read('src/services/store-order-import.ts');
 const orderSync = read('src/services/order-sync.ts');
 const outbox = read('src/services/fulfillment/outbox.ts');
+const directLabels = read('api/carriers/labels.ts');
 const fulfillmentTypes = read('src/domain/fulfillment/types.ts');
 const packageJson = JSON.parse(read('package.json')) as {
   scripts?: Record<string, string>;
@@ -76,6 +77,19 @@ assert(
 assert(
   outbox.includes("resolveStoreConnector(provider, 'shipment.confirm')"),
   'fulfillment outbox must resolve shipment confirmation through store connector capabilities',
+);
+// PS-136: the direct-carrier (Vercel serverless) label path must delegate the confirmation-
+// provider DECISION + support check to the SAME canonical owners as the outbox — not a local
+// inferrer + a hardcoded provider list (which diverged: it defaulted manual/no-marketplace
+// orders to 'shipstation' and marked them supported).
+assert(
+  !directLabels.includes("const supported = provider === 'shipstation' || provider === 'walmart' || provider === 'ebay'"),
+  'api/carriers/labels.ts must not hardcode supported confirmation providers',
+);
+assert(
+  directLabels.includes("resolveStoreConnector(resolvedProvider, 'shipment.confirm')") &&
+    directLabels.includes('resolveShipmentConfirmationProvider({'),
+  'api/carriers/labels.ts must resolve confirmation provider + support via the canonical owners (resolveShipmentConfirmationProvider + resolveStoreConnector)',
 );
 assert(
   fulfillmentTypes.includes("'not_supported'"),
