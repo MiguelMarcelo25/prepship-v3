@@ -44,6 +44,22 @@ const schema = z.object({
   // back to the frontend (e.g. mock label PDFs opened via window.open).
   PUBLIC_API_URL: z.string().url().optional(),
   CRON_SECRET: z.string().optional(),
+  // PS-128/PS-129: inbound store/marketplace webhook ingestion. Shared HMAC secret for
+  // the public POST /webhooks/:provider route; per-provider overrides take precedence
+  // (e.g. SHOPIFY_WEBHOOK_SECRET). When unset, the route rejects all events (fail-safe).
+  WEBHOOK_SIGNING_SECRET: z.string().optional(),
+  SHOPIFY_WEBHOOK_SECRET: z.string().optional(),
+  SHIPSTATION_WEBHOOK_SECRET: z.string().optional(),
+  WALMART_WEBHOOK_SECRET: z.string().optional(),
+  EBAY_WEBHOOK_SECRET: z.string().optional(),
+  // PS-128: how the pre-label safety guard treats a HIGH-RISK but UNVERIFIABLE source row
+  // (e.g. a Walmart-origin order with no store linkage we can confirm). 'audit_only'
+  // (default) logs a would-block but lets the label proceed; 'enforce' hard-blocks before
+  // postage. Definite signals (local cancelled/shipped, trusted upstream cancel/ship
+  // event, externally_shipped) ALWAYS hard-block regardless of this policy.
+  SHIPPING_SAFETY_UNVERIFIED_POLICY: z.enum(['audit_only', 'enforce']).default('audit_only'),
+  // Max inbound webhook body size (bytes) before rejection.
+  WEBHOOK_MAX_BODY_BYTES: z.coerce.number().int().positive().default(1_000_000),
   DB_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
   DB_POOL_MAX: z.coerce.number().int().positive().max(20).default(4),
   DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),

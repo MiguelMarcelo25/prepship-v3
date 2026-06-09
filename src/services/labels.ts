@@ -32,6 +32,7 @@ import {
   inferStoreProvider,
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
+import { assertOrderSafeToShip } from './fulfillment/shipping-safety';
 import { addMockLabelSignature } from '../lib/mock-label-access';
 import {
   type SelectedRateProofInput,
@@ -938,6 +939,16 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
     throw new Error(`Cannot create label for ${order.orderStatus} order`);
   }
+  // PS-128 + PS-129: backend-owned shipping-safety guard. Hard-blocks BEFORE any label or
+  // postage side effect when the order was already shipped externally/upstream (PS-128
+  // duplicate) or cancelled upstream (PS-129) — even if local sync, the webhook, or the
+  // frontend is stale. Runs for BOTH the offline test path and the real-postage path (a
+  // test label still marks the order shipped, which must not happen on a cancelled/
+  // externally-shipped order). Definite signals always block; the unverifiable-high-risk
+  // case is audit-only by default (SHIPPING_SAFETY_UNVERIFIED_POLICY).
+  // Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129): reads
+  // shipped/cancelled signals to block; does not mutate shipped/cancelled rows.
+  await assertOrderSafeToShip(order, { entryPoint: 'createLabelV2' });
 
   // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
   // through the clients.storeIds array (v2 parity for legacy orders whose

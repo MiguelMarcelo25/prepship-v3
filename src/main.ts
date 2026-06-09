@@ -24,6 +24,7 @@ import manifestsRoute from './routes/manifests';
 import analysisRoute from './routes/analysis';
 import dashboardRoute from './routes/dashboard';
 import cronRoute from './routes/cron';
+import webhooksRoute from './routes/webhooks';
 import printQueueRoute from './routes/print-queue';
 import parentSkusRoute from './routes/parent-skus';
 import productsRoute from './routes/products';
@@ -112,6 +113,9 @@ app.use(
 
 app.route('/health', health);
 app.route('/cron', cronRoute);
+// PS-128/PS-129: public store/marketplace webhook ingestion. Mounted BEFORE the JWT block
+// (providers can't send a Supabase JWT); each event is authenticated by per-provider HMAC.
+app.route('/webhooks', webhooksRoute);
 
 // Everything below requires a valid Supabase JWT.
 const protectedPrefixes = [

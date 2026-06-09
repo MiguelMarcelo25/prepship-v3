@@ -33,6 +33,7 @@ import postgres from 'postgres';
 // start safe (unlike the wide connector/eligibility tree, which stays deferred).
 import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
 import { assertLabelPurchaseRateSelection } from '../../src/services/shipping-workflow/rate-quote-snapshot-store.js';
+import { assertOrderSafeToShip, ShippingSafetyError } from '../../src/services/fulfillment/shipping-safety.js';
 
 // ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
 // module top. On Vercel, importing the carrier/store connector orchestrators +
@@ -1063,6 +1064,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           order_number: string | null;
           external_order_id: string | null;
           order_status: string | null;
+          canonical_status: string | null;
+          externally_shipped: boolean | null;
+          source_provider: string | null;
+          source_order_id: string | null;
+          source_order_number: string | null;
           ship_to_name: string | null;
           ship_to_city: string | null;
           ship_to_state: string | null;
@@ -1072,6 +1078,8 @@ export default async function handler(req: any, res: any): Promise<void> {
           SELECT
             o.id, o.client_id, o.store_id, c.name as client_name,
             o.order_number, o.external_order_id, o.order_status,
+            o.canonical_status, o.externally_shipped, o.source_provider,
+            o.source_order_id, o.source_order_number,
             o.ship_to_name, o.ship_to_city, o.ship_to_state, o.ship_to_postal_code,
             o.raw
           FROM orders o
@@ -1114,6 +1122,38 @@ export default async function handler(req: any, res: any): Promise<void> {
       selectedRateKey: typeof body?.selectedRateKey === 'string' ? body.selectedRateKey : null,
       selectedRateProof: body?.selectedRateProof,
     });
+
+    // PS-128 + PS-129: backend-owned shipping-safety guard for the direct-carrier postage
+    // path (the second money path besides createLabelV2). Hard-blocks a duplicate/externally
+    // shipped order (PS-128) or an upstream-cancelled order (PS-129) BEFORE any Shipp/Walmart
+    // Shipping/UPS postage purchase below. The per-branch shipped/cancelled checks remain as
+    // defense in depth. Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129):
+    // reads shipped/cancelled signals to block; does not mutate shipped/cancelled rows.
+    if (orderRow && providerKey !== 'simulator') {
+      try {
+        await assertOrderSafeToShip(
+          {
+            id: orderRow.id,
+            orderStatus: orderRow.order_status,
+            canonicalStatus: orderRow.canonical_status,
+            externallyShipped: orderRow.externally_shipped,
+            sourceProvider: orderRow.source_provider,
+            sourceOrderId: orderRow.source_order_id,
+            sourceOrderNumber: orderRow.source_order_number,
+            orderNumber: orderRow.order_number,
+            externalOrderId: orderRow.external_order_id,
+            storeId: orderRow.store_id,
+          },
+          { entryPoint: 'api/carriers/labels' },
+        );
+      } catch (err) {
+        if (err instanceof ShippingSafetyError) {
+          res.status(err.status as 409).json({ ok: false, error: err.message, code: err.code });
+          return;
+        }
+        throw err;
+      }
+    }
 
     const explicitExternalOrderId = typeof body?.externalOrderId === 'string'
       ? body.externalOrderId

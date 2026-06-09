@@ -1,4 +1,5 @@
 import { sql } from '../src/db/client';
+import { decideShippingSafety } from '../src/services/fulfillment/shipping-safety';
 
 const READ_ONLY_INSPECTOR = true;
 
@@ -149,7 +150,8 @@ async function main() {
 
   const orderRows = args.orderId
     ? await sql`
-        SELECT id, external_order_id, source_provider, source_order_id, client_id, store_id,
+        SELECT id, external_order_id, source_provider, source_order_id, source_order_number,
+               client_id, store_id, externally_shipped, externally_shipped_source,
                order_number, order_status, canonical_status, ship_to_name, ship_to_city,
                ship_to_state, ship_to_postal_code, weight_oz, carrier_code, service_code,
                raw
@@ -158,7 +160,8 @@ async function main() {
         LIMIT 1
       ` as Array<Record<string, unknown>>
     : await sql`
-        SELECT id, external_order_id, source_provider, source_order_id, client_id, store_id,
+        SELECT id, external_order_id, source_provider, source_order_id, source_order_number,
+               client_id, store_id, externally_shipped, externally_shipped_source,
                order_number, order_status, canonical_status, ship_to_name, ship_to_city,
                ship_to_state, ship_to_postal_code, weight_oz, carrier_code, service_code,
                raw
@@ -253,6 +256,45 @@ async function main() {
   const weightOz = Number(order.weight_oz ?? 0);
   const retrySafe = order.order_status === 'awaiting_shipment' && !activeShipment;
 
+  // PS-128 + PS-129 (read-only): external-shipment / upstream-cancellation risk from the
+  // webhook ledger + order signals. Never mutates anything.
+  let webhookEvents: Array<Record<string, unknown>> = [];
+  try {
+    webhookEvents = (await sql`
+      SELECT provider, event_type, canonical_status, status, related_order_id,
+             source_order_number, source_order_id, received_at, processed_at
+      FROM webhook_events
+      WHERE related_order_id = ${orderId}
+        OR (${(order.order_number as string | null) ?? null}::text IS NOT NULL AND source_order_number = ${(order.order_number as string | null) ?? null})
+        OR (${(order.source_order_id as string | null) ?? null}::text IS NOT NULL AND source_order_id = ${(order.source_order_id as string | null) ?? null})
+      ORDER BY received_at DESC
+      LIMIT 50
+    `) as Array<Record<string, unknown>>;
+  } catch {
+    webhookEvents = [];
+  }
+  const upstreamShippedEvent = webhookEvents.some((e) => e.canonical_status === 'shipped' && e.status !== 'ignored');
+  const upstreamCancelledEvent = webhookEvents.some((e) => e.canonical_status === 'cancelled' && e.status !== 'ignored');
+  const externallyShipped = order.externally_shipped === true;
+  const srcProviderKey = String(order.source_provider ?? '').toLowerCase();
+  const looksWalmartUnlinked =
+    (srcProviderKey.includes('walmart') || String(order.external_order_id ?? '').toLowerCase().includes('walmart')) &&
+    order.store_id == null &&
+    storeOrders.length === 0;
+  const shippingSafety = decideShippingSafety({
+    orderStatus: String(order.order_status ?? ''),
+    canonicalStatus: (order.canonical_status as string | null) ?? null,
+    externallyShipped,
+    upstreamShippedEvent,
+    upstreamCancelledEvent,
+    sourceProvider: (order.source_provider as string | null) ?? null,
+    highRiskUnverifiedSource: looksWalmartUnlinked,
+    unverifiedPolicy: 'audit_only',
+  });
+  const externalShippedRisk =
+    order.order_status === 'awaiting_shipment' && (externallyShipped || upstreamShippedEvent);
+  const webhookReconciliationGap = looksWalmartUnlinked && webhookEvents.length === 0;
+
   console.log(JSON.stringify({
     ok: true,
     readOnly: READ_ONLY_INSPECTOR,
@@ -296,7 +338,36 @@ async function main() {
       lastPrintedAt: row.last_printed_at,
     })),
     duplicateActiveLabelRisk: Boolean(activeShipment),
-    retryingLabelCreationAppearsSafe: retrySafe,
+    retryingLabelCreationAppearsSafe: retrySafe && shippingSafety.safe && !externalShippedRisk,
+    // PS-128 + PS-129: external-shipment / upstream-cancellation risk + the canonical
+    // shipping-safety decision the label paths enforce.
+    shippingSafety: {
+      safe: shippingSafety.safe,
+      severity: shippingSafety.severity,
+      code: shippingSafety.code,
+      reason: shippingSafety.reason,
+      operatorStatus: shippingSafety.operatorStatus ?? null,
+    },
+    externalShipmentRisk: {
+      externallyShipped,
+      externallyShippedSource: order.externally_shipped_source ?? null,
+      upstreamShippedEvent,
+      looksWalmartUnlinked,
+    },
+    upstreamCancellation: {
+      localCancelled: order.order_status === 'cancelled',
+      canonicalCancelled: order.canonical_status === 'cancelled',
+      upstreamCancelledEvent,
+    },
+    webhookEvents: webhookEvents.map((e) => ({
+      provider: e.provider,
+      eventType: e.event_type,
+      canonicalStatus: e.canonical_status,
+      status: e.status,
+      matchedOrderId: e.related_order_id,
+      receivedAt: e.received_at,
+      processedAt: e.processed_at,
+    })),
     shipments: shipments.map((row) => ({
       id: row.id,
       carrierCode: row.carrier_code,
@@ -325,6 +396,11 @@ async function main() {
     })),
     warnings: [
       activeShipment ? 'duplicate active label risk: do not create another label until reviewed' : null,
+      externalShippedRisk ? 'external shipped risk: source marketplace shows shipped but PrepShip local order is awaiting' : null,
+      order.canonical_status === 'cancelled' && order.order_status !== 'cancelled' ? 'upstream cancellation reconciled: order is on shipping hold (canonical_status=cancelled)' : null,
+      upstreamCancelledEvent && order.order_status === 'awaiting_shipment' ? 'upstream cancellation event: source store cancelled but PrepShip local order is awaiting' : null,
+      webhookReconciliationGap ? 'webhook/reconciliation missing: high-risk Walmart-source row with no store linkage and no webhook events' : null,
+      !shippingSafety.safe ? `shipping blocked by safety guard: ${shippingSafety.reason}` : null,
       confirmationLifecycleMissing ? 'confirmation lifecycle missing: active local label has no fulfillment_outbox row and no shipment confirmation_status' : null,
       !hasShipTo ? 'ship-to fields are incomplete' : null,
       weightOz <= 0 ? 'weight is missing or zero' : null,
