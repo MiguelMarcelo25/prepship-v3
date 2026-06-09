@@ -64,6 +64,12 @@ function finite(value: unknown): number | null {
 // Hardcoded (not a flat env) because one rate can't be correct for USPS vs UPS/FedEx
 // vs international at once — and a hardcoded schedule keeps the cache fingerprint
 // identical across the API and worker (no env-mismatch cache churn).
+//
+// Billed-data confirmation (2026-06-09): across 31 purchased insured labels read from
+// ShipStation, USPS billed exactly $1.09 (25/25) and UPS exactly $0.99 (6/6) at $100
+// insured — matching this schedule to the cent. FedEx ($0.99, the non-USPS rate) and
+// international ($1.39) are not yet confirmed by a purchased label (no insured FedEx /
+// international shipment on record); re-verify against billed insurance_cost when one exists.
 const PARCELGUARD_SCHEDULE_VERSION = 'shipstation-parcelguard-2026-06-08-v1';
 const PARCELGUARD_DOMESTIC_USPS_PER_HUNDRED = 1.09;
 const PARCELGUARD_DOMESTIC_NON_USPS_PER_HUNDRED = 0.99;
