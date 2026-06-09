@@ -703,6 +703,8 @@ function buildCanonicalOrderModel(
     externalOrderId: stringOrNull(order.externalOrderId),
     orderNumber: stringOrNull(order.orderNumber),
     orderStatus: stringOrNull(order.orderStatus),
+    // PS-128/PS-129: upstream cancellation hold signal for the UI (backend still hard-blocks).
+    canonicalStatus: stringOrNull(order.canonicalStatus),
     orderDate: dateToIso(order.orderDate),
     createdAt: dateToIso(order.createdAt),
     updatedAt: dateToIso(order.updatedAt),
@@ -1144,6 +1146,9 @@ const orderListSelect = {
   clientId: orders.clientId,
   orderNumber: orders.orderNumber,
   orderStatus: orders.orderStatus,
+  // PS-128/PS-129: surfaced so the UI can show the shipping-hold badge (cancelled upstream /
+  // externally shipped). The backend remains authoritative (the label paths hard-block).
+  canonicalStatus: orders.canonicalStatus,
   orderDate: orders.orderDate,
   storeId: orders.storeId,
   sourceProvider: orders.sourceProvider,

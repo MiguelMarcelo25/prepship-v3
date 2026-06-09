@@ -156,6 +156,24 @@ function check(name: string, got: unknown, want: unknown) {
   check('env exposes unverified policy (default audit_only)', /SHIPPING_SAFETY_UNVERIFIED_POLICY/.test(env), true);
 }
 
+// ── UI follow-ups: DTO surfacing, OrdersView gating, print-queue merge exclusion ──
+{
+  const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+  check('order DTO surfaces canonicalStatus (list select)', /canonicalStatus:\s*orders\.canonicalStatus/.test(ordersRoute), true);
+  check('order DTO surfaces canonicalStatus (detail)', /canonicalStatus:\s*stringOrNull\(order\.canonicalStatus\)/.test(ordersRoute), true);
+
+  const ordersSchema = readFileSync('src/db/schema/orders.ts', 'utf8');
+  check('orders schema maps canonicalStatus (read mapping)', /canonicalStatus:\s*text\(\)/.test(ordersSchema), true);
+
+  const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  check('OrdersView defines orderShippingHold helper', /function orderShippingHold\(/.test(ordersView), true);
+  check('OrdersView gates label actions on the hold', /panelHold\?\.blocked/.test(ordersView), true);
+
+  const pq = readFileSync('src/services/print-queue.ts', 'utf8');
+  check('print-queue merge excludes held orders', /loadShippingHoldsByOrderId/.test(pq), true);
+  check('print-queue merge skips held entry (per-entry fail)', /excluded from print batch/.test(pq), true);
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-128/PS-129 upstream shipping safety guard (${failures} failing)`);
   process.exit(1);

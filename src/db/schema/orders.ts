@@ -26,6 +26,11 @@ export const orders = pgTable(
     clientId: integer().references(() => clients.id),
     orderNumber: text().notNull(),
     orderStatus: text().notNull().default('awaiting_shipment'),
+    // Per user override unlock shipped data on 2026-06-09 (PS-128/PS-129): read mapping for
+    // the EXISTING canonical_status column (already created by an earlier migration and
+    // written via raw SQL in fulfillment/outbox.ts). Additive type mapping only — no column
+    // drop or type change. Used by the upstream cancellation HOLD signal (PS-129).
+    canonicalStatus: text(),
     orderDate: timestamp({ withTimezone: true }),
     storeId: integer(),
     customerEmail: text(),

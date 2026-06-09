@@ -5477,6 +5477,24 @@ export default function OrdersView({
     return true
   }
 
+  // PS-128 + PS-129: DISPLAY mirror of the backend shipping-safety guard. The backend
+  // (createLabelV2 + the direct-carrier path) is authoritative and HARD-BLOCKS these before
+  // postage; this only drives the UI (disable buttons + show why) so the operator sees it
+  // before clicking. Mirrors decideShippingSafety's definite column branches; tolerant of
+  // list-row vs detail/flags shapes.
+  function orderShippingHold(order: any): { blocked: boolean; reason: string; status: string } | null {
+    if (!order) return null
+    const orderStatus = order.orderStatus ?? order.status
+    const canonical = order.canonicalStatus ?? order.canonical_status
+    const extShipped =
+      order.externallyShipped ?? order.flags?.externallyShipped ?? order.externally_shipped
+    if (orderStatus === 'cancelled') return { blocked: true, reason: 'order is cancelled', status: 'Cancelled — label blocked' }
+    if (orderStatus === 'shipped') return { blocked: true, reason: 'order is already shipped', status: 'Already shipped — label blocked' }
+    if (canonical === 'cancelled') return { blocked: true, reason: 'cancelled upstream (sync/reconciliation required)', status: 'Cancelled upstream — label blocked' }
+    if (extShipped === true) return { blocked: true, reason: 'already shipped in the source store', status: 'Already shipped in store — sync required' }
+    return null
+  }
+
   function buildRateRequestDraftKey(input: {
     weightOz: number
     dims: { length: number; width: number; height: number }
@@ -9492,6 +9510,9 @@ export default function OrdersView({
       ? `${toStringValue(panelTestRate.carrierNickname) ?? formatCarrierCode(toStringValue(panelTestRate.carrierCode))} · ${toStringValue(panelTestRate.serviceName) ?? formatServiceCode(toStringValue(panelTestRate.serviceCode))}`
       : `${TEST_SHIPPING_ACCOUNT_LABEL} · PrepShip Test Standard`
     const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
+    // PS-128/PS-129: shipping hold (cancelled upstream / externally shipped). Backend
+    // hard-blocks; this gates the panel actions + shows the reason.
+    const panelHold = orderShippingHold(panelDetail ?? panelOrder)
     const trackingNumber = toStringValue(panelOrder.label?.trackingNumber)
     const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder) && !getIsMissingShipmentSync(panelOrder)
     // Per user override unlock shipped data on 2026-05-23: keep shipped queue recovery non-destructive, but disable corrupt saved label URLs.
@@ -10262,13 +10283,23 @@ export default function OrdersView({
 
               {/* Action buttons row — only when awaiting a label */}
               {shipped ? null : (
-                <div className="flex items-stretch gap-1 p-1.5 bg-surface-2/40">
+                <div className="flex flex-col gap-1 p-1.5 bg-surface-2/40">
+                  {/* PS-128/PS-129: shipping-hold banner. Backend hard-blocks; this explains why. */}
+                  {panelHold?.blocked ? (
+                    <div
+                      role="alert"
+                      className="px-2 py-1.5 rounded-md bg-danger-bg text-danger ring-1 ring-danger-border/40 text-[11.5px] font-semibold"
+                    >
+                      ⛔ {panelHold.status}. Buying a label is blocked — {panelHold.reason}.
+                    </div>
+                  ) : null}
+                  <div className="flex items-stretch gap-1">
                   <button
                     type="button"
                     onClick={() => void createOrQueueLabel('print')}
-                    disabled={singleActionBusy}
+                    disabled={singleActionBusy || Boolean(panelHold?.blocked)}
                     aria-busy={singleActionBusy}
-                    title="Buy postage and open the shipping label now"
+                    title={panelHold?.blocked ? `Blocked: ${panelHold.reason}` : 'Buy postage and open the shipping label now'}
                     className={[
                       'flex-[5] inline-flex items-center justify-center gap-2',
                       'h-9 rounded-lg',
@@ -10291,9 +10322,9 @@ export default function OrdersView({
                   <button
                     type="button"
                     onClick={() => void createOrQueueLabel('queue')}
-                    disabled={singleActionBusy}
+                    disabled={singleActionBusy || Boolean(panelHold?.blocked)}
                     aria-busy={singleActionBusy}
-                    title="Buy postage but don't open the label — adds it to the print queue for batch printing"
+                    title={panelHold?.blocked ? `Blocked: ${panelHold.reason}` : "Buy postage but don't open the label — adds it to the print queue for batch printing"}
                     className={[
                       'flex-[3] inline-flex items-center justify-center gap-1.5',
                       'h-9 px-2 rounded-lg',
@@ -10312,9 +10343,9 @@ export default function OrdersView({
                   <button
                     type="button"
                     onClick={() => void createOrQueueLabel('test')}
-                    disabled={singleActionBusy}
+                    disabled={singleActionBusy || Boolean(panelHold?.blocked)}
                     aria-busy={singleActionBusy}
-                    title="Create a VOID mock label for testing — no postage charged, label is watermarked 'VOID — DO NOT SHIP'"
+                    title={panelHold?.blocked ? `Blocked: ${panelHold.reason}` : "Create a VOID mock label for testing — no postage charged, label is watermarked 'VOID — DO NOT SHIP'"}
                     className={[
                       'inline-flex items-center justify-center',
                       'h-9 px-3 rounded-lg',
@@ -10328,6 +10359,7 @@ export default function OrdersView({
                   >
                     Test
                   </button>
+                  </div>
                 </div>
               )}
             </div>

@@ -10,6 +10,7 @@ import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
+import { decideShippingSafety } from './fulfillment/shipping-safety';
 import {
   collapseIdentityLines,
   resolveQueueLineIdentity,
@@ -1154,6 +1155,9 @@ async function runMergeJob(
     // only for the names reference / Batch Manifest; never mutates orders.
     const recipientsByGroup = await loadBatchRecipientsByGroup(entriesByGroup);
     const packageDimsByOrderId = await loadPackageDimsByOrderId(entriesByGroup);
+    // PS-129: orders that became held (cancelled upstream / externally shipped) AFTER being
+    // queued must not be merged into the print batch.
+    const shippingHoldsByOrderId = await loadShippingHoldsByOrderId(entriesByGroup);
     let lastGroup: string | null = null;
     const successfulEntryIds: string[] = [];
     const failedEntryIds = new Set<string>();
@@ -1166,6 +1170,16 @@ async function runMergeJob(
         void persistMergeJobSnapshot(job);
       }
       job.message = `Merging label ${i + 1} of ${sorted.length}…`;
+
+      // PS-129: skip + clearly fail any entry whose order is now on a shipping hold
+      // (cancelled upstream / externally shipped). Mirrors the existing per-entry failure
+      // handling so one held order never blocks the rest of the batch.
+      const holdReason = shippingHoldsByOrderId.get(Number(e.orderId));
+      if (holdReason) {
+        job.labelErrors!.push(`Order ${e.orderNumber ?? e.orderId}: ${holdReason} — excluded from print batch`);
+        failedEntryIds.add(e.id);
+        continue;
+      }
 
       let pdfBytes: Uint8Array | null = null;
       let labelFetchUrl: string;
@@ -1593,6 +1607,52 @@ async function loadPackageDimsByOrderId(
     if (!Number.isFinite(idNum) || result.has(idNum)) continue; // keep newest dims
     const dims = formatPackageDims(row.dimsL, row.dimsW, row.dimsH);
     if (dims) result.set(idNum, dims);
+  }
+  return result;
+}
+
+// PS-129 (per user override unlock shipped data on 2026-06-09): identify queue entries whose
+// order is now on a shipping hold — cancelled upstream (canonical_status), externally shipped
+// (PS-128), or locally shipped/cancelled — so the merged print job EXCLUDES them. The batch
+// SEND path already blocks creation via createLabelV2's guard; this covers a label that was
+// already queued and only later became held. Read-only; never mutates orders.
+async function loadShippingHoldsByOrderId(
+  entriesByGroup: Map<string, PrintQueueEntry[]>,
+): Promise<Map<number, string>> {
+  const ids = new Set<number>();
+  for (const list of entriesByGroup.values()) {
+    for (const e of list) {
+      const idNum = Number(e.orderId);
+      if (Number.isFinite(idNum)) ids.add(idNum);
+    }
+  }
+  const result = new Map<number, string>();
+  if (ids.size === 0) return result;
+
+  const rows = await db
+    .select({
+      id: orders.id,
+      orderStatus: orders.orderStatus,
+      canonicalStatus: orders.canonicalStatus,
+      externallyShipped: orders.externallyShipped,
+      sourceProvider: orders.sourceProvider,
+    })
+    .from(orders)
+    .where(inArray(orders.id, [...ids]));
+
+  for (const row of rows) {
+    const decision = decideShippingSafety({
+      orderStatus: row.orderStatus,
+      canonicalStatus: row.canonicalStatus,
+      externallyShipped: row.externallyShipped,
+      sourceProvider: row.sourceProvider,
+      // Merge print is read-only over already-created labels; only DEFINITE column signals
+      // should exclude an entry (no high-risk-unverified guessing here).
+      unverifiedPolicy: 'audit_only',
+    });
+    if (!decision.safe) {
+      result.set(Number(row.id), decision.operatorStatus ?? decision.reason);
+    }
   }
   return result;
 }
