@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { sql, type SQL } from 'drizzle-orm';
@@ -224,21 +225,6 @@ function buildDateBuckets(fromIso: string, toIso: string) {
   return Array.from({ length: days }, (_, index) =>
     new Date(startMs + index * 86_400_000).toISOString().slice(0, 10)
   );
-}
-
-function normalizeScopeIds(values: number[] | undefined): number[] {
-  if (!Array.isArray(values)) return [];
-  return Array.from(
-    new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
 function analysisScopeFromContext(c: Context): ClientStoreScope {

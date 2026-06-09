@@ -1,4 +1,6 @@
 import { Hono, type Context } from 'hono';
+import { intArraySql } from '../lib/scope-sql';
+import { msSince } from '../lib/route-timing';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
@@ -19,10 +21,6 @@ import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
 import { getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
 const app = new Hono();
-
-function msSince(startedAt: number): number {
-  return Math.round(performance.now() - startedAt);
-}
 
 const dashboardRangeQuery = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'from must be YYYY-MM-DD'),
@@ -124,10 +122,6 @@ function canViewDashboardFinancials(c: Context): boolean {
     },
     'financials:read'
   );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
 function orderScopePredicate(scope: ClientStoreScope): SQL | undefined {

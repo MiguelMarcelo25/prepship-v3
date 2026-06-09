@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
@@ -491,21 +492,6 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
 
   if (!row?.labelUrl) return null;
   return normalizePrintQueueLabelUrl(row.labelUrl);
-}
-
-function normalizeScopeIds(values: number[] | undefined): number[] {
-  if (!Array.isArray(values)) return [];
-  return Array.from(
-    new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
 function printQueueScopePredicate(scope: PrintQueueListScope): SQL {

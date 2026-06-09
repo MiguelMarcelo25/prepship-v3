@@ -1,4 +1,5 @@
 import { and, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -73,21 +74,6 @@ function billingSummaryHasValues(summary: { clients: BillingSummaryRow[] }): boo
       row.storageTotal > 0 ||
       row.grandTotal > 0
   );
-}
-
-function normalizeScopeIds(values: number[] | undefined): number[] {
-  if (!Array.isArray(values)) return [];
-  return Array.from(
-    new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
 const billingShipDateSql = sql<Date | null>`coalesce(

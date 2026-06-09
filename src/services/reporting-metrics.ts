@@ -1,4 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 
@@ -13,21 +14,6 @@ const DEFAULT_INVENTORY_LIMIT = 5000;
 const DEFAULT_REPORTING_READ_TIMEOUT_MS = 1200;
 
 let ensurePromise: Promise<void> | null = null;
-
-function normalizeScopeIds(values: number[] | undefined): number[] {
-  if (!Array.isArray(values)) return [];
-  return Array.from(
-    new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
-}
 
 type ReportingRefreshScope =
   | 'daily-sales'

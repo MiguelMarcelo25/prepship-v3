@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, notInArray, sql, type SQL } from 'drizzle-orm';
@@ -29,21 +30,6 @@ import { backfillReferenceRates } from '../services/billing-ref-rates';
 const app = new Hono();
 
 app.use('*', requirePermission('financials:read'));
-
-function normalizeScopeIds(values: number[] | undefined): number[] {
-  if (!Array.isArray(values)) return [];
-  return Array.from(
-    new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
-}
 
 function billingScopeFromContext(c: Context): ClientStoreScope {
   return getClientStoreScope({

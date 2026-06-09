@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
@@ -60,21 +61,6 @@ const activeInventoryClientPredicate = sql`(
       and ${sql.raw(activeClientPredicateSql('visible_client'))}
   )
 )`;
-
-function normalizeScopeIds(values: number[] | undefined): number[] {
-  if (!Array.isArray(values)) return [];
-  return Array.from(
-    new Set(
-      values
-        .map((value) => Number(value))
-        .filter((value) => Number.isInteger(value) && value > 0)
-    )
-  );
-}
-
-function intArraySql(values: number[]): SQL {
-  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
-}
 
 function inventoryScopeFromContext(c: Context): ClientStoreScope {
   return getClientStoreScope({
