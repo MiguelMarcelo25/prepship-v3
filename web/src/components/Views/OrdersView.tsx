@@ -5634,6 +5634,11 @@ export default function OrdersView({
     },
   ) {
     if (order.orderStatus !== 'awaiting_shipment') return null
+    // PS-129: do not rate a held order (cancelled upstream / externally shipped) as normal
+    // awaiting work. Skipping here gates BOTH the passive table best-rate and the panel
+    // recalc (both funnel through this builder). The label/queue/print paths are already
+    // hard-blocked by the backend guard.
+    if (orderShippingHold(order)?.blocked) return null
     const dims = input.dims
     const weightOz = input.weightOz
     if (!dims || !hasCompleteDims(dims) || weightOz <= 0) return null
@@ -8326,6 +8331,21 @@ export default function OrdersView({
           </span>
           <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(testAmount)}</strong>
         </div>
+      )
+    }
+
+    // PS-128/PS-129: held awaiting order (cancelled upstream / externally shipped). Show a
+    // hold pill instead of a rate — the order is not normal awaiting work and the
+    // label/queue/print paths are hard-blocked by the backend.
+    const rowHold = orderShippingHold(displayOrder)
+    if (displayOrder.orderStatus === 'awaiting_shipment' && rowHold?.blocked) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-danger-bg text-danger ring-1 ring-danger-border/40"
+          title={`${rowHold.status} — ${rowHold.reason}`}
+        >
+          ⛔ {rowHold.status}
+        </span>
       )
     }
 
@@ -11950,6 +11970,16 @@ export default function OrdersView({
                             </span>
                           ) : null}
                         </button>
+                        {/* PS-129: shipping-hold badge. The merge job excludes these from the
+                            printed batch server-side; this shows the operator why. */}
+                        {entry.shipping_hold ? (
+                          <span
+                            className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-danger-bg text-danger ring-1 ring-danger-border/40 text-[9.5px] font-semibold uppercase tracking-wide"
+                            title={(entry.held_reason as string | undefined) || 'On hold — excluded from print'}
+                          >
+                            ⛔ {(entry.held_reason as string | undefined) || 'On hold'}
+                          </span>
+                        ) : null}
                         <span className="pq-order-qty inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-2 text-ink-2 text-[10.5px] font-semibold tabular-nums ring-1 ring-line/70">
                           Qty {entry.order_qty ?? 1}
                         </span>

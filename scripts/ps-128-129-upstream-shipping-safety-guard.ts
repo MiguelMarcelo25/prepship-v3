@@ -93,6 +93,7 @@ function check(name: string, got: unknown, want: unknown) {
   const genHex = createHmac('sha256', secret).update(body, 'utf8').digest('hex');
   check('generic hex HMAC accepted', verifyWebhookSignature({ provider: 'walmart', rawBody: body, secret, headers: { 'x-webhook-signature': genHex } }), true);
   check('generic sha256= prefixed HMAC accepted', verifyWebhookSignature({ provider: 'walmart', rawBody: body, secret, headers: { 'x-webhook-signature': `sha256=${genHex}` } }), true);
+  check('generic x-hub-signature-256 header accepted', verifyWebhookSignature({ provider: 'walmart', rawBody: body, secret, headers: { 'x-hub-signature-256': `sha256=${genHex}` } }), true);
   check('generic tampered body rejected', verifyWebhookSignature({ provider: 'walmart', rawBody: body + 'x', secret, headers: { 'x-webhook-signature': genHex } }), false);
 }
 
@@ -168,10 +169,15 @@ function check(name: string, got: unknown, want: unknown) {
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
   check('OrdersView defines orderShippingHold helper', /function orderShippingHold\(/.test(ordersView), true);
   check('OrdersView gates label actions on the hold', /panelHold\?\.blocked/.test(ordersView), true);
+  check('OrdersView skips rating a held order (rate-flow gating)', /orderShippingHold\(order\)\?\.blocked\)\s*return null/.test(ordersView), true);
+  check('OrdersView shows a list-row hold pill', /rowHold\?\.blocked/.test(ordersView), true);
+  check('OrdersView shows Print Queue hold badge', /entry\.shipping_hold/.test(ordersView), true);
 
   const pq = readFileSync('src/services/print-queue.ts', 'utf8');
   check('print-queue merge excludes held orders', /loadShippingHoldsByOrderId/.test(pq), true);
   check('print-queue merge skips held entry (per-entry fail)', /excluded from print batch/.test(pq), true);
+  check('print-queue list surfaces shipping_hold to the UI', /shipping_hold:/.test(pq), true);
+  check('print-queue exposes shared hold loader', /loadShippingHoldsForOrderIds/.test(pq), true);
 }
 
 if (failures > 0) {

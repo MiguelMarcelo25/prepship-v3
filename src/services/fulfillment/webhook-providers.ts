@@ -65,7 +65,14 @@ export function verifyWebhookSignature(input: {
     return safeEqual(provided, expected);
   }
 
-  const provided = h('x-webhook-signature') || h('x-signature');
+  // Per-provider HMAC-SHA256 over the raw body (the ticket's requirement: "verify HMAC /
+  // per-provider secret before processing"). We accept the common signature header names
+  // providers use (Walmart/eBay configurable webhook, GitHub/Meta-style x-hub-signature-256)
+  // so onboarding a provider is a secret + header config, not a code change. NOTE: confirm
+  // the exact header/scheme with each provider at onboarding; if a provider later requires a
+  // non-HMAC scheme (e.g. RSA), add a provider branch above like Shopify's.
+  const provided =
+    h('x-webhook-signature') || h('x-signature') || h('x-hub-signature-256') || h('x-wm-signature');
   if (!provided) return false;
   const expected = createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex');
   // Allow an optional "sha256=" prefix some providers use.

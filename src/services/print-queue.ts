@@ -734,6 +734,10 @@ export async function listQueue(
   const where = conds.length ? and(...conds) : undefined;
   const entries = await db.select().from(printQueue).where(where);
   const totalQty = entries.reduce((s, e) => s + (e.orderQty ?? 1), 0);
+  // PS-129: surface a per-entry shipping hold (cancelled upstream / externally shipped) so
+  // the Print Queue UI can badge it and block printing. The merge job already EXCLUDES these
+  // server-side — this is the matching display signal. Read-only.
+  const holds = await loadShippingHoldsForOrderIds(entries.map((e) => Number(e.orderId)));
   return {
     queuedOrders: entries.map((e) => ({
       queue_entry_id: e.id,
@@ -750,6 +754,8 @@ export async function listQueue(
       print_count: e.printCount,
       last_printed_at: e.lastPrintedAt?.toISOString() ?? null,
       queued_at: e.queuedAt.toISOString(),
+      shipping_hold: holds.has(Number(e.orderId)),
+      held_reason: holds.get(Number(e.orderId)) ?? null,
     })),
     totalOrders: entries.length,
     totalQty,
@@ -1616,18 +1622,10 @@ async function loadPackageDimsByOrderId(
 // (PS-128), or locally shipped/cancelled — so the merged print job EXCLUDES them. The batch
 // SEND path already blocks creation via createLabelV2's guard; this covers a label that was
 // already queued and only later became held. Read-only; never mutates orders.
-async function loadShippingHoldsByOrderId(
-  entriesByGroup: Map<string, PrintQueueEntry[]>,
-): Promise<Map<number, string>> {
-  const ids = new Set<number>();
-  for (const list of entriesByGroup.values()) {
-    for (const e of list) {
-      const idNum = Number(e.orderId);
-      if (Number.isFinite(idNum)) ids.add(idNum);
-    }
-  }
+export async function loadShippingHoldsForOrderIds(ids: number[]): Promise<Map<number, string>> {
   const result = new Map<number, string>();
-  if (ids.size === 0) return result;
+  const unique = [...new Set(ids.filter((n) => Number.isFinite(n)))];
+  if (unique.length === 0) return result;
 
   const rows = await db
     .select({
@@ -1638,7 +1636,7 @@ async function loadShippingHoldsByOrderId(
       sourceProvider: orders.sourceProvider,
     })
     .from(orders)
-    .where(inArray(orders.id, [...ids]));
+    .where(inArray(orders.id, unique));
 
   for (const row of rows) {
     const decision = decideShippingSafety({
@@ -1646,8 +1644,8 @@ async function loadShippingHoldsByOrderId(
       canonicalStatus: row.canonicalStatus,
       externallyShipped: row.externallyShipped,
       sourceProvider: row.sourceProvider,
-      // Merge print is read-only over already-created labels; only DEFINITE column signals
-      // should exclude an entry (no high-risk-unverified guessing here).
+      // Read-only over already-created labels / list display; only DEFINITE column signals
+      // count here (no high-risk-unverified guessing).
       unverifiedPolicy: 'audit_only',
     });
     if (!decision.safe) {
@@ -1655,6 +1653,16 @@ async function loadShippingHoldsByOrderId(
     }
   }
   return result;
+}
+
+async function loadShippingHoldsByOrderId(
+  entriesByGroup: Map<string, PrintQueueEntry[]>,
+): Promise<Map<number, string>> {
+  const ids: number[] = [];
+  for (const list of entriesByGroup.values()) {
+    for (const e of list) ids.push(Number(e.orderId));
+  }
+  return loadShippingHoldsForOrderIds(ids);
 }
 
 function drawMockFallbackLabel(
