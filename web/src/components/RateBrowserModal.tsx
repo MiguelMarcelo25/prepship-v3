@@ -815,6 +815,19 @@ function priceDisplay(
   );
 }
 
+// PS-126: keep the EXACT postal the operator/order provides (US ZIP+4) so the backend
+// can send it to ShipStation for an exact quote — no longer truncated to 5. Sanitizes
+// US input to "12345" or "12345-6789"; passes international (non-numeric) through
+// trimmed/uppercased. Display/capture only — the backend stays authoritative for the
+// rate payload and selected-rate proof.
+function sanitizePostalInput(value: string | null | undefined): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (/[^0-9-]/.test(raw)) return raw.toUpperCase().slice(0, 10);
+  const digits = raw.replace(/\D/g, '').slice(0, 9);
+  return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
+}
+
 // PS-108 display helper: pretty-print the insurance provider key the backend
 // stamps onto each enriched rate (lowercased, e.g. 'parcelguard'). Display-only —
 // the premium itself is computed and owned by the backend
@@ -982,7 +995,7 @@ export default function RateBrowserModal({
   // nothing. Priority for weight: initialWeight prop > order.weight.value.
   useEffect(() => {
     if (!open) return;
-    setZip(order?.shipTo?.postalCode?.slice(0, 5) ?? '');
+    setZip(sanitizePostalInput(order?.shipTo?.postalCode)); // PS-126: seed exact ZIP+4 when present
 
     if (initialWeight && ((initialWeight.lb ?? 0) > 0 || (initialWeight.oz ?? 0) > 0)) {
       setWtLb(String(Math.floor(initialWeight.lb ?? 0)));
@@ -2254,12 +2267,10 @@ export default function RateBrowserModal({
                 </div>
                 <input
                   type="text"
-                  maxLength={5}
-                  placeholder="90001"
+                  maxLength={10}
+                  placeholder="90001 or 90001-1234"
                   value={zip}
-                  onChange={(e) =>
-                    setZip(e.target.value.replace(/\D/g, '').slice(0, 5))
-                  }
+                  onChange={(e) => setZip(sanitizePostalInput(e.target.value))}
                   className="ship-input"
                   style={{ width: '100%' }}
                 />

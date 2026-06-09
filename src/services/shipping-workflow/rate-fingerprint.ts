@@ -58,9 +58,19 @@ export type SelectedRateProofInput = {
   eligibleRates?: unknown[] | null;
 };
 
-function normalizeZip(zip: string): string {
-  const digits = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
-  return digits || String(zip ?? '').trim().toUpperCase();
+// PS-126: the canonical rate fingerprint must distinguish ZIP+4 from ZIP5 so a saved
+// ZIP5 rate cannot masquerade as a current exact-ZIP+4 rate. US -> "11364-2081" (or
+// "11364" when no +4); non-US -> trimmed/uppercased (never truncated to 5). A ZIP5-only
+// order is unchanged (z=11364), so it does not force re-rate churn.
+function normalizeZip(zip: string, country?: string | null): string {
+  const raw = String(zip ?? '').trim();
+  if (!raw) return '';
+  const cc = String(country ?? 'US').trim().toUpperCase();
+  if (cc && cc !== 'US' && cc !== 'USA') return raw.toUpperCase();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length >= 9) return `${digits.slice(0, 5)}-${digits.slice(5, 9)}`;
+  if (digits.length >= 5) return digits.slice(0, 5);
+  return digits || raw.toUpperCase();
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -110,7 +120,7 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
     `v=${input.version}`,
     `d=${input.shipDateBucket}`,
     `w=${Math.round(input.weightOz * 10)}`,
-    `z=${normalizeZip(input.toZip)}`,
+    `z=${normalizeZip(input.toZip, input.toCountry)}`,
     `co=${(input.toCountry ?? 'US').toUpperCase()}`,
   ];
   if (input.toState) parts.push(`st=${input.toState.trim().toUpperCase()}`);

@@ -20,6 +20,7 @@ import {
   normalizeProviderKey,
 } from '../lib/direct-carrier-scope';
 import { buildShippingRateRequestFingerprint } from './shipping-workflow/rate-fingerprint';
+import { normalizeShippingPostalCode } from './shipping-workflow/postal-code';
 import {
   HUGRAB_DEFAULT_INSURED_VALUE,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -397,7 +398,10 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
 
   return {
     ...input,
-    toZip: normalizeZip(input.toZip),
+    // PS-126: canonical rate path keeps the EXACT postal (US ZIP+4 when present) so
+    // ShipStation rate quotes match exactly. Falls back to legacy zip5 only if the
+    // helper can't produce an exact value. Direct carriers get zip5 at their boundary.
+    toZip: normalizeShippingPostalCode(input.toZip, input.toCountry).exact ?? normalizeZip(input.toZip),
     residential: input.residential !== false,
     storeId: context.storeId,
     clientId: context.clientId,
@@ -1569,8 +1573,13 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
       const quoted = await quoteCarrierRates(account.provider, {
         credentials: account.credentials,
         weightOz: input.weightOz,
-        toZip: input.toZip,
-        fromZip: (input.shipFrom as any)?.postal_code ?? (input.shipFrom as any)?.postalCode,
+        // PS-126: direct carriers (UPS/FedEx/etc.) require 5-digit ZIP — send the zip5
+        // compatibility form, NOT the canonical ZIP+4 used for ShipStation quotes.
+        toZip: normalizeShippingPostalCode(input.toZip, input.toCountry).zip5 ?? input.toZip,
+        fromZip: normalizeShippingPostalCode(
+          (input.shipFrom as any)?.postal_code ?? (input.shipFrom as any)?.postalCode,
+          (input.shipFrom as any)?.country_code,
+        ).zip5 ?? ((input.shipFrom as any)?.postal_code ?? (input.shipFrom as any)?.postalCode),
         dimsL: input.dimsL,
         dimsW: input.dimsW,
         dimsH: input.dimsH,

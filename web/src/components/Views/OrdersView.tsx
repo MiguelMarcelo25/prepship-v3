@@ -5436,10 +5436,17 @@ export default function OrdersView({
     )]
   }
 
+  // PS-126: preserve the EXACT postal (US ZIP+4) in the draft request key so the
+  // frontend cache-match key matches the backend's exact-postal fingerprint. ZIP5-only
+  // orders are unchanged. Backend proof/fingerprint stays authoritative.
   function normalizeRateZip(value: unknown) {
-    const raw = toStringValue(value) ?? ''
-    const digits = raw.replace(/\D/g, '').slice(0, 5)
-    return digits || raw.trim().toUpperCase()
+    const raw = (toStringValue(value) ?? '').trim()
+    if (!raw) return ''
+    if (/[^0-9-]/.test(raw)) return raw.toUpperCase()
+    const digits = raw.replace(/\D/g, '')
+    if (digits.length >= 9) return `${digits.slice(0, 5)}-${digits.slice(5, 9)}`
+    if (digits.length >= 5) return digits.slice(0, 5)
+    return digits || raw.toUpperCase()
   }
 
   function rateShipDateBucket(date = new Date()) {
