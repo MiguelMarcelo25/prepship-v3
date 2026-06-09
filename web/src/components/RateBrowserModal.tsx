@@ -33,6 +33,9 @@ import {
   hasScopedCarrierAccounts,
   setScopedCarrierAccounts,
 } from './rate-browser-carrier-cache';
+// PS-135: the backend owns best-rate selection; the modal consumes its canonical winner
+// (matched into the eligible set) instead of re-ranking rows client-side.
+import { findCanonicalBestRate } from '../lib/rate-proof';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
 export type RbLocationDto = {
@@ -1224,6 +1227,10 @@ export default function RateBrowserModal({
         : new Set(rateShippingAccounts.map((a) => a.shippingProviderId))
     );
     let liveFetchedRates: RateRow[] = [];
+    // PS-135: the backend's authoritative bestRate (captured from the browse response below),
+    // consumed after every carrier finishes so the modal's auto-applied best matches the
+    // backend selection instead of a divergent client-side re-rank.
+    let canonicalBackendBest: unknown = null;
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
     if (order?.orderId) {
@@ -1320,6 +1327,9 @@ export default function RateBrowserModal({
         forceRefresh: options.forceLive === true,
       });
       if (browseSequenceRef.current !== requestSeq) return carriersWithRates;
+      // PS-135: capture the backend-selected bestRate for the auto-apply step (the browseResult
+      // const is scoped to this try block; the selection runs after the finally).
+      canonicalBackendBest = (browseResult as { bestRate?: unknown } | null)?.bestRate ?? null;
       const raw = (Array.isArray(browseResult)
         ? browseResult
         : Array.isArray(browseResult?.rates)
@@ -1449,12 +1459,22 @@ export default function RateBrowserModal({
     }
 
     if (onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
-      // Choose the lowest only after every carrier account has finished.
+      // Choose the best only after every carrier account has finished.
       // If ShipStation returns no live rates, fall back to the table's
       // already-saved best rate so the modal stays consistent with the row.
       const ratesToRank = liveFetchedRates.length ? liveFetchedRates : [seededBestRate!];
       const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r, order, currentRateShippingOptions));
-      const best = available.sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0];
+      // PS-135: the backend owns best-rate selection (src/services/rates.ts picks the cheapest
+      // ELIGIBLE rate POST-markup). Consume that canonical winner — matched WITHIN the eligible
+      // set so the operator's service-class filter + blocked rules still apply — instead of a
+      // parallel client-side re-rank that can silently diverge from the backend (markup-map
+      // drift, eligibility differences) and save a different "best" than the table shows. Fall
+      // back to the local cheapest only when the backend winner isn't in the eligible set
+      // (service-class narrowed it out, or no backend best was returned).
+      const canonicalBest = findCanonicalBestRate(canonicalBackendBest, available);
+      const best =
+        canonicalBest ??
+        [...available].sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0];
       const applied = best ? toAppliedRate(best) : null;
       if (applied) {
         setSelectedPid(applied.shippingProviderId);
