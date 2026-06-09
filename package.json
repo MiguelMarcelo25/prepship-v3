@@ -137,6 +137,7 @@
     "test:ps-123-insured-rate-browser-display": "tsx scripts/ps-123-insured-rate-browser-display-guard.ts",
     "test:ps-124-backend-combined-best-rate": "tsx scripts/ps-124-backend-combined-best-rate-guard.ts",
     "test:ps-125-hugrab-zero-insurance-premium": "tsx scripts/ps-125-hugrab-zero-insurance-premium-guard.ts",
+    "test:ps-126-parcelguard-schedule-premium": "tsx scripts/ps-126-parcelguard-schedule-premium-guard.ts",
     "test:ps-103-remove-frontend-fingerprint-authority": "tsx scripts/ps-103-remove-frontend-fingerprint-authority-guard.ts",
     "test:ps-067-billing-external-fulfilled": "node scripts/ps-067-billing-external-fulfilled-guard.mjs",
     "test:print-queue-sku-grouping": "tsx scripts/print-queue-sku-grouping-guard.ts",

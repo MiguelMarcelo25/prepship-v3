@@ -72,13 +72,14 @@ const groundAdvantage = () => ({
 
 const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
 
-// 1. PS-125: a zero-premium insured estimate is RESOLVED at $0.00 (valid), not blocked.
+// 1. PS-126: a zero ShipStation ParcelGuard estimate resolves via the SCHEDULE
+//    (USPS $1.09/$100), never blocked.
 {
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
-  check('enriched: zero ShipStation insurance amount is resolved (PS-125)', resolved.length === 1 && unresolved.length === 0, true);
-  check('enriched: zero-premium rate stays selectable', isRateInsuranceResolved(resolved[0]), true);
-  check('enriched: zero add-on is stamped as $0.00', resolved[0]?.insurance_amount?.amount, 0);
-  check('enriched: insuranceCost meta records resolved $0 add-on', resolved[0]?.insuranceCost?.amount === 0 && resolved[0]?.insuranceCost?.unresolved === false, true);
+  check('enriched: zero ShipStation estimate is resolved (PS-126)', resolved.length === 1 && unresolved.length === 0, true);
+  check('enriched: schedule-priced rate stays selectable', isRateInsuranceResolved(resolved[0]), true);
+  check('enriched: USPS schedule premium stamped ($1.09)', resolved[0]?.insurance_amount?.amount, 1.09);
+  check('enriched: insuranceCost meta records schedule premium', resolved[0]?.insuranceCost?.amount === 1.09 && resolved[0]?.insuranceCost?.provenance === 'parcelguard_schedule' && resolved[0]?.insuranceCost?.unresolved === false, true);
 }
 
 // 1b. A non-zero ShipStation estimate premium is trusted for every carrier.
@@ -111,9 +112,11 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('shipstation estimate: provenance is ShipStation', resolved.every((r) => r.insuranceCost?.provenance === 'shipstation_estimate'), true);
 }
 
-// 2. PS-125: a $0-add-on insured rate is valid and competes on total — cheapest wins.
+// 2. PS-126: every insured rate competes on its insured total; cheapest wins. The USPS
+//    schedule premium ($1.09) makes the $6.67 USPS rate $7.76, so the $7.50 UPS rate
+//    (postage $7.00 + trusted $0.50 estimate) is the cheaper insured total.
 {
-  const cheapZeroPremium = groundAdvantage(); // $6.67 postage + $0 ParcelGuard add-on = $6.67
+  const uspsScheduled = groundAdvantage(); // $6.67 postage + $1.09 USPS schedule = $7.76
   const competitor = {
     rate_id: 'r-comp',
     carrier_id: 'se-565326',
@@ -123,11 +126,11 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
     shipping_amount: { currency: 'usd', amount: 7.0 },
     insurance_amount: { currency: 'usd', amount: 0.5 }, // estimate already had a premium
   };
-  const { resolved, unresolved } = enrichRatesWithInsuranceCost([cheapZeroPremium, competitor], ctx100);
+  const { resolved, unresolved } = enrichRatesWithInsuranceCost([uspsScheduled, competitor], ctx100);
   const best = pickBest(resolved);
-  check('best rate keeps zero-premium insured rate selectable (PS-125)', unresolved.length, 0);
-  check('best rate is the cheapest insured total', best.carrier_code, 'stamps_com');
-  check('best rate total is postage + $0 insurance', Number(rateTotal(best).toFixed(2)), 6.67);
+  check('best rate keeps every insured rate selectable (PS-126)', unresolved.length, 0);
+  check('best rate is the cheapest insured total', best.carrier_code, 'ups');
+  check('best rate total = postage + insured premium', Number(rateTotal(best).toFixed(2)), 7.5);
 }
 
 // 3. Selected-rate proof authority key carries the insured total (changes vs postage-only).
@@ -140,13 +143,13 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('proof key encodes ShipStation insurance component', keyInsured.includes('1.0900'), true);
 }
 
-// 4. PS-125: a $0 insurance add-on resolves and stays selectable (no block).
+// 4. PS-126: a zero estimate resolves via the schedule and stays selectable (no block).
 {
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([groundAdvantage()], ctx100);
-  check('insured zero-premium rate is resolved and selectable', resolved.length === 1 && unresolved.length === 0, true);
+  check('insured rate is resolved and selectable', resolved.length === 1 && unresolved.length === 0, true);
   const best = pickBest(resolved);
-  check('pickBest returns the resolved zero-premium rate', best?.carrier_code, 'stamps_com');
-  check('resolved rate carries a $0 insurance add-on', best?.insurance_amount?.amount, 0);
+  check('pickBest returns the resolved rate', best?.carrier_code, 'stamps_com');
+  check('resolved rate carries the USPS schedule premium ($1.09)', best?.insurance_amount?.amount, 1.09);
 }
 
 // 5. Non-insured rates are untouched; estimate-provided premiums are trusted.
@@ -160,9 +163,9 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('non-zero estimate premium is trusted (shipstation_estimate)', trusted.status === 'resolved' && (trusted as any).amount === 2.25 && (trusted as any).provenance === 'shipstation_estimate', true);
 }
 
-// 6. Cache fingerprint reflects the API-truth insurance policy, not a schedule/env price.
+// 6. Cache fingerprint reflects the PS-126 schedule policy (busts on schedule change).
 {
-  check('insurance fingerprint reflects PS-125 zero-ok policy', insuranceCostConfigFingerprint(), 'shipstation-api-insurance-v2-zero-ok');
+  check('insurance fingerprint reflects PS-126 schedule policy', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-08-v1');
 }
 
 // 7. Backfill planner — seed order #1247 / se-292074298, idempotent.
@@ -191,16 +194,17 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('backfill: no premium -> not affected', noPremium.affected, false);
 }
 
-// 8. Guardrail: runtime must not contain local ParcelGuard pricing.
+// 8. PS-126: runtime carries the carrier/country ParcelGuard SCHEDULE (the rate-time
+//    premium source), and still does NOT read the removed flat per-100 env vars.
 {
   const enricherSrc = readFileSync('src/services/shipping-workflow/insurance-cost.ts', 'utf8');
-  check('runtime no longer reads flat PARCELGUARD_PREMIUM_PER_100', /PARCELGUARD_PREMIUM_PER_100/.test(enricherSrc), false);
-  check('runtime no longer reads flat PARCELGUARD_PREMIUM_MIN', /PARCELGUARD_PREMIUM_MIN/.test(enricherSrc), false);
-  check('runtime has no ParcelGuard schedule provenance', /parcelguard_schedule/.test(enricherSrc), false);
-  check('runtime has no scheduled premium helper', /parcelGuardScheduledPremium/.test(enricherSrc), false);
-  check('runtime has no hardcoded 1.09 premium', /1\.09/.test(enricherSrc), false);
-  check('runtime has no hardcoded 0.99 premium', /0\.99/.test(enricherSrc), false);
-  check('runtime has no hardcoded 1.39 premium', /1\.39/.test(enricherSrc), false);
+  check('runtime does not read flat PARCELGUARD_PREMIUM_PER_100', /PARCELGUARD_PREMIUM_PER_100/.test(enricherSrc), false);
+  check('runtime does not read flat PARCELGUARD_PREMIUM_MIN', /PARCELGUARD_PREMIUM_MIN/.test(enricherSrc), false);
+  check('runtime HAS the ParcelGuard schedule provenance', /parcelguard_schedule/.test(enricherSrc), true);
+  check('runtime HAS the scheduled premium helper', /parcelGuardScheduledPremium/.test(enricherSrc), true);
+  check('runtime HAS the USPS $1.09 schedule rate', /1\.09/.test(enricherSrc), true);
+  check('runtime HAS the non-USPS $0.99 schedule rate', /0\.99/.test(enricherSrc), true);
+  check('runtime HAS the international $1.39 schedule rate', /1\.39/.test(enricherSrc), true);
 }
 
 // 9. Backend DTOs expose ShipStation insurance add-ons for frontend display.

@@ -1,13 +1,16 @@
 /**
- * PS-125 guard — a $0 (or omitted) ShipStation ParcelGuard insurance add-on is a VALID
- * resolved premium for HUGRAB best-rate selection, NOT an unresolved/excluded error.
- * A positive estimate is still trusted. Explicit zero must never be unresolved, and the
- * insured rate must remain selectable with the $0 add-on preserved for display/proof.
- * Pure logic — no DB, no network, no postage, no labels, no order mutation.
+ * PS-125 guard — an insured (ParcelGuard/HUGRAB) rate is NEVER blocked/excluded for a
+ * zero/omitted ShipStation estimate: it always RESOLVES (never `unresolved`), stays
+ * selectable, and carries a finite premium for display/proof so the best-rate total is
+ * never NaN/null/unavailable.
+ *
+ * The SPECIFIC premium amount is owned by PS-126 (the ParcelGuard carrier/country
+ * schedule) and asserted in the PS-126 guard. PS-125 here only protects the anti-block
+ * invariant — amount-agnostic — so a future amount-policy change can't reintroduce
+ * excluded/blocked insured rates. Pure logic — no DB, no network, no postage.
  *
  *   npx tsx scripts/ps-125-hugrab-zero-insurance-premium-guard.ts
  */
-import { readFileSync } from 'node:fs';
 import {
   resolveRateInsurancePremium,
   enrichRatesWithInsuranceCost,
@@ -29,8 +32,6 @@ function check(name: string, got: unknown, want: unknown) {
 }
 
 const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100, toCountry: 'US' };
-// USPS Ground Advantage, $6.67 postage — ShipStation estimate typically omits the
-// ParcelGuard add-on (returns 0 / nothing) for this insured rate.
 const base = (): any => ({
   rate_id: 'r-ground',
   carrier_id: 'se-433542',
@@ -39,85 +40,81 @@ const base = (): any => ({
   service_type: 'USPS Ground Advantage',
   shipping_amount: { currency: 'usd', amount: 6.67 },
 });
+const resolvedFinite = (r: any): boolean =>
+  r.status === 'resolved' && typeof r.amount === 'number' && Number.isFinite(r.amount) && r.amount >= 0;
 
-// 1. explicit numeric 0 -> resolved $0
-{
-  const r = resolveRateInsurancePremium(ctx100, { ...base(), insurance_amount: { currency: 'usd', amount: 0 } });
-  check('explicit 0 -> resolved', r.status, 'resolved');
-  check('explicit 0 -> amount 0', r.status === 'resolved' ? r.amount : r.status, 0);
+// 1-5. zero / '0' / 0.00 / omitted / null insured estimate -> ALWAYS resolved (never
+//      unresolved), with a finite >= 0 premium. Amount value is PS-126's concern.
+const zeroish: Array<[string, any]> = [
+  ['explicit 0', { currency: 'usd', amount: 0 }],
+  ["string '0'", { currency: 'usd', amount: '0' }],
+  ['0.00', { currency: 'usd', amount: 0.0 }],
+  ['omitted', undefined],
+  ['null', null],
+];
+for (const [label, ins] of zeroish) {
+  const rate = ins === undefined ? base() : { ...base(), insurance_amount: ins };
+  const r = resolveRateInsurancePremium(ctx100, rate);
+  check(`${label} -> resolved (never unresolved)`, r.status, 'resolved');
+  check(`${label} -> finite premium >= 0`, resolvedFinite(r), true);
 }
-// 2. string '0' -> resolved $0
+
+// 6. positive estimate is trusted verbatim
 {
-  const r = resolveRateInsurancePremium(ctx100, { ...base(), insurance_amount: { currency: 'usd', amount: '0' as any } });
-  check("'0' -> resolved $0", r.status === 'resolved' ? r.amount : r.status, 0);
+  const r = resolveRateInsurancePremium(ctx100, { ...base(), insurance_amount: { currency: 'usd', amount: 2.25 } });
+  check('positive estimate trusted', r.status === 'resolved' ? r.amount : r.status, 2.25);
+  check('positive provenance shipstation_estimate', r.status === 'resolved' ? r.provenance : r.status, 'shipstation_estimate');
 }
-// 3. 0.00 -> resolved $0
-{
-  const r = resolveRateInsurancePremium(ctx100, { ...base(), insurance_amount: { currency: 'usd', amount: 0.0 } });
-  check('0.00 -> resolved $0', r.status === 'resolved' ? r.amount : r.status, 0);
-}
-// 4. omitted insurance_amount -> resolved $0 (documented: no add-on at rate time)
-{
-  const r = resolveRateInsurancePremium(ctx100, base());
-  check('omitted amount -> resolved $0', r.status === 'resolved' ? r.amount : r.status, 0);
-}
-// 5. null insurance_amount -> resolved $0
-{
-  const r = resolveRateInsurancePremium(ctx100, { ...base(), insurance_amount: null });
-  check('null amount -> resolved $0', r.status === 'resolved' ? r.amount : r.status, 0);
-}
-// 6. positive estimate is still trusted as-is
-{
-  const r = resolveRateInsurancePremium(ctx100, { ...base(), insurance_amount: { currency: 'usd', amount: 1.09 } });
-  check('positive -> resolved 1.09', r.status === 'resolved' ? r.amount : r.status, 1.09);
-  check('positive -> provenance shipstation_estimate', r.status === 'resolved' ? r.provenance : r.status, 'shipstation_estimate');
-}
-// 7. not insured is unchanged
+
+// 7. not insured -> none
 {
   const r = resolveRateInsurancePremium({ insuranceProvider: 'none', insuredValue: 0 }, base());
   check('not insured -> none', r.status, 'none');
 }
-// 8. enrich keeps a zero-premium insured rate selectable (NOT excluded)
+
+// 8. enrich NEVER excludes an insured rate (the core PS-125 anti-block guarantee)
 {
   const { resolved, unresolved } = enrichRatesWithInsuranceCost([{ ...base(), insurance_amount: { currency: 'usd', amount: 0 } }], ctx100);
-  check('enrich: zero-premium NOT excluded', resolved.length === 1 && unresolved.length === 0, true);
-  check('enrich: zero-premium selectable', isRateInsuranceResolved(resolved[0]), true);
-  check('enrich: $0 add-on stamped on insurance_amount', resolved[0]?.insurance_amount?.amount, 0);
-  check('enrich: meta records $0 add-on, not unresolved', resolved[0]?.insuranceCost?.amount === 0 && resolved[0]?.insuranceCost?.unresolved === false, true);
+  check('enrich: insured rate NOT excluded', resolved.length === 1 && unresolved.length === 0, true);
+  check('enrich: selectable', isRateInsuranceResolved(resolved[0]), true);
+  check('enrich: meta resolved (not unresolved), finite amount', resolved[0]?.insuranceCost?.unresolved === false && typeof resolved[0]?.insuranceCost?.amount === 'number', true);
+  check('enrich: insurance_amount stamped (finite)', typeof resolved[0]?.insurance_amount?.amount === 'number' && Number.isFinite(resolved[0]?.insurance_amount?.amount), true);
 }
-// 9. best-rate total includes the $0 add-on with no NaN/null/unavailable
+
+// 9. best-rate total is finite (no NaN/null/unavailable) regardless of premium
 {
   const { resolved } = enrichRatesWithInsuranceCost([{ ...base(), insurance_amount: { currency: 'usd', amount: 0 } }], ctx100);
   const total = Number(resolved[0]?.shipping_amount?.amount ?? NaN) + Number(resolved[0]?.insurance_amount?.amount ?? NaN);
-  check('best total = postage + $0 (finite)', Number.isFinite(total) ? Number(total.toFixed(2)) : 'NaN', 6.67);
+  check('best total finite (no NaN)', Number.isFinite(total), true);
 }
-// 10. saved best-rate DTO preserves the $0 add-on (folded into otherCost = +0, no double count)
+
+// 10. saved best-rate DTO folds the insurance add-on into otherCost (no double-count / NaN)
 {
   const dto = normalizeOrderBestRateDto({
     carrier_code: 'stamps_com',
     service_code: 'usps_ground_advantage',
     shipping_amount: { currency: 'usd', amount: 6.67 },
-    insurance_amount: { currency: 'usd', amount: 0 },
+    insurance_amount: { currency: 'usd', amount: 1.09 },
   });
   check('DTO shipmentCost 6.67', dto?.shipmentCost, 6.67);
-  check('DTO otherCost includes $0 insurance', dto?.otherCost, 0);
-  check('DTO total = 6.67 (no NaN)', dto ? Number((dto.shipmentCost + dto.otherCost).toFixed(2)) : null, 6.67);
+  check('DTO otherCost folds insurance (1.09)', dto?.otherCost, 1.09);
+  check('DTO total finite (7.76)', dto ? Number((dto.shipmentCost + dto.otherCost).toFixed(2)) : null, 7.76);
 }
-// 11. non-HUGRAB / other insured provider: positive estimate still trusted
+
+// 11. other insured provider: positive estimate trusted
 {
   const r = resolveRateInsurancePremium({ insuranceProvider: 'carrier', insuredValue: 200 }, { ...base(), insurance_amount: { currency: 'usd', amount: 3.5 } });
-  check('other provider positive -> resolved 3.5', r.status === 'resolved' ? r.amount : r.status, 3.5);
+  check('other provider positive trusted', r.status === 'resolved' ? r.amount : r.status, 3.5);
 }
-// 12. consistency: runtime carries no local ParcelGuard schedule + fingerprint is the zero-ok policy
+
+// 12. fingerprint is a non-empty policy string (busts the cache on policy change)
 {
-  const src = readFileSync('src/services/shipping-workflow/insurance-cost.ts', 'utf8');
-  check('runtime has no scheduled premium helper', /parcelGuardScheduledPremium/.test(src), false);
-  check('runtime has no schedule provenance', /parcelguard_schedule/.test(src), false);
-  check('fingerprint is PS-125 zero-ok policy', insuranceCostConfigFingerprint(), 'shipstation-api-insurance-v2-zero-ok');
+  const fp = insuranceCostConfigFingerprint();
+  check('fingerprint is a non-empty policy string', typeof fp === 'string' && fp.length > 0, true);
 }
 
 if (failures > 0) {
-  console.error(`\nFAIL PS-125 HUGRAB zero insurance premium guard (${failures} failing)`);
+  console.error(`\nFAIL PS-125 insured-rate anti-block guard (${failures} failing)`);
   process.exit(1);
 }
-console.log('\nPASS PS-125 HUGRAB zero insurance premium guard');
+console.log('\nPASS PS-125 insured-rate anti-block guard');
