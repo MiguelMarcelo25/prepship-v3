@@ -93,7 +93,8 @@ assert(
 // timestamps as a user-facing date/time must do so via the shared ca-time
 // helpers (which force America/Los_Angeles), not the browser-local default.
 const caTimeConsumers = [
-  'web/src/utils/orders.ts',
+  // PS-139: web/src/utils/orders.ts removed (0-importer dead file; OrdersView/OrderDetailDrawer
+  // define their own ageHours/getPrimarySku). Dropped from this readFileSync list before deletion.
   'web/src/components/RateBrowserModal.tsx',
   'web/src/pages/PromptLibrary.tsx',
   'web/src/pages/Picklist.tsx',

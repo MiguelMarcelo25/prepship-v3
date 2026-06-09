@@ -69,12 +69,5 @@ export function normalizeShippingPostalCode(
   return { exact: fallback, zip5: fallback };
 }
 
-/** Convenience: the canonical EXACT postal for ShipStation rating/labeling, or null. */
-export function exactShippingPostalCode(postal: string | null | undefined, country?: string | null): string | null {
-  return normalizeShippingPostalCode(postal, country).exact;
-}
-
-/** Convenience: the 5-digit compatibility postal for direct carriers / billing, or null. */
-export function zip5ShippingPostalCode(postal: string | null | undefined, country?: string | null): string | null {
-  return normalizeShippingPostalCode(postal, country).zip5;
-}
+// PS-139: removed dead convenience wrappers exactShippingPostalCode / zip5ShippingPostalCode
+// (0 callers; callers use normalizeShippingPostalCode(...).exact / .zip5 directly).

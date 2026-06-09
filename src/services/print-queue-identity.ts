@@ -185,15 +185,4 @@ export function collapseIdentityLines(lines: unknown): CollapsedQueueLine[] {
   return [...collapsed.values()].sort((a, b) => a.groupToken.localeCompare(b.groupToken));
 }
 
-/** Deterministic combo key for grouping a set of collapsed lines. */
-export function buildQueueComboKey(lines: Array<{ groupToken: string; qty: number }>): string {
-  return lines
-    .map((line) => `${line.groupToken}:${queueLineQty(line.qty)}`)
-    .sort((a, b) => a.localeCompare(b))
-    .join('|');
-}
-
-/** Short, safe combo summary, e.g. "Booster Gel x1 + Samyang Variety Pack x2". */
-export function buildQueueComboSummary(lines: CollapsedQueueLine[]): string {
-  return lines.map((line) => `${line.cardTitle} x${line.qty}`).join(' + ');
-}
+// PS-139: removed dead exports buildQueueComboKey / buildQueueComboSummary (0 callers).

@@ -80,10 +80,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-export function getRefRatesJob(jobId: string): RefRatesJob | null {
-  return jobs.get(jobId) ?? null;
-}
-
+// PS-139: removed dead export getRefRatesJob (0 callers; routes use getActiveRefRatesJob /
+// getLatestRefRatesJobSnapshot).
 export function getActiveRefRatesJob(): RefRatesJob | null {
   // Falls back to the most recent finished job if none is active, so the
   // status endpoint can surface its failure samples for debugging.

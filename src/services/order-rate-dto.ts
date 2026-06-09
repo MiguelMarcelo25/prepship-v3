@@ -168,16 +168,8 @@ function hasAnyMeaningfulSelectedRateField(rate: OrderSelectedRateDto): boolean 
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-export function parseOrderRateJson(value: string | null, path: string): unknown | null {
-  if (value == null) return null;
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    throw new Error(`${path} contains invalid JSON`);
-  }
-}
-
+// PS-139: removed dead export parseOrderRateJson (0 callers; best_rate_json/selected_rate_json
+// are stored as Postgres jsonb and auto-parsed, so the JSON.parse wrapper was never adopted).
 export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): OrderBestRateDto | null {
   if (value == null) return null;
 

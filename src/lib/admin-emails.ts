@@ -13,6 +13,4 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return ADMIN_EMAILS.has(email.trim().toLowerCase());
 }
 
-export function listAdminEmails(): string[] {
-  return [...ADMIN_EMAILS];
-}
+// PS-139: removed dead export listAdminEmails (0 callers; isAdminEmail is the live admin gate).

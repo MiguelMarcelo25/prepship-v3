@@ -1234,72 +1234,9 @@ async function fetchDirectCarrierRates(
   };
 }
 
-function rateResultTextKey(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
-}
-
-function rateResultMoneyKey(value: unknown): string {
-  const n = Number(value ?? 0);
-  return Number.isFinite(n) ? n.toFixed(4) : '0.0000';
-}
-
-function rateResultDedupeKey(rate: Record<string, unknown>): string {
-  const raw = rate.raw && typeof rate.raw === 'object'
-    ? rate.raw as Record<string, unknown>
-    : {};
-  const rawShipping = raw.shipping_amount && typeof raw.shipping_amount === 'object'
-    ? raw.shipping_amount as Record<string, unknown>
-    : {};
-  const rawOriginal = raw.original_amount && typeof raw.original_amount === 'object'
-    ? raw.original_amount as Record<string, unknown>
-    : {};
-  const rawOther = raw.other_amount && typeof raw.other_amount === 'object'
-    ? raw.other_amount as Record<string, unknown>
-    : {};
-  const rawConfirmation = raw.confirmation_amount && typeof raw.confirmation_amount === 'object'
-    ? raw.confirmation_amount as Record<string, unknown>
-    : {};
-  const rawInsurance = raw.insurance_amount && typeof raw.insurance_amount === 'object'
-    ? raw.insurance_amount as Record<string, unknown>
-    : {};
-  const shipmentCost = rawOriginal.amount ?? rate.shipmentCost ?? rawShipping.amount ?? rate.amount ?? 0;
-  const otherCost =
-    Number(rate.otherCost ?? 0) ||
-    (Number(rawOther.amount ?? 0) + Number(rawConfirmation.amount ?? 0));
-
-  return [
-    rateResultTextKey(rate.shippingProviderId ?? raw.carrier_id),
-    rateResultTextKey(rate.carrierCode ?? raw.carrier_code),
-    rateResultTextKey(rate.serviceCode ?? raw.service_code ?? rate.serviceName ?? raw.service_type),
-    rateResultMoneyKey(shipmentCost),
-    rateResultMoneyKey(otherCost),
-    rateResultMoneyKey(rawConfirmation.amount),
-    rateResultMoneyKey(rawInsurance.amount),
-    rateResultTextKey(raw.estimated_delivery_date ?? raw.delivery_days ?? rate.deliveryDays),
-  ].join('|');
-}
-
-function dedupeRateResults<T extends Record<string, unknown>>(rates: T[]): T[] {
-  const byKey = new Map<string, T>();
-  for (const rate of rates) {
-    const key = rateResultDedupeKey(rate);
-    const existing = byKey.get(key);
-    if (!existing) {
-      byKey.set(key, rate);
-      continue;
-    }
-    const existingRaw = existing.raw && typeof existing.raw === 'object'
-      ? existing.raw as Record<string, unknown>
-      : {};
-    const rateRaw = rate.raw && typeof rate.raw === 'object'
-      ? rate.raw as Record<string, unknown>
-      : {};
-    if (!existingRaw.rate_id && rateRaw.rate_id) {
-      byKey.set(key, rate);
-    }
-  }
-  return [...byKey.values()];
-}
+// PS-139: removed the dead FE rate-dedupe cluster (dedupeRateResults + rateResultDedupeKey /
+// rateResultMoneyKey / rateResultTextKey) — 0 callers; the backend owns best-rate selection +
+// de-duplication (PS-135), so the parallel client-side de-dupe was orphaned.
 
 const rateBrowseInflight = new Map<string, Promise<any>>();
 
@@ -2579,28 +2516,13 @@ export const apiClient = {
     return api.post<any>('/labels', payload).then(normalizeLabelResponse);
   },
 
-  createLabelBatch(payload: {
-    orderIds: number[];
-    serviceCode: string;
-    shippingProviderId: number;
-    carrierCode?: string;
-    packageCode?: string;
-    confirmation?: string;
-    insuranceProvider?: string;
-    insuredValue?: number;
-    testLabel?: boolean;
-  }): Promise<any> {
-    return api.post<any>('/labels/create-batch', payload);
-  },
-
+  // PS-139: removed dead FE method createLabelBatch (0 callers; the backend /labels/create-batch
+  // route + the parity-kept backend createLabelBatch service are untouched).
   voidLabel(shipmentId: number): Promise<any> {
     return api.post<any>(`/labels/${shipmentId}/void`, {});
   },
 
-  returnLabel(shipmentId: number, reason?: string): Promise<any> {
-    return api.post<any>(`/labels/${shipmentId}/return`, reason ? { reason } : {});
-  },
-
+  // PS-139: removed dead FE method returnLabel (0 callers; backend /labels/:id/return stays live).
   retrieveLabel(orderLookup: number | string, fresh = false): Promise<any> {
     const path = `/labels/${encodeURIComponent(String(orderLookup))}/retrieve${fresh ? '?fresh=true' : ''}`;
     return api.get<any>(path).then(normalizeLabelResponse);
@@ -2834,16 +2756,8 @@ export const apiClient = {
     return api.get<any>(`/print-queue/print/status/${encodeURIComponent(jobId)}`);
   },
 
-  downloadQueuePrintJob(
-    jobId: string
-  ): Promise<{ blob: Blob; filename: string }> {
-    return fetchBlob(
-      'downloadQueuePrintJob',
-      `/print-queue/print/download/${encodeURIComponent(jobId)}`,
-      `batch_print_${jobId}.pdf`
-    );
-  },
-
+  // PS-139: removed dead FE method downloadQueuePrintJob (0 callers; superseded by the PS-065
+  // signed-URL flow openQueuePrintJobPdf / fetchQueuePrintJobSignedUrl).
   fetchQueuePrintJobSignedUrl(
     jobId: string,
     disposition: 'inline' | 'attachment' = 'inline'
@@ -2880,17 +2794,8 @@ export const apiClient = {
     }
   },
 
-  // Back-compat wrapper: return a stable signed inline URL instead of a
-  // short-lived blob: URL, so Chrome's native PDF viewer can save/download
-  // after the tab has been open longer than the old revoke window.
-  async fetchQueuePrintJobPdfUrl(jobId: string): Promise<string | null> {
-    try {
-      const signed = await this.fetchQueuePrintJobSignedUrl(jobId, 'inline');
-      return signed.url;
-    } catch {
-      return null;
-    }
-  },
+  // PS-139: removed dead FE method fetchQueuePrintJobPdfUrl (0 live callers; superseded by the
+  // PS-065 signed-URL helpers — print-queue-signed-pdf-guard asserts its ABSENCE).
 
   // Fetch the billing invoice HTML with Bearer auth and open it in a new
   // tab via blob URL. window.open can't carry a bearer token and the

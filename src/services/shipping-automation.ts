@@ -129,21 +129,4 @@ export async function upsertShippingAutomationRule(
   return nextRules;
 }
 
-export function buildHugrabLockedAutomationRule(
-  context: ShippingServiceEligibilityContext,
-  service: ShippingServiceDescriptor,
-): ShippingAutomationRule | null {
-  if (!isHugrabShippingContext(context) || !isUpsGroundSaverOrSurePostService(service)) return null;
-  return {
-    type: 'service',
-    clientId: context.clientId ?? null,
-    storeId: context.storeId ?? null,
-    carrierCode: service.carrierCode ?? null,
-    serviceCode: service.serviceCode ?? null,
-    serviceName: service.serviceName ?? service.serviceType ?? null,
-    disabled: true,
-    locked: true,
-    source: 'ps-057',
-    reason: HUGRAB_GROUND_SAVER_BLOCK_REASON,
-  };
-}
+// PS-139: removed dead export buildHugrabLockedAutomationRule (0 callers).

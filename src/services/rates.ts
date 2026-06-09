@@ -1103,10 +1103,8 @@ export async function fetchLiveRatesWithDiagnostics(
   return { rates: [], carrierDiagnostics };
 }
 
-export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
-  return (await fetchLiveRatesWithDiagnostics(input)).rates;
-}
-
+// PS-139: removed dead back-compat wrapper fetchLiveRates (0 callers; routes use
+// fetchLiveRatesWithDiagnostics directly).
 export type GetRatesResult = {
   rates: Rate[];
   bestRate: Rate | null;

@@ -132,7 +132,6 @@ const patterns = [
       'web/src/components/Views/orders-parity.ts',
       'web/src/hooks/v2Hooks.ts',
       'web/src/lib/v2-apiClient.ts',
-      'web/src/utils/orders.ts',
     ],
   },
   {

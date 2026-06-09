@@ -4,12 +4,7 @@ export const WALMART_SHIPSTATION_STORE_ID = 376661;
 export const WALMART_DIRECT_STORE_ID = 9_000_001;
 export const WALMART_DIRECT_STORE_ACCOUNT_ID = 1;
 
-export function normalizeWalmartOrderIdentity(value: string | null | undefined): string | null {
-  const trimmed = String(value ?? '').trim();
-  if (!trimmed) return null;
-  return trimmed.replace(/^walmart-/i, '');
-}
-
+// PS-139: removed dead export normalizeWalmartOrderIdentity (0 callers).
 function aliasColumn(alias: 'orders' | 'o', column: string): SQL {
   return sql.raw(`${alias}.${column}`);
 }
