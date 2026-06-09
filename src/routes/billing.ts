@@ -429,10 +429,44 @@ function formatInvoiceDate(value: string | Date | null | undefined): string {
   }).format(date);
 }
 
-app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
-  const { clientId, dateFrom, dateTo } = c.req.valid('query');
-  const invoiceScope = billingScopeFromContext(c);
+type InvoiceTotals = {
+  orderCount: number;
+  pickPackTotal: number;
+  additionalTotal: number;
+  pickPackFeeTotal: number;
+  packageTotal: number;
+  shippingTotal: number;
+  storageTotal: number;
+  grandTotal: number;
+  fulfillmentFeeTotal: number;
+};
 
+type InvoiceDetailRow = {
+  order_id: number | null;
+  order_number: string | null;
+  ship_date: string | null;
+  base_qty: string;
+  addl_qty: string;
+  pickpack_amt: string;
+  additional_amt: string;
+  shipping_amt: string;
+  storage_amt: string;
+  row_total: string;
+  skus: string | null;
+};
+
+// PS-134 (slice 2, extract-only): the /invoice DATA layer. Runs the invoice's OWN summary +
+// per-order aggregates VERBATIM (full-precision ::text sums, raw ::timestamptz bounds, client_id
+// scope behind the billingClientScopePredicate(invoiceScope) gate). NOT delegated to billingSummary()
+// — that unify is a contingent, customer-facing $ behavior change (client-scope filter + date-key
+// granularity divergences) deferred per scoping. Kept in routes/billing.ts so the billing scope
+// guard's pinned literals stay in-file. Returns null when the client is out of scope (route -> 404).
+async function billingInvoiceData(
+  invoiceScope: ReturnType<typeof billingScopeFromContext>,
+  clientId: number,
+  dateFrom: string,
+  dateTo: string,
+): Promise<{ clientName: string; totals: InvoiceTotals; details: InvoiceDetailRow[] } | null> {
   const clientRow = await db.execute<{ id: number; name: string }>(
     sql`
       select id, name from clients
@@ -442,7 +476,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
       limit 1
     `
   );
-  if (!clientRow.length) return c.text('Client not found', 404);
+  if (!clientRow.length) return null;
 
   const summaryRow = await db.execute<{
     pickpack_total: string;
@@ -468,19 +502,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   `);
   const s = summaryRow[0];
 
-  const details = await db.execute<{
-    order_id: number | null;
-    order_number: string | null;
-    ship_date: string | null;
-    base_qty: string;
-    addl_qty: string;
-    pickpack_amt: string;
-    additional_amt: string;
-    shipping_amt: string;
-    storage_amt: string;
-    row_total: string;
-    skus: string | null;
-  }>(sql`
+  const details = await db.execute<InvoiceDetailRow>(sql`
     select
       b.order_id,
       b.order_number,
@@ -506,15 +528,6 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
     order by b.ship_date asc, b.order_id asc
   `);
 
-  const fmt = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
-  const fromDisplay = formatInvoiceDate(dateFrom);
-  const toDisplay = formatInvoiceDate(dateTo);
-  const generated = new Date().toLocaleDateString('en-US', {
-    timeZone: 'America/Los_Angeles',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
   const orderCount = s?.order_count ?? 0;
   const pickPackTotal = Number(s?.pickpack_total ?? 0);
   const additionalTotal = Number(s?.additional_total ?? 0);
@@ -525,7 +538,55 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const grandTotal = Number(s?.grand_total ?? 0);
   const fulfillmentFeeTotal =
     shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
-  const clientName = clientRow[0]!.name;
+
+  return {
+    clientName: clientRow[0]!.name,
+    totals: {
+      orderCount,
+      pickPackTotal,
+      additionalTotal,
+      pickPackFeeTotal,
+      packageTotal,
+      shippingTotal,
+      storageTotal,
+      grandTotal,
+      fulfillmentFeeTotal,
+    },
+    details,
+  };
+}
+
+// PS-134 (slice 2, extract-only): pure HTML renderer — behavior-identical to the prior inline
+// template (fmt / >0 dash guards / `|| grandTotal` fallbacks / escHtml call sites kept verbatim;
+// the guard-pinned `const totalQty = baseQty + addlQty`, `<th class="num">Qty</th>`, and addl-fee
+// ternary stay in-file). `generated` (Date.now()) is computed once per render, same as before.
+function renderInvoiceHtml(args: {
+  clientName: string;
+  dateFrom: string;
+  dateTo: string;
+  totals: InvoiceTotals;
+  details: InvoiceDetailRow[];
+}): string {
+  const { clientName, dateFrom, dateTo, totals, details } = args;
+  const {
+    orderCount,
+    additionalTotal,
+    pickPackFeeTotal,
+    packageTotal,
+    shippingTotal,
+    storageTotal,
+    grandTotal,
+    fulfillmentFeeTotal,
+  } = totals;
+  const fmt = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
+  const fromDisplay = formatInvoiceDate(dateFrom);
+  const toDisplay = formatInvoiceDate(dateTo);
+  const generated = new Date().toLocaleDateString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
 
   const rowsHtml = details
     .map((d) => {
@@ -651,6 +712,21 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
 </body>
 </html>`;
 
+  return html;
+}
+
+app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
+  const { clientId, dateFrom, dateTo } = c.req.valid('query');
+  const invoiceScope = billingScopeFromContext(c);
+  const data = await billingInvoiceData(invoiceScope, clientId, dateFrom, dateTo);
+  if (!data) return c.text('Client not found', 404);
+  const html = renderInvoiceHtml({
+    clientName: data.clientName,
+    dateFrom,
+    dateTo,
+    totals: data.totals,
+    details: data.details,
+  });
   c.header('Content-Type', 'text/html; charset=utf-8');
   return c.body(html);
 });
