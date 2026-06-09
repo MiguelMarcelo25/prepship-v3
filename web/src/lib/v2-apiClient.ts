@@ -1432,9 +1432,6 @@ type OrderDimsRow = { l: number; w: number; h: number; weightOz: number | null }
 
 export const apiClient = {
   // ─── Auth / token (no-op — v4 uses Supabase) ────────────────────────────────
-  setToken(_token: string): void {
-    // No-op: v4 reads the session from supabase.auth; token is managed there.
-  },
 
   // ─── Init / bootstrap ───────────────────────────────────────────────────────
   fetchCounts(filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
@@ -1648,9 +1645,6 @@ export const apiClient = {
     );
   },
 
-  fetchInitData(): Promise<any> {
-    return api.get<any>('/init/init-data');
-  },
 
   // ─── Clients ────────────────────────────────────────────────────────────────
   fetchClients(): Promise<any[]> {
@@ -1672,13 +1666,6 @@ export const apiClient = {
     return apiClient.fetchClients();
   },
 
-  fetchClientDetail(clientId: number): Promise<any> {
-    return safe(
-      'fetchClientDetail',
-      () => api.get<any>(`/clients/${clientId}`),
-      null
-    );
-  },
 
   createClient(data: Record<string, unknown>): Promise<any> {
     return api.post<any>('/clients', normalizeClientMutationPayload(data)).then((res) => {
@@ -1885,21 +1872,7 @@ export const apiClient = {
     );
   },
 
-  fetchShipmentSyncStatus(): Promise<any> {
-    return safe(
-      'fetchShipmentSyncStatus',
-      () => api.get<any>('/shipments/status'),
-      { status: 'idle' }
-    );
-  },
 
-  triggerShipmentSync(): Promise<any> {
-    return safe(
-      'triggerShipmentSync',
-      () => api.post<any>('/shipments/sync', {}),
-      { queued: false }
-    );
-  },
 
   clearAndRefetchAllRates(): Promise<any> {
     return safe<any>(
@@ -2041,13 +2014,6 @@ export const apiClient = {
 
   // v2 parity: plain single-order read (no hydration). Use when callers only
   // need the raw order row — `fetchOrderFull` is the hydrated variant.
-  fetchOrderDetail(orderId: number): Promise<any> {
-    return safe(
-      'fetchOrderDetail',
-      () => api.get<any>(`/orders/${orderId}`),
-      null
-    );
-  },
 
   // Returns every distinct SKU that appears in orders.items. Used by the
   // OrdersView SKU filter dropdown so the list shows ALL SKUs in the
@@ -2116,13 +2082,6 @@ export const apiClient = {
     )
   },
 
-  updateOrder(orderId: number, data: Record<string, unknown>): Promise<any> {
-    return safe(
-      'updateOrder',
-      () => api.patch<any>(`/orders/${orderId}`, data),
-      {}
-    );
-  },
 
   setOrderResidential(orderId: number, residential: boolean | null): Promise<any> {
     return safe(
@@ -2380,38 +2339,6 @@ export const apiClient = {
     );
   },
 
-  fetchOrderDims(orderId: number): Promise<any> {
-    // v4 returns { data: { l, w, h, weightOz } }. v2 callers expect
-    // { orderId, sku, qty, dims: { length, width, height }, weightOz }.
-    // Reshape so v2-copied UI gets the shape it expects.
-    return safe(
-      'fetchOrderDims',
-      async () => {
-        const res = await api.get<{ data: OrderDimsRow }>(
-          `/orders/${orderId}/dims`
-        );
-        const d = res?.data;
-        if (!d) return null;
-        return {
-          orderId,
-          sku: null,
-          qty: null,
-          dims:
-            typeof d.l === 'number' ||
-            typeof d.w === 'number' ||
-            typeof d.h === 'number'
-              ? {
-                  length: Number(d.l ?? 0),
-                  width: Number(d.w ?? 0),
-                  height: Number(d.h ?? 0),
-                }
-              : null,
-          weightOz: d.weightOz ?? null,
-        };
-      },
-      null
-    );
-  },
 
   saveOrderDims(
     orderId: number,
@@ -2518,9 +2445,6 @@ export const apiClient = {
 
   // PS-139: removed dead FE method createLabelBatch (0 callers; the backend /labels/create-batch
   // route + the parity-kept backend createLabelBatch service are untouched).
-  voidLabel(shipmentId: number): Promise<any> {
-    return api.post<any>(`/labels/${shipmentId}/void`, {});
-  },
 
   // PS-139: removed dead FE method returnLabel (0 callers; backend /labels/:id/return stays live).
   retrieveLabel(orderLookup: number | string, fresh = false): Promise<any> {
@@ -2839,18 +2763,6 @@ export const apiClient = {
   },
 
   // ─── Products ──────────────────────────────────────────────────────────────
-  fetchProducts(query?: Record<string, unknown>): Promise<any[]> {
-    return safe(
-      'fetchProducts',
-      async () => {
-        const res = await api.get<any>(`/products${qs((query ?? {}) as any)}`);
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
-      },
-      []
-    );
-  },
 
   async fetchProductsBySku(sku: string): Promise<any> {
     // A missing product is expected (many order SKUs have no product record
@@ -2863,9 +2775,6 @@ export const apiClient = {
     }
   },
 
-  saveProductDefaults(data: Record<string, unknown>): Promise<any> {
-    return api.post<any>('/products', normalizeProductDefaultsPayload(data));
-  },
 
   saveProductDefaultsV2(data: Record<string, unknown>): Promise<any> {
     return api.post<any>('/products/save-defaults', normalizeProductDefaultsPayload(data));
@@ -2876,16 +2785,6 @@ export const apiClient = {
   // one parcel's weight/dims across many lines), but the package selection IS
   // still meaningful for every SKU on the order. This endpoint stamps just
   // inventory.package_id for each provided SKU under the given clientId.
-  bulkSetInventoryPackageDefault(payload: {
-    clientId: number | null;
-    packageId: number | null;
-    skus: string[];
-  }): Promise<{ updated: number; skipped: number; total: number }> {
-    return api.post<{ updated: number; skipped: number; total: number }>(
-      '/inventory/bulk-set-default-package',
-      payload
-    );
-  },
 
   // ─── Inventory ─────────────────────────────────────────────────────────────
   fetchInventoryPage(query?: Record<string, unknown>): Promise<{
@@ -3028,13 +2927,6 @@ export const apiClient = {
     })();
   },
 
-  fetchInventoryDetail(invSkuId: number): Promise<any> {
-    return safe(
-      'fetchInventoryDetail',
-      () => api.get<any>(`/inventory/${invSkuId}`),
-      null
-    );
-  },
 
   updateInventoryItem(invSkuId: number, data: Record<string, unknown>): Promise<any> {
     // v2 InventoryView sends legacy keys that v4's zod body schema doesn't
@@ -3136,18 +3028,6 @@ export const apiClient = {
     );
   },
 
-  fetchInventoryItemLedger(invSkuId: number): Promise<any[]> {
-    return safe(
-      'fetchInventoryItemLedger',
-      async () => {
-        const res = await api.get<any>(`/inventory/${invSkuId}/ledger`);
-        if (Array.isArray(res?.data)) return res.data;
-        if (Array.isArray(res)) return res;
-        return [];
-      },
-      []
-    );
-  },
 
   fetchInventoryLedger(query: Record<string, unknown>): Promise<any[]> {
     const PAGE_SIZE = 2000;
@@ -3460,13 +3340,6 @@ export const apiClient = {
     return safe('createParentSku', () => api.post<any>('/parent-skus', data), {});
   },
 
-  fetchParentSkuDetail(parentSkuId: number): Promise<any> {
-    return safe(
-      'fetchParentSkuDetail',
-      () => api.get<any>(`/parent-skus/${parentSkuId}/detail`),
-      null
-    );
-  },
 
   // ─── Locations ─────────────────────────────────────────────────────────────
   fetchLocations(): Promise<any[]> {
@@ -3490,13 +3363,6 @@ export const apiClient = {
     );
   },
 
-  fetchLocationDetail(locationId: number): Promise<any> {
-    return safe(
-      'fetchLocationDetail',
-      () => api.get<any>(`/locations/${locationId}`),
-      null
-    );
-  },
 
   createLocation(data: Record<string, unknown>): Promise<any> {
     return safe('createLocation', () => api.post<any>('/locations', data), {});
@@ -3559,17 +3425,6 @@ export const apiClient = {
     );
   },
 
-  fetchLowStockPackages(): Promise<any[]> {
-    // v4 has no /packages/low-stock — derive client-side.
-    return apiClient.fetchPackages().then((rows) =>
-      rows.filter(
-        (p: any) =>
-          typeof p?.stockQty === 'number' &&
-          typeof p?.reorderLevel === 'number' &&
-          p.stockQty <= p.reorderLevel
-      )
-    );
-  },
 
   createPackageMutation(data: Record<string, unknown>): Promise<any> {
     return safe(
@@ -4150,59 +4005,7 @@ export const apiClient = {
   // 30-day window (up to 5000 rows!) just to bucket them client-side.
   // Backend does ONE GROUP BY query and returns ~30 rows. See
   // src/routes/orders.ts /daily-counts.
-  fetchOrdersDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
-    data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
-  }> {
-    return safe(
-      'fetchOrdersDailyCounts',
-      async () => {
-        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        const res: any = await api.get<any>(`/orders/daily-counts${qs(q)}`);
-        const data = Array.isArray(res?.data) ? res.data : [];
-        return { data };
-      },
-      // Fallback returned on error so the dashboard render code can keep
-      // pattern-matching `payload?.data` without an extra null guard.
-      { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }> }
-    );
-  },
 
-  fetchDashboardOrderSales(query: { from: string; to: string; sevenFrom?: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
-    revenue: number;
-    units: number;
-    bySku: Array<{ sku: string; revenue: number; units30: number; units7: number }>;
-    dailyRevenue: Array<{ day: string; revenue: number }>;
-  }> {
-    return safe(
-      'fetchDashboardOrderSales',
-      async () => {
-        const q: Record<string, string | number | boolean> = {
-          from: query.from,
-          to: query.to,
-        };
-        if (query.sevenFrom) q.sevenFrom = query.sevenFrom;
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        const res: any = await api.get<any>(`/orders/dashboard-sales${qs(q)}`);
-        return {
-          revenue: Number(res?.revenue) || 0,
-          units: Number(res?.units) || 0,
-          bySku: Array.isArray(res?.bySku) ? res.bySku : [],
-          dailyRevenue: Array.isArray(res?.dailyRevenue) ? res.dailyRevenue : [],
-        };
-      },
-      {
-        revenue: 0,
-        units: 0,
-        bySku: [] as Array<{ sku: string; revenue: number; units30: number; units7: number }>,
-        dailyRevenue: [] as Array<{ day: string; revenue: number }>,
-      }
-    );
-  },
 
   fetchDashboardDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
     data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
