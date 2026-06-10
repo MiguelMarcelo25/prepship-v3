@@ -151,7 +151,7 @@ C. Overlap with already-shipped PS-127/128/129
 - The ~9 "dead duplicate pages" do NOT exist; live web/src/pages/* are auth/util, all route-mounted → PS-158 largely moot. PackageModal.tsx IS used → keep.
 - src/shim/*, src/db/schema/rb-markups.ts, src/db/schema/stores.ts do NOT exist → PS-160 moot; TS2614 already resolved (typecheck green).
 - getBillingInvoiceUrl is USED (BillingView) → PS-151 over-claims; keep it.
-- No hand-rolled confirmation/insurance alias maps in OrdersView/RateBrowserModal (they import shipping-options.ts) → PS-164 appears satisfied (verify→close or reduce to a guard).
+- ~~No hand-rolled confirmation/insurance alias maps in OrdersView/RateBrowserModal → PS-164 satisfied.~~ **CORRECTED 2026-06-10: WRONG.** Both files DO hand-roll their own maps and do NOT import the canonical normalizers; they diverge from canonical (insurance unknown→`carrier`/passthrough vs `none`). PS-164 is a money-path behavior change → DJ-gated (see §8).
 - FE `combinedBestRate = combined[0]` not found → that PS-135 leak appears closed; the live FE rate leak is RateBrowserModal ~line 1457 `sort(rateDisplayTotal)[0]`.
 - FE `residential: true` removed (OrdersView uses residentialForRate ×7; RateBrowserModal no hardcode) → PS-130 #1 / PS-135 residential green.
 - CONFIRMED REAL: cert has 0 web/ owners + all mustNotContain empty (PS-130 valid); ps-079 inspects only OrdersView not RateBrowserModal (PS-130 valid); FE pickBestRate + dedupeRateResults/rateResultDedupeKey unused (PS-159/130 valid); utils/orders.ts fully dead (PS-161 valid); sync_meta dead (PS-153 valid); carrier_accounts rename SQL duplicated inline (PS-132/163 valid); inventory effective-stock fragmented across inventory.ts/admin.ts (PS-133 valid); billing ref-rate ETL inline (PS-134 valid); god-file sizes — OrdersView 12.3k, InventoryView 5.2k, v2-apiClient 4.8k, DashboardView 3.9k, routes/orders 3.6k, CarrierIntegrationsCard 3.6k, RateBrowserModal 2.8k, print-queue 2.4k (PS-154–157/166/167 valid).
@@ -193,18 +193,29 @@ Every item is RESOLVED (shipped or consciously deferred). Status to post per Tre
 
 ---
 
-## 8. Out-of-range tickets resolved — 2026-06-10 (PS-110, PS-119, PS-169)
-Outside the PS-130→168 scope this file was built for, but recorded here so the checklist stays the
-single source of truth. Scope: **clear fixes only** (zero production behavior change, no shipped/cancelled
-surfaces). Local commits on `prepshipv4-stable` — push/deploy pending.
+## 8. Out-of-range / deferred tickets resolved — 2026-06-10 (PS-110, PS-119, PS-169, PS-162)
+Outside the PS-130→168 scope this file was built for (plus PS-162 from the deferred set), recorded here
+so the checklist stays the single source of truth. Scope: **safe fixes only** (zero production behavior
+change, no shipped/cancelled surfaces). Local commits on `prepshipv4-stable` — push/deploy pending.
 
 | Card | Status | Commit | Note + QA evidence |
 |---|---|---|---|
 | **PS-110** | ✅ DONE | `06545ec6` | Master runner: `test:master:audit` (read-only audit entrypoint) was auto-assigned to the `master`/`all-safe` profiles; the manifest guard requires `test:master*` runner commands ABSENT from default profiles (anti-recursion). Added it to `PROFILE_EXCLUDED_COMMANDS`. **QA:** `test:master:manifest` PASS; `test:master:audit` still runs standalone (exit 0). |
 | **PS-119** | ✅ DONE | `53b1dcc1` | Reverted an unsafe "worker-active speedup" that gated the cached-negative live retry on `&& !workerBackfillActiveRef.current` — it persisted a NULL best-rate and stranded rows on terminal "Rate unavailable" (the exact PS-119 bug), recovering only via a worker-timing race. Restored the unconditional retry (removed condition + dead worker-status ref/effect) + strengthened the guard to pin it unconditional. Awaiting-order rate code (NOT the isReadOnly locked surface). **DJ decision:** "remove the optimization." **QA:** `typecheck` + `build:web` green; `test:ps-119-passive-best-rate-live-retry` PASS (19/19). |
 | **PS-169** | ✅ DONE | `5b6b4252` | Docs-only. Added `## Backend-Owned Truth Without Backend Monoliths` to `ARCHITECTURE.md` (bad/good request-flow patterns, frontend responsibilities + forbidden authoritative decisions, backend layer split, anti-monolith rules, final-guard rule, frontend hotspot list, per-domain ownership matrix). No production code. **QA:** `git diff --check` clean; DoD grep strings present. |
+| **PS-162** | ✅ DONE | `ec15b4b8` | Pruned 9 unreferenced scripts (−969 lines): 6 read-only probes + `verify-migration` + `smoke-shipstation-parity` + `verify-receive-fix.ts` (a prod inventory/ledger WRITE footgun, 0 callers — deleting it removes the footgun). Removed the stale `source-of-truth-guard` whitelist line. KEPT `secondary-order-detail-lazy-guard.mjs` (active npm script) + `verify-ground-saver-fix.ts` (guard-pinned). Resolves the §3-vs-§7 contradiction in favor of the card (delete verify-receive-fix). **QA:** `source-of-truth-guard` PASS (warning-only, unchanged); typecheck green; 0 functional refs remain. |
 
-**Deferred (need a DJ decision before any code):** PS-133 full analytics-service extraction (byte-risky;
-see §3 PS-133 note) · PS-150 reorder formula (pick canonical) · PS-164 normalizer delegation (behavior
-change) · PS-167 apiClient split (risk) · PS-162 scripts · PS-154/155/157/165/166 FE decompositions
-(PS-166 declined).
+**PS-164 — INVESTIGATED 2026-06-10, confirmed DJ-gated (NOT safe to refactor).** Resolved the §5-vs-§7
+contradiction: **§7 was right, §5 was wrong.** OrdersView (`normalizeConfirmationForRates`/
+`normalizeInsuranceForRates` ~361-393) and RateBrowserModal (~141-146 + inline insurance ~1191) DO
+hand-roll their own alias maps and do NOT import `normalizeConfirmation`/`normalizeInsurance` from
+`shipping-options.ts`. They DIFFER from canonical: confirmation accepts only 5 values (canonical: 14 via
+aliases → 9 silently downgraded to `none`); **insurance unknown → `carrier`** (OrdersView) / passthrough
+(RateBrowser) vs canonical `none`. Delegating to canonical is therefore a **money-path behavior change**
+(what insurance is charged), not a safe refactor → needs DJ approval + a live rate/insurance spot-check.
+A safe partial (consolidate only the byte-identical confirmation normalizer shared by both FE files) is
+available if a smaller win is wanted.
+
+**Still deferred (need a DJ decision before any code):** PS-133 full analytics-service extraction
+(byte-risky; see §3 PS-133 note) · PS-150 reorder formula (pick canonical) · PS-164 (money-path change,
+above) · PS-167 apiClient split (risk) · PS-154/155/157/165/166 FE decompositions (PS-166 declined).
