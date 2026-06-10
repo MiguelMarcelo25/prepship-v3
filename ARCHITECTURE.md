@@ -45,6 +45,127 @@ fulfillment, billing, auth/scope, marketplace notifications, or shipped/cancelle
 If the UI computes an authoritative value from fallback fields, that is a source-of-truth
 risk unless the backend explicitly marked it presentation-only.
 
+## Backend-Owned Truth Without Backend Monoliths
+
+**Backend owns decisions. Frontend owns interaction. Workers own slow provider work.
+Read models own fast display. Final guards own money safety.**
+
+"The backend owns the truth" does NOT mean one API request does all the work synchronously.
+Backend ownership means the backend is the *authoritative source* for every business decision —
+not that a single page load should fetch every provider live. Overloading one route is how a
+source-of-truth win turns back into a slow, fragile monolith.
+
+**Bad — the synchronous god-request:**
+
+```
+/orders page loads
+→ backend fetches orders
+→ also calls Walmart
+→ also calls ShipStation
+→ also recalculates rates
+→ also checks inventory
+→ also computes billing
+→ response becomes slow and fragile
+```
+
+**Good — fresh state, thin reads, async heavy work, final re-validation:**
+
+```
+webhooks / sync workers / background jobs keep canonical backend state fresh
+→ backend stores operational truth and read models
+→ frontend fetches fast DTOs
+→ expensive checks run asynchronously or on demand
+→ final mutation boundaries re-validate before money/safety side effects
+```
+
+### Frontend owns (interaction & presentation)
+
+- layout, tables, filters / search / sort UI state
+- column visibility/widths, modal/drawer open state
+- form draft values before save
+- safe optimistic UI where the backend can roll back
+- visual badges/colors, local display formatting, non-authoritative previews
+
+### Frontend must not own (authoritative decisions)
+
+The frontend may *display* backend-provided state for these, but the backend must *enforce* them:
+
+- rate selection / Best Rate truth; selected-rate proof / rate freshness
+- label/postage purchase eligibility; shipping provider endpoint routing
+- carrier / account / service eligibility
+- shipped / cancelled / source-shipped safety locks
+- marketplace / source confirmation truth; duplicate-shipment prevention
+- billing generated totals / invoice truth
+- inventory ledger / effective-stock truth
+- tenant / client / store scope or permissions
+- connector / provider capability truth
+
+### Backend layers (split the ownership; don't pile it into one route)
+
+- **domain / workflow services** own business decisions
+- **policy services** own allow/deny and eligibility
+- **connectors / adapters** translate provider payloads
+- **routes / controllers** validate and delegate (stay thin)
+- **workers / jobs / webhooks** perform slow or external-provider reconciliation
+- **read models / DTOs** provide fast UI display state
+- **final guards** enforce safety at mutation boundaries
+
+### Avoid backend overload (anti-monolith)
+
+- Do not put all logic into one huge route/controller.
+- Do not make Orders-page reads call every external provider live.
+- Do not mix provider sync, rate shopping, billing generation, inventory recomputation, and label
+  purchase into one synchronous endpoint.
+- Prefer background jobs/webhooks for slow provider work; read models/DTOs for fast page loads;
+  small domain services over giant service files.
+- Preserve idempotency, audit trails, retries, and stale-state diagnostics.
+
+### Final guard rule
+
+> Even when read models / cache / background jobs keep data fresh, dangerous mutations must
+> re-check safety at the backend boundary immediately before the side effect.
+
+- **Before buying postage:** re-check the local shipped/cancelled lock, upstream/source shipped
+  risk, active-shipment / duplicate-label risk, selected-rate proof/freshness, carrier/account/
+  service eligibility, and tenant/client/store scope.
+- **Before billing generation:** use the backend billing generator / frozen line-item rules, not
+  frontend totals.
+- **Before inventory mutation:** use the backend inventory/package ledger services, not frontend
+  stock math.
+
+### Current frontend hotspots (audit note)
+
+These files today contain frontend-side backend/domain logic and must be treated carefully in
+future work — gradually move *authoritative decisions* into backend canonical owners while leaving
+pure UI/display helpers in the frontend:
+
+- `web/src/components/Views/OrdersView.tsx`
+- `web/src/lib/v2-apiClient.ts`
+- `web/src/hooks/v2Hooks.ts`
+- `web/src/components/RateBrowserModal.tsx`
+- `web/src/components/Views/orders-parity.ts`
+- `web/src/components/Views/billing-parity.ts`
+- `web/src/components/Views/BillingView.tsx`
+- `web/src/components/Views/InventoryView.tsx`
+- `web/src/components/Views/DashboardView.tsx`
+- `web/src/components/Settings/CarrierIntegrationsCard.tsx`
+- `web/src/contexts/MarkupsContext.tsx`
+- `web/src/components/Views/orders-panel-state.ts`
+
+### Ownership matrix (per domain)
+
+| Domain | Frontend may do | Backend / read-model must own |
+|---|---|---|
+| Orders table | render rows, filters, selected IDs, UI state | canonical row DTO, status locks, safe actions, block reasons |
+| Best Rate / Rate Browser | display rates, request refresh, show diagnostics | eligible carrier set, rate-shopping orchestration, best rate, proof/freshness |
+| Label purchase / Print Queue | send operator intent, show progress | purchase orchestration, duplicate-label guard, queue durability, idempotency |
+| Marketplace / source sync | show source status and alerts | webhooks, polling/reconciliation, external shipped/cancelled truth |
+| Billing | edit drafts, show generated rows | generated line items, totals, margins, frozen invoice truth |
+| Inventory / packages | show stock / read-model state, draft adjustments | ledger movements, effective stock, package-stock truth |
+| Dashboard / analytics | render charts and filters | aggregates, cancelled/shipped filtering semantics, read models |
+| Carrier / store integrations | render forms and capability UI | provider capability registry, credential validation, account scope |
+| Auth / scope | hide/show UX affordances | RBAC, client/store/tenant enforcement |
+
 ## Decision tree — where does this code belong?
 
 1. **What business decision or invariant is changing?** Name it in one sentence.
