@@ -124,7 +124,6 @@ const patterns = [
       'src/services/fulfillment-deductions.ts',
       'scripts/backfill-inventory-ledger.ts',
       'scripts/backfill-inventory-images.ts',
-      'scripts/probe-inventory-sku-defaults.ts',
       'scripts/reconciliation-plan-guard.mjs',
       'web/src/components/Views/AnalysisView.tsx',
       'web/src/components/Views/DashboardView.tsx',
