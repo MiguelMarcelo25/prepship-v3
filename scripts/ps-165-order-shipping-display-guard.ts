@@ -14,7 +14,9 @@
 import {
   resolveDisplayCarrierCode,
   resolveDisplayServiceCode,
+  resolveDisplayShipAccount,
   DISPLAY_TEST_CARRIER_CODE,
+  DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL,
 } from '../web/src/components/Views/order-shipping-display';
 
 let failures = 0;
@@ -69,6 +71,29 @@ check('shipped -> canonical wins over bestRate', resolveDisplayServiceCode({ isA
 check('shipped -> no canonical falls to bestRate', resolveDisplayServiceCode({ isAwaiting: false, hasBestRate: true, bestRateServiceCode: 'ups_ground', canonicalServiceCode: null }), 'ups_ground');
 check('no bestRate -> canonical', resolveDisplayServiceCode({ isAwaiting: true, hasBestRate: false, bestRateServiceCode: null, canonicalServiceCode: 'fedex_home' }), 'fedex_home');
 check('nothing -> null', resolveDisplayServiceCode({ isAwaiting: true, hasBestRate: false, bestRateServiceCode: null, canonicalServiceCode: null }), null);
+
+// --- shipping-account display precedence (PS-165 part 2 — first-non-null cascade) ---
+const acct = {
+  isTest: false,
+  awaitingBestRateNickname: null,
+  canonicalNickname: null,
+  selectedNickname: null,
+  v2AccountNickname: null,
+  hasSelectedRate: false,
+  labelAccountLabel: null,
+  bestRateNickname: null,
+  carrierCodeFallback: null,
+};
+check('account: test order -> TEST label', resolveDisplayShipAccount({ ...acct, isTest: true, awaitingBestRateNickname: 'X' }), DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL);
+check('account: awaiting best-rate nickname wins', resolveDisplayShipAccount({ ...acct, awaitingBestRateNickname: 'ROCEL', canonicalNickname: 'Chase', selectedNickname: 'Sel' }), 'ROCEL');
+check('account: falls to canonical', resolveDisplayShipAccount({ ...acct, canonicalNickname: 'Chase', selectedNickname: 'Sel' }), 'Chase');
+check('account: falls to selected', resolveDisplayShipAccount({ ...acct, selectedNickname: 'Sel', v2AccountNickname: 'V2' }), 'Sel');
+check('account: falls to v2 carrier-cache account', resolveDisplayShipAccount({ ...acct, v2AccountNickname: 'GG6381' }), 'GG6381');
+check('account: selectedRate present but no nickname -> External', resolveDisplayShipAccount({ ...acct, hasSelectedRate: true, labelAccountLabel: 'L' }), 'External');
+check('account: label account when no selectedRate', resolveDisplayShipAccount({ ...acct, labelAccountLabel: 'UPS by SS', bestRateNickname: 'BR' }), 'UPS by SS');
+check('account: best-rate nickname fallback', resolveDisplayShipAccount({ ...acct, bestRateNickname: 'BR', carrierCodeFallback: 'UPS' }), 'BR');
+check('account: formatted carrier code is the final fallback', resolveDisplayShipAccount({ ...acct, carrierCodeFallback: 'UPS' }), 'UPS');
+check('account: nothing -> null', resolveDisplayShipAccount(acct), null);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-165 order shipping display guard (${failures} failing)`);

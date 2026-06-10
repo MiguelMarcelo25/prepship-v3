@@ -50,8 +50,8 @@ import type { NewOrderPayload } from '../NewOrderModal'
 // fallback pills for FedEx/DHL/etc. Replaces the previous text-only
 // carrier-badge spans throughout the orders table + side panel.
 import CarrierBadge, { classifyCarrier } from '../CarrierBadge'
-// PS-165: carrier/service display precedence owned by ./order-shipping-display (verbatim cascade).
-import { resolveDisplayCarrierCode, resolveDisplayServiceCode } from './order-shipping-display'
+// PS-165: carrier/service/account display precedence owned by ./order-shipping-display (verbatim cascade).
+import { resolveDisplayCarrierCode, resolveDisplayServiceCode, resolveDisplayShipAccount } from './order-shipping-display'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS, isDirectCarrierId } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -1481,49 +1481,48 @@ function getCarrierCodeForDisplay(order: OrderSummaryDto) {
 }
 
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
-  if (isTestOrder(order)) return TEST_SHIPPING_ACCOUNT_LABEL
-
-  // PS-079: the Awaiting Shipment shipping-account column shows the nickname tied
-  // to the EXACT current Best Rate — not stale selected/canonical/label account
-  // metadata. (Shipped/history rows keep the canonical/selected/label semantics
-  // below.) Fresh auto-rates mirror bestRate into canonical, so this only changes
-  // the divergent/stale case, which must show the best-rate account.
+  // PS-165: the shipping-account display PRECEDENCE is owned VERBATIM by resolveDisplayShipAccount
+  // (./order-shipping-display). The candidate RESOLUTION stays here — it depends on the FE scoped
+  // carrier cache (getV2CarrierAccountForOrder) + the live `accounts` array, which the backend
+  // serializer does not have. PS-079 awaiting-best-rate-first semantics preserved exactly.
+  let awaitingBestRateNickname: string | null = null
   if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
     const bestRateRecord = toRecord(order.bestRate)
-    const bestRateProviderId = getBestRateShippingProviderId(order)
-    const bestRateNickname =
+    awaitingBestRateNickname =
       normalizeShippingAccountName(order.bestRate.carrierNickname) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname)) ??
-      getCarrierAccountLabelByProviderId(accounts, bestRateProviderId)
-    if (bestRateNickname) return bestRateNickname
+      getCarrierAccountLabelByProviderId(accounts, getBestRateShippingProviderId(order))
   }
-
-  const canonicalNickname = normalizeShippingAccountName(getShippingString(order, 'accountNickname'))
-  if (canonicalNickname) return canonicalNickname
-
-  const selectedNickname = normalizeShippingAccountName(order.selectedRate?.providerAccountNickname)
-  if (selectedNickname) return selectedNickname
 
   const v2Account = getV2CarrierAccountForOrder(order)
-  if (v2Account) return v2Account.nickname
 
-  if (order.selectedRate) return 'External'
-
+  let labelAccountLabel: string | null = null
   if (order.label?.shippingProviderId != null) {
     const account = accounts.find((candidate) => candidate.shippingProviderId === order.label.shippingProviderId)
-    const accountLabel = getCarrierAccountDisplay(account)
-    if (accountLabel) return accountLabel
+    labelAccountLabel = getCarrierAccountDisplay(account) ?? null
   }
+
+  let bestRateNickname: string | null = null
   if (order.bestRate) {
     const bestRateRecord = toRecord(order.bestRate)
-    const nickname =
+    bestRateNickname =
       normalizeShippingAccountName(order.bestRate.carrierNickname) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname))
-    if (nickname) return nickname
   }
-  return formatCarrierCode(order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode)
+
+  return resolveDisplayShipAccount({
+    isTest: isTestOrder(order),
+    awaitingBestRateNickname,
+    canonicalNickname: normalizeShippingAccountName(getShippingString(order, 'accountNickname')),
+    selectedNickname: normalizeShippingAccountName(order.selectedRate?.providerAccountNickname),
+    v2AccountNickname: v2Account ? v2Account.nickname : null,
+    hasSelectedRate: Boolean(order.selectedRate),
+    labelAccountLabel,
+    bestRateNickname,
+    carrierCodeFallback: formatCarrierCode(order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode),
+  })
 }
 
 function getShipAccountLabelById(accounts: CarrierAccountDto[], accountId: string) {

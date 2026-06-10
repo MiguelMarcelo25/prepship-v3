@@ -82,3 +82,48 @@ export function resolveDisplayServiceCode(input: DisplayServiceCodeInput): strin
   }
   return input.canonicalServiceCode ?? (input.hasBestRate ? input.bestRateServiceCode : null)
 }
+
+/** Shipping-account display label for a test order (mirrors OrdersView TEST_SHIPPING_ACCOUNT_LABEL). */
+export const DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL = 'PrepShip Test'
+
+export type DisplayShipAccountInput = {
+  /** isTestOrder(order). */
+  isTest: boolean
+  /** awaiting + bestRate: the best-rate nickname (carrier/provider/account, or account-by-providerId). null otherwise. */
+  awaitingBestRateNickname: string | null
+  /** getShippingString(order,'accountNickname'), normalized. */
+  canonicalNickname: string | null
+  /** order.selectedRate?.providerAccountNickname, normalized. */
+  selectedNickname: string | null
+  /** getV2CarrierAccountForOrder(order)?.nickname — the FE scoped carrier-cache lookup. */
+  v2AccountNickname: string | null
+  /** order.selectedRate is present. */
+  hasSelectedRate: boolean
+  /** label.shippingProviderId → matched account display label. */
+  labelAccountLabel: string | null
+  /** order.bestRate nickname (carrier/provider/account), normalized. */
+  bestRateNickname: string | null
+  /** formatCarrierCode(selectedRate.carrierCode ?? bestRate.carrierCode) — final fallback. */
+  carrierCodeFallback: string | null
+}
+
+/**
+ * PS-165 — the Orders shipping-ACCOUNT column display precedence (the account/provider-nickname
+ * resolver), ported VERBATIM from OrdersView.getShipAccountDisplay. The candidate RESOLUTION (incl.
+ * the FE scoped-carrier-cache lookup and the live accounts array) necessarily stays in OrdersView —
+ * the backend serializer doesn't have the live scoped carrier accounts — but the PRECEDENCE POLICY
+ * now lives here (one tested place, alongside the carrier/service precedence). First-non-null cascade:
+ *   test → awaiting best-rate → canonical → selected → v2-cache account → 'External' (if a selected
+ *   rate exists) → label account → best-rate → formatted carrier code.
+ */
+export function resolveDisplayShipAccount(input: DisplayShipAccountInput): string | null {
+  if (input.isTest) return DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL
+  if (input.awaitingBestRateNickname) return input.awaitingBestRateNickname
+  if (input.canonicalNickname) return input.canonicalNickname
+  if (input.selectedNickname) return input.selectedNickname
+  if (input.v2AccountNickname) return input.v2AccountNickname
+  if (input.hasSelectedRate) return 'External'
+  if (input.labelAccountLabel) return input.labelAccountLabel
+  if (input.bestRateNickname) return input.bestRateNickname
+  return input.carrierCodeFallback
+}
