@@ -94,6 +94,11 @@ import {
 import { CarrierIntegrationsCard } from '../Settings/CarrierIntegrationsCard'
 import { CarrierEligibilityPolicyCard } from '../Settings/CarrierEligibilityPolicyCard'
 import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrationsCard'
+// PS-155: SystemStatus / Cache / Sandbox panels extracted to sibling files (behavior-preserving;
+// all state + async handlers stay in this view and are passed as props).
+import { SystemStatusPanel } from './SystemStatusPanel'
+import { CacheManagementPanel } from './CacheManagementPanel'
+import { SandboxTestOrdersPanel } from './SandboxTestOrdersPanel'
 
 // Drawer sections — each represents one icon on the rail and one
 // content panel. Order here = rendering order on the rail.
@@ -1686,275 +1691,35 @@ export default function SettingsView() {
               ) : null}
 
               {activeSection === 'sandbox' ? (
-                <div>
-                  {testClientsLoading ? (
-                    <SkeletonStack rows={3} />
-                  ) : testClients.length === 0 ? (
-                    <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-amber-50 ring-1 ring-amber-200 mb-4">
-                      <AlertTriangle size={14} strokeWidth={2.5} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                      <div className="text-[11.5px] text-amber-900 leading-relaxed">
-                        <strong>No test clients found.</strong> Run the purge SQL in the Supabase editor first — see{' '}
-                        <code className="px-1 py-0.5 rounded bg-amber-100/70 ring-1 ring-amber-200 text-[10.5px] font-mono text-amber-800">
-                          drizzle/apply-test-client-purge.sql
-                        </code>
-                        .
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mb-4">
-                      <div className="text-[11px] uppercase tracking-wider font-bold text-ink-3 mb-2">
-                        Active test clients
-                      </div>
-                      <ul className="space-y-1">
-                        {testClients.map((c) => (
-                          <li
-                            key={c.id}
-                            className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface ring-1 ring-line shadow-sm"
-                          >
-                            <span className="text-[13px] font-semibold text-ink">{c.name}</span>
-                            <span className="text-[11px] text-ink-3 tabular-nums">
-                              {c.order_count} order{c.order_count === 1 ? '' : 's'}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Action row */}
-                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-line">
-                    <label className="inline-flex items-center gap-1.5 text-[12px] text-ink-2 font-medium">
-                      Count:
-                      <input
-                        type="number"
-                        min="1"
-                        max="200"
-                        value={seedCount}
-                        onChange={(e) => setSeedCount(e.target.value)}
-                        className="w-[70px] h-8 px-2 rounded-md ring-1 ring-line bg-surface text-[12.5px] tabular-nums text-ink focus:ring-brand/40 focus:ring-2 outline-none transition"
-                      />
-                    </label>
-
-                    <motion.button
-                      type="button"
-                      onClick={() => void handleSeedTestOrders()}
-                      disabled={sandboxBusy || testClients.length === 0}
-                      whileHover={!sandboxBusy && testClients.length > 0 ? { y: -1 } : undefined}
-                      whileTap={!sandboxBusy && testClients.length > 0 ? { scale: 0.96 } : undefined}
-                      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                      className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-br from-amber-500 to-amber-600 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-shadow duration-150"
-                    >
-                      {isSeeding ? <ButtonSpinner /> : <Plus size={13} strokeWidth={2.5} />}
-                      {isSeeding ? 'Seeding…' : 'Seed Test Orders'}
-                    </motion.button>
-
-                    <motion.button
-                      type="button"
-                      onClick={() => void handlePurgeTestOrders()}
-                      disabled={sandboxBusy || testClients.length === 0}
-                      whileHover={!sandboxBusy && testClients.length > 0 ? { y: -1 } : undefined}
-                      whileTap={!sandboxBusy && testClients.length > 0 ? { scale: 0.96 } : undefined}
-                      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                      className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 ring-1 ring-rose-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
-                    >
-                      {isPurging ? <ButtonSpinner /> : <Trash2 size={13} strokeWidth={2.25} />}
-                      {isPurging ? 'Purging…' : 'Purge Test Orders'}
-                    </motion.button>
-                  </div>
-
-                  {sandboxState.kind === 'loading' ? (
-                    <StatusLine kind="info" message={
-                      sandboxState.op === 'seed' ? 'Seeding test orders…'
-                      : sandboxState.op === 'purge' ? 'Purging test orders…'
-                      : 'Working…'
-                    } />
-                  ) : sandboxState.kind === 'success' ? (
-                    <StatusLine kind="success" message={sandboxState.message} />
-                  ) : sandboxState.kind === 'error' ? (
-                    <StatusLine kind="error" message={sandboxState.message} />
-                  ) : null}
-                </div>
+                <SandboxTestOrdersPanel
+                  testClients={testClients}
+                  testClientsLoading={testClientsLoading}
+                  seedCount={seedCount}
+                  sandboxState={sandboxState}
+                  onSeedCountChange={setSeedCount}
+                  onSeed={handleSeedTestOrders}
+                  onPurge={handlePurgeTestOrders}
+                  onRefreshClients={refreshTestClients}
+                />
               ) : null}
 
               {/* ─── CACHE panel ───────────────────────────────── */}
               {activeSection === 'cache' ? (
-                <div>
-                  <motion.button
-                    type="button"
-                    onClick={() => void handleRefetchAllRates()}
-                    disabled={isRefetching}
-                    whileHover={!isRefetching ? { y: -1 } : undefined}
-                    whileTap={!isRefetching ? { scale: 0.96 } : undefined}
-                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                    className="inline-flex items-center gap-2 h-10 px-5 rounded-lg text-[13px] font-bold text-white bg-gradient-to-br from-violet-600 to-violet-700 shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-shadow duration-150"
-                  >
-                    {isRefetching ? <ButtonSpinner /> : <RefreshCcw size={14} strokeWidth={2.25} />}
-                    {isRefetching ? 'Refetching…' : 'Refetch All Rates & Clear Cache'}
-                  </motion.button>
-
-                  {refetchStatus.visible ? (
-                    <StatusLine
-                      kind={
-                        refetchState.kind === 'loading' ? 'info' :
-                        refetchState.kind === 'error' ? 'error' :
-                        refetchState.kind === 'success' ? 'success' : 'info'
-                      }
-                      message={refetchStatus.text}
-                    />
-                  ) : null}
-                </div>
+                <CacheManagementPanel
+                  isRefetching={isRefetching}
+                  refetchState={refetchState}
+                  onRefetch={handleRefetchAllRates}
+                />
               ) : null}
 
               {/* SYSTEM STATUS panel */}
               {activeSection === 'system' ? (
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-[12px] text-ink-3">
-                      {systemStatus?.generatedAt
-                        ? `Updated ${formatCaDateTimeLabeled(systemStatus.generatedAt)}`
-                        : 'Status loads when this panel opens.'}
-                    </div>
-                    <motion.button
-                      type="button"
-                      onClick={() => void refreshSystemStatus()}
-                      disabled={systemStatusLoading}
-                      whileHover={!systemStatusLoading ? { y: -1 } : undefined}
-                      whileTap={!systemStatusLoading ? { scale: 0.96 } : undefined}
-                      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-                      className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-semibold text-ink bg-surface hover:bg-surface-2 ring-1 ring-line disabled:opacity-60 disabled:cursor-not-allowed transition-colors duration-150"
-                    >
-                      {systemStatusLoading ? <ButtonSpinner /> : <RefreshCcw size={13} strokeWidth={2.25} />}
-                      Refresh
-                    </motion.button>
-                  </div>
-
-                  {systemStatusLoading && !systemStatus ? <SkeletonStack rows={4} /> : null}
-                  {systemStatusError ? <StatusLine kind="error" message={systemStatusError} /> : null}
-
-                  {systemStatus ? (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                        <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
-                          <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
-                            API Routes
-                          </div>
-                          <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">
-                            {systemStatus.apiTiming?.routeCount ?? 0}
-                          </div>
-                          <div className="mt-1 text-[11.5px] text-ink-3">
-                            tracked in timing memory
-                          </div>
-                        </div>
-                        <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
-                          <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
-                            Heap Used
-                          </div>
-                          <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">
-                            {formatBytes(systemStatus.process?.memory?.heapUsedBytes)}
-                          </div>
-                          <div className="mt-1 text-[11.5px] text-ink-3">
-                            RSS {formatBytes(systemStatus.process?.memory?.rssBytes)}
-                          </div>
-                        </div>
-                        <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
-                          <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
-                            Uptime
-                          </div>
-                          <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">
-                            {formatDurationSeconds(systemStatus.process?.uptimeSeconds)}
-                          </div>
-                          <div className="mt-1 text-[11.5px] text-ink-3">
-                            {systemStatus.process?.nodeEnv ?? 'runtime'} environment
-                          </div>
-                        </div>
-                        <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
-                          <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
-                            DB Check
-                          </div>
-                          <div className={`mt-1 text-2xl font-extrabold tabular-nums ${
-                            systemStatus.database?.ok === true
-                              ? 'text-emerald-700'
-                              : systemStatus.database?.ok === false
-                                ? 'text-rose-700'
-                                : 'text-ink'
-                          }`}>
-                            {systemStatus.database?.ok === true
-                              ? 'OK'
-                              : systemStatus.database?.ok === false
-                                ? 'Slow'
-                                : 'n/a'}
-                          </div>
-                          <div className="mt-1 text-[11.5px] text-ink-3">
-                            {systemStatus.database?.durationMs ?? 0}ms ping
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden">
-                        <div className="px-4 py-3 border-b border-line">
-                          <div className="text-[12px] font-extrabold text-ink">Runtime Flags</div>
-                          <div className="text-[11.5px] text-ink-3 mt-0.5">
-                            Confirms whether schedulers, backfills, and maintenance work are enabled.
-                          </div>
-                        </div>
-                        <div className="divide-y divide-line">
-                          {Object.entries(systemStatus.runtime ?? {}).map(([key, value]) => (
-                            <div key={key} className="flex items-center justify-between gap-4 px-4 py-2.5">
-                              <span className="text-[12px] font-semibold text-ink truncate">{key}</span>
-                              <span className="text-[12px] text-ink-2 tabular-nums">{formatFlagValue(value)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden">
-                        <div className="px-4 py-3 border-b border-line">
-                          <div className="text-[12px] font-extrabold text-ink">Hot API Routes</div>
-                          <div className="text-[11.5px] text-ink-3 mt-0.5">
-                            Use this to spot slow or failing endpoints during a browser lag report.
-                          </div>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full text-left text-[12px]">
-                            <thead className="bg-surface-2 text-[10.5px] uppercase tracking-wider text-ink-3">
-                              <tr>
-                                <th className="px-4 py-2 font-bold">Route</th>
-                                <th className="px-3 py-2 font-bold text-right">Count</th>
-                                <th className="px-3 py-2 font-bold text-right">Errors</th>
-                                <th className="px-3 py-2 font-bold text-right">p95</th>
-                                <th className="px-3 py-2 font-bold text-right">p99</th>
-                                <th className="px-3 py-2 font-bold text-right">Max</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-line">
-                              {(systemStatus.apiTiming?.hotRoutes ?? []).length === 0 ? (
-                                <tr>
-                                  <td colSpan={6} className="px-4 py-4 text-center text-ink-3">
-                                    No API timing samples yet.
-                                  </td>
-                                </tr>
-                              ) : (
-                                (systemStatus.apiTiming?.hotRoutes ?? []).map((route) => (
-                                  <tr key={`${route.method}:${route.path}`} className="hover:bg-brand-bg/30">
-                                    <td className="px-4 py-2.5 font-semibold text-ink">
-                                      <span className="mr-2 text-ink-3">{route.method}</span>
-                                      <span className="break-all">{route.path}</span>
-                                    </td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.count}</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.errorCount}</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{Math.round(route.p95Ms)}ms</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{Math.round(route.p99Ms)}ms</td>
-                                    <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{Math.round(route.maxMs)}ms</td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
+                <SystemStatusPanel
+                  systemStatus={systemStatus}
+                  systemStatusLoading={systemStatusLoading}
+                  systemStatusError={systemStatusError}
+                  onRefresh={refreshSystemStatus}
+                />
               ) : null}
 
               {/* Bottom breathing room */}
