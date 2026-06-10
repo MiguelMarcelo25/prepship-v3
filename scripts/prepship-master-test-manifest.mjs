@@ -80,6 +80,11 @@ const PROFILE_EXCLUDED_COMMANDS = new Set([
   'test:master:shipping',
   'test:master:browser',
   'test:master:all-safe',
+  // PS-110 — read-only audit/triage entrypoint over the latest master run
+  // (test-results/master/latest.json). A test:master* runner, not a leaf child:
+  // keep it manually callable (`npm run test:master:audit`) but never auto-selected
+  // into a default profile, or the manifest guard's anti-recursion rule fails.
+  'test:master:audit',
   // Requires --order-id or --mock-process-once. Keep it manually callable, but
   // do not run the bare smoke command from default profiles.
   'smoke:marketplace-confirm',
