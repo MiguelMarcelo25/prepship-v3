@@ -75,6 +75,12 @@ check('passive does a cache-allowed first pass (forceRefresh:false)',
 check('passive does a guarded live retry (cachedNegativeNeedsLiveRetry -> forceLive+forceRefresh)',
   /if \(cachedNegativeNeedsLiveRetry\(response\)\)/.test(ordersView)
     && /\.\.\.baseRateRequest,\s*forceLive: true,\s*forceRefresh: true/.test(ordersView), true);
+// The retry must be UNCONDITIONAL. A reverted "worker-active speedup" gated it on
+// `&& !workerBackfillActiveRef.current`, which persisted a null best-rate and stranded
+// the row on a terminal "Rate unavailable" (the exact PS-119 bug). Pin that it cannot return.
+check('cached-negative live retry is UNCONDITIONAL (no worker-active / && skip-gate)',
+  !/cachedNegativeNeedsLiveRetry\(response\)\s*&&/.test(ordersView)
+    && !/workerBackfillActiveRef/.test(ordersView), true);
 check('passive still persists null only AFTER the (possibly retried) response',
   /apiClient\.saveOrderBestRate\(order\.orderId, null, request\.dimsLabel\)/.test(ordersView), true);
 check('add-dims cell is actionable (opens the order detail panel, not a dead state)',

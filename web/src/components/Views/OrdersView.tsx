@@ -6152,31 +6152,6 @@ export default function OrdersView({
     if (options.refetch) await refetchOrders()
   }
 
-  // Phase 1 rate-browser speedup: when the worker rate-backfill scheduler is
-  // active it already warms rate_cache, so the passive table's redundant PS-119
-  // live-retry (a second forceLive call per cache-miss row) can be skipped. This
-  // ref is best-effort and DEFAULTS TO FALSE, so when the signal is unknown we
-  // keep today's behavior (always retry) — never a PS-119 regression. Mirrors the
-  // worker-scheduler-active check used by DashboardView (worker.status.schedulerEnabled
-  // && !worker.stale).
-  const workerBackfillActiveRef = useRef(false)
-  useEffect(() => {
-    let cancelled = false
-    void apiClient
-      .fetchSyncWorkerStatus()
-      .then((status) => {
-        if (cancelled) return
-        const s = status as { worker?: { stale?: boolean; status?: { schedulerEnabled?: boolean } } } | null
-        workerBackfillActiveRef.current = Boolean(s?.worker?.status?.schedulerEnabled && !s?.worker?.stale)
-      })
-      .catch(() => {
-        /* unknown -> leave false -> keep PS-119 retry */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   useEffect(() => {
     if (loading || currentStatus !== 'awaiting_shipment' || orderedFilteredOrders.length === 0) return
 
@@ -6274,11 +6249,10 @@ export default function OrdersView({
         // Before terminally marking the row "Rate unavailable", do ONE bounded live retry
         // (same request fingerprint, forceLive + forceRefresh) — exactly what manual
         // Browse Rates does. Only a live current-fingerprint empty proves "no rate".
-        // Phase 1 speedup: skip the redundant second live-retry when the worker
-        // rate-backfill is actively warming the cache (it will fill this row on its
-        // next tick). workerBackfillActiveRef defaults to false, so when the worker
-        // signal is unknown/disabled we keep the PS-119 retry — no regression.
-        if (cachedNegativeNeedsLiveRetry(response) && !workerBackfillActiveRef.current) {
+        // (A worker-active speedup that skipped this retry was reverted — it persisted a
+        // null best-rate and stranded the row on a terminal "Rate unavailable"; the retry
+        // is unconditional so a cached-negative can never be marked unavailable unproven.)
+        if (cachedNegativeNeedsLiveRetry(response)) {
           response = await apiClient.browseRates({
             ...baseRateRequest,
             forceLive: true,
