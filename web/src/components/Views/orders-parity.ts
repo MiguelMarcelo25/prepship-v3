@@ -757,12 +757,19 @@ export function classifyAwaitingRateCellState(input: {
 
 export type AwaitingBestRateWorkflowInput = {
   bestRateState?: string | null
+  // PS-120: age of an in-progress (pending/rating) backend state, ms. The classifier uses it as a
+  // WATCHDOG so a stuck job can never render an infinite spinner — past the bound it becomes terminal.
+  bestRateStateAgeMs?: number | null
   allowedActions?: {
     canUseSavedRate?: boolean | null
     requiresRerate?: boolean | null
     canCreateLabel?: boolean | null
   } | null
 } | null
+
+// PS-120: a backend pending/rating older than this is treated as a stuck job → terminal retryable
+// (never an infinite spinner). The backfill tick runs ~every 180s, so 6 min covers a couple of cycles.
+export const PENDING_RATING_WATCHDOG_MS = 6 * 60 * 1000
 
 export type AwaitingRateCellStateInput = Parameters<typeof classifyAwaitingRateCellState>[0]
 
@@ -818,6 +825,20 @@ export function classifyAwaitingRateCellStateWithWorkflow(
       return 'error'
     case 'missing':
       return 'unavailable'
+    case 'pending':
+    case 'rating':
+      // PS-120: backend in-progress states. Missing dims/weight already returned 'add-dims' above
+      // (PS-119 dims-first). WATCHDOG: a state older than the bound = a stuck job → terminal
+      // retryable (never an infinite spinner). Otherwise a last-known displayable rate still wins;
+      // else 'rating' = actively rating (calculating), 'pending' = queued (bounded spinner).
+      if (
+        typeof workflow.bestRateStateAgeMs === 'number' &&
+        workflow.bestRateStateAgeMs > PENDING_RATING_WATCHDOG_MS
+      ) {
+        return fallbackInput.hasDisplayableBestRate ? 'ready' : 'unavailable'
+      }
+      if (fallbackInput.hasDisplayableBestRate) return 'ready'
+      return workflow.bestRateState === 'rating' ? 'calculating' : 'pending'
     case 'stale':
     case 'mismatched_request':
       return fallbackInput.hasDims && fallbackInput.hasWeight

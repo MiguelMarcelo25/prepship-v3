@@ -5,6 +5,11 @@ export type BestRateWorkflowState =
   | 'mismatched_request'
   | 'partial_carrier_failure'
   | 'blocked'
+  // PS-120: backend-owned in-progress states for the per-order rate job. 'pending' = queued for
+  // backend backfill rating; 'rating' = the backfill job is actively rating it now. Both are bounded
+  // by a watchdog in the FE classifier (bestRateStateAgeMs) so they can never become an infinite spinner.
+  | 'pending'
+  | 'rating'
   | 'unknown';
 
 export type BestRateWorkflowSourceConfidence =
