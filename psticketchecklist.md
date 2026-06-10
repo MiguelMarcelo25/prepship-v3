@@ -193,10 +193,11 @@ Every item is RESOLVED (shipped or consciously deferred). Status to post per Tre
 
 ---
 
-## 8. Out-of-range / deferred tickets resolved — 2026-06-10 (PS-110, PS-119, PS-169, PS-162)
-Outside the PS-130→168 scope this file was built for (plus PS-162 from the deferred set), recorded here
-so the checklist stays the single source of truth. Scope: **safe fixes only** (zero production behavior
-change, no shipped/cancelled surfaces). Local commits on `prepshipv4-stable` — push/deploy pending.
+## 8. Out-of-range / deferred tickets resolved — 2026-06-10 (PS-110, PS-119, PS-169, PS-162, PS-150, PS-164)
+Recorded here so the checklist stays the single source of truth. All SHIPPED (origin + mirror), DJ deploys
+manually. No shipped/cancelled lockdown surfaces touched. Mostly behavior-preserving; the exceptions are
+**PS-164** (DJ-approved insurance money-path change — needs a live spot-check) and **PS-150** (backend route
+now velocity-based; UI display unchanged).
 
 | Card | Status | Commit | Note + QA evidence |
 |---|---|---|---|
@@ -204,18 +205,23 @@ change, no shipped/cancelled surfaces). Local commits on `prepshipv4-stable` —
 | **PS-119** | ✅ DONE | `53b1dcc1` | Reverted an unsafe "worker-active speedup" that gated the cached-negative live retry on `&& !workerBackfillActiveRef.current` — it persisted a NULL best-rate and stranded rows on terminal "Rate unavailable" (the exact PS-119 bug), recovering only via a worker-timing race. Restored the unconditional retry (removed condition + dead worker-status ref/effect) + strengthened the guard to pin it unconditional. Awaiting-order rate code (NOT the isReadOnly locked surface). **DJ decision:** "remove the optimization." **QA:** `typecheck` + `build:web` green; `test:ps-119-passive-best-rate-live-retry` PASS (19/19). |
 | **PS-169** | ✅ DONE | `5b6b4252` | Docs-only. Added `## Backend-Owned Truth Without Backend Monoliths` to `ARCHITECTURE.md` (bad/good request-flow patterns, frontend responsibilities + forbidden authoritative decisions, backend layer split, anti-monolith rules, final-guard rule, frontend hotspot list, per-domain ownership matrix). No production code. **QA:** `git diff --check` clean; DoD grep strings present. |
 | **PS-162** | ✅ DONE | `ec15b4b8` | Pruned 9 unreferenced scripts (−969 lines): 6 read-only probes + `verify-migration` + `smoke-shipstation-parity` + `verify-receive-fix.ts` (a prod inventory/ledger WRITE footgun, 0 callers — deleting it removes the footgun). Removed the stale `source-of-truth-guard` whitelist line. KEPT `secondary-order-detail-lazy-guard.mjs` (active npm script) + `verify-ground-saver-fix.ts` (guard-pinned). Resolves the §3-vs-§7 contradiction in favor of the card (delete verify-receive-fix). **QA:** `source-of-truth-guard` PASS (warning-only, unchanged); typecheck green; 0 functional refs remain. |
+| **PS-150** | ✅ DONE | `9f5045f5` | Reorder policy → canonical owner `src/lib/inventory-reorder-policy.ts` (velocity model — DJ's chosen formula, = the current Dashboard FE compute → behavior-preserving display). DashboardView + the dashboard `/inventory-risk` route both delegate; removed the divergent par-level placeholder. Reporting-metrics deliberately NOT changed (feeds InventoryView — separate decision). **QA:** `test:ps-150-reorder-policy` 12/12; typecheck + build:web green. PUSHED. |
+| **PS-164** | ✅ DONE | `ebdfc83b` | FE (OrdersView + RateBrowserModal) delegates confirmation/insurance normalization to canonical `src/lib/shipping-options`; hand-rolled alias maps removed. **DJ-approved money-path change:** unknown insurance provider → `none` (was `carrier`). Adversarially reviewed SAFE-TO-SHIP (label boundary re-normalizes via the same owner; no insurance silently dropped at purchase); fixed the one flagged UI defect (RB clamps confirmation to its 5 dropdown values). **QA:** `test:ps-164-fe-normalizer-delegation` 23/23; typecheck + build:web green. PUSHED. **NEEDS a live insurance spot-check after deploy** (quote each insurance option, confirm premium). |
 
-**PS-164 — INVESTIGATED 2026-06-10, confirmed DJ-gated (NOT safe to refactor).** Resolved the §5-vs-§7
-contradiction: **§7 was right, §5 was wrong.** OrdersView (`normalizeConfirmationForRates`/
-`normalizeInsuranceForRates` ~361-393) and RateBrowserModal (~141-146 + inline insurance ~1191) DO
-hand-roll their own alias maps and do NOT import `normalizeConfirmation`/`normalizeInsurance` from
-`shipping-options.ts`. They DIFFER from canonical: confirmation accepts only 5 values (canonical: 14 via
-aliases → 9 silently downgraded to `none`); **insurance unknown → `carrier`** (OrdersView) / passthrough
-(RateBrowser) vs canonical `none`. Delegating to canonical is therefore a **money-path behavior change**
-(what insurance is charged), not a safe refactor → needs DJ approval + a live rate/insurance spot-check.
-A safe partial (consolidate only the byte-identical confirmation normalizer shared by both FE files) is
-available if a smaller win is wanted.
+**PS-165 — INVESTIGATED 2026-06-10, DEFERRED (clean backend-ownership blocked).** The per-status shipping
+display is 12 FE resolvers in OrdersView (~1654-1913). carrier-code + service-code are pure DTO-field
+cascades (backend-ownable, guaranteed parity), BUT every account-nickname + provider-id resolver ends in
+`getV2CarrierAccountForOrder(order)` — a **frontend-only** lookup against the client-side scoped carrier
+cache (`getScopedCarrierAccounts`) the serializer does not have. True backend-ownership of the account/
+provider display therefore needs the orders serializer to JOIN carrier-account nickname data — a bigger
+change with **parity risk on the shipped/cancelled display** (a surface under active testing). DJ chose to
+DEFER to post-testing rather than risk it; the only fully-safe near-term version is cosmetic FE relocation,
+which is itself deferred. Same risk class as PS-154/155/157/167.
+
+**Deferred to post-testing (FE decomposition / parity-risky — DJ decision 2026-06-10):**
+PS-154 (Inventory/Dashboard) · PS-155 (Settings/Billing/Packages) · PS-157 (RateBrowserModal/Table/v2Hooks)
+· PS-167 (v2-apiClient barrel) · PS-165 (displayShipping — blocked by FE carrier registry, above).
+PS-166 (OrdersView 12k) DECLINED.
 
 **Still deferred (need a DJ decision before any code):** PS-133 full analytics-service extraction
-(byte-risky; see §3 PS-133 note) · PS-150 reorder formula (pick canonical) · PS-164 (money-path change,
-above) · PS-167 apiClient split (risk) · PS-154/155/157/165/166 FE decompositions (PS-166 declined).
+(byte-risky; see §3 PS-133 note).
