@@ -45,6 +45,10 @@ import { nextSortState, sortRows } from '../SortableTable'
 import { Table, type TableColumn } from '../ui/Table'
 // PS-155: Billing summary table extracted to ./BillingSummaryTable (behavior-preserving).
 import { BillingSummaryTable } from './BillingSummaryTable'
+// PS-155: filter row, client-filter panel, and detail client strip extracted (behavior-preserving).
+import { BillingFilters } from './BillingFilters'
+import { BillingClientFilterPanel } from './BillingClientFilterPanel'
+import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 import './BillingView.css'
 
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -1429,129 +1433,50 @@ export default function BillingView() {
       <div className="markup-card">
         <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 12 }}>Generate &amp; Summary</h3>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-            {([
-              ['all', 'All'],
-              ['this_month', 'This Month'],
-              ['last_month', 'Last Month'],
-              ['last_30', 'Last 30 Days'],
-              ['last_90', 'Last 90 Days'],
-            ] as Array<[BillingPresetId, string]>).map(([preset, label]) => (
-              <button
-                key={preset}
-                className={`btn btn-outline btn-sm analysis-preset${activePreset === preset ? ' active' : ''}`}
-                type="button"
-                onClick={() => {
-                  const range = getBillingPresetRange(preset)
-                  setActivePreset(preset)
-                  setFrom(range.from)
-                  setTo(range.to)
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text2)' }}>
-            <span>From</span>
-            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={from} onChange={(event) => {
-              setActivePreset(null)
-              setFrom(event.target.value)
-            }} />
-            <span>To</span>
-            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => {
-              setActivePreset(null)
-              setTo(event.target.value)
-            }} />
-          </div>
-          <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleGenerateBilling()} disabled={generateLoading}>
-            {generateLoading ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Loader2 size={12} strokeWidth={2.5} className="animate-spin" aria-hidden />
-                Updating...
-              </span>
-            ) : (
-              'Update Billing'
-            )}
-          </button>
-          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleGenerateBilling(true)} disabled={generateLoading || regenerateRangeBlocked} title={regenerateRangeBlocked ? 'Regenerate Range is limited to 120 days. Use Update Billing for All/history.' : 'Rebuild every billing row in the selected date range. Use this only when pricing rules changed or history needs repair.'}>
-            Regenerate Range
-          </button>
-          <button
-            className="btn btn-ghost btn-sm"
-            type="button"
-            title="Populate SS USPS/UPS reference rates from rate cache"
-            disabled={backfillLoading}
-            onClick={() => void handleBackfillRefRates()}
-          >
-            {backfillLoading ? '↺ Backfilling…' : '↺ Backfill Ref Rates'}
-          </button>
-          <button
-            className="btn btn-ghost btn-sm"
-            type="button"
-            title="Re-fetch live SS USPS/UPS reference rates for all reference_rate clients (runs in background)"
-            disabled={fetchRefRunning}
-            onClick={() => void handleFetchRefRates()}
-          >
-            ⚡ Fetch Ref Rates
-          </button>
-          <span style={{ fontSize: 10.5, color: 'var(--text3)', marginLeft: 4 }}>{fetchRefStatus}</span>
-          <span style={{ fontSize: 12, color: 'var(--text3)' }}>{generateStatus}</span>
-        </div>
+        <BillingFilters
+          activePreset={activePreset}
+          from={from}
+          to={to}
+          generateLoading={generateLoading}
+          regenerateRangeBlocked={regenerateRangeBlocked}
+          backfillLoading={backfillLoading}
+          fetchRefRunning={fetchRefRunning}
+          fetchRefStatus={fetchRefStatus}
+          generateStatus={generateStatus}
+          onSelectPreset={(preset) => {
+            const range = getBillingPresetRange(preset)
+            setActivePreset(preset)
+            setFrom(range.from)
+            setTo(range.to)
+          }}
+          onFromChange={(value) => {
+            setActivePreset(null)
+            setFrom(value)
+          }}
+          onToChange={(value) => {
+            setActivePreset(null)
+            setTo(value)
+          }}
+          onGenerate={() => void handleGenerateBilling()}
+          onRegenerate={() => void handleGenerateBilling(true)}
+          onBackfillRefRates={() => void handleBackfillRefRates()}
+          onFetchRefRates={() => void handleFetchRefRates()}
+        />
 
-        <div className="billing-client-filter">
-          <div className="billing-client-filter-head">
-            <div className="billing-client-filter-copy">
-              <div className="billing-client-filter-title">
-                <ListFilter size={14} strokeWidth={2.4} aria-hidden />
-                <span>Client Filter</span>
-                <span className="billing-client-filter-count">
-                  {selectedBillingClientCount} of {availableBillingClients.length || summaryRows.length} clients
-                </span>
-              </div>
-              <div className="billing-client-filter-subtitle">
-                {billingClientFilterActive
-                  ? `Visible billing excludes: ${excludedBillingClientNames.length ? excludedBillingClientNames.join(', ') : 'none'}`
-                  : 'All PrepShip billing clients are included.'}
-              </div>
-            </div>
-            <div className="billing-client-filter-actions">
-              <button className="btn btn-outline btn-sm billing-filter-action" type="button" onClick={handleSelectShipStationBillingClients} title="Show only clients that exist in ShipStation">
-                <Check size={12} strokeWidth={2.5} aria-hidden />
-                ShipStation only
-              </button>
-              <button className="btn btn-ghost btn-sm billing-filter-action" type="button" onClick={handleSelectAllBillingClients} title="Restore every PrepShip billing client">
-                <X size={12} strokeWidth={2.5} aria-hidden />
-                All clients
-              </button>
-              <button className="btn btn-ghost btn-sm billing-filter-action" type="button" onClick={() => setClientFilterOpen((open) => !open)} aria-expanded={clientFilterOpen}>
-                <SlidersHorizontal size={12} strokeWidth={2.5} aria-hidden />
-                Advanced
-              </button>
-            </div>
-          </div>
-
-          {clientFilterOpen ? (
-            <div className="billing-client-filter-options">
-              {availableBillingClients.map((client) => {
-                const checked = billingClientFilterActive ? selectedBillingClientIdSet.has(client.clientId) : true
-                return (
-                  <label key={client.clientId} className={`billing-client-filter-option${checked ? ' is-selected' : ''}${client.inShipStation ? '' : ' is-prepship-only'}`}>
-                    <input type="checkbox" checked={checked} onChange={() => handleToggleBillingClient(client.clientId)} />
-                    <span className="billing-client-filter-name">{client.clientName}</span>
-                    <span className="billing-client-filter-badge">{client.inShipStation ? 'ShipStation' : 'PrepShip only'}</span>
-                  </label>
-                )
-              })}
-              {missingShipStationClientNames.length > 0 ? (
-                <div className="billing-client-filter-note">
-                  ShipStation-only client not in PrepShip billing: {missingShipStationClientNames.join(', ')}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <BillingClientFilterPanel
+          clientFilterOpen={clientFilterOpen}
+          selectedBillingClientCount={selectedBillingClientCount}
+          availableBillingClients={availableBillingClients}
+          summaryRowsLength={summaryRows.length}
+          billingClientFilterActive={billingClientFilterActive}
+          excludedBillingClientNames={excludedBillingClientNames}
+          selectedBillingClientIdSet={selectedBillingClientIdSet}
+          missingShipStationClientNames={missingShipStationClientNames}
+          onToggleAdvanced={() => setClientFilterOpen((open) => !open)}
+          onSelectShipStation={handleSelectShipStationBillingClients}
+          onSelectAll={handleSelectAllBillingClients}
+          onToggleClient={handleToggleBillingClient}
+        />
 
         {/* Summary table — migrated 2026-05-12 to the reusable <Table>
             primitive (components/ui/Table.tsx). Operator-controlled
@@ -1577,30 +1502,12 @@ export default function BillingView() {
               <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
             </div>
 
-            <div className="billing-detail-client-strip" aria-label="Line item client selector">
-              <span className="billing-detail-client-strip-label">
-                {sortedSummaryRows.length} visible clients
-                {selectedDetailSummary ? ` · showing ${Number(selectedDetailSummary.orderCount ?? 0)} orders` : ''}
-              </span>
-              {sortedSummaryRows.map((row) => {
-                const active = Number(row.clientId) === Number(detailState.clientId)
-                const orderCount = Number(row.orderCount ?? 0)
-                const rowTotal = Number(row.fulfillmentFeeTotal ?? row.grandTotal ?? row.total ?? 0)
-                return (
-                  <button
-                    key={row.clientId}
-                    className={`billing-detail-toggle${active ? ' active' : ''}${orderCount === 0 && rowTotal === 0 ? ' is-empty' : ''}`}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => void handleLoadDetails(row.clientId, row.clientName)}
-                  >
-                    <span>{row.clientName}</span>
-                    <span className="billing-detail-toggle-meta">{orderCount} orders</span>
-                    <span className="billing-detail-toggle-total">{formatBillingMoney(rowTotal)}</span>
-                  </button>
-                )
-              })}
-            </div>
+            <BillingDetailClientStrip
+              sortedSummaryRows={sortedSummaryRows}
+              detailState={detailState}
+              selectedDetailSummary={selectedDetailSummary}
+              onLoadDetails={handleLoadDetails}
+            />
 
             {/* Detail table — migrated 2026-05-12 to the reusable
                 <Table> primitive. Sort, widths, column order,
