@@ -207,6 +207,7 @@ now velocity-based; UI display unchanged).
 | **PS-162** | ✅ DONE | `ec15b4b8` | Pruned 9 unreferenced scripts (−969 lines): 6 read-only probes + `verify-migration` + `smoke-shipstation-parity` + `verify-receive-fix.ts` (a prod inventory/ledger WRITE footgun, 0 callers — deleting it removes the footgun). Removed the stale `source-of-truth-guard` whitelist line. KEPT `secondary-order-detail-lazy-guard.mjs` (active npm script) + `verify-ground-saver-fix.ts` (guard-pinned). Resolves the §3-vs-§7 contradiction in favor of the card (delete verify-receive-fix). **QA:** `source-of-truth-guard` PASS (warning-only, unchanged); typecheck green; 0 functional refs remain. |
 | **PS-150** | ✅ DONE | `9f5045f5` | Reorder policy → canonical owner `src/lib/inventory-reorder-policy.ts` (velocity model — DJ's chosen formula, = the current Dashboard FE compute → behavior-preserving display). DashboardView + the dashboard `/inventory-risk` route both delegate; removed the divergent par-level placeholder. Reporting-metrics deliberately NOT changed (feeds InventoryView — separate decision). **QA:** `test:ps-150-reorder-policy` 12/12; typecheck + build:web green. PUSHED. |
 | **PS-164** | ✅ DONE | `ebdfc83b` | FE (OrdersView + RateBrowserModal) delegates confirmation/insurance normalization to canonical `src/lib/shipping-options`; hand-rolled alias maps removed. **DJ-approved money-path change:** unknown insurance provider → `none` (was `carrier`). Adversarially reviewed SAFE-TO-SHIP (label boundary re-normalizes via the same owner; no insurance silently dropped at purchase); fixed the one flagged UI defect (RB clamps confirmation to its 5 dropdown values). **QA:** `test:ps-164-fe-normalizer-delegation` 23/23; typecheck + build:web green. PUSHED. **NEEDS a live insurance spot-check after deploy** (quote each insurance option, confirm premium). |
+| **PS-155** | 🟡 1/3 DONE | `2cf93267` | PackagesView's 3 modals (`PackageAdjustModal`/`PackageBillingDefaultModal`/`PackageFormModal`) extracted verbatim → `web/src/components/Views/packages-modals.tsx` (−222 lines; new module fully typed, NOT @ts-nocheck). Behavior-preserving; typecheck + build:web green. PUSHED. **Remaining 2/3:** BillingView (SummaryTable/DetailTable/Filters) + SettingsView (Markups/Carriers/Automation) — their sections are inline state-heavy JSX (no top-level components), so extraction = designing prop interfaces + threading state on @ts-nocheck files (no type net). Paused for a fresh focused session. |
 
 **PS-165 — INVESTIGATED 2026-06-10, DEFERRED (clean backend-ownership blocked).** The per-status shipping
 display is 12 FE resolvers in OrdersView (~1654-1913). carrier-code + service-code are pure DTO-field
@@ -218,10 +219,21 @@ change with **parity risk on the shipped/cancelled display** (a surface under ac
 DEFER to post-testing rather than risk it; the only fully-safe near-term version is cosmetic FE relocation,
 which is itself deferred. Same risk class as PS-154/155/157/167.
 
-**Deferred to post-testing (FE decomposition / parity-risky — DJ decision 2026-06-10):**
-PS-154 (Inventory/Dashboard) · PS-155 (Settings/Billing/Packages) · PS-157 (RateBrowserModal/Table/v2Hooks)
-· PS-167 (v2-apiClient barrel) · PS-165 (displayShipping — blocked by FE carrier registry, above).
-PS-166 (OrdersView 12k) DECLINED.
+**Deferred to a fresh focused session / post-testing (FE decomposition — DJ decision 2026-06-10).**
+These are state-heavy / huge refactors on @ts-nocheck surfaces (no type-net, only build:web) with zero
+functional value — best done with a clean context + own verification pass, not mid-long-session:
+- **PS-155 (2/3 remaining):** BillingView SummaryTable/DetailTable/Filters + SettingsView Markups/Carriers/
+  Automation — inline state-heavy JSX (extraction = new prop interfaces + state threading). PackagesView ✅ done.
+- **PS-154:** InventoryView/DashboardView — same state-heavy kind; DashboardView helpers entangled with
+  component-local types.
+- **PS-157:** RateBrowserModal/Table/v2Hooks — also touches the rate/markup path (behavior-sensitive).
+- **PS-167:** v2-apiClient barrel split — 127 methods + ~50 helpers; type-checked + barrel-viable but huge
+  blast radius. Investigation map: see task notes / wfikx23uk.
+- **PS-165:** displayShipping — blocked by the FE carrier registry (above).
+- **PS-166 (OrdersView 12k) DECLINED.** · **PS-133 deep analytics extraction** still decision-gated (§3).
+
+Recommended next-session order (safest→hardest): PS-155(rest) → PS-154 → PS-157 → PS-167. Each: one
+unit per commit, build:web after every step, confirm-before-push on rate-adjacent ones.
 
 **Still deferred (need a DJ decision before any code):** PS-133 full analytics-service extraction
 (byte-risky; see §3 PS-133 note).
