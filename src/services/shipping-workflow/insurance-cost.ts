@@ -22,6 +22,10 @@ export type InsuranceCostProvenance =
   | 'none'
   | 'shipstation_estimate'
   | 'parcelguard_schedule'
+  // PS-170: direct-carrier declared value (e.g. UPS's free first $100) — a $0 rate-time
+  // premium. Only emitted when the account capability says carrier insurance is purchasable
+  // (DIRECT_UPS_CARRIER_INSURANCE_VERIFIED); otherwise the rate stays on the ParcelGuard schedule.
+  | 'carrier_declared_value'
   | 'shipstation_v2_label'
   | 'shipstation_v1_shipment';
 
@@ -203,6 +207,23 @@ export function resolveRateInsurancePremium(
     };
   }
 
+  // PS-170: carrier declared value — a direct-carrier account insuring the first $100 for
+  // $0 (verified-and-enabled accounts only; the capability resolver upstream decides this,
+  // and only ever passes provider 'carrier' here when DIRECT_UPS_CARRIER_INSURANCE_VERIFIED).
+  // $0 is the real billed cost for $100 declared value on a direct UPS contract, so it is
+  // confirmed (not an estimate). HUGRAB defaults to exactly $100, where declared value is free.
+  if (provider === 'carrier') {
+    return {
+      status: 'resolved',
+      insuranceProvider: provider,
+      insuredValue,
+      amount: 0,
+      provenance: 'carrier_declared_value',
+      confirmed: true,
+      fetchedAt,
+    };
+  }
+
   // PS-126: ShipStation returns 0 for ParcelGuard, so supply the rate-time premium
   // from the verified carrier/country schedule (the value ShipStation actually bills).
   if (isParcelGuard(provider)) {
@@ -282,17 +303,36 @@ export type EnrichRatesResult<T> = {
  * Enrich rates so each insured rate carries the ShipStation API premium in
  * `insurance_amount` before best-rate selection. Unresolved insured rates are
  * excluded from selection and surfaced as explicit diagnostics.
+ *
+ * PS-170 — `resolveProvider` is an OPTIONAL per-candidate provider hook. The request
+ * carries ONE provider (ctx.insuranceProvider), but each candidate rate runs on a
+ * different carrier account, and a direct-UPS account can insure $100 for $0 via carrier
+ * declared value while the ShipStation-brokered ones must use ParcelGuard. The hook lets
+ * the caller (services/rates.ts) pick the provider PER rate from the account capability.
+ *
+ * It is consulted ONLY when the request-level provider is ParcelGuard, so it can only ever
+ * DOWNGRADE a candidate ParcelGuard→carrier (cheaper, still insured) on an eligible account
+ * — never override an operator who explicitly chose `carrier`/`shipsurance`, and never
+ * upgrade `none`. With DIRECT_UPS_CARRIER_INSURANCE_VERIFIED=false the hook returns
+ * ParcelGuard for every account, so enrichment is byte-identical to pre-PS-170.
  */
 export function enrichRatesWithInsuranceCost<T extends RateLike>(
   rates: T[],
   ctx: { insuranceProvider?: string | null; insuredValue?: number | null; toCountry?: string | null },
   now: number = Date.now(),
+  resolveProvider?: (rate: T) => string | null,
 ): EnrichRatesResult<T> {
   const resolved: EnrichedRate<T>[] = [];
   const unresolved: Array<EnrichedRate<T> & { insuranceCostError: string }> = [];
+  const requestIsParcelGuard = isParcelGuard(String(ctx.insuranceProvider ?? ''));
 
   for (const rate of rates) {
-    const resolution = resolveRateInsurancePremium(ctx, rate, now);
+    // Per-candidate provider refinement (PS-170) — only from the ParcelGuard request path.
+    const perRateProvider = requestIsParcelGuard && resolveProvider
+      ? resolveProvider(rate) ?? ctx.insuranceProvider
+      : ctx.insuranceProvider;
+    const rateCtx = perRateProvider === ctx.insuranceProvider ? ctx : { ...ctx, insuranceProvider: perRateProvider };
+    const resolution = resolveRateInsurancePremium(rateCtx, rate, now);
     const meta = toMeta(resolution);
 
     if (resolution.status === 'none') {

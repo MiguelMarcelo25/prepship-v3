@@ -1,4 +1,5 @@
 import { normalizeInsurance, type NormalizedInsuranceProvider } from './shipping-options.js';
+import { effectiveInsuranceProviderForAccount } from './carrier-account-registry.js';
 
 export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1';
 
@@ -269,18 +270,66 @@ export function resolveEffectiveInsurance(
   const uspsGround = isUspsGroundService(service);
   if (!upsGround && !uspsGround) return passthrough;
 
-  const provider: NormalizedInsuranceProvider = 'parcelguard';
+  // PS-170: the PROVIDER is decided by the account's capability, not hardcoded.
+  // A direct-UPS account that can purchase $0 carrier declared value resolves to
+  // 'carrier'; everything else (and any direct-UPS account while the verify gate is
+  // off) resolves to 'parcelguard'. With DIRECT_UPS_CARRIER_INSURANCE_VERIFIED=false
+  // this is ALWAYS 'parcelguard' — the label is guaranteed insured, no behavior change.
+  const provider: NormalizedInsuranceProvider = effectiveInsuranceProviderForAccount({
+    shippingProviderId: service?.carrierId ?? null,
+    carrierCode: service?.carrierCode ?? null,
+    serviceCode: service?.serviceCode ?? null,
+  });
   const operatorValue = operator.insuredValue ?? 0;
   const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
   const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
+  const providerLabel = provider === 'carrier' ? 'carrier declared value' : 'Parcel Guard';
 
   return {
     insuranceProvider: provider,
     insuredValue,
     source: keptOperatorHigher ? 'operator' : 'hugrab-default',
-    reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance via ${
-      upsGround ? 'Parcel Guard (UPS Ground)' : 'Parcel Guard (USPS Ground)'
-    }`,
+    reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance via ${providerLabel} (${
+      upsGround ? 'UPS Ground' : 'USPS Ground'
+    })`,
+  };
+}
+
+/**
+ * PS-170 — request-level HUGRAB insurance intent. The rate REQUEST spans every carrier,
+ * so there is no single service/account yet: this sets the ParcelGuard request-level
+ * provider + the $100-floored value used for the cache fingerprint and saved best-rate
+ * proof. The PER-CANDIDATE provider (ParcelGuard vs direct-UPS carrier declared value)
+ * is refined later during rate enrichment via resolveAccountInsuranceCapability.
+ *
+ * Single owner: services/rates.ts delegates here instead of duplicating the forcing.
+ * Aligns the request-level value with the label's $100 floor (resolveEffectiveInsurance),
+ * so a sub-$100 operator selection on a HUGRAB order no longer prices the rate below the
+ * $100 the label actually insures.
+ */
+export function resolveHugrabRequestInsurance(
+  context: ShippingServiceEligibilityContext | null | undefined,
+  operatorSelection?: { insuranceProvider?: unknown; insuredValue?: unknown; insurance?: unknown; insuranceValue?: unknown } | null,
+): EffectiveInsurance {
+  const operator = normalizeInsurance({
+    insuranceProvider: operatorSelection?.insuranceProvider ?? operatorSelection?.insurance,
+    insuredValue: operatorSelection?.insuredValue ?? operatorSelection?.insuranceValue,
+  });
+  if (!isHugrabShippingContext(context)) {
+    return {
+      insuranceProvider: operator.insuranceProvider,
+      insuredValue: operator.insuredValue,
+      source: operator.insuranceProvider === 'none' ? 'none' : 'operator',
+    };
+  }
+  const operatorValue = operator.insuredValue ?? 0;
+  const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
+  const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
+  return {
+    insuranceProvider: 'parcelguard',
+    insuredValue,
+    source: keptOperatorHigher ? 'operator' : 'hugrab-default',
+    reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance (ParcelGuard request-level; per-candidate provider refined at rate enrichment)`,
   };
 }
 

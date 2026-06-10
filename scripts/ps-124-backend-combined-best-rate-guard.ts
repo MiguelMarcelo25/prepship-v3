@@ -27,7 +27,10 @@ const fetchRatesBlock = fetchRatesStart >= 0 && fetchRatesEnd > fetchRatesStart
   : '';
 
 const browseRatesStart = apiClient.indexOf('browseRates(data: Record<string, unknown>)');
-const browseRatesEnd = apiClient.indexOf('\n  fetchOrdersDailyCounts', browseRatesStart);
+// PS-170: end-anchor repaired — the method after browseRates was renamed
+// fetchOrdersDailyCounts -> fetchDashboardDailyCounts in a prior change, which left this
+// slice empty (a silently-passing-then-failing guard). Re-anchored so it slices again.
+const browseRatesEnd = apiClient.indexOf('\n  fetchDashboardDailyCounts', browseRatesStart);
 const browseRatesBlock = browseRatesStart >= 0 && browseRatesEnd > browseRatesStart
   ? apiClient.slice(browseRatesStart, browseRatesEnd)
   : '';

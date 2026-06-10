@@ -13,7 +13,7 @@ import {
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
-import { normalizeConfirmation, normalizeInsurance, normalizeShippingOptions } from '../lib/shipping-options';
+import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
 import {
   directCarrierVisibleForScope,
   evaluateDirectCarrierScope,
@@ -26,15 +26,14 @@ import {
   residentialForShipping,
   type AddressClassificationSource,
 } from './shipping-workflow/address-classification';
-import { KNOWN_CARRIER_ACCOUNTS, carrierIdForProvider } from '../lib/carrier-account-registry';
+import { KNOWN_CARRIER_ACCOUNTS, carrierIdForProvider, effectiveInsuranceProviderForAccount } from '../lib/carrier-account-registry';
 import {
-  HUGRAB_DEFAULT_INSURED_VALUE,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   describeShippingService,
   evaluateShippingServiceEligibility,
   filterCarrierAccountsForAutomation,
   filterEligibleShippingServices,
-  isHugrabShippingContext,
+  resolveHugrabRequestInsurance,
   type ShippingAutomationRule,
   type ShippingServiceEligibilityContext,
   type ShippingServiceDescriptor,
@@ -407,24 +406,18 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
       carrierName: carrier.nickname,
     }),
   );
-  // PS-123: backend owns the effective HUGRAB insurance used for rate shopping,
-  // cache fingerprints, saved best-rate proof, and label parity. Frontend callers
-  // pass operator intent only; this service resolves the final provider/value.
-  const operatorInsurance = normalizeInsurance(input);
-  let insuranceProvider = operatorInsurance.insuranceProvider as string;
-  let insuredValue = operatorInsurance.insuredValue;
-  let effectiveInsuranceSource = operatorInsurance.insuranceProvider === 'none' ? 'none' : 'operator';
-  if (isHugrabShippingContext({ clientId: context.clientId, storeId: context.storeId })) {
-    if (operatorInsurance.insuranceProvider === 'none') {
-      insuranceProvider = 'parcelguard';
-      insuredValue = HUGRAB_DEFAULT_INSURED_VALUE;
-      effectiveInsuranceSource = 'hugrab-default';
-    } else {
-      insuranceProvider = 'parcelguard';
-      insuredValue = operatorInsurance.insuredValue;
-      effectiveInsuranceSource = 'operator';
-    }
-  }
+  // PS-123 / PS-170: the backend owns the effective HUGRAB insurance used for rate
+  // shopping, cache fingerprints, saved best-rate proof, and label parity. Frontend
+  // callers pass operator intent only. The eligibility module is the SINGLE owner of the
+  // request-level intent (was duplicated here pre-PS-170); the per-candidate provider
+  // (ParcelGuard vs direct-UPS carrier declared value) is refined during enrichment below.
+  const requestInsurance = resolveHugrabRequestInsurance(
+    { clientId: context.clientId, storeId: context.storeId },
+    input,
+  );
+  const insuranceProvider = requestInsurance.insuranceProvider as string;
+  const insuredValue = requestInsurance.insuredValue;
+  const effectiveInsuranceSource = requestInsurance.source;
 
   // PS-127: the backend owns residential/commercial classification. Stop blindly
   // defaulting every request to residential (`input.residential !== false`). Run the
@@ -1061,11 +1054,23 @@ export async function fetchLiveRatesWithDiagnostics(
   // best-rate selection so rateTotal/pickBestRate/cache/proof all see the insured total.
   // Insured rates whose premium cannot be proven are split out (never selected as raw
   // postage) and surfaced as an explicit carrier error diagnostic (requirement #6).
-  const { resolved: filtered, unresolved } = enrichRatesWithInsuranceCost(eligible, {
-    insuranceProvider: input.insuranceProvider,
-    insuredValue: input.insuredValue,
-    toCountry: input.toCountry,
-  });
+  const { resolved: filtered, unresolved } = enrichRatesWithInsuranceCost(
+    eligible,
+    {
+      insuranceProvider: input.insuranceProvider,
+      insuredValue: input.insuredValue,
+      toCountry: input.toCountry,
+    },
+    undefined,
+    // PS-170: per-candidate provider — each rate runs on its own carrier account, so a
+    // direct-UPS candidate can resolve to $0 carrier declared value while ShipStation-
+    // brokered candidates stay on ParcelGuard. Gated by the verify flag (off → all ParcelGuard).
+    (rate) => effectiveInsuranceProviderForAccount({
+      shippingProviderId: rate.carrier_id ?? null,
+      carrierCode: rate.carrier_code ?? null,
+      serviceCode: rate.service_code ?? null,
+    }),
+  );
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
   const filteredCounts = new Map<string, number>();
   for (const rate of filtered) {

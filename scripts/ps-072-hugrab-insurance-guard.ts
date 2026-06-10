@@ -6,6 +6,7 @@
  */
 import {
   resolveEffectiveInsurance,
+  resolveHugrabRequestInsurance,
   isUpsGroundService,
   isUspsGroundService,
   isUpsGroundSaverOrSurePostService,
@@ -110,15 +111,28 @@ check('rate key: none != $100', keyNone !== key100, true);
 check('rate key: $100 != $250', key100 !== key250, true);
 check('rate key: $100 includes ip+iv', key100.includes('ip=parcelguard') && key100.includes('iv=10000'), true);
 
+// PS-170: the HUGRAB request-level forcing moved from an inline block in rates.ts to its
+// single owner resolveHugrabRequestInsurance (shipping-service-eligibility). Assert the
+// BEHAVIOR at the owner (stronger than the old source-regex) + that rates.ts delegates.
 const ratesServiceSource = readFileSync('src/services/rates.ts', 'utf8');
+const reqNone = resolveHugrabRequestInsurance(HUGRAB, { insuranceProvider: 'none', insuredValue: null });
 check(
   'ShipStation rate default uses ParcelGuard when HUGRAB operator insurance is none',
-  /operatorInsurance\.insuranceProvider === 'none'[\s\S]{0,300}insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
+  reqNone.insuranceProvider === 'parcelguard' && reqNone.insuredValue === 100,
   true,
 );
+const reqCarrier = resolveHugrabRequestInsurance(HUGRAB, { insuranceProvider: 'carrier', insuredValue: 100 });
 check(
   'ShipStation HUGRAB auto-rate normalizes carrier insurance to ParcelGuard before ShipStation',
-  /isHugrabShippingContext\(\{ clientId: context\.clientId, storeId: context\.storeId \}\)[\s\S]{0,420}else \{[\s\S]{0,120}insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
+  reqCarrier.insuranceProvider === 'parcelguard',
+  true,
+);
+const reqOther = resolveHugrabRequestInsurance(OTHER, { insuranceProvider: 'none', insuredValue: null });
+check('non-HUGRAB request passes operator selection through (no forcing)', reqOther.insuranceProvider, 'none');
+check(
+  'rates.ts delegates HUGRAB request insurance to the single owner (no inline duplicate)',
+  /resolveHugrabRequestInsurance\(/.test(ratesServiceSource) &&
+    !/insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
   true,
 );
 

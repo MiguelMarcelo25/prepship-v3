@@ -309,3 +309,49 @@ rule — service-specific only.
 re-enable; no proof/fingerprint weakening; no real labels/postage/marketplace notifications/shipped-cancelled
 mutations/secret-or-PII exposure in tests; don't broadly rewrite RateBrowser/OrdersView (pass-through backend
 fields only).
+
+---
+
+### §9 EXECUTION OUTCOMES — 2026-06-10 (committed local; awaiting push confirmation)
+
+**PS-171 update:** Branch `prepshipv4-stable` · commit `ee9060ca` · 100% complete.
+- Files: `src/services/shipping-workflow/insurance-cost.ts` (service-aware `parcelGuardPerHundred` via new
+  `isPostalEconomyParcelGuardService` classifier — normalized contains-match on `groundeconomy`/`smartpost`
+  across service_code/name/type; `RateLike` extended with service fields; `PARCELGUARD_SCHEDULE_VERSION` →
+  `shipstation-parcelguard-2026-06-10-v2` busts stale $0.99 FedEx-economy cache), guards `ps-126` (FedEx
+  Ground Economy/SmartPost/Walmart-FedEx → $1.09; normal FedEx Ground stays $0.99; $7.07+$1.09=$8.16 parity)
+  + `ps-108` (fingerprint bumped).
+- USPS $1.09 / non-USPS $0.99 / intl $1.39 / positive-SS-estimate-wins all unchanged. NOT a blanket "all
+  FedEx = $1.09". Post-purchase backfill still reconciles to billed (only raises).
+- Tests: typecheck + ps-126 (20/20) + ps-108 + ps-125 + ps-072 PASS.
+
+**PS-170 update:** Branch `prepshipv4-stable` · 100% code complete · **carrier path SHIPPED DISABLED** behind
+`DIRECT_UPS_CARRIER_INSURANCE_VERIFIED = false` (DJ "verify-first" decision).
+- Capability owner: `src/lib/carrier-account-registry.ts` — `resolveAccountInsuranceCapability({providerId,
+  carrierCode,serviceCode}) → {required: parcelguard|carrier|blocked, carrierPurchasable}` +
+  `effectiveInsuranceProviderForAccount` + the verify-gate const. Direct `ups` → required `carrier`
+  (purchasable ONLY when gate on); `ups_walleted`/`fedex*`/`stamps_com`/unknown → `parcelguard`; Ground
+  Saver/SurePost → `blocked`.
+- Single-owner forcing: `shipping-service-eligibility.ts` gains `resolveHugrabRequestInsurance` (request
+  level) + makes `resolveEffectiveInsurance` (per-service) capability-aware; `src/services/rates.ts` DELETES
+  its inline HUGRAB forcing duplicate and delegates. Per-candidate provider hook added to
+  `enrichRatesWithInsuranceCost` (insurance-cost.ts) + a `carrier`→`carrier_declared_value` $0 branch in
+  `resolveRateInsurancePremium`. Label path needs no builder change — it already passes the resolver's
+  provider through, so it can never emit `carrier` while the gate is off.
+- **Gate OFF ⇒ byte-identical runtime behavior:** every HUGRAB ground candidate + label resolves to
+  ParcelGuard $100 (proven: NO `carrier`/`none`/uninsured path reachable). The hook only ever
+  ParcelGuard→carrier-downgrades on a direct-UPS account once verified; operator-explicit `carrier`/
+  `shipsurance` never overridden.
+- **One disclosed correctness delta:** unifying onto the $100 floor means a sub-$100 operator selection on a
+  HUGRAB order now PRICES at $100 (it already PURCHASED at $100 via the label) — fixes a latent
+  display-vs-billed mismatch. (Rare in practice.)
+- Guards: new `scripts/ps-170-account-capability-insurance-guard.ts` (49 checks: capability · verify-gate ·
+  unified forcing · per-candidate gate-OFF=ParcelGuard / simulated gate-ON=carrier $0 cheapest-insured-wins ·
+  label parity). Repaired pre-existing stale anchors: `ps-072` (source-regex → behavioral on the new owner),
+  `ps-124` (end-anchor `fetchOrdersDailyCounts`→`fetchDashboardDailyCounts`, a prior rename had silently
+  emptied the slice).
+- Tests: typecheck + build:web + ps-057/072/079/083/102/108/123/124/125/126/170 + best-rate-saved-display +
+  recalculate-best-rate-strict + batch-recalculate-best-rate ALL PASS (14 suites).
+- **Live spot-check to enable the carrier path (separate, DJ):** read-only confirm a direct-UPS label with
+  carrier declared value $100 is actually insured → flip `DIRECT_UPS_CARRIER_INSURANCE_VERIFIED = true` →
+  re-run ps-170 → live verify ROCEL-type candidate wins at $0 add-on. Until then it stays ParcelGuard.

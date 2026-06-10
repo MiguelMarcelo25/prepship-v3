@@ -140,6 +140,7 @@
     "test:ps-126-parcelguard-schedule-premium": "tsx scripts/ps-126-parcelguard-schedule-premium-guard.ts",
     "test:ps-126-zip4-rate-parity": "tsx scripts/ps-126-zip4-rate-parity-guard.ts",
     "test:ps-127-address-classification-parity": "tsx scripts/ps-127-address-classification-parity-guard.ts",
+    "test:ps-170-account-capability-insurance": "tsx scripts/ps-170-account-capability-insurance-guard.ts",
     "test:ps-132-shared-foundations": "tsx scripts/ps-132-shared-foundations-guard.ts",
     "test:ps-133-stock-math": "tsx scripts/ps-133-inventory-stock-math-guard.ts",
     "test:ps-134-billing-ref-rates": "tsx scripts/ps-134-billing-ref-rates-guard.ts",
