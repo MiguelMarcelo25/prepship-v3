@@ -32,8 +32,18 @@ import postgres from 'postgres';
 // Pure leaf module with no transitive deps, so a static import here is cold-
 // start safe (unlike the wide connector/eligibility tree, which stays deferred).
 import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
-import { assertLabelPurchaseRateSelection } from '../../src/services/shipping-workflow/rate-quote-snapshot-store.js';
-import { assertOrderSafeToShip, ShippingSafetyError } from '../../src/services/fulfillment/shipping-safety.js';
+// COLD-START FIX (label/print-queue audit 2026-06-11): the rate-quote-snapshot-store and
+// shipping-safety modules were STATIC imports that transitively pull a module-load env/DB throw,
+// crashing the WHOLE function as an uncatchable FUNCTION_INVOCATION_FAILED at COLD START — before
+// the handler's try/catch — whenever a required Vercel env var (DATABASE_URL/SUPABASE_URL) was
+// missing/invalid. That defeated env.ts's own design (env.ts:107-113 throws-not-process.exit on
+// serverless precisely so the handler returns a clean, actionable 500 naming the missing var). The
+// two cold-start env/DB pullers were:
+//   • rate-quote-snapshot-store -> analytics-cache -> db/client  (pg pool + env at module load)
+//   • shipping-safety           -> env                           (throws on missing DATABASE_URL/SUPABASE_URL)
+// They are now deferred into ensureLabelDeps() (request time, inside the handler's try/catch) so an
+// env/load failure is a catchable 500, not the opaque crash page. (evaluateDirectCarrierScope above
+// and the residential classifier below are pure leaves — no env/db at module load — so they stay static.)
 // PS-135(a): the canonical backend residential classifier (PS-127). Pure leaf (no DB/heavy deps),
 // cold-start safe as a static import. Used to resolve residential server-side at the UPS label
 // boundary so the UPS label charge matches the rate quote (the FE is NOT the authority).
@@ -56,6 +66,10 @@ let normalizeShippingOptions: any;
 let assertShippingServiceEligible: any;
 let processFulfillmentOutboxOnce: any;
 let getDefaultShipFrom: any;
+// Deferred (cold-start fix 2026-06-11) — these pull env/db at module load; loaded at request time.
+let assertLabelPurchaseRateSelection: any;
+let assertOrderSafeToShip: any;
+let ShippingSafetyError: any;
 let _labelDepsLoaded = false;
 async function ensureLabelDeps(): Promise<void> {
   if (_labelDepsLoaded) return;
@@ -68,6 +82,12 @@ async function ensureLabelDeps(): Promise<void> {
   assertShippingServiceEligible = (await import('../../src/lib/shipping-service-eligibility.js')).assertShippingServiceEligible;
   processFulfillmentOutboxOnce = (await import('../../src/services/fulfillment/outbox.js')).processFulfillmentOutboxOnce;
   getDefaultShipFrom = (await import('../../src/lib/ship-from.js')).getDefaultShipFrom;
+  // Cold-start fix: deferred so a missing/invalid env var surfaces as a catchable 500 here (inside
+  // the handler's try/catch) instead of an uncatchable FUNCTION_INVOCATION_FAILED at module load.
+  assertLabelPurchaseRateSelection = (await import('../../src/services/shipping-workflow/rate-quote-snapshot-store.js')).assertLabelPurchaseRateSelection;
+  const shippingSafetyMod = await import('../../src/services/fulfillment/shipping-safety.js');
+  assertOrderSafeToShip = shippingSafetyMod.assertOrderSafeToShip;
+  ShippingSafetyError = shippingSafetyMod.ShippingSafetyError;
   _labelDepsLoaded = true;
 }
 
