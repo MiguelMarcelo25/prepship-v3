@@ -50,6 +50,8 @@ import type { NewOrderPayload } from '../NewOrderModal'
 // fallback pills for FedEx/DHL/etc. Replaces the previous text-only
 // carrier-badge spans throughout the orders table + side panel.
 import CarrierBadge, { classifyCarrier } from '../CarrierBadge'
+// PS-165: carrier/service display precedence owned by ./order-shipping-display (verbatim cascade).
+import { resolveDisplayCarrierCode, resolveDisplayServiceCode } from './order-shipping-display'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS, isDirectCarrierId } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -1462,34 +1464,20 @@ function isStrictShippedOrder(order: OrderSummaryDto) {
 }
 
 function getCarrierCodeForDisplay(order: OrderSummaryDto) {
-  if (isTestOrder(order)) return TEST_CARRIER_CODE
-
-  // PS-079: the Awaiting Shipment carrier column represents the CURRENT Best Rate,
-  // so prefer the bestRate carrier over (possibly stale) canonical/selected
-  // metadata. Fresh auto-rates already mirror bestRate into canonical, so this
-  // only changes the divergent/stale case — which must show the best rate.
-  if (order.orderStatus === 'awaiting_shipment') {
-    const carrierCode =
-      toStringValue(order.bestRate?.carrierCode) ??
-      getShippingString(order, 'carrierCode') ??
-      toStringValue(order.selectedRate?.carrierCode)
-    if (carrierCode) return carrierCode
-    // PS — direct-carrier aggregator rates (EasyPost / Shipp) can resolve a
-    // best-rate account NICKNAME but leave carrierCode blank, which made the
-    // Carrier column render the empty CarrierBadge "—" box even though the rate
-    // is fully resolved (the Shipping Account column shows the carrier). Derive
-    // the carrier from the same nickname — but only when it maps to a KNOWN
-    // carrier, so generic account names (e.g. "ORI Account") don't pollute the
-    // carrier column.
-    const nickname = getBestRateCarrierNickname(order)
-    if (nickname && classifyCarrier(nickname) !== 'other') return nickname
-    return carrierCode
-  }
-
-  const canonicalCarrierCode = getShippingString(order, 'carrierCode')
-  if (canonicalCarrierCode) return canonicalCarrierCode
-
-  return toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode)
+  // PS-165: the awaiting-vs-shipped carrier precedence (incl. PS-079 best-rate-first on awaiting and
+  // the known-carrier-nickname fallback for blank-carrier aggregator rates) is owned VERBATIM by
+  // resolveDisplayCarrierCode (./order-shipping-display); the raw fields are still read here.
+  const isAwaiting = order.orderStatus === 'awaiting_shipment'
+  const bestRateNickname = isAwaiting ? getBestRateCarrierNickname(order) : null
+  return resolveDisplayCarrierCode({
+    isTest: isTestOrder(order),
+    isAwaiting,
+    bestRateCarrierCode: toStringValue(order.bestRate?.carrierCode),
+    canonicalCarrierCode: getShippingString(order, 'carrierCode'),
+    selectedRateCarrierCode: toStringValue(order.selectedRate?.carrierCode),
+    bestRateNickname,
+    bestRateNicknameIsKnownCarrier: bestRateNickname ? classifyCarrier(bestRateNickname) !== 'other' : false,
+  })
 }
 
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
@@ -1581,11 +1569,14 @@ function getBestRateShippingProviderId(order: OrderSummaryDto) {
 }
 
 function getBestRateServiceCode(order: OrderSummaryDto) {
-  if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
-    const serviceCode = toStringValue(order.bestRate.serviceCode)
-    if (serviceCode) return serviceCode
-  }
-  return getShippingString(order, 'serviceCode') ?? (order.bestRate ? toStringValue(order.bestRate.serviceCode) : null)
+  // PS-165: service precedence (awaiting best-rate-first → canonical → best-rate) owned VERBATIM by
+  // resolveDisplayServiceCode (./order-shipping-display); fields read here.
+  return resolveDisplayServiceCode({
+    isAwaiting: order.orderStatus === 'awaiting_shipment',
+    hasBestRate: Boolean(order.bestRate),
+    bestRateServiceCode: order.bestRate ? toStringValue(order.bestRate.serviceCode) : null,
+    canonicalServiceCode: getShippingString(order, 'serviceCode'),
+  })
 }
 
 function getBestRateCarrierNickname(order: OrderSummaryDto) {
