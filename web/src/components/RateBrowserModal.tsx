@@ -39,6 +39,11 @@ import {
 // PS-135: the backend owns best-rate selection; the modal consumes its canonical winner
 // (matched into the eligible set) instead of re-ranking rows client-side.
 import { findCanonicalBestRate } from '../lib/rate-proof';
+// PS-157: presentation-only subcomponents extracted from this file. They own no state
+// and no rate/blocked/money policy — the modal passes values + callbacks down.
+import RateRowItem from './RateRowItem';
+import RateRowsView from './RateRowsView';
+import RateBrowserCarrierSidebar from './RateBrowserCarrierSidebar';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
 export type RbLocationDto = {
@@ -117,7 +122,7 @@ export type RbAppliedRate = {
   dims?: { length: number; width: number; height: number };
 };
 
-type RateConfirmation =
+export type RateConfirmation =
   | 'none'
   | 'delivery'
   | 'signature'
@@ -167,7 +172,7 @@ export type RateBrowserModalProps = {
   onBestRateResolved?: (rate: RbAppliedRate) => void;
 };
 
-type RateRow = {
+export type RateRow = {
   carrierCode: string;
   serviceCode: string;
   serviceName: string;
@@ -191,7 +196,7 @@ type DirectCarrierRateError = {
   message?: string | null;
 };
 
-type CarrierRateStatus = 'cached' | 'loading' | 'live' | 'unavailable' | 'error';
+export type CarrierRateStatus = 'cached' | 'loading' | 'live' | 'unavailable' | 'error';
 
 type RateBrowseInfo = {
   source: 'cache' | 'live' | 'mixed' | null;
@@ -214,7 +219,7 @@ function formatCacheAge(ms: number | undefined): string | null {
   return `${Math.round(minutes / 60)}h ago`;
 }
 
-function RateLoadingSpinner({ text = 'Fetching rates…' }: { text?: string }): JSX.Element {
+export function RateLoadingSpinner({ text = 'Fetching rates…' }: { text?: string }): JSX.Element {
   return (
     <span
       style={{
@@ -334,7 +339,7 @@ function isOpaqueAccountIdentifierLabel(
   return looksLikeUuid || (isAccountNumberLabel && looksLikeLongToken);
 }
 
-function formatAccountDisplay(
+export function formatAccountDisplay(
   account: Partial<RbCarrierAccountDto> | null | undefined,
   fallback = 'Account'
 ): string {
@@ -350,7 +355,7 @@ function formatAccountDisplay(
   return preferred ?? providerLabelForAccount(account) ?? labels[0] ?? fallback;
 }
 
-const SERVICE_NAMES: Record<string, string> = {
+export const SERVICE_NAMES: Record<string, string> = {
   test_mock_service: 'Test Mock Service',
   prepship_test_standard: 'PrepShip Test Standard',
   prepship_test_economy: 'PrepShip Test Economy',
@@ -395,7 +400,7 @@ const SERVICE_NAMES: Record<string, string> = {
 // surface in the app). The special-case `prepship_test` mark stays
 // inline because it's a PrepShip-internal indicator, not a real
 // carrier — falls outside the carrier-logo dispatcher.
-function carrierBadgeLarge(code: string | null | undefined): ReactNode {
+export function carrierBadgeLarge(code: string | null | undefined): ReactNode {
   if (code === 'prepship_test') {
     return (
       <div
@@ -421,7 +426,7 @@ function carrierBadgeLarge(code: string | null | undefined): ReactNode {
   return <CarrierBadge code={code ?? ''} size="md" />;
 }
 
-function formatCarrierDisplay(rate: {
+export function formatCarrierDisplay(rate: {
   carrierNickname?: string | null;
   _label?: string | null;
   carrierCode?: string | null;
@@ -438,7 +443,7 @@ function formatCarrierDisplay(rate: {
   return fallback;
 }
 
-function formatEta(r: RateRow): string {
+export function formatEta(r: RateRow): string {
   const iso = (r as any).estimatedDelivery ?? r.raw?.estimated_delivery_date;
   if (iso) {
     const d = new Date(iso);
@@ -478,7 +483,7 @@ function toOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-function getModalRateSourceLabel(
+export function getModalRateSourceLabel(
   rate: RateRow,
   accounts: RbCarrierAccountDto[]
 ): string {
@@ -789,7 +794,7 @@ function rateDisplayTotal(rate: RateRow, markups: Record<string, Markup>): numbe
     : base + markup.value;
 }
 
-function priceDisplay(
+export function priceDisplay(
   rawCost: number,
   markedCost: number,
   opts: { mainColor?: string; mainSize?: string } = {}
@@ -840,7 +845,7 @@ function sanitizePostalInput(value: string | null | undefined): string {
 // stamps onto each enriched rate (lowercased, e.g. 'parcelguard'). Display-only —
 // the premium itself is computed and owned by the backend
 // (services/shipping-workflow/insurance-cost.ts) and merely surfaced here.
-function formatInsuranceProviderLabel(provider?: string | null): string {
+export function formatInsuranceProviderLabel(provider?: string | null): string {
   const normalized = String(provider ?? '')
     .replace(/[^a-z0-9]+/gi, '')
     .toLowerCase();
@@ -1657,482 +1662,39 @@ export default function RateBrowserModal({
 
   // ── Sub-renderers ──────────────────────────────────────────────────────────
 
+  // PS-157: the row markup now lives in <RateRowItem> (pure presentation). The
+  // blocked/total decision functions and all selection state stay here and are
+  // passed down so behavior is byte-for-byte identical. The same React key the
+  // original root <div> used is preserved on the element so list reconciliation
+  // is unchanged.
   function renderRateRow(r: RateRow, index: number, showCarrier: boolean, isRecommended: boolean): ReactNode {
-    const blockedReason = rateBlockedReason(r, order, currentRateShippingOptions);
-    const blocked = blockedReason != null;
-    const base = rateBaseTotal(r);
     const pid =
       typeof r.shippingProviderId === 'number'
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
-    const marked = rateDisplayTotal(r, markups);
-    const svcName =
-      r.serviceName ||
-      SERVICE_NAMES[r.serviceCode] ||
-      (r.serviceCode || '').replace(/_/g, ' ') ||
-      '—';
-    const acctName = formatCarrierDisplay(r);
-    const eta = formatEta(r);
-    const primaryText = showCarrier ? acctName : svcName;
-    const secondaryText = showCarrier ? svcName : '';
-    const sourceText = getModalRateSourceLabel(r, rateShippingAccounts);
-
-    const detailsArr: any[] = (r.raw?.rate_details ?? r.raw?.rateDetails ?? []) as any[];
-    const surcharges = detailsArr.filter(
-      (d) =>
-        d?.rate_detail_type !== 'shipping' &&
-        typeof d?.amount?.amount === 'number' &&
-        d.amount.amount > 0
-    );
-
     return (
-      <div
+      <RateRowItem
         key={`${pid}-${r.serviceCode}-${index}`}
-        onClick={blocked ? undefined : () => handleRateClick(r)}
-        title={blocked ? blockedReason ?? 'Not available for current client' : undefined}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          padding: '10px 18px',
-          borderBottom: '1px solid var(--border)',
-          cursor: blocked ? 'not-allowed' : 'pointer',
-          opacity: blocked ? 0.45 : 1,
-          transition: 'background .1s',
-        }}
-        onMouseEnter={(e) => {
-          if (!blocked) (e.currentTarget as HTMLDivElement).style.background = 'var(--surface2)';
-        }}
-        onMouseLeave={(e) => {
-          if (!blocked) (e.currentTarget as HTMLDivElement).style.background = '';
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {isRecommended && !blocked && (
-            <div
-              style={{
-                display: 'inline-block',
-                background: '#1a5c29',
-                color: '#fff',
-                fontSize: 10,
-                fontWeight: 700,
-                padding: '1px 8px',
-                borderRadius: 3,
-                marginBottom: 4,
-                letterSpacing: '.3px',
-              }}
-            >
-              Recommended
-            </div>
-          )}
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 700,
-              color: 'var(--text)',
-              lineHeight: 1.3,
-              textDecoration: blocked ? 'line-through' : 'none',
-            }}
-          >
-            {primaryText}
-            {blocked && (
-              <span
-                style={{
-                  fontSize: 10,
-                  color: 'var(--text3)',
-                  fontWeight: 400,
-                  textDecoration: 'none',
-                  marginLeft: 6,
-                }}
-              >
-                (unavailable)
-              </span>
-            )}
-          </div>
-          {secondaryText && (
-            <div style={{ fontSize: 11.5, color: 'var(--text3)', lineHeight: 1.4 }}>
-              {secondaryText}
-            </div>
-          )}
-          {blockedReason ? (
-            <div style={{ fontSize: 10.5, color: 'var(--red)', lineHeight: 1.4, marginTop: 2 }}>
-              {blockedReason}
-            </div>
-          ) : null}
-          <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
-            Rate Source: {sourceText}
-          </div>
-          {surcharges.length > 0 && (
-            <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, lineHeight: 1.5 }}>
-              {surcharges.map((d: any, i: number) => (
-                <span key={i} style={{ marginRight: 8 }}>
-                  +${(d.amount.amount as number).toFixed(2)}{' '}
-                  {d.carrier_description || d.carrierDescription || ''}
-                </span>
-              ))}
-            </div>
-          )}
-          {(() => {
-            // PS-125: surface the per-rate insurance add-on the backend already
-            // resolved (insuranceCost meta). Display-only — the premium is owned by
-            // the backend and never recomputed here. A $0 add-on is VALID and must be
-            // shown as "Insurance incl. +$0.00", not hidden, so the operator can see
-            // insurance was requested/applied with no add-on (real cost reconciles at
-            // purchase). The line renders only for INSURED rates (those carrying the
-            // backend insuranceCost meta) so non-insured rates stay clean.
-            const meta = r.raw?.insuranceCost as
-              | {
-                  insuranceProvider?: string;
-                  insuredValue?: number;
-                  amount?: number | null;
-                  confirmed?: boolean;
-                  unresolved?: boolean;
-                }
-              | undefined;
-            const unresolved =
-              r.raw?.insuranceCostUnresolved === true || meta?.unresolved === true;
-            const provider = formatInsuranceProviderLabel(meta?.insuranceProvider);
-
-            // Genuinely unresolved (rare under PS-125) — warn instead of pricing.
-            if (unresolved) {
-              return (
-                <div style={{ fontSize: 10.5, color: 'var(--red)', marginTop: 2, lineHeight: 1.4 }}>
-                  Insurance: {provider} — premium unresolved (re-rate before selecting)
-                </div>
-              );
-            }
-
-            // Only insured rates carry the backend insuranceCost meta. Non-insured
-            // rates have no meta -> no line.
-            if (!meta) return null;
-            const amount = typeof meta.amount === 'number' ? meta.amount : 0;
-
-            return (
-              <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>
-                Insurance incl. +${amount.toFixed(2)}
-              </div>
-            );
-          })()}
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            flexShrink: 0,
-            textDecoration: blocked ? 'line-through' : 'none',
-          }}
-        >
-          {eta && eta !== '—' && (
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 700,
-                color: '#000',
-                whiteSpace: 'nowrap',
-                textAlign: 'right',
-                marginRight: 15,
-              }}
-            >
-              {eta}
-            </div>
-          )}
-          {carrierBadgeLarge(r.carrierCode)}
-          <div style={{ textAlign: 'right', minWidth: 145 }}>
-            {priceDisplay(base, marked, {
-              mainColor: blocked ? 'var(--text3)' : 'var(--green)',
-            })}
-          </div>
-        </div>
-      </div>
+        r={r}
+        index={index}
+        showCarrier={showCarrier}
+        isRecommended={isRecommended}
+        order={order}
+        markups={markups}
+        rateShippingAccounts={rateShippingAccounts}
+        currentRateShippingOptions={currentRateShippingOptions}
+        onRateClick={handleRateClick}
+        rateBlockedReason={rateBlockedReason}
+        rateBaseTotal={rateBaseTotal}
+        rateDisplayTotal={rateDisplayTotal}
+      />
     );
   }
 
-  function renderRatesBody(): ReactNode {
-    if (!hasWeight || !hasDims) {
-      const missing =
-        !hasWeight && !hasDims
-          ? 'weight and dims'
-          : !hasWeight
-            ? 'weight'
-            : 'dims (L × W × H)';
-      return (
-        <div style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--text3)' }}>
-          <div style={{ fontSize: 28, marginBottom: 12 }}>📏</div>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: 'var(--text2)',
-              marginBottom: 6,
-            }}
-          >
-            Enter {missing} to fetch rates
-          </div>
-          <div style={{ fontSize: 12 }}>
-            Fill in the fields on the left panel, then click Browse Rates.
-          </div>
-        </div>
-      );
-    }
-    if (browsing && !hasAnyRateRows) {
-      return (
-        <div
-          style={{
-            color: 'var(--text3)',
-            fontSize: 12.5,
-            textAlign: 'center',
-            marginTop: 80,
-          }}
-        >
-          <RateLoadingSpinner />
-          <div style={{ marginTop: 8 }}>Checking carriers...</div>
-        </div>
-      );
-    }
-    if (!anyFetched) {
-      // Once auto-fetch is armed, the button is redundant — show a status
-      // that reflects what the modal is doing.
-      const missing =
-        !hasWeight && !hasDims
-          ? 'weight and dims'
-          : !hasWeight
-            ? 'weight'
-            : !hasDims
-              ? 'dims (L × W × H)'
-              : !zip || zip.length < 5
-                ? 'a 5-digit ZIP'
-                : null;
-      return (
-        <div
-          style={{
-            color: 'var(--text3)',
-            fontSize: 12.5,
-            textAlign: 'center',
-            marginTop: 80,
-            lineHeight: 1.8,
-          }}
-        >
-          {browsing ? (
-            <RateLoadingSpinner />
-          ) : missing ? (
-            <>
-              📏
-              <br />
-              Enter {missing} to fetch rates
-            </>
-          ) : (
-            <>
-              No live rates loaded yet
-              <br />
-              Click Browse Rates to refresh carrier quotes.
-            </>
-          )}
-        </div>
-      );
-    }
-
-    if (viewMode === 'all') return renderAllRatesView();
-    return renderCarrierView();
-  }
-
-  function renderAllRatesView(): ReactNode {
-    const displayed = hideUnavail
-      ? combinedAll.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions))
-      : combinedAll;
-    const allCount = combinedAll.length;
-    const hiddenCount = allCount - displayed.length;
-    const countLabel =
-      hideUnavail && hiddenCount > 0
-        ? `${displayed.length} shown, ${hiddenCount} hidden`
-        : `${allCount} total, sorted cheapest first`;
-
-    if (!displayed.length) {
-      return (
-        <div
-          style={{
-            color: 'var(--text3)',
-            fontSize: 12.5,
-            textAlign: 'center',
-            marginTop: 80,
-          }}
-        >
-          No rates available — click Browse Rates
-        </div>
-      );
-    }
-
-    const firstOk = displayed.findIndex((r) => !isBlockedRate(r, order, currentRateShippingOptions));
-    return (
-      <>
-        <div
-          style={{
-            padding: '14px 18px 10px',
-            borderBottom: '2px solid var(--border)',
-            background: 'var(--surface2)',
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
-              All Rates
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text3)' }}>{countLabel}</span>
-          </div>
-        </div>
-        <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 16 }}>
-          {displayed.map((r, i) => renderRateRow(r, i, true, i === firstOk))}
-        </div>
-      </>
-    );
-  }
-
-  function renderCarrierView(): ReactNode {
-    if (selectedPid == null) {
-      return (
-        <div
-          style={{
-            color: 'var(--text3)',
-            fontSize: 12.5,
-            textAlign: 'center',
-            marginTop: 80,
-          }}
-        >
-          Select a carrier account
-        </div>
-      );
-    }
-    const acct = rateShippingAccounts.find((c) => c.shippingProviderId === selectedPid);
-    const carrierError = rateErrorsByPid[String(selectedPid)];
-    const carrierMeta = rateMetaByPid[String(selectedPid)] ?? null;
-    // Resolution-source hint for direct carriers (Walmart / Amazon / eBay
-    // shipping). The backend sets `purchaseOrderSource` to one of:
-    //   'body.purchaseOrderId' / 'body.externalOrderId' → quote scoped to
-    //     the operator's actual order.
-    //   'store_orders lookup' → matched the order via the marketplace
-    //     pull table — also scoped correctly.
-    //   'walmart_marketplace_api' → Fix 4 path: backend asked Walmart to
-    //     translate the customer order number to a purchaseOrderId on
-    //     the fly. Best-effort and slightly slower, but accurate.
-    //   'store_orders fallback (settings demo)' → DEMO-ONLY: the quote
-    //     is for an UNRELATED Walmart order. Operators must know this.
-    const purchaseOrderSource = carrierMeta && typeof carrierMeta.purchaseOrderSource === 'string'
-      ? (carrierMeta.purchaseOrderSource as string)
-      : null;
-    const sourceLabel = (() => {
-      if (!purchaseOrderSource || purchaseOrderSource === 'none') return null;
-      if (purchaseOrderSource === 'body.purchaseOrderId') return { text: 'Scoped to this order (purchaseOrderId)', danger: false };
-      if (purchaseOrderSource === 'body.externalOrderId') return { text: 'Scoped to this order', danger: false };
-      if (purchaseOrderSource === 'store_orders lookup') return { text: 'Scoped via Walmart Marketplace pull', danger: false };
-      if (purchaseOrderSource === 'walmart_marketplace_api') return { text: 'Resolved on-the-fly via Walmart Marketplace API', danger: false };
-      if (purchaseOrderSource.includes('settings demo')) return { text: 'DEMO RATES — borrowed from an unrelated Walmart order', danger: true };
-      return { text: `Source: ${purchaseOrderSource}`, danger: false };
-    })();
-    const all = ratesByPid[String(selectedPid)] ?? [];
-    const filtered = filterBySvcClass(all);
-    const displayed = hideUnavail
-      ? filtered.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions))
-      : filtered;
-    const hiddenCount = filtered.length - displayed.length;
-    const countLabel =
-      hideUnavail && hiddenCount > 0
-        ? `${displayed.length} shown, ${hiddenCount} hidden`
-        : `${filtered.length} rate${filtered.length !== 1 ? 's' : ''} available`;
-
-    if (!all.length) {
-      return (
-        <div
-          style={{
-            color: 'var(--text3)',
-            fontSize: 12.5,
-            textAlign: 'center',
-            marginTop: 80,
-          }}
-        >
-          No rates available for <b>{formatAccountDisplay(acct, 'this account')}</b>
-          {carrierError ? (
-            <div
-              style={{
-                maxWidth: 520,
-                margin: '10px auto 0',
-                color: 'var(--red)',
-                fontSize: 11.5,
-                lineHeight: 1.5,
-              }}
-            >
-              {carrierError}
-            </div>
-          ) : null}
-          {sourceLabel ? (
-            <div
-              style={{
-                maxWidth: 520,
-                margin: '8px auto 0',
-                color: sourceLabel.danger ? 'var(--red)' : 'var(--text3)',
-                fontSize: 10.5,
-                fontStyle: 'italic',
-                lineHeight: 1.4,
-              }}
-              title="purchaseOrderSource from the backend rate response"
-            >
-              {sourceLabel.text}
-            </div>
-          ) : null}
-        </div>
-      );
-    }
-
-    const firstOk = displayed.findIndex((r) => !isBlockedRate(r, order, currentRateShippingOptions));
-    return (
-      <>
-        <div
-          style={{
-            padding: '14px 18px 10px',
-            borderBottom: '2px solid var(--border)',
-            background: 'var(--surface2)',
-            flexShrink: 0,
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
-          >
-            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
-              {formatAccountDisplay(acct)}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text3)' }}>{countLabel}</span>
-          </div>
-          {sourceLabel ? (
-            <div
-              style={{
-                marginTop: 4,
-                color: sourceLabel.danger ? 'var(--red)' : 'var(--text3)',
-                fontSize: 10.5,
-                fontStyle: sourceLabel.danger ? 'normal' : 'italic',
-                fontWeight: sourceLabel.danger ? 700 : 400,
-                lineHeight: 1.4,
-              }}
-              title="purchaseOrderSource from the backend rate response"
-            >
-              {sourceLabel.text}
-            </div>
-          ) : null}
-        </div>
-        <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 16 }}>
-          {displayed.map((r, i) => renderRateRow(r, i, false, i === firstOk))}
-        </div>
-      </>
-    );
-  }
+  // PS-157: the rates body (empty/loading/all/carriers states + the All-Rates and
+  // per-carrier views) moved verbatim into <RateRowsView>. The parent still owns
+  // combinedAll / filterBySvcClass / isBlockedRate and the row rendering
+  // (renderRateRow), passing them down so behavior is byte-for-byte identical.
 
   // ── Main render ────────────────────────────────────────────────────────────
   return (
@@ -2593,159 +2155,27 @@ export default function RateBrowserModal({
             </div>
           </div>
 
-          {/* MIDDLE: Carrier accounts */}
-          <div
-            style={{
-              width: 260,
-              flexShrink: 0,
-              borderRight: '1px solid var(--border)',
-              overflowY: 'auto',
-              background: 'var(--surface2)',
+          {/* MIDDLE: Carrier accounts — PS-157 extracted to <RateBrowserCarrierSidebar> */}
+          <RateBrowserCarrierSidebar
+            rateShippingAccounts={rateShippingAccounts}
+            testMode={testMode}
+            scopedAccountsLoading={scopedAccountsLoading}
+            scopedAccountsError={scopedAccountsError}
+            selectedPid={selectedPid}
+            ratesByPid={ratesByPid}
+            rateErrorsByPid={rateErrorsByPid}
+            carrierStatusByPid={carrierStatusByPid}
+            hideUnavail={hideUnavail}
+            pendingPids={pendingPids}
+            order={order}
+            currentRateShippingOptions={currentRateShippingOptions}
+            isBlockedRate={isBlockedRate}
+            formatSidebarAccountDisplay={formatSidebarAccountDisplay}
+            onSelectCarrier={(pid) => {
+              setSelectedPid(pid);
+              setViewMode('carriers');
             }}
-          >
-            <div
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: 'var(--text3)',
-                textTransform: 'uppercase',
-                letterSpacing: '.5px',
-                padding: '8px 12px 6px',
-              }}
-            >
-              Carrier Accounts
-            </div>
-            {!testMode && scopedAccountsLoading && rateShippingAccounts.length === 0 ? (
-              <div style={{ padding: '12px', fontSize: 11, color: 'var(--text3)' }}>
-                Loading accounts...
-              </div>
-            ) : null}
-            {!testMode && !scopedAccountsLoading && rateShippingAccounts.length === 0 ? (
-              <div style={{ padding: '12px', fontSize: 11, color: 'var(--text3)' }}>
-                {scopedAccountsError || 'No carrier accounts for this order'}
-              </div>
-            ) : null}
-            {rateShippingAccounts.map((c) => {
-              const isSel = c.shippingProviderId === selectedPid;
-              const rates = ratesByPid[String(c.shippingProviderId)];
-              const carrierError = rateErrorsByPid[String(c.shippingProviderId)];
-              const carrierStatus = carrierStatusByPid[String(c.shippingProviderId)];
-              const count =
-                rates != null
-                  ? hideUnavail
-                    ? rates.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions)).length
-                    : rates.length
-                  : null;
-              const pending = pendingPids.has(c.shippingProviderId);
-              return (
-                <div
-                  key={c.shippingProviderId}
-                  onClick={() => {
-                    setSelectedPid(c.shippingProviderId);
-                    setViewMode('carriers');
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '9px 12px',
-                    cursor: 'pointer',
-                    background: isSel ? 'var(--ss-blue)' : 'transparent',
-                    color: isSel ? '#fff' : 'var(--text)',
-                    borderLeft: `3px solid ${isSel ? 'var(--ss-blue)' : 'transparent'}`,
-                    transition: 'background .1s',
-                  }}
-                >
-                  {c.code === 'prepship_test' ? (
-                    <span
-                      style={{
-                        width: 24,
-                        height: 24,
-                        borderRadius: 6,
-                        background: '#0f766e',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                      }}
-                    >
-                      <img src="/prepship-test-logo.svg" alt="" style={{ width: 20, height: 20, display: 'block' }} />
-                    </span>
-                  ) : (
-                    <CarrierBadge code={c.code ?? ''} size="sm" />
-                  )}
-                  <span
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      flex: 1,
-                      minWidth: 0,
-                      // PS: show the full carrier/account nickname (no ellipsis
-                      // clamp); long names wrap within the wider column.
-                      whiteSpace: 'normal',
-                      overflowWrap: 'anywhere',
-                      lineHeight: 1.25,
-                    }}
-                  >
-                    {formatSidebarAccountDisplay(c)}
-                  </span>
-                  {carrierError ? (
-                    <span
-                      title={carrierError}
-                      style={{
-                        background: isSel ? 'rgba(255,255,255,.3)' : 'var(--red)',
-                        color: '#fff',
-                        borderRadius: 10,
-                        padding: '1px 7px',
-                        fontSize: 10,
-                        fontWeight: 800,
-                        minWidth: 22,
-                        textAlign: 'center',
-                      }}
-                    >
-                      !
-                    </span>
-                  ) : count != null ? (
-                    <span
-                      style={{
-                        background: isSel ? 'rgba(255,255,255,.3)' : 'var(--ss-blue)',
-                        color: '#fff',
-                        borderRadius: 10,
-                        padding: '1px 8px',
-                        fontSize: 10,
-                        fontWeight: 700,
-                        minWidth: 22,
-                        textAlign: 'center',
-                      }}
-                    >
-                      {count}
-                    </span>
-                  ) : (
-                    <span
-                      style={{
-                        borderRadius: 10,
-                        padding: '1px 8px',
-                        fontSize: 10,
-                        color: isSel ? 'rgba(255,255,255,.7)' : 'var(--text3)',
-                      }}
-                    >
-                      {pending ? (
-                        <Loader2 size={12} strokeWidth={2.5} className="animate-spin" aria-label="Fetching rates" />
-                      ) : carrierStatus === 'unavailable' ? (
-                        '—'
-                      ) : carrierStatus === 'cached' ? (
-                        'C'
-                      ) : carrierStatus === 'live' ? (
-                        'L'
-                      ) : (
-                        '…'
-                      )}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          />
 
           {/* RIGHT: Rates */}
           <div
@@ -2827,7 +2257,29 @@ export default function RateBrowserModal({
                 flexDirection: 'column',
               }}
             >
-              {renderRatesBody()}
+              {/* PS-157: rates body extracted to <RateRowsView>; parent keeps the
+                  row rendering + all rate math/filtering and passes them down. */}
+              <RateRowsView
+                hasWeight={hasWeight}
+                hasDims={hasDims}
+                browsing={browsing}
+                hasAnyRateRows={hasAnyRateRows}
+                anyFetched={anyFetched}
+                zip={zip}
+                viewMode={viewMode}
+                hideUnavail={hideUnavail}
+                selectedPid={selectedPid}
+                combinedAll={combinedAll}
+                order={order}
+                currentRateShippingOptions={currentRateShippingOptions}
+                rateShippingAccounts={rateShippingAccounts}
+                ratesByPid={ratesByPid}
+                rateErrorsByPid={rateErrorsByPid}
+                rateMetaByPid={rateMetaByPid}
+                filterBySvcClass={filterBySvcClass}
+                isBlockedRate={isBlockedRate}
+                renderRateRow={renderRateRow}
+              />
             </div>
           </div>
         </div>
