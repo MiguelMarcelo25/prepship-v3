@@ -40,6 +40,12 @@ import { formatCaDateTime } from '../../lib/ca-time'
 import { FilterSelect } from '../FilterSelect'
 import { getAnalysisPresetRange } from './analysis-parity'
 import { TOTAL_TREND_SERIES_KEY } from './dashboard-trend-constants'
+// PS-154: pure presentational primitives extracted to reusable components.
+import { KpiCard } from '../KpiCard'
+import { StatusBadge } from '../StatusBadge'
+import { TopNDropdown } from '../TopNDropdown'
+import { SectionSizeToggle } from '../SectionSizeToggle'
+import { RangeToggle } from '../RangeToggle'
 
 const DashboardCharts = lazy(() => import('./DashboardCharts'))
 
@@ -536,11 +542,8 @@ function stockStatus(stock: number, minStock: number): DashboardSkuRow['status']
   return 'in'
 }
 
-function statusLabel(status: DashboardSkuRow['status']) {
-  if (status === 'out') return 'Out of Stock'
-  if (status === 'low') return 'Low Stock'
-  return 'In Stock'
-}
+// PS-154: statusLabel moved into web/src/components/StatusBadge.tsx
+// (co-located with its only caller, StatusBadge).
 
 function heatmapTone(deviation: number): HeatmapCell['tone'] {
   if (deviation >= 20) return 'high'
@@ -828,96 +831,9 @@ function OrdersUnitsValue({ orders, units }: { orders: number; units: number }) 
   )
 }
 
-function KpiCard({
-  title,
-  value,
-  suffix,
-  helper,
-  tone,
-  icon,
-  spark,
-  progress,
-}: {
-  title: string
-  value: React.ReactNode
-  suffix?: string
-  helper: React.ReactNode
-  tone?: 'green' | 'orange' | 'red' | 'blue'
-  icon?: React.ReactNode
-  spark?: number[]
-  progress?: number
-}) {
-  const toneClass =
-    tone === 'green'
-      ? 'text-ok bg-ok/10 ring-ok/20'
-      : tone === 'orange'
-        ? 'text-warn bg-warn/10 ring-warn/20'
-        : tone === 'red'
-          ? 'text-danger bg-danger/10 ring-danger/20'
-          : 'text-brand bg-brand-bg ring-brand/20'
-  const titleClass =
-    tone === 'green'
-      ? 'text-ok'
-      : tone === 'orange'
-        ? 'text-warn'
-        : tone === 'red'
-          ? 'text-danger'
-          : 'text-ink-2'
-  const progressClass =
-    tone === 'green'
-      ? 'bg-ok'
-      : tone === 'orange'
-        ? 'bg-warn'
-        : tone === 'red'
-          ? 'bg-danger'
-          : 'bg-brand'
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="flex min-h-[112px] flex-col justify-between rounded-card border border-line bg-surface px-3 py-3 shadow-sm sm:min-h-[118px] sm:px-4"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className={`text-xs font-semibold ${titleClass}`}>{title}</div>
-          {/* Value row — sparkline now sits INLINE next to the
-              number (operator request 2026-05-13: match the new
-              design where the chart visually anchors the metric
-              instead of floating in the top-right corner). The
-              flex-1 + ml-auto pattern pushes the sparkline to the
-              far right of the value row so the number stays
-              left-anchored with the title above it. */}
-          <div className="mt-3 flex items-end gap-3 text-[24px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums sm:text-[26px]">
-            <div className="inline-flex items-end gap-1.5">
-              {value}
-              {suffix ? <span className="pb-0.5 text-xs font-bold tracking-normal text-ink-2">{suffix}</span> : null}
-            </div>
-            {spark ? (
-              <span className="ml-auto pb-0.5">
-                <MiniSparkline values={spark} positive={tone !== 'red'} size="md" />
-              </span>
-            ) : null}
-          </div>
-          <div className="mt-2 text-tiny">{helper}</div>
-        </div>
-        {/* Stock-card icon — kept in the top-right corner. Slightly
-            larger now (10×10 was 9×9) for a punchier presence that
-            matches the design reference. */}
-        {icon ? (
-          <div className={`grid h-10 w-10 flex-shrink-0 place-items-center rounded-full ring-1 ${toneClass}`}>
-            {icon}
-          </div>
-        ) : null}
-      </div>
-      {typeof progress === 'number' ? (
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-line/70">
-          <div className={`h-full rounded-full ${progressClass}`} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
-        </div>
-      ) : null}
-    </motion.div>
-  )
-}
+// PS-154: KpiCard moved into web/src/components/KpiCard.tsx (with a
+// co-located private copy of MiniSparkline). MiniSparkline above stays
+// here because TinyTrend (a column renderer) still consumes it.
 
 function PanelSkeleton({ className = '' }: { className?: string }) {
   return (
@@ -955,186 +871,15 @@ function ChangeText({ pct, inverse = false, label = 'prior 30 days' }: { pct: nu
   )
 }
 
-function StatusBadge({ status }: { status: DashboardSkuRow['status'] }) {
-  const classes =
-    status === 'in'
-      ? 'bg-ok/10 text-ok'
-      : status === 'low'
-        ? 'bg-warn/10 text-warn'
-        : 'bg-danger/10 text-danger'
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-bold ${classes}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${status === 'in' ? 'bg-ok' : status === 'low' ? 'bg-warn' : 'bg-danger'}`} />
-      {statusLabel(status)}
-    </span>
-  )
-}
+// PS-154: StatusBadge moved into web/src/components/StatusBadge.tsx.
+// PS-154: RangeToggle moved into web/src/components/RangeToggle.tsx.
+// PS-154: SectionSizeToggle moved into web/src/components/SectionSizeToggle.tsx.
+// PS-154: TopNDropdown moved into web/src/components/TopNDropdown.tsx.
 
-// Per-section size toggle. Three buttons (Compact / Standard / Wide)
-// shown in the header of each major dashboard panel. The active
-// preset gets the brand-blue treatment; the others stay quiet so
-// the toggle doesn't dominate the section's actual content.
-// Tooltips on each button explain what the size does ("Compact:
-// 1/3 width" etc.) so the abbreviation icons aren't mystery
-// characters.
-// 2026-05-13: 7/30/90/180-day quick range selector for the Units
-// Sold Trend panel. Clicking a preset replaces the dashboard-wide
-// dateRange so every panel (trend chart, heatmap, KPIs) reflects
-// the same window — the dashboard is already wired to refetch
-// when dateRange changes (useEffect at line ~1547).
-//
-// "Active" detection compares the current range LENGTH in days
-// to each preset, not the date strings themselves. Operators can
-// also pick custom ranges via the DateRangePicker — a 7-day window
-// they typed manually still highlights the 7d preset, so the UI
-// reflects the actual range regardless of how it got set.
-function RangeToggle({
-  value,
-  onChange,
-}: {
-  value: { from: string; to: string }
-  onChange: (next: { from: string; to: string }) => void
-}) {
-  const presets: Array<{ days: number; label: string }> = [
-    { days: 7,   label: '7d' },
-    { days: 30,  label: '30d' },
-    { days: 90,  label: '90d' },
-    { days: 180, label: '180d' },
-  ]
-
-  // Compute the active preset by measuring the current range. Add
-  // 1 because the range is inclusive on both ends. Round to handle
-  // tz/DST edge cases where the math might be 29.99 / 30.01.
-  const rangeDays = (() => {
-    const from = new Date(value.from).getTime()
-    const to = new Date(value.to).getTime()
-    if (!Number.isFinite(from) || !Number.isFinite(to)) return 0
-    return Math.round((to - from) / 86_400_000) + 1
-  })()
-
-  const setRange = (days: number) => {
-    // 2026-05-14: was reimplementing the same "today minus (days - 1),
-    // formatted YYYY-MM-DD" math that lives in getAnalysisPresetRange.
-    // The two helpers drifted — Analysis used `(days)` instead of
-    // `(days - 1)`, producing a 31-day window for "30d" while the
-    // Dashboard produced 30. Operators saw the same SKU + same preset
-    // showing different unit totals on the two screens (70 vs 72 for
-    // B0OOOBYO3K). Now both screens call the same helper, so
-    // 7d/30d/90d/180d are guaranteed to mean the same window
-    // everywhere — and any future preset addition (e.g. 1yr) inherits
-    // the convention automatically.
-    onChange(getAnalysisPresetRange(days))
-  }
-
-  return (
-    <div
-      className="inline-flex items-center gap-0.5 rounded-md ring-1 ring-line p-0.5 bg-surface"
-      role="group"
-      aria-label="Select time range"
-    >
-      {presets.map((preset) => {
-        const active = rangeDays === preset.days
-        return (
-          <button
-            key={preset.days}
-            type="button"
-            onClick={() => setRange(preset.days)}
-            title={`Last ${preset.days} days`}
-            aria-pressed={active}
-            className={`inline-flex h-6 items-center justify-center rounded px-2 text-[11px] font-extrabold tabular-nums transition ${
-              active
-                ? 'bg-brand text-white shadow-sm'
-                : 'text-ink-3 hover:text-ink hover:bg-surface-2'
-            }`}
-          >
-            {preset.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-function SectionSizeToggle({
-  value,
-  onChange,
-}: {
-  value: 'compact' | 'standard' | 'wide'
-  onChange: (size: 'compact' | 'standard' | 'wide') => void
-}) {
-  const options: Array<{ key: 'compact' | 'standard' | 'wide'; label: string; symbol: string; title: string }> = [
-    { key: 'compact',  label: '⅓',     symbol: '⅓', title: 'Compact — 1/3 width' },
-    { key: 'standard', label: '⅔',     symbol: '⅔', title: 'Standard — 2/3 width' },
-    { key: 'wide',     label: 'Full',  symbol: '◼',  title: 'Wide — full width' },
-  ]
-  return (
-    <div
-      // PS mobile: the ⅓/⅔/Full control only changes the xl column span, which
-      // has no effect on the single-column phone/tablet layout — hide it below
-      // xl so panel headers aren't cluttered with a no-op control.
-      className="hidden items-center gap-0.5 rounded-md ring-1 ring-line p-0.5 bg-surface xl:inline-flex"
-      role="group"
-      aria-label="Resize this panel"
-    >
-      {options.map((opt) => {
-        const active = value === opt.key
-        return (
-          <button
-            key={opt.key}
-            type="button"
-            onClick={() => onChange(opt.key)}
-            title={opt.title}
-            aria-pressed={active}
-            className={`inline-flex h-6 min-w-[28px] items-center justify-center rounded px-1.5 text-[11px] font-extrabold tabular-nums transition ${
-              active
-                ? 'bg-brand text-white shadow-sm'
-                : 'text-ink-3 hover:text-ink hover:bg-surface-2'
-            }`}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
+// TinyTrend stays here: it's the SKU-table column renderer (referenced by
+// SKU_COLUMNS) and wraps the parent-local MiniSparkline above.
 function TinyTrend({ values, negative = false }: { values: number[]; negative?: boolean }) {
   return <MiniSparkline values={values} positive={!negative} />
-}
-
-// Top-N dropdown — surfaced in the Top SKUs and Heatmap panel headers
-// so operators can pick how many ranked rows to show. Uses a styled
-// native <select> (small, themed) instead of a custom popover so it
-// inherits OS / keyboard / accessibility behavior for free. The
-// onChange handler always returns a value from the fixed set, so
-// callers can keep their state strongly typed.
-function TopNDropdown({
-  value,
-  onChange,
-  options,
-  ariaLabel,
-}: {
-  value: number
-  onChange: (next: number) => void
-  options: readonly number[]
-  ariaLabel: string
-}) {
-  return (
-    <label className="inline-flex items-center gap-1.5 text-2xs font-bold text-ink-3">
-      <span className="hidden sm:inline">Show</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        aria-label={ariaLabel}
-        className="h-7 cursor-pointer rounded-md border border-line bg-surface px-1.5 pr-5 text-2xs font-extrabold text-ink outline-none ring-0 transition hover:bg-surface-2 focus:border-brand focus:ring-1 focus:ring-brand"
-      >
-        {options.map((n) => (
-          <option key={n} value={n}>Top {n}</option>
-        ))}
-      </select>
-    </label>
-  )
 }
 
 // PS — true at the multi-column (xl, >=1280px) desktop layout. Below xl the

@@ -59,6 +59,9 @@ import {
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import { Table, type TableColumn } from '../ui/Table'
 import { AnalysisPagination } from './AnalysisPagination'
+import { InventoryAdjustModal } from './InventoryAdjustModal'
+import { InventoryLedgerDeleteModal } from './InventoryLedgerDeleteModal'
+import { InventorySKUDetailDrawer } from './InventorySKUDetailDrawer'
 // 2026-05-15: Receive tab SKU picker upgraded from native HTML
 // <datalist> (which Chrome renders as an unstyleable, unfilterable
 // 300-row scroll list) to a real autosuggest combobox. See the
@@ -4922,204 +4925,37 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         </div>
       ) : null}
 
-      {adjustModal ? (
-        <div className="inventory-overlay" onClick={() => setAdjustModal(null)}>
-          <div className="inventory-modal" style={{ width: 380 }} onClick={(event) => event.stopPropagation()}>
-            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 2 }}>Inventory Entry</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14, fontFamily: 'monospace' }}>{adjustModal.sku}</div>
+      <InventoryAdjustModal
+        adjustModal={adjustModal}
+        onClose={() => setAdjustModal(null)}
+        onSubmit={handleAdjustSubmit}
+        onChangeType={(type) => setAdjustModal((current) => current ? { ...current, type, sign: type === 'damage' ? -1 : 1 } : current)}
+        onChangeSign={(sign) => setAdjustModal((current) => current ? { ...current, sign } : current)}
+        onChangeQty={(qty) => setAdjustModal((current) => current ? { ...current, qty } : current)}
+        onChangeNote={(note) => setAdjustModal((current) => current ? { ...current, note } : current)}
+        onChangeDate={(date) => setAdjustModal((current) => current ? { ...current, date } : current)}
+      />
 
-            <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', display: 'block', marginBottom: 4 }}>Type</label>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {([
-                  ['receive', '📦 Receive'],
-                  ['return', '↩ Return'],
-                  ['damage', '⚠ Damage'],
-                  ['adjust', '± Adjust'],
-                ] as Array<[AdjustType, string]>).map(([type, label]) => {
-                  const isActive = adjustModal.type === type
-                  const accent = type === 'damage' ? 'var(--red)' : type === 'return' ? '#d97706' : 'var(--ss-blue)'
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setAdjustModal((current) => current ? { ...current, type, sign: type === 'damage' ? -1 : 1 } : current)}
-                      style={{ flex: 1, padding: '6px 10px', borderRadius: 6, border: `2px solid ${isActive ? accent : 'var(--border2)'}`, background: isActive ? accent : 'var(--surface2)', color: isActive ? '#fff' : 'var(--text)', fontWeight: 700, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+      <InventoryLedgerDeleteModal
+        ledgerDeleteModal={ledgerDeleteModal}
+        onClose={() => setLedgerDeleteModal(null)}
+        onConfirmDelete={confirmDeleteLedgerEntry}
+        isDeleting={ledgerDeleteInFlight}
+      />
 
-            <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', display: 'block', marginBottom: 4 }}>Direction</label>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => setAdjustModal((current) => current ? { ...current, sign: 1 } : current)}
-                  style={{ flex: 1, padding: 7, borderRadius: 6, border: `2px solid ${adjustModal.sign > 0 ? 'var(--ss-blue)' : 'var(--border2)'}`, background: adjustModal.sign > 0 ? 'var(--ss-blue)' : 'var(--surface2)', color: adjustModal.sign > 0 ? '#fff' : 'var(--text)', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
-                >
-                  + Add
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAdjustModal((current) => current ? { ...current, sign: -1 } : current)}
-                  style={{ flex: 1, padding: 7, borderRadius: 6, border: `2px solid ${adjustModal.sign < 0 ? 'var(--red)' : 'var(--border2)'}`, background: adjustModal.sign < 0 ? 'var(--red)' : 'var(--surface2)', color: adjustModal.sign < 0 ? '#fff' : 'var(--text)', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}
-                >
-                  − Remove
-                </button>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', width: 16, textAlign: 'center' }}>{adjustModal.sign > 0 ? '+' : '−'}</span>
-              <input type="number" min="1" step="1" value={adjustModal.qty} onChange={(event) => setAdjustModal((current) => current ? { ...current, qty: event.target.value } : current)} style={{ flex: 1, padding: '7px 10px', border: '1px solid var(--border2)', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text)', fontSize: 14, fontWeight: 700 }} />
-            </div>
-
-            <input type="text" value={adjustModal.note} onChange={(event) => setAdjustModal((current) => current ? { ...current, note: event.target.value } : current)} placeholder="Note (e.g. PO#, reason, ref)" maxLength={120} style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid var(--border2)', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text)', fontSize: 12, marginBottom: 10 }} />
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-              <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>📅 Date:</span>
-              <input type="date" value={adjustModal.date} onChange={(event) => setAdjustModal((current) => current ? { ...current, date: event.target.value } : current)} style={{ flex: 1, padding: '6px 8px', border: '1px solid var(--border2)', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text)', fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{adjustModal.date === californiaDateInputValue() ? '(today)' : ''}</span>
-            </div>
-
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => setAdjustModal(null)}>Cancel</button>
-              <button className="btn btn-primary btn-sm" type="button" onClick={handleAdjustSubmit}>Save</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {ledgerDeleteModal ? (
-        <div className="inventory-overlay" onClick={() => !ledgerDeleteInFlight && setLedgerDeleteModal(null)}>
-          <div className="inventory-modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 460 }}>
-            <h3 style={{ marginTop: 0, marginBottom: 6 }}>Delete history row?</h3>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
-              This will remove the manual inventory movement and reverse its stock impact.
-            </div>
-            <div style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface2)', padding: 12, marginBottom: 14 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '96px 1fr', rowGap: 8, columnGap: 10, fontSize: 12 }}>
-                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>SKU</span>
-                <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{ledgerDeleteModal.sku || '-'}</span>
-                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Type</span>
-                <span style={{ textTransform: 'capitalize', color: 'var(--text)' }}>{ledgerDeleteModal.type}</span>
-                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Qty</span>
-                <span style={{ fontWeight: 800, color: ledgerDeleteModal.qty > 0 ? 'var(--green)' : 'var(--red)' }}>
-                  {ledgerDeleteModal.qty > 0 ? `+${ledgerDeleteModal.qty}` : ledgerDeleteModal.qty}
-                </span>
-                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Note</span>
-                <span style={{ color: 'var(--text2)' }}>{ledgerDeleteModal.note || '-'}</span>
-                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Date</span>
-                <span style={{ color: 'var(--text2)' }}>{formatDateTime(ledgerDeleteModal.createdAt)}</span>
-              </div>
-            </div>
-            <div style={{ fontSize: 11.5, color: 'var(--red)', marginBottom: 16, fontWeight: 700 }}>
-              Ship/order-linked rows stay locked and cannot be deleted from History.
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button className="btn btn-outline btn-sm" type="button" disabled={ledgerDeleteInFlight} onClick={() => setLedgerDeleteModal(null)}>Cancel</button>
-              <button
-                className="btn btn-outline btn-sm"
-                type="button"
-                disabled={ledgerDeleteInFlight}
-                onClick={() => void confirmDeleteLedgerEntry()}
-                style={{ borderColor: 'var(--red)', color: 'var(--red)' }}
-              >
-                {ledgerDeleteInFlight ? 'Deleting...' : 'Delete row'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {skuDrawerOpen ? (
-        <div className="inventory-drawer-overlay" onClick={() => setSkuDrawerOpen(false)}>
-          <div className="inventory-drawer-panel" onClick={(event) => event.stopPropagation()}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>{skuDrawerTitle}</div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2, fontFamily: 'monospace' }}>{skuDrawer?.sku ?? ''}</div>
-              </div>
-              <button type="button" onClick={() => setSkuDrawerOpen(false)} style={{ padding: '5px 10px', border: '1px solid var(--border2)', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text)', cursor: 'pointer', fontSize: 13 }}>✕</button>
-            </div>
-            <div className="inventory-drawer-body">
-              {skuDrawerLoading ? (
-                <div className="loading"><div className="spinner" /></div>
-              ) : skuDrawerError ? (
-                <div style={{ color: 'var(--red)', padding: 16 }}>Failed to load: {skuDrawerError}</div>
-              ) : skuDrawer ? (
-                <>
-                  <div style={{ display: 'flex', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
-                    <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px', flex: 1, minWidth: 120 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)', marginBottom: 4 }}>30-Day Units Sold</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: '#e07a00' }}>{skuDrawer.totalUnits.toLocaleString()}</div>
-                    </div>
-                    <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px', flex: 1, minWidth: 120 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)', marginBottom: 4 }}>Total Orders</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{skuDrawer.orders.length.toLocaleString()}</div>
-                    </div>
-                    <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px', flex: 1, minWidth: 120 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)', marginBottom: 4 }}>Avg/Day (30d)</div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>{(skuDrawer.totalUnits / 30).toFixed(1)}</div>
-                    </div>
-                  </div>
-
-                  <div className="inventory-sku-chart-card" style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px', marginBottom: 18 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>Units Sold — Last 30 Days</div>
-                    <canvas ref={canvasRef} className="inventory-sku-chart-canvas" width={620} height={160} />
-                  </div>
-
-                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Recent Orders ({skuDrawer.orders.length})</div>
-                  {skuDrawer.orders.length === 0 ? (
-                    <div style={{ color: 'var(--text3)', fontSize: 12, padding: 16, textAlign: 'center' }}>No orders found for this SKU.</div>
-                  ) : (
-                    <div className="inventory-sku-orders-wrap">
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                        <thead>
-                          <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                            <SortableHeader sortKey="order" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Order #</SortableHeader>
-                            <SortableHeader sortKey="customer" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Customer</SortableHeader>
-                            <SortableHeader sortKey="qty" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} align="center" style={{ padding: '7px 6px', textAlign: 'center', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Qty</SortableHeader>
-                            <SortableHeader sortKey="status" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Status</SortableHeader>
-                            <SortableHeader sortKey="date" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Date</SortableHeader>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sortedSkuOrders.map((order, index) => {
-                            const statusColor = order.orderStatus === 'shipped' ? 'var(--green)' : order.orderStatus === 'awaiting_shipment' ? 'var(--ss-blue)' : 'var(--text3)'
-                            return (
-                              <tr key={order.orderId} style={{ borderTop: '1px solid var(--border)', background: index % 2 === 0 ? '' : 'var(--surface2)' }}>
-                                <td style={{ padding: '6px 10px' }}>
-                                  <button
-                                    type="button"
-                                    className="inventory-order-link"
-                                    disabled={!Number.isFinite(Number(order.orderId)) || Number(order.orderId) <= 0}
-                                    onClick={() => openSkuDrawerOrder(order)}
-                                  >
-                                    {order.orderNumber || String(order.orderId)}
-                                  </button>
-                                </td>
-                                <td style={{ padding: '6px 10px', fontSize: 11.5, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{order.shipToName || '—'}</td>
-                                <td style={{ padding: '6px 6px', textAlign: 'center', fontWeight: 700 }}>{order.qty || 1}</td>
-                                <td style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: statusColor }}>{order.orderStatus || '—'}</td>
-                                <td style={{ padding: '6px 10px', fontSize: 11, color: 'var(--text3)' }}>{formatDateOnly(order.orderDate)}</td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <InventorySKUDetailDrawer
+        skuDrawerOpen={skuDrawerOpen}
+        skuDrawer={skuDrawer}
+        skuDrawerTitle={skuDrawerTitle}
+        skuDrawerLoading={skuDrawerLoading}
+        skuDrawerError={skuDrawerError}
+        skuOrdersSort={skuOrdersSort}
+        sortedSkuOrders={sortedSkuOrders}
+        onClose={() => setSkuDrawerOpen(false)}
+        onOrderClick={openSkuDrawerOrder}
+        onSortChange={handleSkuOrdersSort}
+        canvasRef={canvasRef}
+      />
 
       {orderDetailModal ? (
         <Suspense fallback={null}>
