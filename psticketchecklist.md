@@ -87,16 +87,21 @@ Standalone
       (no deploy). Residential anti-pattern already CLEAN (PS-127).
 
 Epic PS-131 sequence (don't parallelize same file family)
-- [ ] PS-132 — Carrier-account registry + visibility/cadence/system constants (old 138+141). ACTIVE. Before PS-137. ⚠ overlaps PS-163.
-- [ ] PS-133 — Inventory effective-stock owner + analytics (old 136+147). ACTIVE. Blocks PS-150/154.
-- [ ] PS-134 — Billing ref-rate ETL + invoice SoT (old 140+139). ACTIVE.
-- [ ] PS-135 — Canonical Rate Browser/Best Rate/proof/eligibility (old 132+133+134+142+143+148). ACTIVE (big). ⚠ coordinate PS-130/157/166; residential partly done by PS-127.
-- [ ] PS-136 — 🔒 Fulfillment confirmation + external-shipped + labels (old 135+137+146 + 149 outbox/label). ACTIVE. ⚠ heavy overlap with shipped PS-128/129.
-- [ ] PS-137 — 🔒(maybe) Orders list/export route decomposition (old 144). ACTIVE. After PS-132 (+136). ⚠ vs PS-166 (§4).
-- [ ] PS-138 — Print Queue PDF rendering extraction only (old 145, narrowed). ACTIVE. ⚠ PS-129 added merge-exclusion/listQueue-hold to same file (different functions).
-- [ ] PS-139 — Final guard-aware dead-code sweep (old 149). ACTIVE — LAST. Leftovers only.
+- [x] PS-132 — Carrier-account registry + visibility/cadence/system constants (old 138+141). ✅ LIVE (header table).
+- [x] PS-133 — Inventory effective-stock owner + analytics (old 136+147). ✅ **SoT DONE** (header table). NOTE: a later audit scored it 70% citing "missing" `getSkuOrdersReport`/`listInventoryLedger`/`getInventoryListEnrichment` — those names DO NOT exist; they label the analytics that is INLINE in `routes/inventory.ts` (sku-orders `GET /:id/sku-orders` ~678, ledger `GET /ledger` ~344, list-enrichment `GET /` decorator ~277). That block is guard-pinned (`test:ps-133-stock-math`) + InventoryView-byte-critical, and was consciously reclassified as a separate **live-data-gated decomposition** (tracked alongside PS-154), NOT PS-133 SoT scope. The SoT goal (single `computeEffectiveStockForIds` owner + all 5 consumers delegate) is fully met.
+- [x] PS-134 — Billing ref-rate ETL + invoice SoT (old 140+139). ✅ 100% (header table; DJ live invoice $ confirm pending).
+- [x] PS-135 — Canonical Rate Browser/Best Rate/proof/eligibility (old 132+133+134+142+143+148). ✅ 100% code (header table; PS-135a UPS residential test label pending).
+- [x] PS-136 — 🔒 Fulfillment confirmation + external-shipped + labels (old 135+137+146 + 149 outbox/label). ✅ pushed ~90% (header table; deploy pending). Done under `unlock shipped data`.
+- [x] PS-137 — 🔒(maybe) Orders list/export route decomposition (old 144). ✅ 100% SoT (header table; #8 row-mapper deliberately left inline).
+- [x] PS-138 — Print Queue PDF rendering extraction only (old 145, narrowed). ✅ 100% (header table; local verified).
+- [x] PS-139 — Final guard-aware dead-code sweep (old 149). ✅ 100% (header table; pushed).
 
 Epic PS-131 audit children (PS-150–168)
+
+> ▶ **FINAL STATUS for PS-150–168 is recorded in §7** (2026-06-09, LIVE on `6da46f16`): 6 shipped ·
+> 3 closed-moot · 4 deferred-by-decision · 5 declined/out-of-scope. The checkboxes below are the
+> ORIGINAL pre-execution audit list — §7 is the authoritative per-card outcome.
+
 - [ ] PS-150 — Dashboard reorder-policy → backend. ACTIVE, after PS-133. ⚠ cites OLD 136/147 → PS-133.
 - [ ] PS-151 — FE dead-code (apiClient+views). SUPERSEDED → fold into PS-159. ⚠ wrong: getBillingInvoiceUrl is USED.
 - [ ] PS-152 — Delete OrdersLegacy.tsx. DONE/MOOT — file absent. Close (subsumed by PS-158).
@@ -185,3 +190,21 @@ Every item is RESOLVED (shipped or consciously deferred). Status to post per Tre
 **Guards added (5):** `test:ps-158-dead-component`, `test:ps-153-dead-symbols`, `test:ps-159-apiclient-deadmethods`, `test:ps-168-scope-sql`, `test:ps-163-backfill-owner`.
 **Net:** −666 lines dead code; 2 source-of-truth surfaces collapsed to single owners; 0 behavior change; 0 locked surfaces touched.
 **Pending DJ:** PS-163 + PS-156 spot-checks (above) · PS-135a UPS residential test label (separate track).
+
+---
+
+## 8. Out-of-range tickets resolved — 2026-06-10 (PS-110, PS-119, PS-169)
+Outside the PS-130→168 scope this file was built for, but recorded here so the checklist stays the
+single source of truth. Scope: **clear fixes only** (zero production behavior change, no shipped/cancelled
+surfaces). Local commits on `prepshipv4-stable` — push/deploy pending.
+
+| Card | Status | Commit | Note + QA evidence |
+|---|---|---|---|
+| **PS-110** | ✅ DONE | `06545ec6` | Master runner: `test:master:audit` (read-only audit entrypoint) was auto-assigned to the `master`/`all-safe` profiles; the manifest guard requires `test:master*` runner commands ABSENT from default profiles (anti-recursion). Added it to `PROFILE_EXCLUDED_COMMANDS`. **QA:** `test:master:manifest` PASS; `test:master:audit` still runs standalone (exit 0). |
+| **PS-119** | ✅ DONE | `53b1dcc1` | Reverted an unsafe "worker-active speedup" that gated the cached-negative live retry on `&& !workerBackfillActiveRef.current` — it persisted a NULL best-rate and stranded rows on terminal "Rate unavailable" (the exact PS-119 bug), recovering only via a worker-timing race. Restored the unconditional retry (removed condition + dead worker-status ref/effect) + strengthened the guard to pin it unconditional. Awaiting-order rate code (NOT the isReadOnly locked surface). **DJ decision:** "remove the optimization." **QA:** `typecheck` + `build:web` green; `test:ps-119-passive-best-rate-live-retry` PASS (19/19). |
+| **PS-169** | ✅ DONE | `5b6b4252` | Docs-only. Added `## Backend-Owned Truth Without Backend Monoliths` to `ARCHITECTURE.md` (bad/good request-flow patterns, frontend responsibilities + forbidden authoritative decisions, backend layer split, anti-monolith rules, final-guard rule, frontend hotspot list, per-domain ownership matrix). No production code. **QA:** `git diff --check` clean; DoD grep strings present. |
+
+**Deferred (need a DJ decision before any code):** PS-133 full analytics-service extraction (byte-risky;
+see §3 PS-133 note) · PS-150 reorder formula (pick canonical) · PS-164 normalizer delegation (behavior
+change) · PS-167 apiClient split (risk) · PS-162 scripts · PS-154/155/157/165/166 FE decompositions
+(PS-166 declined).
