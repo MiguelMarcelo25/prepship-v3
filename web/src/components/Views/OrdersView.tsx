@@ -129,6 +129,9 @@ import {
 } from './orders-panel-state'
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
+// PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
+// source of truth). The FE delegates here instead of maintaining its own (drift-prone) alias maps.
+import { normalizeConfirmation, normalizeInsurance } from '../../../../src/lib/shipping-options'
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -358,9 +361,11 @@ const CONFIRMATION_OPTIONS = [
 // POLICY (DJ, 2026-06-04): confirmation DEFAULTS TO 'none' so PrepShip rates
 // match ShipStation's no-confirmation quote out of the box. 'none' is a real,
 // selectable option; the operator can opt into Delivery/Signature per order.
+// PS-164: delegate to the canonical confirmation normalizer (single alias owner). For the 5 UI
+// dropdown values this is identical to the previous hand-rolled allowlist; it additionally honors
+// the backend's confirmation aliases instead of silently downgrading them to 'none'.
 function normalizeConfirmationForRates(value: string | null | undefined) {
-  const normalized = (value ?? '').trim().toLowerCase()
-  return CONFIRMATION_OPTIONS.some((option) => option.value === normalized) ? normalized : 'none'
+  return normalizeConfirmation(value)
 }
 
 // PS-072: infer carrier from a service code so resolveEffectiveInsurance can
@@ -372,24 +377,13 @@ function inferCarrierFromServiceCode(serviceCode: string | null | undefined): st
   return ''
 }
 
+// PS-164: delegate to the canonical insurance normalizer (single alias owner). It preserves
+// 'shipsurance'/'parcelguard' (incl. the parcel_guard / "parcel guard" aliases) and maps
+// carrier/provider/shipstation -> 'carrier'. Behavior change (DJ-approved 2026-06-10): an UNKNOWN
+// provider now resolves to 'none' (no insurance) instead of silently charging 'carrier' insurance —
+// the same money-truth the backend label path already uses. Needs a live insurance spot-check.
 function normalizeInsuranceForRates(provider: string | null | undefined, value: string | number | null | undefined) {
-  const insuranceProvider = (provider ?? 'none').trim().toLowerCase()
-  const insuredValue = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''))
-  if (!Number.isFinite(insuredValue) || insuredValue <= 0 || insuranceProvider === 'none') {
-    return { insuranceProvider: 'none', insuredValue: null as number | null }
-  }
-  return {
-    // PS-072: preserve 'parcelguard' (HUGRAB USPS Ground) and 'shipsurance';
-    // everything else maps to carrier insurance. Previously any non-shipsurance
-    // provider collapsed to 'carrier', silently destroying the parcelguard default.
-    insuranceProvider:
-      insuranceProvider === 'shipsurance'
-        ? 'shipsurance'
-        : insuranceProvider === 'parcelguard' || insuranceProvider === 'parcel_guard' || insuranceProvider === 'parcel guard'
-          ? 'parcelguard'
-          : 'carrier',
-    insuredValue: Math.round(insuredValue * 100) / 100,
-  }
+  return normalizeInsurance({ insuranceProvider: provider, insuredValue: value })
 }
 
 type ShipmentDims = { length: number; width: number; height: number }

@@ -23,6 +23,9 @@ import {
   evaluateShippingServiceEligibility,
   isHugrabShippingContext,
 } from '../../../src/lib/shipping-service-eligibility';
+// PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
+// source of truth). The modal delegates here instead of re-deriving its own alias logic.
+import { normalizeConfirmation, normalizeInsurance } from '../../../src/lib/shipping-options';
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
 // pills for FedEx/etc. Replaces the local carrier-class switch below.
 import CarrierBadge from './CarrierBadge';
@@ -138,11 +141,13 @@ const CONFIRMATION_OPTIONS: Array<{ value: RateConfirmation; label: string }> = 
   { value: 'direct_signature', label: 'Direct Signature' },
 ];
 
+// PS-164: delegate alias resolution to the canonical normalizer (single owner), then clamp to the
+// modal's 5 dropdown values so the <select> never renders blank. Aliases that resolve INTO the 5
+// (e.g. delivery_confirmation -> delivery) are honored; the rarer canonical-only values
+// (delivery_mailed, verbal_confirmation, ...) fall back to 'none' exactly as the prior UI did.
 function normalizeConfirmationForRates(value?: string | null): RateConfirmation {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  return CONFIRMATION_OPTIONS.some((option) => option.value === normalized)
-    ? (normalized as RateConfirmation)
-    : 'none';
+  const normalized = normalizeConfirmation(value);
+  return CONFIRMATION_OPTIONS.some((o) => o.value === normalized) ? (normalized as RateConfirmation) : 'none';
 }
 
 export type RateBrowserModalProps = {
@@ -1188,12 +1193,9 @@ export default function RateBrowserModal({
     const rateConfirmation = normalizeConfirmationForRates(confirmationOverride ?? confirmation);
     const effectiveInsuranceProvider = options.insuranceProviderOverride ?? insuranceProvider;
     const effectiveInsuredValue = options.insuredValueOverride ?? insuredValue;
-    const normalizedInsuranceProvider = effectiveInsuranceProvider !== 'none' && Number(effectiveInsuredValue) > 0
-      ? effectiveInsuranceProvider
-      : 'none';
-    const normalizedInsuredValue = normalizedInsuranceProvider !== 'none'
-      ? Math.round(Number(effectiveInsuredValue) * 100) / 100
-      : null;
+    // PS-164: delegate to the canonical insurance normalizer (single alias owner; unknown -> 'none').
+    const { insuranceProvider: normalizedInsuranceProvider, insuredValue: normalizedInsuredValue } =
+      normalizeInsurance({ insuranceProvider: effectiveInsuranceProvider, insuredValue: effectiveInsuredValue });
     setBrowsing(true);
     const seededTestRates = testMode
       ? buildTestMockRateSeeds(rateShippingAccounts, {
@@ -1583,11 +1585,8 @@ export default function RateBrowserModal({
   }
 
   function currentAppliedInsurance(): Pick<RbAppliedRate, 'insuranceProvider' | 'insuredValue'> {
-    const provider = insuranceProvider !== 'none' && Number(insuredValue) > 0 ? insuranceProvider : 'none';
-    return {
-      insuranceProvider: provider,
-      insuredValue: provider !== 'none' ? Math.round(Number(insuredValue) * 100) / 100 : null,
-    };
+    // PS-164: delegate to the canonical insurance normalizer (single alias owner; unknown -> 'none').
+    return normalizeInsurance({ insuranceProvider, insuredValue });
   }
 
   function rateInsuranceProof(r: RateRow): Pick<
