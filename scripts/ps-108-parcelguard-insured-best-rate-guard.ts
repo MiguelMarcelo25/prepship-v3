@@ -165,7 +165,7 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
 
 // 6. Cache fingerprint reflects the PS-126 schedule policy (busts on schedule change).
 {
-  check('insurance fingerprint reflects PS-126 schedule policy', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-08-v1');
+  check('insurance fingerprint reflects PS-171 schedule policy', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-10-v2');
 }
 
 // 7. Backfill planner — seed order #1247 / se-292074298, idempotent.

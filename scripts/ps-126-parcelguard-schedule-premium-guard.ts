@@ -42,6 +42,20 @@ check('UPS $100 -> $0.99 (non-USPS)', amountOf(resolveRateInsurancePremium(us100
 check('FedEx $100 -> $0.99 (non-USPS)', amountOf(resolveRateInsurancePremium(us100, fedex())), 0.99);
 check('International $100 -> $1.39', amountOf(resolveRateInsurancePremium({ ...us100, toCountry: 'CA' }, ups())), 1.39);
 
+// 1b. PS-171 — service-aware: FedEx Ground Economy / Parcel Select / SmartPost bill at the postal/economy
+// $1.09 tier, NOT the generic non-USPS $0.99 — even though carrier_code is 'fedex'. Normal FedEx Ground
+// must stay $0.99 (no over-match).
+const fedexGroundEconomy = (): any => ({ carrier_code: 'fedex', service_code: 'fedex_ground_economy_parcel_select', service_name: 'FedEx Ground® Economy Parcel Select', insurance_amount: { currency: 'usd', amount: 0 } });
+const fedexGroundEconomyWalmart = (): any => ({ carrier_code: 'fedex', service_code: 'walmart_shipping_fedex_fedex_ground_economy', service_name: 'FedEx FedEx Ground Economy', insurance_amount: { currency: 'usd', amount: 0 } });
+const fedexSmartPost = (): any => ({ carrier_code: 'fedex', service_code: 'easypost_fedex_fedexdefault_smart_post', service_name: 'FedExDefault SMART_POST', insurance_amount: { currency: 'usd', amount: 0 } });
+const fedexGroundNormal = (): any => ({ carrier_code: 'fedex', service_code: 'fedex_ground', service_name: 'FedEx Ground', insurance_amount: { currency: 'usd', amount: 0 } });
+check('FedEx Ground Economy Parcel Select $100 -> $1.09 (postal/economy tier)', amountOf(resolveRateInsurancePremium(us100, fedexGroundEconomy())), 1.09);
+check('FedEx Ground Economy (Walmart) $100 -> $1.09', amountOf(resolveRateInsurancePremium(us100, fedexGroundEconomyWalmart())), 1.09);
+check('FedEx SmartPost $100 -> $1.09', amountOf(resolveRateInsurancePremium(us100, fedexSmartPost())), 1.09);
+check('normal FedEx Ground $100 -> $0.99 (NOT over-matched)', amountOf(resolveRateInsurancePremium(us100, fedexGroundNormal())), 0.99);
+// #1440 screenshot parity: base $7.07 + ParcelGuard $1.09 = $8.16 (was $8.06 under the $0.99 bug).
+check('FedEx Ground Economy rate-total: 7.07 + 1.09 = 8.16', Number((7.07 + Number(amountOf(resolveRateInsurancePremium(us100, fedexGroundEconomy())))).toFixed(2)), 8.16);
+
 // 2. Increments: ceil(value/100) * perHundred
 check('USPS $250 -> $3.27 (3 x 1.09)', amountOf(resolveRateInsurancePremium({ ...us100, insuredValue: 250 }, usps())), 3.27);
 check('UPS $201 -> $2.97 (3 x 0.99)', amountOf(resolveRateInsurancePremium({ ...us100, insuredValue: 201 }, ups())), 2.97);
@@ -76,7 +90,7 @@ check('schedule: value <= 0 -> null', parcelGuardScheduledPremium(0, usps(), 'US
 check('schedule: missing carrier -> null', parcelGuardScheduledPremium(100, {}, 'US'), null);
 
 // 9. Fingerprint reflects the schedule policy (cache busts on schedule change)
-check('fingerprint is the PS-126 schedule policy', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-08-v1');
+check('fingerprint is the PS-171 schedule policy (bumped to bust stale $0.99 FedEx-economy cache)', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-10-v2');
 
 if (failures > 0) {
   console.error(`\nFAIL PS-126 ParcelGuard schedule premium guard (${failures} failing)`);

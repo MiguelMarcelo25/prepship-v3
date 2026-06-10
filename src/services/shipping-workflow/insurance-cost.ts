@@ -70,7 +70,9 @@ function finite(value: unknown): number | null {
 // insured — matching this schedule to the cent. FedEx ($0.99, the non-USPS rate) and
 // international ($1.39) are not yet confirmed by a purchased label (no insured FedEx /
 // international shipment on record); re-verify against billed insurance_cost when one exists.
-const PARCELGUARD_SCHEDULE_VERSION = 'shipstation-parcelguard-2026-06-08-v1';
+// PS-171 (2026-06-10): version bumped to invalidate cached rates priced under the carrier-only
+// schedule (FedEx Ground Economy was wrongly $0.99 instead of the postal/economy $1.09 tier).
+const PARCELGUARD_SCHEDULE_VERSION = 'shipstation-parcelguard-2026-06-10-v2';
 const PARCELGUARD_DOMESTIC_USPS_PER_HUNDRED = 1.09;
 const PARCELGUARD_DOMESTIC_NON_USPS_PER_HUNDRED = 0.99;
 const PARCELGUARD_INTERNATIONAL_PER_HUNDRED = 1.39;
@@ -88,15 +90,37 @@ function isUspsCarrier(rate?: { carrier_code?: string | null; carrierCode?: stri
   return carrierCode === 'usps' || carrierCode === 'stamps_com';
 }
 
+function normalizeServiceText(value?: string | null): string {
+  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+// PS-171: FedEx Ground Economy / Parcel Select (formerly SmartPost) is a postal/economy-tier service that
+// ShipStation prices ParcelGuard at the USPS $1.09/$100 tier — NOT the generic non-USPS $0.99 — even though
+// the carrier is FedEx. Classify by SERVICE (code/name/type), not carrier alone. Evidence: HUGRAB order
+// #1440 (FedEx Ground® Economy Parcel Select, ParcelGuard $100) — PrepShip showed +$0.99/$8.06, ShipStation
+// +$1.09/$8.16. Known service codes: fedex_ground_economy_parcel_select, walmart_shipping_fedex_*_ground_economy,
+// easypost_fedex_fedexdefault_smart_post. Normalized contains-match on 'groundeconomy'/'smartpost' catches all
+// variants without false-matching normal FedEx Ground ('fedexground'). Do NOT treat all FedEx as $1.09.
+function isPostalEconomyParcelGuardService(rate?: RateLike | null): boolean {
+  const blob = [
+    normalizeServiceText(rate?.service_code ?? rate?.serviceCode),
+    normalizeServiceText(rate?.service_name ?? rate?.serviceName),
+    normalizeServiceText(rate?.service_type),
+  ].join(' ');
+  return blob.includes('groundeconomy') || blob.includes('smartpost');
+}
+
 function parcelGuardPerHundred(
-  rate?: { carrier_code?: string | null; carrierCode?: string | null } | null,
+  rate?: RateLike | null,
   toCountry?: string | null,
 ): number | null {
   const country = String(toCountry ?? 'US').trim().toUpperCase();
   if (country && country !== 'US' && country !== 'USA') return PARCELGUARD_INTERNATIONAL_PER_HUNDRED;
   const carrierCode = normalizeCarrierCode(rate);
   if (!carrierCode) return null;
-  return isUspsCarrier(rate) ? PARCELGUARD_DOMESTIC_USPS_PER_HUNDRED : PARCELGUARD_DOMESTIC_NON_USPS_PER_HUNDRED;
+  // PS-171: USPS AND postal/economy-tier services (FedEx Ground Economy / SmartPost) bill at $1.09/$100.
+  if (isUspsCarrier(rate) || isPostalEconomyParcelGuardService(rate)) return PARCELGUARD_DOMESTIC_USPS_PER_HUNDRED;
+  return PARCELGUARD_DOMESTIC_NON_USPS_PER_HUNDRED;
 }
 
 /**
@@ -107,7 +131,7 @@ function parcelGuardPerHundred(
  */
 export function parcelGuardScheduledPremium(
   insuredValue: number,
-  rate?: { carrier_code?: string | null; carrierCode?: string | null } | null,
+  rate?: RateLike | null,
   toCountry?: string | null,
 ): number | null {
   const value = finite(insuredValue);
@@ -132,6 +156,12 @@ type RateLike = {
   carrier_code?: string | null;
   carrierCode?: string | null;
   service_code?: string | null;
+  // PS-171: service fields used to classify postal/economy-tier ParcelGuard pricing (FedEx Ground Economy
+  // / SmartPost → the USPS $1.09/$100 tier instead of the generic non-USPS $0.99).
+  serviceCode?: string | null;
+  service_name?: string | null;
+  serviceName?: string | null;
+  service_type?: string | null;
 };
 
 /**
