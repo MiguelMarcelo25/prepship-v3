@@ -237,3 +237,75 @@ unit per commit, build:web after every step, confirm-before-push on rate-adjacen
 
 **Still deferred (need a DJ decision before any code):** PS-133 full analytics-service extraction
 (byte-risky; see §3 PS-133 note).
+
+---
+
+## 9. NEW follow-up tickets — HUGRAB insurance accuracy (PS-170, PS-171) — added 2026-06-10
+Direct follow-ups to the HUGRAB insurance / Best-Rate work (PS-072 / PS-108 / PS-123 / PS-124 / PS-125)
+and the 2026-06-10 rate-parity audit (PrepShip shows ALL-IN postage+ParcelGuard vs ShipStation's
+postage-only display; ParcelGuard schedule today = USPS $1.09 / non-USPS $0.99 / intl $1.39 per $100,
+calibrated to 31 labels). **Both are BACKEND-OWNED, rate/label-proof-safe, behavior-CHANGING (money) →
+confirm-before-push + a live ShipStation read-only parity spot-check after deploy. Status: NOT STARTED.**
+Branch `prepshipv4-stable`. Do NOT undo PS-072/108/123/124/125 rules. Every update starts `PS-170 update:`
+/ `PS-171 update:` with Trello/branch/PR/files/capability-or-schedule summary/tests/blockers.
+
+### PS-170 — Account-Capability HUGRAB Insurance Resolver: ParcelGuard vs Carrier $100  · P1
+**Problem:** HUGRAB requires $100 declared coverage, but PrepShip blindly forces ParcelGuard on every
+UPS/USPS candidate. The CORRECT provider depends on the ShipStation **carrier-account CAPABILITY**, not the
+carrier code:
+- ShipStation-native USPS/Stamps.com (`433542` stamps_com, "USPS Chase x7439") → **parcelguard $100** + ParcelGuard premium.
+- ShipStation-native / walleted UPS (`433543` ups_walleted, "UPS by SS - Chase x7439") → **parcelguard $100** + premium.
+- Direct UPS via ShipStation (`565326` GG6381, `565377` G19Y32, `596001` ORION, `604209` ROCEL, `607855` ROCEL C81F70) → may use **carrier declared value $100 with $0.00 add-on** (valid included coverage).
+- UPS Ground Saver / SurePost → remain **BLOCKED** for HUGRAB insurance.
+
+**Architecture-first:** the backend owns insurance-provider choice + premium enrichment + Best-Rate
+comparison + selected-rate proof/fingerprint + label-purchase parity. The FE must NOT decide
+ParcelGuard-vs-carrier (render backend state only). Centralize account/service capability — no scattered
+nickname checks; a known-provider-id stopgap is OK only as a clearly-named backend **capability
+registry/resolver** + tests + a TODO for DB-backed discovery.
+
+**Canonical owner (likely):** new/extended resolver beside `src/services/shipping-workflow/insurance-cost.ts`
++ `src/lib/carrier-account-registry.ts`; consumed by `src/services/rates.ts` (Best-Rate compare) and
+`src/services/labels.ts` + `src/lib/shipstation/labels.ts` (label parity). Inputs: providerAccountId/carrierId,
+carrierCode, nickname/account metadata, serviceCode, client/store, insuredValue → output: allowed candidates
+`{parcelguard | carrier | blocked | unknown-needs-probe}`.
+
+**Critical rules:** a `$0` premium is VALID when capability proves coverage (direct-UPS carrier insurance);
+null/missing/unresolved ≠ valid $0 (preserve PS-125 diagnosability). Unknown accounts must NOT silently buy
+uninsured labels — probe valid candidates during rate-shopping when safe, or flag with diagnostics.
+Best-Rate compares TRUE insured totals (base postage + provider fees + resolved premium) across eligible
+candidates and persists the winning provider/value/premium/account/service into the proof; the label path
+enforces the SAME provider+value (no carrier↔parcelguard swap without a fresh re-rate/proof).
+
+**Guards:** capability resolver (USPS-native→parcelguard $100 · walleted-UPS→parcelguard $100 · direct-UPS→
+carrier $100 @ $0 · GroundSaver/SurePost→blocked · non-HUGRAB operator-selected carrier insurance still
+passes) · rate-selection (e.g. SS-UPS $9.00+$0.99=$9.99 vs ROCEL $9.20+$0.00=$9.20 → pick ROCEL $9.20) ·
+selected-rate-proof/label-parity (direct-UPS carrier/$100/$0 and SS-native parcelguard/$100 both preserved
+into the label payload; mismatched provider/value at purchase blocked or needs fresh proof). Keep
+PS-072/108/124/125/126 + best-rate-saved-display + recalculate-best-rate-strict green; `typecheck`.
+
+### PS-171 — Service-Aware ParcelGuard Premium Schedule (FedEx Ground Economy parity) · P1
+Trello: https://trello.com/c/kxNo2gx7 · **Connected to PS-170** — extends the SAME canonical resolver/schedule;
+do NOT build a competing insurance workflow.
+**Problem:** the ParcelGuard schedule is too coarse (USPS $1.09 / non-USPS $0.99 / intl $1.39). FedEx
+**Ground Economy Parcel Select** is a postal/economy service ShipStation bills at the **$1.09** tier, but
+PrepShip applies the generic non-USPS **$0.99**. Evidence (HUGRAB #1440, FedEx One Balance — FedEx Ground
+Economy Parcel Select, ZIP 92618-1791, residential, 2 lb 3 oz, 12×10×3, confirmation None, ParcelGuard
+$100): PrepShip showed **$8.06 "Insurance incl. +$0.99"** vs ShipStation **$8.16** (ParcelGuard $100) → off
+by exactly $0.10 ($1.09 vs $0.99).
+**Fix:** make `parcelGuardScheduledPremium` (in `src/services/shipping-workflow/insurance-cost.ts`)
+SERVICE-AWARE — classify by carrier **and serviceCode** (+ normalized aliases), not carrierCode alone.
+`fedex_ground_economy_parcel_select` (+ variants) → **$1.09**. Keep USPS $1.09, normal non-USPS $0.99, intl
+$1.39, and trust a positive ShipStation `insurance_amount` verbatim. Flow the corrected premium into
+Best-Rate totals + Rate Browser display ("Insurance incl. +$1.09") + saved `best_rate_json`/proof; BUMP the
+cache/fingerprint/schedule version so stale $0.99 FedEx-Economy cached rates invalidate. Don't let
+post-purchase ParcelGuard backfill overwrite the fixed rate-time premium.
+**Guards:** schedule (USPS $1.09 · standard non-USPS $0.99 · FedEx Ground Economy $1.09 · intl $1.39 ·
+positive SS estimate wins) · rate-total (base $7.07 + $1.09 = $8.16, row shows +$1.09) · keep
+PS-126/108/125/072 + best-rate-saved-display green; `typecheck`. **Do NOT** use a blanket "all FedEx = $1.09"
+rule — service-specific only.
+
+**Both — guardrails:** backend-owned (no FE decision); no uninsured HUGRAB labels; no Ground Saver/SurePost
+re-enable; no proof/fingerprint weakening; no real labels/postage/marketplace notifications/shipped-cancelled
+mutations/secret-or-PII exposure in tests; don't broadly rewrite RateBrowser/OrdersView (pass-through backend
+fields only).
