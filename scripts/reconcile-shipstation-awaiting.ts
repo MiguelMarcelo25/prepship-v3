@@ -7,6 +7,7 @@ import {
 import {
   type PrepShipOrderStatus,
   type ShipStationAwaitingKey,
+  type ShipStationAwaitingParityFinding,
   type ShipStationParityLocalOrder,
   classifyShipStationAwaitingParity,
   shouldApplyShipStationAwaitingParityCandidate,
@@ -181,10 +182,21 @@ async function loadSyncAccounts(sql: Sql, requestedStoreIds?: number[]): Promise
     WHERE active = true
   `;
 
+  // Stores owned by a per-org client (its own SS creds) are fetched via THAT account, never main.
+  // Excluding them from main.storeIds is a safety boundary for the deleted-upstream sweep: a store must
+  // never be queried with the wrong org's credentials, since a wrong-creds 404 would falsely flag a
+  // live order as deleted. (For fetchLiveAwaiting this is also correct + more efficient — the per-client
+  // account already covers those stores.)
+  const perOrgStoreIds = new Set(
+    clientRows
+      .filter((row) => row.ssApiKey && row.ssApiSecret)
+      .flatMap((row) => row.storeIds ?? []),
+  );
   const allStoreIds = [
     ...new Set(
       clientRows
         .flatMap((row) => row.storeIds ?? [])
+        .filter((storeId) => !perOrgStoreIds.has(storeId))
         .filter((storeId) => Number.isFinite(storeId) && (!requestedStoreIds || requestedStoreIds.includes(storeId))),
     ),
   ];
@@ -415,6 +427,96 @@ async function persistParityRunStatus(
   }
 }
 
+// ── Deleted-upstream sweep (Part B) ──────────────────────────────────────────────────────────────
+// Per user override unlock shipped data on 2026-06-10. When ShipStation EDITS an order it deletes the
+// original and creates a new one (new orderId + number), so PrepShip keeps a phantom awaiting row that
+// points at a now-deleted SS order. No status pass can resolve it (a deleted order is in NO SS status
+// list). This sweep confirms deletion by a DEFINITIVE 404 on GET /orders/{id} (never a 5xx/network/429)
+// and, only with --apply --resolve-deleted, cancels the phantom (superseded). The matching real order
+// was already imported separately and shipped, so the customer stays fulfilled.
+
+// Route a suspect to the account that OWNS its store, so the 404 check uses the RIGHT credentials.
+// Returns null when no known account owns the store — we then SKIP it (never guess; a wrong-creds 404
+// would falsely cancel a live order that lives in another ShipStation org).
+function accountForStore(accounts: SyncAccount[], storeId: number | null): SyncAccount | null {
+  if (storeId == null) return null;
+  const client = accounts.find((a) => a.label !== 'main' && a.storeIds.includes(storeId));
+  if (client) return client;
+  const main = accounts.find((a) => a.label === 'main');
+  if (main && main.storeIds.includes(storeId)) return main;
+  return null;
+}
+
+// Reliable existence check: raw status code only. 404 => deleted; 2xx => exists; anything else
+// (429/5xx/network/timeout) => 'error' and is NEVER treated as deleted.
+async function shipStationOrderExists(
+  account: SyncAccount,
+  externalOrderId: string,
+): Promise<'deleted' | 'exists' | 'error'> {
+  const key = account.apiKey ?? process.env.SHIPSTATION_API_KEY;
+  const secret = account.apiSecret ?? process.env.SHIPSTATION_API_SECRET;
+  if (!key || !secret) return 'error';
+  try {
+    const auth = 'Basic ' + Buffer.from(`${key}:${secret}`).toString('base64');
+    const res = await fetch(`https://ssapi.shipstation.com/orders/${encodeURIComponent(externalOrderId)}`, {
+      method: 'GET',
+      headers: { Authorization: auth },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 404) return 'deleted';
+    if (res.ok) return 'exists';
+    return 'error';
+  } catch {
+    return 'error';
+  }
+}
+
+async function resolveDeletedUpstream(
+  sql: Sql,
+  accounts: SyncAccount[],
+  suspects: ShipStationAwaitingParityFinding[],
+  options: { apply: boolean; maxLookups: number },
+): Promise<{ checked: number; deleted: ShipStationAwaitingParityFinding[]; cancelled: number; errors: number; skipped: number }> {
+  const deleted: ShipStationAwaitingParityFinding[] = [];
+  let checked = 0;
+  let errors = 0;
+  let skipped = 0;
+  for (const s of suspects) {
+    if (checked >= options.maxLookups) {
+      console.warn(`[deleted-upstream] lookup cap ${options.maxLookups} reached; ${suspects.length - checked - skipped} suspect(s) not checked this run`);
+      break;
+    }
+    const account = accountForStore(accounts, s.storeId);
+    if (!account || !s.externalOrderId) {
+      skipped += 1; // cannot safely verify without an SS id + the owning account's creds
+      continue;
+    }
+    const verdict = await shipStationOrderExists(account, String(s.externalOrderId));
+    checked += 1;
+    if (verdict === 'deleted') {
+      deleted.push(s);
+      console.log(`[deleted-upstream] ${s.orderNumber} (${s.id}) ext=${s.externalOrderId} store=${s.storeId} via ${account.label}: 404 DELETED in ShipStation`);
+    } else if (verdict === 'error') {
+      errors += 1;
+      console.warn(`[deleted-upstream] ${s.orderNumber} (${s.id}): lookup error (skipped — NOT cancelled)`);
+    }
+    await new Promise((r) => setTimeout(r, 200)); // gentle pacing under the 40 req/min v1 limit
+  }
+  let cancelled = 0;
+  if (options.apply && deleted.length) {
+    for (const s of deleted) {
+      const rows = await sql<Array<{ id: number }>>`
+        UPDATE orders
+        SET order_status = 'cancelled', canonical_status = 'cancelled', updated_at = NOW()
+        WHERE id = ${s.id} AND order_status = 'awaiting_shipment'
+        RETURNING id
+      `;
+      cancelled += rows.length;
+    }
+  }
+  return { checked, deleted, cancelled, errors, skipped };
+}
+
 function printUsage(): void {
   console.log(`
 Usage:
@@ -431,6 +533,12 @@ Options:
   --page-size                  ShipStation page size. Default: 500.
   --apply                      Apply safe awaiting -> terminal corrections.
   --allow-shipped-override     With --apply, also apply eligible terminal -> awaiting corrections.
+  --resolve-deleted            Check suspects (awaiting locally, missing from SS awaiting) via
+                               GET /orders/{id}; with --apply AND a scope, cancel ones returning a
+                               definitive 404 (deleted/re-numbered upstream). Routes each to its owning
+                               account creds. Cancellation requires --store-id and/or --order-number;
+                               an unscoped --apply --resolve-deleted reports only (writes nothing).
+  --max-deleted-lookups <n>    Cap deleted-upstream lookups per run (default 200).
 
 Safety:
   Dry run only unless --apply is present.
@@ -451,6 +559,7 @@ async function main(): Promise<void> {
 
   const apply = hasFlag('apply');
   const allowShippedOverride = hasFlag('allow-shipped-override');
+  const resolveDeleted = hasFlag('resolve-deleted');
   const storeIds = parseStoreIds();
   const orderNumbers = parseOrderNumbers();
   const dateFrom = parseDateFrom();
@@ -474,8 +583,14 @@ async function main(): Promise<void> {
     const overrideSafe = actionable.filter(shouldApplyShipStationAwaitingParityOverrideCandidate);
     const testFixtureCleanup = actionable.filter(isTestFixtureFinding);
     const blocked = actionable.filter((finding) => finding.blockedByLockdown);
+    // Only the local-awaiting-missing-from-ShipStation findings are deleted-upstream suspects. We pin the
+    // explicit kind (not the `targetStatus === null` proxy) so a future classifier kind that also leaves
+    // targetStatus null can never silently flow into the auto-cancel sweep.
     const needsConfirmation = actionable.filter(
-      (finding) => finding.targetStatus === null && !isTestFixtureFinding(finding),
+      (finding) =>
+        finding.kind === 'local_awaiting_missing_from_shipstation' &&
+        finding.targetStatus === null &&
+        !isTestFixtureFinding(finding),
     );
 
     console.log(`\n[shipstation-awaiting] ${apply ? 'APPLY' : 'DRY RUN'}`);
@@ -542,6 +657,41 @@ async function main(): Promise<void> {
       for (const finding of needsConfirmation) {
         console.log(`- ${finding.orderNumber} (${finding.id}): ${finding.reason}`);
       }
+    }
+
+    // Part B — deleted-upstream sweep (opt-in via --resolve-deleted). Confirms each needs-confirmation
+    // suspect against ShipStation; a definitive 404 (via its owning account's creds) means the SS order
+    // was deleted/re-numbered, so the local awaiting row is a phantom. Cancels only with --apply.
+    let deletedUpstreamResult: Awaited<ReturnType<typeof resolveDeletedUpstream>> | null = null;
+    if (resolveDeleted && needsConfirmation.length) {
+      console.log('\n[deleted-upstream] verifying needs-confirmation suspects against ShipStation (GET /orders/{id})...');
+      // Scope guard: auto-cancelling customer orders is destructive, so --apply only WRITES when the run is
+      // explicitly scoped to specific orders/stores (--order-number / --store-id). An unscoped --apply still
+      // verifies and reports, but writes nothing — the operator reviews, then re-runs scoped. This caps the
+      // blast radius to the operator's chosen set even if a suspect were ever misrouted to the wrong account.
+      const scoped = Boolean((orderNumbers && orderNumbers.length) || (storeIds && storeIds.length));
+      if (apply && !scoped) {
+        console.warn(
+          '[deleted-upstream] REFUSING to cancel without scope — re-run --apply --resolve-deleted with --store-id and/or --order-number. Reporting only this run.',
+        );
+      }
+      const writeDeleted = apply && scoped;
+      const accounts = await loadSyncAccounts(sql, storeIds);
+      deletedUpstreamResult = await resolveDeletedUpstream(sql, accounts, needsConfirmation, {
+        apply: writeDeleted,
+        maxLookups: parsePositiveInteger('max-deleted-lookups', 200),
+      });
+      const r = deletedUpstreamResult;
+      console.log(
+        `[deleted-upstream] checked=${r.checked} deleted=${r.deleted.length} errors=${r.errors} skipped=${r.skipped} ` +
+          (writeDeleted
+            ? `cancelled=${r.cancelled}`
+            : apply
+              ? '(no write — add --store-id and/or --order-number to cancel)'
+              : '(dry-run — re-run with --apply --resolve-deleted plus a scope to cancel)'),
+      );
+    } else if (resolveDeleted) {
+      console.log('\n[deleted-upstream] no needs-confirmation suspects to verify.');
     }
 
     let updatedSafe: number | null = null;
