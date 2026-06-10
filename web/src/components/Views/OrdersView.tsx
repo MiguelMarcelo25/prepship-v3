@@ -5270,7 +5270,14 @@ export default function OrdersView({
       })()
       return response
     }
-    if (singleActionBusyRef.current) return null
+    if (singleActionBusyRef.current) {
+      // Label/print-queue audit (2026-06-11): a second click while a buy is in flight is already
+      // blocked here (no double-charge), but the placeholder PDF tab was opened above (line ~5244)
+      // before this guard — close it so a double-click doesn't strand an orphan "Creating label
+      // PDF..." tab that never resolves.
+      labelPopup?.close()
+      return null
+    }
     singleActionBusyRef.current = true
     setSingleActionBusy(true)
     try {
@@ -7244,6 +7251,9 @@ export default function OrdersView({
       : null
     let created = 0
     let failed = 0
+    // Label/print-queue audit (2026-06-11): per-order failure reasons so a failed batch isn't a bare
+    // "N failed" count that invites a blind re-run (and a possible double-charge). Surfaced in the toast.
+    const failureReasons: string[] = []
     const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
 
     const processOrder = async (order: OrderSummaryDto) => {
@@ -7386,8 +7396,12 @@ export default function OrdersView({
         }
         if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, false)
         if (mode === 'queue') advanceQueueActionProgress()
-      } catch {
+      } catch (err) {
         failed += 1
+        // Capture WHY this order failed. A reason like "Cannot create label for shipped order" /
+        // "Label already exists" tells the operator the postage was likely already spent — do NOT
+        // re-buy; use Reprint / Queue Existing Labels — vs a fixable "select a carrier/service".
+        failureReasons.push(`${order.orderNumber ?? order.orderId}: ${err instanceof Error ? err.message : String(err)}`)
         if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, true)
         if (mode === 'queue') advanceQueueActionProgress(1)
       }
@@ -7419,12 +7433,15 @@ export default function OrdersView({
       finishPersistentQueueJob(queueJobId)
       finishQueueActionProgress(created > 0 ? 'Queue updated' : 'Queue checked')
     }
+    const reasonSuffix = failureReasons.length
+      ? ` — ${failureReasons.slice(0, 3).join('; ')}${failureReasons.length > 3 ? ` (+${failureReasons.length - 3} more)` : ''}`
+      : ''
     if (mode === 'queue' && created > 0) {
-      showToast(formatQueuedOrdersToast(created, queuedItems, failed), 'success')
+      showToast(`${formatQueuedOrdersToast(created, queuedItems, failed)}${failed > 0 ? reasonSuffix : ''}`, 'success')
     } else if (failed === 0) {
       showToast(`✅ ${mode === 'queue' ? 'Queued' : 'Created'} ${created} orders`, 'success')
     } else {
-      showToast(`⚠ ${created} ${mode === 'queue' ? 'queued' : 'created'}, ${failed} failed`)
+      showToast(`⚠ ${created} ${mode === 'queue' ? 'queued' : 'created'}, ${failed} failed${reasonSuffix}`)
     }
   }
 

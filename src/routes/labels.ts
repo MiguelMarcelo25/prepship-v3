@@ -107,6 +107,18 @@ function handleCreateError(c: Context, err: unknown): Response {
   if (e.code === 'CARRIER_FAMILY_NOT_ELIGIBLE') {
     return c.json({ error: message, code: e.code }, 400);
   }
+  // Label/print-queue audit (2026-06-11): PS-128/PS-129 upstream shipping-safety block
+  // (already shipped/cancelled upstream) is an operator-actionable conflict — ShippingSafetyError
+  // carries status=409 by design (shipping-safety.ts:69-70). It was falling through to an opaque 500;
+  // surface it as 409 + code so the operator sees WHY the buy was blocked (and never re-tries blindly).
+  const safetyStatus = (e as { status?: number }).status;
+  if (e.name === 'ShippingSafetyError' && typeof safetyStatus === 'number') {
+    return c.json({ error: message, code: e.code, ...details }, (safetyStatus ?? 409) as 409);
+  }
+  // PS-135(a): rate-quote vs label residential mismatch is operator-actionable (re-rate), not a 500.
+  if (e.code === 'RATE_LABEL_RESIDENTIAL_MISMATCH') {
+    return c.json({ error: message, code: e.code, ...details }, 409);
+  }
   const invalid = [
     'orderId and serviceCode required',
     'shippingProviderId required for v2 label creation',
