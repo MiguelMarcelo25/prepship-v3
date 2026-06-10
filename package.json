@@ -151,6 +151,7 @@
     "test:ps-159-apiclient-deadmethods": "tsx scripts/ps-159-apiclient-deadmethods-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",
+    "test:ps-150-reorder-policy": "tsx scripts/ps-150-reorder-policy-guard.ts",
     "test:awaiting-onhold-backsync": "tsx scripts/awaiting-onhold-backsync-guard.ts",
     "test:print-queue-hygiene": "tsx scripts/print-queue-hygiene-guard.ts",
     "test:deleted-upstream-sweep": "tsx scripts/deleted-upstream-sweep-guard.ts",

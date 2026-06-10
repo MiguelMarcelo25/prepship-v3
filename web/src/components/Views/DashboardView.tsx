@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
+// PS-150: reorder policy (velocity model) is owned by the backend layer (src/lib); the Dashboard
+// delegates so the restock/days-supply math can't drift from the dashboard /inventory-risk route.
+import { computeReorderPolicy } from '../../../../src/lib/inventory-reorder-policy'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -2263,9 +2266,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         const revenue = orderAgg?.revenue ?? 0
         const stock = num(inventory?.currentStock ?? inventory?.stockQty)
         const minStock = num(inventory?.minStock ?? inventory?.reorderLevel)
-        const dailyRate = units30 > 0 ? units30 / 30 : 0
-        const daysSupply = dailyRate > 0 ? stock / dailyRate : null
-        const targetStock = Math.max(minStock, dailyRate * 14)
+        // PS-150: delegate to the canonical reorder policy owner (same formula + inputs as before).
+        const { daysSupply, restockQty } = computeReorderPolicy({ units30, stock, minStock })
         const status = stockStatus(stock, minStock)
         const totalShipping = num(analysis?.totalShipping)
         const avgShipping =
@@ -2292,7 +2294,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           minStock,
           status,
           daysSupply,
-          restockQty: Math.max(0, Math.ceil(targetStock - stock)),
+          restockQty,
           units7,
           units30,
           priorUnits30,

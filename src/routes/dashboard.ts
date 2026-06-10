@@ -13,6 +13,7 @@ import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../serv
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
+import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
@@ -630,18 +631,23 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     items: rows.map((row) => {
       const stockQty = Number(row.stockQty ?? 0) || 0;
       const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
+      const soldLast30Days = soldByInventoryId.get(row.id) ?? 0;
       const eff = effectiveByInventoryId.get(row.id) ?? {
         totalReceived: 0,
         totalSold: 0,
         effectiveStock: stockQty,
       };
+      // PS-150: reorder policy (velocity model) is owned by src/lib/inventory-reorder-policy — the same
+      // owner the Dashboard SKU table delegates to, so the two layers can't drift. minStock falls back to
+      // reorderLevel (the inventory schema has no minStock column; mirrors the FE's minStock ?? reorderLevel).
+      const reorder = computeReorderPolicy({ units30: soldLast30Days, stock: stockQty, minStock: reorderLevel });
       return {
         ...row,
-        soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
+        soldLast30Days,
         soldLast7Days: 0,
-        velocityPerDay: 0,
-        daysSupply: null,
-        restockQty: Math.max(0, reorderLevel - stockQty),
+        velocityPerDay: reorder.velocityPerDay,
+        daysSupply: reorder.daysSupply,
+        restockQty: reorder.restockQty,
         totalReceived: eff.totalReceived,
         totalSoldAllTime: eff.totalSold,
         effectiveStock: eff.effectiveStock,
