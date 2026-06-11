@@ -1494,10 +1494,18 @@ async function loadPackageDimsByOrderId(
 }
 
 // PS-129 (per user override unlock shipped data on 2026-06-09): identify queue entries whose
-// order is now on a shipping hold — cancelled upstream (canonical_status), externally shipped
-// (PS-128), or locally shipped/cancelled — so the merged print job EXCLUDES them. The batch
-// SEND path already blocks creation via createLabelV2's guard; this covers a label that was
-// already queued and only later became held. Read-only; never mutates orders.
+// order is now on a shipping hold — cancelled locally/upstream (canonical_status) or shipped
+// externally (PS-128) — so the merged print job EXCLUDES them. The batch SEND path already
+// blocks creation via createLabelV2's guard; this covers a label that was already queued and
+// only later became held. Read-only; never mutates orders.
+//
+// Per user override unlock shipped data on 2026-06-11: 'local_shipped' is deliberately NOT a
+// print-queue hold. It is a label-CREATION guard (never buy second postage) — createLabelV2
+// marks the order shipped BEFORE its queue entry exists, so every normally-labeled order is
+// locally shipped by the time it reaches the queue. Treating it as a hold hid every fresh
+// label from the active queue and failed it at merge with "Already shipped — excluded from
+// print batch" (DJ report: order 1463 invisible in an empty queue). Printing an existing
+// label purchases nothing; the creation-time block in decideShippingSafety is unchanged.
 export async function loadShippingHoldsForOrderIds(ids: number[]): Promise<Map<number, string>> {
   const result = new Map<number, string>();
   const unique = [...new Set(ids.filter((n) => Number.isFinite(n)))];
@@ -1524,7 +1532,7 @@ export async function loadShippingHoldsForOrderIds(ids: number[]): Promise<Map<n
       // count here (no high-risk-unverified guessing).
       unverifiedPolicy: 'audit_only',
     });
-    if (!decision.safe) {
+    if (!decision.safe && decision.code !== 'local_shipped') {
       result.set(Number(row.id), decision.operatorStatus ?? decision.reason);
     }
   }
