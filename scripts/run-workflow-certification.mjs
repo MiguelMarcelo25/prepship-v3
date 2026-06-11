@@ -148,6 +148,24 @@ const GROUPS = [
       'test:daily-strip-progress',
     ],
   },
+  {
+    // PS-172 Phases 1-6: the backend-owned workflow DTO contracts (row state /
+    // actions / display / routing / money / identity / defaults) + the Phase 6
+    // FE-authority ratchet. CI-enforcing these is the precondition for deleting
+    // the FE fallbacks: every deletion lands under a pinned contract.
+    checkpoint: 'PS-172 — Backend-owned truth contracts & FE-authority ratchet',
+    scripts: [
+      'test:ps-173-order-row-workflow',
+      'test:ps-174-quote-key-consolidation',
+      'test:ps-175-strict-recalc-decision',
+      'test:ps-176-queue-route-authority',
+      'test:ps-177-queue-sku-identity',
+      'test:ps-177-row-money-display',
+      'test:ps-177-dims-defaults',
+      'test:ps-196-cache-first-display',
+      'test:ps-178-fe-authority-ratchet',
+    ],
+  },
 ];
 
 const seen = new Set();

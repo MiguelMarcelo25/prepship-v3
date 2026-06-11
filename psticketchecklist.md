@@ -510,11 +510,33 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   QA: typecheck + build:web + ps-173 + ps-175 + ps-176 + ps-196 + ps-187-fixture + ps-183 +
   ps-123 + ps-135 + full cert ALL PASS. **Remaining parts:** effective package/dims/default
   source display. Read-model/additive throughout.
-- **PS-178 — Phase 6: OrdersView/RateBrowser thin-client decomposition (AFTER backend contracts).** Extract
-  UI-only components (OrdersToolbar/Table/BatchActions/ShipmentPanel/PrintQueueDrawer/cells) + thin hooks
-  that call backend workflow/poll job status (NO FE rate-finalization/proof/routing/money/queue-identity);
-  shrink v2-apiClient to typed transport; remove FE fallbacks only after DTO contract + browser tests pass;
-  add a boundary guard vs FE money/rate/label authority reappearing. Dep: PS-173–177.
+- **PS-178 — 🟡 PART 1 DONE 2026-06-12 (Phase 6): FE-authority RATCHET + contracts CI-enforced.**
+  **Part 1 shipped:** `test:ps-178-fe-authority-ratchet` pins a COUNT CEILING on every remaining
+  FE-authority fallback site (OrdersView applyCarrierMarkup ≤5, planStrictBestRateRecalculate ≤1 +
+  parity def ≤1, saveOrderDimsStrict ≤1, updateOrderBestRateSelectionStrict ≤2,
+  resolveDisplayCarrier/ServiceCode ≤1 each, deriveShipmentDimsFromProductDefaults ≤2,
+  fetchProductsBySku ≤2, classifyQueueOrderRoute ≤1), pins the money-math consumer file allowlist
+  (exactly OrdersView + markups.ts — a new importer fails), pins pickBestRate at zero forever, and
+  adds the decomposition ratchet (OrdersView ≤12,500 lines, lowered each extraction part). Counts may
+  only go DOWN; deletions lower the ceiling in the same PR. ALSO: new cert checkpoint
+  "PS-172 — Backend-owned truth contracts & FE-authority ratchet" in run-workflow-certification —
+  ps-173/174/175/176/177×3/196/178 now run inside `test:workflow-suites`, so the full Phase 1–5
+  contract gates CI/Render deploys; fallback deletions land under an enforced contract.
+  **PS-167 full-split decision — deliberate non-extraction (task closed):** 29 guard scripts grep
+  v2-apiClient.ts (text-blob pins on method bodies); the remaining barrel is already a thin
+  transport adapter after the safe-partial shared.ts extraction. Splitting the method surface =
+  29 re-anchors for a cosmetic decomposition — the PS-137 #8 standard ("minimize bugs > cosmetic
+  decomposition") says leave it. Revisit only if a real SoT/test need arises in a module.
+  **Remaining parts:** (2) extract OrdersView module-level row-display helpers → orders-row-display
+  (needs closure analysis: helpers depend on OrdersView-internal primitives; batch-recalculate guard
+  slices 2 definitions — re-anchor to the new file); (3) PrintQueueDrawer / BatchActions / toolbar
+  component extractions (prop-threading surgery, one component per part, grep-after-delete
+  discipline per the useAuth crash lesson); (4) FE fallback deletions + ceiling lowering — GATED on
+  DJ verifying the live DTO contract (money cells + panel auto-fill + strict recalc on prod) and
+  browser tests. QA (part 1): ratchet + typecheck + full cert (incl. new checkpoint) ALL PASS.
+  Original scope: extract UI-only components + thin hooks (NO FE
+  rate-finalization/proof/routing/money/queue-identity); remove FE fallbacks only after DTO contract
+  + browser tests pass. Dep: PS-173–177 (all ✅).
 - **PS-179 — Phase 7: Certification + boundary guards + safe dead-code cleanup.** Mocked/offline workflow
   cert (Awaiting→finalized rate→RateBrowser→create-label mocked→print-queue→job status + blocked stale/dup/
   shipped-cancelled), source-of-truth guards vs FE authority, perf sanity, evidence-backed dead-code deletion
