@@ -10578,27 +10578,11 @@ export default function OrdersView({
                     <span className="text-warn font-semibold">Address Not Validated</span>
                   </>
                 )}
-                <button
-                  type="button"
-                  onClick={() => showToast('Address reverted')}
-                  className="ml-1 text-brand font-medium hover:underline"
-                >
-                  Revert
-                </button>
-              </div>
-
-              {/* Tax IDs */}
-              <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-line text-[11px]">
-                <Tag size={10} strokeWidth={2.5} className="text-ink-4" />
-                <span className="text-ink-2">Tax Information:</span>
-                <span className="text-ink-3">0 Tax IDs added</span>
-                <button
-                  type="button"
-                  onClick={() => showToast('Add tax ID — Phase 3')}
-                  className="ml-auto text-brand font-medium hover:underline"
-                >
-                  Add
-                </button>
+                {/* PS-182: the 'Revert' button was a no-op stub (its toast claimed a
+                    revert without reverting anything — there is no address-edit
+                    feature to undo) and the Tax Information row hardcoded a zero
+                    count over a backend concept that doesn't exist. Both v2-parity
+                    stubs removed; reintroduce only WITH a real backend feature. */}
               </div>
 
               {/* Sold To section */}

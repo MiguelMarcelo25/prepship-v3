@@ -703,9 +703,8 @@ export default function OrderDetailDrawer({
                     <div className="recip-validated">
                       {shipTo.addressVerified && shipTo.addressVerified !== 'Not Validated' ? 'Address Validated' : 'Address Not Validated'}
                     </div>
-                    <div className="recip-tax">
-                      Tax Information: <span style={{ color: 'var(--text3)' }}>0 Tax IDs added</span>
-                    </div>
+                    {/* PS-182: hardcoded zero-count Tax Information stub removed — no
+                        tax-id concept exists in the backend; reintroduce only with real data. */}
                     <div className="recip-sold" style={{ marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--border)' }}>
                       <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)', marginBottom: 4 }}>Sold To</div>
                       <div className="recip-sold-name">{soldTo ?? '-'}</div>

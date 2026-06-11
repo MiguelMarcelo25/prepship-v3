@@ -440,8 +440,14 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   (last consumer). Guard `test:ps-181-backend-admin-authority` (9 checks: recursive web/src sweep finds no
   ADMIN_EMAILS, OrdersView reads the backend verdict, /users/me stays on isAdminEmail, behavioral matrix on
   the canonical owner). QA: typecheck + build:web + guard PASS. Local commit only (DJ inspecting before push).
-- **PS-182 — Fix no-op 'Revert' address button + hardcoded '0 Tax IDs added' (no deps).** Wire or remove
-  Revert; show real tax-ID count or remove field; no hardcoded string in web/src.
+- **PS-182 — ✅ DONE 2026-06-11 (Wave 2a): no-op UI stubs removed.** Repo-verified: the 'Revert' button's
+  onClick only toasted "Address reverted" — nothing was reverted and NO address-edit feature exists that
+  could be reverted; the "Tax Information: 0 Tax IDs added" row (OrdersView panel AND OrderDetailDrawer)
+  hardcoded a count over a tax-id concept that does not exist anywhere in the backend (plus an 'Add' stub
+  toasting "Phase 3"). "Wire" was not an option for either (nothing to wire to) → both deleted with
+  reintroduce-only-with-real-backend comments. Real controls survive (residential 'change' toggle,
+  validation status row — guard-pinned). Guard `test:ps-182-dead-stub-ui` (5 checks, recursive web/src
+  sweep). QA: typecheck + build:web + guard:site-actions PASS. Local commit only.
 - **PS-183 — Backend owns `cacheExpiresAt` TTL; FE stops minting now+6h (no deps).** `withRateRequestMetadata`
   (~L5573) prefers backend `metadata.cacheExpiresAt`; FE fallback only if absent (warn). (FE overwrite makes
   stale rates look fresh + bypasses server TTL.) Guard + parity test.
