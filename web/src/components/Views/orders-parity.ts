@@ -904,6 +904,58 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   return input.backendWorkflowCanUseSavedRate === true
 }
 
+// ── PS-197 — Rate Browser effective-insurance display classification ──────────
+// The backend owns the EFFECTIVE insurance used for rate shopping (HUGRAB default forcing,
+// PS-072/123/170 — GetRatesResult.effectiveInsuranceProvider/Value/Source). The Rate Browser
+// dropdown shows only the OPERATOR'S selection, so "Insurance: None" while the backend quotes
+// ParcelGuard $100 reads as a pricing bug (e.g. order #1461: PrepShip $8.95 label-safe vs the
+// ShipStation manual no-insurance $7.93). This PURE classifier turns the backend facts into a
+// display verdict: `effective_policy_diff` = the backend policy overrides the visible selection
+// (the explainable mismatch), `matches_selection` = they agree. UI renders it; never decides it.
+export type EffectiveInsuranceDisplay = {
+  kind: 'effective_policy_diff' | 'matches_selection'
+  provider: string
+  value: number | null
+  source: string | null
+  /** Operator-facing label, e.g. "ParcelGuard $100 — HUGRAB default". */
+  label: string
+}
+
+export function classifyEffectiveInsuranceDisplay(input: {
+  backendProvider?: string | null
+  backendValue?: number | null
+  backendSource?: string | null
+  operatorProvider?: string | null
+  operatorValue?: number | string | null
+}): EffectiveInsuranceDisplay | null {
+  const provider = String(input.backendProvider ?? '').trim().toLowerCase()
+  if (!provider || provider === 'none') return null
+  const value =
+    typeof input.backendValue === 'number' && Number.isFinite(input.backendValue)
+      ? input.backendValue
+      : null
+  const source = typeof input.backendSource === 'string' && input.backendSource ? input.backendSource : null
+  const providerLabel =
+    provider === 'parcelguard' ? 'ParcelGuard'
+    : provider === 'carrier' ? 'Carrier declared value'
+    : provider === 'shipsurance' ? 'Shipsurance'
+    : provider
+  const valueLabel = value != null ? ` $${Number.isInteger(value) ? value : value.toFixed(2)}` : ''
+  const sourceLabel = source === 'hugrab-default' ? ' — HUGRAB default' : ''
+  const operatorProvider = (String(input.operatorProvider ?? 'none').trim().toLowerCase() || 'none')
+  const operatorValueNum =
+    input.operatorValue == null || input.operatorValue === '' ? null : Number(input.operatorValue)
+  const operatorValue = operatorValueNum != null && Number.isFinite(operatorValueNum) ? operatorValueNum : null
+  const differs = operatorProvider !== provider || (value != null && operatorValue !== value)
+  return {
+    kind: differs ? 'effective_policy_diff' : 'matches_selection',
+    provider,
+    value,
+    source,
+    label: `${providerLabel}${valueLabel}${sourceLabel}`,
+  }
+}
+
 export type SkuDisplayLineInput = {
   sku?: string | null
   name?: string | null

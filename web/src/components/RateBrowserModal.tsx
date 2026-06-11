@@ -26,6 +26,9 @@ import {
 // PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
 // source of truth). The modal delegates here instead of re-deriving its own alias logic.
 import { normalizeConfirmation, normalizeInsurance } from '../../../src/lib/shipping-options';
+// PS-197: pure classifier for the backend-effective insurance display (effective_policy_diff vs
+// matches_selection). The backend owns the policy; the modal only renders the verdict.
+import { classifyEffectiveInsuranceDisplay } from './Views/orders-parity';
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
 // pills for FedEx/etc. Replaces the local carrier-class switch below.
 import CarrierBadge from './CarrierBadge';
@@ -920,6 +923,15 @@ export default function RateBrowserModal({
   const [hgtStr, setHgt] = useState('0');
   const [confirmation, setConfirmation] = useState<RateConfirmation>('none');
   const [insuranceProvider, setInsuranceProvider] = useState('none');
+  // PS-197: the backend-EFFECTIVE insurance actually used for the quote (GetRatesResult
+  // effectiveInsuranceProvider/Value/Source — e.g. the HUGRAB ParcelGuard $100 default), plus a
+  // redacted request snapshot for the parity tooltip. Captured per browse; display-only.
+  const [backendEffectiveInsurance, setBackendEffectiveInsurance] = useState<{
+    provider: string;
+    value: number | null;
+    source: string | null;
+    diagnostics: string;
+  } | null>(null);
   const [insuredValue, setInsuredValue] = useState('');
   const [svcClass, setSvcClass] = useState<'' | 'ground' | 'express'>('');
 
@@ -1287,6 +1299,17 @@ export default function RateBrowserModal({
         (selectedPid != null ? accountByPid.get(selectedPid) : null) ??
         (seededPid != null ? accountByPid.get(seededPid) : null) ??
         rateShippingAccounts[0];
+      // PS-127: reflect the order's backend-resolved residential instead of a hardcoded
+      // 'yes'. Commercial only on a trusted signal (operator override merged into
+      // order.residential, or an explicit source-commercial flag); residential-safe
+      // otherwise so we never under-quote the residential surcharge. The backend remains
+      // authoritative (resolveRateInput + the label parity guard / residentialForShipping).
+      const residentialForQuote =
+        typeof order?.residential === 'boolean'
+          ? order.residential
+          : order?.sourceResidential === false
+            ? false
+            : true;
       const browseResult = await apiClient.browseRates({
         fromPostalCode: selectedLocation?.postalCode?.slice(0, 5) ?? undefined,
         toPostalCode: zip,
@@ -1299,17 +1322,7 @@ export default function RateBrowserModal({
           width: widNum,
           height: hgtNum,
         },
-        // PS-127: reflect the order's backend-resolved residential instead of a hardcoded
-        // 'yes'. Commercial only on a trusted signal (operator override merged into
-        // order.residential, or an explicit source-commercial flag); residential-safe
-        // otherwise so we never under-quote the residential surcharge. The backend remains
-        // authoritative (resolveRateInput + the label parity guard / residentialForShipping).
-        residential:
-          typeof order?.residential === 'boolean'
-            ? order.residential
-            : order?.sourceResidential === false
-              ? false
-              : true,
+        residential: residentialForQuote,
         carrierIds: carrierIds.length ? carrierIds : undefined,
         preferredCarrierId: preferredAccount?.carrierId ?? undefined,
         storeId: toFiniteNumber(order?.storeId) ?? undefined,
@@ -1364,6 +1377,25 @@ export default function RateBrowserModal({
                 : null,
         cacheAgeMs: typeof browseResult?.cacheAgeMs === 'number' ? browseResult.cacheAgeMs : undefined,
       });
+      // PS-197: capture the backend-EFFECTIVE insurance for this quote + a redacted request
+      // snapshot (no PII/secrets — just the quote facts) so the operator can see why the total
+      // differs from a manual no-insurance ShipStation estimate (effective_policy_diff).
+      setBackendEffectiveInsurance(
+        typeof browseResult?.effectiveInsuranceProvider === 'string' && browseResult.effectiveInsuranceProvider
+          ? {
+              provider: browseResult.effectiveInsuranceProvider,
+              value:
+                typeof browseResult?.effectiveInsuredValue === 'number' && Number.isFinite(browseResult.effectiveInsuredValue)
+                  ? browseResult.effectiveInsuredValue
+                  : null,
+              source:
+                typeof browseResult?.effectiveInsuranceSource === 'string'
+                  ? browseResult.effectiveInsuranceSource
+                  : null,
+              diagnostics: `Quoted with: ZIP ${zip} · ${totalOz} oz · ${lenNum}×${widNum}×${hgtNum} in · residential ${residentialForQuote ? 'yes' : 'no'} · confirmation ${rateConfirmation || 'none'} · ${browseResult?.cached ? 'cached' : 'live'} rates`,
+            }
+          : null,
+      );
 
       // Fix 3 (2026-05-12): capture per-carrier resolution meta so the
       // rate panel can render the "rates came from X" hint. Walmart in
@@ -2106,6 +2138,38 @@ export default function RateBrowserModal({
                     style={{ width: 70, display: insuranceProvider !== 'none' ? 'block' : 'none' }}
                   />
                 </div>
+
+                {(() => {
+                  // PS-197: show the backend-EFFECTIVE insurance whenever the quote was made
+                  // under a policy (e.g. HUGRAB ParcelGuard $100 default) — especially when it
+                  // differs from the dropdown above, which previously read "None" while the
+                  // totals were label-safe insured (the #1461 $8.95-vs-$7.93 confusion).
+                  const display = classifyEffectiveInsuranceDisplay({
+                    backendProvider: backendEffectiveInsurance?.provider,
+                    backendValue: backendEffectiveInsurance?.value,
+                    backendSource: backendEffectiveInsurance?.source,
+                    operatorProvider: insuranceProvider,
+                    operatorValue: insuredValue,
+                  });
+                  if (!display) return null;
+                  const overridden = display.kind === 'effective_policy_diff';
+                  return (
+                    <div
+                      data-rate-browser="effectiveInsurance"
+                      title={backendEffectiveInsurance?.diagnostics ?? undefined}
+                      style={{
+                        fontSize: 11,
+                        color: overridden ? 'var(--amber, #b45309)' : 'var(--text3)',
+                        marginTop: -4,
+                        marginBottom: 10,
+                        cursor: 'help',
+                      }}
+                    >
+                      Effective insurance: {display.label}
+                      {overridden ? ' (backend policy — included in the totals; totals are label-safe)' : ''}
+                    </div>
+                  );
+                })()}
 
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
                   Service Class

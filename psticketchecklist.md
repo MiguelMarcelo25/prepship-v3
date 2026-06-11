@@ -498,6 +498,22 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   Also re-anchored `batch-recalculate-best-rate` (stale since PS-165 part 2 inlined the provider-id local —
   behavior intact). QA: typecheck + build:web + ps-102 + best-rate-saved-display-contract + ps-099 +
   recalculate-strict + batch-recalculate + ps-119 + ps-120 + full cert ALL PASS.
+- **PS-197 — ✅ DONE: Rate Browser shows the backend-effective HUGRAB insurance + parity diagnostics.**
+  Root cause confirmed: the backend ALREADY owned + returned the effective policy
+  (`GetRatesResult.effectiveInsuranceProvider/Value/Source`, PS-123/170) and the browse passthrough spread
+  it to the FE — the modal just never displayed it, so "Insurance: None" + a label-safe insured total
+  ($8.95) looked wrong next to ShipStation's manual no-insurance $7.93 (#1461 ROCEL UPS Ground). **Fix:**
+  pure classifier `classifyEffectiveInsuranceDisplay` (orders-parity) → `effective_policy_diff` (the
+  explainable mismatch) vs `matches_selection`; the modal captures the backend effective fields per browse
+  + renders "Effective insurance: ParcelGuard $100 — HUGRAB default (backend policy — totals are
+  label-safe)" under the dropdown (`data-rate-browser="effectiveInsurance"`), with a redacted quote-facts
+  tooltip (ZIP+4 · oz · dims · residential · confirmation · cached/live — no PII/secrets). Policy NOT
+  weakened: Ground Saver stays blocked, proof/fingerprint untouched (guard-pinned). Raw-manual vs
+  label-safe dual-mode comparison = documented follow-up (the effective-policy visibility ships now). Guard
+  `test:ps-197-effective-insurance-display` (22 checks incl. the full #1461 fixture: ParcelGuard/$100/
+  hugrab-default, ZIP+4 92801-5567 exact, cache key ip/iv/r=1/w=350, Ground Saver blocked). QA: typecheck +
+  build:web + ps-108/123/124/125/126/170/072 + best-rate-saved-display-contract + ps-196 +
+  rate-browser-manual-selection-table-sync + full cert ALL PASS.
 >
 > **Priority flags:** **PS-186** (fake-label-on-real-order) is a live money/integrity bug — recommend doing it
 > BEFORE the PS-172 phase track. **PS-189** (media-mail auto-default) is a compliance risk. PS-181/182/183/
