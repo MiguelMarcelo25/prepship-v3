@@ -475,10 +475,21 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   Fix: backend `client.isTest` authority; `createLabelV2` rejects `testLabel:true` unless
   `client.isTest===true` (→ `TEST_LABEL_REJECTED`); backend `isTestOrder(orderId)` from authoritative
   signals; delete the FE 7-signal heuristic, read `order.isTest`. **Sequence PS-187 AFTER this.**
-- **PS-187 — Mock-rate fixture branch in canonical rates owner; delete FE `buildTestRatesForShipment`/
-  `buildTestMockRate` (OrdersView L754-883) + `V2_CARRIER_ACCOUNT_REFS` (L885-910).** Backend test-fixture
-  branch gated on `isTestClient` (PS-186) with a `testFixture:true` marker; guard asserts FE fns + table gone.
-  **Depends on PS-186.**
+- **PS-187 — 🟡 PART 1 DONE 2026-06-11 (Wave 2b, replacement-first): backend test-rate fixture is the
+  canonical owner.** New pure module `src/services/test-rate-fixture.ts` — a FAITHFUL port of the FE
+  generator (FNV-1a jitter, same 5 accounts × 3 service templates, same money formula — golden-cell
+  guard-pinned, so fixture money for existing test orders is unchanged) — gated at the TOP of `getRates`
+  on `clients.is_test` via the PS-186 `loadClientIsTest` authority. Fixture rates flow through the NORMAL
+  pipeline (best-rate pick, /browse selectedRateKey + snapshot stamping, FE translation) with
+  `testFixture:true`+`mocked:true` markers; never cached, no carrier API called; PS-186's test-label policy
+  independently forces mock labels at purchase. **Part 2 (next PR, per the replacement-first rule): delete
+  FE `buildTestRatesForShipment`/`buildTestMockRate` + collapse the OrdersView test-rate branches onto the
+  normal backend flow once DJ verifies fixture parity live; `V2_CARRIER_ACCOUNT_REFS` deletion moves to
+  PS-185 (its other consumer is the 1Z attribution block PS-185 deletes — repo-verified entanglement).**
+  Guard `test:ps-187-backend-test-rate-fixture` (11 checks: determinism, seed sensitivity, 15-rate coverage,
+  markers, golden money parity, gating before the live pipeline, never-cached). QA: typecheck +
+  rate-system-hardening + ps-050-rate-exactness + ps-123 + ps-197 + ps-198 + full cert ALL PASS. Local
+  commit only.
 - **PS-188 — ✅ DONE 2026-06-11 (Wave 2a): rate-shop origin backend-owned, '90248' deleted from Views.**
   Repo-verified scope: the hardcode lived in rates-parity.ts (×2: buildLiveRatesPayload fallback + meta-label
   fallback) and RatesView's form default — the card's `orders-parity.ts:83` claim does NOT reproduce (no

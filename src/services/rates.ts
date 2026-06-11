@@ -13,6 +13,8 @@ import {
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
+import { loadClientIsTest } from './fulfillment/test-label-policy';
+import { buildTestFixtureRates } from './test-rate-fixture';
 import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
 import {
   directCarrierVisibleForScope,
@@ -1344,6 +1346,37 @@ export async function getRates(
     rawManualEstimate: opts.rawManualEstimate === true,
   });
   const key = rateCacheKey(resolvedInput);
+
+  // PS-187: test clients (clients.is_test — the PS-186 authority) get DETERMINISTIC
+  // backend fixture rates. This is the canonical owner of what the FE's
+  // buildTestRatesForShipment used to fabricate client-side. No carrier API is
+  // called, nothing is written to the rate cache, and the PS-186 test-label policy
+  // independently forces mock labels for these clients at purchase time — fixtures
+  // can never buy postage. Real clients never reach this branch.
+  if (resolvedInput.clientId != null && (await loadClientIsTest(Number(resolvedInput.clientId)))) {
+    const fixtureRates = buildTestFixtureRates({
+      orderId: resolvedInput.orderId ?? null,
+      weightOz: Number(resolvedInput.weightOz ?? 0),
+      dimsL: Number(resolvedInput.dimsL ?? 0),
+      dimsW: Number(resolvedInput.dimsW ?? 0),
+      dimsH: Number(resolvedInput.dimsH ?? 0),
+    }) as unknown as Rate[];
+    return {
+      rates: fixtureRates,
+      bestRate: pickBestRate(fixtureRates),
+      cached: false,
+      cacheKey: key,
+      fetchedAt: new Date().toISOString(),
+      carrierDiagnostics: [],
+      effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
+      effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
+      effectiveInsuranceSource: 'test-fixture',
+      residential: resolvedInput.residential === true,
+      residentialClassification: resolvedInput.residentialClassification ?? null,
+      residentialSource: resolvedInput.residentialSource ?? null,
+    };
+  }
+
   const automationRules = await loadShippingAutomationRules();
 
   // Markups apply at read time so config changes reflect instantly without
