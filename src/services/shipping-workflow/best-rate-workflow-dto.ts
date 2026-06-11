@@ -82,6 +82,16 @@ export type OrderRowWorkflowDisplay = {
   providerAccountId: number | null;
 };
 
+// PS-177 (Phase 5): backend-owned row MONEY display — computed by the pure
+// rate-money module from the same canonical picks the shipping model uses.
+import {
+  buildOrderRowMoneyDisplay,
+  type MarkupRule,
+  type OrderRowMoneyDisplay,
+} from './rate-money';
+
+export type { OrderRowMoneyDisplay };
+
 export type BestRateSelectedRateState = 'matches_best_rate' | 'mismatched_best_rate' | 'missing' | 'unknown';
 
 // PS-196 — DISPLAY-ONLY classification of the saved best rate, deliberately separate from the
@@ -120,6 +130,11 @@ export type BestRateWorkflowDto = {
   // test order, operator options) still runs LIVE before consulting this, so a
   // stale list-time value can never cause a re-buy.
   queueRoute?: 'backend' | 'direct-create';
+  // PS-177 (Phase 5): backend-owned row MONEY display (base/marked/markup/
+  // insurance/margin) — present only when the route passed money facts AND the
+  // viewer can see financials. Display-only: purchase amounts still come from
+  // the proof-backed selected rate at label time, never from this tuple.
+  money?: OrderRowMoneyDisplay | null;
 };
 
 export type BuildBestRateWorkflowInput = {
@@ -323,6 +338,17 @@ export type OrderRowWorkflowFacts = {
   canonicalAccountNickname: string | null;
   selectedRateCarrierCode: string | null;
   providerAccountId: number | null;
+  // PS-177 (Phase 5): OPTIONAL money facts — when present (and canViewFinancials),
+  // the DTO carries the backend-owned money tuple. Optional so existing callers
+  // (guards, earlier routes) compile and emit byte-identical output unchanged.
+  money?: {
+    canViewFinancials: boolean;
+    bestRateBaseAmount: number | null;
+    selectedRateBaseAmount: number | null;
+    labelFinalCost: number | null;
+    markupRule: MarkupRule | null;
+    insuranceAddOn: number | null;
+  };
 };
 
 const ROW_TEST_CARRIER_CODE = 'prepship_test';
@@ -436,6 +462,21 @@ export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWo
     allowedActions: rowActionsFor(rowState, dto.allowedActions),
     display: displayTupleFor(facts),
     queueRoute: queueRouteFor(facts),
+    // PS-177: money only when the route provided facts; redacted viewers get null.
+    ...(facts.money
+      ? {
+          money: facts.money.canViewFinancials
+            ? buildOrderRowMoneyDisplay({
+                isAwaiting: facts.orderStatus === 'awaiting_shipment',
+                bestRateBaseAmount: facts.money.bestRateBaseAmount,
+                selectedRateBaseAmount: facts.money.selectedRateBaseAmount,
+                labelFinalCost: facts.money.labelFinalCost,
+                markupRule: facts.money.markupRule,
+                insuranceAddOn: facts.money.insuranceAddOn,
+              })
+            : null,
+        }
+      : {}),
   };
 }
 

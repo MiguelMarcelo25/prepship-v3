@@ -477,10 +477,26 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   flows). Guard `test:ps-177-queue-sku-identity` (10 checks: single→SKU:, multi→COMBO: order-insensitive,
   no-SKU kept, ORDER: fallback, adjustment filter, qty merge, degraded-only derivation, best-effort,
   both writes use resolved identity). QA: typecheck + build:web + print-queue-hygiene + ps-176 +
-  test-order-queue-label + ps-052 + ps-109 + batch-names + ps-070 + full cert ALL PASS. **Remaining
-  parts:** money/rate display DTOs (baseLabelCost/insuranceCost/displayRateAmount/markupAmount/
-  customerShippingCharge/marginDisplay/costSource), carrier/account identity display, effective
-  package/dims/default source. Read-model/additive; FE keeps shipped/cancelled fallback.
+  test-order-queue-label + ps-052 + ps-109 + batch-names + ps-070 + full cert ALL PASS.
+  **PART 2 DONE 2026-06-12: backend-owned row MONEY display.** Audit finding: the markup MATH lived
+  twice — rates.ts applyMarkups (browse responses, already backend-applied with original_amount +
+  markup attached) and web markups.ts applyCarrierMarkup (row Best Rate/Margin cells, applied
+  CLIENT-SIDE from the FE-fetched settings map). Shipped: pure
+  `shipping-workflow/rate-money.ts` owns parse (`markup.<pidOrCarrier>` normalization), the
+  application math (percent/flat, cents rounding), the row rule lookup precedence (FE
+  getCarrierMarkup parity: pid → carrierCode; awaiting rows look up by BEST-RATE identity, shipped
+  canonical-first), insurance add-on extraction, and the assembled tuple
+  {baseAmount, markedAmount, markupAmount, insuranceAddOn, marginPercent, source}. rates.ts
+  delegates parse+math (behavior-identical, loadCarrierMarkups exported); /orders loads the SAME
+  rules once per request (additive-safe try/catch) and passes money facts into
+  withOrderRowWorkflow → DTO `money` (null for redacted viewers — canViewFinancials enforced in the
+  DTO, no money key for legacy callers); FE Best Rate + Margin cells prefer DTO.money with
+  applyCarrierMarkup retained ONLY as deploy-skew fallback (Phase 6 deletes). Scope note: shipped
+  rows keep bestRateWorkflow=null by payload design, so shipped Selected Rate stays on the FE
+  fallback until the shipped-row DTO phase. Guard `test:ps-177-row-money-display` (33 checks).
+  QA: typecheck + build:web + ps-173 + ps-175 + ps-176 + ps-196 + ps-187-fixture + ps-183 +
+  ps-123 + ps-135 + full cert ALL PASS. **Remaining parts:** effective package/dims/default
+  source display. Read-model/additive throughout.
 - **PS-178 — Phase 6: OrdersView/RateBrowser thin-client decomposition (AFTER backend contracts).** Extract
   UI-only components (OrdersToolbar/Table/BatchActions/ShipmentPanel/PrintQueueDrawer/cells) + thin hooks
   that call backend workflow/poll job status (NO FE rate-finalization/proof/routing/money/queue-identity);

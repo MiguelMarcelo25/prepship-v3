@@ -1608,6 +1608,24 @@ function getBackendInsuranceAddOn(rate: unknown): number | null {
   return nestedAmount != null && nestedAmount > 0 ? nestedAmount : null
 }
 
+// PS-177 (Phase 5): backend-owned row money tuple (base/marked/markup/insurance/
+// margin) off the workflow DTO. Preferred by the Best Rate + Margin cells; the
+// local applyCarrierMarkup paths below remain ONLY as a deploy-skew fallback for
+// rows that did not carry the tuple (deleted in Phase 6).
+function getBackendRowMoney(order: OrderSummaryDto) {
+  const money = toRecord(toRecord(order.bestRateWorkflow)?.money)
+  if (!money) return null
+  const markedAmount = toNumberValue(money.markedAmount)
+  if (markedAmount == null) return null
+  return {
+    baseAmount: toNumberValue(money.baseAmount),
+    markedAmount,
+    markupAmount: toNumberValue(money.markupAmount),
+    insuranceAddOn: toNumberValue(money.insuranceAddOn),
+    marginPercent: toNumberValue(money.marginPercent),
+  }
+}
+
 function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: number | null, insuranceAddOn?: number | null) {
   const displayAmount = markedAmount ?? baseAmount
   if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'\u2014'}</span>
@@ -8403,6 +8421,16 @@ export default function OrdersView({
       // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
+    // PS-177: backend-owned money tuple first; the applyCarrierMarkup path below
+    // is the deploy-skew fallback only.
+    const backendMoney = getBackendRowMoney(displayOrder)
+    if (backendMoney) {
+      return (
+        <div data-rate-state="ready" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)}
+        </div>
+      )
+    }
     const markedAmount = applyCarrierMarkup({
       shippingProviderId: getBestRateShippingProviderId(displayOrder),
       carrierCode: displayOrder.bestRate.carrierCode ?? '',
@@ -8450,6 +8478,20 @@ export default function OrdersView({
       // Bounded/terminal fallback (compact) instead of an indefinite spinner.
       return renderAwaitingRateFallback(order, displayOrder, 'compact')
         ?? <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
+    }
+
+    // PS-177: backend-owned margin first (markup + percent computed by the same
+    // canonical rule the row's Best Rate amount used); local math = skew fallback.
+    const backendMoney = getBackendRowMoney(displayOrder)
+    if (backendMoney) {
+      const diff = backendMoney.markupAmount
+      if (diff == null || diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
+      return (
+        <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
+          <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney.marginPercent ?? 0}%</div>
+        </div>
+      )
     }
 
     const markedAmount = applyCarrierMarkup({

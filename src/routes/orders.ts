@@ -82,6 +82,12 @@ import {
   computeOrderRateJobFingerprint,
   resolveRateJobWorkflowOverride,
 } from '../services/shipping-workflow/order-rate-job-status';
+import {
+  extractInsuranceAddOn,
+  resolveOrderRowMarkupRule,
+  type MarkupRule,
+} from '../services/shipping-workflow/rate-money';
+import { loadCarrierMarkups } from '../services/rates';
 
 const app = new Hono();
 
@@ -1514,6 +1520,18 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     console.warn('[orders] test-client lookup skipped:', err instanceof Error ? err.message : err);
   }
 
+  // PS-177 (Phase 5): the SAME markup rules browse responses use, loaded once per
+  // request, so every row carries a backend-owned money tuple instead of the FE
+  // re-applying markups from its own settings fetch. Failure leaves the map empty
+  // (rows price without markup facts — FE fallback still renders); display-only,
+  // never breaks /orders.
+  let carrierMarkupRules: Map<string, MarkupRule> = new Map();
+  try {
+    carrierMarkupRules = await loadCarrierMarkups();
+  } catch (err) {
+    console.warn('[orders] markup rules lookup skipped:', err instanceof Error ? err.message : err);
+  }
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -1904,6 +1922,22 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const rowHasQueueableLabel =
       typeof rowLabelUrl === 'string' && /^https?:\/\//i.test(rowLabelUrl) && !rowLabelUrl.includes('[object Object]');
     const rowIsDirectCarrierSelection = (canonicalProviderAccountId ?? 0) >= 10_000_000;
+    // PS-177: row money facts — rule resolution (pid-first, awaiting best-rate
+    // identity vs shipped canonical-first) owned by the pure rate-money module.
+    const rowIsAwaiting = effectiveOrderStatus === 'awaiting_shipment';
+    const rowMarkupRule = resolveOrderRowMarkupRule(
+      {
+        isAwaiting: rowIsAwaiting,
+        bestRateProviderAccountId:
+          providerIdOrNull(bestRateRecord?.providerAccountId ?? bestRateRecord?.shippingProviderId) ?? null,
+        canonicalProviderAccountId: canonicalProviderAccountId ?? null,
+        selectedRateProviderAccountId: selectedRateJsonProviderId ?? null,
+        bestRateCarrierCode: stringOrNull(bestRateRecord?.carrierCode),
+        canonicalCarrierCode,
+        selectedRateCarrierCode,
+      },
+      carrierMarkupRules,
+    );
     const bestRateWorkflowRow = bestRateWorkflow
       ? withOrderRowWorkflow(bestRateWorkflow, {
           orderStatus: r.order.orderStatus ?? null,
@@ -1922,6 +1956,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           canonicalAccountNickname,
           selectedRateCarrierCode: stringOrNull(selectedRateRecord?.carrierCode),
           providerAccountId: canonicalProviderAccountId ?? null,
+          money: {
+            canViewFinancials,
+            bestRateBaseAmount: bestRatePick.value ?? null,
+            selectedRateBaseAmount: selectedRateAmount ?? null,
+            labelFinalCost: labelCost ?? null,
+            markupRule: rowMarkupRule,
+            insuranceAddOn: extractInsuranceAddOn(rowIsAwaiting ? bestRateRecord : selectedRateRecord),
+          },
         })
       : null;
     const shipping = {

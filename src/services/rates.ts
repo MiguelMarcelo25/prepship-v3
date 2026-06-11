@@ -57,32 +57,28 @@ import {
   insuranceCostConfigFingerprint,
   isRateInsuranceResolved,
 } from './shipping-workflow/insurance-cost';
+import {
+  applyMarkupToAmount,
+  parseMarkupSettingValue,
+  type MarkupRule,
+} from './shipping-workflow/rate-money';
 
-type Markup = { type: 'amount' | 'percent'; value: number };
+type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
 const DIRECT_STORE_PROVIDER_ID_OFFSET = 20_000_000;
 
-async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
+// PS-177 (Phase 5): parse normalization moved to the pure canonical owner
+// (shipping-workflow/rate-money.ts) and the loader is exported so the orders
+// route prices row money from the SAME rules browse responses use.
+export async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
   const rows = await db
     .select()
     .from(settings)
     .where(like(settings.key, 'markup.%'));
   const m = new Map<string, Markup>();
   for (const row of rows) {
-    if (!row.value) continue;
-    const id = row.key.slice('markup.'.length);
-    try {
-      const p = JSON.parse(row.value);
-      const value = Number(p.value);
-      if (!Number.isFinite(value) || value === 0) continue;
-      if (p.type === 'amount' || p.type === 'flat') {
-        m.set(id, { type: 'amount', value });
-      } else if (p.type === 'percent' || p.type === 'pct') {
-        m.set(id, { type: 'percent', value });
-      }
-    } catch {
-      // ignore unparseable values
-    }
+    const rule = parseMarkupSettingValue(row.value);
+    if (rule) m.set(row.key.slice('markup.'.length), rule);
   }
   return m;
 }
@@ -134,13 +130,12 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
     const m = markups.get(String(r.carrier_id ?? '')) ?? (providerId ? markups.get(providerId) : undefined);
     if (!m) return r;
     const orig = r.shipping_amount.amount;
-    const newAmount =
-      m.type === 'percent' ? orig * (1 + m.value / 100) : orig + m.value;
     return {
       ...r,
       shipping_amount: {
         ...r.shipping_amount,
-        amount: Math.round(newAmount * 100) / 100,
+        // PS-177: same math, one owner (rate-money.applyMarkupToAmount).
+        amount: applyMarkupToAmount(orig, m),
       },
       original_amount: { ...r.shipping_amount },
       markup: m,
