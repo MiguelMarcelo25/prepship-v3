@@ -19,19 +19,17 @@ import {
 } from '../../services/shipment-tracking-policy.js';
 
 /**
- * ShipStation's tracking endpoint wants the BASE carrier code — walleted
- * variants are PrepShip-side distinctions of the same carrier network.
+ * ShipStation's tracking endpoint wants the BASE carrier code. EVERY carrier
+ * connected to the ShipStation account is supported by construction: the code
+ * stored on the shipment passes through verbatim (stamps_com, fedex, dhl_express,
+ * ups, …), and ANY `_walleted` variant — a ShipStation-side billing distinction
+ * of the same carrier network — is normalized by stripping the suffix, so new
+ * walleted connections never need a code change here.
  */
-const TRACKING_CARRIER_CODE_ALIASES: Record<string, string> = {
-  ups_walleted: 'ups',
-  fedex_walleted: 'fedex',
-  dhl_express_walleted: 'dhl_express',
-};
-
 export function normalizeTrackingCarrierCode(carrierCode: string | null | undefined): string | null {
   const code = typeof carrierCode === 'string' && carrierCode.trim() ? carrierCode.trim() : null;
   if (!code) return null;
-  return TRACKING_CARRIER_CODE_ALIASES[code] ?? code;
+  return code.endsWith('_walleted') ? code.slice(0, -'_walleted'.length) : code;
 }
 
 function toNormalizedStatus(payload: NormalizedTrackingPayload): NormalizedTrackingStatus {

@@ -147,6 +147,14 @@ check('connector calls GET /v2/tracking via the shared ssRequest (rate-limited)'
 check('connector maps 404/400 to unknown (never retires)',
   /err\.status === 404 \|\| err\.status === 400/.test(connector) &&
   /status: 'unknown'/.test(connector));
+// ALL ShipStation-connected carriers are covered by construction: base codes
+// pass through verbatim and any _walleted variant strips to its base carrier.
+check('every connected carrier passes through (generic _walleted normalization)',
+  (() => {
+    const m = connector.match(/export function normalizeTrackingCarrierCode[\s\S]{0,500}?\n\}/);
+    if (!m) return false;
+    return /endsWith\('_walleted'\)/.test(m[0]) && !/TRACKING_CARRIER_CODE_ALIASES/.test(connector);
+  })());
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check("FE history shows everything that left the active queue (status !== 'queued')",
   /activeQueueEntries\.filter\(\(entry\) => entry\.status !== 'queued'\)/.test(ordersView));
