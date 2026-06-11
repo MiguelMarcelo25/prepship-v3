@@ -424,9 +424,14 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
 - **PS-154 / PS-155 / PS-157** → FE decomposition; **sequence after backend contracts (Phase 6)** per the no-broad-FE-decomp-first rule.
 
 ### PS-180–190 — board cleanup + OrdersView sweep findings (mostly independent · "No deps" unless noted)
-- **PS-180 — Housekeeping (no deps).** Close PS-164 (shipped `ebdfc83b`); retarget PS-127/PS-130 guards (the
-  `residential: true` literal was deleted → assert `residentialForRate()` default-true ~L5468); retarget
-  PS-139 guard (`src/shim/` EXISTS but guard asserts absent → TS2614; fix/remove vacuous check).
+- **PS-180 — ✅ DONE 2026-06-11 (Wave 1, repo-verified scope).** The card's claims were checked against
+  THIS repo before "fixing": (a) **PS-127 guard** was NOT broken (it passes and asserts the literal's
+  absence — the correct direction); strengthened it with the POSITIVE invariant the card asked for —
+  `residentialForRate()` (OrdersView ~L5525) honors explicit source=false and defaults to residential
+  (`return true` fallback) — guard PASS. (b) **PS-130 guard does not exist** in this repo (no file/npm
+  script/content ref) — nothing to retarget. (c) **`src/shim/` is ABSENT**, no guard references it, and
+  typecheck is clean (no TS2614) — the PS-139 claim doesn't reproduce. (b)+(c) likely came from an audit of
+  a different snapshot/repo. (d) PS-164 closure: shipped `ebdfc83b` — the Trello board move is DJ's action.
 - **PS-181 — Backend `isAdmin`/role on session DTO; delete FE `ADMIN_EMAILS` hardcode (no deps).** FE reads
   `session.isAdmin`; guard asserts no `ADMIN_EMAILS` in web/src + `isAdmin` on session type.
 - **PS-182 — Fix no-op 'Revert' address button + hardcoded '0 Tax IDs added' (no deps).** Wire or remove

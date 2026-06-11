@@ -138,6 +138,18 @@ const cls = (i: Parameters<typeof classifyShippingAddress>[0]) => classifyShippi
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
   check('OrdersView defines residentialForRate helper', /function residentialForRate\(/.test(ordersView), true);
   check('OrdersView no longer hardcodes residential: true', /residential:\s*true,/.test(ordersView), false);
+  // PS-180: pin the POSITIVE invariant too (not just the literal's absence) — the helper's
+  // default-true cascade: explicit merged boolean wins, then sourceResidential/raw shipTo,
+  // an explicit source FALSE wins commercial, and the fallback default is RESIDENTIAL (true).
+  {
+    const helperStart = ordersView.indexOf('function residentialForRate(');
+    const helperEnd = ordersView.indexOf('\n  }', helperStart);
+    const helperBody = helperStart >= 0 ? ordersView.slice(helperStart, helperEnd) : '';
+    check('residentialForRate honors an explicit source=false (commercial)',
+      /if \(source === false\) return false/.test(helperBody), true);
+    check('residentialForRate defaults to residential (return true fallback)',
+      /return true\s*$/.test(helperBody.trimEnd()), true);
+  }
 
   const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
   check('RateBrowserModal no longer hardcodes residential: true', /residential:\s*true,/.test(modal), false);
