@@ -119,9 +119,15 @@ check('snapshot persistence is backed by analytics_cache (no migration)',
 
 // ── 10. Frontend EMIT: passes { rateQuoteId, selectedRateKey } alongside the proof. ──
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-135 moved the ref/proof candidate selection into web/src/lib/rate-proof.ts
+// (rateQuoteRefFromCandidates); OrdersView's buildRateQuoteRefForOrder delegates to it,
+// passing the SAME ordered candidates as buildSelectedRateProofPayload. PS-198 lets a
+// candidate carrying BOTH backend-minted opaque ids win BEFORE the legacy-proof
+// selection (behavior pinned by ps-198-rate-quote-proof-passthrough-guard.ts).
+const rateProofLib = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
 check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection',
-  /function buildRateQuoteRefForOrder/.test(ordersView) &&
-    /hasBackendIssuedRateProof\(r\) && rateProofFingerprint\(r\)/.test(ordersView));
+  /function buildRateQuoteRefForOrder[\s\S]{0,200}?return rateQuoteRefFromCandidates\(\[\s*toRecord\(candidate\),\s*toRecord\(order\.bestRate\),\s*toRecord\(order\.selectedRate\),\s*getSavedBestRateRecord\(order\),\s*\]\)/.test(ordersView) &&
+    /export function rateQuoteRefFromCandidates[\s\S]*?toStr\(r\.rateQuoteId\) && toStr\(r\.selectedRateKey\)[\s\S]*?hasBackendIssuedRateProof\(r\) && rateProofFingerprint\(r\)/.test(rateProofLib));
 check('frontend emits the rate quote ref on the primary create/queue/batch payloads (>= 3)',
   (ordersView.match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 3);
 check('frontend does NOT pass a stale ref on the direct-carrier retry/override path',
