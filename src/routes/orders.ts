@@ -1896,6 +1896,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const rowDimsW = finiteNumberOrNull(safeOverrides?.rateDimsW) ?? finiteNumberOrNull(rowRawDims.width);
     const rowDimsH = finiteNumberOrNull(safeOverrides?.rateDimsH) ?? finiteNumberOrNull(rowRawDims.height);
     const rowWeightOz = finiteNumberOrNull(safeOverrides?.rateWeightOz) ?? finiteNumberOrNull(r.order.weightOz);
+    // PS-176: queue-routing facts. A queueable label = a real http(s) URL (the
+    // FE's getQueueableLabelUrl semantics — '[object Object]' corruption and
+    // non-strings don't count); a direct-carrier selection = the synthetic
+    // 10M+ provider id range the direct accounts use.
+    const rowLabelUrl = ship?.label_url;
+    const rowHasQueueableLabel =
+      typeof rowLabelUrl === 'string' && /^https?:\/\//i.test(rowLabelUrl) && !rowLabelUrl.includes('[object Object]');
+    const rowIsDirectCarrierSelection = (canonicalProviderAccountId ?? 0) >= 10_000_000;
     const bestRateWorkflowRow = bestRateWorkflow
       ? withOrderRowWorkflow(bestRateWorkflow, {
           orderStatus: r.order.orderStatus ?? null,
@@ -1905,6 +1913,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           hasCompleteDims: rowDimsL != null && rowDimsL > 0 && rowDimsW != null && rowDimsW > 0 && rowDimsH != null && rowDimsH > 0,
           hasWeight: rowWeightOz != null && rowWeightOz > 0,
           hasShipment: Boolean(ship),
+          hasQueueableLabel: rowHasQueueableLabel,
+          isDirectCarrierSelection: rowIsDirectCarrierSelection,
           bestRateCarrierCode: stringOrNull(bestRateRecord?.carrierCode),
           bestRateServiceCode: stringOrNull(bestRateRecord?.serviceCode),
           canonicalCarrierCode,

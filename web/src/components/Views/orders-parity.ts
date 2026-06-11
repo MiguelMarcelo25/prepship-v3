@@ -1312,6 +1312,13 @@ export function classifyQueueOrderRoute(
     isTest: boolean
     /** Selected/best rate resolves to a direct carrier_accounts synthetic id. */
     isDirectCarrier: boolean
+    /**
+     * PS-176: the BACKEND's routing policy (bestRateWorkflow.queueRoute). It is
+     * consulted ONLY after the live never-buy ladder below, so a stale
+     * list-time value can never cause a re-buy — it only decides the residual
+     * direct-vs-backend question for orders that genuinely need a label.
+     */
+    backendQueueRoute?: string | null
   },
   options: { existingLabelOnly?: boolean; batchTestMode?: boolean } = {},
 ): QueueOrderRoute {
@@ -1320,6 +1327,10 @@ export function classifyQueueOrderRoute(
   if (options.batchTestMode) return 'backend' // test run → backend mock, no real postage
   if (input.isTest) return 'backend' // test-client order → backend mock
   if (input.hasQueueableLabel) return 'backend' // already bought → backend queues it as-is
+  // PS-176: the backend owns the residual routing policy when it spoke.
+  if (input.backendQueueRoute === 'backend' || input.backendQueueRoute === 'direct-create') {
+    return input.backendQueueRoute
+  }
   // A direct-carrier order that still needs a label is the ONLY case the backend
   // can't handle. Buy it via the Vercel direct path, then queue.
   if (input.isDirectCarrier) return 'direct-create'

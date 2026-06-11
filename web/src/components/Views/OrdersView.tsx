@@ -4893,6 +4893,9 @@ export default function OrdersView({
           // PS-186: queue ROUTING is a money-path decision — backend fact only.
           isTest: isBackendTestOrder(order),
           isDirectCarrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
+          // PS-176: the backend's routing policy — consulted only after the live
+          // never-buy ladder inside the classifier.
+          backendQueueRoute: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
         },
         options,
       )

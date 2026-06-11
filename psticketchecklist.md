@@ -435,12 +435,22 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   (15 checks — the backend matrix mirrors the FE strict-guard fixtures: parity by fixtures, not trust). QA:
   typecheck + build:web + recalculate-strict + batch-recalculate + ps-123 + ps-197 + ps-198 + ps-105 + full
   cert ALL PASS. Local commit only.
-- **PS-176 — Phase 4: Backend Label Purchase + Print Queue orchestration enforcement (highest money/postage
-  risk).** Composable ShippingIntent/LabelPurchase/PrintQueue services; FE sends order IDs + intent + backend
-  quote/key; backend hydrates canonical data + validates shippability/duplicate-label/shipped-cancelled
-  locks/external-shipped/scope/carrier-scope/selected-rate-proof/payload-parity immediately before side
-  effects; backend owns direct-vs-ShipStation routing; idempotent queue insert; replace FE localStorage
-  shipping-recovery authority with backend job ids. No real postage in tests. Dep: PS-174 + PS-175.
+- **PS-176 — 🟡 PART 1 DONE 2026-06-12 (Phase 4): queue ROUTING policy backend-owned; validation chain
+  repo-verified as already server-side.** Audit finding recorded: the spec's "validate immediately before
+  side effects" list ALREADY runs in createLabelV2 (editable lock PS-190, PS-128/129 shipping safety,
+  duplicate-label, PS-186 test policy, PS-105 selected-rate proof snapshot-first, PS-135a residential
+  parity, service + carrier-family eligibility) and addToQueue is already idempotent — built across prior
+  tickets, not re-implemented. **Part 1 shipped:** the direct-vs-backend ROUTING decision moved onto the
+  row workflow DTO (`queueRoute`, computed by the same extend-never-parallel enricher from
+  shipment/test/provider-id facts); the FE classifier consults it ONLY AFTER its LIVE never-buy ladder
+  (operator options → test fact → existing-label fact), so a stale list-time value can never cause a
+  postage re-buy (behaviorally guard-pinned). **Part 2 (next):** replace the FE localStorage
+  shipping-recovery authority with backend job ids + payload-parity validation at purchase. Guard
+  `test:ps-176-queue-route-authority` (12 checks: backend matrix, never-buy override matrix incl. stale
+  direct-create vs live label/test, garbage falls through, wiring pins). QA: typecheck + build:web +
+  ps-173 + ps-084 + ps-186 + print-queue-hygiene + batch-send-proof-forwarding + direct-carrier-queue-route
+  + test-order-queue-label + full cert ALL PASS. **LOCAL COMMIT ONLY — DJ inspects before push (the
+  Phase 4 discipline).**
 - **PS-177 — Phase 5: Backend display models (money, carrier identity, queue SKU identity, package
   defaults).** Backend DTOs for money/rate display (baseLabelCost/insuranceCost/displayRateAmount/
   markupAmount/customerShippingCharge/marginDisplay/costSource), carrier/account identity, Print Queue SKU

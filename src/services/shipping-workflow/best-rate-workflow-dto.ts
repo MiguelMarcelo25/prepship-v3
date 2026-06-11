@@ -114,6 +114,12 @@ export type BestRateWorkflowDto = {
   // route enriched the DTO with row context via withOrderRowWorkflow (additive).
   rowState?: OrderRowWorkflowState;
   display?: OrderRowWorkflowDisplay;
+  // PS-176 (Phase 4): backend-owned queue ROUTING policy — which path a
+  // queue/label intent takes ('backend' Render job vs 'direct-create' Vercel
+  // direct-carrier purchase). The FE's never-buy safety ladder (existing label,
+  // test order, operator options) still runs LIVE before consulting this, so a
+  // stale list-time value can never cause a re-buy.
+  queueRoute?: 'backend' | 'direct-create';
 };
 
 export type BuildBestRateWorkflowInput = {
@@ -304,6 +310,10 @@ export type OrderRowWorkflowFacts = {
   hasCompleteDims: boolean;
   hasWeight: boolean;
   hasShipment: boolean;
+  // PS-176: queue-routing facts — an existing queueable label and a
+  // direct-carrier selection (synthetic 10M+ provider id) decide the path.
+  hasQueueableLabel: boolean;
+  isDirectCarrierSelection: boolean;
   // PS-165b inputs — the SAME canonical picks + best-rate identity the row payload
   // already computed; the tuple is derived here so the precedence has ONE owner.
   bestRateCarrierCode: string | null;
@@ -396,6 +406,20 @@ function displayTupleFor(facts: OrderRowWorkflowFacts): OrderRowWorkflowDisplay 
 }
 
 /**
+ * PS-176 — the queue ROUTING policy: which path a queue/label intent takes.
+ * Mirrors the FE classifyQueueOrderRoute base ladder (test/existing-label →
+ * backend; direct-carrier needing a label → the Vercel direct purchase path;
+ * everything else → the backend job). The FE's LIVE never-buy overrides
+ * (operator options, fresh label facts) still run before this value is used.
+ */
+function queueRouteFor(facts: OrderRowWorkflowFacts): 'backend' | 'direct-create' {
+  if (facts.isTest) return 'backend';
+  if (facts.hasQueueableLabel) return 'backend';
+  if (facts.isDirectCarrierSelection) return 'direct-create';
+  return 'backend';
+}
+
+/**
  * PS-173 (Phase 1) — enrich an already-built workflow DTO with the backend-owned
  * row state, action verbs, and display tuple. ADDITIVE BY CONSTRUCTION: callers
  * that never invoke this (e.g. /rates/browse) produce byte-identical output to
@@ -411,6 +435,7 @@ export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWo
     rowState,
     allowedActions: rowActionsFor(rowState, dto.allowedActions),
     display: displayTupleFor(facts),
+    queueRoute: queueRouteFor(facts),
   };
 }
 
