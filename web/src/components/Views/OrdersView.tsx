@@ -172,10 +172,20 @@ interface AllMatchingSelectionState {
 
 type PersistentQueueJobKind = 'existing-labels' | 'batch-queue'
 
+// PS-176 part 2: the persisted job carries IDENTIFIERS ONLY — never money
+// payloads (rates/proof/label URLs). Resume re-reads everything fresh from the
+// backend; localStorage holds no purchase authority.
+interface PersistentQueueOrderRef {
+  orderId: number
+  orderNumber?: string | null
+  clientId?: number | null
+  orderStatus?: string | null
+}
+
 interface PersistentQueueJob {
   id: string
   kind: PersistentQueueJobKind
-  orders: OrderSummaryDto[]
+  orders: PersistentQueueOrderRef[]
   completedOrderIds: number[]
   failedOrderIds: number[]
   total: number
@@ -194,31 +204,17 @@ const BATCH_RECALCULATE_TIMEOUT_MS = 45_000
 const BATCH_RECALCULATE_CONCURRENCY = 3
 let persistentQueueJobCache: PersistentQueueJob | null | undefined
 
-function createQueueOrderSnapshot(order: OrderSummaryDto): OrderSummaryDto {
-  const raw = order.raw && typeof order.raw === 'object' ? order.raw as Record<string, unknown> : null
+// PS-176 part 2: persist IDENTIFIERS ONLY. The old snapshot carried full money
+// payloads (bestRate/selectedRate/label) into localStorage and the resume loop
+// rebuilt label purchases from them — stale frontend money authority. Resume
+// now re-reads everything fresh from the backend, so nothing here can buy.
+function createQueueOrderSnapshot(order: OrderSummaryDto): PersistentQueueOrderRef {
   return {
     orderId: order.orderId,
-    orderNumber: order.orderNumber,
-    orderStatus: order.orderStatus,
-    clientId: order.clientId,
-    clientName: order.clientName,
-    storeId: order.storeId,
-    items: order.items,
-    label: order.label,
-    bestRate: order.bestRate,
-    selectedRate: order.selectedRate,
-    serviceCode: order.serviceCode,
-    shipping: order.shipping,
-    canonicalOrder: order.canonicalOrder,
-    weight: order.weight,
-    rateDims: order.rateDims,
-    dimensions: order.dimensions,
-    raw: raw ? {
-      test: raw.test,
-      testing: raw.testing,
-      dimensions: raw.dimensions,
-    } : order.raw,
-  } as OrderSummaryDto
+    orderNumber: order.orderNumber ?? null,
+    clientId: order.clientId ?? null,
+    orderStatus: order.orderStatus ?? null,
+  }
 }
 
 function readPersistentQueueJob(): PersistentQueueJob | null {
@@ -7708,6 +7704,19 @@ export default function OrdersView({
       return
     }
 
+    // PS-176 part 2: localStorage holds IDENTIFIERS ONLY — never money payloads.
+    // A batch-queue job interrupted BEFORE its backend job id was recorded must
+    // NOT re-buy labels from local state: hand control back to the operator
+    // (fresh selection → fresh backend job with live data + full validation).
+    if (job.kind === 'batch-queue') {
+      clearPersistentQueueJob(job.id)
+      showToast(
+        `Queue send was interrupted — ${pendingOrders.length} order${pendingOrders.length === 1 ? ' was' : 's were'} not sent. Select them and Print to Queue again.`,
+        'error',
+      )
+      return
+    }
+
     resumePersistentQueueJobIdRef.current = job.id
     activePersistentQueueJobIdRef.current = job.id
     startQueueActionProgress(progress.total, 'Resuming queue', progress.completed, progress.failed)
@@ -7716,109 +7725,49 @@ export default function OrdersView({
     let sent = 0
     let failed = 0
     let queueClient: number | null = null
-    const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
 
-    const markAndAdvance = (order: OrderSummaryDto, orderFailed: boolean) => {
-      markPersistentQueueJobOrder(job.id, order.orderId, orderFailed)
+    const markAndAdvance = (ref: PersistentQueueOrderRef, orderFailed: boolean) => {
+      markPersistentQueueJobOrder(job.id, ref.orderId, orderFailed)
       advanceQueueActionProgress(orderFailed ? 1 : 0)
     }
 
-    const processExistingLabelOrder = async (order: OrderSummaryDto) => {
-      const labelUrl = getQueueableLabelUrl(order.label?.labelUrl)
-      if (!labelUrl || order.clientId == null) {
+    // existing-labels resume: queue the EXISTING label (no postage). Everything
+    // is re-read FRESH — the label URL from the backend, the queue payload from
+    // the current page's live order DTO when available.
+    const processExistingLabelRef = async (ref: PersistentQueueOrderRef) => {
+      if (ref.clientId == null) {
         failed += 1
-        markAndAdvance(order, true)
+        markAndAdvance(ref, true)
         return
       }
-
       try {
-        await apiClient.addToQueue(buildQueueAddPayload(order, labelUrl))
+        const labelData = await apiClient.retrieveLabel(ref.orderId, true)
+        const labelUrl = getQueueableLabelUrl(labelData?.labelUrl)
+        if (!labelUrl) throw new Error('no queueable label')
+        const freshOrder = orderedFilteredOrders.find((candidate) => candidate.orderId === ref.orderId)
+        const payload = freshOrder
+          ? buildQueueAddPayload(freshOrder, labelUrl)
+          : {
+              client_id: ref.clientId,
+              order_id: String(ref.orderId),
+              order_number: ref.orderNumber ?? null,
+              label_url: labelUrl,
+              sku_group_id: `order-${ref.orderId}`,
+              order_qty: 1,
+            }
+        await apiClient.addToQueue(payload)
         sent += 1
-        queueClient = queueClient ?? order.clientId
-        queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-        markAndAdvance(order, false)
+        queueClient = queueClient ?? ref.clientId
+        markAndAdvance(ref, false)
       } catch {
         failed += 1
-        markAndAdvance(order, true)
-      }
-    }
-
-    const processBatchQueueOrder = async (order: OrderSummaryDto) => {
-      const bestRate = order.bestRate
-      const selectedRate = order.selectedRate
-      const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-      const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
-      const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
-      const orderDetail = orderDetailsById.get(order.orderId) ?? null
-      const dims = getDimensions(order, orderDetail)
-      const weightOz = getOrderWeightOz(order, orderDetail)
-      // PS-186: money path — backend fact only.
-      const orderIsTest = isBackendTestOrder(order)
-      const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
-      const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
-      const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
-
-      if (!orderIsTest && shippingProviderId == null) {
-        failed += 1
-        markAndAdvance(order, true)
-        return
-      }
-      if (!effectiveServiceCode || !effectiveCarrierCode) {
-        failed += 1
-        markAndAdvance(order, true)
-        return
-      }
-
-      try {
-        const shippingOptions = buildOrderShippingOptionsPayload(order)
-        const payload: Record<string, unknown> = {
-          orderId: order.orderId,
-          orderNumber: order.orderNumber ?? undefined,
-          serviceCode: effectiveServiceCode,
-          carrierCode: effectiveCarrierCode,
-          packageCode: 'package',
-          weightOz: effectiveWeightOz,
-          length: dims?.length,
-          width: dims?.width,
-          height: dims?.height,
-          confirmation: shippingOptions.confirmation,
-          insuranceProvider: shippingOptions.insuranceProvider,
-          insuredValue: shippingOptions.insuredValue,
-          selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
-        ...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate),
-          testLabel: Boolean(job.batchTestMode) || orderIsTest,
-        }
-        if (shippingProviderId != null) {
-          payload.shippingProviderId = shippingProviderId
-        }
-
-        const response = await apiClient.createLabel(payload)
-        const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
-        if (!queueableLabelUrl || order.clientId == null) {
-          throw new Error('Label URL is not queueable - label was not added to the print queue')
-        }
-
-        await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
-        sent += 1
-        queueClient = queueClient ?? order.clientId
-        queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-        markAndAdvance(order, false)
-      } catch {
-        failed += 1
-        markAndAdvance(order, true)
+        markAndAdvance(ref, true)
       }
     }
 
     try {
-      setBatchBusy(job.kind === 'batch-queue')
       setQueueLoading(true)
-      await runWithConcurrency(pendingOrders, BATCH_QUEUE_CONCURRENCY, async (order) => {
-        if (job.kind === 'existing-labels') {
-          await processExistingLabelOrder(order)
-          return
-        }
-        await processBatchQueueOrder(order)
-      })
+      await runWithConcurrency(pendingOrders, BATCH_QUEUE_CONCURRENCY, processExistingLabelRef)
       setQueueLoading(false)
 
       if (sent > 0 && (queueScope !== 'client' || queueClient != null)) {
@@ -7837,7 +7786,7 @@ export default function OrdersView({
 
       await refetchOrders()
       if (sent > 0) {
-        showToast(formatQueuedOrdersToast(sent, queuedItems, failed), 'success')
+        showToast(`✓ ${sent} existing label${sent === 1 ? '' : 's'} re-queued${failed ? `, ${failed} failed` : ''}`, 'success')
       } else {
         showToast('⚠ Queue resume finished with no new orders added')
       }

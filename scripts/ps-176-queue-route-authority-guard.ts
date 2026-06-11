@@ -105,6 +105,29 @@ check('classifier consults the backend policy AFTER the never-buy ladder (source
     return ladder > 0 && backend > ladder;
   })());
 
+// ── 4. PART 2: localStorage holds no purchase authority ───────────────────────
+{
+  const snapStart = ordersView.indexOf('function createQueueOrderSnapshot');
+  const snapBlock = ordersView.slice(snapStart, ordersView.indexOf('\n}', snapStart));
+  check('persisted queue snapshot carries IDENTIFIERS ONLY (no money/label payloads)',
+    snapStart > 0 &&
+    !/bestRate/.test(snapBlock) && !/selectedRate/.test(snapBlock) &&
+    !/label:/.test(snapBlock) && !/shipping/.test(snapBlock) && !/raw/.test(snapBlock));
+}
+{
+  const resumeStart = ordersView.indexOf('async function resumePersistentQueueJob');
+  const resumeEnd = ordersView.indexOf('\n  useEffect', resumeStart);
+  const resumeBlock = ordersView.slice(resumeStart, resumeEnd > 0 ? resumeEnd : resumeStart + 9000);
+  check('resume NEVER buys labels (no createLabel call in the resume path)',
+    resumeStart > 0 && !/apiClient\.createLabel\(/.test(resumeBlock));
+  check('interrupted batch-queue jobs hand control back to the operator',
+    /Queue send was interrupted/.test(resumeBlock) && /Print to Queue again/.test(resumeBlock));
+  check('existing-label resume re-reads the label FRESH from the backend',
+    /apiClient\.retrieveLabel\(ref\.orderId, true\)/.test(resumeBlock));
+  check('backend-job resume path intact (durable job id re-attach)',
+    /job\.backendJobId/.test(resumeBlock) && /pollBackendQueueSendJob\(job\.backendJobId/.test(resumeBlock));
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-176 queue route authority guard (${failures} failing)`);
   process.exit(1);

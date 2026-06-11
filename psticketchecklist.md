@@ -435,7 +435,21 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   (15 checks — the backend matrix mirrors the FE strict-guard fixtures: parity by fixtures, not trust). QA:
   typecheck + build:web + recalculate-strict + batch-recalculate + ps-123 + ps-197 + ps-198 + ps-105 + full
   cert ALL PASS. Local commit only.
-- **PS-176 — 🟡 PART 1 DONE 2026-06-12 (Phase 4): queue ROUTING policy backend-owned; validation chain
+- **PS-176 — 🟡 PARTS 1+2 DONE 2026-06-12 (Phase 4): routing policy backend-owned + localStorage purchase
+  authority eliminated.** **Part 2:** the persisted queue job now carries IDENTIFIERS ONLY (orderId/
+  orderNumber/clientId/orderStatus — the old snapshot persisted full bestRate/selectedRate/label money into
+  localStorage and the resume loop REBUILT LABEL PURCHASES from it). Resume semantics now: backend-job-id
+  jobs re-attach to the durable server job (unchanged); existing-labels jobs re-queue with the label URL
+  re-read FRESH from the backend (no postage); interrupted batch-queue jobs WITHOUT a backend job id hand
+  control back to the operator ("select them and Print to Queue again" — a fresh run with live data + full
+  backend validation) instead of re-buying from stale local state. `resume NEVER buys` is guard-pinned (no
+  createLabel call in the resume path). test-order-queue-label re-anchored 3→2 weight-fallback sites (the
+  third path no longer purchases — a stronger guarantee than a fallback). **Part 3 (remaining):**
+  payload-parity validation at purchase (needs a strictness decision — operator weight edits after rating
+  are legitimate today). Guard `test:ps-176-queue-route-authority` now 17 checks. QA (part 2): typecheck +
+  build:web + ps-053 + ps-104 + batch-send-proof-forwarding + ps-084 + test-order-queue-label + full cert
+  ALL PASS. **LOCAL COMMITS ONLY — DJ inspects before push.**
+  **PART 1 (2026-06-12): queue ROUTING policy backend-owned; validation chain
   repo-verified as already server-side.** Audit finding recorded: the spec's "validate immediately before
   side effects" list ALREADY runs in createLabelV2 (editable lock PS-190, PS-128/129 shipping safety,
   duplicate-label, PS-186 test policy, PS-105 selected-rate proof snapshot-first, PS-135a residential

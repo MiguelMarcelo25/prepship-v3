@@ -28,12 +28,18 @@ report.check({
 });
 
 report.check({
-  name: 'All queue/print/resume paths apply test weight fallback',
-  condition: testWeightFallbackCount >= 3,
-  why: 'The same missing-weight bug can appear in batch queue, batch print, and resumed queue jobs if any path skips the fallback.',
-  evidence: `Found ${testWeightFallbackCount} effectiveWeightOz fallback occurrences; expected at least 3.`,
-  failure: 'At least one label path may still reject test orders for missing weight.',
-  fix: 'Apply the same effectiveWeightOz fallback to batch queue, batch print, and resumed batch queue paths.',
+  // PS-176 part 2 re-anchor (count 3 → 2): the resumed-batch-queue path no
+  // longer BUYS labels at all — resume hands interrupted batch jobs back to the
+  // operator (pinned by test:ps-176-queue-route-authority "resume NEVER buys").
+  // A path that cannot purchase cannot have the missing-weight bug, so the
+  // fallback is required only on the two remaining buying paths (batch queue +
+  // batch print).
+  name: 'All label-BUYING queue/print paths apply test weight fallback',
+  condition: testWeightFallbackCount >= 2,
+  why: 'The same missing-weight bug can appear in batch queue and batch print if either path skips the fallback.',
+  evidence: `Found ${testWeightFallbackCount} effectiveWeightOz fallback occurrences; expected at least 2 (resume no longer purchases).`,
+  failure: 'At least one label-buying path may still reject test orders for missing weight.',
+  fix: 'Apply the same effectiveWeightOz fallback to the batch queue and batch print paths.',
 });
 
 report.check({
