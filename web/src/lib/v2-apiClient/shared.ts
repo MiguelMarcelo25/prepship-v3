@@ -628,6 +628,8 @@ export function translateRatePayloadToV4(
   if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
   if (typeof input.forceLive === 'boolean') out.forceLive = input.forceLive;
   if (typeof input.cachedOnly === 'boolean') out.cachedOnly = input.cachedOnly;
+  // PS-197b: on-demand uninsured manual-baseline comparison (reference only, never purchasable).
+  if (typeof input.manualEstimate === 'boolean') out.manualEstimate = input.manualEstimate;
   if (typeof input.preferredCarrierId === 'string' && input.preferredCarrierId) {
     out.preferredCarrierId = input.preferredCarrierId;
   }

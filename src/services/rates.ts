@@ -389,7 +389,15 @@ function classifyRateInputResidential(input: RateInput) {
   });
 }
 
-export async function resolveRateInput(input: RateInput): Promise<RateInput> {
+export async function resolveRateInput(
+  input: RateInput,
+  // PS-197b: rawManualEstimate = quote the UNINSURED manual baseline (what ShipStation's own
+  // Rate Browser shows) for side-by-side comparison. Skips the HUGRAB request-level insurance
+  // forcing ONLY for this read-only reference quote — the label-safe path is untouched, and the
+  // route never stamps proof/selection keys on manual-estimate rates, so they are structurally
+  // non-purchasable.
+  opts: { rawManualEstimate?: boolean } = {},
+): Promise<RateInput> {
   const context = await resolveRateCredentialContext(input);
   const automationRules = await loadShippingAutomationRules();
   const discoveredCarriers = await getAllCarriers(context.apiKeyV2);
@@ -411,10 +419,14 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
   // callers pass operator intent only. The eligibility module is the SINGLE owner of the
   // request-level intent (was duplicated here pre-PS-170); the per-candidate provider
   // (ParcelGuard vs direct-UPS carrier declared value) is refined during enrichment below.
-  const requestInsurance = resolveHugrabRequestInsurance(
-    { clientId: context.clientId, storeId: context.storeId },
-    input,
-  );
+  const requestInsurance = opts.rawManualEstimate
+    ? // PS-197b: the manual baseline is deliberately UNINSURED (parity with ShipStation's
+      // manual Rate Browser). Reference-only — never label-safe, never purchasable.
+      { insuranceProvider: 'none' as const, insuredValue: null, source: 'manual-estimate' as const }
+    : resolveHugrabRequestInsurance(
+        { clientId: context.clientId, storeId: context.storeId },
+        input,
+      );
   const insuranceProvider = requestInsurance.insuranceProvider as string;
   const insuredValue = requestInsurance.insuredValue;
   const effectiveInsuranceSource = requestInsurance.source;
@@ -1130,6 +1142,8 @@ export type GetRatesResult = {
 type GetRatesOptions = {
   forceRefresh?: boolean;
   cachedOnly?: boolean;
+  // PS-197b: quote the uninsured manual baseline (see resolveRateInput) — reference only.
+  rawManualEstimate?: boolean;
 };
 
 function cachedDiagnosticsFromRates(rates: Rate[]): CarrierRateDiagnostic[] {
@@ -1319,7 +1333,9 @@ export async function getRates(
   input: RateInput,
   opts: GetRatesOptions = {}
 ): Promise<GetRatesResult> {
-  const resolvedInput = await resolveRateInput(input);
+  const resolvedInput = await resolveRateInput(input, {
+    rawManualEstimate: opts.rawManualEstimate === true,
+  });
   const key = rateCacheKey(resolvedInput);
   const automationRules = await loadShippingAutomationRules();
 

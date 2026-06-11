@@ -956,6 +956,47 @@ export function classifyEffectiveInsuranceDisplay(input: {
   }
 }
 
+// PS-197b — per-ACCOUNT effective insurance, derived ONLY from the backend-stamped fields on
+// that account's enriched rates (insuranceCost.provenance + insurance_amount). This is how the
+// UI shows "USPS → ParcelGuard $100 (+$1.09)" vs "ORION/ROCEL → Carrier declared value $100
+// ($0.00 — free first $100)" as the operator clicks accounts, WITHOUT mutating the operator's
+// insurance dropdown (intent) and WITHOUT any FE policy inference.
+export function classifyAccountEffectiveInsurance(
+  rates: Array<Record<string, unknown>> | null | undefined,
+  requestInsuredValue: number | null | undefined,
+): { provider: 'carrier' | 'parcelguard'; premium: number | null; label: string } | null {
+  if (!Array.isArray(rates) || rates.length === 0) return null
+  for (const rate of rates) {
+    const cost = rate?.insuranceCost as Record<string, unknown> | null | undefined
+    const provenance = typeof cost?.provenance === 'string' ? cost.provenance : null
+    const amountRecord = rate?.insurance_amount as Record<string, unknown> | null | undefined
+    const premiumRaw =
+      typeof amountRecord?.amount === 'number' ? amountRecord.amount
+      : typeof cost?.amount === 'number' ? cost.amount
+      : null
+    const value = typeof requestInsuredValue === 'number' && Number.isFinite(requestInsuredValue)
+      ? requestInsuredValue
+      : null
+    const valueLabel = value != null ? ` $${Number.isInteger(value) ? value : value.toFixed(2)}` : ''
+    if (provenance === 'carrier_declared_value') {
+      return {
+        provider: 'carrier',
+        premium: premiumRaw ?? 0,
+        label: `Carrier declared value${valueLabel} — free first $100`,
+      }
+    }
+    if (provenance === 'parcelguard_schedule' || provenance === 'shipstation_estimate') {
+      const premiumLabel = premiumRaw != null && premiumRaw > 0 ? ` (+$${premiumRaw.toFixed(2)})` : ''
+      return {
+        provider: 'parcelguard',
+        premium: premiumRaw,
+        label: `ParcelGuard${valueLabel}${premiumLabel}`,
+      }
+    }
+  }
+  return null
+}
+
 export type SkuDisplayLineInput = {
   sku?: string | null
   name?: string | null

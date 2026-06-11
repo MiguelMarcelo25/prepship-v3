@@ -26,9 +26,13 @@ import {
 // PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
 // source of truth). The modal delegates here instead of re-deriving its own alias logic.
 import { normalizeConfirmation, normalizeInsurance } from '../../../src/lib/shipping-options';
-// PS-197: pure classifier for the backend-effective insurance display (effective_policy_diff vs
-// matches_selection). The backend owns the policy; the modal only renders the verdict.
-import { classifyEffectiveInsuranceDisplay } from './Views/orders-parity';
+// PS-197: pure classifiers for the backend-effective insurance display (effective_policy_diff vs
+// matches_selection) + the per-account verdict derived from backend-stamped rate fields.
+// The backend owns the policy; the modal only renders the verdicts.
+import {
+  classifyAccountEffectiveInsurance,
+  classifyEffectiveInsuranceDisplay,
+} from './Views/orders-parity';
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
 // pills for FedEx/etc. Replaces the local carrier-class switch below.
 import CarrierBadge from './CarrierBadge';
@@ -211,6 +215,9 @@ type BrowseRateOptions = {
   forceLive?: boolean;
   insuranceProviderOverride?: string;
   insuredValueOverride?: string | number | null;
+  // PS-197b: also fetch the UNINSURED manual baseline (one extra read-only quote) for the
+  // side-by-side ShipStation comparison. Reference only — never selectable/purchasable.
+  manualEstimateCompare?: boolean;
 };
 
 function formatCacheAge(ms: number | undefined): string | null {
@@ -932,6 +939,10 @@ export default function RateBrowserModal({
     source: string | null;
     diagnostics: string;
   } | null>(null);
+  // PS-197b: the on-demand UNINSURED manual baseline (ShipStation's own browser numbers).
+  // Reference display only — rates carry NO proof keys, so they can never be selected/bought.
+  const [manualEstimateRates, setManualEstimateRates] = useState<RateRow[] | null>(null);
+  const [manualEstimateLoading, setManualEstimateLoading] = useState(false);
   const [insuredValue, setInsuredValue] = useState('');
   const [svcClass, setSvcClass] = useState<'' | 'ground' | 'express'>('');
 
@@ -1345,6 +1356,7 @@ export default function RateBrowserModal({
         cachedOnly: options.cachedOnly === true,
         forceLive: options.forceLive === true,
         forceRefresh: options.forceLive === true,
+        ...(options.manualEstimateCompare ? { manualEstimate: true } : {}),
       });
       if (browseSequenceRef.current !== requestSeq) return carriersWithRates;
       // PS-135: capture the backend-selected bestRate for the auto-apply step (the browseResult
@@ -1396,6 +1408,14 @@ export default function RateBrowserModal({
             }
           : null,
       );
+      // PS-197b: capture the uninsured manual baseline when this browse requested it; clear it
+      // on any other browse so the reference can never go stale against new request params.
+      if (options.manualEstimateCompare) {
+        const manualRates = (browseResult as { manualEstimate?: { rates?: unknown } } | null)?.manualEstimate?.rates;
+        setManualEstimateRates(Array.isArray(manualRates) ? (manualRates as RateRow[]) : null);
+      } else {
+        setManualEstimateRates(null);
+      }
 
       // Fix 3 (2026-05-12): capture per-carrier resolution meta so the
       // rate panel can render the "rates came from X" hint. Walmart in
@@ -2153,20 +2173,91 @@ export default function RateBrowserModal({
                   });
                   if (!display) return null;
                   const overridden = display.kind === 'effective_policy_diff';
+                  // PS-197b: per-ACCOUNT verdict from the backend-stamped rate fields — clicking
+                  // USPS shows "ParcelGuard $100 (+$1.09)", clicking ORION/ROCEL shows "Carrier
+                  // declared value $100 — free first $100". Display-only; the dropdown above
+                  // stays operator INTENT and is never auto-mutated.
+                  const selectedAccountRates = selectedPid != null ? ratesByPid[String(selectedPid)] : null;
+                  const accountVerdict = classifyAccountEffectiveInsurance(
+                    selectedAccountRates,
+                    backendEffectiveInsurance?.value ?? null,
+                  );
+                  const selectedAccountLabel =
+                    rateShippingAccounts.find((account) => account.shippingProviderId === selectedPid)?.nickname ?? null;
+                  // PS-197b: uninsured manual baseline rows for the selected account (reference
+                  // only — these rates carry NO proof keys and can never be selected/purchased).
+                  const manualForAccount = Array.isArray(manualEstimateRates) && selectedPid != null
+                    ? manualEstimateRates.filter(
+                        (rate) => toFiniteNumber(rate.shippingProviderId) === toFiniteNumber(selectedPid),
+                      )
+                    : [];
                   return (
-                    <div
-                      data-rate-browser="effectiveInsurance"
-                      title={backendEffectiveInsurance?.diagnostics ?? undefined}
-                      style={{
-                        fontSize: 11,
-                        color: overridden ? 'var(--amber, #b45309)' : 'var(--text3)',
-                        marginTop: -4,
-                        marginBottom: 10,
-                        cursor: 'help',
-                      }}
-                    >
-                      Effective insurance: {display.label}
-                      {overridden ? ' (backend policy — included in the totals; totals are label-safe)' : ''}
+                    <div style={{ marginTop: -4, marginBottom: 10 }}>
+                      <div
+                        data-rate-browser="effectiveInsurance"
+                        title={backendEffectiveInsurance?.diagnostics ?? undefined}
+                        style={{
+                          fontSize: 11,
+                          color: overridden ? 'var(--amber, #b45309)' : 'var(--text3)',
+                          cursor: 'help',
+                        }}
+                      >
+                        Effective insurance: {display.label}
+                        {overridden ? ' (backend policy — included in the totals; totals are label-safe)' : ''}
+                      </div>
+                      {accountVerdict && selectedAccountLabel ? (
+                        <div
+                          data-rate-browser="accountEffectiveInsurance"
+                          style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}
+                        >
+                          {selectedAccountLabel}: {accountVerdict.label}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        data-rate-browser="manualEstimateCompare"
+                        disabled={browsing || manualEstimateLoading}
+                        onClick={() => {
+                          setManualEstimateLoading(true);
+                          void browseRates(confirmation, { forceLive: true, manualEstimateCompare: true })
+                            .finally(() => setManualEstimateLoading(false));
+                        }}
+                        style={{
+                          fontSize: 11,
+                          marginTop: 4,
+                          padding: 0,
+                          border: 'none',
+                          background: 'none',
+                          color: 'var(--brand, #2563eb)',
+                          cursor: browsing || manualEstimateLoading ? 'wait' : 'pointer',
+                          textDecoration: 'underline',
+                        }}
+                      >
+                        {manualEstimateLoading ? 'Comparing…' : 'Compare ShipStation manual estimate'}
+                      </button>
+                      {manualForAccount.length ? (
+                        <div
+                          data-rate-browser="manualEstimateList"
+                          style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.5 }}
+                        >
+                          <div style={{ fontWeight: 600 }}>
+                            ShipStation manual estimate (uninsured — not label-safe):
+                          </div>
+                          {manualForAccount.map((rate, index) => {
+                            const base = (toFiniteNumber(rate.shipmentCost) ?? toFiniteNumber(rate.amount) ?? 0) +
+                              (toFiniteNumber(rate.otherCost) ?? 0);
+                            return (
+                              <div key={`${rate.serviceCode ?? index}`}>
+                                {String(rate.serviceName ?? rate.serviceCode ?? 'Service')}: ${base.toFixed(2)}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : manualEstimateRates && selectedPid != null ? (
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+                          No manual-estimate rows for this account.
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })()}

@@ -2745,6 +2745,16 @@ export const apiClient = {
             carrierDiagnostics: Array.isArray(backendResult?.carrierDiagnostics) ? backendResult.carrierDiagnostics : [],
             directCarrierErrors: Array.isArray(backendResult?.directCarrierErrors) ? backendResult.directCarrierErrors : [],
             directCarrierMetas: Array.isArray(backendResult?.directCarrierMetas) ? backendResult.directCarrierMetas : [],
+            // PS-197b: uninsured manual baseline — translated for DISPLAY but deliberately
+            // NOT stamped with backendProofMetadata, so a reference rate can never carry the
+            // proof a label purchase requires (structurally non-purchasable).
+            manualEstimate:
+              backendResult?.manualEstimate && Array.isArray(backendResult.manualEstimate.rates)
+                ? {
+                    ...backendResult.manualEstimate,
+                    rates: backendResult.manualEstimate.rates.map((rate: unknown) => translateRateToV2Shape(rate)),
+                  }
+                : null,
           };
         })();
 

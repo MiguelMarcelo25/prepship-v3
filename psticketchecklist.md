@@ -514,6 +514,19 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   hugrab-default, ZIP+4 92801-5567 exact, cache key ip/iv/r=1/w=350, Ground Saver blocked). QA: typecheck +
   build:web + ps-108/123/124/125/126/170/072 + best-rate-saved-display-contract + ps-196 +
   rate-browser-manual-selection-table-sync + full cert ALL PASS.
+- **PS-197b — ✅ DONE (follow-up DJ requested 2026-06-11): per-account effective insurance + on-demand
+  ShipStation manual-estimate comparison.** (1) The effective-insurance area is now ACCOUNT-AWARE: clicking
+  USPS shows "ParcelGuard $100 (+$1.09)", clicking ORION/ROCEL shows "Carrier declared value $100 — free
+  first $100" — derived by pure `classifyAccountEffectiveInsurance` from the backend-stamped per-rate
+  fields (insuranceCost.provenance + insurance_amount); the Insurance dropdown (operator INTENT) is never
+  auto-mutated (guard-pinned — mutating it would change real quotes for non-HUGRAB clients). (2) "Compare
+  ShipStation manual estimate" button: one extra on-demand read-only quote with `rawManualEstimate`
+  (resolveRateInput skips the HUGRAB forcing for the reference ONLY) returned as `manualEstimate` —
+  structurally NON-PURCHASABLE end-to-end: route never stamps selection keys/snapshot/rate-quote id,
+  apiClient translates without proof metadata, UI labels it "uninsured — not label-safe". Default selection
+  stays label-safe. Guard extended to 36 checks. QA: typecheck + build:web + ps-072/108/123/124/125/126/
+  170/196 + best-rate-saved-display-contract + recalculate-strict + table-sync + manifest + full cert ALL
+  PASS (ps-123's payload-block anchor preserved by placing the baseline before the payload literal).
 >
 > **Priority flags:** **PS-186** (fake-label-on-real-order) is a live money/integrity bug — recommend doing it
 > BEFORE the PS-172 phase track. **PS-189** (media-mail auto-default) is a compliance risk. PS-181/182/183/

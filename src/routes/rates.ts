@@ -258,6 +258,10 @@ const browseBody = rateBody.extend({
   purchaseOrderId: z.string().nullable().optional(),
   includeVisibleDirectCarriers: z.boolean().optional(),
   includeAllDirectCarriers: z.boolean().optional(),
+  // PS-197b: on-demand UNINSURED manual baseline (parity with ShipStation's own Rate Browser)
+  // returned as a reference-only `manualEstimate` block — no selection keys, no snapshot, never
+  // purchasable. One extra read-only quote, only when explicitly requested.
+  manualEstimate: z.boolean().optional(),
 });
 
 function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number }; insurance_amount?: { amount?: number } }): number {
@@ -524,8 +528,36 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         ...(rateQuoteId ? { rateQuoteId } : {}),
       }
     : cheapest;
+  // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
+  // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no
+  // rate-quote id — structurally non-purchasable (the purchase boundary rejects proof-less rates).
+  // Best-effort: a baseline failure never breaks the label-safe browse.
+  let manualEstimate: { rates: unknown[]; fetchedAt: string; cached: boolean } | null = null;
+  if (body.manualEstimate === true) {
+    try {
+      const manual = await getRates(
+        { ...rest, confirmation: confirmation ?? signature ?? null, carrierIds: orderedIds },
+        {
+          rawManualEstimate: true,
+          forceRefresh: forceRefresh || forceLive,
+          cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
+        },
+      );
+      const manualFiltered = requestedSet
+        ? manual.rates.filter((r) => requestedSet.has(r.carrier_id))
+        : manual.rates;
+      manualEstimate = {
+        rates: canViewFinancials ? manualFiltered : (redactRateMoneyFields(manualFiltered) as unknown[]),
+        fetchedAt: manual.fetchedAt,
+        cached: manual.cached,
+      };
+    } catch (err) {
+      console.warn('[rates/browse] manual-estimate baseline failed (reference only):', err instanceof Error ? err.message : err);
+    }
+  }
   const payload = {
     ...result,
+    ...(manualEstimate ? { manualEstimate } : {}),
     requestKey: combinedRequestKey,
     cacheKey: combinedRequestKey,
     effectiveInsuranceProvider: result.effectiveInsuranceProvider,

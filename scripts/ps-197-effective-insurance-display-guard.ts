@@ -126,6 +126,59 @@ check('modal display comes from the pure classifier (backend DTO, not inline FE 
 check('the diagnostics tooltip carries the redacted quote facts',
   /Quoted with: ZIP \$\{zip\}/.test(modal), true);
 
+// ── 4. PS-197b — per-account verdict + uninsured manual baseline (reference-only) ──
+import { classifyAccountEffectiveInsurance } from '../web/src/components/Views/orders-parity';
+{
+  const carrier = classifyAccountEffectiveInsurance(
+    [{ insuranceCost: { provenance: 'carrier_declared_value', amount: 0 }, insurance_amount: { amount: 0 } }],
+    100,
+  );
+  check('direct-UPS account rates classify as carrier declared value (free first $100)',
+    carrier?.provider, 'carrier');
+  const pg = classifyAccountEffectiveInsurance(
+    [{ insuranceCost: { provenance: 'parcelguard_schedule', amount: 1.09 }, insurance_amount: { amount: 1.09 } }],
+    100,
+  );
+  check('brokered (USPS) account rates classify as ParcelGuard with the premium shown',
+    pg?.label, 'ParcelGuard $100 (+$1.09)');
+  check('no enriched rates -> no per-account verdict (never FE guesswork)',
+    classifyAccountEffectiveInsurance([], 100), null);
+}
+// The manual baseline must be structurally NON-PURCHASABLE end to end:
+check('backend: resolveRateInput supports the rawManualEstimate uninsured baseline',
+  /rawManualEstimate/.test(ratesService) && /'manual-estimate'/.test(ratesService), true);
+const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+{
+  // The manual-baseline block sits between its gate and the payload literal (so the payload
+  // anchor other guards slice on stays byte-stable).
+  const manualBlockStart = ratesRoute.indexOf('body.manualEstimate === true');
+  const manualBlockEnd = ratesRoute.indexOf('const payload = {', manualBlockStart);
+  const manualBlock = manualBlockStart >= 0 && manualBlockEnd > manualBlockStart
+    ? ratesRoute.slice(manualBlockStart, manualBlockEnd)
+    : '';
+  check('route: manual baseline is on-demand only (gated on body.manualEstimate)', manualBlockStart >= 0, true);
+  check('route: manual baseline never gets selection keys / a snapshot / a rateQuoteId',
+    manualBlock.length > 0 &&
+      !/withSelectedRateKeys|storeRateQuoteSnapshot|rateQuoteId/.test(manualBlock),
+    true);
+}
+{
+  const manualMapStart = apiClient.indexOf('manualEstimate:');
+  const manualMapEnd = apiClient.indexOf('};', manualMapStart);
+  const manualMap = manualMapStart >= 0 ? apiClient.slice(manualMapStart, manualMapEnd) : '';
+  check('apiClient: manual baseline rates are translated WITHOUT proof metadata',
+    manualMap.length > 0 && /translateRateToV2Shape\(rate\)/.test(manualMap) && !/backendProofMetadata/.test(manualMap),
+    true);
+}
+check('modal: per-account effective verdict has a stable selector',
+  /data-rate-browser="accountEffectiveInsurance"/.test(modal), true);
+check('modal: the compare action is explicit + on-demand',
+  /data-rate-browser="manualEstimateCompare"/.test(modal) && /manualEstimateCompare: true/.test(modal), true);
+check('modal: the baseline list is labeled not-label-safe',
+  /uninsured — not label-safe/.test(modal), true);
+check('modal: the dropdown (operator intent) is never auto-mutated by account clicks',
+  !/setInsuranceProvider\([^)]*selectedPid/.test(modal), true);
+
 if (failures > 0) {
   console.error(`\nFAIL PS-197 effective-insurance display guard (${failures} failing)`);
   process.exit(1);
