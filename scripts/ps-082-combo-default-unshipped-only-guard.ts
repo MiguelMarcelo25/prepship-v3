@@ -31,10 +31,18 @@ assert.match(
   /computeComboKey\(items\)\s*!==\s*comboKey/,
   'matching-order fanout must compare each candidate using the backend-derived combo key',
 );
+// PS-121 re-anchor: the fanout now builds a `set` object (dims + weight, plus a conditional
+// stale-rate invalidation) and persists it via an insert(orderOverrides) upsert. Assert both
+// halves (order-agnostic) — the protection (dims+weight written through order_overrides) holds.
 assert.match(
   service,
-  /insert\(orderOverrides\)[\s\S]*rateDimsL:[\s\S]*rateDimsW:[\s\S]*rateDimsH:[\s\S]*rateWeightOz/,
-  'matching-order fanout must write dims and weight through order_overrides',
+  /rateDimsL:[\s\S]*rateDimsW:[\s\S]*rateDimsH:[\s\S]*rateWeightOz/,
+  'matching-order fanout must set dims and weight',
+);
+assert.match(
+  service,
+  /insert\(orderOverrides\)[\s\S]*onConflictDoUpdate/,
+  'matching-order fanout must persist dims/weight through an order_overrides upsert',
 );
 assert.match(
   service,
@@ -66,10 +74,16 @@ assert.match(
   /normalizeComboItems\(/,
   'single-SKU fanout must derive each candidate SKU/qty from normalized order items',
 );
+// PS-121 re-anchor: same `set`-object + insert(orderOverrides) upsert structure as the combo path.
 assert.match(
   productsRoute,
-  /insert\(orderOverrides\)[\s\S]*rateDimsL:[\s\S]*rateDimsW:[\s\S]*rateDimsH:[\s\S]*rateWeightOz/,
-  'single-SKU fanout must write dims and total order weight through order_overrides',
+  /rateDimsL:[\s\S]*rateDimsW:[\s\S]*rateDimsH:[\s\S]*rateWeightOz/,
+  'single-SKU fanout must set dims and total order weight',
+);
+assert.match(
+  productsRoute,
+  /insert\(orderOverrides\)[\s\S]*onConflictDoUpdate/,
+  'single-SKU fanout must persist dims/weight through an order_overrides upsert',
 );
 assert.doesNotMatch(
   productsRoute,

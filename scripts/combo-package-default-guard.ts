@@ -49,7 +49,7 @@ assert.match(
 );
 assert.match(routes, /comboPackageDefault/, 'order detail payload must be enriched with comboPackageDefault');
 // The key must come from the order, not the request body.
-assert.match(routes, /saveComboPackageDefault\(id,/, 'route must pass the order id (server derives the combo key, not the client)');
+assert.match(routes, /saveComboPackageDefault\(\s*id\s*,/, 'route must pass the order id (server derives the combo key, not the client)');
 
 const panelState = readFileSync('web/src/components/Views/orders-panel-state.ts', 'utf8');
 assert.match(panelState, /export function getComboDefaultPackageId/, 'frontend must expose getComboDefaultPackageId resolver');

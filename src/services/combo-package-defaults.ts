@@ -7,6 +7,10 @@ import {
   type ClientComboPackageDefault,
 } from '../db/schema/client-combo-package-defaults';
 import { computeComboKey, isMultiSkuCombo, type ComboItemInput } from '../lib/package-combo';
+import {
+  computeOrderRateJobFingerprint,
+  setOrderRatePending,
+} from './shipping-workflow/order-rate-job-status';
 
 // PS-037 — Service for per-client SKU+qty-combination package defaults.
 //
@@ -66,6 +70,10 @@ export interface SaveComboDefaultResult {
   clientId?: number;
   comboKey?: string;
   appliedMutableOrderCount?: number;
+  // PS-121: ids of the sibling awaiting orders whose dims/weight/package changed AND that had a
+  // saved best rate — i.e. the ones invalidated + queued for a targeted recalc. Empty unless the
+  // caller passed { recalcGroup: true } (the explicit "Save weights & dims as SKU defaults").
+  affectedOrderIds?: number[];
 }
 
 function selectedPackageIdFromComboInput(input: SaveComboDefaultInput): string | null {
@@ -76,14 +84,42 @@ function selectedPackageIdFromComboInput(input: SaveComboDefaultInput): string |
   return packageCode || null;
 }
 
+// PS-121 — numeric equality tolerant of null + real-column string/number drift.
+function numEq(a: unknown, b: unknown): boolean {
+  const na = a == null ? null : Number(a);
+  const nb = b == null ? null : Number(b);
+  if (na == null && nb == null) return true;
+  if (na == null || nb == null) return false;
+  return Math.abs(na - nb) < 1e-9;
+}
+
 async function applyComboPackageDefaultToMatchingMutableOrders(
   clientId: number,
   comboKey: string,
   input: SaveComboDefaultInput,
-): Promise<number> {
+  opts: { recalcGroup: boolean; sourceOrderId: number },
+): Promise<{ appliedMutableOrderCount: number; affectedOrderIds: number[] }> {
+  // Pull each candidate's ship-to + base weight + raw (for the PS-120 rate-job fingerprint) and
+  // its CURRENT override dims/weight/package + whether it has a saved best rate (to detect change).
+  // The orderStatus='awaiting_shipment' filter is the lockdown gate — shipped/cancelled excluded.
   const candidates = await db
-    .select({ id: orders.id, items: orders.items })
+    .select({
+      id: orders.id,
+      items: orders.items,
+      weightOz: orders.weightOz,
+      shipToPostalCode: orders.shipToPostalCode,
+      shipToState: orders.shipToState,
+      shipToCity: orders.shipToCity,
+      raw: orders.raw,
+      curDimsL: orderOverrides.rateDimsL,
+      curDimsW: orderOverrides.rateDimsW,
+      curDimsH: orderOverrides.rateDimsH,
+      curWeightOz: orderOverrides.rateWeightOz,
+      curPackageId: orderOverrides.selectedPackageId,
+      curBestRateAt: orderOverrides.bestRateAt,
+    })
     .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
       and(
         eq(orders.clientId, clientId),
@@ -92,6 +128,7 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
     );
 
   let appliedMutableOrderCount = 0;
+  const affectedOrderIds: number[] = [];
   const selectedPackageId = selectedPackageIdFromComboInput(input);
   const rateWeightOz =
     typeof input.weightOz === 'number' && Number.isFinite(input.weightOz) && input.weightOz > 0
@@ -102,32 +139,69 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
     const items = await loadComboItems(candidate.id, candidate.items);
     if (computeComboKey(items) !== comboKey) continue;
 
+    // PS-121: a sibling's saved best rate is stale ONLY when the explicit default save actually
+    // CHANGED its dims/weight/package AND it currently HAS a saved rate. The source (panel) order
+    // is never invalidated here — it already refreshed its own rate. Silent/normal saves
+    // (recalcGroup=false) propagate dims exactly as before and never touch saved rates.
+    const dimsOrPackageChanged =
+      !numEq(candidate.curDimsL, input.length ?? null) ||
+      !numEq(candidate.curDimsW, input.width ?? null) ||
+      !numEq(candidate.curDimsH, input.height ?? null) ||
+      !numEq(candidate.curWeightOz, rateWeightOz) ||
+      (candidate.curPackageId ?? null) !== selectedPackageId;
+    const invalidate =
+      opts.recalcGroup &&
+      candidate.id !== opts.sourceOrderId &&
+      candidate.curBestRateAt != null &&
+      dimsOrPackageChanged;
+
+    const set = {
+      selectedPackageId,
+      rateDimsL: input.length ?? null,
+      rateDimsW: input.width ?? null,
+      rateDimsH: input.height ?? null,
+      rateWeightOz,
+      updatedAt: new Date(),
+      // Invalidate the stale saved rate (bestRateAt=null makes the order recalc-eligible).
+      ...(invalidate ? { bestRateJson: null, bestRateAt: null, bestRateDims: null } : {}),
+    };
+
     await db
       .insert(orderOverrides)
-      .values({
-        orderId: candidate.id,
-        selectedPackageId,
-        rateDimsL: input.length ?? null,
-        rateDimsW: input.width ?? null,
-        rateDimsH: input.height ?? null,
-        rateWeightOz,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: orderOverrides.orderId,
-        set: {
-          selectedPackageId,
-          rateDimsL: input.length ?? null,
-          rateDimsW: input.width ?? null,
-          rateDimsH: input.height ?? null,
-          rateWeightOz,
-          updatedAt: new Date(),
-        },
-      });
+      .values({ orderId: candidate.id, ...set })
+      .onConflictDoUpdate({ target: orderOverrides.orderId, set });
     appliedMutableOrderCount += 1;
+
+    if (invalidate) {
+      affectedOrderIds.push(candidate.id);
+      // Stamp `pending` immediately (matching rates-backfill's fingerprint inputs: base
+      // orders.weightOz + the now-current override dims = the new propagated dims + ship-to + raw)
+      // so the Orders table shows "refreshing" instead of a momentary "missing". Best-effort.
+      try {
+        await setOrderRatePending(
+          candidate.id,
+          computeOrderRateJobFingerprint({
+            orderId: candidate.id,
+            weightOz: candidate.weightOz,
+            shipToPostalCode: candidate.shipToPostalCode,
+            shipToState: candidate.shipToState,
+            shipToCity: candidate.shipToCity,
+            rateDimsL: input.length ?? null,
+            rateDimsW: input.width ?? null,
+            rateDimsH: input.height ?? null,
+            raw: candidate.raw,
+          }),
+        );
+      } catch (err) {
+        console.warn(
+          '[combo-package-defaults] failed to stamp pending rate-job:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
   }
 
-  return appliedMutableOrderCount;
+  return { appliedMutableOrderCount, affectedOrderIds };
 }
 
 /**
@@ -138,6 +212,7 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
 export async function saveComboPackageDefault(
   orderId: number,
   input: SaveComboDefaultInput,
+  opts?: { recalcGroup?: boolean },
 ): Promise<SaveComboDefaultResult> {
   const { clientId, comboKey } = await deriveOrderComboContext(orderId);
   if (clientId == null) return { saved: false, reason: 'order has no client scope' };
@@ -170,13 +245,13 @@ export async function saveComboPackageDefault(
       },
     });
 
-  const appliedMutableOrderCount = await applyComboPackageDefaultToMatchingMutableOrders(
-    clientId,
-    comboKey,
-    input,
-  );
+  const { appliedMutableOrderCount, affectedOrderIds } =
+    await applyComboPackageDefaultToMatchingMutableOrders(clientId, comboKey, input, {
+      recalcGroup: opts?.recalcGroup === true,
+      sourceOrderId: orderId,
+    });
 
-  return { saved: true, clientId, comboKey, appliedMutableOrderCount };
+  return { saved: true, clientId, comboKey, appliedMutableOrderCount, affectedOrderIds };
 }
 
 export interface ComboPackageDefaultDto {

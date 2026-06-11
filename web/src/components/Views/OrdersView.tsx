@@ -4196,6 +4196,32 @@ export default function OrdersView({
     }
   }
 
+  // PS-121: after an EXPLICIT "Save weights & dims as SKU defaults", the backend invalidated +
+  // queued a targeted recalc for the same SKU+qty group's stale sibling rates and returned their
+  // ids. Surface a clear success/refreshing toast and re-poll /orders a few times so those
+  // siblings flip from stale → "refreshing" (PS-120 pending/rating) → final Best Rate. The PS-120
+  // watchdog bounds the spinner, so a slow recalc never becomes an indefinite spinner.
+  function announceAndRepollGroupRecalc(result: any, baseMessage: string) {
+    const applied = Number(result?.appliedMutableOrderCount ?? 0)
+    const refreshing = Array.isArray(result?.affectedOrderIds) ? result.affectedOrderIds.length : 0
+    showToast(
+      refreshing > 0
+        ? `${baseMessage} · ${applied} order${applied === 1 ? '' : 's'} · refreshing ${refreshing} rate${refreshing === 1 ? '' : 's'}…`
+        : `${baseMessage} · ${applied} order${applied === 1 ? '' : 's'} updated`,
+      'success',
+    )
+    void refetchOrdersRef.current?.()
+    if (refreshing > 0) {
+      let ticks = 0
+      const tick = () => {
+        ticks += 1
+        void refetchOrdersRef.current?.()
+        if (ticks < 8) window.setTimeout(tick, 4000) // ~32s of bounded re-polling
+      }
+      window.setTimeout(tick, 4000)
+    }
+  }
+
   async function savePanelComboDefaults(
     packageId: string | null,
     options: {
@@ -4204,6 +4230,8 @@ export default function OrdersView({
       detail?: OrderFullDto | null
       weightOz?: number
       dims?: ShipmentDims | null
+      // PS-121: only the explicit operator save sets this → backend group-recalc.
+      recalcGroup?: boolean
     } = {},
   ) {
     const sourceOrder = options.order ?? panelOrder
@@ -4235,6 +4263,7 @@ export default function OrdersView({
       width: dims.width,
       height: dims.height,
       weightOz: weightOz > 0 ? weightOz : null,
+      ...(options.recalcGroup ? { recalcGroup: true } : {}),
     })
     if (!result?.saved) {
       throw new Error(result?.reason || 'Combo package default was not saved')
@@ -4266,7 +4295,11 @@ export default function OrdersView({
       await refetchOrders()
     }
 
-    if (!options.silent) showToast('Saved package defaults for this SKU combination', 'success')
+    if (options.recalcGroup) {
+      announceAndRepollGroupRecalc(result, 'Saved package defaults for this SKU combination')
+    } else if (!options.silent) {
+      showToast('Saved package defaults for this SKU combination', 'success')
+    }
     return true
   }
 
@@ -4278,6 +4311,8 @@ export default function OrdersView({
       detail?: OrderFullDto | null
       weightOz?: number
       dims?: ShipmentDims | null
+      // PS-121: only the explicit operator save sets this → backend group-recalc.
+      recalcGroup?: boolean
     } = {},
   ) {
     const sourceOrder = options.order ?? panelOrder
@@ -4324,6 +4359,7 @@ export default function OrdersView({
       // one qty (e.g. a 1-pack) never overwrites another qty's box/weight.
       appliesToQty: target.qty,
     }
+    if (options.recalcGroup) payload.recalcGroup = true
     if (skuWeightOz > 0) payload.weightOz = skuWeightOz
     if (hasCompleteDims(dims)) {
       payload.length = dims.length
@@ -4344,6 +4380,11 @@ export default function OrdersView({
       height: hasCompleteDims(dims) ? dims.height : 0,
       defaultPackageCode: packageCode,
     })
+
+    // PS-121: explicit save → announce + re-poll so same-SKU+qty sibling rates refresh.
+    if (options.recalcGroup) {
+      announceAndRepollGroupRecalc(savedRow, `Saved dims & weight for ${target.sku}`)
+    }
 
     return target.sku
   }
@@ -5399,11 +5440,14 @@ export default function OrdersView({
       const ensuredPackageId = hasCompleteDims(dims)
         ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
         : panelForm.packageId
+      // PS-121: explicit operator save → recalcGroup so the backend refreshes the same
+      // SKU+qty group's stale sibling rates. (The inner handler shows the success/refreshing toast.)
       await savePanelComboDefaults(ensuredPackageId || panelForm.packageId || null, {
         order: panelOrder,
         detail: panelDetail,
         weightOz: getPanelWeightOz(),
         dims: hasCompleteDims(dims) ? dims : null,
+        recalcGroup: true,
       })
       return
     }
@@ -5420,8 +5464,9 @@ export default function OrdersView({
       const ensuredPackageId = hasCompleteDims(dims)
         ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
         : panelForm.packageId
-      const savedSku = await savePanelSkuDefaults(ensuredPackageId || panelForm.packageId || null)
-      if (savedSku) showToast(`Saved dims & weight for ${savedSku}`, 'success')
+      // PS-121: explicit save → recalcGroup. savePanelSkuDefaults (or its combo fall-through)
+      // shows the success/refreshing toast + re-polls, so no extra toast here.
+      await savePanelSkuDefaults(ensuredPackageId || panelForm.packageId || null, { recalcGroup: true })
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Save failed', 'error')
     }

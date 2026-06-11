@@ -9,7 +9,7 @@ import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
-import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
+import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
 // PS-136: the manual mark-shipped-externally transition (status flip + inventory deduction +
 // ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
 import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
@@ -2932,6 +2932,10 @@ app.post(
       width: z.number().nullable().optional(),
       height: z.number().nullable().optional(),
       weightOz: z.number().nullable().optional(),
+      // PS-121: explicit "Save weights & dims as SKU defaults" sets this true so the backend
+      // invalidates + targeted-recalcs the same SKU+qty group's stale sibling rates. Silent
+      // autosave / normal panel Save omit it (default false) → propagate only, no group recalc.
+      recalcGroup: z.boolean().optional(),
     })
   ),
   async (c) => {
@@ -2945,14 +2949,24 @@ app.post(
         : Number.isFinite(Number(body.packageId))
           ? Math.trunc(Number(body.packageId))
           : null;
-    const result = await saveComboPackageDefault(id, {
-      packageId: packageIdNum,
-      packageCode: body.packageCode ?? null,
-      length: body.length ?? null,
-      width: body.width ?? null,
-      height: body.height ?? null,
-      weightOz: body.weightOz ?? null,
-    });
+    const result = await saveComboPackageDefault(
+      id,
+      {
+        packageId: packageIdNum,
+        packageCode: body.packageCode ?? null,
+        length: body.length ?? null,
+        width: body.width ?? null,
+        height: body.height ?? null,
+        weightOz: body.weightOz ?? null,
+      },
+      { recalcGroup: body.recalcGroup === true },
+    );
+    // PS-121: kick a bounded targeted recalc for exactly the invalidated sibling ids (awaiting
+    // only — the primitive keeps the awaiting_shipment lockdown filter). Fire-and-forget; the
+    // siblings already show "refreshing" via the pending stamp the service wrote.
+    if (body.recalcGroup === true && result.affectedOrderIds && result.affectedOrderIds.length) {
+      startBackfillBestRatesForOrderIds(result.affectedOrderIds);
+    }
     return c.json({ data: result });
   }
 );

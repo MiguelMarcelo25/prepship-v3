@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
@@ -106,6 +106,11 @@ type BackfillOptions = {
   clientId?: number;
   limit?: number;
   maxAgeHours?: number;
+  // PS-121: targeted recalc — restrict the backfill to exactly these awaiting order ids
+  // (e.g. the SKU+qty-combo siblings whose dims/weight just changed via an explicit default
+  // save). The awaiting_shipment lockdown filter is ALWAYS kept, so shipped/cancelled ids
+  // passed here are silently dropped — never re-rated.
+  orderIds?: number[];
 };
 
 export const RATE_BACKFILL_STATUS_KEY = 'rate_backfill_best_rates.last_run';
@@ -267,6 +272,23 @@ export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
   return job;
 }
 
+/**
+ * PS-121 — targeted best-rate recalc for an explicit set of awaiting order ids (e.g. the
+ * SKU+qty-combo siblings whose dims/weight just changed via an explicit "Save defaults").
+ * Reuses the exact runBackfill engine — canonical getRates, the PS-120 pending/rating
+ * producer, and the selected-rate proof/fingerprint write — only swapping the order
+ * selection to `inArray(orders.id, …)`. The awaiting_shipment lockdown filter is retained,
+ * so any shipped/cancelled/labelled ids are silently excluded (never re-rated).
+ */
+export function startBackfillBestRatesForOrderIds(
+  orderIds: number[],
+  opts?: { maxAgeHours?: number },
+): BackfillJob | null {
+  const ids = Array.from(new Set((orderIds ?? []).filter((n) => Number.isFinite(n) && n > 0)));
+  if (!ids.length) return null;
+  return startBackfillBestRates({ orderIds: ids, limit: ids.length, maxAgeHours: opts?.maxAgeHours });
+}
+
 async function runBackfill(
   jobId: string,
   opts: BackfillOptions
@@ -281,7 +303,11 @@ async function runBackfill(
       opts.maxAgeHours !== undefined
         ? new Date(Date.now() - opts.maxAgeHours * 60 * 60 * 1000)
         : null;
-    const hardLimit = Math.max(1, Math.min(opts.limit ?? 5000, 10000));
+    // PS-121: when targeting a specific id set, bound the limit to that set.
+    const targetedIds = opts.orderIds?.length ? opts.orderIds : null;
+    const hardLimit = targetedIds
+      ? Math.max(1, Math.min(targetedIds.length, 10000))
+      : Math.max(1, Math.min(opts.limit ?? 5000, 10000));
     const needsRatePredicate = staleCutoff
       ? or(isNull(orderOverrides.bestRateAt), lt(orderOverrides.bestRateAt, staleCutoff))
       : isNull(orderOverrides.bestRateAt);
@@ -318,6 +344,8 @@ async function runBackfill(
       .where(
         and(
           eq(orders.orderStatus, 'awaiting_shipment'),
+          // PS-121: targeted recalc — never widens past awaiting_shipment (lockdown safe).
+          targetedIds ? inArray(orders.id, targetedIds) : undefined,
           opts.clientId !== undefined
             ? eq(orders.clientId, opts.clientId)
             : undefined,

@@ -9,6 +9,11 @@ import { orderOverrides, orders } from '../db/schema/orders';
 import { products } from '../db/schema/products';
 import { normalizeComboItems, type ComboItemInput } from '../lib/package-combo';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
+import {
+  computeOrderRateJobFingerprint,
+  setOrderRatePending,
+} from '../services/shipping-workflow/order-rate-job-status';
+import { startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
 
 const app = new Hono();
 
@@ -161,7 +166,20 @@ const saveDefaultsBody = z.object({
   // qty, so saving a 1-pack default never changes a 2-pack order (whose box
   // size differs). Omitted = legacy behavior (apply across all quantities).
   appliesToQty: z.number().int().positive().optional(),
+  // PS-121: explicit "Save weights & dims as SKU defaults" sets this true so the backend
+  // invalidates + targeted-recalcs the same SKU+qty group's stale sibling rates. Silent
+  // autosave omits it (default false) → propagate dims only, never touch saved rates.
+  recalcGroup: z.boolean().optional(),
 });
+
+// PS-121 — numeric equality tolerant of null + real-column string/number drift.
+function numEqProduct(a: unknown, b: unknown): boolean {
+  const na = a == null ? null : Number(a);
+  const nb = b == null ? null : Number(b);
+  if (na == null && nb == null) return true;
+  if (na == null || nb == null) return false;
+  return Math.abs(na - nb) < 1e-9;
+}
 
 async function loadSingleSkuCandidateItems(orderId: number, fallbackItems: unknown): Promise<ComboItemInput[]> {
   const rows = await db
@@ -188,14 +206,35 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
   // When set, only push to awaiting single-SKU orders with this exact qty, so a
   // saved default for one qty never overwrites another qty's weight/box.
   appliesToQty?: number | null;
-}): Promise<number> {
-  if (input.clientId === undefined) return 0;
+  // PS-121: when true (explicit save), invalidate + collect siblings whose dims/weight/package
+  // changed and that have a saved rate, so the caller can targeted-recalc them.
+  recalcGroup?: boolean;
+}): Promise<{ appliedMutableOrderCount: number; affectedOrderIds: number[] }> {
+  if (input.clientId === undefined) return { appliedMutableOrderCount: 0, affectedOrderIds: [] };
   const normalizedSku = input.sku.trim().toLowerCase();
-  if (!normalizedSku) return 0;
+  if (!normalizedSku) return { appliedMutableOrderCount: 0, affectedOrderIds: [] };
 
+  // Pull ship-to + base weight + raw (for the PS-120 fingerprint) + current override
+  // dims/weight/package + whether a saved rate exists (to detect change). awaiting_shipment
+  // filter is the lockdown gate — shipped/cancelled never touched.
   const candidates = await db
-    .select({ id: orders.id, items: orders.items })
+    .select({
+      id: orders.id,
+      items: orders.items,
+      weightOz: orders.weightOz,
+      shipToPostalCode: orders.shipToPostalCode,
+      shipToState: orders.shipToState,
+      shipToCity: orders.shipToCity,
+      raw: orders.raw,
+      curDimsL: orderOverrides.rateDimsL,
+      curDimsW: orderOverrides.rateDimsW,
+      curDimsH: orderOverrides.rateDimsH,
+      curWeightOz: orderOverrides.rateWeightOz,
+      curPackageId: orderOverrides.selectedPackageId,
+      curBestRateAt: orderOverrides.bestRateAt,
+    })
     .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
       and(
         input.clientId === null ? isNull(orders.clientId) : eq(orders.clientId, input.clientId),
@@ -204,6 +243,7 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
     );
 
   let appliedMutableOrderCount = 0;
+  const affectedOrderIds: number[] = [];
   const selectedPackageId = selectedPackageIdFromProductDefault(input.defaultPackageCode);
   const perUnitWeightOz =
     typeof input.weightOz === 'number' && Number.isFinite(input.weightOz) && input.weightOz > 0
@@ -222,32 +262,61 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
       ? Number((perUnitWeightOz * qty).toFixed(2))
       : null;
 
+    // PS-121: invalidate a sibling's saved rate only when this explicit save actually CHANGED
+    // its dims/weight/package AND it has a saved rate. Silent autosave (recalcGroup=false)
+    // propagates dims exactly as before and never touches saved rates.
+    const dimsOrPackageChanged =
+      !numEqProduct(candidate.curDimsL, input.length ?? null) ||
+      !numEqProduct(candidate.curDimsW, input.width ?? null) ||
+      !numEqProduct(candidate.curDimsH, input.height ?? null) ||
+      !numEqProduct(candidate.curWeightOz, rateWeightOz) ||
+      (candidate.curPackageId ?? null) !== selectedPackageId;
+    const invalidate =
+      input.recalcGroup === true && candidate.curBestRateAt != null && dimsOrPackageChanged;
+
+    const set = {
+      selectedPackageId,
+      rateDimsL: input.length ?? null,
+      rateDimsW: input.width ?? null,
+      rateDimsH: input.height ?? null,
+      rateWeightOz,
+      updatedAt: new Date(),
+      ...(invalidate ? { bestRateJson: null, bestRateAt: null, bestRateDims: null } : {}),
+    };
+
     await db
       .insert(orderOverrides)
-      .values({
-        orderId: candidate.id,
-        selectedPackageId,
-        rateDimsL: input.length ?? null,
-        rateDimsW: input.width ?? null,
-        rateDimsH: input.height ?? null,
-        rateWeightOz,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: orderOverrides.orderId,
-        set: {
-          selectedPackageId,
-          rateDimsL: input.length ?? null,
-          rateDimsW: input.width ?? null,
-          rateDimsH: input.height ?? null,
-          rateWeightOz,
-          updatedAt: new Date(),
-        },
-      });
+      .values({ orderId: candidate.id, ...set })
+      .onConflictDoUpdate({ target: orderOverrides.orderId, set });
     appliedMutableOrderCount += 1;
+
+    if (invalidate) {
+      affectedOrderIds.push(candidate.id);
+      try {
+        await setOrderRatePending(
+          candidate.id,
+          computeOrderRateJobFingerprint({
+            orderId: candidate.id,
+            weightOz: candidate.weightOz,
+            shipToPostalCode: candidate.shipToPostalCode,
+            shipToState: candidate.shipToState,
+            shipToCity: candidate.shipToCity,
+            rateDimsL: input.length ?? null,
+            rateDimsW: input.width ?? null,
+            rateDimsH: input.height ?? null,
+            raw: candidate.raw,
+          }),
+        );
+      } catch (err) {
+        console.warn(
+          '[products] failed to stamp pending rate-job:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
   }
 
-  return appliedMutableOrderCount;
+  return { appliedMutableOrderCount, affectedOrderIds };
 }
 
 app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
@@ -336,18 +405,25 @@ app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
     console.warn('[products] inventory defaults mirror failed:', err);
   }
 
-  const appliedMutableOrderCount = await applySingleSkuDefaultsToMatchingMutableOrders({
-    sku: v.sku,
-    clientId: inventoryClientId,
-    weightOz: v.weightOz,
-    length: v.length,
-    width: v.width,
-    height: v.height,
-    defaultPackageCode: v.defaultPackageCode,
-    appliesToQty: v.appliesToQty ?? null,
-  });
+  const { appliedMutableOrderCount, affectedOrderIds } =
+    await applySingleSkuDefaultsToMatchingMutableOrders({
+      sku: v.sku,
+      clientId: inventoryClientId,
+      weightOz: v.weightOz,
+      length: v.length,
+      width: v.width,
+      height: v.height,
+      defaultPackageCode: v.defaultPackageCode,
+      appliesToQty: v.appliesToQty ?? null,
+      recalcGroup: v.recalcGroup === true,
+    });
 
-  return c.json({ ...row, appliedMutableOrderCount });
+  // PS-121: explicit save → targeted recalc of exactly the invalidated siblings (awaiting only).
+  if (v.recalcGroup === true && affectedOrderIds.length) {
+    startBackfillBestRatesForOrderIds(affectedOrderIds);
+  }
+
+  return c.json({ ...row, appliedMutableOrderCount, affectedOrderIds });
 });
 
 app.delete('/:id{[0-9]+}', async (c) => {

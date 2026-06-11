@@ -908,6 +908,9 @@ export const apiClient = {
       width?: number | null
       height?: number | null
       weightOz?: number | null
+      // PS-121: true ONLY from the explicit "Save weights & dims as SKU defaults" action →
+      // backend invalidates + targeted-recalcs the same SKU+qty group's stale sibling rates.
+      recalcGroup?: boolean
     }
   ): Promise<any> {
     return safe(
@@ -920,6 +923,7 @@ export const apiClient = {
             width: input.width ?? null,
             height: input.height ?? null,
             weightOz: input.weightOz ?? null,
+            ...(input.recalcGroup ? { recalcGroup: true } : {}),
           })
           .then((r) => r.data),
       { saved: false }
