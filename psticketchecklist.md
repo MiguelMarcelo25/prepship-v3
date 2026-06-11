@@ -461,9 +461,17 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   useOrders `resolvedLegacyClientId`). Guard `test:ps-184-legacy-client-id-passthrough` (5 checks incl.
   recursive web/src sweep + backend owner pins). QA: typecheck + build:web + full cert ALL PASS. Local
   commit only.
-- **PS-185 — UPS 1Z tracking-prefix attribution at label-save time; delete FE `/^1Z/` regex block
-  (L1406-1458) (no deps).** Backend stamps resolved carrier account on the shipment at save; FE reads DTO;
-  one-time backfill for existing rows; guard asserts no 1Z regex in web/src.
+- **PS-185 — ✅ DONE 2026-06-11 (Wave 2b, repo-verified scope): FE 1Z attribution block deleted — the
+  backend ALREADY owned it.** Sharper finding than the card: no "stamp at label-save + backfill" was needed —
+  `resolveV2CarrierAccountRef` (src/routes/orders.ts) performs the IDENTICAL 1Z derivation (slice account
+  number from tracking, match the registry, client/shared preference) at the DTO layer and its result feeds
+  the canonical providerAccountId + account nickname on EVERY order's shipping model, which the FE lookup
+  reads FIRST (`getShippingProviderAccountId(order) ?? ...`). The FE's duplicate block could only fire when
+  the backend (same data, same registry) had already failed — pure drift risk, deleted; the FE resolver no
+  longer takes a tracking number (display lookup of the backend-stamped id only). No shipment rows touched,
+  no backfill required (read-side derivation covers historical rows on every request). Guard
+  `test:ps-185-backend-1z-attribution` (5 checks: web/src sweep + backend owner pins + canonical-first read).
+  QA: typecheck + build:web + full cert ALL PASS. Local commit only.
 - **🔴 PS-186 — ✅ DONE 2026-06-11 (Wave 0): test-order classification → backend; reject untrusted
   `testLabel:true` in `createLabelV2`.** Canonical owner `src/services/fulfillment/test-label-policy.ts`
   (pure `decideTestLabel` + `TestLabelRejectedError` 409 + the single `loadClientIsTest`); createLabelV2

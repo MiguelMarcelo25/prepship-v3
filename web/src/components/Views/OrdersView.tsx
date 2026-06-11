@@ -1342,30 +1342,21 @@ function getRateProviderAccountId(rate: Record<string, unknown> | null | undefin
   )
 }
 
+// PS-185: the UPS 1Z tracking-prefix attribution is BACKEND-owned —
+// resolveV2CarrierAccountRef (src/routes/orders.ts) performs the identical
+// derivation at the DTO layer and its result feeds the canonical
+// providerAccountId + account nickname on every order's shipping model, which
+// this lookup reads FIRST. The FE's duplicate tracking-prefix block could only fire
+// when the backend (same data, same registry) had already failed — deleted.
+// What remains is display lookup of the backend-stamped id.
 function resolveV2CarrierAccount(
   providerAccountId: number | null,
   carrierCode: string | null,
-  trackingNumber: string | null,
   clientId: number | null,
 ) {
   if (providerAccountId != null) {
     const exact = V2_CARRIER_ACCOUNT_REFS.find((account) => account.shippingProviderId === providerAccountId)
     if (exact) return exact
-  }
-
-  if ((carrierCode === 'ups' || carrierCode === 'ups_walleted') && trackingNumber) {
-    const tracking = trackingNumber.replace(/\s/g, '').toUpperCase()
-    if (tracking.startsWith('1Z') && tracking.length >= 8) {
-      const accountNumber = tracking.slice(2, 8)
-      const matches = V2_CARRIER_ACCOUNT_REFS.filter(
-        (account) =>
-          (account.carrierCode === 'ups' || account.carrierCode === 'ups_walleted') &&
-          account.accountNumber?.toUpperCase() === accountNumber,
-      )
-      const clientMatch = clientId != null ? matches.find((account) => account.clientId === clientId) : null
-      const sharedMatch = matches.find((account) => account.clientId === null)
-      return clientMatch ?? sharedMatch ?? matches[0] ?? null
-    }
   }
 
   const matching = V2_CARRIER_ACCOUNT_REFS.filter((account) => account.carrierCode === carrierCode)
@@ -1390,10 +1381,9 @@ function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
     getShippingString(order, 'carrierCode') ??
     toStringValue(order.selectedRate?.carrierCode) ??
     toStringValue(order.bestRate?.carrierCode)
-  const trackingNumber = getShippingString(order, 'trackingNumber') ?? toStringValue(order.label?.trackingNumber)
   const clientId = getLegacyClientIdForDisplay(order)
 
-  return resolveV2CarrierAccount(providerAccountId, carrierCode, trackingNumber, clientId)
+  return resolveV2CarrierAccount(providerAccountId, carrierCode, clientId)
 }
 
 function isStrictShippedOrder(order: OrderSummaryDto) {
