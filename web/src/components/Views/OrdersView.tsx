@@ -6824,13 +6824,12 @@ export default function OrdersView({
   }
 
   function isExistingLabelCreateConflict(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error ?? '')
-    const lower = message.toLowerCase()
-    return (
-      lower.includes('cannot create label for shipped order') ||
-      lower.includes('cannot create label for cancelled order') ||
-      lower.includes('label already exists for this order')
-    )
+    // PS-190: conflict detection is code-based — the backend stamps
+    // LABEL_EXISTS (active label already on the order) or ORDER_NOT_EDITABLE
+    // (shipped/cancelled) and the api/vercelFunction transports carry it as
+    // error.code. No substring-matching of human messages.
+    const code = (error as { code?: unknown } | null)?.code
+    return code === 'LABEL_EXISTS' || code === 'ORDER_NOT_EDITABLE'
   }
 
   async function queueExistingLabelAfterCreateConflict(order: OrderSummaryDto, error: unknown) {

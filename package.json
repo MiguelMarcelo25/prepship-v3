@@ -160,6 +160,7 @@
     "test:ps-197-effective-insurance-display": "tsx scripts/ps-197-effective-insurance-display-guard.ts",
     "test:ps-198-rate-quote-proof-passthrough": "tsx scripts/ps-198-rate-quote-proof-passthrough-guard.ts",
     "test:ps-181-backend-admin-authority": "tsx scripts/ps-181-backend-admin-authority-guard.ts",
+    "test:ps-190-label-conflict-codes": "tsx scripts/ps-190-label-conflict-codes-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",

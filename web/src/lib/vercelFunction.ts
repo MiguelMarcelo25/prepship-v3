@@ -50,13 +50,19 @@ export async function callVercelFunction<T>(
     });
     if (!res.ok) {
       let msg = `${res.status} ${res.statusText}`;
+      let code: string | undefined;
       try {
         const err = await res.json();
         if (err?.error) msg = err.error;
+        // PS-190: carry the machine-readable code (parity with ApiRequestError)
+        // so callers branch on error.code instead of message substrings.
+        if (typeof err?.code === 'string' && err.code) code = err.code;
       } catch {
         // ignore — keep status text
       }
-      throw new Error(msg);
+      const error = new Error(msg) as Error & { code?: string };
+      if (code) error.code = code;
+      throw error;
     }
     return (await res.json()) as T;
   } catch (error) {

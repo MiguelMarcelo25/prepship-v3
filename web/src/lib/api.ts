@@ -26,10 +26,13 @@ export class ApiRequestError extends Error {
   requestId?: string;
   method: string;
   path: string;
+  // PS-190: machine-readable error code from the backend body ({ error, code }).
+  // Callers branch on this instead of substring-matching the human message.
+  code?: string;
 
   constructor(
     message: string,
-    options: { status?: number; requestId?: string | null; method: string; path: string }
+    options: { status?: number; requestId?: string | null; method: string; path: string; code?: string }
   ) {
     const requestId = options.requestId?.trim() || undefined;
     super(requestId ? `${message} (Request ID: ${requestId})` : message);
@@ -38,6 +41,7 @@ export class ApiRequestError extends Error {
     this.requestId = requestId;
     this.method = options.method;
     this.path = options.path;
+    this.code = options.code;
   }
 }
 
@@ -243,9 +247,13 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
 
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
+    let code: string | undefined;
     try {
       const err = await res.json();
       if (err?.error) msg = err.error;
+      // PS-190: carry the backend's machine-readable code so callers can
+      // branch on it instead of substring-matching the message.
+      if (typeof err?.code === 'string' && err.code) code = err.code;
     } catch {
       // ignore
     }
@@ -254,6 +262,7 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
       requestId: responseRequestId,
       method,
       path,
+      code,
     });
   }
 

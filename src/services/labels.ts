@@ -930,7 +930,14 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   const order = await timer.task('order load', () => loadOrderRecord(body.orderId));
   if (!order) throw new Error('Order not found');
   if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
-    throw new Error(`Cannot create label for ${order.orderStatus} order`);
+    // PS-190: structured conflict code — the FE branches on `code`, not the message.
+    const err = new Error(`Cannot create label for ${order.orderStatus} order`) as Error & {
+      code?: string;
+      details?: Record<string, unknown>;
+    };
+    err.code = 'ORDER_NOT_EDITABLE';
+    err.details = { orderStatus: order.orderStatus };
+    throw err;
   }
   // PS-128 + PS-129: backend-owned shipping-safety guard. Hard-blocks BEFORE any label or
   // postage side effect when the order was already shipped externally/upstream (PS-128
@@ -999,9 +1006,12 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
 
   const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
   if (existing) {
+    // PS-190: structured conflict code — the FE branches on `code`, not the message.
     const err = new Error('Label already exists for this order') as Error & {
+      code?: string;
       details?: Record<string, unknown>;
     };
+    err.code = 'LABEL_EXISTS';
     err.details = {
       shipmentId: existing.id,
       trackingNumber: existing.trackingNumber,

@@ -480,9 +480,15 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   (OrdersView L680-726) (no deps).** Auto-default stamps `stamps_com` → `usps_media_mail` (legal/compliance
   risk) into the purchase payload with NO backend re-check. Backend `GET /carriers/:accountId/services` (or
   `services[]` on the account DTO); FE deletes table + auto-default; guard. **Unblocks PS-165.**
-- **PS-190 — Structured label-conflict error codes (`LABEL_EXISTS` / `ORDER_NOT_EDITABLE`) (no deps).**
-  Backend returns `{ code, message }`; FE replaces `error.message.includes(...)` with `error.code===...`;
-  guard asserts no substring conflict-detection in web/src.
+- **PS-190 — ✅ DONE 2026-06-11 (Wave 2a): structured label-conflict error codes.** createLabelV2 stamps
+  `code: 'ORDER_NOT_EDITABLE'` (+ `{ orderStatus }` detail) on the shipped/cancelled conflict and
+  `code: 'LABEL_EXISTS'` on the active-label conflict; routes/labels.ts returns `{ error, code, ...details }`
+  at the SAME 400 status (legacy message-based mapping kept as fallback for older error shapes). Both FE
+  transports now carry the body's `code` onto the thrown error (`ApiRequestError.code` in api.ts +
+  `callVercelFunction`), and `isExistingLabelCreateConflict` branches on `error.code` only — zero substring
+  conflict-detection left in web/src (recursive sweep). Deploy-skew safe: backend ships codes before/with the
+  FE; messages unchanged. Guard `test:ps-190-label-conflict-codes` (9 checks). QA: typecheck + build:web +
+  ps-186 + ps-084-direct-carrier-print-queue + test-order-queue-label + full cert ALL PASS. Local commit only.
 
 > ⚠️ **PS-191 is referenced** ("PS-189/PS-190 → PS-191 depends on this") but its spec was not provided — define before sequencing.
 

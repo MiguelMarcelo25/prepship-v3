@@ -124,6 +124,12 @@ function handleCreateError(c: Context, err: unknown): Response {
   if (e.code === 'TEST_LABEL_REJECTED') {
     return c.json({ error: message, code: e.code, ...details }, 409);
   }
+  // PS-190: structured label-conflict codes — same HTTP statuses the legacy
+  // message-based mapping below produced (kept as a fallback for older error
+  // shapes); the FE branches on `code` instead of substring-matching messages.
+  if (e.code === 'LABEL_EXISTS' || e.code === 'ORDER_NOT_EDITABLE') {
+    return c.json({ error: message, code: e.code, ...details }, 400);
+  }
   const invalid = [
     'orderId and serviceCode required',
     'shippingProviderId required for v2 label creation',
