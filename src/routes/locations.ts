@@ -5,6 +5,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { locations } from '../db/schema/locations';
 import { setDefaultLocation } from '../services/locations';
+import { getDefaultShipFrom } from '../lib/ship-from';
 import { listShipStationWarehouses } from '../connectors/store/shipstation';
 
 const app = new Hono();
@@ -35,6 +36,25 @@ app.get('/:id{[0-9]+}', async (c) => {
   const [row] = await db.select().from(locations).where(eq(locations.id, id)).limit(1);
   if (!row) return c.json({ error: 'Location not found' }, 404);
   return c.json(row);
+});
+
+// PS-188: canonical rate-shop/label origin for the FE. Thin read over the SAME
+// owner the label + rate paths use (src/lib/ship-from.ts → getDefaultShipFrom:
+// default Location row, env fallback) so the UI displays the true origin
+// instead of hardcoding one. Read-only.
+app.get('/default-ship-from', async (c) => {
+  try {
+    const addr = await getDefaultShipFrom();
+    return c.json({
+      name: addr.name ?? null,
+      city: addr.city_locality ?? null,
+      state: addr.state_province ?? null,
+      postalCode: addr.postal_code ?? null,
+      countryCode: addr.country_code ?? 'US',
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 404);
+  }
 });
 
 app.post('/', zValidator('json', body), async (c) => {

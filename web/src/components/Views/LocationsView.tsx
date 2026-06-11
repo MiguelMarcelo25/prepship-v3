@@ -190,7 +190,7 @@ export function LocationsViewContent({
               </div>
               <div>
                 <label htmlFor="locFormZip" className={labelCls}>ZIP Code</label>
-                <input id="locFormZip" type="text" className={`${inputCls} font-mono tabular-nums`} placeholder="90248" maxLength={10} value={form.postalCode} onChange={(event) => onFieldChange('postalCode', event.target.value)} />
+                <input id="locFormZip" type="text" className={`${inputCls} font-mono tabular-nums`} placeholder="ZIP" maxLength={10} value={form.postalCode} onChange={(event) => onFieldChange('postalCode', event.target.value)} />
               </div>
               <div>
                 <label htmlFor="locFormPhone" className={labelCls}>Phone <span className="text-ink-4 normal-case font-normal tracking-normal">(optional)</span></label>

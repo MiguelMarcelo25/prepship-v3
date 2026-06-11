@@ -80,7 +80,11 @@ export function getRatesValidationState(form: RatesFormState): RatesEmptyState |
 
 export function buildLiveRatesPayload(form: RatesFormState): LiveRatesRequestDto {
   return {
-    fromPostalCode: form.fromZip.trim() || '90248',
+    // PS-188: the origin is BACKEND-owned (getDefaultShipFrom — default Location
+    // row, env fallback). The form value is seeded from GET /locations/default-
+    // ship-from; no FE hardcode. Empty is fine: the backend rates path always
+    // quotes from its canonical default when no origin is sent.
+    fromPostalCode: form.fromZip.trim(),
     toPostalCode: form.toZip.trim(),
     toCountry: 'US',
     weight: {
@@ -423,7 +427,10 @@ export function buildRatesMetaLabel(form: RatesFormState): string {
   const length = parseRatesNumber(form.lengthIn)
   const width = parseRatesNumber(form.widthIn)
   const height = parseRatesNumber(form.heightIn)
-  const fromZip = form.fromZip.trim() || '90248'
+  // PS-188: never display a hardcoded origin. When the backend-seeded value
+  // hasn't arrived (or no default Location is configured), say so honestly
+  // instead of pretending a ZIP was used.
+  const fromZip = form.fromZip.trim() || 'default origin'
   const toZip = form.toZip.trim()
   // Display the weight in the same lb + oz form the operator typed,
   // so the meta label confirms what was sent (no surprise unit

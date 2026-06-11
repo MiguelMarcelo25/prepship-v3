@@ -473,9 +473,19 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   `buildTestMockRate` (OrdersView L754-883) + `V2_CARRIER_ACCOUNT_REFS` (L885-910).** Backend test-fixture
   branch gated on `isTestClient` (PS-186) with a `testFixture:true` marker; guard asserts FE fns + table gone.
   **Depends on PS-186.**
-- **PS-188 — Rate-shop origin ZIP from backend warehouse/locations DTO; delete hardcoded '90248' (no deps).**
-  `rates-parity.ts:83` + `orders-parity.ts:83` hardcode origin '90248'/US → multi-warehouse wrong rates.
-  Backend exposes origin ZIP/country; FE reads it; guard asserts no '90248' in web/src/components/Views.
+- **PS-188 — ✅ DONE 2026-06-11 (Wave 2a): rate-shop origin backend-owned, '90248' deleted from Views.**
+  Repo-verified scope: the hardcode lived in rates-parity.ts (×2: buildLiveRatesPayload fallback + meta-label
+  fallback) and RatesView's form default — the card's `orders-parity.ts:83` claim does NOT reproduce (no
+  '90248' there). Sharper finding: /rates/browse never even reads the FE origin — the backend always quotes
+  from the canonical `getDefaultShipFrom` (default Location row, env fallback), so the FE literal could
+  silently disagree with the true quoting origin and the meta label displayed an origin that was never used.
+  **Fix:** thin read `GET /locations/default-ship-from` → getDefaultShipFrom (same owner labels+rates use);
+  RatesView seeds the origin field from it (never overwrites operator input; empty default); payload sends
+  the operator value verbatim; meta label says 'default origin' instead of inventing a ZIP; LocationsView
+  placeholder neutralized. Out of scope (documented): NewOrderModal's `defaultFromZip='90248'` param default
+  (components/, not Views; feeds manual order creation — needs its own spec to change money behavior).
+  Guard `test:ps-188-backend-origin-zip` (9 checks incl. recursive Views sweep + owner pin). QA: typecheck +
+  build:web + ship-from-default-location + full cert ALL PASS. Local commit only.
 - **PS-189 — Account→services registry DTO from backend; delete `CARRIER_SERVICES` FE table + auto-default
   (OrdersView L680-726) (no deps).** Auto-default stamps `stamps_com` → `usps_media_mail` (legal/compliance
   risk) into the purchase payload with NO backend re-check. Backend `GET /carriers/:accountId/services` (or

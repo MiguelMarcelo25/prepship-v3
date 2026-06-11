@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useMemo, useState, type FormEvent } from 'react'
+import { useContext, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   DollarSign,
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { RateDto } from '@prepshipv2/contracts/rates/contracts'
 import { apiClient } from '../../api/client'
+import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
 // Shared carrier badge — official UPS/USPS SVG logos with fallback pills.
@@ -43,7 +44,9 @@ const DEFAULT_FORM: RatesFormState = {
   lengthIn: '12',
   widthIn: '9',
   heightIn: '4',
-  fromZip: '90248',
+  // PS-188: origin is backend-owned — seeded from GET /locations/default-ship-from
+  // on mount (the same getDefaultShipFrom the label + rate paths quote from).
+  fromZip: '',
   toZip: '',
 }
 
@@ -125,6 +128,22 @@ export default function RatesView() {
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
   const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
   const { markups } = useMarkups()
+
+  // PS-188: seed the origin ZIP from the backend's canonical default ship-from
+  // (the SAME getDefaultShipFrom the label + rate paths quote from). Only fills
+  // an untouched field — an operator-typed origin is never overwritten. If the
+  // request fails, the field stays blank and the backend still quotes from its
+  // own default.
+  useEffect(() => {
+    let cancelled = false
+    void api.get<{ postalCode: string | null }>('/locations/default-ship-from')
+      .then((res) => {
+        if (cancelled || !res?.postalCode) return
+        setForm((current) => (current.fromZip.trim() ? current : { ...current, fromZip: res.postalCode! }))
+      })
+      .catch(() => { /* no default Location configured — leave blank */ })
+    return () => { cancelled = true }
+  }, [])
 
   const rows = resultState.kind === 'table'
     ? buildRateRows(resultState.rates, shippingAccounts, markups)
