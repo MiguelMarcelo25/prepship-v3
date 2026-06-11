@@ -566,6 +566,12 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // pass back { rateQuoteId, selectedRateKey } at label/queue time instead of full
   // proof internals (selectedRateProof remains as the compatibility fallback).
   const responseRates = rateQuoteId ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId })) : ratesWithKeys;
+  // PS-183: the cache-expiry TTL is BACKEND-owned (CACHE_TTL_MS over the quote's
+  // fetchedAt — the same expiry the rate cache itself enforces). Stamped on the
+  // response + best rate so the FE never mints its own "now + 6h" freshness.
+  const browseCacheExpiresAt = new Date(
+    new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
+  ).toISOString();
   const bestRateOut = cheapest
     ? {
         ...cheapest,
@@ -573,6 +579,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         isComplete: bestRateComplete,
         requestFingerprint: combinedRequestKey,
         cacheKey: combinedRequestKey,
+        cacheCreatedAt: result.fetchedAt,
+        cacheExpiresAt: browseCacheExpiresAt,
         effectiveInsuranceProvider: result.effectiveInsuranceProvider,
         effectiveInsuredValue: result.effectiveInsuredValue,
         effectiveInsuranceSource: result.effectiveInsuranceSource,
@@ -616,6 +624,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     ...(manualEstimate ? { manualEstimate } : {}),
     requestKey: combinedRequestKey,
     cacheKey: combinedRequestKey,
+    cacheExpiresAt: browseCacheExpiresAt,
     effectiveInsuranceProvider: result.effectiveInsuranceProvider,
     effectiveInsuredValue: result.effectiveInsuredValue,
     effectiveInsuranceSource: result.effectiveInsuranceSource,

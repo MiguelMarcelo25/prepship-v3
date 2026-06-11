@@ -5577,8 +5577,18 @@ export default function OrdersView({
       ...rateWithoutProof
     } = rate
     const createdAt = toStringValue(metadata.cacheCreatedAt) ?? new Date().toISOString()
+    // PS-183: the freshness window is BACKEND-owned (CACHE_TTL_MS over fetchedAt,
+    // stamped on the browse response + rates). Prefer the explicit metadata value,
+    // then the rate's backend-stamped expiry. The local mint is a last-resort
+    // DISPLAY fallback only (warned — a minted window can make a stale rate look
+    // fresh, and never extends the server-side cache TTL or the purchase proof).
+    const backendExpiresAt =
+      toStringValue(metadata.cacheExpiresAt) ?? toStringValue(rate.cacheExpiresAt)
+    if (!backendExpiresAt) {
+      console.warn('[orders] backend rate carried no cacheExpiresAt — minting a display-only 6h fallback (PS-183)')
+    }
     const expiresAt =
-      toStringValue(metadata.cacheExpiresAt) ??
+      backendExpiresAt ??
       new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
     return {
       ...rateWithoutProof,

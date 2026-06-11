@@ -448,9 +448,16 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   reintroduce-only-with-real-backend comments. Real controls survive (residential 'change' toggle,
   validation status row — guard-pinned). Guard `test:ps-182-dead-stub-ui` (5 checks, recursive web/src
   sweep). QA: typecheck + build:web + guard:site-actions PASS. Local commit only.
-- **PS-183 — Backend owns `cacheExpiresAt` TTL; FE stops minting now+6h (no deps).** `withRateRequestMetadata`
-  (~L5573) prefers backend `metadata.cacheExpiresAt`; FE fallback only if absent (warn). (FE overwrite makes
-  stale rates look fresh + bypasses server TTL.) Guard + parity test.
+- **PS-183 — ✅ DONE 2026-06-11 (Wave 2b): rate freshness window backend-owned.** /rates/browse now stamps
+  `cacheExpiresAt` (fetchedAt + the SAME `CACHE_TTL_MS` the rate cache itself enforces) on the response top
+  level AND the best rate; both apiClient metadata blocks (browseRates + fetchRates) pass it through (never
+  minted client-side); `withRateRequestMetadata` prefers the explicit metadata value, then the rate's
+  backend-stamped expiry — the local now+6h mint survives ONLY as a warned, display-only last resort (a
+  FE-minted window restarted the 6h clock at APPLY time instead of QUOTE time, making stale quotes look
+  fresh). Purchase authority untouched: proof + the server-side snapshot TTL never read this field. ps-123's
+  bestRateOut proximity window re-anchored 300→450 (assertion unchanged; my new lines sit inside the
+  literal). Guard `test:ps-183-backend-cache-ttl` (9 checks). QA: typecheck + build:web + ps-196 + ps-198 +
+  ps-123 + ps-105 + batch-recalculate + recalculate-strict + full cert ALL PASS. Local commit only.
 - **PS-184 — ✅ DONE 2026-06-11 (Wave 2b): all FE legacy client-id remap tables deleted (more than the
   card knew about).** Repo-verified: the card said 2 tables in OrdersView; the recursive sweep found EIGHT
   maps across THREE files — OrdersView (by display name / store id / current id), AnalysisView (by store

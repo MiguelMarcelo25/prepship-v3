@@ -180,7 +180,9 @@ check(
   /effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(browsePayloadBlock) &&
     /effectiveInsuredValue:\s*result\.effectiveInsuredValue/.test(browsePayloadBlock) &&
     /bestRateMetadata[\s\S]{0,500}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute) &&
-    /bestRateOut[\s\S]{0,300}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute),
+    // Window 300→450 (PS-183 added cacheCreatedAt/cacheExpiresAt lines inside the
+    // bestRateOut literal before the insurance stamp; assertion unchanged).
+    /bestRateOut[\s\S]{0,450}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute),
 );
 
 if (failures > 0) {

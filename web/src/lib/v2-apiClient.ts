@@ -2637,6 +2637,8 @@ export const apiClient = {
             requestFingerprint: responseFingerprint,
             cacheKey: responseFingerprint,
             cacheCreatedAt: res?.fetchedAt ?? null,
+            // PS-183: expiry is backend-owned — pass through, never minted here.
+            cacheExpiresAt: res?.cacheExpiresAt ?? null,
             proofSource: BACKEND_RATE_PROOF_SOURCE,
           }
           : {};
@@ -2724,6 +2726,9 @@ export const apiClient = {
               requestFingerprint: backendFingerprint,
               cacheKey: backendFingerprint,
               cacheCreatedAt: backendResult?.fetchedAt ?? null,
+              // PS-183: expiry is backend-owned (CACHE_TTL_MS over fetchedAt) —
+              // pass it through so the FE never mints its own freshness window.
+              cacheExpiresAt: backendResult?.cacheExpiresAt ?? null,
               proofSource: BACKEND_RATE_PROOF_SOURCE,
             }
             : {};
