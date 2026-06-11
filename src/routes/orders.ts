@@ -77,7 +77,7 @@ import {
   evaluateShippingServiceEligibility,
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
-import { buildBestRateWorkflowDto } from '../services/shipping-workflow/best-rate-workflow-dto';
+import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import {
   computeOrderRateJobFingerprint,
   resolveRateJobWorkflowOverride,
@@ -1883,6 +1883,37 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         source: sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments shipmentCost + otherCost stored on linked shipment'),
       },
     ]);
+    // PS-173 (Phase 1): enrich the workflow DTO with the backend-owned row state,
+    // action verbs, and the carrier/service/account display tuple (PS-165b absorbed)
+    // — derived from the SAME canonical picks the shipping model uses, and applied
+    // AFTER the PS-120 pending/rating override so rowState reflects the
+    // operator-visible rate state. Additive: shipped-bucket rows keep
+    // bestRateWorkflow=null (their intentional payload design — shipped-row states
+    // wire in when later phases revisit that); /rates/browse never enriches, so its
+    // output is byte-identical to before PS-173.
+    const rowRawDims = recordOrNull(recordOrNull(r.order.raw)?.dimensions) ?? {};
+    const rowDimsL = finiteNumberOrNull(safeOverrides?.rateDimsL) ?? finiteNumberOrNull(rowRawDims.length);
+    const rowDimsW = finiteNumberOrNull(safeOverrides?.rateDimsW) ?? finiteNumberOrNull(rowRawDims.width);
+    const rowDimsH = finiteNumberOrNull(safeOverrides?.rateDimsH) ?? finiteNumberOrNull(rowRawDims.height);
+    const rowWeightOz = finiteNumberOrNull(safeOverrides?.rateWeightOz) ?? finiteNumberOrNull(r.order.weightOz);
+    const bestRateWorkflowRow = bestRateWorkflow
+      ? withOrderRowWorkflow(bestRateWorkflow, {
+          orderStatus: r.order.orderStatus ?? null,
+          externallyShipped: r.order.externallyShipped === true,
+          canonicalStatus: r.order.canonicalStatus ?? null,
+          isTest: r.order.clientId != null && testClientIds.has(r.order.clientId),
+          hasCompleteDims: rowDimsL != null && rowDimsL > 0 && rowDimsW != null && rowDimsW > 0 && rowDimsH != null && rowDimsH > 0,
+          hasWeight: rowWeightOz != null && rowWeightOz > 0,
+          hasShipment: Boolean(ship),
+          bestRateCarrierCode: stringOrNull(bestRateRecord?.carrierCode),
+          bestRateServiceCode: stringOrNull(bestRateRecord?.serviceCode),
+          canonicalCarrierCode,
+          canonicalServiceCode,
+          canonicalAccountNickname,
+          selectedRateCarrierCode: stringOrNull(selectedRateRecord?.carrierCode),
+          providerAccountId: canonicalProviderAccountId ?? null,
+        })
+      : null;
     const shipping = {
       carrierCode: canonicalCarrierCode,
       serviceCode: canonicalServiceCode,
@@ -1898,7 +1929,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       source: ship ? 'shipment' : overrideBestRate ? 'order_override' : null,
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
-      bestRateWorkflow,
+      bestRateWorkflow: bestRateWorkflowRow,
       sourceMap: {
         'shipping.carrierCode': carrierPick.source,
         'shipping.serviceCode': servicePick.source,
@@ -1970,7 +2001,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         : null,
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
-      bestRateWorkflow,
+      bestRateWorkflow: bestRateWorkflowRow,
       shipping,
       canonicalOrder,
       sourceLink: walmartSourceLink,

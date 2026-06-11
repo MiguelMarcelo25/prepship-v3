@@ -25,6 +25,13 @@ export type DisplayCarrierCodeInput = {
   isTest: boolean
   /** orderStatus === 'awaiting_shipment'. */
   isAwaiting: boolean
+  /**
+   * PS-173: the BACKEND display tuple (order.bestRateWorkflow.display.carrierCode).
+   * The backend encodes this exact precedence server-side, so when present it is
+   * preferred verbatim; the field-by-field fallbacks below remain for rows without
+   * the enriched DTO (shipped bucket, older payloads).
+   */
+  backendDisplayCarrierCode?: string | null
   /** toStringValue(order.bestRate?.carrierCode). */
   bestRateCarrierCode: string | null
   /** getShippingString(order, 'carrierCode') — the canonical shipping map value. */
@@ -48,6 +55,9 @@ export type DisplayCarrierCodeInput = {
 export function resolveDisplayCarrierCode(input: DisplayCarrierCodeInput): string | null {
   if (input.isTest) return DISPLAY_TEST_CARRIER_CODE
 
+  // PS-173: prefer the backend-owned tuple (same precedence, computed server-side).
+  if (input.backendDisplayCarrierCode) return input.backendDisplayCarrierCode
+
   if (input.isAwaiting) {
     const carrierCode = input.bestRateCarrierCode ?? input.canonicalCarrierCode ?? input.selectedRateCarrierCode
     if (carrierCode) return carrierCode
@@ -62,6 +72,8 @@ export function resolveDisplayCarrierCode(input: DisplayCarrierCodeInput): strin
 export type DisplayServiceCodeInput = {
   /** orderStatus === 'awaiting_shipment'. */
   isAwaiting: boolean
+  /** PS-173: backend display tuple (bestRateWorkflow.display.serviceCode) — preferred when present. */
+  backendDisplayServiceCode?: string | null
   /** order.bestRate is present. */
   hasBestRate: boolean
   /** toStringValue(order.bestRate?.serviceCode). */
@@ -77,6 +89,8 @@ export type DisplayServiceCodeInput = {
  *  - otherwise                          → canonical serviceCode, else the best-rate serviceCode
  */
 export function resolveDisplayServiceCode(input: DisplayServiceCodeInput): string | null {
+  // PS-173: prefer the backend-owned tuple (same precedence, computed server-side).
+  if (input.backendDisplayServiceCode) return input.backendDisplayServiceCode
   if (input.isAwaiting && input.hasBestRate && input.bestRateServiceCode) {
     return input.bestRateServiceCode
   }

@@ -1399,6 +1399,8 @@ function getCarrierCodeForDisplay(order: OrderSummaryDto) {
   return resolveDisplayCarrierCode({
     isTest: isTestOrder(order),
     isAwaiting,
+    // PS-173: backend-owned display tuple — preferred when the row carried it.
+    backendDisplayCarrierCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.carrierCode),
     bestRateCarrierCode: toStringValue(order.bestRate?.carrierCode),
     canonicalCarrierCode: getShippingString(order, 'carrierCode'),
     selectedRateCarrierCode: toStringValue(order.selectedRate?.carrierCode),
@@ -1499,6 +1501,8 @@ function getBestRateServiceCode(order: OrderSummaryDto) {
   // resolveDisplayServiceCode (./order-shipping-display); fields read here.
   return resolveDisplayServiceCode({
     isAwaiting: order.orderStatus === 'awaiting_shipment',
+    // PS-173: backend-owned display tuple — preferred when the row carried it.
+    backendDisplayServiceCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.serviceCode),
     hasBestRate: Boolean(order.bestRate),
     bestRateServiceCode: order.bestRate ? toStringValue(order.bestRate.serviceCode) : null,
     canonicalServiceCode: getShippingString(order, 'serviceCode'),

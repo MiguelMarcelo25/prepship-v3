@@ -376,12 +376,24 @@ validates order state/carrier scope/selected rate/payload/side effects at purcha
 side effects per stage, risk ranking) + child-card drafts + existing-card classification. NO behavior change.
 
 ### Phase children — execution track (do NOT start broad FE decomposition before backend DTO/proof/rate/label boundaries land)
-- **PS-173 — Phase 1: Backend Order Row Shipping Workflow DTO + Action States.** Backend-owned row DTO:
-  states (pending/final/blocked/needs_dims/stale_rate/missing_rate/external_shipped/local_shipped/
-  missing_shipment_sync) + `allowedActions` (canRate/canBrowseRates/canRecalculate/canCreateLabel/
-  canQueueLabel/canMarkExternalShipped) + carrier/account/service display from the backend registry.
-  Additive; no label-purchase change; OrdersView prefers the DTO behind the existing fallback. **Classify
-  PS-165 overlap in the PR.** Dep: after PS-172 map.
+- **PS-173 — ✅ DONE 2026-06-11 (Phase 1): backend order-row workflow DTO + action states.**
+  EXTEND-NEVER-PARALLEL: the row workflow lives ON `BestRateWorkflowDto` via a pure enricher
+  `withOrderRowWorkflow(dto, facts)` — no second workflow object. Adds (1) `rowState` with the full spec
+  vocabulary (pending/final/blocked/needs_dims/stale_rate/missing_rate/external_shipped/local_shipped/
+  missing_shipment_sync — cancelled/external/shipped trump rate states; dims gate before rates; rate
+  lifecycle maps from the existing bestRateState AFTER the PS-120 pending override); (2) the six action
+  verbs on `allowedActions` — **narrower-or-equal by construction** (canCreateLabel keeps fresh-only and
+  can only get narrower; local_shipped may queue the EXISTING label/reprint but never create; blocked rows
+  get nothing); (3) the `display` tuple (**PS-165b absorbed as classified**) — carrier/service/account/
+  providerId computed from the SAME canonical picks the shipping model uses, byte-compatible with the
+  PS-079 precedence (awaiting best-rate-first, shipped canonical-first, test pinned). Route enriches list
+  rows from the canonical picks + PS-186 `testClientIds`; **additive guarantee guard-pinned**: legacy
+  callers (/rates/browse) emit byte-identical output (no new keys). FE prefers the tuple behind existing
+  fallbacks (`backendDisplayCarrierCode/ServiceCode` leading preference in resolveDisplay*). Shipped-bucket
+  rows keep `bestRateWorkflow=null` (their intentional payload design) — shipped-row states wire in when a
+  later phase revisits that; vocabulary + tests ready. Guard `test:ps-173-order-row-workflow` (26 checks).
+  QA: typecheck + build:web + ps-102 + ps-196 + ps-165 + ps-120-producer + ps-099 + batch-recalculate +
+  recalculate-strict + full cert ALL PASS. Local commit only.
 - **PS-174 — Phase 2: Backend Rate Quote Snapshot + selectedRateKey primitive.** Backend issues opaque
   `rateQuoteId`/`selectedRateKey`/proof per final rate (normalized account/service/amount-components/
   insurance/confirmation/ZIP+4/residential/weight/dims/package/ship-date-bucket/client-store-source/

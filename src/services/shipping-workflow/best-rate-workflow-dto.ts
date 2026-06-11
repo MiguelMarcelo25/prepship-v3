@@ -44,6 +44,42 @@ export type BestRateWorkflowAllowedActions = {
   canUseSavedRate: boolean;
   requiresRerate: boolean;
   canCreateLabel: boolean;
+  // PS-173 (Phase 1): row-level action verbs — present ONLY when the route passed
+  // row context to withOrderRowWorkflow (legacy callers' output is byte-identical).
+  canRate?: boolean;
+  canBrowseRates?: boolean;
+  canRecalculate?: boolean;
+  canQueueLabel?: boolean;
+  canMarkExternalShipped?: boolean;
+};
+
+// PS-173 (Phase 1) — the backend-owned ROW workflow state. A superset of the rate
+// lifecycle: rate-centric states for awaiting rows (pending/final/stale_rate/
+// missing_rate/needs_dims/blocked) + shipped-row states (external_shipped/
+// local_shipped/missing_shipment_sync) so later phases can classify every row from
+// ONE object (extend-never-parallel: this lives on BestRateWorkflowDto, not a
+// second workflow object). Additive: only present when row context is provided.
+export type OrderRowWorkflowState =
+  | 'pending'
+  | 'final'
+  | 'blocked'
+  | 'needs_dims'
+  | 'stale_rate'
+  | 'missing_rate'
+  | 'external_shipped'
+  | 'local_shipped'
+  | 'missing_shipment_sync';
+
+// PS-173 / PS-165b — the backend-owned carrier/service/account DISPLAY tuple. The
+// precedence mirrors the FE's resolveDisplayCarrierCode/resolveDisplayServiceCode
+// (PS-079/PS-165 rules) so the FE can prefer this tuple verbatim with zero display
+// change: awaiting rows are best-rate-first; shipped rows canonical-first; test
+// orders pin the test carrier.
+export type OrderRowWorkflowDisplay = {
+  carrierCode: string | null;
+  serviceCode: string | null;
+  accountNickname: string | null;
+  providerAccountId: number | null;
 };
 
 export type BestRateSelectedRateState = 'matches_best_rate' | 'mismatched_best_rate' | 'missing' | 'unknown';
@@ -74,6 +110,10 @@ export type BestRateWorkflowDto = {
   // saved rate immediately on reload when this is fresh/stale/saved_unproven; purchase authority
   // is UNCHANGED (allowedActions + backend proof asserts still require a current fresh rate).
   savedRateDisplay: BestRateSavedRateDisplay;
+  // PS-173 (Phase 1): backend-owned row state + display tuple — present ONLY when the
+  // route enriched the DTO with row context via withOrderRowWorkflow (additive).
+  rowState?: OrderRowWorkflowState;
+  display?: OrderRowWorkflowDisplay;
 };
 
 export type BuildBestRateWorkflowInput = {
@@ -252,6 +292,126 @@ function savedRateDisplayFor(
   // missing/blocked have no saved rate (hasSavedRate=false) — unreachable here; pending/rating are
   // reader-side overrides applied AFTER this builder runs.
   return 'none';
+}
+
+// ── PS-173 (Phase 1): row-context enrichment ─────────────────────────────────
+
+export type OrderRowWorkflowFacts = {
+  orderStatus: string | null;
+  externallyShipped: boolean | null;
+  canonicalStatus: string | null;
+  isTest: boolean;
+  hasCompleteDims: boolean;
+  hasWeight: boolean;
+  hasShipment: boolean;
+  // PS-165b inputs — the SAME canonical picks + best-rate identity the row payload
+  // already computed; the tuple is derived here so the precedence has ONE owner.
+  bestRateCarrierCode: string | null;
+  bestRateServiceCode: string | null;
+  canonicalCarrierCode: string | null;
+  canonicalServiceCode: string | null;
+  canonicalAccountNickname: string | null;
+  selectedRateCarrierCode: string | null;
+  providerAccountId: number | null;
+};
+
+const ROW_TEST_CARRIER_CODE = 'prepship_test';
+
+/**
+ * PS-173 — the row workflow state. Shipped/cancelled classification first (it
+ * trumps any rate state), then dims, then the rate lifecycle the base DTO
+ * already classified. Pure.
+ */
+function rowStateFor(facts: OrderRowWorkflowFacts, bestRateState: BestRateWorkflowState): OrderRowWorkflowState {
+  if (facts.orderStatus === 'cancelled' || facts.canonicalStatus === 'cancelled') return 'blocked';
+  if (facts.externallyShipped === true) return 'external_shipped';
+  if (facts.orderStatus === 'shipped') {
+    return facts.hasShipment ? 'local_shipped' : 'missing_shipment_sync';
+  }
+  if (!facts.hasCompleteDims || !facts.hasWeight) return 'needs_dims';
+  switch (bestRateState) {
+    case 'fresh':
+      return 'final';
+    case 'pending':
+    case 'rating':
+      return 'pending';
+    case 'missing':
+      return 'missing_rate';
+    case 'blocked':
+      return 'blocked';
+    // stale / mismatched_request / partial_carrier_failure / unknown: a saved value
+    // may display (PS-196), but acting on it requires a re-rate.
+    default:
+      return 'stale_rate';
+  }
+}
+
+/**
+ * PS-173 — row action verbs. Strictly NARROWER than or equal to today's behavior:
+ * canCreateLabel keeps its existing fresh-only meaning and additionally requires an
+ * actionable row; canQueueLabel covers BOTH create-and-queue (awaiting, final) and
+ * queue-the-existing-label (local_shipped reprint recovery — never new postage,
+ * which createLabelV2's shipped block enforces independently).
+ */
+function rowActionsFor(state: OrderRowWorkflowState, base: BestRateWorkflowAllowedActions): BestRateWorkflowAllowedActions {
+  const awaitingActionable = state === 'final' || state === 'stale_rate' || state === 'missing_rate' || state === 'pending';
+  const canRate = awaitingActionable;
+  const canBrowseRates = awaitingActionable || state === 'needs_dims';
+  const canRecalculate = awaitingActionable;
+  const canCreateLabel = base.canCreateLabel && state === 'final';
+  const canQueueLabel = canCreateLabel || state === 'local_shipped';
+  const canMarkExternalShipped = awaitingActionable || state === 'needs_dims';
+  return {
+    ...base,
+    canCreateLabel,
+    canRate,
+    canBrowseRates,
+    canRecalculate,
+    canQueueLabel,
+    canMarkExternalShipped,
+  };
+}
+
+/**
+ * PS-165b — the backend display tuple, byte-compatible with the FE's
+ * resolveDisplayCarrierCode/resolveDisplayServiceCode precedence (PS-079 rules):
+ * test → prepship_test; awaiting → best-rate-first; shipped/other → canonical-first.
+ */
+function displayTupleFor(facts: OrderRowWorkflowFacts): OrderRowWorkflowDisplay {
+  const isAwaiting = facts.orderStatus === 'awaiting_shipment';
+  const carrierCode = facts.isTest
+    ? ROW_TEST_CARRIER_CODE
+    : isAwaiting
+      ? facts.bestRateCarrierCode ?? facts.canonicalCarrierCode ?? facts.selectedRateCarrierCode
+      : facts.canonicalCarrierCode ?? facts.selectedRateCarrierCode ?? facts.bestRateCarrierCode;
+  const serviceCode = isAwaiting && facts.bestRateServiceCode
+    ? facts.bestRateServiceCode
+    : facts.canonicalServiceCode ?? facts.bestRateServiceCode;
+  return {
+    carrierCode: carrierCode ?? null,
+    serviceCode: serviceCode ?? null,
+    accountNickname: facts.canonicalAccountNickname ?? null,
+    providerAccountId: facts.providerAccountId ?? null,
+  };
+}
+
+/**
+ * PS-173 (Phase 1) — enrich an already-built workflow DTO with the backend-owned
+ * row state, action verbs, and display tuple. ADDITIVE BY CONSTRUCTION: callers
+ * that never invoke this (e.g. /rates/browse) produce byte-identical output to
+ * before PS-173, and the base fields (bestRateState, savedRateDisplay, the three
+ * original allowedActions semantics) are never weakened — canCreateLabel can only
+ * get NARROWER here. Apply AFTER the PS-120 pending/rating override so the row
+ * state reflects the operator-visible rate state.
+ */
+export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWorkflowFacts): BestRateWorkflowDto {
+  const rowState = rowStateFor(facts, dto.bestRateState);
+  return {
+    ...dto,
+    rowState,
+    allowedActions: rowActionsFor(rowState, dto.allowedActions),
+    display: displayTupleFor(facts),
+  };
 }
 
 export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): BestRateWorkflowDto {
