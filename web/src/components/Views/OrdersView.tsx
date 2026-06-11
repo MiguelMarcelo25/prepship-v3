@@ -62,7 +62,6 @@ const TrackingModal = lazy(() => import('../TrackingModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
 import { useMarkups } from '../../contexts/MarkupsContext'
-import { useAuth } from '../../lib/auth'
 import { api } from '../../lib/api'
 // PS-135: canonical FE rate-proof helpers (extracted from this file; pure backend-DTO reads).
 import {
@@ -2154,8 +2153,18 @@ export default function OrdersView({
   // Order assignment: only admins can assign orders to other users. Workers
   // see only their own assigned rows (server-side filter; this flag just
   // controls visibility of the admin-only UI).
-  const ADMIN_EMAILS = useMemo(() => new Set(['admin@drprepper.com']), [])
-  const callerIsAdmin = Boolean(authUser?.email && ADMIN_EMAILS.has(authUser.email.toLowerCase()))
+  // PS-181: admin identity is BACKEND-owned — GET /users/me answers via the canonical
+  // isAdminEmail (src/lib/admin-emails.ts). The FE never hardcodes admin emails and
+  // defaults to non-admin until the backend answers (the server still enforces every
+  // admin-only route regardless of this display flag).
+  const [callerIsAdmin, setCallerIsAdmin] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void api.get<{ id: string | null; email: string | null; isAdmin: boolean }>('/users/me')
+      .then((res) => { if (!cancelled) setCallerIsAdmin(res.isAdmin === true) })
+      .catch((err) => console.warn('[orders] failed to load caller identity:', err))
+    return () => { cancelled = true }
+  }, [])
   type AssignableUser = { id: string; email: string; isAdmin: boolean }
   const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([])
   const [assignTo, setAssignTo] = useState<string>('')  // userId or '' (none) or 'unassign'

@@ -432,8 +432,14 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   script/content ref) — nothing to retarget. (c) **`src/shim/` is ABSENT**, no guard references it, and
   typecheck is clean (no TS2614) — the PS-139 claim doesn't reproduce. (b)+(c) likely came from an audit of
   a different snapshot/repo. (d) PS-164 closure: shipped `ebdfc83b` — the Trello board move is DJ's action.
-- **PS-181 — Backend `isAdmin`/role on session DTO; delete FE `ADMIN_EMAILS` hardcode (no deps).** FE reads
-  `session.isAdmin`; guard asserts no `ADMIN_EMAILS` in web/src + `isAdmin` on session type.
+- **PS-181 — ✅ DONE 2026-06-11 (Wave 2a): admin identity backend-owned.** The backend ALREADY served
+  `GET /users/me → { id, email, isAdmin }` via the canonical `isAdminEmail` (src/lib/admin-emails.ts) —
+  the FE just never used it. OrdersView's duplicate `ADMIN_EMAILS` set + client-side email comparison
+  deleted; `callerIsAdmin` now loads from `/users/me` (accepts only `isAdmin === true`, defaults to
+  non-admin until the backend answers; server-side route enforcement unchanged). `useAuth` import dropped
+  (last consumer). Guard `test:ps-181-backend-admin-authority` (9 checks: recursive web/src sweep finds no
+  ADMIN_EMAILS, OrdersView reads the backend verdict, /users/me stays on isAdminEmail, behavioral matrix on
+  the canonical owner). QA: typecheck + build:web + guard PASS. Local commit only (DJ inspecting before push).
 - **PS-182 — Fix no-op 'Revert' address button + hardcoded '0 Tax IDs added' (no deps).** Wire or remove
   Revert; show real tax-ID count or remove field; no hardcoded string in web/src.
 - **PS-183 — Backend owns `cacheExpiresAt` TTL; FE stops minting now+6h (no deps).** `withRateRequestMetadata`
