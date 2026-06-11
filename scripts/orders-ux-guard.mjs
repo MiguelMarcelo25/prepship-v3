@@ -4,7 +4,9 @@ import path from 'node:path'
 const root = process.cwd()
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx')
 const orderDetailDrawerPath = path.join(root, 'web/src/components/OrderDetailDrawer.tsx')
-const v2HooksPath = path.join(root, 'web/src/hooks/v2Hooks.ts')
+// PS-157: useOrders split out of v2Hooks.ts into its own module; the
+// server-side SKU sort param ('sort: sortBy') now lives in useOrders.ts.
+const v2HooksPath = path.join(root, 'web/src/hooks/useOrders.ts')
 const ordersRoutePath = path.join(root, 'src/routes/orders.ts')
 const homePath = path.join(root, 'web/src/Home.tsx')
 const shellCssPath = path.join(root, 'web/src/app-shell.css')

@@ -9,7 +9,10 @@ const sourcePaths = [
   'web/src/lib/api.ts',
   'web/src/lib/v2-apiClient.ts',
   'web/src/lib/vercelFunction.ts',
-  'web/src/hooks/v2Hooks.ts',
+  // PS-157: useShippingAccounts split out of v2Hooks.ts into its own module.
+  // The getCachedAuthToken usage (direct-carrier fetch) — and the requirement
+  // not to call supabase.auth.getSession() directly — now live there.
+  'web/src/hooks/useShippingAccounts.ts',
 ];
 
 function read(relativePath) {

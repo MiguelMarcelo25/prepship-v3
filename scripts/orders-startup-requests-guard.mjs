@@ -3,20 +3,50 @@ import path from 'node:path';
 
 const root = process.cwd();
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx');
-const hooksPath = path.join(root, 'web/src/hooks/v2Hooks.ts');
+// PS-157: the v2Hooks shims were split into per-domain modules. The literal
+// checks below target useOrders.ts (exact-total delay), useLocations.ts +
+// useShippingAccounts.ts (the enabled flag + enabled, count), and
+// v2Hooks-shared.ts (the SharedDataHookOptions type). We concatenate those
+// files into a single `hooks` string so the SAME substrings are still asserted.
+const useOrdersPath = path.join(root, 'web/src/hooks/useOrders.ts');
+const useLocationsPath = path.join(root, 'web/src/hooks/useLocations.ts');
+const useShippingAccountsPath = path.join(root, 'web/src/hooks/useShippingAccounts.ts');
+const hooksSharedPath = path.join(root, 'web/src/hooks/v2Hooks-shared.ts');
 const homePath = path.join(root, 'web/src/Home.tsx');
 const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
 const markupsContextPath = path.join(root, 'web/src/contexts/MarkupsContext.tsx');
 const packagePath = path.join(root, 'package.json');
 
-const [ordersView, hooks, home, sidebarOrders, markupsContext, packageJsonRaw] = await Promise.all([
+const [
+  ordersView,
+  useOrdersHook,
+  useLocationsHook,
+  useShippingAccountsHook,
+  hooksShared,
+  home,
+  sidebarOrders,
+  markupsContext,
+  packageJsonRaw,
+] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
-  readFile(hooksPath, 'utf8'),
+  readFile(useOrdersPath, 'utf8'),
+  readFile(useLocationsPath, 'utf8'),
+  readFile(useShippingAccountsPath, 'utf8'),
+  readFile(hooksSharedPath, 'utf8'),
   readFile(homePath, 'utf8'),
   readFile(sidebarOrdersPath, 'utf8'),
   readFile(markupsContextPath, 'utf8'),
   readFile(packagePath, 'utf8'),
 ]);
+
+// Concatenation of the now-split v2 hook modules so the literal substring
+// checks below match regardless of which per-domain file owns each line.
+const hooks = [
+  useOrdersHook,
+  useLocationsHook,
+  useShippingAccountsHook,
+  hooksShared,
+].join('\n');
 
 const packageJson = JSON.parse(packageJsonRaw);
 

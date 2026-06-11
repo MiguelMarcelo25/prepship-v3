@@ -1,7 +1,30 @@
-// @ts-nocheck
-import { useEffect, useState } from "react";
-import { apiClient } from "../api/client";
-import type { LocationDto } from "../types/api";
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../lib/api';
+import {
+  SHARED_DATA_STALE_MS,
+  SHARED_DATA_CACHE_MS,
+  type SharedDataHookOptions,
+} from './v2Hooks-shared';
+
+// ──────────────────────────────────────────────────────────────────
+// useLocations — v4 returns rows with `id`; adapt to `locationId`.
+// ──────────────────────────────────────────────────────────────────
+
+export interface LocationDto {
+  locationId: number;
+  name: string;
+  company: string | null;
+  street1: string | null;
+  street2: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  country: string;
+  phone: string | null;
+  isDefault: boolean;
+  active: boolean;
+}
 
 export interface UseLocationsResult {
   locations: LocationDto[];
@@ -9,34 +32,54 @@ export interface UseLocationsResult {
   error: Error | null;
 }
 
-export function useLocations(): UseLocationsResult {
-  const [locations, setLocations] = useState<LocationDto[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+type V4LocationRow = {
+  id: number;
+  name: string;
+  company: string | null;
+  street1: string | null;
+  street2: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  country: string;
+  phone: string | null;
+  isDefault: boolean;
+  active: boolean;
+};
 
-  useEffect(() => {
-    let mounted = true;
-    setIsLoading(true);
-    setError(null);
+export function useLocations(options: SharedDataHookOptions = {}): UseLocationsResult {
+  const enabled = options.enabled ?? true;
+  const query = useQuery<V4LocationRow[]>({
+    queryKey: ['v2-hooks:locations'],
+    queryFn: () => api.get<V4LocationRow[]>('/locations'),
+    enabled,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
+  });
 
-    void apiClient.fetchLocations()
-      .then((payload) => {
-        if (!mounted) return;
-        setLocations(payload);
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setError(err instanceof Error ? err : new Error("Failed to fetch locations"));
-      })
-      .finally(() => {
-        if (!mounted) return;
-        setIsLoading(false);
-      });
+  const locations = useMemo<LocationDto[]>(
+    () =>
+      (query.data ?? []).map((row) => ({
+        locationId: row.id,
+        name: row.name,
+        company: row.company,
+        street1: row.street1,
+        street2: row.street2,
+        city: row.city,
+        state: row.state,
+        postalCode: row.postalCode,
+        country: row.country,
+        phone: row.phone,
+        isDefault: row.isDefault,
+        active: row.active,
+      })),
+    [query.data]
+  );
 
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  return { locations, isLoading, error };
+  return {
+    locations,
+    isLoading: enabled && query.isLoading,
+    error: (query.error as Error | null) ?? null,
+  };
 }

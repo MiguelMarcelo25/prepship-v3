@@ -56,9 +56,11 @@ for (const file of criticalFiles) {
   );
 }
 
+// PS-157: useOrders split out of v2Hooks.ts into its own module; the
+// California day-boundary date filters now live in web/src/hooks/useOrders.ts.
 assert(
-  read('web/src/hooks/v2Hooks.ts').includes('californiaDayStartIso') &&
-    read('web/src/hooks/v2Hooks.ts').includes('californiaDayEndIso'),
+  read('web/src/hooks/useOrders.ts').includes('californiaDayStartIso') &&
+    read('web/src/hooks/useOrders.ts').includes('californiaDayEndIso'),
   'Orders date filters must use California day boundaries',
 );
 assert(

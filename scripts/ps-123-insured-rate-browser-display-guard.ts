@@ -17,7 +17,10 @@ function check(name: string, ok: boolean) {
   }
 }
 
-const hooks = readFileSync('web/src/hooks/v2Hooks.ts', 'utf8');
+// PS-157: useOrders (and its rate/label transform helpers normalizeRateForV2,
+// normalizeLabelForV2, and the bestRateLegacy block) split out of v2Hooks.ts
+// into web/src/hooks/useOrders.ts. The slice anchors below are unchanged.
+const hooks = readFileSync('web/src/hooks/useOrders.ts', 'utf8');
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');

@@ -156,6 +156,13 @@ const patterns = [
       'web/src/components/Settings/CarrierIntegrationsCard.tsx',
       'web/src/components/Views/InventoryView.tsx',
       'web/src/hooks/v2Hooks.ts',
+      // PS-157: useClients/useAllClients split out of v2Hooks.ts; the
+      // rateSourceClientId literal (ClientDto + transformClientRowV4toV2)
+      // now lives in v2Hooks-shared.ts, with the consuming hooks in their
+      // own modules. Whitelist all three so no new drift warning appears.
+      'web/src/hooks/v2Hooks-shared.ts',
+      'web/src/hooks/useClients.ts',
+      'web/src/hooks/useAllClients.ts',
       'web/src/lib/v2-apiClient.ts',
     ],
   },
