@@ -16,6 +16,7 @@ import {
   collapseIdentityLines,
   resolveQueueLineIdentity,
   headerCardTitle,
+  buildQueueSkuIdentityFromItems,
   NO_SKU_PICK_NOTE,
   type CollapsedQueueLine,
 } from './print-queue-identity';
@@ -742,6 +743,49 @@ export async function addToQueue(
   await assertPrintQueueClientsVisible([input.clientId], input.scope);
   const labelUrl = normalizePrintQueueLabelUrl(input.labelUrl);
 
+  // PS-177 (Phase 5): the queue SKU identity is backend-derivable. When the
+  // caller sent no real identity — absent, or the degraded ORDER:/order-<id>
+  // fallback identifier-only callers use — rebuild it from the order's items
+  // (the SAME collapse/combo-key rule the FE mirrors), so grouping and pick
+  // identity never depend on what the frontend happened to carry. A caller-sent
+  // real identity is kept verbatim (no churn for existing flows); derivation is
+  // best-effort and falls back to the caller's values on any failure.
+  let identity = {
+    skuGroupId: input.skuGroupId,
+    primarySku: input.primarySku ?? null,
+    itemDescription: input.itemDescription ?? null,
+    orderQty: input.orderQty ?? 1,
+    multiSkuData: input.multiSkuData ?? null,
+  };
+  const identityDegraded = !identity.skuGroupId || /^(ORDER:|order-)/.test(identity.skuGroupId);
+  if (identityDegraded) {
+    try {
+      const numericOrderId = Number(input.orderId);
+      if (Number.isFinite(numericOrderId)) {
+        const items = await db
+          .select({ sku: orderItems.sku, name: orderItems.name, quantity: orderItems.quantity })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, numericOrderId));
+        if (items.length) {
+          const derived = buildQueueSkuIdentityFromItems(
+            numericOrderId,
+            items.map((item) => ({ sku: item.sku, name: item.name, qty: Number(item.quantity) || 1 })),
+          );
+          identity = {
+            skuGroupId: derived.skuGroupId,
+            primarySku: derived.primarySku,
+            itemDescription: derived.itemDescription,
+            orderQty: derived.orderQty,
+            multiSkuData: derived.multiSkuData,
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[print-queue] sku identity derivation failed (using caller values):', err instanceof Error ? err.message : err);
+    }
+  }
+  if (!identity.skuGroupId) identity.skuGroupId = `ORDER:${input.orderId}`;
+
   const [existing] = await db
     .select()
     .from(printQueue)
@@ -764,11 +808,11 @@ export async function addToQueue(
       orderId: input.orderId,
       orderNumber: input.orderNumber ?? null,
       labelUrl,
-      skuGroupId: input.skuGroupId,
-      primarySku: input.primarySku ?? null,
-      itemDescription: input.itemDescription ?? null,
-      orderQty: input.orderQty ?? 1,
-      multiSkuData: input.multiSkuData ?? null,
+      skuGroupId: identity.skuGroupId,
+      primarySku: identity.primarySku,
+      itemDescription: identity.itemDescription,
+      orderQty: identity.orderQty,
+      multiSkuData: identity.multiSkuData,
       status: 'queued',
       printCount: 0,
       queuedAt: new Date(),
@@ -777,11 +821,11 @@ export async function addToQueue(
       target: [printQueue.orderId, printQueue.clientId],
       set: {
         labelUrl,
-        skuGroupId: input.skuGroupId,
-        primarySku: input.primarySku ?? null,
-        itemDescription: input.itemDescription ?? null,
-        orderQty: input.orderQty ?? 1,
-        multiSkuData: input.multiSkuData ?? null,
+        skuGroupId: identity.skuGroupId,
+        primarySku: identity.primarySku,
+        itemDescription: identity.itemDescription,
+        orderQty: identity.orderQty,
+        multiSkuData: identity.multiSkuData,
         status: 'queued',
         queuedAt: new Date(),
       },

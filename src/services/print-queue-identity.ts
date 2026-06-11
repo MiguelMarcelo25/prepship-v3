@@ -186,3 +186,57 @@ export function collapseIdentityLines(lines: unknown): CollapsedQueueLine[] {
 }
 
 // PS-139: removed dead exports buildQueueComboKey / buildQueueComboSummary (0 callers).
+
+// ── PS-177 (Phase 5): backend-derived queue SKU identity ─────────────────────
+
+export type QueueSkuIdentity = {
+  skuGroupId: string;
+  primarySku: string | null;
+  itemDescription: string | null;
+  orderQty: number;
+  multiSkuData: Array<{ sku: string; description?: string; qty: number }> | null;
+};
+
+/**
+ * Derive the full queue SKU identity from raw order items — the backend mirror
+ * of the FE buildQueueAddPayload derivation (collapse → combo key →
+ * COMBO:/SKU:/ORDER: prefixes; no-SKU eBay lines KEPT). Lets identifier-only
+ * callers (resume recovery, future thin clients) queue with a REAL pick
+ * identity instead of a degraded ORDER:<id> fallback. Pure.
+ */
+export function buildQueueSkuIdentityFromItems(
+  orderId: number | string,
+  items: unknown,
+): QueueSkuIdentity {
+  const rawItems = Array.isArray(items) ? (items as Array<Record<string, unknown>>) : [];
+  const activeItems = rawItems.filter(
+    (item) => !(item && typeof item === 'object' && (item as Record<string, unknown>).adjustment),
+  );
+  const skuLines = collapseIdentityLines(activeItems);
+  const orderQty = skuLines.reduce((sum, line) => sum + line.qty, 0);
+  const primaryLine = skuLines[0];
+  const fallbackSku = typeof activeItems[0]?.sku === 'string' ? String(activeItems[0].sku).trim() : '';
+  const fallbackName = typeof activeItems[0]?.name === 'string' ? String(activeItems[0].name).trim() : '';
+  const primarySku = primaryLine?.sku || fallbackSku || null;
+  const itemDescription = primaryLine?.cardTitle || primaryLine?.description || fallbackName || null;
+  // Same shape as the FE combo key: `${groupToken}:${qty}` per line, sorted.
+  const comboKey = skuLines
+    .map((line) => `${line.groupToken}:${line.qty}`)
+    .sort((a, b) => a.localeCompare(b))
+    .join('|');
+  const multiSkuData =
+    skuLines.length > 1
+      ? skuLines.map((line) => ({ sku: line.sku, description: line.description, qty: line.qty }))
+      : null;
+  return {
+    skuGroupId: comboKey
+      ? skuLines.length > 1
+        ? `COMBO:${comboKey}`
+        : `SKU:${comboKey}`
+      : `ORDER:${orderId}`,
+    primarySku,
+    itemDescription,
+    orderQty: orderQty || 1,
+    multiSkuData,
+  };
+}

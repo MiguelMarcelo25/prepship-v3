@@ -465,12 +465,22 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   ps-173 + ps-084 + ps-186 + print-queue-hygiene + batch-send-proof-forwarding + direct-carrier-queue-route
   + test-order-queue-label + full cert ALL PASS. **LOCAL COMMIT ONLY — DJ inspects before push (the
   Phase 4 discipline).**
-- **PS-177 — Phase 5: Backend display models (money, carrier identity, queue SKU identity, package
-  defaults).** Backend DTOs for money/rate display (baseLabelCost/insuranceCost/displayRateAmount/
-  markupAmount/customerShippingCharge/marginDisplay/costSource), carrier/account identity, Print Queue SKU
-  identity (skuLines/groupToken/primaryDisplaySku/no-SKU eBay-safe), effective package/dims/default source.
-  Read-model/additive; FE keeps shipped/cancelled fallback. Dep: after rate/proof/label boundaries; before
-  broad FE decomp. May split if the PR grows too large.
+- **PS-177 — 🟡 PART 1 DONE 2026-06-12 (Phase 5): backend-derived Print Queue SKU identity.** The queue SKU
+  identity (skuGroupId/primarySku/itemDescription/orderQty/multiSkuData) is now backend-derivable: pure
+  `buildQueueSkuIdentityFromItems(orderId, items)` in print-queue-identity.ts mirrors the FE
+  buildQueueAddPayload derivation exactly (filter adjustment lines → collapseIdentityLines →
+  `${groupToken}:${qty}` sorted combo key → COMBO:/SKU:/ORDER: prefixes; no-SKU eBay lines KEPT as NOSKU
+  title tokens — PS-070 parity holds since both sides call the same collapse). addToQueue now derives the
+  identity from order_items whenever the caller's skuGroupId is absent or degraded (/^(ORDER:|order-)/ —
+  exactly what the PS-176 identifier-only resume recovery sends as its minimal fallback), best-effort with
+  caller values kept on any failure; a caller-sent REAL identity is kept verbatim (zero churn for existing
+  flows). Guard `test:ps-177-queue-sku-identity` (10 checks: single→SKU:, multi→COMBO: order-insensitive,
+  no-SKU kept, ORDER: fallback, adjustment filter, qty merge, degraded-only derivation, best-effort,
+  both writes use resolved identity). QA: typecheck + build:web + print-queue-hygiene + ps-176 +
+  test-order-queue-label + ps-052 + ps-109 + batch-names + ps-070 + full cert ALL PASS. **Remaining
+  parts:** money/rate display DTOs (baseLabelCost/insuranceCost/displayRateAmount/markupAmount/
+  customerShippingCharge/marginDisplay/costSource), carrier/account identity display, effective
+  package/dims/default source. Read-model/additive; FE keeps shipped/cancelled fallback.
 - **PS-178 — Phase 6: OrdersView/RateBrowser thin-client decomposition (AFTER backend contracts).** Extract
   UI-only components (OrdersToolbar/Table/BatchActions/ShipmentPanel/PrintQueueDrawer/cells) + thin hooks
   that call backend workflow/poll job status (NO FE rate-finalization/proof/routing/money/queue-identity);
