@@ -31,8 +31,14 @@ pass(
   apiClient.includes('confirmPrintedQueueEntries'),
   'frontend API client must expose confirmPrintedQueueEntries'
 );
+// Scope the check to the runMergeJob function body only. The old greedy `runMergeJob[\s\S]*`
+// span reached past the (legitimate) operator-confirm write in confirmPrintedQueueEntries after
+// PS-138 added a file-top comment mentioning runMergeJob. We slice the actual fn body instead.
+const mergeStart = service.indexOf('async function runMergeJob');
+const mergeAfter = service.indexOf('\nfunction ', mergeStart);
+const mergeBody = mergeStart >= 0 ? service.slice(mergeStart, mergeAfter > mergeStart ? mergeAfter : undefined) : '';
 pass(
-  !/runMergeJob[\s\S]*\.set\(\{\s*status:\s*['"]printed['"]/m.test(service),
+  mergeStart >= 0 && !/\.set\(\{\s*status:\s*['"]printed['"]/.test(mergeBody),
   'PDF merge must not mark queue entries printed'
 );
 pass(

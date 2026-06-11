@@ -63,14 +63,21 @@ assert(
   'init-data does not return raw clientsRows',
 );
 
-const lightweightMatch = clientsRoute.match(
-  /function\s+lightweightClient[\s\S]*?\n}\n\nconst\s+body/,
+// Re-anchored: the brittle `function lightweightClient ... }\n\nconst body` shape match broke
+// when the surrounding code changed. lightweightClient now takes ReturnType<typeof publicClient>
+// (already-redacted input) and picks only safe fields. Verify presence + that its body never
+// names a secret key — the actual redaction is owned by publicClient (asserted above).
+const lwStart = clientsRoute.indexOf('function lightweightClient');
+const lwRel = lwStart >= 0 ? clientsRoute.slice(lwStart + 1).search(/\n(?:export |async function |function |const )/) : -1;
+const lightweightBody = lwStart >= 0 ? clientsRoute.slice(lwStart, lwRel >= 0 ? lwStart + 1 + lwRel : undefined) : '';
+assert(
+  lwStart >= 0 && lightweightBody.includes('ReturnType<typeof publicClient>'),
+  'lightweight client serializer is present (narrows the already-redacted publicClient output)',
 );
-assert(Boolean(lightweightMatch), 'lightweight client serializer is present');
-if (lightweightMatch) {
+if (lightweightBody) {
   for (const key of secretKeys) {
     assert(
-      !lightweightMatch[0].includes(key),
+      !lightweightBody.includes(key),
       `lightweight client serializer does not expose ${key}`,
     );
   }

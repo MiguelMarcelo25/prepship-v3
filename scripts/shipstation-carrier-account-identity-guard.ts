@@ -13,6 +13,9 @@ function read(path: string): string {
 const labels = read('src/services/labels.ts');
 const rates = read('src/services/rates.ts');
 const ordersRoute = read('src/routes/orders.ts');
+// PS-132 moved the hardcoded carrier-account refs out of orders.ts into the single backend
+// registry; orders.ts now derives V2_CARRIER_ACCOUNT_REFS from KNOWN_CARRIER_ACCOUNTS.map(...).
+const carrierRegistry = read('src/lib/carrier-account-registry.ts');
 const shipmentsSchema = read('src/db/schema/shipments.ts');
 const ordersSchema = read('src/db/schema/orders.ts');
 const packageJson = JSON.parse(read('package.json')) as {
@@ -49,8 +52,12 @@ assert(
   'label persistence must freeze ShipStation carrier provider/account identity on shipments',
 );
 assert(
-  /carrierCode:\s*'ups'[\s\S]*?shippingProviderId:\s*565326/.test(ordersRoute) &&
-    /carrierCode:\s*'ups'[\s\S]*?shippingProviderId:\s*607855/.test(ordersRoute),
+  // PS-132: two physically distinct UPS accounts (565326 'GG6381' + 607855 'ROCEL C81F70',
+  // same carrierCode 'ups') must stay separate refs. Re-anchored to the canonical registry
+  // (field order is shippingProviderId-first there); orders.ts derives its refs from it.
+  /shippingProviderId:\s*565326,\s*carrierCode:\s*'ups'/.test(carrierRegistry) &&
+    /shippingProviderId:\s*607855,\s*carrierCode:\s*'ups'/.test(carrierRegistry) &&
+    /KNOWN_CARRIER_ACCOUNTS\.map/.test(ordersRoute),
   'Orders route carrier refs must preserve multiple UPS ShipStation accounts distinctly',
 );
 

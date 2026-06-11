@@ -78,6 +78,10 @@ assert(
 const reportingMetrics = readFileSync('src/services/reporting-metrics.ts', 'utf8');
 const inventoryRoute = readFileSync('src/routes/inventory.ts', 'utf8');
 const inventoryView = readFileSync('web/src/components/Views/InventoryView.tsx', 'utf8');
+// PS-154 extracted the delete-confirmation modal body (incl. the warning copy) into this file;
+// InventoryView keeps the state (ledgerDeleteModal), the handler (confirmDeleteLedgerEntry), and
+// renders <InventoryLedgerDeleteModal onConfirmDelete={confirmDeleteLedgerEntry} />.
+const inventoryDeleteModal = readFileSync('web/src/components/Views/InventoryLedgerDeleteModal.tsx', 'utf8');
 const inventoryParity = readFileSync('web/src/components/Views/inventory-parity.ts', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const reconcileScript = readFileSync('scripts/reconcile-inventory-stock.ts', 'utf8');
@@ -125,9 +129,13 @@ assert(
 );
 
 assert(
+  // PS-154: state + handler + render stay on the parent; the warning copy lives in the extracted
+  // modal. Re-anchored to where each piece moved — the confirm-before-mutate protection is intact.
   inventoryView.includes('ledgerDeleteModal') &&
     inventoryView.includes('confirmDeleteLedgerEntry') &&
-    inventoryView.includes('This will remove the manual inventory movement and reverse its stock impact.'),
+    inventoryView.includes('<InventoryLedgerDeleteModal') &&
+    inventoryView.includes('onConfirmDelete={confirmDeleteLedgerEntry}') &&
+    inventoryDeleteModal.includes('This will remove the manual inventory movement and reverse its stock impact.'),
   'Inventory History delete uses an in-app confirmation modal before mutating stock',
 );
 

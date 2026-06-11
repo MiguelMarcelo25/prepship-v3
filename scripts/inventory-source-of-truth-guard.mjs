@@ -12,6 +12,10 @@ const inventoryRoute = fs.readFileSync(path.join(root, 'src/routes/inventory.ts'
 // PS-133: effective-stock SQL now lives in the canonical owner; the route delegates to it.
 const inventoryStockMath = fs.readFileSync(path.join(root, 'src/services/inventory-stock-math.ts'), 'utf8');
 const inventoryView = fs.readFileSync(path.join(root, 'web/src/components/Views/InventoryView.tsx'), 'utf8');
+// PS-154: the pure stock-display helpers (getInventoryDisplayStock + the effectiveStock /
+// cached-stockQty audit-fallback math) were extracted VERBATIM into inventory-stock-helpers.ts;
+// InventoryView imports + consumes them.
+const inventoryStockHelpers = fs.readFileSync(path.join(root, 'web/src/components/Views/inventory-stock-helpers.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function assert(condition, message) {
@@ -75,9 +79,11 @@ assert(
 );
 
 assert(
+  // PS-154: view consumes the helper; the effectiveStock-primary + cached-stockQty-audit math
+  // lives in the extracted owner. Protection intact — re-anchored to where the logic moved.
   inventoryView.includes('getInventoryDisplayStock') &&
-    inventoryView.includes('effectiveStock') &&
-    inventoryView.includes('Cached stockQty'),
+    inventoryStockHelpers.includes('effectiveStock') &&
+    inventoryStockHelpers.includes('Cached stockQty'),
   'inventory UI prefers effectiveStock while exposing cached stock as audit fallback',
 );
 

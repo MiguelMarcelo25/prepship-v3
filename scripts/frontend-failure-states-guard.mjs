@@ -43,7 +43,8 @@ function methodBlock(methodName) {
 
 const criticalMethods = [
   'fetchCounts',
-  'fetchInitData',
+  // PS-159 removed the dead `fetchInitData` object method (0 callers; trivial passthrough,
+  // no safe() fallback). Dropped from the critical-method anchor — no protection lost.
   'fetchOrders',
   'fetchOrderFull',
   'fetchInventoryPage',

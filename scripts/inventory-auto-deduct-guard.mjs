@@ -5,6 +5,9 @@ const orderSync = readFileSync('src/services/order-sync.ts', 'utf8');
 const shipmentSync = readFileSync('src/services/shipment-sync.ts', 'utf8');
 const labels = readFileSync('src/services/labels.ts', 'utf8');
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+// PS-136 extracted the manual mark-shipped-externally transition (status flip + the shared-path
+// inventory deduction) into this service owner; the orders route now delegates to it.
+const markShippedExternally = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
 const deductions = readFileSync('src/services/fulfillment-deductions.ts', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
@@ -27,8 +30,12 @@ assert(
 );
 
 assert(
-  ordersRoute.includes('deductInventoryForOrder(existing') &&
-    ordersRoute.includes("external:${body.source}"),
+  // PS-136: the deduction lives in the extracted owner (shared kill-switch-governed path,
+  // keyed external:<source>); the route delegates via markOrderShippedExternally().
+  // Re-anchored to where the logic moved — protection intact, no lockdown logic changed.
+  markShippedExternally.includes('deductInventoryForOrder(order') &&
+    markShippedExternally.includes('external:${input.source}') &&
+    ordersRoute.includes('markOrderShippedExternally('),
   'external shipped route must deduct inventory through the shared fulfillment deduction path',
 );
 
