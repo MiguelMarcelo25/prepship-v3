@@ -26,12 +26,7 @@
 // Response (failure):
 //   { ok: false, error: string, meta?: ... }
 
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-// PS-083: assignment-scope gate (same rule as Rate Browser + /carriers/rates).
-// Pure leaf module with no transitive deps, so a static import here is cold-
-// start safe (unlike the wide connector/eligibility tree, which stays deferred).
-import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.js';
 // COLD-START FIX (label/print-queue audit 2026-06-11): the rate-quote-snapshot-store and
 // shipping-safety modules were STATIC imports that transitively pull a module-load env/DB throw,
 // crashing the WHOLE function as an uncatchable FUNCTION_INVOCATION_FAILED at COLD START — before
@@ -44,10 +39,14 @@ import { evaluateDirectCarrierScope } from '../../src/lib/direct-carrier-scope.j
 // They are now deferred into ensureLabelDeps() (request time, inside the handler's try/catch) so an
 // env/load failure is a catchable 500, not the opaque crash page. (evaluateDirectCarrierScope above
 // and the residential classifier below are pure leaves — no env/db at module load — so they stay static.)
-// PS-135(a): the canonical backend residential classifier (PS-127). Pure leaf (no DB/heavy deps),
-// cold-start safe as a static import. Used to resolve residential server-side at the UPS label
-// boundary so the UPS label charge matches the rate quote (the FE is NOT the authority).
-import { classifyShippingAddress, residentialForShipping } from '../../src/services/shipping-workflow/address-classification.js';
+// COLD-START HARDENING (2026-06-11, FUNCTION_INVOCATION_FAILED recurrence): production probes
+// showed THIS function crashing at module load (even a GET never reached the handler) while the
+// sibling api/carriers/rates.ts — whose ONLY static deps are npm packages — stayed healthy. The
+// remaining src/ static imports (direct-carrier-scope, address-classification) and the in-file
+// jose JWKS verifier are now ALL deferred into ensureLabelDeps(), making this module's cold-start
+// surface identical to the proven-healthy sibling: static imports = npm packages only. Whatever
+// the bundler/runtime does to the src tree, a load failure is now a catchable JSON 500 naming the
+// failed boundary — never the opaque platform crash page.
 
 // ROOT CAUSE FIX (mirrors api/carriers/rates.ts): these were STATIC imports at
 // module top. On Vercel, importing the carrier/store connector orchestrators +
@@ -70,9 +69,20 @@ let getDefaultShipFrom: any;
 let assertLabelPurchaseRateSelection: any;
 let assertOrderSafeToShip: any;
 let ShippingSafetyError: any;
+// Deferred (cold-start hardening 2026-06-11) — the last src/ statics + the jose verifier.
+let evaluateDirectCarrierScope: any;
+let classifyShippingAddress: any;
+let residentialForShipping: any;
+let verifySupabaseJwt: any;
 let _labelDepsLoaded = false;
 async function ensureLabelDeps(): Promise<void> {
   if (_labelDepsLoaded) return;
+  // Auth + pure-leaf classifiers — deferred so the module's static surface is npm-only.
+  verifySupabaseJwt = (await import('../../src/lib/auth/verify-supabase-jwt.js')).verifySupabaseJwt;
+  evaluateDirectCarrierScope = (await import('../../src/lib/direct-carrier-scope.js')).evaluateDirectCarrierScope;
+  const addressClassification = await import('../../src/services/shipping-workflow/address-classification.js');
+  classifyShippingAddress = addressClassification.classifyShippingAddress;
+  residentialForShipping = addressClassification.residentialForShipping;
   persistDirectCarrierLabel = (await import('../../src/services/direct-label-persistence.js')).persistDirectCarrierLabel;
   assertFulfillmentSchemaReady = (await import('../../src/services/fulfillment/schema-readiness.js')).assertFulfillmentSchemaReady;
   createCarrierLabel = (await import('../../src/services/carrier-connector-orchestrator.js')).createCarrierLabel;
@@ -144,29 +154,9 @@ async function processOrderConfirmationNow(
   }
 }
 
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-function getJwks() {
-  if (cachedJwks) return cachedJwks;
-  const base = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
-  if (!base) return null;
-  cachedJwks = createRemoteJWKSet(new URL(`${base}/auth/v1/.well-known/jwks.json`));
-  return cachedJwks;
-}
-
-async function verifySupabaseJwt(token: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const errors: string[] = [];
-  const jwks = getJwks();
-  if (jwks) {
-    try { await jwtVerify(token, jwks); return { ok: true }; }
-    catch (err) { errors.push(`JWKS: ${err instanceof Error ? err.message : String(err)}`); }
-  }
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (secret) {
-    try { await jwtVerify(token, new TextEncoder().encode(secret)); return { ok: true }; }
-    catch (err) { errors.push(`HS256: ${err instanceof Error ? err.message : String(err)}`); }
-  }
-  return { ok: false, reason: errors.join(' | ') || 'no verification method' };
-}
+// Supabase JWT verification is deferred into ensureLabelDeps (the canonical
+// src/lib/auth/verify-supabase-jwt owner) — the in-file jose JWKS copy is gone
+// so this module's static surface stays npm-only (cold-start hardening 2026-06-11).
 
 function inferStoreProviderFromExternalId(externalOrderId: string | null | undefined): string {
   if (!externalOrderId) return 'shipstation';
@@ -1023,6 +1013,17 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  // Cold-start hardening (2026-06-11): load the ENTIRE deferred src/ tree (incl. the auth
+  // verifier) FIRST, with its own catch — a load failure returns a clean 500 naming the failed
+  // boundary instead of the opaque FUNCTION_INVOCATION_FAILED crash page.
+  try {
+    await ensureLabelDeps();
+  } catch (err) {
+    const code = String((err as { code?: unknown })?.code ?? (err as { name?: unknown })?.name ?? 'Error').slice(0, 48);
+    res.status(500).json({ error: 'Label function dependencies failed to load', type: code });
+    return;
+  }
+
   const auth = (req.headers?.authorization || req.headers?.Authorization || '') as string;
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
@@ -1034,9 +1035,6 @@ export default async function handler(req: any, res: any): Promise<void> {
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
 
   try {
-    // Load the deferred src/ connector + eligibility tree now (request time).
-    // A failure here is a catchable 500, not an uncatchable cold-start crash.
-    await ensureLabelDeps();
     const body = (await readBody(req)) as Record<string, any>;
     const carrierAccountId = Number(body?.carrierAccountId);
     const shippingOptions = normalizeShippingOptions(body);
