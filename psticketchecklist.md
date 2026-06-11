@@ -355,3 +355,117 @@ fields only).
 - **Live spot-check to enable the carrier path (separate, DJ):** read-only confirm a direct-UPS label with
   carrier declared value $100 is actually insured → flip `DIRECT_UPS_CARRIER_INSURANCE_VERIFIED = true` →
   re-run ps-170 → live verify ROCEL-type candidate wins at $0 add-on. Until then it stays ParcelGuard.
+
+---
+
+## 10. EPIC PS-172 — Backend-Owned Shipping Workflow (no monolith) + PS-173–190 track — added 2026-06-11
+
+> Recorded from DJ/Hermes. **Planning + backlog only — none started.** PS-172 is an umbrella/planning
+> card; PS-173–179 are its sequential execution children (work top-to-bottom). Full Codex specs live in
+> Trello; this is the concise tracker. Principle: **"final guards own money safety"** → safer architecture,
+> fast UI, less FE bloat, less backend overload, WITHOUT a backend monolith (thin composable services +
+> thin UI callers).
+
+### PS-172 — EPIC (umbrella/planning, NOT one implementation run)
+Phased plan to move shipping/rates/labels/print-queue **safety** to backend-owned boundaries. Target:
+OrdersView → fetch row DTOs + send operator intents · Rate Browser → display backend-classified rates +
+apply backend `rateQuoteId`/`selectedRateKey` · Label/Print Queue → pass backend proof/quote IDs; backend
+validates order state/carrier scope/selected rate/payload/side effects at purchase/queue time.
+**Phase 0 deliverable:** an architecture audit + target-map doc under `docs/engineering/` or `docs/plans/`
+(current call graph Awaiting→BestRate→RateBrowser→CreateLabel→PrintQueue, current owners, scattered owners,
+side effects per stage, risk ranking) + child-card drafts + existing-card classification. NO behavior change.
+
+### Phase children — execution track (do NOT start broad FE decomposition before backend DTO/proof/rate/label boundaries land)
+- **PS-173 — Phase 1: Backend Order Row Shipping Workflow DTO + Action States.** Backend-owned row DTO:
+  states (pending/final/blocked/needs_dims/stale_rate/missing_rate/external_shipped/local_shipped/
+  missing_shipment_sync) + `allowedActions` (canRate/canBrowseRates/canRecalculate/canCreateLabel/
+  canQueueLabel/canMarkExternalShipped) + carrier/account/service display from the backend registry.
+  Additive; no label-purchase change; OrdersView prefers the DTO behind the existing fallback. **Classify
+  PS-165 overlap in the PR.** Dep: after PS-172 map.
+- **PS-174 — Phase 2: Backend Rate Quote Snapshot + selectedRateKey primitive.** Backend issues opaque
+  `rateQuoteId`/`selectedRateKey`/proof per final rate (normalized account/service/amount-components/
+  insurance/confirmation/ZIP+4/residential/weight/dims/package/ship-date-bucket/client-store-source/
+  eligibility-version/expiry; sanitized only). Returned in BestRate + RateBrowser. No purchase enforcement
+  yet; keep old `selectedRateProof` fallback. Dep: PS-173.
+- **PS-175 — Phase 3: Best Rate + Rate Browser convergence on backend finalized rates.** One backend rate
+  workflow entrypoint for passive BestRate + Recalculate + RateBrowser; backend owns eligibility/HUGRAB
+  blocking/insurance capability+premium/ZIP+4/residential/confirmation/diagnostics; returns final classified
+  states only (no FE "best so far"); each final rate carries the PS-174 quote/key; remove FE final-pick/
+  strict-apply/clear/block. **Integrate PS-170/PS-171 into the backend workflow (not UI patches);** coordinate
+  w/ PS-120/121. Dep: PS-174.
+- **PS-176 — Phase 4: Backend Label Purchase + Print Queue orchestration enforcement (highest money/postage
+  risk).** Composable ShippingIntent/LabelPurchase/PrintQueue services; FE sends order IDs + intent + backend
+  quote/key; backend hydrates canonical data + validates shippability/duplicate-label/shipped-cancelled
+  locks/external-shipped/scope/carrier-scope/selected-rate-proof/payload-parity immediately before side
+  effects; backend owns direct-vs-ShipStation routing; idempotent queue insert; replace FE localStorage
+  shipping-recovery authority with backend job ids. No real postage in tests. Dep: PS-174 + PS-175.
+- **PS-177 — Phase 5: Backend display models (money, carrier identity, queue SKU identity, package
+  defaults).** Backend DTOs for money/rate display (baseLabelCost/insuranceCost/displayRateAmount/
+  markupAmount/customerShippingCharge/marginDisplay/costSource), carrier/account identity, Print Queue SKU
+  identity (skuLines/groupToken/primaryDisplaySku/no-SKU eBay-safe), effective package/dims/default source.
+  Read-model/additive; FE keeps shipped/cancelled fallback. Dep: after rate/proof/label boundaries; before
+  broad FE decomp. May split if the PR grows too large.
+- **PS-178 — Phase 6: OrdersView/RateBrowser thin-client decomposition (AFTER backend contracts).** Extract
+  UI-only components (OrdersToolbar/Table/BatchActions/ShipmentPanel/PrintQueueDrawer/cells) + thin hooks
+  that call backend workflow/poll job status (NO FE rate-finalization/proof/routing/money/queue-identity);
+  shrink v2-apiClient to typed transport; remove FE fallbacks only after DTO contract + browser tests pass;
+  add a boundary guard vs FE money/rate/label authority reappearing. Dep: PS-173–177.
+- **PS-179 — Phase 7: Certification + boundary guards + safe dead-code cleanup.** Mocked/offline workflow
+  cert (Awaiting→finalized rate→RateBrowser→create-label mocked→print-queue→job status + blocked stale/dup/
+  shipped-cancelled), source-of-truth guards vs FE authority, perf sanity, evidence-backed dead-code deletion
+  ONLY after cert passes; final PS-172 closeout table. Dep: PS-173–178.
+
+### Existing-card classification (to be finalized by the PS-172 plan doc)
+- **PS-120 / PS-121** → coordinate w/ Phase 3 rate workflow; **keep (shipped).**
+- **PS-170 / PS-171** → integrate into the Phase 3 backend rate workflow; **keep (shipped).**
+- **PS-165** → backend tuple half (165b) likely **absorbed into Phase 1 (PS-173)**; FE-collapse half (165a) already shipped.
+- **PS-166** → **superseded by Phase 6 (PS-178)** — do NOT decompose OrdersView standalone.
+- **PS-167** → full method split **sequenced into Phase 6** (after backend contracts); safe-partial already shipped.
+- **PS-154 / PS-155 / PS-157** → FE decomposition; **sequence after backend contracts (Phase 6)** per the no-broad-FE-decomp-first rule.
+
+### PS-180–190 — board cleanup + OrdersView sweep findings (mostly independent · "No deps" unless noted)
+- **PS-180 — Housekeeping (no deps).** Close PS-164 (shipped `ebdfc83b`); retarget PS-127/PS-130 guards (the
+  `residential: true` literal was deleted → assert `residentialForRate()` default-true ~L5468); retarget
+  PS-139 guard (`src/shim/` EXISTS but guard asserts absent → TS2614; fix/remove vacuous check).
+- **PS-181 — Backend `isAdmin`/role on session DTO; delete FE `ADMIN_EMAILS` hardcode (no deps).** FE reads
+  `session.isAdmin`; guard asserts no `ADMIN_EMAILS` in web/src + `isAdmin` on session type.
+- **PS-182 — Fix no-op 'Revert' address button + hardcoded '0 Tax IDs added' (no deps).** Wire or remove
+  Revert; show real tax-ID count or remove field; no hardcoded string in web/src.
+- **PS-183 — Backend owns `cacheExpiresAt` TTL; FE stops minting now+6h (no deps).** `withRateRequestMetadata`
+  (~L5573) prefers backend `metadata.cacheExpiresAt`; FE fallback only if absent (warn). (FE overwrite makes
+  stale rates look fresh + bypasses server TTL.) Guard + parity test.
+- **PS-184 — Delete 2 legacy client-ID FE remap tables (OrdersView L730-752 + L1355-1372); pass through
+  backend `legacyClientId` (no deps).** Guard asserts neither table exists.
+- **PS-185 — UPS 1Z tracking-prefix attribution at label-save time; delete FE `/^1Z/` regex block
+  (L1406-1458) (no deps).** Backend stamps resolved carrier account on the shipment at save; FE reads DTO;
+  one-time backfill for existing rows; guard asserts no 1Z regex in web/src.
+- **🔴 PS-186 — HIGHEST PRIORITY (security/money bug): test-order classification → backend; reject untrusted
+  `testLabel:true` in `createLabelV2` (no deps on new cards).** FE `isTestOrder` (~L1163) uses 7 heuristics
+  (orderNumber `TESTING-` prefix, client-name match, SKU sniff, hardcoded legacy client-IDs that override the
+  backend value); when it fires the FE sends `testLabel:true` and `src/services/labels.ts:1080` honors it for
+  **ANY** client → a REAL customer order matching a heuristic silently gets a **FAKE label + fake tracking**,
+  fake rates persisted into the real `best_rate_json` column, and `assertLabelPurchaseRateSelection` bypassed.
+  Fix: backend `client.isTest` authority; `createLabelV2` rejects `testLabel:true` unless
+  `client.isTest===true` (→ `TEST_LABEL_REJECTED`); backend `isTestOrder(orderId)` from authoritative
+  signals; delete the FE 7-signal heuristic, read `order.isTest`. **Sequence PS-187 AFTER this.**
+- **PS-187 — Mock-rate fixture branch in canonical rates owner; delete FE `buildTestRatesForShipment`/
+  `buildTestMockRate` (OrdersView L754-883) + `V2_CARRIER_ACCOUNT_REFS` (L885-910).** Backend test-fixture
+  branch gated on `isTestClient` (PS-186) with a `testFixture:true` marker; guard asserts FE fns + table gone.
+  **Depends on PS-186.**
+- **PS-188 — Rate-shop origin ZIP from backend warehouse/locations DTO; delete hardcoded '90248' (no deps).**
+  `rates-parity.ts:83` + `orders-parity.ts:83` hardcode origin '90248'/US → multi-warehouse wrong rates.
+  Backend exposes origin ZIP/country; FE reads it; guard asserts no '90248' in web/src/components/Views.
+- **PS-189 — Account→services registry DTO from backend; delete `CARRIER_SERVICES` FE table + auto-default
+  (OrdersView L680-726) (no deps).** Auto-default stamps `stamps_com` → `usps_media_mail` (legal/compliance
+  risk) into the purchase payload with NO backend re-check. Backend `GET /carriers/:accountId/services` (or
+  `services[]` on the account DTO); FE deletes table + auto-default; guard. **Unblocks PS-165.**
+- **PS-190 — Structured label-conflict error codes (`LABEL_EXISTS` / `ORDER_NOT_EDITABLE`) (no deps).**
+  Backend returns `{ code, message }`; FE replaces `error.message.includes(...)` with `error.code===...`;
+  guard asserts no substring conflict-detection in web/src.
+
+> ⚠️ **PS-191 is referenced** ("PS-189/PS-190 → PS-191 depends on this") but its spec was not provided — define before sequencing.
+>
+> **Priority flags:** **PS-186** (fake-label-on-real-order) is a live money/integrity bug — recommend doing it
+> BEFORE the PS-172 phase track. **PS-189** (media-mail auto-default) is a compliance risk. PS-181/182/183/
+> 184/185/188/190 are small, independent backend-DTO-ownership fixes aligned with the PS-172 principle —
+> good opportunistic wins. **PS-180** is pure board hygiene (no code risk).
