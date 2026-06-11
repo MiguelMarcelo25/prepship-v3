@@ -685,29 +685,11 @@ const SERVICE_NAMES: Record<string, string> = {
 
 const clientPaletteCache = new Map<string, ClientPalette>()
 
-const LEGACY_CLIENT_ID_BY_DISPLAY_NAME = new Map<string, number>([
-  ['techtok', 7],
-  ['tran agency', 8],
-  ['walmart - djc', 9],
-  ['kf goods', 10],
-  ['test orders', 11],
-])
-
-const LEGACY_CLIENT_ID_BY_DISPLAY_STORE_ID = new Map<number, number>([
-  [367706, 7],
-  [363392, 8],
-  [376661, 9],
-  [277422, 10],
-  [376827, 10],
-])
-
-const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
-  [8, 7],
-  [9, 8],
-  [10, 9],
-  [11, 10],
-  [12, 11],
-])
+// PS-184: the legacy client-id parity maps are BACKEND-owned — every order row
+// and detail payload carries `legacyClientId` stamped by resolveLegacyClientId
+// (src/routes/orders.ts). The three FE remap tables that shadowed it (by display
+// name / store id / current id) are deleted; getLegacyClientIdForDisplay passes
+// the backend value through.
 
 const TEST_PACK_SKU = 'TEST-PACK'
 const TEST_PACK_WEIGHT_OZ = 4
@@ -1322,22 +1304,10 @@ function getCanonicalSourceName(order: OrderSummaryDto, key: string) {
 }
 
 function getLegacyClientIdForDisplay(order: OrderSummaryDto) {
-  const storeId = toNumericValue(order.storeId)
-  if (storeId != null) {
-    const byStore = LEGACY_CLIENT_ID_BY_DISPLAY_STORE_ID.get(storeId)
-    if (byStore != null) return byStore
-  }
-
-  const byName = LEGACY_CLIENT_ID_BY_DISPLAY_NAME.get((toStringValue(order.clientName) ?? '').trim().toLowerCase())
-  if (byName != null) return byName
-
-  const clientId = toNumericValue(order.clientId)
-  if (clientId != null) {
-    const byCurrentId = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId)
-    if (byCurrentId != null) return byCurrentId
-  }
-
-  return toNumericValue(order.legacyClientId) ?? clientId
+  // PS-184: pure pass-through of the backend-derived value (resolveLegacyClientId
+  // stamps it on every row from the canonical store/client parity map). The
+  // clientId fallback only covers rows from before the backend stamped the field.
+  return toNumericValue(order.legacyClientId) ?? toNumericValue(order.clientId)
 }
 
 function getCarrierAccountDisplay(account: CarrierAccountDto | null | undefined) {

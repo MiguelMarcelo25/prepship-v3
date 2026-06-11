@@ -451,8 +451,16 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
 - **PS-183 — Backend owns `cacheExpiresAt` TTL; FE stops minting now+6h (no deps).** `withRateRequestMetadata`
   (~L5573) prefers backend `metadata.cacheExpiresAt`; FE fallback only if absent (warn). (FE overwrite makes
   stale rates look fresh + bypasses server TTL.) Guard + parity test.
-- **PS-184 — Delete 2 legacy client-ID FE remap tables (OrdersView L730-752 + L1355-1372); pass through
-  backend `legacyClientId` (no deps).** Guard asserts neither table exists.
+- **PS-184 — ✅ DONE 2026-06-11 (Wave 2b): all FE legacy client-id remap tables deleted (more than the
+  card knew about).** Repo-verified: the card said 2 tables in OrdersView; the recursive sweep found EIGHT
+  maps across THREE files — OrdersView (by display name / store id / current id), AnalysisView (by store
+  id / current id), and useOrders.ts (by name / store id / current id). All deleted. The backend already
+  stamps `legacyClientId` on every list row AND detail payload via `resolveLegacyClientId`
+  (src/routes/orders.ts canonical parity map) — the FE readers are now pure pass-throughs with a plain
+  clientId fallback for pre-stamp rows (`getLegacyClientIdForDisplay`, AnalysisView `getDisplayClientId`,
+  useOrders `resolvedLegacyClientId`). Guard `test:ps-184-legacy-client-id-passthrough` (5 checks incl.
+  recursive web/src sweep + backend owner pins). QA: typecheck + build:web + full cert ALL PASS. Local
+  commit only.
 - **PS-185 — UPS 1Z tracking-prefix attribution at label-save time; delete FE `/^1Z/` regex block
   (L1406-1458) (no deps).** Backend stamps resolved carrier account on the shipment at save; FE reads DTO;
   one-time backfill for existing rows; guard asserts no 1Z regex in web/src.

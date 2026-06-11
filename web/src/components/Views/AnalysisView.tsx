@@ -389,22 +389,10 @@ function getOrderShipTo(order: unknown) {
   }
 }
 
-const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
-  [367706, 7],
-  [363392, 8],
-  [376661, 9],
-  [277422, 10],
-  [376827, 10],
-])
-
-const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
-  [8, 7],
-  [9, 8],
-  [10, 9],
-  [11, 10],
-  [12, 11],
-])
-
+// PS-184: the legacy client-id parity map is BACKEND-owned — every order row and
+// detail payload carries `legacyClientId` from resolveLegacyClientId
+// (src/routes/orders.ts). The local remap tables that shadowed it are deleted;
+// this reads the backend value with a plain clientId fallback for pre-stamp rows.
 function getDisplayClientId(order: unknown) {
   const row = asRecord(order)
   const canonicalOrder = asRecord(row.canonicalOrder)
@@ -418,22 +406,8 @@ function getDisplayClientId(order: unknown) {
   )
   if (legacyClientId != null) return legacyClientId
 
-  const storeId = numberValue(
-    row.storeId
-    ?? canonicalOrder.storeId
-    ?? rowClient.storeId
-    ?? canonicalClient.storeId,
-  )
-  if (storeId != null) {
-    const mapped = LEGACY_CLIENT_ID_BY_STORE_ID.get(storeId)
-    if (mapped != null) return mapped
-  }
-
   const clientId = numberValue(row.clientId ?? canonicalOrder.clientId ?? rowClient.id ?? canonicalClient.id)
-  if (clientId != null) {
-    const mapped = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId)
-    return mapped ?? clientId
-  }
+  if (clientId != null) return clientId
 
   return '-'
 }

@@ -165,6 +165,7 @@
     "test:ps-182-dead-stub-ui": "tsx scripts/ps-182-dead-stub-ui-guard.ts",
     "test:ps-187-backend-test-rate-fixture": "tsx scripts/ps-187-backend-test-rate-fixture-guard.ts",
     "test:ps-189-backend-service-catalog": "tsx scripts/ps-189-backend-service-catalog-guard.ts",
+    "test:ps-184-legacy-client-id-passthrough": "tsx scripts/ps-184-legacy-client-id-passthrough-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",

@@ -43,29 +43,11 @@ export interface UseOrdersResult {
 
 type V4ClientRow = { id: number; name: string; isTest?: boolean };
 
-const LEGACY_CLIENT_ID_BY_NAME = new Map<string, number>([
-  ['techtok', 7],
-  ['tran agency', 8],
-  ['walmart - djc', 9],
-  ['kf goods', 10],
-  ['test orders', 11],
-]);
-
-const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
-  [367706, 7],
-  [363392, 8],
-  [376661, 9],
-  [277422, 10],
-  [376827, 10],
-]);
-
-const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
-  [8, 7],
-  [9, 8],
-  [10, 9],
-  [11, 10],
-  [12, 11],
-]);
+// PS-184: the legacy client-id parity map is BACKEND-owned — every order row
+// carries `legacyClientId` from resolveLegacyClientId (src/routes/orders.ts).
+// The local remap tables (by name / store id / current id) that shadowed it
+// are deleted; the transform reads the backend value with a plain clientId
+// fallback for pre-stamp rows.
 
 function toNumericValue(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -171,24 +153,6 @@ function getItemsTotalForDisplay(source: unknown): number | null {
   return hasPricedItem && total > 0 ? total : null;
 }
 
-function legacyClientId(
-  clientId: number | null,
-  storeId: unknown,
-  clientsById: Map<number, string>,
-): number | null {
-  const numericStoreId = toNumericValue(storeId);
-  if (numericStoreId != null) {
-    const byStore = LEGACY_CLIENT_ID_BY_STORE_ID.get(numericStoreId);
-    if (byStore != null) return byStore;
-  }
-  if (clientId != null) {
-    const byName = LEGACY_CLIENT_ID_BY_NAME.get((clientsById.get(clientId) ?? '').trim().toLowerCase());
-    if (byName != null) return byName;
-    const byCurrentId = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId);
-    if (byCurrentId != null) return byCurrentId;
-  }
-  return clientId;
-}
 
 function transformOrderRowV4toV2(
   row: Record<string, unknown>,
@@ -210,9 +174,10 @@ function transformOrderRowV4toV2(
     (typeof row.clientId === 'number' ? row.clientId : null);
   const storeId = toNumericValue(canonicalOrder?.storeId) ?? toNumericValue(canonicalClient?.storeId) ?? toNumericValue(row.storeId);
   const resolvedLegacyClientId =
+    toNumericValue(row.legacyClientId) ??
     toNumericValue(canonicalOrder?.legacyClientId) ??
     toNumericValue(canonicalClient?.legacyId) ??
-    legacyClientId(clientId, storeId, clientsById);
+    clientId;
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
   const shippingModel = toRecordValue(canonicalOrder?.shipping) ?? toRecordValue(row.shipping);
   const orderStatus = (canonicalOrder?.orderStatus as string | undefined) ?? (row.orderStatus as string | undefined) ?? null;
