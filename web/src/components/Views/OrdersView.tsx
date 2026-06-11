@@ -2,7 +2,7 @@
 import './OrdersView.css'
 import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Package,
@@ -679,53 +679,9 @@ const SERVICE_NAMES: Record<string, string> = {
   fedex_first_overnight: 'FedEx First Overnight',
 }
 
-const CARRIER_SERVICES: Record<string, Array<{ code: string; label: string }>> = {
-  stamps_com: [
-    { code: 'usps_media_mail', label: 'USPS Media Mail' },
-    { code: 'usps_first_class_mail', label: 'USPS First Class Mail' },
-    { code: 'usps_ground_advantage', label: 'USPS Ground Advantage' },
-    { code: 'usps_priority_mail', label: 'USPS Priority Mail' },
-    { code: 'usps_priority_mail_express', label: 'USPS Priority Express' },
-    { code: 'usps_parcel_select', label: 'USPS Parcel Select' },
-  ],
-  ups: [
-    { code: 'ups_ground', label: 'UPS Ground' },
-    { code: 'ups_ground_saver', label: 'UPS Ground Saver' },
-    { code: 'ups_surepost_less_than_1_lb', label: 'UPS Ground Saver (<1 lb)' },
-    { code: 'ups_surepost_1_lb_or_greater', label: 'UPS Ground Saver (1 lb+)' },
-    { code: 'ups_3_day_select', label: 'UPS 3 Day Select' },
-    { code: 'ups_2nd_day_air', label: 'UPS 2nd Day Air' },
-    { code: 'ups_2nd_day_air_am', label: 'UPS 2nd Day Air AM' },
-    { code: 'ups_next_day_air_saver', label: 'UPS Next Day Air Saver' },
-    { code: 'ups_next_day_air', label: 'UPS Next Day Air' },
-  ],
-  ups_walleted: [
-    { code: 'ups_ground', label: 'UPS Ground' },
-    { code: 'ups_ground_saver', label: 'UPS Ground Saver' },
-    { code: 'ups_surepost_less_than_1_lb', label: 'UPS Ground Saver (<1 lb)' },
-    { code: 'ups_surepost_1_lb_or_greater', label: 'UPS Ground Saver (1 lb+)' },
-    { code: 'ups_3_day_select', label: 'UPS 3 Day Select' },
-    { code: 'ups_2nd_day_air', label: 'UPS 2nd Day Air' },
-    { code: 'ups_next_day_air_saver', label: 'UPS Next Day Air Saver' },
-    { code: 'ups_next_day_air', label: 'UPS Next Day Air' },
-  ],
-  fedex: [
-    { code: 'fedex_ground', label: 'FedEx Ground' },
-    { code: 'fedex_home_delivery', label: 'FedEx Home Delivery' },
-    { code: 'fedex_2day', label: 'FedEx 2Day' },
-    { code: 'fedex_express_saver', label: 'FedEx Express Saver' },
-    { code: 'fedex_priority_overnight', label: 'FedEx Priority Overnight' },
-    { code: 'fedex_standard_overnight', label: 'FedEx Standard Overnight' },
-  ],
-  fedex_walleted: [
-    { code: 'fedex_ground', label: 'FedEx Ground' },
-    { code: 'fedex_home_delivery', label: 'FedEx Home Delivery' },
-    { code: 'fedex_2day', label: 'FedEx 2Day' },
-    { code: 'fedex_express_saver', label: 'FedEx Express Saver' },
-    { code: 'fedex_priority_overnight', label: 'FedEx Priority Overnight' },
-    { code: 'fedex_standard_overnight', label: 'FedEx Standard Overnight' },
-  ],
-}
+// PS-189: the account→service catalog is BACKEND-owned (src/lib/carrier-service-
+// catalog.ts, served at GET /carriers/service-catalog). The local CARRIER_SERVICES
+// copy is deleted; getServiceOptionsForAccount reads the fetched catalog.
 
 const clientPaletteCache = new Map<string, ClientPalette>()
 
@@ -2679,6 +2635,16 @@ export default function OrdersView({
   const { accounts: shippingAccounts, isLoading: accountsLoadingRaw, error: accountsError } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
   const accountsLoading = accountsLoadingRaw && !accountsError
   const { markups } = useMarkups()
+  // PS-189: the account→service catalog is BACKEND-owned. Static per deploy, so
+  // cache it for the session. Until it loads, the service picker shows the saved
+  // value only — it never falls back to a local table.
+  const { data: carrierServiceCatalogResponse } = useQuery({
+    queryKey: ['carrier-service-catalog'],
+    queryFn: () => api.get<{ catalog: Record<string, Array<{ code: string; label: string }>> }>('/carriers/service-catalog'),
+    staleTime: Infinity,
+    enabled: ordersSupportDataEnabled,
+  })
+  const carrierServiceCatalog = carrierServiceCatalogResponse?.catalog ?? {}
 
   const orderDetailsById = useMemo(() => (
     activeOrderId != null && activeOrderDetail != null
@@ -4463,7 +4429,7 @@ export default function OrdersView({
   function getServiceOptionsForAccount(accountId: string) {
     const account = shippingAccounts.find((candidate) => String(candidate.shippingProviderId) === accountId)
     if (!account) return []
-    return CARRIER_SERVICES[account.code] ?? []
+    return carrierServiceCatalog[account.code] ?? []
   }
 
   async function saveColumnPrefsToServer(nextPrefs: ColumnPrefs) {
@@ -9944,11 +9910,20 @@ export default function OrdersView({
                     disabled={shipped || panelIsTestOrder}
                     onChange={(event) => {
                       const nextValue = event.target.value
-                      setPanelForm((current) => ({
-                        ...current,
-                        shipAccountId: nextValue,
-                        serviceCode: getServiceOptionsForAccount(nextValue)[0]?.code ?? current.serviceCode,
-                      }))
+                      setPanelForm((current) => {
+                        // PS-189: NEVER auto-default a service the operator didn't
+                        // choose (the old `[0]?.code` silently stamped
+                        // usps_media_mail — a restricted, books-only service — on
+                        // stamps_com switches). Keep the current service if the new
+                        // account offers it; otherwise force an explicit pick.
+                        const nextOptions = getServiceOptionsForAccount(nextValue)
+                        const keepService = nextOptions.some((option) => option.code === current.serviceCode)
+                        return {
+                          ...current,
+                          shipAccountId: nextValue,
+                          serviceCode: keepService ? current.serviceCode : '',
+                        }
+                      })
                       void apiClient.setOrderSelectedPid(panelOrder.orderId, nextValue ? Number.parseInt(nextValue, 10) : null)
                     }}
                   >

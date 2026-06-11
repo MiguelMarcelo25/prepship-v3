@@ -503,10 +503,16 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   (components/, not Views; feeds manual order creation — needs its own spec to change money behavior).
   Guard `test:ps-188-backend-origin-zip` (9 checks incl. recursive Views sweep + owner pin). QA: typecheck +
   build:web + ship-from-default-location + full cert ALL PASS. Local commit only.
-- **PS-189 — Account→services registry DTO from backend; delete `CARRIER_SERVICES` FE table + auto-default
-  (OrdersView L680-726) (no deps).** Auto-default stamps `stamps_com` → `usps_media_mail` (legal/compliance
-  risk) into the purchase payload with NO backend re-check. Backend `GET /carriers/:accountId/services` (or
-  `services[]` on the account DTO); FE deletes table + auto-default; guard. **Unblocks PS-165.**
+- **PS-189 — ✅ DONE 2026-06-11 (Wave 2b): service catalog backend-owned + media-mail auto-default deleted.**
+  Canonical catalog `src/lib/carrier-service-catalog.ts` (availability only — eligibility/permission stays
+  with shipping-service-eligibility) served at `GET /carriers/service-catalog`; OrdersView fetches it
+  (session-cached) and its `CARRIER_SERVICES` copy is deleted. **Compliance fix:** account switch no longer
+  auto-defaults the FIRST service (which silently stamped restricted `usps_media_mail` on stamps_com) — it
+  keeps the current service when the new account offers it, otherwise clears to '' forcing an explicit
+  operator pick. Media mail remains LISTED (it exists on the account) but is never chosen by code. Guard
+  `test:ps-189-backend-service-catalog` (9 checks incl. behavioral catalog import + no-auto-default pins).
+  QA: typecheck + build:web + ps-051-shipping-options + rate-browser-dynamic-service-selection + full cert
+  ALL PASS. Local commit only.
 - **PS-190 — ✅ DONE 2026-06-11 (Wave 2a): structured label-conflict error codes.** createLabelV2 stamps
   `code: 'ORDER_NOT_EDITABLE'` (+ `{ orderStatus }` detail) on the shipped/cancelled conflict and
   `code: 'LABEL_EXISTS'` on the active-label conflict; routes/labels.ts returns `{ error, code, ...details }`
