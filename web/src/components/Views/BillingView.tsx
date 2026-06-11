@@ -52,6 +52,10 @@ import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 // PS-155: per-client detail table extracted (behavior-preserving; rows/sort/totals/handlers
 // stay here and are passed as props, the table calls the pure computeBillingDetailMetrics).
 import { BillingDetailTable } from './BillingDetailTable'
+// PS-155: Client Billing Config + Package Pricing tables extracted (behavior-preserving; the
+// config/price DRAFT state + setters and the Save handlers stay here and are passed as props).
+import { BillingConfigTable } from './BillingConfigTable'
+import { BillingPackagePricingTable } from './BillingPackagePricingTable'
 import './BillingView.css'
 
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -176,14 +180,6 @@ function marginColor(value: number) {
   if (value > 0) return 'var(--green)'
   if (value < 0) return 'var(--red)'
   return 'var(--text3)'
-}
-
-function getPackageMarginMarkup(row: ReturnType<typeof buildBillingPackagePriceRows>[number]) {
-  if (row.marginPct == null || !row.marginColor) {
-    return <span style={{ color: 'var(--text4)' }}>—</span>
-  }
-
-  return <span style={{ color: row.marginColor, fontWeight: 700 }}>{row.marginPct}%</span>
 }
 
 function normalizeBillingClientName(value: string | null | undefined) {
@@ -579,36 +575,6 @@ export default function BillingView() {
   function handleDetailSort(key: BillingDetailColumnId) {
     setDetailPage(1)
     setDetailSort((current) => nextSortState(current, key))
-  }
-
-  // Editable numeric cell for the Client Billing Config <Table>. The input
-  // fills the cell (width:100%) and right-aligns its own text; the column's
-  // `align:'right'` only drives the header label, so the numeric look comes
-  // from this inline style (Table hardcodes cell text-align to left).
-  function renderConfigNumberCell(
-    config: BillingConfigDto,
-    field: keyof BillingConfigDraft,
-    fallback: string,
-    step: string,
-    min: string,
-    title?: string,
-  ) {
-    const draft = configDrafts[config.clientId]
-    return (
-      <input
-        type="number"
-        step={step}
-        min={min}
-        className="markup-input-lg billing-config-input"
-        style={{ width: '100%', textAlign: 'right', fontSize: 11.5 }}
-        title={title}
-        value={draft?.[field] ?? fallback}
-        onChange={(event) => setConfigDrafts((current) => ({
-          ...current,
-          [config.clientId]: { ...current[config.clientId], [field]: event.target.value },
-        }))}
-      />
-    )
   }
 
   function setBillingClientFilter(nextIds: number[]) {
@@ -1154,283 +1120,31 @@ export default function BillingView() {
       </motion.div>
 
       <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
-        <div className="markup-card">
-          <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 10 }}>Client Billing Config</h3>
-          <div className="billing-config-table-wrap">
-            <Table<BillingConfigDto>
-              data={configs}
-              rowKey={(row) => row.clientId}
-              storageKey="billing-config-table"
-              density="compact"
-              stickyHeader={false}
-              showColumnControls={false}
-              loading={configsLoading}
-              emptyMessage="No clients found."
-              defaultSort={{ key: 'client', direction: 'asc' }}
-              columns={[
-                {
-                  key: 'client',
-                  label: 'Client',
-                  width: 150,
-                  minWidth: 120,
-                  pinned: true,
-                  hideable: false,
-                  sortable: true,
-                  sortValue: (row) => row.clientName ?? '',
-                  render: (row) => <span style={{ fontWeight: 600, fontSize: 11.5 }}>{row.clientName}</span>,
-                },
-                {
-                  key: 'pickPack',
-                  label: 'Pick & Pack',
-                  width: 84,
-                  minWidth: 70,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.pickPackFee ?? row.pickPackFee ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'pickPackFee', '0.00', '0.01', '0'),
-                },
-                {
-                  key: 'additional',
-                  label: 'Addl Unit',
-                  width: 84,
-                  minWidth: 70,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.additionalUnitFee ?? row.additionalUnitFee ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'additionalUnitFee', '0.00', '0.01', '0'),
-                },
-                {
-                  key: 'packageMarkup',
-                  label: 'Pkg %',
-                  width: 76,
-                  minWidth: 64,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.packageCostMarkup ?? row.packageCostMarkup ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'packageCostMarkup', '0.0', '0.1', '0', 'Markup applied to package cost lines (percent)'),
-                },
-                {
-                  key: 'shipPct',
-                  label: 'Ship %',
-                  width: 76,
-                  minWidth: 64,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.shippingMarkupPct ?? row.shippingMarkupPct ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'shippingMarkupPct', '0.0', '0.1', '0'),
-                },
-                {
-                  key: 'shipFlat',
-                  label: 'Ship $',
-                  width: 84,
-                  minWidth: 70,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.shippingMarkupFlat ?? row.shippingMarkupFlat ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'shippingMarkupFlat', '0.00', '0.01', '0'),
-                },
-                {
-                  key: 'storage',
-                  label: 'Storage $/cuft',
-                  width: 96,
-                  minWidth: 80,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.storageFeePerCuFt ?? row.storageFeePerCuFt ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'storageFeePerCuFt', '0.00', '0.01', '0', '$/cuft/month storage fee applied to inventory on hand'),
-                },
-                {
-                  key: 'maxUnits',
-                  label: 'Max Units',
-                  width: 84,
-                  minWidth: 70,
-                  align: 'right',
-                  sortable: true,
-                  sortValue: (row) => Number(configDrafts[row.clientId]?.pickPackMaxUnits ?? row.pickPackMaxUnits ?? 0),
-                  render: (row) => renderConfigNumberCell(row, 'pickPackMaxUnits', '1', '1', '1', 'Orders with total units ≤ this value pay only the base Pick & Pack fee; excess units are billed at the Addl Unit rate'),
-                },
-                {
-                  key: 'mode',
-                  label: 'Mode',
-                  width: 118,
-                  minWidth: 100,
-                  align: 'center',
-                  sortable: true,
-                  sortValue: (row) => configDrafts[row.clientId]?.billingMode ?? row.billingMode ?? '',
-                  render: (row) => {
-                    const draft = configDrafts[row.clientId]
-                    return (
-                      <select
-                        className="ship-select billing-config-select"
-                        style={{ width: '100%', fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--border)' }}
-                        value={draft?.billingMode ?? 'per_shipment'}
-                        onChange={(event) => setConfigDrafts((current) => ({
-                          ...current,
-                          [row.clientId]: { ...current[row.clientId], billingMode: event.target.value },
-                        }))}
-                      >
-                        <option value="label_cost">Label Cost</option>
-                        <option value="ss_ref_rate">SS Ref Rate ★</option>
-                        <option value="per_shipment">Per Shipment</option>
-                        <option value="monthly">Monthly</option>
-                      </select>
-                    )
-                  },
-                },
-                {
-                  key: 'active',
-                  label: 'Active',
-                  width: 64,
-                  minWidth: 52,
-                  align: 'center',
-                  sortable: true,
-                  sortValue: (row) => (configDrafts[row.clientId]?.active ?? row.active ?? true) ? 1 : 0,
-                  render: (row) => {
-                    const draft = configDrafts[row.clientId]
-                    return (
-                      <input
-                        type="checkbox"
-                        checked={draft?.active !== false}
-                        title="Disable to skip billing-line generation for this client"
-                        onChange={(event) => setConfigDrafts((current) => ({
-                          ...current,
-                          [row.clientId]: { ...current[row.clientId], active: event.target.checked },
-                        }))}
-                      />
-                    )
-                  },
-                },
-                {
-                  key: 'actions',
-                  label: '',
-                  width: 70,
-                  minWidth: 60,
-                  align: 'center',
-                  sortable: false,
-                  hideable: false,
-                  render: (row) => (
-                    <button className="btn btn-outline btn-xs" type="button" onClick={() => void handleSaveConfig(row.clientId)}>Save</button>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        </div>
+        {/* PS-155: Client Billing Config table extracted to <BillingConfigTable />.
+            The config DRAFT state (configDrafts) + setter and the Save handler
+            (handleSaveConfig → buildBillingConfigInput → updateBillingConfig) stay here. */}
+        <BillingConfigTable
+          configs={configs}
+          configsLoading={configsLoading}
+          configDrafts={configDrafts}
+          setConfigDrafts={setConfigDrafts}
+          onSaveConfig={handleSaveConfig}
+        />
 
-        <div className="markup-card">
-          <div className="billing-package-card-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
-            <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', margin: 0 }}>Package Pricing by Client</h3>
-            <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
-              <select className="filter-sel" style={{ fontSize: 12 }} value={selectedPkgClientId} onChange={(event) => setSelectedPkgClientId(event.target.value)}>
-                <option value="">Select client…</option>
-                {configs.map((config) => (
-                  <option key={config.clientId} value={config.clientId}>{config.clientName}</option>
-                ))}
-              </select>
-              <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleSavePackagePrices()}>Save</button>
-            </div>
-          </div>
-          <div className="billing-package-table-wrap">
-            {!selectedPkgClientId ? (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>Select a client to view pricing</div>
-            ) : packagePricingError ? (
-              <div style={{ padding: 16, textAlign: 'center', color: 'var(--red)', fontSize: 12 }}>{packagePricingError}</div>
-            ) : (
-              <Table
-                data={packagePricingRows}
-                rowKey={(row) => row.packageId}
-                storageKey="billing-package-pricing-table"
-                density="compact"
-                stickyHeader={false}
-                showColumnControls={false}
-                loading={packagePricingLoading}
-                emptyMessage="No custom packages found"
-                defaultSort={{ key: 'box', direction: 'asc' }}
-                columns={[
-                  {
-                    key: 'box',
-                    label: 'Box',
-                    width: 150,
-                    minWidth: 110,
-                    pinned: true,
-                    hideable: false,
-                    sortable: true,
-                    sortValue: (row) => row.name ?? '',
-                    render: (row) => (
-                      <span style={{ fontWeight: 600, fontSize: 12 }}>
-                        {row.name}
-                        {row.isCustom ? (
-                          <span title="Custom override — won't be changed by Set Default" style={{ fontSize: 9, color: 'var(--ss-blue)', marginLeft: 4, fontWeight: 600, letterSpacing: '.3px' }}>CUSTOM</span>
-                        ) : null}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'dims',
-                    label: 'Dims',
-                    width: 120,
-                    minWidth: 90,
-                    align: 'center',
-                    sortable: true,
-                    sortValue: (row) => row.dimsText ?? '',
-                    render: (row) => <span style={{ fontSize: 11, color: 'var(--text3)' }}>{row.dimsText}</span>,
-                  },
-                  {
-                    key: 'cost',
-                    label: 'Our Cost',
-                    width: 92,
-                    minWidth: 76,
-                    align: 'right',
-                    sortable: true,
-                    sortValue: (row) => row.ourCost,
-                    render: (row) => (
-                      <span style={{ textAlign: 'right', display: 'block', fontSize: 11.5 }}>
-                        {row.ourCost == null ? (
-                          <span style={{ color: 'var(--text4)', fontSize: 10.5 }}>not set</span>
-                        ) : (
-                          <span style={{ color: 'var(--text2)' }}>${row.ourCost.toFixed(3)}</span>
-                        )}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'charge',
-                    label: 'Charge',
-                    width: 92,
-                    minWidth: 76,
-                    align: 'right',
-                    sortable: true,
-                    sortValue: (row) => Number(packagePriceDrafts[row.packageId] ?? row.charge ?? 0),
-                    render: (row) => (
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="markup-input-lg billing-config-input"
-                        style={{ width: '100%', textAlign: 'right', fontSize: 12 }}
-                        value={packagePriceDrafts[row.packageId] ?? (Number(row.charge) || 0).toFixed(2)}
-                        onChange={(event) => setPackagePriceDrafts((current) => ({
-                          ...current,
-                          [row.packageId]: event.target.value,
-                        }))}
-                      />
-                    ),
-                  },
-                  {
-                    key: 'margin',
-                    label: 'Margin',
-                    width: 84,
-                    minWidth: 64,
-                    align: 'right',
-                    sortable: true,
-                    sortValue: (row) => row.marginPct,
-                    render: (row) => <span style={{ display: 'block', textAlign: 'right' }}>{getPackageMarginMarkup(row)}</span>,
-                  },
-                ]}
-              />
-            )}
-          </div>
-        </div>
+        {/* PS-155: Package Pricing card extracted to <BillingPackagePricingTable />.
+            The price DRAFT state (packagePriceDrafts) + setter, selected-client state,
+            the PURE-built packagePricingRows, and the Save handler stay here. */}
+        <BillingPackagePricingTable
+          configs={configs}
+          selectedPkgClientId={selectedPkgClientId}
+          setSelectedPkgClientId={setSelectedPkgClientId}
+          packagePricingRows={packagePricingRows}
+          packagePriceDrafts={packagePriceDrafts}
+          setPackagePriceDrafts={setPackagePriceDrafts}
+          packagePricingLoading={packagePricingLoading}
+          packagePricingError={packagePricingError}
+          onSavePackagePrices={handleSavePackagePrices}
+        />
       </div>
 
       <div className="markup-card">

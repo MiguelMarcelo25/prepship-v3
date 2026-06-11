@@ -2,8 +2,15 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { Box, CalendarClock, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
-// PS-155: the 3 Package modals were extracted verbatim to ./packages-modals (behavior-preserving).
-import { PackageAdjustModal, PackageBillingDefaultModal, PackageFormModal } from './packages-modals'
+// PS-155: the Package modals were extracted verbatim to ./packages-modals (behavior-preserving).
+// ReceiveStockModal + AdjustStockModal own only the modal BODY render; PackagesView keeps the modal
+// state objects and the receive/adjust submit handlers (money/stock mutations) and passes them in.
+import {
+  PackageBillingDefaultModal,
+  PackageFormModal,
+  ReceiveStockModal,
+  AdjustStockModal,
+} from './packages-modals'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
@@ -1209,187 +1216,27 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       ) : null}
 
       {receiveModal ? (
-        <PackageAdjustModal title="📥 Receive Stock" packageName={receiveModal.packageName} onClose={() => setReceiveModal(null)}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-            <input
-              id="pkgAdjQty"
-              type="number"
-              min="1"
-              step="1"
-              value={receiveModal.form.qty}
-              placeholder="Qty"
-              autoFocus
-              onChange={(event) => setReceiveModal((current) => current ? { ...current, form: { ...current.form, qty: event.target.value } } : current)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void handleReceiveSubmit()
-                }
-              }}
-              style={{
-                flex: 1,
-                padding: '7px 10px',
-                border: '1px solid var(--border2)',
-                borderRadius: 6,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                fontSize: 14,
-                fontWeight: 700,
-              }}
-            />
-            <span style={{ fontSize: 12, color: 'var(--text3)' }}>units</span>
-          </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 12, color: 'var(--text3)', whiteSpace: 'nowrap' }}>Cost/unit $</span>
-            <input
-              id="pkgAdjCost"
-              type="number"
-              min="0"
-              step="0.001"
-              value={receiveModal.form.costPerUnit}
-              placeholder="0.000 (optional)"
-              onChange={(event) => setReceiveModal((current) => current ? { ...current, form: { ...current.form, costPerUnit: event.target.value } } : current)}
-              style={{
-                flex: 1,
-                padding: '7px 10px',
-                border: '1px solid var(--border2)',
-                borderRadius: 6,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                fontSize: 13,
-              }}
-            />
-            <span style={{ fontSize: 10.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}>updates unit cost</span>
-          </div>
-          <input
-            id="pkgAdjNote"
-            type="text"
-            maxLength={120}
-            value={receiveModal.form.note}
-            placeholder="Note (optional)"
-            onChange={(event) => setReceiveModal((current) => current ? { ...current, form: { ...current.form, note: event.target.value } } : current)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                void handleReceiveSubmit()
-              }
-            }}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '7px 10px',
-              border: '1px solid var(--border2)',
-              borderRadius: 6,
-              background: 'var(--surface2)',
-              color: 'var(--text)',
-              fontSize: 12,
-              marginBottom: 14,
-            }}
-          />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button type="button" onClick={() => setReceiveModal(null)} style={{ padding: '7px 16px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-            <button type="button" onClick={() => void handleReceiveSubmit()} disabled={modalSaving} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: 'var(--green)', color: '#fff', cursor: modalSaving ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: modalSaving ? 0.7 : 1 }}>{modalSaving ? 'Receiving…' : 'Receive'}</button>
-          </div>
-        </PackageAdjustModal>
+        <ReceiveStockModal
+          packageName={receiveModal.packageName}
+          form={receiveModal.form}
+          modalSaving={modalSaving}
+          onFormChange={(field, value) => setReceiveModal((current) => current ? { ...current, form: { ...current.form, [field]: value } } : current)}
+          onClose={() => setReceiveModal(null)}
+          onSubmit={() => void handleReceiveSubmit()}
+        />
       ) : null}
 
       {adjustModal ? (
-        <PackageAdjustModal title="± Adjust Stock" packageName={adjustModal.packageName} onClose={() => setAdjustModal(null)} narrow>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-            <button
-              id="pkgAdjBtn-add"
-              type="button"
-              onClick={() => setAdjustModal((current) => current ? { ...current, sign: 1 } : current)}
-              style={{
-                flex: 1,
-                padding: 7,
-                borderRadius: 6,
-                border: adjustModal.sign > 0 ? '2px solid var(--ss-blue)' : '2px solid var(--border2)',
-                background: adjustModal.sign > 0 ? 'var(--ss-blue)' : 'var(--surface2)',
-                color: adjustModal.sign > 0 ? '#fff' : 'var(--text)',
-                fontWeight: 700,
-                cursor: 'pointer',
-                fontSize: 13,
-              }}
-            >
-              + Add
-            </button>
-            <button
-              id="pkgAdjBtn-rem"
-              type="button"
-              onClick={() => setAdjustModal((current) => current ? { ...current, sign: -1 } : current)}
-              style={{
-                flex: 1,
-                padding: 7,
-                borderRadius: 6,
-                border: adjustModal.sign < 0 ? '2px solid var(--red)' : '2px solid var(--border2)',
-                background: adjustModal.sign < 0 ? 'var(--red)' : 'var(--surface2)',
-                color: adjustModal.sign < 0 ? '#fff' : 'var(--text)',
-                fontWeight: 700,
-                cursor: 'pointer',
-                fontSize: 13,
-              }}
-            >
-              − Remove
-            </button>
-          </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-            <span id="pkgAdjSignLabel" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', width: 16, textAlign: 'center' }}>{adjustModal.sign > 0 ? '+' : '−'}</span>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={adjustModal.form.qty}
-              placeholder="Qty"
-              autoFocus
-              onChange={(event) => setAdjustModal((current) => current ? { ...current, form: { ...current.form, qty: event.target.value } } : current)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void handleAdjustSubmit()
-                }
-              }}
-              style={{
-                flex: 1,
-                padding: '7px 10px',
-                border: '1px solid var(--border2)',
-                borderRadius: 6,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                fontSize: 14,
-                fontWeight: 700,
-              }}
-            />
-          </div>
-          <input
-            type="text"
-            maxLength={120}
-            value={adjustModal.form.note}
-            placeholder="Note (optional)"
-            onChange={(event) => setAdjustModal((current) => current ? { ...current, form: { ...current.form, note: event.target.value } } : current)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                void handleAdjustSubmit()
-              }
-            }}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '7px 10px',
-              border: '1px solid var(--border2)',
-              borderRadius: 6,
-              background: 'var(--surface2)',
-              color: 'var(--text)',
-              fontSize: 12,
-              marginBottom: 14,
-            }}
-          />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button type="button" onClick={() => setAdjustModal(null)} style={{ padding: '7px 16px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-            <button type="button" onClick={() => void handleAdjustSubmit()} disabled={modalSaving} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: 'var(--ss-blue)', color: '#fff', cursor: modalSaving ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: modalSaving ? 0.7 : 1 }}>{modalSaving ? 'Saving…' : 'Save'}</button>
-          </div>
-        </PackageAdjustModal>
+        <AdjustStockModal
+          packageName={adjustModal.packageName}
+          form={adjustModal.form}
+          sign={adjustModal.sign}
+          modalSaving={modalSaving}
+          onSignChange={(sign) => setAdjustModal((current) => current ? { ...current, sign } : current)}
+          onFormChange={(field, value) => setAdjustModal((current) => current ? { ...current, form: { ...current.form, [field]: value } } : current)}
+          onClose={() => setAdjustModal(null)}
+          onSubmit={() => void handleAdjustSubmit()}
+        />
       ) : null}
 
       {billingDefaultModal ? (

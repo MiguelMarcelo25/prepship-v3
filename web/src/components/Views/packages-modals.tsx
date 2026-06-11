@@ -3,7 +3,7 @@
 // relocating them here thins the view without changing any behavior.
 import { type FormEvent, type ReactNode } from 'react'
 import { X } from 'lucide-react'
-import { type PackageFormState } from './packages-parity'
+import { type PackageFormState, type PackageQuantityFormState } from './packages-parity'
 
 export function PackageAdjustModal({
   title,
@@ -226,5 +226,234 @@ export function PackageFormModal({
         </div>
       </form>
     </div>
+  )
+}
+
+// PS-155: Receive-stock modal body extracted verbatim from PackagesView.tsx (behavior-preserving).
+// State (the receiveModal object) + the submit handler (handleReceiveSubmit → buildPackageReceiveInput
+// → apiClient.receivePackage) stay OWNED by PackagesView. This component only renders the inputs and
+// forwards field edits via onFormChange and the submit via onSubmit (Enter-to-submit wiring is verbatim).
+export function ReceiveStockModal({
+  packageName,
+  form,
+  modalSaving,
+  onFormChange,
+  onClose,
+  onSubmit,
+}: {
+  packageName: string
+  form: PackageQuantityFormState
+  modalSaving: boolean
+  onFormChange: (field: keyof PackageQuantityFormState, value: string) => void
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  return (
+    <PackageAdjustModal title="📥 Receive Stock" packageName={packageName} onClose={onClose}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+        <input
+          id="pkgAdjQty"
+          type="number"
+          min="1"
+          step="1"
+          value={form.qty}
+          placeholder="Qty"
+          autoFocus
+          onChange={(event) => onFormChange('qty', event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void onSubmit()
+            }
+          }}
+          style={{
+            flex: 1,
+            padding: '7px 10px',
+            border: '1px solid var(--border2)',
+            borderRadius: 6,
+            background: 'var(--surface2)',
+            color: 'var(--text)',
+            fontSize: 14,
+            fontWeight: 700,
+          }}
+        />
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>units</span>
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: 'var(--text3)', whiteSpace: 'nowrap' }}>Cost/unit $</span>
+        <input
+          id="pkgAdjCost"
+          type="number"
+          min="0"
+          step="0.001"
+          value={form.costPerUnit}
+          placeholder="0.000 (optional)"
+          onChange={(event) => onFormChange('costPerUnit', event.target.value)}
+          style={{
+            flex: 1,
+            padding: '7px 10px',
+            border: '1px solid var(--border2)',
+            borderRadius: 6,
+            background: 'var(--surface2)',
+            color: 'var(--text)',
+            fontSize: 13,
+          }}
+        />
+        <span style={{ fontSize: 10.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}>updates unit cost</span>
+      </div>
+      <input
+        id="pkgAdjNote"
+        type="text"
+        maxLength={120}
+        value={form.note}
+        placeholder="Note (optional)"
+        onChange={(event) => onFormChange('note', event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            void onSubmit()
+          }
+        }}
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '7px 10px',
+          border: '1px solid var(--border2)',
+          borderRadius: 6,
+          background: 'var(--surface2)',
+          color: 'var(--text)',
+          fontSize: 12,
+          marginBottom: 14,
+        }}
+      />
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" onClick={onClose} style={{ padding: '7px 16px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+        <button type="button" onClick={() => void onSubmit()} disabled={modalSaving} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: 'var(--green)', color: '#fff', cursor: modalSaving ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: modalSaving ? 0.7 : 1 }}>{modalSaving ? 'Receiving…' : 'Receive'}</button>
+      </div>
+    </PackageAdjustModal>
+  )
+}
+
+// PS-155: Adjust-stock modal body extracted verbatim from PackagesView.tsx (behavior-preserving).
+// State (the adjustModal object incl. the +/- sign) + the submit handler (handleAdjustSubmit →
+// buildPackageAdjustInput → apiClient.adjustPackage) stay OWNED by PackagesView. This component only
+// renders the inputs and forwards the sign toggle (onSignChange), field edits (onFormChange) and the
+// submit (onSubmit). Enter-to-submit wiring is verbatim.
+export function AdjustStockModal({
+  packageName,
+  form,
+  sign,
+  modalSaving,
+  onSignChange,
+  onFormChange,
+  onClose,
+  onSubmit,
+}: {
+  packageName: string
+  form: PackageQuantityFormState
+  sign: 1 | -1
+  modalSaving: boolean
+  onSignChange: (sign: 1 | -1) => void
+  onFormChange: (field: keyof PackageQuantityFormState, value: string) => void
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  return (
+    <PackageAdjustModal title="± Adjust Stock" packageName={packageName} onClose={onClose} narrow>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+        <button
+          id="pkgAdjBtn-add"
+          type="button"
+          onClick={() => onSignChange(1)}
+          style={{
+            flex: 1,
+            padding: 7,
+            borderRadius: 6,
+            border: sign > 0 ? '2px solid var(--ss-blue)' : '2px solid var(--border2)',
+            background: sign > 0 ? 'var(--ss-blue)' : 'var(--surface2)',
+            color: sign > 0 ? '#fff' : 'var(--text)',
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          + Add
+        </button>
+        <button
+          id="pkgAdjBtn-rem"
+          type="button"
+          onClick={() => onSignChange(-1)}
+          style={{
+            flex: 1,
+            padding: 7,
+            borderRadius: 6,
+            border: sign < 0 ? '2px solid var(--red)' : '2px solid var(--border2)',
+            background: sign < 0 ? 'var(--red)' : 'var(--surface2)',
+            color: sign < 0 ? '#fff' : 'var(--text)',
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          − Remove
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+        <span id="pkgAdjSignLabel" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', width: 16, textAlign: 'center' }}>{sign > 0 ? '+' : '−'}</span>
+        <input
+          type="number"
+          min="1"
+          step="1"
+          value={form.qty}
+          placeholder="Qty"
+          autoFocus
+          onChange={(event) => onFormChange('qty', event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void onSubmit()
+            }
+          }}
+          style={{
+            flex: 1,
+            padding: '7px 10px',
+            border: '1px solid var(--border2)',
+            borderRadius: 6,
+            background: 'var(--surface2)',
+            color: 'var(--text)',
+            fontSize: 14,
+            fontWeight: 700,
+          }}
+        />
+      </div>
+      <input
+        type="text"
+        maxLength={120}
+        value={form.note}
+        placeholder="Note (optional)"
+        onChange={(event) => onFormChange('note', event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            void onSubmit()
+          }
+        }}
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '7px 10px',
+          border: '1px solid var(--border2)',
+          borderRadius: 6,
+          background: 'var(--surface2)',
+          color: 'var(--text)',
+          fontSize: 12,
+          marginBottom: 14,
+        }}
+      />
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" onClick={onClose} style={{ padding: '7px 16px', borderRadius: 6, border: '1px solid var(--border2)', background: 'var(--surface2)', color: 'var(--text)', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+        <button type="button" onClick={() => void onSubmit()} disabled={modalSaving} style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: 'var(--ss-blue)', color: '#fff', cursor: modalSaving ? 'default' : 'pointer', fontSize: 13, fontWeight: 600, opacity: modalSaving ? 0.7 : 1 }}>{modalSaving ? 'Saving…' : 'Save'}</button>
+      </div>
+    </PackageAdjustModal>
   )
 }
