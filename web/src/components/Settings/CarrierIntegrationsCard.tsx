@@ -1884,16 +1884,18 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               Carriers only, not ShipStation. */}
           {d.kind === 'carrier' && !isShipStation ? (
             <span style={{ flexShrink: 0 }}>
+              {/* The button shows the CURRENT state (ENABLED = green / DISABLED = red);
+                  clicking toggles it. The title spells out what the click will do. */}
               <ActionButton
-                icon={d.active === false ? <Power size={11} strokeWidth={2.5} /> : <PowerOff size={11} strokeWidth={2.5} />}
-                label={d.active === false ? 'Enable' : 'Disable'}
+                icon={d.active === false ? <PowerOff size={11} strokeWidth={2.5} /> : <Power size={11} strokeWidth={2.5} />}
+                label={d.active === false ? 'DISABLED' : 'ENABLED'}
                 loadingLabel={d.active === false ? 'Enabling…' : 'Disabling…'}
                 loading={!!togglingActive[d.id]}
-                variant="subtle"
+                variant={d.active === false ? 'danger' : 'success'}
                 onClick={() => runToggleActive(d)}
                 title={d.active === false
-                  ? 'Enable this carrier — show it in the Rate Browser again'
-                  : 'Disable this carrier — hide it from the Rate Browser (keeps the account + credentials)'}
+                  ? 'This carrier is DISABLED — click to enable it (show it in the Rate Browser again)'
+                  : 'This carrier is ENABLED — click to disable it (hide it from the Rate Browser; keeps the account + credentials)'}
               />
             </span>
           ) : null}

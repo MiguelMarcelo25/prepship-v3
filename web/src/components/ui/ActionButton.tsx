@@ -8,11 +8,12 @@ import { Loader2 } from 'lucide-react'
 // tint communicates the action's role, not the shape:
 //   subtle:  brand-blue tinted bg + brand-blue text (diagnostic/utility)
 //   primary: filled brand-blue gradient (main action)
-//   danger:  rose-tinted bg + rose text (destructive)
+//   danger:  rose-tinted bg + rose text (destructive / disabled-state)
+//   success: emerald-tinted bg + emerald text (healthy / enabled-state)
 //   default: neutral surface (reserved for future generic actions)
 // All buttons are 30px tall, 11.5px font, rounded-full (pill), with a 1px ring
 // instead of a border so the hover boxShadow doesn't fight the border thickness.
-export type ActionVariant = 'subtle' | 'primary' | 'danger' | 'default'
+export type ActionVariant = 'subtle' | 'primary' | 'danger' | 'success' | 'default'
 
 export function ActionButton({
   icon,
@@ -52,6 +53,12 @@ export function ActionButton({
       color: 'rgb(190 18 60)',
       ringColor: 'rgb(244 63 94 / 0.25)',
       hoverRing: 'rgb(244 63 94 / 0.5)',
+    },
+    success: {
+      background: 'rgb(16 185 129 / 0.10)',
+      color: 'rgb(4 120 87)',
+      ringColor: 'rgb(16 185 129 / 0.3)',
+      hoverRing: 'rgb(16 185 129 / 0.55)',
     },
     default: {
       background: 'var(--surface)',

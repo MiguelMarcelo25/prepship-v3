@@ -53,6 +53,12 @@ import type { NewOrderPayload } from '../NewOrderModal'
 import CarrierBadge, { classifyCarrier } from '../CarrierBadge'
 // PS-165: carrier/service/account display precedence owned by ./order-shipping-display (verbatim cascade).
 import { resolveDisplayCarrierCode, resolveDisplayServiceCode, resolveDisplayShipAccount } from './order-shipping-display'
+import {
+  fetchRecalculateAllJob,
+  isRecalculateAllJobDone,
+  startRecalculateAllBestRates,
+  summarizeRecalculateAllJob,
+} from './orders-recalculate-all'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS, isDirectCarrierId } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -2072,6 +2078,43 @@ export default function OrdersView({
   // Order assignment: only admins can assign orders to other users. Workers
   // see only their own assigned rows (server-side filter; this flag just
   // controls visibility of the admin-only UI).
+  // Recalculate All — one backend backfill job over every awaiting order; the
+  // whole feature lives in ./orders-recalculate-all (kept out of this file by
+  // design). Rows light up pending/rating via PS-120 while it runs.
+  const [recalcAllJobId, setRecalcAllJobId] = useState<string | null>(null)
+  const [recalcAllSummary, setRecalcAllSummary] = useState<string | null>(null)
+  async function handleRecalculateAll() {
+    try {
+      const { jobId } = await startRecalculateAllBestRates()
+      setRecalcAllJobId(jobId)
+      setRecalcAllSummary('starting…')
+      showToast('Recalculating best rates for ALL awaiting orders…')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to start Recalculate All', 'error')
+    }
+  }
+  useEffect(() => {
+    if (!recalcAllJobId) return
+    let cancelled = false
+    const timer = setInterval(async () => {
+      try {
+        const job = await fetchRecalculateAllJob(recalcAllJobId)
+        if (cancelled) return
+        setRecalcAllSummary(summarizeRecalculateAllJob(job))
+        if (isRecalculateAllJobDone(job)) {
+          setRecalcAllJobId(null)
+          showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, job.failed ? 'error' : 'success')
+          setTimeout(() => setRecalcAllSummary(null), 8000)
+          await refetchOrders()
+        }
+      } catch {
+        /* transient poll failure — keep polling */
+      }
+    }, 2500)
+    return () => { cancelled = true; clearInterval(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recalcAllJobId])
+
   // PS-181: admin identity is BACKEND-owned — GET /users/me answers via the canonical
   // isAdminEmail (src/lib/admin-emails.ts). The FE never hardcodes admin emails and
   // defaults to non-admin until the backend answers (the server still enforces every
@@ -10069,7 +10112,7 @@ export default function OrdersView({
                     type="button"
                     onClick={() => void queueExistingLabels([panelOrder.orderId])}
                     disabled={!canQueueShippedLabel}
-                    title={canQueueShippedLabel ? 'Add the existing label to the print queue' : shippedLabelUnavailableCopy}
+                    title={canQueueShippedLabel ? 'Send the existing label back to the print queue (no new postage)' : shippedLabelUnavailableCopy}
                     className={[
                       'flex-[3] inline-flex items-center justify-center gap-1.5',
                       'h-9 px-2 rounded-lg',
@@ -10084,7 +10127,10 @@ export default function OrdersView({
                     ].join(' ')}
                   >
                     <Inbox size={12.5} strokeWidth={2.25} aria-hidden />
-                    <span>Print to Queue</span>
+                    {/* Shipped rows SEND the existing label back to the queue (no new
+                        postage) — distinct wording from awaiting rows' "Print to Queue",
+                        which buys postage first. */}
+                    <span>Send to Queue</span>
                   </button>
                 </div>
               ) : (
@@ -10912,22 +10958,31 @@ export default function OrdersView({
               </button>
               <button
                 type="button"
-                onClick={() => void startBatchRecalculateBestRates('filtered')}
-                disabled={batchRecalculateBusy || total === 0}
-                title="Recalculate strict live best rates for all filtered awaiting orders across pages"
+                onClick={() => void handleRecalculateAll()}
+                disabled={recalcAllJobId != null || total === 0}
+                title="Refetch best rates for ALL awaiting orders (one backend job — rows show rating progress as they resolve)"
                 className={`
                   inline-flex items-center gap-1.5
                   h-8 px-2.5 rounded-lg ring-1
                   text-[12px] font-medium
                   transition-all duration-150
-                  ${batchRecalculateBusy || total === 0
+                  ${recalcAllJobId != null || total === 0
                     ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                     : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
                 `}
               >
-                <Zap size={12.5} strokeWidth={2.25} />
+                {recalcAllJobId != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
                 Recalculate All
               </button>
+              {recalcAllSummary ? (
+                <span
+                  data-recalculate-all-progress
+                  className="inline-flex items-center h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] font-mono tabular-nums text-ink-2"
+                  title="Backend best-rate backfill over all awaiting orders"
+                >
+                  {recalcAllSummary}
+                </span>
+              ) : null}
               {batchRecalculateProgress.total > 0 ? (
                 <div
                   data-batch-recalculate-progress
