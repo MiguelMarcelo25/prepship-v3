@@ -1,0 +1,113 @@
+name: Render Auto-Deploy (CI-gated)
+
+# Hands-off Render deploy that ONLY runs after the CI gate (typecheck + frontend build +
+# shipping-roundtrip-certification) passes on prepshipv4-stable. This replaces the manual
+# "redeploy Render after a push" step WITHOUT removing the safety gate that Render's native
+# Auto-Deploy would bypass (native auto-deploy ships every push regardless of CI — unsafe for
+# this money/rate/label/insurance backend).
+#
+# Required GitHub repo secrets (drprepperusa-org/prepship-v4):
+#   RENDER_API_KEY          — Render API key (Bearer token)
+#   RENDER_SERVICE_ID       — the main API service id (srv-...)
+#   RENDER_WORKER_SERVICE_ID — (optional) the worker service id; deployed too when set
+# If the secrets are absent the deploy job fails LOUDLY (so a missing setup never looks "green").
+
+on:
+  push:
+    branches: [prepshipv4-stable]
+
+concurrency:
+  # Never run two deploys for this branch at once; let an in-flight one finish.
+  group: render-auto-deploy-prepshipv4-stable
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    # Only the canonical org repo holds the Render secrets / owns production deploys.
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Frontend build
+        run: npm run build:web
+      - name: Shipping roundtrip certification (offline gate)
+        run: npm run test:shipping-roundtrip-certification
+
+  deploy:
+    needs: gate
+    if: github.repository == 'drprepperusa-org/prepship-v4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Trigger + verify Render deploy (API, then worker if configured)
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          RENDER_WORKER_SERVICE_ID: ${{ secrets.RENDER_WORKER_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RENDER_API_KEY:-}" ] || [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo "::error::RENDER_API_KEY and RENDER_SERVICE_ID must be set as repo secrets before CI-gated deploy can run."
+            exit 1
+          fi
+
+          json_field() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log((JSON.parse(s)||{})[process.argv[1]]??"")}catch{console.log("")}})' "$1"; }
+
+          deploy_service() {
+            service_id="$1"; service_name="$2"
+            echo "::group::Deploy ${service_name} (${service_id})"
+
+            resp=$(curl -sS -w $'\n%{http_code}' -X POST \
+              "https://api.render.com/v1/services/${service_id}/deploys" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              -d '{"clearCache":"do_not_clear"}')
+            http_code=$(printf '%s' "$resp" | tail -n1)
+            body=$(printf '%s' "$resp" | sed '$d')
+
+            if [ "$http_code" != "201" ]; then
+              echo "::error::${service_name}: Render deploy trigger failed (HTTP ${http_code}): ${body}"
+              echo "::endgroup::"
+              return 1
+            fi
+
+            deploy_id=$(printf '%s' "$body" | json_field id)
+            echo "${service_name}: deploy created -> ${deploy_id}"
+
+            # Poll until terminal. Render statuses: live (ok); build_failed/update_failed/
+            # pre_deploy_failed/canceled/deactivated (fail); everything else = in progress.
+            for i in $(seq 1 90); do
+              sleep 10
+              s=$(curl -sS \
+                "https://api.render.com/v1/services/${service_id}/deploys/${deploy_id}" \
+                -H "Authorization: Bearer ${RENDER_API_KEY}" \
+                -H "Accept: application/json" | json_field status)
+              echo "${service_name}: status=${s} (poll ${i})"
+              case "$s" in
+                live)
+                  echo "${service_name}: deploy is LIVE ✓"; echo "::endgroup::"; return 0 ;;
+                build_failed|update_failed|pre_deploy_failed|canceled|deactivated)
+                  echo "::error::${service_name}: deploy ended in '${s}'"; echo "::endgroup::"; return 1 ;;
+              esac
+            done
+            echo "::error::${service_name}: deploy did not reach 'live' within the poll window"
+            echo "::endgroup::"; return 1
+          }
+
+          deploy_service "${RENDER_SERVICE_ID}" "api"
+
+          if [ -n "${RENDER_WORKER_SERVICE_ID:-}" ]; then
+            deploy_service "${RENDER_WORKER_SERVICE_ID}" "worker"
+          else
+            echo "RENDER_WORKER_SERVICE_ID not set — skipping worker deploy (set it to auto-deploy the worker too)."
+          fi
