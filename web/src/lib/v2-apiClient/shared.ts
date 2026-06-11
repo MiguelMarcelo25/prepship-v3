@@ -1281,6 +1281,11 @@ export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       cacheCreatedAt: obj.cacheCreatedAt ?? null,
       cacheExpiresAt: obj.cacheExpiresAt ?? null,
       proofSource: obj.proofSource ?? null,
+      // PS-198: backend-owned quote snapshot ref, stamped per-rate by /rates/browse.
+      // Pass-through ONLY — null when the backend issued none (manual estimate,
+      // legacy cache), which keeps those rates structurally non-purchasable.
+      rateQuoteId: obj.rateQuoteId ?? null,
+      selectedRateKey: obj.selectedRateKey ?? null,
       isComplete: obj.isComplete ?? null,
       rateCount: obj.rateCount ?? null,
       matchType: obj.matchType ?? null,

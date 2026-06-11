@@ -106,12 +106,20 @@ export function findCanonicalBestRate<T>(backendBest: unknown, candidates: T[]):
  * Backend-owned rate-quote reference ({ rateQuoteId, selectedRateKey }) for label/queue
  * payloads — mirrors selectProofFromCandidates's selection so id/key match the proof's rate.
  * Additive: omits fields the rate doesn't carry (the proof path is then used).
+ *
+ * PS-198: a candidate carrying BOTH opaque ids is a complete backend snapshot ref on its
+ * own — /rates/browse is the only minter, and the purchase boundary validates the pair
+ * server-side against the stored snapshot. It therefore wins even when the legacy
+ * proofSource/requestFingerprint fields were dropped by a display translation. Candidates
+ * without the pair still require the legacy backend proof (unchanged), and a rate with
+ * neither yields {} — never synthesized.
  */
 export function rateQuoteRefFromCandidates(
   candidates: Array<Rec | null | undefined>,
 ): { rateQuoteId?: string; selectedRateKey?: string } {
   const list = candidates.filter(Boolean) as Rec[];
-  const rate = list.find((r) => hasBackendIssuedRateProof(r) && rateProofFingerprint(r)) ?? null;
+  const snapshotRef = list.find((r) => toStr(r.rateQuoteId) && toStr(r.selectedRateKey)) ?? null;
+  const rate = snapshotRef ?? list.find((r) => hasBackendIssuedRateProof(r) && rateProofFingerprint(r)) ?? null;
   if (!rate) return {};
   const rateQuoteId = toStr(rate.rateQuoteId);
   const selectedRateKey = toStr(rate.selectedRateKey);

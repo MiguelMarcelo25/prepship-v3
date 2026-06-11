@@ -124,6 +124,15 @@ export type RbAppliedRate = {
   insuranceCostUnresolved?: unknown;
   insuranceCostError?: unknown;
   insurance_amount?: unknown;
+  // PS-198: backend-issued quote proof carried through Apply so the persisted
+  // best rate stays purchasable (Create Label / Print Queue validate the ref
+  // server-side against the rate-quote snapshot). Pass-through only.
+  rateQuoteId?: string;
+  selectedRateKey?: string;
+  requestFingerprint?: string;
+  cacheKey?: string;
+  cacheCreatedAt?: string;
+  proofSource?: string;
   raw?: unknown;
   weight?: { lb: number; oz: number };
   dims?: { length: number; width: number; height: number };
@@ -193,6 +202,14 @@ export type RateRow = {
   insuranceCostUnresolved?: unknown;
   insuranceCostError?: unknown;
   insurance_amount?: unknown;
+  // PS-198: backend-issued quote proof (stamped by /rates/browse + the apiClient
+  // backendProofMetadata). The modal only passes these through — never synthesizes.
+  rateQuoteId?: string | null;
+  selectedRateKey?: string | null;
+  requestFingerprint?: string | null;
+  cacheKey?: string | null;
+  cacheCreatedAt?: string | null;
+  proofSource?: string | null;
   raw?: any;
 };
 
@@ -1687,6 +1704,34 @@ export default function RateBrowserModal({
     };
   }
 
+  // PS-198: lift the backend-issued quote proof off a rate row so Apply preserves it
+  // end-to-end (Apply → persist best_rate_json → Create Label / Print Queue). The
+  // translated row carries the fields top-level; `raw` (the verbatim backend rate) is
+  // the fallback for shapes that pre-date the top-level stamp. Pass-through ONLY —
+  // absent fields stay absent, so a proof-less rate (manual estimate, legacy cache)
+  // remains structurally non-purchasable at the backend boundary.
+  function rateBackendProof(r: RateRow): Partial<
+    Pick<
+      RbAppliedRate,
+      'rateQuoteId' | 'selectedRateKey' | 'requestFingerprint' | 'cacheKey' | 'cacheCreatedAt' | 'proofSource'
+    >
+  > {
+    const raw = (r.raw && typeof r.raw === 'object' ? r.raw : null) as Record<string, unknown> | null;
+    const out: Record<string, string> = {};
+    for (const key of [
+      'rateQuoteId',
+      'selectedRateKey',
+      'requestFingerprint',
+      'cacheKey',
+      'cacheCreatedAt',
+      'proofSource',
+    ] as const) {
+      const value = (r as Record<string, unknown>)[key] ?? raw?.[key];
+      if (typeof value === 'string' && value) out[key] = value;
+    }
+    return out;
+  }
+
   function handleRateClick(r: RateRow): void {
     const pid =
       typeof r.shippingProviderId === 'number'
@@ -1708,6 +1753,7 @@ export default function RateBrowserModal({
       confirmation: normalizeConfirmationForRates(confirmation),
       ...currentAppliedInsurance(),
       ...rateInsuranceProof(r),
+      ...rateBackendProof(r),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     });
@@ -1732,6 +1778,7 @@ export default function RateBrowserModal({
       confirmation: normalizeConfirmationForRates(confirmation),
       ...currentAppliedInsurance(),
       ...rateInsuranceProof(r),
+      ...rateBackendProof(r),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     };

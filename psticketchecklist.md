@@ -527,6 +527,28 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   stays label-safe. Guard extended to 36 checks. QA: typecheck + build:web + ps-072/108/123/124/125/126/
   170/196 + best-rate-saved-display-contract + recalculate-strict + table-sync + manifest + full cert ALL
   PASS (ps-123's payload-block anchor preserved by placing the baseline before the payload literal).
+- **PS-198 — ✅ DONE (DJ requested 2026-06-11): Rate Browser quote proof preserved through Apply → Create
+  Label / Print Queue.** Root cause confirmed exactly per ticket: /rates/browse stamps EVERY rate with the
+  backend snapshot ref (rateQuoteId + selectedRateKey) and the legacy proof quartet, but two FE translations
+  dropped them — `translateRateToV2Shape` rebuilt snake→camel without the two opaque ids (they survived only
+  inside `raw`) and the modal's `toAppliedRate()`/`handleRateClick()` rebuilt the applied rate with
+  display/money fields only — so the persisted `best_rate_json` had ALL proof fields null and a fresh apply
+  was rejected at purchase with "Rate changed or expired". **Fix (pass-through restoration ONLY, no FE
+  synthesis):** (1) `translateRateToV2Shape` carries rateQuoteId/selectedRateKey top-level (null when the
+  backend issued none — manual estimate stays structurally non-purchasable); (2) modal `rateBackendProof(r)`
+  lifts the six backend-issued fields in BOTH apply paths (manual click + canonical/seeded best);
+  (3) `rateQuoteRefFromCandidates` accepts a candidate carrying BOTH opaque ids as a complete server-validated
+  snapshot ref even when legacy proofSource/requestFingerprint were dropped (legacy fallback unchanged; {}
+  when nothing backend-issued). `withRateRequestMetadata` already passed the ids through (guard-pinned now).
+  Backend purchase boundary `assertLabelPurchaseRateSelection` UNTOUCHED (unchanged-or-stricter ✓); legacy
+  proof-less rates still blocked. Guard `test:ps-198-rate-quote-proof-passthrough` (15 checks: ids-only ref,
+  candidate order, half-ref fallback, no-synthesis pins, both apply spreads, translation pass-through,
+  metadata non-strip). QA: typecheck + build:web + ps-094/095/104 + print-to-queue-proof +
+  selected-rate-proof-boundary + batch-send-proof-forwarding + ps-098 + ps-079/123/135/196/197 +
+  batch-recalculate + full cert ALL PASS. Pre-existing (NOT PS-198): ps-105's one OrdersView source pin
+  (stale since PS-135 moved the helper to rate-proof.ts — 22/23 pass) and
+  rate-browser-carrier-account-click (stale since PS-157 moved row markup into RateRowItem) fail identically
+  at HEAD before this change.
 >
 > **Priority flags:** **PS-186** (fake-label-on-real-order) is a live money/integrity bug — recommend doing it
 > BEFORE the PS-172 phase track. **PS-189** (media-mail auto-default) is a compliance risk. PS-181/182/183/
