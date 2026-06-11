@@ -88,6 +88,7 @@ import {
   type MarkupRule,
 } from '../services/shipping-workflow/rate-money';
 import { loadCarrierMarkups } from '../services/rates';
+import { getOrderDimsDefaultsForOrder } from '../services/order-dims-defaults';
 
 const app = new Hono();
 
@@ -2552,6 +2553,10 @@ app.get('/:id{[0-9]+}', async (c) => {
   return c.json({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
     comboPackageDefault,
+    // PS-177 (Phase 5): backend-owned dims/weight/package DEFAULTS from product
+    // data — replaces the panel's N-per-open /products/by-sku fetch loop. Null
+    // when nothing resolvable; the loader swallows its own errors.
+    dimsDefaults: await getOrderDimsDefaultsForOrder(id),
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
     isTest: await loadClientIsTest(order.clientId),
     // Tracking-driven queue retirement: read-only carrier tracking summary for the
@@ -2592,6 +2597,8 @@ app.get('/:id{[0-9]+}/full', async (c) => {
   return c.json({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
     comboPackageDefault,
+    // PS-177 (Phase 5): same backend-owned dims/weight/package defaults as GET /:id.
+    dimsDefaults: await getOrderDimsDefaultsForOrder(id),
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
     isTest: await loadClientIsTest(order.clientId),
     // Tracking-driven queue retirement: same read-only tracking summary as GET /:id.

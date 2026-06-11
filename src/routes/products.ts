@@ -14,6 +14,7 @@ import {
   setOrderRatePending,
 } from '../services/shipping-workflow/order-rate-job-status';
 import { startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
+import { findProductDefaultsBySku } from '../services/order-dims-defaults';
 
 const app = new Hono();
 
@@ -67,52 +68,11 @@ app.get('/bulk', zValidator('query', bulkQ), async (c) => {
 });
 
 app.get('/by-sku/:sku', async (c) => {
+  // PS-177 (Phase 5): the products-then-inventory defaults lookup moved to
+  // order-dims-defaults.findProductDefaultsBySku so this route and the order
+  // detail dimsDefaults resolver share ONE rule. Response shape unchanged.
   const sku = c.req.param('sku');
-  const [row] = await db.select().from(products).where(eq(products.sku, sku)).limit(1);
-  if (row) return c.json(row);
-
-  // complete shipping defaults fallback: some legacy SKUs only have dimensions
-  // in Inventory, but the Orders panel hydrates rate/package fields through
-  // this product-default endpoint. Prefer complete SKU defaults over returning
-  // null and stranding awaiting orders at "Rate unavailable".
-  const [inventoryRow] = await db
-    .select({
-      sku: inventory.sku,
-      name: inventory.name,
-      weightOz: inventory.weightOz,
-      length: inventory.length,
-      width: inventory.width,
-      height: inventory.height,
-      packageId: inventory.packageId,
-    })
-    .from(inventory)
-    .where(and(eq(sql`lower(${inventory.sku})`, sku.trim().toLowerCase()), eq(inventory.active, true)))
-    .orderBy(sql`
-      case
-        when coalesce(${inventory.weightOz}, 0) > 0
-          and coalesce(${inventory.length}, 0) > 0
-          and coalesce(${inventory.width}, 0) > 0
-          and coalesce(${inventory.height}, 0) > 0
-        then 0
-        else 1
-      end,
-      case when ${inventory.clientId} is null then 0 else 1 end,
-      ${inventory.updatedAt} desc
-    `)
-    .limit(1);
-
-  if (!inventoryRow) return c.json(null);
-  return c.json({
-    sku: inventoryRow.sku,
-    name: inventoryRow.name,
-    weightOz: inventoryRow.weightOz ?? 0,
-    length: inventoryRow.length ?? 0,
-    width: inventoryRow.width ?? 0,
-    height: inventoryRow.height ?? 0,
-    defaultPackageCode: inventoryRow.packageId == null ? null : String(inventoryRow.packageId),
-    packageId: inventoryRow.packageId ?? null,
-    source: 'inventory',
-  });
+  return c.json(await findProductDefaultsBySku(sku));
 });
 
 app.get('/:id{[0-9]+}', async (c) => {

@@ -3427,6 +3427,40 @@ export default function OrdersView({
     const uniqueSkus = [...new Set(activeItems.map((item) => item.sku).filter(Boolean))]
     if (!uniqueSkus.length) return
 
+    // PS-177 (Phase 5): backend-owned dims/weight/package defaults arrive on the
+    // detail payload (one server-side resolution from the same product/inventory
+    // truth). When present, seed from it directly — the per-SKU fetch loop below
+    // survives ONLY as the deploy-skew fallback (Phase 6 deletes it).
+    const backendDimsDefaults = toRecord((panelDetail as Record<string, unknown> | null)?.dimsDefaults)
+    const seedFromBackendDefaults = () => {
+      if (!backendDimsDefaults) return false
+      const dimsRecord = toRecord(backendDimsDefaults.dims)
+      const derivedDims = dimsRecord
+        ? {
+          length: toNumberValue(dimsRecord.length) ?? 0,
+          width: toNumberValue(dimsRecord.width) ?? 0,
+          height: toNumberValue(dimsRecord.height) ?? 0,
+        }
+        : null
+      const backendWeightOz = toNumberValue(backendDimsDefaults.weightOz)
+      const backendPackageCode = toStringValue(backendDimsDefaults.defaultPackageCode)
+      const backendPackageId = toNumberValue(backendDimsDefaults.packageId)
+      const payload = backendWeightOz != null || backendPackageCode || backendPackageId != null
+        ? {
+          weightOz: backendWeightOz ?? 0,
+          defaultPackageCode: backendPackageCode ?? null,
+          packageId: backendPackageId ?? null,
+        }
+        : null
+      const completeDims = derivedDims && derivedDims.length > 0 && derivedDims.width > 0 && derivedDims.height > 0
+        ? derivedDims
+        : null
+      if (!payload && !completeDims) return false
+      applyProductDefaultSeeds(payload, completeDims)
+      return true
+    }
+    if (seedFromBackendDefaults()) return
+
     void Promise.all(
       uniqueSkus.map((sku) => apiClient.fetchProductsBySku(sku).then((payload) => ({ sku, payload }))),
     )
@@ -3442,6 +3476,14 @@ export default function OrdersView({
           : null
         const derivedDims = deriveShipmentDimsFromProductDefaults(activeItems, defaultsBySku)
         if (!payload && !derivedDims) return
+        applyProductDefaultSeeds(payload, derivedDims)
+      })
+      .catch(() => { })
+
+    function applyProductDefaultSeeds(
+      payload: Record<string, unknown> | null,
+      derivedDims: { length: number; width: number; height: number } | null,
+    ) {
         setPanelForm((current) => {
           const nextWeightLb = current.weightLb || current.weightOz
             ? current.weightLb
@@ -3479,8 +3521,7 @@ export default function OrdersView({
             packageId: nextPackageId,
           }
         })
-      })
-      .catch(() => { })
+    }
   }, [panelOrderId, panelOrder, panelDetail, locations, packages])
 
   useEffect(() => {

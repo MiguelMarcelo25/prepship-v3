@@ -465,7 +465,20 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   ps-173 + ps-084 + ps-186 + print-queue-hygiene + batch-send-proof-forwarding + direct-carrier-queue-route
   + test-order-queue-label + full cert ALL PASS. **LOCAL COMMIT ONLY — DJ inspects before push (the
   Phase 4 discipline).**
-- **PS-177 — 🟡 PART 1 DONE 2026-06-12 (Phase 5): backend-derived Print Queue SKU identity.** The queue SKU
+- **PS-177 — ✅ COMPLETE 2026-06-12 (Phase 5, 3 parts): backend display models.**
+  **PART 3 DONE 2026-06-12: backend-owned shipment dims/package DEFAULTS.** Audit finding: row-level
+  effective dims/weight + source attribution were ALREADY backend-owned (canonicalOrder model +
+  sourceMap, override-first); the real gap was the shipment panel's N-per-open /products/by-sku fetch
+  loop + CLIENT-SIDE stacked-parcel derivation (max L/W, summed H×qty). Shipped: pure
+  `order-dims-defaults-policy.ts` (exact FE parity incl. numeric-string parsing, all-lines-or-null),
+  `order-dims-defaults.ts` io (shared `findProductDefaultsBySku` — products row first, Inventory
+  completeness→global→recency fallback; /products/by-sku now delegates to it — plus
+  `getOrderDimsDefaultsForOrder`: order_items→orders.items lines, single-SKU-only weight/package,
+  best-effort null). Both detail handlers attach `dimsDefaults` (PS-037 comboPackageDefault pattern);
+  the FE panel seeds from the payload (empty-fields-only rule unchanged) and keeps the fetch loop as
+  deploy-skew fallback (Phase 6 deletes). Guard `test:ps-177-dims-defaults` (16 checks). QA:
+  typecheck + build:web + combo-package-default + ps-060 + ps-082 + full cert ALL PASS.
+  **PART 1 (2026-06-12): backend-derived Print Queue SKU identity.** The queue SKU
   identity (skuGroupId/primarySku/itemDescription/orderQty/multiSkuData) is now backend-derivable: pure
   `buildQueueSkuIdentityFromItems(orderId, items)` in print-queue-identity.ts mirrors the FE
   buildQueueAddPayload derivation exactly (filter adjustment lines → collapseIdentityLines →

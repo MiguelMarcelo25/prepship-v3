@@ -175,6 +175,7 @@
     "test:ps-176-queue-route-authority": "tsx scripts/ps-176-queue-route-authority-guard.ts",
     "test:ps-177-queue-sku-identity": "tsx scripts/ps-177-queue-sku-identity-guard.ts",
     "test:ps-177-row-money-display": "tsx scripts/ps-177-row-money-display-guard.ts",
+    "test:ps-177-dims-defaults": "tsx scripts/ps-177-dims-defaults-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",
