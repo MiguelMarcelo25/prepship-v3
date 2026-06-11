@@ -1,6 +1,7 @@
 // @ts-nocheck
 import './OrdersView.css'
 import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -11013,49 +11014,57 @@ export default function OrdersView({
               )
             })}
           </div>
-          {currentStatus === 'awaiting_shipment' && queueToolbarProgress ? (
-            <div
-              id="queue-progress-indicator"
-              role="status"
-              aria-live="polite"
-              style={{
-                marginLeft: 8,
-                width: 240,
-                maxWidth: '34vw',
-                minWidth: 170,
-                padding: '5px 8px',
-                border: '1px solid var(--border2)',
-                borderRadius: 6,
-                background: 'var(--surface)',
-                boxShadow: '0 1px 2px rgba(15,23,42,.06)',
-                flexShrink: 1,
-                // Print Queue panel overlays at z-index 1200; lift this above
-                // it so the in-progress label stays visible while a Print All
-                // job is running with the panel still open.
-                position: 'relative',
-                zIndex: 1300,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
-                <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{queueToolbarProgress.label}</span>
-                <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-                <div
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={queueToolbarProgress.pct}
-                  style={{ height: 5, flex: 1, minWidth: 0, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}
-                >
-                  <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`, background: queueToolbarProgress.tone, borderRadius: 999, transition: 'width .25s ease' }} />
+          {(() => {
+            if (currentStatus !== 'awaiting_shipment' || !queueToolbarProgress) return null
+            const widget = (
+              <div
+                id="queue-progress-indicator"
+                role="status"
+                aria-live="polite"
+                style={{
+                  marginLeft: 8,
+                  width: 240,
+                  maxWidth: '34vw',
+                  minWidth: 170,
+                  padding: '5px 8px',
+                  border: '1px solid var(--border2)',
+                  borderRadius: 6,
+                  background: 'var(--surface)',
+                  boxShadow: '0 1px 2px rgba(15,23,42,.06)',
+                  flexShrink: 1,
+                  // Print Queue panel overlays at z-index 1200; lift this above
+                  // it so the in-progress label stays visible while a Print All
+                  // job is running with the panel still open.
+                  position: 'relative',
+                  zIndex: 1300,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
+                  <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{queueToolbarProgress.label}</span>
+                  <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
                 </div>
-                <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 112 }}>
-                  {queueToolbarProgress.detail}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                  <div
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={queueToolbarProgress.pct}
+                    style={{ height: 5, flex: 1, minWidth: 0, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}
+                  >
+                    <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`, background: queueToolbarProgress.tone, borderRadius: 999, transition: 'width .25s ease' }} />
+                  </div>
+                  <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 112 }}>
+                    {queueToolbarProgress.detail}
+                  </span>
+                </div>
               </div>
-            </div>
-          ) : null}
+            )
+            // DJ request (2026-06-11): show the progress immediately LEFT of the header Queue
+            // button. Home.tsx renders the #queue-progress-slot anchor there; portal into it
+            // when present (desktop), else keep the original toolbar position as the fallback.
+            const slot = typeof document !== 'undefined' ? document.getElementById('queue-progress-slot') : null
+            return slot ? createPortal(widget, slot) : widget
+          })()}
           {/* Export CSV — stays on the toolbar row, pushed to the far
               right end via ml-auto, per UX request. */}
           <button
