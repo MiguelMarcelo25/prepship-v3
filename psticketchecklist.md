@@ -406,7 +406,19 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   Purchase enforcement UNCHANGED (legacy `selectedRateProof` fallback intact — enforcement is Phase 4).
   Guard `test:ps-174-quote-key-consolidation` (8 checks). QA: typecheck + build:web + ps-105 + ps-121 +
   ps-198 + ps-196 + full cert ALL PASS. Local commit only.
-- **PS-175 — 🟡 PART 1 DONE 2026-06-11 (Phase 3): strict-recalculation DECISION is backend-owned.**
+- **PS-175 — ✅ DONE 2026-06-12 (Phase 3 complete): strict recalculation is backend-owned end-to-end.**
+  **Part 2 (2026-06-12):** the OUTCOME now persists server-side — /browse with `strictRecalculate: true` +
+  an orderId writes the result inside the same request via `rates-recalculate-persist.ts` (separate io
+  module so the decision module stays pure): refuses non-awaiting orders (the same shipped/cancelled lock
+  the guarded routes enforce), blocked never writes, apply reuses the canonical `normalizeOrderBestRateDto`
+  + the shipping-service eligibility re-check (PATCH-route parity), clear nulls rate+dims label, dims/weight
+  persist on both apply and clear; order_overrides only — never orders/shipments. Response carries
+  `persisted`/`reason`; the FE skips its own saveOrderDimsStrict/updateOrderBestRateSelectionStrict when
+  `persisted: true` (both retained as the deploy-skew fallback). The Rate Browser's local-pick fallback
+  removal stays with Phase 6 per the spec's own browser-tests-first rule. Guard extended to 23 checks. QA
+  (part 2): typecheck + build:web + recalculate-strict + batch-recalculate + ps-123 + ps-197 + ps-198 +
+  ps-105 + ps-082 + full cert ALL PASS.
+  **PART 1 (2026-06-11): strict-recalculation DECISION backend-owned.**
   Repo-verified convergence already exists: all three rate paths (passive BestRate, Recalculate,
   RateBrowser) flow through ONE entrypoint (/rates/browse → getRates); the backend already owns
   eligibility/HUGRAB blocking/insurance capability+premium (PS-170/171 live IN the workflow, not UI

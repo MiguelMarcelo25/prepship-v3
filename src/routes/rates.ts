@@ -14,6 +14,7 @@ import {
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
 import { planStrictRecalculateDecision } from '../services/rates-recalculate';
+import { persistStrictRecalculateOutcome } from '../services/rates-recalculate-persist';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   getActiveBackfillJob,
@@ -623,23 +624,48 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       console.warn('[rates/browse] manual-estimate baseline failed (reference only):', err instanceof Error ? err.message : err);
     }
   }
-  // PS-175 (Phase 3 part 1): the STRICT recalculation decision is BACKEND-owned —
+  // PS-175 (Phase 3): the STRICT recalculation decision is BACKEND-owned —
   // computed from the SAME combined carrier statuses + best rate this response
   // returns (byte-compatible port of the FE rule, which becomes a deploy-skew
-  // fallback until Phase 6 deletes it). Decision only; persistence stays with the
-  // existing strict endpoints until Phase 3 part 2.
+  // fallback until Phase 6 deletes it). Part 2: when the request carries an
+  // orderId, the OUTCOME is also persisted server-side (order_overrides only;
+  // refuses non-awaiting orders — the same lock the guarded routes enforce).
+  // The FE skips its own strict persist calls when `persisted: true`.
   let strictRecalculation: Record<string, unknown> | null = null;
   if (body.strictRecalculate === true) {
     const bestProviderMatch = cheapest ? /^se-(\d+)$/i.exec(String(cheapest.carrier_id ?? '')) : null;
     const bestProviderId = bestProviderMatch ? Number.parseInt(bestProviderMatch[1]!, 10) : null;
+    const strictDecision = planStrictRecalculateDecision({
+      liveBestAmount: cheapest ? rateTotal(cheapest) : null,
+      providerAccountId: bestProviderId != null && Number.isFinite(bestProviderId) ? bestProviderId : null,
+      serviceCode: cheapest ? (String(cheapest.service_code ?? '').trim() || null) : null,
+      carrierStatuses: combinedCarrierStatuses,
+    });
+    let persist: { persisted: boolean; reason?: string } = { persisted: false, reason: 'no orderId on request' };
+    if (typeof body.orderId === 'number' && body.orderId > 0) {
+      try {
+        persist = await persistStrictRecalculateOutcome({
+          orderId: body.orderId,
+          decision: strictDecision,
+          bestRate: (bestRateOut as Record<string, unknown> | null) ?? null,
+          dimsL: body.dimsL ?? null,
+          dimsW: body.dimsW ?? null,
+          dimsH: body.dimsH ?? null,
+          weightOz: body.weightOz ?? null,
+          rateCount: combinedRates.length,
+          fetchedAt: result.fetchedAt,
+          requestFingerprint: combinedRequestKey,
+        });
+      } catch (err) {
+        // Persist is best-effort from the response's perspective: the FE falls
+        // back to its own strict endpoints when persisted !== true.
+        persist = { persisted: false, reason: err instanceof Error ? err.message.slice(0, 200) : 'persist failed' };
+      }
+    }
     strictRecalculation = {
-      ...planStrictRecalculateDecision({
-        liveBestAmount: cheapest ? rateTotal(cheapest) : null,
-        providerAccountId: bestProviderId != null && Number.isFinite(bestProviderId) ? bestProviderId : null,
-        serviceCode: cheapest ? (String(cheapest.service_code ?? '').trim() || null) : null,
-        carrierStatuses: combinedCarrierStatuses,
-      }),
+      ...strictDecision,
       requestKey: combinedRequestKey,
+      ...persist,
     };
   }
   const payload = {

@@ -94,8 +94,30 @@ check('FE prefers the backend verdict; apply requires a present best rate',
 check('local plan survives only as the deploy-skew fallback',
   /: planStrictBestRateRecalculate\(\{/.test(ordersView));
 
-// ── 4. persistence endpoints unchanged (decision-only phase) ─────────────────
-check('strict persist endpoints still drive the writes from the applier',
+// ── 4. PART 2: server-side persistence of the strict outcome ─────────────────
+const persistService = readFileSync('src/services/rates-recalculate-persist.ts', 'utf8');
+check('persist writer refuses non-awaiting orders (same lock as the guarded routes)',
+  /orderStatus !== 'awaiting_shipment'/.test(persistService) &&
+  /not editable/.test(persistService));
+check('blocked decisions never write',
+  /action === 'blocked'[\s\S]{0,120}persisted: false/.test(persistService));
+check('persist reuses the canonical normalizer + eligibility re-check',
+  /normalizeOrderBestRateDto\(rateWithMetadata, 'bestRateJson'\)/.test(persistService) &&
+  /evaluateShippingServiceEligibility\(/.test(persistService));
+check('persist touches order_overrides only (never orders/shipments writes)',
+  !/db\s*\.\s*update\(\s*orders\b/.test(persistService) &&
+  !/db\s*\.\s*update\(\s*shipments\b/.test(persistService) &&
+  !/insert\(\s*shipments\b/.test(persistService) &&
+  /insert\(orderOverrides\)/.test(persistService));
+check('persist carries the shipped-data override citation',
+  /Per user override unlock shipped data on 2026-06-12/.test(persistService));
+check('/browse persists the outcome only when the request carries an orderId',
+  /typeof body\.orderId === 'number' && body\.orderId > 0/.test(ratesRoute) &&
+  /persistStrictRecalculateOutcome\(\{/.test(ratesRoute));
+check('FE skips its own strict persist when the backend persisted',
+  /backendPersisted = backendStrict\?\.persisted === true/.test(ordersView) &&
+  (ordersView.match(/if \(!backendPersisted\) \{/g)?.length ?? 0) >= 3);
+check('FE strict endpoints retained as the not-persisted fallback',
   /apiClient\.updateOrderBestRateSelectionStrict\(order\.orderId/.test(ordersView) &&
   /apiClient\.saveOrderDimsStrict\(order\.orderId/.test(ordersView));
 

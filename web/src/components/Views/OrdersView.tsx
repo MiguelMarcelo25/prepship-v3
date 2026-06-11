@@ -6019,6 +6019,10 @@ export default function OrdersView({
     const backendStrict = toRecord(response?.strictRecalculation)
     const backendAction = toStringValue(backendStrict?.action)
     const backendMessage = toStringValue(backendStrict?.message)
+    // PS-175 part 2: when the backend already PERSISTED the outcome server-side
+    // (order_overrides write inside /browse), the FE skips its own strict
+    // persist calls below and only updates local display state.
+    const backendPersisted = backendStrict?.persisted === true
     const decision = backendAction === 'apply' && liveBest
       ? {
           action: 'apply' as const,
@@ -6058,18 +6062,24 @@ export default function OrdersView({
       return { status: 'blocked', message: decision.message }
     }
 
-    await apiClient.saveOrderDimsStrict(order.orderId, {
-      length: request.dims.length,
-      width: request.dims.width,
-      height: request.dims.height,
-      weightOz: request.weightOz,
-    })
+    // PS-175 part 2: skip the FE persist when the backend already wrote the
+    // outcome inside /browse (dims + best rate + selectedPid, same validations).
+    if (!backendPersisted) {
+      await apiClient.saveOrderDimsStrict(order.orderId, {
+        length: request.dims.length,
+        width: request.dims.width,
+        height: request.dims.height,
+        weightOz: request.weightOz,
+      })
+    }
 
     if (decision.action === 'clear') {
-      await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
-        bestRateJson: null,
-        bestRateDims: null,
-      })
+      if (!backendPersisted) {
+        await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
+          bestRateJson: null,
+          bestRateDims: null,
+        })
+      }
       setAutoBestRateEntries((current) => ({
         ...current,
         [order.orderId]: decision.entry,
@@ -6092,11 +6102,13 @@ export default function OrdersView({
       requestFingerprint: backendRequestFingerprint,
       cacheKey: backendRequestFingerprint,
     })
-    await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
-      selectedPid: decision.selectedPid,
-      bestRateJson: rateWithMetadata,
-      bestRateDims: request.dimsLabel,
-    })
+    if (!backendPersisted) {
+      await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
+        selectedPid: decision.selectedPid,
+        bestRateJson: rateWithMetadata,
+        bestRateDims: request.dimsLabel,
+      })
+    }
     clearAutoBestRateWatchdog(request.key)
     setAutoBestRateEntries((current) => ({
       ...current,
