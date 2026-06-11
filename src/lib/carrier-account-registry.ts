@@ -89,15 +89,21 @@ export function knownCarrierCode(idOrCarrierId: string | number): string | null 
 // have PROVEN that path actually insures the parcel.
 //
 // THE VERIFY GATE (DJ decision 2026-06-10, "verify first, then enable"):
-// `DIRECT_UPS_CARRIER_INSURANCE_VERIFIED` defaults to FALSE. While false, even a
-// direct-UPS account reports `carrierPurchasable: false`, so every consumer falls back
-// to ParcelGuard — a guaranteed-insured label, ZERO uninsured risk, and NO change to
-// what is purchased today. Flip to true ONLY after a read-only ShipStation check (or DJ
-// confirmation) proves a direct-UPS label with carrier declared value $100 is insured.
+// `DIRECT_UPS_CARRIER_INSURANCE_VERIFIED` gates whether a DIRECT UPS account may insure
+// the first $100 of declared value for $0 via carrier declared value. While false, even a
+// direct-UPS account reports `carrierPurchasable: false`, so every consumer falls back to
+// ParcelGuard. Flip to true ONLY after a read-only ShipStation check (or DJ confirmation)
+// proves a direct-UPS label with carrier declared value $100 is actually insured.
+//
+// ENABLED 2026-06-11 (DJ confirmed via Lawrence that direct-UPS $100 carrier declared
+// value is verified-insured). With this true, a direct-UPS candidate uses carrier declared
+// value ($0, free first $100) and the cheapest INSURED total wins; ShipStation-brokered
+// accounts (`*_walleted`, `stamps_com`, fedex) STILL use ParcelGuard, and Ground Saver /
+// SurePost stay insurance-blocked. No path ever resolves to uninsured ('none').
 //
 // TODO(PS-170 follow-up): replace this account-code heuristic with DB-backed discovery
 // from the credential/account tables (carrier contract vs ShipStation wallet), DB wins.
-export const DIRECT_UPS_CARRIER_INSURANCE_VERIFIED = false;
+export const DIRECT_UPS_CARRIER_INSURANCE_VERIFIED = true;
 
 export type AccountInsuranceRequirement = 'parcelguard' | 'carrier' | 'blocked';
 
@@ -187,12 +193,33 @@ export function resolveAccountInsuranceCapability(input: {
   };
 }
 
-/** PS-170 — effective insured provider for an account, honoring the verify gate. */
+// PS-170 — carrier declared value insures the FIRST $100 of declared value for $0. Above
+// this cap a direct-carrier account is billed for the excess declared value, so we fall back
+// to ParcelGuard (which prices + insures ANY value via its schedule). DJ verified the $100
+// case (2026-06-11); the >$100 path stays on the guaranteed-priced ParcelGuard.
+export const CARRIER_DECLARED_VALUE_FREE_CAP = 100;
+
+/**
+ * PS-170 — effective insured provider for an account, honoring the verify gate AND the
+ * carrier-declared-value free-tier cap. Returns 'carrier' ONLY for a verified direct-carrier
+ * account whose insured value is within the free $100 tier; everything else (brokered
+ * accounts, gate off, or value above the cap) resolves to 'parcelguard'. Never uninsured.
+ * `insuredValue` is optional: omit it (capability-only callers) to get the un-capped account
+ * capability; pass it (label / rate-enrichment callers) to apply the $100 free-tier cap.
+ */
 export function effectiveInsuranceProviderForAccount(input: {
   shippingProviderId?: number | string | null;
   carrierCode?: string | null;
   serviceCode?: string | number | null;
+  insuredValue?: number | null;
 }): 'parcelguard' | 'carrier' {
   const capability = resolveAccountInsuranceCapability(input);
-  return capability.required === 'carrier' && capability.carrierPurchasable ? 'carrier' : 'parcelguard';
+  const carrierEligible = capability.required === 'carrier' && capability.carrierPurchasable;
+  if (!carrierEligible) return 'parcelguard';
+  const value =
+    typeof input.insuredValue === 'number' && Number.isFinite(input.insuredValue)
+      ? input.insuredValue
+      : null;
+  if (value != null && value > CARRIER_DECLARED_VALUE_FREE_CAP) return 'parcelguard';
+  return 'carrier';
 }

@@ -270,19 +270,19 @@ export function resolveEffectiveInsurance(
   const uspsGround = isUspsGroundService(service);
   if (!upsGround && !uspsGround) return passthrough;
 
-  // PS-170: the PROVIDER is decided by the account's capability, not hardcoded.
-  // A direct-UPS account that can purchase $0 carrier declared value resolves to
-  // 'carrier'; everything else (and any direct-UPS account while the verify gate is
-  // off) resolves to 'parcelguard'. With DIRECT_UPS_CARRIER_INSURANCE_VERIFIED=false
-  // this is ALWAYS 'parcelguard' — the label is guaranteed insured, no behavior change.
+  const operatorValue = operator.insuredValue ?? 0;
+  const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
+  const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
+  // PS-170: the PROVIDER is decided by the account's capability AND the insured value, not
+  // hardcoded. A direct-UPS account that can purchase $0 carrier declared value resolves to
+  // 'carrier' ONLY within the free $100 tier; above the cap (and any brokered account, or
+  // while the verify gate is off) it resolves to 'parcelguard'. Always insured — never 'none'.
   const provider: NormalizedInsuranceProvider = effectiveInsuranceProviderForAccount({
     shippingProviderId: service?.carrierId ?? null,
     carrierCode: service?.carrierCode ?? null,
     serviceCode: service?.serviceCode ?? null,
+    insuredValue,
   });
-  const operatorValue = operator.insuredValue ?? 0;
-  const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
-  const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
   const providerLabel = provider === 'carrier' ? 'carrier declared value' : 'Parcel Guard';
 
   return {

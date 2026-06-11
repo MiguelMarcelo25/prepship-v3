@@ -17,6 +17,7 @@
 //     still reconciled AFTER label purchase via parcelguard-backfill (v2
 //     insurance_cost / v1 otherCost), which remains the final source of truth.
 // HUGRAB defaults to ParcelGuard / insured value 100 upstream (services/rates.ts).
+import { CARRIER_DECLARED_VALUE_FREE_CAP, DIRECT_UPS_CARRIER_INSURANCE_VERIFIED } from '../../lib/carrier-account-registry';
 
 export type InsuranceCostProvenance =
   | 'none'
@@ -150,9 +151,11 @@ export function parcelGuardScheduledPremium(
 
 /** Fingerprint of the active rate-time insurance policy. Bumped for PS-126 (schedule
  *  restored) so cache entries computed under the PS-125 "$0 add-on" rule are
- *  invalidated and re-rated with the real schedule premium. */
+ *  invalidated and re-rated with the real schedule premium. PS-170: the direct-UPS
+ *  carrier-declared-value gate is folded in too, so flipping the gate invalidates cached
+ *  rates and re-prices direct-UPS HUGRAB candidates (parcelguard <-> carrier $0). */
 export function insuranceCostConfigFingerprint(): string {
-  return `parcelguard-schedule-${PARCELGUARD_SCHEDULE_VERSION}`;
+  return `parcelguard-schedule-${PARCELGUARD_SCHEDULE_VERSION}|carrier-dv=${DIRECT_UPS_CARRIER_INSURANCE_VERIFIED ? 'on' : 'off'}`;
 }
 
 type RateLike = {
@@ -187,9 +190,15 @@ export function resolveRateInsurancePremium(
   rate: RateLike,
   now: number = Date.now(),
 ): InsuranceCostResolution {
-  const provider = String(ctx.insuranceProvider ?? 'none').trim().toLowerCase();
+  let provider = String(ctx.insuranceProvider ?? 'none').trim().toLowerCase();
   const insuredValue = finite(ctx.insuredValue) ?? 0;
   if (provider === 'none' || insuredValue <= 0) return { status: 'none' };
+
+  // PS-170 defense-in-depth: carrier declared value is free ONLY for the first $100. The
+  // provider-decision owners (resolveEffectiveInsurance / rates.ts) already cap this, so
+  // 'carrier' should never arrive here above the cap — but if it does, price it as ParcelGuard
+  // (any value, scheduled premium) rather than undercharging/under-insuring the excess.
+  if (provider === 'carrier' && insuredValue > CARRIER_DECLARED_VALUE_FREE_CAP) provider = 'parcelguard';
 
   const fetchedAt = new Date(now).toISOString();
   const estimateAmount = Math.max(0, finite(rate.insurance_amount?.amount) ?? 0);

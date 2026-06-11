@@ -90,7 +90,7 @@ check('schedule: value <= 0 -> null', parcelGuardScheduledPremium(0, usps(), 'US
 check('schedule: missing carrier -> null', parcelGuardScheduledPremium(100, {}, 'US'), null);
 
 // 9. Fingerprint reflects the schedule policy (cache busts on schedule change)
-check('fingerprint is the PS-171 schedule policy (bumped to bust stale $0.99 FedEx-economy cache)', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-10-v2');
+check('fingerprint is the PS-171 schedule policy + PS-170 carrier-dv gate (busts stale cache on flip)', insuranceCostConfigFingerprint(), 'parcelguard-schedule-shipstation-parcelguard-2026-06-10-v2|carrier-dv=on');
 
 if (failures > 0) {
   console.error(`\nFAIL PS-126 ParcelGuard schedule premium guard (${failures} failing)`);

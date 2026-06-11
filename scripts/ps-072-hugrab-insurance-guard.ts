@@ -46,12 +46,14 @@ check('UPS Ground Saver is NOT UPS Ground', isUpsGroundService(groundSaver), fal
 check('SurePost is detected as GroundSaver/SurePost', isUpsGroundSaverOrSurePostService(surePost), true);
 check('UPS 2nd Day is not ground', isUpsGroundService(ups2day), false);
 
-// --- resolver: HUGRAB defaults ---
-check('HUGRAB + UPS Ground, no operator -> parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, upsGround, null)), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
-check('HUGRAB + USPS Ground, no operator -> parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, null)), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
-check('HUGRAB + UPS Ground, operator none -> forced parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'none', insuredValue: null })), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
-check('HUGRAB + UPS Ground, operator $250 -> parcelguard/250 (provider forced, value kept)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'carrier', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
-check('HUGRAB + USPS Ground, operator $250 -> parcelguard/250 (provider forced, value kept)', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, { insuranceProvider: 'shipsurance', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
+// --- resolver: HUGRAB defaults (PS-170 verify gate ON 2026-06-11) ---
+// Direct UPS at the $100 free tier -> carrier declared value ($0). USPS (brokered) stays
+// ParcelGuard. Above the $100 cap, direct UPS falls back to ParcelGuard (correctly priced).
+check('HUGRAB + UPS Ground (direct), no operator -> carrier/100 (gate ON, free declared value)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, null)), { p: 'carrier', v: 100, s: 'hugrab-default' });
+check('HUGRAB + USPS Ground (brokered), no operator -> parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, null)), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
+check('HUGRAB + UPS Ground (direct), operator none -> carrier/100 (gate ON)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'none', insuredValue: null })), { p: 'carrier', v: 100, s: 'hugrab-default' });
+check('HUGRAB + UPS Ground (direct), operator $250 -> parcelguard/250 (PS-170 >$100 cap: carrier free tier is only $100)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'carrier', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
+check('HUGRAB + USPS Ground (brokered), operator $250 -> parcelguard/250 (provider forced, value kept)', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, { insuranceProvider: 'shipsurance', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
 
 // --- PS-057: Ground Saver/SurePost never defaulted ---
 check('HUGRAB + Ground Saver, operator none -> passthrough none (PS-057)', pick(resolveEffectiveInsurance(HUGRAB, groundSaver, { insuranceProvider: 'none' })), { p: 'none', v: null, s: 'none' });

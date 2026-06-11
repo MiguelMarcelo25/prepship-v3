@@ -4,15 +4,16 @@
  *
  * Proves:
  *   1. Account capability classification (direct UPS vs ShipStation-brokered vs blocked).
- *   2. THE VERIFY GATE: DIRECT_UPS_CARRIER_INSURANCE_VERIFIED defaults OFF, so EVERY path
- *      resolves to ParcelGuard — there is NO uninsured and NO carrier label while it is off.
+ *   2. THE VERIFY GATE: DIRECT_UPS_CARRIER_INSURANCE_VERIFIED is ON (DJ-enabled 2026-06-11).
+ *      Direct UPS resolves to carrier declared value ($0, insured $100); brokered accounts
+ *      STILL ParcelGuard; Ground Saver/SurePost stay blocked; NO path is ever uninsured.
  *   3. The HUGRAB forcing is owned in ONE place (request-level + per-service), and rates.ts
  *      delegates (no inline duplicate).
- *   4. Per-candidate enrichment: with the gate ON (simulated via the injected resolver) a
- *      direct-UPS candidate gets $0 carrier declared value and the cheapest INSURED wins;
- *      an operator's explicit `carrier`/`shipsurance` choice is never overridden.
- *   5. Label parity: the label reflects whatever the resolver returns — ParcelGuard while
- *      the gate is off, and the builder can carry `carrier` once it flips.
+ *   4. Per-candidate enrichment: a direct-UPS candidate gets $0 carrier declared value and
+ *      the cheapest INSURED total wins; an operator's explicit `carrier`/`shipsurance`
+ *      choice is never overridden.
+ *   5. Label parity: the direct-UPS HUGRAB label carries carrier declared value at $100;
+ *      a brokered (USPS) label still carries ParcelGuard. No uninsured label is producible.
  *
  *   npx tsx scripts/ps-170-account-capability-insurance-guard.ts
  */
@@ -70,14 +71,19 @@ check('UPS Ground Saver service -> blocked', cap({ carrierCode: 'ups', serviceCo
 check('UPS SurePost service -> blocked', cap({ carrierCode: 'ups', serviceCode: 'ups_surepost_1_lb_or_greater' }), { r: 'blocked', p: false });
 check('EasyPost UPS GroundSaver alias -> blocked', cap({ carrierCode: 'ups', serviceCode: 'easypost_ups_upsdap_upsgroundsavergreaterthan1lb' }), { r: 'blocked', p: false });
 
-// ─── 2. THE VERIFY GATE — default OFF, no carrier/uninsured path reachable ─────
-check('verify gate defaults OFF', DIRECT_UPS_CARRIER_INSURANCE_VERIFIED, false);
-check('gate OFF -> direct UPS effective provider is ParcelGuard', effectiveInsuranceProviderForAccount({ carrierCode: 'ups' }), 'parcelguard');
-check('gate OFF -> direct UPS by id effective provider is ParcelGuard', effectiveInsuranceProviderForAccount({ shippingProviderId: 604209 }), 'parcelguard');
-check('gate OFF -> stamps_com effective provider is ParcelGuard', effectiveInsuranceProviderForAccount({ carrierCode: 'stamps_com' }), 'parcelguard');
-// A direct-UPS account NEVER resolves to a non-insured or carrier provider while gated.
-check('gate OFF -> direct UPS provider is never "carrier"', effectiveInsuranceProviderForAccount({ carrierCode: 'ups' }) === 'carrier', false);
-check('gate OFF -> direct UPS provider is never "none"', effectiveInsuranceProviderForAccount({ carrierCode: 'ups' }) === 'none', false);
+// ─── 2. THE VERIFY GATE — ENABLED 2026-06-11 (DJ confirmed direct-UPS $100 insured) ─────
+check('verify gate is ON (DJ-enabled 2026-06-11)', DIRECT_UPS_CARRIER_INSURANCE_VERIFIED, true);
+check('gate ON -> direct UPS effective provider is carrier (declared value)', effectiveInsuranceProviderForAccount({ carrierCode: 'ups' }), 'carrier');
+check('gate ON -> direct UPS by id effective provider is carrier', effectiveInsuranceProviderForAccount({ shippingProviderId: 604209 }), 'carrier');
+check('gate ON -> stamps_com (brokered) effective provider STILL ParcelGuard', effectiveInsuranceProviderForAccount({ carrierCode: 'stamps_com' }), 'parcelguard');
+// SAFETY INVARIANT (must hold in EITHER gate state): a direct-UPS account is NEVER uninsured.
+// Gate ON -> 'carrier' (insured via declared value); gate OFF -> 'parcelguard'. Never 'none'.
+check('direct UPS provider is never "none" (always insured)', effectiveInsuranceProviderForAccount({ carrierCode: 'ups' }) === 'none', false);
+check('direct UPS provider is one of carrier|parcelguard (insured)', ['carrier', 'parcelguard'].includes(effectiveInsuranceProviderForAccount({ carrierCode: 'ups' })), true);
+// PS-170 FREE-TIER CAP: carrier declared value covers only the first $100. Within the cap a
+// direct-UPS account uses carrier ($0); above it, ParcelGuard (correctly priced, fully insured).
+check('gate ON -> direct UPS at $100 is carrier', effectiveInsuranceProviderForAccount({ carrierCode: 'ups', insuredValue: 100 }), 'carrier');
+check('gate ON -> direct UPS ABOVE $100 cap falls back to parcelguard', effectiveInsuranceProviderForAccount({ carrierCode: 'ups', insuredValue: 250 }), 'parcelguard');
 
 // ─── 3. Single-owner HUGRAB forcing (request-level + per-service) ──────────────
 const req = (sel: any) => {
@@ -92,13 +98,14 @@ check('HUGRAB request, operator $50 -> floored to parcelguard/100', req({ insura
 // Non-HUGRAB passes operator intent through (no forcing).
 check('non-HUGRAB request -> passthrough none', req.call(null, { insuranceProvider: 'none' }) && { p: resolveHugrabRequestInsurance(OTHER, { insuranceProvider: 'none' }).insuranceProvider }, { p: 'none' });
 
-// Per-service (label-time) — direct-UPS HUGRAB ground resolves to ParcelGuard while gated.
+// Per-service (label-time) — gate ON: direct-UPS HUGRAB ground resolves to carrier $100
+// (insured, $0); USPS (brokered) STILL ParcelGuard $100. Ground/SurePost handled in §1.
 const upsGroundDirect = { carrierId: 'se-604209', carrierCode: 'ups', serviceCode: 'ups_ground', serviceName: 'UPS Ground' };
 const uspsGround = { carrierId: 'se-433542', carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', serviceName: 'USPS Ground Advantage' };
 const effUps = resolveEffectiveInsurance(HUGRAB, upsGroundDirect, null);
-check('gate OFF -> HUGRAB UPS Ground (direct) label is parcelguard/100', { p: effUps.insuranceProvider, v: effUps.insuredValue }, { p: 'parcelguard', v: 100 });
+check('gate ON -> HUGRAB UPS Ground (direct) label is carrier/100', { p: effUps.insuranceProvider, v: effUps.insuredValue }, { p: 'carrier', v: 100 });
 const effUsps = resolveEffectiveInsurance(HUGRAB, uspsGround, null);
-check('gate OFF -> HUGRAB USPS Ground label is parcelguard/100', { p: effUsps.insuranceProvider, v: effUsps.insuredValue }, { p: 'parcelguard', v: 100 });
+check('gate ON -> HUGRAB USPS Ground label STILL parcelguard/100', { p: effUsps.insuranceProvider, v: effUsps.insuredValue }, { p: 'parcelguard', v: 100 });
 
 // rates.ts delegates to the single owner (no inline forcing duplicate left behind).
 const ratesSrc = readFileSync('src/services/rates.ts', 'utf8');
@@ -115,16 +122,19 @@ const amountOf = (r: any) => r?.insurance_amount?.amount;
 const provOf = (r: any) => r?.insuranceCost?.provenance;
 const totalOf = (r: any) => Number((r.shipping_amount.amount + (amountOf(r) ?? 0)).toFixed(2));
 
-// 4a. Realistic gate-OFF resolver (the one rates.ts uses) -> every candidate ParcelGuard.
+// 4a. Realistic gate-ON resolver (the one rates.ts uses) -> direct UPS = $0 carrier declared
+// value, USPS = ParcelGuard $1.09, and the cheapest INSURED total wins (UPS 9.20 < USPS 10.09).
 const liveResolver = (r: R) => effectiveInsuranceProviderForAccount({ shippingProviderId: r.carrier_id, carrierCode: r.carrier_code, serviceCode: r.service_code });
 {
   const { resolved } = enrichRatesWithInsuranceCost([upsRate, uspsRate], ctx, undefined, liveResolver);
   const ups = resolved.find((r: any) => r.carrier_code === 'ups');
   const usps = resolved.find((r: any) => r.carrier_code === 'stamps_com');
-  check('gate OFF -> direct UPS candidate priced on ParcelGuard $0.99 (non-USPS)', amountOf(ups), 0.99);
-  check('gate OFF -> direct UPS candidate provenance is parcelguard_schedule', provOf(ups), 'parcelguard_schedule');
-  check('gate OFF -> USPS candidate priced on ParcelGuard $1.09', amountOf(usps), 1.09);
-  check('gate OFF -> NO candidate is carrier_declared_value', resolved.some((r: any) => provOf(r) === 'carrier_declared_value'), false);
+  check('gate ON (live) -> direct UPS candidate is $0 carrier declared value', amountOf(ups), 0);
+  check('gate ON (live) -> direct UPS provenance is carrier_declared_value', provOf(ups), 'carrier_declared_value');
+  check('gate ON (live) -> USPS candidate stays ParcelGuard $1.09', amountOf(usps), 1.09);
+  const cheapest = [...resolved].sort((a: any, b: any) => totalOf(a) - totalOf(b))[0] as any;
+  check('gate ON (live) -> cheapest INSURED total is the direct-UPS carrier candidate', cheapest.carrier_code, 'ups');
+  check('gate ON (live) -> winning insured total is 9.20', totalOf(cheapest), 9.20);
 }
 
 // 4b. Simulate the gate ON via an injected resolver (proves the machinery + selection).
@@ -159,6 +169,14 @@ const enabledResolver = (r: R) => (r.carrier_code === 'ups' ? 'carrier' : 'parce
   check('carrier premium is confirmed (free first $100 is real, not an estimate)', res.status === 'resolved' ? res.confirmed : null, true);
 }
 
+// 4e. Defense-in-depth: resolveRateInsurancePremium prices carrier ABOVE the $100 free tier
+// as ParcelGuard (never $0 for >$100 declared value) — no undercharge/under-insurance.
+{
+  const res = resolveRateInsurancePremium({ insuranceProvider: 'carrier', insuredValue: 250, toCountry: 'US' }, upsRate);
+  check('carrier >$100 -> NOT carrier_declared_value (capped to parcelguard schedule)', res.status === 'resolved' ? res.provenance : null, 'parcelguard_schedule');
+  check('carrier >$100 -> premium is > 0 (excess declared value is priced, not free)', res.status === 'resolved' ? res.amount > 0 : false, true);
+}
+
 // ─── 5. Label parity ──────────────────────────────────────────────────────────
 const labelInput = (insuranceProvider: string, insuredValue: number | null) => ({
   apiKeyV2: 'test',
@@ -178,12 +196,16 @@ const labelInput = (insuranceProvider: string, insuredValue: number | null) => (
   orderNumber: '170',
 });
 
-// Gate OFF: the resolved effective provider is ParcelGuard, so the label carries ParcelGuard
-// and NEVER carrier — proving no uninsured/carrier label can be purchased while gated.
+// Gate ON: effUps resolved to 'carrier', so the direct-UPS HUGRAB label carries carrier
+// declared value at $100 — insured for $0. The label is never uninsured (insured_value present).
 const gatedBody = buildSsLabelRequestBody(labelInput(effUps.insuranceProvider, effUps.insuredValue)) as any;
-check('gate OFF -> HUGRAB direct-UPS label insurance_provider is parcelguard', gatedBody.shipment.insurance_provider, 'parcelguard');
-check('gate OFF -> HUGRAB direct-UPS label is NEVER carrier', gatedBody.shipment.insurance_provider === 'carrier', false);
-check('gate OFF -> label package insured_value is $100', gatedBody.shipment.packages[0].insured_value, { amount: 100, currency: 'usd' });
+check('gate ON -> HUGRAB direct-UPS label insurance_provider is carrier', gatedBody.shipment.insurance_provider, 'carrier');
+check('gate ON -> HUGRAB direct-UPS label is NEVER uninsured (insured_value present)', !!gatedBody.shipment.packages[0].insured_value, true);
+check('gate ON -> direct-UPS label package insured_value is $100', gatedBody.shipment.packages[0].insured_value, { amount: 100, currency: 'usd' });
+// The gate enabled ONLY direct UPS: a brokered (USPS) HUGRAB label still carries ParcelGuard $100.
+const uspsBody = buildSsLabelRequestBody({ ...labelInput(effUsps.insuranceProvider, effUsps.insuredValue), carrierId: 'se-433542', serviceCode: 'usps_ground_advantage' }) as any;
+check('gate ON -> HUGRAB USPS (brokered) label STILL parcelguard', uspsBody.shipment.insurance_provider, 'parcelguard');
+check('gate ON -> HUGRAB USPS label insured_value is $100', uspsBody.shipment.packages[0].insured_value, { amount: 100, currency: 'usd' });
 
 // Builder mechanism: once the gate flips and the resolver returns 'carrier', the payload
 // carries carrier declared value at the package level (parity with what was selected).

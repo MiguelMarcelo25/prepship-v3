@@ -1064,11 +1064,13 @@ export async function fetchLiveRatesWithDiagnostics(
     undefined,
     // PS-170: per-candidate provider — each rate runs on its own carrier account, so a
     // direct-UPS candidate can resolve to $0 carrier declared value while ShipStation-
-    // brokered candidates stay on ParcelGuard. Gated by the verify flag (off → all ParcelGuard).
+    // brokered candidates stay on ParcelGuard. Gated by the verify flag (off → all ParcelGuard)
+    // AND the $100 free-tier cap (insuredValue > $100 → ParcelGuard, correctly priced).
     (rate) => effectiveInsuranceProviderForAccount({
       shippingProviderId: rate.carrier_id ?? null,
       carrierCode: rate.carrier_code ?? null,
       serviceCode: rate.service_code ?? null,
+      insuredValue: input.insuredValue,
     }),
   );
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
