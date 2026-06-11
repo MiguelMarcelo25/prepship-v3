@@ -11,6 +11,12 @@ import {
   describeShippingService,
   evaluateShippingServiceEligibility,
 } from '../lib/shipping-service-eligibility';
+import {
+  clearOrderRateJob,
+  computeOrderRateJobFingerprint,
+  setOrderRatePending,
+  setOrderRateRating,
+} from './shipping-workflow/order-rate-job-status';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -330,9 +336,74 @@ async function runBackfill(
     job.message = `Found ${rows.length} orders; fetching rates…`;
     await persistBackfillJobSnapshot(job, opts);
 
+    // PS-120 (producer): these orders are now ENQUEUED for backend rating. Stamp a per-order
+    // `pending` state keyed by the shared job fingerprint so the Orders table can show "queued
+    // for backend rating" instead of a generic spinner / a premature `missing`. Best-effort:
+    // a status write must never break the actual rating, so failures are swallowed. The fields
+    // come from the SAME columns the /orders reader has, so the fingerprints match.
+    const fingerprintForRow = (row: (typeof rows)[number]): string =>
+      computeOrderRateJobFingerprint({
+        orderId: row.id,
+        weightOz: row.weightOz,
+        shipToPostalCode: row.shipToPostalCode,
+        shipToState: row.shipToState,
+        shipToCity: row.shipToCity,
+        rateDimsL: row.rateDimsL,
+        rateDimsW: row.rateDimsW,
+        rateDimsH: row.rateDimsH,
+        raw: row.raw,
+      });
+    await Promise.all(
+      rows.map(async (row) => {
+        try {
+          await setOrderRatePending(row.id, fingerprintForRow(row));
+        } catch (err) {
+          console.warn(
+            '[rates-backfill] failed to set pending rate-job status:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }),
+    );
+
     const CONCURRENCY = Math.max(1, Math.min(4, RATE_FETCH_CONCURRENCY));
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
+
+      // PS-120 (producer): the job has PICKED this order up to rate it -> mark `rating`. The
+      // FE classifier shows "actively rating" (calculating) for this row, bounded by the
+      // bestRateStateAgeMs watchdog. Best-effort; never let a status write break rating.
+      const jobFingerprint = computeOrderRateJobFingerprint({
+        orderId: row.id,
+        weightOz: row.weightOz,
+        shipToPostalCode: row.shipToPostalCode,
+        shipToState: row.shipToState,
+        shipToCity: row.shipToCity,
+        rateDimsL: row.rateDimsL,
+        rateDimsW: row.rateDimsW,
+        rateDimsH: row.rateDimsH,
+        raw: row.raw,
+      });
+      try {
+        await setOrderRateRating(row.id, jobFingerprint);
+      } catch (err) {
+        console.warn(
+          '[rates-backfill] failed to set rating rate-job status:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+      // PS-120: clear the in-progress row once this order's rate RESOLVES (saved, empty,
+      // skipped, or errored) so a resolved order never lingers as pending/rating.
+      const resolveRateJob = async () => {
+        try {
+          await clearOrderRateJob(row.id);
+        } catch (err) {
+          console.warn(
+            '[rates-backfill] failed to clear rate-job status:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      };
 
       const raw = (row.raw ?? {}) as Record<string, unknown> & {
         shipTo?: { country?: string; residential?: boolean };
@@ -342,6 +413,7 @@ async function runBackfill(
       const dims = getBackfillOrderDims(row);
       const eligibilityRefresh = savedBestRateNeedsEligibilityRefresh(row);
       if (!dims) {
+        await resolveRateJob();
         job.skipped++;
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
@@ -427,6 +499,12 @@ async function runBackfill(
             `order ${row.id} (w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): ${msg.slice(0, 1500)}`
           );
         }
+      } finally {
+        // PS-120: the rate attempt RESOLVED (saved, empty/no-rate, or errored) — clear the
+        // in-progress row so the order shows its terminal state (fresh/missing/blocked) and
+        // never lingers as pending/rating. On error the FE watchdog (bestRateStateAgeMs) is
+        // the backstop, but clearing here is the deterministic path.
+        await resolveRateJob();
       }
 
       job.processed++;

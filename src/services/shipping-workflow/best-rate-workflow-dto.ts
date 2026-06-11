@@ -56,6 +56,10 @@ export type BestRateWorkflowDto = {
   carrierStatuses: BestRateWorkflowCarrierStatus[];
   selectedRateState?: BestRateSelectedRateState;
   allowedActions: BestRateWorkflowAllowedActions;
+  // PS-120: age (ms) of a backend-owned in-progress state (pending/rating). Only present when
+  // the orders payload OVERRODE bestRateState to pending/rating from the order_rate_jobs row.
+  // The FE classifier uses it as a WATCHDOG so a stuck job can never be an infinite spinner.
+  bestRateStateAgeMs?: number;
 };
 
 export type BuildBestRateWorkflowInput = {

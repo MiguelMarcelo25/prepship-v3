@@ -76,6 +76,10 @@ import {
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto } from '../services/shipping-workflow/best-rate-workflow-dto';
+import {
+  computeOrderRateJobFingerprint,
+  resolveRateJobWorkflowOverride,
+} from '../services/shipping-workflow/order-rate-job-status';
 
 const app = new Hono();
 
@@ -1456,6 +1460,43 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     }
   }
 
+  // PS-120 (reader): batch-load the per-order backend rate-job rows (pending/rating) in ONE
+  // query (no N+1). Only the Awaiting view ever shows these in-progress states, and the
+  // producer only writes awaiting orders, so a single store/lookup gated to awaiting keeps
+  // this additive and cheap. When a page has no rows, the map stays empty and the per-row
+  // override below is a no-op — the orders payload is byte-identical to before.
+  const rateJobByOrderId = new Map<number, { state: string; requestFingerprint: string; updatedAtMs: number }>();
+  if (q.status === 'awaiting_shipment' && pageOrderIds.length) {
+    try {
+      const rateJobRows = await timedOrdersStep(timings, 'orderRateJobs', () =>
+        db.execute<{ order_id: number; state: string; request_fingerprint: string; updated_at: string }>(sql`
+          select order_id, state, request_fingerprint, updated_at
+          from order_rate_jobs
+          where order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})
+        `),
+      );
+      for (const job of rateJobRows) {
+        if (job.order_id == null) continue;
+        const updatedAtMs = Date.parse(String(job.updated_at));
+        rateJobByOrderId.set(job.order_id, {
+          state: job.state,
+          requestFingerprint: job.request_fingerprint,
+          updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now(),
+        });
+      }
+    } catch (err) {
+      // ADDITIVE SAFETY: the order_rate_jobs table may not exist yet (first deploy before the
+      // worker ensured it). Any lookup failure leaves the map empty, the per-row override
+      // becomes a no-op, and the orders payload is byte-identical to before. Never break /orders
+      // for an optional display-only enhancement.
+      console.warn(
+        '[orders] order_rate_jobs lookup skipped:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  const rateJobReadNowMs = Date.now();
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -1630,6 +1671,40 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           source: inferBestRateWorkflowSource(bestRateRecord),
         })
       : null;
+    // PS-120 (reader): ADDITIVELY override the derived bestRateState with a backend-owned
+    // in-progress state (pending/rating) ONLY when (a) there is a job row for this order,
+    // (b) its stored fingerprint == the order's CURRENT job fingerprint, and (c) the derived
+    // state is NOT already 'fresh' (a resolved/fresh order must never show a spinner). In any
+    // other case resolveRateJobWorkflowOverride() returns null and bestRateWorkflow is left
+    // exactly as buildBestRateWorkflowDto produced it (the byte-identical / harm-free path).
+    if (bestRateWorkflow) {
+      const rateJob = rateJobByOrderId.get(r.order.id);
+      if (rateJob) {
+        const currentJobFingerprint = computeOrderRateJobFingerprint({
+          orderId: r.order.id,
+          weightOz: r.order.weightOz ?? null,
+          shipToPostalCode: r.order.shipToPostalCode ?? null,
+          shipToState: r.order.shipToState ?? null,
+          shipToCity: r.order.shipToCity ?? null,
+          rateDimsL: safeOverrides?.rateDimsL ?? null,
+          rateDimsW: safeOverrides?.rateDimsW ?? null,
+          rateDimsH: safeOverrides?.rateDimsH ?? null,
+          raw: r.order.raw ?? null,
+        });
+        const override = resolveRateJobWorkflowOverride({
+          jobState: rateJob.state,
+          jobFingerprint: rateJob.requestFingerprint,
+          currentFingerprint: currentJobFingerprint,
+          hasFreshRate: bestRateWorkflow.bestRateState === 'fresh',
+          jobUpdatedAtMs: rateJob.updatedAtMs,
+          nowMs: rateJobReadNowMs,
+        });
+        if (override) {
+          bestRateWorkflow.bestRateState = override.bestRateState;
+          bestRateWorkflow.bestRateStateAgeMs = override.bestRateStateAgeMs;
+        }
+      }
+    }
     const carrierPick = pickStringSource([
       {
         value: hasV2SelectedRateJson ? selectedRateRecord?.carrierCode : null,

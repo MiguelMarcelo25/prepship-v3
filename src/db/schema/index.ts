@@ -1,6 +1,7 @@
 export * from './clients.js';
 export * from './orders.js';
 export * from './order-items.js';
+export * from './order-rate-jobs.js';
 export * from './shipments.js';
 export * from './packages.js';
 export * from './package-ledger.js';
