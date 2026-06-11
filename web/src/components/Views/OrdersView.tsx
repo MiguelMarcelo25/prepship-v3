@@ -1179,6 +1179,17 @@ function isTestOrder(order: OrderSummaryDto, detail: OrderFullDto | null = null)
   )
 }
 
+// PS-186: backend-owned test-order fact for MONEY paths (testLabel on the wire). Reads only
+// backend-derived facts — order.isTest (stamped by /orders from clients.isTest) and the
+// TEST_CLIENT_IDS set (also populated from clients.isTest). The heuristic isTestOrder() above
+// remains DISPLAY-ONLY (badges, filters, mock-rate previews) until PS-187 deletes it; it must
+// never feed testLabel again — a heuristic misfire on a real order would mint a fake label.
+function isBackendTestOrder(order: OrderSummaryDto) {
+  if ((order as { isTest?: boolean }).isTest === true) return true
+  const clientId = toNumericValue(order.clientId)
+  return clientId != null && TEST_CLIENT_IDS.has(clientId)
+}
+
 function getOrderWeightOz(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const savedWeightOz = order.weight?.value ?? 0
   if (savedWeightOz > 0) return savedWeightOz
@@ -4695,7 +4706,8 @@ export default function OrdersView({
       const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
-      const orderIsTest = isTestOrder(order, orderDetail)
+      // PS-186: money path — backend fact only (heuristics must never shape a label payload).
+      const orderIsTest = isBackendTestOrder(order)
       const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : undefined)
       const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : undefined)
       const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
@@ -4896,7 +4908,8 @@ export default function OrdersView({
       const route = classifyQueueOrderRoute(
         {
           hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
-          isTest: isTestOrder(order, orderDetailsById.get(order.orderId) ?? null),
+          // PS-186: queue ROUTING is a money-path decision — backend fact only.
+          isTest: isBackendTestOrder(order),
           isDirectCarrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
         },
         options,
@@ -5187,7 +5200,9 @@ export default function OrdersView({
     }
 
     const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
-    const isTest = isTestOrder(order, orderDetail)
+    // PS-186: money path — backend fact only. An explicit mode==='test' on a real client now
+    // gets a visible TEST_LABEL_REJECTED 409 instead of a silent fake label.
+    const isTest = isBackendTestOrder(order)
     const shippingProviderId = Number.parseInt(panelForm.shipAccountId, 10)
     const weightOz = getPanelWeightOz() || getOrderWeightOz(order, orderDetail)
     const panelDims = getPanelDims()
@@ -7314,7 +7329,8 @@ export default function OrdersView({
       // forces a VOID mock label regardless, so we just need to reach the
       // endpoint with a serviceCode + carrierCode. Use the order's stored
       // defaults when no rate has been shopped.
-      const orderIsTest = isTestOrder(order, orderDetail)
+      // PS-186: money path — backend fact only.
+      const orderIsTest = isBackendTestOrder(order)
       let effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
       let effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
       const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
@@ -7694,7 +7710,8 @@ export default function OrdersView({
       const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
-      const orderIsTest = isTestOrder(order, orderDetail)
+      // PS-186: money path — backend fact only.
+      const orderIsTest = isBackendTestOrder(order)
       const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
       const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
       const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0

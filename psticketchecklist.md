@@ -439,8 +439,18 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
 - **PS-185 — UPS 1Z tracking-prefix attribution at label-save time; delete FE `/^1Z/` regex block
   (L1406-1458) (no deps).** Backend stamps resolved carrier account on the shipment at save; FE reads DTO;
   one-time backfill for existing rows; guard asserts no 1Z regex in web/src.
-- **🔴 PS-186 — HIGHEST PRIORITY (security/money bug): test-order classification → backend; reject untrusted
-  `testLabel:true` in `createLabelV2` (no deps on new cards).** FE `isTestOrder` (~L1163) uses 7 heuristics
+- **🔴 PS-186 — ✅ DONE 2026-06-11 (Wave 0): test-order classification → backend; reject untrusted
+  `testLabel:true` in `createLabelV2`.** Canonical owner `src/services/fulfillment/test-label-policy.ts`
+  (pure `decideTestLabel` + `TestLabelRejectedError` 409 + the single `loadClientIsTest`); createLabelV2
+  resolves the flag through it BEFORE the mock branch (isTest client → forced mock as before; REAL client +
+  requested mock → structured `TEST_LABEL_REJECTED` 409 — the silent fake-label path is closed); batch
+  covered via delegation + structured failure codes; 3 inline isTest loads deduped. /orders rows + detail
+  now carry backend-owned `isTest`; FE money paths (buildQueueSendOrderPayload / createOrQueueLabel /
+  handleBatchAction / resumePersistentQueueJob / queue routing) read `isBackendTestOrder` (backend facts
+  only) — the 7-heuristic `isTestOrder` is now DISPLAY-ONLY until PS-187 deletes it. Guard
+  `test:ps-186-test-label-authority` (21 checks incl. the pure decision matrix). QA: typecheck + build:web +
+  rate-system-hardening + ps-050-rate-exactness + test-order-queue-label + full cert suite ALL PASS.
+  Original spec: FE `isTestOrder` (~L1163) uses 7 heuristics
   (orderNumber `TESTING-` prefix, client-name match, SKU sniff, hardcoded legacy client-IDs that override the
   backend value); when it fires the FE sends `testLabel:true` and `src/services/labels.ts:1080` honors it for
   **ANY** client → a REAL customer order matching a heuristic silently gets a **FAKE label + fake tracking**,

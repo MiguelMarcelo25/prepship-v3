@@ -119,6 +119,11 @@ function handleCreateError(c: Context, err: unknown): Response {
   if (e.code === 'RATE_LABEL_RESIDENTIAL_MISMATCH') {
     return c.json({ error: message, code: e.code, ...details }, 409);
   }
+  // PS-186: a `testLabel: true` request for a NON-test client is rejected by the canonical
+  // test-label policy — operator-actionable conflict (the order is real; create a real label).
+  if (e.code === 'TEST_LABEL_REJECTED') {
+    return c.json({ error: message, code: e.code, ...details }, 409);
+  }
   const invalid = [
     'orderId and serviceCode required',
     'shippingProviderId required for v2 label creation',

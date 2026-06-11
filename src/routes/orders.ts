@@ -13,6 +13,7 @@ import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, sta
 // PS-136: the manual mark-shipped-externally transition (status flip + inventory deduction +
 // ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
 import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
+import { loadClientIsTest } from '../services/fulfillment/test-label-policy';
 import { replaceOrderItemsForOrders } from '../services/order-items';
 import {
   getComboPackageDefaultForOrder,
@@ -1497,6 +1498,21 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   }
   const rateJobReadNowMs = Date.now();
 
+  // PS-186: backend-owned test-order fact for the row DTO. One tiny indexed query per request
+  // (clients_test_client_id_idx partial index) so every row carries `isTest` and the FE reads
+  // the backend fact instead of inventing heuristics. Failure leaves the set empty (rows fall
+  // back to false) — display-only, never breaks /orders.
+  const testClientIds = new Set<number>();
+  try {
+    const testClientRows = await db
+      .select({ id: clients.id })
+      .from(clients)
+      .where(eq(clients.isTest, true));
+    for (const row of testClientRows) testClientIds.add(row.id);
+  } catch (err) {
+    console.warn('[orders] test-client lookup skipped:', err instanceof Error ? err.message : err);
+  }
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -1940,6 +1956,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       orderStatus: effectiveOrderStatus,
       expedited,
       legacyClientId,
+      // PS-186: backend-owned test-order fact (clients.isTest) — the FE must read this,
+      // never classify test-ness itself for money paths.
+      isTest: r.order.clientId != null && testClientIds.has(r.order.clientId),
       overrides: safeOverrides,
       label: label
         ? {
@@ -2449,6 +2468,8 @@ app.get('/:id{[0-9]+}', async (c) => {
   return c.json({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
     comboPackageDefault,
+    // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
+    isTest: await loadClientIsTest(order.clientId),
   });
 });
 
@@ -2483,6 +2504,8 @@ app.get('/:id{[0-9]+}/full', async (c) => {
   return c.json({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
     comboPackageDefault,
+    // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
+    isTest: await loadClientIsTest(order.clientId),
   });
 });
 

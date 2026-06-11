@@ -33,6 +33,7 @@ import {
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
 import { assertOrderSafeToShip } from './fulfillment/shipping-safety';
+import { loadClientIsTest, resolveEffectiveTestLabel } from './fulfillment/test-label-policy';
 import { addMockLabelSignature } from '../lib/mock-label-access';
 import {
   type SelectedRateProofInput,
@@ -980,19 +981,20 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     insuredValue: effectiveInsurance.insuredValue,
   };
   await assertLabelServiceEligibleForOrder(order, clientId, serviceDescriptor, options);
-  // Hard guard: any order under an isTest client is forced into offline-mock
-  // mode regardless of what the UI sent. Prevents a test row from ever
-  // spending real postage.
-  if (clientId) {
-    const [cli] = await db
-      .select({ isTest: clients.isTest })
-      .from(clients)
-      .where(eq(clients.id, clientId))
-      .limit(1);
-    if (cli?.isTest) {
-      body = { ...body, testLabel: true };
-    }
-  }
+  // PS-186 — canonical test-label authority (test-label-policy.ts). isTest clients are
+  // FORCED into offline-mock (a test row never spends real postage); a `testLabel: true`
+  // request for a REAL client is REJECTED with a structured 409 (TEST_LABEL_REJECTED)
+  // instead of silently minting a fake label/tracking on a real customer order. Runs
+  // BEFORE every consumption of the flag (rate-limit skip, weight default, mock branch).
+  body = {
+    ...body,
+    testLabel: await resolveEffectiveTestLabel({
+      clientId,
+      requestedTestLabel: body.testLabel === true,
+      orderId: order.id,
+      entryPoint: 'createLabelV2',
+    }),
+  };
   if (clientId && !body.testLabel) checkLabelRateLimit(clientId);
 
   const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
@@ -1347,6 +1349,11 @@ export async function createBatchV2(body: CreateBatchLabelInputDto): Promise<Cre
           orderId,
           success: false,
           error: err instanceof Error ? err.message : 'Unknown error',
+          // PS-186/PS-190: surface structured codes (e.g. TEST_LABEL_REJECTED) so batch
+          // failures are machine-readable, not message-string sniffed.
+          ...(err && typeof err === 'object' && 'code' in err && typeof (err as { code?: unknown }).code === 'string'
+            ? { code: (err as { code: string }).code }
+            : {}),
         });
       }
     },
@@ -1535,19 +1542,12 @@ async function createLabelFromOrderId(args: {
     serviceCode: args.serviceCode,
     serviceName: args.serviceCode,
   });
-  if (effectiveClientId) {
-    const [cli] = await db
-      .select({ isTest: clients.isTest })
-      .from(clients)
-      .where(eq(clients.id, effectiveClientId))
-      .limit(1);
-    if (cli?.isTest) {
-      return await createMockShipmentForOrder({
-        order,
-        clientId: effectiveClientId,
-        serviceCode: args.serviceCode,
-      });
-    }
+  if (await loadClientIsTest(effectiveClientId)) {
+    return await createMockShipmentForOrder({
+      order,
+      clientId: effectiveClientId!,
+      serviceCode: args.serviceCode,
+    });
   }
 
   return createLabelFromShipment({
@@ -1582,15 +1582,7 @@ export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponse
   // Double guard: honor the explicit test_offline source marker AND verify
   // the shipment's client isn't flagged is_test (in case a test row was
   // somehow persisted with a real labelShipmentId).
-  let clientIsTest = false;
-  if (row.clientId) {
-    const [cli] = await db
-      .select({ isTest: clients.isTest })
-      .from(clients)
-      .where(eq(clients.id, row.clientId))
-      .limit(1);
-    clientIsTest = Boolean(cli?.isTest);
-  }
+  const clientIsTest = await loadClientIsTest(row.clientId);
   if (row.source !== 'test_offline' && !clientIsTest && row.labelShipmentId) {
     const creds = await loadClientCredentials(row.clientId);
     try {
@@ -1650,15 +1642,8 @@ export async function createReturnLabelV2(
   // forces testLabel=true for isTest clients, but returns go through a
   // separate SS endpoint — without this check a test shipment with a real
   // labelShipmentId (edge case) would burn real postage.
-  if (row.clientId) {
-    const [cli] = await db
-      .select({ isTest: clients.isTest })
-      .from(clients)
-      .where(eq(clients.id, row.clientId))
-      .limit(1);
-    if (cli?.isTest) {
-      throw new Error('Cannot create return label for a test-client shipment');
-    }
+  if (await loadClientIsTest(row.clientId)) {
+    throw new Error('Cannot create return label for a test-client shipment');
   }
 
   const creds = await loadClientCredentials(row.clientId);
