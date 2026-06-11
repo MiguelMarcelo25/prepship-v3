@@ -18,7 +18,11 @@
 // all delegate here; the frontend may DISPLAY the result and capture a manual override,
 // but is never the authoritative classifier.
 
-import { normalizeShippingPostalCode } from './postal-code';
+// .js extension REQUIRED: this module is loaded via runtime dynamic import() in the Vercel
+// labels function (ensureLabelDeps) — Node strict ESM there throws ERR_MODULE_NOT_FOUND on
+// extensionless relative specifiers (prod outage 2026-06-11, "Label function dependencies
+// failed to load"). Guard: scripts/vercel-fn-esm-import-closure-guard.mjs
+import { normalizeShippingPostalCode } from './postal-code.js';
 
 export type AddressClassification = 'residential' | 'commercial';
 
