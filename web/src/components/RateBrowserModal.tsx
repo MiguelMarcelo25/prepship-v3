@@ -970,6 +970,27 @@ export default function RateBrowserModal({
     () => (testMode ? shippingAccounts : scopedShippingAccounts),
     [testMode, shippingAccounts, scopedShippingAccounts]
   );
+
+  // PS-197c: when the BACKEND policy owns this order's insurance (HUGRAB default), the dropdown
+  // MIRRORS the selected account's effective insurance — click USPS -> ParcelGuard $100, click
+  // ORION/ROCEL -> Carrier $100, and vice-versa. Safe ONLY because for policy orders the
+  // dropdown value is cosmetic: the backend re-normalizes the request (resolveHugrabRequestInsurance)
+  // and re-decides the per-account provider at quote/label time regardless of what the dropdown
+  // says. For NON-policy orders this effect early-returns — the dropdown stays real operator
+  // intent and is never auto-mutated. State-only sync (no re-browse is triggered).
+  useEffect(() => {
+    if (backendEffectiveInsurance?.source !== 'hugrab-default') return;
+    if (selectedPid == null) return;
+    const verdict = classifyAccountEffectiveInsurance(
+      ratesByPid[String(selectedPid)],
+      backendEffectiveInsurance.value ?? null,
+    );
+    if (!verdict) return;
+    setInsuranceProvider(verdict.provider);
+    if (backendEffectiveInsurance.value != null) {
+      setInsuredValue(String(backendEffectiveInsurance.value));
+    }
+  }, [selectedPid, backendEffectiveInsurance, ratesByPid]);
   const rateAccountsReady = testMode || rateShippingAccounts.length > 0;
   const hugrabGroundSaverBlocked = useMemo(
     () =>

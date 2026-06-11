@@ -176,8 +176,21 @@ check('modal: the compare action is explicit + on-demand',
   /data-rate-browser="manualEstimateCompare"/.test(modal) && /manualEstimateCompare: true/.test(modal), true);
 check('modal: the baseline list is labeled not-label-safe',
   /uninsured — not label-safe/.test(modal), true);
-check('modal: the dropdown (operator intent) is never auto-mutated by account clicks',
-  !/setInsuranceProvider\([^)]*selectedPid/.test(modal), true);
+// PS-197c: the dropdown auto-syncs to the selected account's effective insurance ONLY when the
+// backend policy owns the order's insurance (hugrab-default). For non-policy orders the gate
+// early-returns and the dropdown stays REAL operator intent (a flip there would change actual
+// quoted insurance — a money behavior change).
+{
+  const syncStart = modal.indexOf("backendEffectiveInsurance?.source !== 'hugrab-default'");
+  const syncEnd = modal.indexOf('}, [selectedPid, backendEffectiveInsurance, ratesByPid]);', syncStart);
+  const syncBlock = syncStart >= 0 && syncEnd > syncStart ? modal.slice(syncStart, syncEnd) : '';
+  check('modal: dropdown auto-sync is GATED on the backend hugrab-default policy',
+    syncStart >= 0 && /setInsuranceProvider\(verdict\.provider\)/.test(syncBlock), true);
+  check('modal: the gate early-returns BEFORE any dropdown mutation (non-policy intent preserved)',
+    syncBlock.indexOf('return;') >= 0 &&
+      syncBlock.indexOf('return;') < syncBlock.indexOf('setInsuranceProvider('),
+    true);
+}
 
 if (failures > 0) {
   console.error(`\nFAIL PS-197 effective-insurance display guard (${failures} failing)`);
