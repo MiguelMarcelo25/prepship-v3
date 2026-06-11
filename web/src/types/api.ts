@@ -46,7 +46,11 @@ export type PackageDto = AnyRecord & {
 }
 export type PrintQueueEntryDto = AnyRecord & {
   queue_entry_id: string
-  status: 'queued' | 'printed'
+  // 'delivered' = tracking-driven retirement: carrier tracking confirmed the
+  // package reached the customer, so the entry left the ACTIVE queue and lives
+  // in History (auto_retired_at carries the delivery/retirement time).
+  status: 'queued' | 'printed' | 'delivered'
+  auto_retired_at?: string | null
   sku_group_id: string
   order_qty: number | null
   primary_sku: string | null

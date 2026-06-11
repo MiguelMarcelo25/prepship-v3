@@ -168,6 +168,7 @@
     "test:ps-184-legacy-client-id-passthrough": "tsx scripts/ps-184-legacy-client-id-passthrough-guard.ts",
     "test:ps-185-backend-1z-attribution": "tsx scripts/ps-185-backend-1z-attribution-guard.ts",
     "test:ps-183-backend-cache-ttl": "tsx scripts/ps-183-backend-cache-ttl-guard.ts",
+    "test:shipment-tracking-retirement": "tsx scripts/shipment-tracking-retirement-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",

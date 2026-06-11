@@ -149,6 +149,10 @@ export type StoreConnectorAccountInput = Record<string, unknown>;
 export type NormalizedTrackingStatus = {
   trackingNumber: string;
   status: 'unknown' | 'pre_transit' | 'in_transit' | 'delivered' | 'exception' | 'return_to_sender';
+  // Redacted display fields (truncated carrier status line + delivery date) —
+  // the persistence layer stores THESE, never rawPayload/events checkpoints.
+  statusDescription?: string | null;
+  deliveredAt?: string | null;
   rawPayload?: unknown;
 };
 

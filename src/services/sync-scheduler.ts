@@ -21,6 +21,8 @@ import {
 } from './worker-status';
 import { refreshReportingMetrics } from './reporting-metrics';
 import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
+import { runShipmentTrackingPollOnce } from './shipment-tracking';
+import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -47,6 +49,7 @@ const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
 const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
 const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking; // 15 minutes
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -57,6 +60,7 @@ let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
 let reportingRefreshRunning = false;
 let externalShippedClassifierRunning = false;
+let shipmentTrackingRunning = false;
 let heavySchedulerJobRunning: string | null = null;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
@@ -66,6 +70,7 @@ let syncProductsTimer: NodeJS.Timeout | null = null;
 let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 let reportingRefreshTimer: NodeJS.Timeout | null = null;
 let externalShippedClassifierTimer: NodeJS.Timeout | null = null;
+let shipmentTrackingTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 
 async function withSchedulerAdvisoryLock<T>(
@@ -345,6 +350,35 @@ export async function runExternalShippedClassifierTick(): Promise<void> {
   }
 }
 
+export async function runShipmentTrackingTick(): Promise<void> {
+  if (shipmentTrackingRunning) {
+    console.log('[scheduler] shipment tracking poll already running - skipping tick');
+    return;
+  }
+  shipmentTrackingRunning = true;
+  try {
+    const result = await runHeavySchedulerJob('shipment tracking poll', () =>
+      runShipmentTrackingPollOnce({
+        // Tracking-driven print-queue retirement: observe-only unless the
+        // operator explicitly enables auto-retire (the instant kill-switch).
+        autoRetire: env.TRACKING_AUTO_RETIRE_ENABLED === true,
+      })
+    );
+    if (!result) return;
+    console.log(
+      `[scheduler] shipment tracking: candidates=${result.candidates}, checked=${result.checked}, ` +
+      `delivered=${result.delivered}, retired=${result.retired}, unknown=${result.unknown}, errors=${result.errors}`
+    );
+  } catch (err) {
+    console.error(
+      '[scheduler] shipment tracking poll failed:',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    shipmentTrackingRunning = false;
+  }
+}
+
 export function startSyncScheduler(
   options: { mode?: 'api-scheduler' | 'worker-scheduler' } = {}
 ): void {
@@ -398,6 +432,26 @@ export function startSyncScheduler(
     } else {
       console.log(
         '[scheduler] external-shipped classifier disabled; set ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true to automate PS-056 dry-run/apply'
+      );
+    }
+  }
+
+  if (!shipmentTrackingTimer) {
+    if (env.ENABLE_SHIPMENT_TRACKING_SCHEDULER && env.SHIPSTATION_API_KEY_V2) {
+      console.log(
+        `[scheduler] shipment tracking poll enabled - every ${SHIPMENT_TRACKING_INTERVAL_MS / 60000}m; ` +
+        `autoRetire=${env.TRACKING_AUTO_RETIRE_ENABLED === true}`
+      );
+      setTimeout(() => {
+        void runShipmentTrackingTick();
+        shipmentTrackingTimer = setInterval(
+          () => void runShipmentTrackingTick(),
+          SHIPMENT_TRACKING_INTERVAL_MS
+        );
+      }, STARTUP_DELAY_MS + 7 * 60 * 1000);
+    } else {
+      console.log(
+        '[scheduler] shipment tracking poll disabled; set ENABLE_SHIPMENT_TRACKING_SCHEDULER=true (+ SHIPSTATION_API_KEY_V2) to poll delivery status for queued labels'
       );
     }
   }
@@ -527,6 +581,10 @@ export function stopSyncScheduler(): void {
   if (externalShippedClassifierTimer) {
     clearInterval(externalShippedClassifierTimer);
     externalShippedClassifierTimer = null;
+  }
+  if (shipmentTrackingTimer) {
+    clearInterval(shipmentTrackingTimer);
+    shipmentTrackingTimer = null;
   }
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);

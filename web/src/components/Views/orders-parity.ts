@@ -149,9 +149,12 @@ export interface PrintQueueEntryDto {
   item_description: string | null
   order_qty: number | null
   multi_sku_data?: unknown
-  status: 'queued' | 'printed'
+  // 'delivered' = tracking-driven retirement (carrier confirmed delivery; the
+  // entry left the active queue and lives in History with auto_retired_at).
+  status: 'queued' | 'printed' | 'delivered'
   print_count: number
   last_printed_at: string | null
+  auto_retired_at?: string | null
   queued_at: string
 }
 

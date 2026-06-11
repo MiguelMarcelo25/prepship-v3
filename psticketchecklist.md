@@ -622,3 +622,28 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
 > BEFORE the PS-172 phase track. **PS-189** (media-mail auto-default) is a compliance risk. PS-181/182/183/
 > 184/185/188/190 are small, independent backend-DTO-ownership fixes aligned with the PS-172 principle —
 > good opportunistic wins. **PS-180** is pure board hygiene (no code risk).
+
+### Tracking-driven print-queue retirement (delivered → History) — built 2026-06-11, DJ-requested (unnumbered)
+- **🟡 BUILT, SHIPS DARK (env-gated):** when ShipStation v2 tracking confirms a package was DELIVERED, its
+  print-queue entry automatically moves 'queued' → 'delivered' (leaves the active queue/count/Print-All,
+  stays in History with an emerald "Delivered" pill + auto_retired_at date); the order side panel's Tracking
+  strip shows "Delivered <date>" / "In transit" / "Tracking exception". **Architecture:** first
+  implementation of the existing TrackingConnector interface (`src/connectors/tracking/shipstation.ts`, via
+  the shared rate-limited ssRequest; 404/400 → 'unknown' = never retires); pure policy module
+  `shipment-tracking-policy.ts` (DE/SP→delivered, AT=attempt→in_transit, return-to-sender prose detection,
+  ≤160-char description truncation — events[]/raw NEVER persisted); canonical service
+  `shipment-tracking.ts` (reads shipments — lockdown citation; new additive `shipment_tracking_status`
+  table + drizzle/0042 + runtime ensure; candidates = queued entries only, excludes test clients +
+  prepship_test, 45-day age cap, 12-min recheck, 240-check cap, 50/tick); print-queue owner's
+  `retireDeliveredQueueEntries` (WHERE pins status='queued'; never touches 'printed'; never DELETEs —
+  the no-op removeQueueEntriesForOrder policy still holds). Job registered in BOTH schedulers (interval +
+  pg-boss 'prepship.tracking.poll', 15-min cadence, +7-min stagger). **Rollout:** ships with BOTH flags off →
+  set `ENABLE_SHIPMENT_TRACKING_SCHEDULER=true` for observe-only (status fills, queue untouched; validate
+  per-carrier coverage from worker telemetry) → set `TRACKING_AUTO_RETIRE_ENABLED=true` to go live;
+  unsetting it is the instant kill-switch. **Follow-up:** direct-UPS/Shipp/Walmart tracking connectors on
+  the same interface (the screenshotted 1ZC81F70… ROCEL label is direct UPS — v2 tracking may 404 → safe
+  'unknown' until then). Guard `test:shipment-tracking-retirement` (29 checks: full retirement matrix,
+  status-code mapping incl. AT≠delivered, truncation/no-raw pins, lockdown pins, both-scheduler pins,
+  active-filter-unchanged pin). QA: typecheck + build:web + print-queue-hygiene + client-scope + ps-053 +
+  ps-104 + ps-032 (connector classified + audit doc) + vercel-fn-esm-import-closure + full cert ALL PASS.
+  Local commit only.

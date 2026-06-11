@@ -27,6 +27,7 @@ const approvedConnectorOwned = new Set([
   'src/connectors/store/ebay.ts',
   'src/connectors/store/shipstation.ts',
   'src/connectors/carrier/shipstation.ts',
+  'src/connectors/tracking/shipstation.ts',
   'src/connectors/carrier/ups.ts',
   'src/connectors/carrier/easypost.ts',
   'src/connectors/carrier/shipp.ts',
@@ -72,6 +73,8 @@ const ignoredFiles = new Set([
   'scripts/parity/extract.mjs',
   'scripts/ps-032-connector-boundary-guard.mjs',
   'scripts/ps-032-connector-orchestrator-guard.mjs',
+  // References ssRequest/v2 tracking ONLY inside source-pin regexes (no provider calls).
+  'scripts/shipment-tracking-retirement-guard.ts',
 ]);
 
 function normalize(filePath) {

@@ -73,6 +73,14 @@ const schema = z.object({
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
   ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY: booleanFlag(false),
+  // Tracking-driven print-queue retirement (delivered → History). Two-stage
+  // rollout mirroring the pair above: the SCHEDULER flag turns polling on
+  // (observe-only — shipment_tracking_status fills, panel shows status, queue
+  // untouched); AUTO_RETIRE additionally lets a carrier-confirmed delivery move
+  // a queued entry to 'delivered'. Both default OFF; unsetting AUTO_RETIRE is
+  // the instant kill-switch.
+  ENABLE_SHIPMENT_TRACKING_SCHEDULER: booleanFlag(false),
+  TRACKING_AUTO_RETIRE_ENABLED: booleanFlag(false),
   USE_PG_BOSS_SCHEDULER: booleanFlag(true),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   PG_BOSS_POOL_MAX: z.coerce.number().int().positive().max(5).default(1),

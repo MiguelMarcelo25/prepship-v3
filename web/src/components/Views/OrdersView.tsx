@@ -7808,8 +7808,11 @@ export default function OrdersView({
     () => queuedEntries.map((entry) => entry.queue_entry_id),
     [queuedEntries],
   )
+  // History = everything that left the active queue: confirmed-printed entries
+  // AND tracking-retired 'delivered' entries (carrier confirmed the package
+  // reached the customer; its label never needs printing).
   const printedEntries = useMemo(
-    () => queueHistoryVisible ? activeQueueEntries.filter((entry) => entry.status === 'printed') : [],
+    () => queueHistoryVisible ? activeQueueEntries.filter((entry) => entry.status !== 'queued') : [],
     [activeQueueEntries, queueHistoryVisible],
   )
   const queueGroups = useMemo<PrintQueueGroup[]>(
@@ -7861,9 +7864,15 @@ export default function OrdersView({
   }, [queueGroups, pqSearchLower])
   const visiblePrintedEntries = useMemo(() => {
     const filtered = pqSearchLower ? printedEntries.filter(matchesPqSearch) : printedEntries
+    // History timestamp: printed entries sort by their confirm time, delivered
+    // entries by the tracking-retirement time.
+    const historyTime = (entry: { last_printed_at?: string | null; auto_retired_at?: string | null }) => {
+      const stamp = entry.last_printed_at ?? entry.auto_retired_at
+      return stamp ? Date.parse(stamp) : 0
+    }
     const sorted = [...filtered].sort((a, b) => {
-      const aT = a.last_printed_at ? Date.parse(a.last_printed_at) : 0
-      const bT = b.last_printed_at ? Date.parse(b.last_printed_at) : 0
+      const aT = historyTime(a)
+      const bT = historyTime(b)
       return pqHistoryAsc ? aT - bT : bT - aT
     })
     return sorted
@@ -10363,6 +10372,35 @@ export default function OrdersView({
               >
                 {trackingNumber}
               </button>
+              {/* Backend-owned carrier tracking status (shipment-tracking poller).
+                  Display-only: delivered/in-transit/exception; quiet otherwise. */}
+              {(() => {
+                const tracking = toRecord((panelDetail as Record<string, unknown> | null)?.tracking)
+                const trackingStatus = toStringValue(tracking?.status)
+                if (!trackingStatus) return null
+                if (trackingStatus === 'delivered') {
+                  const deliveredAtRaw = toStringValue(tracking?.deliveredAt)
+                  const deliveredLabel = deliveredAtRaw
+                    ? new Date(deliveredAtRaw).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: CALIFORNIA_TZ })
+                    : null
+                  return (
+                    <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-emerald-200 shrink-0">
+                      Delivered{deliveredLabel ? ` ${deliveredLabel}` : ''}
+                    </span>
+                  )
+                }
+                if (trackingStatus === 'in_transit') {
+                  return <span className="ml-auto text-[10.5px] font-semibold text-ink-3 shrink-0">In transit</span>
+                }
+                if (trackingStatus === 'exception' || trackingStatus === 'return_to_sender') {
+                  return (
+                    <span className="ml-auto inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200 shrink-0">
+                      Tracking exception
+                    </span>
+                  )
+                }
+                return null
+              })()}
             </div>
           ) : null}
 
@@ -11958,7 +11996,7 @@ export default function OrdersView({
             {visiblePrintedEntries.length > 0 ? (
               <div className="mt-3 pt-3 border-t border-line">
                 <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-ink-3">
-                  <span>📋 Printed History</span>
+                  <span>📋 History</span>
                   <span className="inline-flex items-center px-1.5 py-px rounded-sm bg-surface-2 text-ink-2 text-[10px] tabular-nums ring-1 ring-line/70">
                     {visiblePrintedEntries.length}
                     {pqSearchLower && visiblePrintedEntries.length !== printedEntries.length ? ` / ${printedEntries.length}` : ''}
@@ -11968,6 +12006,12 @@ export default function OrdersView({
                   {visiblePrintedEntries.map((entry) => {
                     const numericOrderId = Number.parseInt(String(entry.order_id), 10)
                     const orderClickable = Number.isFinite(numericOrderId) && numericOrderId > 0
+                    // Tracking-retired entries show the carrier-confirmed delivery
+                    // instead of the printed checkmark (the label never needed printing).
+                    const wasDelivered = entry.status === 'delivered'
+                    const historyStamp = wasDelivered
+                      ? (entry.auto_retired_at ?? entry.last_printed_at)
+                      : entry.last_printed_at
                     return (
                       <div
                         key={entry.queue_entry_id}
@@ -11985,12 +12029,20 @@ export default function OrdersView({
                         >
                           Order #{entry.order_number || entry.order_id}
                         </button>
+                        {wasDelivered ? (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-emerald-200"
+                            title="Carrier tracking confirmed delivery — this label left the queue automatically"
+                          >
+                            Delivered
+                          </span>
+                        ) : null}
                         <span className="pq-order-qty inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-2 text-ink-2 text-[10.5px] font-semibold tabular-nums ring-1 ring-line/70">
                           Qty {entry.order_qty ?? 1}
                         </span>
                         <span className="pq-order-time inline-flex items-center gap-1 text-[10.5px] text-ink-3 tabular-nums">
-                          <span className="text-emerald-600">✓</span>
-                          {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: CALIFORNIA_TZ }) : '—'}
+                          {wasDelivered ? <span className="text-emerald-600">📦</span> : <span className="text-emerald-600">✓</span>}
+                          {historyStamp ? new Date(historyStamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: CALIFORNIA_TZ }) : '—'}
                         </span>
                       </div>
                     )

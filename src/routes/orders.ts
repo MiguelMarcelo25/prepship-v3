@@ -14,6 +14,7 @@ import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, sta
 // ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
 import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
 import { loadClientIsTest } from '../services/fulfillment/test-label-policy';
+import { loadOrderTrackingSummary } from '../services/shipment-tracking';
 import { replaceOrderItemsForOrders } from '../services/order-items';
 import {
   getComboPackageDefaultForOrder,
@@ -2470,6 +2471,10 @@ app.get('/:id{[0-9]+}', async (c) => {
     comboPackageDefault,
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
     isTest: await loadClientIsTest(order.clientId),
+    // Tracking-driven queue retirement: read-only carrier tracking summary for the
+    // side panel ("Delivered Jun 12" / "In transit"). Null until the poller has seen
+    // this order; never blocks the payload (the loader swallows its own errors).
+    tracking: await loadOrderTrackingSummary(id),
   });
 });
 
@@ -2506,6 +2511,8 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     comboPackageDefault,
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
     isTest: await loadClientIsTest(order.clientId),
+    // Tracking-driven queue retirement: same read-only tracking summary as GET /:id.
+    tracking: await loadOrderTrackingSummary(id),
   });
 });
 

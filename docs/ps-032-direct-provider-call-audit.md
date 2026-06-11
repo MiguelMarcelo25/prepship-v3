@@ -33,6 +33,7 @@ These files currently contain direct provider call markers and are allowed as co
 | `src/connectors/store/ebay.ts` | eBay Marketplace | StoreConnector implementation owns eBay marketplace API details. |
 | `src/connectors/store/shipstation.ts` | ShipStation store/orders | StoreConnector implementation owns ShipStation order API details. |
 | `src/connectors/carrier/shipstation.ts` | ShipStation carrier | CarrierConnector implementation owns ShipStation label/rate behavior. |
+| `src/connectors/tracking/shipstation.ts` | ShipStation tracking | TrackingConnector implementation owns the read-only GET /v2/tracking call (delivered-driven print-queue retirement). |
 | `src/connectors/carrier/ups.ts` | UPS | CarrierConnector implementation owns UPS carrier behavior. |
 | `src/connectors/carrier/easypost.ts` | EasyPost | CarrierConnector implementation owns EasyPost carrier behavior. |
 | `src/connectors/carrier/shipp.ts` | Shipp | CarrierConnector implementation owns Shipp carrier behavior. |

@@ -24,6 +24,10 @@ export const printQueue = pgTable(
     status: text().default('queued').notNull(),
     printCount: integer().default(0).notNull(),
     lastPrintedAt: timestamp({ withTimezone: true }),
+    // Tracking-driven retirement: stamped when the poller moves a 'queued' entry
+    // to 'delivered' (the package reached the customer — its label never needs
+    // printing). History sorts/renders "Delivered <date>" from this.
+    autoRetiredAt: timestamp({ withTimezone: true }),
     queuedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },

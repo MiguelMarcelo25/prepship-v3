@@ -7,6 +7,7 @@ import {
 import { ssRequest } from '../../lib/shipstation/client.js';
 import type { CarriersResponse, Label } from '../../lib/shipstation/types.js';
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
+import { shipStationTrackingConnector } from '../tracking/shipstation.js';
 
 type ShipStationRateEstimateInput = {
   body?: Record<string, unknown>;
@@ -112,6 +113,10 @@ export function createShipStationCarrierConnector(): CarrierConnector<
     voidLabel: async (input) => {
       await ssVoidShipment(input.labelId, (input as { apiKeyV2?: string }).apiKeyV2);
     },
+    // Tracking-driven queue retirement: delegate to the TrackingConnector
+    // implementation (src/connectors/tracking/shipstation.ts) so the
+    // trackCarrierShipment orchestrator works for 'shipstation'. Read-only.
+    trackShipment: (input) => shipStationTrackingConnector.trackShipment(input),
     listCarrierAccounts: async (input) => {
       const row = input as { apiKeyV2?: string; apiKey?: string; dedupeKey?: string };
       return ssRequest<CarriersResponse>('/v2/carriers', {

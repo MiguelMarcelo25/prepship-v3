@@ -8,6 +8,7 @@ import {
   runOrderSync,
   runReportingRefreshTick,
   runShipmentSync,
+  runShipmentTrackingTick,
   runSyncProductsTick,
 } from './sync-scheduler';
 import {
@@ -30,6 +31,7 @@ const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = SYNC_CADENCE_MS.productCatalog;
 const FULFILLMENT_OUTBOX_INTERVAL_MS = SYNC_CADENCE_MS.fulfillmentOutbox;
 const REPORTING_REFRESH_INTERVAL_MS = SYNC_CADENCE_MS.reportingMetrics;
 const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedClassifier;
+const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking;
 const STARTUP_DELAY_MS = SYNC_STARTUP_DELAY_MS;
 
 const JOBS = {
@@ -41,6 +43,7 @@ const JOBS = {
   fulfillmentOutbox: 'prepship.sync.fulfillment-outbox',
   reportingRefresh: 'prepship.reporting.refresh',
   externalShippedClassifier: 'prepship.shipping.external-shipped-classifier',
+  shipmentTracking: 'prepship.tracking.poll',
 } as const;
 
 type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -200,6 +203,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
   await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierTick);
+  await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());
 
   heartbeatTimer = setInterval(() => {
@@ -227,6 +231,18 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   } else {
     console.log(
       '[job-queue] external-shipped classifier disabled; set ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true to automate PS-056 dry-run/apply'
+    );
+  }
+
+  if (env.ENABLE_SHIPMENT_TRACKING_SCHEDULER && env.SHIPSTATION_API_KEY_V2) {
+    scheduleEnqueue(
+      JOBS.shipmentTracking,
+      STARTUP_DELAY_MS + 7 * 60 * 1000,
+      SHIPMENT_TRACKING_INTERVAL_MS
+    );
+  } else {
+    console.log(
+      '[job-queue] shipment tracking poll disabled; set ENABLE_SHIPMENT_TRACKING_SCHEDULER=true (+ SHIPSTATION_API_KEY_V2) to poll delivery status for queued labels'
     );
   }
 

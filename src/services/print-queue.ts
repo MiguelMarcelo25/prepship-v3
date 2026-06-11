@@ -726,6 +726,7 @@ export async function listQueue(
       status: e.status,
       print_count: e.printCount,
       last_printed_at: e.lastPrintedAt?.toISOString() ?? null,
+      auto_retired_at: e.autoRetiredAt?.toISOString() ?? null,
       queued_at: e.queuedAt.toISOString(),
       shipping_hold: holds.has(Number(e.orderId)),
       held_reason: holds.get(Number(e.orderId)) ?? null,
@@ -963,6 +964,41 @@ export async function confirmPrintedQueueEntries(input: {
 export async function removeQueueEntriesForOrder(orderId: number): Promise<number> {
   void orderId;
   return 0;
+}
+
+/**
+ * Tracking-driven retirement (per user override unlock shipped data on
+ * 2026-06-11): when carrier tracking shows a package was DELIVERED, its label
+ * never needs printing — the shipment-tracking poller moves the entry
+ * 'queued' → 'delivered' so it leaves the ACTIVE queue (which filters
+ * status='queued') but stays in History with auto_retired_at. This is the
+ * ONLY writer of the 'delivered' status. Strictly narrower than the operator
+ * actions above: the WHERE pins status='queued' so 'printed' history is never
+ * touched, and nothing is ever DELETED (the no-op policy in
+ * removeQueueEntriesForOrder still holds — order status alone never removes a
+ * row; only a carrier-confirmed delivery retires one, and only to History).
+ */
+export async function retireDeliveredQueueEntries(input: {
+  entries: Array<{ entryId: string; deliveredAt: Date | null }>;
+}): Promise<{ retiredCount: number; retiredEntryIds: string[] }> {
+  const ids = [...new Set(input.entries.map((entry) => entry.entryId).filter(Boolean))];
+  if (!ids.length) return { retiredCount: 0, retiredEntryIds: [] };
+  const deliveredAtByEntry = new Map(
+    input.entries.map((entry) => [entry.entryId, entry.deliveredAt] as const),
+  );
+  const retiredEntryIds: string[] = [];
+  for (const entryId of ids) {
+    const rows = await db
+      .update(printQueue)
+      .set({
+        status: 'delivered',
+        autoRetiredAt: deliveredAtByEntry.get(entryId) ?? new Date(),
+      })
+      .where(and(eq(printQueue.id, entryId), eq(printQueue.status, 'queued')))
+      .returning({ id: printQueue.id });
+    if (rows.length) retiredEntryIds.push(entryId);
+  }
+  return { retiredCount: retiredEntryIds.length, retiredEntryIds };
 }
 
 // ─── PDF MERGE ────────────────────────────────────────────────────────
