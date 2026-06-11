@@ -19,8 +19,6 @@ import {
   Loader2,
   AlertCircle,
   KeyRound,
-  Power,
-  PowerOff,
 } from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 // PS-083: drop the Rate Browser scoped-carrier cache after an assignment change
@@ -33,6 +31,7 @@ import EasyPostLogo from '../../utils/logo/easypost'
 import WalmartLogo from '../../utils/logo/walmart'
 import { ModernCheckbox } from '../ui/ModernCheckbox'
 import { ActionButton } from '../ui/ActionButton'
+import { StateToggle } from '../ui/StateToggle'
 
 // Phase 2 frontend stub. Each provider declares the credential fields its
 // "Add integration" form needs. When the backend route POST /carrier-accounts
@@ -1884,14 +1883,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               Carriers only, not ShipStation. */}
           {d.kind === 'carrier' && !isShipStation ? (
             <span style={{ flexShrink: 0 }}>
-              {/* The button shows the CURRENT state (ENABLED = green / DISABLED = red);
-                  clicking toggles it. The title spells out what the click will do. */}
-              <ActionButton
-                icon={d.active === false ? <PowerOff size={11} strokeWidth={2.5} /> : <Power size={11} strokeWidth={2.5} />}
-                label={d.active === false ? 'DISABLED' : 'ENABLED'}
-                loadingLabel={d.active === false ? 'Enabling…' : 'Disabling…'}
+              {/* A SWITCH, not a labeled button — a pill that says "ENABLED" reads
+                  like a command ("click to enable"); the knob's position + color is
+                  unambiguously the CURRENT state, and clicking flips it. */}
+              <StateToggle
+                on={d.active !== false}
                 loading={!!togglingActive[d.id]}
-                variant={d.active === false ? 'danger' : 'success'}
                 onClick={() => runToggleActive(d)}
                 title={d.active === false
                   ? 'This carrier is DISABLED — click to enable it (show it in the Rate Browser again)'
