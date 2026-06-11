@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
 import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getRates } from './rates';
+import { finalizeBestRateWithQuote } from './shipping-workflow/rate-quote-snapshot-store';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 import {
@@ -488,8 +489,19 @@ async function runBackfill(
           }
         } else {
           const now = new Date();
+          // PS-174 (Phase 2): stamp the backend quote snapshot ref + proof marker —
+          // the SAME finalization /rates/browse performs — so the persisted best
+          // rate is snapshot-purchasable on reload without a re-browse. Best-effort
+          // (a snapshot failure persists the rate without the ref; the purchase
+          // boundary then requires a re-rate exactly as before PS-174).
+          const finalizedBest = await finalizeBestRateWithQuote({
+            bestRate: best as Record<string, unknown>,
+            rates: result.rates as unknown as Array<Record<string, unknown>>,
+            cacheKey: result.cacheKey,
+            fetchedAt: result.fetchedAt,
+          });
           const bestWithMetadata = {
-            ...best,
+            ...finalizedBest,
             requestFingerprint: result.cacheKey,
             cacheKey: result.cacheKey,
             cacheCreatedAt: result.fetchedAt,

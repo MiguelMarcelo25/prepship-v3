@@ -394,11 +394,18 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   later phase revisits that; vocabulary + tests ready. Guard `test:ps-173-order-row-workflow` (26 checks).
   QA: typecheck + build:web + ps-102 + ps-196 + ps-165 + ps-120-producer + ps-099 + batch-recalculate +
   recalculate-strict + full cert ALL PASS. Local commit only.
-- **PS-174 — Phase 2: Backend Rate Quote Snapshot + selectedRateKey primitive.** Backend issues opaque
-  `rateQuoteId`/`selectedRateKey`/proof per final rate (normalized account/service/amount-components/
-  insurance/confirmation/ZIP+4/residential/weight/dims/package/ship-date-bucket/client-store-source/
-  eligibility-version/expiry; sanitized only). Returned in BestRate + RateBrowser. No purchase enforcement
-  yet; keep old `selectedRateProof` fallback. Dep: PS-173.
+- **PS-174 — ✅ DONE 2026-06-11 (Phase 2, consolidation): every backend-finalized best rate carries the
+  quote ref.** Repo-verified: the phase's primitive was largely PRE-BUILT — PS-105 ships the snapshot store
+  + opaque `rateQuoteId`/`selectedRateKey` per /browse rate, PS-198 makes the FE persist them through
+  Apply, PS-183 adds the backend expiry; the recalculate path therefore already carries the ref via the
+  browse→FE chain. **The remaining gap closed here:** the server-side `rates-backfill` persisted best rates
+  WITHOUT the ref, so a reloaded "fresh" saved rate could not be snapshot-purchased until someone
+  re-browsed. New single finalizer `finalizeBestRateWithQuote` in the snapshot store (reuses
+  withSelectedRateKeys + storeRateQuoteSnapshot + selectedRateOpaqueKey; stamps the now-canonical
+  `BACKEND_RATE_PROOF_SOURCE` constant; half-refs never invented); the backfill persists through it.
+  Purchase enforcement UNCHANGED (legacy `selectedRateProof` fallback intact — enforcement is Phase 4).
+  Guard `test:ps-174-quote-key-consolidation` (8 checks). QA: typecheck + build:web + ps-105 + ps-121 +
+  ps-198 + ps-196 + full cert ALL PASS. Local commit only.
 - **PS-175 — Phase 3: Best Rate + Rate Browser convergence on backend finalized rates.** One backend rate
   workflow entrypoint for passive BestRate + Recalculate + RateBrowser; backend owns eligibility/HUGRAB
   blocking/insurance capability+premium/ZIP+4/residential/confirmation/diagnostics; returns final classified

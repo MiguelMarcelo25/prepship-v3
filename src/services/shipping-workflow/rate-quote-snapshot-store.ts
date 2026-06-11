@@ -65,6 +65,40 @@ export function withSelectedRateKeys<T extends Record<string, unknown>>(rates: T
   }));
 }
 
+// PS-174: the single backend proof-source marker. The FE mirrors this value in
+// web/src/lib/rate-proof.ts (BACKEND_RATE_PROOF_SOURCE) — it is an output tag the
+// frontend passes back verbatim, never synthesizes.
+export const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response';
+
+/**
+ * PS-174 (Phase 2) — finalize a rate result's BEST rate with the backend quote
+ * snapshot ref + proof marker: the SAME stamping /rates/browse performs, packaged
+ * for server-side persist paths (rates-backfill) so a saved best rate is
+ * snapshot-purchasable WITHOUT a re-browse. Best-effort: if the snapshot id cannot
+ * be derived/stored, the rate is returned with the selection key only (a half-ref
+ * is ignored at the purchase boundary, which then uses the legacy proof path).
+ * Purchase enforcement itself is untouched (Phase 4 territory).
+ */
+export async function finalizeBestRateWithQuote<T extends Record<string, unknown>>(input: {
+  bestRate: T;
+  rates: Array<Record<string, unknown>>;
+  cacheKey: string;
+  fetchedAt?: string | number;
+}): Promise<T & { selectedRateKey: string; rateQuoteId?: string; proofSource: string }> {
+  const ratesWithKeys = withSelectedRateKeys(input.rates);
+  const rateQuoteId = await storeRateQuoteSnapshot({
+    cacheKey: input.cacheKey,
+    rates: ratesWithKeys,
+    fetchedAt: input.fetchedAt,
+  });
+  return {
+    ...input.bestRate,
+    selectedRateKey: selectedRateOpaqueKey(input.bestRate),
+    ...(rateQuoteId ? { rateQuoteId } : {}),
+    proofSource: BACKEND_RATE_PROOF_SOURCE,
+  };
+}
+
 export async function loadRateQuoteSnapshot(rateQuoteId: string | null | undefined): Promise<RateQuoteSnapshot | null> {
   const id = typeof rateQuoteId === 'string' ? rateQuoteId.trim() : '';
   if (!id) return null;
