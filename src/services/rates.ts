@@ -1137,6 +1137,13 @@ export type GetRatesResult = {
   effectiveInsuranceProvider: string | null;
   effectiveInsuredValue: number | null;
   effectiveInsuranceSource: string | null;
+  // PS-197 (residential parity): the backend-resolved classification used for the quote + WHICH
+  // evidence tier decided it (manual_override / provider_marker / shipstation_source /
+  // address_validation / company_heuristic / fallback_residential) — so the Rate Browser can
+  // show WHY a quote was residential vs commercial (e.g. the #1461 $1.02 surcharge axis).
+  residential: boolean;
+  residentialClassification: string | null;
+  residentialSource: string | null;
 };
 
 type GetRatesOptions = {
@@ -1383,6 +1390,9 @@ export async function getRates(
           effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
           effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
           effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+          residential: resolvedInput.residential === true,
+          residentialClassification: resolvedInput.residentialClassification ?? null,
+          residentialSource: resolvedInput.residentialSource ?? null,
         };
       }
     }
@@ -1401,6 +1411,9 @@ export async function getRates(
       effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
       effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
       effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+      residential: resolvedInput.residential === true,
+      residentialClassification: resolvedInput.residentialClassification ?? null,
+      residentialSource: resolvedInput.residentialSource ?? null,
     };
   }
 
@@ -1424,6 +1437,9 @@ export async function getRates(
     effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
     effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
     effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+    residential: resolvedInput.residential === true,
+    residentialClassification: resolvedInput.residentialClassification ?? null,
+    residentialSource: resolvedInput.residentialSource ?? null,
   };
 }
 

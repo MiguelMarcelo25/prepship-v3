@@ -29,7 +29,9 @@ import {
   resolveHugrabRequestInsurance,
   evaluateShippingServiceEligibility,
 } from '../src/lib/shipping-service-eligibility';
+import { effectiveInsuranceProviderForAccount } from '../src/lib/carrier-account-registry';
 import { normalizeShippingPostalCode } from '../src/services/shipping-workflow/postal-code';
+import { classifyShippingAddress } from '../src/services/shipping-workflow/address-classification';
 import { rateCacheKey } from '../src/services/rates';
 
 let failures = 0;
@@ -41,12 +43,32 @@ function check(name: string, got: unknown, want: unknown) {
 }
 
 // ── 1. The #1461 fixture (HUGRAB · ROCEL C81F70 · UPS Ground) ─────────────────
+// DJ correction (2026-06-10): #1461 ROCEL is a DIRECT UPS account — its EFFECTIVE insurance is
+// CARRIER DECLARED VALUE $100 ($0 add-on, PS-170 capability rule), NOT ParcelGuard. ParcelGuard
+// remains only the REQUEST-LEVEL fingerprint policy (it spans all carriers before the
+// per-candidate refinement) and the effective provider for brokered accounts (stamps_com,
+// ups_walleted / UPS by SS).
 const HUGRAB = { clientId: 4, storeId: 378060 };
 {
   const eff = resolveHugrabRequestInsurance(HUGRAB, { insuranceProvider: 'none', insuredValue: null });
-  check('#1461: HUGRAB + operator none -> effective ParcelGuard', eff.insuranceProvider, 'parcelguard');
-  check('#1461: HUGRAB effective insured value is $100', eff.insuredValue, 100);
-  check('#1461: the effective source is the HUGRAB default policy', eff.source, 'hugrab-default');
+  check('REQUEST-LEVEL fingerprint policy is ParcelGuard (spans all carriers pre-refinement)', eff.insuranceProvider, 'parcelguard');
+  check('REQUEST-LEVEL insured value is $100', eff.insuredValue, 100);
+  check('REQUEST-LEVEL source is the HUGRAB default policy', eff.source, 'hugrab-default');
+}
+{
+  // The PS-170 capability rule decides what each ACCOUNT actually purchases with:
+  check('#1461 ROCEL C81F70 (607855, direct UPS) effective insurance is CARRIER declared value',
+    effectiveInsuranceProviderForAccount({ shippingProviderId: 607855, serviceCode: 'ups_ground', insuredValue: 100 }),
+    'carrier');
+  check('ROCEL (604209, direct UPS) effective insurance is CARRIER declared value',
+    effectiveInsuranceProviderForAccount({ shippingProviderId: 604209, serviceCode: 'ups_ground', insuredValue: 100 }),
+    'carrier');
+  check('UPS by SS / walleted stays ParcelGuard',
+    effectiveInsuranceProviderForAccount({ carrierCode: 'ups_walleted', insuredValue: 100 }),
+    'parcelguard');
+  check('USPS/Stamps stays ParcelGuard',
+    effectiveInsuranceProviderForAccount({ carrierCode: 'stamps_com', insuredValue: 100 }),
+    'parcelguard');
 }
 check('#1461: ZIP+4 92801-5567 is preserved exactly',
   normalizeShippingPostalCode('92801-5567', 'US').exact, '92801-5567');
@@ -190,6 +212,53 @@ check('modal: the baseline list is labeled not-label-safe',
     syncBlock.indexOf('return;') >= 0 &&
       syncBlock.indexOf('return;') < syncBlock.indexOf('setInsuranceProvider('),
     true);
+}
+
+// ── 5. PS-197 residential parity — the OTHER #1461 axis ($1.02 = residential surcharge) ──
+// ShipStation's Rate Alert on #1461: "Ship To Address Classification is changed from
+// Residential to Commercial." PrepShip quoted residential (raw flag), hence $8.95 vs $7.93.
+// The fix: /browse loads the ORDER's classification evidence and feeds the canonical
+// classifier's proper tiers — the FE's collapsed boolean no longer decides for real orders.
+{
+  // Commercial must be REACHABLE through every trusted tier (the ticket's acceptance):
+  const manual = classifyShippingAddress({ manualOverrideResidential: false, sourceResidential: true });
+  check('manual commercial override beats the raw residential flag', manual.classification, 'commercial');
+  check('manual override is attributed to the manual tier', manual.source, 'manual_override');
+  const provider = classifyShippingAddress({
+    providerMarker: { classification: 'commercial', provider: 'shipstation' },
+    sourceResidential: true,
+  });
+  check('a ShipStation classification-change marker beats the raw residential flag (the #1461 alert)',
+    provider.classification, 'commercial');
+  const validated = classifyShippingAddress({ addressValidation: { business: 'Y' } });
+  check('validation business=Y classifies commercial (validated tier)', validated.classification, 'commercial');
+  check('validated commercial is attributed to address_validation', validated.source, 'address_validation');
+  // Both variants must hit the fingerprint so cached residential/commercial quotes never mix:
+  const base = { weightOz: 35, toZip: '92801-5567', toCountry: 'US', dimsL: 12, dimsW: 10, dimsH: 3, clientId: 4, insuranceProvider: 'parcelguard', insuredValue: 100 };
+  check('commercial fingerprint carries r=0',
+    rateCacheKey({ ...base, residential: false } as Parameters<typeof rateCacheKey>[0]).includes('r=0'), true);
+  check('residential fingerprint carries r=1',
+    rateCacheKey({ ...base, residential: true } as Parameters<typeof rateCacheKey>[0]).includes('r=1'), true);
+}
+{
+  // Source pins — the backend owns the evidence for real-order browses:
+  check('browse loads the order residential EVIDENCE (manual override + raw source flag)',
+    /manualOverrideResidential: residentialEvidence\.manualOverrideResidential/.test(ratesRoute) &&
+      /sourceResidential: residentialEvidence\.sourceResidential/.test(ratesRoute),
+    true);
+  check('browse DROPS the FE-collapsed residential boolean when order evidence exists',
+    /residential: undefined,/.test(ratesRoute), true);
+  check('the manual-estimate baseline reuses the SAME evidence-resolved input (apples to apples)',
+    /const manual = await getRates\(\s*\/\/[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n\s*browseRateInput/.test(ratesRoute) ||
+      /await getRates\(\s*(\/\/[^\n]*\n\s*)*browseRateInput/.test(ratesRoute),
+    true);
+  check('GetRatesResult declares the residential classification fields',
+    /residential: boolean;[\s\S]{0,400}residentialClassification: string \| null;[\s\S]{0,100}residentialSource: string \| null;/.test(ratesService),
+    true);
+  check('the modal diagnostics show the backend classification + evidence tier',
+    /browseResult\?\.residentialClassification/.test(modal), true);
+  check('the per-account verdict is the PRIMARY effective-insurance line when an account is selected',
+    /Effective insurance \(\$\{selectedAccountLabel\}\): \$\{accountVerdict\.label\}/.test(modal), true);
 }
 
 if (failures > 0) {

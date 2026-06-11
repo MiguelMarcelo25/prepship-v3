@@ -39,7 +39,7 @@ import {
   getCarrierEligibilityMode,
   evaluateOrderCarrierEligibility,
 } from '../services/shipping-workflow/carrier-eligibility-policy';
-import { orders } from '../db/schema/orders';
+import { orderOverrides, orders } from '../db/schema/orders';
 
 const app = new Hono();
 
@@ -344,8 +344,64 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   const requestedCarrierIds = carrierIds?.length ? carrierIds : carrierId ? [carrierId] : undefined;
   const preferred = preferredCarrierId ?? carrierId ?? requestedCarrierIds?.[0];
   const orderedIds = orderedCarrierIds(requestedCarrierIds, preferred);
+  // PS-197 (residential parity): when the browse is for a real order, the BACKEND loads the
+  // order's residential/commercial EVIDENCE (manual override > raw ShipStation source flag,
+  // plus company/name for the heuristic tier) and feeds the canonical classifier through the
+  // proper tiers — instead of trusting the FE's collapsed `residential: boolean` (which can
+  // only ever be a source-signal and silently forced r=1 on #1461-style orders). The label
+  // boundary already classifies from this same order evidence (PS-127), so browse == label
+  // classification BY CONSTRUCTION. Best-effort: any load failure falls back to the FE boolean.
+  let orderForBrowse: { sourceProvider: string | null; raw: unknown } | null = null;
+  let residentialEvidence: {
+    manualOverrideResidential: boolean | null;
+    sourceResidential: boolean | null;
+    toCompany: string | null;
+    toName: string | null;
+  } | null = null;
+  if (body.orderId) {
+    try {
+      const [ord] = await db
+        .select({ sourceProvider: orders.sourceProvider, raw: orders.raw, shipToName: orders.shipToName })
+        .from(orders)
+        .where(eq(orders.id, body.orderId))
+        .limit(1);
+      if (ord) {
+        orderForBrowse = ord;
+        const [ovr] = await db
+          .select({ residential: orderOverrides.residential })
+          .from(orderOverrides)
+          .where(eq(orderOverrides.orderId, body.orderId))
+          .limit(1);
+        const rawShipTo = ((ord.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+        residentialEvidence = {
+          manualOverrideResidential: typeof ovr?.residential === 'boolean' ? ovr.residential : null,
+          sourceResidential: typeof rawShipTo.residential === 'boolean' ? rawShipTo.residential : null,
+          toCompany: typeof rawShipTo.company === 'string' ? rawShipTo.company : null,
+          toName: ord.shipToName ?? null,
+        };
+      }
+    } catch (err) {
+      console.warn('[rates/browse] order residential-evidence load skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+  const browseRateInput = {
+    ...rest,
+    confirmation: confirmation ?? signature ?? null,
+    carrierIds: orderedIds,
+    ...(residentialEvidence
+      ? {
+          // Evidence decides — the collapsed FE boolean is dropped so the classifier's
+          // manual_override / shipstation_source tiers attribute correctly.
+          residential: undefined,
+          manualOverrideResidential: residentialEvidence.manualOverrideResidential,
+          sourceResidential: residentialEvidence.sourceResidential,
+          ...(residentialEvidence.toCompany != null ? { toCompany: residentialEvidence.toCompany } : {}),
+          ...(residentialEvidence.toName && !rest.toName ? { toName: residentialEvidence.toName } : {}),
+        }
+      : {}),
+  };
   const result = await getRates(
-    { ...rest, confirmation: confirmation ?? signature ?? null, carrierIds: orderedIds },
+    browseRateInput,
     {
       forceRefresh: forceRefresh || forceLive,
       cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
@@ -362,11 +418,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   let shipStationBlocked = false;
   if (body.orderId) {
     try {
-      const [ord] = await db
-        .select({ sourceProvider: orders.sourceProvider, raw: orders.raw })
-        .from(orders)
-        .where(eq(orders.id, body.orderId))
-        .limit(1);
+      // PS-197: reuse the order row already loaded for the residential-evidence step above.
+      const ord = orderForBrowse;
       if (ord) {
         const mode = await getCarrierEligibilityMode();
         const elig = evaluateOrderCarrierEligibility({ carrierFamily: 'shipstation', order: ord, mode });
@@ -536,7 +589,10 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   if (body.manualEstimate === true) {
     try {
       const manual = await getRates(
-        { ...rest, confirmation: confirmation ?? signature ?? null, carrierIds: orderedIds },
+        // Same input as the label-safe browse (incl. the PS-197 residential evidence) so the
+        // ONLY difference between the two quotes is the insurance — a true apples-to-apples
+        // baseline.
+        browseRateInput,
         {
           rawManualEstimate: true,
           forceRefresh: forceRefresh || forceLive,

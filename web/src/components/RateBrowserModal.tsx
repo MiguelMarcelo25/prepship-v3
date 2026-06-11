@@ -1425,7 +1425,13 @@ export default function RateBrowserModal({
                 typeof browseResult?.effectiveInsuranceSource === 'string'
                   ? browseResult.effectiveInsuranceSource
                   : null,
-              diagnostics: `Quoted with: ZIP ${zip} · ${totalOz} oz · ${lenNum}×${widNum}×${hgtNum} in · residential ${residentialForQuote ? 'yes' : 'no'} · confirmation ${rateConfirmation || 'none'} · ${browseResult?.cached ? 'cached' : 'live'} rates`,
+              // PS-197 residential parity: prefer the BACKEND-resolved classification + its
+              // evidence tier (e.g. "commercial (manual_override)") over the FE-sent boolean.
+              diagnostics: `Quoted with: ZIP ${zip} · ${totalOz} oz · ${lenNum}×${widNum}×${hgtNum} in · ${
+                typeof browseResult?.residentialClassification === 'string'
+                  ? `${browseResult.residentialClassification}${typeof browseResult?.residentialSource === 'string' ? ` (${browseResult.residentialSource})` : ''}`
+                  : `residential ${residentialForQuote ? 'yes' : 'no'}`
+              } · confirmation ${rateConfirmation || 'none'} · ${browseResult?.cached ? 'cached' : 'live'} rates`,
             }
           : null,
       );
@@ -2212,6 +2218,15 @@ export default function RateBrowserModal({
                         (rate) => toFiniteNumber(rate.shippingProviderId) === toFiniteNumber(selectedPid),
                       )
                     : [];
+                  // PS-197 correction (DJ 2026-06-10): when an account is selected, its
+                  // per-account verdict IS the effective insurance (e.g. ROCEL direct-UPS ->
+                  // "Carrier declared value $100", NOT the request-level ParcelGuard policy).
+                  // The request-level policy drops to a secondary "request policy" note — it
+                  // still owns the fingerprint/cache key, but it is not what the selected
+                  // account purchases with.
+                  const primaryLabel = accountVerdict && selectedAccountLabel
+                    ? `Effective insurance (${selectedAccountLabel}): ${accountVerdict.label}`
+                    : `Effective insurance: ${display.label}`;
                   return (
                     <div style={{ marginTop: -4, marginBottom: 10 }}>
                       <div
@@ -2223,7 +2238,7 @@ export default function RateBrowserModal({
                           cursor: 'help',
                         }}
                       >
-                        Effective insurance: {display.label}
+                        {primaryLabel}
                         {overridden ? ' (backend policy — included in the totals; totals are label-safe)' : ''}
                       </div>
                       {accountVerdict && selectedAccountLabel ? (
@@ -2231,7 +2246,7 @@ export default function RateBrowserModal({
                           data-rate-browser="accountEffectiveInsurance"
                           style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}
                         >
-                          {selectedAccountLabel}: {accountVerdict.label}
+                          Request policy: {display.label}
                         </div>
                       ) : null}
                       <button
