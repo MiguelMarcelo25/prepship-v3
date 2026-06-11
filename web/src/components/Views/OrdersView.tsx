@@ -5968,14 +5968,43 @@ export default function OrdersView({
     const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
     const serviceCode = liveBest ? toStringValue(liveBest.serviceCode) : null
     const carrierStatuses = Array.isArray(response?.carrierStatuses) ? response.carrierStatuses : []
-    const decision = planStrictBestRateRecalculate({
-      requestKey: request.key,
-      liveBest,
-      liveBestAmount,
-      providerAccountId,
-      serviceCode,
-      carrierStatuses,
-    })
+    // PS-175: the strict apply/blocked/clear decision is BACKEND-owned
+    // (response.strictRecalculation, computed from the same carriers + best rate
+    // this response carries). The local planStrictBestRateRecalculate remains
+    // ONLY as a deploy-skew fallback for backends that predate the field —
+    // Phase 6 deletes it.
+    const backendStrict = toRecord(response?.strictRecalculation)
+    const backendAction = toStringValue(backendStrict?.action)
+    const backendMessage = toStringValue(backendStrict?.message)
+    const decision = backendAction === 'apply' && liveBest
+      ? {
+          action: 'apply' as const,
+          entry: { key: request.key, rate: liveBest },
+          selectedPid: toProviderAccountId(backendStrict?.selectedPid) ?? providerAccountId,
+          serviceCode: toStringValue(backendStrict?.serviceCode) ?? serviceCode,
+          rate: liveBest,
+          message: backendMessage ?? 'Live best rate applied.',
+        }
+      : backendAction === 'clear'
+        ? {
+            action: 'clear' as const,
+            entry: { key: request.key, rate: null },
+            message: backendMessage ?? 'No live rates were returned for this shipment.',
+          }
+        : backendAction === 'blocked'
+          ? {
+              action: 'blocked' as const,
+              entry: { key: request.key, rate: null, error: backendMessage ?? 'Recalculation blocked.' },
+              message: backendMessage ?? 'Recalculation blocked.',
+            }
+          : planStrictBestRateRecalculate({
+              requestKey: request.key,
+              liveBest,
+              liveBestAmount,
+              providerAccountId,
+              serviceCode,
+              carrierStatuses,
+            })
 
     if (decision.action === 'blocked') {
       setAutoBestRateEntries((current) => ({
@@ -6089,6 +6118,9 @@ export default function OrdersView({
       // carriers (Walmart Shipping / SHIPP), not just ShipStation - otherwise it
       // overwrites the cheaper direct best rate the Rate Browser found.
       includeVisibleDirectCarriers: true,
+      // PS-175: ask the backend for the strict apply/blocked/clear decision —
+      // the business rule's owner; the local copy below is a deploy-skew fallback.
+      strictRecalculate: true,
     })
     const response = options.timeoutMs
       ? await withRecalculateTimeout(browsePromise, options.timeoutMs)

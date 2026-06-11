@@ -13,6 +13,7 @@ import {
   resolveRateInput,
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
+import { planStrictRecalculateDecision } from '../services/rates-recalculate';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   getActiveBackfillJob,
@@ -262,6 +263,9 @@ const browseBody = rateBody.extend({
   // returned as a reference-only `manualEstimate` block — no selection keys, no snapshot, never
   // purchasable. One extra read-only quote, only when explicitly requested.
   manualEstimate: z.boolean().optional(),
+  // PS-175 (Phase 3 part 1): ask the backend for the STRICT recalculation decision
+  // (apply/blocked/clear) computed from THIS response's carriers + best rate.
+  strictRecalculate: z.boolean().optional(),
 });
 
 function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number }; insurance_amount?: { amount?: number } }): number {
@@ -619,8 +623,28 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       console.warn('[rates/browse] manual-estimate baseline failed (reference only):', err instanceof Error ? err.message : err);
     }
   }
+  // PS-175 (Phase 3 part 1): the STRICT recalculation decision is BACKEND-owned —
+  // computed from the SAME combined carrier statuses + best rate this response
+  // returns (byte-compatible port of the FE rule, which becomes a deploy-skew
+  // fallback until Phase 6 deletes it). Decision only; persistence stays with the
+  // existing strict endpoints until Phase 3 part 2.
+  let strictRecalculation: Record<string, unknown> | null = null;
+  if (body.strictRecalculate === true) {
+    const bestProviderMatch = cheapest ? /^se-(\d+)$/i.exec(String(cheapest.carrier_id ?? '')) : null;
+    const bestProviderId = bestProviderMatch ? Number.parseInt(bestProviderMatch[1]!, 10) : null;
+    strictRecalculation = {
+      ...planStrictRecalculateDecision({
+        liveBestAmount: cheapest ? rateTotal(cheapest) : null,
+        providerAccountId: bestProviderId != null && Number.isFinite(bestProviderId) ? bestProviderId : null,
+        serviceCode: cheapest ? (String(cheapest.service_code ?? '').trim() || null) : null,
+        carrierStatuses: combinedCarrierStatuses,
+      }),
+      requestKey: combinedRequestKey,
+    };
+  }
   const payload = {
     ...result,
+    ...(strictRecalculation ? { strictRecalculation } : {}),
     ...(manualEstimate ? { manualEstimate } : {}),
     requestKey: combinedRequestKey,
     cacheKey: combinedRequestKey,

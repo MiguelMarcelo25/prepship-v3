@@ -406,12 +406,23 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   Purchase enforcement UNCHANGED (legacy `selectedRateProof` fallback intact — enforcement is Phase 4).
   Guard `test:ps-174-quote-key-consolidation` (8 checks). QA: typecheck + build:web + ps-105 + ps-121 +
   ps-198 + ps-196 + full cert ALL PASS. Local commit only.
-- **PS-175 — Phase 3: Best Rate + Rate Browser convergence on backend finalized rates.** One backend rate
-  workflow entrypoint for passive BestRate + Recalculate + RateBrowser; backend owns eligibility/HUGRAB
-  blocking/insurance capability+premium/ZIP+4/residential/confirmation/diagnostics; returns final classified
-  states only (no FE "best so far"); each final rate carries the PS-174 quote/key; remove FE final-pick/
-  strict-apply/clear/block. **Integrate PS-170/PS-171 into the backend workflow (not UI patches);** coordinate
-  w/ PS-120/121. Dep: PS-174.
+- **PS-175 — 🟡 PART 1 DONE 2026-06-11 (Phase 3): strict-recalculation DECISION is backend-owned.**
+  Repo-verified convergence already exists: all three rate paths (passive BestRate, Recalculate,
+  RateBrowser) flow through ONE entrypoint (/rates/browse → getRates); the backend already owns
+  eligibility/HUGRAB blocking/insurance capability+premium (PS-170/171 live IN the workflow, not UI
+  patches)/ZIP+4/residential/confirmation/diagnostics; the Rate Browser consumes the canonical backend best
+  (PS-135); every final rate carries the quote/key (PS-105/174/198). **Part 1 shipped here:** the strict
+  apply/blocked/clear rule (any non-live carrier blocks; clean no-rate clears; only a clean live best with
+  full identity applies) moved server-side — byte-compatible pure port in `src/services/rates-recalculate.ts`,
+  computed on /browse when `strictRecalculate: true` and returned as `strictRecalculation`; the FE consumes
+  the backend verdict (apply additionally requires a present best rate) and keeps its local
+  planStrictBestRateRecalculate ONLY as a deploy-skew fallback. **Part 2 (next session):** move the strict
+  persist orchestration server-side (the applier still drives saveOrderDimsStrict/
+  updateOrderBestRateSelectionStrict — both already backend-validated endpoints) + remove the FE
+  final-pick fallback in the Rate Browser (Phase 6 coordination). Guard `test:ps-175-strict-recalc-decision`
+  (15 checks — the backend matrix mirrors the FE strict-guard fixtures: parity by fixtures, not trust). QA:
+  typecheck + build:web + recalculate-strict + batch-recalculate + ps-123 + ps-197 + ps-198 + ps-105 + full
+  cert ALL PASS. Local commit only.
 - **PS-176 — Phase 4: Backend Label Purchase + Print Queue orchestration enforcement (highest money/postage
   risk).** Composable ShippingIntent/LabelPurchase/PrintQueue services; FE sends order IDs + intent + backend
   quote/key; backend hydrates canonical data + validates shippability/duplicate-label/shipped-cancelled

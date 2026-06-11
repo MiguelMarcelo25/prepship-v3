@@ -171,6 +171,7 @@
     "test:shipment-tracking-retirement": "tsx scripts/shipment-tracking-retirement-guard.ts",
     "test:ps-173-order-row-workflow": "tsx scripts/ps-173-order-row-workflow-guard.ts",
     "test:ps-174-quote-key-consolidation": "tsx scripts/ps-174-quote-key-consolidation-guard.ts",
+    "test:ps-175-strict-recalc-decision": "tsx scripts/ps-175-strict-recalc-decision-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",
