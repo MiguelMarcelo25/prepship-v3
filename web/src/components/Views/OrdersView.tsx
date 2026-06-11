@@ -2065,7 +2065,6 @@ export default function OrdersView({
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
   const queryClient = useQueryClient()
-  const { user: authUser } = useAuth()
   // Order assignment: only admins can assign orders to other users. Workers
   // see only their own assigned rows (server-side filter; this flag just
   // controls visibility of the admin-only UI).
