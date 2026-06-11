@@ -48,6 +48,16 @@ export type BestRateWorkflowAllowedActions = {
 
 export type BestRateSelectedRateState = 'matches_best_rate' | 'mismatched_best_rate' | 'missing' | 'unknown';
 
+// PS-196 — DISPLAY-ONLY classification of the saved best rate, deliberately separate from the
+// purchase authority (allowedActions + the selected-rate proof asserts, which are unchanged):
+//   'fresh'          proven + current → display AND purchase-authorized (canCreateLabel)
+//   'stale'          proven but expired / fingerprint-mismatched → display as saved/stale; re-rate to buy
+//   'saved_unproven' legacy saved rate: positive amount + carrier/service identity but missing the
+//                    newer proof metadata (requestFingerprint/isComplete/cacheExpiresAt) → display
+//                    as saved; NEVER purchase-authorized until re-rated with current proof
+//   'none'           nothing displayable (no saved rate, or no usable display identity)
+export type BestRateSavedRateDisplay = 'fresh' | 'stale' | 'saved_unproven' | 'none';
+
 export type BestRateWorkflowDto = {
   bestRateState: BestRateWorkflowState;
   requestFingerprint: string | null;
@@ -60,6 +70,10 @@ export type BestRateWorkflowDto = {
   // the orders payload OVERRODE bestRateState to pending/rating from the order_rate_jobs row.
   // The FE classifier uses it as a WATCHDOG so a stuck job can never be an infinite spinner.
   bestRateStateAgeMs?: number;
+  // PS-196: display-only saved-rate verdict (see BestRateSavedRateDisplay). The FE renders the
+  // saved rate immediately on reload when this is fresh/stale/saved_unproven; purchase authority
+  // is UNCHANGED (allowedActions + backend proof asserts still require a current fresh rate).
+  savedRateDisplay: BestRateSavedRateDisplay;
 };
 
 export type BuildBestRateWorkflowInput = {
@@ -198,6 +212,48 @@ function actionsFor(state: BestRateWorkflowState): BestRateWorkflowAllowedAction
   };
 }
 
+// PS-196 — does the saved rate carry enough identity to RENDER (amount + carrier/service/account)?
+// Tolerant of both the camelCase v2 shape and snake_case provider fields, matching what
+// rates-backfill persists into order_overrides.best_rate_json across eras.
+function savedRateHasDisplayIdentity(rate: Record<string, unknown> | null): boolean {
+  if (!rate) return false;
+  return Boolean(
+    stringOrNull(rate.serviceCode) ??
+      stringOrNull(rate.service_code) ??
+      stringOrNull(rate.carrierCode) ??
+      stringOrNull(rate.carrier_code) ??
+      stringOrNull(rate.carrierNickname) ??
+      stringOrNull(rate.carrier_nickname) ??
+      stringOrNull(rate.providerAccountNickname) ??
+      stringOrNull(rate.serviceName) ??
+      stringOrNull(rate.service_type),
+  );
+}
+
+/**
+ * PS-196 — DISPLAY-ONLY verdict for the saved rate, decoupled from purchase authority.
+ * 'fresh' mirrors the proven+current state; 'stale' = proven-but-expired/mismatched (display the
+ * saved value, re-rate to buy); 'saved_unproven' = a legacy saved rate with a positive amount and
+ * display identity but missing the newer proof metadata — display it instead of a spinner, but it
+ * is NEVER purchase-authorized (allowedActions/proof asserts unchanged).
+ */
+function savedRateDisplayFor(
+  state: BestRateWorkflowState,
+  savedRate: Record<string, unknown> | null,
+  hasSavedRate: boolean,
+): BestRateSavedRateDisplay {
+  if (!hasSavedRate || !savedRateHasDisplayIdentity(savedRate)) return 'none';
+  if (state === 'fresh') return 'fresh';
+  if (state === 'stale' || state === 'mismatched_request' || state === 'partial_carrier_failure') {
+    return 'stale';
+  }
+  // 'unknown' is the legacy bucket: saved amount + identity, but no fingerprint/isComplete/expiry.
+  if (state === 'unknown') return 'saved_unproven';
+  // missing/blocked have no saved rate (hasSavedRate=false) — unreachable here; pending/rating are
+  // reader-side overrides applied AFTER this builder runs.
+  return 'none';
+}
+
 export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): BestRateWorkflowDto {
   const now = input.now ?? new Date();
   const savedRate = isRecord(input.savedBestRate) ? input.savedBestRate : null;
@@ -240,5 +296,6 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     carrierStatuses,
     ...(input.selectedRateState ? { selectedRateState: input.selectedRateState } : {}),
     allowedActions: actionsFor(bestRateState),
+    savedRateDisplay: savedRateDisplayFor(bestRateState, savedRate, hasSavedRate),
   };
 }

@@ -760,6 +760,9 @@ export type AwaitingBestRateWorkflowInput = {
   // PS-120: age of an in-progress (pending/rating) backend state, ms. The classifier uses it as a
   // WATCHDOG so a stuck job can never render an infinite spinner — past the bound it becomes terminal.
   bestRateStateAgeMs?: number | null
+  // PS-196: backend display-only saved-rate verdict ('fresh' | 'stale' | 'saved_unproven' | 'none').
+  // Display authority only — purchase still requires allowedActions/current backend proof.
+  savedRateDisplay?: string | null
   allowedActions?: {
     canUseSavedRate?: boolean | null
     requiresRerate?: boolean | null
@@ -841,6 +844,10 @@ export function classifyAwaitingRateCellStateWithWorkflow(
       return workflow.bestRateState === 'rating' ? 'calculating' : 'pending'
     case 'stale':
     case 'mismatched_request':
+      // PS-196: cache-first — a displayable saved rate (incl. the backend savedRateDisplay
+      // verdict for proven-but-stale rows) renders immediately instead of wiping the cell into
+      // a spinner on reload. Purchase still requires a re-rate (allowedActions unchanged).
+      if (fallbackInput.hasDisplayableBestRate) return 'ready'
       return fallbackInput.hasDims && fallbackInput.hasWeight
         ? fallbackInput.isAutoRatingActive === false
           ? 'deferred'
@@ -865,8 +872,20 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   matchType?: string | null
   baseAmount: number
   backendWorkflowCanUseSavedRate?: boolean | null
+  // PS-196: the backend's display-only verdict (BestRateWorkflowDto.savedRateDisplay). When the
+  // canonical owner says the saved rate is displayable (fresh/stale/saved_unproven), render it —
+  // legacy rates without the newer proof metadata included. DISPLAY ONLY: label purchase / Print
+  // Queue still require a current backend-issued proof (allowedActions + the purchase asserts).
+  backendSavedRateDisplay?: string | null
 }): boolean {
   if (input.baseAmount <= 0) return false
+  if (
+    input.backendSavedRateDisplay === 'fresh' ||
+    input.backendSavedRateDisplay === 'stale' ||
+    input.backendSavedRateDisplay === 'saved_unproven'
+  ) {
+    return true
+  }
   if (
     input.requireEligibilityVersion !== false &&
     input.requiredEligibilityVersion &&

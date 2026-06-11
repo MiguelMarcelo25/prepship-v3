@@ -177,9 +177,11 @@ const shippingDisplayEnd = ordersView.indexOf('\nfunction getShipAccountLabelByI
 const shippingDisplayBlock = shippingDisplayStart >= 0 && shippingDisplayEnd > shippingDisplayStart
   ? ordersView.slice(shippingDisplayStart, shippingDisplayEnd)
   : '';
+// PS-165 part 2 (67d0d77f) inlined the provider-id local into the call; the protection (the
+// awaiting nickname fallback resolves the best-rate provider id through the loaded accounts)
+// is unchanged — re-anchored to the inlined form.
 check('awaiting account display resolves best-rate provider id through loaded accounts',
-  /const bestRateProviderId = getBestRateShippingProviderId\(order\)/.test(shippingDisplayBlock) &&
-  /getCarrierAccountLabelByProviderId\(accounts,\s*bestRateProviderId\)/.test(shippingDisplayBlock));
+  /getCarrierAccountLabelByProviderId\(accounts,\s*getBestRateShippingProviderId\(order\)\)/.test(shippingDisplayBlock));
 
 const overlayStart = ordersView.indexOf('function withBestRateOverride(');
 const overlayEnd = ordersView.indexOf('\n  function withoutStaleBestRate', overlayStart);

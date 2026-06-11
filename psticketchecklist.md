@@ -479,6 +479,25 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   guard asserts no substring conflict-detection in web/src.
 
 > ⚠️ **PS-191 is referenced** ("PS-189/PS-190 → PS-191 depends on this") but its spec was not provided — define before sequencing.
+
+### PS-196 / PS-197 — added + executed 2026-06-11 (DJ paused the wave track for these)
+- **PS-196 — ✅ DONE: cache-first Awaiting Best Rate display after reload.** Root cause confirmed: ~29k
+  awaiting orders have saved rates, but legacy rows lack requestFingerprint/isComplete/cacheExpiresAt →
+  workflow classified them `unknown` and the FE display contract (orders-parity
+  `savedBestRateCanDisplayForCurrentRequest`) rejected them → reload = spinners + stripped display rows +
+  pointless passive live re-fetch. **Fix separates display from purchase authority at the canonical owner:**
+  `BestRateWorkflowDto` gains display-only `savedRateDisplay: fresh|stale|saved_unproven|none`
+  (best-rate-workflow-dto.ts — saved amount + carrier/service identity ⇒ displayable; legacy ⇒
+  `saved_unproven`); `allowedActions`/proof asserts UNCHANGED (legacy still never purchase-authorized). FE:
+  the display contract accepts the backend verdict (display only), the classifier renders `ready` for
+  displayable stale/mismatched/unknown rows, and the single wiring point in OrdersView passes the verdict —
+  which simultaneously fixes the display-order rate wipe, the spinner cells, the `--` render, AND makes the
+  passive queue skip displayable rows (cache-first; explicit Recalculate still forces live). Guard
+  `test:ps-196-cache-first-display` (23 checks: DTO matrix display-vs-purchase, FE verdict acceptance with
+  strict no-verdict behavior preserved, classifier ready/calculating/terminal, cache-first source pins).
+  Also re-anchored `batch-recalculate-best-rate` (stale since PS-165 part 2 inlined the provider-id local —
+  behavior intact). QA: typecheck + build:web + ps-102 + best-rate-saved-display-contract + ps-099 +
+  recalculate-strict + batch-recalculate + ps-119 + ps-120 + full cert ALL PASS.
 >
 > **Priority flags:** **PS-186** (fake-label-on-real-order) is a live money/integrity bug — recommend doing it
 > BEFORE the PS-172 phase track. **PS-189** (media-mail auto-default) is a compliance risk. PS-181/182/183/

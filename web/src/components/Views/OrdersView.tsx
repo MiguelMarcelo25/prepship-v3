@@ -5787,6 +5787,10 @@ export default function OrdersView({
       matchType: toStringValue(savedRate.matchType),
       baseAmount: getRateBaseAmount(savedRate),
       backendWorkflowCanUseSavedRate: toRecord(workflow?.allowedActions)?.canUseSavedRate === true,
+      // PS-196: the backend's display-only verdict — legacy saved rates (no newer proof
+      // metadata) render immediately as saved/stale instead of a spinner. Display only; the
+      // purchase paths still require current backend proof.
+      backendSavedRateDisplay: toStringValue(toRecord(workflow)?.savedRateDisplay),
     })
   }
 
