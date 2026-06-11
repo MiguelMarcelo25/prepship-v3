@@ -56,6 +56,15 @@ import {
   type ReceiveDraftRow,
   type ReceiveSkuLookup,
 } from './inventory-parity'
+// PS-154: pure stock-math + sort helpers extracted to a shared module.
+import {
+  compareInventoryRows,
+  getInventoryDisplayStatus,
+  getInventoryDisplayStock,
+  getInventoryStockTooltip,
+  type InventorySortKey,
+  type InventorySortState,
+} from './inventory-stock-helpers'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import { Table, type TableColumn } from '../ui/Table'
 import { AnalysisPagination } from './AnalysisPagination'
@@ -253,29 +262,9 @@ interface ThumbnailPreviewState {
   zoom: number
 }
 
-type InventorySortDirection = 'asc' | 'desc'
-type InventorySortKey =
-  | 'sku'
-  | 'name'
-  | 'store'
-  | 'weight'
-  | 'length'
-  | 'width'
-  | 'height'
-  | 'dims'
-  | 'cuFt'
-  | 'package'
-  | 'stock'
-  | 'sold30'
-  | 'unitsPerPack'
-  | 'totalUnits'
-  | 'min'
-  | 'status'
-
-interface InventorySortState {
-  key: InventorySortKey
-  direction: InventorySortDirection
-}
+// PS-154: InventorySortDirection / InventorySortKey / InventorySortState
+// moved to ./inventory-stock-helpers (imported above) alongside the pure
+// stock-math + sort-value functions that consume them.
 
 // ──────────────────────────────────────────────────────────────────
 // Column layout for the Stock Levels table. A superset of
@@ -517,112 +506,13 @@ function writeStoredInventoryColumnWidths(widths: InventoryColumnWidths): void {
   } catch { /* best-effort */ }
 }
 
-const inventorySortCollator = new Intl.Collator(undefined, {
-  numeric: true,
-  sensitivity: 'base',
-})
-
-const inventoryStatusRank: Record<string, number> = {
-  out: 0,
-  low: 1,
-  ok: 2,
-}
-
-function toSortNumber(value: unknown) {
-  const nextValue = Number(value)
-  return Number.isFinite(nextValue) ? nextValue : 0
-}
-
-function getInventoryDisplayStock(row: InventoryItemDto) {
-  const effectiveStock = Number(row.effectiveStock)
-  return Number.isFinite(effectiveStock) ? effectiveStock : toSortNumber(row.currentStock)
-}
-
-function getInventoryDisplayStatus(row: InventoryItemDto): 'ok' | 'low' | 'out' {
-  const stock = getInventoryDisplayStock(row)
-  if (stock <= 0) return 'out'
-  if (stock <= toSortNumber(row.minStock)) return 'low'
-  return 'ok'
-}
-
-function getInventoryStockTooltip(row: InventoryItemDto) {
-  const displayStock = getInventoryDisplayStock(row)
-  const cachedStock = Number((row as any).cachedStockQty)
-  const auditStock = Number.isFinite(cachedStock) ? cachedStock : row.currentStock
-  const tooltipParts = [
-    `Received: ${row.totalReceived ?? 0}`,
-    `Sold shipped all-time: ${row.totalSoldAllTime ?? 0}`,
-    `Effective stock: ${displayStock}`,
-  ]
-  if (typeof row.effectiveStock === 'number' && row.effectiveStock !== auditStock) {
-    tooltipParts.push(`Cached stockQty: ${auditStock}`)
-  }
-  return tooltipParts.join('\n')
-}
-
-function getInventoryPackageSortLabel(row: InventoryItemDto) {
-  if (row.packageName) return row.packageName
-  if (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) {
-    return `${row.packageLength}x${row.packageWidth}x${row.packageHeight}`
-  }
-  return ''
-}
-
-function getInventorySortValue(row: InventoryItemDto, key: InventorySortKey) {
-  switch (key) {
-    case 'sku':
-      return row.sku || ''
-    case 'name':
-      return row.name || ''
-    case 'store':
-      return row.clientName || ''
-    case 'weight':
-      return toSortNumber(row.weightOz)
-    case 'length':
-      return toSortNumber(row.productLength || row.packageLength)
-    case 'width':
-      return toSortNumber(row.productWidth || row.packageWidth)
-    case 'height':
-      return toSortNumber(row.productHeight || row.packageHeight)
-    case 'dims':
-      return toSortNumber(row.packageLength) * toSortNumber(row.packageWidth) * toSortNumber(row.packageHeight)
-    case 'cuFt':
-      return getInventoryCuFt(row)
-    case 'package':
-      return getInventoryPackageSortLabel(row)
-    case 'stock':
-      // Sort by the displayed value (effective stock) so the
-      // operator's "sort by stock" matches what they see.
-      return getInventoryDisplayStock(row)
-    case 'sold30':
-      return toSortNumber(row.soldLast30Days)
-    case 'unitsPerPack':
-      return toSortNumber(row.units_per_pack)
-    case 'totalUnits':
-      return getInventoryDisplayStock(row) * Math.max(1, toSortNumber(row.units_per_pack))
-    case 'min':
-      return toSortNumber(row.minStock)
-    case 'status':
-      return inventoryStatusRank[getInventoryDisplayStatus(row)] ?? 99
-    default:
-      return ''
-  }
-}
-
-function compareInventoryRows(left: InventoryItemDto, right: InventoryItemDto, sort: InventorySortState) {
-  const leftValue = getInventorySortValue(left, sort.key)
-  const rightValue = getInventorySortValue(right, sort.key)
-  const direction = sort.direction === 'asc' ? 1 : -1
-  const comparison =
-    typeof leftValue === 'number' && typeof rightValue === 'number'
-      ? leftValue - rightValue
-      : inventorySortCollator.compare(String(leftValue ?? ''), String(rightValue ?? ''))
-
-  if (comparison !== 0) return comparison * direction
-  const fallback = inventorySortCollator.compare(left.sku || '', right.sku || '')
-  if (fallback !== 0) return fallback
-  return toSortNumber(left.id) - toSortNumber(right.id)
-}
+// PS-154: inventorySortCollator / inventoryStatusRank / toSortNumber /
+// getInventoryDisplayStock / getInventoryDisplayStatus /
+// getInventoryStockTooltip / getInventoryPackageSortLabel /
+// getInventorySortValue / compareInventoryRows moved VERBATIM into
+// ./inventory-stock-helpers (imported above). They are pure read-only
+// stock-math over an InventoryItemDto row — no state, no handlers,
+// no money mutation — so consolidating them changes no behavior.
 
 function formatWeight(ounces: number | null | undefined) {
   if (!ounces) return '—'
