@@ -1320,14 +1320,17 @@ export const apiClient = {
     return api.get<any>(`/print-queue/batch-send/status/${encodeURIComponent(jobId)}`);
   },
 
-  clearQueue(clientId: number): Promise<any> {
+  // PS-195: clears require EXPLICIT entry targeting — the backend rejects
+  // blanket clears without ids and refuses entries inside a running merge.
+  clearQueue(clientId: number, entryIds: string[]): Promise<any> {
     return safe(
       'clearQueue',
       () => api.post<any>('/print-queue/clear', {
         client_id: clientId,
+        queue_entry_ids: entryIds,
         confirmation: 'REMOVE_UNPRINTED_LABELS',
       }),
-      { cleared_count: 0 }
+      { cleared_count: 0, blocked_in_flight: 0 }
     );
   },
 

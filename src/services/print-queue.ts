@@ -84,6 +84,9 @@ export type MergeJob = {
   // Persisted on the job + durable snapshot and returned on the status DTO so
   // the gate is backend truth.
   successfulEntryIds: string[];
+  // PS-195: every entry this merge covers — clearQueue refuses to delete an
+  // entry that sits inside a pending/running merge job.
+  entryIds: string[];
   createdAt: number;
 };
 
@@ -996,15 +999,44 @@ export async function removeFromQueue(
   return row;
 }
 
-export async function clearQueue(clientId?: number, scope: PrintQueueListScope = {}) {
-  const conds = [eq(printQueue.status, 'queued')];
-  if (clientId !== undefined) conds.push(eq(printQueue.clientId, clientId));
-  conds.push(printQueueScopePredicate(scope));
+// PS-195: entry ids currently inside a PENDING/RUNNING merge job. Clearing
+// one of these mid-merge would yank a label out from under an operator's
+// in-flight print — those entries are refused, not deleted.
+function inFlightMergeEntryIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const job of mergeJobs.values()) {
+    if (job.status !== 'pending' && job.status !== 'running') continue;
+    for (const entryId of job.entryIds ?? []) ids.add(entryId);
+  }
+  return ids;
+}
+
+// PS-195: clears are EXPLICITLY TARGETED — the caller names the queued entry
+// ids it intends to remove (the route schema already rejects id-less
+// requests). Deletion stays bounded to status='queued' within client/scope,
+// and entries belonging to a running merge job are skipped and reported.
+export async function clearQueue(input: {
+  entryIds: string[];
+  clientId?: number;
+  scope?: PrintQueueListScope;
+}): Promise<{ cleared: number; blockedInFlight: number }> {
+  if (!input.entryIds.length) return { cleared: 0, blockedInFlight: 0 };
+  const inFlight = inFlightMergeEntryIds();
+  const clearable = input.entryIds.filter((id) => !inFlight.has(id));
+  const blockedInFlight = input.entryIds.length - clearable.length;
+  if (!clearable.length) return { cleared: 0, blockedInFlight };
+
+  const conds = [
+    inArray(printQueue.id, clearable),
+    eq(printQueue.status, 'queued'),
+  ];
+  if (input.clientId !== undefined) conds.push(eq(printQueue.clientId, input.clientId));
+  conds.push(printQueueScopePredicate(input.scope ?? {}));
   const rows = await db
     .delete(printQueue)
     .where(and(...conds))
     .returning({ id: printQueue.id });
-  return rows.length;
+  return { cleared: rows.length, blockedInFlight };
 }
 
 export async function confirmPrintedQueueEntries(input: {
@@ -1137,6 +1169,7 @@ export async function startPrintJob(input: {
     createdAt: Date.now(),
     labelErrors: [],
     successfulEntryIds: [],
+    entryIds: entries.map((entry) => entry.id),
   };
   mergeJobs.set(jobId, job);
 

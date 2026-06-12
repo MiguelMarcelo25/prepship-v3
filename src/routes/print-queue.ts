@@ -541,13 +541,25 @@ app.post(
     'json',
     z.object({
       client_id: z.number().int().optional(),
+      // PS-195: blanket clears are gone — the caller must name EXACTLY which
+      // queued entries it intends to remove. A clear without explicit ids is
+      // rejected by the schema, so a stale UI can no longer wipe a queue it
+      // is not looking at (or entries mid-merge in someone else's print job).
+      queue_entry_ids: z.array(z.string().min(1)).min(1).max(500),
       confirmation: z.literal('REMOVE_UNPRINTED_LABELS'),
     })
   ),
   async (c) => {
     const body = c.req.valid('json');
-    const cleared = await clearQueue(body.client_id, printQueueScopeFromContext(c));
-    return c.json({ cleared_count: cleared });
+    const result = await clearQueue({
+      entryIds: body.queue_entry_ids,
+      clientId: body.client_id,
+      scope: printQueueScopeFromContext(c),
+    });
+    return c.json({
+      cleared_count: result.cleared,
+      blocked_in_flight: result.blockedInFlight,
+    });
   }
 );
 

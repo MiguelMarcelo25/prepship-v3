@@ -1453,3 +1453,28 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   confirms. Follow-up candidate (explicitly NOT bundled): per-row persisted classifier verdicts so the
   table can split recoverable vs lookup-failed visually; today both rest on the actionable sync-error
   badge and the classifier report distinguishes them.
+
+### PS-195 — Explicit print-queue clear targeting — DONE 2026-06-13
+- **✅ DONE (delta-audited; card mapped onto the real architecture and the gap reported):** the card
+  prescribed a `DELETE /print-queue/jobs` gated on jobIds + successfulEntryIds — but there is NO deletable
+  jobs store (merge jobs live in-memory with a single durable last-run settings snapshot; they expire,
+  they aren't cleared). The REAL clear surface was `POST /print-queue/clear` → blanket-deleting EVERY
+  queued ENTRY for the client: no per-entry targeting, and nothing protected entries sitting inside a
+  pending/RUNNING merge job (operator A printing, operator B clears → labels yanked mid-merge).
+  **Implementation (card intent, real surface):** the clear schema now REQUIRES
+  `queue_entry_ids[] (min 1, max 500)` — id-less blanket clears are schema-rejected; `clearQueue` takes
+  explicit ids and deletes ONLY `id = ANY(ids) AND status='queued'` within client/store scope
+  (printed/delivered untouchable, scope predicate intact); the PS-194 merge-job record now carries its
+  `entryIds`, and `inFlightMergeEntryIds()` refuses (and reports as `blocked_in_flight`) any targeted
+  entry inside a pending/running merge. FE: the drawer's Clear names exactly the LISTED entries
+  (`queuedEntries.map(queue_entry_id)`), the confirm dialog states the count, and an in-flight refusal
+  surfaces as an info toast; `apiClient.clearQueue(clientId, entryIds)`. The typed
+  `REMOVE_UNPRINTED_LABELS` confirmation literal stays. **Guard** `test:ps-195-clear-targeting`: schema
+  requires ids; route passes them + reports blocked_in_flight; service pins (inArray-bounded, queued-only,
+  scope predicate, empty-list-clears-nothing, in-flight set covers pending+running, MergeJob.entryIds
+  recorded at start); FE pins (drawer passes the listed ids — no blanket; apiClient sends them; refusal
+  surfaced). **QA:** typecheck + build:web + ps-195 + ps-194 + print-queue-hygiene +
+  print-queue-client-scope ALL PASS. **Acceptance mapping:** "clear endpoint requires explicit IDs" ✓;
+  "backend refuses in-flight" ✓ (running-merge membership — the live equivalent of the card's
+  successfulEntryIds-empty test, reported explicitly as a card-vs-reality delta); "FE passes explicit
+  IDs on every clear" ✓; guard ✓.

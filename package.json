@@ -183,6 +183,7 @@
     "test:ps-191-retry-eligibility": "tsx scripts/ps-191-retry-eligibility-guard.ts",
     "test:ps-193-dirty-flag-auto-persist": "tsx scripts/ps-193-dirty-flag-auto-persist-guard.ts",
     "test:ps-194-confirm-printed-persistence": "tsx scripts/ps-194-confirm-printed-persistence-guard.ts",
+    "test:ps-195-clear-targeting": "tsx scripts/ps-195-clear-targeting-guard.ts",
     "test:ps-207-shipped-box-billing-policy": "tsx scripts/ps-207-shipped-box-billing-policy-guard.ts",
     "test:ps-208-billing-calendar-day-invoice-xlsx": "tsx scripts/ps-208-billing-calendar-day-invoice-xlsx-guard.ts",
     "test:ps-206-rate-browser-full-coverage": "tsx scripts/ps-206-rate-browser-full-coverage-guard.ts",

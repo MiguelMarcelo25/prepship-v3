@@ -138,10 +138,19 @@ export function OrdersPrintQueueDrawer({
                 title={queueScope === 'client' ? 'Clear active queue entries for this client' : 'Switch to Current client before clearing a queue'}
                 onClick={() =>
                   queueScope === 'client' && queueClientId != null
-                    ? window.confirm('This removes all unprinted labels from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?')
+                    ? window.confirm(`This removes the ${queuedEntries.length} listed unprinted label${queuedEntries.length === 1 ? '' : 's'} from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?`)
+                      // PS-195: the clear names EXACTLY the entries on screen —
+                      // the backend rejects blanket clears without explicit ids
+                      // and refuses entries inside a running merge job.
                       ? void apiClient
-                        .clearQueue(queueClientId)
-                        .then(() => hydrateQueue())
+                        .clearQueue(queueClientId, queuedEntries.map((entry) => entry.queue_entry_id))
+                        .then((result: any) => {
+                          const blocked = Number(result?.blocked_in_flight ?? 0)
+                          if (blocked > 0) {
+                            showToast(`${blocked} label${blocked === 1 ? '' : 's'} kept — currently in a running print merge`, 'info')
+                          }
+                          return hydrateQueue()
+                        })
                         .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error'))
                       : undefined
                     : undefined
