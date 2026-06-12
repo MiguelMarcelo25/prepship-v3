@@ -55,8 +55,14 @@ check(
   // `selectedRateProof: overridePayload?.selectedRateProof ?? buildSelectedRateProofPayload(order, ...)`,
   // so count the wrapper-aware pattern (matches the boundary guard) — the proof is
   // genuinely passed on all 4 single/batch/queue/direct-carrier paths.
-  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4 &&
-    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)') &&
+  //
+  // PS-204 re-anchor (2026-06-12): the property-site census is THREE (the
+  // fourth path is the batch-create `let selectedRateProof = ...` pinned
+  // below — the property regex never matched it; the old >= 4 was stale since
+  // the PS-178 decomposition). The batch-create pin gains PS-204's account
+  // binding (third arg) — stricter, never weaker.
+  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,') &&
     proofBoundaryGuard.includes('Orders single/batch/queue label payloads pass selectedRateProof'),
 );

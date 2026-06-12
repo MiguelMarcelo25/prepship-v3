@@ -1216,13 +1216,13 @@ export function selectBatchRecalculateOrderIds(input: {
 }
 
 // ─── Send-to-Queue routing (direct carriers vs ShipStation) ─────────────────
-// The Render queue job's label creator (createLabelV2) is ShipStation-only —
-// it sends `se-<providerId>` to ShipStation, which rejects a direct carrier's
-// synthetic id. So a direct-carrier order that still needs a label must be
-// routed to the Vercel /carriers/labels path (buy the label there, then add the
-// created label to the queue). Everything else stays on the backend create/
-// recover job. This is the pure decision the queue action consumes so it can be
-// unit-tested without buying real postage.
+// PS-204 note: since PS-202, createLabelV2 owns BOTH families server-side
+// (synthetic direct ids route to the direct connector branch), so this routing
+// decides which CLIENT flow runs (buy-then-queue vs backend create/recover
+// job) — it no longer protects ShipStation from synthetic ids; the backend
+// proof/account binding and the se- emission assert own that. This is the
+// pure decision the queue action consumes so it can be unit-tested without
+// buying real postage.
 // PS-178 final part: planStrictBestRateRecalculate (the FE copy of the strict
 // recalc decision) DELETED — the decision is backend-owned
 // (src/services/rates-recalculate.ts → response.strictRecalculation) and a
@@ -1245,6 +1245,16 @@ export function classifyQueueOrderRoute(
      * direct-vs-backend question for orders that genuinely need a label.
      */
     backendQueueRoute?: string | null
+    /**
+     * PS-204: the LIVE single-order panel payload's shippingProviderId, passed
+     * only when the caller carries an explicit labelPayloadOverrides entry for
+     * this order. When present it — not the stale saved DTO — decides the
+     * residual direct-vs-backend question: the operator's current selection is
+     * the purchase account, and the backend proof/account binding blocks the
+     * purchase before postage if that selection is incoherent with the proof.
+     * Batch/list flows don't pass it and keep PS-176 backend-policy routing.
+     */
+    explicitPayloadProviderId?: number | null
   },
   options: { existingLabelOnly?: boolean; batchTestMode?: boolean } = {},
 ): QueueOrderRoute {
@@ -1253,12 +1263,17 @@ export function classifyQueueOrderRoute(
   if (options.batchTestMode) return 'backend' // test run → backend mock, no real postage
   if (input.isTest) return 'backend' // test-client order → backend mock
   if (input.hasQueueableLabel) return 'backend' // already bought → backend queues it as-is
+  // PS-204: an explicit live panel payload outranks the saved DTO policy for
+  // the residual routing question (never the never-buy rungs above).
+  if (input.explicitPayloadProviderId != null) {
+    return input.explicitPayloadProviderId >= 10_000_000 ? 'direct-create' : 'backend'
+  }
   // PS-176: the backend owns the residual routing policy when it spoke.
   if (input.backendQueueRoute === 'backend' || input.backendQueueRoute === 'direct-create') {
     return input.backendQueueRoute
   }
-  // A direct-carrier order that still needs a label is the ONLY case the backend
-  // can't handle. Buy it via the Vercel direct path, then queue.
+  // A direct-carrier order that still needs a label: buy via the direct client
+  // flow (apiClient.createLabel → v4 /labels), then queue.
   if (input.isDirectCarrier) return 'direct-create'
   return 'backend' // ShipStation provider → backend createLabelV2
 }

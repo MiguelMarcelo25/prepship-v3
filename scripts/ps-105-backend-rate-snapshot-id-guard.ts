@@ -125,16 +125,29 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 // candidate carrying BOTH backend-minted opaque ids win BEFORE the legacy-proof
 // selection (behavior pinned by ps-198-rate-quote-proof-passthrough-guard.ts).
 const rateProofLib = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
+// PS-204 re-anchor: the wrapper's delegation gained an account-binding option
+// ({ forShippingProviderId }) so cross-account candidates are filtered out —
+// same ordered candidate list, STRICTER selection, never weaker.
 check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection',
-  /function buildRateQuoteRefForOrder[\s\S]{0,200}?return rateQuoteRefFromCandidates\(\[\s*toRecord\(candidate\),\s*toRecord\(order\.bestRate\),\s*toRecord\(order\.selectedRate\),\s*getSavedBestRateRecord\(order\),\s*\]\)/.test(ordersView) &&
+  /function buildRateQuoteRefForOrder[\s\S]{0,260}?return rateQuoteRefFromCandidates\(\[\s*toRecord\(candidate\),\s*toRecord\(order\.bestRate\),\s*toRecord\(order\.selectedRate\),\s*getSavedBestRateRecord\(order\),\s*\], \{ forShippingProviderId \}\)/.test(ordersView) &&
     /export function rateQuoteRefFromCandidates[\s\S]*?toStr\(r\.rateQuoteId\) && toStr\(r\.selectedRateKey\)[\s\S]*?hasBackendIssuedRateProof\(r\) && rateProofFingerprint\(r\)/.test(rateProofLib));
-check('frontend emits the rate quote ref on the primary create/queue/batch payloads (>= 3)',
-  (ordersView.match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 3);
+// PS-204 re-anchor (2026-06-12): both counts below were STALE at base (failing
+// silently outside the cert since the PS-178 decomposition consolidated payload
+// sites). Honest census: TWO ...buildRateQuoteRefForOrder( emission sites
+// (panel single-create + batch queue payload) and THREE selectedRateProof:
+// property sites (+ the batch-create `let` form, pinned by the boundary/ps-095
+// guards). Both panel/batch forms are now ACCOUNT-BOUND per PS-204 — pinned
+// here so the binding can't silently disappear.
+check('frontend emits the rate quote ref on the primary create/queue/batch payloads (>= 2)',
+  (ordersView.match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 2 &&
+  /\.\.\.buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
+  /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
 check('frontend does NOT pass a stale ref on the direct-carrier retry/override path',
   // site 2 keeps the override-wrapper proof only; no buildRateQuoteRefForOrder next to it.
   !/overridePayload\?\.selectedRateProof[\s\S]{0,200}?buildRateQuoteRefForOrder/.test(ordersView));
 check('frontend ref is additive (proof still passed at every site)',
-  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4);
+  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+  ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)'));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-105 backend rate snapshot id guard (${failures} failing)`);

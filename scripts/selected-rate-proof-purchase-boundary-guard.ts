@@ -63,7 +63,19 @@ check(
     // The direct-carrier queue path additionally prefers a caller override
     // (overridePayload?.selectedRateProof ?? buildSelectedRateProofPayload(order, ...)),
     // so allow that wrapper form when counting the payload sites.
-    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4,
+    //
+    // PS-204 re-anchor (2026-06-12): the honest census of `selectedRateProof:`
+    // property sites is THREE (panel single, direct-carrier override wrapper,
+    // batch queue payload) — the fourth proof path is the batch-create flow's
+    // `let selectedRateProof = buildSelectedRateProofPayload(...)` (pinned
+    // below), which this property regex never matched. The old >= 4 was stale
+    // since the PS-178 decomposition and failing silently outside the cert.
+    // STRENGTHENED: the panel + batch property sites must now be ACCOUNT-BOUND
+    // (third arg = the payload's shippingProviderId) per PS-204.
+    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
+    /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
+    /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView),
 );
 
 check(

@@ -53,6 +53,81 @@ export function rateProofFingerprint(rate: Rec | null): string | null {
   );
 }
 
+// ── PS-204: provider-account identity of a rate (display + proof honesty) ────
+// Mirrors the backend's providerAccountKey normalization (se-<n> ↔ numeric ↔
+// text) — a pure READ of what the backend stamped, never a recomputation.
+
+function providerAccountKeyText(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const match = text.match(/^se-(\d+)$/i);
+  if (match?.[1]) return match[1];
+  const n = Number(text);
+  if (Number.isFinite(n)) return String(Math.trunc(n));
+  return text.toLowerCase().replace(/\s+/g, '_');
+}
+
+/** Normalized account identity carried BY a rate record, or null when it has none. */
+export function rateProviderAccountKey(rate: unknown): string | null {
+  const rec = toRec(rate);
+  if (!rec) return null;
+  const raw = toRec(rec.raw);
+  const candidates = [
+    rec.shippingProviderId,
+    rec.providerAccountId,
+    (rec as Rec)['shipping_provider_id'],
+    rec.carrier_id,
+    rec.carrierId,
+    raw?.shippingProviderId,
+    raw?.providerAccountId,
+    raw?.carrier_id,
+  ];
+  for (const value of candidates) {
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    return providerAccountKeyText(value);
+  }
+  return null;
+}
+
+/** Normalized identity of a panel/payload shippingProviderId (null = none selected). */
+export function providerAccountKeyFromId(shippingProviderId: unknown): string | null {
+  if (shippingProviderId === null || shippingProviderId === undefined) return null;
+  return providerAccountKeyText(shippingProviderId);
+}
+
+/**
+ * PS-204 display/proof honesty: does this rate belong to the given account?
+ * Returns null when the rate carries NO identity (unknowable — callers treat
+ * that as "allowed", matching the backend binding's skip rule).
+ */
+export function rateBelongsToProviderAccount(rate: unknown, shippingProviderId: unknown): boolean | null {
+  const rateKey = rateProviderAccountKey(rate);
+  if (rateKey == null) return null;
+  const accountKey = providerAccountKeyFromId(shippingProviderId);
+  if (accountKey == null) return null;
+  return rateKey === accountKey;
+}
+
+export type ProofCandidateOptions = {
+  /**
+   * PS-204: the account the payload will CHARGE. Candidates that carry an
+   * identity for a DIFFERENT account are excluded — the proof sent to the
+   * backend can then never describe one account while the payload charges
+   * another (the order-1484 class). Identity-less candidates still pass
+   * (legacy rows; the backend binding skips those the same way).
+   */
+  forShippingProviderId?: unknown;
+};
+
+function filterCandidatesForAccount(list: Rec[], options?: ProofCandidateOptions): Rec[] {
+  const accountKey = providerAccountKeyFromId(options?.forShippingProviderId);
+  if (accountKey == null) return list;
+  return list.filter((rate) => {
+    const rateKey = rateProviderAccountKey(rate);
+    return rateKey == null || rateKey === accountKey;
+  });
+}
+
 /**
  * Pick the first candidate that carries a backend-issued proof + fingerprint and return the
  * selected-rate proof payload. Callers pass the ordered candidate list (e.g. [explicit
@@ -60,8 +135,9 @@ export function rateProofFingerprint(rate: Rec | null): string | null {
  */
 export function selectProofFromCandidates(
   candidates: Array<Rec | null | undefined>,
+  options?: ProofCandidateOptions,
 ): { requestFingerprint: string; selectedRate: Rec } | undefined {
-  const list = candidates.filter(Boolean) as Rec[];
+  const list = filterCandidatesForAccount(candidates.filter(Boolean) as Rec[], options);
   const selectedRate = list.find((rate) => hasBackendIssuedRateProof(rate) && rateProofFingerprint(rate)) ?? null;
   const requestFingerprint = rateProofFingerprint(selectedRate);
   if (!selectedRate || !requestFingerprint) return undefined;
@@ -116,8 +192,9 @@ export function findCanonicalBestRate<T>(backendBest: unknown, candidates: T[]):
  */
 export function rateQuoteRefFromCandidates(
   candidates: Array<Rec | null | undefined>,
+  options?: ProofCandidateOptions,
 ): { rateQuoteId?: string; selectedRateKey?: string } {
-  const list = candidates.filter(Boolean) as Rec[];
+  const list = filterCandidatesForAccount(candidates.filter(Boolean) as Rec[], options);
   const snapshotRef = list.find((r) => toStr(r.rateQuoteId) && toStr(r.selectedRateKey)) ?? null;
   const rate = snapshotRef ?? list.find((r) => hasBackendIssuedRateProof(r) && rateProofFingerprint(r)) ?? null;
   if (!rate) return {};
