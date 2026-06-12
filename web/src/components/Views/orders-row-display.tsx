@@ -442,11 +442,21 @@ export function renderExtLabelBadge() {
   )
 }
 
-// PS-036: a shipped order with no local shipment data is NOT the same as an
-// externally-fulfilled order. Surfacing it as "Missing shipment sync" keeps the
-// grid honest — it tells the operator the row needs a ShipStation re-sync rather
-// than implying the label lives in a marketplace.
-export function renderMissingShipmentSyncBadge() {
+// PS-036 + PS-215: a shipped order with no local shipment data is NOT the
+// same as an externally-fulfilled order (never infer "Ext. Label" from
+// absence — PS-036 safety rule, unchanged). PS-215 changes only the RESTING
+// PRESENTATION: the raw "Missing shipment sync" text sat in the operator-
+// facing table as a dead-end; DJ's invariant is that shipped rows show either
+// External Label or an ACTIONABLE sync-error diagnostic. The shipped display
+// states are:
+//   local_label     — local shipment/label/rate data exists (normal render)
+//   external_label  — persisted external/marketplace flag (Ext. Label badge)
+//   sync_error      — neither: a recoverable ShipStation sync gap or a row
+//                     the PS-056 external-shipped classifier has not
+//                     classified yet (this badge; see the PS-215 runbook)
+// The external/sync-error split stays owned by the canonical predicates
+// (getIsExternallyFulfilled / getIsMissingShipmentSync) — this is a renderer.
+export function renderShipmentSyncErrorBadge() {
   return (
     <span
       style={{
@@ -459,9 +469,9 @@ export function renderMissingShipmentSyncBadge() {
         fontWeight: 600,
         cursor: 'help',
       }}
-      title="Shipped in ShipStation, but local shipment data (carrier/account/rate) hasn't synced yet. Re-run ShipStation sync to backfill."
+      title="Shipment sync error: shipped, but no local label/shipment data. Re-run ShipStation sync to backfill; if it persists, this is either a marketplace-fulfilled order awaiting the external-shipped classifier or a sync gap — see the PS-215 remediation runbook."
     >
-      Missing shipment sync
+      Shipment sync error
     </span>
   )
 }

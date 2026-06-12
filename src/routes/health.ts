@@ -123,6 +123,15 @@ function readinessResponseBody(readiness: Awaited<ReturnType<typeof checkDeepRea
   return {
     status: readiness.ok ? 'ready' : 'degraded',
     components: readiness.components,
+    // PS-215: the external-shipped classifier flags are operational state the
+    // Shipped-table invariant depends on (rows resting on "Shipment sync
+    // error" usually mean the classifier isn't running). Surfacing them here
+    // makes a silently-disabled deploy visible at a glance instead of being
+    // discovered through a wall of amber badges.
+    externalShippedClassifier: {
+      schedulerEnabled: env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER === true,
+      autoApplyEnabled: env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true,
+    },
     ts: new Date().toISOString(),
   };
 }

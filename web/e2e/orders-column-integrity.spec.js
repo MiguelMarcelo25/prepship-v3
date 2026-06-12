@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 // made immutable by PS-056:
 //   - LOCAL -> real local shipment data -> carrier/acct/rate
 //   - RECOVERABLE_MISSING_SYNC -> upstream shipment/fulfillment may still be
-//     backfilled; no explicit external flag -> "Missing shipment sync"
+//     backfilled; no explicit external flag -> "Shipment sync error"
 //   - EXTERNAL -> explicit operator/marketplace flag -> Ext. Label
 //
 // No live ShipStation calls, labels, postage, or marketplace notifications are
@@ -238,7 +238,7 @@ const shippedExternal = baseRow(980002, 'shipped', 2, {
   externallyShipped: true,
 })
 
-// 5) Shipped, NO flag and NO local data -> must render "Missing shipment sync"
+// 5) Shipped, NO flag and NO local data -> must render "Shipment sync error"
 //    (the exact bug PS-036 fixes — previously this rendered "Ext. Label").
 const shippedMissingSync = baseRow(980003, 'shipped', 1, {
   orderNumber: 'SHIPPED-980003',
@@ -414,9 +414,9 @@ test('Awaiting grid columns render every required field from source of truth', a
   })
   await scrollOrdersTableRight(page)
   await assertColumns(page, awaitingValid.orderId, {
-    carrier: { notContains: ['Ext. Label', 'Missing shipment sync', '— add dims'] },
+    carrier: { notContains: ['Ext. Label', 'Shipment sync error', '— add dims'] },
     custcarrier: { contains: 'ROCEL C81F70' },
-    bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },
+    bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Shipment sync error'] },
     test_bestRate: { contains: ['ups', '9.86'] },
   })
 
@@ -473,16 +473,16 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     customer: { contains: 'Ella Johnson' },
     weight: { matches: /\d/ },
     shipto: { contains: ['El Reno', 'OK', '73036'] },
-    carrier: { notContains: ['Ext. Label', 'Missing shipment sync'] },
-    custcarrier: { contains: 'ROCEL C81F70', notContains: ['Ext. Label', 'Missing shipment sync'] },
-    bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },
+    carrier: { notContains: ['Ext. Label', 'Shipment sync error'] },
+    custcarrier: { contains: 'ROCEL C81F70', notContains: ['Ext. Label', 'Shipment sync error'] },
+    bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Shipment sync error'] },
     tracking: { contains: '1Z999AA1010980001' },
     labelcreated: { matches: /\d/ },
     test_carrierCode: { contains: 'ups' },
     test_shippingProviderID: { contains: '7381' },
     test_shippingAccount: {
       contains: 'ROCEL C81F70',
-      notContains: ['ups', 'Ext. Label', 'Missing shipment sync'],
+      notContains: ['ups', 'Ext. Label', 'Shipment sync error'],
     },
   })
 
@@ -492,19 +492,19 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     client: { equals: 'eBay - DJC' },
     orderNum: { contains: 'SHIPPED-980002' },
     customer: { contains: 'Tony McMasters' },
-    carrier: { contains: 'Ext. Label', notContains: 'Missing shipment sync' },
-    custcarrier: { contains: 'Ext. Label', notContains: 'Missing shipment sync' },
-    bestrate: { contains: 'Ext. Label', notContains: 'Missing shipment sync' },
+    carrier: { contains: 'Ext. Label', notContains: 'Shipment sync error' },
+    custcarrier: { contains: 'Ext. Label', notContains: 'Shipment sync error' },
+    bestrate: { contains: 'Ext. Label', notContains: 'Shipment sync error' },
   })
 
   // Missing-sync row — shipped, no explicit flag, no local data. THE PS-036
-  // regression guard: this must render "Missing shipment sync", NOT "Ext. Label".
+  // regression guard: this must render "Shipment sync error", NOT "Ext. Label".
   await assertColumns(page, shippedMissingSync.orderId, {
     client: { equals: 'KF Goods' },
     orderNum: { contains: 'SHIPPED-980003' },
-    carrier: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
-    custcarrier: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
-    bestrate: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
+    carrier: { contains: 'Shipment sync error', notContains: 'Ext. Label' },
+    custcarrier: { contains: 'Shipment sync error', notContains: 'Ext. Label' },
+    bestrate: { contains: 'Shipment sync error', notContains: 'Ext. Label' },
   })
 
   // Real carrier label, NO nickname source -> diagnostic "Acct Nickname"

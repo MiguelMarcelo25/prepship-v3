@@ -1422,3 +1422,34 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   payload; apiClient forwards clientId on both fetchers). **QA:** typecheck + build:web + ps-212 guard +
   daily-orders-trend-count + daily-orders-trend-total-line ALL PASS. Browser evidence (All Clients vs
   HUGRAB screenshot) = DJ's next dashboard look — the change is deterministic intent routing.
+
+### PS-215 — Shipped rows show External Label or sync error, never raw Missing shipment sync — DONE 2026-06-13
+- **✅ CODE DONE (one ops step = DJ/deploy):** the operator-facing Shipped table no longer rests on raw
+  "Missing shipment sync". **Display model (canonical predicates unchanged):** local_label (normal
+  render) / external_label (Ext. Label — PS-036 rule intact: ONLY from the persisted flag, never
+  inferred from absence) / sync_error — the no-local-no-flag state now renders an ACTIONABLE amber
+  "Shipment sync error" badge whose tooltip routes the operator (re-run ShipStation sync → external-
+  shipped classifier → PS-215 runbook). The decision stays owned by the shared
+  getIsExternallyFulfilled / getIsMissingShipmentSync predicates (the carrier column's
+  shouldShowCarrierExtLabel wrapper included); orders-row-display's renderMissingShipmentSyncBadge →
+  renderShipmentSyncErrorBadge; OrdersView panel copy updated to match. **Why rows were resting there
+  (operational, per the card's investigation):** the PS-056 classifier is correct but NOT operational —
+  ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER and ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY default false (the
+  2026-06-12 dry run found 10 unflagged-external rows). **Ops layer added:** GET /health/ready + /deep now
+  expose `externalShippedClassifier: {schedulerEnabled, autoApplyEnabled}` so a silently-disabled deploy
+  is visible at a glance; NEW runbook docs/runbooks/ps-215-external-shipped-remediation.md (dry-run via
+  certify:external-shipped → recoverable rows drain via sync/backfill → DJ-approved apply/flag-enable →
+  verify zero; deploy checklist note). **Re-anchors:** the E2E orders-column-integrity spec literals (15
+  sites) moved to the new badge text — its safety assertions are unchanged in MEANING (the no-flag
+  fixture row must NOT render Ext. Label); ps-056-external-label-certification-guard's pinned regex
+  re-anchored with the rationale; the OrdersView PS-056 comment updated. **Guard**
+  `test:ps-215-shipped-display-state`: raw phrase banned as any rendered badge (comment-safe pins), new
+  renderer + actionable tooltip pinned, external-before-fallback ordering pinned at all 3 columns,
+  PS-036 predicate usage pinned, E2E asserts the new text AND still proves no-flag ≠ Ext. Label, /health
+  exposes both flags, scheduler disabled-logging pinned, runbook content pinned. **QA:** typecheck +
+  build:web + ps-215 guard + external-shipped-reconcile + ps-056-auto-external-shipped +
+  ps-056-external-label-certification ALL PASS. **DJ/deploy action:** set the two env flags on Render per
+  the runbook (scheduler=true; auto-apply=true when ready to flag the 10 known externals) — /health/deep
+  confirms. Follow-up candidate (explicitly NOT bundled): per-row persisted classifier verdicts so the
+  table can split recoverable vs lookup-failed visually; today both rest on the actionable sync-error
+  badge and the classifier report distinguishes them.

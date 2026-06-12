@@ -98,7 +98,7 @@ import {
   getBackendRowMoney,
   renderRateAmountWithMarkup,
   renderExtLabelBadge,
-  renderMissingShipmentSyncBadge,
+  renderShipmentSyncErrorBadge,
 } from './orders-row-display'
 import {
   fetchRecalculateAllJob,
@@ -1359,7 +1359,8 @@ type ShippedDataState = 'external' | 'local' | 'missing'
 // Per user override unlock shipped data on 2026-06-01: PS-056 keeps this
 // shipped-row display classification explicit so marketplace-fulfilled rows
 // show Ext. Label only after persisted external classification, while
-// recoverable ShipStation shipment/fulfillment gaps stay Missing shipment sync.
+// recoverable ShipStation shipment/fulfillment gaps stay on the actionable
+// sync-error badge (PS-215 renamed the old raw resting text).
 function getShippedDataState(order: OrderSummaryDto): ShippedDataState {
   if (hasExplicitExternalFlag(order)) return 'external'
   if (hasLocalShipmentData(order)) return 'local'
@@ -7923,7 +7924,7 @@ export default function OrdersView({
         return renderExtLabelBadge()
       }
       if (getIsMissingShipmentSync(displayOrder)) {
-        return renderMissingShipmentSyncBadge()
+        return renderShipmentSyncErrorBadge()
       }
 
       const selectedRateBase = getSelectedRateBaseCost(displayOrder)
@@ -8044,7 +8045,7 @@ export default function OrdersView({
         return renderExtLabelBadge()
       }
       if (getIsMissingShipmentSync(displayOrder)) {
-        return renderMissingShipmentSyncBadge()
+        return renderShipmentSyncErrorBadge()
       }
 
       const carrierCode = getShippedDisplayCarrierCode(displayOrder)
@@ -8096,7 +8097,7 @@ export default function OrdersView({
         return renderExtLabelBadge()
       }
       if (getIsMissingShipmentSync(displayOrder)) {
-        return renderMissingShipmentSyncBadge()
+        return renderShipmentSyncErrorBadge()
       }
 
       const accountDisplay = getShipAccountDisplay(displayOrder, shippingAccounts)
@@ -9092,7 +9093,7 @@ export default function OrdersView({
     const shippedLabelUnavailableCopy = getIsExternallyFulfilled(panelOrder)
       ? 'External label - reprint in marketplace or carrier'
       : getIsMissingShipmentSync(panelOrder)
-        ? 'Missing shipment sync — re-run ShipStation sync to backfill label data'
+        ? 'Shipment sync error — re-run ShipStation sync to backfill label data'
         : shippedQueueableLabelUrl
           ? 'No client selected for print queue'
           : 'No saved queueable PrepShip label URL yet'
@@ -9802,7 +9803,7 @@ export default function OrdersView({
                     getIsExternallyFulfilled(panelOrder) ? (
                       <span className="text-[12.5px] text-ink-3 italic leading-snug">External label — purchased externally</span>
                     ) : getIsMissingShipmentSync(panelOrder) ? (
-                      <span className="text-[12.5px] text-amber-700 italic leading-snug">Missing shipment sync — re-run ShipStation sync</span>
+                      <span className="text-[12.5px] text-amber-700 italic leading-snug">Shipment sync error — re-run ShipStation sync</span>
                     ) : (
                       <>
                         <span className="text-[18px] font-bold tabular-nums leading-none text-ink font-display">

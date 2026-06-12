@@ -51,10 +51,15 @@ assert.match(
   /LOCAL.*RECOVERABLE_MISSING_SYNC.*EXTERNAL/s,
   'Orders column-integrity E2E must explicitly document the three PS-056 shipped states.',
 );
+// PS-215 re-anchor: the recoverable-sync badge text changed from the raw
+// "Missing shipment sync" resting state to the actionable "Shipment sync
+// error" (DJ invariant: shipped rows show External Label or an actionable
+// error — never the raw phrase). The PS-056 classification split (external
+// vs recoverable) is unchanged; only the operator-facing wording moved.
 assert.match(
   ordersSpec,
-  /SHIPPED-980002[\s\S]*Ext\. Label[\s\S]*SHIPPED-980003[\s\S]*Missing shipment sync/,
-  'Orders column-integrity E2E must assert Ext. Label and Missing shipment sync separately.',
+  /SHIPPED-980002[\s\S]*Ext\. Label[\s\S]*SHIPPED-980003[\s\S]*Shipment sync error/,
+  'Orders column-integrity E2E must assert Ext. Label and Shipment sync error separately.',
 );
 assert.match(
   ordersView,
