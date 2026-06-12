@@ -27,7 +27,11 @@ export type SelectedRateValidationReason =
   | 'missing_current_fingerprint'
   | 'missing_fingerprint'
   | 'fingerprint_mismatch'
-  | 'not_in_current_eligible_rates';
+  | 'not_in_current_eligible_rates'
+  // PS-204: the purchase payload names one carrier account while the validated
+  // proof rate belongs to a different one (the order-1484 class: payload
+  // shippingProviderId=10000025 with proof carrier_id=se-565377).
+  | 'purchase_account_mismatch';
 
 export type SelectedRateValidationResult =
   | {
@@ -271,4 +275,100 @@ export function assertSelectedRateProofForLabelPurchase(proof: SelectedRateProof
     );
   }
   return result;
+}
+
+// ── PS-204: bind the selected-rate proof to the PURCHASE account ──────────────
+// The order-1484 class: the payload charged shippingProviderId=10000025 (a
+// direct-carrier synthetic id) while the carried proof's rate belonged to
+// ShipStation se-565377 — the amount/proof source and the purchase account
+// source disagreed and nothing compared them. These pure helpers extract the
+// provider-account identity from a proof rate and validate it against the
+// payload's shippingProviderId BEFORE any provider call.
+
+/** Same synthetic ranges the rate/label sides use (se-1xxxxxxx carrier_accounts, se-2xxxxxxx store_accounts). */
+export const DIRECT_SYNTHETIC_PROVIDER_ID_FLOOR = 10_000_000;
+
+export function isDirectSyntheticProviderKey(key: string | null | undefined): boolean {
+  const n = Number(key);
+  return Number.isFinite(n) && n >= DIRECT_SYNTHETIC_PROVIDER_ID_FLOOR;
+}
+
+/**
+ * Normalized provider-account identity of a proof/snapshot rate, or null when
+ * the rate carries no identity at all (legacy rows — binding is then skipped,
+ * never weaker than the pre-PS-204 boundary).
+ */
+export function selectedRateProviderAccountKey(rate: unknown): string | null {
+  const row = record(rate) ?? {};
+  const raw = record(row.raw) ?? {};
+  const value = firstPresent(
+    row.shippingProviderId,
+    row.providerAccountId,
+    row.shipping_provider_id,
+    row.carrier_id,
+    row.carrierId,
+    raw.shippingProviderId,
+    raw.providerAccountId,
+    raw.carrier_id,
+  );
+  if (value == null) return null;
+  const key = providerAccountKey(value);
+  return key ? key : null;
+}
+
+/** Normalized identity of the purchase payload's shippingProviderId (null = not sent). */
+export function purchaseProviderAccountKey(shippingProviderId: unknown): string | null {
+  if (shippingProviderId === null || shippingProviderId === undefined) return null;
+  const text = String(shippingProviderId).trim();
+  if (!text) return null;
+  return providerAccountKey(text) || null;
+}
+
+export type PurchaseAccountBindingResult =
+  | { ok: true; reason: 'ok' | 'no_purchase_account' | 'proof_has_no_account_identity'; purchaseKey: string | null; proofKey: string | null }
+  | { ok: false; reason: 'purchase_account_mismatch'; purchaseKey: string; proofKey: string };
+
+/**
+ * PS-204 pure decision: when BOTH the purchase payload and the validated proof
+ * rate name a carrier account, they must be the SAME account. Absent either
+ * side, the binding passes (identical to the pre-PS-204 boundary) — it only
+ * ever ADDS a block, never relaxes one.
+ */
+export function validatePurchaseAccountBinding(input: {
+  purchaseShippingProviderId: unknown;
+  selectedRate: unknown;
+}): PurchaseAccountBindingResult {
+  const purchaseKey = purchaseProviderAccountKey(input.purchaseShippingProviderId);
+  const proofKey = selectedRateProviderAccountKey(input.selectedRate);
+  if (purchaseKey == null) return { ok: true, reason: 'no_purchase_account', purchaseKey: null, proofKey };
+  if (proofKey == null) return { ok: true, reason: 'proof_has_no_account_identity', purchaseKey, proofKey: null };
+  if (purchaseKey === proofKey) return { ok: true, reason: 'ok', purchaseKey, proofKey };
+  return { ok: false, reason: 'purchase_account_mismatch', purchaseKey, proofKey };
+}
+
+/**
+ * Throwing wrapper for the purchase boundary. Mismatch throws the SAME
+ * SelectedRateProofError class the proof path throws (structured, before any
+ * provider call). The error code distinguishes the synthetic-id-on-a-
+ * ShipStation-proof shape (DIRECT_CARRIER_ON_SHIPSTATION_PATH) from the
+ * general account mismatch so the UI can show the right re-rate action.
+ */
+export function assertPurchaseAccountMatchesProof(input: {
+  purchaseShippingProviderId: unknown;
+  selectedRate: unknown;
+}): PurchaseAccountBindingResult {
+  const result = validatePurchaseAccountBinding(input);
+  if (result.ok) return result;
+  const purchaseIsSynthetic = isDirectSyntheticProviderKey(result.purchaseKey);
+  const proofIsSynthetic = isDirectSyntheticProviderKey(result.proofKey);
+  const err = new SelectedRateProofError(
+    purchaseIsSynthetic && !proofIsSynthetic
+      ? `Selected account (provider id ${result.purchaseKey}) is a direct carrier account, but the selected rate proof belongs to ShipStation account ${result.proofKey}. Re-rate/select the matching account before purchasing. No postage was purchased.`
+      : `Purchase payload account (provider id ${result.purchaseKey}) does not match the selected rate proof account (${result.proofKey}). Re-rate or reselect the rate for the chosen account. No postage was purchased.`,
+    { ok: false, reason: 'purchase_account_mismatch', selectedAuthorityKey: result.proofKey },
+  );
+  err.code = purchaseIsSynthetic && !proofIsSynthetic
+    ? 'DIRECT_CARRIER_ON_SHIPSTATION_PATH'
+    : 'SELECTED_RATE_ACCOUNT_MISMATCH';
+  throw err;
 }

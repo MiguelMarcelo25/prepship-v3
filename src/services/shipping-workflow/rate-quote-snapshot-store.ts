@@ -13,6 +13,7 @@
 
 import { getAnalyticsCache, setAnalyticsCache } from '../analytics-cache.js';
 import {
+  assertPurchaseAccountMatchesProof,
   assertSelectedRateProofForLabelPurchase,
   type SelectedRateProofInput,
 } from './rate-fingerprint.js';
@@ -109,6 +110,10 @@ export type LabelPurchaseRateSelection = {
   rateQuoteId?: string | null;
   selectedRateKey?: string | null;
   selectedRateProof?: SelectedRateProofInput | null;
+  // PS-204: the account the purchase payload will CHARGE. When present, the
+  // validated proof rate must belong to the same account — the amount/proof
+  // source and the purchase account source can never diverge again.
+  purchaseShippingProviderId?: unknown;
 };
 
 /**
@@ -116,6 +121,12 @@ export type LabelPurchaseRateSelection = {
  * failure to resolve it, FALL BACK to the legacy carried proof (also strict). Throws
  * SelectedRateProofError before any provider call when neither yields a valid proof.
  * Never weaker than the legacy path; identical to legacy when no rateQuoteId is sent.
+ *
+ * PS-204: AFTER the proof validates, the proof rate's provider-account identity
+ * must match the purchase payload's shippingProviderId (when both are present) —
+ * on BOTH proof paths, snapshot-resolved and legacy carried. A stale selection
+ * can never buy postage on a different account than the proven rate (the
+ * order-1484 class: payload pid 10000025 with proof se-565377).
  */
 export async function assertLabelPurchaseRateSelection(body: LabelPurchaseRateSelection): Promise<void> {
   if (body.rateQuoteId && body.selectedRateKey) {
@@ -123,10 +134,18 @@ export async function assertLabelPurchaseRateSelection(body: LabelPurchaseRateSe
     const resolved = resolveRateQuoteForPurchase({ snapshot, selectedRateKey: body.selectedRateKey });
     if (resolved.ok) {
       assertSelectedRateProofForLabelPurchase(resolved.proof); // final authority
+      assertPurchaseAccountMatchesProof({
+        purchaseShippingProviderId: body.purchaseShippingProviderId,
+        selectedRate: resolved.proof.selectedRate,
+      });
       return;
     }
     // snapshot missing/expired/mismatched -> fall through to the legacy proof, which
     // throws if it too is missing/invalid. Never silently proceeds.
   }
   assertSelectedRateProofForLabelPurchase(body.selectedRateProof ?? null);
+  assertPurchaseAccountMatchesProof({
+    purchaseShippingProviderId: body.purchaseShippingProviderId,
+    selectedRate: body.selectedRateProof?.selectedRate,
+  });
 }

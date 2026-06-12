@@ -120,6 +120,7 @@ import {
   BACKEND_RATE_PROOF_SOURCE,
   hasBackendIssuedRateProof,
   rateProofFingerprint,
+  rateBelongsToProviderAccount,
   selectProofFromCandidates,
   rateQuoteRefFromCandidates,
 } from '../../lib/rate-proof'
@@ -4192,8 +4193,11 @@ export default function OrdersView({
         confirmation: shippingOptions.confirmation,
         insuranceProvider: shippingOptions.insuranceProvider,
         insuredValue: shippingOptions.insuredValue,
-        selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
-        ...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate),
+        // PS-204: proof candidates filtered to the account this batch payload
+        // charges (shippingProviderId above) — same binding the panel payload
+        // and the backend boundary enforce.
+        selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId),
+        ...buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId),
         testLabel: Boolean(options.batchTestMode) || orderIsTest,
       }
     }
@@ -4369,6 +4373,11 @@ export default function OrdersView({
     let directQueued = 0
     const backendJobOrders: OrderSummaryDto[] = []
     for (const order of jobOrders) {
+      // PS-204: when the caller carries the LIVE single-order panel payload,
+      // its shippingProviderId is the purchase account — routing must follow
+      // it, not the stale saved DTO. (Batch flows have no override → null.)
+      const overridePayload = options.labelPayloadOverrides?.get(order.orderId) ?? null
+      const overrideProviderId = toNumberValue(toRecord(overridePayload)?.shippingProviderId) ?? null
       const route = classifyQueueOrderRoute(
         {
           hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
@@ -4378,6 +4387,7 @@ export default function OrdersView({
           // PS-176: the backend's routing policy — consulted only after the live
           // never-buy ladder inside the classifier.
           backendQueueRoute: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
+          explicitPayloadProviderId: overrideProviderId,
         },
         options,
       )
@@ -4720,6 +4730,14 @@ export default function OrdersView({
       // saved best rate is only a display signal (shown as calculating/unresolved
       // when stale via classifyAwaitingRateCellState) and can never become the
       // selected rate. Do NOT add a stale-rate block here without DJ's sign-off.
+      //
+      // PS-204 refinement (DJ-signed via the PS-204 card, 2026-06-12): the req-4
+      // decision stands for STALENESS, but the PROOF attached below is now
+      // account-bound — a rate from a different account than the charged
+      // shippingProviderId is never sent as proof, and a cross-account purchase
+      // is blocked (here with a re-rate toast; independently at the backend
+      // boundary). Proceeding with the operator's selection never meant
+      // charging account A on account B's proof.
       serviceName: isTest
         ? toStringValue(testSelectedRate?.serviceName) ?? testServiceCode
         : toStringValue(panelRatePreview[0]?.serviceName) ?? panelForm.serviceCode,
@@ -4736,8 +4754,13 @@ export default function OrdersView({
       confirmation: shippingOptions.confirmation,
       insuranceProvider: shippingOptions.insuranceProvider,
       insuredValue: shippingOptions.insuredValue ?? undefined,
-      selectedRateProof: buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate),
-      ...buildRateQuoteRefForOrder(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate),
+      // PS-204: the proof/quote-ref candidates are FILTERED to the account the
+      // payload charges (shippingProviderId above) — a preview/saved rate from
+      // a DIFFERENT account can no longer ride along as "proof" for this
+      // purchase (the order-1484 class: pid 10000025 with an se-565377 proof).
+      // The backend boundary independently enforces the same binding.
+      selectedRateProof: buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate, isTest ? null : shippingProviderId),
+      ...buildRateQuoteRefForOrder(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate, isTest ? null : shippingProviderId),
       testLabel: isTest || mode === 'test',
       shipTo: {
         name: shipTo.name ?? '',
@@ -4761,6 +4784,24 @@ export default function OrdersView({
         country: location.country,
         phone: location.phone,
       } : undefined,
+    }
+
+    // PS-204 UI honesty: if a backend-proven rate EXISTS but belongs to a
+    // different account than the dropdown selection, the account filter above
+    // produced no proof — surface the real situation and require a re-rate for
+    // the chosen account instead of letting the purchase fail server-side with
+    // a generic proof error. (No proof at all = unchanged: the backend proof
+    // gate rejects exactly as before.)
+    if (!isTest && !payload.selectedRateProof && !payload.rateQuoteId) {
+      const unfiltered = buildSelectedRateProofPayload(order, panelRatePreview[0] ?? order.bestRate ?? order.selectedRate)
+      if (unfiltered) {
+        const accountLabel = account?.nickname || account?._label || `account ${shippingProviderId}`
+        showToast(
+          `The displayed rate belongs to a different carrier account — Browse Rates for ${accountLabel} before purchasing`,
+          'error',
+        )
+        return null
+      }
     }
 
     const labelPopup = mode === 'queue' ? null : openLabelPdfPlaceholder()
@@ -5282,24 +5323,27 @@ export default function OrdersView({
   // PS-135: proof logic lives in ../../lib/rate-proof (hasBackendIssuedRateProof /
   // rateProofFingerprint / selectProofFromCandidates / rateQuoteRefFromCandidates). These two
   // wrappers keep every existing call site unchanged while delegating to the canonical lib.
-  function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown) {
+  // PS-204: optional forShippingProviderId filters the candidates to the
+  // account the payload charges — cross-account proofs are excluded at the
+  // source (rate-proof.ts owns the rule; the backend binding re-checks it).
+  function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown) {
     return selectProofFromCandidates([
       toRecord(candidate),
       toRecord(order.bestRate),
       toRecord(order.selectedRate),
       getSavedBestRateRecord(order),
-    ])
+    ], { forShippingProviderId })
   }
 
   // PS-105/PS-135: backend-owned rate-quote ref for label/queue payloads — mirrors the proof
   // candidate selection so id/key match the proof's rate. Additive (omits absent fields).
-  function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown): { rateQuoteId?: string; selectedRateKey?: string } {
+  function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown): { rateQuoteId?: string; selectedRateKey?: string } {
     return rateQuoteRefFromCandidates([
       toRecord(candidate),
       toRecord(order.bestRate),
       toRecord(order.selectedRate),
       getSavedBestRateRecord(order),
-    ])
+    ], { forShippingProviderId })
   }
 
   function hasAnySavedBestRateForDisplay(order: OrderSummaryDto) {
@@ -6838,7 +6882,10 @@ export default function OrdersView({
       try {
         const shippingOptions = buildOrderShippingOptionsPayload(order)
         let proofRate = bestRate ?? selectedRate
-        let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)
+        // PS-204: account-bound — a saved rate from a different account than the
+        // payload pid can't serve as proof; the strict-recalc fallback below then
+        // re-proves (and re-derives BOTH pid and proof from the same fresh rate).
+        let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)
         if (!selectedRateProof && !orderIsTest) {
           const proofRequest = getAutoBestRateRequest(order)
           if (!proofRequest) {
@@ -6852,6 +6899,9 @@ export default function OrdersView({
           }
           proofRate = proofResult.rate
           bestRate = proofResult.rate
+          // PS-204: no account filter here BY DESIGN — the pid is re-derived from
+          // this same fresh rate on the next line, so proof and payload account
+          // are coherent by construction.
           selectedRateProof = buildSelectedRateProofPayload(order, proofRate)
           shippingProviderId = toNumberValue(proofRate.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
           serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(proofRate.serviceCode) ?? selectedRate?.serviceCode
@@ -9389,6 +9439,15 @@ export default function OrdersView({
                           shipAccountId: nextValue,
                           serviceCode: keepService ? current.serviceCode : '',
                         }
+                      })
+                      // PS-204: a preview rate quoted for the PREVIOUS account is
+                      // stale for the new selection — drop it instead of letting
+                      // it dress the new account with another account's amount.
+                      // Re-rating (Browse Rates / preview fetch) repopulates it
+                      // for the chosen account.
+                      setPanelRatePreview((current) => {
+                        const belongs = rateBelongsToProviderAccount(current[0], nextValue)
+                        return belongs === false ? [] : current
                       })
                       void apiClient.setOrderSelectedPid(panelOrder.orderId, nextValue ? Number.parseInt(nextValue, 10) : null)
                     }}

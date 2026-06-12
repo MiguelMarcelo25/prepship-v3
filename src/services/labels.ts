@@ -1203,6 +1203,12 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     rateQuoteId: body.rateQuoteId,
     selectedRateKey: body.selectedRateKey,
     selectedRateProof: body.selectedRateProof,
+    // PS-204: bind the proof to the account being CHARGED. A payload naming a
+    // direct synthetic id while the proof rate belongs to ShipStation (or any
+    // cross-account pair) is blocked here, before either family's provider
+    // call — this gate runs ahead of BOTH the direct branch and the
+    // ShipStation branch.
+    purchaseShippingProviderId: body.shippingProviderId,
   });
   // PS-127 rate↔label parity guard: if the order classifies as TRUSTED residential/commercial
   // (operator override, provider/source flag, or validated business) but the selected rate

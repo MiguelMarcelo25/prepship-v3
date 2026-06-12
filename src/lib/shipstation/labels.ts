@@ -169,6 +169,26 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
   return pick(labelDownload);
 }
 
+// PS-204 defense-in-depth: synthetic direct-account ids (se-1xxxxxxx
+// carrier_accounts / se-2xxxxxxx store_accounts) are PrepShip-internal — they
+// do not exist at ShipStation, which rejects them ("carrier_id 10000025 not
+// found"... after the request was already sent). This last-mile check makes it
+// structurally impossible for PrepShip to EMIT such a request body, whatever
+// upstream routing bug produced the id. Pure + offline-testable.
+const SS_SYNTHETIC_CARRIER_ID_FLOOR = 10_000_000;
+
+export function assertSsCarrierIdIsNotSynthetic(carrierId: unknown): void {
+  const match = String(carrierId ?? '').trim().match(/^se-(\d+)$/i);
+  const numeric = match ? Number(match[1]) : NaN;
+  if (Number.isFinite(numeric) && numeric >= SS_SYNTHETIC_CARRIER_ID_FLOOR) {
+    const err = new Error(
+      `Direct-carrier account id ${numeric} cannot be sent to ShipStation (carrier_id ${String(carrierId)} is a PrepShip-internal synthetic id). Re-rate/select the matching account or route through the direct-carrier label path. No postage was purchased.`,
+    ) as Error & { code?: string };
+    err.code = 'DIRECT_CARRIER_ON_SHIPSTATION_PATH';
+    throw err;
+  }
+}
+
 /**
  * Build the ShipStation v2 POST /v2/labels request body. Pure (no network) so
  * the payload SHAPE — especially PS-072's package-level insured_value vs
@@ -176,6 +196,7 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
  * postage. ssCreateLabel uses this.
  */
 export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
+  assertSsCarrierIdIsNotSynthetic(input.carrierId);
   const options = normalizeShippingOptions(input);
   const pkg: Record<string, unknown> = {
     weight: { value: Number(input.weightOz.toFixed(2)), unit: 'ounce' },
