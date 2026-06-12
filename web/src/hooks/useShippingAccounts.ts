@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { getCachedAuthToken } from '../lib/auth-session-cache';
 import {
   SHARED_DATA_STALE_MS,
   SHARED_DATA_CACHE_MS,
@@ -76,32 +75,30 @@ const STORE_PROVIDER_KEYS = new Set<string>([
   'bigcommerce',
 ]);
 
-// Route the direct-carrier list through the Vercel function we control
-// (api/carrier-accounts.ts) rather than Render's same-named endpoint,
-// whose code lives in a separate repo and may not match. Using fetch
-// directly here so we don't have to thread callVercelFunction through
-// the React Query queryFn — same-origin /api/* path + Supabase JWT.
+// PS-200 S1: the direct-carrier list comes from the v4 backend. The old
+// rationale for staying on the Vercel function ("Render's code lives in a
+// separate repo and may not match") inverted — THIS repo is the Render
+// deploy, and the route delegates to the same credential-accounts service
+// the Vercel function used.
 async function fetchDirectCarrierAccounts(): Promise<V4DirectCarriersResponse> {
-  const accessToken = await getCachedAuthToken();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-  const res = await fetch('/api/carrier-accounts?source=admin', { headers });
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* ignore */ }
+  try {
+    const json = await api.get<V4DirectCarriersResponse>('/carrier-accounts?source=admin');
+    // eslint-disable-next-line no-console
+    console.debug('[useShippingAccounts] direct carriers:', json?.data?.length ?? 0);
+    return json;
+  } catch (err) {
     // Surface in console too — the merged hook (useShippingAccounts below)
     // intentionally swallows this error when ShipStation succeeds, so a
     // failure here is invisible in the UI. That makes "my direct UPS isn't
     // in the Rate Browser sidebar" near-impossible to diagnose without
     // poking at Network. Console warn is the cheapest fix.
     // eslint-disable-next-line no-console
-    console.warn('[useShippingAccounts] direct carrier list failed:', msg);
-    throw new Error(msg);
+    console.warn(
+      '[useShippingAccounts] direct carrier list failed:',
+      err instanceof Error ? err.message : err
+    );
+    throw err;
   }
-  const json = (await res.json()) as V4DirectCarriersResponse;
-  // eslint-disable-next-line no-console
-  console.debug('[useShippingAccounts] direct carriers:', json?.data?.length ?? 0);
-  return json;
 }
 
 export function useShippingAccounts(options: SharedDataHookOptions = {}): UseShippingAccountsResult {

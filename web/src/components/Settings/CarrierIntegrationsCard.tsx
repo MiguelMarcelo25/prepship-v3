@@ -817,10 +817,10 @@ async function postIntegration(
       .sort(),
     payloadBytes: JSON.stringify(body).length,
   })
-  const json = await callVercelFunction<{ data: SavedRow | null }>(endpoint, {
-    method: 'POST',
-    body,
-  })
+  // PS-200 S1: account CRUD + verify go to the v4 backend (same handler code
+  // the legacy Vercel functions delegated to). The marketplace pull/probe
+  // buttons below still use callVercelFunction until S2 ports their routes.
+  const json = await api.post<{ data: SavedRow | null }>(endpoint, body)
   return (json?.data as SavedRow) ?? null
 }
 
@@ -837,17 +837,15 @@ async function verifyConnection(rowId: number, provider: string): Promise<Verify
   // Tell the verifier which table to load from. Stores → store_accounts,
   // carriers → carrier_accounts.
   const isStore = STORE_PROVIDERS.has(provider)
-  return callVercelFunction<VerifyResult>('/carriers/verify', {
-    method: 'POST',
-    body: isStore ? { storeAccountId: rowId } : { carrierAccountId: rowId },
-  })
+  return api.post<VerifyResult>(
+    '/carriers/verify',
+    isStore ? { storeAccountId: rowId } : { carrierAccountId: rowId },
+  )
 }
 
 async function deleteIntegration(rowId: number, provider: string): Promise<void> {
   const endpoint = endpointForProvider(provider)
-  await callVercelFunction<unknown>(`${endpoint}?id=${rowId}`, {
-    method: 'DELETE',
-  })
+  await api.delete<unknown>(`${endpoint}?id=${rowId}`)
 }
 
 // PATCH /carrier-accounts?id=N { source: 'admin' } — flips a portal
@@ -858,12 +856,9 @@ async function deleteIntegration(rowId: number, provider: string): Promise<void>
 // Carriers only (store_accounts uses a separate table without the
 // source field's pending/active distinction).
 async function approveCarrierIntegration(rowId: number): Promise<void> {
-  await callVercelFunction<{ data: Record<string, unknown> | null }>(
+  await api.patch<{ data: Record<string, unknown> | null }>(
     `/carrier-accounts?id=${rowId}`,
-    {
-      method: 'PATCH',
-      body: { source: 'admin' },
-    },
+    { source: 'admin' },
   )
 }
 
@@ -889,13 +884,10 @@ async function renameCarrierIntegration(
   rowId: number,
   label: string,
 ): Promise<RenameResult | null> {
-  const res = await callVercelFunction<{
+  const res = await api.patch<{
     data: { label: string | null } | null
     ordersUpdated?: number
-  }>(`/carrier-accounts?id=${rowId}`, {
-    method: 'PATCH',
-    body: { label },
-  })
+  }>(`/carrier-accounts?id=${rowId}`, { label })
   if (!res?.data) return null
   return {
     label: res.data.label ?? null,
@@ -912,12 +904,9 @@ async function reconnectCarrierCredentials(
   rowId: number,
   credentials: Record<string, string>,
 ): Promise<void> {
-  await callVercelFunction<{ data: Record<string, unknown> | null }>(
+  await api.patch<{ data: Record<string, unknown> | null }>(
     `/carrier-accounts?id=${rowId}`,
-    {
-      method: 'PATCH',
-      body: { credentials },
-    },
+    { credentials },
   )
 }
 
@@ -925,12 +914,9 @@ async function reconnectCarrierCredentials(
 // Browser without deleting it. active=false is filtered out client-side
 // (fetchDirectCarrierAccountRows), so the carrier stops appearing for any order.
 async function setCarrierActive(rowId: number, active: boolean): Promise<void> {
-  await callVercelFunction<{ data: Record<string, unknown> | null }>(
+  await api.patch<{ data: Record<string, unknown> | null }>(
     `/carrier-accounts?id=${rowId}`,
-    {
-      method: 'PATCH',
-      body: { active },
-    },
+    { active },
   )
 }
 
@@ -1253,7 +1239,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setAssignSaving(true)
     try {
       const ids = Array.from(assignDraft)
-      const res = await callVercelFunction<{
+      const res = await api.put<{
         data: {
           id: number
           assignedClientIds: number[]
@@ -1266,10 +1252,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           promotedFromPortal?: boolean
           source?: string
         }
-      }>(`/carrier-accounts?id=${d.accountId}`, {
-        method: 'PUT',
-        body: { clientIds: ids },
-      })
+      }>(`/carrier-accounts?id=${d.accountId}`, { clientIds: ids })
       const fresh = res?.data?.assignedClientIds ?? ids
       const newSource = res?.data?.source ?? d.source
       setSaved((prev) =>
@@ -1512,11 +1495,11 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       const STORE_DISPLAY_OFFSET = 1_000_000_000
       type RawRow = Omit<SavedRow, 'accountId' | 'kind'>
       const [carriersRes, storesRes] = await Promise.all([
-        callVercelFunction<{ data: RawRow[] }>('/carrier-accounts').catch((e) => {
+        api.get<{ data: RawRow[] }>('/carrier-accounts').catch((e) => {
           console.warn('[Settings] /carrier-accounts fetch failed:', e)
           return { data: [] as RawRow[] }
         }),
-        callVercelFunction<{ data: RawRow[] }>('/store-accounts?source=admin').catch((e) => {
+        api.get<{ data: RawRow[] }>('/store-accounts?source=admin').catch((e) => {
           console.warn('[Settings] /store-accounts fetch failed:', e)
           return { data: [] as RawRow[] }
         }),

@@ -921,9 +921,11 @@ export function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): 
 }
 
 export async function fetchDirectCarrierAccountRows(): Promise<DirectCarrierAccountRow[]> {
+  // PS-200 S1: account lists come from the v4 backend (same handler code the
+  // legacy Vercel functions delegated to — single service layer either way).
   const [carrierRes, storeRes] = await Promise.all([
-    callVercelFunction<{ data?: DirectCarrierAccountRow[] }>('/carrier-accounts?source=admin'),
-    callVercelFunction<{ data?: DirectCarrierAccountRow[] }>('/store-accounts?source=admin').catch((err) => {
+    api.get<{ data?: DirectCarrierAccountRow[] }>('/carrier-accounts?source=admin'),
+    api.get<{ data?: DirectCarrierAccountRow[] }>('/store-accounts?source=admin').catch((err) => {
       console.warn(
         '[v2-apiClient] store account lookup for carrier rates failed:',
         err instanceof Error ? err.message : err

@@ -11,7 +11,6 @@
 import { api, qs } from './api';
 import { API_BASE } from './api-base';
 import { getCachedAuthToken } from './auth-session-cache';
-import { callVercelFunction } from './vercelFunction';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
 import { directCarrierVisibleForScope } from '../../../src/lib/direct-carrier-scope';
 

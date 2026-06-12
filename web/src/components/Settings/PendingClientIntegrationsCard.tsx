@@ -1,6 +1,5 @@
 // @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
-import { callVercelFunction } from '../../lib/vercelFunction'
 import { api } from '../../lib/api'
 import { formatCaDateShort, formatCaTimeOnly } from '../../lib/ca-time'
 import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
@@ -73,7 +72,7 @@ export function PendingClientIntegrationsCard() {
   const refresh = async () => {
     setState({ kind: 'loading' })
     try {
-      const res = await callVercelFunction<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1')
+      const res = await api.get<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1')
       setItems(Array.isArray(res?.data) ? res.data : [])
       setState({ kind: 'idle' })
     } catch (error) {
@@ -86,7 +85,7 @@ export function PendingClientIntegrationsCard() {
     let active = true
     void (async () => {
       try {
-        const res = await callVercelFunction<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1')
+        const res = await api.get<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1')
         if (!active) return
         setItems(Array.isArray(res?.data) ? res.data : [])
         setState({ kind: 'idle' })

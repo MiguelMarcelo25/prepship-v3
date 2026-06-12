@@ -775,11 +775,28 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   override unlock shipped data on 2026-06-12 (protection-strengthening deletion only; no
   shipped/cancelled data touched). raw-error-response-audit guard list trimmed with in-file note (an
   absent endpoint can't leak raw errors — intent preserved, not weakened). QA: raw-error-response
-  (33 checks) + vercel-function-imports + typecheck PASS. **Remaining surfaces**: S1 account-CRUD FE
-  flip (+ v4 /store-accounts route), S2 walmart/ebay/fees ops routes + dead-code deletion, S3 fees
-  cron → v4 worker (both schedulers), S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy
-  deletion (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final
-  flip (vercel.json exclusions/crons removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
+  (33 checks) + vercel-function-imports + typecheck PASS. **S1 (account-CRUD cutover, 2026-06-12)**:
+  v4 /store-accounts route added (new imported handler mirroring the legacy function — synthetic
+  store-client create/cascade, POST diagnostics, safe 500s) + mounted with
+  requireCredentialAccountPermission; imported carrier-accounts handler drift re-synced (PATCH gate
+  now accepts {credentials} Reconnect + {active} Hide/Show — the shared normalizer/service always
+  supported both, only the early-400 gate blocked them on v4 — plus the incident-born POST shape
+  diagnostics + post-insert JSONB verification); ALL account-CRUD FE call sites flipped
+  callVercelFunction→api client (shared.ts account lists, useShippingAccounts raw fetch→api.get,
+  PendingClientIntegrationsCard ×2, CarrierIntegrationsCard save/verify/delete/approve/rename/
+  reconnect/setActive/assignments/lists ×9, dead callVercelFunction import dropped from
+  v2-apiClient.ts). Remaining legacy FE calls = exactly the S2 set (walmart/ebay/fees pulls +
+  carriers/rates probe). Auth note: v4 enforces credentials:read/write (admin/operator/warehouse
+  flows covered; client_user appears nowhere in this FE; the SEPARATE portal app still posts to the
+  legacy Vercel endpoint — S8 traffic check owns that cutover). Guards: credential-accounts guard
+  extended to the new handler; frontend-auth-cache re-anchored (useShippingAccounts no longer holds
+  auth code — negative getSession pin kept, positive pin would force auth code back in). QA:
+  credential-accounts + raw-error-response + vercel-function-imports + ps-159 + ps-178 ratchet +
+  ps-202 + ps-078 + typecheck + build:web + FULL shipping certification (78/78) PASS.
+  **Remaining surfaces**: S2 walmart/ebay/fees ops routes + dead-code deletion, S3 fees cron → v4
+  worker (both schedulers), S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy deletion
+  (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final flip
+  (vercel.json exclusions/crons removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
 
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 

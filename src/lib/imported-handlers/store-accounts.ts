@@ -1,17 +1,21 @@
 // @ts-nocheck
-// Vercel serverless function: CRUD for the carrier_accounts table.
+// PS-200 S1: v4 mirror of the legacy Vercel store-accounts function — CRUD
+// for the store_accounts table (marketplace order sources — Walmart, Amazon,
+// eBay, etc.). Mirrors imported-handlers/carrier-accounts.ts but writes to a
+// separate table so credentials for stores stay isolated from credentials
+// for shipping carriers.
 // Uses the migration-owned credential account schema. The handler verifies
 // readiness on entry instead of creating tables or indexes during requests.
 //
 // Endpoints (all under the same path, dispatched on req.method):
-//   GET  /api/carrier-accounts            → list (filterable by source/pending)
-//   POST /api/carrier-accounts            → upsert by (clientId, provider, accountIdentifier)
+//   GET  /store-accounts            → list (filterable by source/pending)
+//   POST /store-accounts            → upsert by (clientId, provider, accountIdentifier)
 //
-//   PUT  /api/carrier-accounts?id=N     -> replace/update connection metadata
-//   PATCH /api/carrier-accounts?id=N    -> partial update, including label/source
-//   DELETE /api/carrier-accounts?id=N   -> delete a carrier account row
+//   PATCH /store-accounts?id=N      -> partial update, including label/source
+//   DELETE /store-accounts?id=N     -> delete a store account row
 //
-// Auth: Supabase JWT in Authorization: Bearer <token>.
+// Auth: Supabase JWT verified in-handler; the mounting route additionally
+// enforces the credentials:read/write app permission (stricter than legacy).
 
 import postgres from 'postgres';
 import {
@@ -28,28 +32,30 @@ import {
   readJsonRequestBody,
 } from '../credential-accounts';
 import { corsHeaders } from '../http/cors';
-import { ensureCredentialAccountRuntimeSchema } from '../../services/credential-account-schema';
 import {
-  backfillAwaitingSnapshotNickname,
+  ensureCredentialAccountRuntimeSchema,
+  migrateLegacyStoreCredentialRows,
+} from '../../services/credential-account-schema';
+import {
   deleteCredentialAccount,
-  getCredentialAccountSnapshot,
+  deleteSyntheticStoreClientForAccount,
+  ensureSyntheticStoreClient,
+  getCredentialAccountProvider,
   getCredentialAccountStoredCredentialKeys,
   listCredentialAccounts,
-  normalizeAssignedClientIds,
   patchCredentialAccount,
-  replaceCarrierAccountClientAssignments,
   upsertCredentialAccount,
 } from '../../services/credential-accounts';
 
-const TABLE = 'carrier_accounts';
+const TABLE = 'store_accounts';
 
 // Provider validation: lowercase slug pattern instead of an explicit list.
-// This used to be a hardcoded Set that drifted out of sync with verify.ts's
-// VERIFIERS map every time a new carrier was added — bug #lessonlearned.
-// The pattern accepts any future provider key without an edit here. The
-// verifier endpoint (api/carriers/verify.ts) is the single source of truth
-// for which providers can actually be tested; unknown providers there fall
-// through to a clean "not yet implemented" response.
+// This used to be a hardcoded Set that drifted out of sync with the
+// verifier's VERIFIERS map every time a new carrier was added — bug
+// #lessonlearned. The pattern accepts any future provider key without an
+// edit here. The credential-verification connector is the single source of
+// truth for which providers can actually be tested; unknown providers there
+// fall through to a clean "not yet implemented" response.
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
@@ -70,7 +76,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   }
   const verified = await verifySupabaseJwt(token);
   if (!verified.ok) {
-    console.warn('[imported-carrier-accounts] Invalid token:', verified.reason);
+    console.warn('[imported-store-accounts] Invalid token:', verified.reason);
     res.status(401).json({ error: 'Invalid token' });
     return;
   }
@@ -79,7 +85,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   if (!dbUrl) {
     sendInternalServerError(
       res,
-      'imported-carrier-accounts:config',
+      'imported-store-accounts:config',
       new Error('DATABASE_URL not configured'),
     );
     return;
@@ -93,6 +99,7 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   try {
     await ensureCredentialAccountRuntimeSchema(sql, TABLE);
+    await migrateLegacyStoreCredentialRows(sql);
 
     if (req.method === 'GET') {
       const url = new URL(req.url ?? '', 'http://x');
@@ -102,10 +109,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       // table" — for now just filters by source since we don't have a
       // reviewed_at column. Tightening can come later.
       const wantSource = source && ALLOWED_ACCOUNT_SOURCES.has(source) ? source : null;
-      const rows = await listCredentialAccounts(sql, TABLE, {
-        source: wantSource,
-        includeAssignments: true,
-      });
+      const rows = await listCredentialAccounts(sql, TABLE, { source: wantSource });
       res.status(200).json({ data: rows, pending: pending === '1' });
       return;
     }
@@ -124,11 +128,11 @@ export default async function handler(req: any, res: any): Promise<void> {
         bodyType,
       } = normalizeCredentialAccountBody(body);
 
-      // PS-200 S1 drift re-sync: the legacy Vercel handler grew this
-      // diagnostic after a real incident (a 4/30 Walmart row saved with empty
-      // credentials). Log key SHAPE only — never values — so a bad save can
-      // be traced without dumping secrets.
-      console.log('[imported-carrier-accounts:POST]', JSON.stringify({
+      // Diagnostic: log key shape (never values) so a bad save can be traced
+      // without dumping secrets. Drop a row that arrives with no credential
+      // keys at all — the prior 4/30 Walmart row landed in that empty state
+      // and there's no legitimate flow that should produce one.
+      console.log('[imported-store-accounts:POST]', JSON.stringify({
         provider,
         accountIdentifier: maskAccountIdentifier(accountIdentifier),
         credentialKeys: credKeys,
@@ -173,42 +177,42 @@ export default async function handler(req: any, res: any): Promise<void> {
           TABLE,
           inserted?.id as number | undefined,
         );
-        console.log('[imported-carrier-accounts:POST] post-insert', JSON.stringify({
+        console.log('[imported-store-accounts:POST] post-insert', JSON.stringify({
           rowId: inserted?.id ?? null,
           storedCredentialKeys: storedKeys,
         }));
       } catch (vErr) {
-        console.warn('[imported-carrier-accounts:POST] post-insert verify failed:', vErr instanceof Error ? vErr.message : vErr);
+        console.warn('[imported-store-accounts:POST] post-insert verify failed:', vErr instanceof Error ? vErr.message : vErr);
+      }
+
+      // Auto-create a `clients` row tied to a synthetic store_id so the
+      // store appears in the Awaiting Shipment sidebar immediately —
+      // without waiting for a Pull Orders run. The same offset scheme is
+      // used by the per-provider order pullers, so when orders are pulled
+      // they reuse this client_id rather than creating a duplicate.
+      // Idempotent: skips if a clients row already exists for the synthetic
+      // store_id (re-saves don't dupe).
+      const accountId = inserted?.id as number | undefined;
+      if (accountId != null) {
+        try {
+          const synthetic = await ensureSyntheticStoreClient(sql, { provider, accountId, label });
+          if (synthetic?.created) {
+            console.log('[imported-store-accounts:POST] auto-created clients row', JSON.stringify({
+              provider,
+              accountId,
+              syntheticStoreId: synthetic.syntheticStoreId,
+              clientName: synthetic.clientName,
+            }));
+          }
+        } catch (clientErr) {
+          console.warn(
+            '[imported-store-accounts:POST] could not auto-create clients row:',
+            clientErr instanceof Error ? clientErr.message : clientErr,
+          );
+        }
       }
 
       res.status(200).json({ data: inserted ?? null });
-      return;
-    }
-
-    if (req.method === 'PUT') {
-      // Set the full client-assignment list for a carrier account
-      // (replace semantics — sending [] removes all assignments).
-      // Used by the Settings UI's "Assign clients" popover.
-      //
-      // URL: PUT /api/carrier-accounts?id={carrierAccountId}
-      // Body: { clientIds: number[] }
-      const url = new URL(req.url ?? '', 'http://x');
-      const idStr = url.searchParams.get('id');
-      const id = idStr != null ? Number(idStr) : NaN;
-      if (!Number.isFinite(id) || id <= 0) {
-        res.status(400).json({ error: 'id query parameter is required' });
-        return;
-      }
-      const body = await readJsonRequestBody(req);
-      const clientIds = normalizeAssignedClientIds(body);
-      const assignmentResult = await replaceCarrierAccountClientAssignments(sql, id, clientIds, {
-        promotePortal: true,
-      });
-      if (!assignmentResult) {
-        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
-        return;
-      }
-      res.status(200).json({ data: assignmentResult });
       return;
     }
 
@@ -223,28 +227,12 @@ export default async function handler(req: any, res: any): Promise<void> {
 
       const body = await readJsonRequestBody(req);
       const patch = normalizeCredentialAccountPatchBody(body);
-      // PS-200 S1 drift re-sync: the legacy handler also accepts
-      // { credentials } (the Settings "Reconnect" JSONB-merge re-entry) and
-      // { active } (the Rate Browser Hide/Show toggle). The shared
-      // normalizer + patchCredentialAccount already support both — this
-      // early-400 gate was the only thing blocking them on the v4 path.
-      if (!patch.hasSource && !patch.hasLabel && !patch.hasCredentials && !patch.hasActive) {
+      if (!patch.hasSource && !patch.hasLabel) {
         res.status(400).json({
-          error: 'PATCH body must include at least one of: source, label, credentials, active',
+          error: 'PATCH body must include at least one of: source, label',
         });
         return;
       }
-
-      // Credential re-entry ("Reconnect") — log which KEYS are being merged,
-      // never the values, so a stale-creds save can be traced without leaking
-      // secrets. Mirrors the POST path's diagnostic.
-      if (patch.hasCredentials) {
-        console.log('[imported-carrier-accounts:PATCH] credentials merge', JSON.stringify({
-          id,
-          credentialKeys: patch.credentialKeys,
-        }));
-      }
-
       if (patch.hasSource && patch.source == null) {
         res.status(400).json({
           error: `source must be one of: ${[...ALLOWED_ACCOUNT_SOURCES].join(', ')}`,
@@ -252,40 +240,13 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
 
-      const before = await getCredentialAccountSnapshot(sql, TABLE, id);
-      if (!before) {
-        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
-        return;
-      }
-
       const updated = await patchCredentialAccount(sql, TABLE, id, patch);
       if (!updated) {
-        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        res.status(404).json({ error: `store_accounts row #${id} not found` });
         return;
       }
 
-      let ordersUpdated = 0;
-      if (
-        patch.hasLabel &&
-        before.label != null &&
-        before.label.length > 0 &&
-        !patch.labelGoesNull &&
-        patch.label != null &&
-        patch.label !== before.label
-      ) {
-        try {
-          // PS-163: the awaiting-only nickname backfill SQL now lives in the credential-accounts
-          // service (single owner). This handler still decides WHEN to run it (real label change above).
-          ordersUpdated = await backfillAwaitingSnapshotNickname(sql, before.label, patch.label);
-        } catch (err) {
-          console.warn(
-            '[carrier-accounts:PATCH] awaiting-snapshot backfill failed:',
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-
-      res.status(200).json({ data: updated, ordersUpdated });
+      res.status(200).json({ data: updated });
       return;
     }
 
@@ -297,18 +258,37 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ error: 'id query parameter is required' });
         return;
       }
+      const provider = await getCredentialAccountProvider(sql, TABLE, id);
       const deletedId = await deleteCredentialAccount(sql, TABLE, id);
       if (deletedId == null) {
-        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        res.status(404).json({ error: `store_accounts row #${id} not found` });
         return;
       }
-      res.status(200).json({ data: { id: deletedId, deleted: true } });
+
+      let cascadedClientId: number | null = null;
+      if (provider) {
+        try {
+          cascadedClientId = await deleteSyntheticStoreClientForAccount(sql, {
+            provider,
+            accountId: id,
+          });
+        } catch (cascadeErr) {
+          console.warn(
+            '[imported-store-accounts:DELETE] could not cascade-delete clients row:',
+            cascadeErr instanceof Error ? cascadeErr.message : cascadeErr,
+          );
+        }
+      }
+
+      res.status(200).json({
+        data: { id: deletedId, deleted: true, cascadedClientId },
+      });
       return;
     }
 
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
-    sendInternalServerError(res, 'imported-carrier-accounts', err);
+    sendInternalServerError(res, 'imported-store-accounts', err);
   } finally {
     try {
       await sql.end({ timeout: 1 });

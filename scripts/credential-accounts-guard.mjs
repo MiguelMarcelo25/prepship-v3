@@ -34,6 +34,11 @@ const handlers = [
     'src/lib/imported-handlers/carrier-accounts.ts',
     read('src/lib/imported-handlers/carrier-accounts.ts'),
   ],
+  // PS-200 S1: the v4 store-accounts mirror joins the same structural rules.
+  [
+    'src/lib/imported-handlers/store-accounts.ts',
+    read('src/lib/imported-handlers/store-accounts.ts'),
+  ],
 ];
 
 assert(

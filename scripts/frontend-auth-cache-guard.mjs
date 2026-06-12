@@ -9,9 +9,15 @@ const sourcePaths = [
   'web/src/lib/api.ts',
   'web/src/lib/v2-apiClient.ts',
   'web/src/lib/vercelFunction.ts',
-  // PS-157: useShippingAccounts split out of v2Hooks.ts into its own module.
-  // The getCachedAuthToken usage (direct-carrier fetch) — and the requirement
-  // not to call supabase.auth.getSession() directly — now live there.
+];
+
+// PS-200 S1 re-anchor: useShippingAccounts no longer holds ANY auth code —
+// its raw fetch (which needed getCachedAuthToken) was replaced by the shared
+// api client, whose getCachedAuthToken usage is pinned above. The file keeps
+// the negative pin (must not call supabase.auth.getSession directly); the
+// positive "uses getCachedAuthToken" pin is dropped for it because requiring
+// it would force auth code back INTO the hook. Same intent, stricter outcome.
+const noDirectSessionPaths = [
   'web/src/hooks/useShippingAccounts.ts',
 ];
 
@@ -51,6 +57,14 @@ for (const sourcePath of sourcePaths) {
   assert(
     source.includes('getCachedAuthToken'),
     `${sourcePath} uses getCachedAuthToken`,
+  );
+}
+
+for (const sourcePath of noDirectSessionPaths) {
+  const source = read(sourcePath);
+  assert(
+    !source.includes('supabase.auth.getSession()'),
+    `${sourcePath} does not call supabase.auth.getSession directly`,
   );
 }
 
