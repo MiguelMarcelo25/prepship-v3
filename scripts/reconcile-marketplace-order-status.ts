@@ -1,9 +1,9 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 import postgres from 'postgres';
 import {
   type MarketplaceProvider,
   reconcileMarketplaceOrderStatuses,
-} from '../api/_lib/marketplace-status-reconciliation.ts';
+} from '../src/services/marketplace-status-reconciliation.ts';
 
 function argValue(name: string): string | null {
   const prefix = `--${name}=`;

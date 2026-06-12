@@ -5,7 +5,10 @@ const security = readFileSync('SECURITY_PATCH_PLAN.md', 'utf8');
 const devTasks = readFileSync('DEV_TASKS_README.md', 'utf8');
 const enterprise = readFileSync('ENTERPRISE_READINESS_AUDIT.md', 'utf8');
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
-const safeErrorHelperPath = 'api/_lib/safe-error.ts';
+// PS-200 S6: the safe-error helper moved to the v4 tree; api/_lib keeps a
+// compatibility re-export (pinned below) until S8 deletes the api/ directory.
+const safeErrorHelperPath = 'src/lib/safe-error.ts';
+const safeErrorShimPath = 'api/_lib/safe-error.ts';
 
 const checks = [];
 
@@ -56,6 +59,11 @@ if (existsSync(safeErrorHelperPath)) {
       safeErrorHelper.includes('Internal server error')
   );
 }
+expect(
+  'legacy api/_lib safe-error shim re-exports the v4 helper (until S8 deletes api/)',
+  existsSync(safeErrorShimPath) &&
+    readFileSync(safeErrorShimPath, 'utf8').includes("from '../../src/lib/safe-error.js'")
+);
 
 for (const file of [
   'api/carriers/walmart/fees.ts',

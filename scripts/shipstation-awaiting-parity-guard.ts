@@ -1,10 +1,10 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   classifyShipStationAwaitingParity,
   shouldApplyShipStationAwaitingParityOverrideCandidate,
   shouldApplyShipStationAwaitingParityCandidate,
-} from '../api/_lib/shipstation-awaiting-parity.ts';
+} from '../src/lib/shipstation-awaiting-parity.ts';
 
 const liveAwaiting = [
   { externalOrderId: '286991416', orderNumber: '1001', storeId: 378060 },

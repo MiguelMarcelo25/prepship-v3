@@ -1,9 +1,9 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 import postgres from 'postgres';
 import {
   type MarketplaceProvider,
   aggregateMarketplaceOrderStatus,
-} from '../api/_lib/marketplace-status-reconciliation.ts';
+} from '../src/services/marketplace-status-reconciliation.ts';
 import {
   type PrepShipOrderStatus,
   type ShipStationAwaitingKey,
@@ -12,7 +12,7 @@ import {
   classifyShipStationAwaitingParity,
   shouldApplyShipStationAwaitingParityCandidate,
   shouldApplyShipStationAwaitingParityOverrideCandidate,
-} from '../api/_lib/shipstation-awaiting-parity.ts';
+} from '../src/lib/shipstation-awaiting-parity.ts';
 import { listShipStationOrders } from '../src/connectors/store/shipstation.ts';
 
 type Sql = ReturnType<typeof postgres>;
@@ -185,7 +185,7 @@ async function loadSyncAccounts(sql: Sql, requestedStoreIds?: number[]): Promise
   // Stores owned by a per-org client (its own SS creds) are fetched via THAT account, never main.
   // Excluding them from main.storeIds is a safety boundary for the deleted-upstream sweep: a store must
   // never be queried with the wrong org's credentials, since a wrong-creds 404 would falsely flag a
-  // live order as deleted. (For fetchLiveAwaiting this is also correct + more efficient — the per-client
+  // live order as deleted. (For fetchLiveAwaiting this is also correct + more efficient â€” the per-client
   // account already covers those stores.)
   const perOrgStoreIds = new Set(
     clientRows
@@ -427,7 +427,7 @@ async function persistParityRunStatus(
   }
 }
 
-// ── Deleted-upstream sweep (Part B) ──────────────────────────────────────────────────────────────
+// â”€â”€ Deleted-upstream sweep (Part B) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Per user override unlock shipped data on 2026-06-10. When ShipStation EDITS an order it deletes the
 // original and creates a new one (new orderId + number), so PrepShip keeps a phantom awaiting row that
 // points at a now-deleted SS order. No status pass can resolve it (a deleted order is in NO SS status
@@ -436,7 +436,7 @@ async function persistParityRunStatus(
 // was already imported separately and shipped, so the customer stays fulfilled.
 
 // Route a suspect to the account that OWNS its store, so the 404 check uses the RIGHT credentials.
-// Returns null when no known account owns the store — we then SKIP it (never guess; a wrong-creds 404
+// Returns null when no known account owns the store â€” we then SKIP it (never guess; a wrong-creds 404
 // would falsely cancel a live order that lives in another ShipStation org).
 function accountForStore(accounts: SyncAccount[], storeId: number | null): SyncAccount | null {
   if (storeId == null) return null;
@@ -498,7 +498,7 @@ async function resolveDeletedUpstream(
       console.log(`[deleted-upstream] ${s.orderNumber} (${s.id}) ext=${s.externalOrderId} store=${s.storeId} via ${account.label}: 404 DELETED in ShipStation`);
     } else if (verdict === 'error') {
       errors += 1;
-      console.warn(`[deleted-upstream] ${s.orderNumber} (${s.id}): lookup error (skipped — NOT cancelled)`);
+      console.warn(`[deleted-upstream] ${s.orderNumber} (${s.id}): lookup error (skipped â€” NOT cancelled)`);
     }
     await new Promise((r) => setTimeout(r, 200)); // gentle pacing under the 40 req/min v1 limit
   }
@@ -659,7 +659,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // Part B — deleted-upstream sweep (opt-in via --resolve-deleted). Confirms each needs-confirmation
+    // Part B â€” deleted-upstream sweep (opt-in via --resolve-deleted). Confirms each needs-confirmation
     // suspect against ShipStation; a definitive 404 (via its owning account's creds) means the SS order
     // was deleted/re-numbered, so the local awaiting row is a phantom. Cancels only with --apply.
     let deletedUpstreamResult: Awaited<ReturnType<typeof resolveDeletedUpstream>> | null = null;
@@ -667,12 +667,12 @@ async function main(): Promise<void> {
       console.log('\n[deleted-upstream] verifying needs-confirmation suspects against ShipStation (GET /orders/{id})...');
       // Scope guard: auto-cancelling customer orders is destructive, so --apply only WRITES when the run is
       // explicitly scoped to specific orders/stores (--order-number / --store-id). An unscoped --apply still
-      // verifies and reports, but writes nothing — the operator reviews, then re-runs scoped. This caps the
+      // verifies and reports, but writes nothing â€” the operator reviews, then re-runs scoped. This caps the
       // blast radius to the operator's chosen set even if a suspect were ever misrouted to the wrong account.
       const scoped = Boolean((orderNumbers && orderNumbers.length) || (storeIds && storeIds.length));
       if (apply && !scoped) {
         console.warn(
-          '[deleted-upstream] REFUSING to cancel without scope — re-run --apply --resolve-deleted with --store-id and/or --order-number. Reporting only this run.',
+          '[deleted-upstream] REFUSING to cancel without scope â€” re-run --apply --resolve-deleted with --store-id and/or --order-number. Reporting only this run.',
         );
       }
       const writeDeleted = apply && scoped;
@@ -687,8 +687,8 @@ async function main(): Promise<void> {
           (writeDeleted
             ? `cancelled=${r.cancelled}`
             : apply
-              ? '(no write — add --store-id and/or --order-number to cancel)'
-              : '(dry-run — re-run with --apply --resolve-deleted plus a scope to cancel)'),
+              ? '(no write â€” add --store-id and/or --order-number to cancel)'
+              : '(dry-run â€” re-run with --apply --resolve-deleted plus a scope to cancel)'),
       );
     } else if (resolveDeleted) {
       console.log('\n[deleted-upstream] no needs-confirmation suspects to verify.');

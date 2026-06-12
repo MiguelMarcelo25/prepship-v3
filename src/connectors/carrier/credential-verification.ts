@@ -45,7 +45,7 @@ import {
   verifySupabaseJwt,
 } from '../../lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../lib/http/cors.js';
-import { sendInternalServerError } from '../../../api/_lib/safe-error.js';
+import { sendInternalServerError } from '../../lib/safe-error.js';
 
 type ProviderType =
   | 'simulator'

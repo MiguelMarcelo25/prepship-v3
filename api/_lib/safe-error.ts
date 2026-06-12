@@ -1,19 +1,9 @@
-export const INTERNAL_SERVER_ERROR = 'Internal server error';
-
-export function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-export function logServerError(scope: string, err: unknown): void {
-  console.error(`[${scope}]`, errorMessage(err));
-}
-
-export function sendInternalServerError(
-  res: any,
-  scope: string,
-  err: unknown,
-  extra: Record<string, unknown> = {},
-): void {
-  logServerError(scope, err);
-  res.status(500).json({ ok: false, error: INTERNAL_SERVER_ERROR, ...extra });
-}
+// PS-200 S6: relocated to src/lib/safe-error.ts (the v4 tree owns shared
+// code; the legacy Vercel functions consume it through this compatibility
+// re-export until S8 deletes the api/ directory).
+export {
+  INTERNAL_SERVER_ERROR,
+  errorMessage,
+  logServerError,
+  sendInternalServerError,
+} from '../../src/lib/safe-error.js';

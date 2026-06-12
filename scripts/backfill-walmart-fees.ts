@@ -1,5 +1,5 @@
-#!/usr/bin/env tsx
-// ──────────────────────────────────────────────────────────────────
+﻿#!/usr/bin/env tsx
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // scripts/backfill-walmart-fees.ts
 //
 // One-off operator-runnable backfill: pull Walmart selling fees for
@@ -10,7 +10,7 @@
 // 14-day window to catch up over many days.
 //
 // Uses the same shared helper as the user-triggered "Pull Fees"
-// button and the nightly cron — api/_lib/walmart-fees-sync.ts —
+// button and the nightly cron â€” api/_lib/walmart-fees-sync.ts â€”
 // so the three paths can never drift apart on the data they write.
 //
 // Usage:
@@ -19,11 +19,11 @@
 //   npx tsx scripts/backfill-walmart-fees.ts --store-account-id 5   # 90 days, one account
 //   npx tsx scripts/backfill-walmart-fees.ts --days 30 --store-account-id 5
 //
-// Safe to re-run: the UPDATE inside the helper is idempotent —
+// Safe to re-run: the UPDATE inside the helper is idempotent â€”
 // running the same window twice produces the same selling_fee
 // values. Fees only change when Walmart issues a retro adjustment,
 // which the cron's 14-day rolling window also catches.
-// ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import 'dotenv/config';
 import postgres from 'postgres';
@@ -31,7 +31,7 @@ import {
   syncWalmartFeesAllAccounts,
   syncWalmartFeesForAccount,
   type WalmartFeesSyncOutcome,
-} from '../api/_lib/walmart-fees-sync';
+} from '../src/connectors/store/walmart-fees';
 
 function parseArgs(): { days: number; storeAccountId: number | null } {
   const argv = process.argv.slice(2);
@@ -77,10 +77,10 @@ Options:
 }
 
 function formatResult(label: string, r: WalmartFeesSyncOutcome): string {
-  if (!r.ok) return `  ✗ ${label}: ${r.error}`;
-  const note = r.note ? ` · ${r.note}` : '';
-  return `  ✓ ${label}: ${r.fetched} transactions · ${r.ordersUpdated} orders updated · $${r.totalFeesUsd.toFixed(2)} fees${
-    r.ordersMissing > 0 ? ` · ${r.ordersMissing} unmatched` : ''
+  if (!r.ok) return `  âœ— ${label}: ${r.error}`;
+  const note = r.note ? ` Â· ${r.note}` : '';
+  return `  âœ“ ${label}: ${r.fetched} transactions Â· ${r.ordersUpdated} orders updated Â· $${r.totalFeesUsd.toFixed(2)} fees${
+    r.ordersMissing > 0 ? ` Â· ${r.ordersMissing} unmatched` : ''
   }${note}`;
 }
 
@@ -97,7 +97,7 @@ async function main() {
   const toDate = now.toISOString().slice(0, 10);
 
   console.log('Walmart fees backfill');
-  console.log(`  window: ${fromDate} → ${toDate} (${days} days)`);
+  console.log(`  window: ${fromDate} â†’ ${toDate} (${days} days)`);
   console.log(`  scope:  ${storeAccountId ? `store_account #${storeAccountId}` : 'all active Walmart accounts'}`);
   console.log('');
 
@@ -127,7 +127,7 @@ async function main() {
         const totalUpdated = results.reduce((acc, r) => acc + (r.ok ? r.ordersUpdated : 0), 0);
         const totalFees = results.reduce((acc, r) => acc + (r.ok ? r.totalFeesUsd : 0), 0);
         console.log('');
-        console.log(`Totals: ${totalFetched} transactions · ${totalUpdated} orders updated · $${totalFees.toFixed(2)} fees across ${results.length} accounts`);
+        console.log(`Totals: ${totalFetched} transactions Â· ${totalUpdated} orders updated Â· $${totalFees.toFixed(2)} fees across ${results.length} accounts`);
       }
     }
     console.log('\nDone.');

@@ -18,7 +18,7 @@ import {
   extractBearerToken,
   verifySupabaseJwt,
 } from '../auth/verify-supabase-jwt';
-import { sendInternalServerError } from '../../../api/_lib/safe-error';
+import { sendInternalServerError } from '../safe-error';
 import {
   ALLOWED_ACCOUNT_SOURCES,
   CREDENTIAL_PROVIDER_PATTERN,

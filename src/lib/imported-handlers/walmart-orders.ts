@@ -23,12 +23,12 @@
 //   { ok: false, error: string, reason?: string }
 
 import postgres from 'postgres';
-import { assertStoreOrdersSchemaReady } from '../../../api/_lib/store-orders-schema';
+import { assertStoreOrdersSchemaReady } from '../../services/store-orders-schema';
 import {
   hasExistingMarketplaceOrderRow,
   reconcileMarketplaceOrderStatuses,
-} from '../../../api/_lib/marketplace-status-reconciliation';
-import { sendInternalServerError } from '../../../api/_lib/safe-error';
+} from '../../services/marketplace-status-reconciliation';
+import { sendInternalServerError } from '../safe-error';
 import {
   extractBearerToken,
   verifySupabaseJwt,

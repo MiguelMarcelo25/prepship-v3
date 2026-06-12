@@ -18,6 +18,7 @@ export * from './return-labels.js';
 export * from './mock-labels.js';
 export * from './product-defaults.js';
 export * from './client-combo-package-defaults.js';
+export * from './store-orders.js';
 export * from './sync-meta.js';
 export * from './carrier-accounts.js';
 export * from './fulfillment-outbox.js';

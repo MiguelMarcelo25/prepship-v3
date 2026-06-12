@@ -1,10 +1,10 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   aggregateMarketplaceOrderStatus,
   normalizeMarketplaceOrderStatus,
   shouldUpdateMarketplaceOrderStatus,
-} from '../api/_lib/marketplace-status-reconciliation.ts';
+} from '../src/services/marketplace-status-reconciliation.ts';
 
 assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Shipped'), 'shipped');
 assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Delivered'), 'shipped');
@@ -50,7 +50,9 @@ assert.match(
   /Synthetic marketplace rows are reconciled only when no real ShipStation row owns the order number/,
 );
 
-const reconciliationSource = readFileSync('api/_lib/marketplace-status-reconciliation.ts', 'utf8');
+// PS-200 S6: the reconciliation service moved to the v4 tree (api/_lib keeps a
+// compatibility re-export until S8) — the source pins read the real home.
+const reconciliationSource = readFileSync('src/services/marketplace-status-reconciliation.ts', 'utf8');
 assert.match(reconciliationSource, /synthetic marketplace row/i);
 assert.ok(
   reconciliationSource.includes('external_order_id LIKE ${syntheticPrefix}'),

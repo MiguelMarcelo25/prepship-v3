@@ -828,9 +828,23 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   — 4 undocumented src DDL files (walmart-fees connector bootstrap, webhook-ledger,
   shipment-tracking, order-rate-job-status) + 2 stale api list entries; follow-up belongs to the
   master-audit track. QA: ps-032 + raw-error (31) + typecheck + FULL shipping certification PASS.
+  **S6 (_lib relocation + store_orders Drizzle adoption, 2026-06-12)**: the src→api dependency is
+  GONE. git-mv'd (history preserved): api/_lib/safe-error.ts → src/lib/safe-error.ts,
+  store-orders-schema.ts → src/services/, marketplace-status-reconciliation.ts → src/services/,
+  shipstation-awaiting-parity.ts → src/lib/ (script-only importers — no shim). api/_lib keeps
+  .js-specifier compatibility re-export shims (the proven walmart-fees-sync pattern) so the legacy
+  Vercel functions are untouched until S8 deletes them. Importer flips: 4 imported-handlers +
+  credential-verification (kept .js — Vercel-walked) + 5 scripts (reconcile/backfill/guards).
+  store_orders adopted into the v4 Drizzle schema (src/db/schema/store-orders.ts, READ/TYPE ONLY —
+  columns mirror drizzle/0030 exactly, data never touched; registered in the schema index) — ONE
+  schema owner exists; runtime readiness checking stays DDL-free in src/services. Guard re-anchors
+  (documented): marketplace-status-reconciliation reads the src home; raw-error-response points at
+  src/lib/safe-error + ADDS a shim-integrity pin. QA: typecheck + vercel-function-imports (103
+  files walked through the shims) + raw-error (32) + reconciliation + awaiting-parity + ps-032 +
+  credential-accounts + ps-205 + FULL certification PASS.
   **Remaining surfaces**: S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy deletion
-  (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final flip
-  (vercel.json exclusions removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
+  (DJ: PS-202 verification), S8 final flip (vercel.json exclusions removed, api/ deleted, ps-200
+  guard + guard-fleet re-anchor).
 
 - [x] **PS-206** — Rate Browser always fetches ALL scoped carriers — ✅ CODE COMPLETE 2026-06-12.
   Architecture placement: scoped-carrier COVERAGE is backend/DTO-owned — 'uncached' joined
