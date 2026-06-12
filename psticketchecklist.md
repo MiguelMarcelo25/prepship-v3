@@ -759,6 +759,28 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   test-mode ($0) Shipp + Walmart Shipping label through v4, field-by-field shipments-row compare
   vs a legacy row, then ONE live canary per carrier.
 
+- [~] **PS-200** — Decommission legacy Vercel api/ backend — 🔨 IN PROGRESS (parts 1+2 of 8,
+  2026-06-12). **Part 1 (inventory)**: full endpoint→caller→v4-equivalent map + 8-surface cutover
+  plan in `docs/ps-200-legacy-api-decommission.md`. Load-bearing findings: the two backends already
+  share ONE service layer (api/carrier-accounts.ts imports src/services/credential-accounts; both
+  verify shims re-export the same connector module) so cutover is deployment routing, not logic
+  porting; v4 already mounts /carrier-accounts + /carriers/verify + rates-multi via
+  src/lib/imported-handlers; that imported handler imports FROM api/_lib/safe-error so the _lib
+  relocation (S6) must precede the api/ deletion (S8); fetchDirectCarrierRates (FE → POST
+  /api/carriers/rates) is DEAD since PS-203 (zero callers); 25 guard scripts pin api/ sources and
+  re-anchor per surface. **Part 2 (one-shot tools deleted)**: api/debug-env.ts, api/migrate-from.ts,
+  api/admin/fix-marketplace-timestamps.ts — all self-labeled "remove after migration", zero callers;
+  fix-marketplace-timestamps could UPDATE orders.order_date (incl. shipped rows) and double-shifts
+  if re-run, so deleting it is lockdown-POSITIVE (a mutation path on shipped data is gone). Per user
+  override unlock shipped data on 2026-06-12 (protection-strengthening deletion only; no
+  shipped/cancelled data touched). raw-error-response-audit guard list trimmed with in-file note (an
+  absent endpoint can't leak raw errors — intent preserved, not weakened). QA: raw-error-response
+  (33 checks) + vercel-function-imports + typecheck PASS. **Remaining surfaces**: S1 account-CRUD FE
+  flip (+ v4 /store-accounts route), S2 walmart/ebay/fees ops routes + dead-code deletion, S3 fees
+  cron → v4 worker (both schedulers), S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy
+  deletion (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final
+  flip (vercel.json exclusions/crons removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |
