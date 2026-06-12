@@ -964,19 +964,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [priorSales, setPriorSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
   const [currentDailyCounts, setCurrentDailyCounts] = useState<DailyOrderCount[]>([])
   const [priorDailyCounts, setPriorDailyCounts] = useState<DailyOrderCount[]>([])
-  // PS — the Daily Orders Trend chart has its OWN client filter that
-  // scopes ONLY that chart, independent of the dashboard-wide
-  // `selectedClientId`. When `trendClientId` is null the chart follows
-  // the dashboard data (no extra fetch); when a client is picked we
-  // fetch just this chart's series (counts + revenue) so nothing else
-  // on the dashboard re-renders or re-fetches.
-  const [trendClientId, setTrendClientId] = useState<number | null>(null)
-  const [trendDailyCounts, setTrendDailyCounts] = useState<DailyOrderCount[]>([])
-  const [trendPriorDailyCounts, setTrendPriorDailyCounts] = useState<DailyOrderCount[]>([])
-  const [trendRevenueByDay, setTrendRevenueByDay] = useState<Map<string, number>>(() => new Map())
+  // PS-212: the chart-local `trendClientId` override is GONE. It let the
+  // Daily Orders Trend re-scope to a client while Top SKUs / heatmap / KPIs
+  // stayed global — DJ's report showed exactly that split (HUGRAB trend, KF
+  // Goods SKUs) and his invariant is the opposite: selecting a client must
+  // correlate EVERY client-scoped panel. The chart dropdown now drives the
+  // one canonical dashboard filter (`selectedClientId`); the dashboard load
+  // already passes it to every endpoint, so the chart renders the shared
+  // (scoped) data with no dedicated fetch.
   // Per-client daily order value for the "All Clients" multi-line view —
-  // one line per client. Only fetched when the chart is on "All Clients"
-  // (trendClientId == null).
+  // one line per client. Only fetched when the dashboard filter is on
+  // "All Clients" (selectedClientId == null).
   const [clientRevenueRows, setClientRevenueRows] = useState<
     Array<{ day: string; clientId: number | null; revenue: number; count: number }>
   >([])
@@ -1648,11 +1646,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           if (cid && !nextClients.some((client) => client.clientId === cid)) {
             setSelectedClientId(null)
           }
-          // Mirror the guard for the chart-local trend filter: if its
-          // client vanished from the list, fall back to "All Clients".
-          setTrendClientId((prev) =>
-            prev != null && !nextClients.some((client) => client.clientId === prev) ? null : prev,
-          )
         })
         .catch(() => {
           if (loadSeq === dashboardLoadSeqRef.current) setClients([])
@@ -1760,64 +1753,18 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClientId, dateRange.from, dateRange.to])
 
-  // PS — independent fetch for the Daily Orders Trend client override.
-  // Runs ONLY when a specific client is chosen on the chart; the
-  // dashboard-wide load above is left completely untouched, so KPIs,
-  // SKU trends, inventory, and the table keep their own (global) scope.
-  // We pull both the daily order counts (blue line) and the order-value
-  // aggregate (green line) so the two series stay consistent.
-  useEffect(() => {
-    // The trend reflects ONLY its own dropdown (`trendClientId`); null
-    // means "All Clients" = every client's aggregate. We only need a
-    // dedicated fetch when the shared dashboard data wouldn't already
-    // be that view: when the chart picked a client, OR when the
-    // dashboard-wide filter is narrowing the shared data away from
-    // all-clients. Otherwise we reuse the shared data (no extra fetch).
-    const needsOwnFetch = trendClientId != null || selectedClientId != null
-    if (!needsOwnFetch) {
-      setTrendDailyCounts([])
-      setTrendPriorDailyCounts([])
-      setTrendRevenueByDay(new Map())
-      return
-    }
-    let cancelled = false
-    const currentFrom = dateRange.from
-    const currentTo = dateRange.to
-    const prior = priorRange(dateRange)
-    const rangeLengthDays = inclusiveRangeDays(currentFrom, currentTo)
-    const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))
-    // clientId === undefined → server returns the all-clients aggregate.
-    const cid = trendClientId ?? undefined
-    Promise.all([
-      apiClient.fetchDashboardDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
-      apiClient.fetchDashboardDailyCounts({ from: prior.from, to: prior.to, clientId: cid, hideTestOrders: true }),
-      apiClient.fetchDashboardSummary({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
-    ])
-      .then(([currentRes, priorRes, summaryRes]) => {
-        if (cancelled) return
-        setTrendDailyCounts(safeArray<DailyOrderCount>(currentRes?.data))
-        setTrendPriorDailyCounts(safeArray<DailyOrderCount>(priorRes?.data))
-        setTrendRevenueByDay(normalizeDashboardOrderAgg(summaryRes).dailyRevenue)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setTrendDailyCounts([])
-        setTrendPriorDailyCounts([])
-        setTrendRevenueByDay(new Map())
-      })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trendClientId, selectedClientId, dateRange.from, dateRange.to])
+  // PS-212: the dedicated trend-override fetch is DELETED. The dashboard
+  // load already passes `selectedClientId` to /dashboard/daily-counts and
+  // /dashboard/summary, so when a client is selected the shared
+  // currentDailyCounts / currentOrderAgg ARE that client's series — one
+  // filter, one fetch pipeline, every panel in agreement.
 
   // PS — per-client daily order COUNT for the "All Clients" multi-line
   // view (the panel is "Daily Orders Trend", so each line is order count,
-  // not order value). Independent of the dashboard-wide filter: "All Clients"
-  // always means every client. Skipped entirely when a single client is picked
-  // on the chart (that uses the dual-axis Orders + Order value view).
+  // not order value). Skipped entirely when a client is selected (that
+  // uses the dual-axis Orders + Order value view of the scoped data).
   useEffect(() => {
-    if (trendClientId != null) {
+    if (selectedClientId != null) {
       setClientRevenueRows([])
       return
     }
@@ -1836,7 +1783,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trendClientId, dateRange.from, dateRange.to])
+  }, [selectedClientId, dateRange.from, dateRange.to])
 
   // Daily revenue comes from /orders/dashboard-sales so the
   // Daily Orders Trend chart can render a second line for total order
@@ -1856,20 +1803,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const currentDays = buildDateBuckets(dateRange.from, dateRange.to)
     const prior = priorRange(dateRange)
     const priorDays = buildDateBuckets(prior.from, prior.to)
-    // Render the chart's own scoped series whenever it differs from the
-    // shared all-clients view — that is, when the chart picked a client
-    // OR the dashboard-wide filter is narrowing the shared data. When
-    // both are "All Clients" the shared data already IS the all-clients
-    // aggregate, so we reuse it (no extra fetch). Both lines (counts +
-    // revenue) switch together so they never disagree.
-    const scoped = trendClientId != null || selectedClientId != null
-    const dailyCurrent = scoped ? trendDailyCounts : currentDailyCounts
-    const dailyPrior = scoped ? trendPriorDailyCounts : priorDailyCounts
-    const revenue = scoped ? trendRevenueByDay : revenueByDay
-    const base = buildOrderCountTrend(currentDays, priorDays, dailyCurrent, dailyPrior)
+    // PS-212: the shared dashboard data is ALREADY scoped by the one
+    // canonical client filter (selectedClientId rides every dashboard
+    // fetch), so the chart always renders it — counts and revenue come
+    // from the same scoped pipeline and can never disagree with the KPIs,
+    // Top SKUs, or heatmap beside it.
+    const base = buildOrderCountTrend(currentDays, priorDays, currentDailyCounts, priorDailyCounts)
     return base.map((point) => ({
       ...point,
-      currentRevenue: revenue.get(point.day) ?? 0,
+      currentRevenue: revenueByDay.get(point.day) ?? 0,
     }))
   }, [
     currentDailyCounts,
@@ -1877,11 +1819,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     dateRange.to,
     priorDailyCounts,
     revenueByDay,
-    selectedClientId,
-    trendClientId,
-    trendDailyCounts,
-    trendPriorDailyCounts,
-    trendRevenueByDay,
   ])
 
   // Multi-line "All Clients" view: pivot the long per-client rows into
@@ -1892,7 +1829,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // so the legend leads with the busiest clients. Empty when a single client is
   // selected — that path uses the dual-axis `trend` instead.
   const { clientSeries, clientTrend } = useMemo(() => {
-    if (trendClientId != null || clientRevenueRows.length === 0) {
+    if (selectedClientId != null || clientRevenueRows.length === 0) {
       return {
         clientSeries: [] as Array<{ key: string; name: string }>,
         clientTrend: [] as Array<Record<string, number | string>>,
@@ -1942,7 +1879,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       ],
       clientTrend: rows,
     }
-  }, [trendClientId, clientRevenueRows, clients, dateRange.from, dateRange.to])
+  }, [selectedClientId, clientRevenueRows, clients, dateRange.from, dateRange.to])
   const heatmap = useMemo(
     () => buildHeatmap(currentSales, priorSales, heatmapLimit),
     [currentSales, priorSales, heatmapLimit],
@@ -2610,17 +2547,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <div className="flex flex-wrap items-center gap-2.5">
                 <h3 className="text-sm font-extrabold text-ink">Daily Orders Trend</h3>
               </div>
-              {/* PS — client filter scoped to THIS chart only, placed on
-                  its own row below the title (left-aligned). "All Clients"
-                  always shows every client's aggregate — fully independent
-                  of the dashboard-wide `selectedClientId`. Selecting a
-                  client re-renders just the trend lines (counts + value)
-                  without touching the KPIs, SKU charts, inventory, or
-                  table. Bound to `trendClientId`, NOT `selectedClientId`. */}
+              {/* PS-212: this dropdown drives the ONE canonical dashboard
+                  client filter (`selectedClientId`). The old chart-local
+                  `trendClientId` override re-scoped only the trend lines —
+                  DJ would pick HUGRAB here and Top SKUs / heatmap / KPIs
+                  silently stayed global. Selecting a client now re-runs the
+                  dashboard load, which passes clientId to every endpoint, so
+                  all client-scoped panels correlate. */}
               <div className="relative mt-2 inline-block">
                 <select
-                  value={trendClientId ?? ''}
-                  onChange={(event) => setTrendClientId(event.target.value ? Number(event.target.value) : null)}
+                  value={selectedClientId ?? ''}
+                  onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
                   className="h-7 max-w-[12rem] appearance-none rounded-card border border-line bg-surface pl-2.5 pr-7 text-2xs font-bold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
                   aria-label="Filter Daily Orders Trend by client"
                 >

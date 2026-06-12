@@ -1395,3 +1395,30 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   template stays deleted, no-label → no-suffix, pure module stays zero-import). **QA:** typecheck +
   build:web + ps-216 guard + ps-206 full-coverage guard ALL PASS. Browser eyeball (HUGRAB sidebar shows
   "(USPS)"/"(UPS)") = DJ, next session.
+
+### PS-212 — Dashboard Top SKUs must respect selected client filter — DONE 2026-06-13
+- **✅ DONE:** selecting HUGRAB now scopes Top 5 SKUs, the Sales Performance Heatmap, the KPIs, AND the
+  Daily Orders Trend together. **Root cause (data-flow, not missing plumbing):** the backend was already
+  correct — /dashboard/top-skus and /dashboard/sku-trends accept clientId, pass it into
+  getSkuBreakdownFromOrderItems / getSkuDailyFromOrderItems (whose SQL applies
+  `o.client_id = cid` in every query), and key their analytics caches by client. The dashboard had TWO
+  client filters: the canonical dashboard-wide `selectedClientId` and a chart-local `trendClientId`
+  override on the Daily Orders Trend that — BY DESIGN ("scopes ONLY that chart... KPIs, SKU charts,
+  inventory, and the table keep their own (global) scope") — re-fetched just the trend lines. DJ used
+  the chart dropdown as "the dashboard filter": trend went HUGRAB, everything else silently stayed
+  global. **Fix (intent unification):** the chart dropdown now drives `selectedClientId` — one filter,
+  one already-scoped fetch pipeline. Deleted the trendClientId state, its mirror-guard, the dedicated
+  3-request override fetch, and the trendDailyCounts/trendPriorDailyCounts/trendRevenueByDay states; the
+  trend memo always renders the shared scoped data (counts + revenue from the same pipeline as the KPIs,
+  so the panels can never disagree); the "All Clients" multi-line view gates on selectedClientId == null
+  (same UX). Zero leftover references (grep-verified — the @ts-nocheck crash class). Heatmap correlates
+  to the selected client automatically (it derives from the scoped sku-trends payload), per DJ's default
+  expectation. KPI semantics untouched (all-orders vs fulfilled-only rules unchanged — only the client
+  intent routing changed). One fewer fetch burst per client selection (the old override fired 3 extra
+  requests). **Guard** `test:dashboard-client-sku-filter`: backend pins (route passes q.clientId into
+  both SKU owners; ≥4 client-keyed cache keys; ≥5 client predicates in analysis SQL) + FE pins
+  (trendClientId stays deleted; the trend dropdown reads/writes selectedClientId; all four dashboard
+  fetches carry clientId: cid; load effect re-runs on selectedClientId; heatmap derives from the scoped
+  payload; apiClient forwards clientId on both fetchers). **QA:** typecheck + build:web + ps-212 guard +
+  daily-orders-trend-count + daily-orders-trend-total-line ALL PASS. Browser evidence (All Clients vs
+  HUGRAB screenshot) = DJ's next dashboard look — the change is deterministic intent routing.
