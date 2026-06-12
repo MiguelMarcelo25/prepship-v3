@@ -200,6 +200,11 @@ export default function RateBrowserCarrierSidebar({
                   'C'
                 ) : carrierStatus === 'live' ? (
                   'L'
+                ) : carrierStatus === 'uncached' ? (
+                  // PS-206: terminal "not cached — the live check runs next";
+                  // visually distinct from the in-flight spinner so the
+                  // sidebar never implies work that isn't happening.
+                  <span title="Not cached — live check pending">↻</span>
                 ) : (
                   '…'
                 )}

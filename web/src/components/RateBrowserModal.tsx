@@ -220,7 +220,12 @@ type DirectCarrierRateError = {
   message?: string | null;
 };
 
-export type CarrierRateStatus = 'cached' | 'loading' | 'live' | 'unavailable' | 'error';
+// PS-206: 'uncached' = TERMINAL "no cached coverage; this account was not
+// checked in the cached-only probe — a live check is required". Distinct from
+// 'loading' (a request is actually in flight) and 'unavailable' (checked,
+// nothing returned). Coverage identity — never a carrier count — drives the
+// modal's automatic live follow-up.
+export type CarrierRateStatus = 'cached' | 'loading' | 'live' | 'unavailable' | 'error' | 'uncached';
 
 type RateBrowseInfo = {
   source: 'cache' | 'live' | 'mixed' | null;
@@ -1159,9 +1164,8 @@ export default function RateBrowserModal({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Try the cache on open when weight + dims are already valid. Live carrier
-  // fanout stays explicit so opening the modal never waits on every carrier.
-  // Guard with a ref so we only fire once per open, not on every form edit.
+  // Try the cache on open when weight + dims are already valid, then ALWAYS
+  // complete coverage live. Guard with a ref so we only fire once per open.
   const autoFetchedRef = useRef<number | null>(null);
   useEffect(() => {
     if (!open) {
@@ -1176,15 +1180,17 @@ export default function RateBrowserModal({
     void (async () => {
       // Instant paint from cache first — often just the order's saved best rate
       // (a single carrier) when the cache is cold/thin.
-      const cachedCarrierCount = await browseRates(undefined, { cachedOnly: true });
-      // PS-123 reconciliation: fan out LIVE only when the cached probe is THIN
-      // (<= 1 carrier — cold cache or just the saved best rate). When the worker
-      // backfill / passive auto-rater has already warmed the full carrier set into
-      // the cache, the probe returns multiple carriers and we SKIP the live fanout
-      // — no duplicate fanout on open — while still always ending up showing every
-      // available carrier. Guard against the modal switching orders / closing
-      // mid-probe; browseRates also supersedes stale updates via its sequence ref.
-      if (autoFetchedRef.current === orderId && cachedCarrierCount <= 1) {
+      const probe = await browseRates(undefined, { cachedOnly: true });
+      // PS-206: the Rate Browser is a live shopping workflow — 1, 2, or 3
+      // carriers with cached rates is NEVER "good enough" coverage. The old
+      // `<= 1` carrier-COUNT heuristic is gone: the follow-up decision now
+      // reads the backend's per-carrier COVERAGE identity. Any scoped account
+      // the cached probe left 'uncached' (no cached coverage; direct carriers
+      // are never live-quoted during a cached-only probe) triggers a full
+      // scoped live fan-out — correctness beats avoiding one extra request,
+      // and the sequence ref still supersedes stale updates if the modal
+      // switches orders mid-probe.
+      if (autoFetchedRef.current === orderId && probe.uncoveredPids.length > 0) {
         await browseRates(undefined, { forceLive: true });
       }
     })();
@@ -1242,17 +1248,22 @@ export default function RateBrowserModal({
   // Fetch all scoped carrier accounts in one UI request. The backend still calls
   // ShipStation per carrier, but it does that work in parallel and returns one
   // grouped result set for the modal.
+  // PS-206: browseRates reports COVERAGE, not a carrier count. uncoveredPids =
+  // scoped accounts whose terminal state after this request is 'uncached' (no
+  // cached coverage; never live-quoted in a cached-only probe). The modal-open
+  // effect live-fetches when ANY scoped account is uncovered — a count of
+  // accounts-with-rates can never again be read as "coverage is complete".
+  type BrowseCoverage = { carriersWithRates: number; uncoveredPids: number[] };
+
   async function browseRates(
     confirmationOverride?: RateConfirmation,
     options: BrowseRateOptions = {}
-  ): Promise<number> {
-    if (!zip || zip.length < 5 || !hasWeight || !hasDims) return 0;
-    if (!testMode && !rateShippingAccounts.length) return 0;
+  ): Promise<BrowseCoverage> {
+    if (!zip || zip.length < 5 || !hasWeight || !hasDims) return { carriersWithRates: 0, uncoveredPids: [] };
+    if (!testMode && !rateShippingAccounts.length) return { carriersWithRates: 0, uncoveredPids: [] };
 
-    // Count of carrier accounts that ended up with >=1 rate — returned so the
-    // modal-open effect can tell whether a cached probe was complete enough to
-    // skip the live fanout (PS-123: no duplicate live fanout on open).
     let carriersWithRates = 0;
+    const uncoveredPids: number[] = [];
     const requestSeq = browseSequenceRef.current + 1;
     browseSequenceRef.current = requestSeq;
     const totalOz = lbNum * 16 + ozNum;
@@ -1318,7 +1329,7 @@ export default function RateBrowserModal({
       }
       setPendingPids(new Set());
       setBrowsing(false);
-      return carriersWithRates;
+      return { carriersWithRates, uncoveredPids };
     }
 
     try {
@@ -1396,7 +1407,7 @@ export default function RateBrowserModal({
         forceRefresh: options.forceLive === true,
         ...(options.manualEstimateCompare ? { manualEstimate: true } : {}),
       });
-      if (browseSequenceRef.current !== requestSeq) return carriersWithRates;
+      if (browseSequenceRef.current !== requestSeq) return { carriersWithRates, uncoveredPids };
       // PS-135: capture the backend-selected bestRate for the auto-apply step (the browseResult
       // const is scoped to this try block; the selection runs after the finally).
       canonicalBackendBest = (browseResult as { bestRate?: unknown } | null)?.bestRate ?? null;
@@ -1528,7 +1539,11 @@ export default function RateBrowserModal({
           nextRatesByPid[key] = accountRates;
           nextStatusByPid[key] = browseResult?.cached ? 'cached' : 'live';
         } else if (options.cachedOnly) {
-          nextStatusByPid[key] ??= 'loading';
+          // PS-206: a cached-only probe is TERMINAL for this account — it has
+          // no cached coverage and was not checked ('uncached'), it is NOT
+          // 'loading' (nothing is in flight). The open-effect live-fetches
+          // every uncovered account right after this paint.
+          nextStatusByPid[key] ??= 'uncached';
         } else {
           nextRatesByPid[key] = [];
           nextStatusByPid[key] ??= 'unavailable';
@@ -1546,10 +1561,22 @@ export default function RateBrowserModal({
       carriersWithRates = Object.values(nextRatesByPid).filter(
         (rows) => Array.isArray(rows) && rows.length > 0,
       ).length;
+      // PS-206: coverage identity for the caller — every scoped account whose
+      // terminal state is 'uncached' still needs a live check.
+      for (const acct of rateShippingAccounts) {
+        if (nextStatusByPid[String(acct.shippingProviderId)] === 'uncached') {
+          uncoveredPids.push(acct.shippingProviderId);
+        }
+      }
     } catch {
-      if (browseSequenceRef.current !== requestSeq) return carriersWithRates;
+      if (browseSequenceRef.current !== requestSeq) return { carriersWithRates, uncoveredPids };
       setRateErrorsByPid({});
-      setCarrierStatusByPid({});
+      // PS-206: a failed browse leaves every scoped account in a TERMINAL
+      // 'error' state — never blank/loading — so the header and sidebar can't
+      // claim work is still happening when nothing is in flight.
+      setCarrierStatusByPid(
+        Object.fromEntries(rateShippingAccounts.map((acct) => [String(acct.shippingProviderId), 'error' as CarrierRateStatus])),
+      );
       setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
       setRateMetaByPid({});
       setRatesByPid(
@@ -1586,7 +1613,7 @@ export default function RateBrowserModal({
     }
 
     setBrowsing(false);
-    return carriersWithRates;
+    return { carriersWithRates, uncoveredPids };
   }
 
   function filterBySvcClass(rates: RateRow[]): RateRow[] {
@@ -1661,13 +1688,13 @@ export default function RateBrowserModal({
       }).length,
     [carrierStatusByPid, rateShippingAccounts, ratesByPid]
   );
+  // PS-206: "loading" is derived ONLY from genuinely in-flight requests
+  // (pendingPids). Counting a resting status string as in-flight was what left
+  // the header stuck on "Checking carriers..." with zero requests running.
   const totalCarriersLoading = useMemo(
     () =>
-      rateShippingAccounts.filter((c) => {
-        const key = String(c.shippingProviderId);
-        return pendingPids.has(c.shippingProviderId) || carrierStatusByPid[key] === 'loading';
-      }).length,
-    [carrierStatusByPid, pendingPids, rateShippingAccounts]
+      rateShippingAccounts.filter((c) => pendingPids.has(c.shippingProviderId)).length,
+    [pendingPids, rateShippingAccounts]
   );
   const carrierDisplayCounts = useMemo(() => {
     const counts = new Map<string, number>();

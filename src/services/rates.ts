@@ -48,6 +48,7 @@ import {
   isServiceOrPackageBlocked,
 } from '../lib/rate-block-list';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
+import { withCarrierQuoteTimeout } from './rates-combined';
 import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
@@ -682,7 +683,10 @@ type EstimateRate = {
   rate_details?: unknown[];
 };
 
-export type CarrierRateDiagnosticStatus = 'ok' | 'empty' | 'failed' | 'cached' | 'loading';
+// PS-206: 'uncached' = the carrier was deliberately NOT quoted in a
+// cached-only lookup and has no cached coverage — terminal for the lookup,
+// live check required. Never 'loading' (nothing is in flight).
+export type CarrierRateDiagnosticStatus = 'ok' | 'empty' | 'failed' | 'cached' | 'loading' | 'uncached';
 
 export type CarrierRateDiagnostic = {
   carrierId: string;
@@ -1668,9 +1672,36 @@ async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<Direc
   );
 }
 
-export async function getDirectCarrierRatesForRateInput(input: RateInput): Promise<DirectCarrierRatesResult> {
+export async function getDirectCarrierRatesForRateInput(
+  input: RateInput,
+  options: { cachedOnly?: boolean } = {},
+): Promise<DirectCarrierRatesResult> {
   const accounts = await loadVisibleDirectCarrierAccounts(input);
   if (!accounts.length) return { rates: [], errors: [], metas: [], diagnostics: [] };
+  // PS-206: cachedOnly means cached-only across the WHOLE combined universe.
+  // Direct carriers have no rate cache today, so a cached-only lookup must NOT
+  // live-quote them (the old behavior silently fired provider calls during the
+  // Rate Browser's "instant cache paint"). Instead, report every visible
+  // account as terminal 'uncached' coverage — the caller (Rate Browser) then
+  // decides the live follow-up from this coverage identity, never from a
+  // carrier count.
+  if (options.cachedOnly) {
+    return {
+      rates: [],
+      errors: [],
+      metas: [],
+      diagnostics: accounts.map((account) => {
+        const shippingProviderId = directProviderIdFromAccount(account);
+        return {
+          carrierId: `se-${shippingProviderId}`,
+          carrierCode: normalizeProviderKey(account.provider),
+          nickname: account.label || account.accountIdentifier || account.provider,
+          status: 'uncached' as CarrierRateDiagnosticStatus,
+          rateCount: 0,
+        };
+      }),
+    };
+  }
   const shippingOptions = normalizeShippingOptions(input);
   // PS-203 (stage 3): direct rates pass the SAME markup rules ShipStation rates
   // already get at read time (applyMarkups keys by `se-<pid>` carrier_id —
@@ -1734,7 +1765,10 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
               'rates',
             )
           : null;
-      const quoted = await quoteCarrierRates(account.provider, {
+      // PS-206: bounded per-carrier quoting — one slow/hung provider becomes a
+      // per-account 'failed' diagnostic (caught below) instead of holding the
+      // whole combined /browse response open while every other carrier waits.
+      const quoted = await withCarrierQuoteTimeout(quoteCarrierRates(account.provider, {
         credentials: account.credentials,
         weightOz: input.weightOz,
         // PS-126: direct carriers (UPS/FedEx/etc.) require 5-digit ZIP — send the zip5
@@ -1760,7 +1794,7 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
         // input.residential, so direct-vs-ShipStation quotes are comparable and the UPS label matches.
         residential: resolvedResidential,
         shippingOptions,
-      });
+      }), label);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
       const eligible = filterRatesForShippingServiceEligibility(
         rawRates,

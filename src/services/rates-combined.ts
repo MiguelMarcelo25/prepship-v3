@@ -101,10 +101,42 @@ export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[
  * complete only when every carrier in the COMBINED universe reached a terminal
  * result (none loading, none errored). A failed direct carrier makes the
  * selection partial even when ShipStation answered cleanly.
+ * PS-206: 'uncached' (no cached coverage in a cached-only lookup) is terminal
+ * for the LOOKUP but the carrier was never actually checked — a selection over
+ * an uncached carrier set is NEVER complete.
  */
 function statusesComplete(statuses: ReadonlyArray<{ status: string }>): boolean {
   if (!statuses.length) return false;
-  return statuses.every((status) => status.status !== 'loading' && status.status !== 'error');
+  return statuses.every(
+    (status) => status.status !== 'loading' && status.status !== 'error' && status.status !== 'uncached',
+  );
+}
+
+/**
+ * PS-206: bounded per-carrier quoting — one slow/hung provider becomes a
+ * per-carrier 'failed' diagnostic (with this reason) instead of holding the
+ * whole combined response open. Pure (caller supplies the promise), so the
+ * timeout rule is offline-testable without any provider call.
+ */
+export const DIRECT_CARRIER_QUOTE_TIMEOUT_MS = 25_000;
+
+export function withCarrierQuoteTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs: number = DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`)),
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
 }
 
 export function combineCarrierUniverses(input: CombineCarrierUniversesInput): CombinedRateSelection {
@@ -127,7 +159,11 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
     input.ssDiagnostics.map((diagnostic) => [diagnostic.carrierId, diagnostic]),
   );
   const statusWhenFound = input.ssCached ? 'cached' : 'live';
-  const missingStatus = input.isCachedOnlyLookup ? 'loading' : 'unavailable';
+  // PS-206: a cached-only lookup is TERMINAL — a carrier with no cached rates
+  // was not checked ('uncached', live check required), it is not 'loading'
+  // (nothing is in flight). 'loading' was the resting-state lie that left the
+  // Rate Browser header stuck on "Checking carriers...".
+  const missingStatus = input.isCachedOnlyLookup ? 'uncached' : 'unavailable';
   const carrierStatuses: BestRateWorkflowCarrierStatus[] = statusCarrierIds.map((id) => {
     const diagnostic = diagnosticsByCarrierId.get(id);
     const hasRates = carriersWithRates.has(id);
@@ -165,7 +201,12 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
             ? 'unavailable'
             : diagnostic.status === 'cached'
               ? 'cached'
-              : 'loading',
+              // PS-206: cached-only lookups skip direct quoting entirely — the
+              // rates service emits terminal 'uncached' diagnostics for every
+              // visible direct account (live check required), never 'loading'.
+              : diagnostic.status === 'uncached'
+                ? 'uncached'
+                : 'loading',
     rateCount: diagnostic.rateCount ?? 0,
     durationMs: diagnostic.durationMs,
     error: diagnostic.error,

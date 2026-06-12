@@ -832,6 +832,32 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final flip
   (vercel.json exclusions removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
 
+- [x] **PS-206** — Rate Browser always fetches ALL scoped carriers — ✅ CODE COMPLETE 2026-06-12.
+  Architecture placement: scoped-carrier COVERAGE is backend/DTO-owned — 'uncached' joined
+  BestRateWorkflowCarrierStatusValue + CarrierRateDiagnosticStatus as the TERMINAL "no cached
+  coverage, not checked, live required" state (≠ 'loading' in-flight, ≠ 'unavailable'
+  checked-and-empty); rates-combined owns the rule (cached-only missing → 'uncached'; completeness
+  REJECTS uncached) and the FE consumes coverage identity, never counts. Shipped: (1)
+  `cachedCarrierCount <= 1` heuristic DELETED — browseRates returns {carriersWithRates,
+  uncoveredPids} and the open flow live-fans-out whenever ANY scoped account is uncovered (full
+  scoped fan-out per the card: correctness beats one extra request; cache paint stays instant);
+  (2) cachedOnly honored across the WHOLE combined universe — getDirectCarrierRatesForRateInput
+  gains {cachedOnly} and returns terminal 'uncached' diagnostics WITHOUT provider calls (the old
+  path silently live-quoted direct carriers during every "instant cache paint"); (3) 'loading'
+  resting state eliminated — combined owner emits 'uncached' not 'loading' for cached-only misses,
+  FE cachedOnly branch matches, header in-flight derives ONLY from pendingPids, failed browse sets
+  every scoped account to terminal 'error'; (4) per-carrier bounded quoting — pure
+  withCarrierQuoteTimeout (25s) wraps each direct quote so one hung provider becomes that
+  carrier's 'failed' diagnostic while the rest resolve; (5) misleading source ternary fixed
+  ('cache'/'live'/'mixed' honestly; mixed = SS cache + live direct contribution); (6) sidebar
+  renders 'uncached' as its own terminal badge (↻ "live check pending"). Proof fields
+  (rateQuoteId/selectedRateKey/fingerprint) untouched. NEW guard
+  test:ps-206-rate-browser-full-coverage (22 checks: coverage fixtures incl. 2-carriers-cached ≠
+  complete, timeout behavior, end-to-end pins). QA: ps-206 + ps-203 + ps-124 + ps-196 +
+  rate-browser click/table-sync + typecheck + build:web + FULL certification PASS. NOTE:
+  test:selected-rate-proof-boundary fails on stable with the PRE-EXISTING stale count (verified at
+  base a40489ad) — its re-anchor rides the PS-204 PR branch.
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |

@@ -27,7 +27,13 @@ export type BestRateWorkflowCarrierStatusValue =
   | 'loading'
   | 'error'
   | 'blocked'
-  | 'unknown';
+  | 'unknown'
+  // PS-206: TERMINAL "this carrier has no cached coverage and was not live-
+  // quoted in this (cached-only) lookup — a live check is required". Distinct
+  // from 'loading' (an actual request is in flight) and from 'unavailable'
+  // (the carrier WAS checked and returned nothing). The Rate Browser uses this
+  // coverage identity — never a carrier COUNT — to decide its live follow-up.
+  | 'uncached';
 
 export type BestRateWorkflowCarrierStatus = {
   carrierId: string;

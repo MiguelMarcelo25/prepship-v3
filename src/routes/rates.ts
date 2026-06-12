@@ -452,11 +452,17 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     : requestedSet
       ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
       : result.rates;
+  const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
+  // PS-206: cachedOnly is honored across the WHOLE combined universe — a
+  // cached-only probe must not live-quote direct carriers. The rates service
+  // returns terminal 'uncached' coverage diagnostics for every visible direct
+  // account instead, and the Rate Browser decides its live follow-up from
+  // that coverage identity (never from a carrier count).
   const directRates = await getDirectCarrierRatesForRateInput({
     ...rest,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: requestedCarrierIds,
-  });
+  }, { cachedOnly: isCachedOnlyLookup });
   const accounts = await getCarrierAccountsForRateContext({
     storeId: rest.storeId ?? null,
     clientId: rest.clientId ?? null,
@@ -481,7 +487,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       ])
     ),
     accountCarrierIds: accounts.map((account) => account.carrier_id),
-    isCachedOnlyLookup: Boolean(cachedOnly && !forceRefresh && !forceLive),
+    isCachedOnlyLookup,
   });
   const {
     combinedRates,
@@ -636,7 +642,13 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     effectiveInsuranceSource: result.effectiveInsuranceSource,
     rateQuoteId,
     carrierEligibility,
-    source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
+    // PS-206: honest source reporting (the old ternary's live/live arms were a
+    // no-op). ShipStation cache + LIVE direct quotes that contributed rates is
+    // 'mixed'; a cached-only lookup (direct skipped as 'uncached') stays
+    // 'cache'; anything that live-quoted ShipStation is 'live'.
+    source: result.cached
+      ? (!isCachedOnlyLookup && directRates.rates.length > 0 ? 'mixed' : 'cache')
+      : 'live',
     cacheAgeMs: result.cacheAgeMs,
     rates: responseRates,
     bestRate: bestRateOut,
