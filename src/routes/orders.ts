@@ -17,6 +17,7 @@ import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, sta
 // PS-136: the manual mark-shipped-externally transition (status flip + inventory deduction +
 // ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
 import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
+import { resolveOrdersStatusScope } from '../services/orders-search-scope';
 import { loadClientIsTest } from '../services/fulfillment/test-label-policy';
 import { loadOrderTrackingSummary } from '../services/shipment-tracking';
 import { replaceOrderItemsForOrders } from '../services/order-items';
@@ -1070,6 +1071,10 @@ const listQuery = paginationSchema.extend({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
+  // PS-210: explicit operator intent that a non-empty search reads across
+  // the whole order lifecycle (awaiting/shipped/cancelled) instead of the
+  // active tab. Ignored when search is empty — see orders-search-scope.ts.
+  searchScope: z.enum(['active_status', 'global']).optional(),
   sort: z.enum(['sku']).optional(),
   includeTotal: z.coerce.boolean().optional(),
   idsOnly: z.coerce.boolean().optional(),
@@ -1168,14 +1173,37 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // ShipStation itself counts awaiting strictly by orderStatus, and v4 should
   // match that exact definition (otherwise users see "Walmart-DJC: 2" in
   // ShipStation but "1" in v4 because we silently hid one).
+  //
+  // PS-210: a NON-EMPTY search with searchScope=global is a global READ
+  // across the lifecycle (awaiting/shipped/cancelled) — the single-status tab
+  // predicate is replaced by the lifecycle union BEFORE pagination/totals, so
+  // a Shipped match surfaces while the operator is on Awaiting. The awaiting
+  // arm keeps visibleAwaitingOrdersPredicate so search can never surface
+  // awaiting rows the tab itself would hide. Every other predicate below
+  // (auth scope, assignee, client/store, store visibility, test exclusion,
+  // dates) still applies unchanged. This is read-only routing — shipped/
+  // cancelled rows stay locked by assertOrderEditable on every mutation
+  // endpoint regardless of how they were listed.
+  const statusScope = resolveOrdersStatusScope({
+    status: q.status,
+    search,
+    searchScope: q.searchScope,
+  });
   let statusPredicate: ReturnType<typeof sql> | undefined;
-  if (q.status) {
-    statusPredicate = sql`${orders.orderStatus} = ${q.status}`;
+  if (statusScope.mode === 'single_status') {
+    statusPredicate = sql`${orders.orderStatus} = ${statusScope.status}`;
+  } else if (statusScope.mode === 'global_lifecycle') {
+    statusPredicate = sql`(
+      (${orders.orderStatus} = 'awaiting_shipment' and ${visibleAwaitingOrdersPredicate('orders')})
+      or ${orders.orderStatus} in ('shipped', 'cancelled')
+    )`;
   }
   const where = and(
     ...[
       statusPredicate,
-      q.status === 'awaiting_shipment' ? visibleAwaitingOrdersPredicate('orders') : undefined,
+      statusScope.mode === 'single_status' && statusScope.status === 'awaiting_shipment'
+        ? visibleAwaitingOrdersPredicate('orders')
+        : undefined,
       orderScopePredicate(orderScope),
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,

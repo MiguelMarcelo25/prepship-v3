@@ -24,6 +24,10 @@ export interface UseOrdersOptions {
   hideTestOrders?: boolean;
   includeInactiveClients?: boolean;
   search?: string;
+  /** PS-210: 'global' widens a NON-EMPTY search across awaiting/shipped/
+   *  cancelled server-side. Backend ignores it when search is empty, so the
+   *  no-search tab behavior is unchanged by construction. */
+  searchScope?: 'global';
   sku?: string;
   sortBy?: 'sku';
 }
@@ -433,6 +437,7 @@ export function useOrders(
     hideTestOrders = false,
     includeInactiveClients = false,
     search,
+    searchScope,
     sku,
     sortBy,
   } = options;
@@ -458,6 +463,9 @@ export function useOrders(
   const isoTo = toIsoEnd(dateEnd);
   const trimmedSearch = search?.trim() ?? '';
   const trimmedSku = sku?.trim() ?? '';
+  // PS-210: scope intent only rides a real search — an empty box never
+  // changes the tab query (and the backend ignores it anyway).
+  const effectiveSearchScope = trimmedSearch ? searchScope : undefined;
 
   // Test clients can appear in the sidebar without a real ShipStation store.
   // /init/stores represents those rows with a negative synthetic store id
@@ -516,6 +524,7 @@ export function useOrders(
       isoFrom,
       isoTo,
       trimmedSearch,
+      effectiveSearchScope,
       trimmedSku,
       sortBy,
       delayExactTotal,
@@ -534,6 +543,7 @@ export function useOrders(
           dateFrom: isoFrom,
           dateTo: isoTo,
           search: trimmedSearch || undefined,
+          searchScope: effectiveSearchScope,
           sku: trimmedSku || undefined,
           sort: sortBy,
           includeTotal: delayExactTotal ? false : undefined,

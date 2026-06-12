@@ -2178,15 +2178,24 @@ export default function OrdersView({
     activeStore == null && !showTestOrders
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 350)
 
+  // PS-210: a non-empty search is a GLOBAL read — the backend widens the
+  // status filter across awaiting/shipped/cancelled (searchScope=global) and
+  // the store-sidebar scoping is dropped, exactly matching what the
+  // bulk-selection matcher (matchingSelectionQuery below) has always done, so
+  // the visible table and Select-All-Matching can no longer disagree. Date
+  // and Hide-Test filters intentionally still apply (the search pill says
+  // so). Clearing the box restores plain tab-local behavior.
+  const isGlobalSearchActive = debouncedSearchQuery.trim().length > 0
   const { orders, total, totalApproximate, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
     pageSize,
-    storeId: activeStore ?? undefined,
+    storeId: isGlobalSearchActive ? undefined : activeStore ?? undefined,
     dateStart: dateRange.start,
     dateEnd: dateRange.end,
     hideTestOrders: hideTestOrdersInAllAwaiting,
     includeInactiveClients,
     search: debouncedSearchQuery,
+    searchScope: isGlobalSearchActive ? 'global' : undefined,
     sortBy: skuSortActive ? 'sku' : undefined,
     // Forwarded so the backend filters by SKU exactly. Replaces the
     // old client-side filter (now removed below) which only ran over
@@ -2199,7 +2208,10 @@ export default function OrdersView({
     const isGlobalSearch = trimmedSearch.length > 0
     return {
       ...(isGlobalSearch
-        ? {}
+        ? // PS-210: same explicit global intent the visible table now sends —
+          // selection matching and the table read the SAME backend result set
+          // (lifecycle union of awaiting/shipped/cancelled, store scope off).
+          { searchScope: 'global' as const }
         : {
           orderStatus: currentStatus,
           storeId: activeStore ?? undefined,
@@ -8135,8 +8147,43 @@ export default function OrdersView({
   const renderOrderCell = (order: OrderSummaryDto) => {
     const testOrder = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
     const isShipping = transitionalShippedIds.has(order.orderId)
+    // PS-210: global search mixes lifecycle statuses into one table. A row
+    // whose REAL status differs from the active tab gets an explicit status
+    // pill so a Shipped/Cancelled match on the Awaiting tab can never be
+    // mistaken for an awaiting order. Display-only — every mutation stays
+    // gated by the row's actual orderStatus at the backend
+    // (assertOrderEditable rejects shipped/cancelled writes).
+    const offTabStatus =
+      isGlobalSearchActive && order.orderStatus && order.orderStatus !== currentStatus
+        ? order.orderStatus
+        : null
+    const offTabStatusStyle =
+      offTabStatus === 'shipped'
+        ? { color: '#fff', background: '#059669' }
+        : offTabStatus === 'cancelled'
+          ? { color: '#fff', background: '#6b7280' }
+          : { color: '#fff', background: '#2563eb' }
     return (
       <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
+        {offTabStatus && (
+          <span
+            title={`This order's actual status is ${offTabStatus.replace(/_/g, ' ')} — it appears here because search looks across all statuses`}
+            data-testid="off-tab-status-pill"
+            style={{
+              display: 'inline-block',
+              padding: '1px 6px',
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              borderRadius: 3,
+              flexShrink: 0,
+              textTransform: 'uppercase',
+              ...offTabStatusStyle,
+            }}
+          >
+            {offTabStatus === 'awaiting_shipment' ? 'AWAITING' : offTabStatus.replace(/_/g, ' ')}
+          </span>
+        )}
         {testOrder && (
           <span
             title="Sandbox / test order — no real postage, billing, or inventory impact"
@@ -10259,7 +10306,14 @@ export default function OrdersView({
           {searchQuery.trim() ? (
             <div className="inline-flex items-center gap-1 h-7 px-2 rounded-full bg-brand-bg ring-1 ring-brand/40 text-brand text-[10.5px] font-semibold whitespace-nowrap">
               <span aria-hidden>🌐</span>
-              <span>Searching all orders</span>
+              {/* PS-210: this claim is now TRUE — the backend widens search
+                  across Awaiting/Shipped/Cancelled and drops store scoping.
+                  Date + Hide-Test filters intentionally still apply, so say
+                  so instead of overclaiming. */}
+              <span>
+                Searching all statuses &amp; stores
+                {dateRange.start || dateRange.end ? ' · in date range' : ''}
+              </span>
             </div>
           ) : null}
 

@@ -1632,3 +1632,47 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   guard:shipping-certification + FULL shipping-roundtrip-certification (78/78) ALL PASS. **DJ
   eyeball:** Dashboard → Top SKUs panel → "Combos" tab; with the client filter on HUGRAB the combos
   must be HUGRAB-only and match the filter everywhere else (PS-212 behavior).
+
+### PS-210 — Orders search is global across Awaiting / Shipped / Cancelled — DONE 2026-06-13
+- **✅ ROOT CAUSE (matches the card's repo evidence):** the UI claimed global search ("Searching all
+  orders", "Global search — looking across all statuses & stores") and the bulk-selection matcher
+  (matchingSelectionQuery) already searched globally — but the VISIBLE table query still sent the
+  active tab's status and src/routes/orders.ts pinned `order_status = q.status` before the search
+  predicate, so a Shipped match could never surface from Awaiting; table and Select-All-Matching
+  disagreed. **✅ BACKEND OWNS THE SEMANTICS** (architecture-first): new pure owner
+  `src/services/orders-search-scope.ts` — `resolveOrdersStatusScope`: a NON-EMPTY search +
+  `searchScope=global` resolves to the lifecycle union (awaiting_shipment | shipped | cancelled) from
+  ANY tab; empty/whitespace search or a missing scope param keeps tab-local behavior byte-for-byte
+  (legacy callers unchanged; clearing search restores the tab). The /orders route widens the STATUS
+  predicate only — the global awaiting arm KEEPS visibleAwaitingOrdersPredicate (search can never
+  surface awaiting rows the tab itself hides), and auth/RBAC scope, assignee filter, client/store
+  filters, store visibility, test exclusion, and dates all still apply in the same `where`, which
+  feeds the paged query + idsOnly selection + count — **global search happens server-side BEFORE
+  pagination/totals** (a shipped match never depends on being on the current awaiting page).
+  **✅ LIFECYCLE SAFETY STAYS ROW-OWNED:** read-only ticket — zero mutation-path changes;
+  `assertOrderEditable` still guards every modification endpoint (shipped/cancelled rows surfaced by
+  search stay locked exactly as before; the FE tab-level isReadOnly line — DJ's 2026-05-06 unlock
+  state — is untouched). **✅ FE DECLARES INTENT + HONEST UI:** the table fetch sends
+  `searchScope='global'` with a non-empty search and drops the store-sidebar scoping (matching what
+  the selection matcher always did — the two surfaces now read the SAME backend result set; the
+  matcher also sends the explicit scope now); off-tab rows render a real-status pill
+  (SHIPPED/CANCELLED/AWAITING, `data-testid="off-tab-status-pill"`) in the Order # cell so a shipped
+  match on Awaiting can never read as an awaiting order; the search pill now tells the truth —
+  "Searching all statuses & stores · in date range" (date + Hide-Test filters intentionally still
+  apply and are disclosed instead of overclaimed). **Guard** `test:ps-210-global-orders-search`:
+  resolver matrix (global from each tab spans the lifecycle; empty/whitespace/missing-scope stay
+  tab-local; legacy callers unchanged) + route pins (zod param, owner delegation, global awaiting arm
+  keeps the visibility predicate, shipped+cancelled union, scope/assignee/store predicates intact,
+  where resolves BEFORE ordersPage/ordersIdsOnlyPage/count, ≥5 assertOrderEditable gates untouched) +
+  FE pins (hook scope-only-with-search, table + matcher intent, store-drop, truthful pill + old text
+  gone, row-keyed status pill) + e2e-spec pins. **Browser/workflow proof:**
+  `web/e2e/orders-global-search.spec.js` (Playwright, fully mocked via page.route, fake fixture names
+  only — "Riley Globalsearch"/"Casey Fixture", no PII): the /orders mock returns cross-status rows
+  ONLY when the request carries search + searchScope=global (if the FE stops declaring intent, the
+  suite fails); proves from-Awaiting/from-Shipped/from-Cancelled the shipped + cancelled matches
+  appear with correct real-status pills (and no pill on their own tab), the wire carried the scope,
+  clearing search restores tab rows AND drops the scope param. NOT RUN here (needs the vite server +
+  browser env like the other 12 specs — runs in DJ's local/CI Playwright flow). **QA:** typecheck
+  (both) + ps-210 guard + build:web + FULL shipping-roundtrip-certification (78/78) ALL PASS. No
+  shipped/cancelled mutations, no labels/postage, no marketplace notifications — read/search/display
+  only.
