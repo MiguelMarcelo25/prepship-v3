@@ -22,6 +22,7 @@ import {
 import { refreshReportingMetrics } from './reporting-metrics';
 import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
 import { runShipmentTrackingPollOnce } from './shipment-tracking';
+import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';
 import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
@@ -50,6 +51,7 @@ const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
 const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking; // 15 minutes
+const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees; // daily (legacy Vercel cron parity)
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -61,6 +63,7 @@ let fulfillmentOutboxRunning = false;
 let reportingRefreshRunning = false;
 let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
+let walmartFeesRunning = false;
 let heavySchedulerJobRunning: string | null = null;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
@@ -71,6 +74,7 @@ let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 let reportingRefreshTimer: NodeJS.Timeout | null = null;
 let externalShippedClassifierTimer: NodeJS.Timeout | null = null;
 let shipmentTrackingTimer: NodeJS.Timeout | null = null;
+let walmartFeesTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 
 async function withSchedulerAdvisoryLock<T>(
@@ -379,6 +383,54 @@ export async function runShipmentTrackingTick(): Promise<void> {
   }
 }
 
+// PS-200 S3: daily Walmart selling-fee sync, relocated from the legacy
+// Vercel cron (api/cron/sync-walmart-fees.ts, 09:00 UTC). Same window (14
+// days) and the same connector-owned sync (src/connectors/store/
+// walmart-fees.ts); only the scheduler moved. Uses the shared pg client —
+// this is a long-lived process, not a serverless function.
+export async function runWalmartFeesTick(): Promise<void> {
+  if (walmartFeesRunning) {
+    console.log('[scheduler] walmart fees sync already running - skipping tick');
+    return;
+  }
+  walmartFeesRunning = true;
+  try {
+    const result = await runHeavySchedulerJob('walmart fees sync', async () => {
+      const days = 14;
+      const now = new Date();
+      const fromDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const toDate = now.toISOString().slice(0, 10);
+      const accountResults = await syncWalmartFeesAllAccounts(pg, fromDate, toDate);
+      const totals = { accounts: accountResults.length, fetched: 0, ordersUpdated: 0, ordersMissing: 0, totalFeesUsd: 0, errors: 0 };
+      for (const r of accountResults) {
+        if (r.ok) {
+          totals.fetched += r.fetched ?? 0;
+          totals.ordersUpdated += r.ordersUpdated ?? 0;
+          totals.ordersMissing += r.ordersMissing ?? 0;
+          totals.totalFeesUsd += r.totalFeesUsd ?? 0;
+        } else {
+          totals.errors += 1;
+        }
+      }
+      totals.totalFeesUsd = Math.round(totals.totalFeesUsd * 100) / 100;
+      return totals;
+    });
+    if (!result) return;
+    console.log(
+      `[scheduler] walmart fees sync: accounts=${result.accounts}, fetched=${result.fetched}, ` +
+      `ordersUpdated=${result.ordersUpdated}, ordersMissing=${result.ordersMissing}, ` +
+      `feesUsd=${result.totalFeesUsd}, errors=${result.errors}`
+    );
+  } catch (err) {
+    console.error(
+      '[scheduler] walmart fees sync failed:',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    walmartFeesRunning = false;
+  }
+}
+
 export function startSyncScheduler(
   options: { mode?: 'api-scheduler' | 'worker-scheduler' } = {}
 ): void {
@@ -452,6 +504,25 @@ export function startSyncScheduler(
     } else {
       console.log(
         '[scheduler] shipment tracking poll disabled; set ENABLE_SHIPMENT_TRACKING_SCHEDULER=true (+ SHIPSTATION_API_KEY_V2) to poll delivery status for queued labels'
+      );
+    }
+  }
+
+  if (!walmartFeesTimer) {
+    if (env.ENABLE_WALMART_FEES_SCHEDULER) {
+      console.log(
+        `[scheduler] walmart fees sync enabled - every ${WALMART_FEES_INTERVAL_MS / 3600000}h (legacy Vercel cron replacement)`
+      );
+      walmartFeesTimer = setTimeout(() => {
+        void runWalmartFeesTick();
+        walmartFeesTimer = setInterval(
+          () => void runWalmartFeesTick(),
+          WALMART_FEES_INTERVAL_MS
+        );
+      }, STARTUP_DELAY_MS + 9 * 60 * 1000);
+    } else {
+      console.log(
+        '[scheduler] walmart fees sync disabled via ENABLE_WALMART_FEES_SCHEDULER=false'
       );
     }
   }

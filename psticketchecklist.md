@@ -814,10 +814,23 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   transport), ps-190 (one-transport note), marketplace-status-reconciliation (v4 puller mirrors
   ADDED to the reconciliation-wiring matrix). QA: all 7 touched guards + ps-159 + typecheck +
   build:web + FULL shipping certification PASS.
-  **Remaining surfaces**: S3 fees cron → v4 worker (both schedulers), S4 eBay OAuth (DJ:
-  redirect-URI check), S5 labels+rates legacy deletion (DJ: PS-202 verification), S6 _lib relocation
-  + store_orders Drizzle adoption, S8 final flip (vercel.json exclusions/crons removed, api/
-  deleted, ps-200 guard + guard-fleet re-anchor).
+  **S3 (fees cron → v4 worker, 2026-06-12)**: runWalmartFeesTick added to sync-scheduler (shared pg
+  client, 14-day window, totals telemetry via runHeavySchedulerJob/worker-status — ops-visible like
+  every other job) and registered in BOTH scheduler paths (interval scheduler + pg-boss
+  'prepship.fees.walmart-sync' with +9min stagger — the register-in-one-scheduler classic miss
+  avoided). ENABLE_WALMART_FEES_SCHEDULER defaults TRUE (relocated live production behavior →
+  kill-switch, not opt-in; documented vs the dark-rollout flags). vercel.json crons block REMOVED;
+  api/cron/sync-walmart-fees.ts DELETED. Cadence: SYNC_CADENCE_MS.walmartFees = 24h (interval anchor
+  resets on deploy — harmless, idempotent 14-day upsert window). Re-anchors: ps-032 fees-cron pin →
+  scheduler tick (same connector-ownership intent, new home), raw-error + runtime-ddl list entries
+  dropped with notes; walmart-fees connector header updated to the new consumer map. NOTE
+  (pre-existing, NOT S3): test:runtime-ddl (audit profile, not in cert) was already failing at HEAD
+  — 4 undocumented src DDL files (walmart-fees connector bootstrap, webhook-ledger,
+  shipment-tracking, order-rate-job-status) + 2 stale api list entries; follow-up belongs to the
+  master-audit track. QA: ps-032 + raw-error (31) + typecheck + FULL shipping certification PASS.
+  **Remaining surfaces**: S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy deletion
+  (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final flip
+  (vercel.json exclusions removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
 
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 

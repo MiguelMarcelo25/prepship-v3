@@ -19,6 +19,11 @@ export const SYNC_CADENCE_MS = {
   // tick is <2% of the ShipStation v2 budget, and a delivery surfaces within
   // one operator shift.
   shipmentTracking: 15 * 60 * 1000,
+  // PS-200 S3: daily parity with the legacy Vercel cron (0 9 * * *). The
+  // interval anchor resets on deploy, so deploy days can run it more than
+  // once — harmless: the sync re-reads a 14-day settlement window and
+  // upserts idempotently.
+  walmartFees: 24 * 60 * 60 * 1000,
 } as const;
 
 /** Delay before the first scheduled enqueue after process start. */

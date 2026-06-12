@@ -29,7 +29,11 @@ const probeRateScopingScript = read('scripts/probe-rate-scoping.ts');
 const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const walmartFeesRoute = read('api/carriers/walmart/fees.ts');
-const walmartFeesCron = read('api/cron/sync-walmart-fees.ts');
+// PS-200 S3: api/cron/sync-walmart-fees.ts deleted — the daily fee sync now
+// runs on the v4 worker (sync-scheduler runWalmartFeesTick, registered in
+// BOTH scheduler paths). Its "must call connector-owned sync" pin moves to
+// the tick below — same intent, new home.
+const syncSchedulerSource = read('src/services/sync-scheduler.ts');
 const walmartFeesLib = read('api/_lib/walmart-fees-sync.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const ebayOauthCallback = read('api/oauth/ebay/callback.ts');
@@ -160,9 +164,9 @@ assert(
   'Walmart fees route must call connector-owned fee sync, not Walmart API directly',
 );
 assert(
-  walmartFeesCron.includes('syncWalmartFeesAllAccounts') &&
-    !walmartFeesCron.includes('marketplace.walmartapis.com'),
-  'Walmart fees cron must call connector-owned fee sync, not Walmart API directly',
+  syncSchedulerSource.includes('syncWalmartFeesAllAccounts') &&
+    !syncSchedulerSource.includes('marketplace.walmartapis.com'),
+  'Walmart fees scheduler tick must call connector-owned fee sync, not Walmart API directly',
 );
 assert(
   walmartFeesLib.includes('../../src/connectors/store/walmart-fees') &&

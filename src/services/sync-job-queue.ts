@@ -10,6 +10,7 @@ import {
   runShipmentSync,
   runShipmentTrackingTick,
   runSyncProductsTick,
+  runWalmartFeesTick,
 } from './sync-scheduler';
 import {
   recordWorkerHeartbeat,
@@ -32,6 +33,7 @@ const FULFILLMENT_OUTBOX_INTERVAL_MS = SYNC_CADENCE_MS.fulfillmentOutbox;
 const REPORTING_REFRESH_INTERVAL_MS = SYNC_CADENCE_MS.reportingMetrics;
 const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedClassifier;
 const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking;
+const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees;
 const STARTUP_DELAY_MS = SYNC_STARTUP_DELAY_MS;
 
 const JOBS = {
@@ -44,6 +46,7 @@ const JOBS = {
   reportingRefresh: 'prepship.reporting.refresh',
   externalShippedClassifier: 'prepship.shipping.external-shipped-classifier',
   shipmentTracking: 'prepship.tracking.poll',
+  walmartFees: 'prepship.fees.walmart-sync',
 } as const;
 
 type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -204,6 +207,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
   await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierTick);
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
+  await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
   await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());
 
   heartbeatTimer = setInterval(() => {
@@ -243,6 +247,19 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   } else {
     console.log(
       '[job-queue] shipment tracking poll disabled; set ENABLE_SHIPMENT_TRACKING_SCHEDULER=true (+ SHIPSTATION_API_KEY_V2) to poll delivery status for queued labels'
+    );
+  }
+
+  // PS-200 S3: daily Walmart selling-fee sync (legacy Vercel cron replacement).
+  if (env.ENABLE_WALMART_FEES_SCHEDULER) {
+    scheduleEnqueue(
+      JOBS.walmartFees,
+      STARTUP_DELAY_MS + 9 * 60 * 1000,
+      WALMART_FEES_INTERVAL_MS
+    );
+  } else {
+    console.log(
+      '[job-queue] walmart fees sync disabled via ENABLE_WALMART_FEES_SCHEDULER=false'
     );
   }
 

@@ -59,7 +59,9 @@ if (existsSync(safeErrorHelperPath)) {
 
 for (const file of [
   'api/carriers/walmart/fees.ts',
-  'api/cron/sync-walmart-fees.ts',
+  // PS-200 S3 (2026-06-12): api/cron/sync-walmart-fees.ts deleted — the daily
+  // fee sync runs on the v4 worker now; an absent endpoint can't leak raw
+  // errors.
   'api/carriers/walmart/orders.ts',
   'api/carriers/ebay/orders.ts',
   'api/carriers/rates.ts',

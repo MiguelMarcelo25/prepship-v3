@@ -81,6 +81,11 @@ const schema = z.object({
   // the instant kill-switch.
   ENABLE_SHIPMENT_TRACKING_SCHEDULER: booleanFlag(false),
   TRACKING_AUTO_RETIRE_ENABLED: booleanFlag(false),
+  // PS-200 S3: daily Walmart selling-fee sync, relocated from the legacy
+  // Vercel cron (09:00 UTC). Defaults ON — unlike the dark-rollout flags
+  // above, this is EXISTING production behavior moving homes, so the flag is
+  // a kill-switch, not an opt-in. Unset to stop the daily pull.
+  ENABLE_WALMART_FEES_SCHEDULER: booleanFlag(true),
   USE_PG_BOSS_SCHEDULER: booleanFlag(true),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   PG_BOSS_POOL_MAX: z.coerce.number().int().positive().max(5).default(1),

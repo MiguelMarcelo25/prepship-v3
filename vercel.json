@@ -30,11 +30,5 @@
     },
     { "source": "/maintenance", "destination": "/maintenance.html" },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/sync-walmart-fees",
-      "schedule": "0 9 * * *"
-    }
   ]
 }

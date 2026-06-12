@@ -1,14 +1,14 @@
 // @ts-nocheck
 // ──────────────────────────────────────────────────────────────────
-// api/_lib/walmart-fees-sync.ts
-//
 // Reusable core for the Walmart selling-fee sync flow. Extracted
-// 2026-05-13 so the user-triggered "Pull Fees" button
-// (api/carriers/walmart/fees.ts), the nightly cron
-// (api/cron/sync-walmart-fees.ts), and the operator backfill
-// script (scripts/backfill-walmart-fees.ts) all share one
-// implementation. Without this split, two of those three would
-// inevitably drift out of sync with each other on the next change.
+// 2026-05-13 so every entry point shares one implementation. PS-200 S3
+// consumers: the v4 "Pull Fees" route (src/routes/carriers.ts), the
+// daily worker tick (src/services/sync-scheduler.ts runWalmartFeesTick
+// — replaced the legacy Vercel cron), the legacy Vercel route
+// (api/carriers/walmart/fees.ts via the api/_lib re-export shim, until
+// PS-200 S8 deletes it), and the operator backfill script
+// (scripts/backfill-walmart-fees.ts). Without this split, the entry
+// points would inevitably drift out of sync on the next change.
 //
 // The helper takes a postgres client + store-account id + date
 // window and does the full cycle:
