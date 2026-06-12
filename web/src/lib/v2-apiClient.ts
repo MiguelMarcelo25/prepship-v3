@@ -1420,17 +1420,16 @@ export const apiClient = {
     from: string,
     to: string
   ): Promise<boolean> {
-    const toIsoStart = (d: string) =>
-      d.includes('T') ? d : new Date(`${d}T00:00:00.000Z`).toISOString();
-    const toIsoEnd = (d: string) =>
-      d.includes('T') ? d : new Date(`${d}T23:59:59.999Z`).toISOString();
     try {
       const accessToken = await getCachedAuthToken();
       if (!accessToken) throw new Error('Not authenticated');
+      // PS-208: pass the operator-picked days VERBATIM (plain YYYY-MM-DD).
+      // The backend (src/lib/time/billing-day.ts) owns calendar-day semantics;
+      // the FE must never convert a billing day to an instant.
       const qs = new URLSearchParams({
         clientId: String(clientId),
-        dateFrom: toIsoStart(from),
-        dateTo: toIsoEnd(to),
+        dateFrom: from,
+        dateTo: to,
       }).toString();
       const res = await fetch(`${API_BASE}/billing/invoice?${qs}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -1447,6 +1446,45 @@ export const apiClient = {
       return true;
     } catch (err) {
       console.error('[invoice] open failed:', (err as Error).message);
+      return false;
+    }
+  },
+
+  // PS-208: download the SAME invoice as an Excel workbook. Identical query
+  // params and auth pattern as openBillingInvoice — the backend builds the
+  // XLSX from the same dataset as the HTML, so the two can never disagree.
+  async openBillingInvoiceXlsx(
+    clientId: number,
+    from: string,
+    to: string
+  ): Promise<boolean> {
+    try {
+      const accessToken = await getCachedAuthToken();
+      if (!accessToken) throw new Error('Not authenticated');
+      const qs = new URLSearchParams({
+        clientId: String(clientId),
+        dateFrom: from,
+        dateTo: to,
+      }).toString();
+      const res = await fetch(`${API_BASE}/billing/invoice.xlsx?${qs}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(`Invoice XLSX failed: ${msg}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${clientId}-${from}-${to}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return true;
+    } catch (err) {
+      console.error('[invoice] xlsx download failed:', (err as Error).message);
       return false;
     }
   },

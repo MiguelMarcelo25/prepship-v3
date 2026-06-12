@@ -71,9 +71,18 @@ assert(
   read('web/src/components/DateRangePicker.tsx').includes('californiaDateInputValue'),
   'Dashboard date picker presets must use California today, not browser-local today',
 );
+// PS-208 re-anchor: billing ranges are CALENDAR DAYS owned by
+// src/lib/time/billing-day.ts — NOT California business days. ship_date rows
+// are stored at UTC midnight, so the old California coercion (07:00:00Z
+// bounds) EXCLUDED the first day's rows from every month. Billing must use
+// billingDayRange and must never re-import the California coercion.
 assert(
-  read('src/routes/billing.ts').includes('coerceCaliforniaIsoDay'),
-  'Billing route YYYY-MM-DD filters must coerce as California business days',
+  read('src/routes/billing.ts').includes('billingDayRange'),
+  'Billing routes must derive range bounds from billingDayRange (src/lib/time/billing-day.ts)',
+);
+assert(
+  !read('src/routes/billing.ts').includes('coerceCaliforniaIsoDay'),
+  'Billing routes must NOT use California day coercion — ship_date is a UTC-midnight calendar day (PS-208)',
 );
 assert(
   read('src/routes/dashboard.ts').includes("America/Los_Angeles"),
@@ -137,10 +146,18 @@ assert(
   'inventory.ts history grouping/buckets must use America/Los_Angeles',
 );
 
-// Billing invoice line ship-date display must render the California calendar day.
+// PS-208: billing ship dates are calendar days stored at UTC midnight. The
+// invoice must extract the day AT UTC — any America/Los_Angeles conversion
+// shifts a UTC-midnight May 1 row to April 30 (the SP6447 bug). Note the
+// "Invoice generated <today>" footer stamp is a true instant and stays
+// Pacific; only ship_date is day-typed.
 assert(
-  !/to_char\(b\.ship_date,/.test(read('src/routes/billing.ts')),
-  'billing.ts invoice ship_date must render as a California day (at time zone America/Los_Angeles)',
+  !/ship_date at time zone 'America\/Los_Angeles'/.test(read('src/routes/billing.ts')),
+  'billing.ts must not timezone-convert ship_date — it is a UTC-midnight calendar day (PS-208)',
+);
+assert(
+  read('src/routes/billing.ts').includes("to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD')"),
+  'billing.ts invoice ship_date must extract the calendar day at UTC (PS-208)',
 );
 
 console.log('PASS date/time standard guard');

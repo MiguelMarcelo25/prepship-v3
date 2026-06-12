@@ -22,7 +22,7 @@
  *   Defaults: clientId=4 (HUGRAB), dateFrom=2026-03-04, dateTo=2026-06-02
  */
 import { sql } from '../src/db/client';
-import { coerceCaliforniaIsoDay } from '../src/lib/time/california';
+import { billingDayRange } from '../src/lib/time/billing-day';
 
 const clientId = Number.parseInt(process.argv[2] ?? '', 10) || 4;
 const rawFrom = process.argv[3] ?? '2026-03-04';
@@ -40,16 +40,15 @@ function money(v: number): string {
 function line(): void {
   console.log('-'.repeat(68));
 }
-function isoDay(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
-}
-
 async function main(): Promise<void> {
-  // Coerce the way /billing/summary and /billing/details do (shared schema).
-  const from = coerceCaliforniaIsoDay(rawFrom, false)!;
-  const to = coerceCaliforniaIsoDay(rawTo, true)!;
-  const fromDay = isoDay(from); // billing_summary_metrics.period_from key
-  const toDay = isoDay(to); // billing_summary_metrics.period_to key
+  // PS-208: coerce the way /billing/summary and /billing/details do (shared
+  // schema) — canonical UTC calendar-day bounds, upper EXCLUSIVE.
+  const range = billingDayRange(rawFrom, rawTo);
+  if (!range) throw new Error(`invalid range ${rawFrom}..${rawTo}`);
+  const from = range.fromUtc;
+  const to = range.toUtcExclusive;
+  const fromDay = range.fromDay; // billing_summary_metrics.period_from key
+  const toDay = range.toDay; // billing_summary_metrics.period_to key
 
   console.log('PS-069 billing summary/details consistency diagnostic (read-only)');
   console.log(`clientId=${clientId}  range=${rawFrom}..${rawTo}`);

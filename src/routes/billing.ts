@@ -20,7 +20,7 @@ import {
   upsertBillingConfig,
 } from '../services/billing';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
-import { coerceCaliforniaIsoDay } from '../lib/time/california';
+import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
 import { requirePermission } from '../middleware/auth';
 // PS-132: synthetic/system clients excluded from Config + Summary grids — single source.
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
@@ -181,13 +181,14 @@ app.put(
   }
 );
 
-// Accepts v2's short param names (from/to, plain YYYY-MM-DD) and v4's
-// long names (dateFrom/dateTo, ISO datetime). Coerces YYYY-MM-DD to an
-// ISO datetime anchored at start/end-of-day.
-function coerceIsoDay(raw: string | undefined, endOfDay: boolean): string | undefined {
-  return coerceCaliforniaIsoDay(raw, endOfDay);
-}
-
+// PS-208: billing ranges are CALENDAR DAYS (the canonical owner is
+// src/lib/time/billing-day.ts). Accepts v2's short names (from/to) and v4's
+// long names (dateFrom/dateTo), plain YYYY-MM-DD or legacy ISO instants — in
+// every shape the LEADING date is the operator-picked day. The transform
+// yields UTC-midnight bounds (dateTo EXCLUSIVE: first day AFTER the range) so
+// every billing endpoint agrees on exactly which days belong to the month;
+// the previous California-day coercion EXCLUDED UTC-midnight rows like
+// 2026-05-01T00:00:00Z from May.
 const generateRawSchema = z.object({
   clientId: z.coerce.number().int().optional(),
   dateFrom: z.string().optional(),
@@ -196,23 +197,31 @@ const generateRawSchema = z.object({
   to: z.string().optional(),
 });
 const generateSchema = generateRawSchema
-  .transform((v) => ({
-    clientId: v.clientId,
-    dateFrom: coerceIsoDay(v.dateFrom ?? v.from, false),
-    dateTo: coerceIsoDay(v.dateTo ?? v.to, true),
-  }))
+  .transform((v) => {
+    const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
+    return {
+      clientId: v.clientId,
+      dateFrom: range?.fromUtc,
+      dateTo: range?.toUtcExclusive,
+      fromDay: range?.fromDay,
+      toDay: range?.toDay,
+    };
+  })
   .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
     message: 'dateFrom/from and dateTo/to are required',
   });
 
 const detailsSchema = generateRawSchema
   .extend({ limit: z.coerce.number().int().max(2000).optional() })
-  .transform((v) => ({
-    clientId: v.clientId,
-    dateFrom: coerceIsoDay(v.dateFrom ?? v.from, false),
-    dateTo: coerceIsoDay(v.dateTo ?? v.to, true),
-    limit: v.limit,
-  }))
+  .transform((v) => {
+    const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
+    return {
+      clientId: v.clientId,
+      dateFrom: range?.fromUtc,
+      dateTo: range?.toUtcExclusive,
+      limit: v.limit,
+    };
+  })
   .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
     message: 'dateFrom/from and dateTo/to are required',
   });
@@ -388,10 +397,12 @@ app.patch('/details/:orderId{[0-9]+}', zValidator('json', detailPatchSchema), as
   return c.json({ ok: true, orderId, clientId: body.clientId, updated, inserted });
 });
 
+// PS-208: accept plain YYYY-MM-DD (canonical) AND legacy ISO instants — the
+// route normalizes through billingDayRange like every other billing endpoint.
 const invoiceQuery = z.object({
   clientId: z.coerce.number().int().positive(),
-  dateFrom: z.string().datetime(),
-  dateTo: z.string().datetime(),
+  dateFrom: z.string().min(10),
+  dateTo: z.string().min(10),
 });
 
 function escHtml(s: string | number | null | undefined): string {
@@ -403,18 +414,12 @@ function escHtml(s: string | number | null | undefined): string {
     .replace(/"/g, '&quot;');
 }
 
-function formatInvoiceDate(value: string | Date | null | undefined): string {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Los_Angeles',
-    month: 'long',
-    day: '2-digit',
-    year: 'numeric',
-  }).format(date);
-}
+// PS-208: invoice dates are CALENDAR DAYS — formatted by formatBillingDay
+// (component split, no Date round-trip, no timezone). The old
+// formatInvoiceDate here converted to America/Los_Angeles, which shifted a
+// UTC-midnight May 1 row to "April 30" — and stacked on the SQL-side LA
+// conversion it rendered April 29 (SP6447: stored 2026-05-04, displayed
+// May 02). Deleted; nothing in billing may timezone-convert a ship day.
 
 type InvoiceTotals = {
   orderCount: number;
@@ -475,7 +480,10 @@ async function billingInvoiceData(
     select
       b.order_id,
       b.order_number,
-      to_char(b.ship_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD') as ship_date,
+      -- PS-208: ship_date is a calendar day stored at UTC midnight — extract
+      -- the day AT UTC. The previous America/Los_Angeles conversion turned a
+      -- May 1 row into April 30 before display even started.
+      to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD') as ship_date,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.total_cost else 0 end), 0)::text as pickpack_amt,
@@ -491,8 +499,10 @@ async function billingInvoiceData(
       ) as skus
     from billing_line_items b
     where b.client_id = ${clientId}
+      -- PS-208: identical date-only bounds as every billing endpoint — UTC
+      -- midnight inclusive lower, EXCLUSIVE day-after upper.
       and b.ship_date >= ${dateFrom}::timestamptz
-      and b.ship_date <= ${dateTo}::timestamptz
+      and b.ship_date < ${dateTo}::timestamptz
     group by b.order_id, b.order_number, b.ship_date
     order by b.ship_date asc, b.order_id asc
   `);
@@ -510,12 +520,13 @@ async function billingInvoiceData(
 // ternary stay in-file). `generated` (Date.now()) is computed once per render, same as before.
 function renderInvoiceHtml(args: {
   clientName: string;
-  dateFrom: string;
-  dateTo: string;
+  /** PS-208: the operator-picked calendar days (plain YYYY-MM-DD), not instants. */
+  fromDay: string;
+  toDay: string;
   totals: InvoiceTotals;
   details: InvoiceDetailRow[];
 }): string {
-  const { clientName, dateFrom, dateTo, totals, details } = args;
+  const { clientName, fromDay, toDay, totals, details } = args;
   const {
     orderCount,
     additionalTotal,
@@ -527,8 +538,10 @@ function renderInvoiceHtml(args: {
     fulfillmentFeeTotal,
   } = totals;
   const fmt = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
-  const fromDisplay = formatInvoiceDate(dateFrom);
-  const toDisplay = formatInvoiceDate(dateTo);
+  // PS-208: header shows the operator-picked days verbatim — "May 01, 2026 →
+  // May 31, 2026" for a 05/01→05/31 selection, never the previous day.
+  const fromDisplay = formatBillingDay(fromDay);
+  const toDisplay = formatBillingDay(toDay);
   const generated = new Date().toLocaleDateString('en-US', {
     timeZone: 'America/Los_Angeles',
     month: 'long',
@@ -550,7 +563,7 @@ function renderInvoiceHtml(args: {
       const fulfillmentFeeAmt = rowTotal > 0
         ? rowTotal
         : pickPackFeeAmt + shippingAmt + storageAmt;
-      const shipDate = formatInvoiceDate(d.ship_date);
+      const shipDate = formatBillingDay(d.ship_date);
       return `
       <tr>
         <td>${escHtml(shipDate)}</td>
@@ -665,18 +678,157 @@ function renderInvoiceHtml(args: {
 
 app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const { clientId, dateFrom, dateTo } = c.req.valid('query');
+  // PS-208: normalize to canonical calendar-day bounds (UTC midnight, upper
+  // EXCLUSIVE) — the same range semantics as /generate, /summary, /details.
+  const range = billingDayRange(dateFrom, dateTo);
+  if (!range) return c.text('Invalid dateFrom/dateTo — expected YYYY-MM-DD', 400);
   const invoiceScope = billingScopeFromContext(c);
-  const data = await billingInvoiceData(invoiceScope, clientId, dateFrom, dateTo);
+  const data = await billingInvoiceData(invoiceScope, clientId, range.fromUtc, range.toUtcExclusive);
   if (!data) return c.text('Client not found', 404);
   const html = renderInvoiceHtml({
     clientName: data.clientName,
-    dateFrom,
-    dateTo,
+    fromDay: range.fromDay,
+    toDay: range.toDay,
     totals: data.totals,
     details: data.details,
   });
   c.header('Content-Type', 'text/html; charset=utf-8');
   return c.body(html);
+});
+
+// ─── Invoice (XLSX) ───────────────────────────────────────────────────
+// PS-208: Excel export of the SAME invoice. Built from billingInvoiceData —
+// the exact dataset behind the HTML invoice (no forked query, so the two
+// exports can never disagree about rows, totals, or which days are in range).
+
+/** UTC-midnight Date for a YYYY-MM-DD day. exceljs serializes Date cells via
+ * pure epoch math (dateToExcel = 25569 + ms/86400000), so a UTC-midnight Date
+ * renders as exactly that calendar day in Excel on every machine. */
+function excelDayCell(day: string | null | undefined): Date | string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(day ?? ''));
+  if (!match) return String(day ?? '');
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+}
+
+async function renderInvoiceXlsx(args: {
+  clientName: string;
+  fromDay: string;
+  toDay: string;
+  totals: InvoiceTotals;
+  details: InvoiceDetailRow[];
+}): Promise<Buffer> {
+  // Lazy import: exceljs is heavy and only this route needs it.
+  const { default: ExcelJS } = await import('exceljs');
+  const { clientName, fromDay, toDay, totals, details } = args;
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'PrepShip';
+
+  const MONEY_FMT = '"$"#,##0.00';
+  const DATE_FMT = 'mmm dd, yyyy';
+
+  // ── Sheet 1: Summary ──
+  const summary = workbook.addWorksheet('Summary');
+  summary.columns = [{ width: 26 }, { width: 22 }];
+  const addSummaryRow = (label: string, value: unknown, fmt?: string) => {
+    const row = summary.addRow([label, value]);
+    row.getCell(1).font = { bold: true };
+    if (fmt) row.getCell(2).numFmt = fmt;
+    return row;
+  };
+  addSummaryRow('Client', clientName);
+  addSummaryRow('Period start', excelDayCell(fromDay), DATE_FMT);
+  addSummaryRow('Period end', excelDayCell(toDay), DATE_FMT);
+  addSummaryRow('Orders', totals.orderCount);
+  summary.addRow([]);
+  addSummaryRow('Pick & Pack fees', totals.pickPackFeeTotal, MONEY_FMT);
+  addSummaryRow('Additional units', totals.additionalTotal, MONEY_FMT);
+  addSummaryRow('Package cost', totals.packageTotal, MONEY_FMT);
+  addSummaryRow('Shipping', totals.shippingTotal, MONEY_FMT);
+  addSummaryRow('Storage', totals.storageTotal, MONEY_FMT);
+  // Same fallback as the HTML tfoot: fulfillmentFeeTotal || grandTotal.
+  const grand = addSummaryRow('Total', totals.fulfillmentFeeTotal || totals.grandTotal, MONEY_FMT);
+  grand.getCell(2).font = { bold: true };
+
+  // ── Sheet 2: Line Items (one row per order, mirroring the HTML table) ──
+  const items = workbook.addWorksheet('Line Items', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
+  items.columns = [
+    { header: 'Ship Date', key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
+    { header: 'Order #', key: 'orderNumber', width: 20 },
+    { header: 'SKUs', key: 'skus', width: 40 },
+    { header: 'Qty', key: 'qty', width: 8 },
+    { header: 'Pick & Pack Fee', key: 'pickPackFee', width: 16, style: { numFmt: MONEY_FMT } },
+    { header: 'Additional Units', key: 'additional', width: 16, style: { numFmt: MONEY_FMT } },
+    { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: MONEY_FMT } },
+    { header: 'Storage', key: 'storage', width: 12, style: { numFmt: MONEY_FMT } },
+    { header: 'Total', key: 'total', width: 14, style: { numFmt: MONEY_FMT } },
+  ];
+  items.getRow(1).font = { bold: true };
+  for (const d of details) {
+    // Identical derivation to the HTML rows — qty/fee composition and the
+    // rowTotal>0 fallback must stay in lockstep with renderInvoiceHtml.
+    const baseQty = Number(d.base_qty);
+    const addlQty = Number(d.addl_qty);
+    const pickPackFeeAmt = Number(d.pickpack_amt) + Number(d.additional_amt);
+    const shippingAmt = Number(d.shipping_amt);
+    const storageAmt = Number(d.storage_amt);
+    const rowTotal = Number(d.row_total);
+    items.addRow({
+      shipDate: excelDayCell(d.ship_date),
+      orderNumber: String(d.order_number ?? d.order_id ?? ''),
+      skus: d.skus ?? '',
+      qty: baseQty + addlQty,
+      pickPackFee: pickPackFeeAmt,
+      additional: addlQty > 0 ? Number(d.additional_amt) : 0,
+      shipping: shippingAmt,
+      storage: storageAmt,
+      total: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,
+    });
+  }
+  if (details.length) {
+    const first = 2;
+    const last = first + details.length - 1;
+    const totalsRow = items.addRow({
+      skus: `Totals — ${totals.orderCount} orders`,
+      qty: { formula: `SUM(D${first}:D${last})` },
+      pickPackFee: { formula: `SUM(E${first}:E${last})` },
+      additional: { formula: `SUM(F${first}:F${last})` },
+      shipping: { formula: `SUM(G${first}:G${last})` },
+      storage: { formula: `SUM(H${first}:H${last})` },
+      total: { formula: `SUM(I${first}:I${last})` },
+    });
+    totalsRow.font = { bold: true };
+  }
+
+  const out = await workbook.xlsx.writeBuffer();
+  return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer);
+}
+
+app.get('/invoice.xlsx', zValidator('query', invoiceQuery), async (c) => {
+  const { clientId, dateFrom, dateTo } = c.req.valid('query');
+  const range = billingDayRange(dateFrom, dateTo);
+  if (!range) return c.text('Invalid dateFrom/dateTo — expected YYYY-MM-DD', 400);
+  const invoiceScope = billingScopeFromContext(c);
+  const data = await billingInvoiceData(invoiceScope, clientId, range.fromUtc, range.toUtcExclusive);
+  if (!data) return c.text('Client not found', 404);
+  const bytes = await renderInvoiceXlsx({
+    clientName: data.clientName,
+    fromDay: range.fromDay,
+    toDay: range.toDay,
+    totals: data.totals,
+    details: data.details,
+  });
+  const safeClient = data.clientName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || String(clientId);
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'content-disposition': `attachment; filename="invoice-${safeClient}-${range.fromDay}-${range.toDay}.xlsx"`,
+      'content-length': String(bytes.byteLength),
+      'x-content-type-options': 'nosniff',
+    },
+  });
 });
 
 // ─── Client package prices ────────────────────────────────────────────

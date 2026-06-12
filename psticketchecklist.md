@@ -1194,3 +1194,45 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   active-filter-unchanged pin). QA: typecheck + build:web + print-queue-hygiene + client-scope + ps-053 +
   ps-104 + ps-032 (connector classified + audit doc) + vercel-fn-esm-import-closure + full cert ALL PASS.
   Local commit only.
+
+### PS-208 — Billing invoice ship-date calendar-day fix + Excel XLSX export (P1) — DONE 2026-06-12
+- **✅ DONE (code + guards; live eyeball = DJ):** billing ship dates are now CALENDAR DAYS end-to-end — a
+  row stored 2026-05-04T00:00:00Z renders "May 04, 2026" everywhere and a 05/01→05/31 selection includes
+  exactly May. **Root causes fixed (SP6447 evidence):** (1) invoice SQL converted ship_date to
+  America/Los_Angeles (UTC-midnight May 4 → May 3) and formatInvoiceDate's `new Date('2026-05-03')` + LA
+  Intl re-shifted it (rendered May 02 = −2 days); (2) header dates were FE `T00:00:00.000Z` instants run
+  through the same LA formatter (−1 day); (3) range bounds used California day coercion (07:00:00Z) which
+  EXCLUDED every month's UTC-midnight first-day rows, while inclusive `<=` upper bounds leaked the next
+  period's first day. **Architecture (canonical owner):** NEW `src/lib/time/billing-day.ts` —
+  `billingDayOf` (leading-date extraction, accepts plain days + all legacy instant shapes), `billingDayRange`
+  ({fromDay,toDay,fromUtc,toUtcExclusive} — upper bound EXCLUSIVE day-after midnight), `formatBillingDay`
+  (component split, zero Date/timezone involvement). ALL billing endpoints (generate, status, summary,
+  details, invoice, invoice.xlsx) normalize through it; `GenerateInput.dateTo` documented EXCLUSIVE; 9
+  inclusive `<=` ship_date bounds flipped to `<` across services/billing.ts + routes/billing.ts +
+  reporting-metrics.ts (incl. the generateLineItems period DELETE — `<=` there would have wiped the next
+  month's first-day lines on every regenerate, and the billing_summary_metrics cache materializer);
+  `billingShipDateSql` now `date_trunc('day', … at time zone 'UTC')`-normalizes source timestamps so every
+  generated line lands on the UTC-midnight storage invariant; invoice ship_date extracted
+  `at time zone 'UTC'`; invoiceQuery accepts plain YYYY-MM-DD; FE sends picked days VERBATIM
+  (openBillingInvoice instant-coercion deleted). **XLSX export:** NEW `GET /billing/invoice.xlsx` consuming
+  the SAME `billingInvoiceData` as the HTML invoice (structurally impossible to disagree — no query fork);
+  exceljs (lazy-imported), Summary sheet (client/period/orders/per-category totals, $ numFmt) + Line Items
+  sheet (one row per order mirroring the HTML table, REAL date cells via UTC-anchored Dates — exceljs
+  serializes via pure epoch math so the day is machine-timezone-proof, frozen header, SUM formulas, bold
+  totals row); attachment filename `invoice-<client>-<from>-<to>.xlsx`; FE 📊 Excel button next to 📄 Export
+  (BillingSummaryTable) + `openBillingInvoiceXlsx` blob download. **Guards:**
+  `test:ps-208-billing-calendar-day-invoice-xlsx` (behavioral matrix on the pure helpers — leading-date
+  extraction incl. CA-day-end shape, exclusive-bound membership for the regression rows, month/year/leap
+  rollovers, SP6447 display case — + source pins: no CA coercion in billing, no LA ship_date conversion, no
+  inclusive upper bounds, strict DELETE, date_trunc UTC, no-query-fork ≥2 billingInvoiceData calls, frozen
+  header/SUM/MIME pins, FE verbatim-days + Excel wiring, exceljs dep); `date-time-standard-guard`
+  RE-ANCHORED (billing pins flipped from "must use coerceCaliforniaIsoDay" to "must use billingDayRange /
+  must NOT CA-coerce / ship_date day extracted at UTC" — analytics/orders/inventory Pacific pins untouched);
+  ps-069 diagnostic converted to billingDayRange. **QA:** typecheck + build:web + ps-208 guard +
+  date-time-standard + billing-formula + billing-client-scope + billing-detail-ps040 + ps-134-ref-rates +
+  ps-067-external-fulfilled + full shipping-roundtrip-certification ALL PASS. **Notes:** billing reads
+  shipped orders only (no lockdown surface modified); existing billing_line_items rows generated under the
+  old CA bounds keep their stored values — display is now faithful to storage; if DJ wants historical
+  months re-priced under exact-day bounds, regenerating those months is the (DJ-approved-only) path per the
+  card's no-production-regeneration guardrail. exceljs adds ~77 transitive packages (npm audit count moved —
+  pre-existing tooling-dep advisories, none in the served bundle).

@@ -29,8 +29,13 @@ const systemClientNamesSql = sql.join(
 
 export type GenerateInput = {
   clientId?: number;
-  dateFrom: string; // ISO
-  dateTo: string; // ISO
+  // PS-208: UTC-midnight calendar-day bounds from billingDayRange (the
+  // canonical owner, src/lib/time/billing-day.ts). dateFrom is INCLUSIVE
+  // (midnight of the first day); dateTo is EXCLUSIVE (midnight of the day
+  // AFTER the last day). Every ship_date comparison in this file must be
+  // `>= dateFrom AND < dateTo` — never `<=`.
+  dateFrom: string; // ISO, UTC midnight, inclusive
+  dateTo: string; // ISO, UTC midnight, EXCLUSIVE
   scopeClientIds?: number[];
   scopeStoreIds?: number[];
   scopeIsGlobal?: boolean;
@@ -76,7 +81,15 @@ function billingSummaryHasValues(summary: { clients: BillingSummaryRow[] }): boo
   );
 }
 
-const billingShipDateSql = sql<Date | null>`coalesce(
+// PS-208: a billing ship date is a CALENDAR DAY (canonical owner:
+// src/lib/time/billing-day.ts). The raw sources can carry a time-of-day
+// (shipments.ship_date is a real instant; raw fulfilledAt/shippedAt are
+// marketplace timestamps), so normalize to UTC midnight of the UTC day HERE —
+// every billing_line_items.ship_date written by generateLineItems then lands
+// exactly on the storage invariant, and the day-range bounds
+// (>= dateFrom AND < dateTo) are exact day membership. No timezone other than
+// UTC may ever touch this value.
+const billingShipDateSql = sql<Date | null>`date_trunc('day', coalesce(
   ${shipments.shipDate},
   case
     when coalesce(${orders.raw}->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
@@ -94,7 +107,7 @@ const billingShipDateSql = sql<Date | null>`coalesce(
     else null
   end,
   ${orders.orderDate}
-)`;
+) at time zone 'UTC') at time zone 'UTC'`;
 
 function billingClientScopePredicate(input: GenerateInput): SQL {
   if (input.scopeIsGlobal === true) return sql`true`;
@@ -202,7 +215,7 @@ export async function billingGenerationStatus(
     select max(b.ship_date)::text as latest_billing_ship_date
     from billing_line_items b
     where b.ship_date >= ${fromIso}::timestamptz
-      and b.ship_date <= ${toIso}::timestamptz
+      and b.ship_date < ${toIso}::timestamptz
       and b.order_id is not null
       ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
       and ${billingLineItemScopePredicate(input)}
@@ -232,7 +245,7 @@ export async function billingGenerationStatus(
           select 1 from billing_line_items b
           where b.client_id = c.id
             and b.ship_date >= ${fromIso}::timestamptz
-            and b.ship_date <= ${toIso}::timestamptz
+            and b.ship_date < ${toIso}::timestamptz
         )
         and greatest(
           coalesce((select max(updated_at) from client_package_prices where client_id = c.id), 'epoch'::timestamptz),
@@ -241,7 +254,7 @@ export async function billingGenerationStatus(
           select max(b.created_at) from billing_line_items b
           where b.client_id = c.id
             and b.ship_date >= ${fromIso}::timestamptz
-            and b.ship_date <= ${toIso}::timestamptz
+            and b.ship_date < ${toIso}::timestamptz
         )
     ) as pricing_stale
   `);
@@ -299,7 +312,9 @@ export async function billingGenerationStatus(
           else null
         end,
         o.order_date
-      ) <= ${toIso}::timestamptz
+        -- PS-208: an instant < the EXCLUSIVE UTC-midnight upper bound is
+        -- exactly "UTC day <= toDay" — no truncation needed for comparison.
+      ) < ${toIso}::timestamptz
       ${latestBilling
         ? sql`and coalesce(
             s.ship_date,
@@ -573,7 +588,7 @@ export async function generateLineItems(input: GenerateInput) {
       and(
         eq(orders.orderStatus, 'shipped'),
         sql`${billingShipDateSql} >= ${fromIso}::timestamptz`,
-        sql`${billingShipDateSql} <= ${toIso}::timestamptz`
+        sql`${billingShipDateSql} < ${toIso}::timestamptz`
       )
     );
 
@@ -677,7 +692,10 @@ export async function generateLineItems(input: GenerateInput) {
   await db.delete(billingLineItems).where(
     and(
       sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-      sql`${billingLineItems.shipDate} <= ${toIso}::timestamptz`,
+      // PS-208: STRICT upper bound. dateTo is the EXCLUSIVE day-after
+      // midnight — `<=` here would delete the first day of the NEXT period's
+      // lines on every regenerate.
+      sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
       input.clientId !== undefined
         ? eq(billingLineItems.clientId, input.clientId)
         : undefined,
@@ -1157,7 +1175,7 @@ async function hasBillingLineItemsForSummary(input: GenerateInput): Promise<bool
       select 1
       from billing_line_items
       where ship_date >= ${input.dateFrom}::timestamptz
-        and ship_date <= ${input.dateTo}::timestamptz
+        and ship_date < ${input.dateTo}::timestamptz
         ${input.clientId !== undefined ? sql`and client_id = ${input.clientId}` : sql``}
         and ${billingLineItemScopePredicate(input)}
       limit 1
@@ -1308,7 +1326,7 @@ export async function billingSummary(
     left join billing_line_items b
       on b.client_id = c.id
       and b.ship_date >= ${input.dateFrom}::timestamptz
-      and b.ship_date <= ${input.dateTo}::timestamptz
+      and b.ship_date < ${input.dateTo}::timestamptz
     where c.active = true
       and c.name not in (${systemClientNamesSql})
       ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
@@ -1403,7 +1421,7 @@ export async function billingInvoiceHeaderTotals(
     from billing_line_items
     where client_id = ${clientId}
       and ship_date >= ${dateFrom}::timestamptz
-      and ship_date <= ${dateTo}::timestamptz
+      and ship_date < ${dateTo}::timestamptz
   `);
   const s = summaryRow[0];
 

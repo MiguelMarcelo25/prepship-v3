@@ -510,6 +510,12 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
   });
 }
 
+// PS-208 key contract: billingSummary passes UTC-midnight calendar-day bounds
+// with `to` EXCLUSIVE (midnight of the day AFTER the period) — so the
+// period_to cache key is the EXCLUSIVE end day's UTC date. Unchanged from the
+// legacy CA-day-end inputs (2026-06-01T06:59:59Z also sliced to 2026-06-01),
+// so existing read/write key pairs still match; the 45-min freshness window
+// ages out any rows aggregated under the old inclusive bounds.
 export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promise<number> {
   await ensureReportingMetricsTables();
   const fromDay = isoDate(from);
@@ -552,7 +558,10 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
       left join billing_line_items b
         on b.client_id = c.id
         and b.ship_date >= ${from.toISOString()}::timestamptz
-        and b.ship_date <= ${to.toISOString()}::timestamptz
+        -- PS-208: STRICT upper bound ("to" is the exclusive day-after
+        -- midnight); an inclusive bound would aggregate the next period's
+        -- first day into this cache row.
+        and b.ship_date < ${to.toISOString()}::timestamptz
       where c.active = true
         and c.name not in (${systemClientNamesSql})
       group by c.id

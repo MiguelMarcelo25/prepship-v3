@@ -1091,6 +1091,22 @@ export default function BillingView() {
     })
   }
 
+  // PS-208: same invoice, Excel download. Passes the picked days verbatim —
+  // the backend owns all calendar-day semantics.
+  function handleExportInvoiceXlsx(clientId: number, clientName: string) {
+    if (!from || !to) {
+      toastContext?.addToast('⚠ Select a date range first', 'error')
+      return
+    }
+
+    toastContext?.addToast(`📊 Downloading Excel invoice for ${clientName || 'client'}…`, 'success')
+    void apiClient.openBillingInvoiceXlsx(clientId, from, to).then((ok) => {
+      if (!ok) {
+        toastContext?.addToast('Failed to download Excel invoice — check console', 'error')
+      }
+    })
+  }
+
   const billingEditMetrics = billingEditModal ? computeBillingDetailMetrics(billingEditModal.row) : null
   const billingEditDraftTotal = billingEditModal
     ? parseMoneyDraft(billingEditModal.draft.pickPack)
@@ -1210,6 +1226,7 @@ export default function BillingView() {
           detailState={detailState}
           handleLoadDetails={handleLoadDetails}
           handleExportInvoice={handleExportInvoice}
+          handleExportInvoiceXlsx={handleExportInvoiceXlsx}
         />
 
         {detailState.open ? (
