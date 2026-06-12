@@ -174,13 +174,15 @@ check('FE Best Rate cell prefers the backend tuple',
   /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn\)/.test(ordersView));
 check('FE Margin cell prefers the backend tuple',
   /backendMoney\?\.markupAmount/.test(ordersView) && /backendMoney\.marginPercent/.test(ordersView));
-// PS-178 final part: the awaiting-row FE markup-math fallbacks are DELETED.
-// Exactly ONE applyCarrierMarkup call remains — the SHIPPED Selected Rate cell,
-// which has no DTO money (shipped rows carry bestRateWorkflow=null by payload
-// design) until the shipped-row DTO phase.
-check('awaiting FE markup math deleted; only the shipped cell remains',
-  (ordersView.match(/applyCarrierMarkup\(/g)?.length ?? 0) === 1 &&
-  /selectedMarkedAmount = applyCarrierMarkup\(/.test(ordersView));
+// Shipped-row DTO phase: shipped rows now carry the workflow DTO (money priced
+// from the SELECTED rate by the same canonical rules), so the LAST FE markup
+// call is deleted — zero applyCarrierMarkup anywhere in OrdersView.
+check('zero FE markup math (every row reads the backend DTO money tuple)',
+  (ordersView.match(/applyCarrierMarkup\(/g)?.length ?? 0) === 0 &&
+  /const shippedBackendMoney = getBackendRowMoney\(displayOrder\)/.test(ordersView));
+const ordersRouteSrc = readFileSync('src/routes/orders.ts', 'utf8');
+check('shipped rows carry the workflow DTO (built without best-rate data)',
+  /: buildBestRateWorkflowDto\(\{ savedBestRate: null, source: 'none' \}\)/.test(ordersRouteSrc));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-177 row money display guard (${failures} failing)`);

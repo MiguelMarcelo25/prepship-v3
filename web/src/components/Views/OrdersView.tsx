@@ -114,7 +114,6 @@ const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 const TrackingModal = lazy(() => import('../TrackingModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
-import { useMarkups } from '../../contexts/MarkupsContext'
 import { api } from '../../lib/api'
 // PS-135: canonical FE rate-proof helpers (extracted from this file; pure backend-DTO reads).
 import {
@@ -124,7 +123,6 @@ import {
   selectProofFromCandidates,
   rateQuoteRefFromCandidates,
 } from '../../lib/rate-proof'
-import { applyCarrierMarkup } from '../../utils/markups'
 import type {
   CarrierAccountDto,
   CreateLabelRequestDto,
@@ -1527,7 +1525,6 @@ function getSortValue(
   detail: OrderFullDto | null,
   key: SortKey,
   accounts: CarrierAccountDto[],
-  markups: Parameters<typeof applyCarrierMarkup>[1],
 ): string | number {
   switch (key) {
     case 'date':
@@ -2268,7 +2265,8 @@ export default function OrdersView({
   // fetch doesn't masquerade as "loading carriers…" forever.
   const { accounts: shippingAccounts, isLoading: accountsLoadingRaw, error: accountsError } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
   const accountsLoading = accountsLoadingRaw && !accountsError
-  const { markups } = useMarkups()
+  // Shipped-row DTO phase: useMarkups removed — every row's money display
+  // (awaiting AND shipped) comes from the backend DTO money tuple now.
   // PS-189: the account→service catalog is BACKEND-owned. Static per deploy, so
   // cache it for the session. Until it loads, the service picker shows the saved
   // value only — it never falls back to a local table.
@@ -2466,8 +2464,8 @@ export default function OrdersView({
     next.sort((left, right) => {
       const leftDetail = orderDetailsById.get(left.orderId) ?? null
       const rightDetail = orderDetailsById.get(right.orderId) ?? null
-      const leftValue = getSortValue(left, leftDetail, sortState.key, shippingAccounts, markups)
-      const rightValue = getSortValue(right, rightDetail, sortState.key, shippingAccounts, markups)
+      const leftValue = getSortValue(left, leftDetail, sortState.key, shippingAccounts)
+      const rightValue = getSortValue(right, rightDetail, sortState.key, shippingAccounts)
       const direction = sortState.dir === 'asc' ? 1 : -1
       if (leftValue < rightValue) return -direction
       if (leftValue > rightValue) return direction
@@ -2475,7 +2473,7 @@ export default function OrdersView({
     })
 
     return next
-  }, [searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts, markups])
+  }, [searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts])
   const skuOrderGroups = useMemo(
     () => (
       skuSortActive
@@ -5964,7 +5962,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, markups, shippingAccounts, rateRetryNonce])
+  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, shippingAccounts, rateRetryNonce])
 
   async function refreshPanelBestRate(options: {
     order: OrderSummaryDto
@@ -7826,32 +7824,18 @@ export default function OrdersView({
         return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
       }
 
-      const selectedRateCarrierCode = getSelectedRateCarrierCode(displayOrder)
-      // Apply the same markup the awaiting-shipment column uses, so shipped
-      // rows show what the customer was charged (base + markup) — not just
-      // the raw carrier label cost. Falls back to labelCost / selectedRateBase
-      // when carrier metadata isn't enough to look up a markup rule.
-      const baseForMarkup = selectedRateBase ?? labelCost ?? 0
-      const selectedMarkedAmount = applyCarrierMarkup(
-        {
-          shippingProviderId: getSelectedRateShippingProviderId(displayOrder),
-          carrierCode: selectedRateCarrierCode ?? '',
-          serviceCode: getSelectedRateServiceCode(displayOrder) ?? '',
-          serviceName: displayOrder.selectedRate?.serviceName ?? '',
-          amount: baseForMarkup,
-          shipmentCost: baseForMarkup,
-          otherCost: 0,
-          carrierNickname: getSelectedRateCarrierNickname(displayOrder),
-        },
-        markups,
-      )
-      const displayMarked =
-        selectedMarkedAmount != null
-          ? selectedMarkedAmount
-          : labelCost ?? selectedRateBase
+      // Shipped-row DTO phase: shipped rows now carry the backend money tuple
+      // (priced from the SELECTED rate by the same canonical markup rules) —
+      // the FE's LAST markup-math call is deleted. A row without the tuple
+      // degrades to the plain final label cost / carrier base, never
+      // FE-computed markup.
       // PS — Selected Rate shows only the amount. The carrier badge lives
       // solely in the dedicated Carrier column; duplicating it here was noisy.
-      return renderRateAmountWithMarkup(selectedRateBase, displayMarked, getBackendInsuranceAddOn(displayOrder.selectedRate))
+      const shippedBackendMoney = getBackendRowMoney(displayOrder)
+      if (shippedBackendMoney) {
+        return renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn)
+      }
+      return renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase, getBackendInsuranceAddOn(displayOrder.selectedRate))
     }
 
     const awaitingFallback = renderAwaitingRateFallback(order, displayOrder, 'full')

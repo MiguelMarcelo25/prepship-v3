@@ -1706,7 +1706,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           savedBestRate: bestRateRecord,
           source: inferBestRateWorkflowSource(bestRateRecord),
         })
-      : null;
+      // Shipped-row DTO phase: shipped rows now carry the SAME workflow object
+      // (extend-never-parallel) — built WITHOUT best-rate data (shipped rows
+      // intentionally never expose awaiting best-rate amounts; bestRatePick
+      // stays null), so the row enrichment below contributes rowState
+      // (local_shipped / external_shipped / missing_shipment_sync), the
+      // canonical-first display tuple, and the money tuple priced from the
+      // SELECTED rate — letting the FE's last markup-math call die.
+      : buildBestRateWorkflowDto({ savedBestRate: null, source: 'none' });
     // PS-120 (reader): ADDITIVELY override the derived bestRateState with a backend-owned
     // in-progress state (pending/rating) ONLY when (a) there is a job row for this order,
     // (b) its stored fingerprint == the order's CURRENT job fingerprint, and (c) a fresh

@@ -41,13 +41,14 @@ function ceiling(name: string, actual: number, max: number, deletionPhase: strin
 }
 
 // ── money: FE markup application (backend owner: rate-money.ts + DTO.money) ──
-// PS-178 final part: 5 → 1. The ONLY remaining call is the SHIPPED Selected
-// Rate cell — shipped rows carry bestRateWorkflow=null by payload design, so
-// they have no DTO money until the shipped-row DTO phase deletes this last one.
-ceiling('OrdersView applyCarrierMarkup calls', count(ordersView, /applyCarrierMarkup\(/g), 1, 'the shipped-row DTO phase');
+// Shipped-row DTO phase: 1 → 0. Shipped rows now carry the workflow DTO too,
+// so EVERY row's money display comes from the backend tuple — zero FE markup
+// math remains anywhere in OrdersView.
+ceiling('OrdersView applyCarrierMarkup calls', count(ordersView, /applyCarrierMarkup\(/g), 0, 'n/a — deleted; backend DTO money only');
 {
   // The money-math import surface is a fixed allowlist — a NEW file importing
   // the FE markup math is a new money-policy consumer, which Phase 6 forbids.
+  // Only the defining module remains (applyCarrierMarkup has zero importers).
   const moneyConsumers = execSync(
     'git grep -l "applyCarrierMarkup" -- web/src',
     { encoding: 'utf8' },
@@ -57,7 +58,6 @@ ceiling('OrdersView applyCarrierMarkup calls', count(ordersView, /applyCarrierMa
     .map((p) => p.replace(/\\/g, '/'))
     .sort();
   const allowlist = [
-    'web/src/components/Views/OrdersView.tsx',
     'web/src/utils/markups.ts',
   ];
   check(

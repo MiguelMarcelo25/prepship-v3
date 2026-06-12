@@ -648,6 +648,23 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   pins. All run inside test:workflow-suites → CI-gates Render deploys.
   QA: typecheck + build:web + ps-159 + recalculate-best-rate-strict + ratchet + full cert ALL PASS.
 
+- **Shipped-row DTO phase — ✅ COMPLETE 2026-06-12 (the closeout table's named exit for the last FE
+  markup retention).** Shipped-bucket rows now carry the SAME workflow object
+  (extend-never-parallel): built WITHOUT best-rate data (`buildBestRateWorkflowDto({savedBestRate:
+  null, source:'none'})` — bestRatePick stays null, awaiting amounts never exposed), then the
+  existing row enrichment contributes rowState (local_shipped/external_shipped/
+  missing_shipment_sync — already in the enricher since PS-173), the canonical-first display tuple,
+  queueRoute, and the money tuple priced from the SELECTED rate (already implemented in
+  buildOrderRowMoneyDisplay since PS-177 part 2 — it was just never emitted). FE: the shipped
+  Selected Rate cell reads the DTO tuple; THE LAST applyCarrierMarkup call is DELETED, along with
+  useMarkups, the markups sorter param, and both effect deps — **OrdersView now contains ZERO
+  markup math; the money-consumer allowlist is down to the defining module only.** A shipped row
+  without the tuple degrades to the plain final label cost. Ratchet: markup ceiling 1 → 0;
+  ps-177 money guard re-pins zero-markup + the shipped DTO emission. QA: typecheck + build:web +
+  ps-177 + ps-178 ratchet + ps-173 + ps-176 + full cert ALL PASS. Remaining display-cascade
+  deletion (resolveDisplayCarrier/ServiceCode local fallbacks) = next slice, after DJ eyeballs
+  shipped-row money on prod.
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |
