@@ -62,6 +62,7 @@ import {
   parseMarkupSettingValue,
   type MarkupRule,
 } from './shipping-workflow/rate-money';
+import { resolveWalmartPurchaseOrder } from './walmart-po-resolution';
 
 type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
@@ -1674,6 +1675,24 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
     }
     const requestFingerprint = `${rateCacheKey({ ...input, carrierIds: [`se-${shippingProviderId}`] })}:direct:${account.sourceTable}:${account.id}`;
     try {
+      // PS-199: Walmart Shipping quotes need a Walmart purchaseOrderId + the raw
+      // marketplace order. The canonical resolver (body → walmart- prefix →
+      // store_orders cache → live Marketplace lookup, no-borrow rule for real
+      // orders) lives in walmart-po-resolution; the FE never sends these.
+      const walmartPo =
+        normalizeProviderKey(account.provider) === 'walmart_shipping'
+          ? await resolveWalmartPurchaseOrder(
+              {
+                purchaseOrderId: input.purchaseOrderId ?? null,
+                orderId: input.orderId ?? null,
+                externalOrderId: input.externalOrderId ?? null,
+                orderNumber: input.orderNumber ?? null,
+                credentials: account.credentials,
+                storeAccountId: account.sourceTable === 'store_accounts' ? account.id : null,
+              },
+              'rates',
+            )
+          : null;
       const quoted = await quoteCarrierRates(account.provider, {
         credentials: account.credentials,
         weightOz: input.weightOz,
@@ -1692,7 +1711,8 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
         storeId: input.storeId,
         externalOrderId: input.externalOrderId ?? input.orderNumber,
         orderNumber: input.orderNumber,
-        purchaseOrderId: input.purchaseOrderId,
+        purchaseOrderId: walmartPo?.purchaseOrderId ?? input.purchaseOrderId,
+        ...(walmartPo?.rawOrder != null ? { rawOrder: walmartPo.rawOrder } : {}),
         shipFrom: input.shipFrom,
         // PS-127/PS-135(a): direct carriers rate under the SAME backend-resolved residential
         // classification as ShipStation (classifyRateInputResidential above), NOT the raw FE
@@ -1718,6 +1738,9 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
         sourceTable: account.sourceTable,
         provider: normalizeProviderKey(quoted.provider ?? account.provider),
         rateCount: rates.length,
+        // PS-199: surfaced in the Rate Browser ("Resolved on-the-fly via Walmart
+        // Marketplace API" / cache badge) — the FE modal already renders it.
+        ...(walmartPo ? { purchaseOrderSource: walmartPo.purchaseOrderSource } : {}),
       };
       return {
         rates,

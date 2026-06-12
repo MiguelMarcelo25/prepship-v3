@@ -164,6 +164,7 @@ pure UI/display helpers in the frontend:
 | Inventory / packages | show stock / read-model state, draft adjustments | ledger movements, effective stock, package-stock truth |
 | Dashboard / analytics | render charts and filters | aggregates, cancelled/shipped filtering semantics, read models |
 | Carrier / store integrations | render forms and capability UI | provider capability registry, credential validation, account scope |
+| Walmart purchaseOrderId (PS-199) | display the resolution source badge | `src/services/walmart-po-resolution.ts` — the LIVE Walmart Marketplace lookup OWNS customerOrderId→purchaseOrderId translation; `store_orders` is a cache in front of it (read-before, upsert-after). Quote and label paths consume the same resolver; real orders never borrow another order's PO. |
 | Auth / scope | hide/show UX affordances | RBAC, client/store/tenant enforcement |
 
 ## Decision tree — where does this code belong?

@@ -665,6 +665,31 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   deletion (resolveDisplayCarrier/ServiceCode local fallbacks) = next slice, after DJ eyeballs
   shipped-row money on prod.
 
+- **PS-199 — ✅ CODE COMPLETE 2026-06-12 (live check pending): Walmart purchaseOrderId resolution
+  ported to v4.** Walmart Shipping rates were broken for EVERY v4 order (connector requires a PO;
+  the resolution chain lived only in legacy api/carriers/rates.ts:683-771 + labels.ts:606-720).
+  Shipped: NEW canonical `src/services/walmart-po-resolution.ts` — faithful port of the full chain
+  (① body PO → ② walmart- prefix strip → ③ store_orders cache lookup by external_order_id OR
+  customer_order_id, recovering rawOrder + owning account → ④ live
+  lookupWalmartOrderByCustomerOrderId), with TWO modes so quote and label can never diverge:
+  'rates' (live = rescue only; misses surface the connector's clean error; the most-recent-row
+  fallback ONLY without a real orderId — legacy Fix 1 no-borrow preserved) and 'labels' (money
+  path, ready for PS-202: ALWAYS live-verifies when a customerOrderId candidate exists, replaces a
+  stale cached PO on mismatch, THROWS on verification failure — never buys unverified; no demo
+  fallback). Live hits upsert the store_orders cache (ON CONFLICT provider+external_order_id;
+  skipped without account attribution — the column is NOT NULL). rawOrder usability
+  (orderLines/postalAddress) + cache re-hydration ported. Wired into
+  getDirectCarrierRatesForRateInput for walmart_shipping accounts: connector now receives the
+  resolved PO + rawOrder; `purchaseOrderSource` stamped on the per-carrier meta (the Rate Browser
+  modal already renders the badge — zero FE work). OWNERSHIP recorded in ARCHITECTURE.md: live
+  Marketplace lookup owns the translation; store_orders is its cache (the stale legacy pull is
+  not required for correctness). Legacy api/ endpoints deliberately untouched (PS-200/202 own
+  their decommission). Guard `test:ps-199-walmart-po-resolution` (17 checks: priority order,
+  no-borrow, labels strictness, hydration, wiring, ownership note, writes-only-cache safety).
+  QA: typecheck + build:web + ps-032 connector boundary + full cert ALL PASS. **Acceptance
+  remaining (live, DJ):** Browse Rates on a ShipStation-synced Walmart order (200014792308203
+  style) returns Walmart rates with the source badge; walmart-* orders quote too.
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |
