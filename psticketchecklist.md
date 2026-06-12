@@ -1346,3 +1346,30 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   full shipping-roundtrip-certification ALL PASS. **Note:** multi-batch in-session unions still work (the
   Set accumulates across jobs); after refresh, the LAST job's ids re-seed (the durable layer keeps one
   last-run snapshot by design) — PS-195 (card still missing) builds on this.
+
+### PS-193 — Write-path defaults ownership: dirty-flag gate on panel auto-persist — DONE 2026-06-13
+- **✅ DONE (delta-audited first):** opening the order side panel can no longer mutate the DB without an
+  operator action. **Delta audit vs the card** (its line refs predate PS-177/178): (1) the card's
+  "deriveShipmentDimsFromProductDefaults auto-populates and saves" was ALREADY fixed by PS-178 — the FE
+  derivation is deleted and dims suggestions are backend-owned by the PURE
+  `order-dims-defaults-policy.ts` (returns the dimsDefaults DTO on the detail payload; zero db access —
+  the card's "backend suggestion endpoint returns DTO without writing" acceptance was already satisfied);
+  (2) the 450ms auto-package effect was STILL LIVE and ungated: on panel open with complete seeded dims
+  it auto-matched or auto-CREATED a package row, persisted the order's selected package, and (saveSku:
+  true) silently minted per-unit SKU PRODUCT DEFAULTS — the weight ÷ qty math at savePanelSkuDefaults —
+  seeding FUTURE orders' rate inputs; (3) the 750ms auto-save effect was ungated past its last-saved-key
+  check, so any programmatic post-open form fill (including the cascade from #2) persisted
+  weight/dims/package with zero operator action. **Fix (surgical):** BOTH debounced effects now gate on
+  `dimsUserEditedRef` — the existing operator-edit dirty flag (set only by the weight/dims/package input
+  handlers, reset on order switch; the 700ms rate-refresh effect already used it); the auto-package path
+  runs with `saveSku: false` — product-default minting (incl. per-unit weight) is reserved for the
+  EXPLICIT Save-SKU-defaults action and the post-label-purchase followup. Suggestions stay visible in
+  the form; rating and label purchase read LIVE form values, so unsaved suggestions still price and buy
+  exactly as shown. **Guard** `test:ps-193-dirty-flag-auto-persist`: both effects pinned dirty-gated,
+  saveSku:false pinned (saveSku:true forbidden in the auto effect), dirty-flag reset-on-order-switch +
+  ≥6 input-handler setters pinned, FE derivation stays deleted (call-shape pin — the PS-178 comment
+  names it), dims-policy module pinned pure (no db). **QA:** typecheck + build:web + ps-193 guard +
+  single-sku-default-qty-scope + multi-sku-product-dims-rate-fallback + full
+  shipping-roundtrip-certification ALL PASS. **Acceptance:** no unconditional auto-persist on panel
+  open ✓; all dims/package writes require the dirty flag ✓; backend suggestion DTO exists without
+  writing (PS-178, pinned) ✓; guard passes ✓.

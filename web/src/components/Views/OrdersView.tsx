@@ -3153,6 +3153,14 @@ export default function OrdersView({
 
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment' || !packagesLoaded) return
+    // PS-193: GATED on an actual operator edit. Pre-PS-193 this fired on
+    // panel OPEN whenever the seeded dims were complete — silently
+    // auto-matching/auto-CREATING a package row, persisting the order's
+    // selected package, and (via saveSku) minting per-unit SKU weight/dims
+    // PRODUCT DEFAULTS that seeded FUTURE orders' rate inputs, all with zero
+    // operator action. Suggestions stay visible in the form; nothing persists
+    // until the operator edits.
+    if (!dimsUserEditedRef.current) return
 
     const dims = getPanelDims()
     if (!hasCompleteDims(dims)) return
@@ -3163,7 +3171,11 @@ export default function OrdersView({
     const timeout = window.setTimeout(() => {
       if (autoPackageDimsKeyRef.current === key) return
       autoPackageDimsKeyRef.current = key
-      void ensurePanelPackageForDims({ saveSku: true, silent: true })
+      // PS-193: saveSku:false — product-default minting (incl. the per-unit
+      // weight ÷ qty math) is reserved for the EXPLICIT Save-SKU-defaults
+      // action and the post-label-purchase followup, never a dims-edit
+      // byproduct.
+      void ensurePanelPackageForDims({ saveSku: false, silent: true })
         .catch(() => {
           autoPackageDimsKeyRef.current = null
         })
@@ -3218,6 +3230,13 @@ export default function OrdersView({
 
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return
+    // PS-193: the debounced auto-persist is GATED on an actual operator edit
+    // (the same dirty flag the rate-refresh effect uses). Programmatic form
+    // fills — panel-open seeding, backend dims suggestions, the auto-package
+    // match above — must never reach the DB on their own. Rating and label
+    // purchase read the LIVE form values, so unsaved suggestions still price
+    // and buy exactly as shown.
+    if (!dimsUserEditedRef.current) return
 
     const currentKey = getShipmentDetailsKey(panelOrder.orderId, panelForm)
     if (!currentKey || currentKey === shipmentLastSavedKeyRef.current) return
