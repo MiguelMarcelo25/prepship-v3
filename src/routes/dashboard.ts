@@ -19,7 +19,7 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import { hasAppPermission } from '../middleware/auth';
 import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
-import { getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
+import { getComboBreakdownFromOrderItems, getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
 const app = new Hono();
 
@@ -45,6 +45,13 @@ const dashboardSkuTrendQuery = dashboardRangeQuery.extend({
 
 const dashboardTopSkusQuery = dashboardRangeQuery.extend({
   limit: z.coerce.number().int().positive().max(500).optional().default(200),
+  includeCancelled: z.coerce.boolean().optional().default(true),
+});
+
+// PS-213: multi-SKU combination sales (Combos tab). Same range/scope inputs
+// as Top SKUs; smaller default limit — combos are a long-tail distribution.
+const dashboardTopCombosQuery = dashboardRangeQuery.extend({
+  limit: z.coerce.number().int().positive().max(200).optional().default(50),
   includeCancelled: z.coerce.boolean().optional().default(true),
 });
 
@@ -537,6 +544,48 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
   };
+  void setAnalyticsCache(cacheKey, payload, 120);
+  return c.json(payload);
+});
+
+// PS-213 — GET /dashboard/top-combos: which SKU combinations sell together.
+// comboSales = ORDER count; normalization owned by the PS-037 combo module
+// (A+B ≡ B+A, qty in the key); single-SKU orders excluded. Same client/store
+// scoping + caller-segregated caching as /top-skus.
+app.get('/top-combos', zValidator('query', dashboardTopCombosQuery), async (c) => {
+  const q = c.req.valid('query');
+  const scope = dashboardScopeFromContext(c);
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  const canViewFinancials = canViewDashboardFinancials(c);
+  type DashboardTopCombosPayload = Awaited<ReturnType<typeof getComboBreakdownFromOrderItems>>;
+  const cacheKey = analyticsCacheKey('dashboard.top-combos.v1', {
+    from: q.from,
+    to: q.to,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    limit: q.limit,
+    includeCancelled: q.includeCancelled,
+    includeInactiveClients,
+    hideTestOrders: q.hideTestOrders === true,
+    caller: dashboardCallerCacheScope(c, scope),
+    financials: canViewFinancials,
+  });
+  const cached = await getAnalyticsCache<DashboardTopCombosPayload>(cacheKey);
+  if (cached) return c.json(cached);
+
+  const payload = await getComboBreakdownFromOrderItems({
+    dateFrom: isoDayStart(q.from),
+    dateTo: isoDayEnd(q.to),
+    clientId: q.clientId,
+    storeId: q.storeId,
+    clientIds: scope.clientIds,
+    storeIds: scope.storeIds,
+    scopeRestricted: scope.isRestricted,
+    canViewFinancials,
+    limit: q.limit,
+    hideTestOrders: q.hideTestOrders === true,
+    includeCancelled: q.includeCancelled,
+  });
   void setAnalyticsCache(cacheKey, payload, 120);
   return c.json(payload);
 });

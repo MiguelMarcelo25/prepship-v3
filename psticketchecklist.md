@@ -1598,3 +1598,37 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   calls) are follow-up work — the architecture now classifies them honestly as not_supported instead
   of mis-dispatching to ShipStation, and the dynamic guard makes adding one a two-line flip
   (implement voidLabel + re-add the capability).
+
+### PS-213 — Dashboard SKU-combination sales (Combos tab) — DONE 2026-06-13
+- **✅ BACKEND OWNS THE COMBO IDENTITY:** new pure service `src/services/combo-sales.ts`
+  (`aggregateOrderComboSales`) delegates ALL normalization to the PS-037 combo owner
+  (src/lib/package-combo.ts — the SAME identity client package defaults key on): case-insensitive +
+  trimmed SKUs, duplicate-line qty summing, sorted lines (A+B ≡ B+A), qty part of the key
+  (A:2|B:1 ≠ A:1|B:1), single-SKU orders excluded by the canonical isMultiSkuCombo.
+  **comboSales = ORDER count** (the card's definition: one order of 2×A+1×B = ONE sale of that
+  combo); units + revenue aggregated alongside; longest observed product name per SKU (the Top SKUs
+  SQL convention); `totalCombos` reported PRE-limit so truncation is never silent. **✅ SQL OWNER WITH
+  THE SAME SCOPE AS TOP SKUS:** `getComboBreakdownFromOrderItems` (routes/analysis.ts) applies the
+  identical predicate set — canonical clientId, restricted client/store scope
+  (analysisOrderScopePredicate), test-order + cancelled + active-client filters, date window — plus a
+  multi-SKU SQL prefilter (`having count(distinct lower(trim(sku))) >= 2`) that is an OPTIMIZATION
+  only (the TS owner remains authoritative for what collapses). **✅ ROUTE:** GET /dashboard/top-combos
+  — cache key `dashboard.top-combos.v1` (from/to/clientId/storeId/limit/cancelled/inactive/test/
+  caller-scope/financials — same segregation as /top-skus), financials-gated revenue (null without
+  the permission), TTL 120s, limit ≤200 default 50. **✅ FE (Top SKUs PRESERVED EXACTLY):** the Top
+  SKUs panel gains a SKUs | Combos tab toggle — SKUs stays the default with its fetch/render
+  untouched (PS-212 pins still green); the Combos tab lazy-fetches on first switch and re-fetches on
+  the canonical selectedClientId + date window (the PS-212 one-filter rule), rendering rank + the
+  combination's "qty× name" lines + per-SKU pills + an `orders` headline count + a comboSales-scaled
+  bar + a "Showing N of M combos" truncation line. **Guard** `test:ps-213-top-combos`: the card's
+  matrix — reversed/case-different order collapses into the same combo (A/B collapse), A+C stays
+  distinct, qty distinguishes combos, duplicate lines sum then join the right combo, single-SKU
+  orders never appear, sort + limit honesty (totalCombos pre-limit), financials gate nulls revenue
+  only — plus source pins (combo-sales imports the PS-037 owner and re-implements nothing; SQL block
+  carries clientId predicate + scope + active-client + prefilter + delegates to the pure service;
+  route cache key + caller scope + financials; FE fetch carries cid + effect deps + both tabs + Top
+  SKUs fetch/render strings unchanged + truncation line). **QA:** typecheck (both) + ps-213 + ps-212
+  (dashboard-client-sku-filter) + dashboard-chart-lazy + dashboard-first-paint + build:web +
+  guard:shipping-certification + FULL shipping-roundtrip-certification (78/78) ALL PASS. **DJ
+  eyeball:** Dashboard → Top SKUs panel → "Combos" tab; with the client filter on HUGRAB the combos
+  must be HUGRAB-only and match the filter everywhere else (PS-212 behavior).

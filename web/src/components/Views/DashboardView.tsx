@@ -1259,6 +1259,39 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     try { window.localStorage.setItem(TOP_SKU_LIMIT_KEY, String(topSkuLimit)) } catch { /* non-fatal */ }
   }, [topSkuLimit])
 
+  // PS-213 — Combos tab inside the Top SKUs panel: which SKU combinations
+  // sell TOGETHER (comboSales = order count; backend owns the PS-037 combo
+  // normalization + the same client scoping as Top SKUs). Fetched lazily on
+  // first tab switch, re-fetched when the canonical client filter or the
+  // date window changes — same scope inputs as every other dashboard panel.
+  type ComboRow = {
+    comboKey: string
+    items: Array<{ sku: string; qty: number; name: string | null }>
+    skuCount: number
+    comboSales: number
+    units: number
+    revenue: number | null
+  }
+  const [skuPanelTab, setSkuPanelTab] = useState<'skus' | 'combos'>('skus')
+  const [topCombos, setTopCombos] = useState<ComboRow[]>([])
+  const [topCombosTotal, setTopCombosTotal] = useState(0)
+  const [topCombosLoading, setTopCombosLoading] = useState(false)
+  useEffect(() => {
+    if (skuPanelTab !== 'combos') return
+    let cancelled = false
+    setTopCombosLoading(true)
+    const cid = selectedClientId ?? undefined
+    apiClient
+      .fetchDashboardTopCombos({ from: dateRange.from, to: dateRange.to, limit: 50, clientId: cid, hideTestOrders: true })
+      .then((res) => {
+        if (cancelled) return
+        setTopCombos(res.combos)
+        setTopCombosTotal(res.totalCombos)
+      })
+      .finally(() => { if (!cancelled) setTopCombosLoading(false) })
+    return () => { cancelled = true }
+  }, [skuPanelTab, selectedClientId, dateRange.from, dateRange.to])
+
   const HEATMAP_LIMIT_KEY = 'dashboard_heatmap_limit_v1'
   const [heatmapLimit, setHeatmapLimit] = useState<TopNValue>(() => {
     if (typeof window === 'undefined') return 5
@@ -2684,19 +2717,52 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h3 className="text-sm font-extrabold text-ink">Top {topSkuLimit} SKUs (30d)</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-extrabold text-ink">
+                  {skuPanelTab === 'combos' ? 'Top SKU Combos' : `Top ${topSkuLimit} SKUs (30d)`}
+                </h3>
+                {/* PS-213 — SKUs | Combos tab toggle. Top SKUs stays the
+                    default and renders exactly as before; Combos shows
+                    multi-SKU combination sales (order counts). */}
+                <div className="flex overflow-hidden rounded-card border border-line" role="tablist" aria-label="Top SKUs panel view">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={skuPanelTab === 'skus'}
+                    onClick={() => setSkuPanelTab('skus')}
+                    className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${skuPanelTab === 'skus' ? 'bg-brand text-white' : 'bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink'}`}
+                  >
+                    SKUs
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={skuPanelTab === 'combos'}
+                    onClick={() => setSkuPanelTab('combos')}
+                    className={`px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${skuPanelTab === 'combos' ? 'bg-brand text-white' : 'bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink'}`}
+                  >
+                    Combos
+                  </button>
+                </div>
+              </div>
               {/* PS mobile: "· stretch to see more" refers to drag-resizing
                   the panel taller, which only works on desktop (xl). Drop
                   the hint below xl so the subtitle stays short on phones. */}
-              <p className="text-tiny text-ink-3">By total units sold<span className="hidden xl:inline"> · stretch to see more</span></p>
+              <p className="text-tiny text-ink-3">
+                {skuPanelTab === 'combos'
+                  ? 'Multi-SKU combinations by orders sold together'
+                  : (<>By total units sold<span className="hidden xl:inline"> · stretch to see more</span></>)}
+              </p>
             </div>
             <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
+              {skuPanelTab === 'skus' ? (
               <TopNDropdown
                 value={topSkuLimit}
                 onChange={(n) => setTopSkuLimit(n as TopNValue)}
                 options={TOP_N_OPTIONS}
                 ariaLabel="Choose how many top SKUs to show"
               />
+              ) : null}
               <SectionSizeToggle
                 value={sectionSizes.topSkus}
                 onChange={(size) => setSectionSize('topSkus', size)}
@@ -2743,7 +2809,68 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 - Subtle hover background to surface row-as-button
                 - Divider between rows for cleaner separation
           */}
-          {panelLoading.topSkus ? (
+          {/* PS-213 — Combos tab body. Each row is ONE combination (the
+              backend's PS-037-normalized identity): rank, the combination's
+              lines as "qty× name" with SKU pills, and the order count —
+              comboSales — as the headline number. */}
+          {skuPanelTab === 'combos' ? (
+            topCombosLoading ? (
+              <PanelSkeleton className="flex-1 min-h-0" />
+            ) : (
+              <div className="flex-1 min-h-0 overflow-y-auto pr-1 divide-y divide-line/60">
+                {(() => {
+                  const maxComboSales = Math.max(...topCombos.map((combo) => combo.comboSales), 1)
+                  return topCombos.map((combo, index) => {
+                    const pct = Math.max(5, Math.min(100, (combo.comboSales / maxComboSales) * 100))
+                    return (
+                      <div
+                        key={combo.comboKey}
+                        className="grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1.5 py-2.5 text-left"
+                      >
+                        <div className="grid h-7 w-7 place-items-center rounded-full bg-brand/10 text-2xs font-extrabold tabular-nums text-brand ring-1 ring-brand/20">
+                          {index + 1}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="line-clamp-2 text-tiny font-semibold leading-snug text-ink">
+                            {combo.items.map((item) => `${item.qty}× ${item.name || item.sku}`).join(' + ')}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {combo.items.map((item) => (
+                              <span key={item.sku} className="rounded-sm bg-surface-2 px-1 py-px font-mono text-[10px] text-ink-3">
+                                {item.qty}× {item.sku}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-line/60">
+                            <div
+                              className="h-full rounded-full bg-brand transition-[width] duration-300"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end pl-1 leading-none">
+                          <span className="font-mono text-sm font-extrabold tabular-nums text-ink">
+                            {formatInt(combo.comboSales)}
+                          </span>
+                          <span className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+                            orders
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })
+                })()}
+                {topCombos.length === 0 ? (
+                  <div className="grid h-40 place-items-center text-tiny text-ink-3">No multi-SKU combos in this window.</div>
+                ) : null}
+                {topCombosTotal > topCombos.length ? (
+                  <div className="px-1.5 py-2 text-center text-[10px] text-ink-3">
+                    Showing {topCombos.length} of {topCombosTotal} combos
+                  </div>
+                ) : null}
+              </div>
+            )
+          ) : panelLoading.topSkus ? (
             <PanelSkeleton className="flex-1 min-h-0" />
           ) : panelErrors.topSkus ? (
             <PanelError message={panelErrors.topSkus} className="flex-1 min-h-0" />

@@ -3016,6 +3016,48 @@ export const apiClient = {
     );
   },
 
+  // PS-213 — multi-SKU combination sales (Dashboard Combos tab). Backend owns
+  // normalization (PS-037 combo key) + scoping; this is a thin pass-through.
+  fetchDashboardTopCombos(query: {
+    from: string;
+    to: string;
+    limit?: number;
+    clientId?: number;
+    storeId?: number;
+    hideTestOrders?: boolean;
+    includeCancelled?: boolean;
+  }): Promise<{
+    combos: Array<{
+      comboKey: string;
+      items: Array<{ sku: string; qty: number; name: string | null }>;
+      skuCount: number;
+      comboSales: number;
+      units: number;
+      revenue: number | null;
+    }>;
+    totalCombos: number;
+    multiSkuOrders: number;
+  }> {
+    return safe(
+      'fetchDashboardTopCombos',
+      async () => {
+        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+        if (query.limit !== undefined) q.limit = query.limit;
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
+        const res: any = await api.get<any>(`/dashboard/top-combos${qs(q)}`);
+        return {
+          combos: Array.isArray(res?.combos) ? res.combos : [],
+          totalCombos: Number(res?.totalCombos ?? 0) || 0,
+          multiSkuOrders: Number(res?.multiSkuOrders ?? 0) || 0,
+        };
+      },
+      { combos: [], totalCombos: 0, multiSkuOrders: 0 }
+    );
+  },
+
   fetchDashboardInventoryRisk(query?: { clientId?: number; active?: boolean; pageSize?: number }): Promise<{
     items: any[];
     total: number;

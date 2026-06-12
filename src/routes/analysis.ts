@@ -6,6 +6,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { activeClientPredicateSql, testOrInactiveClientPredicateSql } from '../lib/active-client-predicate';
+import { aggregateOrderComboSales } from '../services/combo-sales';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
 
@@ -727,6 +728,78 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
     totalSkus: enrichedRows.length,
     totalOrders: totalOrders[0]?.count ?? 0,
   };
+}
+
+// PS-213 — multi-SKU combination sales for the Dashboard "Combos" tab.
+// SAME scope/filters as getSkuBreakdownFromOrderItems (clientId, restricted
+// client/store scope, test-order + cancelled + active-client predicates,
+// date window) — only the aggregation differs: SQL fetches flat per-order
+// item lines and the PS-037 combo owner (via services/combo-sales) decides
+// what the combination IS. The SQL multi-SKU prefilter is an optimization
+// only — rows that collapse to a single normalized SKU in TS (e.g. "A " vs
+// "a") are dropped by the canonical isMultiSkuCombo, not double-counted.
+export async function getComboBreakdownFromOrderItems(
+  q: SkuBreakdownQuery & { limit?: number },
+) {
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
+  const cid: number | null = q.clientId ?? null;
+  const cancelledFilter = q.includeCancelled
+    ? sql`true`
+    : sql`coalesce(o.order_status, '') <> 'cancelled'`;
+  const testOrderFilter = q.hideTestOrders
+    ? sql`and not (
+        coalesce(c.is_test, false) = true
+        or coalesce(o.order_number, '') ilike 'TESTING-%'
+        or o.raw @> '{"test": true}'::jsonb
+        or o.raw @> '{"testing": true}'::jsonb
+      )`
+    : sql``;
+
+  const rows = await db.execute<{
+    order_id: number;
+    sku: string;
+    quantity: number;
+    unit_price: string | number | null;
+    name: string | null;
+  }>(sql`
+    select
+      o.id                                       as order_id,
+      oi.sku                                     as sku,
+      greatest(0, coalesce(oi.quantity, 0))::int as quantity,
+      coalesce(oi.unit_price, 0)::numeric        as unit_price,
+      coalesce(nullif(oi.name, ''), null)        as name
+    from order_items oi
+    join orders o on o.id = oi.order_id
+    left join clients c on c.id = o.client_id
+    where ${cancelledFilter}
+      and o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      ${testOrderFilter}
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and ${analysisOrderScopePredicate(q)}
+      and oi.quantity > 0
+      and oi.sku <> ''
+      and (o.client_id is null or ${sql.raw(activeClientPredicateSql('c'))})
+      and o.id in (
+        select oi2.order_id
+        from order_items oi2
+        where oi2.quantity > 0 and oi2.sku <> ''
+        group by oi2.order_id
+        having count(distinct lower(trim(oi2.sku))) >= 2
+      )
+  `);
+
+  return aggregateOrderComboSales(
+    rows.map((r) => ({
+      orderId: Number(r.order_id),
+      sku: r.sku,
+      quantity: Number(r.quantity),
+      unitPrice: r.unit_price,
+      name: r.name,
+    })),
+    { limit: q.limit, includeRevenue: q.canViewFinancials !== false },
+  );
 }
 
 async function getSkuBreakdown(q: SkuBreakdownQuery) {
