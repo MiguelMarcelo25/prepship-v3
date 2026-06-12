@@ -151,9 +151,15 @@ assert.ok(!/excelDayCell[\s\S]{0,200}toLocale/.test(routes),
 assert.ok(routes.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
   'XLSX response must carry the workbook MIME type');
 
-// Service layer: every ship_date bound is exclusive-upper; no <= anywhere.
+// Service layer: every ship_date bound is exclusive-upper; no <= anywhere —
+// in raw SQL (`<=`), drizzle sql-template (`shipDate} <=`), OR the drizzle
+// builder form (lte(...)) that a literal sweep misses.
 assert.ok(!/ship_date <= /.test(service) && !/shipDate} <= /.test(service),
   'services/billing.ts must not retain inclusive ship_date upper bounds');
+assert.ok(!/lte\(billingLineItems\.shipDate/.test(service),
+  'billingDetails must bound shipDate with lt(), not lte() (drizzle form)');
+assert.ok(/lt\(billingLineItems\.shipDate/.test(service),
+  'billingDetails must use the exclusive lt() upper bound');
 assert.ok(service.includes('and b.ship_date < ${fromIso') === false, 'sanity: lower bounds stay >=');
 assert.ok(/dateFrom: string; \/\/ ISO, UTC midnight, inclusive/.test(service),
   'GenerateInput must document the calendar-day bound semantics');

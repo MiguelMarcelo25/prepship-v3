@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import {
@@ -1493,7 +1493,9 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
     .where(
       and(
         gte(billingLineItems.shipDate, from),
-        lte(billingLineItems.shipDate, to),
+        // PS-208: `to` is the EXCLUSIVE day-after midnight — lt, never lte
+        // (the drizzle form the literal `<=` sweep missed).
+        lt(billingLineItems.shipDate, to),
         input.clientId !== undefined
           ? eq(billingLineItems.clientId, input.clientId)
           : undefined,
