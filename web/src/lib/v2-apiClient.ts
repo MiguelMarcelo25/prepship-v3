@@ -1130,42 +1130,15 @@ export const apiClient = {
   // dims inside /browse (PS-175/PS-178); zero FE callers remained. Pinned
   // removed by test:ps-159-apiclient-deadmethods.
   createLabel(payload: unknown): Promise<any> {
-    const body = payload && typeof payload === 'object'
-      ? (payload as Record<string, unknown>)
-      : {};
-    const shippingProviderId = parseFiniteNumber(body.shippingProviderId);
-    const directRef = directAccountRefFromProviderId(shippingProviderId);
-    const route = classifyLabelEndpoint(shippingProviderId);
-
-    // PS-078 req 7: a direct store_accounts (marketplace store) selected rate
-    // cannot create a label on either endpoint. BLOCK before any postage with a
-    // clear reason instead of falling through to ShipStation /labels as a bogus
-    // `se-20000xxx` id (which silently fails or hits the wrong carrier).
-    if (route === 'store-account-blocked') {
-      return Promise.reject(
-        new Error(
-          'This rate comes from a marketplace store account and can’t create a shipping label. Select a carrier-account rate (UPS / EasyPost / Shipp / Walmart Shipping) or a ShipStation rate.',
-        ),
-      );
-    }
-
-    // Direct carrier accounts use synthetic provider ids (10,000,000 + row id),
-    // not ShipStation carrier ids. Always route those labels through the
-    // Vercel direct-carrier label endpoint so ShipStation never receives
-    // non-existent ids like `se-10000025` or service codes like `shipp_*`.
-    if (route === 'carrier-direct' && directRef) {
-      return callVercelFunction<any>('/carriers/labels', {
-        method: 'POST',
-        body: {
-          ...body,
-          carrierAccountId: directRef.accountId,
-          dimsL: body.length ?? body.dimsL,
-          dimsW: body.width ?? body.dimsW,
-          dimsH: body.height ?? body.dimsH,
-        },
-      }).then(normalizeLabelResponse);
-    }
-
+    // PS-202: ONE label owner. Direct carrier-account purchases (synthetic
+    // 10M+/20M+ provider ids: Shipp, Walmart Shipping, direct UPS, EasyPost)
+    // now go through the SAME v4 POST /labels as ShipStation — createLabelV2
+    // resolves the account, applies the proof gate/safety/eligibility, buys
+    // via the carrier connector, and runs the identical persistence/deduction/
+    // confirmation tail. The legacy Vercel direct-label branch is deleted
+    // (that endpoint itself is decommissioned by PS-200). store_accounts rates
+    // (walmart_shipping) are now purchasable: createLabelV2 routes them to the
+    // marketplace shipping connector with the live-verified PO (PS-199).
     return api.post<any>('/labels', payload).then(normalizeLabelResponse);
   },
 

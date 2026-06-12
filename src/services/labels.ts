@@ -27,6 +27,12 @@ import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment
 import { packages } from '../db/schema/packages';
 import { createCarrierLabel, listCarrierAccounts } from './carrier-connector-orchestrator';
 import {
+  createDirectCarrierLabelForOrder,
+  directLabelAccountRefFromProviderId,
+  loadDirectAccountForLabel,
+} from './labels-direct';
+import { normalizeProviderKey } from '../lib/direct-carrier-scope';
+import {
   enqueueShipmentConfirmation,
   ensureFulfillmentSchema,
   inferStoreProvider,
@@ -1221,45 +1227,93 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     err.code = 'RATE_LABEL_RESIDENTIAL_MISMATCH';
     throw err;
   }
-  // Per user override unlock shipped data on 2026-06-06 (PS-106): carrier-family
-  // eligibility — a direct-store order must not buy postage through a ShipStation
-  // carrier account. This IS the ShipStation flow, so family = 'shipstation'. The
-  // policy defaults to audit_only (logs a would-block, never blocks); only when an
-  // operator sets the policy to `enforce` does this throw before the provider call.
-  await assertCarrierFamilyEligibleForPurchase({
-    carrierFamily: 'shipstation',
-    order,
-    orderId: order.id,
-  });
-  const creds = await loadClientCredentials(clientId);
-  const apiKeyV2 = creds.apiKeyV2 ?? undefined;
   if (!body.shippingProviderId) {
     throw new Error('shippingProviderId required for v2 label creation');
   }
-  const created = await timer.task('ShipStation createLabel connector', async () => {
-    const label = await createCarrierLabel('shipstation', {
-      apiKeyV2,
-      clientId,
-      storeId: order.storeId ?? null,
-      carrierId: `se-${body.shippingProviderId}`,
-      carrierCode: body.carrierCode ?? null,
-      serviceCode: body.serviceCode,
-      packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
-      weightOz: effectiveWeightOz,
-      length,
-      width,
-      height,
-      shipTo,
-      shipFrom,
-      confirmation: options.confirmation,
-      insuranceProvider: options.insuranceProvider,
-      insuredValue: options.insuredValue,
-      ssOrderId: order.id,
-      orderNumber: order.orderNumber ?? null,
-      testLabel: false,
+  // PS-202: direct carrier-account purchases (synthetic 10M+/20M+ provider ids:
+  // Shipp, Walmart Shipping, direct UPS, EasyPost) are now v4-owned. The SAME
+  // proof gate, shipping-safety, residential parity, and eligibility asserts
+  // above already ran; the SAME persistence/deduction/confirmation tail below
+  // runs unchanged — only the connector call differs. This retires the legacy
+  // Vercel api/carriers/labels path (deleted by PS-200), which skipped
+  // inventory/package deduction entirely.
+  const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);
+  let created: CreatedExternalLabel;
+  let directWalmartContext: Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>['walmartContext'] = null;
+  let directProviderKey: string | null = null;
+  if (directRef) {
+    // PS-106: this is the DIRECT family purchase boundary.
+    await assertCarrierFamilyEligibleForPurchase({
+      carrierFamily: 'direct',
+      order,
+      orderId: order.id,
     });
-    return label as CreatedExternalLabel;
-  });
+    const account = await loadDirectAccountForLabel(directRef, {
+      clientId: clientId ?? null,
+      storeId: order.storeId ?? null,
+    });
+    directProviderKey = normalizeProviderKey(account.provider);
+    const direct = await timer.task(`direct ${directProviderKey} createLabel connector`, () =>
+      createDirectCarrierLabelForOrder({
+        account,
+        providerAccountId: Number(body.shippingProviderId),
+        orderId: order.id,
+        orderNumber: order.orderNumber ?? null,
+        externalOrderId: order.externalOrderId ?? null,
+        clientId: clientId ?? null,
+        storeId: order.storeId ?? null,
+        serviceCode: body.serviceCode,
+        serviceName: body.serviceName ?? null,
+        weightOz: effectiveWeightOz,
+        length,
+        width,
+        height,
+        shipTo,
+        shipFrom,
+        shippingOptions: options,
+        rawOrder: order.raw ?? null,
+      }),
+    );
+    created = direct.created;
+    directWalmartContext = direct.walmartContext;
+  } else {
+    // Per user override unlock shipped data on 2026-06-06 (PS-106): carrier-family
+    // eligibility — a direct-store order must not buy postage through a ShipStation
+    // carrier account. This IS the ShipStation flow, so family = 'shipstation'. The
+    // policy defaults to audit_only (logs a would-block, never blocks); only when an
+    // operator sets the policy to `enforce` does this throw before the provider call.
+    await assertCarrierFamilyEligibleForPurchase({
+      carrierFamily: 'shipstation',
+      order,
+      orderId: order.id,
+    });
+    const creds = await loadClientCredentials(clientId);
+    const apiKeyV2 = creds.apiKeyV2 ?? undefined;
+    created = await timer.task('ShipStation createLabel connector', async () => {
+      const label = await createCarrierLabel('shipstation', {
+        apiKeyV2,
+        clientId,
+        storeId: order.storeId ?? null,
+        carrierId: `se-${body.shippingProviderId}`,
+        carrierCode: body.carrierCode ?? null,
+        serviceCode: body.serviceCode,
+        packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
+        weightOz: effectiveWeightOz,
+        length,
+        width,
+        height,
+        shipTo,
+        shipFrom,
+        confirmation: options.confirmation,
+        insuranceProvider: options.insuranceProvider,
+        insuredValue: options.insuredValue,
+        ssOrderId: order.id,
+        orderNumber: order.orderNumber ?? null,
+        testLabel: false,
+      });
+      return label as CreatedExternalLabel;
+    });
+  }
 
   const localShipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
     created,
@@ -1271,7 +1325,9 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     width,
     height,
     selectedPackageId: body.customPackageId ? String(body.customPackageId) : null,
-    source: 'prepship_v2',
+    // PS-202: direct purchases keep the legacy source attribution (shipments
+    // rows showed source='shipp'/'walmart_shipping') so billing/queries match.
+    source: directProviderKey ?? 'prepship_v2',
     insuranceProvider: options.insuranceProvider,
     insuredValue: options.insuredValue,
   }));
@@ -1287,9 +1343,20 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.
   const confirmationProvider = confirmationProviderForOrder(order);
-  const confirmationPayload = confirmationProvider
+  let confirmationPayload = confirmationProvider
     ? marketplaceConfirmationPayload(order, created, confirmationProvider)
     : baseConfirmationPayload(created);
+  // PS-202/PS-199: ShipStation-pulled Walmart orders have no purchaseOrderId in
+  // order.raw — the live-verified PO from the labels-mode resolver feeds the
+  // confirmation payload so the ship-confirm cannot fail like the PS-201 burst.
+  if (directWalmartContext && confirmationProvider === 'walmart') {
+    confirmationPayload = {
+      ...confirmationPayload,
+      ...(directWalmartContext.purchaseOrderId ? { purchaseOrderId: directWalmartContext.purchaseOrderId } : {}),
+      ...(directWalmartContext.rawOrder != null ? { rawOrder: directWalmartContext.rawOrder } : {}),
+      ...(directWalmartContext.storeAccountId != null ? { storeAccountId: String(directWalmartContext.storeAccountId) } : {}),
+    };
+  }
   try {
     // Per user override unlock shipped data on 2026-06-01: marketplace
     // confirmation enqueue failures must not block shipped-label queue recovery.

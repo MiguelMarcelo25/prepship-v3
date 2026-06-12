@@ -90,13 +90,30 @@ check('store_accounts id → blocked (never ShipStation se-20000xxx)', classifyL
 check('plain ShipStation id → Render', classifyLabelEndpointById(7381) === 'shipstation_render');
 check('null provider id → Render', classifyLabelEndpointById(null) === 'shipstation_render');
 
-// ── (4) Frontend wiring: createLabel must block store_accounts before postage ─
+// ── (4) Frontend wiring — PS-202: ONE label owner. createLabel posts ONLY to
+// v4 /labels; the Vercel /carriers/labels branch is deleted. The PS-078
+// store-account protection moved to the BACKEND structure: synthetic 10M+/20M+
+// ids resolve through labels-direct (scope-asserted via PS-083), and a
+// non-label-capable provider is rejected by the connector registry
+// (missingCarrierConnector) BEFORE any postage — store accounts can never
+// reach ShipStation as bogus se-20000xxx ids because directRef intercepts them.
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
-check('v2-apiClient uses classifyLabelEndpoint', /classifyLabelEndpoint\(/.test(apiClient));
-check('v2-apiClient blocks store-account-blocked before posting to /labels',
-  /store-account-blocked'\)?\s*\{[\s\S]{0,400}?Promise\.reject/.test(apiClient));
-check('v2-apiClient still routes carrier-direct to /carriers/labels',
-  /route === 'carrier-direct'[\s\S]{0,200}?\/carriers\/labels/.test(apiClient));
+const createLabelStart = apiClient.indexOf('createLabel(payload: unknown)');
+const createLabelBlock = apiClient.slice(createLabelStart, apiClient.indexOf('retrieveLabel(', createLabelStart));
+check('v2-apiClient createLabel posts ONLY to v4 /labels (no Vercel branch)',
+  createLabelStart >= 0 &&
+  /api\.post<any>\('\/labels', payload\)/.test(createLabelBlock) &&
+  !/carriers\/labels/.test(createLabelBlock) &&
+  !/callVercelFunction/.test(createLabelBlock));
+const labelsService = readFileSync('src/services/labels.ts', 'utf8');
+const labelsDirect = readFileSync('src/services/labels-direct.ts', 'utf8');
+check('backend createLabelV2 intercepts synthetic direct ids before the ShipStation call',
+  /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsService) &&
+  /carrierFamily: 'direct'/.test(labelsService));
+check('store_accounts ids resolve through the scope-asserted direct loader (never ShipStation)',
+  /DIRECT_STORE_PROVIDER_ID_OFFSET/.test(labelsDirect) &&
+  /sourceTable: 'store_accounts'/.test(labelsDirect) &&
+  /DIRECT_CARRIER_NOT_ASSIGNED/.test(labelsDirect));
 
 // ── (5) Exact-rate: non-test label payload must NOT pull stale order.bestRate ──
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');

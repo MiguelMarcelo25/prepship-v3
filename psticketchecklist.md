@@ -731,6 +731,34 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   delegates), backfill delegates + persists raw-amount DTO (kills double-markup), boundary tests
   at the owner ($9.27<$10.44 fixture, direct error ⇒ incomplete, charge-basis pick).
 
+- **PS-202 — ✅ CODE COMPLETE 2026-06-12 (test-mode verification + live canary pending DJ): direct
+  labels have ONE owner — v4 POST /labels.** Real postage for direct carrier-account rates (Shipp,
+  Walmart Shipping, direct UPS, EasyPost — synthetic 10M+/20M+ ids) was being purchased on the
+  LEGACY Vercel stack (forked auth verifier, separately-deployed money services, NO
+  inventory/package deduction). Shipped: NEW `src/services/labels-direct.ts`
+  (directLabelAccountRefFromProviderId 10M/20M mapping; loadDirectAccountForLabel with the PS-083
+  assignment-scope assert + structured DIRECT_CARRIER_NOT_ASSIGNED; createDirectCarrierLabelForOrder
+  porting the proven legacy connector input shapes — walmart_shipping gets the PS-199 LABELS-mode
+  context (live-verified PO or throw), the orchestrator's $0 test-mode seam is reachable, a missing
+  tracking number fails the purchase, and the connector result maps to CreatedExternalLabel with a
+  local numeric shipment id + provider id preserved in labelId). createLabelV2 intercepts synthetic
+  ids AFTER the PS-105 proof gate / PS-128-129 safety / residential parity and asserts the DIRECT
+  carrier family (PS-106), then the SAME persist/markShipped/DEDUCTION/confirmation tail runs —
+  closing the legacy deduction gap (direct labels now flow recordFulfillmentDeductions under
+  INVENTORY_AUTO_DEDUCT, one owner). Shipments keep legacy source attribution
+  (source='shipp'/'walmart_shipping'). Walmart confirmations get the live-verified PO + rawOrder +
+  storeAccountId injected into the outbox payload — the PS-201 INVALID_REQUEST_CONTENT failure
+  class for ShipStation-pulled orders is structurally closed. FE: apiClient.createLabel posts ONLY
+  to v4 /labels (the Vercel branch deleted; PS-078's store-account protection moved to backend
+  structure — non-label providers are rejected by the connector registry before postage; ps-078
+  guard re-pinned to the new world with documented reasons). Legacy endpoint left alive for
+  transition (PS-200 deletes it). Guard `test:ps-202-direct-label-owner` (12 checks). Noted
+  follow-item: the PS-078 compatibility-matrix module still labels the endpoint 'carrier_vercel' —
+  refresh its naming during PS-200. QA: typecheck + build:web + ps-202 + ps-078 +
+  direct-carrier-labels + full cert ALL PASS. **Verification remaining (DJ go-ahead):** one
+  test-mode ($0) Shipp + Walmart Shipping label through v4, field-by-field shipments-row compare
+  vs a legacy row, then ONE live canary per carrier.
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |
