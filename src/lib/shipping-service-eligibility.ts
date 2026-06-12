@@ -231,20 +231,26 @@ export type EffectiveInsurance = {
 };
 
 /**
- * PS-072 — single source of truth for the effective insurance on a shipment.
- * Both rate quoting and label purchase MUST call this so the displayed price and
- * the purchased label agree.
+ * PS-072 → PS-214 — single source of truth for the effective insurance on a
+ * shipment. Both rate quoting and label purchase MUST call this so the
+ * displayed price and the purchased label agree.
  *
  * Rules:
  *  - Non-HUGRAB context: pass the operator's selection through untouched.
- *  - HUGRAB + UPS Ground            -> parcelguard, $100 (or higher operator value).
- *  - HUGRAB + USPS Ground/Advantage -> parcelguard, $100 (or higher operator value).
- *  - HUGRAB + Ground Saver/SurePost -> NEVER defaulted (PS-057); operator value
- *    passed through (evaluateShippingServiceEligibility blocks insurance there).
- *  - HUGRAB + any other service     -> operator selection passed through.
+ *  - HUGRAB + ANY service           -> $100 coverage (or higher operator
+ *    value). PS-214: the old rule only forced UPS Ground + USPS Ground —
+ *    Shipp/FedEx/EasyPost ground-like services fell through to the operator
+ *    passthrough and order #1476 shipped a Shipp/FedEx label UNINSURED while
+ *    its rate fingerprint said parcelguard/$100. HUGRAB policy is "$100 on
+ *    every label", not "only insure UPS/USPS". ParcelGuard is third-party
+ *    coverage, so it needs NO carrier support; the capability resolver below
+ *    picks carrier declared value only where that is verified-valid.
+ *  - HUGRAB + Ground Saver/SurePost -> NEVER defaulted (PS-057); operator
+ *    value passed through (evaluateShippingServiceEligibility blocks the
+ *    service for HUGRAB anyway).
  *  - An operator-selected higher value (e.g. $250) is preserved via Math.max.
- *  - An operator selecting "none" on a HUGRAB ground service is still forced to
- *    the $100 default (HUGRAB policy).
+ *  - An operator selecting "none" on a HUGRAB service is still forced to the
+ *    $100 default (HUGRAB policy).
  */
 export function resolveEffectiveInsurance(
   context: ShippingServiceEligibilityContext | null | undefined,
@@ -266,10 +272,6 @@ export function resolveEffectiveInsurance(
   // insurance — never apply the default to them.
   if (isUpsGroundSaverOrSurePostService(service)) return passthrough;
 
-  const upsGround = isUpsGroundService(service);
-  const uspsGround = isUspsGroundService(service);
-  if (!upsGround && !uspsGround) return passthrough;
-
   const operatorValue = operator.insuredValue ?? 0;
   const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
   const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
@@ -284,14 +286,17 @@ export function resolveEffectiveInsurance(
     insuredValue,
   });
   const providerLabel = provider === 'carrier' ? 'carrier declared value' : 'Parcel Guard';
+  const serviceFamily = isUpsGroundService(service)
+    ? 'UPS Ground'
+    : isUspsGroundService(service)
+      ? 'USPS Ground'
+      : `${service?.carrierCode ?? service?.provider ?? 'carrier'} service`;
 
   return {
     insuranceProvider: provider,
     insuredValue,
     source: keptOperatorHigher ? 'operator' : 'hugrab-default',
-    reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance via ${providerLabel} (${
-      upsGround ? 'UPS Ground' : 'USPS Ground'
-    })`,
+    reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance via ${providerLabel} (${serviceFamily})`,
   };
 }
 

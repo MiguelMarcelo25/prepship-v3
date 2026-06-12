@@ -218,13 +218,14 @@ const sourceChecks: Array<[string, string[]]> = [
       'storeId',
     ],
   ],
+  // PS-209 re-anchor: the legacy Vercel label endpoint is a retired
+  // no-import 410 — it cannot buy postage, so the Ground-Saver eligibility
+  // gate there is moot (the v4 owner's gate is pinned above). The stub-shape
+  // pin keeps purchase machinery from creeping back.
   [
     'api/carriers/labels.ts',
     [
-      'assertShippingServiceEligible',
-      'store_id',
-      'serviceCode',
-      'serviceName: body?.serviceName ?? directServiceCode',
+      'LEGACY_LABEL_ENDPOINT_RETIRED',
     ],
   ],
   [

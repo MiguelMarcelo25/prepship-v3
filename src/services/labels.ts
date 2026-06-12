@@ -55,9 +55,14 @@ import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carr
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
+  isHugrabShippingContext,
+  isUpsGroundSaverOrSurePostService,
   resolveEffectiveInsurance,
   type ShippingServiceDescriptor,
 } from '../lib/shipping-service-eligibility';
+// PS-214: direct labels persist the PS-171 schedule premium when the
+// connector reports none (ParcelGuard is third-party — carriers don't bill it).
+import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost';
 import { loadShippingAutomationRules } from './shipping-automation';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
@@ -808,9 +813,31 @@ async function persistCreatedLabel(args: {
   // breakdown in `selectedRateJson` so the insured total is recoverable and auditable.
   // `cost`/`labelCost` stay postage-only so existing billing semantics are unchanged;
   // the billed total is cost + otherCost (mirrors ShipStation v1 shipmentCost+otherCost).
-  const insuranceCost = Number(created.insuranceCost ?? 0);
   const insuranceProvider = String(args.insuranceProvider ?? 'none').trim().toLowerCase();
   const insuredValue = Number(args.insuredValue ?? 0) || null;
+  // PS-214: direct-carrier connectors do not bill/report a ParcelGuard premium
+  // (it is third-party coverage) — a parcelguard-insured direct label persists
+  // the PS-171 schedule premium so the shipment's audit trail and billed total
+  // carry the real coverage cost instead of $0 (the order-#1476 class:
+  // otherCost=0.00 and no insurance fields on a "insured" Shipp/FedEx label).
+  // Carrier declared value within the free tier is genuinely $0 (confirmed).
+  const reportedInsuranceCost = Number(created.insuranceCost ?? 0);
+  const scheduledPremium =
+    insuranceProvider === 'parcelguard' && reportedInsuranceCost <= 0 && insuredValue != null
+      ? parcelGuardScheduledPremium(insuredValue, {
+          carrier_code: created.carrierCode ?? null,
+          service_code: created.serviceCode ?? null,
+        }) ?? 0
+      : 0;
+  const insuranceCost = reportedInsuranceCost > 0 ? reportedInsuranceCost : scheduledPremium;
+  const insuranceProvenance =
+    reportedInsuranceCost > 0
+      ? 'shipstation_v2_label'
+      : scheduledPremium > 0
+        ? 'parcelguard_schedule'
+        : insuranceProvider === 'carrier'
+          ? 'carrier_declared_value'
+          : 'none';
   const [row] = await db
     .insert(shipments)
     .values({
@@ -849,11 +876,12 @@ async function persistCreatedLabel(args: {
         cost: created.cost,
         shipmentCost: created.cost,
         otherCost: insuranceCost,
-        // PS-108 insured-total audit: postage + ParcelGuard premium = billed total.
+        // PS-108/PS-214 insured-total audit: postage + premium = billed total,
+        // persisted even when valid carrier declared value costs $0.00.
         insuranceProvider,
         insuredValue,
         insuranceCost,
-        insuranceProvenance: 'shipstation_v2_label',
+        insuranceProvenance,
         totalCost: Number((created.cost + insuranceCost).toFixed(2)),
       },
       voided: created.voided,
@@ -993,6 +1021,23 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     insuranceProvider: effectiveInsurance.insuranceProvider,
     insuredValue: effectiveInsurance.insuredValue,
   };
+  // PS-214 belt-and-braces: a HUGRAB label may NEVER buy uninsured. With the
+  // widened resolveEffectiveInsurance this is unreachable for purchasable
+  // services (Ground Saver/SurePost is blocked by eligibility below), but if
+  // a future resolver edit narrows coverage again this throws BEFORE postage
+  // instead of silently shipping bare (the order-#1476 class).
+  if (
+    isHugrabShippingContext({ clientId, storeId: order.storeId ?? null }) &&
+    options.insuranceProvider === 'none' &&
+    body.testLabel !== true &&
+    !isUpsGroundSaverOrSurePostService(serviceDescriptor)
+  ) {
+    const err = new Error(
+      'HUGRAB orders require $100 coverage on every label — the resolved insurance came back none, so no postage was purchased. Re-rate the order; if this repeats, the insurance resolver is misconfigured.'
+    ) as Error & { code?: string };
+    err.code = 'HUGRAB_INSURANCE_REQUIRED';
+    throw err;
+  }
   await assertLabelServiceEligibleForOrder(order, clientId, serviceDescriptor, options);
   // PS-186 — canonical test-label authority (test-label-policy.ts). isTest clients are
   // FORCED into offline-mock (a test row never spends real postage); a `testLabel: true`

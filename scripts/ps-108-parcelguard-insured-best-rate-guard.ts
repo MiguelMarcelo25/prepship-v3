@@ -237,8 +237,12 @@ const ctx100 = { insuranceProvider: 'parcelguard', insuredValue: 100 };
   check('selected-rate DTO preserves backend billed insurance add-on', selectedRateDto?.insuranceCost, 1.09);
   check('selected-rate DTO preserves backend billed total', selectedRateDto?.totalCost, 7.76);
 
-  const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-  check('OrdersView renders insurance add-on from backend DTO field', /insuranceCost/.test(ordersViewSrc) && /Insurance/.test(ordersViewSrc), true);
+  // PS-214 re-anchor: PS-177 moved the row money rendering into the shared
+  // orders-row-display module — the insurance add-on line lives there now
+  // (this pin was stale-at-base; `insuranceCost` is absent from OrdersView
+  // at 9420d3e7~1, well before this batch). Same pin, the actual renderer.
+  const rowDisplaySrc = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
+  check('orders-row-display renders insurance add-on from backend DTO field', /insuranceCost|insuranceAddOn/.test(rowDisplaySrc) && /Insurance/.test(rowDisplaySrc), true);
 }
 
 if (failures > 0) {

@@ -63,8 +63,18 @@ check('HUGRAB + SurePost -> not defaulted', pick(resolveEffectiveInsurance(HUGRA
 check('non-HUGRAB + UPS Ground -> no default', pick(resolveEffectiveInsurance(OTHER, upsGround, null)), { p: 'none', v: null, s: 'none' });
 check('non-HUGRAB + UPS Ground, operator carrier/100 -> passthrough', pick(resolveEffectiveInsurance(OTHER, upsGround, { insuranceProvider: 'carrier', insuredValue: 100 })), { p: 'carrier', v: 100, s: 'operator' });
 
-// --- HUGRAB non-ground service unaffected ---
-check('HUGRAB + UPS 2nd Day -> no default', pick(resolveEffectiveInsurance(HUGRAB, ups2day, null)), { p: 'none', v: null, s: 'none' });
+// --- PS-214 re-anchor: HUGRAB policy is $100 on EVERY service ---
+// The old case here certified "non-ground services get no default" — exactly
+// the gap that let order #1476 ship a Shipp/FedEx label uninsured while its
+// rate fingerprint said parcelguard/$100. DJ's policy: $100 coverage
+// required, full stop (Ground Saver/SurePost excepted — PS-057, pinned
+// above). UPS 2nd Day on the direct-UPS account resolves to carrier declared
+// value within the free $100 tier; non-UPS carriers resolve to ParcelGuard
+// (third-party — needs no carrier support).
+check('HUGRAB + UPS 2nd Day -> $100 default (PS-214: every service)', pick(resolveEffectiveInsurance(HUGRAB, ups2day, null)), { p: 'carrier', v: 100, s: 'hugrab-default' });
+const shippGroundLike = { carrierCode: 'shipp', serviceCode: 'fedex_ground', serviceName: 'FedEx Ground (Shipp)' };
+check('HUGRAB + Shipp/FedEx ground-like -> parcelguard/100 (the order-#1476 class)', pick(resolveEffectiveInsurance(HUGRAB, shippGroundLike, null)), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
+check('HUGRAB + Shipp, operator none -> still parcelguard/100', pick(resolveEffectiveInsurance(HUGRAB, shippGroundLike, { insuranceProvider: 'none', insuredValue: null })), { p: 'parcelguard', v: 100, s: 'hugrab-default' });
 
 // --- parcelguard normalization survives + does not collapse ---
 check('normalize parcelguard/100', normalizeInsurance({ insuranceProvider: 'parcelguard', insuredValue: 100 }), { insuranceProvider: 'parcelguard', insuredValue: 100 });

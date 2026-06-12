@@ -1515,3 +1515,42 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   SQL); B — queue create+queue atomicity certification (mocked crash-window recovery proof); PS-192
   (outbox-only shipped-external — awaiting unlock phrase); live certification matrix = DJ's PS-202
   canary. No postage, labels, marketplace notifications, or order/shipment mutations.
+
+### PS-214 — HUGRAB $100 insurance on EVERY quoted + purchased rate — DONE 2026-06-13
+- **✅ ROOT CAUSE (order #1476):** `resolveEffectiveInsurance` — the single label-side insurance owner —
+  only forced the HUGRAB $100 default for UPS Ground + USPS Ground and passed every other service
+  through as the operator's "none". A Shipp/FedEx label purchased through it shipped UNINSURED while
+  the rate fingerprint said ip=parcelguard/iv=10000 (the quote side was already right: PS-170's
+  `resolveHugrabRequestInsurance` had no service narrowing). **Fix at the owner:** the ground-only
+  narrowing is deleted — HUGRAB + ANY service now resolves $100 (operator-higher kept), with the
+  provider decided by the PS-170 capability resolver (direct UPS → carrier declared value, free ≤$100
+  tier; everything else → ParcelGuard, which is THIRD-PARTY coverage and needs no carrier support).
+  Ground Saver/SurePost stays excluded (PS-057 blocks the service itself). **✅ BELT-AND-BRACES:**
+  createLabelV2 now refuses to buy a HUGRAB label that somehow resolved uninsured
+  (`HUGRAB_INSURANCE_REQUIRED`, thrown BEFORE postage; test labels exempt). **✅ PERSIST AUDIT FIELDS
+  (the #1476 forensic gap):** persistCreatedLabel still stamps insuranceProvider/insuredValue into
+  shipments.selectedRateJson, and now prices the ParcelGuard schedule premium
+  (`parcelGuardScheduledPremium`) when a direct connector reports no insuranceCost, with explicit
+  `insuranceProvenance`: 'shipstation_v2_label' (provider-billed) / 'parcelguard_schedule' (scheduled
+  premium) / 'carrier_declared_value' (free $100 tier, $0.00 BY DESIGN — recorded, not absent) /
+  'none'. Quote-side premiums were already enriched on every candidate (PS-126/171
+  `enrichRatesWithInsuranceCost` at the single merge point) and fingerprints already carry ip/iv
+  (PS-170) — no cache invalidation needed. **Guard** `test:ps-214-hugrab-universal-insurance`: the
+  card's matrix — SS-native USPS → parcelguard/100; SS-walleted FedEx → parcelguard/100; direct UPS
+  2nd Day → carrier/100 + resolved premium; Shipp/FedEx (the #1476 class) → parcelguard/100 + REAL
+  schedule premium (provenance parcelguard_schedule); a 5-carrier sweep (easypost/shipengine/
+  walmart_shipping/unknown/ups_walleted) asserting NO HUGRAB candidate ever resolves uninsured or
+  <$100; Ground Saver passthrough; non-HUGRAB untouched; operator $250 kept; over-cap carrier →
+  ParcelGuard; + source pins (narrowing deleted, one resolve feeds both purchase branches, the
+  pre-purchase block, schedule-premium persist, provenance literals, direct connector carries
+  shippingOptions, rates.ts enrichment + request resolver). **Guards re-anchored (strictly stronger):**
+  ps-072 ("UPS 2nd Day → no default" certified the GAP — now expects carrier/100 + two new Shipp
+  cases), ps-108 (stale-at-base OrdersView pin → orders-row-display, where PS-177 moved the insurance
+  rendering — verified absent at the base commit before re-anchoring), ps-057 (legacy
+  api/carriers/labels.ts eligibility pins → the PS-209 410-stub reality). **QA:** typecheck + ps-214 +
+  ps-072 + ps-057 + ps-108 + ps-126 + ps-170 + ps-203 + ps-085 + guard:shipping-certification +
+  build:web + FULL shipping-roundtrip-certification (78/78 offline suites) ALL PASS. No postage, no
+  live labels, no marketplace notifications, no order/shipment mutations. **DJ live check:** quote any
+  HUGRAB order on a non-UPS/USPS service (e.g. FedEx/Shipp) — Rate Browser should show the +$0.99
+  insurance add-on on every candidate, and a purchased label's order detail should show the insurance
+  line; #1476-class labels can no longer purchase uninsured.
