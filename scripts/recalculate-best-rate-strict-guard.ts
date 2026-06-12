@@ -157,14 +157,12 @@ check('Rate card button is labeled Recalculate', />Recalculate</.test(ordersView
 check('Rate card Recalculate button calls recalculateBestRate, not openRateBrowser', /onClick=\{\(\) => void recalculateBestRate\(\)\}/.test(ordersView));
 
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
-const strictStart = apiClient.indexOf('updateOrderBestRateSelectionStrict(');
-const strictEnd = apiClient.indexOf('createManualOrder(', strictStart);
-const strictBlock = strictStart >= 0 && strictEnd > strictStart
-  ? apiClient.slice(strictStart, strictEnd)
-  : '';
-check('apiClient exposes strict best-rate selection updater', strictStart >= 0);
-check('strict updater uses direct api.patch', /api\.patch<any>\(`\/orders\/\$\{orderId\}`/.test(strictBlock));
-check('strict updater is not wrapped in safe fallback', !/safe\(/.test(strictBlock));
+// PS-179: the FE strict persisters (updateOrderBestRateSelectionStrict /
+// saveOrderDimsStrict) are DELETED — the backend persists inside /browse.
+// Their stays-deleted pins live in test:ps-159-apiclient-deadmethods.
+check('FE strict persister methods deleted from apiClient',
+  !/^  updateOrderBestRateSelectionStrict[ :(]/m.test(apiClient) &&
+  !/^  saveOrderDimsStrict[ :(]/m.test(apiClient));
 check('rate browse in-flight key includes insurance fields for strict request identity',
   /'insuranceProvider'/.test(apiClient) && /'insuredValue'/.test(apiClient));
 

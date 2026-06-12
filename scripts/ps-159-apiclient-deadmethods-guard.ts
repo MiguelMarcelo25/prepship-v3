@@ -14,12 +14,18 @@ import { join } from 'node:path';
 
 const FILE = 'web/src/lib/v2-apiClient.ts';
 const src = readFileSync(FILE, 'utf8');
+// PS-167 (safe-partial) moved the module-level leaf helpers into
+// ./v2-apiClient/shared.ts — the LIVE_MODULE_FNS pins read their new home.
+const sharedSrc = readFileSync('web/src/lib/v2-apiClient/shared.ts', 'utf8');
 
 const REMOVED = [
   'bulkSetInventoryPackageDefault', 'fetchClientDetail', 'fetchDashboardOrderSales', 'fetchInitData',
   'fetchInventoryDetail', 'fetchInventoryItemLedger', 'fetchLocationDetail', 'fetchLowStockPackages',
   'fetchOrderDetail', 'fetchOrderDims', 'fetchOrdersDailyCounts', 'fetchParentSkuDetail', 'fetchProducts',
   'fetchShipmentSyncStatus', 'saveProductDefaults', 'setToken', 'triggerShipmentSync', 'updateOrder', 'voidLabel',
+  // PS-179: FE strict persisters — the backend persists strict-recalc outcomes
+  // inside /browse (PS-175/PS-178); their last FE callers were deleted there.
+  'saveOrderDimsStrict', 'updateOrderBestRateSelectionStrict',
 ];
 // Live module-level functions (bare-called internally) that must survive.
 const LIVE_MODULE_FNS = ['clearCachedReads', 'fetchDirectCarrierAccountRows'];
@@ -53,7 +59,7 @@ for (const n of REMOVED) {
 // ── (2) the two live module-level helpers survive (bare-called internally; do NOT delete) ──
 for (const n of LIVE_MODULE_FNS) {
   check(`live module fn ${n}() retained (bare-called internally — not a dead method)`,
-    new RegExp(`function ${n}\\b`).test(src));
+    new RegExp(`function ${n}\\b`).test(src) || new RegExp(`function ${n}\\b`).test(sharedSrc));
 }
 
 if (failures > 0) {

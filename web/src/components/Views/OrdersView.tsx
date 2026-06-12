@@ -94,7 +94,6 @@ import {
   getSelectedRateCarrierNickname,
   getAwaitingDisplayAccountNickname,
   getSelectedRateShippingProviderId,
-  getMarkupAmount,
   getBackendInsuranceAddOn,
   getBackendRowMoney,
   renderRateAmountWithMarkup,

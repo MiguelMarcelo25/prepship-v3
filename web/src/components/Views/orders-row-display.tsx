@@ -360,9 +360,8 @@ export function getSelectedRateShippingProviderId(order: OrderSummaryDto) {
   )
 }
 
-export function getMarkupAmount(baseAmount: number, markedAmount: number) {
-  return markedAmount - baseAmount
-}
+// PS-179: getMarkupAmount removed — its last callers (the FE margin math)
+// were deleted in PS-178; the backend money tuple carries markupAmount.
 
 export function getBackendInsuranceAddOn(rate: unknown): number | null {
   const record = toRecord(rate)

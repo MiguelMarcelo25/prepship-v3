@@ -946,20 +946,9 @@ export const apiClient = {
     );
   },
 
-  updateOrderBestRateSelectionStrict(
-    orderId: number,
-    payload: {
-      selectedPid?: number | null;
-      bestRateJson: unknown | null;
-      bestRateDims?: string | null;
-    }
-  ): Promise<any> {
-    return api.patch<any>(`/orders/${orderId}`, {
-      ...(payload.selectedPid !== undefined ? { selectedPid: payload.selectedPid } : {}),
-      bestRateJson: payload.bestRateJson,
-      bestRateDims: payload.bestRateDims ?? null,
-    });
-  },
+  // PS-179: updateOrderBestRateSelectionStrict removed — the backend persists
+  // strict-recalc outcomes inside /browse (PS-175/PS-178); zero FE callers
+  // remained. Pinned removed by test:ps-159-apiclient-deadmethods.
 
   createManualOrder(payload: Record<string, unknown>): Promise<any> {
     return api.post<any>('/orders/manual', payload);
@@ -1137,32 +1126,9 @@ export const apiClient = {
   // Throws on failure — callers (OrdersView) use try/catch to surface toasts
   // and keep flow-control semantics intact. Other methods in this file return
   // safe fallbacks, but labels MUST surface errors to the UI.
-  saveOrderDimsStrict(
-    orderId: number,
-    dims:
-      | { l?: number; w?: number; h?: number; weightOz?: number }
-      | { length?: number; width?: number; height?: number; weightOz?: number }
-      | Record<string, unknown>
-  ): Promise<any> {
-    const anyDims = dims as Record<string, unknown>;
-    const rawL = anyDims.l ?? anyDims.length;
-    const rawW = anyDims.w ?? anyDims.width;
-    const rawH = anyDims.h ?? anyDims.height;
-    const l = parseFiniteNumber(rawL);
-    const w = parseFiniteNumber(rawW);
-    const h = parseFiniteNumber(rawH);
-    const weightOz =
-      anyDims.weightOz === undefined ? undefined : parseFiniteNumber(anyDims.weightOz);
-    const payload: Record<string, number> = {};
-    if (rawL != null && l != null) payload.l = l;
-    if (rawW != null && w != null) payload.w = w;
-    if (rawH != null && h != null) payload.h = h;
-    if (weightOz !== undefined && weightOz != null) payload.weightOz = weightOz;
-    return api
-      .post<{ data: any }>(`/orders/${orderId}/save-dims`, payload)
-      .then((r) => r.data);
-  },
-
+  // PS-179: saveOrderDimsStrict removed — the backend persists strict-recalc
+  // dims inside /browse (PS-175/PS-178); zero FE callers remained. Pinned
+  // removed by test:ps-159-apiclient-deadmethods.
   createLabel(payload: unknown): Promise<any> {
     const body = payload && typeof payload === 'object'
       ? (payload as Record<string, unknown>)

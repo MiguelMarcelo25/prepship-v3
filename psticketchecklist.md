@@ -629,10 +629,50 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   fresh best rate lands as its order resolves. Guard `test:recalculate-all-live` (6 checks). QA:
   recalculate-all-live + ps-120 (21 checks incl. new 2e') + ratchet + typecheck + build:web + full
   cert ALL PASS.
-- **PS-179 — Phase 7: Certification + boundary guards + safe dead-code cleanup.** Mocked/offline workflow
-  cert (Awaiting→finalized rate→RateBrowser→create-label mocked→print-queue→job status + blocked stale/dup/
-  shipped-cancelled), source-of-truth guards vs FE authority, perf sanity, evidence-backed dead-code deletion
-  ONLY after cert passes; final PS-172 closeout table. Dep: PS-173–178.
+- **PS-179 — ✅ COMPLETE 2026-06-12 (Phase 7): certification closeout + evidence-based dead-code pass.**
+  **Dead code deleted (evidence: zero member-access callers repo-wide + typecheck/build backstop):**
+  apiClient.saveOrderDimsStrict + apiClient.updateOrderBestRateSelectionStrict (the FE strict persisters —
+  last callers deleted in PS-178; added to the ps-159 REMOVED stays-deleted list) and
+  orders-row-display.getMarkupAmount (last callers were the deleted FE margin math).
+  recalculate-best-rate-strict's apiClient pins re-pointed to assert DELETION. Stale-anchor fix
+  surfaced by the pass: ps-159's two LIVE_MODULE_FNS pins still read the barrel though PS-167 moved
+  the helpers to shared.ts — re-anchored to read both (the guard isn't in the cert groups, so it had
+  been silently failing since the extraction).
+  **Workflow-cert coverage audit (the spec's flow → existing offline cert, no duplicate harness built):**
+  Awaiting→rate: checkpoint A/O/E (rate-system-hardening, best-rate-dims, order-readiness-preflight) +
+  the PS-172 contracts checkpoint (ps-173/174/175/196); RateBrowser: ps-135 re-rank + ps-123 display
+  (cert via workflow suites); create-label mocked: fixture-label-smoke + direct-carrier-labels +
+  test-order-queue-label; print-queue + job status: checkpoint G/H (durable/persistence/invalid-label/
+  ownership/client-scope/diagnostics) + ps-176/177 queue contracts; blocked stale/dup/shipped-cancelled:
+  order-editable-lockdown (checkpoint L) + ps-190 conflict codes + print-queue-hygiene decideShippingSafety
+  pins. All run inside test:workflow-suites → CI-gates Render deploys.
+  QA: typecheck + build:web + ps-159 + recalculate-best-rate-strict + ratchet + full cert ALL PASS.
+
+### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
+
+| Phase | Ticket | Outcome |
+|---|---|---|
+| 0 | PS-172 audit | Architecture audit doc; extend-never-parallel discipline set (ONE BestRateWorkflowDto) |
+| 1 | PS-173 ✅ | Backend row workflow DTO: rowState (9 states) + action verbs + display tuple (PS-165b absorbed) |
+| 2 | PS-174 ✅ | Rate-quote/key consolidation: backfill persists through finalizeBestRateWithQuote (proof chain) |
+| 3 | PS-175 ✅ | Strict recalc decision (pure rates-recalculate) + persistence (rates-recalculate-persist) on /browse |
+| 4 | PS-176 ✅ | queueRoute on the DTO; localStorage purchase authority eliminated (identifiers-only, resume never buys) |
+| 5 | PS-177 ✅ | Backend display models ×3: queue SKU identity, row money tuple, dims/package defaults |
+| 6 | PS-178 ✅ | FE-authority ratchet + contracts CI-gated; OrdersView decomposed (row-display readers, queue drawer, selection toolbar — 12,430→~11,400 lines); ALL awaiting FE fallbacks deleted |
+| 7 | PS-179 ✅ | Cert coverage mapped to the offline workflow cert; evidence-based dead-code pass (strict persisters, getMarkupAmount) |
+
+**What the frontend can no longer do:** pick best rates, apply markups to awaiting rows, decide or
+persist strict recalcs, derive queue SKU identity, derive dims defaults, route queue purchases from
+stale local state, or mint cache expiries — every one is a backend DTO field with a count-ceiling
+ratchet (`test:ps-178-fe-authority-ratchet`) and the full contract runs in CI
+(run-workflow-certification "PS-172" checkpoint) gating Render deploys.
+
+**Deliberate retentions (each documented in the ratchet, with its exit ticket):** the SHIPPED
+Selected-Rate markup call + display-resolver cascades (shipped rows carry bestRateWorkflow=null —
+exits with the shipped-row DTO phase), classifyQueueOrderRoute's live never-buy ladder (permanent
+safety), one fetchProductsBySku verification read, and the v2-apiClient barrel (PS-167 deliberate
+non-extraction). **Out-of-epic follow-ups:** PS-187 part 2 (after DJ's test-order parity check),
+direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–195 specs from DJ.
 
 ### Existing-card classification (to be finalized by the PS-172 plan doc)
 - **PS-120 / PS-121** → coordinate w/ Phase 3 rate workflow; **keep (shipped).**
