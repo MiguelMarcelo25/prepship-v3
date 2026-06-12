@@ -510,7 +510,30 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   QA: typecheck + build:web + ps-173 + ps-175 + ps-176 + ps-196 + ps-187-fixture + ps-183 +
   ps-123 + ps-135 + full cert ALL PASS. **Remaining parts:** effective package/dims/default
   source display. Read-model/additive throughout.
-- **PS-178 — 🟡 PART 1 DONE 2026-06-12 (Phase 6): FE-authority RATCHET + contracts CI-enforced.**
+- **PS-178 — 🟡 PARTS 1+2 DONE 2026-06-12 (Phase 6).**
+  **PART 2: row-display reader extraction (first OrdersView decomposition slice).** 43 symbols moved
+  VERBATIM from OrdersView to NEW `orders-row-display.tsx` (~370 lines): the DTO-reader primitives
+  (toRecord/toStringValue/toNumberValue/toNumericValue/toProviderAccountId/formatMoney/
+  normalizeShippingAccountName), the canonical-model readers (getCanonicalOrderModel/Record,
+  getShippingModel/String/Number/ProviderAccountId, getCanonicalSource*/getLegacyClientIdForDisplay,
+  getBestRateWorkflowModel), the pure carrier-account display lookups, the static
+  V2_CARRIER_ACCOUNT_REFS registry + resolveV2CarrierAccount/getV2CarrierAccountForOrder (PS-185
+  comments preserved), every getBestRate*/getSelectedRate* field reader, getAwaitingDisplay
+  AccountNickname, getMarkupAmount/getBackendInsuranceAddOn/getBackendRowMoney (PS-177), and the 3
+  stateless renderers (renderRateAmountWithMarkup/renderExtLabelBadge/renderMissingShipmentSyncBadge).
+  Component-state/live-accounts/isTestOrder consumers (getShipAccountDisplay,
+  getCarrierCodeForDisplay, date formatters, getQueueableLabelUrl) STAYED and import the readers —
+  one-way dependency. Module is @ts-nocheck with documented reason (verbatim extraction from the
+  @ts-nocheck source; strict-typing = its own later part, typing the DTO not the readers).
+  OrdersView 12,430 → 12,072 lines; ratchet ceiling lowered 12,500 → 12,150 in the same PR.
+  Guard re-anchors (same pins, new home, all documented in-file): batch-recalculate-best-rate
+  (3 definition slices → rowDisplay + getShipAccountDisplay end-anchor → its new neighbor), ps-185
+  (FE lookup/resolver pins → rowDisplay; the web/src-wide 1Z sweep already covers the new file),
+  ps-184 (pass-through pin → rowDisplay), ps-173 (service-tuple consumer pin → rowDisplay; carrier
+  consumer stayed). Leftover-definition sweep across all 43 names: clean (the @ts-nocheck crash-class
+  check). QA: typecheck + build:web + all 4 re-anchored guards + ps-177×2 + recalculate-all-live +
+  ps-176 + ps-196 + ratchet + full cert ALL PASS.
+  **PART 1: FE-authority RATCHET + contracts CI-enforced.**
   **Part 1 shipped:** `test:ps-178-fe-authority-ratchet` pins a COUNT CEILING on every remaining
   FE-authority fallback site (OrdersView applyCarrierMarkup ≤5, planStrictBestRateRecalculate ≤1 +
   parity def ≤1, saveOrderDimsStrict ≤1, updateOrderBestRateSelectionStrict ≤2,

@@ -128,6 +128,11 @@ check('finalized batch rows can render their current displayable rate',
   }) === 'ready');
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-178 (Phase 6, part 2): the row-display readers (getBestRateBaseCost /
+// getBestRateShippingProviderId / getBestRateServiceCode and friends) were
+// extracted VERBATIM to orders-row-display.tsx — the definition slices below
+// re-anchor there; the OrdersView call-site pins are unchanged.
+const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
 const batchStart = ordersView.indexOf('async function runBatchRecalculateOrder(');
 const batchEnd = ordersView.indexOf('\n  // PS-071', batchStart);
 const batchBlock = batchStart >= 0 && batchEnd > batchStart
@@ -163,17 +168,19 @@ check('Browse Rates modal owns strict live browse trigger',
 check('Browse Rates modal applies backend best-rate callback',
   /onBestRateResolved/.test(ordersView) && /const applied = best \? toAppliedRate\(best\) : null/.test(rateBrowserModalStart));
 
-const bestRateProviderStart = ordersView.indexOf('function getBestRateShippingProviderId(');
-const bestRateProviderEnd = ordersView.indexOf('\nfunction getBestRateServiceCode', bestRateProviderStart);
+const bestRateProviderStart = rowDisplay.indexOf('export function getBestRateShippingProviderId(');
+const bestRateProviderEnd = rowDisplay.indexOf('\nexport function getBestRateServiceCode', bestRateProviderStart);
 const bestRateProviderBlock = bestRateProviderStart >= 0 && bestRateProviderEnd > bestRateProviderStart
-  ? ordersView.slice(bestRateProviderStart, bestRateProviderEnd)
+  ? rowDisplay.slice(bestRateProviderStart, bestRateProviderEnd)
   : '';
 check('awaiting best-rate provider id wins over stale shipping metadata',
   /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateProviderBlock) &&
   /return\s+rateProviderId\s*\?\?\s*getShippingProviderAccountId\(order\)/.test(bestRateProviderBlock));
 
+// PS-178 part 2: getShipAccountDisplay STAYED in OrdersView (live accounts dep);
+// the function that used to follow it moved, so the end anchor is its new neighbor.
 const shippingDisplayStart = ordersView.indexOf('function getShipAccountDisplay(');
-const shippingDisplayEnd = ordersView.indexOf('\nfunction getShipAccountLabelById', shippingDisplayStart);
+const shippingDisplayEnd = ordersView.indexOf('\nfunction hasAuthoritativeProviderId', shippingDisplayStart);
 const shippingDisplayBlock = shippingDisplayStart >= 0 && shippingDisplayEnd > shippingDisplayStart
   ? ordersView.slice(shippingDisplayStart, shippingDisplayEnd)
   : '';
@@ -233,19 +240,19 @@ check('passive auto-rating drains the full queue at bounded concurrency after ca
   /const workerCount = Math\.min\(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue\.length\)/.test(passiveRunnerBlock) &&
   /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock));
 
-const bestRateBaseStart = ordersView.indexOf('function getBestRateBaseCost(');
-const bestRateBaseEnd = ordersView.indexOf('\nfunction getBestRateShippingProviderId', bestRateBaseStart);
+const bestRateBaseStart = rowDisplay.indexOf('export function getBestRateBaseCost(');
+const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateShippingProviderId', bestRateBaseStart);
 const bestRateBaseBlock = bestRateBaseStart >= 0 && bestRateBaseEnd > bestRateBaseStart
-  ? ordersView.slice(bestRateBaseStart, bestRateBaseEnd)
+  ? rowDisplay.slice(bestRateBaseStart, bestRateBaseEnd)
   : '';
 check('awaiting best-rate amount reads saved bestRate before stale canonical amount',
   /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateBaseBlock) &&
   bestRateBaseBlock.indexOf("order.orderStatus === 'awaiting_shipment'") < bestRateBaseBlock.indexOf("getShippingNumber(order, 'bestRateAmount')"));
 
-const bestRateServiceStart = ordersView.indexOf('function getBestRateServiceCode(');
-const bestRateServiceEnd = ordersView.indexOf('\nfunction getBestRateCarrierNickname', bestRateServiceStart);
+const bestRateServiceStart = rowDisplay.indexOf('export function getBestRateServiceCode(');
+const bestRateServiceEnd = rowDisplay.indexOf('\nexport function getBestRateCarrierNickname', bestRateServiceStart);
 const bestRateServiceBlock = bestRateServiceStart >= 0 && bestRateServiceEnd > bestRateServiceStart
-  ? ordersView.slice(bestRateServiceStart, bestRateServiceEnd)
+  ? rowDisplay.slice(bestRateServiceStart, bestRateServiceEnd)
   : '';
 check('awaiting best-rate service reads saved bestRate before stale canonical service',
   /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateServiceBlock) &&

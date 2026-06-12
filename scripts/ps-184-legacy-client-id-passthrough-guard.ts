@@ -42,10 +42,12 @@ const offenders = walk('web/src').filter((f) => /LEGACY_CLIENT_ID_BY_\w+\s*=\s*n
 check('no FE legacy client-id remap table anywhere in web/src', offenders.length === 0, offenders.join(', '));
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-178 (Phase 6, part 2): the pass-through moved VERBATIM to orders-row-display.tsx.
+const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
 check('getLegacyClientIdForDisplay passes the backend value through',
-  /function getLegacyClientIdForDisplay[\s\S]{0,500}return toNumericValue\(order\.legacyClientId\) \?\? toNumericValue\(order\.clientId\)/.test(ordersView));
+  /function getLegacyClientIdForDisplay[\s\S]{0,500}return toNumericValue\(order\.legacyClientId\) \?\? toNumericValue\(order\.clientId\)/.test(rowDisplay));
 check('no display-name-based legacy mapping remains',
-  !/LEGACY_CLIENT_ID_BY_DISPLAY_NAME/.test(ordersView));
+  !/LEGACY_CLIENT_ID_BY_DISPLAY_NAME/.test(ordersView) && !/LEGACY_CLIENT_ID_BY_DISPLAY_NAME/.test(rowDisplay));
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 check('backend resolveLegacyClientId owner unchanged',

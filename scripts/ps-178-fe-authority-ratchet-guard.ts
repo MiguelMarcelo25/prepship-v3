@@ -92,10 +92,11 @@ ceiling('OrdersView classifyQueueOrderRoute calls', count(ordersView, /classifyQ
 
 // ── decomposition ratchet: OrdersView must shrink, not grow ──────────────────
 {
+  // Part 2 (row-display extraction) lowered this from 12,500 → 12,150.
   const lineCount = ordersView.split('\n').length;
   check(
-    `OrdersView line count ${lineCount} ≤ 12500 (decomposition ratchet)`,
-    lineCount <= 12_500,
+    `OrdersView line count ${lineCount} ≤ 12150 (decomposition ratchet)`,
+    lineCount <= 12_150,
     'OrdersView grew past the Phase 6 ceiling. Extract components instead of adding inline; ' +
       'lower this ceiling in each decomposition part.',
   );

@@ -52,11 +52,14 @@ check('backend resolveV2CarrierAccountRef still owns the 1Z derivation',
 check('the derived attribution feeds the canonical provider pick',
   /resolvedCarrierAccount\?\.shippingProviderId[\s\S]{0,200}Derived from provider id, carrier code, tracking account number/.test(ordersRoute));
 
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-178 (Phase 6, part 2): the FE lookup + resolver moved VERBATIM to
+// orders-row-display.tsx — same pins, new home. The web/src-wide 1Z offender
+// sweep above already covers the new file.
+const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
 check('FE lookup reads the canonical shipping model id first',
-  /getV2CarrierAccountForOrder[\s\S]{0,300}getShippingProviderAccountId\(order\) \?\?/.test(ordersView));
+  /getV2CarrierAccountForOrder[\s\S]{0,300}getShippingProviderAccountId\(order\) \?\?/.test(rowDisplay));
 check('FE resolver no longer takes a tracking number',
-  /function resolveV2CarrierAccount\(\s*providerAccountId: number \| null,\s*carrierCode: string \| null,\s*clientId: number \| null,\s*\)/.test(ordersView));
+  /function resolveV2CarrierAccount\(\s*providerAccountId: number \| null,\s*carrierCode: string \| null,\s*clientId: number \| null,\s*\)/.test(rowDisplay));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-185 backend 1Z attribution guard (${failures} failing)`);
