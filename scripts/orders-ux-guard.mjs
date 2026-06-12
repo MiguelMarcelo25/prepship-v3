@@ -7,6 +7,10 @@ const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx'
 // render-only component — drawer-string pins read there; queue STATE pins stay
 // against OrdersView, which kept all queue state/derivations/handlers.
 const queueDrawerPath = path.join(root, 'web/src/components/Views/OrdersPrintQueueDrawer.tsx')
+// PS-178 (Phase 6, part 4): the selected-rows toolbar JSX moved VERBATIM to its
+// own render-only component (thin renderSelectionToolbar wrapper kept in
+// OrdersView) — toolbar-string pins read there.
+const selectionToolbarPath = path.join(root, 'web/src/components/Views/OrdersSelectionToolbar.tsx')
 const orderDetailDrawerPath = path.join(root, 'web/src/components/OrderDetailDrawer.tsx')
 // PS-157: useOrders split out of v2Hooks.ts into its own module; the
 // server-side SKU sort param ('sort: sortBy') now lives in useOrders.ts.
@@ -15,9 +19,10 @@ const ordersRoutePath = path.join(root, 'src/routes/orders.ts')
 const homePath = path.join(root, 'web/src/Home.tsx')
 const shellCssPath = path.join(root, 'web/src/app-shell.css')
 
-const [ordersView, queueDrawer, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss] = await Promise.all([
+const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(queueDrawerPath, 'utf8'),
+  readFile(selectionToolbarPath, 'utf8'),
   readFile(orderDetailDrawerPath, 'utf8'),
   readFile(v2HooksPath, 'utf8'),
   readFile(ordersRoutePath, 'utf8'),
@@ -37,7 +42,7 @@ const checks = [
   {
     name: 'selected-row actions render next to the orders table',
     pass:
-      ordersView.includes('data-testid="orders-selection-toolbar"') &&
+      selectionToolbar.includes('data-testid="orders-selection-toolbar"') &&
       ordersView.includes('{renderSelectionToolbar()}') &&
       shellCss.includes('.orders-selection-toolbar'),
   },
@@ -51,9 +56,9 @@ const checks = [
   {
     name: 'shipped and cancelled selections are status-appropriate',
     pass:
-      ordersView.includes('Queue Existing Labels') &&
-      ordersView.includes('Shipping actions disabled') &&
-      ordersView.includes('Cancelled orders can be selected for review or copy only.'),
+      selectionToolbar.includes('Queue Existing Labels') &&
+      selectionToolbar.includes('Shipping actions disabled') &&
+      selectionToolbar.includes('Cancelled orders can be selected for review or copy only.'),
   },
   {
     name: 'global topbar no longer owns visible selection actions',

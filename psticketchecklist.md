@@ -510,7 +510,20 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   QA: typecheck + build:web + ps-173 + ps-175 + ps-176 + ps-196 + ps-187-fixture + ps-183 +
   ps-123 + ps-135 + full cert ALL PASS. **Remaining parts:** effective package/dims/default
   source display. Read-model/additive throughout.
-- **PS-178 — 🟡 PARTS 1+2+3 DONE 2026-06-12 (Phase 6).**
+- **PS-178 — 🟡 PARTS 1–4 DONE 2026-06-12 (Phase 6).**
+  **PART 4: selection toolbar extraction.** renderSelectionToolbar's 156-line JSX body moved VERBATIM
+  (line-range splice) to NEW render-only `OrdersSelectionToolbar.tsx` (15 typed props); a thin
+  renderSelectionToolbar wrapper stays in OrdersView so the `{renderSelectionToolbar()}` call-site
+  pin survives untouched. ZERO batch logic moved — selection state, busy flags, and every handler
+  (handleBatchAction print/queue, handleBatchMarkAsShipped, queueExistingLabels, clearSelection)
+  stay in OrdersView (batch-safety guards keep their single owner). Free-identifier scan: clean.
+  OrdersView 11,727 → 11,593; ratchet ceiling lowered 11,800 → 11,650. Guard re-anchor: orders-ux
+  toolbar-string pins (data-testid, Queue Existing Labels, Shipping actions disabled, cancelled
+  review-only copy) → the component; the desktop batch-panel pins (handleBatchAction strings,
+  Mark as Shipped) still pass against OrdersView unchanged. QA: typecheck + build:web + orders-ux +
+  ratchet + full cert ALL PASS. **Remaining: final part — FE fallback deletions + ceiling lowering,
+  GATED on DJ's live verification (Best Rate/Margin money, panel auto-fill, Recalculate All
+  spinners, queue drawer) on prod.**
   **PART 3: Print Queue drawer extraction.** The 383-line drawer JSX block moved VERBATIM (line-range
   splice, not retyped) from OrdersView to NEW render-only `OrdersPrintQueueDrawer.tsx` (30 typed
   props). ZERO queue logic moved — all state, derived lists (groups/history/search), and handlers

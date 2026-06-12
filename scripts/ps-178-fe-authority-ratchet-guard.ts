@@ -94,10 +94,11 @@ ceiling('OrdersView classifyQueueOrderRoute calls', count(ordersView, /classifyQ
 {
   // Part 2 (row-display extraction) lowered this from 12,500 → 12,150.
   // Part 3 (Print Queue drawer extraction) lowered it to 11,800.
+  // Part 4 (selection toolbar extraction) lowered it to 11,650.
   const lineCount = ordersView.split('\n').length;
   check(
-    `OrdersView line count ${lineCount} ≤ 11800 (decomposition ratchet)`,
-    lineCount <= 11_800,
+    `OrdersView line count ${lineCount} ≤ 11650 (decomposition ratchet)`,
+    lineCount <= 11_650,
     'OrdersView grew past the Phase 6 ceiling. Extract components instead of adding inline; ' +
       'lower this ceiling in each decomposition part.',
   );
