@@ -371,7 +371,7 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
 export function createUpsCarrierConnector(): CarrierConnector {
   return {
     provider: 'ups',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromUps,
     createLabel: createLabelUps,
   };

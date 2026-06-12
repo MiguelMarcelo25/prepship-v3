@@ -148,7 +148,7 @@ async function ratesFromFedex(input: Record<string, unknown>): Promise<Array<{ s
 export function createFedexCarrierConnector(): CarrierConnector {
   return {
     provider: 'fedex',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromFedex,
     createLabel: async () => {
       throw new Error('FedEx labels are not implemented yet');

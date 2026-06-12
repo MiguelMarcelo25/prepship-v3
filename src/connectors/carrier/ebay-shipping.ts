@@ -194,7 +194,7 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
 export function createEbayShippingCarrierConnector(): CarrierConnector {
   return {
     provider: 'ebay_shipping',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromEbayShipping,
     createLabel: async () => {
       throw new Error('eBay Shipping labels are not implemented in the connector yet');

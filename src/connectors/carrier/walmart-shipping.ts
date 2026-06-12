@@ -1065,7 +1065,7 @@ async function createLabelWalmartShipping(input: Record<string, unknown>): Promi
 export function createWalmartShippingCarrierConnector(): CarrierConnector {
   return {
     provider: 'walmart_shipping',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromWalmartShipping,
     createLabel: createLabelWalmartShipping,
   };

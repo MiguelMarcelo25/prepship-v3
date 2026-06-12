@@ -233,7 +233,7 @@ async function ratesFromShipEngine(input: Record<string, unknown>): Promise<Arra
 export function createShipEngineCarrierConnector(): CarrierConnector {
   return {
     provider: 'shipengine',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromShipEngine,
     createLabel: async () => {
       throw new Error('ShipEngine labels are not implemented in the connector yet');

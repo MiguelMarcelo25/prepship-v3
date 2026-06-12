@@ -1554,3 +1554,47 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   HUGRAB order on a non-UPS/USPS service (e.g. FedEx/Shipp) — Rate Browser should show the +$0.99
   insurance add-on on every candidate, and a purchased label's order detail should show the insurance
   line; #1476-class labels can no longer purchase uninsured.
+
+### PS-211 — Universal, provider-aware label void connector — DONE 2026-06-13
+- **✅ ROOT CAUSE:** voidLabelV2 hardcoded ShipStation's void API for EVERY label — a direct-carrier
+  shipment (Shipp/Walmart Shipping/direct UPS/EasyPost) had its locally-SYNTHESIZED labelShipmentId
+  sent to ShipStation as if it were an SS shipment id, and a row with NO labelShipmentId skipped the
+  provider entirely and was voided LOCALLY while the postage stayed purchased at the provider (the
+  money leak the card targets). Nine connectors advertised 'labels.void' while exactly one
+  (shipstation) implemented voidLabel. **✅ DISPATCH BY OWNING PROVIDER:** new pure policy
+  `src/services/label-void-policy.ts` (zero imports, guard-testable) routes from row facts — test rows
+  (source 'test_offline' / is_test client) void locally (no provider label exists); ShipStation
+  purchases (source 'prepship_v2' + legacy null/'' sources) dispatch `voidCarrierLabel('shipstation')`
+  addressed by the NUMERIC SS shipment id (the connector now normalizes numeric ids so ssVoidShipment
+  applies the v2 `se-` prefix); direct purchases dispatch to THEIR provider (source column = the
+  PS-202 attribution) addressed by the provider-NATIVE label id, falling back to tracking number for
+  pre-PS-211 rows. **✅ LOCAL VOID ONLY AFTER PROVIDER SUCCESS** (the card's core invariant): the
+  single `voided:true` write + order reset to awaiting_shipment runs ONLY after the provider void
+  returns (or for test/local rows); provider error → 'provider_failed', the row stays ACTIVE.
+  **✅ CAPABILITY HONESTY:** connectorCapabilityMatrix + the 8 connector capability arrays no longer
+  advertise labels.void without an implementation — only shipstation advertises it; the orchestrator's
+  new `carrierConnectorSupportsVoid` classifies honest 'not_supported' BEFORE dispatch with an
+  operator-actionable message (void at the carrier portal; local record stays truthful).
+  **✅ STRUCTURED OUTCOMES:** VoidLabelResponseDto carries status
+  voided/already_voided/not_supported/provider_failed/not_voidable + provider + message;
+  already-voided is now an idempotent 200 (was a throw→400); route maps provider_failed→502,
+  not_supported/not_voidable→409. **✅ PROVIDER-NATIVE IDENTITY FORWARD:** persistCreatedLabel now
+  persists `providerLabelId` (created.labelId — the provider's string id) into
+  shipments.selectedRateJson so future direct voids dispatch on the real id, never the synthesized
+  local number. **Guard** `test:ps-211-universal-void`: dispatch-policy matrix (already_voided wins;
+  test→local; SS by numeric id; SS row w/o id → not_voidable — the old silent-local-void shape;
+  shipp→provider_label_id; walmart fallback→tracking; no-identity direct → not_voidable; synthesized
+  id NEVER the void key) + DYNAMIC capability honesty (matrix advertises labels.void IFF the registry
+  connector implements voidLabel — a future implementation must flip both or the guard fails) +
+  orchestrator rejects unsupported dispatch before any HTTP + source-ORDER pin (dispatch →
+  provider_failed exit → the ONE voided:true write LAST) + providerLabelId persist + route status
+  codes + npm wiring. **QA:** typecheck (both projects) + ps-211 + ps-078-connector-matrix +
+  connector-registry + connector-architecture + ps-032-boundary + ps-032-orchestrators +
+  direct-carrier-labels + store-connector-source + guard:shipping-certification + build:web + FULL
+  shipping-roundtrip-certification (78/78) ALL PASS. Mocked tests only — no real voids, no postage, no
+  marketplace notifications, no order/shipment mutations. **Card-vs-reality delta (reported honestly):**
+  no FE void button exists today (the dead v2-apiClient voidLabel was deleted in PS-159) — the void
+  surface is the API route; direct-provider void IMPLEMENTATIONS (Shipp/UPS/EasyPost/Walmart HTTP
+  calls) are follow-up work — the architecture now classifies them honestly as not_supported instead
+  of mis-dispatching to ShipStation, and the dynamic guard makes adding one a two-line flip
+  (implement voidLabel + re-add the capability).

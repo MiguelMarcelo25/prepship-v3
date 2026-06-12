@@ -111,7 +111,13 @@ export function createShipStationCarrierConnector(): CarrierConnector<
       return ssCreateLabel(input);
     },
     voidLabel: async (input) => {
-      await ssVoidShipment(input.labelId, (input as { apiKeyV2?: string }).apiKeyV2);
+      // PS-211: CarrierVoidInput.labelId arrives as a string. ShipStation
+      // shipment ids persisted locally are numeric — hand them to
+      // ssVoidShipment as numbers so it applies the `se-` prefix the v2 void
+      // endpoint requires. Already-prefixed ids pass through untouched.
+      const raw = String(input.labelId ?? '').trim();
+      const id = /^\d+$/.test(raw) ? Number(raw) : raw;
+      await ssVoidShipment(id, (input as { apiKeyV2?: string }).apiKeyV2);
     },
     // Tracking-driven queue retirement: delegate to the TrackingConnector
     // implementation (src/connectors/tracking/shipstation.ts) so the

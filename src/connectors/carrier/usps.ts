@@ -185,7 +185,7 @@ async function ratesFromUsps(input: Record<string, unknown>): Promise<Array<{ se
 export function createUspsCarrierConnector(): CarrierConnector {
   return {
     provider: 'usps',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromUsps,
     createLabel: async () => {
       throw new Error('USPS labels are not implemented yet');

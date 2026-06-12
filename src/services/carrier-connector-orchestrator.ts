@@ -107,6 +107,18 @@ export async function createCarrierLabel(
   };
 }
 
+/**
+ * PS-211 capability honesty: a provider "supports void" only when its
+ * connector both advertises labels.void in the capability matrix AND actually
+ * implements voidLabel. The service layer uses this to classify
+ * 'not_supported' BEFORE attempting a dispatch (instead of pattern-matching a
+ * thrown missing-connector message).
+ */
+export function carrierConnectorSupportsVoid(provider: string | null | undefined): boolean {
+  const resolved = resolveCarrierConnector(provider, 'labels.void');
+  return typeof resolved?.connector.voidLabel === 'function';
+}
+
 export async function voidCarrierLabel(
   provider: string | null | undefined,
   input: CarrierVoidInput,

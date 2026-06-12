@@ -231,7 +231,7 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
 export function createEasyPostCarrierConnector(): CarrierConnector {
   return {
     provider: 'easypost',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromEasyPost,
     createLabel: createLabelEasyPost,
   };

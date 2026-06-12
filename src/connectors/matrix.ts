@@ -21,15 +21,21 @@ export const connectorCapabilityMatrix: Record<ConnectorProvider, ConnectorCapab
     'products.import',
     'credentials.verify',
   ],
-  walmart_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  // PS-211 capability honesty: labels.void is advertised ONLY where the
+  // connector actually implements voidLabel (today: shipstation). Eight
+  // providers previously advertised void with no implementation — the
+  // orchestrator would resolve them and immediately throw. A provider that
+  // gains a real voidLabel implementation re-adds the capability here (the
+  // ps-211 guard cross-checks this matrix against the registry functions).
+  walmart_shipping: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
   shipp: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
-  easypost: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
-  ups: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
-  fedex: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
-  usps: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
-  shipengine: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
-  ebay_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
-  amazon_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  easypost: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
+  ups: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  fedex: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  usps: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  shipengine: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  ebay_shipping: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  amazon_shipping: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
   ebay: [
     'orders.import',
     'orders.statusSync',

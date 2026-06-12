@@ -208,15 +208,23 @@ app.post('/create-batch', zValidator('json', batchBody), async (c) => {
   }
 });
 
-// POST /labels/:shipmentId/void — void a label
+// POST /labels/:shipmentId/void — void a label at its OWNING provider.
+// PS-211: outcomes are structured statuses from the service ('voided' /
+// 'already_voided' succeed; 'not_supported' / 'not_voidable' / 'provider_failed'
+// leave the local record active). HTTP codes follow the status so callers and
+// scripts can branch without parsing message strings.
 app.post('/:shipmentId{[0-9]+}/void', async (c) => {
   const id = Number(c.req.param('shipmentId'));
   try {
     const result = await voidLabelV2(id);
-    return c.json(result);
+    const httpStatus =
+      result.status === 'provider_failed' ? 502
+      : result.status === 'not_supported' || result.status === 'not_voidable' ? 409
+      : 200;
+    return c.json(result, httpStatus);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    const status = message === 'Shipment not found' ? 404 : message === 'Label already voided' ? 400 : 500;
+    const status = message === 'Shipment not found' ? 404 : 500;
     return c.json({ error: message }, status);
   }
 });

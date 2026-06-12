@@ -9,7 +9,6 @@ import {
   ssCreateReturnLabel,
   ssGetShipmentV1,
   ssListRecentLabels,
-  ssVoidShipment,
   type CreatedExternalLabel,
   type ShipstationAddressInput,
 } from '../lib/shipstation/labels';
@@ -25,7 +24,17 @@ import {
 } from './mock-label-generator';
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
 import { packages } from '../db/schema/packages';
-import { createCarrierLabel, listCarrierAccounts } from './carrier-connector-orchestrator';
+import {
+  carrierConnectorSupportsVoid,
+  createCarrierLabel,
+  listCarrierAccounts,
+  voidCarrierLabel,
+} from './carrier-connector-orchestrator';
+import {
+  resolveLabelVoidDispatch,
+  voidNotSupportedMessage,
+  type LabelVoidOutcomeStatus,
+} from './label-void-policy';
 import {
   createDirectCarrierLabelForOrder,
   directLabelAccountRefFromProviderId,
@@ -326,17 +335,24 @@ export type CreateLabelResponseDto = {
   apiVersion: 'v2';
 };
 
+// PS-211: void outcomes are structured statuses, not throw-strings. 'voided'
+// and 'already_voided' are success-shaped (idempotent); 'not_supported',
+// 'not_voidable', and 'provider_failed' leave the LOCAL record untouched on
+// purpose — local void state is applied only after the provider void succeeds.
 export type VoidLabelResponseDto = {
-  success: true;
+  success: boolean;
+  status: LabelVoidOutcomeStatus;
+  provider: string;
+  message: string;
   shipmentId: number;
   orderNumber: string | null;
-  voided: true;
-  voidedAt: string;
+  voided: boolean;
+  voidedAt: string | null;
   trackingNumber: string | null;
   refundAmount: number | null;
-  refundInitiated: true;
-  refundEstimate: string;
-  note: string;
+  refundInitiated: boolean;
+  refundEstimate: string | null;
+  note: string | null;
 };
 
 export type ReturnLabelResponseDto = {
@@ -883,6 +899,12 @@ async function persistCreatedLabel(args: {
         insuranceCost,
         insuranceProvenance,
         totalCost: Number((created.cost + insuranceCost).toFixed(2)),
+        // PS-211: the provider-NATIVE label id (string — direct carriers don't
+        // use ShipStation's numeric id space). This is the identity a future
+        // provider void dispatches on; labelShipmentId can be a locally
+        // synthesized number for direct labels and must not be sent to a
+        // provider.
+        providerLabelId: created.labelId ?? null,
       },
       voided: created.voided,
       source: args.source,
@@ -1707,6 +1729,23 @@ async function createLabelFromOrderId(args: {
 
 // ── Void / Return / Retrieve ──────────────────────────────────────────────────
 
+/**
+ * PS-211 — universal, provider-aware label void.
+ *
+ * The previous implementation hardcoded ShipStation's void API for EVERY
+ * label: a direct-carrier shipment (Shipp/Walmart Shipping/direct UPS/
+ * EasyPost) would have its locally-synthesized labelShipmentId sent to
+ * ShipStation as if it were an SS shipment id — and a row with NO
+ * labelShipmentId skipped the provider entirely and was voided locally while
+ * the postage stayed purchased at the provider.
+ *
+ * Now: resolveLabelVoidDispatch routes by the row's owning provider
+ * (source column — the same attribution persistCreatedLabel writes), the
+ * orchestrator's capability check classifies honest 'not_supported', and the
+ * LOCAL void state is applied ONLY after the provider void succeeds (or for
+ * test/local rows that have no provider label). Provider failure leaves the
+ * row active and reports 'provider_failed' — never a silent local void.
+ */
 export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponseDto> {
   const [row] = await db
     .select()
@@ -1714,22 +1753,89 @@ export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponse
     .where(or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)))
     .limit(1);
   if (!row) throw new Error('Shipment not found');
-  if (row.voided) throw new Error('Label already voided');
 
   // Double guard: honor the explicit test_offline source marker AND verify
   // the shipment's client isn't flagged is_test (in case a test row was
   // somehow persisted with a real labelShipmentId).
   const clientIsTest = await loadClientIsTest(row.clientId);
-  if (row.source !== 'test_offline' && !clientIsTest && row.labelShipmentId) {
-    const creds = await loadClientCredentials(row.clientId);
+  const selectedRate = (row.selectedRateJson ?? null) as Record<string, unknown> | null;
+  const dispatch = resolveLabelVoidDispatch({
+    source: row.source ?? null,
+    labelShipmentId: row.labelShipmentId ?? null,
+    voided: !!row.voided,
+    trackingNumber: row.trackingNumber ?? null,
+    providerLabelId:
+      selectedRate && typeof selectedRate.providerLabelId === 'string' ? selectedRate.providerLabelId : null,
+    clientIsTest,
+  });
+
+  const baseResponse = {
+    shipmentId: row.id,
+    orderNumber: row.orderNumber,
+    trackingNumber: row.trackingNumber,
+  };
+  const failureShape = (status: LabelVoidOutcomeStatus, provider: string, message: string): VoidLabelResponseDto => ({
+    success: false,
+    status,
+    provider,
+    message,
+    ...baseResponse,
+    voided: false,
+    voidedAt: null,
+    refundAmount: null,
+    refundInitiated: false,
+    refundEstimate: null,
+    note: null,
+  });
+
+  if (dispatch.kind === 'already_voided') {
+    return {
+      success: true,
+      status: 'already_voided',
+      provider: String(row.source ?? 'shipstation'),
+      message: 'Label was already voided — nothing to do.',
+      ...baseResponse,
+      voided: true,
+      voidedAt: row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+      refundAmount: null,
+      refundInitiated: false,
+      refundEstimate: null,
+      note: null,
+    };
+  }
+
+  if (dispatch.kind === 'not_voidable') {
+    return failureShape('not_voidable', String(row.source ?? 'unknown'), dispatch.reason);
+  }
+
+  let provider = 'test_offline';
+  if (dispatch.kind === 'provider') {
+    provider = dispatch.provider;
+    if (!carrierConnectorSupportsVoid(dispatch.provider)) {
+      return failureShape('not_supported', dispatch.provider, voidNotSupportedMessage(dispatch.provider));
+    }
     try {
-      await ssVoidShipment(row.labelShipmentId, creds.apiKeyV2 ?? undefined);
+      const creds =
+        dispatch.provider === 'shipstation' ? await loadClientCredentials(row.clientId) : null;
+      await voidCarrierLabel(dispatch.provider, {
+        labelId: dispatch.voidKey,
+        trackingNumber: row.trackingNumber ?? null,
+        ...(creds?.apiKeyV2 ? { apiKeyV2: creds.apiKeyV2 } : {}),
+      } as Parameters<typeof voidCarrierLabel>[1]);
     } catch (err) {
-      // Surface the SS error but still record the local void — parity with v2 is to fail hard.
-      throw err;
+      const message = err instanceof Error ? err.message : 'Unknown provider error';
+      // The provider refused or errored — the label is still purchased there,
+      // so the local record stays ACTIVE (no silent local void).
+      return failureShape(
+        'provider_failed',
+        dispatch.provider,
+        `${dispatch.provider} void failed: ${message}. The label remains active locally — retry once the provider issue is resolved.`,
+      );
     }
   }
 
+  // Provider void succeeded (or this is a test/local row with no provider
+  // label) — NOW record the local void state and free the order for a new label.
   const now = new Date();
   await db
     .update(shipments)
@@ -1746,13 +1852,17 @@ export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponse
 
   return {
     success: true,
-    shipmentId: row.id,
-    orderNumber: row.orderNumber,
+    status: 'voided',
+    provider,
+    message:
+      dispatch.kind === 'local_test'
+        ? 'Test label voided locally (no provider label exists).'
+        : `Label voided at ${provider}.`,
+    ...baseResponse,
     voided: true,
     voidedAt: now.toISOString(),
-    trackingNumber: row.trackingNumber,
     refundAmount: row.labelCost ? Number(row.labelCost) : null,
-    refundInitiated: true,
+    refundInitiated: dispatch.kind === 'provider',
     refundEstimate: getRefundEstimate(row.carrierCode),
     note: 'Order status reset to "Awaiting Shipment"; you can create a new label.',
   };

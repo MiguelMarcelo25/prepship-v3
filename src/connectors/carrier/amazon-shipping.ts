@@ -189,7 +189,7 @@ async function ratesFromAmazonBuyShipping(input: Record<string, unknown>): Promi
 export function createAmazonShippingCarrierConnector(): CarrierConnector {
   return {
     provider: 'amazon_shipping',
-    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+    capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromAmazonBuyShipping,
     createLabel: async () => {
       throw new Error('Amazon Shipping labels are not implemented in the connector yet');
