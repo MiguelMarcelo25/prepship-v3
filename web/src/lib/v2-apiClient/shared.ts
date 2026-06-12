@@ -711,6 +711,9 @@ export function normalizeCarrierAccountDto(c: any, index = 0): any {
     code: carrierCode,
     _label: label,
     sourceClientName: c?.source_client_name ?? c?.sourceClientName,
+    // PS-216: backend-owned human disambiguator for duplicate nicknames
+    // ("USPS"/"UPS"/...). Display code must use this — never provider ids.
+    displayDisambiguator: c?.display_disambiguator ?? c?.displayDisambiguator ?? null,
   };
 }
 
@@ -880,6 +883,9 @@ export function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): 
     sourceTable: row.sourceTable ?? 'carrier_accounts',
     assignedClientIds: normalizeClientIdList(row.assignedClientIds),
     sourceClientName: 'Direct carrier accounts',
+    // PS-216: human provider label for duplicate-nickname disambiguation —
+    // synthetic direct ids must never surface as display suffixes.
+    displayDisambiguator: DIRECT_ACCOUNT_PROVIDER_LABELS[provider] ?? null,
   };
 }
 

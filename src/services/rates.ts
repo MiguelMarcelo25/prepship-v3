@@ -29,6 +29,8 @@ import {
   type AddressClassificationSource,
 } from './shipping-workflow/address-classification';
 import { KNOWN_CARRIER_ACCOUNTS, carrierIdForProvider, effectiveInsuranceProviderForAccount } from '../lib/carrier-account-registry';
+// PS-216: human carrier-family labels for duplicate-nickname disambiguation.
+import { carrierFamilyDisplayLabel } from '../lib/carrier-family-label';
 import {
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   describeShippingService,
@@ -852,6 +854,11 @@ export async function getCarrierAccountsForRateContext(
   return allowedCarriers.map((carrier) => ({
     ...carrier,
     friendly_name: carrier.nickname,
+    // PS-216: operator-safe disambiguator for duplicate nicknames — the Rate
+    // Browser shows "GREG PAYABILITY 6/17 (USPS)" / "(UPS)", never provider
+    // ids like se-442006. Owned here (the carriers-for-store read DTO) so the
+    // FE renders backend display facts instead of inventing labels from ids.
+    display_disambiguator: carrierFamilyDisplayLabel(carrier.carrier_code),
     source_client_id: context.sourceClientId,
     source_client_name: context.sourceClientName,
   }));

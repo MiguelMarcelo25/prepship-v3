@@ -89,6 +89,9 @@ export type RbCarrierAccountDto = {
   source?: string | null;
   sourceClientName?: string | null;
   directCarrierAccountId?: number | null;
+  // PS-216: backend-owned HUMAN disambiguator ("USPS"/"UPS"/provider label)
+  // for duplicate nicknames. Display code uses this — never provider ids.
+  displayDisambiguator?: string | null;
 };
 
 export type RbOrderSummaryDto = {
@@ -1705,11 +1708,41 @@ export default function RateBrowserModal({
     return counts;
   }, [rateShippingAccounts]);
 
+  // PS-216: duplicate nicknames disambiguate with HUMAN facts only — the
+  // backend-owned displayDisambiguator ("USPS"/"UPS"/provider label), with a
+  // same-shaped carrier-family fallback for deploy skew. The old suffix
+  // appended carrierId/directCarrierAccountId/shippingProviderId, which
+  // leaked se-442006-style provider ids into the HUGRAB sidebar. When no
+  // human label can be derived, show NO suffix — never an identifier.
+  const SIDEBAR_FAMILY_FALLBACK: Record<string, string> = {
+    stamps_com: 'USPS',
+    usps: 'USPS',
+    ups: 'UPS',
+    ups_walleted: 'UPS',
+    fedex: 'FedEx',
+    fedex_walleted: 'FedEx',
+    dhl_express: 'DHL',
+    shipp: 'Shipp',
+    easypost: 'EasyPost',
+    shipengine: 'ShipEngine',
+    walmart_shipping: 'Walmart Shipping',
+    ebay_shipping: 'eBay Shipping',
+    amazon_shipping: 'Amazon Shipping',
+    prepship_test: 'PrepShip Test',
+  };
+
+  function sidebarAccountDisambiguator(account: RbCarrierAccountDto): string | null {
+    const fromDto = toDisplayLabel(account.displayDisambiguator);
+    if (fromDto) return fromDto;
+    const code = String(account.carrierCode ?? account.code ?? '').trim().toLowerCase();
+    return SIDEBAR_FAMILY_FALLBACK[code] ?? null;
+  }
+
   function formatSidebarAccountDisplay(account: RbCarrierAccountDto): string {
     const label = formatAccountDisplay(account);
     if ((carrierDisplayCounts.get(label) ?? 0) <= 1) return label;
-    const suffix = account.carrierId ?? account.directCarrierAccountId ?? account.shippingProviderId;
-    return `${label} · ${suffix}`;
+    const family = sidebarAccountDisambiguator(account);
+    return family ? `${label} (${family})` : label;
   }
 
   function currentAppliedInsurance(): Pick<RbAppliedRate, 'insuranceProvider' | 'insuredValue'> {

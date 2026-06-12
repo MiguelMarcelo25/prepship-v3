@@ -186,6 +186,7 @@
     "test:ps-207-shipped-box-billing-policy": "tsx scripts/ps-207-shipped-box-billing-policy-guard.ts",
     "test:ps-208-billing-calendar-day-invoice-xlsx": "tsx scripts/ps-208-billing-calendar-day-invoice-xlsx-guard.ts",
     "test:ps-206-rate-browser-full-coverage": "tsx scripts/ps-206-rate-browser-full-coverage-guard.ts",
+    "test:ps-216-rate-browser-account-labels": "tsx scripts/ps-216-rate-browser-account-labels-guard.ts",
     "test:ps-205-package-facts-precedence": "tsx scripts/ps-205-package-facts-precedence-guard.ts",
     "test:ps-204-account-binding": "tsx scripts/ps-204-account-binding-guard.ts",
     "test:ps-202-direct-label-owner": "tsx scripts/ps-202-direct-label-owner-guard.ts",

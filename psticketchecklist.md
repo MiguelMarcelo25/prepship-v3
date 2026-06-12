@@ -1373,3 +1373,25 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   shipping-roundtrip-certification ALL PASS. **Acceptance:** no unconditional auto-persist on panel
   open ✓; all dims/package writes require the dirty flag ✓; backend suggestion DTO exists without
   writing (PS-178, pinned) ✓; guard passes ✓.
+
+### PS-216 — Rate Browser must not show provider IDs in carrier account names — DONE 2026-06-13
+- **✅ DONE:** duplicate account nicknames now disambiguate with HUMAN labels — "GREG PAYABILITY 6/17
+  (USPS)" / "(UPS)" — never "· se-442006". **Root cause:** formatSidebarAccountDisplay (added in the
+  5f1c9f33 hardening, made fully visible by the 858e7315 no-clamp + PS-206 full-universe changes)
+  appended `carrierId ?? directCarrierAccountId ?? shippingProviderId` to duplicate labels — right
+  intent (disambiguate), wrong display fact (technical ids). **Canonical owner:** NEW pure
+  `src/lib/carrier-family-label.ts` — `carrierFamilyDisplayLabel(code)` maps carrier codes to operator
+  labels (stamps_com→USPS, ups/ups_walleted→UPS, fedex/fedex_walleted→FedEx, direct providers →
+  provider names; unknown word-like codes prettify; ANYTHING id-like → null so an identifier can never
+  become a "label"). The carriers-for-store read DTO (`getCarrierAccountsForRateContext`) stamps it as
+  `display_disambiguator`; both FE normalizers carry it (`displayDisambiguator` — the direct-account
+  normalizer reuses the existing DIRECT_ACCOUNT_PROVIDER_LABELS human map); the sidebar formatter
+  consumes the DTO field with a same-shaped family-map fallback (deploy skew) and renders NO suffix when
+  no human label is derivable. Rate rows already used suffix-free formatAccountDisplay ✓. No eligibility/
+  scoping/proof/ranking changes — display/read-model only; PS-206 full scoped coverage untouched (guard
+  re-run ✓). **Guard** `test:ps-216-rate-browser-account-labels`: behavioral matrix on the pure module
+  (families, walleted variants, case-insensitivity, prettify, se-/numeric/synthetic → null) + source
+  pins (DTO stamp, both normalizers, the formatter block references NO id fields, the old `· ${suffix}`
+  template stays deleted, no-label → no-suffix, pure module stays zero-import). **QA:** typecheck +
+  build:web + ps-216 guard + ps-206 full-coverage guard ALL PASS. Browser eyeball (HUGRAB sidebar shows
+  "(USPS)"/"(UPS)") = DJ, next session.
