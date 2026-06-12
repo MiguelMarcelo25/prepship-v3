@@ -1,13 +1,30 @@
 /**
  * Guard: multi-SKU awaiting orders with complete SKU/product defaults must not
  * be stranded at "Rate unavailable" only because order-level package dims are
- * blank. The Orders panel should fetch all SKU defaults and derive conservative
- * shipment dims for the rate request form.
+ * blank.
+ *
+ * PS-205 re-anchor (2026-06-12, failing-at-base fix): the original pins
+ * required the FRONTEND to fetch every SKU default and derive stacked dims
+ * (deriveShipmentDimsFromProductDefaults inline in OrdersView + a per-SKU
+ * apiClient.fetchProductsBySku loop). PS-177 (Phase 5, part 3) moved that
+ * derivation BACKEND-side (order-dims-defaults / order-dims-defaults-policy →
+ * the detail payload's `dimsDefaults` block) and PS-178 deleted the FE loop —
+ * so this guard had been failing silently ever since, pinning code that no
+ * longer exists. Same intent, new owners:
+ *   • the stacking derivation lives in the PURE policy module,
+ *   • the panel consumes the backend dimsDefaults payload (no FE fetch loop,
+ *     no FE-derived dims policy),
+ *   • the by-SKU lookup (products row → complete inventory defaults) lives in
+ *     the shared backend resolver,
+ *   • PS-205: product-derived dims remain a FALLBACK below explicit combo
+ *     defaults in the canonical package-facts precedence.
  */
 import { readFileSync } from 'node:fs';
 
+const policy = readFileSync('src/services/order-dims-defaults-policy.ts', 'utf8');
+const resolver = readFileSync('src/services/order-dims-defaults.ts', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-const productsRoute = readFileSync('src/routes/products.ts', 'utf8');
+const factsPolicy = readFileSync('src/services/package-facts-policy.ts', 'utf8');
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -19,23 +36,24 @@ function check(name: string, condition: boolean) {
   }
 }
 
-const deriveStart = ordersView.indexOf('function deriveShipmentDimsFromProductDefaults');
-const deriveEnd = deriveStart >= 0 ? ordersView.indexOf('\n  function assertSavedProductDefaults', deriveStart) : -1;
-const deriveBlock = deriveStart >= 0 && deriveEnd > deriveStart ? ordersView.slice(deriveStart, deriveEnd) : '';
-
-const effectMarker = 'const activeItems = getActiveItems(panelOrder, panelDetail).filter((item) => item.sku)';
-const effectStart = ordersView.indexOf(effectMarker);
-const effectEnd = effectStart >= 0 ? ordersView.indexOf('\n  }, [panelOrderId, panelOrder, panelDetail, locations, packages])', effectStart) : -1;
-const effectBlock = effectStart >= 0 && effectEnd > effectStart ? ordersView.slice(effectStart, effectEnd) : '';
-
-check('derived shipment dims helper exists', deriveBlock.length > 0);
-check('derived dims use max item length', /Math\.max\(\.\.\.resolved\.map\(\(item\) => item\.length\)\)/.test(deriveBlock));
-check('derived dims use max item width', /Math\.max\(\.\.\.resolved\.map\(\(item\) => item\.width\)\)/.test(deriveBlock));
-check('derived dims stack item height by quantity', /item\.height \* item\.quantity/.test(deriveBlock));
-check('panel hydration fetches every active SKU default', /Promise\.all\([\s\S]*uniqueSkus\.map\([\s\S]*apiClient\.fetchProductsBySku\(sku\)/.test(effectBlock));
-check('panel hydration no longer bails out for multi-SKU orders', !/if\s*\(uniqueSkus\.length !== 1\)\s*\{\s*return\s*\}/.test(effectBlock));
-check('panel hydration applies derived dims only into blank fields', /derivedDims[\s\S]*nextLength[\s\S]*current\.length \|\| !derivedDims\?\.length/s.test(effectBlock));
-check('products by-sku falls back to complete inventory defaults', /complete shipping defaults fallback[\s\S]*\.from\(inventory\)/.test(productsRoute));
+check('derived shipment dims helper exists (backend pure policy owner)',
+  /export function deriveShipmentDimsFromProductDefaults/.test(policy));
+check('derived dims use max item length', /Math\.max\(\.\.\.resolved\.map\(\(item\) => item\.length\)\)/.test(policy));
+check('derived dims use max item width', /Math\.max\(\.\.\.resolved\.map\(\(item\) => item\.width\)\)/.test(policy));
+check('derived dims stack item height by quantity', /item\.height \* item\.quantity/.test(policy));
+check('backend resolves every active SKU default in ONE server-side pass (no FE fetch loop)',
+  /uniqueSkus\.map\(async \(sku\) => \(\{ sku, payload: await findProductDefaultsBySku\(sku\) \}\)\)/.test(resolver));
+check('panel consumes the backend dimsDefaults payload instead of deriving dims client-side',
+  /backendDimsDefaults/.test(ordersView) &&
+  /dims\/weight\/package defaults are\s*\n\s*\/\/ BACKEND-owned/.test(ordersView) &&
+  !/function deriveShipmentDimsFromProductDefaults/.test(ordersView) &&
+  !/fetchProductsBySku\(sku\)/.test(ordersView));
+check('products by-sku falls back to complete inventory defaults (shared backend lookup)',
+  /export async function findProductDefaultsBySku/.test(resolver) &&
+  /\.from\(inventory\)/.test(resolver) &&
+  /coalesce\(\$\{inventory\.weightOz\}, 0\) > 0/.test(resolver));
+check('PS-205: product-derived dims sit BELOW explicit combo defaults in the canonical precedence',
+  /if \(rungHasFacts\(input\.comboDefault\)\) return build\('combo_default', input\.comboDefault\);\s*\n\s*if \(rungHasFacts\(input\.singleSkuDefault\)\)/.test(factsPolicy));
 
 if (failures > 0) {
   console.error(`\nFAIL multi-SKU product dims rate fallback guard (${failures} failing)`);

@@ -858,6 +858,35 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   test:selected-rate-proof-boundary fails on stable with the PRE-EXISTING stale count (verified at
   base a40489ad) — its re-anchor rides the PS-204 PR branch.
 
+- [x] **PS-205** — Saved SKU/combo package defaults override imported weights/dims — ✅ CODE
+  COMPLETE 2026-06-12. Architecture placement: precedence is a PURE backend policy
+  (`package-facts-policy.ts`: override → combo_default → single_sku_default → imported-FALLBACK-ONLY;
+  bundle semantics, no cross-rung field mixing; source honesty — an override equal to the current
+  combo default reports 'combo_default', never a fake operator edit). THE structural fix:
+  **import-time materialization** — `materializePackageFactsForImportedOrders` runs inside
+  upsertNormalizedStoreOrders (the single persistence helper ALL order sources flow through), so a
+  saved combo default lands in order_overrides the moment a matching order imports — and since
+  EVERY reader (list row, panel, Rate Browser inputs, passive rating, Recalculate Selected/All,
+  print-queue payloads, create-label) already resolves `overrides.rate_* ?? orders.*`, one write
+  point closes every path; ShipStation re-importing 35oz can never out-rank the saved 31oz/12x10x3/
+  pkg-121 again. Write scope: awaiting_shipment ONLY (lockdown gate), rows with ANY existing
+  package-fact override skipped (operator edits + prior materializations sacred), live-label rows
+  skipped via READ-ONLY shipments EXISTS probe, only override package-fact columns written,
+  best-rate invalidation + pending stamp when a rate was saved off imported facts (mirrors the
+  PS-060/121 save flow, which is untouched). NEW `resolveOrderPackageFacts(orderId)` DTO
+  ({source, weightOz, dims, selectedPackageId, comboKey}) attached to BOTH detail handlers as
+  `packageFacts` (additive, source-honest panel display). Single-SKU rung delegates to the existing
+  qty-scoped dims-defaults owner; product-derived stacked dims sit BELOW explicit combo defaults by
+  construction. Guards: NEW test:ps-205-package-facts-precedence (23 checks covering all 10 card
+  proofs incl. HUGRAB 31-beats-35 fixture, qty/client scoping, shipped/labelled no-op, rate
+  invalidation, reader-precedence pins); multi-sku-product-dims-rate-fallback guard RE-ANCHORED
+  (was failing AT BASE since PS-177 moved the derivation backend — verified in a detached worktree
+  at 5720445f; now pins the backend policy/resolver owners + the PS-205 precedence position, per
+  the card's explicit instruction). QA: ps-205 + package-combo-key + combo-package-default + ps-060
+  + ps-082-unshipped-only + single-sku-qty-scope + multi-sku re-anchored + recalculate-strict +
+  batch-recalc + print-to-queue-proof + typecheck + build:web + FULL certification PASS.
+  Remaining (DJ eyeball): one HUGRAB sibling order re-synced after deploy showing 31 oz everywhere.
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |

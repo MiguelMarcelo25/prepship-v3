@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { replaceOrderItemsForExternalOrderIds } from './order-items';
+import { materializePackageFactsForImportedOrders } from './combo-package-defaults';
 import type { NormalizedOrderSource } from './normalized-order-persistence';
 
 export type NormalizedStoreOrder = {
@@ -108,11 +109,26 @@ export async function upsertNormalizedStoreOrders(
       },
     });
 
-  await replaceOrderItemsForExternalOrderIds(
-    rows
-      .map((row) => row.externalOrderId)
-      .filter((id): id is string => Boolean(id)),
-  );
+  const externalIds = rows
+    .map((row) => row.externalOrderId)
+    .filter((id): id is string => Boolean(id));
+  await replaceOrderItemsForExternalOrderIds(externalIds);
+
+  // PS-205: imported package facts are FALLBACK ONLY. After every import batch
+  // (this is the single persistence helper all order sources flow through),
+  // saved client combo defaults are materialized onto mutable awaiting rows
+  // that carry no operator/package-fact overrides — so a ShipStation re-import
+  // of a stale 35 oz can never out-rank the operator's saved 31 oz / 12x10x3
+  // combo default at any rating/label/list read site. Best-effort: a
+  // materialization failure never fails the sync itself.
+  try {
+    await materializePackageFactsForImportedOrders(externalIds);
+  } catch (err) {
+    console.warn(
+      '[store-order-import] package-facts materialization skipped:',
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   return rows.length;
 }

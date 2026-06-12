@@ -181,6 +181,7 @@
     "test:ps-199-walmart-po-resolution": "tsx scripts/ps-199-walmart-po-resolution-guard.ts",
     "test:ps-203-best-rate-universe": "tsx scripts/ps-203-best-rate-universe-guard.ts",
     "test:ps-206-rate-browser-full-coverage": "tsx scripts/ps-206-rate-browser-full-coverage-guard.ts",
+    "test:ps-205-package-facts-precedence": "tsx scripts/ps-205-package-facts-precedence-guard.ts",
     "test:ps-202-direct-label-owner": "tsx scripts/ps-202-direct-label-owner-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",

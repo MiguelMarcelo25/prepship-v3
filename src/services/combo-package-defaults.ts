@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { orderItems } from '../db/schema/order-items';
@@ -6,11 +6,18 @@ import {
   clientComboPackageDefaults,
   type ClientComboPackageDefault,
 } from '../db/schema/client-combo-package-defaults';
-import { computeComboKey, isMultiSkuCombo, type ComboItemInput } from '../lib/package-combo';
+import { computeComboKey, isMultiSkuCombo, normalizeComboItems, type ComboItemInput } from '../lib/package-combo';
 import {
   computeOrderRateJobFingerprint,
   setOrderRatePending,
 } from './shipping-workflow/order-rate-job-status';
+import {
+  resolvePackageFactsFromInputs,
+  rungHasFacts,
+  type EffectivePackageFacts,
+  type PackageFactsRung,
+} from './package-facts-policy';
+import { getOrderDimsDefaultsForOrder } from './order-dims-defaults';
 
 // PS-037 — Service for per-client SKU+qty-combination package defaults.
 //
@@ -291,4 +298,281 @@ export async function getComboPackageDefaultForOrder(
     weightOz: r.weightOz ?? null,
     comboKey: r.comboKey,
   };
+}
+
+// ─── PS-205: import-time materialization + the effective-facts resolver ──────
+//
+// ShipStation re-imports stale weights/dims on every sync (the upsert
+// overwrites orders.weight_oz unconditionally), and every rating/label/list
+// reader resolves `order_overrides.rate_* ?? orders.*`. So the ONE write that
+// protects every downstream path is: when an imported MUTABLE awaiting order
+// matches a saved client combo default and carries NO package-fact overrides
+// yet, materialize the default into order_overrides — imported data then loses
+// at every existing read site without touching any reader.
+
+const PACKAGE_FACTS_MATERIALIZE_SOURCE = 'combo_default' as const;
+
+function comboDefaultRung(row: Pick<ClientComboPackageDefault, 'packageId' | 'packageCode' | 'length' | 'width' | 'height' | 'weightOz'>): PackageFactsRung {
+  return {
+    weightOz: row.weightOz ?? null,
+    length: row.length ?? null,
+    width: row.width ?? null,
+    height: row.height ?? null,
+    selectedPackageId: selectedPackageIdFromComboInput({
+      packageId: row.packageId ?? null,
+      packageCode: row.packageCode ?? null,
+    }),
+  };
+}
+
+export type MaterializePackageFactsResult = {
+  examined: number;
+  materialized: number;
+  invalidatedOrderIds: number[];
+};
+
+/**
+ * PS-205 — apply saved combo defaults to freshly-imported orders.
+ *
+ * Strictly scoped writes:
+ *   • orderStatus = 'awaiting_shipment' ONLY (shipped/cancelled never touched —
+ *     the lockdown stays intact; this filter is the gate).
+ *   • Orders with ANY existing package-fact override (operator edit OR a prior
+ *     materialization) are SKIPPED — sync can never overwrite a human.
+ *   • Orders with a live (non-voided) shipment label are SKIPPED (read-only
+ *     EXISTS probe against shipments — labelled rows keep their facts).
+ *   • Only the package-fact override columns are written; every other override
+ *     field (selected_pid, residential, …) is preserved.
+ *   • If a skipped-rate row ALREADY had a saved best rate (rated between
+ *     import and materialization), the stale rate is invalidated exactly like
+ *     the explicit save-defaults flow (bestRateAt=null + pending stamp).
+ */
+export async function materializePackageFactsForImportedOrders(
+  externalOrderIds: string[],
+): Promise<MaterializePackageFactsResult> {
+  const ids = [...new Set(externalOrderIds.filter((id) => typeof id === 'string' && id.trim()))];
+  if (!ids.length) return { examined: 0, materialized: 0, invalidatedOrderIds: [] };
+
+  const candidates = await db
+    .select({
+      id: orders.id,
+      clientId: orders.clientId,
+      items: orders.items,
+      weightOz: orders.weightOz,
+      shipToPostalCode: orders.shipToPostalCode,
+      shipToState: orders.shipToState,
+      shipToCity: orders.shipToCity,
+      raw: orders.raw,
+      curDimsL: orderOverrides.rateDimsL,
+      curDimsW: orderOverrides.rateDimsW,
+      curDimsH: orderOverrides.rateDimsH,
+      curWeightOz: orderOverrides.rateWeightOz,
+      curPackageId: orderOverrides.selectedPackageId,
+      curBestRateAt: orderOverrides.bestRateAt,
+      // Read-only label probe (shipments reads are allowed; never written here).
+      hasActiveLabel: sql<boolean>`exists (
+        select 1 from shipments s
+        where s.order_id = ${orders.id} and coalesce(s.voided, false) = false
+      )`,
+    })
+    .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
+    .where(
+      and(
+        inArray(orders.externalOrderId, ids),
+        // Lockdown gate: mutable awaiting rows only.
+        eq(orders.orderStatus, 'awaiting_shipment'),
+      ),
+    );
+
+  let materialized = 0;
+  const invalidatedOrderIds: number[] = [];
+  const defaultsCache = new Map<string, ClientComboPackageDefault | null>();
+
+  for (const candidate of candidates) {
+    if (candidate.clientId == null) continue;
+    if (candidate.hasActiveLabel) continue;
+    // An operator edit OR a prior materialization already owns the facts.
+    const hasExistingFacts = rungHasFacts({
+      weightOz: candidate.curWeightOz,
+      length: candidate.curDimsL,
+      width: candidate.curDimsW,
+      height: candidate.curDimsH,
+      selectedPackageId: candidate.curPackageId ?? null,
+    });
+    if (hasExistingFacts) continue;
+
+    const items = await loadComboItems(candidate.id, candidate.items);
+    const comboKey = computeComboKey(items);
+    if (!comboKey) continue;
+
+    const cacheKey = `${candidate.clientId}:${comboKey}`;
+    let def = defaultsCache.get(cacheKey);
+    if (def === undefined) {
+      const [row] = await db
+        .select()
+        .from(clientComboPackageDefaults)
+        .where(
+          and(
+            eq(clientComboPackageDefaults.clientId, candidate.clientId),
+            eq(clientComboPackageDefaults.comboKey, comboKey),
+          ),
+        )
+        .limit(1);
+      def = (row as ClientComboPackageDefault | undefined) ?? null;
+      defaultsCache.set(cacheKey, def);
+    }
+    if (!def) continue;
+    const rung = comboDefaultRung(def);
+    if (!rungHasFacts(rung)) continue;
+
+    const set = {
+      selectedPackageId: rung.selectedPackageId ?? null,
+      rateDimsL: def.length ?? null,
+      rateDimsW: def.width ?? null,
+      rateDimsH: def.height ?? null,
+      rateWeightOz:
+        typeof def.weightOz === 'number' && Number.isFinite(def.weightOz) && def.weightOz > 0
+          ? def.weightOz
+          : null,
+      updatedAt: new Date(),
+      // A rate saved off the imported facts (between import and this pass) is
+      // stale for the materialized facts — same invalidation the explicit
+      // save-defaults flow performs.
+      ...(candidate.curBestRateAt != null ? { bestRateJson: null, bestRateAt: null, bestRateDims: null } : {}),
+    };
+    await db
+      .insert(orderOverrides)
+      .values({ orderId: candidate.id, ...set })
+      .onConflictDoUpdate({ target: orderOverrides.orderId, set });
+    materialized += 1;
+
+    if (candidate.curBestRateAt != null) {
+      invalidatedOrderIds.push(candidate.id);
+      try {
+        await setOrderRatePending(
+          candidate.id,
+          computeOrderRateJobFingerprint({
+            orderId: candidate.id,
+            weightOz: candidate.weightOz,
+            shipToPostalCode: candidate.shipToPostalCode,
+            shipToState: candidate.shipToState,
+            shipToCity: candidate.shipToCity,
+            rateDimsL: def.length ?? null,
+            rateDimsW: def.width ?? null,
+            rateDimsH: def.height ?? null,
+            raw: candidate.raw,
+          }),
+        );
+      } catch (err) {
+        console.warn(
+          '[package-facts] failed to stamp pending rate-job after materialization:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  if (materialized > 0) {
+    console.log(
+      `[package-facts] materialized ${PACKAGE_FACTS_MATERIALIZE_SOURCE} onto ${materialized}/${candidates.length} imported awaiting orders` +
+      (invalidatedOrderIds.length ? ` (invalidated stale rates: ${invalidatedOrderIds.join(', ')})` : ''),
+    );
+  }
+  return { examined: candidates.length, materialized, invalidatedOrderIds };
+}
+
+/**
+ * PS-205 — the canonical effective package facts for an order, with the
+ * precedence decided by the PURE policy (package-facts-policy.ts). Read-only;
+ * attached to the order detail payload as `packageFacts` so the panel / UI can
+ * tell the operator WHERE the weight/dims came from instead of mixing sources.
+ */
+export async function resolveOrderPackageFacts(orderId: number): Promise<EffectivePackageFacts | null> {
+  try {
+    const [row] = await db
+      .select({
+        id: orders.id,
+        clientId: orders.clientId,
+        items: orders.items,
+        weightOz: orders.weightOz,
+        raw: orders.raw,
+        curDimsL: orderOverrides.rateDimsL,
+        curDimsW: orderOverrides.rateDimsW,
+        curDimsH: orderOverrides.rateDimsH,
+        curWeightOz: orderOverrides.rateWeightOz,
+        curPackageId: orderOverrides.selectedPackageId,
+      })
+      .from(orders)
+      .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
+      .where(eq(orders.id, orderId))
+      .limit(1);
+    if (!row) return null;
+
+    const items = await loadComboItems(orderId, row.items);
+    const comboKey = computeComboKey(items);
+    const normalized = normalizeComboItems(items);
+
+    let comboDefault: PackageFactsRung | null = null;
+    if (row.clientId != null && comboKey) {
+      const [def] = await db
+        .select()
+        .from(clientComboPackageDefaults)
+        .where(
+          and(
+            eq(clientComboPackageDefaults.clientId, row.clientId),
+            eq(clientComboPackageDefaults.comboKey, comboKey),
+          ),
+        )
+        .limit(1);
+      if (def) comboDefault = comboDefaultRung(def as ClientComboPackageDefault);
+    }
+
+    // Rung 3 — TRUE single-SKU orders only (the dims-defaults owner already
+    // enforces the qty-scope rules); product-derived multi-SKU stacking stays
+    // a display/seed fallback BELOW any explicit combo default by position.
+    let singleSkuDefault: PackageFactsRung | null = null;
+    if (normalized.length === 1) {
+      const dd = await getOrderDimsDefaultsForOrder(orderId);
+      if (dd) {
+        singleSkuDefault = {
+          weightOz: dd.weightOz,
+          length: dd.dims?.length ?? null,
+          width: dd.dims?.width ?? null,
+          height: dd.dims?.height ?? null,
+          selectedPackageId: dd.packageId != null ? String(dd.packageId) : dd.defaultPackageCode,
+        };
+      }
+    }
+
+    // Imported dims live on the raw ShipStation payload (orders.raw.dimensions).
+    const rawRecord = row.raw && typeof row.raw === 'object' && !Array.isArray(row.raw)
+      ? (row.raw as Record<string, unknown>)
+      : null;
+    const importedDims = rawRecord?.dimensions && typeof rawRecord.dimensions === 'object' && !Array.isArray(rawRecord.dimensions)
+      ? (rawRecord.dimensions as { length?: unknown; width?: unknown; height?: unknown })
+      : null;
+    return resolvePackageFactsFromInputs({
+      override: {
+        weightOz: row.curWeightOz,
+        length: row.curDimsL,
+        width: row.curDimsW,
+        height: row.curDimsH,
+        selectedPackageId: row.curPackageId ?? null,
+      },
+      comboDefault,
+      singleSkuDefault,
+      imported: {
+        weightOz: row.weightOz,
+        length: importedDims?.length as number | null | undefined ?? null,
+        width: importedDims?.width as number | null | undefined ?? null,
+        height: importedDims?.height as number | null | undefined ?? null,
+        selectedPackageId: null,
+      },
+      comboKey,
+    });
+  } catch (err) {
+    console.warn('[package-facts] resolve skipped:', err instanceof Error ? err.message : err);
+    return null;
+  }
 }

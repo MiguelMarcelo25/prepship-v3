@@ -18,6 +18,7 @@ import { loadOrderTrackingSummary } from '../services/shipment-tracking';
 import { replaceOrderItemsForOrders } from '../services/order-items';
 import {
   getComboPackageDefaultForOrder,
+  resolveOrderPackageFacts,
   saveComboPackageDefault,
 } from '../services/combo-package-defaults';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
@@ -2565,6 +2566,11 @@ app.get('/:id{[0-9]+}', async (c) => {
     // data — replaces the panel's N-per-open /products/by-sku fetch loop. Null
     // when nothing resolvable; the loader swallows its own errors.
     dimsDefaults: await getOrderDimsDefaultsForOrder(id),
+    // PS-205: the CANONICAL effective package facts + their source
+    // ('override' | 'combo_default' | 'single_sku_default' | 'imported') so the
+    // panel can say where the weight/dims came from instead of mixing sources.
+    // Read-only; the loader swallows its own errors.
+    packageFacts: await resolveOrderPackageFacts(id),
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
     isTest: await loadClientIsTest(order.clientId),
     // Tracking-driven queue retirement: read-only carrier tracking summary for the
@@ -2607,6 +2613,8 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     comboPackageDefault,
     // PS-177 (Phase 5): same backend-owned dims/weight/package defaults as GET /:id.
     dimsDefaults: await getOrderDimsDefaultsForOrder(id),
+    // PS-205: same canonical effective package facts as GET /:id.
+    packageFacts: await resolveOrderPackageFacts(id),
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
     isTest: await loadClientIsTest(order.clientId),
     // Tracking-driven queue retirement: same read-only tracking summary as GET /:id.
