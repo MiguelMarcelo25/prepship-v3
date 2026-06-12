@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import {
+  billingBoxResolutions,
   billingConfig,
   billingLineItems,
   clientPackagePrices,
@@ -10,8 +11,18 @@ import { shipments } from '../db/schema/shipments';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
-import { inventory } from '../db/schema/inventory';
+// PS-207: the `inventory` import is deliberately GONE — billing must never
+// consult inventory/SKU package defaults (the storage-fee block reads
+// inventory via raw SQL for cubic-feet, which is not box resolution).
 import { SS_BASELINE_CARRIER_CODES } from './rates';
+import {
+  boxDimsKey,
+  decidePackageCostLine,
+  resolveShippedPackageId,
+  type BoxLookups,
+  type BoxPackage,
+  type OperatorBoxResolution,
+} from './billing-box-policy';
 import { resolveCarrierNickname } from './labels';
 import {
   getFreshBillingSummaryMetrics,
@@ -108,6 +119,34 @@ const billingShipDateSql = sql<Date | null>`date_trunc('day', coalesce(
   end,
   ${orders.orderDate}
 ) at time zone 'UTC') at time zone 'UTC'`;
+
+// ── PS-207 runtime schema ensure (mirrors drizzle/0043_billing_box_resolutions.sql;
+// same pattern as shipment-tracking.ts so API/worker both work pre-migration). ──
+let boxResolutionsEnsured: Promise<void> | null = null;
+
+export async function ensureBillingBoxResolutionsSchema(): Promise<void> {
+  boxResolutionsEnsured ??= (async () => {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS billing_box_resolutions (
+        id serial PRIMARY KEY,
+        order_id integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        shipment_id integer REFERENCES shipments(id),
+        package_id integer REFERENCES packages(id),
+        override_price numeric(10, 2),
+        note text,
+        resolved_by text,
+        resolved_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        CONSTRAINT billing_box_resolutions_order_unq UNIQUE (order_id)
+      )
+    `);
+    await db.execute(sql`ALTER TABLE billing_box_resolutions ENABLE ROW LEVEL SECURITY`);
+  })().catch((err) => {
+    boxResolutionsEnsured = null;
+    throw err;
+  });
+  return boxResolutionsEnsured;
+}
 
 function billingClientScopePredicate(input: GenerateInput): SQL {
   if (input.scopeIsGlobal === true) return sql`true`;
@@ -564,9 +603,6 @@ export async function generateLineItems(input: GenerateInput) {
       dimsH: shipments.dimsH,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
-      rateDimsL: orderOverrides.rateDimsL,
-      rateDimsW: orderOverrides.rateDimsW,
-      rateDimsH: orderOverrides.rateDimsH,
       orderId: orders.id,
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
@@ -621,9 +657,6 @@ export async function generateLineItems(input: GenerateInput) {
     dimsL: number | null;
     dimsW: number | null;
     dimsH: number | null;
-    rateDimsL: number | null;
-    rateDimsW: number | null;
-    rateDimsH: number | null;
     refUspsRate: string | null;
     refUpsRate: string | null;
     items: unknown[];
@@ -662,9 +695,6 @@ export async function generateLineItems(input: GenerateInput) {
         dimsH: row.dimsH,
         refUspsRate: row.refUspsRate,
         refUpsRate: row.refUpsRate,
-        rateDimsL: row.rateDimsL,
-        rateDimsW: row.rateDimsW,
-        rateDimsH: row.rateDimsH,
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
         externallyShipped: row.externallyShipped === true,
         externallyFulfilled: row.externallyFulfilled === true,
@@ -704,12 +734,14 @@ export async function generateLineItems(input: GenerateInput) {
   );
 
   // ─── B2 pre-fetch: packages + per-client package prices ──────────────────
-  // Three lookup maps for the resolvePackageId resolver:
-  //   packagesById     — shipment.selectedPid → package
-  //   packagesByCode   — shipment.selectedPackageId (text ShipStation code)
-  //   packagesByDims   — dims fallback when no explicit pid/code on shipment
-  // Pricing is keyed (clientId, packageId) with `isCustom` meaning "don't
-  // overwrite on set-default"; for computation both kinds are equal.
+  // PS-207: the billed box comes from the SHIPMENT'S RECORDED BOX ONLY,
+  // resolved by the pure policy module (billing-box-policy.ts — operator
+  // directive → selected pid/code → exact dims; mismatch/unresolved → review
+  // line). The pre-PS-207 fallbacks are deliberately GONE and must not come
+  // back: SKU/inventory package defaults, rounded-dims matching, and
+  // rate-dims resolution all billed boxes the parcel never shipped in
+  // (HKP audit: SP6754 billed a 12x10x3 it never used; SP6755/6759 billed
+  // $0.00 off an unpriced SKU-default box).
   const allPackages = await db
     .select({
       id: packages.id,
@@ -721,23 +753,20 @@ export async function generateLineItems(input: GenerateInput) {
     })
     .from(packages);
 
-  type PkgRow = (typeof allPackages)[number];
-  const packagesById = new Map<number, PkgRow>();
-  const packagesByCode = new Map<string, PkgRow>();
-  const packagesByDims = new Map<string, PkgRow>();
-  const packagesByRoundedDims = new Map<string, PkgRow>();
-  const dimsKey = (l: number, w: number, h: number): string =>
-    `${l}×${w}×${h}`;
-  const roundedDimsKey = (l: number, w: number, h: number): string =>
-    `${Math.round(l)}x${Math.round(w)}x${Math.round(h)}`;
+  const packagesById = new Map<number, BoxPackage>();
+  const packagesByCode = new Map<string, BoxPackage>();
+  const packagesByDims = new Map<string, BoxPackage>();
   for (const p of allPackages) {
     packagesById.set(p.id, p);
     if (p.packageCode) packagesByCode.set(p.packageCode, p);
-    if (p.length > 0 && p.width > 0 && p.height > 0) {
-      packagesByDims.set(dimsKey(p.length, p.width, p.height), p);
-      packagesByRoundedDims.set(roundedDimsKey(p.length, p.width, p.height), p);
-    }
+    const key = boxDimsKey(p.length, p.width, p.height);
+    if (key) packagesByDims.set(key, p);
   }
+  const boxLookups: BoxLookups = {
+    byId: packagesById,
+    byCode: packagesByCode,
+    byDims: packagesByDims,
+  };
 
   const clientIdsInScope = [...configByClient.keys()];
   const priceRows = clientIdsInScope.length
@@ -756,91 +785,17 @@ export async function generateLineItems(input: GenerateInput) {
     m.set(r.packageId, Number(r.price));
   }
 
-  const skuPackageRows = await db
-    .select({
-      clientId: inventory.clientId,
-      sku: inventory.sku,
-      packageId: inventory.packageId,
-    })
-    .from(inventory)
-    .where(eq(inventory.active, true));
-  const packageByClientSku = new Map<string, number>();
-  const packageBySku = new Map<string, number>();
-  for (const row of skuPackageRows) {
-    if (row.packageId === null) continue;
-    if (row.clientId !== null) {
-      packageByClientSku.set(`${row.clientId}:${row.sku}`, row.packageId);
-    }
-    if (!packageBySku.has(row.sku)) packageBySku.set(row.sku, row.packageId);
-  }
-
-  function packageIdFromItems(items: unknown[], clientId: number): number | null {
-    for (const it of items) {
-      if (!it || typeof it !== 'object') continue;
-      if ((it as { adjustment?: unknown }).adjustment === true) continue;
-      const sku = (it as { sku?: unknown }).sku;
-      if (typeof sku !== 'string' || !sku) continue;
-      const packageId =
-        packageByClientSku.get(`${clientId}:${sku}`) ?? packageBySku.get(sku);
-      if (packageId != null && packagesById.has(packageId)) return packageId;
-    }
-    return null;
-  }
-
-  function resolvePackageId(s: {
-    clientId: number;
-    items: unknown[];
-    selectedPid: number | null;
-    selectedPackageId: string | null;
-    dimsL: number | null;
-    dimsW: number | null;
-    dimsH: number | null;
-    rateDimsL: number | null;
-    rateDimsW: number | null;
-    rateDimsH: number | null;
-  }): number | null {
-    // v2 resolves billed box cost from SKU first, then shipment dims, then
-    // reference-rate dims. Selected package fields are only a v4 fallback.
-    {
-      const packageId = packageIdFromItems(s.items, s.clientId);
-      if (packageId != null) return packageId;
-    }
-    if (s.dimsL != null && s.dimsW != null && s.dimsH != null) {
-      const exact = packagesByDims.get(dimsKey(s.dimsL, s.dimsW, s.dimsH));
-      if (exact) return exact.id;
-      const rounded = packagesByRoundedDims.get(
-        roundedDimsKey(s.dimsL, s.dimsW, s.dimsH)
-      );
-      if (rounded) return rounded.id;
-    }
-    if (s.rateDimsL != null && s.rateDimsW != null && s.rateDimsH != null) {
-      const exact = packagesByDims.get(dimsKey(s.rateDimsL, s.rateDimsW, s.rateDimsH));
-      if (exact) return exact.id;
-      const rounded = packagesByRoundedDims.get(
-        roundedDimsKey(s.rateDimsL, s.rateDimsW, s.rateDimsH)
-      );
-      if (rounded) return rounded.id;
-    }
-    // 1. Explicit integer custom-package FK on the shipment.
-    if (s.selectedPid != null && packagesById.has(s.selectedPid)) {
-      return s.selectedPid;
-    }
-    // 2. Text code — could be numeric id stringified, or a ShipStation
-    //    package_code (e.g. "large_flat_rate_box"). Try both.
-    if (s.selectedPackageId) {
-      const asInt = Number.parseInt(s.selectedPackageId, 10);
-      if (Number.isFinite(asInt) && packagesById.has(asInt)) return asInt;
-      const byCode = packagesByCode.get(s.selectedPackageId);
-      if (byCode) return byCode.id;
-    }
-    const bySku = packageIdFromItems(s.items, s.clientId);
-    if (bySku != null) return bySku;
-    // 3. Exact dims match (v2 makeDimsKey parity — unsorted, verbatim).
-    if (s.dimsL != null && s.dimsW != null && s.dimsH != null) {
-      const match = packagesByDims.get(dimsKey(s.dimsL, s.dimsW, s.dimsH));
-      if (match) return match.id;
-    }
-    return null;
+  // PS-207: operator review resolutions — explicit directives that persist
+  // across regeneration (this DELETE/INSERT cycle never touches the table).
+  await ensureBillingBoxResolutionsSchema();
+  const resolutionRows = await db.select().from(billingBoxResolutions);
+  const resolutionByOrderId = new Map<number, OperatorBoxResolution>();
+  for (const r of resolutionRows) {
+    resolutionByOrderId.set(r.orderId, {
+      packageId: r.packageId,
+      overridePrice: r.overridePrice != null ? Number(r.overridePrice) : null,
+      note: r.note,
+    });
   }
 
   let generated = 0;
@@ -863,6 +818,10 @@ export async function generateLineItems(input: GenerateInput) {
     qty: string;
     unitCost: string;
     totalCost: string;
+    // PS-207: the package this order was BILLED as (resolver outcome or
+    // operator directive). Stamped on every line of the order so the Box
+    // Size column in billing details always shows the billed box.
+    packageId: number | null;
   };
   const allRows: LineRow[] = [];
 
@@ -880,6 +839,22 @@ export async function generateLineItems(input: GenerateInput) {
 
     const rows: LineRow[] = [];
 
+    // ─── PS-207: shipped-box resolution (canonical: billing-box-policy.ts) ──
+    // Operator directive → selected pid/code (dims-coherent) → exact dims.
+    // The outcome feeds the package_cost block below AND stamps packageId on
+    // every line of the order so the billed box is what details display.
+    const boxResolution = resolveShippedPackageId({
+      operator: s.orderId != null ? resolutionByOrderId.get(s.orderId) ?? null : null,
+      selectedPid: s.selectedPid,
+      selectedPackageId: s.selectedPackageId,
+      dimsL: s.dimsL,
+      dimsW: s.dimsW,
+      dimsH: s.dimsH,
+      lookups: boxLookups,
+    });
+    const billedPackageId =
+      boxResolution.status === 'resolved' ? boxResolution.packageId : null;
+
     const pickPackFee = toNum(cfg.pickPackFee);
     if (pickPackFee > 0) {
       rows.push({
@@ -893,6 +868,7 @@ export async function generateLineItems(input: GenerateInput) {
         qty: '1',
         unitCost: pickPackFee.toFixed(2),
         totalCost: pickPackFee.toFixed(2),
+        packageId: billedPackageId,
       });
     }
 
@@ -922,6 +898,7 @@ export async function generateLineItems(input: GenerateInput) {
         qty: String(extraUnits),
         unitCost: additionalUnitFee.toFixed(2),
         totalCost: extraCost.toFixed(2),
+        packageId: billedPackageId,
       });
     }
 
@@ -957,6 +934,7 @@ export async function generateLineItems(input: GenerateInput) {
         qty: '1',
         unitCost: shipCost.toFixed(2),
         totalCost: shipCost.toFixed(2),
+        packageId: billedPackageId,
       });
     } else if (s.externallyShipped || s.externallyFulfilled || s.id === null) {
       rows.push({
@@ -970,35 +948,55 @@ export async function generateLineItems(input: GenerateInput) {
         qty: '1',
         unitCost: '0.00',
         totalCost: '0.00',
+        packageId: billedPackageId,
       });
     }
 
-    // ─── Package cost (gap B2) ──────────────────────────────────────────────
-    // Resolve which custom package was used on this shipment (selectedPid →
-    // selectedPackageId → dims match), look up the client's price for it,
-    // then emit a package_cost line. packageCostMarkup on the billing config
-    // is applied as a percent on top of the base price.
-    const resolvedPkgId = resolvePackageId({ ...s, clientId });
-    if (resolvedPkgId != null) {
-      const basePrice = pricesByClient.get(clientId)?.get(resolvedPkgId);
-      if (basePrice != null && basePrice > 0) {
-        const markupPct = toNum(cfg.packageCostMarkup);
-        const effectivePrice = basePrice * (1 + markupPct / 100);
-        const pkgName =
-          packagesById.get(resolvedPkgId)?.name ?? `Box #${resolvedPkgId}`;
-        rows.push({
-          clientId,
-          orderId: s.orderId,
-          orderNumber: s.orderNumber,
-          shipmentId: s.id,
-          shipDate: s.shipDate,
-          lineType: 'package_cost',
-          description: `Box (${pkgName})`,
-          qty: '1',
-          unitCost: effectivePrice.toFixed(2),
-          totalCost: effectivePrice.toFixed(2),
-        });
-      }
+    // ─── Package cost (PS-207: shipment box ONLY, review when unsure) ───────
+    // The DECISION (gate on configured box pricing, override-vs-configured
+    // pricing, review emission) is owned by decidePackageCostLine in
+    // billing-box-policy.ts — this block only translates it into a LineRow.
+    const clientPrices = pricesByClient.get(clientId);
+    const packageCostDecision = decidePackageCostLine({
+      resolution: boxResolution,
+      clientHasBoxPricing: (clientPrices?.size ?? 0) > 0,
+      configuredPrice:
+        boxResolution.status === 'resolved' && boxResolution.packageId != null
+          ? clientPrices?.get(boxResolution.packageId)
+          : undefined,
+      markupPct: toNum(cfg.packageCostMarkup),
+    });
+    if (packageCostDecision.kind === 'line') {
+      rows.push({
+        clientId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber,
+        shipmentId: s.id,
+        shipDate: s.shipDate,
+        lineType: 'package_cost',
+        description: `Box (${packageCostDecision.pkgName})`,
+        qty: '1',
+        unitCost: packageCostDecision.amount.toFixed(2),
+        totalCost: packageCostDecision.amount.toFixed(2),
+        packageId: billedPackageId,
+      });
+    } else if (packageCostDecision.kind === 'review') {
+      // Mismatch or unresolved — explicit $0.00 review line (mirrors the
+      // shipping_missing pattern). Stays $0.00 until the operator resolves
+      // it via billing_box_resolutions; never inflates totals.
+      rows.push({
+        clientId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber,
+        shipmentId: s.id,
+        shipDate: s.shipDate,
+        lineType: 'package_cost_missing',
+        description: packageCostDecision.description,
+        qty: '1',
+        unitCost: '0.00',
+        totalCost: '0.00',
+        packageId: null,
+      });
     }
 
     // Collect for batch insert instead of inserting one at a time.
@@ -1668,6 +1666,11 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const lineType = row.lineType ?? '';
       const isShippingLine = lineType === 'shipping';
       const isMissingShippingLine = lineType === 'shipping_missing';
+      // PS-207: $0.00 box review line — the shipped box could not be resolved
+      // to a known package (or selected box and shipment dims disagree). The
+      // FE renders a NEEDS REVIEW chip from these flags; it does no policy
+      // math of its own.
+      const isBoxReviewLine = lineType === 'package_cost_missing';
       const stalePackagePrice =
         lineType === 'package_cost' &&
         row.createdAt != null &&
@@ -1743,6 +1746,13 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         actual_label_cost: isShippingLine ? labelCost : null,
         shippingCostMissing: isMissingShippingLine,
         shipping_cost_missing: isMissingShippingLine,
+        // PS-207: box-review flag + the generator's reason text (the review
+        // line's description, e.g. "Box mismatch — selected box (12x10x3)
+        // disagrees with shipment dims (12x10x1)").
+        packageCostNeedsReview: isBoxReviewLine,
+        package_cost_needs_review: isBoxReviewLine,
+        packageCostReviewReason: isBoxReviewLine ? row.description : null,
+        package_cost_review_reason: isBoxReviewLine ? row.description : null,
         refUspsRate: isShippingLine ? refUspsRate : null,
         ref_usps_rate: isShippingLine ? refUspsRate : null,
         refUpsRate: isShippingLine ? refUpsRate : null,

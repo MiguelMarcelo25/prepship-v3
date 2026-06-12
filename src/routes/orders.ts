@@ -7,6 +7,10 @@ import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
+import { packages } from '../db/schema/packages';
+// PS-207 (B): canonical dims-identity key — shared with the billing box
+// resolver so order-side coherence and billing-side resolution can't drift.
+import { boxDimsKey } from '../services/billing-box-policy';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
 import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
@@ -2955,6 +2959,16 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
       .where(eq(orders.id, id));
   }
 
+  // PS-207 (B): keep an explicitly-submitted package and dims coherent
+  // (the PATCH body carries selectedPackageId; rateDims* never ride this
+  // route today, but the chokepoint covers any future caller).
+  const coherentBody = await applyBoxDimsCoherence(
+    overridesBody as Partial<typeof orderOverrides.$inferInsert>
+  );
+  if (!coherentBody.ok) {
+    return c.json({ error: coherentBody.error, code: 'BOX_DIMS_MISMATCH' }, 400);
+  }
+
   const bestRateAt = overridesBody.bestRateJson === undefined
     ? undefined
     : overridesBody.bestRateJson === null
@@ -2962,10 +2976,10 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
       : new Date();
   const [row] = await db
     .insert(orderOverrides)
-    .values({ orderId: id, ...overridesBody, bestRateAt, updatedAt: new Date() })
+    .values({ orderId: id, ...coherentBody.patch, bestRateAt, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: orderOverrides.orderId,
-      set: { ...overridesBody, bestRateAt, updatedAt: new Date() },
+      set: { ...coherentBody.patch, bestRateAt, updatedAt: new Date() },
     })
     .returning();
 
@@ -2976,6 +2990,100 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
 // field (POST /orders/:id/residential, .../selected-pid, etc.) — v4's canonical
 // update path is a PATCH with the field in the body. These aliases forward to
 // the same upsert logic so v2 callers don't need to know the v4 shape.
+
+// ─── PS-207 (B): dims ⇄ selected-box coherence for MUTABLE orders ───────────
+// The panel's Package dropdown and Size fields must persist in lockstep:
+// choosing a package also persists its dims; entering dims that exactly match
+// a package selects that package; explicitly submitting a package AND dims
+// that identify different boxes is rejected (400) — never silently
+// precedence-picked. Applies to the PACKAGE channel only
+// (selectedPackageId + rateDims*): orderOverrides.selectedPid is the SHIP
+// ACCOUNT channel in v4 (the panel writes shippingProviderId there) and gets
+// no box coherence. Custom dims do NOT clear an existing selection here —
+// cross-time disagreement is billing's job to flag as a review line
+// (PS-193's dirty-flag work will revisit panel auto-persist behavior).
+async function applyBoxDimsCoherence(
+  patch: Partial<typeof orderOverrides.$inferInsert>,
+): Promise<
+  | { ok: true; patch: Partial<typeof orderOverrides.$inferInsert> }
+  | { ok: false; error: string }
+> {
+  const rawPkg =
+    patch.selectedPackageId !== undefined && patch.selectedPackageId !== null
+      ? String(patch.selectedPackageId).trim()
+      : null;
+  const l = patch.rateDimsL;
+  const w = patch.rateDimsW;
+  const h = patch.rateDimsH;
+  const dimsKey = boxDimsKey(
+    typeof l === 'number' ? l : null,
+    typeof w === 'number' ? w : null,
+    typeof h === 'number' ? h : null
+  );
+  if (!rawPkg && !dimsKey) return { ok: true, patch };
+
+  const pkgRows = await db
+    .select({
+      id: packages.id,
+      name: packages.name,
+      packageCode: packages.packageCode,
+      length: packages.length,
+      width: packages.width,
+      height: packages.height,
+    })
+    .from(packages);
+  const byId = new Map(pkgRows.map((p) => [p.id, p]));
+  const byCode = new Map(pkgRows.filter((p) => p.packageCode).map((p) => [p.packageCode!, p]));
+  const byDims = new Map(
+    pkgRows
+      .map((p) => [boxDimsKey(p.length, p.width, p.height), p] as const)
+      .filter((entry): entry is [string, (typeof pkgRows)[number]] => entry[0] !== null)
+  );
+
+  let explicitPkg: (typeof pkgRows)[number] | null = null;
+  if (rawPkg) {
+    const asInt = Number.parseInt(rawPkg, 10);
+    if (Number.isFinite(asInt) && String(asInt) === rawPkg) {
+      explicitPkg = byId.get(asInt) ?? null;
+    }
+    if (!explicitPkg) explicitPkg = byCode.get(rawPkg) ?? null;
+    // Unknown text codes are provider package codes that live outside the
+    // packages table — no dims derivable, nothing to keep coherent.
+    if (!explicitPkg) return { ok: true, patch };
+  }
+
+  if (explicitPkg && dimsKey) {
+    const pkgKey = boxDimsKey(explicitPkg.length, explicitPkg.width, explicitPkg.height);
+    if (pkgKey && pkgKey !== dimsKey) {
+      return {
+        ok: false,
+        error: `Selected box (${explicitPkg.name ?? pkgKey} ${pkgKey}) disagrees with the entered dims (${dimsKey}) — pick the matching box or fix the dims`,
+      };
+    }
+    return { ok: true, patch };
+  }
+
+  if (explicitPkg) {
+    const pkgKey = boxDimsKey(explicitPkg.length, explicitPkg.width, explicitPkg.height);
+    if (!pkgKey) return { ok: true, patch };
+    return {
+      ok: true,
+      patch: {
+        ...patch,
+        rateDimsL: explicitPkg.length,
+        rateDimsW: explicitPkg.width,
+        rateDimsH: explicitPkg.height,
+      },
+    };
+  }
+
+  // Dims only — exact identity auto-selects the matching package.
+  const match = byDims.get(dimsKey!);
+  if (match && patch.selectedPackageId === undefined) {
+    return { ok: true, patch: { ...patch, selectedPackageId: String(match.id) } };
+  }
+  return { ok: true, patch };
+}
 
 async function applyOverridesPatch(
   id: number,
@@ -3046,7 +3154,10 @@ app.post(
     const body = c.req.valid('json');
     const raw = body.packageId ?? body.selectedPid ?? null;
     const selectedPackageId = raw === null ? null : String(raw);
-    const row = await applyOverridesPatch(id, { selectedPackageId });
+    // PS-207 (B): selecting a known package also persists its dims (lockstep).
+    const coherent = await applyBoxDimsCoherence({ selectedPackageId });
+    if (!coherent.ok) return c.json({ error: coherent.error, code: 'BOX_DIMS_MISMATCH' }, 400);
+    const row = await applyOverridesPatch(id, coherent.patch);
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });
   }
@@ -3273,12 +3384,19 @@ app.post(
     if (body.h !== undefined) patch.rateDimsH = body.h;
     if (body.weightOz !== undefined) patch.rateWeightOz = body.weightOz;
 
+    // PS-207 (B): complete dims that exactly identify a package auto-select
+    // that package, so the saved selection and dims stay in lockstep.
+    const coherent = await applyBoxDimsCoherence(
+      patch as Partial<typeof orderOverrides.$inferInsert>
+    );
+    if (!coherent.ok) return c.json({ error: coherent.error, code: 'BOX_DIMS_MISMATCH' }, 400);
+
     const [row] = await db
       .insert(orderOverrides)
-      .values({ orderId: id, ...patch, updatedAt: new Date() })
+      .values({ orderId: id, ...coherent.patch, updatedAt: new Date() })
       .onConflictDoUpdate({
         target: orderOverrides.orderId,
-        set: { ...patch, updatedAt: new Date() },
+        set: { ...coherent.patch, updatedAt: new Date() },
       })
       .returning();
 

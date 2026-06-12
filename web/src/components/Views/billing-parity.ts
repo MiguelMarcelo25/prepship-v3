@@ -443,6 +443,11 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
         // the Box Cost cell can badge "stale — regenerate". Only package_cost
         // lines set this, so OR-ing across the order's lines is correct.
         stalePackagePrice: (row as { stalePackagePrice?: unknown }).stalePackagePrice === true,
+        // PS-207: carry the box-review flag + backend reason up to the order
+        // row (only package_cost_missing lines set them). The FE renders the
+        // chip from these — it does NO box policy math of its own.
+        packageCostNeedsReview: (row as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true,
+        packageCostReviewReason: (row as { packageCostReviewReason?: unknown }).packageCostReviewReason ?? null,
       } as BillingDetailDto & Record<string, unknown>)
       order.push(key)
       continue
@@ -462,6 +467,13 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
     existing.stalePackagePrice =
       (existing as { stalePackagePrice?: unknown }).stalePackagePrice === true ||
       (row as { stalePackagePrice?: unknown }).stalePackagePrice === true
+    existing.packageCostNeedsReview =
+      (existing as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true ||
+      (row as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true
+    existing.packageCostReviewReason =
+      (existing as { packageCostReviewReason?: unknown }).packageCostReviewReason ??
+      (row as { packageCostReviewReason?: unknown }).packageCostReviewReason ??
+      null
 
     // First-wins for the non-monetary fields. The shipping row is
     // usually richer (carrier, ref rates, ship date, actual label

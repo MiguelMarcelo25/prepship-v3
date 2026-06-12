@@ -1236,3 +1236,55 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   months re-priced under exact-day bounds, regenerating those months is the (DJ-approved-only) path per the
   card's no-production-regeneration guardrail. exceljs adds ~77 transitive packages (npm audit count moved —
   pre-existing tooling-dep advisories, none in the served bundle).
+
+### PS-207 — Bill the box the shipment actually used; no SKU-default fallbacks, persistent review (P1) — DONE 2026-06-12
+- **✅ CODE COMPLETE (deploy → "Update Billing" re-prices under the new policy; already-invoiced history
+  untouched until DJ regenerates):** package_cost is priced from the SHIPMENT'S RECORDED BOX ONLY.
+  **Deleted fallbacks (HKP audit root causes):** SKU-default/inventory package maps (packageIdFromItems +
+  the inventory import — SP6755/6759 billed $0.00 off an unpriced SKU-default 8.5x8x2.5 the parcels never
+  used), rounded-dims matching, rate-dims resolution, and precedence-picking when selected box ≠ shipment
+  dims (SP6754 billed a 12x10x3 it never shipped in). **Architecture (canonical owner):** NEW pure
+  zero-import `src/services/billing-box-policy.ts` — `resolveShippedPackageId` (operator directive →
+  selected_package_id → selected_pid → exact-dims identity; both mismatch arms: dims→different package AND
+  dims→custom-that-isn't-the-selected-box), `decidePackageCostLine` (gate on client having ≥1 box price;
+  resolved+configured>0 → line with markup; operator override price = FINAL amount, no markup;
+  resolved+unpriced/zero → free, no line no review; mismatch/unresolved → $0.00 `package_cost_missing`
+  review line mirroring shipping_missing), `boxDimsKey` (identity, NOT rounding), `describeBoxReview`
+  (stable text — participates in the unique key). selected_package_id outranks selected_pid because
+  selected_pid is provider-account-contaminated on legacy rows (inventory/analysis key markup off it) — a
+  collision + dims lands in MISMATCH review, never a silent wrong-box bill. Generator stamps the billed
+  packageId on every line of the order so the Box Size column always shows the billed box.
+  **Persistence:** NEW `billing_box_resolutions` (drizzle/0043, additive, RLS-no-policy, one row per order,
+  runtime ensure in services/billing.ts) — regeneration deletes/recreates billing_line_items ONLY (guard
+  pins zero deletes of resolutions); also fixes the old wipe-on-regeneration of manual box-line edits. The
+  Edit Billing Detail PATCH detects DECISIONS by diff (modal submits everything): box change vs stamped
+  box, price change vs current line — and a price equal to the chosen box's configured price is autofill →
+  box stored WITHOUT pinning the price (future price changes still reflow); resolving deletes the order's
+  review line immediately; resolved_by = operator email. **Dims⇄box coherence (B, mutable orders only):**
+  `applyBoxDimsCoherence` in routes/orders.ts wired at PATCH /:id + /selected-package-id + /save-dims
+  (NOT /selected-pid — that's the Ship Acct channel): selecting a known package persists its dims; complete
+  dims exactly matching a package auto-select it; explicit package + explicit dims that disagree → 400
+  `BOX_DIMS_MISMATCH`; custom dims never silently clear an existing selection (billing review is the
+  cross-time net; PS-193 revisits panel auto-persist). FE: panel Size inputs run `lockstepPanelDims`
+  (exact match selects the package in the dropdown; the Package dropdown already filled dims). **FE review
+  flow (D):** billingDetails DTO carries `packageCostNeedsReview` + reason (the review line's description);
+  billing-parity aggregation ORs the flag per order; Box Cost cell renders a clickable amber NEEDS REVIEW
+  chip → opens the Edit modal, which shows an amber "Box needs review: <reason>" banner; resolution = pick
+  box and/or type price + Save (no FE policy math anywhere). **Guard**
+  `test:ps-207-shipped-box-billing-policy` (16-case resolver matrix incl. SP6754/SP6753 verbatim
+  descriptions, provider-contamination, package-without-dims exception, unknown-code noise, operator wins,
+  note-only ≠ directive + 8-case decision matrix incl. markup-on-configured / no-markup-on-override /
+  zero-config-client-emits-NOTHING + source pins: banned fallbacks absent, no resolution deletes, ensure
+  present, coherence at exactly 3 call sites and NOT /selected-pid, chip+modal+aggregation+lockstep wired,
+  policy module stays zero-import). **READ-ONLY dry-run** (scripts/ps-207-hkp-box-resolution-dryrun.ts) on
+  live HKP (client 3, 435 box prices, 0% markup), latest 40 shipped orders: 12x10x3 → $0.55 ✓, 11x9x6 →
+  $0.74 ✓ (DJ's expected table), recurring customs (11.5x9x3/12x10x2/8.5x8x2.5) already exist as package
+  rows → resolved-but-unpriced → free (price them to start billing); ZERO review storm in recent data; no
+  writes. **QA:** typecheck + build:web + ps-207 guard + billing-formula + billing-detail-ps040 +
+  billing-client-scope + billing-best-rate-ui:guard + ps-208 guard + date-time-standard + full cert ALL
+  PASS. test:master:quick 16/20 — the 4 failures (carrier-enable-disable-label, awaiting-carrier-badge-
+  nickname-fallback, ps-098, ps-103) fail IDENTICALLY at base e1c91793 via detached worktree = pre-existing
+  stale pins, NOT PS-207 (candidates for a re-anchor pass). **Safety:** no production billing regeneration,
+  invoice mutation, order/shipment mutation, postage, or marketplace notification occurred; migration is
+  additive-only; lockdown untouched (order-save coherence applies to awaiting orders behind the unchanged
+  assertOrderEditable guard).

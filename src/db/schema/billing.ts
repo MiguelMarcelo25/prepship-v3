@@ -111,3 +111,31 @@ export const billingRefRates = pgTable(
 
 export type ClientPackagePrice = typeof clientPackagePrices.$inferSelect;
 export type BillingRefRate = typeof billingRefRates.$inferSelect;
+
+// PS-207: operator review resolutions for shipped-box billing. One row per
+// order — an EXPLICIT operator directive ("bill this order as box X and/or at
+// price Y") that the generator consults FIRST, before any shipment evidence.
+// Range regeneration deletes/recreates billing_line_items only; it must NEVER
+// touch this table — that persistence is the whole point (pre-PS-207, manual
+// box-line edits were wiped by every regenerate).
+// overridePrice is the FINAL line amount (no markup applied) so a regenerate
+// reproduces exactly what the operator set in the Edit Billing Detail modal.
+export const billingBoxResolutions = pgTable(
+  'billing_box_resolutions',
+  {
+    id: serial().primaryKey(),
+    orderId: integer()
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    shipmentId: integer().references(() => shipments.id),
+    packageId: integer().references(() => packages.id),
+    overridePrice: numeric({ precision: 10, scale: 2 }),
+    note: text(),
+    resolvedBy: text(),
+    resolvedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [unique('billing_box_resolutions_order_unq').on(t.orderId)]
+);
+
+export type BillingBoxResolution = typeof billingBoxResolutions.$inferSelect;

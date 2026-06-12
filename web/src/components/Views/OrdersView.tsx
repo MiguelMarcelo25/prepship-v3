@@ -3585,6 +3585,24 @@ export default function OrdersView({
     return getPackageDims(selectedPackage) ?? panelDims
   }
 
+  // PS-207 (B): dims ⇄ package lockstep, FE side. When the operator types
+  // dims that EXACTLY match a known package, reflect that package in the
+  // dropdown (the backend save-dims path persists the same auto-selection).
+  // Custom dims leave the selection untouched — billing flags cross-time
+  // disagreement as a review line; the panel never guesses.
+  function lockstepPanelDims<T extends { length: string; width: string; height: string; packageId: string }>(next: T): T {
+    const l = Number(next.length)
+    const w = Number(next.width)
+    const h = Number(next.height)
+    if (!(l > 0 && w > 0 && h > 0)) return next
+    const match = packages.find((pkg) => {
+      const d = getPackageDims(pkg)
+      return d && Number(d.length) === l && Number(d.width) === w && Number(d.height) === h
+    })
+    const id = match ? getPackageIdentifier(match) : ''
+    return id && id !== next.packageId ? { ...next, packageId: id } : next
+  }
+
   // PS-178 final part: deriveShipmentDimsFromProductDefaults DELETED — the
   // stacking derivation is backend-owned (order-dims-defaults-policy.ts) and
   // arrives on the detail payload as dimsDefaults.
@@ -9498,11 +9516,11 @@ export default function OrdersView({
               <div className="ship-field-row">
                 <span className="ship-field-label">Size</span>
                 <div className="ship-field-value" style={{ gap: 3, flexWrap: 'wrap' }}>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.length} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, length: event.target.value })) }} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.length} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, length: event.target.value })) }} />
                   <span className="ship-input-unit">L</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.width} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, width: event.target.value })) }} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.width} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, width: event.target.value })) }} />
                   <span className="ship-input-unit">W</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, height: event.target.value })) }} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, height: event.target.value })) }} />
                   <span className="ship-input-unit">H (in)</span>
                 </div>
               </div>

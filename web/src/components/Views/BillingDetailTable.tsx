@@ -234,6 +234,46 @@ export function BillingDetailTable({
               case 'additional':
                 return formatBillingMoney(metrics.additional, { dashIfZero: true })
               case 'packageCost':
+                // PS-207: the shipped box could not be resolved to a known
+                // package (or selected box ≠ shipment dims) — the backend
+                // emitted a $0.00 package_cost_missing review line. Render the
+                // backend flag as an amber NEEDS REVIEW chip; clicking opens
+                // the Edit Billing Detail modal to resolve (box and/or price
+                // → persisted in billing_box_resolutions). No FE policy math.
+                if (row.packageCostNeedsReview) {
+                  return (
+                    <button
+                      type="button"
+                      title={`${row.packageCostReviewReason || 'Shipped box needs review'} — click to resolve`}
+                      onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 0,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 8.5,
+                          fontWeight: 700,
+                          color: '#b45309',
+                          background: '#fef3c7',
+                          border: '1px solid #fde68a',
+                          borderRadius: 4,
+                          padding: '0 3px',
+                          lineHeight: 1.4,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        NEEDS REVIEW
+                      </span>
+                    </button>
+                  )
+                }
                 // PS-068: badge box charges whose stored price predates the
                 // client's latest package-price/config change, so operators can
                 // see un-repriced rows before exporting (run Update Billing to fix).

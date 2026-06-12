@@ -1309,6 +1309,29 @@ export default function BillingView() {
               <div><span>USPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_usps_rate, { dashIfZero: true })}</strong></div>
             </div>
 
+            {/* PS-207: backend box-review flag — the shipped box could not be
+                resolved (or selected box ≠ shipment dims). Picking a Box Size
+                and/or typing a Box Cost below resolves it: the save persists a
+                billing_box_resolutions directive that survives regeneration. */}
+            {billingEditModal.row.packageCostNeedsReview ? (
+              <div
+                role="alert"
+                style={{
+                  margin: '8px 0',
+                  padding: '8px 12px',
+                  border: '1px solid #fde68a',
+                  borderRadius: 8,
+                  background: 'rgba(245, 158, 11, 0.10)',
+                  fontSize: 11.5,
+                  color: 'var(--text)',
+                }}
+              >
+                <strong style={{ color: '#b45309' }}>Box needs review:</strong>{' '}
+                {billingEditModal.row.packageCostReviewReason || 'the shipped box could not be matched to a known package.'}
+                {' '}Pick the correct Box Size (or set a Box Cost) and Save — the decision persists across billing regeneration.
+              </div>
+            ) : null}
+
             <div className="billing-edit-money-grid">
               <label>
                 <span>Pick & Pack</span>
