@@ -21,11 +21,92 @@
  *   npx tsx scripts/ps-203-best-rate-universe-guard.ts
  */
 import { readFileSync } from 'node:fs';
+import { combineCarrierUniverses, rateTotal } from '../src/services/rates-combined';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
   if (!cond) { failures += 1; console.error(`FAIL ${name}${detail ? ` — ${detail}` : ''}`); }
   else console.log(`ok   ${name}`);
+}
+
+// ── stages 3+5: boundary tests at the canonical combined owner ────────────────
+const SS_1044 = {
+  carrier_id: 'se-595995',
+  service_code: 'ups_ground_saver',
+  shipping_amount: { amount: 10.44 },
+  other_amount: { amount: 0 },
+  requestFingerprint: 'fp-ss',
+};
+const DIRECT_927 = {
+  carrier_id: 'se-10000031',
+  service_code: 'ups_surepost',
+  shipping_amount: { amount: 9.27 },
+  other_amount: { amount: 0 },
+  requestFingerprint: 'fp-direct',
+};
+const BASE_COMBINE = {
+  ssCacheKey: 'ss-key',
+  ssCached: false,
+  ssDiagnostics: [{ carrierId: 'se-595995', status: 'ok', rateCount: 1 }],
+  requestedCarrierIds: null,
+  accountNamesByCarrierId: new Map([['se-595995', 'ORI Account']]),
+  accountCarrierIds: ['se-595995'],
+  isCachedOnlyLookup: false,
+};
+{
+  // THE production fixture: the $9.27 Shipp SurePost must beat the $10.44 ORI
+  // Ground Saver once both families are in one comparison.
+  const combined = combineCarrierUniverses({
+    ...BASE_COMBINE,
+    ssRates: [SS_1044],
+    directRates: [DIRECT_927],
+    directDiagnostics: [{ carrierId: 'se-10000031', status: 'ok', rateCount: 1 }],
+  });
+  check('combined pick beats the SS-only winner ($9.27 < $10.44)',
+    combined.cheapest?.carrier_id === 'se-10000031' && rateTotal(combined.cheapest!) === 9.27);
+  check('combined request key carries the direct carrier ids',
+    combined.combinedRequestKey === 'ss-key:direct:se-10000031');
+  check('clean combined universe is COMPLETE',
+    combined.bestRateComplete === true);
+}
+{
+  // A failed direct carrier makes the selection PARTIAL even when ShipStation
+  // answered cleanly — a partial winner must never self-certify complete.
+  const combined = combineCarrierUniverses({
+    ...BASE_COMBINE,
+    ssRates: [SS_1044],
+    directRates: [],
+    directDiagnostics: [{ carrierId: 'se-10000031', status: 'failed', rateCount: 0, error: 'timeout' }],
+  });
+  check('direct-carrier error ⇒ combined universe INCOMPLETE',
+    combined.bestRateComplete === false && combined.cheapest?.carrier_id === 'se-595995');
+}
+{
+  // CHARGE-basis pick: the comparison uses the full customer charge (shipping +
+  // other + confirmation + insurance) — a raw-cheap rate that is expensive once
+  // its add-ons count loses to a flat cheaper total.
+  const rawCheapMarkedExpensive = {
+    carrier_id: 'se-10000031',
+    service_code: 'ups_ground',
+    shipping_amount: { amount: 8.0 },
+    other_amount: { amount: 3.5 }, // charge total 11.50
+    requestFingerprint: 'fp-direct',
+  };
+  const flatTen = {
+    carrier_id: 'se-595995',
+    service_code: 'usps_ground_advantage',
+    shipping_amount: { amount: 10.0 },
+    other_amount: { amount: 0 }, // charge total 10.00
+    requestFingerprint: 'fp-ss',
+  };
+  const combined = combineCarrierUniverses({
+    ...BASE_COMBINE,
+    ssRates: [flatTen],
+    directRates: [rawCheapMarkedExpensive],
+    directDiagnostics: [{ carrierId: 'se-10000031', status: 'ok', rateCount: 1 }],
+  });
+  check('pick compares the full CHARGE total (raw-cheap/charge-expensive loses)',
+    combined.cheapest?.carrier_id === 'se-595995' && rateTotal(combined.cheapest!) === 10.0);
 }
 
 // ── stage 1: the panel refresh quotes the COMBINED universe ───────────────────
@@ -59,6 +140,31 @@ check('rates service owns the visibility evaluator (one account load, per-contex
   /directCarrierVisibleForScope\(account, \{/.test(ratesService));
 check('evaluator failure degrades to legacy completeness (never breaks the cache read)',
   /direct-carrier visibility load skipped/.test(ratesService));
+
+// ── stage 3 wiring: ONE owner of the combine + uniform charge basis ───────────
+check('direct rates pass the SAME markup rules at the source (uniform charge basis)',
+  /const directMarkups = await loadCarrierMarkups\(\)/.test(ratesService) &&
+  /const rates = applyMarkups\(/.test(ratesService));
+check('/browse delegates the merge/pick/completeness to the canonical owner',
+  /const combined = combineCarrierUniverses\(\{/.test(ratesRoute) &&
+  !/const cheapest = \[\.\.\.combinedRates\]\.sort/.test(ratesRoute));
+
+// ── stage 4 wiring: the backfill persists the COMBINED winner, raw amounts ────
+const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
+check('backfill delegates to the same combined owner',
+  /combineCarrierUniverses\(\{/.test(backfill) &&
+  /getDirectCarrierRatesForRateInput\(\{/.test(backfill) &&
+  /includeVisibleDirectCarriers: true/.test(backfill));
+check('backfill persists the RAW carrier amount (kills the double-markup display)',
+  /best\.original_amount \? \{ shipping_amount: best\.original_amount \}/.test(backfill) &&
+  /delete rawAmountBest\.original_amount/.test(backfill) &&
+  /delete rawAmountBest\.markup/.test(backfill));
+check('backfill completeness + fingerprint come from the combined universe',
+  /isComplete: combined\.bestRateComplete/.test(backfill) &&
+  /requestFingerprint: combined\.combinedRequestKey/.test(backfill));
+check('a wholesale direct-fetch failure marks the universe incomplete (synthetic failed diagnostic)',
+  /carrierId: 'se-direct-fetch'/.test(backfill) &&
+  /status: 'failed' as const/.test(backfill));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-203 best-rate universe guard (${failures} failing)`);

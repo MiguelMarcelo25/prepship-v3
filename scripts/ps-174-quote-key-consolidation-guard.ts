@@ -50,9 +50,11 @@ check('finalizer omits the ref when no snapshot id (half-ref never invented as f
   /\.\.\.\(rateQuoteId \? \{ rateQuoteId \} : \{\}\)/.test(store));
 
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
+// PS-203 (stage 4): the backfill now persists the COMBINED winner — the
+// fingerprint is the combined request key (SS + direct), not the SS-only one.
 check('rates-backfill persists THROUGH the finalizer',
   /finalizedBest = await finalizeBestRateWithQuote\(\{/.test(backfill) &&
-  /\.\.\.finalizedBest,\s*\n\s*requestFingerprint: result\.cacheKey/.test(backfill));
+  /\.\.\.finalizedBest,\s*\n\s*requestFingerprint: combined\.combinedRequestKey/.test(backfill));
 check('backfill keeps its existing metadata stamps (expiry/eligibility/completeness)',
   /cacheExpiresAt: new Date\(new Date\(result\.fetchedAt\)\.getTime\(\) \+ CACHE_TTL_MS\)/.test(backfill) &&
   /eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION/.test(backfill));

@@ -71,17 +71,23 @@ check(
     /directCarrierVisibleForScope/.test(ratesService),
 );
 
+// PS-203 (stage 3): the merge + single cheapest pick moved VERBATIM to the
+// canonical owner (src/services/rates-combined.ts); /browse delegates via
+// combineCarrierUniverses. Same pins, split homes — the route still fetches
+// the direct quotes and emits the combined best rate; the owner does the pick.
+const ratesCombined = readFileSync('src/services/rates-combined.ts', 'utf8');
 check(
   'backend /rates/browse includes direct carrier quotes before choosing cheapest',
   /getDirectCarrierRatesForRateInput/.test(ratesRoute) &&
-    /combinedRates\s*=\s*dedupeBrowseRates\(\[\.\.\.filtered,\s*\.\.\.directRates\.rates\]\)/.test(browseRouteBlock) &&
-    /const cheapest = \[\.\.\.combinedRates\]\.sort/.test(browseRouteBlock) &&
+    /const combined = combineCarrierUniverses\(\{/.test(browseRouteBlock) &&
+    /dedupeBrowseRates\(\[\.\.\.input\.ssRates, \.\.\.input\.directRates\]\)/.test(ratesCombined) &&
+    /\.sort\(\(a, b\) => rateTotal\(a\) - rateTotal\(b\)\)/.test(ratesCombined) &&
     /bestRate:\s*bestRateOut/.test(browseRouteBlock),
 );
 
 check(
   'backend /rates/browse diagnostics include direct carriers instead of hiding failures',
-  /directCarrierStatuses/.test(browseRouteBlock) &&
+  /directCarrierStatuses/.test(ratesCombined) &&
     /directCarrierDiagnostics/.test(browseRouteBlock) &&
     /directCarrierErrors/.test(browseRouteBlock) &&
     /directCarrierMetas/.test(browseRouteBlock),

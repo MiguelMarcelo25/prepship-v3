@@ -76,11 +76,15 @@ assert(
   '/rates/cached/bulk supports exact cache keys and marks rough matches approximate',
 );
 
+// PS-203 (stage 3): the source-tagged diagnostic merge moved VERBATIM to the
+// canonical combined-selection owner; the route consumes its output. Same
+// pins, split homes.
+const ratesCombinedSrc = read('src/services/rates-combined.ts');
 assert(
   client.includes('carrierDiagnostics') &&
     route.includes('combinedCarrierDiagnostics') &&
-    route.includes("source: 'direct'") &&
-    route.includes("source: 'shipstation'"),
+    ratesCombinedSrc.includes("source: 'direct'") &&
+    ratesCombinedSrc.includes("source: 'shipstation'"),
   'Rate Browser preserves backend-normalized ShipStation and direct-carrier diagnostics',
 );
 

@@ -14,6 +14,7 @@ import {
   resolveRateInput,
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
+import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
 import { planStrictRecalculateDecision } from '../services/rates-recalculate';
 import { persistStrictRecalculateOutcome } from '../services/rates-recalculate-persist';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
@@ -270,34 +271,13 @@ const browseBody = rateBody.extend({
   strictRecalculate: z.boolean().optional(),
 });
 
-function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number }; insurance_amount?: { amount?: number } }): number {
-  return (
-    Number(rate.shipping_amount?.amount ?? 0) +
-    Number(rate.other_amount?.amount ?? 0) +
-    Number(rate.confirmation_amount?.amount ?? 0) +
-    Number(rate.insurance_amount?.amount ?? 0)
-  );
-}
+// PS-203 (stage 3): rateTotal + dedupeBrowseRates moved to the canonical
+// combined-selection owner (src/services/rates-combined.ts) — imported above.
 
 function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?: string): string[] | undefined {
   const unique = [...new Set((carrierIds ?? []).filter(Boolean))];
   if (!preferredCarrierId || !unique.includes(preferredCarrierId)) return unique.length ? unique : undefined;
   return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
-}
-
-function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[] {
-  const byKey = new Map<string, T>();
-  for (const rate of rates) {
-    const key = [
-      String(rate.carrier_id ?? rate.carrierId ?? '').toLowerCase(),
-      String(rate.service_code ?? rate.serviceCode ?? rate.service ?? '').toLowerCase(),
-      Number(rate.shipping_amount?.amount ?? rate.shipmentCost ?? rate.cost ?? rate.amount ?? 0).toFixed(4),
-      Number(rate.other_amount?.amount ?? rate.otherCost ?? 0).toFixed(4),
-      String(rate.requestFingerprint ?? rate.cacheKey ?? ''),
-    ].join('|');
-    if (!byKey.has(key)) byKey.set(key, rate);
-  }
-  return [...byKey.values()];
 }
 
 // PS-203 (stage 2): does the cached row's diagnostic set cover any DIRECT
@@ -477,93 +457,41 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     confirmation: confirmation ?? signature ?? null,
     carrierIds: requestedCarrierIds,
   });
-  const combinedRates = dedupeBrowseRates([...filtered, ...directRates.rates]);
-  const directCarrierIds = [...new Set(directRates.diagnostics.map((diagnostic) => diagnostic.carrierId).filter(Boolean))];
-  const combinedRequestKey = directCarrierIds.length
-    ? `${result.cacheKey}:direct:${directCarrierIds.sort().join(',')}`
-    : result.cacheKey;
-  const cheapest = [...combinedRates].sort(
-    (a, b) => rateTotal(a) - rateTotal(b)
-  )[0] ?? null;
   const accounts = await getCarrierAccountsForRateContext({
     storeId: rest.storeId ?? null,
     clientId: rest.clientId ?? null,
   }).catch(() => []);
-  const accountNameByCarrierId = new Map(
-    accounts.map((account) => [
-      account.carrier_id,
-      account.friendly_name ?? account.nickname ?? account.carrier_code ?? account.carrier_id,
-    ])
-  );
-  const statusCarrierIds = requestedCarrierIds?.length
-    ? requestedCarrierIds
-    : accounts.map((account) => account.carrier_id);
-  const carriersWithRates = new Set(combinedRates.map((rate) => rate.carrier_id));
-  const diagnosticsByCarrierId = new Map(
-    (result.carrierDiagnostics ?? []).map((diagnostic) => [diagnostic.carrierId, diagnostic])
-  );
-  const statusWhenFound = result.cached ? 'cached' : 'live';
-  const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
-  const missingStatus = isCachedOnlyLookup ? 'loading' : 'unavailable';
-  const carrierStatuses: BestRateWorkflowCarrierStatus[] = statusCarrierIds.map((id) => {
-    const diagnostic = diagnosticsByCarrierId.get(id);
-    const hasRates = carriersWithRates.has(id);
-    const status: BestRateWorkflowCarrierStatus['status'] = hasRates
-      ? statusWhenFound
-      : diagnostic?.status === 'failed'
-        ? 'error'
-        : diagnostic?.status === 'empty'
-          ? 'unavailable'
-          : diagnostic?.status === 'loading'
-            ? 'loading'
-            : missingStatus;
-    return {
-      carrierId: id,
-      carrierName: accountNameByCarrierId.get(id) ?? diagnostic?.nickname ?? id,
-      carrierCode: diagnostic?.carrierCode,
-      nickname: diagnostic?.nickname,
-      status,
-      rateCount: hasRates ? combinedRates.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
-      durationMs: diagnostic?.durationMs,
-      error: diagnostic?.error,
-    };
+  // PS-203 (stage 3): the merge, the SINGLE cheapest pick (uniform charge basis —
+  // direct rates now carry the same markup rules as ShipStation), the per-carrier
+  // statuses, and the PS-111 combined-universe completeness are owned by the pure
+  // rates-combined module. The backfill delegates to the SAME owner, so a
+  // persisted best rate can never again be a ShipStation-only self-certified win.
+  const combined = combineCarrierUniverses({
+    ssRates: filtered,
+    ssCacheKey: result.cacheKey,
+    ssCached: result.cached,
+    ssDiagnostics: result.carrierDiagnostics ?? [],
+    directRates: directRates.rates,
+    directDiagnostics: directRates.diagnostics,
+    requestedCarrierIds,
+    accountNamesByCarrierId: new Map(
+      accounts.map((account) => [
+        account.carrier_id,
+        account.friendly_name ?? account.nickname ?? account.carrier_code ?? account.carrier_id,
+      ])
+    ),
+    accountCarrierIds: accounts.map((account) => account.carrier_id),
+    isCachedOnlyLookup: Boolean(cachedOnly && !forceRefresh && !forceLive),
   });
-  const directCarrierStatuses: BestRateWorkflowCarrierStatus[] = directRates.diagnostics.map((diagnostic) => ({
-    carrierId: diagnostic.carrierId,
-    carrierName: diagnostic.nickname ?? diagnostic.carrierId,
-    carrierCode: diagnostic.carrierCode,
-    nickname: diagnostic.nickname,
-    status:
-      diagnostic.status === 'ok'
-        ? 'live'
-        : diagnostic.status === 'failed'
-          ? 'error'
-          : diagnostic.status === 'empty'
-            ? 'unavailable'
-            : diagnostic.status === 'cached'
-              ? 'cached'
-              : 'loading',
-    rateCount: diagnostic.rateCount,
-    durationMs: diagnostic.durationMs,
-    error: diagnostic.error,
-  }));
-  const combinedCarrierStatuses = [...carrierStatuses, ...directCarrierStatuses];
-  const directCarrierDiagnostics = directRates.diagnostics.map((diagnostic) => ({
-    ...diagnostic,
-    source: 'direct',
-  }));
-  const combinedCarrierDiagnostics = [
-    ...(result.carrierDiagnostics ?? []).map((diagnostic) => ({
-      ...diagnostic,
-      source: 'shipstation',
-    })),
-    ...directCarrierDiagnostics,
-  ];
-  // PS-111: completeness is BACKEND-OWNED and derived from carrier diagnostics — a
-  // best rate is complete only when every eligible carrier reached a terminal result
-  // (none loading, none errored). Never hardcode true: a rate found while a carrier is
-  // still loading or failed is PARTIAL, and the workflow DTO + frontend must see that.
-  const bestRateComplete = isBestRateComplete(combinedCarrierStatuses);
+  const {
+    combinedRates,
+    cheapest,
+    combinedRequestKey,
+    combinedCarrierStatuses,
+    directCarrierDiagnostics,
+    combinedCarrierDiagnostics,
+    bestRateComplete,
+  } = combined;
   const bestRateMetadata = cheapest
     ? {
         ...cheapest,

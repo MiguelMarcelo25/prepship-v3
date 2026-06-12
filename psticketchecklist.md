@@ -690,7 +690,27 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   remaining (live, DJ):** Browse Rates on a ShipStation-synced Walmart order (200014792308203
   style) returns Walmart rates with the source badge; walmart-* orders quote too.
 
-- **PS-203 — 🟡 STAGES 1+2 DONE 2026-06-12 (premature SS-only best-rate poisoning stopped).**
+- **PS-203 — ✅ COMPLETE 2026-06-12 (all 5 stages): "best rate" has ONE owner across the combined
+  carrier universe.** **Stages 3–5:** NEW pure `src/services/rates-combined.ts` —
+  `combineCarrierUniverses` owns the merge (dedupe), the SINGLE cheapest pick on the uniform
+  CHARGE basis, the per-carrier statuses, and PS-111 completeness over the COMBINED universe;
+  rateTotal + dedupeBrowseRates moved in (route imports back). UNIFORM MARKUPS:
+  getDirectCarrierRatesForRateInput now passes direct rates through the SAME applyMarkups rules
+  ShipStation rates get at read time (keyed by se-<pid>, original_amount preserved) — before this,
+  /browse compared marked SS prices against raw direct prices. /browse delegates its inline
+  merge/pick block to the owner (replacement-first; route keeps io + payload + PS-105/106/175/183
+  concerns). BACKFILL (stage 4): delegates to the SAME owner — fetches direct rates
+  (includeVisibleDirectCarriers + orderId for the PS-199 Walmart PO context), persists the COMBINED
+  winner with combined fingerprint + combined completeness, and persists the RAW carrier amount
+  (original_amount swap, markup fields stripped) so the PS-177 read-time money tuple never
+  double-marks; a wholesale direct-fetch failure injects a synthetic failed diagnostic (never
+  self-certifies SS-only). STAGE 5 boundary tests run against the pure owner in
+  `test:ps-203-best-rate-universe` (19 checks): the production fixture $9.27 Shipp beats $10.44
+  ORI; direct error ⇒ incomplete; charge-basis pick (raw-cheap/charge-expensive loses); + all
+  stage-1/2 pins. Guard re-anchors (same pins, new home, documented): ps-124 (merge/pick →
+  rates-combined), rate-system-hardening (source-tagged diagnostics → owner), ps-174 (backfill
+  fingerprint → combinedRequestKey). QA: typecheck + build:web + ps-123 + ps-175 + ps-183 +
+  ps-124 + ps-121 + rate-system-hardening + full cert ALL PASS.
   Symptom: saved BEST RATE $10.44 (ORI UPS Ground Saver) vs Rate Browser combined $9.27 (Shipp
   SurePost) — every persisting path compared a ShipStation-only universe and self-certified it
   complete. **Stage 1 (FE):** refreshPanelBestRate's browse call now sends

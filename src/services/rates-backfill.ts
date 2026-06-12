@@ -3,7 +3,8 @@ import { and, desc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
-import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getRates } from './rates';
+import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getDirectCarrierRatesForRateInput, getRates } from './rates';
+import { combineCarrierUniverses } from './rates-combined';
 import { finalizeBestRateWithQuote } from './shipping-workflow/rate-quote-snapshot-store';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
@@ -468,30 +469,66 @@ async function runBackfill(
       }
       const dimsLabel = `${dims.length}x${dims.width}x${dims.height}`;
       try {
+        const rateInput = {
+          weightOz: Number(row.weightOz),
+          toZip: row.shipToPostalCode!,
+          toState: row.shipToState ?? undefined,
+          toCity: row.shipToCity ?? undefined,
+          toCountry,
+          residential: raw.shipTo?.residential ?? undefined,
+          dimsL: dims.length,
+          dimsW: dims.width,
+          dimsH: dims.height,
+          storeId: row.storeId,
+          clientId: row.clientId,
+        };
         const result = await withTimeout(
-          getRates(
-            {
-              weightOz: Number(row.weightOz),
-              toZip: row.shipToPostalCode!,
-              toState: row.shipToState ?? undefined,
-              toCity: row.shipToCity ?? undefined,
-              toCountry,
-              residential: raw.shipTo?.residential ?? undefined,
-              dimsL: dims.length,
-              dimsW: dims.width,
-              dimsH: dims.height,
-              storeId: row.storeId,
-              clientId: row.clientId,
-            },
-            liveRecalculate ? { forceRefresh: true } : undefined,
-          ),
+          getRates(rateInput, liveRecalculate ? { forceRefresh: true } : undefined),
           PER_ORDER_TIMEOUT_MS,
           `getRates(order=${row.id})`
         );
+        // PS-203 (stage 4): the persisted best rate is the COMBINED winner —
+        // visible direct carriers (Shipp / Walmart Shipping / direct UPS) join
+        // the comparison through the same canonical owner /browse delegates to.
+        // A wholesale direct-fetch failure marks the universe incomplete (a
+        // synthetic failed diagnostic) instead of self-certifying SS-only.
+        const directResult = await withTimeout(
+          getDirectCarrierRatesForRateInput({
+            ...rateInput,
+            includeVisibleDirectCarriers: true,
+            orderId: row.id,
+            orderNumber: row.orderNumber ?? undefined,
+          }),
+          PER_ORDER_TIMEOUT_MS,
+          `getDirectCarrierRates(order=${row.id})`
+        ).catch((err) => ({
+          rates: [],
+          errors: [],
+          metas: [],
+          diagnostics: [{
+            carrierId: 'se-direct-fetch',
+            carrierCode: 'direct',
+            nickname: 'direct carriers',
+            status: 'failed' as const,
+            rateCount: 0,
+            error: err instanceof Error ? err.message.slice(0, 200) : 'direct rate fetch failed',
+          }],
+        }));
+        const combined = combineCarrierUniverses({
+          ssRates: result.rates as unknown as Array<Record<string, unknown>>,
+          ssCacheKey: result.cacheKey,
+          ssCached: result.cached,
+          ssDiagnostics: result.carrierDiagnostics ?? [],
+          directRates: directResult.rates as unknown as Array<Record<string, unknown>>,
+          directDiagnostics: directResult.diagnostics,
+          requestedCarrierIds: null,
+          accountNamesByCarrierId: new Map(),
+          accountCarrierIds: (result.carrierDiagnostics ?? []).map((diagnostic) => diagnostic.carrierId),
+          isCachedOnlyLookup: false,
+        });
+        const best = combined.cheapest;
 
-          const best = result.bestRate;
-
-          if (!best) {
+        if (!best) {
           job.skipped++;
           if (job.failureSamples.length < 5) {
             job.failureSamples.push(
@@ -500,26 +537,36 @@ async function runBackfill(
           }
         } else {
           const now = new Date();
+          // PS-203 (stage 4): persist the RAW carrier amount, never the marked-up
+          // charge. The display markup is applied at read time by the PS-177 row
+          // money tuple — persisting marked amounts double-marked the display.
+          const rawAmountBest: Record<string, unknown> = {
+            ...best,
+            ...(best.original_amount ? { shipping_amount: best.original_amount } : {}),
+          };
+          delete rawAmountBest.original_amount;
+          delete rawAmountBest.markup;
           // PS-174 (Phase 2): stamp the backend quote snapshot ref + proof marker —
           // the SAME finalization /rates/browse performs — so the persisted best
           // rate is snapshot-purchasable on reload without a re-browse. Best-effort
           // (a snapshot failure persists the rate without the ref; the purchase
           // boundary then requires a re-rate exactly as before PS-174).
           const finalizedBest = await finalizeBestRateWithQuote({
-            bestRate: best as Record<string, unknown>,
-            rates: result.rates as unknown as Array<Record<string, unknown>>,
-            cacheKey: result.cacheKey,
+            bestRate: rawAmountBest,
+            rates: combined.combinedRates as Array<Record<string, unknown>>,
+            cacheKey: combined.combinedRequestKey,
             fetchedAt: result.fetchedAt,
           });
           const bestWithMetadata = {
             ...finalizedBest,
-            requestFingerprint: result.cacheKey,
-            cacheKey: result.cacheKey,
+            requestFingerprint: combined.combinedRequestKey,
+            cacheKey: combined.combinedRequestKey,
             cacheCreatedAt: result.fetchedAt,
             cacheExpiresAt: new Date(new Date(result.fetchedAt).getTime() + CACHE_TTL_MS).toISOString(),
             eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-            isComplete: result.carrierDiagnostics.every((diagnostic) => diagnostic.status !== 'failed' && diagnostic.status !== 'loading'),
-            rateCount: result.rates.length,
+            // PS-111/PS-203: completeness over the COMBINED universe.
+            isComplete: combined.bestRateComplete,
+            rateCount: combined.combinedRates.length,
             matchType: result.cached ? 'exact' : 'live',
           };
           await db

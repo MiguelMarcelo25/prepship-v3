@@ -1672,6 +1672,16 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
   const accounts = await loadVisibleDirectCarrierAccounts(input);
   if (!accounts.length) return { rates: [], errors: [], metas: [], diagnostics: [] };
   const shippingOptions = normalizeShippingOptions(input);
+  // PS-203 (stage 3): direct rates pass the SAME markup rules ShipStation rates
+  // already get at read time (applyMarkups keys by `se-<pid>` carrier_id —
+  // direct synthetic ids included), so the combined best-rate pick compares a
+  // uniform CHARGE basis. Before this, /browse compared marked-up ShipStation
+  // prices against raw direct prices. Best-effort: a rules-load failure quotes
+  // direct rates unmarked (the legacy behavior), never blocks quoting.
+  const directMarkups = await loadCarrierMarkups().catch((err) => {
+    console.warn('[rates] direct-rate markup load skipped:', err instanceof Error ? err.message : err);
+    return new Map<string, Markup>();
+  });
   // PS-135(a): resolve residential via the SAME canonical classifier the ShipStation path uses
   // (classifyRateInputResidential), NOT the raw FE input.residential, so direct-carrier (UPS/etc.)
   // quotes apply the SAME residential classification as ShipStation and match the label.
@@ -1761,9 +1771,12 @@ export async function getDirectCarrierRatesForRateInput(input: RateInput): Promi
         directRateServiceDescriptor(rate as Record<string, unknown>, account.provider),
         shippingOptions,
       ).allowed);
-      const rates = eligible
-        .map((rate) => toDirectRate(rate as Record<string, unknown>, account, requestFingerprint, fetchedAt, eligible.length))
-        .filter((rate): rate is Rate => rate != null);
+      const rates = applyMarkups(
+        eligible
+          .map((rate) => toDirectRate(rate as Record<string, unknown>, account, requestFingerprint, fetchedAt, eligible.length))
+          .filter((rate): rate is Rate => rate != null),
+        directMarkups,
+      );
       const meta = {
         accountId: account.id,
         sourceTable: account.sourceTable,
