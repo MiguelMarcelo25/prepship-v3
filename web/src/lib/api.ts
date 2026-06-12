@@ -29,10 +29,23 @@ export class ApiRequestError extends Error {
   // PS-190: machine-readable error code from the backend body ({ error, code }).
   // Callers branch on this instead of substring-matching the human message.
   code?: string;
+  // PS-191: backend-owned retry eligibility on purchase failures. When true,
+  // a rate refresh + operator review is a sensible next step; the FE only
+  // ever PROMPTS — it never auto-repurchases.
+  retryEligible?: boolean;
+  retryReason?: string;
 
   constructor(
     message: string,
-    options: { status?: number; requestId?: string | null; method: string; path: string; code?: string }
+    options: {
+      status?: number;
+      requestId?: string | null;
+      method: string;
+      path: string;
+      code?: string;
+      retryEligible?: boolean;
+      retryReason?: string;
+    }
   ) {
     const requestId = options.requestId?.trim() || undefined;
     super(requestId ? `${message} (Request ID: ${requestId})` : message);
@@ -42,6 +55,8 @@ export class ApiRequestError extends Error {
     this.method = options.method;
     this.path = options.path;
     this.code = options.code;
+    this.retryEligible = options.retryEligible;
+    this.retryReason = options.retryReason;
   }
 }
 
@@ -248,12 +263,18 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     let code: string | undefined;
+    let retryEligible: boolean | undefined;
+    let retryReason: string | undefined;
     try {
       const err = await res.json();
       if (err?.error) msg = err.error;
       // PS-190: carry the backend's machine-readable code so callers can
       // branch on it instead of substring-matching the message.
       if (typeof err?.code === 'string' && err.code) code = err.code;
+      // PS-191: carry the backend's retry-eligibility verdict for purchase
+      // failures — the FE prompts on it, never regexes the message.
+      if (typeof err?.retryEligible === 'boolean') retryEligible = err.retryEligible;
+      if (typeof err?.retryReason === 'string' && err.retryReason) retryReason = err.retryReason;
     } catch {
       // ignore
     }
@@ -263,6 +284,8 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
       method,
       path,
       code,
+      retryEligible,
+      retryReason,
     });
   }
 

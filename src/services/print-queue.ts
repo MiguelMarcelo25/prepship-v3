@@ -11,6 +11,8 @@ import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
+// PS-191: structural retry-eligibility classification for purchase failures.
+import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
 import { decideShippingSafety } from './fulfillment/shipping-safety';
 import {
   collapseIdentityLines,
@@ -104,6 +106,11 @@ export type QueueSendJobResult = {
   labelUrl?: string | null;
   trackingNumber?: string | null;
   error?: string;
+  // PS-191: backend-owned retry eligibility on purchase failures (structural
+  // proof-error classification — classifyLabelPurchaseRetry). The FE prompts
+  // a re-rate on eligible failures; it never auto-repurchases.
+  retryEligible?: boolean;
+  retryReason?: string | null;
 };
 
 export type QueueSendJob = {
@@ -135,6 +142,12 @@ type QueueSendResultSnapshot = {
   alreadyQueued?: boolean;
   trackingNumber?: string | null;
   error?: string;
+  // PS-191: backend-owned retry eligibility on purchase failures (derived
+  // structurally from the proof-error shape — see classifyLabelPurchaseRetry).
+  // The FE renders these; it never regex-parses error text, and a retryable
+  // failure only PROMPTS the operator — nothing auto-repurchases.
+  retryEligible?: boolean;
+  retryReason?: string | null;
 };
 
 export type QueueSendJobSnapshot = {
@@ -298,6 +311,9 @@ function toQueueSendSnapshot(job: QueueSendJob): QueueSendJobSnapshot {
       alreadyQueued: result.alreadyQueued,
       trackingNumber: result.trackingNumber ?? null,
       error: result.error,
+      // PS-191: retry verdict survives into the durable snapshot too.
+      retryEligible: result.retryEligible,
+      retryReason: result.retryReason ?? null,
     })),
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt).toISOString(),
@@ -908,10 +924,17 @@ async function runQueueSendJob(
           job.results.push(result);
         } catch (err) {
           job.failed += 1;
+          // PS-191: classify retry eligibility STRUCTURALLY (proof-error code
+          // + details.reason) — never by parsing the message. The FE surfaces
+          // a "refresh the rate and click again" prompt for eligible failures
+          // and must never auto-repurchase.
+          const retry = classifyLabelPurchaseRetry(err);
           job.results.push({
             orderId: order.orderId,
             success: false,
             error: err instanceof Error ? err.message : 'Unknown error',
+            retryEligible: retry.retryEligible,
+            retryReason: retry.retryReason,
           });
         } finally {
           job.current += 1;

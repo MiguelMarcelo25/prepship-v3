@@ -1,10 +1,21 @@
 /**
  * Guard: single-order Print to Queue handles selected-rate proof failures.
  *
- * The backend queue job returns per-order skipped errors instead of throwing the
- * label-purchase error. The side-panel Print to Queue path must recognize the
- * selected-rate-proof error there, refresh the rate, and avoid surfacing the raw
+ * The backend queue job returns per-order results instead of throwing the
+ * label-purchase error. The side-panel Print to Queue path must recognize a
+ * retry-eligible failure there, refresh the rate, and avoid surfacing the raw
  * "missing_current_fingerprint" toast forever.
+ *
+ * PS-191 re-anchor (2026-06-13): detection moved from message-regex
+ * (isSelectedRateProofError) to the BACKEND retry verdict
+ * (result.retryEligibleOrderIds, fed by retryEligible on queue-send results),
+ * and the same-action auto-retry was REMOVED BY POLICY — the old pin
+ * "retries queue with refreshed backend proof in the same user action"
+ * certified a silent re-purchase at a possibly higher refreshed rate
+ * (promptForRetry:false). The refresh now PROMPTS; the operator confirms the
+ * buy by clicking Print to Queue again. test:ps-191-retry-eligibility owns
+ * the no-auto-repurchase pins; this guard keeps the recognize/refresh/no-raw-
+ * toast protections at their new anchors.
  */
 import { readFileSync } from 'node:fs';
 
@@ -28,20 +39,22 @@ const createOrQueue = createOrQueueStart >= 0 && createOrQueueEnd > createOrQueu
 
 check('found createOrQueueLabel block', createOrQueue.length > 0);
 check(
-  'queue skippedErrors are inspected for selected-rate proof failures',
+  'queue failures branch on the backend retry verdict (no message regex)',
   /const queueErrorMessage = result\.skippedErrors\[0\]/.test(createOrQueue) &&
-    /isSelectedRateProofError\(queueErrorMessage\)/.test(createOrQueue),
+    /result\.retryEligibleOrderIds\.has\(order\.orderId\)/.test(createOrQueue),
 );
 check(
-  'proof failure refreshes stale rate instead of showing raw queue error',
-  /await refreshStaleRateForOrder\(order, 'Print to Queue'/.test(createOrQueue),
+  'retryable failure refreshes the stale rate instead of showing raw queue error',
+  /refreshStaleRateForOrder\(order, 'Print to Queue'\)/.test(createOrQueue),
 );
 check(
-  'proof failure retries queue with refreshed backend proof in the same user action',
-  /const refreshedRate = await refreshStaleRateForOrder\(order, 'Print to Queue'/.test(createOrQueue) &&
-    /buildSelectedRateProofPayload\(order, refreshedRate\)/.test(createOrQueue) &&
-    /selectedRateProof: refreshedRateProof/.test(createOrQueue) &&
-    /const retryResult = await sendOrdersToQueueBackend/.test(createOrQueue),
+  'PS-191: the refresh PROMPTS — no same-action re-purchase with the refreshed proof',
+  // Pin CODE shapes (the explanatory comment legitimately names the old
+  // promptForRetry:false behavior while documenting why it is gone).
+  !/buildSelectedRateProofPayload\(order, refreshedRate\)/.test(createOrQueue) &&
+    !/const retryResult = await sendOrdersToQueueBackend/.test(createOrQueue) &&
+    !createOrQueue.includes('{ promptForRetry: false }') &&
+    !createOrQueue.includes('promptForRetry?: boolean'),
 );
 check(
   'raw missing_current_fingerprint is not shown from the queue skipped error path',

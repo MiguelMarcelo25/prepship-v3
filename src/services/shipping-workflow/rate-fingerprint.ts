@@ -346,6 +346,52 @@ export function validatePurchaseAccountBinding(input: {
   return { ok: false, reason: 'purchase_account_mismatch', purchaseKey, proofKey };
 }
 
+// ─── PS-191: structured retry eligibility for purchase failures ─────────────
+// The FE previously regex-parsed postage error MESSAGES to decide whether a
+// failed purchase was worth retrying — and Print-to-Queue then silently
+// re-purchased at a possibly higher rate. Retry eligibility is now a backend
+// fact derived STRUCTURALLY from the proof-error shape (code + details.reason
+// — never message text), returned on every purchase-failure response, and the
+// FE only ever PROMPTS the operator; it never auto-buys.
+//
+// Eligible = reasons a rate REFRESH actually fixes (stale/missing/changed
+// proof). NOT eligible: purchase_account_mismatch — the saved rate belongs to
+// a different account, so refreshing the same selection just loops; the
+// operator must pick the matching account/rate.
+const PROOF_ERROR_CODES: ReadonlySet<string> = new Set([
+  'SELECTED_RATE_PROOF_INVALID',
+  'DIRECT_CARRIER_ON_SHIPSTATION_PATH',
+  'SELECTED_RATE_ACCOUNT_MISMATCH',
+]);
+
+const RETRY_ELIGIBLE_PROOF_REASONS: ReadonlySet<string> = new Set([
+  'missing_selected_rate',
+  'missing_current_fingerprint',
+  'missing_fingerprint',
+  'fingerprint_mismatch',
+  'not_in_current_eligible_rates',
+]);
+
+export function classifyLabelPurchaseRetry(err: unknown): {
+  retryEligible: boolean;
+  retryReason: string | null;
+} {
+  const e = err as
+    | { code?: unknown; name?: unknown; details?: { reason?: unknown } }
+    | null
+    | undefined;
+  const isProofError =
+    !!e &&
+    (PROOF_ERROR_CODES.has(String(e.code)) || e.name === 'SelectedRateProofError');
+  if (!isProofError) return { retryEligible: false, retryReason: null };
+  const reason =
+    typeof e!.details?.reason === 'string' ? e!.details.reason : null;
+  return {
+    retryEligible: reason !== null && RETRY_ELIGIBLE_PROOF_REASONS.has(reason),
+    retryReason: reason,
+  };
+}
+
 /**
  * Throwing wrapper for the purchase boundary. Mismatch throws the SAME
  * SelectedRateProofError class the proof path throws (structured, before any

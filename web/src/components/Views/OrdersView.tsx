@@ -4509,6 +4509,16 @@ export default function OrdersView({
       })
       .filter((message): message is string => Boolean(message))
 
+    // PS-191: backend-owned retry eligibility per failed order. Callers use
+    // this to PROMPT a re-rate (operator reviews + clicks again) — never to
+    // auto-repurchase.
+    const retryEligibleOrderIds = new Set(
+      backendResults
+        .filter((result) => result.success === false && result.retryEligible === true)
+        .map((result) => toNumberValue(result.orderId ?? result.order_id))
+        .filter((orderId): orderId is number => orderId != null),
+    )
+
     return {
       // Direct-carrier orders bought + queued via the Vercel path count too.
       queued: directQueued + (toNumberValue(finalStatus?.queued) ?? 0),
@@ -4517,6 +4527,7 @@ export default function OrdersView({
       // Direct-carrier failures first, then client-side skips, then the backend's
       // per-order reasons. The toasts show skippedErrors[0].
       skippedErrors: [...directErrors, ...skippedErrors, ...backendErrors],
+      retryEligibleOrderIds,
     }
   }
 
@@ -4637,26 +4648,27 @@ export default function OrdersView({
   // (PS-095/PS-098). Every reason here means the same thing for an operator: the
   // order's saved rate is stale/unproven and must be re-rated before postage is
   // bought. We surface a friendly "recalculate then print" flow instead of the
-  // raw reason code (e.g. "missing_current_fingerprint").
-  function isSelectedRateProofError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
-    return (
-      /rate proof is required before label purchase/i.test(message) ||
-      /\b(missing_current_fingerprint|missing_fingerprint|fingerprint_mismatch|missing_selected_rate|not_in_current_eligible_rates)\b/i.test(message)
-    )
+  // PS-191: retry eligibility is a BACKEND fact (retryEligible/retryReason on
+  // purchase-failure responses, derived structurally from the proof-error
+  // code — see classifyLabelPurchaseRetry). The old regex over error MESSAGE
+  // text is deleted; this only reads structured fields. The code fallback
+  // covers deploy skew (older responses without the flag).
+  function isRetryEligibleRateFailure(error: unknown): boolean {
+    const e = error as { retryEligible?: unknown; code?: unknown } | null | undefined
+    if (!e || typeof e !== 'object') return false
+    if (typeof e.retryEligible === 'boolean') return e.retryEligible
+    return e.code === 'SELECTED_RATE_PROOF_INVALID'
   }
 
   // One-click re-rate: when a purchase is refused for a stale/unproven rate,
-  // refresh the order's best rate (which re-stamps the request fingerprint).
-  // Create + Print still asks the operator to review/click again; Print to Queue
-  // may continue the original queue click with the freshly returned backend
-  // proof so it does not get stuck in a stale-proof retry loop.
+  // refresh the order's best rate (which re-stamps the request fingerprint)
+  // and PROMPT the operator to review it and click again. PS-191: every retry
+  // requires that confirmation — no caller may auto-continue the purchase
+  // with the refreshed (possibly higher-priced) rate.
   async function refreshStaleRateForOrder(
     order: OrderSummaryDto,
     nextActionLabel = 'Create + Print Label',
-    options: { promptForRetry?: boolean } = {},
   ) {
-    const promptForRetry = options.promptForRetry ?? true
     const request = getAutoBestRateRequest(order)
     if (!request) {
       showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
@@ -4670,10 +4682,8 @@ export default function OrdersView({
       })
       if (result.status === 'updated') {
         showToast(
-          promptForRetry
-            ? `Rate refreshed — review it and click ${nextActionLabel} again.`
-            : `Rate refreshed — continuing ${nextActionLabel}.`,
-          promptForRetry ? 'success' : 'info',
+          `Rate refreshed — review it and click ${nextActionLabel} again.`,
+          'success',
         )
         return result.rate ?? null
       } else if (result.status === 'cleared') {
@@ -4881,39 +4891,15 @@ export default function OrdersView({
           )
         } else {
           const queueErrorMessage = result.skippedErrors[0]
-          if (isSelectedRateProofError(queueErrorMessage)) {
-            const refreshedRate = await refreshStaleRateForOrder(order, 'Print to Queue', { promptForRetry: false })
-            const refreshedRateProof = refreshedRate ? buildSelectedRateProofPayload(order, refreshedRate) : undefined
-            if (refreshedRate && refreshedRateProof) {
-              const retryPayload = {
-                ...(payload as unknown as Record<string, unknown>),
-                selectedRateProof: refreshedRateProof,
-              }
-              const retryResult = await sendOrdersToQueueBackend([order], {
-                kind: 'existing-labels',
-                label: 'Sending to queue',
-                labelPayloadOverrides: new Map([[order.orderId, retryPayload]]),
-              })
-              if (retryResult.queued > 0) {
-                showToast(
-                  formatQueuedOrderToast(
-                    order.orderNumber ?? order.orderId,
-                    getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
-                  ),
-                  'success',
-                )
-              } else {
-                const retryErrorMessage = retryResult.skippedErrors[0]
-                showToast(
-                  isSelectedRateProofError(retryErrorMessage)
-                    ? RATE_PROOF_RETRY_MESSAGE
-                    : retryErrorMessage ?? 'Label was not added to the print queue',
-                  'error',
-                )
-              }
-            } else {
-              showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
-            }
+          // PS-191: NEVER auto-repurchase. The old path re-rated and re-fired
+          // the queue purchase with promptForRetry:false — the operator could
+          // be charged a higher refreshed rate with zero awareness. Now a
+          // backend-flagged retryable failure refreshes the rate and PROMPTS
+          // (same UX as Create + Print); the operator reviews and clicks
+          // Print to Queue again to confirm the buy.
+          if (result.retryEligibleOrderIds.has(order.orderId)) {
+            showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
+            void refreshStaleRateForOrder(order, 'Print to Queue')
           } else {
             showToast(queueErrorMessage ?? 'Label was not added to the print queue', 'error')
           }
@@ -4951,7 +4937,7 @@ export default function OrdersView({
           return null
         }
       }
-      if (isSelectedRateProofError(error)) {
+      if (isRetryEligibleRateFailure(error)) {
         // Stale/unproven rate — don't show the raw reason code. Auto-refresh the
         // rate and prompt the operator to print again (they confirm the buy).
         showLabelPdfPlaceholderMessage(

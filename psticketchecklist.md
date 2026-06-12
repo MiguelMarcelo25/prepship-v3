@@ -1288,3 +1288,37 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   invoice mutation, order/shipment mutation, postage, or marketplace notification occurred; migration is
   additive-only; lockdown untouched (order-save coherence applies to awaiting orders behind the unchanged
   assertOrderEditable guard).
+
+### PS-191 — Auto-retry postage: structured retry-eligibility DTO; FE must not re-purchase without operator review — DONE 2026-06-13
+- **✅ DONE:** Print-to-Queue can no longer silently re-purchase postage. **The bug:** on a proof failure
+  the queue path regex-parsed the error MESSAGE (isSelectedRateProofError), re-rated with
+  `promptForRetry: false`, and RE-FIRED the purchase with the refreshed proof — the operator could be
+  charged a higher refreshed rate with zero awareness (Create+Print prompted; Print-to-Queue bypassed).
+  **Backend (canonical owner):** `classifyLabelPurchaseRetry` in
+  src/services/shipping-workflow/rate-fingerprint.ts (co-located with SelectedRateProofError) — derives
+  `retryEligible`/`retryReason` STRUCTURALLY from the proof-error code + details.reason (guard pins the
+  classifier body never reads `.message` or regexes). Eligible = reasons a rate refresh actually fixes
+  (missing_selected_rate, missing_current_fingerprint, missing_fingerprint, fingerprint_mismatch,
+  not_in_current_eligible_rates); NOT eligible = purchase_account_mismatch (all three PS-204 code
+  spellings — refreshing the same selection just loops; operator must change the account/rate). Returned
+  on BOTH purchase-failure surfaces: the labels route proof branch (which now also catches the
+  DIRECT_CARRIER_ON_SHIPSTATION_PATH / SELECTED_RATE_ACCOUNT_MISMATCH codes as 400s instead of falling
+  through toward 500) and the queue-send job's per-order results (+ durable snapshot samples).
+  **FE:** ApiRequestError carries retryEligible/retryReason from error bodies;
+  `isRetryEligibleRateFailure` is a STRUCTURAL field check (backend flag authoritative; code fallback
+  only for deploy skew) — the message regexes are deleted from web/src entirely;
+  sendOrdersToQueueBackend exposes `retryEligibleOrderIds` from backend results; the queue failure path
+  now refreshes the rate and PROMPTS ("review it and click Print to Queue again" — same UX as
+  Create+Print); the `promptForRetry` auto-continue plumbing is deleted (refreshStaleRateForOrder always
+  prompts). **Guards:** NEW `test:ps-191-retry-eligibility` (classifier matrix: 5 eligible reasons, 3
+  account-mismatch codes ineligible-with-reason, message-text-never-drives-eligibility incl. a poisoned
+  Error message, LABEL_EXISTS-details-ignored, garbage reasons → null + source pins: no regex in
+  classifier, DTO on both surfaces, regexes/auto-retry deleted from FE, prompt-only refresh);
+  `print-to-queue-selected-rate-proof` guard RE-ANCHORED (its old pin literally certified the same-action
+  auto-re-purchase — now pins the backend-verdict branch, the refresh-and-prompt, and the ABSENCE of the
+  re-fire; override-forwarding + no-raw-toast pins unchanged). **QA:** typecheck + build:web + ps-191 +
+  re-anchored print-to-queue proof guard + selected-rate-proof-boundary + batch-send-proof-forwarding +
+  ps-204-account-binding + ps-202-direct-label-owner + full shipping-roundtrip-certification ALL PASS.
+  **Acceptance:** no postage-error regex parsing in web/src ✓; Print-to-Queue retries require operator
+  confirmation ✓; backend retryEligible on failure responses ✓; guards pass ✓. No postage purchased, no
+  marketplace notifications, no order/shipment mutation.

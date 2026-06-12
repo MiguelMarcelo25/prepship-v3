@@ -15,6 +15,8 @@ import {
 } from '../services/labels';
 import { generateMockLabelHtml } from '../services/mock-label-generator';
 import { verifyMockLabelSignature } from '../lib/mock-label-access';
+// PS-191: structural retry-eligibility classification for purchase failures.
+import { classifyLabelPurchaseRetry } from '../services/shipping-workflow/rate-fingerprint';
 
 const app = new Hono();
 
@@ -100,8 +102,28 @@ function handleCreateError(c: Context, err: unknown): Response {
       429
     );
   }
-  if (e.code === 'SELECTED_RATE_PROOF_INVALID') {
-    return c.json({ error: message, code: e.code, ...details }, 400);
+  if (
+    e.code === 'SELECTED_RATE_PROOF_INVALID' ||
+    // PS-204 account-binding rejections are the same SelectedRateProofError
+    // class with a more specific code — operator-actionable 400s, not 500s.
+    e.code === 'DIRECT_CARRIER_ON_SHIPSTATION_PATH' ||
+    e.code === 'SELECTED_RATE_ACCOUNT_MISMATCH'
+  ) {
+    // PS-191: structured retry eligibility on every purchase-failure response.
+    // The FE branches on these fields — it must never regex the message — and
+    // a retry-eligible failure only ever PROMPTS the operator to re-rate and
+    // click again; nothing auto-purchases.
+    const retry = classifyLabelPurchaseRetry(e);
+    return c.json(
+      {
+        error: message,
+        code: e.code,
+        retryEligible: retry.retryEligible,
+        retryReason: retry.retryReason,
+        ...details,
+      },
+      400
+    );
   }
   // PS-106: direct-store order blocked from a ShipStation carrier (enforce mode).
   if (e.code === 'CARRIER_FAMILY_NOT_ELIGIBLE') {
