@@ -853,9 +853,33 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   src/lib/safe-error + ADDS a shim-integrity pin. QA: typecheck + vercel-function-imports (103
   files walked through the shims) + raw-error (32) + reconciliation + awaiting-parity + ps-032 +
   credential-accounts + ps-205 + FULL certification PASS.
-  **Remaining surfaces**: S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy deletion
-  (DJ: PS-202 verification), S8 final flip (vercel.json exclusions removed, api/ deleted, ps-200
-  guard + guard-fleet re-anchor).
+  **S4 (eBay OAuth, 2026-06-12)**: resolved WITHOUT the portal gate — eBay's token exchange uses
+  the RuName (`DrprepperUSA-Drpreppe-Prepsh-qoumohks`), an eBay-side indirection whose record holds
+  the actual accept URL. The callback is now ported to v4 (imported-handler mirror +
+  src/routes/oauth.ts mounted PRE-JWT like /webhooks — the seller's browser arrives sessionless;
+  the single-use keyset-bound eBay code is the auth). BOTH stacks serve it; the only human step:
+  **eBay dev portal → User Tokens → RuName → set "auth accepted URL" to
+  `https://prepshipv4-api-l5xc.onrender.com/oauth/ebay/callback`** (one field, anytime before S8;
+  legacy stays live until then). SAME-DAY CATCH while reading the auth boundary: S1's
+  /store-accounts route was missing from main.ts protectedPrefixes — requireAuth never ran, the
+  permission middleware saw no auth vars, and EVERY /store-accounts call 403'd since the S1 deploy.
+  Fixed (route was dark, not misbehaving — stores Settings list/save would have failed loudly).
+  **PS-201 — ✅ CLOSED (read-only API check, 2026-06-12)**: all 5 May ship-confirm failures verified
+  via the Walmart Marketplace API — every order shows **Delivered** with tracking EXACTLY matching
+  our shipments rows (24399/129114065068060, 24256/119113695082845, 24252/119113695308811,
+  24257/119113694548583, 24258/119113694642560 — co# in card). No Seller Center action required;
+  no late-shipment exposure; confirmation_status stays 'failed' as historical truth per the card.
+  **Quick looks (2026-06-12)**: PS-199 ✅ live-verified — awaiting order #200014759868070 resolved
+  PO 129116451700091 via walmart_marketplace_api and walmart_shipping returned 2 real rates (USPS
+  GA $9.79 / Priority $14.56, $0 spent). PS-205 ✅ — HUGRAB combo rows #1494/#1491 EFFECTIVE 31oz
+  12x10x3 pkg 121 (source combo_default); #1493/#1492 carry LEGACY 35oz operator-field overrides
+  (pre-PS-205 stamp) which the materializer correctly refuses to overwrite — DJ one-click fix: open
+  any combo order → Save weights & dims as SKU defaults (the PS-060/121 apply re-stamps 31oz to
+  both + re-rates). Ops tool: scripts/ops-ps201-ps199-ps205-check.ts (read-only; --apply gates the
+  materializer backfill).
+  **Remaining surfaces**: S5 labels+rates legacy deletion (DJ: live-order test), S8 final flip
+  (vercel.json exclusions removed, api/ deleted, RuName flip confirmed, ps-200 guard + guard-fleet
+  re-anchor).
 
 - [x] **PS-206** — Rate Browser always fetches ALL scoped carriers — ✅ CODE COMPLETE 2026-06-12.
   Architecture placement: scoped-carrier COVERAGE is backend/DTO-owned — 'uncached' joined

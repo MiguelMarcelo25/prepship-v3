@@ -33,6 +33,7 @@ import adminRoute from './routes/admin';
 import carrierAccountsRoute from './routes/carrier-accounts';
 import carriersRoute from './routes/carriers';
 import storeAccountsRoute from './routes/store-accounts';
+import oauthRoute from './routes/oauth';
 import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 import observabilityRoute from './routes/observability';
@@ -117,6 +118,10 @@ app.route('/cron', cronRoute);
 // PS-128/PS-129: public store/marketplace webhook ingestion. Mounted BEFORE the JWT block
 // (providers can't send a Supabase JWT); each event is authenticated by per-provider HMAC.
 app.route('/webhooks', webhooksRoute);
+// PS-200 S4: eBay OAuth consent callback — the seller's browser arrives via
+// redirect from eBay with no session; the single-use eBay auth code (bound to
+// the stored keyset) is the auth. See src/routes/oauth.ts.
+app.route('/oauth', oauthRoute);
 
 // Everything below requires a valid Supabase JWT.
 const protectedPrefixes = [
@@ -140,6 +145,10 @@ const protectedPrefixes = [
   '/init',
   '/admin',
   '/carrier-accounts',
+  // PS-200 S4 fix: S1 mounted /store-accounts but missed this allowlist —
+  // requireCredentialAccountPermission then saw no auth vars and 403'd every
+  // caller. The route was dark since the S1 deploy (same-day catch).
+  '/store-accounts',
   '/carriers',
   '/users',
   '/worker',
