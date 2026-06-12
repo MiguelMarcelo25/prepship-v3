@@ -755,9 +755,20 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   transition (PS-200 deletes it). Guard `test:ps-202-direct-label-owner` (12 checks). Noted
   follow-item: the PS-078 compatibility-matrix module still labels the endpoint 'carrier_vercel' —
   refresh its naming during PS-200. QA: typecheck + build:web + ps-202 + ps-078 +
-  direct-carrier-labels + full cert ALL PASS. **Verification remaining (DJ go-ahead):** one
-  test-mode ($0) Shipp + Walmart Shipping label through v4, field-by-field shipments-row compare
-  vs a legacy row, then ONE live canary per carrier.
+  direct-carrier-labels + full cert ALL PASS. **Test-mode verification RUN 1 (2026-06-12,
+  DJ-authorized; orders 1281639/40/41):** two findings. (1) The __carrierTestMode seam was never
+  WIRED from createLabelV2's direct branch (the guard pinned the string, not the wiring) — fixed,
+  double-gated, guard strengthened. (2) PS-186's test-label authority outranks the direct branch
+  for is_test clients: every harness purchase produced a $0 MOCK shipment (cost 0.00, TEST
+  tracking, /labels/mock/ URL, source test_offline, ZERO outbox rows, zero provider HTTP — DB
+  evidence). That is a STRONGER money-safety invariant than planned: a test-client order
+  physically cannot reach a real connector through v4. Consequence: the direct branch's connector
+  mapping is untestable with a test client BY DESIGN, and the replay fixture store is EMPTY
+  (capture never ran) — so the REMAINING PS-202 verification = the ONE live canary per carrier on
+  a real order (DJ's separate approval), which doubles as the fixture-capture run (replay
+  regression exists forever after). scripts/ps-202-test-mode-verification.ts re-anchored to assert
+  the PS-186 reality (repeatable green check; each run leaves mock-shipped harness rows for the
+  Stage-4 purge list — 3 added: 1281639/40/41).
 
 - [~] **PS-200** — Decommission legacy Vercel api/ backend — 🔨 IN PROGRESS (parts 1+2 of 8,
   2026-06-12). **Part 1 (inventory)**: full endpoint→caller→v4-equivalent map + 8-surface cutover
