@@ -622,6 +622,9 @@ app.get('/print/status/:jobId', async (c) => {
         file_name: durableJob.fileName,
         error: durableJob.errorMessage,
         label_errors: durableJob.labelErrors,
+        // PS-194: the entries that actually merged — the FE Confirm-Printed
+        // gate consumes this DTO field, never a session-only set.
+        successful_entry_ids: durableJob.successfulEntryIds ?? [],
         durableJob,
       });
     }
@@ -640,7 +643,32 @@ app.get('/print/status/:jobId', async (c) => {
     file_name: job.fileName ?? null,
     error: job.errorMessage ?? null,
     label_errors: job.labelErrors ?? [],
+    // PS-194: see above — backend-owned Confirm-Printed evidence.
+    successful_entry_ids: job.successfulEntryIds ?? [],
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
+  });
+});
+
+// PS-194: the most recent merge job (durable snapshot — survives worker
+// restarts AND the operator's page refresh). The FE re-seeds its
+// Confirm-Printed gate from successful_entry_ids on load, so "which labels
+// actually went through a printed PDF" is backend truth instead of a
+// session-only useState Set that a refresh wiped.
+app.get('/print/last', async (c) => {
+  const scope = printQueueScopeFromContext(c);
+  const durableJob = await withDurableStatusTimeout(getLatestMergeJobSnapshot);
+  if (!durableJob || !(await canViewMergeSnapshot(durableJob, scope))) {
+    return c.json({ job: null });
+  }
+  return c.json({
+    job: {
+      job_id: durableJob.jobId,
+      status: durableJob.status,
+      file_name: durableJob.fileName,
+      successful_entry_ids: durableJob.successfulEntryIds ?? [],
+      created_at: durableJob.createdAt,
+      persisted_at: durableJob.persistedAt,
+    },
   });
 });
 

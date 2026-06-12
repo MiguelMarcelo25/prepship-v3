@@ -6673,6 +6673,11 @@ export default function OrdersView({
 
     const printWindow = openQueuePrintWindow()
     let pdfOpened = false
+    // PS-194: which entries ACTUALLY merged is backend truth
+    // (successful_entry_ids on the job DTO) — a held/failed label must not be
+    // marked print-ready just because it was requested. Falls back to the
+    // requested ids only when an older backend omits the field.
+    let mergedEntryIds: string[] = entryIds
     setQueuePrintInFlight(true)
     setQueuePrintProgress(0)
     setQueuePrintMessage('Starting merge…')
@@ -6693,6 +6698,10 @@ export default function OrdersView({
         setQueuePrintProgress(typeof status.progress === 'number' ? status.progress : null)
 
         if (status.status === 'done') {
+          const backendMergedIds = Array.isArray(status.successful_entry_ids)
+            ? (status.successful_entry_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+            : null
+          if (backendMergedIds) mergedEntryIds = backendMergedIds
           // The signed PDF URL is short-lived but stable enough for Chrome's
           // native PDF viewer save/download controls; do not use a blob URL
           // here because the old 30s revoke window made viewer downloads fail.
@@ -6727,7 +6736,7 @@ export default function OrdersView({
       if (pdfOpened) {
         setQueuePrintReadyEntryIds((current) => {
           const next = new Set(current)
-          entryIds.forEach((entryId) => next.add(entryId))
+          mergedEntryIds.forEach((entryId) => next.add(entryId))
           return next
         })
       }
@@ -7387,6 +7396,27 @@ export default function OrdersView({
       return next.size === current.size ? current : next
     })
   }, [queuedEntryIds])
+  // PS-194: Confirm-Printed survives a page refresh. Re-seed the print-ready
+  // set from the backend's LAST merge job (durable snapshot) — the entries
+  // that actually merged into a printed PDF are backend truth, not session
+  // state. The pruning effect above intersects with the live queue, so ids
+  // from already-confirmed/removed entries fall away naturally.
+  useEffect(() => {
+    let cancelled = false
+    void apiClient.fetchQueuePrintLastJob().then(({ job }) => {
+      if (cancelled || !job || job.status !== 'done') return
+      const ids = Array.isArray(job.successful_entry_ids)
+        ? (job.successful_entry_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+        : []
+      if (!ids.length) return
+      setQueuePrintReadyEntryIds((current) => {
+        const next = new Set(current)
+        ids.forEach((id) => next.add(id))
+        return next.size === current.size ? current : next
+      })
+    })
+    return () => { cancelled = true }
+  }, [])
   // Search & sort applied to the queue and history lists. Search matches the
   // order number OR the order_id (cast to string) — covers both how users
   // type queries (full order #, partial digits, etc.).

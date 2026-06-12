@@ -1322,3 +1322,27 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   **Acceptance:** no postage-error regex parsing in web/src ✓; Print-to-Queue retries require operator
   confirmation ✓; backend retryEligible on failure responses ✓; guards pass ✓. No postage purchased, no
   marketplace notifications, no order/shipment mutation.
+
+### PS-194 — Confirm-Printed: backend persists successfulEntryIds; FE validates against the DTO — DONE 2026-06-13
+- **✅ DONE:** the Confirm-Printed gate now runs on BACKEND TRUTH that survives a page refresh. **The
+  bug:** runMergeJob computed `successfulEntryIds` (entries that actually merged into the batch PDF) and
+  threw the array away after the count; the FE gated on a session-only useState Set seeded from the
+  REQUESTED entry ids — a refresh wiped it (everything looked unconfirmable) and a mid-merge failure
+  (held order, bad label URL) still got marked print-ready in-session. **Backend:** `MergeJob` carries
+  `successfulEntryIds` (the live array is stamped onto the job at merge start, so progress snapshots and
+  the done-persist serialize whatever has merged); `MergeJobSnapshot`/`toMergeSnapshot` persist it
+  durably (capped 500 — batch max is 200; optional on the type for pre-PS-194 snapshots);
+  `/print-queue/print/status/:jobId` returns `successful_entry_ids` on BOTH branches (in-memory +
+  durable); NEW `GET /print-queue/print/last` returns the latest durable merge job (scope-checked via
+  canViewMergeSnapshot) for refresh re-seeding. **FE:** merge-done seeding switched from the requested
+  `entryIds` to `status.successful_entry_ids` (failed entries never get marked print-ready; requested-ids
+  fallback only for deploy skew); a mount effect re-seeds the gate from `fetchQueuePrintLastJob()` —
+  the existing pruning effect intersects with the live queue so confirmed/removed entries fall away;
+  the pdfOpened gating stays (the PDF must have reached the operator). Gate shape unchanged: Confirm
+  enabled only when every queued entry is print-ready. **Guard**
+  `test:ps-194-confirm-printed-persistence`: job/snapshot/DTO persistence pins, /print/last + scope
+  check, FE never seeds from requested ids, merge-done + refresh seeds read DTO fields, gate formula
+  pinned. **QA:** typecheck + build:web + ps-194 guard + print-queue-hygiene + print-queue-client-scope +
+  full shipping-roundtrip-certification ALL PASS. **Note:** multi-batch in-session unions still work (the
+  Set accumulates across jobs); after refresh, the LAST job's ids re-seed (the durable layer keeps one
+  last-run snapshot by design) — PS-195 (card still missing) builds on this.

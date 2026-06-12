@@ -1369,6 +1369,17 @@ export const apiClient = {
     return api.get<any>(`/print-queue/print/status/${encodeURIComponent(jobId)}`);
   },
 
+  // PS-194: the most recent merge job (durable snapshot). Used to re-seed the
+  // Confirm-Printed gate after a page refresh — successful_entry_ids is
+  // backend truth for "these labels went through a merged print PDF".
+  fetchQueuePrintLastJob(): Promise<{ job: Record<string, unknown> | null }> {
+    return safe(
+      'fetchQueuePrintLastJob',
+      () => api.get<{ job: Record<string, unknown> | null }>('/print-queue/print/last'),
+      { job: null },
+    );
+  },
+
   // PS-139: removed dead FE method downloadQueuePrintJob (0 callers; superseded by the PS-065
   // signed-URL flow openQueuePrintJobPdf / fetchQueuePrintJobSignedUrl).
   fetchQueuePrintJobSignedUrl(

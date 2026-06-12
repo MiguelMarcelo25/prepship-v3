@@ -78,6 +78,12 @@ export type MergeJob = {
   fileName?: string;
   errorMessage?: string;
   labelErrors?: string[];
+  // PS-194: the entries that ACTUALLY merged into the batch PDF. Previously
+  // computed inside runMergeJob and discarded after the count — so the FE's
+  // Confirm-Printed gate ran on a session-only Set that a page refresh wiped.
+  // Persisted on the job + durable snapshot and returned on the status DTO so
+  // the gate is backend truth.
+  successfulEntryIds: string[];
   createdAt: number;
 };
 
@@ -186,6 +192,9 @@ export type MergeJobSnapshot = {
   fileName: string | null;
   errorMessage: string | null;
   labelErrors: string[];
+  // PS-194: optional for back-compat with snapshots persisted before the
+  // field existed — readers default to [].
+  successfulEntryIds?: string[];
   createdAt: string;
   persistedAt: string;
 };
@@ -336,6 +345,9 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
     fileName: job.fileName ?? null,
     errorMessage: job.errorMessage ?? null,
     labelErrors: (job.labelErrors ?? []).slice(-10),
+    // PS-194: capped well above the 200-entry batch limit; the durable
+    // snapshot is what lets Confirm-Printed survive a page refresh.
+    successfulEntryIds: (job.successfulEntryIds ?? []).slice(0, 500),
     createdAt: new Date(job.createdAt).toISOString(),
     persistedAt: new Date().toISOString(),
   };
@@ -1124,6 +1136,7 @@ export async function startPrintJob(input: {
     message: `Starting merge of ${entries.length} label${entries.length === 1 ? '' : 's'}…`,
     createdAt: Date.now(),
     labelErrors: [],
+    successfulEntryIds: [],
   };
   mergeJobs.set(jobId, job);
 
@@ -1241,7 +1254,11 @@ async function runMergeJob(
     // queued must not be merged into the print batch.
     const shippingHoldsByOrderId = await loadShippingHoldsByOrderId(entriesByGroup);
     let lastGroup: string | null = null;
+    // PS-194: the job carries the live array — progress snapshots and the
+    // final done-persist serialize whatever has merged so far, and the status
+    // DTO exposes it for the FE Confirm-Printed gate.
     const successfulEntryIds: string[] = [];
+    job.successfulEntryIds = successfulEntryIds;
     const failedEntryIds = new Set<string>();
 
     for (let i = 0; i < sorted.length; i += 1) {
