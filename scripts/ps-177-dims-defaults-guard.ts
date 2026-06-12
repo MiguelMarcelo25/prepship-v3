@@ -75,10 +75,12 @@ check('both detail handlers attach dimsDefaults',
   (ordersRoute.match(/dimsDefaults: await getOrderDimsDefaultsForOrder\(id\)/g)?.length ?? 0) === 2);
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('FE panel seeds from the backend payload first',
-  /backendDimsDefaults/.test(ordersView) && /if \(seedFromBackendDefaults\(\)\) return/.test(ordersView));
-check('FE fetch-loop fallback retained until Phase 6',
-  /apiClient\.fetchProductsBySku\(sku\)/.test(ordersView) &&
-  /deriveShipmentDimsFromProductDefaults\(activeItems, defaultsBySku\)/.test(ordersView));
+  /backendDimsDefaults/.test(ordersView) && /seedFromBackendDefaults\(\)/.test(ordersView));
+// PS-178 final part: the per-SKU fetch loop + client-side stacking derivation
+// are DELETED — dims defaults come ONLY from the backend dimsDefaults payload.
+check('FE dims-derivation fallback deleted (backend dimsDefaults only)',
+  !/deriveShipmentDimsFromProductDefaults\(activeItems/.test(ordersView) &&
+  !/fetchProductsBySku\(sku\)\.then/.test(ordersView));
 check('FE seeding still only fills EMPTY fields (operator edits win)',
   /current\.length \|\| !derivedDims\?\.length \? current\.length/.test(ordersView));
 

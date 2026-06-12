@@ -510,7 +510,31 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   QA: typecheck + build:web + ps-173 + ps-175 + ps-176 + ps-196 + ps-187-fixture + ps-183 +
   ps-123 + ps-135 + full cert ALL PASS. **Remaining parts:** effective package/dims/default
   source display. Read-model/additive throughout.
-- **PS-178 — 🟡 PARTS 1–4 DONE 2026-06-12 (Phase 6).**
+- **PS-178 — ✅ COMPLETE 2026-06-12 (Phase 6, 5 parts).**
+  **FINAL PART: FE fallback deletions (gate released by DJ's live check).** Deleted from the FE:
+  (a) ALL awaiting-row markup math — Best Rate cell, Margin cell, margin SORT comparator, and the
+  side-panel rate price now read ONLY the backend DTO money tuple (a row without the tuple degrades
+  to the plain carrier base / a dash — the FE never computes money policy); (b) the FE strict-recalc
+  decision plan — planStrictBestRateRecalculate DELETED from OrdersView + orders-parity (+ its
+  types); a /browse response without the backend strictRecalculation verdict is BLOCKED with an
+  explicit retry message, never FE-decided; (c) the FE strict persist calls — saveOrderDimsStrict +
+  updateOrderBestRateSelectionStrict calls deleted (backend persists inside /browse; FE updates
+  display state only; the apiClient methods remain for PS-179's evidence-based dead-code pass);
+  (d) the panel dims fallback — the per-SKU fetchProductsBySku loop + client-side stacking
+  derivation deleted (backend dimsDefaults only; a payload without it leaves fields to the
+  operator). RETAINED BY DESIGN (each documented in the ratchet): the SHIPPED Selected-Rate markup
+  call (shipped rows carry bestRateWorkflow=null until the shipped-row DTO phase — ceiling 1), the
+  display-resolver local cascades (shipped rows' only carrier/service path), the
+  classifyQueueOrderRoute never-buy ladder + residual rule (live safety, drift-pinned by ps-176),
+  and one fetchProductsBySku verification read (assertSavedProductDefaults — not dims policy).
+  Ratchet ceilings lowered to the deleted state: markup 5→1, strict plan/persists →0, dims
+  derivation →0, fetch loop →1. Guards updated to pin DELETION (never weakened):
+  recalculate-best-rate-strict matrix retargeted to the canonical backend
+  planStrictRecalculateDecision + a no-local-plan pin; ps-175 re-pins "local plan deleted" + "FE
+  never persists"; ps-177 money re-pins "only the shipped call remains"; ps-177 dims re-pins
+  "derivation deleted"; recalculate-all-live spinner count re-anchored to the merged cell branch.
+  QA: typecheck + build:web + ps-175 + recalculate-best-rate-strict + ps-177×2 + ps-178 ratchet +
+  recalculate-all-live + ps-196 + full cert ALL PASS.
   **PART 4: selection toolbar extraction.** renderSelectionToolbar's 156-line JSX body moved VERBATIM
   (line-range splice) to NEW render-only `OrdersSelectionToolbar.tsx` (15 typed props); a thin
   renderSelectionToolbar wrapper stays in OrdersView so the `{renderSelectionToolbar()}` call-site

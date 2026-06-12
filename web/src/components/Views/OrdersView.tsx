@@ -159,7 +159,6 @@ import {
   PENDING_RATING_WATCHDOG_MS,
   getColumnMinWidth,
   groupPrintQueueEntries,
-  planStrictBestRateRecalculate,
   planSettledAutoRate,
   resolveColumnPrefs,
   savedBestRateCanDisplayForCurrentRequest,
@@ -1570,22 +1569,11 @@ function getSortValue(
     case 'test_bestRate':
       return getBestRateBaseCost(order) ?? -1
     case 'margin': {
-      // Mirrors renderMargin's core: markup applied to the best-rate base.
-      // Only awaiting orders show a margin (shipped/cancelled render '—').
+      // PS-178 final part: the margin sort value is the BACKEND money tuple's
+      // markupAmount (PS-177) — the FE markup-math fallback is deleted. Rows
+      // without the tuple sort with the blanks (-1), same as no-rate rows.
       if (order.orderStatus !== 'awaiting_shipment') return -1
-      const base = getBestRateBaseCost(order)
-      if (base == null || !order.bestRate) return -1
-      const marked = applyCarrierMarkup({
-        shippingProviderId: getBestRateShippingProviderId(order),
-        carrierCode: order.bestRate.carrierCode ?? '',
-        serviceCode: getBestRateServiceCode(order) ?? '',
-        serviceName: order.bestRate.serviceName ?? '',
-        amount: base,
-        shipmentCost: base,
-        otherCost: 0,
-        carrierNickname: getBestRateCarrierNickname(order),
-      }, markups)
-      return getMarkupAmount(base, marked)
+      return getBackendRowMoney(order)?.markupAmount ?? -1
     }
     case 'tracking':
       return (toStringValue(order.label?.trackingNumber) ?? '').toLowerCase()
@@ -3054,10 +3042,11 @@ export default function OrdersView({
     const uniqueSkus = [...new Set(activeItems.map((item) => item.sku).filter(Boolean))]
     if (!uniqueSkus.length) return
 
-    // PS-177 (Phase 5): backend-owned dims/weight/package defaults arrive on the
-    // detail payload (one server-side resolution from the same product/inventory
-    // truth). When present, seed from it directly — the per-SKU fetch loop below
-    // survives ONLY as the deploy-skew fallback (Phase 6 deletes it).
+    // PS-177 (Phase 5) / PS-178 final part: dims/weight/package defaults are
+    // BACKEND-owned — one server-side resolution on the detail payload
+    // (dimsDefaults). The per-SKU FE fetch loop + client-side stacking
+    // derivation are DELETED; a payload without the block simply leaves the
+    // fields for the operator (no FE-derived dims policy, ever).
     const backendDimsDefaults = toRecord((panelDetail as Record<string, unknown> | null)?.dimsDefaults)
     const seedFromBackendDefaults = () => {
       if (!backendDimsDefaults) return false
@@ -3086,26 +3075,7 @@ export default function OrdersView({
       applyProductDefaultSeeds(payload, completeDims)
       return true
     }
-    if (seedFromBackendDefaults()) return
-
-    void Promise.all(
-      uniqueSkus.map((sku) => apiClient.fetchProductsBySku(sku).then((payload) => ({ sku, payload }))),
-    )
-      .then((results) => {
-        const defaultsBySku = new Map<string, Record<string, unknown>>()
-        for (const result of results) {
-          if (result.payload && typeof result.payload === 'object') {
-            defaultsBySku.set(result.sku.trim().toLowerCase(), result.payload as Record<string, unknown>)
-          }
-        }
-        const payload = uniqueSkus.length === 1
-          ? defaultsBySku.get(uniqueSkus[0]!.trim().toLowerCase()) ?? null
-          : null
-        const derivedDims = deriveShipmentDimsFromProductDefaults(activeItems, defaultsBySku)
-        if (!payload && !derivedDims) return
-        applyProductDefaultSeeds(payload, derivedDims)
-      })
-      .catch(() => { })
+    seedFromBackendDefaults()
 
     function applyProductDefaultSeeds(
       payload: Record<string, unknown> | null,
@@ -3617,40 +3587,9 @@ export default function OrdersView({
     return getPackageDims(selectedPackage) ?? panelDims
   }
 
-  function deriveShipmentDimsFromProductDefaults(
-    items: Array<{ sku?: string | null; quantity?: number | null }>,
-    defaultsBySku: Map<string, Record<string, unknown>>,
-  ) {
-    const readPositive = (value: unknown) => {
-      if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
-      if (typeof value === 'string' && value.trim()) {
-        const parsed = Number.parseFloat(value)
-        return Number.isFinite(parsed) && parsed > 0 ? parsed : null
-      }
-      return null
-    }
-
-    const resolved = items
-      .map((item) => {
-        const sku = (item.sku ?? '').trim().toLowerCase()
-        const defaults = sku ? defaultsBySku.get(sku) : null
-        const quantity = Math.max(1, Number(item.quantity ?? 1) || 1)
-        const length = readPositive(defaults?.length)
-        const width = readPositive(defaults?.width)
-        const height = readPositive(defaults?.height)
-        if (!length || !width || !height) return null
-        return { length, width, height, quantity }
-      })
-      .filter((item): item is { length: number; width: number; height: number; quantity: number } => Boolean(item))
-
-    if (resolved.length !== items.length || resolved.length === 0) return null
-
-    return {
-      length: Number(Math.max(...resolved.map((item) => item.length)).toFixed(2)),
-      width: Number(Math.max(...resolved.map((item) => item.width)).toFixed(2)),
-      height: Number(resolved.reduce((sum, item) => sum + item.height * item.quantity, 0).toFixed(2)),
-    }
-  }
+  // PS-178 final part: deriveShipmentDimsFromProductDefaults DELETED — the
+  // stacking derivation is backend-owned (order-dims-defaults-policy.ts) and
+  // arrives on the detail payload as dimsDefaults.
 
   function assertSavedProductDefaults(
     product: unknown,
@@ -5560,18 +5499,15 @@ export default function OrdersView({
     const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
     const serviceCode = liveBest ? toStringValue(liveBest.serviceCode) : null
     const carrierStatuses = Array.isArray(response?.carrierStatuses) ? response.carrierStatuses : []
-    // PS-175: the strict apply/blocked/clear decision is BACKEND-owned
-    // (response.strictRecalculation, computed from the same carriers + best rate
-    // this response carries). The local planStrictBestRateRecalculate remains
-    // ONLY as a deploy-skew fallback for backends that predate the field —
-    // Phase 6 deletes it.
+    // PS-175 / PS-178 final part: the strict apply/blocked/clear decision is
+    // BACKEND-owned (response.strictRecalculation) and the backend PERSISTS the
+    // outcome inside /browse. The FE's local decision plan and its strict
+    // persist calls are DELETED — a response without the verdict (deploy skew)
+    // is treated as blocked with an explicit retry message; the FE never
+    // decides or writes rate selection.
     const backendStrict = toRecord(response?.strictRecalculation)
     const backendAction = toStringValue(backendStrict?.action)
     const backendMessage = toStringValue(backendStrict?.message)
-    // PS-175 part 2: when the backend already PERSISTED the outcome server-side
-    // (order_overrides write inside /browse), the FE skips its own strict
-    // persist calls below and only updates local display state.
-    const backendPersisted = backendStrict?.persisted === true
     const decision = backendAction === 'apply' && liveBest
       ? {
           action: 'apply' as const,
@@ -5587,20 +5523,15 @@ export default function OrdersView({
             entry: { key: request.key, rate: null },
             message: backendMessage ?? 'No live rates were returned for this shipment.',
           }
-        : backendAction === 'blocked'
-          ? {
-              action: 'blocked' as const,
-              entry: { key: request.key, rate: null, error: backendMessage ?? 'Recalculation blocked.' },
-              message: backendMessage ?? 'Recalculation blocked.',
-            }
-          : planStrictBestRateRecalculate({
-              requestKey: request.key,
-              liveBest,
-              liveBestAmount,
-              providerAccountId,
-              serviceCode,
-              carrierStatuses,
-            })
+        : {
+            action: 'blocked' as const,
+            entry: {
+              key: request.key,
+              rate: null,
+              error: backendMessage ?? 'Recalculation did not return a backend verdict — try again.',
+            },
+            message: backendMessage ?? 'Recalculation did not return a backend verdict — try again.',
+          }
 
     if (decision.action === 'blocked') {
       setAutoBestRateEntries((current) => ({
@@ -5611,24 +5542,10 @@ export default function OrdersView({
       return { status: 'blocked', message: decision.message }
     }
 
-    // PS-175 part 2: skip the FE persist when the backend already wrote the
-    // outcome inside /browse (dims + best rate + selectedPid, same validations).
-    if (!backendPersisted) {
-      await apiClient.saveOrderDimsStrict(order.orderId, {
-        length: request.dims.length,
-        width: request.dims.width,
-        height: request.dims.height,
-        weightOz: request.weightOz,
-      })
-    }
-
+    // PS-178 final part: the FE strict persist calls are DELETED — the backend
+    // persists the outcome inside /browse (dims + best rate + selectedPid, with
+    // the same validations). The FE only updates local display state.
     if (decision.action === 'clear') {
-      if (!backendPersisted) {
-        await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
-          bestRateJson: null,
-          bestRateDims: null,
-        })
-      }
       setAutoBestRateEntries((current) => ({
         ...current,
         [order.orderId]: decision.entry,
@@ -5651,13 +5568,6 @@ export default function OrdersView({
       requestFingerprint: backendRequestFingerprint,
       cacheKey: backendRequestFingerprint,
     })
-    if (!backendPersisted) {
-      await apiClient.updateOrderBestRateSelectionStrict(order.orderId, {
-        selectedPid: decision.selectedPid,
-        bestRateJson: rateWithMetadata,
-        bestRateDims: request.dimsLabel,
-      })
-    }
     clearAutoBestRateWatchdog(request.key)
     setAutoBestRateEntries((current) => ({
       ...current,
@@ -7971,42 +7881,18 @@ export default function OrdersView({
       </span>
     ) : null
 
-    // PS-177: backend-owned money tuple first; the applyCarrierMarkup path below
-    // is the deploy-skew fallback only.
+    // PS-178 final part: the BACKEND money tuple (PS-177) is the only markup
+    // source — the FE markup-math fallback is deleted. A row without the tuple
+    // (pre-deploy cache edge) degrades to the plain carrier base amount, never
+    // FE-computed markup.
+    // Operator request (2026-05-12, under `unlock shipped data` override): no
+    // per-carrier SVG badge in this cell — the Carrier column already shows it.
     const backendMoney = getBackendRowMoney(displayOrder)
-    if (backendMoney) {
-      return (
-        <div data-rate-state="ready" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)}
-          {recalculatingSpinner}
-        </div>
-      )
-    }
-    const markedAmount = applyCarrierMarkup({
-      shippingProviderId: getBestRateShippingProviderId(displayOrder),
-      carrierCode: displayOrder.bestRate.carrierCode ?? '',
-      serviceCode: getBestRateServiceCode(displayOrder) ?? '',
-      serviceName: displayOrder.bestRate.serviceName ?? '',
-      amount: bestRateBaseCost ?? 0,
-      shipmentCost: bestRateBaseCost ?? undefined,
-      otherCost: 0,
-      carrierNickname: getBestRateCarrierNickname(displayOrder),
-    }, markups)
-
-    // Operator request (2026-05-12, under `unlock shipped data`
-    // override): drop the per-carrier SVG badge from the Best Rate
-    // cell across awaiting / shipped / cancelled views. The amount
-    // (with markup) carries enough information on its own; the
-    // carrier identity is already redundantly visible in the
-    // dedicated Carrier column on the same row. CarrierBadge import
-    // stays — the badge is still rendered by other cells (selected
-    // rate, carrier column).
     return (
-      <div
-        data-rate-state="ready"
-        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-      >
-        {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount, getBackendInsuranceAddOn(displayOrder.bestRate))}
+      <div data-rate-state="ready" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {backendMoney
+          ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)
+          : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate))}
         {recalculatingSpinner}
       </div>
     )
@@ -8032,39 +7918,16 @@ export default function OrdersView({
         ?? <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
     }
 
-    // PS-177: backend-owned margin first (markup + percent computed by the same
-    // canonical rule the row's Best Rate amount used); local math = skew fallback.
+    // PS-178 final part: the BACKEND money tuple (PS-177) is the only margin
+    // source — the FE markup-math fallback is deleted. A row without the tuple
+    // shows a dash; the FE never computes money policy.
     const backendMoney = getBackendRowMoney(displayOrder)
-    if (backendMoney) {
-      const diff = backendMoney.markupAmount
-      if (diff == null || diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-      return (
-        <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney.marginPercent ?? 0}%</div>
-        </div>
-      )
-    }
-
-    const markedAmount = applyCarrierMarkup({
-      shippingProviderId: getBestRateShippingProviderId(displayOrder),
-      carrierCode: displayOrder.bestRate.carrierCode ?? '',
-      serviceCode: getBestRateServiceCode(displayOrder) ?? '',
-      serviceName: displayOrder.bestRate.serviceName ?? '',
-      amount: bestRateBaseCost,
-      shipmentCost: bestRateBaseCost,
-      otherCost: 0,
-      carrierNickname: getBestRateCarrierNickname(displayOrder),
-    }, markups)
-    const diff = getMarkupAmount(bestRateBaseCost, markedAmount)
-    if (diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-
-    const percent = bestRateBaseCost > 0 ? Math.round((diff / bestRateBaseCost) * 100) : 0
-
+    const diff = backendMoney?.markupAmount
+    if (diff == null || diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
     return (
       <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)' }}>{percent}%</div>
+        <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney.marginPercent ?? 0}%</div>
       </div>
     )
   }
@@ -9871,16 +9734,10 @@ export default function OrdersView({
                   ) : panelDisplayOrder.bestRate ? (
                     <>
                       <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney(applyCarrierMarkup({
-                          shippingProviderId: getBestRateShippingProviderId(panelDisplayOrder),
-                          carrierCode: panelDisplayOrder.bestRate.carrierCode ?? '',
-                          serviceCode: getBestRateServiceCode(panelDisplayOrder) ?? '',
-                          serviceName: panelDisplayOrder.bestRate.serviceName ?? '',
-                          amount: typeof panelDisplayOrder.bestRate.amount === 'number' ? panelDisplayOrder.bestRate.amount : 0,
-                          shipmentCost: typeof panelDisplayOrder.bestRate.shipmentCost === 'number' ? panelDisplayOrder.bestRate.shipmentCost : undefined,
-                          otherCost: typeof panelDisplayOrder.bestRate.otherCost === 'number' ? panelDisplayOrder.bestRate.otherCost : undefined,
-                          carrierNickname: getBestRateCarrierNickname(panelDisplayOrder),
-                        }, markups))}
+                        {/* PS-178 final part: BACKEND money tuple only (PS-177) — the FE
+                            markup-math fallback is deleted; without the tuple the panel
+                            shows the plain carrier base, never FE-computed markup. */}
+                        {formatMoney(getBackendRowMoney(panelDisplayOrder)?.markedAmount ?? getBestRateBaseCost(panelDisplayOrder))}
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
                         {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}

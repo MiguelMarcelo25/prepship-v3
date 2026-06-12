@@ -91,8 +91,11 @@ check('recalc browse call sends strictRecalculate: true',
 check('FE prefers the backend verdict; apply requires a present best rate',
   /backendAction === 'apply' && liveBest/.test(ordersView) &&
   /toRecord\(response\?\.strictRecalculation\)/.test(ordersView));
-check('local plan survives only as the deploy-skew fallback',
-  /: planStrictBestRateRecalculate\(\{/.test(ordersView));
+// PS-178 final part: the local plan is DELETED — a response without the
+// backend verdict is BLOCKED, never FE-decided.
+check('local strict plan deleted (no-verdict responses are blocked)',
+  !/planStrictBestRateRecalculate/.test(ordersView) &&
+  /did not return a backend verdict/.test(ordersView));
 
 // ── 4. PART 2: server-side persistence of the strict outcome ─────────────────
 const persistService = readFileSync('src/services/rates-recalculate-persist.ts', 'utf8');
@@ -114,12 +117,12 @@ check('persist carries the shipped-data override citation',
 check('/browse persists the outcome only when the request carries an orderId',
   /typeof body\.orderId === 'number' && body\.orderId > 0/.test(ratesRoute) &&
   /persistStrictRecalculateOutcome\(\{/.test(ratesRoute));
-check('FE skips its own strict persist when the backend persisted',
-  /backendPersisted = backendStrict\?\.persisted === true/.test(ordersView) &&
-  (ordersView.match(/if \(!backendPersisted\) \{/g)?.length ?? 0) >= 3);
-check('FE strict endpoints retained as the not-persisted fallback',
-  /apiClient\.updateOrderBestRateSelectionStrict\(order\.orderId/.test(ordersView) &&
-  /apiClient\.saveOrderDimsStrict\(order\.orderId/.test(ordersView));
+// PS-178 final part: the FE strict persist calls are DELETED — the backend
+// persists inside /browse; the FE only updates display state.
+check('FE never persists strict outcomes (backend-only writes)',
+  !/apiClient\.updateOrderBestRateSelectionStrict\(/.test(ordersView) &&
+  !/apiClient\.saveOrderDimsStrict\(/.test(ordersView) &&
+  !/backendPersisted/.test(ordersView));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-175 strict recalc decision guard (${failures} failing)`);

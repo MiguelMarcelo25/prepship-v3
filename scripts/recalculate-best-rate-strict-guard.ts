@@ -4,10 +4,15 @@
  * It must not open Browse Rates, use cached/stale order fallback rates, or
  * silently keep an old best rate after a clean no-rate result.
  *
+ * PS-178 final part: the FE copy of the decision (planStrictBestRateRecalculate)
+ * was DELETED — the decision is backend-owned (response.strictRecalculation).
+ * The behavioral matrix below now runs against the canonical backend owner,
+ * src/services/rates-recalculate.ts, with the same fixtures.
+ *
  * Read-only: no DB, no network, no provider calls.
  */
 import { readFileSync } from 'node:fs';
-import { planStrictBestRateRecalculate } from '../web/src/components/Views/orders-parity';
+import { planStrictRecalculateDecision } from '../src/services/rates-recalculate';
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -19,21 +24,8 @@ function check(name: string, condition: boolean) {
   }
 }
 
-const KEY = '1206596|strict-live-fingerprint';
-const LIVE_RATE = {
-  amount: 7.45,
-  shipmentCost: 7.45,
-  otherCost: 0,
-  shippingProviderId: 433542,
-  carrierCode: 'stamps_com',
-  serviceCode: 'usps_ground_advantage',
-  serviceName: 'USPS Ground Advantage',
-};
-
 {
-  const decision = planStrictBestRateRecalculate({
-    requestKey: KEY,
-    liveBest: LIVE_RATE,
+  const decision = planStrictRecalculateDecision({
     liveBestAmount: 7.45,
     providerAccountId: 433542,
     serviceCode: 'usps_ground_advantage',
@@ -43,16 +35,12 @@ const LIVE_RATE = {
     ],
   });
   check('clean live response with usable best rate applies', decision.action === 'apply');
-  check('apply decision is keyed by exact request', decision.entry.key === KEY);
-  check('apply decision carries the live best', decision.entry.rate === LIVE_RATE);
   check('apply decision selects provider account', decision.action === 'apply' && decision.selectedPid === 433542);
   check('apply decision selects service', decision.action === 'apply' && decision.serviceCode === 'usps_ground_advantage');
 }
 
 {
-  const decision = planStrictBestRateRecalculate({
-    requestKey: KEY,
-    liveBest: LIVE_RATE,
+  const decision = planStrictRecalculateDecision({
     liveBestAmount: 7.45,
     providerAccountId: 433542,
     serviceCode: 'usps_ground_advantage',
@@ -62,28 +50,19 @@ const LIVE_RATE = {
     ],
   });
   check('any carrier error blocks update', decision.action === 'blocked');
-  check('blocked decision writes exact-key error entry for table convergence', Boolean(decision.entry.error));
-  check('blocked decision does not carry a selected rate', decision.entry.rate === null);
+  check('blocked decision carries an operator-actionable message', decision.action === 'blocked' && Boolean(decision.message));
 }
 
-{
-  const decision = planStrictBestRateRecalculate({
-    requestKey: KEY,
-    liveBest: LIVE_RATE,
+check('cached carrier status blocks strict live recalculation',
+  planStrictRecalculateDecision({
     liveBestAmount: 7.45,
     providerAccountId: 433542,
     serviceCode: 'usps_ground_advantage',
-    carrierStatuses: [
-      { carrierId: 'se-433542', status: 'cached', rateCount: 4 },
-    ],
-  });
-  check('cached carrier status blocks strict live recalculation', decision.action === 'blocked');
-}
+    carrierStatuses: [{ carrierId: 'se-433542', status: 'cached', rateCount: 4 }],
+  }).action === 'blocked');
 
-{
-  const decision = planStrictBestRateRecalculate({
-    requestKey: KEY,
-    liveBest: null,
+check('clean no-rate response clears saved best rate',
+  planStrictRecalculateDecision({
     liveBestAmount: null,
     providerAccountId: null,
     serviceCode: null,
@@ -91,30 +70,31 @@ const LIVE_RATE = {
       { carrierId: 'se-433542', status: 'unavailable', rateCount: 0 },
       { carrierId: 'se-10000007', status: 'unavailable', rateCount: 0 },
     ],
-  });
-  check('clean no-rate response clears saved best rate', decision.action === 'clear');
-  check('clear decision writes no-rate entry for current request', decision.entry.key === KEY && decision.entry.rate === null && !decision.entry.error);
-}
+  }).action === 'clear');
 
-{
-  const missingProvider = planStrictBestRateRecalculate({
-    requestKey: KEY,
-    liveBest: LIVE_RATE,
+check('missing provider account blocks update',
+  planStrictRecalculateDecision({
     liveBestAmount: 7.45,
     providerAccountId: null,
     serviceCode: 'usps_ground_advantage',
     carrierStatuses: [{ carrierId: 'se-433542', status: 'live', rateCount: 4 }],
-  });
-  const missingService = planStrictBestRateRecalculate({
-    requestKey: KEY,
-    liveBest: LIVE_RATE,
+  }).action === 'blocked');
+check('missing service blocks update',
+  planStrictRecalculateDecision({
     liveBestAmount: 7.45,
     providerAccountId: 433542,
     serviceCode: null,
     carrierStatuses: [{ carrierId: 'se-433542', status: 'live', rateCount: 4 }],
-  });
-  check('missing provider account blocks update', missingProvider.action === 'blocked');
-  check('missing service blocks update', missingService.action === 'blocked');
+  }).action === 'blocked');
+
+// PS-178 final part: the FE never decides — the applier consumes ONLY the
+// backend verdict, and a response without one is BLOCKED (no local plan).
+{
+  const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  check('FE consumes the backend strictRecalculation verdict only (local plan deleted)',
+    /toRecord\(response\?\.strictRecalculation\)/.test(ordersViewSrc) &&
+    !/planStrictBestRateRecalculate/.test(ordersViewSrc) &&
+    /did not return a backend verdict/.test(ordersViewSrc));
 }
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');

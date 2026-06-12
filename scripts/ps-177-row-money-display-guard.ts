@@ -173,9 +173,14 @@ check('FE Best Rate cell prefers the backend tuple',
   /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(ordersView) &&
   /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn\)/.test(ordersView));
 check('FE Margin cell prefers the backend tuple',
-  /backendMoney\.markupAmount/.test(ordersView) && /backendMoney\.marginPercent/.test(ordersView));
-check('FE deploy-skew fallback retained until Phase 6 (applyCarrierMarkup still wired)',
-  /applyCarrierMarkup\(\{/.test(ordersView));
+  /backendMoney\?\.markupAmount/.test(ordersView) && /backendMoney\.marginPercent/.test(ordersView));
+// PS-178 final part: the awaiting-row FE markup-math fallbacks are DELETED.
+// Exactly ONE applyCarrierMarkup call remains — the SHIPPED Selected Rate cell,
+// which has no DTO money (shipped rows carry bestRateWorkflow=null by payload
+// design) until the shipped-row DTO phase.
+check('awaiting FE markup math deleted; only the shipped cell remains',
+  (ordersView.match(/applyCarrierMarkup\(/g)?.length ?? 0) === 1 &&
+  /selectedMarkedAmount = applyCarrierMarkup\(/.test(ordersView));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-177 row money display guard (${failures} failing)`);

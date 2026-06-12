@@ -41,7 +41,10 @@ function ceiling(name: string, actual: number, max: number, deletionPhase: strin
 }
 
 // ── money: FE markup application (backend owner: rate-money.ts + DTO.money) ──
-ceiling('OrdersView applyCarrierMarkup calls', count(ordersView, /applyCarrierMarkup\(/g), 5, 'PS-178 fallback deletion');
+// PS-178 final part: 5 → 1. The ONLY remaining call is the SHIPPED Selected
+// Rate cell — shipped rows carry bestRateWorkflow=null by payload design, so
+// they have no DTO money until the shipped-row DTO phase deletes this last one.
+ceiling('OrdersView applyCarrierMarkup calls', count(ordersView, /applyCarrierMarkup\(/g), 1, 'the shipped-row DTO phase');
 {
   // The money-math import surface is a fixed allowlist — a NEW file importing
   // the FE markup math is a new money-policy consumer, which Phase 6 forbids.
@@ -70,20 +73,22 @@ check('no FE pickBestRate resurrection in OrdersView',
 check('no FE pickBestRate resurrection in orders-parity',
   !/function pickBestRate|\.pickBestRate\(|= pickBestRate\(/.test(parity));
 
-// ── strict recalc: backend decision + persist first (PS-175) ─────────────────
-ceiling('OrdersView planStrictBestRateRecalculate calls', count(ordersView, /planStrictBestRateRecalculate\(/g), 1, 'PS-178 fallback deletion');
-ceiling('orders-parity planStrictBestRateRecalculate definitions', count(parity, /function planStrictBestRateRecalculate/g), 1, 'PS-178 fallback deletion');
-ceiling('OrdersView saveOrderDimsStrict fallback persists', count(ordersView, /saveOrderDimsStrict\(/g), 1, 'PS-178 fallback deletion');
-ceiling('OrdersView updateOrderBestRateSelectionStrict fallback persists', count(ordersView, /updateOrderBestRateSelectionStrict\(/g), 2, 'PS-178 fallback deletion');
+// ── strict recalc: backend decision + persist ONLY (PS-175 + PS-178 final) ───
+ceiling('OrdersView planStrictBestRateRecalculate calls', count(ordersView, /planStrictBestRateRecalculate\(/g), 0, 'n/a — deleted; backend verdict only');
+ceiling('orders-parity planStrictBestRateRecalculate definitions', count(parity, /function planStrictBestRateRecalculate/g), 0, 'n/a — deleted; backend owner is rates-recalculate.ts');
+ceiling('OrdersView saveOrderDimsStrict fallback persists', count(ordersView, /saveOrderDimsStrict\(/g), 0, 'n/a — deleted; backend persists inside /browse');
+ceiling('OrdersView updateOrderBestRateSelectionStrict fallback persists', count(ordersView, /updateOrderBestRateSelectionStrict\(/g), 0, 'n/a — deleted; backend persists inside /browse');
 
 // ── display: backend tuple first (PS-165b/173) ───────────────────────────────
 ceiling('OrdersView resolveDisplayCarrierCode calls', count(ordersView, /resolveDisplayCarrierCode\(/g), 1, 'PS-178 fallback deletion');
 ceiling('OrdersView resolveDisplayServiceCode calls', count(ordersView, /resolveDisplayServiceCode\(/g), 1, 'PS-178 fallback deletion');
 
-// ── dims defaults: backend dimsDefaults first (PS-177 part 3) ────────────────
-ceiling('OrdersView deriveShipmentDimsFromProductDefaults occurrences (def + fallback call)',
-  count(ordersView, /deriveShipmentDimsFromProductDefaults\(/g), 2, 'PS-178 fallback deletion');
-ceiling('OrdersView fetchProductsBySku N-per-panel loop sites', count(ordersView, /fetchProductsBySku\(/g), 2, 'PS-178 fallback deletion');
+// ── dims defaults: backend dimsDefaults ONLY (PS-177 part 3 + PS-178 final) ──
+ceiling('OrdersView deriveShipmentDimsFromProductDefaults occurrences',
+  count(ordersView, /deriveShipmentDimsFromProductDefaults\(/g), 0, 'n/a — deleted; backend owner is order-dims-defaults-policy.ts');
+// The one remaining fetchProductsBySku is the SAVED-DEFAULTS VERIFICATION read
+// (assertSavedProductDefaults) — not dims policy; the seeding loop is deleted.
+ceiling('OrdersView fetchProductsBySku sites', count(ordersView, /fetchProductsBySku\(/g), 1, 'n/a — verification read only');
 
 // ── queue routing: backend queueRoute first (PS-176) ─────────────────────────
 // classifyQueueOrderRoute stays (it hosts the live never-buy ladder); the pin is
