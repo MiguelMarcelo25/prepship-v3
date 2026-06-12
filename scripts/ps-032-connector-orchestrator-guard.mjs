@@ -35,9 +35,13 @@ const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const ebayOauthCallback = read('api/oauth/ebay/callback.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
 const carrierLabelsRoute = read('api/carriers/labels.ts');
-const validateAddressRoute = read('api/carriers/validate-address.ts');
-const upsProbeRoute = read('api/carriers/ups/probe.ts');
-const walmartProbeCarriersRoute = read('api/carriers/walmart/probe-carriers.ts');
+// PS-200 S2: api/carriers/validate-address.ts, ups/probe.ts, and
+// walmart/probe-carriers.ts (zero-caller diagnostic endpoints) were deleted.
+// Their route-side asserts ("route calls connector-owned logic, not the
+// provider API directly") are gone WITH the routes — nothing can call a
+// provider from a route that no longer exists. The connector-ownership
+// asserts (probeUpsCredentials / probeWalmartShippingCarriers /
+// validateUspsAddress live in the connectors) remain below, unweakened.
 const carrierVerifyRoute = read('api/carriers/verify.ts');
 const importedCarrierVerifyHandler = read('src/lib/imported-handlers/carriers-verify.ts');
 const carrierCredentialVerification = read('src/connectors/carrier/credential-verification.ts');
@@ -211,11 +215,6 @@ assert(
   'UPS CarrierConnector must own UPS label API calls',
 );
 assert(
-  upsProbeRoute.includes('probeUpsCredentials') &&
-    !upsProbeRoute.includes('onlinetools.ups.com'),
-  'UPS credential probe route must call CarrierConnector-owned probe logic, not UPS OAuth directly',
-);
-assert(
   upsCarrierConnector.includes('probeUpsCredentials') &&
     upsCarrierConnector.includes('https://onlinetools.ups.com/security/v1/oauth/token'),
   'UPS CarrierConnector must own UPS OAuth credential probe calls',
@@ -288,11 +287,6 @@ assert(
   'Walmart Shipping CarrierConnector must own Walmart Shipping label API calls',
 );
 assert(
-  walmartProbeCarriersRoute.includes('probeWalmartShippingCarriers') &&
-    !walmartProbeCarriersRoute.includes('marketplace.walmartapis.com'),
-  'Walmart Shipping carriers probe route must call CarrierConnector-owned probe logic, not Walmart API directly',
-);
-assert(
   carrierVerifyRoute.includes('credential-verification') &&
     !carrierVerifyRoute.includes('https://') &&
     !carrierVerifyRoute.includes('fetch('),
@@ -336,12 +330,6 @@ assert(
   uspsCarrierConnector.includes('apis.usps.com') &&
     uspsCarrierConnector.includes('getRates'),
   'USPS CarrierConnector must own USPS rate API calls',
-);
-assert(
-  validateAddressRoute.includes('validateUspsAddress') &&
-    !validateAddressRoute.includes('api.usps.com') &&
-    !validateAddressRoute.includes('apis.usps.com'),
-  'USPS address validation route must call CarrierConnector-owned validation logic, not USPS API directly',
 );
 assert(
   uspsCarrierConnector.includes('validateUspsAddress') &&

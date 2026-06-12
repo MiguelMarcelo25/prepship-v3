@@ -46,15 +46,14 @@ check('legacy message-based status mapping retained as fallback',
   /message === 'Label already exists for this order' \? 400/.test(labelsRoute) &&
   /message\.startsWith\('Cannot create label for'\) \? 400/.test(labelsRoute));
 
-// ── both FE transports carry the code ────────────────────────────────────────
+// ── the FE transport carries the code ────────────────────────────────────────
+// PS-200 S2 re-anchor: callVercelFunction (the second transport) is DELETED —
+// the FE has exactly one HTTP transport now (web/src/lib/api.ts), so the code
+// only needs to survive one path. Fewer transports, same protection.
 const apiLib = readFileSync('web/src/lib/api.ts', 'utf8');
 check('ApiRequestError carries the backend code',
   /code\?: string;/.test(apiLib) && /this\.code = options\.code/.test(apiLib) &&
   /if \(typeof err\?\.code === 'string' && err\.code\) code = err\.code/.test(apiLib));
-const vercelFn = readFileSync('web/src/lib/vercelFunction.ts', 'utf8');
-check('callVercelFunction carries the backend code',
-  /if \(typeof err\?\.code === 'string' && err\.code\) code = err\.code/.test(vercelFn) &&
-  /if \(code\) error\.code = code/.test(vercelFn));
 
 // ── FE branches on code; no substring conflict-detection left in web/src ─────
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');

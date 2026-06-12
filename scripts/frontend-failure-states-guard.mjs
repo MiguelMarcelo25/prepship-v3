@@ -3,7 +3,10 @@ import path from 'node:path';
 
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root, 'web/src/lib/v2-apiClient.ts'), 'utf8');
-const vercelFunctionSource = fs.readFileSync(path.join(root, 'web/src/lib/vercelFunction.ts'), 'utf8');
+// PS-200 S2 re-anchor: vercelFunction.ts (the second FE transport) is DELETED —
+// every FE request now flows through web/src/lib/api.ts, so the bounded-timeout
+// and abort pins below retarget there. Same protections, one transport.
+const apiSource = fs.readFileSync(path.join(root, 'web/src/lib/api.ts'), 'utf8');
 const ordersViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersView.tsx'), 'utf8');
 
 function fail(message) {
@@ -74,24 +77,23 @@ assert(
 );
 
 assert(
-  /timeoutMs\?:\s*number/.test(vercelFunctionSource) &&
-    /READ_TIMEOUT_MS\s*=\s*30_000/.test(vercelFunctionSource) &&
-    /WRITE_TIMEOUT_MS\s*=\s*60_000/.test(vercelFunctionSource),
-  'callVercelFunction exposes bounded timeout support with 30s read and 60s write defaults',
+  /timeoutMs\?:\s*number/.test(apiSource) &&
+    /READ_TIMEOUT_MS\s*=\s*30_000/.test(apiSource) &&
+    /WRITE_TIMEOUT_MS\s*=\s*60_000/.test(apiSource),
+  'api client exposes bounded timeout support with 30s read and 60s write defaults',
 );
 
 assert(
-  /new\s+AbortController\(\)/.test(vercelFunctionSource) &&
-    /window\.setTimeout\(\(\)\s*=>\s*controller\.abort\(\),\s*timeoutMs\)/.test(vercelFunctionSource) &&
-    /window\.clearTimeout\(timeoutId\)/.test(vercelFunctionSource),
-  'callVercelFunction aborts timed-out direct Vercel fetches and clears the timer',
+  /new\s+AbortController\(\)/.test(apiSource) &&
+    /controller\.abort\(\)/.test(apiSource) &&
+    /clearTimeout\(timer\)/.test(apiSource),
+  'api client aborts timed-out fetches and clears the timer',
 );
 
 assert(
-  vercelFunctionSource.includes('The carrier provider may still be processing') &&
-    vercelFunctionSource.includes('retry from Orders in a moment') &&
-    /Timed out after \$\{timeoutSeconds\}s calling \$\{method\} \$\{url\}/.test(vercelFunctionSource),
-  'callVercelFunction throws safe timeout errors with method, API path, timeout seconds, and provider retry advice',
+  /timed out after \$\{seconds\(timeoutMs\)\}s/.test(apiSource) &&
+    apiSource.includes('Please retry; if it repeats, Render or Supabase is not responding.'),
+  'api client throws safe timeout errors with the timeout seconds and retry advice',
 );
 
 assert(

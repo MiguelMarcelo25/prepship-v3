@@ -793,10 +793,31 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   auth code — negative getSession pin kept, positive pin would force auth code back in). QA:
   credential-accounts + raw-error-response + vercel-function-imports + ps-159 + ps-178 ratchet +
   ps-202 + ps-078 + typecheck + build:web + FULL shipping certification (78/78) PASS.
-  **Remaining surfaces**: S2 walmart/ebay/fees ops routes + dead-code deletion, S3 fees cron → v4
-  worker (both schedulers), S4 eBay OAuth (DJ: redirect-URI check), S5 labels+rates legacy deletion
-  (DJ: PS-202 verification), S6 _lib relocation + store_orders Drizzle adoption, S8 final flip
-  (vercel.json exclusions/crons removed, api/ deleted, ps-200 guard + guard-fleet re-anchor).
+  **S2 (carrier ops cutover, 2026-06-12)**: v4 routes added under /carriers — walmart/orders +
+  ebay/orders (verbatim imported-handler mirrors of the legacy pullers, same store_orders
+  upsert/reconciliation wiring, settings:write), walmart/fees (thin route over the ALREADY-shared
+  src/connectors/store/walmart-fees.ts logic, settings:write), and POST /carriers/rates (NEW
+  carrier-rates-probe service: admin probe semantics — load account by id, no visibility filter, no
+  markups, PS-199 'rates'-mode walmart PO settings-demo fallback, quoteCarrierRates raw prices,
+  credentials:read). FE: 4 Settings call sites flipped (pull walmart/ebay orders, pull fees, test
+  rates). DEAD-CODE DELETION: fetchDirectCarrierRates + its whole orphan chain
+  (translateDirectRateToV2Shape, slugRateService, infer/normalizeCarrierCodeForDirectRate,
+  directCarrierErrorMessage, DirectCarrierRatesResult/RateResult/RateMeta types — ~300 lines, zero
+  callers since PS-203) removed from v2-apiClient/shared with tombstone; barrel import list trimmed.
+  With that, callVercelFunction had ZERO callers → **web/src/lib/vercelFunction.ts DELETED — the FE
+  no longer has ANY transport to the legacy Vercel functions** (S8's "no FE call path" acceptance is
+  now structural). Also deleted: api/carriers/{validate-address, ups/probe, walmart/probe-carriers}
+  .ts (zero-caller diagnostics; connector-side logic retained). Guard re-anchors (documented
+  in-file, none weakened): ps-032 (route-side probe asserts gone with the routes; connector
+  ownership pins kept), raw-error-response (3 deleted entries; 2 new imported-puller entries ADDED),
+  frontend-auth-cache + frontend-failure-states (vercelFunction pins retargeted to the single api
+  transport), ps-190 (one-transport note), marketplace-status-reconciliation (v4 puller mirrors
+  ADDED to the reconciliation-wiring matrix). QA: all 7 touched guards + ps-159 + typecheck +
+  build:web + FULL shipping certification PASS.
+  **Remaining surfaces**: S3 fees cron → v4 worker (both schedulers), S4 eBay OAuth (DJ:
+  redirect-URI check), S5 labels+rates legacy deletion (DJ: PS-202 verification), S6 _lib relocation
+  + store_orders Drizzle adoption, S8 final flip (vercel.json exclusions/crons removed, api/
+  deleted, ps-200 guard + guard-fleet re-anchor).
 
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 

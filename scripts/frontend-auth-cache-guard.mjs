@@ -8,7 +8,8 @@ const lockJson = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json')
 const sourcePaths = [
   'web/src/lib/api.ts',
   'web/src/lib/v2-apiClient.ts',
-  'web/src/lib/vercelFunction.ts',
+  // PS-200 S2: vercelFunction.ts deleted — the legacy Vercel transport is
+  // gone, so there is one fewer place a stray getSession call could hide.
 ];
 
 // PS-200 S1 re-anchor: useShippingAccounts no longer holds ANY auth code —

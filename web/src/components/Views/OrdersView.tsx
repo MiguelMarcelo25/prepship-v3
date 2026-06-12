@@ -6313,7 +6313,7 @@ export default function OrdersView({
   function isExistingLabelCreateConflict(error: unknown) {
     // PS-190: conflict detection is code-based — the backend stamps
     // LABEL_EXISTS (active label already on the order) or ORDER_NOT_EDITABLE
-    // (shipped/cancelled) and the api/vercelFunction transports carry it as
+    // (shipped/cancelled) and the api transport carries it as
     // error.code. No substring-matching of human messages.
     const code = (error as { code?: unknown } | null)?.code
     return code === 'LABEL_EXISTS' || code === 'ORDER_NOT_EDITABLE'

@@ -58,9 +58,6 @@ if (existsSync(safeErrorHelperPath)) {
 }
 
 for (const file of [
-  'api/carriers/validate-address.ts',
-  'api/carriers/ups/probe.ts',
-  'api/carriers/walmart/probe-carriers.ts',
   'api/carriers/walmart/fees.ts',
   'api/cron/sync-walmart-fees.ts',
   'api/carriers/walmart/orders.ts',
@@ -70,10 +67,16 @@ for (const file of [
   // one-line re-export shims for the real handler below; assert the handler.
   'src/connectors/carrier/credential-verification.ts',
   'src/lib/imported-handlers/carrier-accounts.ts',
+  // PS-200 S2: the v4 mirrors of the marketplace pullers join the safe-500 list.
+  'src/lib/imported-handlers/walmart-orders.ts',
+  'src/lib/imported-handlers/ebay-orders.ts',
   // PS-200 part 2 (2026-06-12): api/migrate-from.ts and
   // api/admin/fix-marketplace-timestamps.ts were one-shot tools, deleted —
   // an absent endpoint can't leak raw errors, so dropping their entries
   // keeps the audit's intent (no raw 500 bodies) with no weakening.
+  // PS-200 S2 (2026-06-12): api/carriers/validate-address.ts, ups/probe.ts,
+  // and walmart/probe-carriers.ts (zero-caller diagnostic endpoints) deleted —
+  // same reasoning.
 ]) {
   const content = readFileSync(file, 'utf8');
   expect(`${file} uses safe 500 helper`, content.includes('sendInternalServerError'));

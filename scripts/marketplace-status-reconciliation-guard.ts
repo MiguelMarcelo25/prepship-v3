@@ -67,7 +67,14 @@ assert.match(
   'terminal duplicate reconciliation must only promote awaiting synthetic marketplace rows',
 );
 
-for (const file of ['api/carriers/walmart/orders.ts', 'api/carriers/ebay/orders.ts']) {
+for (const file of [
+  'api/carriers/walmart/orders.ts',
+  'api/carriers/ebay/orders.ts',
+  // PS-200 S2: the v4 mirrors of the pullers must keep the same
+  // reconciliation wiring as the legacy functions they replace.
+  'src/lib/imported-handlers/walmart-orders.ts',
+  'src/lib/imported-handlers/ebay-orders.ts',
+]) {
   const source = readFileSync(file, 'utf8');
   assert.match(source, /hasExistingMarketplaceOrderRow/);
   assert.match(source, /reconcileMarketplaceOrderStatuses/);

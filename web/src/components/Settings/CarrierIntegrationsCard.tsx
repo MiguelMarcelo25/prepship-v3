@@ -20,7 +20,6 @@ import {
   AlertCircle,
   KeyRound,
 } from 'lucide-react'
-import { callVercelFunction } from '../../lib/vercelFunction'
 // PS-083: drop the Rate Browser scoped-carrier cache after an assignment change
 // so an unassigned carrier (e.g. SHIPP) cannot resurrect from a stale scope.
 import { clearScopedCarrierAccountsCache } from '../rate-browser-carrier-cache'
@@ -817,9 +816,8 @@ async function postIntegration(
       .sort(),
     payloadBytes: JSON.stringify(body).length,
   })
-  // PS-200 S1: account CRUD + verify go to the v4 backend (same handler code
-  // the legacy Vercel functions delegated to). The marketplace pull/probe
-  // buttons below still use callVercelFunction until S2 ports their routes.
+  // PS-200 S1+S2: every Settings call in this card goes to the v4 backend
+  // (same handler code the legacy Vercel functions delegated to).
   const json = await api.post<{ data: SavedRow | null }>(endpoint, body)
   return (json?.data as SavedRow) ?? null
 }
@@ -933,19 +931,13 @@ interface WalmartOrdersResult {
 }
 
 async function pullWalmartOrders(storeAccountId: number): Promise<WalmartOrdersResult> {
-  return callVercelFunction<WalmartOrdersResult>('/carriers/walmart/orders', {
-    method: 'POST',
-    body: { storeAccountId },
-  })
+  return api.post<WalmartOrdersResult>('/carriers/walmart/orders', { storeAccountId })
 }
 
 async function pullEbayOrders(storeAccountId: number): Promise<WalmartOrdersResult> {
   // Same response shape as Walmart's orders endpoint, so we reuse
   // WalmartOrdersResult — no need for a parallel type.
-  return callVercelFunction<WalmartOrdersResult>('/carriers/ebay/orders', {
-    method: 'POST',
-    body: { storeAccountId },
-  })
+  return api.post<WalmartOrdersResult>('/carriers/ebay/orders', { storeAccountId })
 }
 
 // Maps a store provider key to the matching Pull Orders endpoint helper.
@@ -974,10 +966,7 @@ interface FeesPullResult {
   error?: string
 }
 async function pullWalmartFees(storeAccountId: number): Promise<FeesPullResult> {
-  return callVercelFunction<FeesPullResult>('/carriers/walmart/fees', {
-    method: 'POST',
-    body: { storeAccountId },
-  })
+  return api.post<FeesPullResult>('/carriers/walmart/fees', { storeAccountId })
 }
 const STORE_FEE_PULLERS: Record<string, (storeAccountId: number) => Promise<FeesPullResult>> = {
   walmart: pullWalmartFees,
@@ -998,19 +987,16 @@ async function fetchDemoRates(carrierAccountId: number): Promise<CarrierRatesRes
   // certain accounts) reject calls without boxDimensions — and including
   // them is harmless for quoters that don't care (UPS, USPS, Simulator).
   // For Walmart specifically, the API also requires a purchaseOrderId; the
-  // server-side dispatcher (api/carriers/rates.ts) falls back to the most
-  // recent Walmart store_orders row when none is passed, which is exactly
-  // what we want for a Settings "test the connection" preview.
-  return callVercelFunction<CarrierRatesResult>('/carriers/rates', {
-    method: 'POST',
-    body: {
-      carrierAccountId,
-      weightOz: 32,
-      toZip: '94601',
-      dimsL: 12,
-      dimsW: 10,
-      dimsH: 6,
-    },
+  // backend probe falls back to the most recent Walmart store_orders row
+  // when none is passed (PS-199 'rates' mode), which is exactly what we
+  // want for a Settings "test the connection" preview.
+  return api.post<CarrierRatesResult>('/carriers/rates', {
+    carrierAccountId,
+    weightOz: 32,
+    toZip: '94601',
+    dimsL: 12,
+    dimsW: 10,
+    dimsH: 6,
   })
 }
 
