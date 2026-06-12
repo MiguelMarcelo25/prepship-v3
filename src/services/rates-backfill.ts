@@ -304,6 +304,14 @@ async function runBackfill(
       opts.maxAgeHours !== undefined
         ? new Date(Date.now() - opts.maxAgeHours * 60 * 60 * 1000)
         : null;
+    // Recalculate All (maxAgeHours: 0) is an OPERATOR demand for current prices:
+    // bypass the rate cache and live-fan-out every carrier, exactly like manual
+    // Browse Rates with forceLive. Without this the job re-served cached rate
+    // sets — a set cached while one carrier errored would "recalculate" to a
+    // worse winner than a manual browse (the $13.00-vs-$11.66 class). Nightly /
+    // passive sweeps (maxAgeHours unset or > 0) keep cache-allowed behavior so
+    // they never hammer the carrier APIs.
+    const liveRecalculate = opts.maxAgeHours === 0;
     // PS-121: when targeting a specific id set, bound the limit to that set.
     const targetedIds = opts.orderIds?.length ? opts.orderIds : null;
     const hardLimit = targetedIds
@@ -461,19 +469,22 @@ async function runBackfill(
       const dimsLabel = `${dims.length}x${dims.width}x${dims.height}`;
       try {
         const result = await withTimeout(
-          getRates({
-            weightOz: Number(row.weightOz),
-            toZip: row.shipToPostalCode!,
-            toState: row.shipToState ?? undefined,
-            toCity: row.shipToCity ?? undefined,
-            toCountry,
-            residential: raw.shipTo?.residential ?? undefined,
-            dimsL: dims.length,
-            dimsW: dims.width,
-            dimsH: dims.height,
-            storeId: row.storeId,
-            clientId: row.clientId,
-          }),
+          getRates(
+            {
+              weightOz: Number(row.weightOz),
+              toZip: row.shipToPostalCode!,
+              toState: row.shipToState ?? undefined,
+              toCity: row.shipToCity ?? undefined,
+              toCountry,
+              residential: raw.shipTo?.residential ?? undefined,
+              dimsL: dims.length,
+              dimsW: dims.width,
+              dimsH: dims.height,
+              storeId: row.storeId,
+              clientId: row.clientId,
+            },
+            liveRecalculate ? { forceRefresh: true } : undefined,
+          ),
           PER_ORDER_TIMEOUT_MS,
           `getRates(order=${row.id})`
         );

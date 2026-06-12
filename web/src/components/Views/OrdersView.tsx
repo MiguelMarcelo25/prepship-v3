@@ -103,6 +103,7 @@ import {
   classifyAwaitingRateCellState,
   classifyAwaitingRateCellStateWithWorkflow,
   classifyQueueOrderRoute,
+  PENDING_RATING_WATCHDOG_MS,
   getColumnMinWidth,
   groupPrintQueueEntries,
   planStrictBestRateRecalculate,
@@ -2110,6 +2111,7 @@ export default function OrdersView({
   useEffect(() => {
     if (!recalcAllJobId) return
     let cancelled = false
+    let refreshInflight = false
     const timer = setInterval(async () => {
       try {
         const job = await fetchRecalculateAllJob(recalcAllJobId)
@@ -2120,6 +2122,15 @@ export default function OrdersView({
           showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, job.failed ? 'error' : 'success')
           setTimeout(() => setRecalcAllSummary(null), 8000)
           await refetchOrders()
+          return
+        }
+        // Mid-job row refresh: the backfill stamps each order pending → rating →
+        // resolved (PS-120), and the /orders payload carries that state. Refetch
+        // while the job runs so rows show the live recalculating spinner and each
+        // best rate appears as soon as its order resolves — not only at the end.
+        if (!refreshInflight) {
+          refreshInflight = true
+          void refetchOrders().finally(() => { refreshInflight = false })
         }
       } catch {
         /* transient poll failure — keep polling */
@@ -8462,6 +8473,24 @@ export default function OrdersView({
       // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
+    // Recalculate-in-flight indicator: the backfill stamps pending/rating on the
+    // row's rate job (PS-120) while Recalculate All re-rates it. Keep showing the
+    // saved amount (PS-196 — never wipe a displayable value) but spin beside it so
+    // the operator SEES the recalculation; the fresh best rate replaces it on the
+    // next mid-job row refresh. Bounded by the same watchdog the rate-state
+    // classifier uses, so a stuck job can never spin forever.
+    const rowWorkflowRecord = toRecord(displayOrder.bestRateWorkflow)
+    const rowRateJobState = toStringValue(rowWorkflowRecord?.bestRateState)
+    const rowRateJobAgeMs = toNumberValue(rowWorkflowRecord?.bestRateStateAgeMs)
+    const isRowRecalculating =
+      (rowRateJobState === 'pending' || rowRateJobState === 'rating') &&
+      (rowRateJobAgeMs == null || rowRateJobAgeMs <= PENDING_RATING_WATCHDOG_MS)
+    const recalculatingSpinner = isRowRecalculating ? (
+      <span title="Recalculating — fetching live rates from all carriers" className="inline-flex shrink-0">
+        <Loader2 size={12} className="animate-spin text-brand" aria-hidden />
+      </span>
+    ) : null
+
     // PS-177: backend-owned money tuple first; the applyCarrierMarkup path below
     // is the deploy-skew fallback only.
     const backendMoney = getBackendRowMoney(displayOrder)
@@ -8469,6 +8498,7 @@ export default function OrdersView({
       return (
         <div data-rate-state="ready" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)}
+          {recalculatingSpinner}
         </div>
       )
     }
@@ -8497,6 +8527,7 @@ export default function OrdersView({
         style={{ display: 'flex', alignItems: 'center', gap: 6 }}
       >
         {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount, getBackendInsuranceAddOn(displayOrder.bestRate))}
+        {recalculatingSpinner}
       </div>
     )
   }

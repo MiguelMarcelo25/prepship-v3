@@ -1709,8 +1709,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       : null;
     // PS-120 (reader): ADDITIVELY override the derived bestRateState with a backend-owned
     // in-progress state (pending/rating) ONLY when (a) there is a job row for this order,
-    // (b) its stored fingerprint == the order's CURRENT job fingerprint, and (c) the derived
-    // state is NOT already 'fresh' (a resolved/fresh order must never show a spinner). In any
+    // (b) its stored fingerprint == the order's CURRENT job fingerprint, and (c) a fresh
+    // derived state defers only the QUEUED 'pending' stamp — an ACTIVE 'rating' overrides
+    // even fresh, so Recalculate All visibly spins on rows being re-rated. In any
     // other case resolveRateJobWorkflowOverride() returns null and bestRateWorkflow is left
     // exactly as buildBestRateWorkflowDto produced it (the byte-identical / harm-free path).
     if (bestRateWorkflow) {

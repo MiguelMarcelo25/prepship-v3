@@ -537,6 +537,22 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   Original scope: extract UI-only components + thin hooks (NO FE
   rate-finalization/proof/routing/money/queue-identity); remove FE fallbacks only after DTO contract
   + browser tests pass. Dep: PS-173–177 (all ✅).
+- **Recalculate All live fan-out + visible progress — ✅ FIXED 2026-06-12 (DJ report: $13.00 UPS vs
+  manual-browse $11.66 FedEx + no spinner).** Root causes: (a) the backfill's per-order getRates()
+  served CACHED rate sets — a set cached while one carrier errored "recalculated" to a worse winner
+  than manual Browse Rates; (b) rows with FRESH saved rates never received the PS-120 pending/rating
+  override (the fresh-rate gate), and the FE only refetched rows when the job finished — zero visible
+  activity. Fixes at the owners: rates-backfill `maxAgeHours === 0` (Recalculate All + Settings
+  clear-and-refetch) now passes `getRates({forceRefresh:true})` — the SAME full live carrier fan-out
+  manual Browse Rates forceLive uses (nightly/passive sweeps stay cache-allowed);
+  order-rate-job-status: ACTIVE `rating` now overrides even a fresh rate (the worker is re-rating it
+  NOW — operator must see it), queued `pending` still defers to fresh (leftover-stamp protection,
+  ps-120 guard 2e preserved + 2e' added); OrdersView: Best Rate cell shows a watchdog-bounded
+  spinner (PENDING_RATING_WATCHDOG_MS) beside the saved amount while re-rating (PS-196 value never
+  wiped), and the Recalculate All poll refetches rows DURING the job (inflight-deduped) so each
+  fresh best rate lands as its order resolves. Guard `test:recalculate-all-live` (6 checks). QA:
+  recalculate-all-live + ps-120 (21 checks incl. new 2e') + ratchet + typecheck + build:web + full
+  cert ALL PASS.
 - **PS-179 — Phase 7: Certification + boundary guards + safe dead-code cleanup.** Mocked/offline workflow
   cert (Awaiting→finalized rate→RateBrowser→create-label mocked→print-queue→job status + blocked stale/dup/
   shipped-cancelled), source-of-truth guards vs FE authority, perf sanity, evidence-backed dead-code deletion

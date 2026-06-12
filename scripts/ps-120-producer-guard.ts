@@ -101,12 +101,22 @@ check('fingerprint mismatch -> no override (null)',
     hasFreshRate: false, jobUpdatedAtMs: now - 5_000, nowMs: now,
   }) === null);
 
-// 2e. NO-OP: order already has a FRESH saved rate -> null (resolved never shows a spinner).
-check('fresh saved rate -> no override even with a matching pending row (null)',
+// 2e. NO-OP: order already has a FRESH saved rate -> a QUEUED 'pending' stamp never
+// shows a spinner over it (leftover stamps from dead jobs must not haunt resolved rows).
+check('fresh saved rate -> no override for a matching pending row (null)',
   resolveRateJobWorkflowOverride({
     jobState: 'pending', jobFingerprint: CURRENT, currentFingerprint: CURRENT,
     hasFreshRate: true, jobUpdatedAtMs: now - 5_000, nowMs: now,
   }) === null);
+
+// 2e'. Recalculate All visibility: an ACTIVE 'rating' DOES override a fresh rate —
+// the worker is re-rating this order right now, and the operator must see it.
+// (Stuck rows are bounded by the FE watchdog via bestRateStateAgeMs.)
+check('fresh saved rate + ACTIVE rating -> override rating (visible re-rate)',
+  resolveRateJobWorkflowOverride({
+    jobState: 'rating', jobFingerprint: CURRENT, currentFingerprint: CURRENT,
+    hasFreshRate: true, jobUpdatedAtMs: now - 1_000, nowMs: now,
+  })?.bestRateState === 'rating');
 
 // 2f. NO-OP: missing current fingerprint -> null.
 check('missing current fingerprint -> no override (null)',

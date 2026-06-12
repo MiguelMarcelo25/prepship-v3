@@ -156,7 +156,9 @@ export type ResolveRateJobWorkflowOverrideInput = {
  * Returns null (no-op) when ANY of these holds — i.e. the common case:
  *   - no job row (jobState/jobFingerprint absent),
  *   - the job state is not one of the in-progress states,
- *   - the order already has a fresh displayable saved rate (resolved -> never pending/rating),
+ *   - the order has a fresh displayable saved rate AND the job is only QUEUED
+ *     ('pending' defers to fresh; an ACTIVE 'rating' overrides even fresh — the
+ *     Recalculate All visibility rule),
  *   - there is no current fingerprint to compare against, or
  *   - the stored fingerprint != the order's current fingerprint (stale job; inputs changed).
  *
@@ -168,8 +170,13 @@ export function resolveRateJobWorkflowOverride(
 ): RateJobWorkflowOverride | null {
   const state = input.jobState;
   if (state !== 'pending' && state !== 'rating') return null;
-  // A resolved/fresh order is terminal — never show an in-progress spinner over it.
-  if (input.hasFreshRate) return null;
+  // A fresh order never spins for a QUEUED stamp — a leftover `pending` row from
+  // a dead job must not haunt resolved orders. But an ACTIVE `rating` is the
+  // worker re-rating this order RIGHT NOW (Recalculate All forces re-rates of
+  // fresh rows by design), so it overrides even a fresh rate; the operator sees
+  // the recalculation happen instead of a silently unchanged row. A stuck
+  // `rating` row is bounded by the FE watchdog (bestRateStateAgeMs).
+  if (input.hasFreshRate && state === 'pending') return null;
   const current = input.currentFingerprint;
   if (!current) return null;
   if (!input.jobFingerprint || input.jobFingerprint !== current) return null;
