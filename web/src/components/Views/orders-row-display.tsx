@@ -375,7 +375,7 @@ export function getBackendInsuranceAddOn(rate: unknown): number | null {
 
 // PS-177 (Phase 5): backend-owned row money tuple (base/marked/markup/insurance/
 // margin) off the workflow DTO. Preferred by the Best Rate + Margin cells; the
-// local applyCarrierMarkup paths in OrdersView remain ONLY as a deploy-skew
+// local FE markup-math fallback paths in OrdersView remain ONLY as a deploy-skew
 // fallback for rows that did not carry the tuple (deleted in Phase 6).
 export function getBackendRowMoney(order: OrderSummaryDto) {
   const money = toRecord(toRecord(order.bestRateWorkflow)?.money)

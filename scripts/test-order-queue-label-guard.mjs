@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { createGuardReport } from './lib/detailed-guard-report.mjs';
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-178 (Phase 6, part 3): the Print Queue drawer JSX moved VERBATIM to its own
+// render-only component; drawer-string pins read there. Queue STATE pins
+// (scope default, fetchQueue scoping) stay against OrdersView, which kept them.
+const queueDrawer = readFileSync('web/src/components/Views/OrdersPrintQueueDrawer.tsx', 'utf8');
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
 const fulfillmentOutbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
 const carrierLabels = readFileSync('api/carriers/labels.ts', 'utf8');
@@ -89,7 +93,7 @@ report.check({
   condition: ordersView.includes("const [queueScope, setQueueScope] = useState<'all' | 'client'>('all')") &&
     ordersView.includes("const queueClientId = queueScope === 'client' ? inferredQueueClientId : null") &&
     ordersView.includes('apiClient.fetchQueue(queueClientId, queueHistoryVisible)') &&
-    ordersView.includes("Switch to Current client before clearing a queue"),
+    queueDrawer.includes("Switch to Current client before clearing a queue"),
   why: 'Operators need to see queued labels across authorized clients unless they explicitly narrow scope.',
   evidence: 'Queue scope defaults to all, fetchQueue receives null for all-client mode, and clearing requires current-client scope.',
   failure: 'The queue panel may appear empty because it is silently scoped to the wrong client.',

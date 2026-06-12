@@ -158,8 +158,12 @@ check('every connected carrier passes through (generic _walleted normalization)'
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check("FE history shows everything that left the active queue (status !== 'queued')",
   /activeQueueEntries\.filter\(\(entry\) => entry\.status !== 'queued'\)/.test(ordersView));
+// PS-178 (Phase 6, part 3): the drawer JSX (incl. the Delivered pill render)
+// moved VERBATIM to the render-only OrdersPrintQueueDrawer component; the
+// history-list DERIVATION above stays in OrdersView. Same pin, new home.
+const queueDrawer = readFileSync('web/src/components/Views/OrdersPrintQueueDrawer.tsx', 'utf8');
 check('FE history renders the Delivered pill from auto_retired_at',
-  /wasDelivered/.test(ordersView) && /auto_retired_at \?\? entry\.last_printed_at/.test(ordersView));
+  /wasDelivered/.test(queueDrawer) && /auto_retired_at \?\? entry\.last_printed_at/.test(queueDrawer));
 const parityTypes = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
 const apiTypes = readFileSync('web/src/types/api.ts', 'utf8');
 check("both FE status unions include 'delivered'",

@@ -510,7 +510,23 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   QA: typecheck + build:web + ps-173 + ps-175 + ps-176 + ps-196 + ps-187-fixture + ps-183 +
   ps-123 + ps-135 + full cert ALL PASS. **Remaining parts:** effective package/dims/default
   source display. Read-model/additive throughout.
-- **PS-178 — 🟡 PARTS 1+2 DONE 2026-06-12 (Phase 6).**
+- **PS-178 — 🟡 PARTS 1+2+3 DONE 2026-06-12 (Phase 6).**
+  **PART 3: Print Queue drawer extraction.** The 383-line drawer JSX block moved VERBATIM (line-range
+  splice, not retyped) from OrdersView to NEW render-only `OrdersPrintQueueDrawer.tsx` (30 typed
+  props). ZERO queue logic moved — all state, derived lists (groups/history/search), and handlers
+  (hydrate/print/confirm/remove/clear/open-detail) stay in OrdersView and flow down as props, so the
+  queue guards' behavior pins (client scope, clear gating, holds, history filter, delivered
+  retirement) keep their single owner. Free-identifier scan on the new @ts-nocheck component:
+  every referenced identifier resolves to a prop, an import, or a body-local — zero unresolved
+  (the useAuth crash-class check). OrdersView 12,072 → 11,727; ratchet ceiling lowered
+  12,150 → 11,800. Guard re-anchors (drawer-STRING pins → the component; queue-STATE pins stay on
+  OrdersView, all documented in-file): test-order-queue-label ("Switch to Current client before
+  clearing"), shipment-tracking-retirement (Delivered pill + auto_retired_at render; the history
+  derivation pin stays on OrdersView), orders-ux ("Click Print All first" + Confirm Printed
+  disabled-rule strings). One ratchet false-positive fixed at the source: a comment in
+  orders-row-display named the FE markup fn and tripped the money-consumer allowlist — comment
+  reworded, allowlist NOT widened. QA: typecheck + build:web + test-order-queue-label +
+  shipment-tracking-retirement + orders-ux + print-queue-hygiene + ratchet + full cert ALL PASS.
   **PART 2: row-display reader extraction (first OrdersView decomposition slice).** 43 symbols moved
   VERBATIM from OrdersView to NEW `orders-row-display.tsx` (~370 lines): the DTO-reader primitives
   (toRecord/toStringValue/toNumberValue/toNumericValue/toProviderAccountId/formatMoney/
