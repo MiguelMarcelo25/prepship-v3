@@ -70,8 +70,10 @@ for (const file of [
   // one-line re-export shims for the real handler below; assert the handler.
   'src/connectors/carrier/credential-verification.ts',
   'src/lib/imported-handlers/carrier-accounts.ts',
-  'api/migrate-from.ts',
-  'api/admin/fix-marketplace-timestamps.ts',
+  // PS-200 part 2 (2026-06-12): api/migrate-from.ts and
+  // api/admin/fix-marketplace-timestamps.ts were one-shot tools, deleted —
+  // an absent endpoint can't leak raw errors, so dropping their entries
+  // keeps the audit's intent (no raw 500 bodies) with no weakening.
 ]) {
   const content = readFileSync(file, 'utf8');
   expect(`${file} uses safe 500 helper`, content.includes('sendInternalServerError'));
