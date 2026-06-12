@@ -73,7 +73,12 @@ check('account loading enforces the PS-083 assignment scope before postage',
 check('walmart_shipping uses the PS-199 LABELS-mode resolver (live-verify or throw)',
   /resolveWalmartPurchaseOrder\(/.test(labelsDirect) && /'labels',\s*\n\s*\)/.test(labelsDirect));
 check('the orchestrator test-mode seam is reachable ($0 verification path)',
-  /__carrierTestMode: true/.test(labelsDirect));
+  /__carrierTestMode: true/.test(labelsDirect) &&
+  // PS-202 verification (2026-06-12): the seam must be WIRED from createLabelV2's
+  // direct branch, not merely declared — the original pin checked the string in
+  // labels-direct while no caller ever set args.carrierTestMode. Double-gated:
+  // inert unless CARRIER_TEST_MODE is also armed in the env.
+  /carrierTestMode: \(body as Record<string, unknown>\)\.__carrierTestMode === true/.test(labels));
 check('a missing tracking number fails the purchase (no half-recorded labels)',
   /returned no tracking number/.test(labelsDirect));
 check('synthetic id mapping covers both account tables',

@@ -1272,6 +1272,15 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
         shipFrom,
         shippingOptions: options,
         rawOrder: order.raw ?? null,
+        // PS-202 verification seam, double-gated: this flag only has an effect
+        // when CARRIER_TEST_MODE is ALSO set in the process env (see
+        // carrier-test-mode.ts) — production never arms the env, so a stray
+        // client-sent flag is inert. With both gates armed, the orchestrator
+        // routes the connector call through the $0 sandbox/replay path
+        // (assertNoLivePostageOrMarketplace enforced) while THIS pipeline —
+        // proof gate, PS-204 account binding, family/scope asserts, persist
+        // tail — runs exactly as production.
+        carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,
       }),
     );
     created = direct.created;
