@@ -56,9 +56,13 @@ assert(
     routeSource.includes('canViewQueueSendSnapshot(durableJob, scope)'),
   'print-queue batch-send status checks job visibility',
 );
+// PS-195 re-anchor: clears are now explicitly targeted — the call shape
+// carries entryIds + clientId + the SAME auth scope (unchanged protection,
+// stronger targeting).
 assert(
-  routeSource.includes('clearQueue(body.client_id, printQueueScopeFromContext(c))'),
-  'print-queue clear passes auth scope into service',
+  routeSource.includes('entryIds: body.queue_entry_ids') &&
+    /clearQueue\(\{[\s\S]{0,160}scope: printQueueScopeFromContext\(c\)/.test(routeSource),
+  'print-queue clear passes explicit entry ids + auth scope into service',
 );
 assert(
   routeSource.includes('scope: printQueueScopeFromContext(c)') &&

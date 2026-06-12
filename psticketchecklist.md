@@ -1478,3 +1478,40 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   "backend refuses in-flight" ✓ (running-merge membership — the live equivalent of the card's
   successfulEntryIds-empty test, reported explicitly as a card-vs-reality delta); "FE passes explicit
   IDs on every clear" ✓; guard ✓.
+
+### PS-209 — Shipping architecture audit + first safe slice — DONE 2026-06-13 (audit + slice 1 of the track)
+- **✅ AUDIT DELIVERED** (docs/engineering/ps-209-shipping-architecture-audit.md — owner maps for label
+  purchase / direct marketplace import / confirmation lifecycle / print queue / confirm-printed, with
+  risk ranking + follow-up cards): the headline finding is that the legacy Vercel
+  `api/carriers/labels.ts` was still **REACHABLE in production** — vercel.json's rewrite exclusions keep
+  `/api/carriers/*` served locally, so a complete SECOND purchase pipeline (own JWT verify, connector
+  calls, persistence, outbox kick) sat live even though PS-202 moved every caller to v4 (no current
+  caller — but any stale tab/script could buy postage through it). Also confirmed read-only for PS-192:
+  `mark-shipped-externally.ts` hardcodes `ssMarkOrderShippedV1`, bypassing the outbox resolver — ranked
+  HIGH, fix stays blocked on DJ's unlock phrase. **✅ FIRST SLICE (Option 2):** the legacy endpoint is
+  now a **no-import 410 stub** (`LEGACY_LABEL_ENDPOINT_RETIRED`, operator-actionable message) — zero
+  purchase capability remains in the module, trivially reversible, and the full api/ deletion stays
+  PS-200 S5/S8 behind DJ's live order test. The misleading PS-078 comment in v2-apiClient/shared.ts
+  ("buys via the Vercel /carriers/labels function") corrected to the post-PS-202 reality. **Guard**
+  `test:ps-209-label-owner-slice` (stub shape + zero purchase imports + no legacy URL literals in the
+  api client layers + createLabelV2/proof-gate intact + audit doc exists). **SEVEN guards re-anchored**
+  (their pins certified the legacy fn's internals — each moved to the LIVE owner, strictly stronger):
+  store-connector-source (legacy confirmation pins → stub-with-zero-confirmation),
+  connector-architecture (capability-metadata pins → stub-with-zero-connector-machinery; rates pins
+  unchanged), ps-032-connector-orchestrators (4 positive routing pins → labels-direct's generic
+  `createCarrierLabel(provider, input)` dispatch), ps-078-connector-matrix (whitelist-parity →
+  one-owner dispatch; in-request Vercel confirmation → the v4 shared tail's per-order
+  `processFulfillmentOutboxOnce`), direct-carrier-label (rewritten wholesale to the v4 owners —
+  persistCreatedLabel tail, generic dispatch, PS-199 PO-safety pins on walmart-po-resolution + the
+  connector's exact customerOrderId match; the Walmart label-extractor behavioral cases unchanged),
+  test-order-queue-label/queue-label-diagnostics (readiness pin → outbox + DB-free stub), and
+  print-queue-ownership (a PS-195 call-shape catch: clear now passes explicit ids + the same scope).
+  **QA:** typecheck + ps-209 + ps-202 + ps-203 + store-connector-source + ps-064-confirmation-outbox +
+  shipment-confirmation-auto-recovery + print-queue-durable + print-queue-client-scope +
+  connector-architecture + ps-032-boundary + ps-032-orchestrators + ps-078-connector-matrix +
+  ps-176-queue-route-authority + print-queue-ownership + guard:shipping-certification + FULL
+  shipping-roundtrip-certification (74→78/78 offline suites) ALL PASS. **Follow-up cards proposed (in
+  the audit):** A — canonical direct Walmart/eBay persistence owner (collapse imported-handler-local
+  SQL); B — queue create+queue atomicity certification (mocked crash-window recovery proof); PS-192
+  (outbox-only shipped-external — awaiting unlock phrase); live certification matrix = DJ's PS-202
+  canary. No postage, labels, marketplace notifications, or order/shipment mutations.

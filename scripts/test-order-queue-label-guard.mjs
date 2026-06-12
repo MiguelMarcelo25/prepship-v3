@@ -121,14 +121,19 @@ report.check({
 });
 
 report.check({
+  // PS-209 re-anchor: the legacy Vercel label fn is a retired no-import 410 —
+  // it does NO database work, so a readiness assert there is meaningless (and
+  // request-time DDL is impossible by construction). The readiness protection
+  // lives where labels are actually written: the outbox + the v4 owner's
+  // ensureFulfillmentSchema task (pinned in the previous check).
   name: 'Fulfillment readiness requires label_provider_key without request-time DDL',
   condition: fulfillmentOutbox.includes('assertFulfillmentSchemaReady') &&
-    carrierLabels.includes('assertFulfillmentSchemaReady') &&
+    carrierLabels.includes('LEGACY_LABEL_ENDPOINT_RETIRED') &&
     fulfillmentSchemaReadiness.includes('label_provider_key'),
   why: 'Readiness checks should fail fast instead of mutating schema during live label requests.',
-  evidence: 'Outbox and carrier label flows call assertFulfillmentSchemaReady, and readiness includes label_provider_key.',
+  evidence: 'The outbox asserts readiness (incl. label_provider_key); the legacy label fn is a DB-free retired stub.',
   failure: 'A deployment missing label_provider_key may fail only during a real label or marketplace confirmation flow.',
-  fix: 'Keep assertFulfillmentSchemaReady in the label/outbox paths and include label_provider_key in readiness requirements.',
+  fix: 'Keep assertFulfillmentSchemaReady in the outbox path and keep the legacy endpoint a purchase-free stub.',
 });
 
 report.check({

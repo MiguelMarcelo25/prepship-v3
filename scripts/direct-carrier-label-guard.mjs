@@ -1,20 +1,59 @@
+// PS-209 re-anchor (2026-06-13): this guard certified the LEGACY Vercel
+// direct-label function, which is now a retired no-import 410
+// (LEGACY_LABEL_ENDPOINT_RETIRED). Every behavior it protected lives at the
+// v4 owners now — same intent, new homes:
+//   shared persistence  → src/services/labels.ts persistCreatedLabel tail
+//   confirmation        → per-order outbox processing in the same tail
+//   provider dispatch   → labels-direct.ts generic createCarrierLabel(provider, input)
+//   Walmart PO safety   → PS-199 resolver (walmart-po-resolution.ts) + the
+//                         connector's exact customerOrderId match
+// The Walmart label-extractor behavioral cases stay (the connector always
+// owned them).
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { tsImport } from 'tsx/esm/api';
 
-const labels = readFileSync('api/carriers/labels.ts', 'utf8');
+const legacy = readFileSync('api/carriers/labels.ts', 'utf8');
+const labelsSvc = readFileSync('src/services/labels.ts', 'utf8');
+const labelsDirect = readFileSync('src/services/labels-direct.ts', 'utf8');
+const walmartConnector = readFileSync('src/connectors/store/walmart.ts', 'utf8');
+const poResolution = readFileSync('src/services/walmart-po-resolution.ts', 'utf8');
 
-assert(labels.includes('persistDirectCarrierLabel'), 'direct labels must use shared persistence helper');
-assert(!labels.includes('CREATE TABLE IF NOT EXISTS shipments'), 'direct labels must not create shipments table at request time');
-assert(!labels.includes('INSERT INTO shipments'), 'direct labels must not perform ad hoc shipment inserts');
-assert(labels.includes('enqueueShipmentConfirmationSql'), 'direct labels must enqueue source confirmation');
-for (const provider of ['shipp', 'walmart_shipping', 'ups', 'easypost']) {
-  assert(labels.includes(`providerKey === '${provider}'`), `direct labels missing ${provider} branch`);
-}
+// The legacy endpoint stays a purchase-free stub.
+assert(legacy.includes('LEGACY_LABEL_ENDPOINT_RETIRED'), 'legacy label endpoint must stay the retired 410 stub');
+assert(!legacy.includes('CREATE TABLE IF NOT EXISTS shipments'), 'no request-time DDL can return to the stub');
+assert(!legacy.includes('INSERT INTO shipments'), 'no ad hoc shipment inserts can return to the stub');
 
-const {
-  __test_selectWalmartOrderByCustomerOrderId,
-} = await tsImport('../api/carriers/labels.ts', import.meta.url);
+// v4 direct labels use the SAME sanctioned persistence + confirmation tail
+// as ShipStation labels.
+assert(labelsSvc.includes('persistCreatedLabel'), 'direct labels must use the shared persistence helper (v4 tail)');
+assert(/processFulfillmentOutboxOnce\(\{ orderId/.test(labelsSvc), 'the shared tail must process the source confirmation per order');
+assert(labelsDirect.includes('createCarrierLabel(provider, input)'),
+  'direct providers dispatch generically through the connector orchestrator (no per-provider route branches)');
+assert(labelsDirect.includes('persistCreatedLabel'),
+  'labels-direct must document/route rows through the sanctioned persist helper');
+
+// Walmart PO safety (PS-199 resolver, labels mode): live verification either
+// proves the mapping or stops the purchase — never trusts a cached PO blind.
+assert(
+  poResolution.includes('live PO verification replaced cached purchaseOrderId'),
+  'walmart resolver must log when live PO verification replaces a cached purchaseOrderId',
+);
+assert(
+  poResolution.includes('Could not verify live Walmart PO#'),
+  'walmart resolver must stop label purchase when live PO verification cannot prove the mapping',
+);
+// The connector's lookup selects the EXACT customerOrderId — no first-row fallback.
+assert(
+  /elements\.find\(\(order\) => firstString\(\(order as any\)\?\.customerOrderId\) === trimmed\)/.test(walmartConnector),
+  'walmart connector lookup must select the exact customerOrderId match',
+);
+assert(
+  walmartConnector.includes('order lookup exact customerOrderId match not found'),
+  'walmart connector must warn (not fall back) when the exact match is missing',
+);
+
+// Walmart label-extractor behavioral cases — connector-owned, unchanged.
 const {
   __test_extractWalmartLabelReference,
 } = await tsImport('../src/connectors/carrier/walmart-shipping.ts', import.meta.url);
@@ -84,40 +123,4 @@ assert.throws(
   'walmart label extractor must reject empty label payload strings',
 );
 
-const walmartLookupPayload = {
-  list: {
-    elements: {
-      order: [
-        {
-          customerOrderId: '200014621111111',
-          purchaseOrderId: '129114381111111',
-        },
-        {
-          customerOrderId: '200014621589900',
-          purchaseOrderId: '129114381893181',
-          orderLines: { orderLine: [{ lineNumber: '1' }] },
-        },
-      ],
-    },
-  },
-};
-const exactWalmartOrder = __test_selectWalmartOrderByCustomerOrderId(walmartLookupPayload, '200014621589900');
-assert.equal(
-  exactWalmartOrder?.purchaseOrderId,
-  '129114381893181',
-  'walmart live PO lookup must select the exact customerOrderId match',
-);
-const missingWalmartOrder = __test_selectWalmartOrderByCustomerOrderId(walmartLookupPayload, '200014629999999');
-assert.equal(
-  missingWalmartOrder,
-  null,
-  'walmart live PO lookup must not fall back to the first returned order when customerOrderId does not match',
-);
-assert(
-  labels.includes('walmart live PO verification replaced cached purchaseOrderId'),
-  'walmart labels must log when live PO verification replaces cached purchaseOrderId',
-);
-assert(
-  labels.includes('Could not verify live Walmart PO#'),
-  'walmart labels must stop label purchase when live PO verification cannot prove the mapping',
-);
+console.log('PASS direct-carrier label guard (PS-209 re-anchored to the v4 owners)');

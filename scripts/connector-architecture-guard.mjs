@@ -146,17 +146,21 @@ assert(storeResolution.includes('connectorCapabilityMatrix'), 'store resolver mu
 assert(fulfillmentOutbox.includes('resolveStoreConnector'), 'fulfillment outbox must resolve confirmation providers through store connector resolver');
 assert(fulfillmentOutbox.includes('connectorCapabilities'), 'fulfillment outbox must expose store connector capabilities in logs or payload');
 
-for (const source of [carrierLabels, carrierRates]) {
-  assert(source.includes('connectorCapabilities'), 'direct carrier endpoint response metadata must expose connector capabilities');
-}
+// PS-209 re-anchor: the legacy Vercel LABEL endpoint is retired (no-import
+// 410 — LEGACY_LABEL_ENDPOINT_RETIRED). Its old pins (inline capability
+// metadata, cold-start hygiene) protected a live purchase pipeline that no
+// longer exists; the stronger invariant is that the module carries NO
+// connector machinery at all. The rates endpoint pins below are unchanged
+// (it still quotes).
 assert(
-  carrierLabels.includes('LABEL_CREATE_CONNECTOR_CAPABILITIES') &&
-    carrierLabels.includes('labelCreateConnectorCapabilities'),
-  'direct carrier label endpoint must keep Vercel-safe inline connector capability metadata',
+  carrierRates.includes('connectorCapabilities'),
+  'direct carrier rates endpoint response metadata must expose connector capabilities',
 );
 assert(
-  !carrierLabels.includes("from '../../src/connectors/carrier-resolution.js'"),
-  'direct carrier label endpoint must not import connector registry at Vercel cold start',
+  carrierLabels.includes('LEGACY_LABEL_ENDPOINT_RETIRED') &&
+    !carrierLabels.includes('createCarrierLabel') &&
+    !carrierLabels.includes("from '../../src/connectors/carrier-resolution.js'"),
+  'legacy label endpoint must stay the retired 410 stub with zero connector machinery (PS-209)',
 );
 assert(
   carrierRates.includes('DIRECT_CARRIER_CONNECTOR_CAPABILITIES'),

@@ -193,6 +193,7 @@
     "test:ps-205-package-facts-precedence": "tsx scripts/ps-205-package-facts-precedence-guard.ts",
     "test:ps-204-account-binding": "tsx scripts/ps-204-account-binding-guard.ts",
     "test:ps-202-direct-label-owner": "tsx scripts/ps-202-direct-label-owner-guard.ts",
+    "test:ps-209-label-owner-slice": "tsx scripts/ps-209-label-owner-slice-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",

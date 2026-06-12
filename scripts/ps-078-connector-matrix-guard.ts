@@ -24,22 +24,23 @@ function check(name: string, cond: boolean) {
   }
 }
 
-// ── (1) The direct label-capable set must equal the Vercel endpoint whitelist ──
-// so the matrix can never claim a carrier buys labels that /carriers/labels
-// rejects (or vice-versa).
+// ── (1) PS-209 re-anchor: the legacy Vercel /carriers/labels endpoint is a
+// retired no-import 410 — there is no second purchase whitelist to drift
+// from anymore. The matrix's label-capable set now answers to the ONE owner:
+// v4 createLabelV2 → labels-direct.ts, which dispatches generically through
+// createCarrierLabel(provider, input) — so the matrix itself (already
+// cross-checked against connector capabilities below) is the acceptance set.
 const labelsSrc = readFileSync('api/carriers/labels.ts', 'utf8');
-const whitelistBlock = labelsSrc.slice(
-  labelsSrc.indexOf('LABEL_CREATE_CONNECTOR_CAPABILITIES'),
-  labelsSrc.indexOf('function labelCreateConnectorCapabilities'),
-);
-const whitelistKeys = [...whitelistBlock.matchAll(/^\s{2}([a-z_]+):\s*\[/gm)].map((m) => m[1]);
+const directLabelsSvc = readFileSync('src/services/labels-direct.ts', 'utf8');
 check(
-  'Vercel /carriers/labels whitelist found',
-  whitelistKeys.length > 0,
+  'legacy /carriers/labels is the retired 410 stub (no purchase whitelist remains)',
+  labelsSrc.includes('LEGACY_LABEL_ENDPOINT_RETIRED') &&
+    !labelsSrc.includes('LABEL_CREATE_CONNECTOR_CAPABILITIES'),
 );
 check(
-  `DIRECT_LABEL_CARRIERS matches Vercel whitelist (matrix=[${[...DIRECT_LABEL_CARRIERS].sort()}], endpoint=[${[...whitelistKeys].sort()}])`,
-  [...DIRECT_LABEL_CARRIERS].sort().join(',') === [...whitelistKeys].sort().join(','),
+  `v4 direct-label owner dispatches every matrix carrier generically (matrix=[${[...DIRECT_LABEL_CARRIERS].sort()}])`,
+  [...DIRECT_LABEL_CARRIERS].length > 0 &&
+    directLabelsSvc.includes('createCarrierLabel(provider, input)'),
 );
 
 // ── (2) Key matrix rows ────────────────────────────────────────────────────
@@ -135,17 +136,18 @@ check('label payload selected tuple comes from panel (account.code / panelForm.s
 check('req-4 "proceed with current operator selection" decision is documented at the label payload',
   /PS-078 req 4 — DECISION[\s\S]{0,400}?proceed with current operator/.test(labelPayloadBlock));
 
-// ── (6) Direct-carrier label must PROCESS the source confirmation in-request ──
-// Vercel freezes the function after the response, so a Shipp/UPS/EasyPost label
-// on a ShipStation- or eBay-sourced order must process the confirmation outbox
-// synchronously (like ShipStation's Render path) — not merely enqueue it — or the
-// marketplace is never notified.
-check('direct-carrier labels function loads the outbox processor (deferred)',
-  /processFulfillmentOutboxOnce = \(await import\('\.\.\/\.\.\/src\/services\/fulfillment\/outbox\.js'\)\)/.test(labelsSrc));
-check('direct-carrier labels function defines an in-request confirmation processor',
-  /async function processOrderConfirmationNow\(/.test(labelsSrc) && /processFulfillmentOutboxOnce\(\{ orderId/.test(labelsSrc));
-check('all 3 direct return paths (shipp / walmart_shipping / ups+easypost) fire confirmation processing',
-  (labelsSrc.match(/await processOrderConfirmationNow\(orderId\)/g) ?? []).length >= 3);
+// ── (6) PS-209 re-anchor: confirmation processing lives at the v4 owner ──
+// The old pin held the Vercel function's in-request confirmation (Vercel
+// freezes after the response). Direct labels now run on Render through the
+// SAME shared persist tail as ShipStation labels (PS-202), where the outbox
+// fires per-order — and the 1-minute scheduler tick below remains the
+// self-healing net.
+const v4LabelsSvc = readFileSync('src/services/labels.ts', 'utf8');
+check('v4 label owner fires the per-order outbox processor in the shared tail',
+  /processFulfillmentOutboxOnce\(\{ orderId/.test(v4LabelsSvc));
+check('legacy label endpoint carries NO confirmation machinery',
+  !labelsSrc.includes('processFulfillmentOutboxOnce') &&
+    !labelsSrc.includes('processOrderConfirmationNow'));
 
 // ── (7) Self-healing backstop: the 1-minute outbox worker must stay wired ────
 // The direct-carrier label fires confirmation in-request, but the proven safety

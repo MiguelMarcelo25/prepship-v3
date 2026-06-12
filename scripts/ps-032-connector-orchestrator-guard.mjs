@@ -38,7 +38,13 @@ const walmartFeesLib = read('api/_lib/walmart-fees-sync.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const ebayOauthCallback = read('api/oauth/ebay/callback.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
+// PS-209: the legacy Vercel label endpoint is a retired no-import 410. The
+// positive "labels route through the orchestrator" pins moved to the LIVE
+// v4 owner (labels-direct.ts, generic createCarrierLabel(provider, input)
+// dispatch); the legacy file keeps only NEGATIVE pins (no provider API
+// calls can creep back into the stub).
 const carrierLabelsRoute = read('api/carriers/labels.ts');
+const directLabelsService = read('src/services/labels-direct.ts');
 // PS-200 S2: api/carriers/validate-address.ts, ups/probe.ts, and
 // walmart/probe-carriers.ts (zero-caller diagnostic endpoints) were deleted.
 // Their route-side asserts ("route calls connector-owned logic, not the
@@ -179,12 +185,12 @@ assert(
   'Walmart fees connector helper must own Walmart Payments API calls',
 );
 assert(
-  carrierLabelsRoute.includes("confirmStoreShipment('walmart'") &&
-    carrierLabelsRoute.includes('lookupWalmartOrderByCustomerOrderId') &&
+  carrierLabelsRoute.includes('LEGACY_LABEL_ENDPOINT_RETIRED') &&
     !carrierLabelsRoute.includes('marketplace.walmartapis.com') &&
     !carrierLabelsRoute.includes('confirmWalmartOrderShipped') &&
+    !carrierLabelsRoute.includes("confirmStoreShipment('walmart'") &&
     !carrierLabelsRoute.includes('/v3/orders/${encodeURIComponent(input.purchaseOrderId)}/shipping'),
-  'Walmart post-label marketplace confirmation must route through StoreConnector orchestration, not direct Walmart confirmation calls from api/carriers/labels.ts',
+  'PS-209: the legacy label endpoint is a retired stub — Walmart post-label confirmation lives only in the v4 outbox/StoreConnector path',
 );
 assert(
   walmartStoreConnector.includes('/v3/orders/${encodeURIComponent(purchaseOrderId)}/shipping') &&
@@ -208,10 +214,10 @@ assert(
   'UPS CarrierConnector must own UPS rate API calls',
 );
 assert(
-  carrierLabelsRoute.includes('createCarrierLabel') &&
+  directLabelsService.includes('createCarrierLabel(provider, input)') &&
     !carrierLabelsRoute.includes('buyLabelUps') &&
     !carrierLabelsRoute.includes('https://onlinetools.ups.com/api/shipments/v2403/ship'),
-  'UPS labels must route through CarrierConnector orchestration, not direct UPS label API calls from api/carriers/labels.ts',
+  'UPS labels must route through CarrierConnector orchestration via the v4 direct-label owner (PS-209: legacy endpoint retired)',
 );
 assert(
   upsCarrierConnector.includes('https://onlinetools.ups.com/api/shipments/v2403/ship') &&
@@ -255,10 +261,10 @@ assert(
   'Shipp CarrierConnector must own Shipp rate API calls',
 );
 assert(
-  carrierLabelsRoute.includes("createCarrierLabel('shipp'") &&
+  directLabelsService.includes('createCarrierLabel(provider, input)') &&
     !carrierLabelsRoute.includes('buyLabelShipp') &&
     !carrierLabelsRoute.includes('https://shipp.to/api'),
-  'Shipp labels must route through CarrierConnector orchestration, not direct Shipp API calls from api/carriers/labels.ts',
+  'Shipp labels must route through CarrierConnector orchestration via the v4 direct-label owner (PS-209: legacy endpoint retired)',
 );
 assert(
   shippCarrierConnector.includes('https://shipp.to/api/shipping/label/create') &&
@@ -277,13 +283,13 @@ assert(
   'Walmart Shipping CarrierConnector must own Walmart Shipping Estimates API calls',
 );
 assert(
-  carrierLabelsRoute.includes("createCarrierLabel('walmart_shipping'") &&
+  directLabelsService.includes('createCarrierLabel(provider, input)') &&
     !carrierLabelsRoute.includes('buyLabelWalmartShipping') &&
     !carrierLabelsRoute.includes('/v3/shipping/labels/shipping-estimates') &&
     !carrierLabelsRoute.includes('/v3/shipping/labels/carriers/') &&
     !carrierLabelsRoute.includes('/v3/shipping/labels/${encodeURIComponent(labelId)}') &&
     !carrierLabelsRoute.includes("'https://marketplace.walmartapis.com/v3/shipping/labels'"),
-  'Walmart Shipping labels must route through CarrierConnector orchestration, not direct Walmart Shipping label API calls from api/carriers/labels.ts',
+  'Walmart Shipping labels must route through CarrierConnector orchestration via the v4 direct-label owner (PS-209: legacy endpoint retired)',
 );
 assert(
   walmartShippingCarrierConnector.includes('/v3/shipping/labels') &&

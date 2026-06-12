@@ -793,12 +793,15 @@ export function isDirectCarrierId(value: unknown): boolean {
   return directAccountRefFromProviderId(toProviderAccountId(value)) != null;
 }
 
-// PS-078 req 7: deliberate label-endpoint routing by provider id. A direct
-// carrier_accounts rate (10M offset) buys via the Vercel /carriers/labels
-// function; a ShipStation provider id buys via Render /labels; a direct
+// PS-078 req 7 (routing CLASS, not endpoint — PS-202/PS-209 update): every
+// purchase posts to v4 /labels (createLabelV2 owns both the ShipStation and
+// direct-carrier branches; the legacy Vercel function is a retired 410).
+// This classifier still matters for the WORKFLOW split: a direct
+// carrier_accounts rate (10M offset) takes the direct-create queue route; a
+// ShipStation provider id takes the backend queue job; a direct
 // store_accounts rate (20M offset) is a MARKETPLACE store account that cannot
-// create a label on either endpoint — it must be BLOCKED before postage rather
-// than silently posting a bogus `se-20000xxx` id to ShipStation /labels.
+// create a label at all — it must be BLOCKED before postage rather than
+// silently posting a bogus `se-20000xxx` id to ShipStation.
 export type LabelEndpointRoute = 'carrier-direct' | 'store-account-blocked' | 'shipstation';
 
 export function classifyLabelEndpoint(shippingProviderId: number | null): LabelEndpointRoute {

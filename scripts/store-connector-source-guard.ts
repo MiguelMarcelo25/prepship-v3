@@ -78,18 +78,21 @@ assert(
   outbox.includes("resolveStoreConnector(provider, 'shipment.confirm')"),
   'fulfillment outbox must resolve shipment confirmation through store connector capabilities',
 );
-// PS-136: the direct-carrier (Vercel serverless) label path must delegate the confirmation-
-// provider DECISION + support check to the SAME canonical owners as the outbox — not a local
-// inferrer + a hardcoded provider list (which diverged: it defaulted manual/no-marketplace
-// orders to 'shipstation' and marked them supported).
+// PS-136 → PS-209 re-anchor: the old pin required the legacy Vercel label fn
+// to delegate its confirmation decision to the canonical owners. PS-209's
+// first slice retired that fn as a purchase path entirely (no-import 410 —
+// LEGACY_LABEL_ENDPOINT_RETIRED), which is strictly STRONGER: it cannot
+// confirm anything, canonically or otherwise. The pin now holds the stub
+// shape so purchase/confirmation machinery cannot creep back in.
 assert(
   !directLabels.includes("const supported = provider === 'shipstation' || provider === 'walmart' || provider === 'ebay'"),
   'api/carriers/labels.ts must not hardcode supported confirmation providers',
 );
 assert(
-  directLabels.includes("resolveStoreConnector(resolvedProvider, 'shipment.confirm')") &&
-    directLabels.includes('resolveShipmentConfirmationProvider({'),
-  'api/carriers/labels.ts must resolve confirmation provider + support via the canonical owners (resolveShipmentConfirmationProvider + resolveStoreConnector)',
+  directLabels.includes('LEGACY_LABEL_ENDPOINT_RETIRED') &&
+    !directLabels.includes('confirmStoreShipment') &&
+    !directLabels.includes('processFulfillmentOutboxOnce'),
+  'api/carriers/labels.ts must stay the retired 410 stub with zero confirmation capability (PS-209)',
 );
 assert(
   fulfillmentTypes.includes("'not_supported'"),
