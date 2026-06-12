@@ -690,6 +690,27 @@ side effects per stage, risk ranking) + child-card drafts + existing-card classi
   remaining (live, DJ):** Browse Rates on a ShipStation-synced Walmart order (200014792308203
   style) returns Walmart rates with the source badge; walmart-* orders quote too.
 
+- **PS-203 — 🟡 STAGES 1+2 DONE 2026-06-12 (premature SS-only best-rate poisoning stopped).**
+  Symptom: saved BEST RATE $10.44 (ORI UPS Ground Saver) vs Rate Browser combined $9.27 (Shipp
+  SurePost) — every persisting path compared a ShipStation-only universe and self-certified it
+  complete. **Stage 1 (FE):** refreshPanelBestRate's browse call now sends
+  `includeVisibleDirectCarriers: true` (the flag Recalculate + passive-live already send) — the
+  panel-persisted winner is compared against direct carriers. **Stage 2 (BE):** /rates/cached/bulk
+  completeness is now relative to the REQUIRED carrier universe: NEW
+  `loadDirectCarrierVisibilityEvaluator()` in rates.ts (one account load per request, per-context
+  closure over directCarrierVisibleForScope, failure degrades to legacy behavior); both exact and
+  rough cache hits mark `requiredDirectCarriersUncovered` when the order scope has visible direct
+  accounts the row never compared; cacheMetadata gates isComplete on it (+ observability field
+  `requiredCarrierUniverse: 'missing-direct'`). The FE's passive fast-path already requires
+  isComplete, so SS-only winners stop persisting for direct-carrier-scoped orders. Coverage check
+  is stage-3-ready: a row COVERS direct carriers when its diagnostics carry synthetic se- ids
+  ≥10,000,000 — stage 3's combined cache rows pass without touching the rule. Guard
+  `test:ps-203-best-rate-universe` (8 checks). QA: typecheck + build:web + ps-196 + full cert ALL
+  PASS. **Stages 3–5 remaining:** canonical `getCombinedRates` service (SS + direct, uniform
+  markups on BOTH families, single pick, combined completeness + combined cache row; /browse
+  delegates), backfill delegates + persists raw-amount DTO (kills double-markup), boundary tests
+  at the owner ($9.27<$10.44 fixture, direct error ⇒ incomplete, charge-basis pick).
+
 ### PS-172 — ✅ EPIC CLOSED 2026-06-12 (closeout table)
 
 | Phase | Ticket | Outcome |

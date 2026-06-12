@@ -9,6 +9,7 @@ import {
   getCarrierAccountsForRateContext,
   getDirectCarrierRatesForRateInput,
   getRates,
+  loadDirectCarrierVisibilityEvaluator,
   rateCacheKey,
   resolveRateInput,
   sanitizeRateCacheRowForEligibility,
@@ -299,7 +300,23 @@ function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[] {
   return [...byKey.values()];
 }
 
-function cacheMetadata(row: typeof rateCachePublicColumns | any, matchQuality: 'exact' | 'rough' | 'miss') {
+// PS-203 (stage 2): does the cached row's diagnostic set cover any DIRECT
+// carrier (synthetic se-1xxxxxxx ids ≥ 10,000,000)? Today's rate_cache rows are
+// ShipStation-only, so this is false — but stage 3's combined cache rows will
+// carry direct diagnostics and pass without touching this rule again.
+function rateCacheRowCoversDirectCarriers(row: any): boolean {
+  const diagnostics = Array.isArray(row?.diagnostics) ? row.diagnostics : [];
+  return diagnostics.some((diagnostic: any) => {
+    const match = /^se-(\d+)$/i.exec(String(diagnostic?.carrierId ?? ''));
+    return match != null && Number.parseInt(match[1]!, 10) >= 10_000_000;
+  });
+}
+
+function cacheMetadata(
+  row: typeof rateCachePublicColumns | any,
+  matchQuality: 'exact' | 'rough' | 'miss',
+  options: { requiredDirectCarriersUncovered?: boolean } = {},
+) {
   if (!row || matchQuality === 'miss') {
     return {
       matchType: 'miss' as const,
@@ -317,14 +334,25 @@ function cacheMetadata(row: typeof rateCachePublicColumns | any, matchQuality: '
   const fetchedAt = row.fetchedAt instanceof Date ? row.fetchedAt : new Date(row.fetchedAt);
   const cacheExpiresAt = new Date(fetchedAt.getTime() + CACHE_TTL_MS);
   const fresh = cacheExpiresAt.getTime() > Date.now();
-  const isComplete = fresh && rates.length > 0 && diagnostics.every((diagnostic: any) => (
-    diagnostic?.status === 'ok' || diagnostic?.status === 'cached' || diagnostic?.status === 'empty'
-  ));
+  // PS-203 (stage 2): completeness is relative to the REQUIRED carrier universe,
+  // not just the carriers the row happened to query. A ShipStation-only row for
+  // an order whose scope has visible direct carriers (Shipp / Walmart Shipping)
+  // is NOT complete — persisting its winner is how the $10.44-vs-$9.27 premature
+  // best rate happened. The FE's cache fast-path already requires isComplete, so
+  // this alone stops the poisoning.
+  const coversRequiredUniverse = options.requiredDirectCarriersUncovered !== true;
+  const isComplete = fresh && rates.length > 0 && coversRequiredUniverse &&
+    diagnostics.every((diagnostic: any) => (
+      diagnostic?.status === 'ok' || diagnostic?.status === 'cached' || diagnostic?.status === 'empty'
+    ));
   return {
     matchType: matchQuality,
     matchQuality: matchQuality === 'exact' ? 'exact' as const : 'rough' as const,
     approximate: matchQuality === 'rough' ? true : false,
     isComplete,
+    ...(options.requiredDirectCarriersUncovered === true
+      ? { requiredCarrierUniverse: 'missing-direct' as const }
+      : {}),
     rateCount: rates.length,
     cacheCreatedAt: fetchedAt.toISOString(),
     cacheExpiresAt: cacheExpiresAt.toISOString(),
@@ -783,6 +811,9 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const { items } = c.req.valid('json');
   const canViewFinancials = canViewRateFinancials(c);
   const automationRules = await loadShippingAutomationRules();
+  // PS-203 (stage 2): one account-table load per request; each item's order
+  // context is checked against the REQUIRED carrier universe below.
+  const hasVisibleDirectCarriers = await loadDirectCarrierVisibilityEvaluator();
   const itemsWithKeys = await Promise.all(items.map(async (it) => {
     if (it.cacheKey) {
       return {
@@ -884,7 +915,11 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         insuranceProvider: effectiveInsuranceProvider ?? (it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none'),
         insuredValue: effectiveInsuredValue ?? (typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null),
       }, automationRules);
-      const meta = cacheMetadata(eligibleHit, 'exact');
+      const meta = cacheMetadata(eligibleHit, 'exact', {
+        requiredDirectCarriersUncovered:
+          hasVisibleDirectCarriers({ clientId: it.clientId ?? null, storeId: it.storeId ?? null }) &&
+          !rateCacheRowCoversDirectCarriers(eligibleHit),
+      });
       return {
         orderId: it.orderId,
         cacheKey: computedCacheKey,
@@ -913,7 +948,11 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         insuranceProvider: effectiveInsuranceProvider ?? (it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none'),
         insuredValue: effectiveInsuredValue ?? (typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null),
       }, automationRules);
-      const meta = cacheMetadata(eligibleHit, 'rough');
+      const meta = cacheMetadata(eligibleHit, 'rough', {
+        requiredDirectCarriersUncovered:
+          hasVisibleDirectCarriers({ clientId: it.clientId ?? null, storeId: it.storeId ?? null }) &&
+          !rateCacheRowCoversDirectCarriers(eligibleHit),
+      });
       return {
         orderId: it.orderId,
         cacheKey: computedCacheKey,

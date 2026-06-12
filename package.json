@@ -179,6 +179,7 @@
     "test:ps-178-fe-authority-ratchet": "tsx scripts/ps-178-fe-authority-ratchet-guard.ts",
     "test:recalculate-all-live": "tsx scripts/recalculate-all-live-guard.ts",
     "test:ps-199-walmart-po-resolution": "tsx scripts/ps-199-walmart-po-resolution-guard.ts",
+    "test:ps-203-best-rate-universe": "tsx scripts/ps-203-best-rate-universe-guard.ts",
     "test:ps-167-apiclient-shared-extraction": "tsx scripts/ps-167-apiclient-shared-extraction-guard.ts",
     "test:ps-168-scope-sql": "tsx scripts/ps-168-scope-sql-guard.ts",
     "test:ps-163-backfill-owner": "tsx scripts/ps-163-backfill-owner-guard.ts",

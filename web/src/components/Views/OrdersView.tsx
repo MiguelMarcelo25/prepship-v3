@@ -6036,6 +6036,11 @@ export default function OrdersView({
           undefined,
         forceLive: true,
         forceRefresh: true,
+        // PS-203 stage 1: the panel refresh compared a ShipStation-only universe
+        // and persisted the winner as complete — Shipp/Walmart direct rates never
+        // entered the comparison (the $10.44-vs-$9.27 bug). Same flag the
+        // Recalculate + passive-live paths already send.
+        includeVisibleDirectCarriers: true,
       }) as Record<string, unknown>
       const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
 

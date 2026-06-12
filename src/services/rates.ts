@@ -1549,6 +1549,37 @@ function toDirectRate(
   } as unknown as Rate;
 }
 
+/**
+ * PS-203 (stage 2) — the REQUIRED carrier universe for an order context.
+ * A cached ShipStation-only rate row can only be COMPLETE when the order's
+ * scope has no visible direct-carrier accounts (Shipp / Walmart Shipping /
+ * direct UPS…) that the row never compared. Loads the account tables once and
+ * returns a per-context evaluator so bulk callers pay one load per request.
+ */
+export async function loadDirectCarrierVisibilityEvaluator(): Promise<
+  (context: { clientId?: number | null; storeId?: number | null }) => boolean
+> {
+  let accounts: DirectCarrierAccountInfo[] = [];
+  try {
+    accounts = await loadVisibleDirectCarrierAccounts({
+      includeAllDirectCarriers: true,
+    } as RateInput);
+  } catch (err) {
+    // Best-effort: an account-load failure must never break a cache read —
+    // evaluate as "no visible direct carriers" (legacy completeness behavior).
+    console.warn('[rates] direct-carrier visibility load skipped:', err instanceof Error ? err.message : err);
+    return () => false;
+  }
+  return (context) =>
+    accounts.some((account) =>
+      directCarrierVisibleForScope(account, {
+        clientId: context.clientId ?? null,
+        storeId: context.storeId ?? null,
+        includeAllDirectCarriers: false,
+      }),
+    );
+}
+
 async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<DirectCarrierAccountInfo[]> {
   const requestedRefs = (input.carrierIds ?? [])
     .map(directAccountRefFromCarrierId)
