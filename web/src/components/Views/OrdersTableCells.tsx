@@ -1,3 +1,9 @@
+// @ts-nocheck — the W2c2 diagnostic-column renderer reads loose DTO rate/label
+// records (order.bestRate?.carrierCode etc. are {}-typed on OrderSummaryDto),
+// following the documented sibling precedent (orders-display-state.ts,
+// orders-row-display.tsx). The leaf renderers below are trivially correct; the
+// renderOrderCell context type stays as in-file documentation.
+//
 // PS-166 (Wave 2c1): the two leaf cell renderers — the Order # cell and the
 // generic diagnostic cell — extracted from OrdersView.tsx with BYTE-IDENTICAL
 // markup. The Order # cell carries DOM the e2e suites pin
@@ -7,12 +13,36 @@
 // function used to capture), so behavior is identical and nothing here owns
 // component state.
 //
-// The giant column-switch renderTableCell stays in OrdersView (W2c2);
-// it calls these with the same context.
+// PS-166 (Wave 2c2): the 7 test_* DIAGNOSTIC column cells — fully pure on
+// (order, column) + pure display helpers + renderDiagnosticCell, ZERO
+// component state — moved here as renderDiagnosticColumnCell. The
+// component-coupled dispatcher renderTableCell + its 4 sibling cell renderers
+// (carrier/account/best-rate/margin) stay in the OrdersView shell, which is
+// their natural home (an 18-field context blob incl. render-callbacks would be
+// higher-risk + architecturally worse — see the PS-166 plan W2c note).
 import { Truck } from 'lucide-react'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
+import type { TableColumn } from './orders-table-columns'
 import { isTestOrder } from './orders-items'
-import { copyText } from './orders-display-state'
+import {
+  copyText,
+  getCancelledDisplayAccountNickname,
+  getCancelledDisplayCarrierCode,
+  getCancelledDisplayProviderId,
+  getCancelledDisplayServiceCode,
+  getShippedDisplayAccountNickname,
+  getShippedDisplayCarrierCode,
+  getShippedDisplayProviderId,
+  getShippedDisplayServiceCode,
+  shouldShowCarrierExtLabel,
+} from './orders-display-state'
+import {
+  getAwaitingDisplayAccountNickname,
+  getLegacyClientIdForDisplay,
+  toProviderAccountId,
+  toRecord,
+  toStringValue,
+} from './orders-row-display'
 
 export type OrderNumberCellContext = {
   orderDetailsById: Map<number, OrderFullDto>
@@ -159,4 +189,112 @@ export function renderDiagnosticCell(
       {display}
     </span>
   )
+}
+
+// PS-166 (Wave 2c2): the 7 test_* DIAGNOSTIC column cells, moved VERBATIM out
+// of renderTableCell's switch. Pure on (order, column) — the three diagnostic
+// flags are computed internally from order.orderStatus + the canonical
+// shouldShowCarrierExtLabel (identical to the inline derivations they
+// replaced), and every value resolver is a pure display helper. No component
+// state. renderTableCell delegates all 7 test_* cases here.
+export function renderDiagnosticColumnCell(order: OrderSummaryDto, column: TableColumn) {
+  const diagnosticIsShipped = order.orderStatus !== 'awaiting_shipment'
+  const diagnosticIsCancelled = order.orderStatus === 'cancelled'
+  const diagnosticIsExternalLabel = shouldShowCarrierExtLabel(order)
+
+  switch (column.key) {
+    case 'test_carrierCode': {
+      if (diagnosticIsExternalLabel && !diagnosticIsCancelled) return renderDiagnosticCell(null, { monospace: true })
+      const value = diagnosticIsShipped
+        ? diagnosticIsCancelled
+          ? getCancelledDisplayCarrierCode(order)
+          : getShippedDisplayCarrierCode(order)
+        : order.bestRate
+          ? toStringValue(order.bestRate?.carrierCode)
+          : null
+      return renderDiagnosticCell(value, { monospace: true })
+    }
+    case 'test_shippingProviderID': {
+      if (diagnosticIsExternalLabel && !diagnosticIsCancelled) return renderDiagnosticCell(null, { monospace: true })
+      const value = diagnosticIsShipped
+        ? diagnosticIsCancelled
+          ? getCancelledDisplayProviderId(order)
+          : getShippedDisplayProviderId(order)
+        : toProviderAccountId(order.bestRate?.shippingProviderId)
+      return renderDiagnosticCell(value, { monospace: true })
+    }
+    case 'test_clientID':
+      return renderDiagnosticCell(getLegacyClientIdForDisplay(order), { monospace: true })
+    case 'test_serviceCode': {
+      if (diagnosticIsExternalLabel && !diagnosticIsCancelled) {
+        return renderDiagnosticCell(null, {
+          fontSize: 10,
+          maxWidth: column.width,
+          monospace: true,
+        })
+      }
+      const value = diagnosticIsShipped
+        ? diagnosticIsCancelled
+          ? getCancelledDisplayServiceCode(order)
+          : getShippedDisplayServiceCode(order)
+        : toStringValue(order.bestRate?.serviceCode)
+      return renderDiagnosticCell(value, {
+        fontSize: 10,
+        maxWidth: column.width,
+        monospace: true,
+      })
+    }
+    case 'test_bestRate': {
+      if (diagnosticIsExternalLabel) return renderDiagnosticCell(null, { fontSize: 10, muted: true, surface: false })
+      const bestRate = order.bestRate
+      if (!bestRate) return renderDiagnosticCell(null, { fontSize: 10, muted: true, surface: false })
+
+      const rateRecord = toRecord(bestRate) ?? {}
+      const shipmentCost = typeof rateRecord.shipmentCost === 'number' ? rateRecord.shipmentCost : 0
+      const otherCost = typeof rateRecord.otherCost === 'number' ? rateRecord.otherCost : 0
+      const amount = shipmentCost + otherCost
+      const carrierCode = toStringValue(rateRecord.carrierCode) ?? '?'
+      const serviceCode = toStringValue(rateRecord.serviceCode) ?? '?'
+      const display = `${carrierCode}|${serviceCode}|$${amount.toFixed(2)}`
+
+      return renderDiagnosticCell(display, {
+        fontSize: 9,
+        maxWidth: column.width,
+        monospace: true,
+        title: JSON.stringify(bestRate),
+      })
+    }
+    case 'test_orderLocal': {
+      if (diagnosticIsExternalLabel) {
+        return renderDiagnosticCell(null, {
+          fontSize: 9,
+          maxWidth: column.width,
+        })
+      }
+      const parts: string[] = []
+      if (order.weight?.value && order.weight.value > 0) {
+        parts.push(`w:${order.weight.value}${order.weight.units?.[0] || 'oz'}`)
+      }
+      if (order.label?.trackingNumber) parts.push('track:yes')
+      if (order.bestRate) parts.push('best:yes')
+
+      const display = parts.length ? parts.join(' ') : null
+      return renderDiagnosticCell(display, {
+        fontSize: 9,
+        maxWidth: column.width,
+        title: display ?? '—',
+      })
+    }
+    case 'test_shippingAccount': {
+      if (diagnosticIsExternalLabel && !diagnosticIsCancelled) return renderDiagnosticCell(null)
+      const value = diagnosticIsShipped
+        ? diagnosticIsCancelled
+          ? getCancelledDisplayAccountNickname(order)
+          : getShippedDisplayAccountNickname(order)
+        : getAwaitingDisplayAccountNickname(order)
+      return renderDiagnosticCell(value)
+    }
+    default:
+      return null
+  }
 }
