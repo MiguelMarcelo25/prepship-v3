@@ -27,6 +27,29 @@ that protects it, and the verification commands.
 | PS-105 | Backend-owned rate quote snapshot ID (replace carried proof) | 🟡 Blocked | PS-104 | `test:ps-105-backend-rate-snapshot-id` (todo) | high 🔒 |
 | PS-106 | Direct-store vs ShipStation carrier eligibility + Settings toggle | 🆕 New | PS-083, PS-100 | `test:ps-106-*` (todo) | high 🔒 |
 | PS-107 | Master regression test runner + bug-capture manifest | 🆕 New | — | `test:master:manifest` (todo) | low (test infra) |
+| PS-196 | Cache-first Awaiting Shipment Best Rate display after reload | 🆕 New | PS-099, PS-102, PS-111 | `test:ps-196-*` (todo) | medium (display) — proof boundary must not weaken 🔒-adjacent |
+| PS-197 | Rate Browser effective HUGRAB insurance + raw-vs-label-safe parity | 🆕 New | PS-108, PS-123–126, PS-170 | `test:ps-197-*` (todo) | medium (display/diagnostics) — HUGRAB policy must not weaken 🔒-adjacent |
+| PS-221 | Package resolution single source of truth | 🆕 New | — | `test:ps-221-package-source-of-truth` (todo) | high 🔒 (label/shipment persistence) |
+| PS-222 | Package pricing + catalog data (enable box billing) | 🆕 New | pairs w/ PS-221 | `test:ps-222-package-pricing-present` (todo) | low (catalog/pricing data) |
+| PS-223 | Bulk packaging-default seeding (rule engine) | 🆕 New | PS-221 | `test:ps-223-packaging-rule-engine` (todo) | medium (awaiting defaults) |
+| PS-224 | Package / inventory negative-stock reconciliation | 🆕 New | — | `test:ps-224-negative-stock` (todo) | medium 🔒-adjacent (deduct kill-switch) |
+| PS-225 | Delete superseded packaging code | 🆕 New | **PS-221 landed+verified** | re-anchored guards (todo) | high 🔒 (dead-code on `labels.ts`) |
+| PS-226 | Add HTTP security headers (CSP/XFO/nosniff/…) | 🆕 New (P1) | — | headers check (todo) | medium (deploy config) |
+| PS-227 | Remediate dependency vulnerabilities (2 crit/7 high) | 🆕 New (P1) | — | `npm audit` gate (todo) | medium (supply chain) |
+| PS-228 | Regression-proof RLS (sole anon-key wall) | 🆕 New (P1) | — | RLS advisor in security-readiness (todo) | medium now / HIGH if regresses |
+| PS-229 | Sanitize carrier connector error messages | 🆕 New (P2) | — | (todo) | low (info leakage) |
+| PS-230 | JWT defense-in-depth on Vercel serverless | 🆕 New (P2) | — | (todo) | medium (auth hardening) |
+| PS-231 | Audit-log + rate-limit the `?force=1` override | 🆕 New (P2) | PS-234 | (todo) | medium (override) 🔒-adjacent |
+| PS-232 | Low-severity hardening bundle (Supabase + hygiene) | 🆕 New (P2) | — | (todo) | low |
+| PS-233 | **Cross-tenant access** on label/shipment routes | 🆕 New (**P0 CRIT**) | — | `test:label-shipment-scope-enforcement` (todo) | CRITICAL (multi-tenant) 🔒 |
+| PS-234 | Append-only audit log table + event writers | 🆕 New (P3) | — | `test:audit-logging` (todo) | high (forensics infra) |
+| PS-239 | Marketplace Fee + Profit columns (backend-computed) | 🆕 New | PS-177 | `test:ps-239-marketplace-fee` (todo) | medium (display/financials) |
+| PS-240 | Scope on ORDER & CLIENT write paths (split PS-233) | 🆕 New (P1) | PS-233 | `test:*-scope-enforcement` (todo) | high (multi-tenant writes) |
+| PS-241 | Rate Browser live carrier fan-out skipped on open | 🆕 New | — | `test:ps-241-rate-browser-fanout` (todo) | medium (rate browse) |
+
+> **PS-221 → PS-241 full cards:** `docs/ps-tickets/ps-221-ps-241-new-cards.md` (packaging
+> source-of-truth epic, security review 2026-06-13, marketplace-fee + rate-browser cards).
+> `PS-235`–`PS-238` are unused (the PS-233 write-path split shipped as **PS-240**).
 
 ¹ PS-104 shipped this session as the `/print-queue/batch-send` proof-forwarding fix.
 Its guard is currently named `test:batch-send-proof-forwarding` (not `ps-104-*`).
@@ -123,6 +146,70 @@ browser_e2e | workflow_certification | manual_live_gated`) and safety level.
 **Artifacts:** `test-results/master/latest.{json,md}` + timestamped history; doc at
 `docs/testing/master-regression-suite.md`.
 **Lockdown:** none (test infra) — but must never run live/mutating commands by default.
+
+## PS-196 — Cache-first Awaiting Shipment Best Rate display after reload 🆕
+**Reported:** DJ, 2026-06-10 — reloading Awaiting Shipment makes all Best Rates reload
+instead of showing saved rates immediately; caching appears broken.
+**Root cause (from read-only DB check 2026-06-10):** saved rates are NOT gone
+(29,150 of 29,292 awaiting orders have `best_rate_json`), but most legacy saved rows lack
+newer proof/freshness metadata (only 41 have `requestFingerprint`/`cacheKey`, 29 have
+`rateQuoteId`/`selectedRateKey`) → display gating rejects them → spinner/live re-rate.
+**Core fix:** separate two decisions the gating currently conflates —
+1. **displayable saved rate** (render last saved amount/carrier/account immediately;
+   legacy rows with positive amount + display fields qualify, shown as saved/stale/refreshing), vs
+2. **purchase-authorized selected rate** (Create Label / Print Queue still require
+   current backend-issued proof/fingerprint/`rateQuoteId` — unchanged, never weakened).
+Backend DTO (`BestRateWorkflowDto` or adjacent) exposes the distinction; all four
+awaiting cells (Best Rate / Carrier / Shipping Account / Ship Margin) consume the same
+canonical state; cache-first on reload, bounded background refresh, explicit
+Recalculate still forces live; terminal states never spin forever.
+**Key surfaces:** `src/routes/orders.ts`, `best-rate-workflow-dto.ts`,
+`order-rate-dto.ts`, `rates.ts`, `rates-backfill.ts`, `web/.../orders-parity.ts`,
+`web/.../OrdersView.tsx`.
+**Guards (todo):** backend displayable-vs-purchase guard, frontend reload display guard,
+cache-first no-forced-live guard; run alongside `test:ps-102-best-rate-workflow-dto`,
+`test:best-rate-saved-display-contract`, `test:ps-099-orders-rate-cache-first`,
+`test:recalculate-best-rate-strict`, `test:batch-recalculate-best-rate`,
+`test:shipping-roundtrip-certification`.
+**Full task packet:** `docs/ps-196-cache-first-awaiting-best-rate-display.md`.
+**Lockdown:** 🔒-adjacent — display-only change; selected-rate proof enforcement and the
+label-purchase boundary must remain untouched.
+
+## PS-197 — Rate Browser effective HUGRAB insurance + raw-vs-label-safe parity 🆕
+**Reported:** DJ/Hermes investigation, 2026-06-10. **Not covered by PS-196** (that's
+Awaiting-table reload display; this is Rate Browser parity diagnostics).
+**Symptom:** order `#1461` (HUGRAB, ROCEL C81F70, UPS Ground) shows **$8.95** in PrepShip
+Rate Browser vs **$7.93** in ShipStation's manual estimate for identical inputs
+(ZIP `92801-5567`, residential, 35 oz, 12×10×3, no confirmation) → operators assume
+PrepShip is wrong.
+**Root cause (confirmed read-only):** PrepShip's UI shows `Insurance: None` while the
+backend request/cache key applies the HUGRAB default **ParcelGuard $100**
+(`ip=parcelguard`, `iv=10000` in the matching cache key) — so PrepShip shows a
+**label-safe HUGRAB-policy rate** while ShipStation shows a plain no-insurance manual
+estimate. The price difference is correct policy; the UI just doesn't say so.
+**Core fix:**
+1. Rate Browser displays the **backend-effective insurance** (e.g. "Effective insurance:
+   ParcelGuard $100 — HUGRAB default"), never bare `Insurance: None` when policy applies.
+2. Rate row exposes amount components + provenance (`shipping/confirmation/insurance/
+   other_amount`, effective provider/value, final total) from backend DTO.
+3. Operator-safe parity diagnostic (redacted request facts: ZIP+4, residential, weight,
+   dims, confirmation, effective insurance, account nickname, service code, cache/live,
+   rate source) classifying mismatches as `effective_policy_diff` rather than generic.
+4. Optional/preferred: explicit raw-manual vs label-safe comparison mode (label-safe stays
+   the operational default); document as follow-up if too large.
+**Must not change:** HUGRAB $100 coverage requirement, Ground Saver/SurePost block,
+selected-rate proof/fingerprint enforcement; no secrets/PII/raw provider payloads in
+diagnostics; live ShipStation reads (if any) are `/rates/estimate` read-only.
+**Key surfaces:** `src/services/rates.ts`, `src/lib/shipping-service-eligibility.ts`,
+`src/services/shipping-workflow/{insurance-cost,rate-fingerprint}.ts`,
+`src/routes/rates.ts`, `web/src/components/RateBrowserModal.tsx`,
+`web/src/lib/v2-apiClient.ts`.
+**Guards (todo):** `test:ps-197-*` (HUGRAB fixture request facts + effective-insurance
+DTO/UI + `effective_policy_diff` parity classification); run alongside
+`test:ps-108/123/124/125/126/170` insurance guards + `test:best-rate-saved-display-contract`.
+**Full task packet:** `docs/ps-197-rate-browser-effective-insurance-parity.md`.
+**Lockdown:** 🔒-adjacent — display/diagnostics only; HUGRAB insurance policy and the
+label-purchase boundary must remain untouched.
 
 ---
 
