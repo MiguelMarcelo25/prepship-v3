@@ -68,7 +68,15 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(401).json({ error: 'Missing Authorization' });
     return;
   }
-  const verified = await verifySupabaseJwt(token);
+  // PS-230: force strict issuer/audience validation regardless of the env default
+  // so a validly-signed token from a DIFFERENT Supabase project is rejected here.
+  if (!process.env.SUPABASE_URL) {
+    console.warn('[store-accounts] SUPABASE_URL empty — strict JWT claim validation cannot be enforced');
+  }
+  const verified = await verifySupabaseJwt(token, {
+    strictClaims: true,
+    supabaseUrl: process.env.SUPABASE_URL,
+  });
   if (!verified.ok) {
     console.warn('[store-accounts] Invalid token:', verified.reason);
     res.status(401).json({ error: 'Invalid token' });
