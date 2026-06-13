@@ -33,3 +33,17 @@ export function OrdersPanelSaveSkuDefaultsLink({
     </button>
   )
 }
+
+type ShipmentDims = { length: number; width: number; height: number }
+
+// W4b — the green "L × W × H in" package-dims line under the Package
+// selector. Pure display; the `dims` value is derived in the OrdersView shell
+// and passed in. The display:none toggle (dims ? 'block' : 'none') is kept
+// byte-identical so the inline style object is unchanged.
+export function OrdersPanelPackageDimsLine({ dims }: { dims: ShipmentDims | null }) {
+  return (
+    <div id="p-package-dims" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 600, color: 'var(--green,#16a34a)', borderBottom: '1px solid var(--border)', display: dims ? 'block' : 'none' }}>
+      {dims ? `${dims.length} × ${dims.width} × ${dims.height} in` : ''}
+    </div>
+  )
+}
