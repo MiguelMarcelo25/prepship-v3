@@ -1232,7 +1232,7 @@ export default function OrdersView({
   // and Hide-Test filters intentionally still apply (the search pill says
   // so). Clearing the box restores plain tab-local behavior.
   const isGlobalSearchActive = debouncedSearchQuery.trim().length > 0
-  const { orders, total, totalApproximate, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
+  const { orders, total, totalApproximate, pages, currentPage, loading, refreshing, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
     pageSize,
     storeId: isGlobalSearchActive ? undefined : activeStore ?? undefined,
@@ -1248,6 +1248,17 @@ export default function OrdersView({
     // the current paginated page and missed matches on later pages.
     sku: skuFilter,
   })
+  // PS-218: an Orders search is "in flight" in two windows the table must not
+  // mistake for "no results": (1) the debounce gap — the user has typed but
+  // debouncedSearchQuery (the query key) hasn't caught up yet; and (2) the
+  // server fetch — React Query keeps the previous page as placeholderData, so
+  // `loading` stays false while the new search request is running. In both
+  // windows the locally-filtered table can be empty even though the real result
+  // is still loading, so we render a Searching… spinner instead of a false
+  // "No orders match". (refreshing = manual refetch OR background fetch with
+  // placeholder data; see useOrders.)
+  const isSearchTransitionPending = searchQuery.trim() !== debouncedSearchQuery.trim()
+  const ordersSearching = refreshing || isSearchTransitionPending
   const matchingSelectionQuery = useMemo(() => {
     const trimmedSearch = debouncedSearchQuery.trim()
     const trimmedSku = skuFilter.trim()
@@ -9229,7 +9240,32 @@ export default function OrdersView({
                 </table>
               ) : null}
 
-              {!loading && !error && orderedFilteredOrders.length === 0 ? (
+              {/* PS-218: while a search/filter request is in flight, show a
+                  Searching… spinner — never the false "No orders match" empty
+                  state. The empty state below only renders once the request has
+                  settled (ordersSearching === false). */}
+              {!loading && !error && orderedFilteredOrders.length === 0 && ordersSearching ? (
+                <motion.div
+                  id="searchingState"
+                  data-testid="orders-searching"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-col items-center justify-center gap-3 py-16 px-6"
+                >
+                  <Loader2 size={26} strokeWidth={2.25} className="animate-spinSlow text-brand" />
+                  <div className="text-sm font-semibold text-ink font-display tracking-tight">
+                    {searchQuery.trim() ? `Searching for “${searchQuery.trim()}”…` : 'Searching orders…'}
+                  </div>
+                  {isGlobalSearchActive ? (
+                    <div className="text-xs2 text-ink-3 max-w-sm text-center leading-relaxed">
+                      Searching all statuses &amp; stores in the selected date range.
+                    </div>
+                  ) : null}
+                </motion.div>
+              ) : null}
+
+              {!loading && !error && !ordersSearching && orderedFilteredOrders.length === 0 ? (
                 <motion.div
                   id="emptyState"
                   initial={{ opacity: 0, y: 12 }}

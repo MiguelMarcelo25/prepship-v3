@@ -349,6 +349,7 @@
     "test:order-detail-drawer-lazy": "node scripts/order-detail-drawer-lazy-guard.mjs",
     "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
     "test:orders-column-integrity:browser": "playwright test web/e2e/orders-column-integrity.spec.js --reporter=line",
+    "test:ps-218-orders-search-loading": "playwright test web/e2e/orders-search-loading.spec.js --reporter=line",
     "test:orders-expedited:browser": "playwright test web/e2e/orders-expedited.spec.js --reporter=line",
     "test:orders-daily-strip:browser": "playwright test web/e2e/orders-daily-strip-resilience.spec.js --reporter=line",
     "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line",
