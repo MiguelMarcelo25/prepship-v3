@@ -558,6 +558,32 @@ export const apiClient = {
     );
   },
 
+  // ─── PS-239: marketplace-fee rules (settings kv store) ──────────────────────
+  fetchMarketplaceFeeRules(): Promise<any> {
+    return safe(
+      'fetchMarketplaceFeeRules',
+      async () => {
+        const row = await api.get<{ value?: string | null }>('/settings/marketplace_fee_rules', { timeoutMs: 25_000 });
+        try {
+          return JSON.parse(row?.value ?? '');
+        } catch {
+          return null;
+        }
+      },
+      null,
+    );
+  },
+
+  saveMarketplaceFeeRules(payload: unknown): Promise<any> {
+    return safe(
+      'saveMarketplaceFeeRules',
+      () => api.put<any>('/settings/marketplace_fee_rules', {
+        value: JSON.stringify(payload ?? { version: 1, rules: [] }),
+      }),
+      {},
+    );
+  },
+
   // ─── PS-106: direct-store vs ShipStation carrier-family policy ───────────────
   // Reads/writes the `block_shipstation_for_direct_store` setting via the generic
   // settings endpoints. The backend defaults to (and fails safe to) audit_only.

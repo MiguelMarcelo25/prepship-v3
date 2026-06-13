@@ -42,6 +42,9 @@ import {
 } from './settings-ui'
 // PS-155: the Markups panel extracted to ./MarkupsSection (behavior-preserving; props owned by the view).
 import { MarkupsSection } from './MarkupsSection'
+// PS-239: Marketplace Fees config panel (self-contained CRUD over the
+// marketplace_fee_rules settings KV).
+import { MarketplaceFeesSection } from './MarketplaceFeesSection'
 import {
   Settings as SettingsIcon,
   ChevronDown,
@@ -63,6 +66,7 @@ import {
   Bot,
   Lock,
   Search,
+  Percent,
 } from 'lucide-react'
 // 2026-05-13: Ship-From Locations now lives as a Settings tab instead
 // of a top-level sidebar destination. Mounting <LocationsView embedded />
@@ -105,7 +109,7 @@ import { AutomationAvailabilityPanel } from './AutomationAvailabilityPanel'
 
 // Drawer sections — each represents one icon on the rail and one
 // content panel. Order here = rendering order on the rail.
-type DrawerSectionId = 'markups' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system' | 'automation'
+type DrawerSectionId = 'markups' | 'marketplaceFees' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system' | 'automation'
 
 const DRAWER_SECTION_KEY = 'settings:active-drawer-section'
 
@@ -780,6 +784,7 @@ export default function SettingsView() {
   // /settings/markup and /settings/markups on different clicks.
   const SECTION_PATH: Record<DrawerSectionId, string> = {
     markups: '/settings/markups',
+    marketplaceFees: '/settings/marketplace-fees',
     locations: '/settings/locations',
     stores: '/settings/stores',
     carriers: '/settings/carriers',
@@ -892,6 +897,16 @@ export default function SettingsView() {
         '$ or % markup added per carrier account. Applied to displayed rates in the Rate Browser; useful for billing clients above cost.',
       icon: Sparkles,
       tone: 'brand',
+    },
+    {
+      // PS-239: per-store/client marketplace commission → Marketplace Fee + Profit columns.
+      id: 'marketplaceFees',
+      label: 'Marketplace Fees & Profit',
+      short: 'Mkt Fees',
+      description:
+        'Per-store/client commission on the product subtotal (flat % or tiered). Drives the Marketplace Fee + Profit columns on Awaiting/Shipped. A store rule overrides a client rule.',
+      icon: Percent,
+      tone: 'violet',
     },
     {
       // 2026-05-13: First tab after Markups per operator request —
@@ -1285,6 +1300,9 @@ export default function SettingsView() {
                   handleMarkupChange={handleMarkupChange}
                 />
               ) : null}
+
+              {/* ─── MARKETPLACE FEES panel (PS-239) ───────────── */}
+              {activeSection === 'marketplaceFees' ? <MarketplaceFeesSection /> : null}
 
               {/* ─── LOCATIONS panel ───────────────────────────── */}
               {/* 2026-05-13: Ship-From Locations moved here from a

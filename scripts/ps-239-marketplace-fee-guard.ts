@@ -113,6 +113,18 @@ const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8')
 check('columns hidden on Cancelled (Awaiting + Shipped only)',
   /cancelled[\s\S]*?marketplacefee[\s\S]*?profit/.test(parity));
 
+// 7. Settings config UI — the operator-facing CRUD over the rules KV.
+const feeSection = (() => { try { return readFileSync('web/src/components/Views/MarketplaceFeesSection.tsx', 'utf8'); } catch { return ''; } })();
+check('MarketplaceFeesSection exists', feeSection.includes('export function MarketplaceFeesSection'));
+check('section loads + saves via apiClient (no client-side fee math)',
+  feeSection.includes('fetchMarketplaceFeeRules') && feeSection.includes('saveMarketplaceFeeRules') && !/computeMarketplaceFee/.test(feeSection));
+const apiClientSrc = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+check('apiClient reads/writes the marketplace_fee_rules KV',
+  apiClientSrc.includes("'/settings/marketplace_fee_rules'") && /fetchMarketplaceFeeRules/.test(apiClientSrc) && /saveMarketplaceFeeRules/.test(apiClientSrc));
+const settingsView = readFileSync('web/src/components/Views/SettingsView.tsx', 'utf8');
+check('SettingsView wires the Marketplace Fees section',
+  /marketplaceFees/.test(settingsView) && settingsView.includes('<MarketplaceFeesSection'));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-239 marketplace-fee guard (${failures} failing)`);
   process.exit(1);
