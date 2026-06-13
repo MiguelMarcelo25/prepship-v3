@@ -704,7 +704,7 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
-import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow } from './OrdersPanelShippingFields'
+import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -8064,58 +8064,18 @@ export default function OrdersView({
               {/* PS-166 W4b: package-dims line extracted to OrdersPanelPackageDimsLine (byte-identical). */}
               <OrdersPanelPackageDimsLine dims={dims} />
 
-              {/* User override "unlock shipped data" on 2026-05-15: expose shipped PrepShip label reprint/queue actions while keeping external labels disabled. */}
+              {/* User override "unlock shipped data" on 2026-05-15: expose shipped PrepShip label reprint/queue actions while keeping external labels disabled.
+                  PS-166 W4d — Per user override unlock shipped data on 2026-06-13: the shipped-label-actions surface moved VERBATIM to
+                  OrdersPanelShippedLabelActions (handlers stay in this shell; external-label gating preserved; no protection weakened). */}
               {shipped ? (
-                <div
-                  data-testid="shipped-label-actions"
-                  className="flex items-stretch gap-1 p-1.5 bg-surface-2/40"
-                >
-                  <button
-                    type="button"
-                    onClick={() => void reprintLabel()}
-                    disabled={!shippedHasPrepShipLabel}
-                    title={shippedHasPrepShipLabel ? 'Open the existing shipping label PDF' : shippedLabelUnavailableCopy}
-                    className={[
-                      'flex-[5] inline-flex items-center justify-center gap-2',
-                      'h-9 rounded-lg',
-                      'text-[12.5px] font-semibold tracking-tight',
-                      shippedHasPrepShipLabel
-                        ? 'text-white bg-brand hover:bg-brand-dark shadow-[0_1px_2px_rgba(42,91,215,0.20),inset_0_1px_0_rgba(255,255,255,0.12)]'
-                        : 'text-ink-4 bg-surface ring-1 ring-line cursor-not-allowed',
-                      'active:scale-[0.985]',
-                      'disabled:opacity-70 disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    <PrinterIcon size={13} strokeWidth={2.5} aria-hidden />
-                    <span>{shippedHasPrepShipLabel ? 'Reprint Label' : 'Reprint unavailable'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void queueExistingLabels([panelOrder.orderId])}
-                    disabled={!canQueueShippedLabel}
-                    title={canQueueShippedLabel ? 'Send the existing label back to the print queue (no new postage)' : shippedLabelUnavailableCopy}
-                    className={[
-                      'flex-[3] inline-flex items-center justify-center gap-1.5',
-                      'h-9 px-2 rounded-lg',
-                      'text-[12.5px] font-semibold',
-                      'bg-surface ring-1 ring-line',
-                      canQueueShippedLabel
-                        ? 'text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface'
-                        : 'text-ink-4 cursor-not-allowed',
-                      'active:scale-[0.98]',
-                      'disabled:opacity-70 disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    <Inbox size={12.5} strokeWidth={2.25} aria-hidden />
-                    {/* Shipped rows SEND the existing label back to the queue (no new
-                        postage) — distinct wording from awaiting rows' "Print to Queue",
-                        which buys postage first. */}
-                    <span>Send to Queue</span>
-                  </button>
-                </div>
+                <OrdersPanelShippedLabelActions
+                  panelOrder={panelOrder}
+                  reprintLabel={reprintLabel}
+                  queueExistingLabels={queueExistingLabels}
+                  shippedHasPrepShipLabel={shippedHasPrepShipLabel}
+                  canQueueShippedLabel={canQueueShippedLabel}
+                  shippedLabelUnavailableCopy={shippedLabelUnavailableCopy}
+                />
               ) : (
                 <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <button className="btn btn-primary btn-sm" type="button" style={{ fontSize: 11.5, gap: 4 }} onClick={() => void openRateBrowser()}>🔍 Browse Rates</button>

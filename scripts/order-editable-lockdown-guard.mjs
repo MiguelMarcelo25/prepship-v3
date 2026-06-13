@@ -64,12 +64,21 @@ for (const route of [
   );
 }
 
-// 6. The OrdersView shipped surface still suppresses new-label creation and
-//    exposes the read-only reprint/queue actions instead.
+// 6. The shipped surface still suppresses new-label creation and exposes the
+//    read-only reprint/queue actions instead. PS-166 W4d (per user override
+//    unlock shipped data on 2026-06-13): the shipped-label-actions markup moved
+//    VERBATIM to OrdersPanelShippingFields.tsx; OrdersView renders it ONLY for
+//    shipped orders. Pin BOTH the markup home and the shell consumption —
+//    strictly stronger than the prior single OrdersView string check.
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+const shippingFields = readFileSync('web/src/components/Views/OrdersPanelShippingFields.tsx', 'utf8');
 assert(
-  ordersView.includes('shipped-label-actions'),
-  'OrdersView must render the read-only shipped-label-actions surface (reprint/queue), not new-label creation',
+  shippingFields.includes('data-testid="shipped-label-actions"'),
+  'OrdersPanelShippingFields must own the read-only shipped-label-actions surface (reprint/queue), not new-label creation',
+);
+assert(
+  /\{shipped \? \(\s*<OrdersPanelShippedLabelActions/.test(ordersView),
+  'OrdersView must render <OrdersPanelShippedLabelActions> only for shipped orders (the read-only reprint/queue surface)',
 );
 
 // 7. Self-wiring.

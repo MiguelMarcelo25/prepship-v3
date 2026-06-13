@@ -10,8 +10,8 @@
 // that is not declared as a prop — the structural antidote to the @ts-nocheck
 // silent-missing-dep crash class.
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
-import { Save as SaveIcon } from 'lucide-react'
-import type { LocationDto } from '../../types/api'
+import { Inbox, Printer as PrinterIcon, Save as SaveIcon } from 'lucide-react'
+import type { LocationDto, OrderSummaryDto } from '../../types/api'
 import type { PanelFormState } from './orders-panel-state'
 
 // W4a — the "Save weights & dims as SKU defaults" quiet text-link. The
@@ -145,6 +145,83 @@ export function OrdersPanelSizeRow({
         <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, height: event.target.value })) }} />
         <span className="ship-input-unit">H (in)</span>
       </div>
+    </div>
+  )
+}
+
+// W4d — the shipped-order label actions (Reprint Label + Send to Queue), shown
+// ONLY for shipped orders. Per user override unlock shipped data on 2026-06-13:
+// this shipped-data UI is moved VERBATIM from OrdersView for the PS-166
+// decomposition. The handlers (reprintLabel, queueExistingLabels) stay in the
+// OrdersView shell; the external-label-disabled gating (shippedHasPrepShipLabel
+// / canQueueShippedLabel / shippedLabelUnavailableCopy) is preserved exactly;
+// no shipped/cancelled protection is weakened. data-testid kept byte-identical
+// (order-editable-lockdown + the e2e DOM contract pin it).
+export function OrdersPanelShippedLabelActions({
+  panelOrder,
+  reprintLabel,
+  queueExistingLabels,
+  shippedHasPrepShipLabel,
+  canQueueShippedLabel,
+  shippedLabelUnavailableCopy,
+}: {
+  panelOrder: OrderSummaryDto
+  reprintLabel: () => void | Promise<void>
+  queueExistingLabels: (orderIds: number[]) => void | Promise<void>
+  shippedHasPrepShipLabel: boolean
+  canQueueShippedLabel: boolean
+  shippedLabelUnavailableCopy: string
+}) {
+  return (
+    <div
+      data-testid="shipped-label-actions"
+      className="flex items-stretch gap-1 p-1.5 bg-surface-2/40"
+    >
+      <button
+        type="button"
+        onClick={() => void reprintLabel()}
+        disabled={!shippedHasPrepShipLabel}
+        title={shippedHasPrepShipLabel ? 'Open the existing shipping label PDF' : shippedLabelUnavailableCopy}
+        className={[
+          'flex-[5] inline-flex items-center justify-center gap-2',
+          'h-9 rounded-lg',
+          'text-[12.5px] font-semibold tracking-tight',
+          shippedHasPrepShipLabel
+            ? 'text-white bg-brand hover:bg-brand-dark shadow-[0_1px_2px_rgba(42,91,215,0.20),inset_0_1px_0_rgba(255,255,255,0.12)]'
+            : 'text-ink-4 bg-surface ring-1 ring-line cursor-not-allowed',
+          'active:scale-[0.985]',
+          'disabled:opacity-70 disabled:active:scale-100',
+          'transition-all duration-150 ease-out',
+        ].join(' ')}
+      >
+        <PrinterIcon size={13} strokeWidth={2.5} aria-hidden />
+        <span>{shippedHasPrepShipLabel ? 'Reprint Label' : 'Reprint unavailable'}</span>
+      </button>
+
+      <button
+        type="button"
+        onClick={() => void queueExistingLabels([panelOrder.orderId])}
+        disabled={!canQueueShippedLabel}
+        title={canQueueShippedLabel ? 'Send the existing label back to the print queue (no new postage)' : shippedLabelUnavailableCopy}
+        className={[
+          'flex-[3] inline-flex items-center justify-center gap-1.5',
+          'h-9 px-2 rounded-lg',
+          'text-[12.5px] font-semibold',
+          'bg-surface ring-1 ring-line',
+          canQueueShippedLabel
+            ? 'text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface'
+            : 'text-ink-4 cursor-not-allowed',
+          'active:scale-[0.98]',
+          'disabled:opacity-70 disabled:active:scale-100',
+          'transition-all duration-150 ease-out',
+        ].join(' ')}
+      >
+        <Inbox size={12.5} strokeWidth={2.25} aria-hidden />
+        {/* Shipped rows SEND the existing label back to the queue (no new
+            postage) — distinct wording from awaiting rows' "Print to Queue",
+            which buys postage first. */}
+        <span>Send to Queue</span>
+      </button>
     </div>
   )
 }
