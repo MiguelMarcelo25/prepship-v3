@@ -122,7 +122,9 @@ if (!parsed.success) {
   // returns a clean, actionable 500 listing the missing vars. The Render server
   // keeps fail-fast on startup.
   if (isServerless) {
-    throw new Error(`Invalid environment variables: ${JSON.stringify(fieldErrors)}`);
+    // PS-232: the missing-var NAMES are logged server-side above; do NOT echo them
+    // in the thrown message (it surfaces in the client 500 body). Generic message.
+    throw new Error('Server misconfigured: required environment variables are missing.');
   }
   process.exit(1);
 }

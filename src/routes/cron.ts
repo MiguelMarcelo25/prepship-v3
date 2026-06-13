@@ -27,9 +27,17 @@ app.use('*', async (c, next) => {
 // ignoring the stored watermark. Useful for initial backfill or recovery
 // after a sync gap. Matches the same body contract as /orders/sync (the
 // JWT-authed equivalent in src/routes/orders.ts).
+// PS-232: cap the cron sync body. These endpoints accept only a tiny
+// {sinceMs?, fullResync?} payload; reject anything larger before parsing (the
+// webhook route already caps its body — mirror that posture here). Oversize ->
+// fall through to safe defaults (a normal watermark sync, never a full resync).
+const CRON_SYNC_MAX_BODY_BYTES = 64 * 1024;
+
 async function parseSyncBody(c: Context): Promise<{ sinceMs?: number }> {
   try {
-    const body = await c.req.json().catch(() => null);
+    const raw = await c.req.text().catch(() => '');
+    if (raw && Buffer.byteLength(raw, 'utf8') > CRON_SYNC_MAX_BODY_BYTES) return {};
+    const body = raw ? JSON.parse(raw) : null;
     if (body && typeof body === 'object') {
       if (typeof body.sinceMs === 'number') return { sinceMs: body.sinceMs };
       if (body.fullResync === true) return { sinceMs: 0 };

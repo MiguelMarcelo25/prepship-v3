@@ -47,7 +47,11 @@ process.on('unhandledRejection', (reason) => {
       ? `${reason.name}: ${reason.message}`
       : String(reason);
   console.error('[worker:unhandledRejection]', msg);
-  if (reason instanceof Error && reason.stack) console.error(reason.stack);
+  // PS-232: full stack only when explicitly enabled (WORKER_DEBUG_STACKS=1) —
+  // keep raw stacks out of default logs; name+message above is enough to triage.
+  if (reason instanceof Error && reason.stack && process.env.WORKER_DEBUG_STACKS === '1') {
+    console.error(reason.stack);
+  }
 });
 
 process.on('uncaughtException', (err) => {
@@ -55,7 +59,10 @@ process.on('uncaughtException', (err) => {
     '[worker:uncaughtException]',
     err instanceof Error ? `${err.name}: ${err.message}` : String(err)
   );
-  if (err instanceof Error && err.stack) console.error(err.stack);
+  // PS-232: full stack only when WORKER_DEBUG_STACKS=1 (see unhandledRejection above).
+  if (err instanceof Error && err.stack && process.env.WORKER_DEBUG_STACKS === '1') {
+    console.error(err.stack);
+  }
 });
 
 async function main(): Promise<void> {

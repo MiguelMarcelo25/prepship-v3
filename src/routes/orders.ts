@@ -2562,18 +2562,32 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
 //
 // Excludes adjustment items (where item.adjustment is truthy) since
 // those aren't real SKUs — they're discounts, fees, etc.
-app.get('/distinct-skus', async (c) => {
+// PS-232: zod-validate the /distinct-skus query (was read raw via c.req.query).
+// IDs are coerced (empty string -> undefined, not NaN); booleans keep the exact
+// '1'|'true'|'yes' semantics; values still flow into PARAMETERIZED SQL below.
+const distinctSkusOptionalId = z.preprocess(
+  (v) => (v === '' || v == null ? undefined : v),
+  z.coerce.number().int().positive().optional(),
+);
+const distinctSkusQuery = z.object({
+  status: z.string().max(64).optional(),
+  clientId: distinctSkusOptionalId,
+  storeId: distinctSkusOptionalId,
+  dateFrom: z.string().max(40).optional(),
+  dateTo: z.string().max(40).optional(),
+  includeInactiveClients: z.string().max(8).optional(),
+  includeInactive: z.string().max(8).optional(),
+});
+app.get('/distinct-skus', zValidator('query', distinctSkusQuery), async (c) => {
+  const q = c.req.valid('query');
   const distinctSkusScope = ordersScopeFromContext(c);
-  const status = c.req.query('status') ?? null;
-  const clientIdRaw = c.req.query('clientId');
-  const storeIdRaw = c.req.query('storeId');
-  const dateFrom = c.req.query('dateFrom') ?? null;
-  const dateTo = c.req.query('dateTo') ?? null;
-  const includeInactiveRaw =
-    c.req.query('includeInactiveClients') ?? c.req.query('includeInactive') ?? 'false';
-  const includeInactiveClients = ['1', 'true', 'yes'].includes(includeInactiveRaw.toLowerCase());
-  const cid = clientIdRaw ? Number.parseInt(clientIdRaw, 10) : null;
-  const sid = storeIdRaw ? Number.parseInt(storeIdRaw, 10) : null;
+  const status = q.status ?? null;
+  const dateFrom = q.dateFrom ?? null;
+  const dateTo = q.dateTo ?? null;
+  const includeInactiveRaw = (q.includeInactiveClients ?? q.includeInactive ?? 'false').toLowerCase();
+  const includeInactiveClients = ['1', 'true', 'yes'].includes(includeInactiveRaw);
+  const cid = q.clientId ?? null;
+  const sid = q.storeId ?? null;
 
   const rows = await db.execute<{ sku: string }>(sql`
     select distinct oi.sku as sku
