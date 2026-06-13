@@ -125,11 +125,18 @@ assert.ok(ordersView.includes('storeId: isGlobalSearchActive ? undefined : activ
   'search must drop the store-sidebar scoping (matching the selection matcher)');
 assert.ok(ordersView.includes("{ searchScope: 'global' as const }"),
   'the bulk-selection matcher must declare the SAME global intent as the table');
-// The pill no longer overclaims.
-assert.ok(ordersView.includes('Searching all statuses &amp; stores'),
+// The pill no longer overclaims. (PS-166 Wave 2b re-anchor: the search bar
+// renders from OrdersSearchBar.tsx with byte-identical markup; OrdersView
+// threads the same props.)
+const searchBar = readFileSync('web/src/components/Views/OrdersSearchBar.tsx', 'utf8');
+assert.ok(searchBar.includes('Searching all statuses &amp; stores'),
   'the search pill must state the true scope');
-assert.ok(!ordersView.includes('<span>Searching all orders</span>'),
+assert.ok(!searchBar.includes('<span>Searching all orders</span>') &&
+  !ordersView.includes('<span>Searching all orders</span>'),
   'the old overclaiming pill text must be gone');
+assert.ok(/OrdersSearchBar\s+searchQuery=\{searchQuery\}/.test(ordersView.replace(/\n\s*/g, ' ')) ||
+  ordersView.includes('<OrdersSearchBar'),
+  'OrdersView must render the extracted search bar');
 // Off-tab rows are labeled with their REAL status, gated on the row (not the tab).
 assert.ok(ordersView.includes('data-testid="off-tab-status-pill"'),
   'mixed-status rows must render the real-status pill');
