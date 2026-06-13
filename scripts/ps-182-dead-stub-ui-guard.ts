@@ -46,11 +46,18 @@ check('no hardcoded "Tax IDs added" string anywhere in web/src', offendersTax.le
 const offendersAdd = files.filter((f) => readFileSync(f, 'utf8').includes("showToast('Add tax ID"));
 check('no "Add tax ID" stub toast anywhere in web/src', offendersAdd.length === 0, offendersAdd.join(', '));
 
+// PS-166 Wave 3b re-anchor: the recipient section JSX (the residential
+// 'change' control + the validation status row) moved VERBATIM to the
+// presentational OrdersPanelSections; the toggleResidential HANDLER still
+// lives in OrdersView and is passed as a prop. The stub-removal negatives
+// above already scan the whole web/src tree, so they cover the new file.
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+const panelSections = readFileSync('web/src/components/Views/OrdersPanelSections.tsx', 'utf8');
 check('the REAL residential change control survives',
-  /void toggleResidential\(\)/.test(ordersView));
+  /void toggleResidential\(\)/.test(panelSections) &&
+  /async function toggleResidential\(\)|toggleResidential={toggleResidential}/.test(ordersView));
 check('the validation status row survives',
-  /Address Validated/.test(ordersView) && /Address Not Validated/.test(ordersView));
+  /Address Validated/.test(panelSections) && /Address Not Validated/.test(panelSections));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-182 dead stub UI guard (${failures} failing)`);

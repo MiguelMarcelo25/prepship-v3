@@ -27,11 +27,16 @@ assert(
   'HoverImage positioning must use viewport coordinates directly after moving the preview outside the zoomed body.',
 );
 
-const panelItemsStart = ordersView.indexOf('id="sec-items"');
-const panelRecipientStart = ordersView.indexOf('id="sec-recipient"', panelItemsStart);
-assert(panelItemsStart >= 0 && panelRecipientStart > panelItemsStart, 'Could not locate side-panel items section in OrdersView.');
+// PS-166 Wave 3b: the side-panel Items section moved VERBATIM to the
+// presentational OrdersPanelSections component (OrdersView renders it). The
+// HoverImage thumbnail pin reads there now; the portal-mount pins above still
+// read OrdersView (HoverImage's own component is unchanged).
+const panelSections = fs.readFileSync('web/src/components/Views/OrdersPanelSections.tsx', 'utf8');
+const panelItemsStart = panelSections.indexOf('id="sec-items"');
+const panelRecipientStart = panelSections.indexOf('id="sec-recipient"', panelItemsStart);
+assert(panelItemsStart >= 0 && panelRecipientStart > panelItemsStart, 'Could not locate side-panel items section in OrdersPanelSections.');
 
-const panelItemsSection = ordersView.slice(panelItemsStart, panelRecipientStart);
+const panelItemsSection = panelSections.slice(panelItemsStart, panelRecipientStart);
 assert(
   panelItemsSection.includes('<HoverImage') &&
     panelItemsSection.includes('src={item.imageUrl}') &&
