@@ -15,6 +15,18 @@ export type ClientStoreScope = {
   isRestricted: boolean;
 };
 
+// PS-233 (Per user override unlock shipped data on 2026-06-13): an explicit
+// unrestricted scope for TRUSTED internal/system callers (durable workers,
+// schedulers, batch fan-out) that have already cleared request-level
+// authorization. Passing this to a scope-enforcing service means "no per-resource
+// restriction" — it is greppable so an accidental unscoped service call stands out.
+export const GLOBAL_SCOPE: ClientStoreScope = {
+  clientIds: [],
+  storeIds: [],
+  isGlobal: true,
+  isRestricted: false,
+};
+
 type ClientLike = {
   id: number;
   storeIds?: number[] | null;

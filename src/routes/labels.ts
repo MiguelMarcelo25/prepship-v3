@@ -17,8 +17,24 @@ import { generateMockLabelHtml } from '../services/mock-label-generator';
 import { verifyMockLabelSignature } from '../lib/mock-label-access';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from '../services/shipping-workflow/rate-fingerprint';
+// PS-233 (Per user override unlock shipped data on 2026-06-13): thread the caller
+// scope into every label service + block portal roles from the mutation routes.
+import { requireInternalPermission } from '../middleware/auth';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 const app = new Hono();
+
+// PS-233: derive the caller's client/store scope from the verified JWT claims so
+// the label services can refuse cross-tenant orders/shipments (404, no leak).
+function labelsScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
 
 const addressInput = z
   .object({
@@ -168,10 +184,13 @@ function handleCreateError(c: Context, err: unknown): Response {
 }
 
 // POST /labels — create single label (v2-parity flat body)
-app.post('/', zValidator('json', createBody), async (c) => {
+// PS-233: requireInternalPermission blocks portal roles (client_user /
+// read_only_support) from buying postage at all; the scope passed to the service
+// then refuses any order outside an internal caller's scope.
+app.post('/', requireInternalPermission('print_queue:write'), zValidator('json', createBody), async (c) => {
   try {
     const body = c.req.valid('json');
-    const result = await createLabelV2(body);
+    const result = await createLabelV2(body, labelsScopeFromContext(c));
     return c.json(result, 201);
   } catch (err) {
     return handleCreateError(c, err);
@@ -179,10 +198,10 @@ app.post('/', zValidator('json', createBody), async (c) => {
 });
 
 // POST /labels/create — explicit v2 path alias
-app.post('/create', zValidator('json', createBody), async (c) => {
+app.post('/create', requireInternalPermission('print_queue:write'), zValidator('json', createBody), async (c) => {
   try {
     const body = c.req.valid('json');
-    const result = await createLabelV2(body);
+    const result = await createLabelV2(body, labelsScopeFromContext(c));
     return c.json(result, 201);
   } catch (err) {
     return handleCreateError(c, err);
@@ -190,10 +209,10 @@ app.post('/create', zValidator('json', createBody), async (c) => {
 });
 
 // POST /labels/create-batch — bulk creation
-app.post('/create-batch', zValidator('json', batchBody), async (c) => {
+app.post('/create-batch', requireInternalPermission('print_queue:write'), zValidator('json', batchBody), async (c) => {
   try {
     const body = c.req.valid('json');
-    const result = await createBatchV2(body);
+    const result = await createBatchV2(body, labelsScopeFromContext(c));
     return c.json(result);
   } catch (err) {
     const e = err as Error & { rateLimited?: boolean; retryAfterMs?: number };
@@ -213,10 +232,10 @@ app.post('/create-batch', zValidator('json', batchBody), async (c) => {
 // 'already_voided' succeed; 'not_supported' / 'not_voidable' / 'provider_failed'
 // leave the local record active). HTTP codes follow the status so callers and
 // scripts can branch without parsing message strings.
-app.post('/:shipmentId{[0-9]+}/void', async (c) => {
+app.post('/:shipmentId{[0-9]+}/void', requireInternalPermission('print_queue:write'), async (c) => {
   const id = Number(c.req.param('shipmentId'));
   try {
-    const result = await voidLabelV2(id);
+    const result = await voidLabelV2(id, labelsScopeFromContext(c));
     const httpStatus =
       result.status === 'provider_failed' ? 502
       : result.status === 'not_supported' || result.status === 'not_voidable' ? 409
@@ -232,12 +251,13 @@ app.post('/:shipmentId{[0-9]+}/void', async (c) => {
 // POST /labels/:shipmentId/return — create a return label
 app.post(
   '/:shipmentId{[0-9]+}/return',
+  requireInternalPermission('print_queue:write'),
   zValidator('json', returnBody),
   async (c) => {
     const id = Number(c.req.param('shipmentId'));
     try {
       const body = c.req.valid('json');
-      const result = await createReturnLabelV2(id, body);
+      const result = await createReturnLabelV2(id, body, labelsScopeFromContext(c));
       return c.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -295,7 +315,7 @@ app.get('/:lookup/retrieve', async (c) => {
   const lookup = Number.isFinite(asNum) && String(asNum) === raw ? asNum : raw;
   const fresh = c.req.query('fresh') === 'true';
   try {
-    const result = await retrieveLabelV2(lookup, fresh);
+    const result = await retrieveLabelV2(lookup, fresh, labelsScopeFromContext(c));
     return c.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -312,7 +332,7 @@ app.get('/:lookup/retrieve', async (c) => {
 // GET /labels/:lookup — list shipments matching the lookup (kept for back-compat)
 app.get('/:lookup', async (c) => {
   const lookup = c.req.param('lookup');
-  const rows = await lookupLabel(lookup);
+  const rows = await lookupLabel(lookup, labelsScopeFromContext(c));
   if (!rows.length) return c.json({ error: 'No labels found' }, 404);
   return c.json({ data: rows });
 });

@@ -14,6 +14,9 @@ import {
   getClientStoreScope,
   isClientVisibleToScope,
 } from '../lib/client-store-scope';
+// PS-240 (Per user override unlock shipped data on 2026-06-13): client CRUD is an
+// internal-admin action — block portal roles + scope-check each target client.
+import { requireInternalPermission } from '../middleware/auth';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 
 const app = new Hono();
@@ -126,16 +129,22 @@ app.get('/:id{[0-9]+}', async (c) => {
   return c.json(safeRow);
 });
 
-app.post('/', zValidator('json', body), async (c) => {
+app.post('/', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
   const v = c.req.valid('json');
   const [row] = await db.insert(clients).values(v).returning();
   if (!row) return c.json({ error: 'Client create failed' }, 500);
   return c.json(publicClient(row), 201);
 });
 
-app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
+  // PS-240: a scoped caller may only edit a client visible to its scope.
+  const [existing] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
+  if (!existing) return c.json({ error: 'Client not found' }, 404);
+  if (!isClientVisibleToScope(publicClient(existing), scopeFromContext(c))) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
   const [row] = await db
     .update(clients)
     .set({ ...v, updatedAt: new Date() })
@@ -145,8 +154,14 @@ app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
   return c.json(publicClient(row));
 });
 
-app.delete('/:id{[0-9]+}', async (c) => {
+app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
+  // PS-240: a scoped caller may only delete a client visible to its scope.
+  const [existing] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
+  if (!existing) return c.json({ error: 'Client not found' }, 404);
+  if (!isClientVisibleToScope(publicClient(existing), scopeFromContext(c))) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
   const [row] = await db.delete(clients).where(eq(clients.id, id)).returning();
   if (!row) return c.json({ error: 'Client not found' }, 404);
   return c.json({ deleted: true });
@@ -164,6 +179,7 @@ const backfillQuery = z.object({
 
 app.post(
   '/:id{[0-9]+}/backfill-orders',
+  requireInternalPermission('settings:write'),
   zValidator('query', backfillQuery),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -174,6 +190,10 @@ app.post(
       .where(eq(clients.id, id))
       .limit(1);
     if (!client) return c.json({ error: 'Client not found' }, 404);
+    // PS-240: a scoped caller may only backfill into a client visible to its scope.
+    if (!isClientVisibleToScope(publicClient(client), scopeFromContext(c))) {
+      return c.json({ error: 'Client not found' }, 404);
+    }
     // 2026-05-13 visibility hardening: refuse to backfill orders into
     // a disabled client. Without this guard, an operator could
     // accidentally reassign hundreds of orders to a store they have

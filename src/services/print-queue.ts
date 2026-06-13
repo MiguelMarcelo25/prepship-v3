@@ -11,6 +11,7 @@ import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
+import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
 import { decideShippingSafety } from './fulfillment/shipping-safety';
@@ -676,11 +677,15 @@ async function processQueueSendOrder(
       throw new Error('Missing label payload');
     } else {
       try {
+        // PS-233: the print-queue worker is a TRUSTED internal caller — the
+        // operator's scope was already enforced when the entry was queued, and
+        // the queue routes are gated by print_queue:write (portal roles can't
+        // reach them). GLOBAL_SCOPE = no per-resource restriction here.
         const created = await createLabelV2({
           ...order.label,
           orderId: order.orderId,
           orderNumber: order.orderNumber ?? order.label.orderNumber,
-        });
+        }, GLOBAL_SCOPE);
         labelUrl = created.labelUrl;
         trackingNumber = created.trackingNumber;
       } catch (err) {

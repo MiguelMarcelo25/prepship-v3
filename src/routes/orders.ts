@@ -67,6 +67,9 @@ import {
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+// PS-240 (Per user override unlock shipped data on 2026-06-13): caller-scope
+// enforcement on order WRITE paths (reads were already scoped; writes were not).
+import { isResourceInScope } from '../lib/scope-predicates';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { detectExpeditedShipping } from '../lib/shipping/expedited';
@@ -75,7 +78,7 @@ import {
   computeFulfillmentShiftWindow,
   formatFulfillmentBoundaryLabel,
 } from '../lib/time/fulfillment-window';
-import { hasAppPermission } from '../middleware/auth';
+import { hasAppPermission, requireInternalPermission } from '../middleware/auth';
 import {
   WALMART_DIRECT_STORE_ID,
   WALMART_SHIPSTATION_STORE_ID,
@@ -207,11 +210,27 @@ async function assertOrderEditable(
   orderId: number,
 ): Promise<{ ok: true } | { ok: false; response: Response }> {
   const [row] = await db
-    .select({ id: orders.id, status: orders.orderStatus })
+    .select({
+      id: orders.id,
+      status: orders.orderStatus,
+      clientId: orders.clientId,
+      storeId: orders.storeId,
+    })
     .from(orders)
     .where(eq(orders.id, orderId))
     .limit(1);
   if (!row) {
+    return { ok: false, response: c.json({ error: 'Order not found' }, 404) };
+  }
+  // PS-240 (Per user override unlock shipped data on 2026-06-13): a restricted
+  // caller may only mutate an order within its scope. Out-of-scope → the same 404
+  // as not-found (no cross-tenant existence leak). Runs BEFORE the ?force=1 admin
+  // override so a restricted principal can never force-edit another tenant's row.
+  // This single check covers PATCH /:id and every mutation subroute, which all
+  // funnel through assertOrderEditable. The shipped/cancelled lock below is
+  // unchanged — scope is enforced in ADDITION to it, never instead of it.
+  const editScope = ordersScopeFromContext(c);
+  if (!isResourceInScope(editScope, { clientId: row.clientId, storeId: row.storeId })) {
     return { ok: false, response: c.json({ error: 'Order not found' }, 404) };
   }
   const status = String(row.status ?? '').toLowerCase();
@@ -2754,7 +2773,11 @@ async function ensureManualOrdersClient() {
   return created;
 }
 
-app.post('/manual', zValidator('json', manualOrderBody), async (c) => {
+// PS-240: manual order creation is an internal-operator tool — block portal roles
+// (client_user / read_only_support). It writes to the fixed manual-orders client,
+// so there is no cross-tenant target to scope, but a portal principal must not be
+// able to create orders at all.
+app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('json', manualOrderBody), async (c) => {
   const body = c.req.valid('json');
   const activeItems = body.items
     .map((item) => ({

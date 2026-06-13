@@ -1,11 +1,14 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { shipments } from '../db/schema/shipments';
 import { clients } from '../db/schema/clients';
+import { orders } from '../db/schema/orders';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { isResourceInScope } from '../lib/scope-predicates';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import {
   getShipmentSyncStatus,
@@ -32,6 +35,37 @@ const activeShipmentClientPredicate = sql`(
       and ${sql.raw(activeClientPredicateSql('owner_client'))}
   )
 )`;
+
+// PS-233 (Per user override unlock shipped data on 2026-06-13): restrict the
+// shipment listing to the caller's client/store scope. Previously the list only
+// filtered DISABLED clients (activeShipmentClientPredicate) — NOT the caller's
+// scope — so a restricted principal could read every tenant's shipments (and the
+// recipient PII + label URLs they carry). shipments.clientId is the primary axis;
+// store-scoped principals match via the owning order's store. Read-only filter.
+function shipmentScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function shipmentScopePredicate(scope: ClientStoreScope): SQL | undefined {
+  if (!scope.isRestricted) return undefined;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length > 0) predicates.push(inArray(shipments.clientId, scope.clientIds));
+  if (scope.storeIds.length > 0) {
+    predicates.push(sql`exists (
+      select 1 from orders scoped_order
+      where scoped_order.id = ${shipments.orderId}
+        and scoped_order.store_id in (${sql.join(scope.storeIds.map((id) => sql`${id}`), sql`, `)})
+    )`);
+  }
+  if (!predicates.length) return sql`false`;
+  return predicates.length === 1 ? predicates[0] : sql`(${sql.join(predicates, sql` or `)})`;
+}
 
 // User-initiated sync + status. These sit behind requireAuth (mounted at
 // main.ts). /cron/sync-shipments is the cron-secret equivalent for schedulers.
@@ -77,6 +111,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       q.dateTo ? lte(shipments.shipDate, new Date(q.dateTo)) : undefined,
       q.voided !== undefined ? eq(shipments.voided, q.voided) : undefined,
       q.includeInactiveClients ? undefined : activeShipmentClientPredicate,
+      // PS-233: never return shipments outside the caller's scope.
+      shipmentScopePredicate(shipmentScopeFromContext(c)),
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
@@ -98,6 +134,20 @@ app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.select().from(shipments).where(eq(shipments.id, id)).limit(1);
   if (!row) return c.json({ error: 'Shipment not found' }, 404);
+  // PS-233: out-of-scope shipment → same 404 as not-found (no cross-tenant leak).
+  const scope = shipmentScopeFromContext(c);
+  if (scope.isRestricted) {
+    let inScope = isResourceInScope(scope, { clientId: row.clientId, storeId: null });
+    if (!inScope && row.orderId != null) {
+      const [owner] = await db
+        .select({ clientId: orders.clientId, storeId: orders.storeId })
+        .from(orders)
+        .where(eq(orders.id, row.orderId))
+        .limit(1);
+      inScope = !!owner && isResourceInScope(scope, { clientId: owner.clientId, storeId: owner.storeId });
+    }
+    if (!inScope) return c.json({ error: 'Shipment not found' }, 404);
+  }
   return c.json(row);
 });
 

@@ -1,9 +1,14 @@
-import { and, eq, or, desc, sql } from 'drizzle-orm';
+import { and, eq, or, desc, inArray, sql } from 'drizzle-orm';
 import { performance } from 'node:perf_hooks';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
+// PS-233 (Per user override unlock shipped data on 2026-06-13): caller-scope
+// enforcement on label/shipment operations. The label services are the attack
+// surface (routes pass them only an id/body); they now require the caller's scope.
+import type { ClientStoreScope } from '../lib/client-store-scope';
+import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
 import {
   extractShipstationLabelUrl,
   ssCreateReturnLabel,
@@ -619,7 +624,7 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
   return persistLabelFromRate(label, input.orderId, input.clientId);
 }
 
-export async function lookupLabel(lookup: string) {
+export async function lookupLabel(lookup: string, scope: ClientStoreScope) {
   const asNum = Number(lookup);
   const rows = await db
     .select()
@@ -631,7 +636,27 @@ export async function lookupLabel(lookup: string) {
     )
     .orderBy(desc(shipments.createdAt))
     .limit(10);
-  return rows;
+  // PS-233: a restricted caller only sees shipments within its scope. Resolve the
+  // owning orders' client/store once and filter (shipment.clientId is the primary
+  // axis; the order's store covers store-scoped principals + legacy null clientId).
+  if (!scope.isRestricted) return rows;
+  const orderIds = Array.from(
+    new Set(rows.map((r) => r.orderId).filter((x): x is number => x != null)),
+  );
+  const owners = orderIds.length
+    ? await db
+        .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+        .from(orders)
+        .where(inArray(orders.id, orderIds))
+    : [];
+  const ownerById = new Map(owners.map((o) => [o.id, o]));
+  return rows.filter((r) => {
+    const owner = r.orderId != null ? ownerById.get(r.orderId) : undefined;
+    return isResourceInScope(scope, {
+      clientId: r.clientId ?? owner?.clientId ?? null,
+      storeId: owner?.storeId ?? null,
+    });
+  });
 }
 
 // ── V2-parity label orchestration ─────────────────────────────────────────────
@@ -653,6 +678,34 @@ async function loadOrderRecord(orderId: number) {
     .where(eq(orders.id, orderId))
     .limit(1);
   return order ?? null;
+}
+
+// PS-233 (Per user override unlock shipped data on 2026-06-13): enforce caller
+// scope on a shipment-keyed label operation. A restricted principal may only act
+// on a shipment whose owning client/store is in its scope; otherwise we throw the
+// SAME not-found message the route maps to 404, so a cross-tenant probe is
+// indistinguishable from a missing record. Read-only — no shipped/cancelled
+// mutation happens here; this gates the existing void/return/retrieve paths.
+async function assertShipmentInScope(
+  row: { clientId: number | null; orderId: number | null },
+  scope: ClientStoreScope,
+  notFoundMessage = 'Shipment not found',
+): Promise<void> {
+  if (!scope.isRestricted) return;
+  if (row.clientId != null && scope.clientIds.includes(Number(row.clientId))) return;
+  // Resolve the owning order's client/store (covers store-scoped principals and
+  // legacy shipments whose clientId was never backfilled).
+  if (row.orderId != null) {
+    const [owner] = await db
+      .select({ clientId: orders.clientId, storeId: orders.storeId })
+      .from(orders)
+      .where(eq(orders.id, row.orderId))
+      .limit(1);
+    if (owner && isResourceInScope(scope, { clientId: owner.clientId, storeId: owner.storeId })) {
+      return;
+    }
+  }
+  throw new ResourceScopeError(notFoundMessage);
 }
 
 type MarketplaceConfirmationProvider = 'shipstation' | 'walmart' | 'ebay';
@@ -976,7 +1029,10 @@ async function recordFulfillmentDeductions(args: {
  * Create a label (v2-parity). Supports offline testLabel mode (generates a
  * mock PDF with no ShipStation interaction) and real ShipStation creation.
  */
-export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLabelResponseDto> {
+export async function createLabelV2(
+  body: CreateLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateLabelResponseDto> {
   if (!body.orderId || !body.serviceCode) {
     throw new Error('orderId and serviceCode required');
   }
@@ -985,6 +1041,11 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   await timer.task('fulfillment schema readiness', () => ensureFulfillmentSchema());
   const order = await timer.task('order load', () => loadOrderRecord(body.orderId));
   if (!order) throw new Error('Order not found');
+  // PS-233 (Per user override unlock shipped data on 2026-06-13): a restricted
+  // caller may only buy postage on an order within its scope. Out-of-scope → the
+  // same "Order not found" 404 (no cross-tenant existence leak). Runs before any
+  // postage/label side effect. No shipped/cancelled mutation.
+  assertResourceInScope(scope, { clientId: order.clientId, storeId: order.storeId }, 'Order not found');
   if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
     // PS-190: structured conflict code — the FE branches on `code`, not the message.
     const err = new Error(`Cannot create label for ${order.orderStatus} order`) as Error & {
@@ -1477,7 +1538,10 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   };
 }
 
-export async function createBatchV2(body: CreateBatchLabelInputDto): Promise<CreateBatchLabelResponseDto> {
+export async function createBatchV2(
+  body: CreateBatchLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateBatchLabelResponseDto> {
   const created: BatchLabelResultItem[] = [];
   const failed: BatchLabelResultItem[] = [];
 
@@ -1495,7 +1559,9 @@ export async function createBatchV2(body: CreateBatchLabelInputDto): Promise<Cre
           insuredValue: typeof body.insuranceValue === 'string' ? Number(body.insuranceValue) : body.insuredValue ?? body.insuranceValue,
           testLabel: body.testLabel,
           shippingProviderId: body.shippingProviderId,
-        });
+          // PS-233: every order in the batch is scope-checked individually inside
+          // createLabelV2 — an out-of-scope orderId fails as "Order not found".
+        }, scope);
         created.push({
           orderId,
           success: true,
@@ -1746,13 +1812,18 @@ async function createLabelFromOrderId(args: {
  * test/local rows that have no provider label). Provider failure leaves the
  * row active and reports 'provider_failed' — never a silent local void.
  */
-export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponseDto> {
+export async function voidLabelV2(
+  shipmentId: number,
+  scope: ClientStoreScope,
+): Promise<VoidLabelResponseDto> {
   const [row] = await db
     .select()
     .from(shipments)
     .where(or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)))
     .limit(1);
   if (!row) throw new Error('Shipment not found');
+  // PS-233: a restricted caller may not void another tenant's label.
+  await assertShipmentInScope(row, scope);
 
   // Double guard: honor the explicit test_offline source marker AND verify
   // the shipment's client isn't flagged is_test (in case a test row was
@@ -1875,7 +1946,8 @@ export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponse
 
 export async function createReturnLabelV2(
   shipmentId: number,
-  body: { reason?: string } = {}
+  body: { reason?: string } = {},
+  scope: ClientStoreScope,
 ): Promise<ReturnLabelResponseDto> {
   const [row] = await db
     .select()
@@ -1883,6 +1955,8 @@ export async function createReturnLabelV2(
     .where(or(eq(shipments.id, shipmentId), eq(shipments.labelShipmentId, shipmentId)))
     .limit(1);
   if (!row) throw new Error('Shipment not found');
+  // PS-233: a restricted caller may not create a return on another tenant's shipment.
+  await assertShipmentInScope(row, scope);
   if (!row.labelShipmentId) throw new Error('Cannot create return — no ShipStation shipment id on record');
 
   // Block real-postage returns for test-client shipments. createLabelV2
@@ -1956,7 +2030,8 @@ export async function createReturnLabelV2(
 
 export async function retrieveLabelV2(
   lookup: number | string,
-  fresh = false
+  fresh = false,
+  scope: ClientStoreScope,
 ): Promise<RetrieveLabelResponseDto> {
   const asNum = typeof lookup === 'number' ? lookup : Number(lookup);
   const isNumeric = Number.isFinite(asNum);
@@ -1980,6 +2055,9 @@ export async function retrieveLabelV2(
     .limit(1);
 
   if (!row) throw new Error('No active label found for this order');
+  // PS-233: out-of-scope label URL/tracking → same "No active label found" 404
+  // (label URLs + tracking are cross-tenant PII; never leak another tenant's).
+  await assertShipmentInScope(row, scope, 'No active label found for this order');
 
   let labelUrl = row.labelUrl;
   if (fresh || !labelUrl) {
