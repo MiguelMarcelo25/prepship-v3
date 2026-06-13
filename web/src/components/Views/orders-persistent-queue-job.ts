@@ -134,6 +134,27 @@ export function yieldToBrowser(delay = QUEUE_UI_YIELD_MS) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, delay))
 }
 
+// PS-166 (Wave 2a3): generic bounded-concurrency pool used by the batch queue
+// flows, moved VERBATIM from OrdersView.tsx — it lives with yieldToBrowser,
+// which paces each worker's loop.
+export async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+) {
+  let nextIndex = 0
+  const workerCount = Math.min(Math.max(1, limit), items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      await worker(items[index]!, index)
+      await yieldToBrowser()
+    }
+  }))
+}
+
 export function markPersistentQueueJobOrder(jobId: string | null | undefined, orderId: number, failed: boolean) {
   if (!jobId) return
   const job = readPersistentQueueJob()

@@ -152,6 +152,7 @@ import {
   getPersistentQueueJobProgress,
   markPersistentQueueJobOrder,
   readPersistentQueueJob,
+  runWithConcurrency,
   yieldToBrowser,
   type PersistentQueueJob,
   type PersistentQueueJobKind,
@@ -701,76 +702,11 @@ import {
   shouldShowCarrierExtLabel,
 } from './orders-display-state'
 
-function buildEmptyPanel(onHide?: () => void) {
-  const kbdCls =
-    'inline-block bg-surface-3 px-1.5 py-px rounded text-[10px] border border-line-2 font-mono tabular-nums'
-  return (
-    <div className="relative flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3 animate-[fadeIn_0.3s_ease-out]">
-      {/* Drawer-style close button — top-right of the empty panel. */}
-      {onHide ? (
-        <button
-          type="button"
-          onClick={onHide}
-          aria-label="Hide this panel when no order is selected"
-          title="Hide this panel when no order is selected"
-          className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 ring-1 ring-transparent hover:ring-line transition"
-        >
-          <XIcon size={14} strokeWidth={2.5} aria-hidden />
-        </button>
-      ) : null}
-
-      {/* Subtle iconographic mark — quiet, framed, refined.
-          Linear / Mercury idiom: small icon inside a soft tinted ring,
-          rather than a giant emoji. Reads as a state indicator, not a
-          mascot. */}
-      <div className="mb-4 inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-surface-2 ring-1 ring-line text-ink-3 animate-[bounceIn_0.5s_cubic-bezier(0.34,1.56,0.64,1)]">
-        <Inbox size={20} strokeWidth={1.75} aria-hidden />
-      </div>
-
-      <div className="text-[14px] font-semibold mb-1 text-ink-2 font-display tracking-tight">
-        No order selected
-      </div>
-      <div className="text-[11.5px] leading-relaxed mb-5 text-ink-3">
-        Click any row to view details
-      </div>
-      <div className="text-left text-[11px] leading-loose text-ink-4 border-t border-line pt-3.5 w-full max-w-[180px] space-y-0.5">
-        <div><kbd className={kbdCls}>↑↓</kbd> <span className="ml-1">Navigate rows</span></div>
-        <div><kbd className={kbdCls}>Enter</kbd> <span className="ml-1">Select / deselect</span></div>
-        <div><kbd className={kbdCls}>Esc</kbd> <span className="ml-1">Deselect &amp; close</span></div>
-        <div><kbd className={kbdCls}>⌘C</kbd> <span className="ml-1">Copy order #</span></div>
-      </div>
-    </div>
-  )
-}
-
-async function runWithConcurrency<T>(
-  items: T[],
-  limit: number,
-  worker: (item: T, index: number) => Promise<void>,
-) {
-  let nextIndex = 0
-  const workerCount = Math.min(Math.max(1, limit), items.length)
-
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex
-      nextIndex += 1
-      await worker(items[index], index)
-      await yieldToBrowser()
-    }
-  }))
-}
-
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value)
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs)
-    return () => window.clearTimeout(timer)
-  }, [delayMs, value])
-
-  return debounced
-}
+// PS-166 (Wave 2a3): buildEmptyPanel → ./orders-empty-panel (verbatim JSX);
+// runWithConcurrency → ./orders-persistent-queue-job (lives with
+// yieldToBrowser, which paces it); useDebouncedValue → ../../hooks (generic).
+import { buildEmptyPanel } from './orders-empty-panel'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 
 export default function OrdersView({
   currentStatus,
