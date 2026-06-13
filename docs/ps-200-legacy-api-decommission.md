@@ -88,6 +88,22 @@ their surfaces land — the big ones: `ps-032-connector-orchestrator` (11 api fi
 `runtime-ddl` (path strings only). The `compatibility-matrix` `carrier_vercel` endpoint naming
 refresh rides with S5/S8.
 
+## Security hardening to carry forward (PS-229 / PS-230 — "both" decision)
+
+Applied to the live Vercel `api/*` handlers now AND must be preserved when those
+handlers move to Render (do not regress on the migration):
+
+- **PS-229** — `api/carriers/rates.ts` per-provider catch blocks route through
+  `sanitizedProviderRateError(provider, err)`: generic client message + stable
+  `code: 'RATE_QUOTE_FAILED'`, full detail logged server-side only. Re-anchor the
+  guard `scripts/ps-229-carrier-error-sanitization-guard.ts` to the new home; keep
+  `raw-error-response-audit` green.
+- **PS-230** — `api/carrier-accounts.ts` + `api/store-accounts.ts` call
+  `verifySupabaseJwt` with explicit `{ strictClaims: true, supabaseUrl }`; set
+  `STRICT_JWT_CLAIMS=true` in prod (Render + Vercel). The Render-native routes must
+  pass the same strict options (the Render middleware already reads
+  `env.STRICT_JWT_CLAIMS`).
+
 ## Acceptance (from the card)
 
 - No FE call path resolves to a Vercel serverless function (network tab + Vercel invocation logs at zero over a full business day).

@@ -61,6 +61,16 @@ function safeErrType(e: unknown): string {
   return String(code ?? name ?? 'Error').slice(0, 48);
 }
 
+// PS-229: per-provider rate failures must NOT leak upstream/credential-shaped detail
+// to the browser (e.g. "FedEx OAuth response missing access_token", "FedEx
+// accountNumber is required", "Amazon LWA 401: Unauthorized", raw upstream bodies).
+// Log the real message server-side; return a generic client message. Pair the
+// response with a stable `code: 'RATE_QUOTE_FAILED'` so callers branch on the code.
+function sanitizedProviderRateError(provider: unknown, err: unknown): string {
+  console.error(`[carriers/rates:${String(provider)}]`, err instanceof Error ? err.message : String(err));
+  return 'Rate quote failed';
+}
+
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
 // connector registry here pulls a wider src/ tree into the serverless bundle;
 // other carrier functions already hit FUNCTION_INVOCATION_FAILED from similar
@@ -534,7 +544,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
         });
       }
       return;
@@ -568,7 +579,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
         });
       }
       return;
@@ -602,7 +614,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
         });
       }
       return;
@@ -673,7 +686,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
           meta: { externalOrderId, orderNumber, hasRawOrder: rawOrder != null },
         });
       }
@@ -885,7 +899,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
           meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
         });
       }
@@ -939,7 +954,8 @@ export default async function handler(req: any, res: any): Promise<void> {
       } catch (err) {
         res.status(200).json({
           ok: false, provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
           meta: { externalOrderId, hasRawOrder: rawOrder != null },
         });
       }
@@ -1014,7 +1030,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
           meta: { externalOrderId, orderNumber, ebayOrderId, hasRawOrder: rawOrder != null },
         });
       }
@@ -1067,7 +1084,8 @@ export default async function handler(req: any, res: any): Promise<void> {
       } catch (err) {
         res.status(200).json({
           ok: false, provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
           meta: { externalOrderId, hasRawOrder: rawOrder != null },
         });
       }
@@ -1164,7 +1182,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: false,
           provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: sanitizedProviderRateError(provider, err),
+          code: 'RATE_QUOTE_FAILED',
           meta: { orderId, externalOrderId, orderNumber, hasRawOrder: rawOrder != null },
         });
       }
