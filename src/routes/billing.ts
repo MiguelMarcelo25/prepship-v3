@@ -24,6 +24,8 @@ import {
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
 import { requirePermission } from '../middleware/auth';
+// PS-234: durable audit trail for billing generation.
+import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 // PS-132: synthetic/system clients excluded from Config + Summary grids — single source.
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
@@ -260,6 +262,15 @@ app.post('/generate', zValidator('json', generateSchema), async (c) => {
     dateFrom: body.dateFrom!,
     dateTo: body.dateTo!,
   }));
+  // PS-234: audit billing generation (request facts only — no PII/secret values).
+  await recordAuditEvent({
+    ...auditActorFromContext(c),
+    eventType: 'billing',
+    resourceType: 'billing_generation',
+    resourceId: body.clientId ?? null,
+    action: 'generate',
+    details: { clientId: body.clientId ?? null, dateFrom: body.dateFrom, dateTo: body.dateTo },
+  });
   return c.json(result);
 });
 

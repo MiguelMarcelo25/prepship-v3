@@ -6,6 +6,17 @@ This Phase 12 deliverable scopes the append-only audit logging work needed for e
 
 PrepShip already has stronger route protection and scoped reads. The next enterprise step is proof: when credentials, labels, orders, inventory, packages, billing, settings, and sync jobs change, the system should preserve who did it, what changed, when it happened, and whether the action succeeded.
 
+> **Implementation status — PS-234 (2026-06-13):** the append-only `audit_log` table
+> (`drizzle/0044_audit_log.sql` + `src/db/schema/audit-log.ts`), the best-effort writer
+> (`src/services/audit-log.ts` — `recordAuditEvent` / `ensureAuditLogSchema` /
+> `redactAuditDetails`), and runtime event writers for **credential create/update/delete**,
+> **label create/void/return**, **shipped/cancelled `?force=1` override**, **manual order
+> create**, **billing generation**, and **settings changes** have shipped. Append-only is
+> enforced at the DB level (a BEFORE UPDATE OR DELETE trigger that raises for every role).
+> `test:audit-logging` now verifies the schema + service + migration + the wired writers,
+> not just this matrix. Remaining matrix rows (auth login/logout, inventory/package,
+> OAuth, print-queue, job lifecycle) are follow-ups.
+
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |

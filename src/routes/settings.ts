@@ -5,6 +5,8 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { settings } from '../db/schema/settings';
 import { requirePermission } from '../middleware/auth';
+// PS-234: durable audit trail for settings writes.
+import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 
 // v2-parity ALLOWED_SETTINGS guard. v2 source:
 //   packages/contracts/src/settings/contracts.ts#ALLOWED_SETTINGS
@@ -66,6 +68,15 @@ app.put('/:key', requirePermission('settings:write'), zValidator('json', putBody
     .values({ key, value })
     .onConflictDoUpdate({ target: settings.key, set: { value } })
     .returning();
+  // PS-234: audit the settings write (key only — value may carry config, never logged raw).
+  await recordAuditEvent({
+    ...auditActorFromContext(c),
+    eventType: 'settings',
+    resourceType: 'setting',
+    resourceId: key,
+    action: 'write',
+    details: { key },
+  });
   return c.json(row);
 });
 
@@ -76,6 +87,13 @@ app.delete('/:key', requirePermission('settings:write'), async (c) => {
   }
   const [row] = await db.delete(settings).where(eq(settings.key, key)).returning();
   if (!row) return c.json({ error: 'Setting not found' }, 404);
+  await recordAuditEvent({
+    ...auditActorFromContext(c),
+    eventType: 'settings',
+    resourceType: 'setting',
+    resourceId: key,
+    action: 'delete',
+  });
   return c.json({ deleted: true });
 });
 

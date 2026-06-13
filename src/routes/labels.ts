@@ -21,6 +21,8 @@ import { classifyLabelPurchaseRetry } from '../services/shipping-workflow/rate-f
 // scope into every label service + block portal roles from the mutation routes.
 import { requireInternalPermission } from '../middleware/auth';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+// PS-234: durable audit trail for label create/void/return.
+import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 
 const app = new Hono();
 
@@ -191,6 +193,14 @@ app.post('/', requireInternalPermission('print_queue:write'), zValidator('json',
   try {
     const body = c.req.valid('json');
     const result = await createLabelV2(body, labelsScopeFromContext(c));
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'label',
+      resourceType: 'order',
+      resourceId: body.orderId,
+      action: 'label_create',
+      details: { shipmentId: result.shipmentId, tracking: result.trackingNumber, cost: result.cost },
+    });
     return c.json(result, 201);
   } catch (err) {
     return handleCreateError(c, err);
@@ -202,6 +212,14 @@ app.post('/create', requireInternalPermission('print_queue:write'), zValidator('
   try {
     const body = c.req.valid('json');
     const result = await createLabelV2(body, labelsScopeFromContext(c));
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'label',
+      resourceType: 'order',
+      resourceId: body.orderId,
+      action: 'label_create',
+      details: { shipmentId: result.shipmentId, tracking: result.trackingNumber, cost: result.cost },
+    });
     return c.json(result, 201);
   } catch (err) {
     return handleCreateError(c, err);
@@ -236,6 +254,14 @@ app.post('/:shipmentId{[0-9]+}/void', requireInternalPermission('print_queue:wri
   const id = Number(c.req.param('shipmentId'));
   try {
     const result = await voidLabelV2(id, labelsScopeFromContext(c));
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'label',
+      resourceType: 'shipment',
+      resourceId: id,
+      action: 'label_void',
+      details: { status: result.status, success: result.success },
+    });
     const httpStatus =
       result.status === 'provider_failed' ? 502
       : result.status === 'not_supported' || result.status === 'not_voidable' ? 409
@@ -258,6 +284,14 @@ app.post(
     try {
       const body = c.req.valid('json');
       const result = await createReturnLabelV2(id, body, labelsScopeFromContext(c));
+      await recordAuditEvent({
+        ...auditActorFromContext(c),
+        eventType: 'label',
+        resourceType: 'shipment',
+        resourceId: id,
+        action: 'label_return',
+        details: { returnTracking: result.returnTrackingNumber },
+      });
       return c.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

@@ -70,6 +70,8 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 // PS-240 (Per user override unlock shipped data on 2026-06-13): caller-scope
 // enforcement on order WRITE paths (reads were already scoped; writes were not).
 import { isResourceInScope } from '../lib/scope-predicates';
+// PS-234: durable audit trail for shipped/cancelled ?force=1 overrides + manual orders.
+import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { detectExpeditedShipping } from '../lib/shipping/expedited';
@@ -248,6 +250,17 @@ async function assertOrderEditable(
     console.warn(
       `[orders] LOCKDOWN BYPASS — admin ${callerEmail} forced modification of ${status} order ${orderId}`
     );
+    // PS-234: every ?force=1 lockdown override leaves a durable, queryable audit
+    // row (actor, order, prior status, route) — not just an ephemeral console
+    // line. PS-231 adds per-admin rate-limiting + a reason on top of this.
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'lockdown_override',
+      resourceType: 'order',
+      resourceId: orderId,
+      action: 'force_override',
+      details: { priorStatus: status, route: c.req.path, reason: c.req.query('reason') ?? null },
+    });
     return { ok: true };
   }
   return {
@@ -2868,6 +2881,15 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
 
   if (!created) return c.json({ error: 'Manual order could not be created' }, 500);
   await replaceOrderItemsForOrders([created]);
+  // PS-234: audit manual order creation (actor + new order id; no PII values).
+  await recordAuditEvent({
+    ...auditActorFromContext(c),
+    eventType: 'order',
+    resourceType: 'order',
+    resourceId: created.id,
+    action: 'manual_create',
+    details: { orderNumber, itemCount: activeItems.length },
+  });
 
   const [overrides] = await db
     .insert(orderOverrides)
