@@ -550,6 +550,10 @@ type InvoiceTotals = {
   fulfillmentFeeTotal: number;
 };
 
+// PS-217: the renderer-facing per-order invoice row. box_cost is the BILLED
+// package_cost line value (never a current price-table guess); box_label is the
+// human-readable billed box; box_review marks an unresolved/mismatched box so
+// the export shows the review reason instead of a silent blank.
 type InvoiceDetailRow = {
   order_id: number | null;
   order_number: string | null;
@@ -562,7 +566,45 @@ type InvoiceDetailRow = {
   storage_amt: string;
   row_total: string;
   skus: string | null;
+  package_cost_amt: string;
+  box_label: string;
+  box_review: boolean;
 };
+
+// PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review'> & {
+  billed_package_id: number | null;
+  box_cost_desc: string | null;
+  box_review_reason: string | null;
+};
+
+type InvoicePackageRecord = { name: string; length: number; width: number; height: number };
+
+// PS-217: resolve the operator-facing billed box label with the documented
+// precedence, all from the BILLED line items / the package_id PS-207 stamped on
+// the order's lines — no shipment re-resolution, no current price-table lookup:
+//   (1) the billed package name (+ dims) from the packages catalog;
+//   (2) the package_cost line's "Box (...)" description;
+//   (3) the package_cost_missing review reason (marked box_review);
+//   (4) an em dash when there is no box evidence at all.
+function resolveInvoiceBoxLabel(
+  row: InvoiceDetailSqlRow,
+  packagesById: Map<number, InvoicePackageRecord>,
+): { box_label: string; box_review: boolean } {
+  const pkg = row.billed_package_id != null ? packagesById.get(row.billed_package_id) : undefined;
+  if (pkg?.name) {
+    const fmtDim = (n: number) => (Number.isInteger(n) ? String(n) : String(Number(n.toFixed(2))));
+    const hasDims = pkg.length > 0 || pkg.width > 0 || pkg.height > 0;
+    const dims = hasDims ? ` (${fmtDim(pkg.length)}x${fmtDim(pkg.width)}x${fmtDim(pkg.height)})` : '';
+    return { box_label: `${pkg.name}${dims}`, box_review: false };
+  }
+  const parsed = row.box_cost_desc ? /^Box\s+\((.+)\)$/i.exec(row.box_cost_desc.trim()) : null;
+  if (parsed?.[1]) return { box_label: parsed[1], box_review: false };
+  if (row.box_review_reason && row.box_review_reason.trim()) {
+    return { box_label: row.box_review_reason.trim(), box_review: true };
+  }
+  return { box_label: '—', box_review: false };
+}
 
 // PS-134 (slice 2, extract-only): the /invoice DATA layer. Runs the invoice's OWN summary +
 // per-order aggregates VERBATIM (full-precision ::text sums, raw ::timestamptz bounds, client_id
@@ -593,7 +635,7 @@ async function billingInvoiceData(
   // below stays here (billingSummary/the service has no per-order representation to delegate to).
   const totals = await billingInvoiceHeaderTotals(clientId, dateFrom, dateTo);
 
-  const details = await db.execute<InvoiceDetailRow>(sql`
+  const rawDetails = await db.execute<InvoiceDetailSqlRow>(sql`
     select
       b.order_id,
       b.order_number,
@@ -607,6 +649,15 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.total_cost else 0 end), 0)::text as additional_amt,
       coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
       coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_amt,
+      -- PS-217: the BILLED box cost is the generated package_cost line value for
+      -- this order in the period — never the current package price table, and
+      -- never the package_cost_missing $0.00 review rows. The stamped package_id
+      -- (PS-207 puts the same billedPackageId on every line of the order) and the
+      -- line descriptions carry the human box label + review reason.
+      coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_cost_amt,
+      max(b.package_id) as billed_package_id,
+      max(case when b.line_type = 'package_cost' then b.description else null end) as box_cost_desc,
+      max(case when b.line_type = 'package_cost_missing' then b.description else null end) as box_review_reason,
       sum(b.total_cost)::text as row_total,
       (
         select string_agg(oi.sku, ', ' order by oi.line_index)
@@ -623,6 +674,43 @@ async function billingInvoiceData(
     group by b.order_id, b.order_number, b.ship_date
     order by b.ship_date asc, b.order_id asc
   `);
+
+  // PS-217: resolve the human-readable billed box from the stamped package_id.
+  // packages is a shared catalog (no client_id column) — looking up names/dims
+  // by id leaks no client scope, and the billed set is exactly the ids stamped
+  // on this client's billed lines.
+  const billedPackageIds = [
+    ...new Set(rawDetails.map((r) => r.billed_package_id).filter((id): id is number => id != null)),
+  ];
+  const packagesById = new Map<number, InvoicePackageRecord>();
+  if (billedPackageIds.length) {
+    const pkgRows = await db.execute<{ id: number; name: string; length: number; width: number; height: number }>(sql`
+      select id, name, length, width, height from packages where id = any(${billedPackageIds})
+    `);
+    for (const p of pkgRows) {
+      packagesById.set(p.id, { name: p.name, length: Number(p.length), width: Number(p.width), height: Number(p.height) });
+    }
+  }
+
+  const details: InvoiceDetailRow[] = rawDetails.map((r) => {
+    const { box_label, box_review } = resolveInvoiceBoxLabel(r, packagesById);
+    return {
+      order_id: r.order_id,
+      order_number: r.order_number,
+      ship_date: r.ship_date,
+      base_qty: r.base_qty,
+      addl_qty: r.addl_qty,
+      pickpack_amt: r.pickpack_amt,
+      additional_amt: r.additional_amt,
+      shipping_amt: r.shipping_amt,
+      storage_amt: r.storage_amt,
+      row_total: r.row_total,
+      skus: r.skus,
+      package_cost_amt: r.package_cost_amt,
+      box_label,
+      box_review,
+    };
+  });
 
   return {
     clientName: clientRow[0]!.name,
@@ -686,6 +774,8 @@ function renderInvoiceHtml(args: {
         <td>${escHtml(shipDate)}</td>
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
+        <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
+        <td class="num">${Number(d.package_cost_amt) > 0 ? fmt(d.package_cost_amt) : '—'}</td>
         <td class="num">${totalQty}</td>
         <td class="num">${fmt(pickPackFeeAmt)}</td>
         <td class="num">${addlQty > 0 ? fmt(additionalAmt) : '—'}</td>
@@ -729,6 +819,7 @@ function renderInvoiceHtml(args: {
     td.mono { font-family: monospace; font-size: 11px; color: #2563eb; }
     td.sku { font-family: monospace; font-size: 10px; color: #6b7280; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     td.bold { font-weight: 700; }
+    td.review { color: #b45309; font-size: 11px; }
     tfoot td { border: 1px solid #d1d5db; padding: 8px 10px; font-weight: 700; background: #f3f4f6; }
     tfoot td.num { text-align: right; }
     .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; text-align: center; }
@@ -766,6 +857,8 @@ function renderInvoiceHtml(args: {
         <th>Ship Date</th>
         <th>Order #</th>
         <th>SKU(s)</th>
+        <th>Box Size</th>
+        <th class="num">Box Cost</th>
         <th class="num">Qty</th>
         <th class="num">Pick &amp; Pack</th>
         <th class="num">Add'l Units</th>
@@ -778,6 +871,8 @@ function renderInvoiceHtml(args: {
     <tfoot>
       <tr>
         <td colspan="4">Totals — ${orderCount} orders</td>
+        <td class="num">${packageTotal > 0 ? fmt(packageTotal) : '—'}</td>
+        <td></td>
         <td class="num">${fmt(pickPackFeeTotal)}</td>
         <td class="num">${fmt(additionalTotal)}</td>
         <td class="num">${fmt(shippingTotal)}</td>
@@ -874,6 +969,9 @@ async function renderInvoiceXlsx(args: {
     { header: 'Ship Date', key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
     { header: 'Order #', key: 'orderNumber', width: 20 },
     { header: 'SKUs', key: 'skus', width: 40 },
+    // PS-217: billed box size (display) + billed box cost (the package_cost line).
+    { header: 'Box Size', key: 'boxSize', width: 22 },
+    { header: 'Box Cost', key: 'boxCost', width: 12, style: { numFmt: MONEY_FMT } },
     { header: 'Qty', key: 'qty', width: 8 },
     { header: 'Pick & Pack Fee', key: 'pickPackFee', width: 16, style: { numFmt: MONEY_FMT } },
     { header: 'Additional Units', key: 'additional', width: 16, style: { numFmt: MONEY_FMT } },
@@ -895,6 +993,8 @@ async function renderInvoiceXlsx(args: {
       shipDate: excelDayCell(d.ship_date),
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
       skus: d.skus ?? '',
+      boxSize: d.box_label,
+      boxCost: Number(d.package_cost_amt),
       qty: baseQty + addlQty,
       pickPackFee: pickPackFeeAmt,
       additional: addlQty > 0 ? Number(d.additional_amt) : 0,
@@ -908,12 +1008,19 @@ async function renderInvoiceXlsx(args: {
     const last = first + details.length - 1;
     const totalsRow = items.addRow({
       skus: `Totals — ${totals.orderCount} orders`,
-      qty: { formula: `SUM(D${first}:D${last})` },
-      pickPackFee: { formula: `SUM(E${first}:E${last})` },
-      additional: { formula: `SUM(F${first}:F${last})` },
-      shipping: { formula: `SUM(G${first}:G${last})` },
-      storage: { formula: `SUM(H${first}:H${last})` },
-      total: { formula: `SUM(I${first}:I${last})` },
+      // PS-217: two columns (Box Size = D, Box Cost = E) were inserted before
+      // Qty, shifting every numeric column right by two. Box Cost totals in
+      // column E; Qty→F, Pick&Pack→G, Additional→H, Shipping→I, Storage→J,
+      // Total→K. Box Cost is DISPLAY-ONLY — it is already inside each row's
+      // Total (row_total sums all line types incl. package_cost), so the Total
+      // SUM is unchanged in meaning and box cost is never double-counted.
+      boxCost: { formula: `SUM(E${first}:E${last})` },
+      qty: { formula: `SUM(F${first}:F${last})` },
+      pickPackFee: { formula: `SUM(G${first}:G${last})` },
+      additional: { formula: `SUM(H${first}:H${last})` },
+      shipping: { formula: `SUM(I${first}:I${last})` },
+      storage: { formula: `SUM(J${first}:J${last})` },
+      total: { formula: `SUM(K${first}:K${last})` },
     });
     totalsRow.font = { bold: true };
   }
