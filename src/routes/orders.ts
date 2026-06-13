@@ -72,6 +72,8 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { isResourceInScope } from '../lib/scope-predicates';
 // PS-234: durable audit trail for shipped/cancelled ?force=1 overrides + manual orders.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
+// PS-231: per-admin rate limit on the ?force=1 lockdown override.
+import { checkForceOverrideRateLimit } from '../lib/force-override-rate-limit';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { detectExpeditedShipping } from '../lib/shipping/expedited';
@@ -247,19 +249,51 @@ async function assertOrderEditable(
   const callerEmail = c.get('email' as never) as string | undefined;
   const callerIsAdmin = isAdminEmail(callerEmail);
   if (forceFlag === '1' && callerIsAdmin) {
+    // PS-231: cap how many shipped/cancelled overrides one admin can do per hour —
+    // a compromised admin token must not rewrite unlimited locked records in a
+    // burst. A throttled attempt is itself audited and rejected with 429.
+    const rl = checkForceOverrideRateLimit(callerEmail);
+    if (!rl.allowed) {
+      await recordAuditEvent({
+        ...auditActorFromContext(c),
+        eventType: 'lockdown_override',
+        resourceType: 'order',
+        resourceId: orderId,
+        action: 'force_override_throttled',
+        details: { priorStatus: status, route: c.req.path, retryAfterMs: rl.retryAfterMs },
+      });
+      return {
+        ok: false,
+        response: c.json(
+          {
+            error: 'Force-override rate limit exceeded — too many shipped/cancelled overrides this hour.',
+            status,
+            orderId,
+            locked: true,
+            retryAfterMs: rl.retryAfterMs,
+          },
+          429,
+        ),
+      };
+    }
     console.warn(
       `[orders] LOCKDOWN BYPASS — admin ${callerEmail} forced modification of ${status} order ${orderId}`
     );
     // PS-234: every ?force=1 lockdown override leaves a durable, queryable audit
-    // row (actor, order, prior status, route) — not just an ephemeral console
-    // line. PS-231 adds per-admin rate-limiting + a reason on top of this.
+    // row (actor, order, prior status, route, optional ?reason=) — not just an
+    // ephemeral console line.
     await recordAuditEvent({
       ...auditActorFromContext(c),
       eventType: 'lockdown_override',
       resourceType: 'order',
       resourceId: orderId,
       action: 'force_override',
-      details: { priorStatus: status, route: c.req.path, reason: c.req.query('reason') ?? null },
+      details: {
+        priorStatus: status,
+        route: c.req.path,
+        reason: c.req.query('reason') ?? null,
+        remaining: rl.remaining,
+      },
     });
     return { ok: true };
   }

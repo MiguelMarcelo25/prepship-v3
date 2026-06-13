@@ -267,6 +267,7 @@
     "test:field-level-rbac-extended": "node scripts/field-level-rbac-extended-guard.mjs",
     "test:label-shipment-scope-review": "node scripts/label-shipment-scope-review-guard.mjs",
     "test:label-shipment-scope-enforcement": "tsx scripts/ps-233-label-shipment-scope-enforcement-guard.ts",
+    "test:ps-231-force-override-rate-limit": "tsx scripts/ps-231-force-override-rate-limit-guard.ts",
     "test:print-queue-ownership": "node scripts/print-queue-ownership-guard.mjs",
     "test:secrets-governance": "node scripts/secrets-governance-guard.mjs",
     "test:audit-logging": "node scripts/audit-logging-guard.mjs",
