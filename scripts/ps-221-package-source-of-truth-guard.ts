@@ -54,6 +54,23 @@ check('no historical backfill UPDATE of selected_package_id introduced',
 check('labels.ts cites the override for the anchor fix',
   labels.includes('PS-221') && labels.includes('unlock shipped data on 2026-06-13'));
 
+// ── Slice 2: unified resolver — label-time selection follows the canonical source ──
+const resolver = (() => { try { return readFileSync('src/services/package-resolution.ts', 'utf8'); } catch { return ''; } })();
+check('unified resolver service exists', resolver.includes('export async function resolveOrderLabelPackageId('));
+check('precedence #1: operator pick (customPackageId) wins',
+  /toPositiveInt\(args\.customPackageId\)/.test(resolver));
+check('precedence #2: the order canonical selected_package_id is consulted',
+  /orderOverrides\.selectedPackageId/.test(resolver) && /resolvePackageRef/.test(resolver));
+check('canonical ref resolves by packages.id OR package_code',
+  /eq\(packages\.id/.test(resolver) && /eq\(packages\.packageCode/.test(resolver));
+check('precedence #3: dims ±0.1" fallback', /DIMS_TOLERANCE = 0\.1/.test(resolver) && /findPackageByDims/.test(resolver));
+check('resolver is read-only this slice (no auto-create/save writes yet)',
+  !/db\.insert\(|\.insert\(|db\.update\(|saveComboPackageDefault\(/.test(resolver));
+check('labels.ts delegates to the unified resolver (no inline dims-guess)',
+  labels.includes('return resolveOrderLabelPackageId(args)') && !/const tol = 0\.1;/.test(labels));
+check('labels.ts threads orderId into the resolver',
+  /resolveLabelPackageId\(\{[\s\S]*?orderId: body\.orderId/.test(labels));
+
 // Self-wiring.
 check('package.json exposes test:ps-221-package-source-of-truth',
   /test:ps-221-package-source-of-truth/.test(pkg));

@@ -9,6 +9,8 @@ import { clients } from '../db/schema/clients';
 // surface (routes pass them only an id/body); they now require the caller's scope.
 import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
+// PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
+import { resolveOrderLabelPackageId } from './package-resolution';
 import {
   extractShipstationLabelUrl,
   ssCreateReturnLabel,
@@ -85,31 +87,18 @@ import { loadShippingAutomationRules } from './shipping-automation';
 // the package's stock_qty never decrements for batch-issued labels and the
 // PACKAGES section count stays flat regardless of how many labels go out.
 async function resolveLabelPackageId(args: {
+  orderId: number | null;
   customPackageId?: number | string | null;
   length: number | null;
   width: number | null;
   height: number | null;
 }): Promise<number | null> {
-  if (args.customPackageId != null && args.customPackageId !== '') {
-    const id = Number(args.customPackageId);
-    if (Number.isFinite(id) && id > 0) return id;
-  }
-  if (args.length && args.width && args.height) {
-    const tol = 0.1;
-    const [match] = await db
-      .select({ id: packages.id })
-      .from(packages)
-      .where(
-        and(
-          sql`abs(${packages.length} - ${args.length}) <= ${tol}`,
-          sql`abs(${packages.width} - ${args.width}) <= ${tol}`,
-          sql`abs(${packages.height} - ${args.height}) <= ${tol}`
-        )
-      )
-      .limit(1);
-    if (match) return match.id;
-  }
-  return null;
+  // PS-221 (slice 2, Per user override unlock shipped data on 2026-06-13): delegate
+  // to the unified resolver so label-time package selection follows the SAME
+  // precedence as billing (PS-207) + import (PS-205): operator pick → the order's
+  // canonical selected_package_id → dims ±0.1" match. Previously this dims-guessed
+  // in isolation, ignoring the order's already-resolved box (e.g. on batch labels).
+  return resolveOrderLabelPackageId(args);
 }
 
 // Optional local throttle. Disabled by default so batch queue jobs are not capped.
@@ -1216,6 +1205,7 @@ export async function createLabelV2(
   // Resolve which package this shipment is consuming so its stock_qty is
   // decremented correctly. Used for both the test-mode and real-postage paths.
   const resolvedPackageId = await resolveLabelPackageId({
+    orderId: body.orderId ?? null,
     customPackageId: body.customPackageId,
     length,
     width,
