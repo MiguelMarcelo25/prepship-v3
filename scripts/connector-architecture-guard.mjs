@@ -18,7 +18,7 @@ const shipmentsSchema = read('src/db/schema/shipments.ts');
 const normalizedOrderPersistence = read('src/services/normalized-order-persistence.ts');
 const storeOrderImport = read('src/services/store-order-import.ts');
 const orderSync = read('src/services/order-sync.ts');
-const directLabelPersistence = read('src/services/direct-label-persistence.ts');
+const labelsService = read('src/services/labels.ts');
 const carrierLabels = read('api/carriers/labels.ts');
 const carrierRates = read('api/carriers/rates.ts');
 const carrierStatus = read('scripts/status-carriers.ts');
@@ -120,15 +120,26 @@ for (const schemaField of [
   assert(shipmentsSchema.includes(`${schemaField}:`), `shipments schema missing ${schemaField}`);
 }
 
-for (const sqlColumn of [
-  'carrier_provider',
-  'carrier_account_id',
-  'label_provider_key',
-  'confirmation_provider',
-  'confirmation_status',
-]) {
-  assert(directLabelPersistence.includes(sqlColumn), `direct label persistence must write ${sqlColumn}`);
+// PS-225 (Per user override unlock shipped data on 2026-06-13): the legacy
+// src/services/direct-label-persistence.ts that USED to own this write was
+// orphaned when PS-209 retired the legacy label endpoint (→ 410) — it had zero
+// callers — and has now been deleted. The canonical shipment provider-lineage
+// columns are persisted by their LIVE owners, so this invariant is re-anchored
+// onto them instead of guarding a corpse:
+//   • src/services/labels.ts (the v4 /labels path) → carrierProvider,
+//     carrierAccountId, confirmationProvider (drizzle camelCase).
+//   • src/services/fulfillment/outbox.ts           → confirmation_status
+//     (set to 'pending' at outbox creation, updated by the worker).
+// label_provider_key has NO live writer: the live label path records the provider
+// via labelProvider (integer id) + carrierCode, leaving the text *_key column NULL
+// on every live shipment. It is a dead column — intentionally NOT asserted here.
+for (const field of ['carrierProvider', 'carrierAccountId', 'confirmationProvider']) {
+  assert(labelsService.includes(field), `labels.ts (direct-label persistence) must write ${field}`);
 }
+assert(
+  fulfillmentOutbox.includes('confirmation_status'),
+  'fulfillment outbox must persist confirmation_status (canonical confirmation lineage)',
+);
 
 for (const key of ['shipstation', 'walmart', 'ebay', 'shopify', 'amazon']) {
   assert(registry.includes(`${key}:`), `store connector registry missing ${key}`);
