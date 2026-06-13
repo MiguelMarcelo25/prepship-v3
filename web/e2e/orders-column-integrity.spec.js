@@ -86,6 +86,11 @@ const rate = {
   otherCost: 0,
   requestFingerprint: ps050RateFingerprint,
   cacheKey: ps050RateFingerprint,
+  // A real backend-issued saved rate is stamped with the proof source the
+  // display gate requires: hasBackendIssuedRateProof() checks
+  // proofSource === 'backend_rate_response'. The original fixture predated
+  // PS-135 and omitted it, so the saved rate failed the proof gate.
+  proofSource: 'backend_rate_response',
   cacheCreatedAt: new Date().toISOString(),
   cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
   isComplete: true,
@@ -139,8 +144,13 @@ function baseRow(id, status, clientId, overrides = {}) {
 
 // --- The six certified row classes -----------------------------------------
 
-// 1) Awaiting, fully rated.
-const awaitingValid = baseRow(970001, 'awaiting_shipment', 1)
+// 1) Awaiting, fully rated. A faithful awaiting row also carries the backend's
+// bestRateWorkflow display verdict (PS-196 savedRateDisplay) — the canonical
+// owner saying the saved rate is displayable. savedBestRateCanDisplayForCurrentRequest
+// honours that without re-deriving the orderId-prefixed request key on the client.
+const awaitingValid = baseRow(970001, 'awaiting_shipment', 1, {
+  bestRateWorkflow: { savedRateDisplay: 'fresh' },
+})
 
 // 2) Awaiting, missing dims + no rate -> carrier/account/best-rate must say "— add dims".
 const awaitingMissingDims = baseRow(970002, 'awaiting_shipment', 1, {
@@ -179,6 +189,7 @@ const bestRateDivergent = {
 }
 const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
   orderNumber: 'ORD-970005',
+  bestRateWorkflow: { savedRateDisplay: 'fresh' },
   overrides: { rateWeightOz: 60, rateDimsL: 11, rateDimsW: 8, rateDimsH: 6, bestRateDims: '11x8x6', bestRateJson: bestRateDivergent },
   bestRate: bestRateDivergent,
   selectedRate: {
@@ -435,9 +446,11 @@ test('Awaiting grid columns render every required field from source of truth', a
     sku: { equals: 'B0D43C5FGF' },
     qty: { equals: '1' },
     total: { contains: '16.99' },
-    carrier: { contains: '— add dims' },
-    custcarrier: { contains: '— add dims' },
-    bestrate: { contains: '— add dims' },
+    // The grid cells render the actionable button variant ("Add dims"), not the
+    // dense compact "— add dims" span — assert the text the columns actually show.
+    carrier: { contains: 'Add dims' },
+    custcarrier: { contains: 'Add dims' },
+    bestrate: { contains: 'Add dims' },
   })
 
   // Multi-item row — Item Name and SKU columns both carry per-line quantity
