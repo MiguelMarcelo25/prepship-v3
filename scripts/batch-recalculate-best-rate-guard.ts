@@ -177,12 +177,15 @@ check('awaiting best-rate provider id wins over stale shipping metadata',
   /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateProviderBlock) &&
   /return\s+rateProviderId\s*\?\?\s*getShippingProviderAccountId\(order\)/.test(bestRateProviderBlock));
 
-// PS-178 part 2: getShipAccountDisplay STAYED in OrdersView (live accounts dep);
-// the function that used to follow it moved, so the end anchor is its new neighbor.
-const shippingDisplayStart = ordersView.indexOf('function getShipAccountDisplay(');
-const shippingDisplayEnd = ordersView.indexOf('\nfunction hasAuthoritativeProviderId', shippingDisplayStart);
+// PS-166 Wave 2a re-anchor: getShipAccountDisplay moved VERBATIM to the
+// orders-display-state module (it still receives the live `accounts` array as
+// an argument — the dependency rides the parameter, behavior identical). The
+// call-shape pin below (panel passes shippingAccounts) still reads OrdersView.
+const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
+const shippingDisplayStart = displayState.indexOf('export function getShipAccountDisplay(');
+const shippingDisplayEnd = displayState.indexOf('\nexport function hasAuthoritativeProviderId', shippingDisplayStart);
 const shippingDisplayBlock = shippingDisplayStart >= 0 && shippingDisplayEnd > shippingDisplayStart
-  ? ordersView.slice(shippingDisplayStart, shippingDisplayEnd)
+  ? displayState.slice(shippingDisplayStart, shippingDisplayEnd)
   : '';
 // PS-165 part 2 (67d0d77f) inlined the provider-id local into the call; the protection (the
 // awaiting nickname fallback resolves the best-rate provider id through the loaded accounts)

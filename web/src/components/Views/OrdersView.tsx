@@ -50,9 +50,11 @@ import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
 // fallback pills for FedEx/DHL/etc. Replaces the previous text-only
 // carrier-badge spans throughout the orders table + side panel.
-import CarrierBadge, { classifyCarrier } from '../CarrierBadge'
+import CarrierBadge from '../CarrierBadge'
 // PS-165: carrier/service/account display precedence owned by ./order-shipping-display (verbatim cascade).
-import { resolveDisplayCarrierCode, resolveDisplayServiceCode, resolveDisplayShipAccount } from './order-shipping-display'
+// PS-166 (Wave 2a): the order-shipping-display resolvers are consumed by
+// ./orders-display-state now (resolveDisplayServiceCode was already
+// call-free here since PS-178's fallback deletion).
 // PS-178 (Phase 6, part 2): row display readers extracted VERBATIM to ./orders-row-display
 // (pure DTO readers — canonical model, best/selected rate fields, backend money tuple,
 // the static v2 account registry, and the stateless row badges).
@@ -197,11 +199,9 @@ import {
   getPanelConfirmation,
   getPanelInsurance,
   getPanelPackageId,
-  getPanelRequestedService,
   getPanelWarehouseId,
   getProductDefaultPackageId,
 } from './orders-panel-state'
-import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
 // PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
 // source of truth). The FE delegation wrappers live in ./orders-rate-input (PS-166 Wave 1d) —
@@ -704,275 +704,31 @@ import {
   isTestOrder,
   normalizeItems,
 } from './orders-items'
-
-function getRequestedService(order: OrderSummaryDto, detail: OrderFullDto | null) {
-  return getPanelRequestedService(order, detail)
-}
-
-function isStrictShippedOrder(order: OrderSummaryDto) {
-  return order.orderStatus === 'shipped'
-}
-
-function getCarrierCodeForDisplay(order: OrderSummaryDto) {
-  // PS-165: the awaiting-vs-shipped carrier precedence (incl. PS-079 best-rate-first on awaiting and
-  // the known-carrier-nickname fallback for blank-carrier aggregator rates) is owned VERBATIM by
-  // resolveDisplayCarrierCode (./order-shipping-display); the raw fields are still read here.
-  const isAwaiting = order.orderStatus === 'awaiting_shipment'
-  const bestRateNickname = isAwaiting ? getBestRateCarrierNickname(order) : null
-  return resolveDisplayCarrierCode({
-    isTest: isTestOrder(order),
-    isAwaiting,
-    // PS-173: backend-owned display tuple — preferred when the row carried it.
-    backendDisplayCarrierCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.carrierCode),
-    bestRateCarrierCode: toStringValue(order.bestRate?.carrierCode),
-    canonicalCarrierCode: getShippingString(order, 'carrierCode'),
-    selectedRateCarrierCode: toStringValue(order.selectedRate?.carrierCode),
-    bestRateNickname,
-    bestRateNicknameIsKnownCarrier: bestRateNickname ? classifyCarrier(bestRateNickname) !== 'other' : false,
-  })
-}
-
-function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
-  // PS-165: the shipping-account display PRECEDENCE is owned VERBATIM by resolveDisplayShipAccount
-  // (./order-shipping-display). The candidate RESOLUTION stays here — it depends on the FE scoped
-  // carrier cache (getV2CarrierAccountForOrder) + the live `accounts` array, which the backend
-  // serializer does not have. PS-079 awaiting-best-rate-first semantics preserved exactly.
-  let awaitingBestRateNickname: string | null = null
-  if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
-    const bestRateRecord = toRecord(order.bestRate)
-    awaitingBestRateNickname =
-      normalizeShippingAccountName(order.bestRate.carrierNickname) ??
-      normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
-      normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname)) ??
-      getCarrierAccountLabelByProviderId(accounts, getBestRateShippingProviderId(order))
-  }
-
-  const v2Account = getV2CarrierAccountForOrder(order)
-
-  let labelAccountLabel: string | null = null
-  if (order.label?.shippingProviderId != null) {
-    const account = accounts.find((candidate) => candidate.shippingProviderId === order.label.shippingProviderId)
-    labelAccountLabel = getCarrierAccountDisplay(account) ?? null
-  }
-
-  let bestRateNickname: string | null = null
-  if (order.bestRate) {
-    const bestRateRecord = toRecord(order.bestRate)
-    bestRateNickname =
-      normalizeShippingAccountName(order.bestRate.carrierNickname) ??
-      normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
-      normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname))
-  }
-
-  return resolveDisplayShipAccount({
-    isTest: isTestOrder(order),
-    awaitingBestRateNickname,
-    canonicalNickname: normalizeShippingAccountName(getShippingString(order, 'accountNickname')),
-    selectedNickname: normalizeShippingAccountName(order.selectedRate?.providerAccountNickname),
-    v2AccountNickname: v2Account ? v2Account.nickname : null,
-    hasSelectedRate: Boolean(order.selectedRate),
-    labelAccountLabel,
-    bestRateNickname,
-    carrierCodeFallback: formatCarrierCode(order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode),
-  })
-}
-
-function hasAuthoritativeProviderId(order: OrderSummaryDto) {
-  const providerId = getShippingProviderAccountId(order) ?? toProviderAccountId(order.label?.shippingProviderId)
-  if (providerId == null) return false
-  const sourceVersion = getCanonicalSourceVersion(order, 'shipping.providerAccountId')
-  const sourceName = getCanonicalSourceName(order, 'shipping.providerAccountId')
-  return sourceVersion === 'v2' && sourceName !== 'shipments.provider_account_id'
-}
-
-function hasV2SelectedRatePayload(order: OrderSummaryDto) {
-  return getCanonicalSourceVersion(order, 'shipping.selectedRate') === 'v2'
-}
-
-// PS-036: read the EXPLICIT external-fulfillment signal from where the API
-// actually emits it. The order summary nests these under `flags`
-// (orders.ts -> flags.externallyShipped / flags.externallyFulfilled); the older
-// top-level `order.externalShipped` is kept only as a defensive fallback.
-// `externallyShipped` is the operator's mark-as-shipped override; `externallyFulfilled`
-// is ShipStation's own marketplace/Amazon fulfillment flag. Either one is a real
-// external signal — the ABSENCE of local data is NOT.
-function hasExplicitExternalFlag(order: OrderSummaryDto): boolean {
-  const flags = (order.flags ?? null) as { externallyShipped?: unknown; externallyFulfilled?: unknown } | null
-  return (
-    flags?.externallyShipped === true ||
-    flags?.externallyFulfilled === true ||
-    order.externalShipped === true
-  )
-}
-
-// True when the local DB actually carries shipment metadata for the row.
-function hasLocalShipmentData(order: OrderSummaryDto): boolean {
-  return Boolean(
-    order.label?.cost ||
-    order.label?.trackingNumber ||
-    hasAuthoritativeProviderId(order) ||
-    hasV2SelectedRatePayload(order),
-  )
-}
-
-type ShippedDataState = 'external' | 'local' | 'missing'
-
-// PS-036: classify a shipped row into one of three honest states instead of
-// conflating "no local data" with "externally fulfilled".
-// Per user override unlock shipped data on 2026-06-01: PS-056 keeps this
-// shipped-row display classification explicit so marketplace-fulfilled rows
-// show Ext. Label only after persisted external classification, while
-// recoverable ShipStation shipment/fulfillment gaps stay on the actionable
-// sync-error badge (PS-215 renamed the old raw resting text).
-function getShippedDataState(order: OrderSummaryDto): ShippedDataState {
-  if (hasExplicitExternalFlag(order)) return 'external'
-  if (hasLocalShipmentData(order)) return 'local'
-  return 'missing'
-}
-
-function getIsExternallyFulfilled(order: OrderSummaryDto) {
-  if (order.orderStatus === 'awaiting_shipment') return false
-  return getShippedDataState(order) === 'external'
-}
-
-// PS-036: shipped, not flagged external, and missing local shipment data ->
-// the row needs a ShipStation re-sync, not an "Ext. Label" badge.
-function getIsMissingShipmentSync(order: OrderSummaryDto) {
-  if (order.orderStatus === 'awaiting_shipment') return false
-  return getShippedDataState(order) === 'missing'
-}
-
-function getShippedDisplayCarrierCode(order: OrderSummaryDto) {
-  if (getIsExternallyFulfilled(order)) {
-    return toStringValue(order.carrierCode) ?? toStringValue(order.label?.carrierCode) ?? getShippingString(order, 'carrierCode')
-  }
-  return (
-    toStringValue(order.label?.carrierCode) ??
-    toStringValue(order.selectedRate?.carrierCode) ??
-    toStringValue(order.carrierCode) ??
-    getShippingString(order, 'carrierCode')
-  )
-}
-
-function getShippedDisplayServiceCode(order: OrderSummaryDto) {
-  if (getIsExternallyFulfilled(order)) {
-    return toStringValue(order.serviceCode) ?? toStringValue(order.label?.serviceCode) ?? getShippingString(order, 'serviceCode')
-  }
-  return (
-    toStringValue(order.selectedRate?.serviceCode) ??
-    toStringValue(order.label?.serviceCode) ??
-    toStringValue(order.serviceCode) ??
-    getShippingString(order, 'serviceCode')
-  )
-}
-
-function getShippedDisplayProviderId(order: OrderSummaryDto) {
-  return (
-    getShippingProviderAccountId(order) ??
-    toProviderAccountId(order.selectedRate?.shippingProviderId) ??
-    toProviderAccountId(order.selectedRate?.providerAccountId) ??
-    toProviderAccountId(order.label?.shippingProviderId) ??
-    toProviderAccountId(order.bestRate?.shippingProviderId) ??
-    getV2CarrierAccountForOrder(order)?.shippingProviderId ??
-    null
-  )
-}
-
-function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
-  if (getIsExternallyFulfilled(order)) return null
-  // Per user override unlock shipped data on 2026-06-01: PS-048 keeps this
-  // shipped-row diagnostic display-only and forbids carrier-code nickname fallbacks.
-  return (
-    getShippingString(order, 'accountNickname') ??
-    toStringValue(order.selectedRate?.providerAccountNickname) ??
-    toStringValue(order.selectedRate?.carrierNickname) ??
-    normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
-    getV2CarrierAccountForOrder(order)?.nickname ??
-    null
-  )
-}
-
-function getCancelledDisplayCarrierCode(order: OrderSummaryDto) {
-  return (
-    getShippingString(order, 'carrierCode') ??
-    toStringValue(order.selectedRate?.carrierCode) ??
-    toStringValue(order.label?.carrierCode) ??
-    toStringValue(order.carrierCode) ??
-    toStringValue(order.bestRate?.carrierCode)
-  )
-}
-
-function getCancelledDisplayProviderId(order: OrderSummaryDto) {
-  return (
-    getSelectedRateShippingProviderId(order) ??
-    toProviderAccountId(order.bestRate?.shippingProviderId) ??
-    getV2CarrierAccountForOrder(order)?.shippingProviderId ??
-    null
-  )
-}
-
-function getCancelledDisplayServiceCode(order: OrderSummaryDto) {
-  return (
-    getShippingString(order, 'serviceCode') ??
-    toStringValue(order.selectedRate?.serviceCode) ??
-    toStringValue(order.label?.serviceCode) ??
-    toStringValue(order.serviceCode) ??
-    toStringValue(order.bestRate?.serviceCode)
-  )
-}
-
-function getCancelledDisplayAccountNickname(order: OrderSummaryDto) {
-  return (
-    getSelectedRateCarrierNickname(order) ??
-    normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
-    getV2CarrierAccountForOrder(order)?.nickname ??
-    normalizeShippingAccountName(order.label?.carrierCode) ??
-    formatCarrierCode(getCancelledDisplayCarrierCode(order))
-  )
-}
-
-function shouldShowCarrierExtLabel(order: OrderSummaryDto) {
-  // getIsExternallyFulfilled already honors the explicit external flags
-  // (flags.externallyShipped / flags.externallyFulfilled). PS-036: a shipped row
-  // with merely-missing local data is no longer treated as external here.
-  return order.orderStatus === 'shipped' && getIsExternallyFulfilled(order)
-}
-
-function getIsException(order: OrderSummaryDto) {
-  if (order.orderStatus !== 'awaiting_shipment') return false
-  return ageHours(order.orderDate) > 48 || !(order.weight?.value && order.weight.value > 0)
-}
-
-// PS-038 — Expedited badge resolver. Prefers the server-computed
-// `order.expedited` object from the Orders list API (detected on the buyer's
-// REQUESTED service for both awaiting + shipped buckets); falls back to the
-// frontend mirror detector on the requested service when an older payload
-// lacks the field. Returns the tier (for styling) + human-readable label.
-function getExpeditedBadge(
-  order: OrderSummaryDto,
-  detail: OrderFullDto | null,
-): { tier: ExpeditedTier; label: string } | null {
-  const fromApi = order?.expedited
-  if (
-    fromApi &&
-    typeof fromApi === 'object' &&
-    fromApi.isExpedited &&
-    fromApi.tier &&
-    fromApi.label
-  ) {
-    return { tier: fromApi.tier as ExpeditedTier, label: String(fromApi.label) }
-  }
-  const detected = detectExpeditedShipping(getRequestedService(order, detail))
-  if (detected.isExpedited && detected.tier && detected.label) {
-    return { tier: detected.tier, label: detected.label }
-  }
-  return null
-}
-
-function copyText(value: string) {
-  if (!value || typeof navigator === 'undefined' || !navigator.clipboard) return
-  void navigator.clipboard.writeText(value)
-}
+// PS-166 (Wave 2a): the shipped/cancelled/awaiting display-state + badge
+// resolvers (PS-036/056 three-state classification, PS-165 display
+// precedence, PS-048 shipped diagnostics, PS-038 expedited, copyText) moved
+// VERBATIM to ./orders-display-state. Definition pins read the new home;
+// every call site below is unchanged.
+import {
+  copyText,
+  getCancelledDisplayAccountNickname,
+  getCancelledDisplayCarrierCode,
+  getCancelledDisplayProviderId,
+  getCancelledDisplayServiceCode,
+  getCarrierCodeForDisplay,
+  getExpeditedBadge,
+  getIsException,
+  getIsExternallyFulfilled,
+  getIsMissingShipmentSync,
+  getRequestedService,
+  getShipAccountDisplay,
+  getShippedDisplayAccountNickname,
+  getShippedDisplayCarrierCode,
+  getShippedDisplayProviderId,
+  getShippedDisplayServiceCode,
+  isStrictShippedOrder,
+  shouldShowCarrierExtLabel,
+} from './orders-display-state'
 
 function getVisibleColumns(currentStatus: OrderStatus) {
   const hidden = new Set<TableColumnKey>()

@@ -61,10 +61,20 @@ assert.match(
   /SHIPPED-980002[\s\S]*Ext\. Label[\s\S]*SHIPPED-980003[\s\S]*Shipment sync error/,
   'Orders column-integrity E2E must assert Ext. Label and Shipment sync error separately.',
 );
+// PS-166 Wave 2a re-anchor: the PS-056 three-state classifier
+// (getShippedDataState + its override-citation doc comment) moved VERBATIM to
+// orders-display-state.ts; OrdersView consumes it. The citation must live
+// where the classifier lives.
+const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
+assert.match(
+  displayState,
+  /Per user override unlock shipped data on 2026-06-01: PS-056/,
+  'PS-056 shipped-display classification must carry the required shipped-data override comment.',
+);
 assert.match(
   ordersView,
-  /Per user override unlock shipped data on 2026-06-01: PS-056/,
-  'PS-056 shipped-display changes must carry the required shipped-data override comment.',
+  /from '\.\/orders-display-state'/,
+  'OrdersView must consume the PS-056 classification from the display-state module (no local copy).',
 );
 
 console.log('PASS PS-056 external-label classification certification guard');

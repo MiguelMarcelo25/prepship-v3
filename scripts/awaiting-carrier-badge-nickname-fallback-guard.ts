@@ -29,22 +29,33 @@ check("classifyCarrier('EasyPost Carrier') === 'easypost'", classifyCarrier('Eas
 check("classifyCarrier('Shipp Carrier') === 'shipp'", classifyCarrier('Shipp Carrier') === 'shipp');
 check("classifyCarrier('ORI Account') === 'other'", classifyCarrier('ORI Account') === 'other');
 
-// CarrierBadge exports classifyCarrier and OrdersView imports it.
+// STALE-PIN RE-ANCHOR (PS-166 Wave 2a; pre-existing red since PS-165): the
+// old pins held getCarrierCodeForDisplay's pre-PS-165 INLINE body
+// (`const nickname = …; return nickname`). PS-165 moved the precedence —
+// including the known-carrier nickname fallback — into the canonical
+// resolveDisplayCarrierCode (order-shipping-display, behaviorally certified
+// by test:ps-165-order-shipping-display), and getCarrierCodeForDisplay
+// DELEGATES, feeding it `bestRateNicknameIsKnownCarrier` from
+// classifyCarrier. PS-166 then moved the delegating function verbatim to
+// orders-display-state. Pin the LIVE shape: the module classifies the
+// nickname via classifyCarrier and hands the fallback decision to the
+// canonical resolver.
+const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
 check(
-  'OrdersView imports classifyCarrier from CarrierBadge',
-  /import CarrierBadge, \{ classifyCarrier \} from '\.\.\/CarrierBadge'/.test(ordersView),
+  'display-state module imports classifyCarrier from CarrierBadge',
+  /import \{ classifyCarrier \} from '\.\.\/CarrierBadge'/.test(displayState),
 );
 
-// getCarrierCodeForDisplay (awaiting) falls back to the known-carrier nickname.
-const fnStart = ordersView.indexOf('function getCarrierCodeForDisplay(');
-const fnEnd = ordersView.indexOf('\nfunction getShipAccountDisplay(', fnStart);
-const fnBlock = fnStart >= 0 && fnEnd > fnStart ? ordersView.slice(fnStart, fnEnd) : '';
+const fnStart = displayState.indexOf('export function getCarrierCodeForDisplay(');
+const fnEnd = displayState.indexOf('\nexport function getShipAccountDisplay(', fnStart);
+const fnBlock = fnStart >= 0 && fnEnd > fnStart ? displayState.slice(fnStart, fnEnd) : '';
 check('found getCarrierCodeForDisplay', fnBlock.length > 0);
 check(
-  'awaiting carrier falls back to nickname only for a KNOWN carrier',
-  /const nickname = getBestRateCarrierNickname\(order\)/.test(fnBlock) &&
-    /classifyCarrier\(nickname\) !== 'other'/.test(fnBlock) &&
-    /return nickname/.test(fnBlock),
+  'awaiting carrier nickname fallback is KNOWN-carrier-gated through the canonical resolver',
+  /getBestRateCarrierNickname\(order\)/.test(fnBlock) &&
+    /classifyCarrier\(bestRateNickname\) !== 'other'/.test(fnBlock) &&
+    /bestRateNicknameIsKnownCarrier/.test(fnBlock) &&
+    /resolveDisplayCarrierCode\(\{/.test(fnBlock),
 );
 
 if (failures > 0) {

@@ -91,11 +91,13 @@ assert.match(script, /invokedDirectly/, 'main() must be guarded so the planner c
 // local shipment data — NOT "missing" and NOT false "Ext. Label". This is what
 // makes the inserted fulfillment row fix the #1010 display.
 // ---------------------------------------------------------------------------
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166 Wave 2a re-anchor: hasLocalShipmentData moved VERBATIM to the
+// orders-display-state module (PS-036 classification unchanged).
+const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
 assert.match(
-  ordersView,
+  displayState,
   /hasLocalShipmentData[\s\S]*order\.label\?\.trackingNumber/,
-  'OrdersView.hasLocalShipmentData must treat a tracking number as real local shipment data so a recovered fulfillment row renders as shipped, not missing/external',
+  'hasLocalShipmentData must treat a tracking number as real local shipment data so a recovered fulfillment row renders as shipped, not missing/external',
 );
 
 console.log('PASS backfill script is dry-run-default + insert-only, and the tracking-number display contract holds (PS-039)');

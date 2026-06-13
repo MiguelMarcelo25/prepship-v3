@@ -189,10 +189,12 @@ check('FE resolvers prefer the backend display tuple behind existing fallbacks',
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-178 (Phase 6, part 2): getBestRateServiceCode (the service-tuple consumer)
 // moved VERBATIM to orders-row-display.tsx; the carrier consumer
-// (getCarrierCodeForDisplay) stayed in OrdersView. Same pins, split homes.
+// (getCarrierCodeForDisplay) moved VERBATIM to orders-display-state.ts in
+// PS-166 Wave 2a. Same pins, split homes — both tuple reads unchanged.
 const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
+const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
 check('FE passes the backend tuple into both resolvers',
-  /backendDisplayCarrierCode: toStringValue\(toRecord\(order\.bestRateWorkflow\?\.display\)\?\.carrierCode\)/.test(ordersView) &&
+  /backendDisplayCarrierCode: toStringValue\(toRecord\(order\.bestRateWorkflow\?\.display\)\?\.carrierCode\)/.test(displayState) &&
   /backendDisplayServiceCode: toStringValue\(toRecord\(order\.bestRateWorkflow\?\.display\)\?\.serviceCode\)/.test(rowDisplay));
 
 if (failures > 0) {
