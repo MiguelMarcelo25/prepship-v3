@@ -203,6 +203,10 @@ const feTable = read('web/src/components/Views/BillingDetailTable.tsx');
 const feParity = read('web/src/components/Views/billing-parity.ts');
 const feView = read('web/src/components/Views/BillingView.tsx');
 const feOrders = read('web/src/components/Views/OrdersView.tsx');
+// PS-166 W4f: the side-panel Size row (the lockstepPanelDims dim inputs) moved
+// VERBATIM to the presentational OrdersPanelShippingFields component; OrdersView
+// still owns the lockstepPanelDims handler and threads it down as a prop.
+const feShippingFields = read('web/src/components/Views/OrdersPanelShippingFields.tsx');
 const pkgJson = read('package.json');
 
 // Banned fallbacks are GONE from the generator.
@@ -284,8 +288,12 @@ assert.ok(feParity.includes('packageCostNeedsReview'),
 assert.ok(feView.includes('packageCostNeedsReview'),
   'Edit modal must surface the review reason');
 assert.ok(feOrders.includes('lockstepPanelDims'),
-  'panel Size fields must auto-select an exactly-matching package');
-const lockstepUses = feOrders.split('lockstepPanelDims({ ...current').length - 1;
+  'OrdersView must still own + thread the lockstepPanelDims handler');
+// PS-166 W4f re-anchor: the three Size inputs (L/W/H) that route through the
+// lockstep now live in OrdersPanelShippingFields (presentational, byte-identical
+// markup); the handler stays in OrdersView and is passed as a prop, so the
+// exactly-matching-package auto-select behavior is unchanged.
+const lockstepUses = feShippingFields.split('lockstepPanelDims({ ...current').length - 1;
 assert.equal(lockstepUses, 3, `all three Size inputs route through the lockstep (found ${lockstepUses})`);
 
 // npm wiring.

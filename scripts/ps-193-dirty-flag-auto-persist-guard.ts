@@ -54,7 +54,13 @@ assert.ok(autoSaveEffect.includes('if (!dimsUserEditedRef.current) return'),
 // ── The dirty flag itself: set by operator inputs, reset on order switch ───
 assert.ok(/useEffect\(\(\) => \{\s*dimsUserEditedRef\.current = false\s*\}, \[panelOrderId\]\)/.test(ordersView),
   'the dirty flag must reset when the active order changes');
-const setterCount = ordersView.split('dimsUserEditedRef.current = true').length - 1;
+// PS-166 W4e/W4f: the Weight + Size input rows (where the dirty flag is set on
+// edit) moved VERBATIM to OrdersPanelShippingFields; the Package selector
+// handler, the ref, and the dirty-gated effects stay in OrdersView. Count the
+// operator-edit dirty-flag sets across BOTH files so the total is unchanged.
+const feShippingFields = read('web/src/components/Views/OrdersPanelShippingFields.tsx');
+const setterCount = (ordersView.split('dimsUserEditedRef.current = true').length - 1)
+  + (feShippingFields.split('dimsUserEditedRef.current = true').length - 1);
 assert.ok(setterCount >= 6,
   `the dirty flag must be set by the weight/dims/package input handlers (found ${setterCount})`);
 
