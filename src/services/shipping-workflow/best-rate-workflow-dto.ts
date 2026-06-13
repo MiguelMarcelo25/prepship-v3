@@ -92,8 +92,11 @@ export type OrderRowWorkflowDisplay = {
 // rate-money module from the same canonical picks the shipping model uses.
 import {
   buildOrderRowMoneyDisplay,
+  buildOrderRowMarketplace,
   type MarkupRule,
+  type MarketplaceFeeRule,
   type OrderRowMoneyDisplay,
+  type OrderRowMarketplaceDisplay,
 } from './rate-money';
 
 export type { OrderRowMoneyDisplay };
@@ -141,6 +144,10 @@ export type BestRateWorkflowDto = {
   // viewer can see financials. Display-only: purchase amounts still come from
   // the proof-backed selected rate at label time, never from this tuple.
   money?: OrderRowMoneyDisplay | null;
+  // PS-239: marketplace fee + profit (subtotal − fee − best-rate-incl-markup).
+  // Same canViewFinancials gate as `money`; computed independently of the rate so
+  // the fee shows pre-rating (profit stays null until a marked rate exists).
+  marketplace?: OrderRowMarketplaceDisplay | null;
 };
 
 export type BuildBestRateWorkflowInput = {
@@ -354,6 +361,9 @@ export type OrderRowWorkflowFacts = {
     labelFinalCost: number | null;
     markupRule: MarkupRule | null;
     insuranceAddOn: number | null;
+    // PS-239: marketplace-fee facts (display-only, redacted with the rest of money).
+    productSubtotal?: number | null;
+    marketplaceFeeRule?: MarketplaceFeeRule | null;
   };
 };
 
@@ -462,27 +472,37 @@ function queueRouteFor(facts: OrderRowWorkflowFacts): 'backend' | 'direct-create
  */
 export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWorkflowFacts): BestRateWorkflowDto {
   const rowState = rowStateFor(facts, dto.bestRateState);
+  // PS-177 money + PS-239 marketplace: only when the route provided facts;
+  // redacted (non-financial) viewers get null for both. Marketplace rides a
+  // SEPARATE field so the existing money tuple + its FE getter are untouched.
+  let moneyPatch: Partial<BestRateWorkflowDto> = {};
+  if (facts.money) {
+    const money = facts.money.canViewFinancials
+      ? buildOrderRowMoneyDisplay({
+          isAwaiting: facts.orderStatus === 'awaiting_shipment',
+          bestRateBaseAmount: facts.money.bestRateBaseAmount,
+          selectedRateBaseAmount: facts.money.selectedRateBaseAmount,
+          labelFinalCost: facts.money.labelFinalCost,
+          markupRule: facts.money.markupRule,
+          insuranceAddOn: facts.money.insuranceAddOn,
+        })
+      : null;
+    const marketplace = facts.money.canViewFinancials
+      ? buildOrderRowMarketplace({
+          productSubtotal: facts.money.productSubtotal ?? null,
+          marketplaceFeeRule: facts.money.marketplaceFeeRule ?? null,
+          markedAmount: money?.markedAmount ?? null,
+        })
+      : null;
+    moneyPatch = { money, marketplace };
+  }
   return {
     ...dto,
     rowState,
     allowedActions: rowActionsFor(rowState, dto.allowedActions),
     display: displayTupleFor(facts),
     queueRoute: queueRouteFor(facts),
-    // PS-177: money only when the route provided facts; redacted viewers get null.
-    ...(facts.money
-      ? {
-          money: facts.money.canViewFinancials
-            ? buildOrderRowMoneyDisplay({
-                isAwaiting: facts.orderStatus === 'awaiting_shipment',
-                bestRateBaseAmount: facts.money.bestRateBaseAmount,
-                selectedRateBaseAmount: facts.money.selectedRateBaseAmount,
-                labelFinalCost: facts.money.labelFinalCost,
-                markupRule: facts.money.markupRule,
-                insuranceAddOn: facts.money.insuranceAddOn,
-              })
-            : null,
-        }
-      : {}),
+    ...moneyPatch,
   };
 }
 

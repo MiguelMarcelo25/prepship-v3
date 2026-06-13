@@ -28,6 +28,8 @@ export const ALLOWED_SETTINGS = [
   'defaultView',
   // v4-only exact keys in active use
   'orders.columnPrefs',
+  // PS-239: per-client/store marketplace-fee rules ({version, rules:[]}).
+  'marketplace_fee_rules',
 ] as const;
 
 export type AllowedSettingKey = (typeof ALLOWED_SETTINGS)[number];

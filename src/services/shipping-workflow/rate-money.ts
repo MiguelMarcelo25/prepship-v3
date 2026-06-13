@@ -180,3 +180,69 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     source: 'selected_rate',
   };
 }
+
+// ── PS-239: Marketplace fee + Profit ──────────────────────────────────────────
+// Pure, zero-import (offline guard-importable), parallel to the markup math above.
+// A marketplace fee is a configurable commission on the order's PRODUCT subtotal
+// (price before tax + shipping). Two rule kinds:
+//   - flat:   subtotal * percent
+//   - tiered: subtotal >= threshold ? atOrAbovePercent : belowPercent, applied to
+//             the WHOLE subtotal (flat-tier, not marginal/bracketed).
+
+export type MarketplaceFeeRule =
+  | { kind: 'flat'; percent: number }
+  | { kind: 'tiered'; threshold: number; belowPercent: number; atOrAbovePercent: number };
+
+/**
+ * The fee amount for a subtotal under a rule. No rule → null (the cell renders —).
+ * A rule with a zero/negative subtotal → 0 (a real, known fee of $0).
+ */
+export function computeMarketplaceFee(
+  subtotal: number | null | undefined,
+  rule: MarketplaceFeeRule | null | undefined,
+): number | null {
+  if (!rule) return null;
+  const s = typeof subtotal === 'number' && Number.isFinite(subtotal) && subtotal > 0 ? subtotal : 0;
+  const pct =
+    rule.kind === 'flat'
+      ? rule.percent
+      : s >= rule.threshold
+        ? rule.atOrAbovePercent
+        : rule.belowPercent;
+  if (!Number.isFinite(pct)) return round2(0);
+  return round2(s * (pct / 100));
+}
+
+export type OrderRowMarketplaceDisplay = {
+  /** Σ non-adjustment unitPrice×qty (pre-tax, pre-shipping). Null when unknown. */
+  productSubtotal: number | null;
+  /** Configured commission on the subtotal. Null = no matching rule (renders —). */
+  marketplaceFee: number | null;
+  /** subtotal − marketplaceFee − best-rate-incl-markup. Null until a rate exists. */
+  profit: number | null;
+};
+
+/**
+ * Assemble the marketplace economics tuple, INDEPENDENT of the rate so the fee can
+ * show before an order is rated (profit stays null until a marked rate exists).
+ * Returns null only when there's neither a subtotal nor a fee to display.
+ */
+export function buildOrderRowMarketplace(facts: {
+  productSubtotal: number | null;
+  marketplaceFeeRule: MarketplaceFeeRule | null;
+  markedAmount: number | null;
+}): OrderRowMarketplaceDisplay | null {
+  const subtotal =
+    typeof facts.productSubtotal === 'number' &&
+    Number.isFinite(facts.productSubtotal) &&
+    facts.productSubtotal > 0
+      ? round2(facts.productSubtotal)
+      : null;
+  const marketplaceFee = computeMarketplaceFee(subtotal, facts.marketplaceFeeRule);
+  if (subtotal == null && marketplaceFee == null) return null;
+  const profit =
+    subtotal != null && facts.markedAmount != null
+      ? round2(subtotal - (marketplaceFee ?? 0) - facts.markedAmount)
+      : null;
+  return { productSubtotal: subtotal, marketplaceFee, profit };
+}

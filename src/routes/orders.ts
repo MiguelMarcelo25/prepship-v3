@@ -104,6 +104,13 @@ import {
   type MarkupRule,
 } from '../services/shipping-workflow/rate-money';
 import { loadCarrierMarkups } from '../services/rates';
+// PS-239: marketplace-fee rules (loaded once per request) + per-row resolution + subtotal.
+import {
+  loadMarketplaceFeeRules,
+  resolveMarketplaceFeeRule,
+  computeProductSubtotal,
+  type StoredMarketplaceFeeRule,
+} from '../services/marketplace-fee';
 import { getOrderDimsDefaultsForOrder } from '../services/order-dims-defaults';
 
 const app = new Hono();
@@ -1635,6 +1642,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     console.warn('[orders] markup rules lookup skipped:', err instanceof Error ? err.message : err);
   }
 
+  // PS-239: marketplace-fee rules loaded once per request (mirrors carrierMarkupRules).
+  // Empty on failure (rows just render no fee — display-only, never breaks /orders).
+  const marketplaceFeeRules: StoredMarketplaceFeeRule[] = await loadMarketplaceFeeRules();
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -2074,6 +2085,16 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             labelFinalCost: labelCost ?? null,
             markupRule: rowMarkupRule,
             insuranceAddOn: extractInsuranceAddOn(rowIsAwaiting ? bestRateRecord : selectedRateRecord),
+            // PS-239: marketplace-fee facts. Subtotal from the order items (Σ
+            // non-adjustment unitPrice×qty); rule resolved most-specific-wins. The
+            // marketplace axis is an optional refinement — store/client scope covers
+            // the carded KF-Goods two-store case (resolved by storeId).
+            productSubtotal: computeProductSubtotal(r.order.items),
+            marketplaceFeeRule: resolveMarketplaceFeeRule(marketplaceFeeRules, {
+              clientId: r.order.clientId ?? null,
+              storeId: r.order.storeId ?? null,
+              marketplace: null,
+            }),
           },
         })
       : null;
