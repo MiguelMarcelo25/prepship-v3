@@ -106,13 +106,22 @@ check('classifier consults the backend policy AFTER the never-buy ladder (source
   })());
 
 // ── 4. PART 2: localStorage holds no purchase authority ───────────────────────
+// PS-166 Wave 1a re-anchor: the persistent queue-job machinery (incl.
+// createQueueOrderSnapshot) moved VERBATIM to orders-persistent-queue-job.ts.
+// The identifiers-only contract is pinned at its new home; resume logic below
+// is component-internal and stays pinned in OrdersView.
 {
-  const snapStart = ordersView.indexOf('function createQueueOrderSnapshot');
-  const snapBlock = ordersView.slice(snapStart, ordersView.indexOf('\n}', snapStart));
+  const queueJobModule = readFileSync('web/src/components/Views/orders-persistent-queue-job.ts', 'utf8');
+  const snapStart = queueJobModule.indexOf('export function createQueueOrderSnapshot');
+  const snapBlock = queueJobModule.slice(snapStart, queueJobModule.indexOf('\n}', snapStart));
   check('persisted queue snapshot carries IDENTIFIERS ONLY (no money/label payloads)',
     snapStart > 0 &&
     !/bestRate/.test(snapBlock) && !/selectedRate/.test(snapBlock) &&
     !/label:/.test(snapBlock) && !/shipping/.test(snapBlock) && !/raw/.test(snapBlock));
+  check('OrdersView consumes the queue-job machinery from the strict module (no local copy)',
+    ordersView.includes("from './orders-persistent-queue-job'") &&
+    !/\nfunction createQueueOrderSnapshot/.test(ordersView) &&
+    !/\nfunction readPersistentQueueJob/.test(ordersView));
 }
 {
   const resumeStart = ordersView.indexOf('async function resumePersistentQueueJob');
