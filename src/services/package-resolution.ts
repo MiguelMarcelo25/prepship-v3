@@ -21,8 +21,45 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { packages } from '../db/schema/packages';
 import { orderOverrides } from '../db/schema/orders';
+// PS-221 slice 3: save the auto-provisioned box as the order's combo default.
+import { saveComboPackageDefault } from './combo-package-defaults';
 
 const DIMS_TOLERANCE = 0.1;
+
+// PS-221 slice 3 — auto-provision is DARK by default. When OFF (the default), a
+// dims-present order with no catalog match resolves to null exactly as before
+// (zero prod behavior change). When DJ flips PACKAGE_AUTO_PROVISION=true (after
+// reviewing the dry-run, scripts/ps-221-auto-provision-dry-run.ts), a no-match
+// label auto-creates the package + saves it as the order's combo default so future
+// imports of that SKU+qty resolve it. Kill-switch style, like INVENTORY_AUTO_DEDUCT.
+export function isPackageAutoProvisionEnabled(): boolean {
+  const raw = (process.env.PACKAGE_AUTO_PROVISION ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+/** Find-or-create a catalog box for these dims (±0.1"); returns its packages.id.
+ *  Mirrors POST /packages/auto-create. */
+export async function findOrCreatePackageForDims(
+  length: number,
+  width: number,
+  height: number,
+): Promise<number | null> {
+  const existing = await findPackageByDims(length, width, height);
+  if (existing != null) return existing;
+  const [row] = await db
+    .insert(packages)
+    .values({
+      name: `Custom ${length}x${width}x${height}`,
+      type: 'box',
+      length,
+      width,
+      height,
+      tareWeightOz: 0,
+      source: 'custom',
+    })
+    .returning({ id: packages.id });
+  return row?.id ?? null;
+}
 
 function toPositiveInt(value: unknown): number | null {
   if (value == null || value === '') return null;
@@ -90,5 +127,30 @@ export async function resolveOrderLabelPackageId(args: {
   }
 
   // 3. Dims ±0.1" catalog match.
-  return findPackageByDims(args.length, args.width, args.height);
+  const dimsMatch = await findPackageByDims(args.length, args.width, args.height);
+  if (dimsMatch != null) return dimsMatch;
+
+  // 3b. PS-221 slice 3 — DARK by default (PACKAGE_AUTO_PROVISION). Dims present but
+  //     no catalog match → auto-create the box + save it as the order's combo
+  //     default so future imports of this SKU+qty resolve it. When the flag is OFF
+  //     (default) this returns null exactly as before — zero prod behavior change.
+  if (isPackageAutoProvisionEnabled() && args.length && args.width && args.height) {
+    const created = await findOrCreatePackageForDims(args.length, args.width, args.height);
+    if (created != null && args.orderId != null) {
+      await saveComboPackageDefault(args.orderId, {
+        packageId: created,
+        length: args.length,
+        width: args.width,
+        height: args.height,
+      }).catch((err) => {
+        console.warn(
+          '[package-resolution] auto-provision save-default failed:',
+          err instanceof Error ? err.message : err,
+        );
+      });
+    }
+    return created;
+  }
+
+  return null;
 }

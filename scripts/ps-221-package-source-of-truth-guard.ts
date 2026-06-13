@@ -64,12 +64,24 @@ check('precedence #2: the order canonical selected_package_id is consulted',
 check('canonical ref resolves by packages.id OR package_code',
   /eq\(packages\.id/.test(resolver) && /eq\(packages\.packageCode/.test(resolver));
 check('precedence #3: dims ±0.1" fallback', /DIMS_TOLERANCE = 0\.1/.test(resolver) && /findPackageByDims/.test(resolver));
-check('resolver is read-only this slice (no auto-create/save writes yet)',
-  !/db\.insert\(|\.insert\(|db\.update\(|saveComboPackageDefault\(/.test(resolver));
+// Slice 3: auto-provision is DARK by default — writes gated behind the flag.
+check('auto-provision flag reads env (off when unset)',
+  /export function isPackageAutoProvisionEnabled/.test(resolver) && /PACKAGE_AUTO_PROVISION/.test(resolver));
+check('auto-provision writes are gated behind the flag',
+  /if \(isPackageAutoProvisionEnabled\(\) &&/.test(resolver));
+check('auto-provision find-or-creates the box + saves the combo default',
+  /findOrCreatePackageForDims/.test(resolver) && /saveComboPackageDefault\(/.test(resolver));
 check('labels.ts delegates to the unified resolver (no inline dims-guess)',
   labels.includes('return resolveOrderLabelPackageId(args)') && !/const tol = 0\.1;/.test(labels));
 check('labels.ts threads orderId into the resolver',
   /resolveLabelPackageId\(\{[\s\S]*?orderId: body\.orderId/.test(labels));
+
+// Slice 3 dry-run: read-only readiness baseline before flipping the flag.
+const dryRun = (() => { try { return readFileSync('scripts/ps-221-auto-provision-dry-run.ts', 'utf8'); } catch { return ''; } })();
+check('auto-provision dry-run exists', dryRun.length > 0);
+check('dry-run is read-only (counts only, no writes)',
+  !/db\.insert\(|db\.update\(|db\.delete\(|saveComboPackageDefault|\.insert\(/.test(dryRun));
+check('package.json wires the auto-provision dry-run', /ps-221-auto-provision-dry-run/.test(pkg));
 
 // Self-wiring.
 check('package.json exposes test:ps-221-package-source-of-truth',
