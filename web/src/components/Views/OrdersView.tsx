@@ -204,8 +204,8 @@ import {
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
 // PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
-// source of truth). The FE delegates here instead of maintaining its own (drift-prone) alias maps.
-import { normalizeConfirmation, normalizeInsurance } from '../../../../src/lib/shipping-options'
+// source of truth). The FE delegation wrappers live in ./orders-rate-input (PS-166 Wave 1d) —
+// this file consumes the wrappers and owns no alias maps.
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -263,33 +263,15 @@ const CONFIRMATION_OPTIONS = [
   { value: 'direct_signature', label: 'Direct Signature' },
 ] as const
 
-// POLICY (DJ, 2026-06-04): confirmation DEFAULTS TO 'none' so PrepShip rates
-// match ShipStation's no-confirmation quote out of the box. 'none' is a real,
-// selectable option; the operator can opt into Delivery/Signature per order.
-// PS-164: delegate to the canonical confirmation normalizer (single alias owner). For the 5 UI
-// dropdown values this is identical to the previous hand-rolled allowlist; it additionally honors
-// the backend's confirmation aliases instead of silently downgrading them to 'none'.
-function normalizeConfirmationForRates(value: string | null | undefined) {
-  return normalizeConfirmation(value)
-}
-
-// PS-072: infer carrier from a service code so resolveEffectiveInsurance can
-// apply the ParcelGuard defaults to UPS/USPS ground services.
-function inferCarrierFromServiceCode(serviceCode: string | null | undefined): string {
-  const s = String(serviceCode ?? '').toLowerCase()
-  if (s.includes('usps') || s.includes('stamps') || s.includes('ground_advantage') || s.includes('groundadvantage') || s.includes('parcel_select')) return 'usps'
-  if (s.includes('ups')) return 'ups'
-  return ''
-}
-
-// PS-164: delegate to the canonical insurance normalizer (single alias owner). It preserves
-// 'shipsurance'/'parcelguard' (incl. the parcel_guard / "parcel guard" aliases) and maps
-// carrier/provider/shipstation -> 'carrier'. Behavior change (DJ-approved 2026-06-10): an UNKNOWN
-// provider now resolves to 'none' (no insurance) instead of silently charging 'carrier' insurance —
-// the same money-truth the backend label path already uses. Needs a live insurance spot-check.
-function normalizeInsuranceForRates(provider: string | null | undefined, value: string | number | null | undefined) {
-  return normalizeInsurance({ insuranceProvider: provider, insuredValue: value })
-}
+// PS-166 (Wave 1d): the rate-input normalizers (confirmation/insurance
+// delegation + PS-072 carrier inference) moved VERBATIM to
+// ./orders-rate-input (strict module). The PS-164 delegation pins read the
+// new home.
+import {
+  inferCarrierFromServiceCode,
+  normalizeConfirmationForRates,
+  normalizeInsuranceForRates,
+} from './orders-rate-input'
 
 type ShipmentDims = { length: number; width: number; height: number }
 

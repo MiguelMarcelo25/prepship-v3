@@ -50,16 +50,27 @@ check('insurance: none -> none',
   normalizeInsurance({ insuranceProvider: 'none', insuredValue: 100 }), { insuranceProvider: 'none', insuredValue: null });
 
 // ── 3) OrdersView delegates (no hand-rolled maps) ──
+// PS-166 Wave 1d re-anchor: the delegation WRAPPERS moved verbatim to the
+// strict orders-rate-input module; OrdersView consumes them and owns no
+// alias maps. The canonical-import + definition-shape pins read the new
+// home; the no-hand-rolled-map pins cover BOTH files.
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-checkBool('OrdersView imports the canonical normalizers',
-  /import \{ normalizeConfirmation, normalizeInsurance \} from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/shipping-options'/.test(ordersView));
-checkBool('OrdersView confirmation delegates to canonical',
-  /function normalizeConfirmationForRates[\s\S]{0,200}?return normalizeConfirmation\(value\)/.test(ordersView));
-checkBool('OrdersView insurance delegates to canonical',
-  /function normalizeInsuranceForRates[\s\S]{0,260}?return normalizeInsurance\(\{ insuranceProvider: provider, insuredValue: value \}\)/.test(ordersView));
-checkBool('OrdersView no longer hand-rolls the insurance carrier-fallback ternary',
+const rateInput = readFileSync('web/src/components/Views/orders-rate-input.ts', 'utf8');
+checkBool('rate-input module imports the canonical normalizers',
+  /import \{ normalizeConfirmation, normalizeInsurance \} from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/shipping-options'/.test(rateInput));
+checkBool('confirmation delegates to canonical',
+  /export function normalizeConfirmationForRates[\s\S]{0,200}?return normalizeConfirmation\(value\)/.test(rateInput));
+checkBool('insurance delegates to canonical',
+  /export function normalizeInsuranceForRates[\s\S]{0,260}?return normalizeInsurance\(\{ insuranceProvider: provider, insuredValue: value \}\)/.test(rateInput));
+checkBool('OrdersView consumes the wrappers from the strict module (no local copies)',
+  /from '\.\/orders-rate-input'/.test(ordersView) &&
+  !/\nfunction normalizeConfirmationForRates/.test(ordersView) &&
+  !/\nfunction normalizeInsuranceForRates/.test(ordersView));
+checkBool('no hand-rolled insurance carrier-fallback ternary anywhere',
   !/everything else maps to carrier insurance/.test(ordersView) &&
-  !/insuranceProvider === 'shipsurance'\s*\n\s*\?\s*'shipsurance'/.test(ordersView));
+  !/insuranceProvider === 'shipsurance'\s*\n\s*\?\s*'shipsurance'/.test(ordersView) &&
+  !/everything else maps to carrier insurance/.test(rateInput) &&
+  !/insuranceProvider === 'shipsurance'\s*\n\s*\?\s*'shipsurance'/.test(rateInput));
 
 // ── 4) RateBrowserModal delegates (no inline passthrough) ──
 const rateBrowser = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
