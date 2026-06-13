@@ -21,7 +21,7 @@
   ],
   "rewrites": [
     {
-      "source": "/api/:path((?!carrier-accounts|carriers/|store-accounts|oauth/|debug-env|migrate-from|admin/|cron/).+)",
+      "source": "/api/:path((?!carrier-accounts|carriers/|store-accounts|oauth/|admin/|cron/).+)",
       "destination": "https://prepshipv4-api-l5xc.onrender.com/:path"
     },
     {
