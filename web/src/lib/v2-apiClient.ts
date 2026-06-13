@@ -1141,6 +1141,18 @@ export const apiClient = {
     return api.get<any>(path).then(normalizeLabelResponse);
   },
 
+  // PS-219: void a shipped label at its OWNING provider (PS-211 backend). Pure
+  // pass-through to POST /labels/:shipmentId/void. `shipmentId` MUST be the
+  // LOCAL shipments.id PK the backend stamps on order.labelVoidability.shipmentId
+  // — never an order id, a ShipStation shipment id, or a synthetic direct-carrier
+  // id (the void route's or(id, labelShipmentId) lookup would otherwise match the
+  // wrong row). Resolves the structured VoidLabelResponseDto on HTTP 200
+  // ('voided' / 'already_voided'); throws ApiRequestError with `.status` on
+  // 409 (not_supported / not_voidable), 502 (provider_failed), or 404.
+  voidLabel(shipmentId: number): Promise<any> {
+    return api.post<any>(`/labels/${encodeURIComponent(String(shipmentId))}/void`, {});
+  },
+
   async openLabel(url: string): Promise<void> {
     // Back-compat thin wrapper. New code should call openLabelPdf()
     // which handles auth-gated URLs via blob proxy. This wrapper still

@@ -705,6 +705,8 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
 import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
+// PS-219: shared danger-tone confirm dialog for the operator Void Label action.
+import { ConfirmModal } from '../ui/ConfirmModal'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -995,6 +997,12 @@ export default function OrdersView({
   const resumePersistentQueueJobIdRef = useRef<string | null>(null)
   const lastSelectionAnchorRef = useRef<number | null>(null)
   const shiftHeldOnMouseDownRef = useRef(false)
+  // PS-219 (per user override unlock shipped data on 2026-06-13): operator Void
+  // Label confirm state. voidConfirm holds the BACKEND-stamped local shipment id
+  // + display facts; voidBusy gates the in-flight mutation. No optimistic local
+  // void — the row only leaves Shipped after a 200 success refetch.
+  const [voidConfirm, setVoidConfirm] = useState<{ shipmentId: number; voidability: any; order: OrderSummaryDto } | null>(null)
+  const [voidBusy, setVoidBusy] = useState(false)
   const [panelForm, setPanelForm] = useState<PanelFormState>({
     locationId: '',
     shipAccountId: '',
@@ -5447,6 +5455,57 @@ export default function OrdersView({
     }
   }
 
+  // PS-219 (per user override unlock shipped data on 2026-06-13): operator Void
+  // Label workflow. openVoidConfirm only OPENS the confirm dialog; the void runs
+  // in confirmVoidLabel after explicit confirmation. The UI passes ONLY the
+  // backend-stamped local shipment id (panelDetail.labelVoidability.shipmentId) —
+  // never an order id or a provider/ShipStation id. No optimistic local void:
+  // the row leaves Shipped only after a 200 success refetch.
+  function openVoidConfirm() {
+    if (!panelOrder) return
+    const v = (panelDetail as Record<string, unknown> | null)?.labelVoidability as
+      | { shipmentId: number | null; voidable: boolean; providerLabel: unknown }
+      | null
+      | undefined
+    if (!v || v.shipmentId == null || !v.voidable) return
+    setVoidConfirm({ shipmentId: v.shipmentId, voidability: v, order: panelOrder })
+  }
+
+  async function confirmVoidLabel() {
+    if (!voidConfirm) return
+    setVoidBusy(true)
+    try {
+      const result = await apiClient.voidLabel(voidConfirm.shipmentId)
+      const label = voidConfirm.order.orderNumber ?? voidConfirm.order.orderId
+      showToast(
+        result?.note || result?.message || `Label voided for ${label}${result?.refundEstimate ? ` — ${result.refundEstimate}` : ''}`,
+        'success',
+      )
+      setVoidConfirm(null)
+      // Backend reset the order to awaiting_shipment after provider success;
+      // recompute voidability + move the row out of Shipped.
+      void queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', voidConfirm.order.orderId] })
+      await refetchOrders()
+    } catch (error) {
+      // Branch on HTTP status (the route maps 409 not_supported/not_voidable,
+      // 502 provider_failed, 404 not-found) — never on message text. No local
+      // change on failure: the shipment stays visible/active.
+      const status = (error as { status?: number } | null)?.status
+      const message =
+        status === 409
+          ? 'This label can’t be voided from PrepShip — void it at the carrier portal. The label stays active.'
+          : status === 502
+            ? 'Provider void failed — the label is still active. Try again in a moment.'
+            : status === 404
+              ? 'Shipment not found — refresh the order and try again.'
+              : error instanceof Error ? error.message : 'Void failed'
+      showToast(message, 'error')
+      setVoidConfirm(null)
+    } finally {
+      setVoidBusy(false)
+    }
+  }
+
   function isExistingLabelCreateConflict(error: unknown) {
     // PS-190: conflict detection is code-based — the backend stamps
     // LABEL_EXISTS (active label already on the order) or ORDER_NOT_EDITABLE
@@ -8086,6 +8145,8 @@ export default function OrdersView({
                   shippedHasPrepShipLabel={shippedHasPrepShipLabel}
                   canQueueShippedLabel={canQueueShippedLabel}
                   shippedLabelUnavailableCopy={shippedLabelUnavailableCopy}
+                  labelVoidability={panelDetail?.labelVoidability ?? null}
+                  onVoidLabel={() => openVoidConfirm()}
                 />
               ) : (
                 <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -9636,6 +9697,52 @@ export default function OrdersView({
           />
         </Suspense>
       ) : null}
+
+      {/* PS-219 (per user override unlock shipped data on 2026-06-13): operator
+          Void Label confirmation. Danger tone; backdrop/Escape are suppressed
+          while the void is in flight so it can't be abandoned mid-request. */}
+      <ConfirmModal
+        open={!!voidConfirm}
+        tone="danger"
+        loading={voidBusy}
+        title="Void this label?"
+        description={
+          voidConfirm ? (
+            <div className="space-y-1">
+              <div>
+                Order <strong>{voidConfirm.order.orderNumber ?? voidConfirm.order.orderId}</strong>
+              </div>
+              {voidConfirm.voidability?.providerLabel ? (
+                <div>
+                  {[
+                    voidConfirm.voidability.providerLabel.carrier,
+                    voidConfirm.voidability.providerLabel.service,
+                    voidConfirm.voidability.providerLabel.accountLabel,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </div>
+              ) : null}
+              {voidConfirm.voidability?.providerLabel?.trackingNumber ? (
+                <div className="font-mono text-[11px] text-ink-2">
+                  {voidConfirm.voidability.providerLabel.trackingNumber}
+                </div>
+              ) : null}
+              <div className="mt-1.5 text-ink-3">
+                A postage refund is requested at the carrier; timing varies. The order
+                resets to Awaiting Shipment only AFTER the provider confirms the void —
+                if the provider fails, nothing changes locally.
+              </div>
+            </div>
+          ) : null
+        }
+        confirmLabel="Void label"
+        cancelLabel="Keep label"
+        onConfirm={() => void confirmVoidLabel()}
+        onCancel={() => {
+          if (!voidBusy) setVoidConfirm(null)
+        }}
+      />
     </>
   )
 }

@@ -19,6 +19,9 @@ import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, sta
 import { markOrderShippedExternally } from '../services/fulfillment/mark-shipped-externally';
 import { resolveOrdersStatusScope } from '../services/orders-search-scope';
 import { loadClientIsTest } from '../services/fulfillment/test-label-policy';
+// PS-219 (per user override unlock shipped data on 2026-06-13): read-only,
+// backend-owned label voidability for the operator Void Label UI.
+import { resolveOrderLabelVoidability } from '../services/label-voidability';
 import { loadOrderTrackingSummary } from '../services/shipment-tracking';
 import { replaceOrderItemsForOrders } from '../services/order-items';
 import {
@@ -2590,6 +2593,7 @@ app.get('/:id{[0-9]+}', async (c) => {
   // PS-037: resolve the per-client SKU+qty combination package default (if any)
   // so the side panel can auto-select it. Derived server-side from order items.
   const comboPackageDefault = await getComboPackageDefaultForOrder(id);
+  const detailClientIsTest = await loadClientIsTest(order.clientId);
 
   return c.json({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
@@ -2604,7 +2608,11 @@ app.get('/:id{[0-9]+}', async (c) => {
     // Read-only; the loader swallows its own errors.
     packageFacts: await resolveOrderPackageFacts(id),
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
-    isTest: await loadClientIsTest(order.clientId),
+    isTest: detailClientIsTest,
+    // PS-219 (per user override unlock shipped data on 2026-06-13): backend-owned
+    // read-only voidability so the operator Void Label UI never guesses. Reads the
+    // shipmentRows already loaded above; performs NO write.
+    labelVoidability: resolveOrderLabelVoidability(shipmentRows, detailClientIsTest),
     // Tracking-driven queue retirement: read-only carrier tracking summary for the
     // side panel ("Delivered Jun 12" / "In transit"). Null until the poller has seen
     // this order; never blocks the payload (the loader swallows its own errors).
@@ -2639,6 +2647,7 @@ app.get('/:id{[0-9]+}/full', async (c) => {
   // PS-037: resolve the per-client SKU+qty combination package default (if any)
   // so the side panel can auto-select it. Derived server-side from order items.
   const comboPackageDefault = await getComboPackageDefaultForOrder(id);
+  const detailClientIsTest = await loadClientIsTest(order.clientId);
 
   return c.json({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
@@ -2648,7 +2657,11 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     // PS-205: same canonical effective package facts as GET /:id.
     packageFacts: await resolveOrderPackageFacts(id),
     // PS-186: backend-owned test-order fact (clients.isTest) — mirrors the list row field.
-    isTest: await loadClientIsTest(order.clientId),
+    isTest: detailClientIsTest,
+    // PS-219 (per user override unlock shipped data on 2026-06-13): backend-owned
+    // read-only voidability so the operator Void Label UI never guesses. Reads the
+    // shipmentRows already loaded above; performs NO write.
+    labelVoidability: resolveOrderLabelVoidability(shipmentRows, detailClientIsTest),
     // Tracking-driven queue retirement: same read-only tracking summary as GET /:id.
     tracking: await loadOrderTrackingSummary(id),
   });

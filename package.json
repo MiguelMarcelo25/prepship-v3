@@ -196,6 +196,7 @@
     "test:ps-209-label-owner-slice": "tsx scripts/ps-209-label-owner-slice-guard.ts",
     "test:ps-200-stale-exclusion-slice": "tsx scripts/ps-200-stale-exclusion-slice-guard.ts",
     "test:ps-217-billing-export-box-fields": "tsx scripts/ps-217-billing-export-box-fields.ts",
+    "test:ps-219-void-label-ui": "tsx scripts/ps-219-void-label-ui-guard.ts",
     "test:ps-214-hugrab-universal-insurance": "tsx scripts/ps-214-hugrab-universal-insurance-guard.ts",
     "test:ps-211-universal-void": "tsx scripts/ps-211-universal-void-guard.ts",
     "test:ps-213-top-combos": "tsx scripts/ps-213-top-combos-guard.ts",

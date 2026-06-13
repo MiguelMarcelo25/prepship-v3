@@ -10,7 +10,7 @@
 // that is not declared as a prop — the structural antidote to the @ts-nocheck
 // silent-missing-dep crash class.
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
-import { Inbox, Printer as PrinterIcon, Save as SaveIcon } from 'lucide-react'
+import { Inbox, Printer as PrinterIcon, Save as SaveIcon, XCircle } from 'lucide-react'
 import type { LocationDto, OrderSummaryDto } from '../../types/api'
 import type { PanelFormState } from './orders-panel-state'
 
@@ -157,6 +157,33 @@ export function OrdersPanelSizeRow({
 // / canQueueShippedLabel / shippedLabelUnavailableCopy) is preserved exactly;
 // no shipped/cancelled protection is weakened. data-testid kept byte-identical
 // (order-editable-lockdown + the e2e DOM contract pin it).
+// PS-219 (per user override unlock shipped data on 2026-06-13): the
+// BACKEND-OWNED voidability verdict the shipped-detail DTO carries
+// (order.labelVoidability). The FE only RENDERS it — it never recomputes
+// voidability and never constructs a shipment/provider id. shipmentId is the
+// local shipments.id PK the void route addresses.
+export type OrderLabelVoidability = {
+  shipmentId: number | null
+  voidable: boolean
+  reasonCode: 'already_voided' | 'not_supported' | 'missing_provider_label_id' | 'no_active_shipment' | null
+  providerLabel: { carrier: string | null; service: string | null; accountLabel: string | null; trackingNumber: string | null } | null
+}
+
+// Operator-facing copy for a DISABLED Void button — driven by the backend
+// reasonCode, never by parsing a message string.
+function voidReasonCopy(reasonCode: OrderLabelVoidability['reasonCode']): string {
+  switch (reasonCode) {
+    case 'already_voided':
+      return 'This label is already voided.'
+    case 'not_supported':
+      return 'PrepShip can’t void this provider yet — void it at the carrier portal; the label stays active.'
+    case 'missing_provider_label_id':
+      return 'No provider label id on record — void it at the carrier portal; the label stays active.'
+    default:
+      return 'This label can’t be voided.'
+  }
+}
+
 export function OrdersPanelShippedLabelActions({
   panelOrder,
   reprintLabel,
@@ -164,6 +191,8 @@ export function OrdersPanelShippedLabelActions({
   shippedHasPrepShipLabel,
   canQueueShippedLabel,
   shippedLabelUnavailableCopy,
+  labelVoidability,
+  onVoidLabel,
 }: {
   panelOrder: OrderSummaryDto
   reprintLabel: () => void | Promise<void>
@@ -171,8 +200,14 @@ export function OrdersPanelShippedLabelActions({
   shippedHasPrepShipLabel: boolean
   canQueueShippedLabel: boolean
   shippedLabelUnavailableCopy: string
+  // PS-219: null / no shipmentId → the Void action is HIDDEN (no active
+  // shipment). Enabled ONLY when voidable===true; else disabled + reason tooltip.
+  labelVoidability?: OrderLabelVoidability | null
+  onVoidLabel?: () => void
 }) {
+  const voidShipmentId = labelVoidability?.shipmentId ?? null
   return (
+    <>
     <div
       data-testid="shipped-label-actions"
       className="flex items-stretch gap-1 p-1.5 bg-surface-2/40"
@@ -223,5 +258,31 @@ export function OrdersPanelShippedLabelActions({
         <span>Send to Queue</span>
       </button>
     </div>
+    {voidShipmentId != null ? (
+      <div className="flex items-stretch px-1.5 pb-1.5">
+        <button
+          type="button"
+          data-testid="shipped-void-action"
+          disabled={!labelVoidability?.voidable}
+          onClick={() => { if (labelVoidability?.voidable) onVoidLabel?.() }}
+          title={labelVoidability?.voidable ? 'Void this label at its carrier/provider (requests a refund where supported)' : voidReasonCopy(labelVoidability?.reasonCode ?? null)}
+          className={[
+            'flex-1 inline-flex items-center justify-center gap-1.5',
+            'h-8 rounded-lg',
+            'text-[12px] font-semibold',
+            labelVoidability?.voidable
+              ? 'text-rose-700 bg-rose-50 ring-1 ring-rose-200 hover:bg-rose-100 hover:ring-rose-300'
+              : 'text-ink-4 bg-surface ring-1 ring-line cursor-not-allowed',
+            'active:scale-[0.98]',
+            'disabled:opacity-70 disabled:active:scale-100',
+            'transition-all duration-150 ease-out',
+          ].join(' ')}
+        >
+          <XCircle size={12.5} strokeWidth={2.25} aria-hidden />
+          <span>Void Label</span>
+        </button>
+      </div>
+    ) : null}
+    </>
   )
 }
