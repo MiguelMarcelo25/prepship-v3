@@ -276,6 +276,7 @@
     "test:ps-230-jwt-strict-claims": "tsx scripts/ps-230-jwt-strict-claims-guard.ts",
     "test:ps-232-hardening-bundle": "tsx scripts/ps-232-hardening-bundle-guard.ts",
     "test:ps-239-marketplace-fee": "tsx scripts/ps-239-marketplace-fee-guard.ts",
+    "test:ps-221-package-source-of-truth": "tsx scripts/ps-221-package-source-of-truth-guard.ts",
     "test:print-queue-ownership": "node scripts/print-queue-ownership-guard.mjs",
     "test:secrets-governance": "node scripts/secrets-governance-guard.mjs",
     "test:audit-logging": "node scripts/audit-logging-guard.mjs",

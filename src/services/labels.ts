@@ -1467,7 +1467,13 @@ export async function createLabelV2(
     length,
     width,
     height,
-    selectedPackageId: body.customPackageId ? String(body.customPackageId) : null,
+    // PS-221 (Per user override unlock shipped data on 2026-06-13): persist the
+    // package that was actually RESOLVED + deducted (resolvedPackageId, line ~1482),
+    // not the raw body.customPackageId. Previously the real path dropped the
+    // dims-matched package (selected_package_id NULL on ~99.5% of shipments), so the
+    // box deducted ≠ billed ≠ displayed. The test path (above) already did this.
+    // Forward-only: no backfill of historical NULLs.
+    selectedPackageId: resolvedPackageId != null ? String(resolvedPackageId) : null,
     // PS-202: direct purchases keep the legacy source attribution (shipments
     // rows showed source='shipp'/'walmart_shipping') so billing/queries match.
     source: directProviderKey ?? 'prepship_v2',
