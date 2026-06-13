@@ -33,7 +33,6 @@ import {
   Shield,
   BadgeCheck,
   RefreshCcw,
-  Save as SaveIcon,
   Zap,
   Send,
   ClipboardList,
@@ -715,6 +714,8 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // sections moved VERBATIM to strict presentational components (collapse,
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
+// PS-166 W4: leaf presentational rows of the side-panel Shipping section.
+import { OrdersPanelSaveSkuDefaultsLink } from './OrdersPanelShippingFields'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -8241,18 +8242,10 @@ export default function OrdersView({
               {/* Save weights/dims link — quiet text-link inside the
                   shipping form. Demoted from a green pill to a subtle
                   inline action so the visual weight goes to the
-                  Decision Card below. */}
-              {shipped ? null : (
-                <button
-                  type="button"
-                  onClick={() => void saveSkuDefaults()}
-                  className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-medium text-ink-3 hover:text-brand transition group"
-                  title="Apply current weights and dims as defaults for this SKU"
-                >
-                  <SaveIcon size={10} strokeWidth={2.25} className="text-ink-4 group-hover:text-brand transition" />
-                  Save weights & dims as SKU defaults
-                </button>
-              )}
+                  Decision Card below. PS-166 W4a: extracted to
+                  OrdersPanelSaveSkuDefaultsLink (byte-identical markup;
+                  the saveSkuDefaults handler stays in this shell). */}
+              <OrdersPanelSaveSkuDefaultsLink shipped={shipped} saveSkuDefaults={saveSkuDefaults} />
             </div>
           </div>
 
