@@ -18,8 +18,13 @@ const v2HooksPath = path.join(root, 'web/src/hooks/useOrders.ts')
 const ordersRoutePath = path.join(root, 'src/routes/orders.ts')
 const homePath = path.join(root, 'web/src/Home.tsx')
 const shellCssPath = path.join(root, 'web/src/app-shell.css')
+// PS-166 (Wave 2d): the batch-actions panel JSX moved VERBATIM to its own
+// strict <OrdersBatchPanel> component (OrdersView passes the state/handlers
+// as props) — batch-panel string pins read there; the handler DEFINITIONS
+// (handleBatchAction etc.) stay in OrdersView and are pinned against it.
+const batchPanelPath = path.join(root, 'web/src/components/Views/OrdersBatchPanel.tsx')
 
-const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss] = await Promise.all([
+const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, batchPanel] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(queueDrawerPath, 'utf8'),
   readFile(selectionToolbarPath, 'utf8'),
@@ -28,6 +33,7 @@ const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, or
   readFile(ordersRoutePath, 'utf8'),
   readFile(homePath, 'utf8'),
   readFile(shellCssPath, 'utf8'),
+  readFile(batchPanelPath, 'utf8'),
 ])
 
 const normalizedOrdersView = ordersView.replace(/\r\n/g, '\n')
@@ -47,11 +53,16 @@ const checks = [
       shellCss.includes('.orders-selection-toolbar'),
   },
   {
+    // PS-166 Wave 2d re-anchor: the batch-action onClicks + Mark-as-Shipped
+    // label live in the extracted <OrdersBatchPanel>; OrdersView still owns
+    // the handleBatchAction handler (pinned by ps-099/recalculate-strict) and
+    // passes it as a prop.
     name: 'awaiting shipment selection has explicit shipping actions',
     pass:
-      ordersView.includes("handleBatchAction('print')") &&
-      ordersView.includes("handleBatchAction('queue')") &&
-      ordersView.includes('Mark as Shipped'),
+      batchPanel.includes("handleBatchAction('print')") &&
+      batchPanel.includes("handleBatchAction('queue')") &&
+      batchPanel.includes('as Shipped') &&
+      ordersView.includes('handleBatchAction={handleBatchAction}'),
   },
   {
     name: 'shipped and cancelled selections are status-appropriate',
