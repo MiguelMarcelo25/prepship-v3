@@ -870,6 +870,61 @@ async function failOutboxRow(row: OutboxRow, err: unknown, retryable: boolean): 
   }
 }
 
+// Per user override unlock shipped data on 2026-06-13 (PS-192): one-shot
+// marketplace shipment confirmation for EXTERNALLY-fulfilled orders. The
+// manual "mark shipped externally" flow has no local shipment row, so it
+// cannot ride the shipment-anchored outbox lifecycle — but its marketplace
+// dispatch must still be THE SAME connector call the outbox worker makes
+// (resolveStoreConnector + loadStoreCredentials + connector.confirmShipment,
+// identical input shape, shipmentId 0 = the worker's own no-shipment
+// placeholder). This helper reuses the worker's internals so the two paths
+// cannot drift; processOutboxRow below is UNCHANGED. Read-only with respect
+// to orders/shipments — it sends the provider notification and reports.
+export async function confirmShipmentDirectNow(args: {
+  provider: string;
+  order: OrderForConfirmation;
+  trackingNumber: string;
+  carrierCode: string | null;
+  shipDate: string;
+  notifyCustomer: boolean;
+  notifyMarketplace: boolean;
+  payload?: Record<string, unknown>;
+}): Promise<{ ok: boolean; reason?: string }> {
+  const resolvedStoreConnector = resolveStoreConnector(args.provider, 'shipment.confirm');
+  if (!resolvedStoreConnector || resolvedStoreConnector.implementation.status !== 'live') {
+    const reason = !resolvedStoreConnector
+      ? `No shipment confirmation connector registered for ${args.provider}`
+      : `${args.provider} shipment confirmation connector is ${resolvedStoreConnector.implementation.status}`;
+    return { ok: false, reason };
+  }
+  const payload: Record<string, unknown> = {
+    ...(args.payload ?? {}),
+    orderId: args.order.id,
+    externalOrderId: args.order.externalOrderId,
+    clientId: args.order.clientId,
+    orderNumber: args.order.orderNumber,
+    trackingNumber: args.trackingNumber,
+    carrierCode: args.carrierCode,
+    shipDate: args.shipDate,
+  };
+  const credentials = await loadStoreCredentials(args.provider, payload, args.order.clientId ?? null);
+  const result = await resolvedStoreConnector.connector.confirmShipment({
+    orderId: args.order.id,
+    shipmentId: 0,
+    externalOrderId: args.order.externalOrderId,
+    clientId: args.order.clientId,
+    orderNumber: args.order.orderNumber,
+    trackingNumber: args.trackingNumber,
+    carrierCode: args.carrierCode,
+    shipDate: args.shipDate,
+    notifyCustomer: args.notifyCustomer,
+    notifyMarketplace: args.notifyMarketplace,
+    credentials,
+    payload,
+  });
+  return result.ok ? { ok: true } : { ok: false, reason: result.message ?? 'Confirmation failed' };
+}
+
 async function processOutboxRow(row: OutboxRow): Promise<boolean> {
   const resolvedStoreConnector = resolveStoreConnector(row.provider, 'shipment.confirm');
   if (!resolvedStoreConnector) {

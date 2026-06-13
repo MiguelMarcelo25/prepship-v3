@@ -1676,3 +1676,47 @@ direct-carrier tracking connectors, NewOrderModal defaultFromZip spec, PS-191–
   (both) + ps-210 guard + build:web + FULL shipping-roundtrip-certification (78/78) ALL PASS. No
   shipped/cancelled mutations, no labels/postage, no marketplace notifications — read/search/display
   only.
+
+### PS-192 — Shipped-external notifies the order's REAL marketplace (canonical resolver) — DONE 2026-06-13
+- **Per user override `unlock shipped data` typed by DJ on 2026-06-13** — applied NARROWLY to this
+  card's notify-routing fix only. **✅ ROOT CAUSE (PS-209 audit, ranked HIGH):**
+  `markOrderShippedExternally` hardcoded `ssMarkOrderShippedV1` for EVERY order — a direct
+  Walmart/eBay order either failed with "no upstream ShipStation ID — sync may be incomplete" or
+  risked acking the wrong system, and the actual marketplace was never notified when an operator
+  marked an order shipped externally with the notify toggles on. **✅ FIX AT THE CANONICAL OWNER:**
+  the notify provider now comes from `resolveShipmentConfirmationProvider` (services/fulfillment/
+  outbox.ts — the SAME single owner every label confirmation uses: normalized source_provider,
+  falling back to the externalOrderId prefix; recordOrderSourceIfNeeded stamps source_provider on
+  confirmed orders, so the store-derived identity flows through the one resolver — no second
+  storeId→marketplaceName derivation path was added, single source of truth preserved).
+  Routing: ShipStation-sourced orders (incl. bare numeric upstream ids — SS relays to the
+  marketplace) keep the EXACT v1 markasshipped call with the customer/sales-channel toggles; direct
+  marketplaces (walmart/ebay/…) dispatch through THEIR StoreConnector via NEW
+  `confirmShipmentDirectNow` (outbox.ts) — built from the outbox worker's own internals
+  (resolveStoreConnector('shipment.confirm') + loadStoreCredentials + connector.confirmShipment,
+  identical input shape, shipmentId 0 = the worker's no-shipment placeholder) so the two dispatch
+  paths cannot drift; a missing tracking number refuses with an operator-actionable reason;
+  no-marketplace orders report an honest "nothing to notify"; failures stay logged-never-thrown
+  (the local flip already happened; a retry would double-ack — unchanged semantics).
+  **✅ LOCKDOWN NOT WEAKENED (override report):** exact locked surfaces touched =
+  `src/services/fulfillment/mark-shipped-externally.ts` (notify block only) +
+  `src/services/fulfillment/outbox.ts` (one additive exported helper; `processOutboxRow` worker
+  byte-untouched). Why necessary: the marketplace identity decision lives on the shipped-order
+  fulfillment path — unreachable without the override. Protections proof (pinned by the guard): the
+  forward-only `WHERE order_status='awaiting_shipment'` flip guard intact; the unmark branch still
+  flips ONLY the flag; `deductInventoryForOrder` (INVENTORY_AUTO_DEDUCT kill switch) unchanged; the
+  route still calls `assertOrderEditable` BEFORE the service; citation comments at both change
+  sites. **Guard** `test:ps-192-shipped-external-provider`: resolver behavioral matrix
+  (walmart/ebay by source_provider AND by externalOrderId prefix; bare numeric → shipstation;
+  manual/none/empty → null) + source pins (resolver-over-order-facts, exactly ONE ssMarkOrderShippedV1
+  call site gated behind provider==='shipstation', direct dispatch + tracking-required + honest
+  no-op, override citation, forward-only flip, unmark flag-only, deduction call, route guard
+  ordering, helper reuses worker machinery + worker untouched + both use the same connector call
+  shape). **QA:** typecheck (both) + ps-192 + ps-064-confirmation-outbox +
+  shipment-confirmation-auto-recovery + store-connector-source + guard:shipping-certification +
+  FULL shipping-roundtrip-certification (78/78) ALL PASS. **No real labels, postage, live
+  marketplace notifications, or production shipped/cancelled mutations occurred** — offline guards
+  only; the dispatch helper executes only when an operator opts into notify on a live order.
+  **DJ live check:** mark a direct Walmart order shipped-external with "notify marketplace" on — the
+  Walmart ship-confirm should land (previously impossible); a ShipStation order behaves exactly as
+  before.
