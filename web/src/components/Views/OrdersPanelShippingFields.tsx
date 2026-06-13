@@ -116,3 +116,35 @@ export function OrdersPanelWeightRow({
     </div>
   )
 }
+
+// W4f — the Size (L / W / H) row. Threads the mutable dimsUserEditedRef AND
+// lockstepPanelDims (the shell closure that auto-matches a known package when
+// the entered dims line up). Both stay owned by the shell; the child calls
+// them through props exactly as the inline handlers did.
+export function OrdersPanelSizeRow({
+  panelForm,
+  setPanelForm,
+  shipped,
+  dimsUserEditedRef,
+  lockstepPanelDims,
+}: {
+  panelForm: PanelFormState
+  setPanelForm: Dispatch<SetStateAction<PanelFormState>>
+  shipped: boolean
+  dimsUserEditedRef: MutableRefObject<boolean>
+  lockstepPanelDims: (next: PanelFormState) => PanelFormState
+}) {
+  return (
+    <div className="ship-field-row">
+      <span className="ship-field-label">Size</span>
+      <div className="ship-field-value" style={{ gap: 3, flexWrap: 'wrap' }}>
+        <input type="number" className="ship-input ship-input-sm" value={panelForm.length} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, length: event.target.value })) }} />
+        <span className="ship-input-unit">L</span>
+        <input type="number" className="ship-input ship-input-sm" value={panelForm.width} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, width: event.target.value })) }} />
+        <span className="ship-input-unit">W</span>
+        <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, height: event.target.value })) }} />
+        <span className="ship-input-unit">H (in)</span>
+      </div>
+    </div>
+  )
+}

@@ -704,7 +704,7 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
-import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow } from './OrdersPanelShippingFields'
+import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow } from './OrdersPanelShippingFields'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -8014,17 +8014,14 @@ export default function OrdersView({
                 dimsUserEditedRef={dimsUserEditedRef}
               />
 
-              <div className="ship-field-row">
-                <span className="ship-field-label">Size</span>
-                <div className="ship-field-value" style={{ gap: 3, flexWrap: 'wrap' }}>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.length} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, length: event.target.value })) }} />
-                  <span className="ship-input-unit">L</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.width} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, width: event.target.value })) }} />
-                  <span className="ship-input-unit">W</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => lockstepPanelDims({ ...current, height: event.target.value })) }} />
-                  <span className="ship-input-unit">H (in)</span>
-                </div>
-              </div>
+              {/* PS-166 W4f: Size row extracted to OrdersPanelSizeRow (byte-identical; threads dimsUserEditedRef + lockstepPanelDims). */}
+              <OrdersPanelSizeRow
+                panelForm={panelForm}
+                setPanelForm={setPanelForm}
+                shipped={shipped}
+                dimsUserEditedRef={dimsUserEditedRef}
+                lockstepPanelDims={lockstepPanelDims}
+              />
 
               <div className="ship-field-row" style={{ borderBottom: 'none', paddingBottom: 2 }}>
                 <span className="ship-field-label">Package</span>
