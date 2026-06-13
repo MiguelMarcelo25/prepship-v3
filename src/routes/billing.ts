@@ -696,7 +696,7 @@ async function billingInvoiceData(
   const packagesById = new Map<number, InvoicePackageRecord>();
   if (billedPackageIds.length) {
     const pkgRows = await db.execute<{ id: number; name: string; length: number; width: number; height: number }>(sql`
-      select id, name, length, width, height from packages where id = any(${billedPackageIds})
+      select id, name, length, width, height from packages where id = any(${intArraySql(billedPackageIds)})
     `);
     for (const p of pkgRows) {
       packagesById.set(p.id, { name: p.name, length: Number(p.length), width: Number(p.width), height: Number(p.height) });
