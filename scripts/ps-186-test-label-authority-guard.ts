@@ -62,14 +62,25 @@ check('createBody/batchBody still DECLARE testLabel (semantic rejection, not sil
   (labelsRoute.match(/testLabel: z\.boolean\(\)\.optional\(\)/g) ?? []).length >= 2);
 
 // ── 4. FE money paths read backend facts only ─────────────────────────────────
+// PS-166 Wave 1c re-anchor: isBackendTestOrder's DEFINITION moved verbatim to
+// the strict orders-items module; OrdersView imports it. The call-shape pins
+// below still read OrdersView (the money-path call sites stayed).
 check('isBackendTestOrder reader exists (backend facts only)',
-  /function isBackendTestOrder\(/.test(ordersView));
+  /export function isBackendTestOrder\(/.test(
+    readFileSync('web/src/components/Views/orders-items.ts', 'utf8'),
+  ) && /\bisBackendTestOrder\b/.test(ordersView));
 check('no money-path local is derived from the heuristic (const orderIsTest/isTest = isTestOrder)',
   !/const (orderIsTest|isTest)\s*=\s*isTestOrder\(/.test(ordersView));
 check('no testLabel line calls the heuristic directly',
   !/testLabel:[^,\n]*\bisTestOrder\(/.test(ordersView));
-check('money-path locals come from isBackendTestOrder',
-  (ordersView.match(/=\s*isBackendTestOrder\(order\)/g) ?? []).length >= 4);
+// Stale-pin re-anchor (found during PS-166 W1c, pre-existing since PS-176
+// part 2): the old `>= 4` counted only `= isBackendTestOrder(order)` locals,
+// and PS-176's resume rewrite DELETED one such money path outright (strictly
+// safer — that path no longer exists to misclassify). The live money-path
+// consumption today is 3 locals + 1 payload field (`isTest:`); pin BOTH
+// shapes so a payload-field regression is caught too.
+check('money-path locals/payload fields come from isBackendTestOrder',
+  (ordersView.match(/[=:]\s*isBackendTestOrder\(order\)/g) ?? []).length >= 4);
 
 // ── 5. /orders stamps the backend-owned isTest fact ───────────────────────────
 check('orders list loads the test-client set', /testClientIds = new Set<number>\(\)/.test(ordersRoute));
