@@ -198,6 +198,7 @@ import {
   getPanelPackageId,
   getPanelWarehouseId,
   getProductDefaultPackageId,
+  type PanelFormState,
 } from './orders-panel-state'
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
 // PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
@@ -243,20 +244,8 @@ const AUTO_BEST_RATE_WATCHDOG_MS = 45_000
 const BATCH_RECALCULATE_TIMEOUT_MS = 45_000
 const BATCH_RECALCULATE_CONCURRENCY = 3
 
-interface PanelFormState {
-  locationId: string
-  shipAccountId: string
-  serviceCode: string
-  weightLb: string
-  weightOz: string
-  length: string
-  width: string
-  height: string
-  packageId: string
-  confirmation: string
-  insurance: string
-  insuranceValue: string
-}
+// PS-166 W4c: PanelFormState moved to ./orders-panel-state (imported above as a
+// type) so the extracted strict shipping-field components can share the shape.
 
 const CONFIRMATION_OPTIONS = [
   { value: 'none', label: 'None' },
@@ -715,7 +704,7 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
-import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine } from './OrdersPanelShippingFields'
+import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow } from './OrdersPanelShippingFields'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -7939,23 +7928,14 @@ export default function OrdersView({
             </div>
 
             <div className="panel-section-body">
-              <div className="ship-field-row">
-                <span className="ship-field-label">Ship From</span>
-                <div className="ship-field-value">
-                  <select className="ship-select" style={{ flex: 1 }} value={panelForm.locationId} onChange={(event) => setPanelForm((current) => ({ ...current, locationId: event.target.value }))} disabled={shipped}>
-                    {locations.length === 0 ? <option value="">Loading…</option> : null}
-                    {locations.map((location: LocationDto, i: number) => {
-                      const id = location.locationId ?? (location as any).id ?? i
-                      return (
-                        <option key={id} value={id}>
-                          {location.name}
-                        </option>
-                      )
-                    })}
-                  </select>
-                  <button className="ship-icon-btn" type="button" title="Manage locations" onClick={() => onNavigateView?.('locations')}>📍</button>
-                </div>
-              </div>
+              {/* PS-166 W4c: Ship From row extracted to OrdersPanelShipFromRow (byte-identical). */}
+              <OrdersPanelShipFromRow
+                panelForm={panelForm}
+                setPanelForm={setPanelForm}
+                shipped={shipped}
+                locations={locations}
+                onNavigateView={onNavigateView}
+              />
 
               <div className="ship-field-row">
                 <span className="ship-field-label">Ship Acct</span>

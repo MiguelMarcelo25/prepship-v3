@@ -9,7 +9,10 @@
 // explicit props interface makes the compiler refuse any closure dependency
 // that is not declared as a prop — the structural antidote to the @ts-nocheck
 // silent-missing-dep crash class.
+import type { Dispatch, SetStateAction } from 'react'
 import { Save as SaveIcon } from 'lucide-react'
+import type { LocationDto } from '../../types/api'
+import type { PanelFormState } from './orders-panel-state'
 
 // W4a — the "Save weights & dims as SKU defaults" quiet text-link. The
 // saveSkuDefaults HANDLER stays in OrdersView (it owns the recalcGroup logic
@@ -44,6 +47,44 @@ export function OrdersPanelPackageDimsLine({ dims }: { dims: ShipmentDims | null
   return (
     <div id="p-package-dims" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 600, color: 'var(--green,#16a34a)', borderBottom: '1px solid var(--border)', display: dims ? 'block' : 'none' }}>
       {dims ? `${dims.length} × ${dims.width} × ${dims.height} in` : ''}
+    </div>
+  )
+}
+
+// W4c — the "Ship From" location row (first row of the panel body). The
+// setPanelForm setter and locations list stay owned by the OrdersView shell;
+// the trivial location onChange and the 📍 manage-locations button (with its
+// optional onNavigateView?. guard) move verbatim.
+export function OrdersPanelShipFromRow({
+  panelForm,
+  setPanelForm,
+  shipped,
+  locations,
+  onNavigateView,
+}: {
+  panelForm: PanelFormState
+  setPanelForm: Dispatch<SetStateAction<PanelFormState>>
+  shipped: boolean
+  locations: LocationDto[]
+  onNavigateView?: (view: 'locations' | 'packages') => void
+}) {
+  return (
+    <div className="ship-field-row">
+      <span className="ship-field-label">Ship From</span>
+      <div className="ship-field-value">
+        <select className="ship-select" style={{ flex: 1 }} value={panelForm.locationId} onChange={(event) => setPanelForm((current) => ({ ...current, locationId: event.target.value }))} disabled={shipped}>
+          {locations.length === 0 ? <option value="">Loading…</option> : null}
+          {locations.map((location: LocationDto, i: number) => {
+            const id = location.locationId ?? (location as any).id ?? i
+            return (
+              <option key={id} value={id}>
+                {location.name}
+              </option>
+            )
+          })}
+        </select>
+        <button className="ship-icon-btn" type="button" title="Manage locations" onClick={() => onNavigateView?.('locations')}>📍</button>
+      </div>
     </div>
   )
 }

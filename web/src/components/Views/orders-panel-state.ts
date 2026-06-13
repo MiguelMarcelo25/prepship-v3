@@ -10,6 +10,25 @@ import {
   evaluateShippingServiceEligibility,
 } from '../../../../src/lib/shipping-service-eligibility'
 
+// PS-166 W4c: the side-panel shipping form shape. Shared by OrdersView (the
+// panel-state owner) and the extracted OrdersPanelShippingFields leaf
+// components so the strict children can type panelForm/setPanelForm without
+// depending on the OrdersView module.
+export interface PanelFormState {
+  locationId: string
+  shipAccountId: string
+  serviceCode: string
+  weightLb: string
+  weightOz: string
+  length: string
+  width: string
+  height: string
+  packageId: string
+  confirmation: string
+  insurance: string
+  insuranceValue: string
+}
+
 function toRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, unknown>
