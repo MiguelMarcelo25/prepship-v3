@@ -390,6 +390,20 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
   }
 }
 
+// PS-239: marketplace fee + profit ride a SEPARATE backend tuple (bestRateWorkflow
+// .marketplace), NOT money — so the fee shows even when there's no rate yet (the
+// money getter above returns null when markedAmount is null). Backend-computed +
+// canViewFinancials-redacted; the FE only renders.
+export function getBackendRowMarketplace(order: OrderSummaryDto) {
+  const marketplace = toRecord(toRecord(order.bestRateWorkflow)?.marketplace)
+  if (!marketplace) return null
+  return {
+    productSubtotal: toNumberValue(marketplace.productSubtotal),
+    marketplaceFee: toNumberValue(marketplace.marketplaceFee),
+    profit: toNumberValue(marketplace.profit),
+  }
+}
+
 // ── stateless row renderers ───────────────────────────────────────────────────
 
 export function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: number | null, insuranceAddOn?: number | null) {

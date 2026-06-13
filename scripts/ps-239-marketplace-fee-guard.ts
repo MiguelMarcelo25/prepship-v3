@@ -94,6 +94,25 @@ check('settings allows marketplace_fee_rules', settings.includes("'marketplace_f
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json exposes test:ps-239-marketplace-fee', /test:ps-239-marketplace-fee/.test(pkg));
 
+// 6. FE columns (thin consumer) — accessor reads the SEPARATE marketplace field
+//    (not gated on markedAmount), columns registered, rendered, cancelled-hidden.
+const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
+check('FE getBackendRowMarketplace reads bestRateWorkflow.marketplace',
+  /export function getBackendRowMarketplace/.test(rowDisplay) && /\?\.marketplace\)/.test(rowDisplay));
+const cols = readFileSync('web/src/components/Views/orders-table-columns.ts', 'utf8');
+check('marketplacefee + profit in TableColumnKey', /'marketplacefee'/.test(cols) && /'profit'/.test(cols));
+check('marketplacefee + profit in TABLE_COLUMNS',
+  cols.includes("key: 'marketplacefee'") && cols.includes("key: 'profit'"));
+check('marketplacefee + profit sortable via getBackendRowMarketplace',
+  /case 'marketplacefee':[\s\S]*?getBackendRowMarketplace/.test(cols) && /case 'profit':[\s\S]*?getBackendRowMarketplace/.test(cols));
+const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+check('OrdersView imports + renders the two cells',
+  ordersView.includes('getBackendRowMarketplace') && /case 'marketplacefee':/.test(ordersView) && /case 'profit':/.test(ordersView));
+check('profit cell renders negative in red, never clamped', /mp\.profit < 0 \? 'var\(--danger/.test(ordersView));
+const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
+check('columns hidden on Cancelled (Awaiting + Shipped only)',
+  /cancelled[\s\S]*?marketplacefee[\s\S]*?profit/.test(parity));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-239 marketplace-fee guard (${failures} failing)`);
   process.exit(1);

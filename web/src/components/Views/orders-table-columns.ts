@@ -16,6 +16,7 @@ import { getOrderWeightOz, getPrimaryItem, getShipTo, getTotalQuantity } from '.
 import { getShipAccountDisplay, isStrictShippedOrder } from './orders-display-state'
 import {
   getBackendRowMoney,
+  getBackendRowMarketplace,
   getBestRateBaseCost,
   getBestRateCarrierNickname,
   getBestRateServiceCode,
@@ -29,8 +30,8 @@ export type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 // now sortable across Awaiting / Shipped / Cancelled. This only adds DISPLAY
 // sorting (client-side, same path as the existing keys) — it does not modify,
 // edit, or weaken any shipped/cancelled order data or protection.
-export type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_shippingAccount' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal'
-export type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
+export type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'marketplacefee' | 'profit' | 'tracking' | 'labelcreated' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_shippingAccount' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal'
+export type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'marketplacefee' | 'profit' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
 
 export interface TableColumn {
   key: TableColumnKey
@@ -63,6 +64,9 @@ export const TABLE_COLUMNS: TableColumn[] = [
   { key: 'test_orderLocal', label: 'Order Local', width: 140, sort: 'test_orderLocal' },
   { key: 'labelcreated', label: 'Label Created', width: 115, sort: 'labelcreated' },
   { key: 'margin', label: 'Ship Margin', width: 90, sort: 'margin' },
+  // PS-239: backend-computed marketplace fee + profit (Awaiting + Shipped).
+  { key: 'marketplacefee', label: 'Marketplace Fee', width: 115, sort: 'marketplacefee' },
+  { key: 'profit', label: 'Profit', width: 90, sort: 'profit' },
   { key: 'tracking', label: 'Tracking #', width: 160, sort: 'tracking' },
   { key: 'age', label: 'Age', width: 50, sort: 'age' },
 ]
@@ -70,6 +74,8 @@ export const TABLE_COLUMNS: TableColumn[] = [
 export function getVisibleColumns(currentStatus: OrderStatus) {
   const hidden = new Set<TableColumnKey>()
   if (currentStatus !== 'awaiting_shipment') hidden.add('age')
+  // PS-239: marketplace fee + profit show on Awaiting + Shipped only, not Cancelled.
+  if (currentStatus === 'cancelled') { hidden.add('marketplacefee'); hidden.add('profit') }
 
   return TABLE_COLUMNS.filter((column) => !hidden.has(column.key)).map((column) => (
     column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
@@ -128,6 +134,14 @@ export function getSortValue(
       // without the tuple sort with the blanks (-1), same as no-rate rows.
       if (order.orderStatus !== 'awaiting_shipment') return -1
       return getBackendRowMoney(order)?.markupAmount ?? -1
+    }
+    // PS-239: marketplace fee (>=0, blanks → -1) + profit (can be negative, so
+    // blanks sort to the bottom via -Infinity rather than mingling with negatives).
+    case 'marketplacefee':
+      return getBackendRowMarketplace(order)?.marketplaceFee ?? -1
+    case 'profit': {
+      const profit = getBackendRowMarketplace(order)?.profit
+      return profit == null ? Number.NEGATIVE_INFINITY : profit
     }
     case 'tracking':
       return (toStringValue(order.label?.trackingNumber) ?? '').toLowerCase()

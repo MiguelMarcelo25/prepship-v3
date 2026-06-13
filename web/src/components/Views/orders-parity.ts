@@ -367,6 +367,11 @@ export function resolveColumnPrefs(
   }
 
   if (currentStatus !== 'awaiting_shipment') hiddenColumns.add('age')
+  // PS-239: marketplace fee + profit are Awaiting + Shipped only (never Cancelled).
+  if (currentStatus === 'cancelled') {
+    hiddenColumns.add('marketplacefee' as TableColumnKey)
+    hiddenColumns.add('profit' as TableColumnKey)
+  }
 
   return {
     orderedColumns,

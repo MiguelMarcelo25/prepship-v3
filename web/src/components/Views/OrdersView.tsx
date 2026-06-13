@@ -94,6 +94,7 @@ import {
   getSelectedRateShippingProviderId,
   getBackendInsuranceAddOn,
   getBackendRowMoney,
+  getBackendRowMarketplace,
   renderRateAmountWithMarkup,
   renderExtLabelBadge,
   renderShipmentSyncErrorBadge,
@@ -7517,6 +7518,25 @@ export default function OrdersView({
         return renderBestRatePrice(order)
       case 'margin':
         return renderMargin(order)
+      case 'marketplacefee': {
+        // PS-239: backend-computed fee (canViewFinancials-redacted). Shows even
+        // pre-rating; — when no rule matches.
+        const mp = getBackendRowMarketplace(order)
+        return mp?.marketplaceFee != null
+          ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(mp.marketplaceFee)}</span>
+          : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
+      }
+      case 'profit': {
+        // PS-239: profit = subtotal − fee − best-rate-incl-markup. — until a rate
+        // exists; negative profit rendered in red, never clamped.
+        const mp = getBackendRowMarketplace(order)
+        if (mp?.profit == null) return <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
+        return (
+          <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', color: mp.profit < 0 ? 'var(--danger, #dc2626)' : 'var(--text1)' }}>
+            {formatMoney(mp.profit)}
+          </span>
+        )
+      }
       case 'tracking':
         {
           const trackingNumber = toStringValue(order.label?.trackingNumber)
