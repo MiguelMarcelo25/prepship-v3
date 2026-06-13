@@ -69,6 +69,12 @@ const MUTED = 'var(--text3)';
 // --- (b) strip consumes /orders/daily-stats and renders truthful CA labels ---
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166 (Wave 3, JSX-safe): the daily-strip MARKUP moved VERBATIM to
+// OrdersDailyStrip.tsx; OrdersView keeps all daily-stats state, the
+// fetchDailyStats load, the buildDailyStripProgress derivation, the
+// dailyStatsStatus model, the visibilitychange retry, and the CA label
+// normalizer. Markup pins read the component; logic pins read OrdersView.
+const dailyStrip = readFileSync('web/src/components/Views/OrdersDailyStrip.tsx', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const dailyStatsClientBlock = apiClient.slice(
   apiClient.indexOf('fetchDailyStats('),
@@ -101,9 +107,9 @@ assert.doesNotMatch(
   'OrdersView must not hide the entire daily strip when dailyStats is null',
 );
 assert.match(
-  ordersView,
+  dailyStrip,
   /Daily stats unavailable/,
-  'OrdersView must render a retryable daily-stats failure state instead of disappearing',
+  'daily strip must render a retryable daily-stats failure state instead of disappearing',
 );
 assert.match(
   ordersView,
@@ -111,9 +117,14 @@ assert.match(
   'OrdersView must retry daily stats immediately when a hidden tab becomes visible',
 );
 assert.match(
-  ordersView,
+  dailyStrip,
   /\{dailyStripProgress\?\.shipped\} of \{dailyStatsForStrip\.totalOrders\} shipped/,
-  'OrdersView must render the "{shipped} of {totalOrders} shipped" summary',
+  'daily strip must render the "{shipped} of {totalOrders} shipped" summary',
+);
+assert.match(
+  ordersView,
+  /<OrdersDailyStrip/,
+  'OrdersView must render the extracted daily strip',
 );
 assert.match(
   apiClient,
@@ -136,9 +147,9 @@ assert.match(
   'normalizer must target the PT/PST/PDT suffixes the server emits',
 );
 assert.match(
-  ordersView,
+  dailyStrip,
   /shifts at 6 PM CA/,
-  'OrdersView must label the fulfillment rollover as 6 PM CA',
+  'daily strip must label the fulfillment rollover as 6 PM CA',
 );
 
 // Behavioral proof: replicate the exact transform the component applies and
