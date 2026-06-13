@@ -706,6 +706,10 @@ import {
 // yieldToBrowser, which paces it); useDebouncedValue → ../../hooks (generic).
 import { buildEmptyPanel } from './orders-empty-panel'
 import { OrdersSearchBar } from './OrdersSearchBar'
+// PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
+// diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
+// (still here) calls renderOrderCell with an explicit context object.
+import { renderDiagnosticCell, renderOrderCell } from './OrdersTableCells'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 
 export default function OrdersView({
@@ -7187,144 +7191,6 @@ export default function OrdersView({
     )
   }
 
-  const renderOrderCell = (order: OrderSummaryDto) => {
-    const testOrder = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
-    const isShipping = transitionalShippedIds.has(order.orderId)
-    // PS-210: global search mixes lifecycle statuses into one table. A row
-    // whose REAL status differs from the active tab gets an explicit status
-    // pill so a Shipped/Cancelled match on the Awaiting tab can never be
-    // mistaken for an awaiting order. Display-only — every mutation stays
-    // gated by the row's actual orderStatus at the backend
-    // (assertOrderEditable rejects shipped/cancelled writes).
-    const offTabStatus =
-      isGlobalSearchActive && order.orderStatus && order.orderStatus !== currentStatus
-        ? order.orderStatus
-        : null
-    const offTabStatusStyle =
-      offTabStatus === 'shipped'
-        ? { color: '#fff', background: '#059669' }
-        : offTabStatus === 'cancelled'
-          ? { color: '#fff', background: '#6b7280' }
-          : { color: '#fff', background: '#2563eb' }
-    return (
-      <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
-        {offTabStatus && (
-          <span
-            title={`This order's actual status is ${offTabStatus.replace(/_/g, ' ')} — it appears here because search looks across all statuses`}
-            data-testid="off-tab-status-pill"
-            style={{
-              display: 'inline-block',
-              padding: '1px 6px',
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              borderRadius: 3,
-              flexShrink: 0,
-              textTransform: 'uppercase',
-              ...offTabStatusStyle,
-            }}
-          >
-            {offTabStatus === 'awaiting_shipment' ? 'AWAITING' : offTabStatus.replace(/_/g, ' ')}
-          </span>
-        )}
-        {testOrder && (
-          <span
-            title="Sandbox / test order — no real postage, billing, or inventory impact"
-            style={{
-              display: 'inline-block',
-              padding: '1px 6px',
-              fontSize: 9,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              color: '#fff',
-              background: '#d97706',
-              borderRadius: 3,
-              flexShrink: 0,
-            }}
-          >
-            TEST
-          </span>
-        )}
-        {/* Shipping-in-progress pill — only renders during the 30 s
-          fade transition (Create + Print Label flow). Animated truck
-          icon + pulsing background give the operator a clear,
-          persistent signal that the order is in flight to Shipped.
-          See .ps-shipping-pill in app-shell.css for the styles. */}
-        {isShipping && (
-          <span className="ps-shipping-pill" title="Order is being shipped — will move to Shipped in 30 seconds">
-            <Truck size={9} strokeWidth={2.5} />
-            Shipping…
-          </span>
-        )}
-        <span
-          className="od-order-link"
-          title="Open order detail"
-          style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
-          onClick={(event) => {
-            event.stopPropagation()
-            openDetailDrawer(order.orderId ?? null)
-          }}
-        >
-          {order.orderNumber ?? `#${order.orderId}`}
-        </span>
-        <span
-          title="Copy"
-          style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6, transition: 'opacity .1s', flexShrink: 0 }}
-          onClick={(event) => {
-            event.stopPropagation()
-            copyText(order.orderNumber ?? String(order.orderId))
-          }}
-          onMouseEnter={(event) => {
-            event.currentTarget.style.opacity = '1'
-          }}
-          onMouseLeave={(event) => {
-            event.currentTarget.style.opacity = '0.6'
-          }}
-        >
-          ⎘
-        </span>
-      </div>
-    )
-  }
-
-  const renderDiagnosticCell = (
-    value: unknown,
-    options: {
-      fontSize?: number
-      maxWidth?: number
-      title?: string
-      align?: 'left' | 'center'
-      monospace?: boolean
-      muted?: boolean
-      surface?: boolean
-    } = {},
-  ) => {
-    const display = value == null || value === '' ? '—' : String(value)
-    const surface = options.surface ?? !options.muted
-
-    return (
-      <span
-        style={{
-          display: 'block',
-          fontSize: options.fontSize ?? 14,
-          textAlign: options.align ?? 'left',
-          fontFamily: options.monospace ? 'monospace' : undefined,
-          color: options.muted ? 'var(--text3)' : 'var(--text2)',
-          background: surface ? 'var(--surface2)' : undefined,
-          padding: surface ? '4px 6px' : undefined,
-          borderRadius: surface ? 3 : undefined,
-          maxWidth: options.maxWidth,
-          overflow: options.maxWidth ? 'hidden' : undefined,
-          textOverflow: options.maxWidth ? 'ellipsis' : undefined,
-          whiteSpace: options.maxWidth ? 'nowrap' : undefined,
-        }}
-        title={options.title ?? display}
-      >
-        {display}
-      </span>
-    )
-  }
-
   const renderTableCell = (order: OrderSummaryDto, column: TableColumn) => {
     const detail = orderDetailsById.get(order.orderId) ?? null
     const items = getActiveItems(order, detail)
@@ -7431,7 +7297,13 @@ export default function OrdersView({
           </span>
         )
       case 'orderNum':
-        return renderOrderCell(order)
+        return renderOrderCell(order, {
+          orderDetailsById,
+          transitionalShippedIds,
+          isGlobalSearchActive,
+          currentStatus,
+          openDetailDrawer,
+        })
       case 'customer': {
         // Tiny "Assigned to" badge under the customer name. Only renders when
         // the order has an assignee — keeps the cell quiet for unassigned

@@ -137,11 +137,17 @@ assert.ok(!searchBar.includes('<span>Searching all orders</span>') &&
 assert.ok(/OrdersSearchBar\s+searchQuery=\{searchQuery\}/.test(ordersView.replace(/\n\s*/g, ' ')) ||
   ordersView.includes('<OrdersSearchBar'),
   'OrdersView must render the extracted search bar');
-// Off-tab rows are labeled with their REAL status, gated on the row (not the tab).
-assert.ok(ordersView.includes('data-testid="off-tab-status-pill"'),
+// Off-tab rows are labeled with their REAL status, gated on the row (not the
+// tab). PS-166 Wave 2c1 re-anchor: the Order # cell (and its off-tab pill)
+// moved VERBATIM to OrdersTableCells.tsx; OrdersView threads currentStatus +
+// isGlobalSearchActive into it via the renderOrderCell context.
+const tableCells = readFileSync('web/src/components/Views/OrdersTableCells.tsx', 'utf8');
+assert.ok(tableCells.includes('data-testid="off-tab-status-pill"'),
   'mixed-status rows must render the real-status pill');
-assert.ok(ordersView.includes('isGlobalSearchActive && order.orderStatus && order.orderStatus !== currentStatus'),
+assert.ok(tableCells.includes('isGlobalSearchActive && order.orderStatus && order.orderStatus !== currentStatus'),
   'the pill must key on the ROW status differing from the active tab during search');
+assert.ok(/renderOrderCell\(order, \{[\s\S]{0,200}isGlobalSearchActive,[\s\S]{0,80}currentStatus,/.test(ordersView),
+  'OrdersView must thread isGlobalSearchActive + currentStatus into the Order # cell');
 
 // ── (5) Browser/workflow proof exists and follows the mocked-only harness ───
 const spec = readFileSync('web/e2e/orders-global-search.spec.js', 'utf8');
