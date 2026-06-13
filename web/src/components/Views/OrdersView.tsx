@@ -704,7 +704,7 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
-import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow } from './OrdersPanelShippingFields'
+import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow } from './OrdersPanelShippingFields'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -8006,15 +8006,13 @@ export default function OrdersView({
                 </div>
               </div>
 
-              <div className="ship-field-row">
-                <span className="ship-field-label">Weight</span>
-                <div className="ship-field-value">
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.weightLb} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, weightLb: event.target.value })) }} />
-                  <span className="ship-input-unit">lb</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.weightOz} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, weightOz: event.target.value })) }} />
-                  <span className="ship-input-unit">oz</span>
-                </div>
-              </div>
+              {/* PS-166 W4e: Weight row extracted to OrdersPanelWeightRow (byte-identical; threads the mutable dimsUserEditedRef). */}
+              <OrdersPanelWeightRow
+                panelForm={panelForm}
+                setPanelForm={setPanelForm}
+                shipped={shipped}
+                dimsUserEditedRef={dimsUserEditedRef}
+              />
 
               <div className="ship-field-row">
                 <span className="ship-field-label">Size</span>

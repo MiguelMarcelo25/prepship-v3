@@ -9,7 +9,7 @@
 // explicit props interface makes the compiler refuse any closure dependency
 // that is not declared as a prop — the structural antidote to the @ts-nocheck
 // silent-missing-dep crash class.
-import type { Dispatch, SetStateAction } from 'react'
+import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { Save as SaveIcon } from 'lucide-react'
 import type { LocationDto } from '../../types/api'
 import type { PanelFormState } from './orders-panel-state'
@@ -84,6 +84,34 @@ export function OrdersPanelShipFromRow({
           })}
         </select>
         <button className="ship-icon-btn" type="button" title="Manage locations" onClick={() => onNavigateView?.('locations')}>📍</button>
+      </div>
+    </div>
+  )
+}
+
+// W4e — the Weight (lb / oz) row. First slice to thread the MUTABLE
+// dimsUserEditedRef: the child receives the SAME ref object and sets
+// .current = true on edit, exactly as inline, so the shell's auto-rate-refresh
+// decision is preserved. setPanelForm stays the shell setter.
+export function OrdersPanelWeightRow({
+  panelForm,
+  setPanelForm,
+  shipped,
+  dimsUserEditedRef,
+}: {
+  panelForm: PanelFormState
+  setPanelForm: Dispatch<SetStateAction<PanelFormState>>
+  shipped: boolean
+  dimsUserEditedRef: MutableRefObject<boolean>
+}) {
+  return (
+    <div className="ship-field-row">
+      <span className="ship-field-label">Weight</span>
+      <div className="ship-field-value">
+        <input type="number" className="ship-input ship-input-sm" value={panelForm.weightLb} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, weightLb: event.target.value })) }} />
+        <span className="ship-input-unit">lb</span>
+        <input type="number" className="ship-input ship-input-sm" value={panelForm.weightOz} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, weightOz: event.target.value })) }} />
+        <span className="ship-input-unit">oz</span>
       </div>
     </div>
   )
