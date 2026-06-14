@@ -285,6 +285,7 @@
     "ps-223:rules:dry-run": "tsx scripts/ps-223-packaging-rules-dry-run.ts",
     "test:ps-224-negative-stock": "tsx scripts/ps-224-negative-stock-guard.ts",
     "ps-224:negative-stock:reconcile": "tsx scripts/ps-224-negative-stock-reconcile.ts",
+    "test:ps-224a-negative-stock-baseline": "tsx scripts/ps-224a-negative-stock-baseline-guard.ts",
     "ps-221:auto-provision-dry-run": "tsx scripts/ps-221-auto-provision-dry-run.ts",
     "test:ps-241-rate-browser-fanout": "tsx scripts/ps-241-rate-browser-fanout-guard.ts",
     "test:print-queue-ownership": "node scripts/print-queue-ownership-guard.mjs",
