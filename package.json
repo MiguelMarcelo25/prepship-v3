@@ -280,6 +280,7 @@
     "test:ps-225-superseded-packaging-removed": "tsx scripts/ps-225-superseded-packaging-removed-guard.ts",
     "test:drizzle-any-array-binding": "tsx scripts/drizzle-any-array-binding-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
+    "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
     "test:ps-223-packaging-rule-engine": "tsx scripts/ps-223-packaging-rule-engine-guard.ts",
     "ps-223:rules:dry-run": "tsx scripts/ps-223-packaging-rules-dry-run.ts",

@@ -27,10 +27,10 @@
  *   "clientPrices":     [{ "clientName":"HUGRAB","packageName":"12x10x3","price":1.25,"isCustom":true }]
  * }
  *
- * NOTE: a $0 "factory set box (no charge)" can be added here, but the current billing
- * policy SUPPRESSES any line whose effective price <= 0 (billing-box-policy.ts). Until
- * that policy is changed (deferred PS-222b), a $0 box bills as NO line, not an explicit
- * $0.00 line. The audit/plan flags this so it isn't a silent surprise.
+ * NOTE (PS-222b shipped): a $0 box with source:'factory' now SHOWS an explicit $0.00
+ * billing line (billing-box-policy NO_CHARGE_BOX_SOURCE). A $0 box with any OTHER
+ * source is still SUPPRESSED (no line) by policy — so flag your factory boxes with
+ * source:'factory'. The audit/plan flags non-factory $0 boxes so it isn't a surprise.
  *
  * READ-ONLY unless --apply. Touches only the packages catalog (shared, no client scope)
  * and client_package_prices. Does NOT touch orders/shipments/shipped-cancelled rows.
@@ -54,6 +54,9 @@ const InputSchema = z.object({
     tareWeightOz: z.number().nonnegative().default(0),
     packageCode: z.string().nullish(),
     unitCost: z.number().nonnegative().nullish(),
+    // PS-222b: set source:'factory' to make a $0 "no charge" box that SHOWS an
+    // explicit $0.00 billing line (billing-box-policy NO_CHARGE_BOX_SOURCE).
+    source: z.string().default('catalog'),
   })).default([]),
   nameFixes: z.array(z.object({ id: z.number().int().positive(), name: z.string().min(1) })).default([]),
   packageUnitCosts: z.array(z.object({
@@ -146,8 +149,13 @@ async function planAndMaybeApply(path: string) {
 
   console.log(`Catalog additions: ${parsed.catalogAdditions.length}`);
   for (const a of parsed.catalogAdditions) {
-    const flag = (a.unitCost ?? 1) <= 0 ? '  [⚠ $0/no-charge — billing suppresses the line until PS-222b]' : '';
-    console.log(`  + ${a.name} (${a.type}) ${a.length}x${a.width}x${a.height}${flag}`);
+    const isFactory = a.source === 'factory';
+    const flag = (a.unitCost ?? 1) <= 0
+      ? (isFactory
+          ? '  [no-charge factory box — shows explicit $0.00 line (PS-222b)]'
+          : '  [⚠ $0 but source!=factory — billing still suppresses the line]')
+      : '';
+    console.log(`  + ${a.name} (${a.type}, source=${a.source}) ${a.length}x${a.width}x${a.height}${flag}`);
   }
   console.log(`Name fixes: ${parsed.nameFixes.length}`);
   for (const n of parsed.nameFixes) console.log(`  ~ #${n.id} → "${n.name}"`);
@@ -167,7 +175,7 @@ async function planAndMaybeApply(path: string) {
     for (const a of parsed.catalogAdditions) {
       await tx`insert into packages (name, type, length, width, height, tare_weight_oz, source, package_code, unit_cost)
                values (${a.name}, ${a.type}, ${a.length}, ${a.width}, ${a.height}, ${a.tareWeightOz},
-                       'catalog', ${a.packageCode ?? null}, ${a.unitCost ?? null})`;
+                       ${a.source}, ${a.packageCode ?? null}, ${a.unitCost ?? null})`;
     }
     for (const n of parsed.nameFixes) {
       await tx`update packages set name = ${n.name}, updated_at = now() where id = ${n.id}`;

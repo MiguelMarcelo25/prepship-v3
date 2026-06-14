@@ -51,6 +51,10 @@ export type BoxPackage = {
   length: number;
   width: number;
   height: number;
+  // PS-222b: packages.source. When it equals NO_CHARGE_BOX_SOURCE the box is
+  // "no charge" (client provides it) and shows an explicit $0.00 line. Optional so
+  // existing BoxPackage producers that don't carry it still type-check.
+  source?: string | null;
 };
 
 export type BoxLookups = {
@@ -272,6 +276,12 @@ export type PackageCostDecision =
   | { kind: 'review'; description: string }
   | { kind: 'none' };
 
+// PS-222b: a package whose `source` equals this marker is a "no charge" box (the
+// client supplies it). It shows an EXPLICIT $0.00 package_cost line instead of
+// being suppressed, so the invoice reflects the box was used at no cost. The
+// PS-222 seeder creates such boxes with source = 'factory'.
+export const NO_CHARGE_BOX_SOURCE = 'factory';
+
 export function decidePackageCostLine(args: {
   resolution: ShippedBoxResolution;
   clientHasBoxPricing: boolean;
@@ -290,6 +300,19 @@ export function decidePackageCostLine(args: {
       : args.configuredPrice != null && args.configuredPrice > 0
         ? args.configuredPrice * (1 + args.markupPct / 100)
         : null;
+  // PS-222b: a flagged no-charge/factory box shows an EXPLICIT $0.00 line when no
+  // positive price applies — instead of the silent suppression below. A real
+  // positive price (or override) still bills normally, so this never lowers a
+  // charge; it only makes a genuinely free box visible. Scoped to the marker, so
+  // ordinary $0/unpriced boxes are unaffected (no change to existing invoices).
+  if ((effective == null || effective <= 0) && r.pkg?.source === NO_CHARGE_BOX_SOURCE) {
+    return {
+      kind: 'line',
+      amount: 0,
+      packageId: r.packageId,
+      pkgName: r.pkg?.name ?? (r.packageId != null ? `Box #${r.packageId}` : 'no-charge box'),
+    };
+  }
   if (effective == null || effective <= 0) return { kind: 'none' };
   return {
     kind: 'line',

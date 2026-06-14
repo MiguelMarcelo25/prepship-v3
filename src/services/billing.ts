@@ -750,6 +750,9 @@ export async function generateLineItems(input: GenerateInput) {
       length: packages.length,
       width: packages.width,
       height: packages.height,
+      // PS-222b: source carries the no-charge/factory marker into BoxPackage so
+      // decidePackageCostLine can emit an explicit $0.00 line for those boxes.
+      source: packages.source,
     })
     .from(packages);
 
