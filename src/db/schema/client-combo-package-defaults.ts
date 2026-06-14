@@ -40,6 +40,11 @@ export const clientComboPackageDefaults = pgTable(
     width: real(),
     height: real(),
     weightOz: real(),
+    // PS-223 — provenance. An operator-set default ('operator') is never overwritten
+    // by the packaging rule engine (which writes 'rule_engine'); 'import' marks one
+    // materialized from a store import. Defaults to 'operator' so every PRE-EXISTING
+    // row is treated as operator-owned — the safe, conservative choice.
+    source: text().notNull().default('operator'),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },

@@ -281,6 +281,8 @@
     "test:drizzle-any-array-binding": "tsx scripts/drizzle-any-array-binding-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
+    "test:ps-223-packaging-rule-engine": "tsx scripts/ps-223-packaging-rule-engine-guard.ts",
+    "ps-223:rules:dry-run": "tsx scripts/ps-223-packaging-rules-dry-run.ts",
     "ps-221:auto-provision-dry-run": "tsx scripts/ps-221-auto-provision-dry-run.ts",
     "test:ps-241-rate-browser-fanout": "tsx scripts/ps-241-rate-browser-fanout-guard.ts",
     "test:print-queue-ownership": "node scripts/print-queue-ownership-guard.mjs",

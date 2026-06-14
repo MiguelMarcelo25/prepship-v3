@@ -24,6 +24,9 @@ import { join } from 'node:path';
 // NOT drizzle's db.execute — raw `any(${array})` is valid there.
 const PORSAGER_SQL_ALLOWLIST = new Set<string>([
   'src/services/fulfillment/schema-readiness.ts',
+  // PS-223 — uses the porsager `sql` tag (import { sql } from '../db/client'),
+  // which binds JS arrays as Postgres arrays natively; any(${orderIds}) is valid.
+  'src/services/packaging-rules.ts',
 ]);
 
 function walk(dir: string, out: string[] = []): string[] {
