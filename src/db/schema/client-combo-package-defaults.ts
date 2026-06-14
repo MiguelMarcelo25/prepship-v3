@@ -40,11 +40,12 @@ export const clientComboPackageDefaults = pgTable(
     width: real(),
     height: real(),
     weightOz: real(),
-    // PS-223 — provenance. An operator-set default ('operator') is never overwritten
-    // by the packaging rule engine (which writes 'rule_engine'); 'import' marks one
-    // materialized from a store import. Defaults to 'operator' so every PRE-EXISTING
-    // row is treated as operator-owned — the safe, conservative choice.
-    source: text().notNull().default('operator'),
+    // PS-223 NOTE: the provenance column `source` (operator|rule_engine|import)
+    // lives in drizzle/0047 + ensurePackagingRulesSchema(), but is INTENTIONALLY
+    // NOT modeled here. These reads use bare `db.select()`, which would emit the
+    // column in the generated SQL and 500 in prod before the out-of-band migration
+    // runs. The rule engine reads `source` via the porsager raw-SQL tag (explicit
+    // columns) instead. Add it here only alongside a drizzle WRITE of source.
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
