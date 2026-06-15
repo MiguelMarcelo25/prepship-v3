@@ -162,6 +162,14 @@ const RATE_MONEY_FIELD_KEYS = [
   'amount',
 ] as const;
 
+// PS-277 (slice 1): browse-to-SOT writeback canary. OFF by default — when 'on', a PLAIN browse
+// (modal open) that returns a fresh LIVE complete best for an awaiting order reconciles the
+// persisted SOT, so opening the Rate Browser corrects the BEST RATE column instead of leaving a
+// stale number beside the live one. Flip after a canary (live write on a high-frequency endpoint).
+function browseSotWritebackEnabled(): boolean {
+  return process.env.BROWSE_SOT_WRITEBACK === 'on';
+}
+
 function canViewRateFinancials(c: Context): boolean {
   return hasAppPermission(
     {
@@ -630,6 +638,42 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       requestKey: combinedRequestKey,
       ...persist,
     };
+  } else if (
+    // PS-277 (slice 1): a PLAIN browse reconciles the SOT (env-gated, OFF by default). Only when a
+    // fresh LIVE complete best exists for an order — never on a cached-only probe, never when the FE
+    // already drove the strict-recalculate persist above. Reuses the awaiting-only persist owner
+    // (refuses shipped/cancelled), so opening the browser corrects the column without a manual recalc.
+    browseSotWritebackEnabled() &&
+    typeof body.orderId === 'number' && body.orderId > 0 &&
+    bestRateOut != null && bestRateComplete && !result.cached
+  ) {
+    const reconcileMatch = cheapest ? /^se-(\d+)$/i.exec(String(cheapest.carrier_id ?? '')) : null;
+    const reconcileProviderId = reconcileMatch ? Number.parseInt(reconcileMatch[1]!, 10) : null;
+    const reconcileDecision = planStrictRecalculateDecision({
+      liveBestAmount: cheapest ? rateTotal(cheapest) : null,
+      providerAccountId: reconcileProviderId != null && Number.isFinite(reconcileProviderId) ? reconcileProviderId : null,
+      serviceCode: cheapest ? (String(cheapest.service_code ?? '').trim() || null) : null,
+      carrierStatuses: combinedCarrierStatuses,
+    });
+    if (reconcileDecision.action === 'apply') {
+      try {
+        await persistStrictRecalculateOutcome({
+          orderId: body.orderId,
+          decision: reconcileDecision,
+          bestRate: (bestRateOut as Record<string, unknown> | null) ?? null,
+          dimsL: body.dimsL ?? null,
+          dimsW: body.dimsW ?? null,
+          dimsH: body.dimsH ?? null,
+          weightOz: body.weightOz ?? null,
+          rateCount: combinedRates.length,
+          fetchedAt: result.fetchedAt,
+          requestFingerprint: combinedRequestKey,
+        });
+      } catch (err) {
+        // Best-effort: a browse never fails on a reconcile-write error (the column just stays as-is).
+        console.warn('[rates/browse] SOT reconcile write failed (best-effort):', err instanceof Error ? err.message : err);
+      }
+    }
   }
   const payload = {
     ...result,
