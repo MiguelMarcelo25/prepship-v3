@@ -1591,7 +1591,18 @@ export default function RateBrowserModal({
       setPendingPids(new Set());
     }
 
-    if (onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
+    // PS-260: never resolve/persist a "best rate" from a cached-only PROBE while a live
+    // fan-out is still pending. The open effect runs the probe first and then a forceLive
+    // pass whenever probe.uncoveredPids.length > 0 (RateBrowserModal open effect); emitting
+    // here would push a premature/partial best through onBestRateResolved into the order
+    // panel (OrdersView.persistAppliedRateForOrder) and auto-select it BEFORE every scoped
+    // carrier finished — the UI would assert a final/"Recommended" rate while still loading.
+    // The cached seed stays VISIBLE (PS-196 cache-first paint via setRatesByPid above); only
+    // the canonical best-rate emission waits for the fan-out. A cached probe with FULL
+    // coverage (uncoveredPids.length === 0 → no live follow-up) still emits, since the cached
+    // set IS the final answer; the forceLive pass (cachedOnly !== true) always emits.
+    const awaitingLiveFanout = options.cachedOnly === true && uncoveredPids.length > 0;
+    if (!awaitingLiveFanout && onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
       // Choose the best only after every carrier account has finished.
       // If ShipStation returns no live rates, fall back to the table's
       // already-saved best rate so the modal stays consistent with the row.
