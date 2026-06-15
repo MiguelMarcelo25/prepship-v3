@@ -106,9 +106,7 @@ export async function deductPackageForShipment(input: {
 
     if (!pkg) return { deducted: false, reason: 'package-not-found' as const };
 
-    // PS-224a (Per user override unlock shipped data on 2026-06-13): floor box
-    // stock at 0 — a package consumed before it was received must not go negative.
-    const balanceAfter = Math.max(0, pkg.stockQty - 1);
+    const balanceAfter = pkg.stockQty - 1;
     await tx
       .update(packages)
       .set({ stockQty: balanceAfter, updatedAt: new Date() })
@@ -232,13 +230,7 @@ export async function deductInventoryForOrder(
         continue;
       }
 
-      // PS-224a (Per user override unlock shipped data on 2026-06-13): never write a
-      // NEGATIVE cached stock_qty. A SKU auto-deducted before it was ever received
-      // used to go to -N (row auto-created at 0, then 0 - qty). Floor the CACHE at 0;
-      // the ledger 'ship' row below still records the true -qty, so the canonical
-      // effective-stock (computeEffectiveStockForIds, ledger-based) keeps the real
-      // on-hand. Forward-only — no historical rows are touched.
-      const balanceAfter = Math.max(0, row.stockQty - line.qty);
+      const balanceAfter = row.stockQty - line.qty;
       const patch: Record<string, unknown> = {
         stockQty: balanceAfter,
         updatedAt: new Date(),
