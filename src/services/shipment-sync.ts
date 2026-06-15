@@ -11,6 +11,11 @@ import {
 import { deductInventoryForOrder } from './fulfillment-deductions';
 import { getSettingNumber, setSetting } from './settings';
 import { formatShipStationV1DateParam, parseShipStationV1Date } from '../lib/shipstation/v1-date';
+import {
+  createSyncRunBudget,
+  syncRunBudgetExhausted,
+  syncRunBudgetTimeExhausted,
+} from '../lib/sync-run-budget';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
@@ -391,6 +396,10 @@ export async function syncShipments(
   // v2-parity: pageSize=500 matches v2's v1Pages helper default.
   const pageSize = opts.pageSize ?? 500;
   const runStartMs = Date.now();
+  // PS-265: bound the per-run work so the handler finishes UNDER its ~10-min deadline and
+  // advances its watermark incrementally (instead of being killed mid-walk and re-pulling the
+  // same backlog forever). Page cap is per account; the time budget is run-wide (all accounts).
+  const budget = createSyncRunBudget();
 
   let totalFetched = 0;
   let totalInserted = 0;
@@ -417,6 +426,9 @@ export async function syncShipments(
       const sinceParam = formatShipStationV1DateParam(lastSync);
 
       let page = 1;
+      let pagesThisAccount = 0;
+      let cursorCreateMs: number | null = null;
+      let drained = false;
       while (true) {
         const q = new URLSearchParams({
           createDateStart: sinceParam,
@@ -442,8 +454,23 @@ export async function syncShipments(
         totalUpdated += batch.updated;
         totalMatched += batch.matched;
         shippedOrderIds.push(...batch.shippedOrderIds);
+        pagesThisAccount += 1;
+        // PS-265: track the newest CreateDate processed (results are CreateDate ASC) as a
+        // resume cursor for a budget-bounded run.
+        for (const s of res.shipments) {
+          const ms = Date.parse(s.createDate ?? '');
+          if (Number.isFinite(ms) && (cursorCreateMs === null || ms > cursorCreateMs)) cursorCreateMs = ms;
+        }
 
-        if (!res.shipments.length || page >= res.pages) break;
+        if (!res.shipments.length || page >= res.pages) {
+          drained = true;
+          break;
+        }
+        // PS-265: stop before the job-handler deadline so the run RETURNS and its watermark
+        // advances to the cursor (incremental drain), instead of being killed mid-walk with
+        // the watermark un-advanced — which re-pulled the same backlog every run and drained
+        // nothing. Resume from the cursor next run.
+        if (syncRunBudgetExhausted(budget, pagesThisAccount)) break;
         page += 1;
         // v2-parity: 500ms inter-page delay.
         await new Promise((r) => setTimeout(r, 500));
@@ -454,28 +481,41 @@ export async function syncShipments(
       // `/v2/shipments` page over the same time window and backfills
       // `shipments.providerAccountId` by matching on tracking number.
       // Mirrors apps/api/src/modules/shipments/application/shipment-services.ts:132.
-      try {
-        const enriched = await enrichProviderAccountIds(acct, lastSync);
-        if (enriched > 0) {
-          console.log(
-            `[shipment-sync] enriched providerAccountId on ${enriched} shipments for "${acct.label}"`
+      // PS-265: skip the (paginated) V2 enrichment when the run is out of time budget — it
+      // is best-effort backfill and would push the handler past its deadline. It resumes on
+      // a later run once the V1 window is caught up.
+      if (!syncRunBudgetTimeExhausted(budget)) {
+        try {
+          const enriched = await enrichProviderAccountIds(acct, lastSync);
+          if (enriched > 0) {
+            console.log(
+              `[shipment-sync] enriched providerAccountId on ${enriched} shipments for "${acct.label}"`
+            );
+          }
+        } catch (err) {
+          // Best-effort enrichment — never block the V1 sync on V2 failures.
+          console.warn(
+            `[shipment-sync] V2 enrichment failed for "${acct.label}":`,
+            (err as Error).message
           );
         }
-      } catch (err) {
-        // Best-effort enrichment — never block the V1 sync on V2 failures.
-        console.warn(
-          `[shipment-sync] V2 enrichment failed for "${acct.label}":`,
-          (err as Error).message
-        );
       }
 
-      await setSetting(key, String(runStartMs));
+      // PS-265: advance the watermark. Fully drained within budget -> 'now' (runStartMs), as
+      // before. Budget-bounded (backlog remains) -> resume from the last processed CreateDate
+      // next run; the read-side 48h overlap re-checks the boundary, so progress is durable and
+      // no un-processed shipment is skipped (CreateDate ASC guarantees this).
+      const nextWatermarkMs = drained ? runStartMs : cursorCreateMs ?? storedLastSync ?? runStartMs;
+      await setSetting(key, String(nextWatermarkMs));
     } catch (err) {
       console.error(
         `[shipment-sync] account "${acct.label}" failed:`,
         (err as Error).message
       );
     }
+    // PS-265: stop starting new accounts once the run is out of time budget; their watermarks
+    // are unchanged, so they resume on the next run (fair round-robin across runs).
+    if (syncRunBudgetTimeExhausted(budget)) break;
   }
 
   let ordersMarkedShipped = 0;
