@@ -47,9 +47,16 @@ check('browse keeps its own display-only fields on the best rate (insurance/expi
 check('backfill delegates to the finalizer (destructured bestRate)',
   /const \{ bestRate: finalizedBest \} = await finalizeBestRateWithQuote\(\{/.test(backfill));
 
-// ── DEFERRED: the purchase-enforcement flip did NOT happen ────────────────────
-check('purchase boundary keeps the legacy selectedRateProof FALLBACK (flip deferred, not done)',
-  /falls back to the legacy carried selectedRateProof/i.test(store) || /FALL BACK to the legacy carried proof/i.test(store));
+// ── PS-244 Phase 4 (Per user override unlock shipped data on 2026-06-15) ──────
+// The purchase-enforcement flip is now BUILT but ships in 'canary' by DEFAULT: the
+// legacy carried-proof fallback is RETAINED until the canary proves the snapshot
+// resolves ~always; 'strict' (env RATE_PROOF_ENFORCEMENT=strict) drops it. Pin BOTH —
+// the default still keeps the fallback (not weakened) AND the strict gate now exists.
+// (The flip's own behavior is covered deeply by ps-244-purchase-enforcement-canary.)
+check('purchase boundary keeps the legacy carried-proof fallback as the DEFAULT (canary)',
+  /FALL BACK to the legacy carried proof/i.test(store));
+check('the env-gated strict enforcement flip now exists (default canary)',
+  /rateProofEnforcementMode\(\) === 'strict'/.test(store));
 
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json wires test:ps-244-rate-finalization-single-owner', /test:ps-244-rate-finalization-single-owner/.test(pkg));

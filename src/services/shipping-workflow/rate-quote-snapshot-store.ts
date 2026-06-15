@@ -24,6 +24,10 @@ import {
   RATE_QUOTE_SNAPSHOT_TTL_MS,
   type RateQuoteSnapshot,
 } from './rate-quote-snapshot.js';
+import {
+  rateProofEnforcementMode,
+  recordRateProofCanary,
+} from './rate-proof-enforcement.js';
 
 // Re-export so route code can import all rate-quote helpers from one module.
 export { selectedRateOpaqueKey } from './rate-quote-snapshot.js';
@@ -145,12 +149,26 @@ export type LabelPurchaseRateSelection = {
  * on BOTH proof paths, snapshot-resolved and legacy carried. A stale selection
  * can never buy postage on a different account than the proven rate (the
  * order-1484 class: payload pid 10000025 with proof se-565377).
+ *
+ * PS-244 Phase 4 (Per user override unlock shipped data on 2026-06-15): the snapshot
+ * ENFORCEMENT flip + canary. Every outcome is recorded (recordRateProofCanary) so we
+ * can measure, in production, how often a supplied snapshot ref actually resolves at
+ * purchase time vs. falls back to the FE-carried proof. The MODE gates the behavior:
+ *   - 'canary' (DEFAULT): a snapshot ref that fails to resolve falls through to the
+ *     legacy carried proof exactly as before — deployed behavior is unchanged.
+ *   - 'strict' (env RATE_PROOF_ENFORCEMENT=strict, flipped only after the canary
+ *     proves the snapshot resolves ~always): an unresolved ref BLOCKS the purchase via
+ *     the SAME strict validator — no silent fallback to the FE proof.
+ * FAIL-SAFE: strict reuses the existing strict validator (which throws on a missing
+ * proof) and, in the impossible case it did not throw, still falls through to the
+ * legacy validator below — so 'strict' is provably never weaker than 'canary'.
  */
 export async function assertLabelPurchaseRateSelection(body: LabelPurchaseRateSelection): Promise<void> {
   if (body.rateQuoteId && body.selectedRateKey) {
     const snapshot = await loadRateQuoteSnapshot(body.rateQuoteId);
     const resolved = resolveRateQuoteForPurchase({ snapshot, selectedRateKey: body.selectedRateKey });
     if (resolved.ok) {
+      recordRateProofCanary('snapshot_enforced');
       assertSelectedRateProofForLabelPurchase(resolved.proof); // final authority
       assertPurchaseAccountMatchesProof({
         purchaseShippingProviderId: body.purchaseShippingProviderId,
@@ -158,9 +176,23 @@ export async function assertLabelPurchaseRateSelection(body: LabelPurchaseRateSe
       });
       return;
     }
-    // snapshot missing/expired/mismatched -> fall through to the legacy proof, which
-    // throws if it too is missing/invalid. Never silently proceeds.
+    // PS-244 Phase 4: a snapshot ref was supplied but did NOT resolve. Record the
+    // miss + reason — this is the event a strict flip would block. In 'strict' we
+    // block it now via the SAME strict validator (a missing/invalid snapshot proof
+    // throws before any provider call); in 'canary' (default) we fall through to the
+    // legacy carried proof below, which itself throws if missing/invalid. Either way
+    // no purchase proceeds without a valid proof.
+    recordRateProofCanary('snapshot_fallback', resolved.reason);
+    if (rateProofEnforcementMode() === 'strict') {
+      assertSelectedRateProofForLabelPurchase(
+        resolved.reason === 'snapshot_missing' ? null : { requestFingerprint: null },
+      );
+    }
+  } else {
+    recordRateProofCanary('legacy_only');
   }
+  // FALL BACK to the legacy carried proof (also strict). Reached in 'canary' on an
+  // unresolved ref, and on every request that carries no snapshot ref at all.
   assertSelectedRateProofForLabelPurchase(body.selectedRateProof ?? null);
   assertPurchaseAccountMatchesProof({
     purchaseShippingProviderId: body.purchaseShippingProviderId,
