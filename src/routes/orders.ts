@@ -101,7 +101,11 @@ import {
   classifyShippingAddress,
   residentialForShipping,
 } from '../services/shipping-workflow/address-classification';
-import { buildResidentialEvidenceFromOrder } from '../services/shipping-workflow/residential-evidence';
+import {
+  buildResidentialEvidenceFromOrder,
+  type ResidentialAddressValidation,
+  type ResidentialProviderMarker,
+} from '../services/shipping-workflow/residential-evidence';
 import {
   computeOrderRateJobFingerprint,
   resolveRateJobWorkflowOverride,
@@ -616,6 +620,9 @@ function buildCanonicalOrderModel(
   overrides: Record<string, unknown> | null,
   legacyClientId: number | null,
   shipping: Record<string, unknown>,
+  // PS-276 (slice 2b): optional resolver evidence (USPS/UPS/FedEx). Supplied by the list endpoint's
+  // batch cache read when ADDRESS_RESOLVER=on (slice 2b-2); undefined today -> verdict unchanged.
+  resolvedResidential?: { addressValidation?: ResidentialAddressValidation | null; providerMarker?: ResidentialProviderMarker | null } | null,
 ) {
   const raw = recordOrNull(order.raw) ?? {};
   const rawShipTo = recordOrNull(raw.shipTo) ?? {};
@@ -738,6 +745,7 @@ function buildCanonicalOrderModel(
     rawShipTo,
     manualOverrideResidential: overrides?.residential,
     shipToName: stringOrNull(rawShipTo.name) ?? stringOrNull(order.shipToName),
+    resolved: resolvedResidential ?? null,
   });
   const residentialResult = classifyShippingAddress({
     orderId,
@@ -753,6 +761,9 @@ function buildCanonicalOrderModel(
     },
     manualOverrideResidential: residentialEvidence.manualOverrideResidential,
     sourceResidential: residentialEvidence.sourceResidential,
+    // PS-276 (slice 2b): resolver tiers 4/2 — undefined today (no caller supplies resolved evidence).
+    addressValidation: residentialEvidence.addressValidation ?? undefined,
+    providerMarker: residentialEvidence.providerMarker ?? undefined,
   });
   const residentialResolved = residentialForShipping(residentialResult);
 

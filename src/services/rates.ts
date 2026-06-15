@@ -309,6 +309,11 @@ export type RateInput = {
   manualOverrideResidential?: boolean | null;
   /** Trusted source flag (e.g. ShipStation raw shipTo.residential). */
   sourceResidential?: boolean | null;
+  // PS-276 (slice 2b): resolver-supplied trusted evidence (USPS validated business marker /
+  // UPS-FedEx provider verdict) fed into the canonical classifier's tiers 4/2. Populated by the
+  // address resolver (slice 2b-2) when ADDRESS_RESOLVER=on; absent otherwise (classifier unchanged).
+  addressValidation?: { business?: boolean | string | null; dpvConfirmation?: string | null; zipPlus4?: string | null; carrierRoute?: string | null } | null;
+  providerMarker?: { classification?: 'residential' | 'commercial' | null; provider?: string | null } | null;
   // PS-127 resolved classification (output of resolveRateInput, for DTO/diagnostics).
   residentialClassification?: 'residential' | 'commercial';
   residentialSource?: AddressClassificationSource;
@@ -388,6 +393,11 @@ function classifyRateInputResidential(input: RateInput) {
     manualOverrideResidential: input.manualOverrideResidential ?? null,
     sourceResidential:
       input.sourceResidential ?? (typeof input.residential === 'boolean' ? input.residential : null),
+    // PS-276 (slice 2b): resolver evidence — the canonical classifier's trusted tiers 4 (USPS
+    // validated business) + 2 (UPS/FedEx provider verdict). Undefined until the resolver is wired
+    // + ADDRESS_RESOLVER=on (slice 2b-2), so today this is a no-op (tiers stay inactive).
+    addressValidation: input.addressValidation ?? undefined,
+    providerMarker: input.providerMarker ?? undefined,
   });
 }
 

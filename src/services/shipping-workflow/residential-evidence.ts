@@ -13,11 +13,28 @@
 //
 // Lockdown: awaiting/rating path only. No shipped/cancelled data, no writes here (pure).
 
+// PS-276 (slice 2b): resolver-supplied trusted evidence shapes (USPS validated business marker /
+// UPS-FedEx provider verdict). Declared inline so this module stays PURE (no cache/db import).
+export type ResidentialAddressValidation = {
+  business?: boolean | string | null;
+  dpvConfirmation?: string | null;
+  zipPlus4?: string | null;
+  carrierRoute?: string | null;
+};
+export type ResidentialProviderMarker = {
+  classification?: 'residential' | 'commercial' | null;
+  provider?: string | null;
+};
+
 export type ResidentialEvidence = {
   manualOverrideResidential: boolean | null;
   sourceResidential: boolean | null;
   toCompany: string | null;
   toName: string | null;
+  // PS-276 (slice 2b): optional resolver evidence (classifier tiers 4/2). The caller merges it in
+  // from resolveAddressClassification when ADDRESS_RESOLVER=on; absent otherwise (classifier unchanged).
+  addressValidation?: ResidentialAddressValidation | null;
+  providerMarker?: ResidentialProviderMarker | null;
 };
 
 /**
@@ -29,6 +46,8 @@ export function buildResidentialEvidenceFromOrder(input: {
   rawShipTo: unknown;
   manualOverrideResidential: unknown;
   shipToName?: string | null;
+  // PS-276 (slice 2b): merge in resolver evidence (resolveAddressClassification output) when present.
+  resolved?: { addressValidation?: ResidentialAddressValidation | null; providerMarker?: ResidentialProviderMarker | null } | null;
 }): ResidentialEvidence {
   const shipTo =
     input.rawShipTo && typeof input.rawShipTo === 'object'
@@ -40,6 +59,8 @@ export function buildResidentialEvidenceFromOrder(input: {
     sourceResidential: typeof shipTo.residential === 'boolean' ? shipTo.residential : null,
     toCompany: typeof shipTo.company === 'string' ? shipTo.company : null,
     toName: input.shipToName ?? null,
+    ...(input.resolved?.addressValidation ? { addressValidation: input.resolved.addressValidation } : {}),
+    ...(input.resolved?.providerMarker ? { providerMarker: input.resolved.providerMarker } : {}),
   };
 }
 
@@ -58,6 +79,8 @@ export function residentialEvidenceRateInput(
   sourceResidential: boolean | null;
   toCompany?: string;
   toName?: string;
+  addressValidation?: ResidentialAddressValidation | null;
+  providerMarker?: ResidentialProviderMarker | null;
 } {
   return {
     residential: undefined,
@@ -65,5 +88,8 @@ export function residentialEvidenceRateInput(
     sourceResidential: evidence.sourceResidential,
     ...(evidence.toCompany != null ? { toCompany: evidence.toCompany } : {}),
     ...(evidence.toName && !existingToName ? { toName: evidence.toName } : {}),
+    // PS-276 (slice 2b): carry resolver evidence into the RateInput (classifier tiers 4/2).
+    ...(evidence.addressValidation ? { addressValidation: evidence.addressValidation } : {}),
+    ...(evidence.providerMarker ? { providerMarker: evidence.providerMarker } : {}),
   };
 }
