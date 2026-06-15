@@ -94,6 +94,14 @@ import {
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
+// PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
+// (the value the rate path uses) via the SAME classifier + money-safe policy, so every
+// surface — incl. the FE rate draft key — can read one residential instead of re-deriving.
+import {
+  classifyShippingAddress,
+  residentialForShipping,
+} from '../services/shipping-workflow/address-classification';
+import { buildResidentialEvidenceFromOrder } from '../services/shipping-workflow/residential-evidence';
 import {
   computeOrderRateJobFingerprint,
   resolveRateJobWorkflowOverride,
@@ -688,6 +696,10 @@ function buildCanonicalOrderModel(
     'recipient.residential': overrides?.residential != null
       ? sourceOf('local', 'order_overrides.residential', 'PrepShip user override')
       : sourceOf('v1', 'orders.raw.shipTo.residential', 'ShipStation v1 /orders.shipTo.residential'),
+    // PS-276 (slice 4): the resolved verdict is the canonical classifier output (money-safe).
+    'recipient.residentialClassification': sourceOf('derived', 'classifyShippingAddress', 'PS-276 backend residential classifier (residentialForShipping money-safe policy)'),
+    'recipient.residentialSource': sourceOf('derived', 'classifyShippingAddress', 'PS-276 classification provenance tier'),
+    'recipient.residentialConfidence': sourceOf('derived', 'classifyShippingAddress', 'PS-276 classification confidence tier'),
     'recipient.addressVerified': sourceOf('v1', 'orders.raw.shipTo.addressVerified', 'ShipStation v1 /orders.shipTo.addressVerified'),
     weight: overrideWeightOz != null
       ? sourceOf('local', 'order_overrides.rateWeightOz', 'PrepShip weight override')
@@ -716,6 +728,33 @@ function buildCanonicalOrderModel(
     'flags.externallyFulfilled': sourceOf('v1', 'orders.raw.externallyFulfilled', 'ShipStation v1 /orders.externallyFulfilled'),
     'flags.externallyFulfilledVerified': sourceOf('local', 'orders.externally_fulfilled_verified', 'PrepShip verification flag'),
   };
+
+  // PS-276 (slice 4): the resolved residential VERDICT (what the rate uses), via the SAME
+  // evidence owner + classifier + money-safe policy as /rates/browse + rates-backfill — so
+  // recipient.residentialClassification equals the rate fingerprint r= bit by construction.
+  // (addressValidation/providerMarker resolver tiers arrive in slice 2b; until then this is
+  // override+source, exactly what the rate path computes today.)
+  const residentialEvidence = buildResidentialEvidenceFromOrder({
+    rawShipTo,
+    manualOverrideResidential: overrides?.residential,
+    shipToName: stringOrNull(rawShipTo.name) ?? stringOrNull(order.shipToName),
+  });
+  const residentialResult = classifyShippingAddress({
+    orderId,
+    clientId,
+    storeId,
+    shipTo: {
+      name: residentialEvidence.toName,
+      company: residentialEvidence.toCompany,
+      city: stringOrNull(rawShipTo.city) ?? stringOrNull(order.shipToCity),
+      state: stringOrNull(rawShipTo.state) ?? stringOrNull(order.shipToState),
+      postalCode: stringOrNull(rawShipTo.postalCode) ?? stringOrNull(order.shipToPostalCode),
+      country: stringOrNull(rawShipTo.country) ?? 'US',
+    },
+    manualOverrideResidential: residentialEvidence.manualOverrideResidential,
+    sourceResidential: residentialEvidence.sourceResidential,
+  });
+  const residentialResolved = residentialForShipping(residentialResult);
 
   return {
     id: orderId,
@@ -751,6 +790,10 @@ function buildCanonicalOrderModel(
       country: stringOrNull(rawShipTo.country) ?? 'US',
       phone: stringOrNull(rawShipTo.phone),
       residential: booleanOrNull(overrides?.residential) ?? booleanOrNull(rawShipTo.residential),
+      // PS-276 (slice 4): the resolved verdict (what the rate uses) + provenance for the resi/comm tag.
+      residentialClassification: (residentialResolved ? 'residential' : 'commercial') as 'residential' | 'commercial',
+      residentialSource: residentialResult.source,
+      residentialConfidence: residentialResult.confidence,
       addressVerified: stringOrNull(rawShipTo.addressVerified),
     },
     weight: weightOz != null ? { value: weightOz, units: 'ounces' } : null,

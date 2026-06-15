@@ -63,6 +63,12 @@ export interface OrderDTO {
   shipTo?: OrderAddress;
   residential?: boolean;
   sourceResidential?: boolean;
+  // PS-276 (slice 4): the BACKEND's resolved residential verdict (what the rate uses) +
+  // provenance. The FE reads these instead of re-classifying (slice 3 points the rate
+  // draft key + resi/comm tag at them); equals the rate fingerprint r= bit by construction.
+  residentialClassification?: 'residential' | 'commercial';
+  residentialSource?: string;
+  residentialConfidence?: string;
 
   // Items
   items?: OrderItem[];
