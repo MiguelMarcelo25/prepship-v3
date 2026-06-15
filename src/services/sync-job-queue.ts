@@ -1,5 +1,6 @@
 import PgBoss from 'pg-boss';
 import { env } from '../lib/env';
+import { withDeadline } from '../lib/with-deadline';
 import {
   runBackfillTick,
   runFulfillmentOutboxTick,
@@ -114,6 +115,16 @@ function scheduleEnqueue(
   timers.push(timeout);
 }
 
+// PS-265 — bound every job handler so a hung one (e.g. a ShipStation HTTP call
+// that never returns) can't hold the activeJobName mutex forever and deadlock the
+// whole worker. Must be < pg-boss expireInMinutes (30) so the in-process timeout
+// fires first. Default 10 min; override via env. The sync is watermark-based and
+// idempotent, so a timed-out tick loses nothing — the next tick re-pulls the gap.
+const JOB_HANDLER_TIMEOUT_MS = Math.max(
+  60_000,
+  Math.min(25 * 60_000, Number(process.env.JOB_HANDLER_TIMEOUT_MS) || 10 * 60_000),
+);
+
 async function registerWorker(
   name: JobName,
   handler: () => Promise<void> | void
@@ -136,7 +147,9 @@ async function registerWorker(
       console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
       await recordWorkerJobStart(name);
       try {
-        const result = await handler();
+        // PS-265: deadline-bounded so a hung handler rejects here → catch records
+        // the failure → finally ALWAYS clears activeJobName (deadlock → self-heal).
+        const result = await withDeadline(handler, JOB_HANDLER_TIMEOUT_MS, name);
         const durationMs = Date.now() - startedAt;
         console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
         await recordWorkerJobSuccess(name, startedAt, result);
