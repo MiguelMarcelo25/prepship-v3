@@ -9,6 +9,8 @@ import {
   buildResidentialEvidenceFromOrder,
   residentialEvidenceRateInput,
 } from './shipping-workflow/residential-evidence';
+// PS-276 (slice 2b-2b): the live address-classification resolver (cache-or-USPS), env-gated OFF.
+import { resolveAddressClassification } from './shipping-workflow/resolve-address-classification';
 import { finalizeBestRateWithQuote } from './shipping-workflow/rate-quote-snapshot-store';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
@@ -481,10 +483,22 @@ async function runBackfill(
         // PS-276: build residential evidence through the SAME shared owner /rates/browse uses,
         // so the persisted BEST RATE column honors the manual override + source flag identically
         // to the live Rate Browser (residential: undefined lets the classifier's tiers attribute).
+        // PS-276 (slice 2b-2b): resolve the address-validation evidence (cache-or-USPS), env-gated
+        // ADDRESS_RESOLVER (OFF -> {} -> unchanged). SAME resolver /rates/browse uses, so the persisted
+        // best rate and the live browse fingerprint stay identical on residential by construction.
+        const backfillRawShipTo = (raw.shipTo ?? {}) as Record<string, unknown>;
+        const backfillResolved = await resolveAddressClassification({
+          street1: typeof backfillRawShipTo.street1 === 'string' ? backfillRawShipTo.street1 : null,
+          city: row.shipToCity ?? null,
+          state: row.shipToState ?? null,
+          postalCode: row.shipToPostalCode ?? null,
+          country: toCountry,
+        });
         const residentialEvidence = buildResidentialEvidenceFromOrder({
           rawShipTo: raw.shipTo,
           manualOverrideResidential: row.residentialOverride,
           shipToName: row.shipToName,
+          resolved: backfillResolved,
         });
         const rateInput = {
           weightOz: Number(row.weightOz),

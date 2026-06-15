@@ -18,6 +18,7 @@ import {
   setCachedAddressClassification,
 } from './address-classification-cache';
 import type { AddressClassificationRow } from '../../db/schema/address-classifications';
+import { validateUspsAddress } from '../../connectors/carrier/usps';
 
 export type ResolvedAddressEvidence = {
   // tier 4 (validated): an explicit USPS business marker. business true = commercial, false = residential.
@@ -106,8 +107,30 @@ export type ResolveAddressDeps = {
 };
 
 /**
- * Resolve trusted residential evidence for an address. Cache-first; on miss, call the injected
- * resolver (best-effort). Returns {} when OFF / unkeyable / outage — never throws into a quote.
+ * Default USPS validator — USPS Address Validation is a GLOBAL service (one developer OAuth app), so
+ * creds come from env (USPS_CONSUMER_KEY / USPS_CONSUMER_SECRET), NOT per-client like the ShipStation
+ * ssApiKey. Returns null (-> no evidence, residential-safe) when unconfigured or missing a street1.
+ */
+async function envUspsValidate(input: ResolveAddressInput): Promise<UspsValidationResult> {
+  const consumerKey = process.env.USPS_CONSUMER_KEY;
+  const consumerSecret = process.env.USPS_CONSUMER_SECRET;
+  const street1 = typeof input.street1 === 'string' ? input.street1.trim() : '';
+  if (!consumerKey || !consumerSecret || !street1) return null;
+  return validateUspsAddress(
+    { consumerKey, consumerSecret },
+    {
+      streetAddress: street1,
+      city: input.city ?? undefined,
+      state: input.state ?? undefined,
+      ZIPCode: input.postalCode ?? undefined,
+    },
+  );
+}
+
+/**
+ * Resolve trusted residential evidence for an address. Cache-first; on miss, call the resolver
+ * (the injected validator, else the env-based USPS validator) best-effort. Returns {} when OFF /
+ * unkeyable / outage — never throws into a quote.
  */
 export async function resolveAddressClassification(
   input: ResolveAddressInput,
@@ -122,9 +145,9 @@ export async function resolveAddressClassification(
   const cached = await getCachedAddressClassification(key);
   if (cached) return evidenceFromCacheRow(cached);
 
-  if (!deps.validateUsps) return {}; // no resolver wired -> nothing (still cache-safe)
+  const validateUsps = deps.validateUsps ?? envUspsValidate;
   try {
-    const usps = await deps.validateUsps(input);
+    const usps = await validateUsps(input);
     const evidence = normalizeUspsAddressClassification(usps);
     await setCachedAddressClassification(key, {
       business: evidence.addressValidation ? evidence.addressValidation.business : null,

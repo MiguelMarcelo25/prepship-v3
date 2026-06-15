@@ -20,6 +20,8 @@ import {
   residentialEvidenceRateInput,
   type ResidentialEvidence,
 } from '../services/shipping-workflow/residential-evidence';
+// PS-276 (slice 2b-2b): the live address-classification resolver (cache-or-USPS), env-gated OFF.
+import { resolveAddressClassification } from '../services/shipping-workflow/resolve-address-classification';
 import { planStrictRecalculateDecision } from '../services/rates-recalculate';
 import { persistStrictRecalculateOutcome } from '../services/rates-recalculate-persist';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
@@ -398,10 +400,22 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         // Rate Browser and the persisted BEST RATE column feed the classifier the SAME manual
         // override + source flag (the #1585 residential asymmetry fix — backfill used to drop
         // the manual override that this path honors).
+        // PS-276 (slice 2b-2b): resolve the carrier address-validation evidence (cache-or-USPS),
+        // env-gated ADDRESS_RESOLVER (OFF -> {} -> classifier unchanged). Async UPSTREAM so the pure
+        // classifier stays sync + the fingerprint matches the backfill path.
+        const browseRawShipTo = ((ord.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+        const browseResolved = await resolveAddressClassification({
+          street1: typeof browseRawShipTo.street1 === 'string' ? browseRawShipTo.street1 : null,
+          city: typeof browseRawShipTo.city === 'string' ? browseRawShipTo.city : null,
+          state: typeof browseRawShipTo.state === 'string' ? browseRawShipTo.state : null,
+          postalCode: typeof browseRawShipTo.postalCode === 'string' ? browseRawShipTo.postalCode : null,
+          country: typeof browseRawShipTo.country === 'string' ? browseRawShipTo.country : null,
+        });
         residentialEvidence = buildResidentialEvidenceFromOrder({
           rawShipTo: (ord.raw as { shipTo?: unknown } | null)?.shipTo,
           manualOverrideResidential: ovr?.residential,
           shipToName: ord.shipToName,
+          resolved: browseResolved,
         });
       }
     } catch (err) {
