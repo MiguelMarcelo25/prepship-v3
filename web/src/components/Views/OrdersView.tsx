@@ -4133,6 +4133,16 @@ export default function OrdersView({
   // Critically: today every site hardcodes `true`, so residential orders keep r=1 (no
   // re-rate churn) and only genuinely-commercial orders correctly flip to r=0.
   function residentialForRate(order: any): boolean {
+    // PS-276 (slice 3): PREFER the BACKEND's resolved verdict (recipient.residentialClassification —
+    // the money-safe value the rate path uses), so the FE rate draft key's r= bit matches the backend
+    // requestFingerprint by construction and the column/browser never diverge. The FE no longer OWNS the
+    // classification — it forwards the backend verdict. Fall back to the legacy local derivation ONLY on
+    // deploy-skew (payloads predating slice 4). Today this is behavior-identical (the legacy logic already
+    // mirrored the backend's override+source); once slice 2b's resolver flips an address, the FE follows.
+    const backendClass =
+      order?.residentialClassification ?? order?.canonicalOrder?.recipient?.residentialClassification
+    if (backendClass === 'residential') return true
+    if (backendClass === 'commercial') return false
     const merged = order?.residential
     if (typeof merged === 'boolean') return merged
     const rawShipTo = (order?.raw?.shipTo ?? {}) as Record<string, any>
