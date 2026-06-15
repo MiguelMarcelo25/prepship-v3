@@ -293,6 +293,7 @@
     "test:ps-244-rate-finalization-single-owner": "tsx scripts/ps-244-rate-finalization-single-owner-guard.ts",
     "test:ps-244-purchase-enforcement-canary": "tsx scripts/ps-244-purchase-enforcement-canary-guard.ts",
     "test:ps-276-backfill-residential-parity": "tsx scripts/ps-276-backfill-residential-parity-guard.ts",
+    "test:ps-276-address-classification-cache": "tsx scripts/ps-276-address-classification-cache-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
