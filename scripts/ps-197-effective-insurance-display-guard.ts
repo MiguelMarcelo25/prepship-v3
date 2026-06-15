@@ -241,13 +241,20 @@ check('modal: the baseline list is labeled not-label-safe',
     rateCacheKey({ ...base, residential: true } as Parameters<typeof rateCacheKey>[0]).includes('r=1'), true);
 }
 {
-  // Source pins — the backend owns the evidence for real-order browses:
-  check('browse loads the order residential EVIDENCE (manual override + raw source flag)',
-    /manualOverrideResidential: residentialEvidence\.manualOverrideResidential/.test(ratesRoute) &&
-      /sourceResidential: residentialEvidence\.sourceResidential/.test(ratesRoute),
+  // Source pins — the backend owns the evidence for real-order browses. PS-276 moved the
+  // evidence build into the SHARED owner residential-evidence.ts (buildResidentialEvidenceFromOrder
+  // + residentialEvidenceRateInput), used by BOTH /rates/browse and rates-backfill so the persisted
+  // BEST RATE column and the live browser can't diverge on residential (the #1585 fix). The manual
+  // override + source mapping + the dropped collapsed boolean now live in that one owner.
+  const residentialEvidenceOwner = readFileSync('src/services/shipping-workflow/residential-evidence.ts', 'utf8');
+  check('browse loads the order residential EVIDENCE via the shared owner (manual override + source)',
+    /buildResidentialEvidenceFromOrder\(\{/.test(ratesRoute) &&
+      /residentialEvidenceRateInput\(residentialEvidence, rest\.toName\)/.test(ratesRoute) &&
+      /manualOverrideResidential:[\s\S]{0,40}typeof input\.manualOverrideResidential === 'boolean'/.test(residentialEvidenceOwner) &&
+      /sourceResidential: typeof shipTo\.residential === 'boolean'/.test(residentialEvidenceOwner),
     true);
-  check('browse DROPS the FE-collapsed residential boolean when order evidence exists',
-    /residential: undefined,/.test(ratesRoute), true);
+  check('the FE-collapsed residential boolean is dropped (residential: undefined) by the shared owner',
+    /residential: undefined,/.test(residentialEvidenceOwner) && /residentialEvidenceRateInput/.test(ratesRoute), true);
   check('the manual-estimate baseline reuses the SAME evidence-resolved input (apples to apples)',
     /const manual = await getRates\(\s*\/\/[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n\s*browseRateInput/.test(ratesRoute) ||
       /await getRates\(\s*(\/\/[^\n]*\n\s*)*browseRateInput/.test(ratesRoute),

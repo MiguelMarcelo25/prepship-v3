@@ -5,6 +5,10 @@ import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
 import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getDirectCarrierRatesForRateInput, getRates } from './rates';
 import { combineCarrierUniverses } from './rates-combined';
+import {
+  buildResidentialEvidenceFromOrder,
+  residentialEvidenceRateInput,
+} from './shipping-workflow/residential-evidence';
 import { finalizeBestRateWithQuote } from './shipping-workflow/rate-quote-snapshot-store';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
@@ -343,6 +347,11 @@ async function runBackfill(
         shipToCity: orders.shipToCity,
         serviceCode: orders.serviceCode,
         raw: orders.raw,
+        shipToName: orders.shipToName,
+        // PS-276: the operator's manual residential/commercial override — backfill must feed
+        // this to the classifier the SAME way /rates/browse does (it previously did not, so a
+        // manual commercial override was dropped: the #1585 $13.00-vs-$10.79 asymmetry).
+        residentialOverride: orderOverrides.residential,
         bestRateJson: orderOverrides.bestRateJson,
         rateDimsL: orderOverrides.rateDimsL,
         rateDimsW: orderOverrides.rateDimsW,
@@ -469,13 +478,21 @@ async function runBackfill(
       }
       const dimsLabel = `${dims.length}x${dims.width}x${dims.height}`;
       try {
+        // PS-276: build residential evidence through the SAME shared owner /rates/browse uses,
+        // so the persisted BEST RATE column honors the manual override + source flag identically
+        // to the live Rate Browser (residential: undefined lets the classifier's tiers attribute).
+        const residentialEvidence = buildResidentialEvidenceFromOrder({
+          rawShipTo: raw.shipTo,
+          manualOverrideResidential: row.residentialOverride,
+          shipToName: row.shipToName,
+        });
         const rateInput = {
           weightOz: Number(row.weightOz),
           toZip: row.shipToPostalCode!,
           toState: row.shipToState ?? undefined,
           toCity: row.shipToCity ?? undefined,
           toCountry,
-          residential: raw.shipTo?.residential ?? undefined,
+          ...residentialEvidenceRateInput(residentialEvidence),
           dimsL: dims.length,
           dimsW: dims.width,
           dimsH: dims.height,

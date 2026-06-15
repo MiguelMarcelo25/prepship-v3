@@ -15,6 +15,11 @@ import {
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
 import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
+import {
+  buildResidentialEvidenceFromOrder,
+  residentialEvidenceRateInput,
+  type ResidentialEvidence,
+} from '../services/shipping-workflow/residential-evidence';
 import { planStrictRecalculateDecision } from '../services/rates-recalculate';
 import { persistStrictRecalculateOutcome } from '../services/rates-recalculate-persist';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
@@ -366,12 +371,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // boundary already classifies from this same order evidence (PS-127), so browse == label
   // classification BY CONSTRUCTION. Best-effort: any load failure falls back to the FE boolean.
   let orderForBrowse: { sourceProvider: string | null; raw: unknown } | null = null;
-  let residentialEvidence: {
-    manualOverrideResidential: boolean | null;
-    sourceResidential: boolean | null;
-    toCompany: string | null;
-    toName: string | null;
-  } | null = null;
+  let residentialEvidence: ResidentialEvidence | null = null;
   if (body.orderId) {
     try {
       const [ord] = await db
@@ -386,13 +386,15 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
           .from(orderOverrides)
           .where(eq(orderOverrides.orderId, body.orderId))
           .limit(1);
-        const rawShipTo = ((ord.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
-        residentialEvidence = {
-          manualOverrideResidential: typeof ovr?.residential === 'boolean' ? ovr.residential : null,
-          sourceResidential: typeof rawShipTo.residential === 'boolean' ? rawShipTo.residential : null,
-          toCompany: typeof rawShipTo.company === 'string' ? rawShipTo.company : null,
-          toName: ord.shipToName ?? null,
-        };
+        // PS-276: ONE residential-evidence builder, shared with rates-backfill so the live
+        // Rate Browser and the persisted BEST RATE column feed the classifier the SAME manual
+        // override + source flag (the #1585 residential asymmetry fix — backfill used to drop
+        // the manual override that this path honors).
+        residentialEvidence = buildResidentialEvidenceFromOrder({
+          rawShipTo: (ord.raw as { shipTo?: unknown } | null)?.shipTo,
+          manualOverrideResidential: ovr?.residential,
+          shipToName: ord.shipToName,
+        });
       }
     } catch (err) {
       console.warn('[rates/browse] order residential-evidence load skipped:', err instanceof Error ? err.message : err);
@@ -402,17 +404,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     ...rest,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: orderedIds,
-    ...(residentialEvidence
-      ? {
-          // Evidence decides — the collapsed FE boolean is dropped so the classifier's
-          // manual_override / shipstation_source tiers attribute correctly.
-          residential: undefined,
-          manualOverrideResidential: residentialEvidence.manualOverrideResidential,
-          sourceResidential: residentialEvidence.sourceResidential,
-          ...(residentialEvidence.toCompany != null ? { toCompany: residentialEvidence.toCompany } : {}),
-          ...(residentialEvidence.toName && !rest.toName ? { toName: residentialEvidence.toName } : {}),
-        }
-      : {}),
+    // Evidence decides — the collapsed FE boolean is dropped (residential: undefined) so the
+    // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
+    ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),
   };
   const result = await getRates(
     browseRateInput,
