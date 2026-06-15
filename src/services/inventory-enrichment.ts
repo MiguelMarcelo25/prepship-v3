@@ -35,6 +35,14 @@ import { db } from '../db/client';
 import { inventory } from '../db/schema/inventory';
 import { clients } from '../db/schema/clients';
 import { listShipStationProducts } from '../connectors/store/shipstation';
+import { createSyncRunBudget, syncRunBudgetTimeExhausted } from '../lib/sync-run-budget';
+
+// PS-265: bound the per-run SKU import so the job finishes UNDER the worker's ~10-min deadline.
+// It was an unbounded full-catalog DISTINCT scan + a per-row N+1 (SELECT-then-upsert) over EVERY
+// distinct SKU every run, which hung as the catalog grew. The NOT EXISTS filter + this cap drain
+// only NOT-yet-imported SKUs (each batch is excluded next run, so it acts as the cursor) and
+// terminate once the catalog is fully imported.
+const MAX_SKUS_PER_RUN = 1000;
 
 export interface ImportSkusFromOrdersResult {
   inserted: number;
@@ -62,13 +70,27 @@ export async function importSkusFromOrders(): Promise<ImportSkusFromOrdersResult
     join orders o on o.id = oi.order_id
     where oi.sku is not null
       and oi.sku <> ''
+      -- PS-265: only SKUs not yet in inventory. Each run imports up to MAX_SKUS_PER_RUN and
+      -- they are excluded next run (this NOT EXISTS is the cursor), so the import drains and
+      -- TERMINATES instead of re-scanning the full catalog every run with a per-row N+1 (the
+      -- hang). Legacy image/name back-fill on already-existing rows is a separate bounded
+      -- follow-up — not this hot loop.
+      and not exists (
+        select 1 from inventory inv
+        where inv.sku = oi.sku
+          and (inv.client_id = o.client_id or (inv.client_id is null and o.client_id is null))
+      )
     order by oi.sku, o.client_id, oi.updated_at desc
+    limit ${MAX_SKUS_PER_RUN}
   `);
 
   let inserted = 0;
   let skipped = 0;
+  // PS-265: defense-in-depth wall-clock bound on the per-row loop (the LIMIT already caps rows).
+  const budget = createSyncRunBudget();
 
   for (const r of rows) {
+    if (syncRunBudgetTimeExhausted(budget)) break;
     const [existing] = await db
       .select({ id: inventory.id })
       .from(inventory)
@@ -108,7 +130,7 @@ export async function importSkusFromOrders(): Promise<ImportSkusFromOrdersResult
   return {
     inserted,
     skipped,
-    message: `Imported ${inserted} new SKUs from orders (${skipped} existed — images/names back-filled where missing)`,
+    message: `Imported ${inserted} new SKUs from orders (capped ${MAX_SKUS_PER_RUN}/run; ${skipped} already existed). Any remaining new SKUs import on the next run.`,
   };
 }
 

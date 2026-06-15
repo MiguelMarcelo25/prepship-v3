@@ -72,6 +72,15 @@ check('status catch-up passes stop when the run is out of time budget',
 check('order-sync stops starting new accounts near the deadline',
   (ord.match(/syncRunBudgetTimeExhausted\(budget\)\) break/g) ?? []).length >= 2);
 
+// ── inventory-import wiring (slice 3): bounded + cursor-by-NOT-EXISTS ─────────
+const inv = read('src/services/inventory-enrichment.ts');
+check('inventory-import caps SKUs per run (MAX_SKUS_PER_RUN + LIMIT)',
+  /MAX_SKUS_PER_RUN\s*=\s*\d+/.test(inv) && /limit \$\{MAX_SKUS_PER_RUN\}/.test(inv));
+check('inventory-import only scans SKUs not yet in inventory (NOT EXISTS = cursor)',
+  /not exists \(\s*select 1 from inventory inv/.test(inv));
+check('inventory-import loop has a wall-clock budget break',
+  inv.includes('syncRunBudgetTimeExhausted(budget)'));
+
 const pkg = read('package.json');
 check('package.json wires test:ps-265-sync-run-budget', /test:ps-265-sync-run-budget/.test(pkg));
 
