@@ -7,6 +7,10 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { SkeletonStack, StatusLine } from './settings-ui'
+import { MarketplaceFeeScopeSelectors } from './MarketplaceFeesScopeSelectors'
+import { toClientLites, toStoreLites, type ClientLite, type StoreLite } from './marketplace-fee-scope-options'
+
+type OptionsState = { kind: 'loading' | 'ready' | 'error'; message?: string }
 
 type FeeRuleKind = 'flat' | 'tiered'
 
@@ -40,6 +44,9 @@ function newRule(): FeeRule {
 export function MarketplaceFeesSection() {
   const [rules, setRules] = useState<FeeRule[] | null>(null)
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
+  const [clients, setClients] = useState<ClientLite[]>([])
+  const [stores, setStores] = useState<StoreLite[]>([])
+  const [options, setOptions] = useState<OptionsState>({ kind: 'loading' })
 
   useEffect(() => {
     let cancelled = false
@@ -48,6 +55,29 @@ export function MarketplaceFeesSection() {
       if (cancelled) return
       const loaded = Array.isArray(data?.rules) ? (data.rules as FeeRule[]) : []
       setRules(loaded)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // PS-242: load the canonical client + store lists so the scope is picked by name.
+  // Best-effort: on failure the selectors still render (saved IDs preserved as
+  // "Unknown … — ID ####") and we surface a non-destructive warning.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const [clientRows, storeRows] = await Promise.all([
+          apiClient.fetchClients(),
+          apiClient.fetchStores(),
+        ])
+        if (cancelled) return
+        setClients(toClientLites(clientRows))
+        setStores(toStoreLites(storeRows))
+        setOptions({ kind: 'ready' })
+      } catch (err) {
+        if (cancelled) return
+        setOptions({ kind: 'error', message: err instanceof Error ? err.message : 'lookup failed' })
+      }
     })()
     return () => { cancelled = true }
   }, [])
@@ -90,6 +120,11 @@ export function MarketplaceFeesSection() {
         catch-all. Profit = subtotal − fee − best rate (incl. markup).
       </p>
 
+      {options.kind === 'error' ? (
+        <StatusLine kind="error"
+          message={`Couldn't load the client/store list (${options.message}). Existing rules still show their saved IDs and can be edited — pick by name once the list loads.`} />
+      ) : null}
+
       {rules.length === 0 ? (
         <div className="text-[13px] text-ink-3 italic px-1 py-2">No rules yet — add one below.</div>
       ) : (
@@ -97,15 +132,15 @@ export function MarketplaceFeesSection() {
           {rules.map((rule, index) => (
             <div key={index} className="rounded-xl ring-1 ring-line bg-surface p-3 space-y-2 shadow-sm">
               <div className="flex flex-wrap items-center gap-2">
-                <label className="text-[11px] text-ink-3">Client ID</label>
-                <input className={NUM_FIELD} type="number" min="0" placeholder="any"
-                  value={rule.clientId ?? ''} onChange={(e) => update(index, { clientId: numOrNull(e.target.value) })} />
-                <label className="text-[11px] text-ink-3">Store ID</label>
-                <input className={NUM_FIELD} type="number" min="0" placeholder="any"
-                  value={rule.storeId ?? ''} onChange={(e) => update(index, { storeId: numOrNull(e.target.value) })} />
-                <label className="text-[11px] text-ink-3">Marketplace</label>
-                <input className={`${FIELD} w-[110px]`} type="text" placeholder="any (amazon…)"
-                  value={rule.marketplace ?? ''} onChange={(e) => update(index, { marketplace: e.target.value.trim() || null })} />
+                <MarketplaceFeeScopeSelectors
+                  clientId={rule.clientId}
+                  storeId={rule.storeId}
+                  marketplace={rule.marketplace}
+                  clients={clients}
+                  stores={stores}
+                  optionsLoading={options.kind === 'loading'}
+                  onChange={(patch) => update(index, patch)}
+                />
                 <button type="button" onClick={() => removeRule(index)}
                   className="ml-auto inline-flex items-center gap-1 h-7 px-2 rounded ring-1 ring-line text-[11px] text-rose-600 hover:bg-rose-50 transition"
                   aria-label="Remove rule">
