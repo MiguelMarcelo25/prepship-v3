@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
+import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
   runBackfillTick,
   runFulfillmentOutboxTick,
@@ -62,10 +63,6 @@ const timers: Timer[] = [];
 
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
-}
-
-function jobSingletonSeconds(intervalMs: number): number {
-  return Math.max(30, Math.floor(intervalMs / 1000) - 5);
 }
 
 async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {

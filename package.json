@@ -281,6 +281,7 @@
     "test:drizzle-any-array-binding": "tsx scripts/drizzle-any-array-binding-guard.ts",
     "test:ps-243-direct-label-shipment-id-namespace": "tsx scripts/ps-243-direct-label-shipment-id-namespace-guard.ts",
     "test:ps-265-job-handler-deadline": "tsx scripts/ps-265-job-handler-deadline-guard.ts",
+    "test:ps-265-walmart-throttle": "tsx scripts/ps-265-walmart-throttle-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
