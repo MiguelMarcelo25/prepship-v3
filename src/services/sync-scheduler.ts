@@ -19,6 +19,7 @@ import {
   recordWorkerJobSuccess,
   setWorkerMode,
 } from './worker-status';
+import { startSyncStalenessWatchdog } from './sync-staleness-watchdog';
 import { refreshReportingMetrics } from './reporting-metrics';
 import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
 import { runShipmentTrackingPollOnce } from './shipment-tracking';
@@ -441,6 +442,10 @@ export function startSyncScheduler(
       void recordWorkerHeartbeat();
     }, 30_000);
   }
+  // PS-265 (secondary): active staleness watchdog. Complements PS-265 core's withDeadline
+  // self-heal by NOTICING a stale heartbeat or a job held past its deadline — emits a
+  // structured `[sync-watchdog]` alert so a wedged sync surfaces without a manual restart.
+  startSyncStalenessWatchdog();
 
   if (!fulfillmentOutboxTimer) {
     console.log(

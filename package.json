@@ -288,6 +288,7 @@
     "test:ps-263-void-confirmation-retract": "tsx scripts/ps-263-void-confirmation-retract-guard.ts",
     "test:ps-260-premature-best-rate": "tsx scripts/ps-260-premature-best-rate-guard.ts",
     "test:ps-261-easypost-insurance-cost": "tsx scripts/ps-261-easypost-insurance-cost-guard.ts",
+    "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
