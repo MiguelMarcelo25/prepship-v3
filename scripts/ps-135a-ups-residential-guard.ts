@@ -17,7 +17,10 @@ import { readFileSync } from 'node:fs';
 
 const ups = readFileSync('src/connectors/carrier/ups.ts', 'utf8');
 const rates = readFileSync('src/services/rates.ts', 'utf8');
-const labels = readFileSync('api/carriers/labels.ts', 'utf8');
+// PS-276 (276.E re-anchor): the label classification + the rate↔label money-safety block live in the
+// v4 backend (src/services/labels.ts createLabelV2), NOT the legacy api/carriers/labels.ts that PS-200
+// decommissioned. Re-pointed here so the guard verifies the FUNCTIONING path (was failing on the dead file).
+const labels = readFileSync('src/services/labels.ts', 'utf8');
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -50,19 +53,20 @@ check('getDirectCarrierRatesForRateInput resolves residential via the helper (no
   /const resolvedResidential = residentialForShipping\(classifyRateInputResidential\(input\)\);/.test(rates) &&
   /residential: resolvedResidential,/.test(rates));
 
-// ── (4) Label path: server-side classification threaded into the UPS label (billing-critical) ──
-check('labels.ts imports the PS-127 classifier',
-  /import \{ classifyShippingAddress, residentialForShipping \} from '\.\.\/\.\.\/src\/services\/shipping-workflow\/address-classification\.js';/.test(labels));
-check('UPS label branch classifies server-side + threads residential into createCarrierLabel',
-  /const upsLabelResidential = residentialForShipping\(upsLabelClassification\);/.test(labels) &&
-  /residential: upsLabelResidential,/.test(labels));
-check('UPS label classification reads company from RAW order (resolveShipTo strips it)',
-  /company: \(upsRawShipTo\.company \?\? upsRawShipTo\.companyName \?\? null\)/.test(labels));
-check('label order read includes order_overrides.residential (manual override not dropped)',
-  /ov\.residential as override_residential/.test(labels) &&
-  /LEFT JOIN order_overrides ov ON ov\.order_id = o\.id/.test(labels));
-check('UPS label manual override sourced from order_overrides.residential',
-  /manualOverrideResidential:\s*[\s\S]{0,80}?orderRow\?\.override_residential/.test(labels));
+// ── (4) Label path (v4 src/services/labels.ts createLabelV2): server-side classification stamped on
+//        the shipTo the carrier sees + the rate↔label money-safety block (billing-critical). ──
+check('labels.ts classifies server-side via the PS-127 classifier (classifyShippingAddress + residentialForShipping)',
+  /classifyShippingAddress\(\{/.test(labels) && /residentialForShipping\b/.test(labels));
+check('label residential is the classifier verdict, stamped onto the shipTo the carrier sees',
+  /const labelResidential = residentialForShipping\(labelClassification\);/.test(labels) &&
+  /shipTo\.residential = labelResidential;/.test(labels));
+check('label manual override sourced from order_overrides.residential (not dropped)',
+  /manualOverrideResidential:\s*[\s\S]{0,80}?typeof overrides\?\.residential === 'boolean' \? overrides\.residential : null/.test(labels));
+check('label source flag sourced from the raw ShipStation shipTo.residential',
+  /sourceResidential:\s*[\s\S]{0,90}?typeof rawShipTo\.residential === 'boolean'/.test(labels));
+check('rate↔label parity BLOCKS a commercial-quoted label vs a trusted-residential classification (money-safety net)',
+  /labelTrusted && quotedResidential !== null && quotedResidential !== labelResidential/.test(labels) &&
+  /RATE_LABEL_RESIDENTIAL_MISMATCH/.test(labels));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-135(a) UPS residential guard (${failures} failing)`);
