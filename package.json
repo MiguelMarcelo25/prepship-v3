@@ -300,6 +300,7 @@
     "test:ps-276-resolver": "tsx scripts/ps-276-resolver-guard.ts",
     "test:ps-276-resolver-consumption": "tsx scripts/ps-276-resolver-consumption-guard.ts",
     "test:ps-276-resolver-wiring": "tsx scripts/ps-276-resolver-wiring-guard.ts",
+    "test:ps-276-list-tag-parity": "tsx scripts/ps-276-list-tag-parity-guard.ts",
     "test:ps-277-browse-sot-writeback": "tsx scripts/ps-277-browse-sot-writeback-guard.ts",
     "test:ps-277-sot-consistency": "tsx scripts/ps-277-sot-consistency-guard.ts",
     "test:ps-277-panel-reads-sot": "tsx scripts/ps-277-panel-reads-sot-guard.ts",

@@ -107,6 +107,15 @@ import {
   type ResidentialProviderMarker,
 } from '../services/shipping-workflow/residential-evidence';
 import {
+  addressClassificationKey,
+  getCachedAddressClassifications,
+} from '../services/shipping-workflow/address-classification-cache';
+import {
+  addressResolverMode,
+  evidenceFromCacheRow,
+  type ResolvedAddressEvidence,
+} from '../services/shipping-workflow/resolve-address-classification';
+import {
   computeOrderRateJobFingerprint,
   resolveRateJobWorkflowOverride,
 } from '../services/shipping-workflow/order-rate-job-status';
@@ -1700,6 +1709,34 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // Empty on failure (rows just render no fee — display-only, never breaks /orders).
   const marketplaceFeeRules: StoredMarketplaceFeeRule[] = await loadMarketplaceFeeRules();
 
+  // PS-276 (slice 2b-2c): batch-read the resolver's address-classification cache so each list row's
+  // resi/comm TAG reflects the SAME resolved verdict the rate fingerprint already used. /rates/browse +
+  // rates-backfill WRITE this cache when ADDRESS_RESOLVER=on; here we only READ it (cache-only — no live
+  // USPS call on the list path) and feed the cached evidence into buildCanonicalOrderModel, where it runs
+  // through the SAME residentialForShipping money-safe policy as the rate path. A miss falls back to the
+  // override+heuristic verdict (today's behavior). One IN(...) query per page; ZERO queries when OFF.
+  const resolvedResidentialByOrderId = new Map<number, ResolvedAddressEvidence>();
+  if (addressResolverMode() === 'on') {
+    const keyByOrderId = new Map<number, string>();
+    for (const r of joined) {
+      const orderId = finiteNumberOrNull(r.order.id);
+      if (orderId == null) continue;
+      const rawShipTo = recordOrNull(recordOrNull(r.order.raw)?.shipTo) ?? {};
+      const key = addressClassificationKey({
+        street1: stringOrNull(rawShipTo.street1),
+        state: stringOrNull(rawShipTo.state) ?? stringOrNull(r.order.shipToState),
+        postalCode: stringOrNull(rawShipTo.postalCode) ?? stringOrNull(r.order.shipToPostalCode),
+        country: stringOrNull(rawShipTo.country) ?? 'US',
+      });
+      if (key) keyByOrderId.set(orderId, key);
+    }
+    const cacheByKey = await getCachedAddressClassifications([...keyByOrderId.values()]);
+    for (const [orderId, key] of keyByOrderId) {
+      const row = cacheByKey.get(key);
+      if (row) resolvedResidentialByOrderId.set(orderId, evidenceFromCacheRow(row));
+    }
+  }
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -2208,6 +2245,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       safeOverrides as Record<string, unknown> | null,
       legacyClientId,
       shipping,
+      // PS-276 (slice 2b-2c): the resolver's cached verdict for this address, so the row's resi/comm
+      // TAG matches the rate fingerprint. null (miss / resolver OFF) -> override+heuristic verdict.
+      resolvedResidentialByOrderId.get(r.order.id) ?? null,
     );
     // PS-038 — expedited indicator for BOTH awaiting and shipped rows. Detected
     // from the BUYER'S REQUESTED service (the original customer expectation),

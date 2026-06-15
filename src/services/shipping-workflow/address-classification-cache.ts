@@ -8,7 +8,7 @@
 // table (ensure), the key, and get/set — no carrier calls, no classification policy.
 //
 // Lockdown: additive table only. No shipped/cancelled data, no shipments writes.
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { db, sql as pg } from '../../db/client';
 import {
   addressClassifications,
@@ -96,6 +96,34 @@ export async function getCachedAddressClassification(
   } catch {
     return null; // cache outage must never block a rate
   }
+}
+
+/**
+ * Batch-read non-expired cached classifications by key (slice 2b-2c). One `IN (...)` query for a
+ * whole orders page instead of N round-trips. Best-effort: a cache outage returns an empty Map so
+ * the list render falls back to the override/heuristic verdict — it must NEVER block /orders.
+ */
+export async function getCachedAddressClassifications(
+  keys: Array<string | null | undefined>,
+): Promise<Map<string, AddressClassificationRow>> {
+  const out = new Map<string, AddressClassificationRow>();
+  const unique = Array.from(new Set(keys.filter((k): k is string => typeof k === 'string' && k.length > 0)));
+  if (unique.length === 0) return out;
+  try {
+    await ensureAddressClassificationsSchema();
+    const rows = await db
+      .select()
+      .from(addressClassifications)
+      .where(inArray(addressClassifications.addressKey, unique));
+    const now = Date.now();
+    for (const row of rows) {
+      if (row.expiresAt && row.expiresAt.getTime() <= now) continue; // expired -> miss
+      out.set(row.addressKey, row);
+    }
+  } catch {
+    return out; // cache outage must never block the list
+  }
+  return out;
 }
 
 /** Upsert a resolved classification. Best-effort: a write failure just means the next call re-resolves. */
