@@ -34,7 +34,10 @@ import {
 } from '../services/rates-backfill';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
-import { hasAppPermission } from '../middleware/auth';
+import { hasAppPermission, requireInternalPermission } from '../middleware/auth';
+// PS-250 (Card 5): the shared order-scope owner — so a rate route can't read/persist
+// against another tenant's order (cross-tenant IDOR on /browse).
+import { scopeFromContext, orderScopePredicate } from '../lib/order-scope';
 import { loadShippingAutomationRules } from '../services/shipping-automation';
 import {
   buildBestRateWorkflowDto,
@@ -359,6 +362,19 @@ function cacheMetadata(
 app.post('/browse', zValidator('json', browseBody), async (c) => {
   const body = c.req.valid('json');
   const canViewFinancials = canViewRateFinancials(c);
+  // PS-250 (Card 5): an order-scoped browse must belong to the caller. A restricted
+  // (client_user) caller passing another tenant's orderId gets 404 — blocking the
+  // cross-tenant rate read, residential-evidence load, AND the order_overrides persist
+  // below (all keyed off body.orderId). Admin/global scope = unrestricted (no-op).
+  if (body.orderId) {
+    const browseScope = scopeFromContext(c);
+    const [inScope] = await db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(and(eq(orders.id, body.orderId), orderScopePredicate(browseScope)))
+      .limit(1);
+    if (!inScope) return c.json({ error: 'Order not found' }, 404);
+  }
   const {
     forceRefresh,
     forceLive,
@@ -1035,6 +1051,8 @@ app.get('/carriers-for-store', zValidator('query', carriersForStoreQuery), async
 
 app.post(
   '/backfill-best',
+  // PS-250 (Card 5): a global best-rate backfill is an admin/internal op, not tenant-scoped.
+  requireInternalPermission('scope:global'),
   zValidator(
     'json',
     z
@@ -1069,7 +1087,8 @@ app.get('/backfill-best/latest', async (c) => {
   });
 });
 
-app.delete('/cache', async (c) => {
+// PS-250 (Card 5): wiping the WHOLE rate cache is a global admin op — not reachable by a tenant-scoped caller.
+app.delete('/cache', requireInternalPermission('scope:global'), async (c) => {
   const counts = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
@@ -1080,7 +1099,7 @@ app.delete('/cache', async (c) => {
 // v2 parity: POST /rates/cache-clear-and-refetch — clears rate cache and
 // kicks off a best-rate backfill. v2 exposed this at /cache/clear-and-refetch;
 // mounting under /rates/ keeps the auth + route ownership clean.
-app.post('/cache-clear-and-refetch', async (c) => {
+app.post('/cache-clear-and-refetch', requireInternalPermission('scope:global'), async (c) => {
   const counts = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
