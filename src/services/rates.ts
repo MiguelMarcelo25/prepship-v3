@@ -1394,12 +1394,36 @@ export async function getRates(
     const cached = await selectRateCacheByKey(key);
     if (cached) {
       const shippingOptionEligibility = rateShippingOptionEligibilityContext(resolvedInput);
-      const cachedRaw = filterRatesForShippingServiceEligibility(
+      let cachedRaw = filterRatesForShippingServiceEligibility(
         dedupeRates(cached.rates as Rate[], 'cached'),
         rateEligibilityContext(resolvedInput),
         shippingOptionEligibility,
         automationRules,
       );
+      // PS-264: cached rates must run the SAME insurance enrichment as the live
+      // path (see :1078-1096) BEFORE best-rate selection — otherwise a cached
+      // HUGRAB/insured rate carries a stale/zero insurance_amount and the
+      // cheapest-pick (rateTotal sums the premium) mis-picks by ~$0.99-$1.39 and
+      // the Rate Browser shows a wrong total. Same ctx + per-candidate provider
+      // hook as live; bind back to cachedRaw so cache-repair, applyMarkups and
+      // pickBestRate all see the insured total. Non-insured/non-HUGRAB rates
+      // resolve to 'none' (no-op); unresolved insured premiums are dropped from
+      // the selectable set, mirroring the live path's unresolved split.
+      cachedRaw = enrichRatesWithInsuranceCost(
+        cachedRaw,
+        {
+          insuranceProvider: input.insuranceProvider,
+          insuredValue: input.insuredValue,
+          toCountry: input.toCountry,
+        },
+        undefined,
+        (rate) => effectiveInsuranceProviderForAccount({
+          shippingProviderId: rate.carrier_id ?? null,
+          carrierCode: rate.carrier_code ?? null,
+          serviceCode: rate.service_code ?? null,
+          insuredValue: input.insuredValue,
+        }),
+      ).resolved;
       const cacheAgeMs = Date.now() - cached.fetchedAt.getTime();
       const cacheTtlMs = cachedRaw.length ? CACHE_TTL_MS : RATE_NEGATIVE_CACHE_TTL_MS;
       if (cacheAgeMs >= cacheTtlMs) {
