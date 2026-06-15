@@ -10,13 +10,20 @@ AGENTS.md (shipped/cancelled lockdown) before opening. Fill every section; delet
 
 ## Architecture Placement
 
-> Fix the source of truth, not the symptom. See [ARCHITECTURE.md](../ARCHITECTURE.md).
+> Fix the source of truth, not the symptom. Trace bad data to where it first entered.
+> See [ARCHITECTURE.md](../ARCHITECTURE.md). **Fast rejection:** a PR that only changes the
+> visible symptom — without explaining why the canonical source of truth is already correct,
+> or how the fix moved the rule to that source of truth — is incomplete.
 
 - **Business rule / workflow changed:**
+- **Where could imperfect data** (bad, stale, incomplete, ambiguous, or less-than-perfect)
+  **have entered** before this fix? (sync/webhook, import, provider payload,
+  default/fallback, cache write, input boundary):
 - **Canonical owner / source of truth** (file + symbol):
-- **Why this layer:**
-- **Callers updated to delegate:**
-- **Duplicate logic removed** (or explicitly left as follow-up debt):
+- **Why is this the canonical source-of-truth owner:**
+- **Which callers now delegate to it:**
+- **What duplicate frontend/route/adapter logic was removed** (or marked as follow-up):
+- **What boundary test proves the source-of-truth behavior** (path):
 - **Frontend/adapters stay thin consumers** (no money/label/inventory/fulfillment/auth/
   rate/marketplace decision moved into UI or adapter): yes / N/A — explain
 

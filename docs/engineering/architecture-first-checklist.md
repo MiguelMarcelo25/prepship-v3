@@ -7,8 +7,11 @@ nearest symptom.
 ## Pre-coding questions (answer before writing code)
 
 1. **What business decision or invariant is changing?** (one sentence)
-2. **Where does this behavior currently live?** Find the canonical owner.
-3. **Is it duplicated** across UI / routes / adapters / services?
+2. **Where can imperfect data first enter this workflow?** Name the earliest point where
+   bad, stale, incomplete, ambiguous, or less-than-perfect data can enter (sync/webhook,
+   import, provider payload, default/fallback, cache write, input boundary).
+3. **Where does this behavior currently live?** Find the canonical owner.
+4. **Is it duplicated** across UI / routes / adapters / services?
 4. **What is the canonical owner after this change?** (file + symbol)
 5. **Which callers should delegate** to that owner instead of re-deriving the fact?
 6. **What duplicate logic can be removed** — or explicitly left as follow-up debt?
@@ -19,6 +22,10 @@ If you cannot name the canonical owner, stop and find it before coding.
 
 ## PR review checklist
 
+- [ ] The PR names the **bad-data injection point** — where imperfect data first entered.
+- [ ] The fix is at the **canonical owner**, not the visible symptom.
+- [ ] UI / routes / adapters are **thin consumers** after the change.
+- [ ] Tests are at the **source-of-truth boundary**, not only at the UI symptom.
 - [ ] The change is at the canonical owner; the symptom site is a thin consumer.
 - [ ] Routes stay thin (validate → call service → return DTO); no business logic added.
 - [ ] Adapters/connectors only translate provider data; no cross-workflow policy.
@@ -32,6 +39,11 @@ If you cannot name the canonical owner, stop and find it before coding.
 
 ## Fast rejection signals (send it back)
 
+- The PR fixes where bad data *surfaces* but never identifies where it first *entered*.
+- The PR only changes the visible symptom and does not explain why the canonical source of
+  truth is already correct, or how the fix moved the rule to that source of truth.
+- A frontend-only diff changes money, rates, labels, inventory, marketplace confirmation,
+  billing, or auth/scope (backend-owned truth) without a backend owner change.
 - The diff only touches a UI component/helper but the bug is a business-rule bug.
 - The frontend computes a total, picks the "best" option, or builds a proof.
 - An adapter decides eligibility/insurance/winner instead of the policy/workflow service.

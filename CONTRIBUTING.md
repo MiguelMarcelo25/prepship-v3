@@ -14,6 +14,9 @@ AI coding agents must also follow [AGENTS.md](AGENTS.md) (mirrored to `CLAUDE.md
 1. **Architecture placement notes** (see [ARCHITECTURE.md](ARCHITECTURE.md) and the
    [PR template](.github/pull_request_template.md)):
    - the business rule/workflow changed,
+   - **where bad, stale, incomplete, ambiguous, or less-than-perfect data could first have
+     entered** the workflow, and why the fix moves the rule to the canonical owner rather
+     than patching the symptom,
    - the canonical owner / source of truth (file + symbol) and why that layer,
    - which callers were updated to delegate,
    - duplicate logic removed or explicitly left as follow-up debt.

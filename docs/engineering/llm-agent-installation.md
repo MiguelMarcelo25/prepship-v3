@@ -11,12 +11,22 @@ should also install the short instruction below into your tool so it is applied 
 Paste this verbatim into your agent's custom instructions / system prompt / rules file:
 
 ```
-Architecture-first instruction:
-Before coding, identify the canonical owner/source of truth for this behavior. Do not
-patch the nearest symptom if the business rule belongs deeper. Place the rule at the
-authoritative layer, make callers delegate to it, remove duplicate logic when practical,
-and add boundary tests. Frontend should not own business-critical decisions; routes
-should stay thin; adapters should translate provider data, not own cross-workflow policy.
+Architecture-first / root-cause instruction:
+Read ARCHITECTURE.md and AGENTS.md before coding. For every non-trivial change:
+1. Identify the canonical owner / source of truth for this behavior.
+2. Trace imperfect data to its source — find the earliest point where bad, stale,
+   incomplete, ambiguous, or less-than-perfect data can first enter the workflow
+   (sync/webhook, import, provider payload, default/fallback, cache write, input).
+3. Do NOT patch the nearest symptom. Fix the canonical owner.
+4. Make callers delegate to that owner; keep UI/routes/adapters thin consumers
+   (they may display, validate input shape, or translate provider payloads, but must
+   not own backend-critical business truth).
+5. Add boundary tests at the owner (plus a workflow/API/UI test for the symptom).
+6. Fill the PR's Architecture Placement section, including where bad data could have
+   entered and why this is the canonical source-of-truth owner.
+If a frontend symptom affects money, rates, labels, inventory, marketplace confirmation,
+billing, auth/scope, or shipped/cancelled safety, assume backend ownership until proven
+otherwise.
 ```
 
 ## Where to install it per tool

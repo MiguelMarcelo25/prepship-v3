@@ -17,6 +17,27 @@ returns somewhere else. Read this before any non-trivial change.
 A symptom in the frontend is rarely a frontend bug. Ask "what business fact is wrong, and
 which layer *owns* that fact?" Fix the owner; let everything else consume it.
 
+## Root-cause / imperfect-data injection rule
+
+A symptom is the *last* place bad data shows up, not the first. Before fixing, trace the
+data **backwards** to the earliest point where bad, stale, incomplete, ambiguous, or
+less-than-perfect data can first enter the workflow — a sync/webhook, an import, a provider
+payload translation, a default/fallback value, a cache write, or a user-input boundary —
+and fix the canonical source-of-truth owner there, so every downstream consumer becomes
+correct for free.
+
+> **Root-cause / imperfect-data rule:**
+> For every non-trivial change, identify where bad, stale, incomplete, ambiguous, or
+> less-than-perfect data can first enter the workflow. Do not patch only the visible
+> symptom. Fix the canonical source-of-truth owner, make callers delegate to it, and add
+> boundary tests at that owner. UI/routes/adapters may display, validate input shape, or
+> translate provider payloads, but they must not own backend-critical business truth.
+
+> **Fast rejection rule:**
+> A PR is incomplete if it only changes the visible symptom and does not explain why the
+> canonical source of truth is already correct or how the fix moved the rule to that source
+> of truth.
+
 ### A worked example (PS-108)
 
 The Rate Browser displayed a postage-only total ($6.67) for an insured HUGRAB order that
@@ -44,6 +65,26 @@ Every behavior has exactly one canonical owner. Find it before you code.
 fulfillment, billing, auth/scope, marketplace notifications, or shipped/cancelled locks.
 If the UI computes an authoritative value from fallback fields, that is a source-of-truth
 risk unless the backend explicitly marked it presentation-only.
+
+### Backend source-of-truth owners (non-negotiable)
+
+These concerns are backend / source-of-truth owned. The frontend, routes, and adapters may
+display, validate input shape, or translate provider payloads — but must never own the
+decision or mint the value. If a change touches any of these and the diff is frontend-only,
+treat it as misplaced until proven the backend owner is already correct (Fast rejection rule):
+
+- **Best Rate selection** and rate-shopping orchestration
+- **Package facts / dims / weight** source of truth
+- **Carrier / account eligibility**
+- **Shipping service eligibility**
+- **Effective insurance / confirmation / shipping options** resolution
+- **Selected-rate proof / quote-reference validity** and rate freshness
+- **Label purchase validity** (final pre-postage re-validation)
+- **Print Queue durability** and idempotency
+- **Marketplace confirmation / fulfillment outbox** truth
+- **Billing generated charges** / frozen invoice totals
+- **Inventory movements** / effective-stock ledger
+- **Auth / RBAC / client / store scope**
 
 ## Backend-Owned Truth Without Backend Monoliths
 
@@ -170,8 +211,10 @@ pure UI/display helpers in the frontend:
 ## Decision tree — where does this code belong?
 
 1. **What business decision or invariant is changing?** Name it in one sentence.
-2. **Where does that fact live today?** Search for the canonical owner. Is it duplicated
-   across UI / routes / adapters / services?
+2. **Where does that fact live today, and where can imperfect data first enter it?** Search
+   for the canonical owner AND the earliest point where bad/stale/incomplete/ambiguous data
+   can enter (sync/webhook, import, provider payload, default/fallback, cache write, input).
+   Is the fact duplicated across UI / routes / adapters / services?
 3. **Is the right owner deeper than where the bug showed up?**
    - Yes → place the change at the canonical owner; make the symptom site a thin consumer.
    - No (it is genuinely presentation/transport) → fix it at that layer and say why.
@@ -181,6 +224,7 @@ pure UI/display helpers in the frontend:
 
 ## Anti-patterns to reject
 
+- ✗ Fixing where bad data *surfaces* instead of where it first *entered* the workflow.
 - ✗ Patching the nearest UI component/helper when the rule belongs in a service.
 - ✗ Frontend computing money, choosing the final/best rate, or minting a proof.
 - ✗ Adapters deciding cross-workflow policy (eligibility, insurance, winner selection).
@@ -195,8 +239,9 @@ pure UI/display helpers in the frontend:
 Every non-trivial PR states:
 
 - **Business rule / workflow changed:** …
+- **Where bad/stale/incomplete data could have entered** before this fix: …
 - **Canonical owner / source of truth:** file + symbol.
-- **Why this layer:** …
+- **Why this layer** (is the canonical owner): …
 - **Callers updated to delegate:** …
 - **Duplicate logic removed** (or explicitly left as follow-up debt): …
 - **Boundary tests added** at the owner: …

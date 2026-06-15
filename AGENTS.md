@@ -162,6 +162,36 @@ Core rule:
 - Add a boundary/source-of-truth test at the owner and remove duplicate logic when
   practical. Frontend-only patches for the business-critical areas above are rejected.
 
+### Mandatory root-cause workflow for AI coding agents
+
+Before writing code for any non-trivial change, an AI agent MUST, in order:
+
+1. **Identify the canonical owner / source of truth** for the behavior being changed.
+2. **Find where imperfect data is injected** — the earliest point where bad, stale,
+   incomplete, ambiguous, or less-than-perfect data can first enter the workflow
+   (sync/webhook, import, provider payload, default/fallback, cache write, user input).
+3. **Fix the root / canonical owner first** — not the visible symptom.
+4. **Make callers delegate** to that owner instead of re-deriving the fact.
+5. **Add boundary tests** at the owner (plus a workflow/API/UI test for the symptom).
+6. If the bug appears in the **frontend but affects money, rates, labels, inventory,
+   marketplace confirmation, billing, auth/scope, or shipped/cancelled safety, assume
+   backend ownership until proven otherwise** — a frontend-only diff for these is rejected.
+
+> **Root-cause / imperfect-data rule:**
+> For every non-trivial change, identify where bad, stale, incomplete, ambiguous, or
+> less-than-perfect data can first enter the workflow. Do not patch only the visible
+> symptom. Fix the canonical source-of-truth owner, make callers delegate to it, and add
+> boundary tests at that owner. UI/routes/adapters may display, validate input shape, or
+> translate provider payloads, but they must not own backend-critical business truth.
+
+> **Fast rejection rule:**
+> A change is incomplete if it only changes the visible symptom and does not explain why the
+> canonical source of truth is already correct or how the fix moved the rule to that source
+> of truth.
+
+The full standard and the list of backend source-of-truth owners live in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 This standard does NOT relax the shipped/cancelled lockdown above — it adds *where*
 business logic must live. The lockdown still governs *what* may be touched.
 

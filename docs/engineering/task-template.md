@@ -22,14 +22,17 @@ existing guards/tests. -->
 
 ## Architecture placement
 
-> Fix the source of truth, not the symptom.
+> Fix the source of truth, not the symptom. Trace bad data to where it first entered.
 
 - **Business rule / workflow changing:**
+- **Where imperfect data may enter** (earliest point bad/stale/incomplete/ambiguous data
+  can enter — sync/webhook, import, provider payload, default/fallback, cache write, input):
 - **Canonical owner / source of truth** (file + symbol):
 - **Why this layer** (and why not the UI/route/adapter):
 - **Callers to update to delegate:**
 - **Duplicate logic to remove** (or leave as follow-up debt):
-- **Boundary test** (at the owner) **+ symptom test** (workflow/API/browser):
+- **Boundary tests required** (at the owner):
+- **Workflow / UI / API tests required** (when applicable, for the operator-visible symptom):
 
 ## Implementation requirements
 
