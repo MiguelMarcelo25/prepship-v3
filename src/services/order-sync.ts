@@ -13,6 +13,12 @@ import { deductInventoryForOrder } from './fulfillment-deductions';
 import { importStoreOrders } from './store-connector-orchestrator';
 import type { NormalizedOrder } from '../connectors/types';
 import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
+import {
+  type SyncRunBudget,
+  createSyncRunBudget,
+  syncRunBudgetExhausted,
+  syncRunBudgetTimeExhausted,
+} from '../lib/sync-run-budget';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
@@ -394,11 +400,13 @@ async function fetchOrdersPage(
     storeId?: number;
     statusOnly?: boolean;
   },
+  budget: SyncRunBudget = createSyncRunBudget(),
 ): Promise<{ synced: number; pages: number }> {
   const sinceParam = formatShipStationV1DateParam(args.sinceMs);
   let page = 1;
   let pages = 1;
   let total = 0;
+  let pagesThisPass = 0;
 
   while (true) {
     const res = await importStoreOrders('shipstation', {
@@ -440,7 +448,13 @@ async function fetchOrdersPage(
       );
     }
 
+    pagesThisPass += 1;
     if (!res.orders.length || page >= pages) break;
+    // PS-265: bound the per-pass pages + run wall-clock so the orders handler finishes UNDER
+    // its ~10-min deadline (stops the kill-mid-walk / no-progress / re-pull-same-backlog loop).
+    // The window is a fixed lookback re-scanned every run, so a partial pass is re-attempted
+    // next run — nothing is permanently skipped.
+    if (syncRunBudgetExhausted(budget, pagesThisPass)) break;
     page += 1;
     // v2-parity: 500ms inter-page delay. Matches v1Pages helper.
     await new Promise((r) => setTimeout(r, 500));
@@ -457,7 +471,8 @@ async function syncOrdersForAccount(
     pageSize?: number;
     skipStatusPasses?: boolean;
   },
-  storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>
+  storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
+  budget: SyncRunBudget = createSyncRunBudget(),
 ): Promise<{ synced: number; pages: number; sinceIso: string }> {
   const key = watermarkKey(account.label);
   const lastSync =
@@ -474,6 +489,42 @@ async function syncOrdersForAccount(
   // awaiting_shipment to shipped/cancelled without that old awaiting row being
   // revisited by a narrow watermark. Use a 30-day catch-up window so stale DB
   // awaiting counts converge back to ShipStation's live sidebar counts.
+  let total = 0;
+  let maxPages = 1;
+  let failed = false;
+
+  // PS-265: the awaiting_shipment pass (the new orders operators ship TODAY) runs FIRST so a
+  // large historical status catch-up can never starve it under the run budget.
+  const awaitingSinceMs =
+    opts.awaitingSinceMs ?? Math.min(lastSync, runStartMs - AWAITING_CATCHUP_LOOKBACK_MS);
+  const awaitingStoreIds = account.storeIds.filter((sid) => !isExcludedStoreId(sid));
+  const awaitingTargets =
+    awaitingStoreIds.length > 0
+      ? awaitingStoreIds.map((storeId) => ({ storeId }))
+      : [{ storeId: undefined as number | undefined }];
+
+  for (const target of awaitingTargets) {
+    try {
+      const result = await fetchOrdersPage(account, storeToClient, {
+        orderStatus: 'awaiting_shipment',
+        sinceMs: awaitingSinceMs,
+        pageSize,
+        storeId: target.storeId,
+      }, budget);
+      total += result.synced;
+      if (result.pages > maxPages) maxPages = result.pages;
+    } catch (err) {
+      failed = true;
+      console.warn(
+        `[order-sync] account="${account.label}" orderStatus="awaiting_shipment" storeId="${target.storeId ?? 'all'}" failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // Status catch-up passes run AFTER awaiting and only while run-budget time remains. The
+  // window is a fixed 30-day lookback re-scanned every run (idempotent), so a partial pass
+  // is re-attempted next run — this just stops the orders handler from overrunning its deadline.
   const catchupSinceMs = Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS);
   const passes: Array<{ orderStatus: string; sinceMs: number }> = [
     ...(opts.skipStatusPasses
@@ -492,17 +543,17 @@ async function syncOrdersForAccount(
         ]),
   ];
 
-  let total = 0;
-  let maxPages = 1;
-  let failed = false;
   for (const pass of passes) {
+    // PS-265: stop starting status catch-up passes once the run is out of time budget; the
+    // fixed 30-day window is re-scanned next run, so nothing is permanently skipped.
+    if (syncRunBudgetTimeExhausted(budget)) break;
     try {
       const result = await fetchOrdersPage(account, storeToClient, {
         orderStatus: pass.orderStatus,
         sinceMs: pass.sinceMs,
         pageSize,
         statusOnly: true,
-      });
+      }, budget);
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
     } catch (err) {
@@ -510,33 +561,6 @@ async function syncOrdersForAccount(
       // Per-status failure shouldn't kill the whole account sync.
       console.warn(
         `[order-sync] account="${account.label}" orderStatus="${pass.orderStatus}" failed:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
-
-  const awaitingSinceMs =
-    opts.awaitingSinceMs ?? Math.min(lastSync, runStartMs - AWAITING_CATCHUP_LOOKBACK_MS);
-  const awaitingStoreIds = account.storeIds.filter((sid) => !isExcludedStoreId(sid));
-  const awaitingTargets =
-    awaitingStoreIds.length > 0
-      ? awaitingStoreIds.map((storeId) => ({ storeId }))
-      : [{ storeId: undefined as number | undefined }];
-
-  for (const target of awaitingTargets) {
-    try {
-      const result = await fetchOrdersPage(account, storeToClient, {
-        orderStatus: 'awaiting_shipment',
-        sinceMs: awaitingSinceMs,
-        pageSize,
-        storeId: target.storeId,
-      });
-      total += result.synced;
-      if (result.pages > maxPages) maxPages = result.pages;
-    } catch (err) {
-      failed = true;
-      console.warn(
-        `[order-sync] account="${account.label}" orderStatus="awaiting_shipment" storeId="${target.storeId ?? 'all'}" failed:`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -559,6 +583,10 @@ export async function syncOrders(opts: {
   skipStatusPasses?: boolean;
 } = {}): Promise<SyncResult> {
   const runStartMs = Date.now();
+  // PS-265: one run-wide budget bounds the WHOLE orders handler (all accounts + passes) under
+  // its ~10-min deadline, so it returns and advances watermarks instead of being killed
+  // mid-walk with no progress (the loop that re-pulled the same backlog and drained nothing).
+  const budget = createSyncRunBudget();
   const storeToClient = await buildStoreToClientMap();
   const accounts = await loadSyncAccounts();
 
@@ -568,7 +596,7 @@ export async function syncOrders(opts: {
 
   for (const acct of accounts) {
     try {
-      const result = await syncOrdersForAccount(acct, opts, storeToClient);
+      const result = await syncOrdersForAccount(acct, opts, storeToClient, budget);
       grandTotal += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
       if (result.sinceIso < earliestSinceIso) earliestSinceIso = result.sinceIso;
@@ -578,6 +606,9 @@ export async function syncOrders(opts: {
         (err as Error).message
       );
     }
+    // PS-265: stop starting new accounts once the run is out of time budget; their watermarks
+    // are unchanged, so they resume on the next run (fair round-robin across runs).
+    if (syncRunBudgetTimeExhausted(budget)) break;
   }
 
   // Flush any new (storeId → clientId) mappings discovered during this

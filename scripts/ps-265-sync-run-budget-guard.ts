@@ -58,6 +58,20 @@ check('V2 enrichment is skipped when out of time budget',
 check('the deadline is NOT raised (no JOB_HANDLER_TIMEOUT_MS change here)',
   !/JOB_HANDLER_TIMEOUT_MS/.test(ship));
 
+// ── order-sync wiring (slice 2): bounded + awaiting-first ────────────────────
+const ord = read('src/services/order-sync.ts');
+check('order-sync imports the run budget', ord.includes("from '../lib/sync-run-budget'"));
+check('syncOrders creates a run-wide budget', /const budget = createSyncRunBudget\(\)/.test(ord));
+check('fetchOrdersPage breaks on the per-pass page/time budget',
+  /syncRunBudgetExhausted\(budget, pagesThisPass\)/.test(ord));
+check('the awaiting_shipment pass runs BEFORE the status catch-up passes (no new-order starvation)',
+  ord.indexOf("orderStatus: 'awaiting_shipment'") > -1
+  && ord.indexOf("orderStatus: 'awaiting_shipment'") < ord.indexOf('const passes:'));
+check('status catch-up passes stop when the run is out of time budget',
+  /if \(syncRunBudgetTimeExhausted\(budget\)\) break;[\s\S]{0,200}orderStatus: pass\.orderStatus/.test(ord));
+check('order-sync stops starting new accounts near the deadline',
+  (ord.match(/syncRunBudgetTimeExhausted\(budget\)\) break/g) ?? []).length >= 2);
+
 const pkg = read('package.json');
 check('package.json wires test:ps-265-sync-run-budget', /test:ps-265-sync-run-budget/.test(pkg));
 
