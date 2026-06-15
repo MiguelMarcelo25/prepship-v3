@@ -134,15 +134,19 @@ check(
 );
 
 check(
-  // PS-123 (reconciled with the "show all carriers on open" requirement): the modal
-  // open must PROBE THE CACHE FIRST. A live fanout is permitted ONLY as a fallback
-  // gated by a thin-cache check (cachedCarrierCount <= 1), so a warm/complete cache
-  // (worker backfill or the passive auto-rater) is served without any duplicate
-  // live fanout. An UNCONDITIONAL forceLive on open is still forbidden.
-  'modal open probes cache first; any live fanout is gated by a thin-cache check (no unconditional/duplicate fanout)',
+  // PS-206 + PS-241 + PS-260 (coverage-driven fan-out): the modal open must
+  // PROBE THE CACHE FIRST (cachedOnly:true) for an instant paint, then complete
+  // coverage LIVE only when the cached probe left scoped accounts uncovered. The
+  // follow-up fan-out is gated by the backend's per-carrier COVERAGE identity
+  // (probe.uncoveredPids.length > 0) — NOT a carrier-COUNT heuristic. The old
+  // `cachedCarrierCount <= 1` thin-cache check this assertion used to pin was
+  // deliberately removed by PS-206; a cached probe with full coverage
+  // (uncoveredPids empty) is served with no live fan-out at all. This mirrors the
+  // PS-241 fan-out guard's coverage-identity / no-`<=1`-heuristic invariants.
+  'modal open probes cache first, then gates the live fanout on coverage identity (uncoveredPids), not a carrier-count heuristic',
   /cachedOnly:\s*true/.test(autoFetchBlock) &&
-    (!/forceLive:\s*true/.test(autoFetchBlock) ||
-      (/cachedCarrierCount/.test(autoFetchBlock) && /<=\s*1/.test(autoFetchBlock))),
+    /probe\.uncoveredPids\.length\s*>\s*0/.test(autoFetchBlock) &&
+    !/(carriers?WithRates|ratedCount|withRates|cachedCarrierCount)\s*<=\s*1/.test(autoFetchBlock),
 );
 
 check(
