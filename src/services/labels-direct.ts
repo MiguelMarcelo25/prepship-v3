@@ -29,7 +29,7 @@ import { normalizeProviderKey, directCarrierVisibleForScope } from '../lib/direc
 import { resolveWalmartPurchaseOrder, type WalmartPoResolution } from './walmart-po-resolution';
 import type { CreatedExternalLabel } from '../lib/shipstation/labels';
 import type { NormalizedShippingOptions } from '../lib/shipping-options';
-import { generateFakeShipmentId } from './mock-label-generator';
+import { resolveDirectLabelShipmentRef } from './direct-label-shipment-id';
 
 // The synthetic provider-id ranges the Rate Browser assigns to direct
 // accounts (same constants as the rate side; values are part of the public
@@ -239,17 +239,20 @@ export async function createDirectCarrierLabelForOrder(
       ? `data:application/pdf;base64,${result.labelBase64}`
       : '');
   const resultRecord = result as Record<string, unknown>;
-  // CreatedExternalLabel.shipmentId is numeric (ShipStation's id space). Direct
-  // providers return string ids — keep the provider's id in labelId (string)
-  // and synthesize a local numeric shipment id, exactly as the offline mock
-  // path does for its locally-created shipments.
+  // PS-243: a direct label's LOCAL shipment id is ALWAYS synthetic (negative,
+  // int4-safe, collision-proof) — never the provider's numeric id, which can
+  // overflow shipments.labelShipmentId (integer) or collide with ShipStation's
+  // id space. The provider's real id is preserved in labelId. Full rationale in
+  // resolveDirectLabelShipmentRef.
   const providerShipmentId = resultRecord.shipmentId != null ? String(resultRecord.shipmentId) : null;
-  const numericShipmentId = Number(providerShipmentId);
+  const { shipmentId: directShipmentId, labelId: directLabelId } = resolveDirectLabelShipmentRef({
+    providerShipmentId,
+    providerLabelId: resultRecord.labelId != null ? String(resultRecord.labelId) : null,
+    fallbackLabelId: `${provider}-${tracking}`,
+  });
   const created: CreatedExternalLabel = {
-    shipmentId: Number.isFinite(numericShipmentId) && numericShipmentId > 0
-      ? Math.trunc(numericShipmentId)
-      : generateFakeShipmentId(),
-    labelId: String(resultRecord.labelId ?? providerShipmentId ?? `${provider}-${tracking}`),
+    shipmentId: directShipmentId,
+    labelId: directLabelId,
     trackingNumber: tracking,
     labelUrl,
     labelFormat: String(resultRecord.labelFormat ?? (labelUrl.startsWith('data:application/pdf') ? 'pdf' : 'png')),
