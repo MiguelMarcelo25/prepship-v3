@@ -1,4 +1,5 @@
 import { sql as pg } from '../../db/client.js';
+import { hydrateMarketplaceConfirmationPayload } from './confirmation-payload.js';
 import { loadClientCredentials } from '../../lib/shipstation/credentials.js';
 import { resolveStoreConnector } from '../../connectors/store-resolution.js';
 import { assertFulfillmentSchemaReady } from './schema-readiness.js';
@@ -9,6 +10,9 @@ type OrderForConfirmation = {
   sourceProvider?: string | null;
   clientId: number | null;
   orderNumber: string | null;
+  // PS-262a: the order's raw payload — the source of the per-marketplace confirmation
+  // identity (eBay lineItems/ebayOrderId, Walmart purchaseOrderId, storeAccountId).
+  raw?: Record<string, any> | null;
 };
 
 type EnqueueShipmentConfirmationInput = {
@@ -897,8 +901,17 @@ export async function confirmShipmentDirectNow(args: {
       : `${args.provider} shipment confirmation connector is ${resolvedStoreConnector.implementation.status}`;
     return { ok: false, reason };
   }
+  // PS-262a: hydrate the per-marketplace identity (lineItems/purchaseOrderId/etc.)
+  // from the order BEFORE dispatch. mark-shipped-externally passes no payload, so
+  // without this a direct eBay/Walmart confirmation reaches the connector with no
+  // identity and fails non-retryably. Any live value already in args.payload wins.
+  const hydratedPayload = hydrateMarketplaceConfirmationPayload({
+    provider: args.provider,
+    order: args.order,
+    payload: args.payload,
+  });
   const payload: Record<string, unknown> = {
-    ...(args.payload ?? {}),
+    ...hydratedPayload,
     orderId: args.order.id,
     externalOrderId: args.order.externalOrderId,
     clientId: args.order.clientId,
@@ -933,7 +946,24 @@ async function processOutboxRow(row: OutboxRow): Promise<boolean> {
   }
   const { connector, connectorCapabilities } = resolvedStoreConnector;
 
-  const payload = row.payload ?? {};
+  let payload: Record<string, unknown> = (row.payload ?? {}) as Record<string, unknown>;
+  // PS-262a (Per user override unlock shipped data on 2026-06-14): re-hydrate the
+  // marketplace identity from the order before dispatch. Auto-recovery / lifecycle
+  // enqueues store a minimal payload, so a direct eBay/Walmart confirmation would
+  // otherwise dispatch with no lineItems/purchaseOrderId and fail non-retryably.
+  // Any live value already on the stored payload wins (hydrate only fills blanks).
+  const hydrateOrderId = Number(payload.orderId ?? row.order_id);
+  if (Number.isFinite(hydrateOrderId) && hydrateOrderId > 0) {
+    const [orderRow] = await pg<Array<{ external_order_id: string | null; raw: Record<string, unknown> | null }>>`
+      SELECT external_order_id, raw FROM orders WHERE id = ${hydrateOrderId} LIMIT 1`;
+    if (orderRow) {
+      payload = hydrateMarketplaceConfirmationPayload({
+        provider: row.provider,
+        order: { externalOrderId: orderRow.external_order_id, raw: orderRow.raw },
+        payload,
+      });
+    }
+  }
   const credentials = await loadStoreCredentials(
     row.provider,
     payload,

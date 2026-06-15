@@ -147,6 +147,9 @@ export async function markOrderShippedExternally(
               sourceProvider: order.sourceProvider ?? null,
               clientId: order.clientId,
               orderNumber: order.orderNumber,
+              // PS-262a: carry the raw order so the direct confirmation path can
+              // hydrate the per-marketplace identity (lineItems/purchaseOrderId).
+              raw: order.raw ?? null,
             },
             trackingNumber,
             carrierCode: input.carrierCode ?? null,

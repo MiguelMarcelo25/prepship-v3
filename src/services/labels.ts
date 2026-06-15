@@ -11,6 +11,8 @@ import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
 import { resolveOrderLabelPackageId } from './package-resolution';
+// PS-262a: single canonical owner of the per-marketplace confirmation identity.
+import { buildMarketplaceConfirmationIdentity } from './fulfillment/confirmation-payload';
 import {
   extractShipstationLabelUrl,
   ssCreateReturnLabel,
@@ -721,11 +723,6 @@ function isNoMarketplaceSource(value: unknown): boolean {
   return ['manual', 'manual_orders', 'internal', 'none', 'no_marketplace'].includes(text);
 }
 
-function stripProviderPrefix(externalOrderId: string | null | undefined, provider: string): string {
-  const text = firstText(externalOrderId);
-  const prefix = `${provider}-`;
-  return text.toLowerCase().startsWith(prefix) ? text.slice(prefix.length) : '';
-}
 
 function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider | null {
   if (isNoMarketplaceSource(order.sourceProvider)) return null;
@@ -782,53 +779,25 @@ function marketplaceConfirmationPayload(
   created: CreatedExternalLabel,
   provider: MarketplaceConfirmationProvider,
 ): Record<string, unknown> {
-  const raw = order.raw ?? {};
   const payload: Record<string, unknown> = {
     carrierProvider: 'shipstation',
     carrierAccountId: created.providerAccountId,
     shipStationShipmentId: created.shipmentId,
     notifyCustomer: false,
     notifyMarketplace: true,
+    // PS-262a: the per-marketplace IDENTITY (storeAccountId, purchaseOrderId/
+    // ebayOrderId, rawOrder, lineItems) now comes from the single canonical owner so
+    // the label path and the direct/recovery paths build it identically.
+    ...buildMarketplaceConfirmationIdentity(provider, order),
   };
 
+  // Label-derived fields stay here (they need `created`, which only the label path has).
   if (provider === 'walmart') {
-    payload.storeAccountId = firstText(
-      raw.accountId,
-      raw.storeAccountId,
-      raw.sourceAccountId,
-      raw.marketplaceAccountId
-    ) || undefined;
-    payload.purchaseOrderId = firstText(
-      raw.purchaseOrderId,
-      stripProviderPrefix(order.externalOrderId, 'walmart'),
-      raw.orderId,
-      raw.id
-    ) || undefined;
-    payload.rawOrder = raw;
     payload.carrierName = carrierNameForMarketplace(created.carrierCode);
     payload.trackingUrl = trackingUrlForCarrier(created.carrierCode, created.trackingNumber) || undefined;
     payload.serviceCode = created.serviceCode;
   }
-
   if (provider === 'ebay') {
-    payload.storeAccountId = firstText(
-      raw.accountId,
-      raw.storeAccountId,
-      raw.sourceAccountId,
-      raw.marketplaceAccountId
-    ) || undefined;
-    payload.ebayOrderId = firstText(
-      raw.orderId,
-      stripProviderPrefix(order.externalOrderId, 'ebay'),
-      raw.id
-    ) || undefined;
-    payload.rawOrder = raw;
-    payload.lineItems = Array.isArray(raw.lineItems)
-      ? raw.lineItems.map((line: any) => ({
-          lineItemId: firstText(line?.lineItemId, line?.line_item_id),
-          quantity: Number(line?.quantity ?? 1) || 1,
-        })).filter((line: any) => line.lineItemId)
-      : undefined;
     payload.shippingCarrierCode = carrierNameForMarketplace(created.carrierCode);
     payload.serviceCode = created.serviceCode;
   }
