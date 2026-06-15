@@ -551,7 +551,9 @@ async function runBackfill(
           // rate is snapshot-purchasable on reload without a re-browse. Best-effort
           // (a snapshot failure persists the rate without the ref; the purchase
           // boundary then requires a re-rate exactly as before PS-174).
-          const finalizedBest = await finalizeBestRateWithQuote({
+          // PS-244: the finalizer now returns { bestRate, rates, rateQuoteId } (single owner shared
+          // with /rates/browse); the backfill persists only the best rate.
+          const { bestRate: finalizedBest } = await finalizeBestRateWithQuote({
             bestRate: rawAmountBest,
             rates: combined.combinedRates as Array<Record<string, unknown>>,
             cacheKey: combined.combinedRequestKey,

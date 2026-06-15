@@ -103,8 +103,10 @@ const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
 const labelsRoute = readFileSync('src/routes/labels.ts', 'utf8');
 const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
-check('rates /browse emits rateQuoteId + stamps selectedRateKeys',
-  /storeRateQuoteSnapshot\(/.test(ratesRoute) && /withSelectedRateKeys\(/.test(ratesRoute) && /rateQuoteId,/.test(ratesRoute));
+// PS-244: /rates/browse emits the snapshot ref + selection keys via the SINGLE finalizer
+// (finalizeBestRateWithQuote) now, not inline storeRateQuoteSnapshot/withSelectedRateKeys.
+check('rates /browse emits rateQuoteId + selectedRateKeys via the single finalizer',
+  /finalizeBestRateWithQuote\(/.test(ratesRoute) && /responseRates = finalized\.rates/.test(ratesRoute) && /rateQuoteId/.test(ratesRoute));
 check('createLabelV2 boundary uses the unified rate-selection resolver',
   /await assertLabelPurchaseRateSelection\(/.test(labelsService));
 check('createLabelV2 input accepts rateQuoteId + selectedRateKey',

@@ -35,6 +35,7 @@ import {
   type BestRateWorkflowCarrierStatus,
 } from '../services/shipping-workflow/best-rate-workflow-dto';
 import {
+  finalizeBestRateWithQuote,
   storeRateQuoteSnapshot,
   withSelectedRateKeys,
   selectedRateOpaqueKey,
@@ -523,39 +524,45 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // selection server-side WITHOUT the frontend carrying full proof internals. The
   // snapshot expires with the analytics-cache TTL; selectedRateProof stays as the
   // compatibility fallback until the frontend migrates.
-  const ratesWithKeys = withSelectedRateKeys(combinedRates);
-  const rateQuoteId = await storeRateQuoteSnapshot({
-    cacheKey: combinedRequestKey,
-    rates: ratesWithKeys,
-    fetchedAt: result.fetchedAt,
-  });
-  // Stamp the opaque rateQuoteId onto each rate + the best rate so the frontend can
-  // pass back { rateQuoteId, selectedRateKey } at label/queue time instead of full
-  // proof internals (selectedRateProof remains as the compatibility fallback).
-  const responseRates = rateQuoteId ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId })) : ratesWithKeys;
-  // PS-183: the cache-expiry TTL is BACKEND-owned (CACHE_TTL_MS over the quote's
-  // fetchedAt — the same expiry the rate cache itself enforces). Stamped on the
-  // response + best rate so the FE never mints its own "now + 6h" freshness.
+  // PS-244: route the live /rates/browse producer through the SINGLE rate-finalization owner
+  // (finalizeBestRateWithQuote) instead of stamping the selection key + quote snapshot inline,
+  // so browse and the backfill producer can NEVER diverge. selectedRateKey/rateQuoteId are
+  // byte-identical (shared pure fns); the best rate now also carries the backend-owned
+  // proofSource (previously the frontend injected it). The locked label-purchase ENFORCEMENT
+  // boundary is untouched — still dual-path (snapshot preferred, legacy selectedRateProof
+  // fallback); that flip is deferred.
+  //
+  // PS-183: the cache-expiry TTL stays BACKEND-owned (CACHE_TTL_MS over the quote's fetchedAt,
+  // the same expiry the rate cache enforces) so the FE never mints its own "now + 6h" freshness.
   const browseCacheExpiresAt = new Date(
     new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
   ).toISOString();
-  const bestRateOut = cheapest
-    ? {
-        ...cheapest,
-        selectedRateKey: selectedRateOpaqueKey(cheapest),
-        isComplete: bestRateComplete,
-        requestFingerprint: combinedRequestKey,
-        cacheKey: combinedRequestKey,
-        cacheCreatedAt: result.fetchedAt,
-        cacheExpiresAt: browseCacheExpiresAt,
-        effectiveInsuranceProvider: result.effectiveInsuranceProvider,
-        effectiveInsuredValue: result.effectiveInsuredValue,
-        effectiveInsuranceSource: result.effectiveInsuranceSource,
-        insuranceProvider: result.effectiveInsuranceProvider,
-        insuredValue: result.effectiveInsuredValue,
-        ...(rateQuoteId ? { rateQuoteId } : {}),
-      }
-    : cheapest;
+  let responseRates: Array<Record<string, unknown>> = withSelectedRateKeys(combinedRates);
+  let rateQuoteId: string | undefined;
+  let bestRateOut = cheapest;
+  if (cheapest) {
+    const finalized = await finalizeBestRateWithQuote({
+      bestRate: cheapest as Record<string, unknown>,
+      rates: combinedRates as Array<Record<string, unknown>>,
+      cacheKey: combinedRequestKey,
+      fetchedAt: result.fetchedAt,
+    });
+    rateQuoteId = finalized.rateQuoteId;
+    responseRates = finalized.rates;
+    bestRateOut = {
+      ...finalized.bestRate,
+      isComplete: bestRateComplete,
+      requestFingerprint: combinedRequestKey,
+      cacheKey: combinedRequestKey,
+      cacheCreatedAt: result.fetchedAt,
+      cacheExpiresAt: browseCacheExpiresAt,
+      effectiveInsuranceProvider: result.effectiveInsuranceProvider,
+      effectiveInsuredValue: result.effectiveInsuredValue,
+      effectiveInsuranceSource: result.effectiveInsuranceSource,
+      insuranceProvider: result.effectiveInsuranceProvider,
+      insuredValue: result.effectiveInsuredValue,
+    } as typeof cheapest;
+  }
   // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
   // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no
   // rate-quote id — structurally non-purchasable (the purchase boundary rejects proof-less rates).

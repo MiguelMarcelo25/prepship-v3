@@ -52,8 +52,8 @@ check('finalizer omits the ref when no snapshot id (half-ref never invented as f
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 // PS-203 (stage 4): the backfill now persists the COMBINED winner — the
 // fingerprint is the combined request key (SS + direct), not the SS-only one.
-check('rates-backfill persists THROUGH the finalizer',
-  /finalizedBest = await finalizeBestRateWithQuote\(\{/.test(backfill) &&
+check('rates-backfill persists THROUGH the finalizer (PS-244 single owner; destructured bestRate)',
+  /const \{ bestRate: finalizedBest \} = await finalizeBestRateWithQuote\(\{/.test(backfill) &&
   /\.\.\.finalizedBest,\s*\n\s*requestFingerprint: combined\.combinedRequestKey/.test(backfill));
 check('backfill keeps its existing metadata stamps (expiry/eligibility/completeness)',
   /cacheExpiresAt: new Date\(new Date\(result\.fetchedAt\)\.getTime\(\) \+ CACHE_TTL_MS\)/.test(backfill) &&
@@ -63,9 +63,14 @@ check('purchase boundary keeps the legacy selectedRateProof fallback (no new enf
   /falls back to the legacy carried selectedRateProof/i.test(store) ||
   /FALL BACK to the legacy carried proof/.test(store));
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
-check('/rates/browse stamping untouched (rateQuoteId per rate + keys)',
-  /const ratesWithKeys = withSelectedRateKeys\(combinedRates\)/.test(ratesRoute) &&
-  /rateQuoteId \? ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId \}\)\)/.test(ratesRoute));
+// PS-244: /rates/browse now routes through the SINGLE finalizer (finalizeBestRateWithQuote)
+// instead of stamping the selection key + quote snapshot inline — browse and backfill can no
+// longer diverge. selectedRateKey/rateQuoteId are byte-identical (shared pure fns); the best
+// rate now also carries the backend-owned proofSource. The inline trio is GONE.
+check('/rates/browse routes through the single finalizer (PS-244 — no inline re-stamping)',
+  /const finalized = await finalizeBestRateWithQuote\(\{/.test(ratesRoute) &&
+  /responseRates = finalized\.rates/.test(ratesRoute) &&
+  !/const ratesWithKeys = withSelectedRateKeys\(combinedRates\)[\s\S]{0,80}storeRateQuoteSnapshot/.test(ratesRoute));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-174 quote-key consolidation guard (${failures} failing)`);

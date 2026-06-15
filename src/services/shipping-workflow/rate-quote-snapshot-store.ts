@@ -80,23 +80,41 @@ export const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response';
  * is ignored at the purchase boundary, which then uses the legacy proof path).
  * Purchase enforcement itself is untouched (Phase 4 territory).
  */
+// PS-244: returns the SINGLE owner's full output — the stamped best rate, the key+quote-stamped
+// rates array, and the top-level rateQuoteId — so EVERY producer (rates-backfill AND the live
+// /rates/browse route) delegates here instead of re-stamping inline. selectedRateKey/rateQuoteId
+// are byte-identical to the old inline stamping (shared pure fns); the best rate now also carries
+// the backend-owned proofSource. The label-purchase ENFORCEMENT boundary is untouched.
 export async function finalizeBestRateWithQuote<T extends Record<string, unknown>>(input: {
   bestRate: T;
   rates: Array<Record<string, unknown>>;
   cacheKey: string;
   fetchedAt?: string | number;
-}): Promise<T & { selectedRateKey: string; rateQuoteId?: string; proofSource: string }> {
+}): Promise<{
+  bestRate: T & { selectedRateKey: string; rateQuoteId?: string; proofSource: string };
+  rates: Array<Record<string, unknown> & { selectedRateKey: string; rateQuoteId?: string }>;
+  rateQuoteId?: string;
+}> {
   const ratesWithKeys = withSelectedRateKeys(input.rates);
   const rateQuoteId = await storeRateQuoteSnapshot({
     cacheKey: input.cacheKey,
     rates: ratesWithKeys,
     fetchedAt: input.fetchedAt,
   });
+  // Stamp the opaque rateQuoteId onto each rate too (the FE passes back { rateQuoteId,
+  // selectedRateKey } at label/queue time) — the same shape /rates/browse returned inline.
+  const rates = rateQuoteId
+    ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId }))
+    : ratesWithKeys;
   return {
-    ...input.bestRate,
-    selectedRateKey: selectedRateOpaqueKey(input.bestRate),
+    bestRate: {
+      ...input.bestRate,
+      selectedRateKey: selectedRateOpaqueKey(input.bestRate),
+      ...(rateQuoteId ? { rateQuoteId } : {}),
+      proofSource: BACKEND_RATE_PROOF_SOURCE,
+    },
+    rates,
     ...(rateQuoteId ? { rateQuoteId } : {}),
-    proofSource: BACKEND_RATE_PROOF_SOURCE,
   };
 }
 
