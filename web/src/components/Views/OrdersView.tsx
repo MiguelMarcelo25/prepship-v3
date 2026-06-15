@@ -8342,6 +8342,21 @@ export default function OrdersView({
                     >
                       <Loader2 size={15} strokeWidth={2.5} className="animate-spin text-brand" />
                     </div>
+                  ) : panelDisplayOrder.bestRate ? (
+                    <>
+                      {/* PS-277 (slice 2): the side panel reads the PERSISTED SOT FIRST — the SAME
+                          getBackendRowMoney(...).markedAmount the BEST RATE column reads — so panel == column
+                          (incl. markup). refreshPanelBestRate persists every live result to the SOT
+                          (persistAppliedRateForOrder), so this is always fresh; the ephemeral preview below
+                          is only a transient fallback for the brief window before the SOT row refetches.
+                          PS-178: BACKEND money tuple only — no FE markup math. */}
+                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
+                        {formatMoney(getBackendRowMoney(panelDisplayOrder)?.markedAmount ?? getBestRateBaseCost(panelDisplayOrder))}
+                      </span>
+                      <span className="text-[11px] text-ink-3 leading-snug truncate">
+                        {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}
+                      </span>
+                    </>
                   ) : panelPreviewRate ? (
                     <>
                       <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
@@ -8349,18 +8364,6 @@ export default function OrdersView({
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
                         {panelPreviewAccountLabel} · {formatServiceCode(toStringValue(panelPreviewRate.serviceCode))}
-                      </span>
-                    </>
-                  ) : panelDisplayOrder.bestRate ? (
-                    <>
-                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {/* PS-178 final part: BACKEND money tuple only (PS-177) — the FE
-                            markup-math fallback is deleted; without the tuple the panel
-                            shows the plain carrier base, never FE-computed markup. */}
-                        {formatMoney(getBackendRowMoney(panelDisplayOrder)?.markedAmount ?? getBestRateBaseCost(panelDisplayOrder))}
-                      </span>
-                      <span className="text-[11px] text-ink-3 leading-snug truncate">
-                        {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}
                       </span>
                     </>
                   ) : (

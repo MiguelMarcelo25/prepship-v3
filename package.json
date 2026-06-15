@@ -301,6 +301,7 @@
     "test:ps-276-resolver-consumption": "tsx scripts/ps-276-resolver-consumption-guard.ts",
     "test:ps-277-browse-sot-writeback": "tsx scripts/ps-277-browse-sot-writeback-guard.ts",
     "test:ps-277-sot-consistency": "tsx scripts/ps-277-sot-consistency-guard.ts",
+    "test:ps-277-panel-reads-sot": "tsx scripts/ps-277-panel-reads-sot-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
