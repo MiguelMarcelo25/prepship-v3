@@ -15,6 +15,8 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
+// PS-276 (slice 4-UI): resi/comm header tag — reads the backend verdict off the DTO (display-only).
+import { ResidentialTag, residentialTagFacts } from './ui/ResidentialTag';
 import { apiClient } from '../lib/v2-apiClient';
 import { CALIFORNIA_TZ } from '../lib/ca-time';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
@@ -108,6 +110,10 @@ export type RbOrderSummaryDto = {
   shipTo?: { postalCode?: string | null; company?: string | null } | null;
   residential?: boolean | null;
   sourceResidential?: boolean | null;
+  // PS-276 (slice 4-UI): the backend's resolved residential verdict for the resi/comm header tag.
+  residentialClassification?: 'residential' | 'commercial' | null;
+  residentialSource?: string | null;
+  residentialConfidence?: string | null;
 };
 
 export type RbAppliedRate = {
@@ -1938,6 +1944,10 @@ export default function RateBrowserModal({
         >
           <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', flex: 1 }}>
             Rate Browser
+          </span>
+          {/* PS-276 (slice 4-UI): the order's backend resi/comm verdict (one per browse, not per rate). */}
+          <span style={{ marginRight: 12 }} className="text-[11px]">
+            <ResidentialTag facts={residentialTagFacts(order)} />
           </span>
           <button
             type="button"

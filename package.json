@@ -296,6 +296,7 @@
     "test:ps-276-address-classification-cache": "tsx scripts/ps-276-address-classification-cache-guard.ts",
     "test:ps-276-dto-residential-verdict": "tsx scripts/ps-276-dto-residential-verdict-guard.ts",
     "test:ps-276-fe-residential-defers": "tsx scripts/ps-276-fe-residential-defers-guard.ts",
+    "test:ps-276-resi-comm-tag": "tsx scripts/ps-276-resi-comm-tag-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",

@@ -14,6 +14,8 @@
 import { AlertTriangle, BadgeCheck, Box, ChevronDown, Copy as CopyIcon, Edit3, Loader2, MapPin, Package, User as UserIcon } from 'lucide-react'
 import HoverImage from '../HoverImage'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
+// PS-276 (slice 4-UI): the resi/comm tag reads the backend verdict off the DTO (display-only).
+import { ResidentialTag, residentialTagFacts } from '../ui/ResidentialTag'
 import { copyText } from './orders-display-state'
 import { formatMoney, toRecord, toStringValue } from './orders-row-display'
 import type { OrderLineItem } from './orders-items'
@@ -168,22 +170,11 @@ export function OrdersPanelRecipientSection({
           <div className="text-[12px] text-ink-2 mt-1 font-mono tabular-nums">{shipTo.phone}</div>
         ) : null}
 
-        {/* Address type pill */}
+        {/* Address type pill — PS-276 (slice 4-UI): the backend resi/comm verdict + source/confidence
+            (green trusted-commercial, amber low-confidence-commercial, neutral residential). Display
+            of the SOT classification, never a second classifier. */}
         <div className="flex items-center gap-1.5 mt-2 text-[10.5px]">
-          {panelOrder.residential ?? panelOrder.sourceResidential ? (
-            <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line font-medium">
-              <MapPin size={9} strokeWidth={2.5} className="text-ink-3" />
-              Residential
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line font-medium">
-              <Box size={9} strokeWidth={2.5} className="text-ink-3" />
-              Commercial
-            </span>
-          )}
-          <span className="text-ink-4">
-            {panelOrder.residential != null ? '(manual)' : '(auto)'}
-          </span>
+          <ResidentialTag facts={residentialTagFacts(panelOrder)} />
           <button
             type="button"
             onClick={(event) => { event.preventDefault(); void toggleResidential() }}

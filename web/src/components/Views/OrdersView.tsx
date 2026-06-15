@@ -708,6 +708,8 @@ import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPa
 import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
 // PS-219: shared danger-tone confirm dialog for the operator Void Label action.
 import { ConfirmModal } from '../ui/ConfirmModal'
+// PS-276 (slice 4-UI): compact resi/comm tag on the Orders table customer cell (display-only).
+import { ResidentialTag, residentialTagFacts } from '../ui/ResidentialTag'
 // PS-166 (Wave 2c1): the two leaf cell renderers (Order # cell + generic
 // diagnostic cell) moved VERBATIM to ./OrdersTableCells; renderTableCell
 // (still here) calls renderOrderCell with an explicit context object.
@@ -7390,6 +7392,8 @@ export default function OrdersView({
         return (
           <div>
             <div className="customer-name">{shipTo.name ?? '—'}</div>
+            {/* PS-276 (slice 4-UI): compact resi/comm verdict at a glance (display-only). */}
+            <div className="mt-0.5 text-[9.5px]"><ResidentialTag facts={residentialTagFacts(order)} /></div>
             {assignedLocal ? (
               <div
                 title={`Assigned to ${assignedEmail}`}
