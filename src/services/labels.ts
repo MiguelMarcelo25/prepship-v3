@@ -51,6 +51,7 @@ import {
 } from './labels-direct';
 import { normalizeProviderKey } from '../lib/direct-carrier-scope';
 import {
+  cancelShipmentConfirmationsForVoid,
   enqueueShipmentConfirmation,
   ensureFulfillmentSchema,
   inferStoreProvider,
@@ -1884,6 +1885,20 @@ export async function voidLabelV2(
       .update(orders)
       .set({ orderStatus: 'awaiting_shipment', updatedAt: now })
       .where(eq(orders.id, row.orderId));
+  }
+
+  // PS-263 (Per user override unlock shipped data on 2026-06-14): a void must retract the
+  // marketplace confirmation. Cancel every not-yet-sent confirmation for this order so it
+  // can't fire with the now-dead tracking, and stamp the shipment's confirmation lifecycle.
+  // Best-effort: the single local void write above already succeeded (PS-211 invariant) and
+  // must not be undone if this retract misses.
+  try {
+    await cancelShipmentConfirmationsForVoid({ orderId: row.orderId ?? null, shipmentId: row.id });
+  } catch (retractErr) {
+    console.warn(
+      `[voidLabelV2] confirmation retract failed shipmentId=${row.id} orderId=${row.orderId ?? 'null'}:`,
+      retractErr,
+    );
   }
 
   return {

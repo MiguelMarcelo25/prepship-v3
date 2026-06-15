@@ -258,6 +258,68 @@ export async function markShipmentConfirmationState(args: {
   `;
 }
 
+/**
+ * PS-263 (Per user override unlock shipped data on 2026-06-14) — retract a marketplace
+ * shipment confirmation when its label is voided.
+ *
+ * Before this, voidLabelV2 voided the carrier label and reset the order to
+ * awaiting_shipment but never touched fulfillment_outbox or shipments.confirmation_status.
+ * So a still-pending confirmation could fire AFTER the void (acking the marketplace with a
+ * now-dead/voided tracking number), and a re-labeled order enqueued a SECOND confirmation
+ * with a different number — a double-confirm with conflicting tracking.
+ *
+ * This is the single owner that honors a void everywhere a confirmation can still
+ * originate. It is BEST-EFFORT: callers wrap it in try/catch — the local void already
+ * happened and must never be undone by a retract miss. It touches NO carrier postage,
+ * label, or print state and never re-acks a marketplace (it only stops a pending ack and
+ * records the lifecycle for reporting).
+ */
+export async function cancelShipmentConfirmationsForVoid(args: {
+  orderId: number | null;
+  shipmentId: number;
+}): Promise<{ cancelledQueued: number; alreadyConfirmed: boolean }> {
+  await ensureFulfillmentSchema();
+  const { orderId, shipmentId } = args;
+
+  // 1) Was THIS shipment already confirmed to the marketplace? Read its own lifecycle
+  //    BEFORE we restamp it — that is the precise per-shipment signal.
+  const [ship] = (await pg`
+    SELECT confirmation_status, marketplace_confirmed_at
+    FROM shipments WHERE id = ${shipmentId} LIMIT 1
+  `) as Array<{ confirmation_status: string | null; marketplace_confirmed_at: string | null }>;
+  const alreadyConfirmed =
+    ship?.confirmation_status === 'succeeded' || ship?.marketplace_confirmed_at != null;
+
+  // 2) Stop every not-yet-succeeded confirmation from ever firing. claimDueOutboxRows /
+  //    claimOutboxRowById only select status IN ('pending','failed'), so flipping these to
+  //    'cancelled' (and next_run_at='infinity') makes them permanently unclaimable. A
+  //    succeeded row is left intact — it is confirmation history, not a pending send.
+  const cancelled = (await pg`
+    UPDATE fulfillment_outbox
+    SET status = 'cancelled', next_run_at = 'infinity', updated_at = NOW()
+    WHERE event_type = 'shipment_confirmation_requested'
+      AND status <> 'succeeded'
+      AND ${orderId != null ? pg`order_id = ${orderId}` : pg`shipment_id = ${shipmentId}`}
+    RETURNING id
+  `) as Array<{ id: number }>;
+
+  // 3) Stamp the voided shipment's confirmation lifecycle:
+  //      already confirmed → 'void_retract_pending' (the marketplace still holds the dead
+  //        tracking; this surfaces in reporting, and a re-label's fresh enqueue re-confirms
+  //        with the correct number);
+  //      otherwise → 'cancelled' (the pending send we just stopped never fired).
+  //    Either non-null value also keeps the missing-confirmation recovery sweep (which
+  //    requires confirmation_status IS NULL) from re-enqueuing this voided shipment.
+  await pg`
+    UPDATE shipments
+    SET confirmation_status = ${alreadyConfirmed ? 'void_retract_pending' : 'cancelled'},
+        updated_at = NOW()
+    WHERE id = ${shipmentId}
+  `;
+
+  return { cancelledQueued: cancelled.length, alreadyConfirmed };
+}
+
 export async function enqueueShipmentConfirmation(
   input: EnqueueShipmentConfirmationInput,
 ): Promise<{ queued: boolean; provider: string; outboxId?: number }> {
