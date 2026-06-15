@@ -182,6 +182,32 @@ export function resolveAccountInsuranceCapability(input: {
     };
   }
 
+  // PS-262b (Per user override unlock shipped data on 2026-06-14): a DIRECT
+  // (non-ShipStation) carrier that cannot actually buy insurance must NOT resolve to
+  // ParcelGuard (a ShipStation-only product that can't be purchased there) — that
+  // silently ships uninsured. Audited 2026-06-14: Walmart Shipping hardcodes
+  // insurance:false, so an insured order on it is BLOCKED (the eligibility layer
+  // refuses it) rather than shipped uninsured. `walmart_shipping` is direct-only
+  // (ShipStation never brokers Walmart), so the carrier code is unambiguous.
+  //
+  // Intentionally NOT blocked here:
+  //  - direct FedEx already self-blocks: its connector asserts insurance unsupported
+  //    and throws at label time, and the bare `fedex` code can't be distinguished
+  //    from ShipStation-brokered FedEx (which insures fine via ParcelGuard) by code
+  //    alone — blocking it would break ShipStation FedEx. PS-261 (account context)
+  //    handles that distinction.
+  //  - Shipp/EasyPost DO insure (Shipp via customsValue, EasyPost via a paid
+  //    insurance amount); their correct provider/cost reclassification is deferred to
+  //    PS-261 (pricing EasyPost at $0 'carrier' would under-charge). They fall
+  //    through to ParcelGuard pricing below — cosmetic label only, still insured.
+  if (carrierCode === 'walmartshipping') {
+    return {
+      required: 'blocked',
+      carrierPurchasable: false,
+      reason: 'Walmart Shipping cannot purchase insurance (insurance:false) — insured shipping blocked',
+    };
+  }
+
   // ShipStation-brokered (ups_walleted/fedex_walleted/stamps_com/usps) and everything
   // else: ParcelGuard is the only available insurance.
   return {

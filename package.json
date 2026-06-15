@@ -283,6 +283,7 @@
     "test:ps-265-job-handler-deadline": "tsx scripts/ps-265-job-handler-deadline-guard.ts",
     "test:ps-265-walmart-throttle": "tsx scripts/ps-265-walmart-throttle-guard.ts",
     "test:ps-264-cached-rate-insurance-enrich": "tsx scripts/ps-264-cached-rate-insurance-enrich-guard.ts",
+    "test:ps-262b-direct-carrier-insurance": "tsx scripts/ps-262b-direct-carrier-insurance-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",

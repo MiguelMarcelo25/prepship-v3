@@ -1,5 +1,5 @@
 import { normalizeInsurance, type NormalizedInsuranceProvider } from './shipping-options.js';
-import { effectiveInsuranceProviderForAccount } from './carrier-account-registry.js';
+import { effectiveInsuranceProviderForAccount, resolveAccountInsuranceCapability } from './carrier-account-registry.js';
 
 export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1';
 
@@ -377,6 +377,27 @@ export function evaluateShippingServiceEligibility(
       ruleId: 'ups-ground-saver-insurance',
       reason: UPS_GROUND_SAVER_INSURANCE_BLOCK_REASON,
     };
+  }
+  // PS-262b (Per user override unlock shipped data on 2026-06-14): an INSURED order
+  // cannot ship on a direct carrier that can't actually buy insurance. The capability
+  // resolver returns 'blocked' for those (e.g. Walmart Shipping, which hardcodes
+  // insurance:false and would otherwise ship uninsured). Block it here rather than
+  // silently shipping uninsured or faking ParcelGuard. Ground Saver insured is already
+  // blocked above; this catches the non-Ground-Saver blocked carriers.
+  if (insuranceProvider !== 'none' && Number.isFinite(insuredValue) && insuredValue > 0) {
+    const capability = resolveAccountInsuranceCapability({
+      shippingProviderId: service?.carrierId ?? null,
+      carrierCode: service?.carrierCode ?? null,
+      serviceCode: service?.serviceCode ?? null,
+    });
+    if (capability.required === 'blocked') {
+      return {
+        allowed: false,
+        version: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+        ruleId: 'insurance-unsupported-carrier',
+        reason: capability.reason,
+      };
+    }
   }
   return {
     allowed: true,
