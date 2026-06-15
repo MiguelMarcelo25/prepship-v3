@@ -56,6 +56,7 @@ import {
   shippingAutomationRulesFingerprint,
 } from './shipping-automation';
 import {
+  easyPostScheduledPremium,
   enrichRatesWithInsuranceCost,
   insuranceCostConfigFingerprint,
   isRateInsuranceResolved,
@@ -1836,12 +1837,33 @@ export async function getDirectCarrierRatesForRateInput(
         directRateServiceDescriptor(rate as Record<string, unknown>, account.provider),
         shippingOptions,
       ).allowed);
-      const rates = applyMarkups(
+      const markedUp = applyMarkups(
         eligible
           .map((rate) => toDirectRate(rate as Record<string, unknown>, account, requestFingerprint, fetchedAt, eligible.length))
           .filter((rate): rate is Rate => rate != null),
         directMarkups,
       );
+      // PS-261: EasyPost charges its OWN insurance fee and its rates never pass through the
+      // ShipStation enrichRatesWithInsuranceCost path (the direct universe is merged AFTER
+      // enrichment via combineCarrierUniverses), so an insured EasyPost rate would carry
+      // insurance_amount=0 and be compared on bare postage — winning the combined cheapest
+      // pick UNFAIRLY against ParcelGuard-priced ShipStation rates. Attach the best-effort
+      // EasyPost insurance estimate so the candidate is ranked/displayed fairly. This is
+      // rate-time only: accurate post-purchase billing requires the EasyPost connector to
+      // report its real fee (a source-of-truth follow-up; createLabelEasyPost discards it).
+      const easyPostPremium =
+        normalizeProviderKey(account.provider) === 'easypost'
+        && shippingOptions.insuranceProvider !== 'none'
+        && Number(shippingOptions.insuredValue ?? 0) > 0
+          ? easyPostScheduledPremium(Number(shippingOptions.insuredValue ?? 0))
+          : null;
+      const rates =
+        easyPostPremium != null && easyPostPremium > 0
+          ? markedUp.map((rate) => ({
+              ...rate,
+              insurance_amount: { amount: easyPostPremium, currency: rate.insurance_amount?.currency ?? 'USD' },
+            }))
+          : markedUp;
       const meta = {
         accountId: account.id,
         sourceTable: account.sourceTable,

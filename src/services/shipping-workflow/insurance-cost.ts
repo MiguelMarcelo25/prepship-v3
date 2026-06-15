@@ -149,6 +149,24 @@ export function parcelGuardScheduledPremium(
   return Number(premium.toFixed(2));
 }
 
+// PS-261 (best-effort, UNCONFIRMED) — EasyPost charges its OWN insurance fee (a paid amount
+// on the bought shipment), NOT ParcelGuard. EasyPost's published insurance is ~1% of the
+// insured value with a ~$0.50 minimum. This rate-time ESTIMATE stops an insured EasyPost
+// candidate from being compared at $0 (artificially cheapest) against ParcelGuard-priced
+// ShipStation rates in the combined cheapest pick. It is intentionally an estimate: the
+// EasyPost connector does not yet return the real billed insurance fee (a source-of-truth
+// follow-up — createLabelEasyPost discards it), so the persisted post-purchase cost is a
+// separate slice. TODO(PS-261): re-verify this schedule against a purchased EasyPost label
+// and replace it with the connector's actual reported insurance_cost.
+const EASYPOST_INSURANCE_MIN = 0.5;
+const EASYPOST_INSURANCE_PER_DOLLAR = 0.01; // 1% of insured value
+export function easyPostScheduledPremium(insuredValue: number): number | null {
+  const value = finite(insuredValue);
+  if (value == null || value <= 0) return null;
+  const premium = Math.max(EASYPOST_INSURANCE_MIN, value * EASYPOST_INSURANCE_PER_DOLLAR);
+  return premium > 0 ? Number(premium.toFixed(2)) : null;
+}
+
 /** Fingerprint of the active rate-time insurance policy. Bumped for PS-126 (schedule
  *  restored) so cache entries computed under the PS-125 "$0 add-on" rule are
  *  invalidated and re-rated with the real schedule premium. PS-170: the direct-UPS
@@ -251,15 +269,20 @@ export function resolveRateInsurancePremium(
     }
   }
 
-  // Non-ParcelGuard insured rate, or a ParcelGuard rate the schedule couldn't price:
-  // resolve at $0 so the rate is never blocked (PS-125 anti-block preserved).
+  // PS-261: a non-ParcelGuard insured provider this resolver can't price (a direct-carrier
+  // provider whose cost is owned elsewhere, the dead 'shipsurance' member, or any future
+  // value), or a ParcelGuard rate the schedule couldn't price. Resolve at $0 so the rate is
+  // NEVER blocked (PS-125 anti-block preserved) — but mark it UNCONFIRMED. A $0 here is a
+  // "couldn't price" fallback, NOT a verified $0 premium (the genuine free-tier $0 is the
+  // 'carrier' branch above, which stays confirmed). Confirming this $0 falsely asserted an
+  // insured rate carries no premium, letting downstream treat an unpriced provider as final.
   return {
     status: 'resolved',
     insuranceProvider: provider,
     insuredValue,
     amount: 0,
     provenance: 'shipstation_estimate',
-    confirmed: true,
+    confirmed: false,
     fetchedAt,
   };
 }
