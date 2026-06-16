@@ -1,6 +1,7 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { normalizeShippingOptions } from '../../lib/shipping-options.js';
+import { readShipFrom } from './ship-from-address.js';
 
 const UPS_SERVICE_NAMES: Record<string, string> = {
   '01': 'UPS Next Day Air',
@@ -237,7 +238,9 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
   const dimsW = Number(input.dimsW ?? 0);
   const dimsH = Number(input.dimsH ?? 0);
   const serviceCode = String(input.serviceCode ?? '03');
-  const shipFrom = input.shipFrom as Record<string, unknown>;
+  // Canonical origin read (snake_case Address read correctly; was `shipFrom.city/.zip`
+  // etc. — camelCase that read undefined → UPS quoted/labeled from a blank/default origin).
+  const from = readShipFrom(input.shipFrom as Record<string, unknown>, undefined, (input as { fromZip?: unknown }).fromZip);
   const shipTo = input.shipTo as Record<string, unknown>;
   const packageServiceOptions = upsPackageServiceOptions(input);
   // PS-135(a): accept the residential flag from the top-level input OR a stamped shipTo.residential
@@ -255,16 +258,16 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
       Shipment: {
         Description: 'Merchandise',
         Shipper: {
-          Name: shipFrom.name,
-          AttentionName: shipFrom.name,
+          Name: from.name,
+          AttentionName: from.name,
           ShipperNumber: accountNumber,
-          Phone: { Number: shipFrom.phone || '0000000000' },
+          Phone: { Number: from.phone || '0000000000' },
           Address: {
-            AddressLine: [shipFrom.street1],
-            City: shipFrom.city,
-            StateProvinceCode: shipFrom.state,
-            PostalCode: shipFrom.zip,
-            CountryCode: shipFrom.country,
+            AddressLine: [from.line1, from.line2].filter(Boolean),
+            City: from.city,
+            StateProvinceCode: from.state,
+            PostalCode: from.postalCode,
+            CountryCode: from.country,
           },
         },
         ShipTo: {
@@ -284,15 +287,15 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
           },
         },
         ShipFrom: {
-          Name: shipFrom.name,
-          AttentionName: shipFrom.name,
-          Phone: { Number: shipFrom.phone || '0000000000' },
+          Name: from.name,
+          AttentionName: from.name,
+          Phone: { Number: from.phone || '0000000000' },
           Address: {
-            AddressLine: [shipFrom.street1],
-            City: shipFrom.city,
-            StateProvinceCode: shipFrom.state,
-            PostalCode: shipFrom.zip,
-            CountryCode: shipFrom.country,
+            AddressLine: [from.line1, from.line2].filter(Boolean),
+            City: from.city,
+            StateProvinceCode: from.state,
+            PostalCode: from.postalCode,
+            CountryCode: from.country,
           },
         },
         PaymentInformation: {

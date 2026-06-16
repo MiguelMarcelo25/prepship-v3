@@ -1,8 +1,24 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { normalizeShippingOptions } from '../../lib/shipping-options.js';
+import { readShipFrom } from './ship-from-address.js';
 
 type EasyPostRate = { service: string; cost: number; days: number; currency: string };
+
+/** Map the canonical origin to EasyPost's from_address shape. */
+function easyPostFromAddress(shipFrom: unknown, creds: Record<string, unknown>, fallbackZip: unknown) {
+  const a = readShipFrom(shipFrom as Record<string, unknown>, creds, fallbackZip);
+  return {
+    name: a.name,
+    street1: a.line1,
+    ...(a.line2 ? { street2: a.line2 } : {}),
+    city: a.city,
+    state: a.state,
+    zip: a.postalCode,
+    country: a.country,
+    phone: a.phone,
+  };
+}
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {
@@ -48,17 +64,8 @@ async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPo
   }
 
   const basic = Buffer.from(`${apiKey}:`).toString('base64');
-  const credShipFromZip = firstString(creds.shipFromZip).replace(/[^0-9]/g, '').slice(0, 5);
-  const fromZip = credShipFromZip || firstString(input.fromZip, '90248').replace(/[^0-9]/g, '').slice(0, 5);
-  const fromAddress = {
-    name: firstString(creds.shipFromName, 'Seller'),
-    street1: firstString(creds.shipFromAddress1, 'Warehouse'),
-    city: firstString(creds.shipFromCity, 'Carson'),
-    state: firstString(creds.shipFromState, 'CA'),
-    zip: fromZip,
-    country: 'US',
-    phone: firstString(creds.shipFromPhone, '0000000000'),
-  };
+  // Canonical origin (was creds-only with a Carson default — never read input.shipFrom).
+  const fromAddress = easyPostFromAddress(input.shipFrom, creds, input.fromZip);
 
   const rawOrder = input.rawOrder as any;
   const orderAddr =
@@ -148,21 +155,13 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
     'Content-Type': 'application/json',
     Accept: 'application/json',
   };
-  const shipFrom = input.shipFrom as Record<string, unknown>;
   const shipTo = input.shipTo as Record<string, unknown>;
   const normalizedOptions = easyPostOptions(input);
 
   const shipBody = {
     shipment: {
-      from_address: {
-        name: shipFrom.name,
-        street1: shipFrom.street1,
-        city: shipFrom.city,
-        state: shipFrom.state,
-        zip: shipFrom.zip,
-        country: shipFrom.country,
-        phone: shipFrom.phone,
-      },
+      // Canonical origin (was `shipFrom.street1/.city/.zip` — camelCase that read undefined).
+      from_address: easyPostFromAddress(input.shipFrom, creds, (input as { fromZip?: unknown }).fromZip),
       to_address: {
         name: shipTo.name,
         street1: shipTo.street1,

@@ -1,6 +1,7 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
+import { readShipFrom } from './ship-from-address.js';
 
 type Rate = { service: string; cost: number; days: number; currency: string };
 
@@ -80,15 +81,18 @@ async function ratesFromAmazonBuyShipping(input: Record<string, unknown>): Promi
   }
 
   const accessToken = await getAmazonLwaAccessToken(creds);
-  const fromZip = stringOrDefault(input.fromZip, '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  // Canonical origin (was FULLY hardcoded to a Carson/"Warehouse" default — never read
+  // input.shipFrom, so every Amazon quote shipped from the wrong origin).
+  const from = readShipFrom(input.shipFrom as Record<string, unknown>, creds, input.fromZip);
   const shipFrom = {
-    name: 'Seller',
-    addressLine1: 'Warehouse',
-    city: 'Carson',
-    stateOrRegion: 'CA',
-    postalCode: fromZip,
-    countryCode: 'US',
-    phoneNumber: '0000000000',
+    name: from.name,
+    addressLine1: from.line1,
+    ...(from.line2 ? { addressLine2: from.line2 } : {}),
+    city: from.city,
+    stateOrRegion: from.state,
+    postalCode: from.postalCode,
+    countryCode: from.country,
+    phoneNumber: from.phone,
   };
 
   const weightOz = Number(input.weightOz ?? 0);

@@ -1,6 +1,7 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
+import { readShipFrom } from './ship-from-address.js';
 import { PDFDocument } from 'pdf-lib';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
@@ -248,33 +249,18 @@ function shippShipFrom(
   creds: Record<string, unknown>,
   input: { fromZip?: unknown; shipFrom?: any },
 ) {
-  const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom : {};
-  const fromZip = String(
-    creds?.shipFromZip ??
-      shipFromInput?.postalCode ??
-      input.fromZip ??
-      '90248',
-  ).replace(/[^0-9-]/g, '').slice(0, 10);
+  // Canonical origin (was camelCase reads → undefined → Carson default).
+  const a = readShipFrom(input.shipFrom as Record<string, unknown>, creds, input.fromZip);
   return {
-    name: String(creds?.shipFromName ?? shipFromInput?.name ?? 'Seller'),
-    phone: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '0000000000'),
-    company_name: String(creds?.shipFromCompany ?? creds?.shipFromName ?? shipFromInput?.name ?? ''),
-    address_line1: String(
-      creds?.shipFromAddress1 ??
-        shipFromInput?.addressLine1 ??
-        shipFromInput?.street1 ??
-        'Warehouse',
-    ),
-    address_line2: String(
-      creds?.shipFromAddress2 ??
-        shipFromInput?.addressLine2 ??
-        shipFromInput?.street2 ??
-        '',
-    ) || null,
-    city_locality: String(creds?.shipFromCity ?? shipFromInput?.city ?? 'Carson'),
-    state_province: String(creds?.shipFromState ?? shipFromInput?.state ?? 'CA'),
-    postal_code: fromZip || '90248',
-    country_code: String(shipFromInput?.country ?? 'US') || 'US',
+    name: a.name,
+    phone: a.phone,
+    company_name: a.company,
+    address_line1: a.line1,
+    address_line2: a.line2 || null,
+    city_locality: a.city,
+    state_province: a.state,
+    postal_code: a.postalCode,
+    country_code: a.country,
   };
 }
 
@@ -356,9 +342,11 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   );
   const hasRawShipTo = shippHasRawShipTo(rawOrder);
   const toZipPlace = await shippLookupUsZip(to.postal_code);
-  const shipFrom = input.shipFrom as any;
-  const fromHasExplicitCity = Boolean(shippFirstString(creds?.shipFromCity, shipFrom?.city));
-  const fromHasExplicitState = Boolean(shippFirstString(creds?.shipFromState, shipFrom?.state));
+  // Was the city/state EXPLICITLY provided (vs defaulted)? Read the canonical Address
+  // snake_case (city_locality/state_province) + creds — NOT camelCase shipFrom.city.
+  const sfRaw = (input.shipFrom ?? {}) as Record<string, unknown>;
+  const fromHasExplicitCity = Boolean(shippFirstString(creds?.shipFromCity, sfRaw.city_locality));
+  const fromHasExplicitState = Boolean(shippFirstString(creds?.shipFromState, sfRaw.state_province));
   const fromZipPlace = (!fromHasExplicitCity || !fromHasExplicitState)
     ? await shippLookupUsZip(from.postal_code)
     : {};

@@ -1,6 +1,7 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
+import { readShipFrom } from './ship-from-address.js';
 
 async function getEbayLogisticsAccessToken(creds: Record<string, unknown>): Promise<string> {
   const appId = String(creds?.appId ?? '').trim();
@@ -119,24 +120,23 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
   const useSandbox = String(creds?.environment ?? '').toLowerCase() === 'sandbox';
   const apiBase = useSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
   const marketplaceId = String(creds?.marketplaceId ?? 'EBAY_US').trim() || 'EBAY_US';
-  const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object'
-    ? input.shipFrom as Record<string, any>
-    : {};
-  const fromZip = String(creds?.shipFromZip ?? shipFromInput?.postalCode ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  // Canonical origin (was camelCase reads — postalCode/city/state/addressLine1 — that read
+  // undefined for the snake_case Address and fell back to a Carson default).
+  const from = readShipFrom(input.shipFrom as Record<string, unknown>, creds, input.fromZip);
   const shipFrom = {
-    fullName: String(creds?.shipFromName ?? shipFromInput?.name ?? 'Seller'),
-    companyName: String(creds?.shipFromCompany ?? creds?.shipFromName ?? shipFromInput?.name ?? 'Seller'),
+    fullName: from.name,
+    companyName: from.company || from.name,
     contactAddress: {
-      addressLine1: String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? 'Warehouse'),
-      addressLine2: String(creds?.shipFromAddress2 ?? shipFromInput?.addressLine2 ?? shipFromInput?.street2 ?? ''),
-      city: String(creds?.shipFromCity ?? shipFromInput?.city ?? 'Carson'),
-      stateOrProvince: String(creds?.shipFromState ?? shipFromInput?.state ?? 'CA'),
-      postalCode: fromZip,
-      countryCode: String(shipFromInput?.country ?? 'US') || 'US',
+      addressLine1: from.line1,
+      addressLine2: from.line2,
+      city: from.city,
+      stateOrProvince: from.state,
+      postalCode: from.postalCode,
+      countryCode: from.country,
       county: String(creds?.shipFromCounty ?? ''),
     },
     primaryPhone: {
-      phoneNumber: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '0000000000'),
+      phoneNumber: from.phone,
     },
   };
 

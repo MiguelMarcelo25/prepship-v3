@@ -295,7 +295,7 @@ function walmartLabelFromAddress(creds: Record<string, unknown>, shipFrom: any):
   const from = shipFrom && typeof shipFrom === 'object' ? (shipFrom as Record<string, unknown>) : null;
   const resolved = resolveWalmartShipFrom(from, creds);
   const result: Record<string, unknown> = {
-    addressLine1: resolved.addressLines[0] ?? 'Warehouse',
+    addressLine1: resolved.addressLines[0] ?? '',
     city: resolved.city,
     contactName: resolved.name,
     country: resolved.countryCode.toUpperCase(),
