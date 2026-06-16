@@ -45,14 +45,17 @@ check(
     proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 
-// PS-105 (Per user override unlock shipped data on 2026-06-06): the direct-carrier
-// boundary also enforces via the unified resolver (prefers rateQuoteId snapshot,
-// falls back to carried selectedRateProof; delegates to the SAME strict validator).
+// PS-209 re-anchor (2026-06-16): the standalone direct-carrier purchase owner
+// (api/carriers/labels.ts) was RETIRED to a 410 stub; PS-202 unified EVERY
+// direct-carrier purchase into createLabelV2 (src/services/labels.ts), whose single
+// assertLabelPurchaseRateSelection gate (pinned in the check above) precedes the
+// provider dispatch for ShipStation AND direct carriers alike. Assert the legacy
+// direct path is genuinely dead AND the unified owner still enforces the boundary.
+// (Direct-carrier ASSIGNMENT scope has its own guard: test:ps-083-direct-carrier-assignment-scope.)
 check(
-  'direct-carrier label function enforces the selected-rate boundary before carrier purchase',
-  directLabels.includes('await assertLabelPurchaseRateSelection(') &&
-    directLabels.includes('body?.selectedRateProof') &&
-    directLabels.includes('SELECTED_RATE_PROOF_INVALID') &&
+  'direct-carrier purchases run through the unified, proof-gated owner; the legacy direct path is retired',
+  /LEGACY_LABEL_ENDPOINT_RETIRED|cannot purchase postage/i.test(directLabels) &&
+    labelsService.includes('await assertLabelPurchaseRateSelection(') &&
     proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 

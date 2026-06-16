@@ -5,13 +5,17 @@
  * spending money. This guard proves the invariants that make that true, and
  * encodes a KNOWN constraint discovered during the build:
  *
- *   api/carriers/labels.ts infers the confirmation provider from the order's
- *   external_order_id ONLY (inferStoreProviderFromExternalId), defaulting a null
- *   id to 'shipstation' — a SUPPORTED confirmation provider. So source_provider
- *   ='internal' alone does NOT suppress confirmation on that handler's SQL enqueue
- *   path. The harness therefore drives createCarrierLabel + persist + print-queue
- *   directly (which is confirmation-free) and NEVER the handler's confirmation
- *   branch. This guard fails if that ever changes.
+ *   src/services/fulfillment/outbox.ts infers the confirmation provider from the
+ *   order's external_order_id ONLY (inferStoreProvider), defaulting a null id to
+ *   'shipstation' — a SUPPORTED confirmation provider. So source_provider
+ *   ='internal' alone does NOT suppress confirmation on that enqueue path. The
+ *   harness therefore drives createCarrierLabel + persist + print-queue directly
+ *   (which is confirmation-free) and NEVER the confirmation branch. This guard
+ *   fails if that ever changes.
+ *
+ *   PS-209 re-anchor (2026-06-16): api/carriers/labels.ts was retired to a 410
+ *   stub; the inference moved to outbox.ts (inferStoreProvider). Pinned at the
+ *   live owner — the documented gap is unchanged, not silently altered.
  *
  * Plan: ~/.claude/plans/zany-spinning-hennessy.md
  */
@@ -66,11 +70,12 @@ const orch = readFileSync('src/services/carrier-connector-orchestrator.ts', 'utf
 check('orchestrator does not enqueue/confirm any marketplace shipment',
   !/enqueueShipmentConfirmation|processFulfillmentOutbox|confirmStoreShipment|confirmWalmart/.test(orch));
 
-// ── encode the KNOWN inference gap: null external id → 'shipstation' lives ONLY
-//    in the handler, and the harness must NOT drive that confirmation path ──
-const handler = readFileSync('api/carriers/labels.ts', 'utf8');
-check('handler still defaults a null external id to shipstation (gap is documented, not silently changed)',
-  /function inferStoreProviderFromExternalId[\s\S]*?if \(!externalOrderId\) return 'shipstation'/.test(handler));
+// ── encode the KNOWN inference gap: null external id → 'shipstation' lives in the
+//    confirmation-provider inference (outbox.ts), and the harness must NOT drive
+//    that confirmation path. PS-209 re-anchored from the retired api/ stub. ──
+const inference = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
+check('confirmation-provider inference still defaults a null external id to shipstation (gap is documented, not silently changed)',
+  /export function inferStoreProvider\([\s\S]*?if \(!externalOrderId\) return 'shipstation'/.test(inference));
 
 const runner = readFileSync('scripts/carrier-harness-e2e.ts', 'utf8');
 check('runner drives createCarrierLabel (confirmation-free), NOT the handler confirmation SQL',

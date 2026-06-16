@@ -67,23 +67,16 @@ check(
   directRateScopeIndex >= 0 && directRateProviderIndex > directRateScopeIndex,
 );
 
-const directLabelScopeIndex = indexAfter(directLabels, 'const scopeDecision = evaluateDirectCarrierScope');
-// PS-105 (Per user override unlock shipped data on 2026-06-06): direct-carrier
-// boundary enforces via the unified resolver (prefers rateQuoteId, falls back to
-// carried proof; same strict validator). The scope -> proof -> provider ordering
-// invariant is unchanged.
-const directLabelProofIndex = indexAfter(directLabels, 'await assertLabelPurchaseRateSelection(', directLabelScopeIndex);
-const directProviderCalls = [
-  "createCarrierLabel('shipp'",
-  "createCarrierLabel('walmart_shipping'",
-  "createCarrierLabel('ups'",
-  "createCarrierLabel('easypost'",
-].map((needle) => indexAfter(directLabels, needle, directLabelProofIndex));
+// PS-209 re-anchor (2026-06-16): the standalone direct-carrier label owner
+// (api/carriers/labels.ts) was RETIRED to a 410 stub; PS-202 unified direct-carrier
+// purchases into createLabelV2 (src/services/labels.ts), whose single
+// assertLabelPurchaseRateSelection gate precedes provider dispatch for ShipStation
+// AND direct carriers (pinned in the ShipStation check below — the same gate covers
+// direct). Direct-carrier ASSIGNMENT scope is owned by test:ps-083-direct-carrier-assignment-scope.
 check(
-  'direct-carrier label path checks scope then selected-rate proof before every provider label call',
-  directLabelScopeIndex >= 0 &&
-    directLabelProofIndex > directLabelScopeIndex &&
-    directProviderCalls.every((index) => index > directLabelProofIndex),
+  'legacy standalone direct-carrier label path is retired; direct purchases run through the unified proof-gated owner',
+  /LEGACY_LABEL_ENDPOINT_RETIRED|cannot purchase postage/i.test(directLabels) &&
+    indexAfter(labelsService, 'await assertLabelPurchaseRateSelection(') >= 0,
 );
 
 // PS-105 (Per user override unlock shipped data on 2026-06-06): the ShipStation
@@ -108,20 +101,25 @@ check(
 check(
   'frontend passes backend-issued selectedRateProof through label and queue payloads',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    // PS-104 direct-carrier path uses the override-wrapper form, so count the
-    // wrapper-aware pattern (matches the boundary guard) — the proof IS passed on
-    // all 4 single/batch/queue/direct-carrier paths.
-    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 4 &&
-    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate)') &&
+    // PS-204 re-anchor (2026-06-16): honest census is THREE `selectedRateProof:
+    // buildSelectedRateProofPayload(order...` property sites (panel single, direct-
+    // carrier override wrapper, batch queue); the 4th proof path is the batch-create
+    // `let selectedRateProof = buildSelectedRateProofPayload(...)` with the PS-204
+    // account-binding 3rd arg (pinned below). Aligns with the selected-rate-proof-boundary guard.
+    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,'),
 );
 
+// PS-209 re-anchor (2026-06-16): direct-carrier print-to-queue local ship-to recovery is owned by its
+// dedicated guard (test:ps-084-direct-carrier-print-queue) + report; the standalone api/ owner that
+// once held resolveShipTo is retired (410 stub). Assert the dedicated coverage exists AND the legacy
+// path is dead, rather than scanning the retired stub for a moved helper.
 check(
-  'direct-carrier print-to-queue local ship-to recovery remains certified',
+  'direct-carrier print-to-queue local ship-to recovery remains certified (owned by its dedicated guard)',
   packageRaw.includes('"test:ps-084-direct-carrier-print-queue"') &&
-    directLabels.includes('function resolveShipTo(body: any, rawOrder: any, orderRow: any)') &&
-    directLabels.includes('resolveLocalOrderShipTo(orderRow') &&
-    ps084ReportExists,
+    ps084ReportExists &&
+    /LEGACY_LABEL_ENDPOINT_RETIRED|cannot purchase postage/i.test(directLabels),
 );
 
 const baseFingerprint = buildShippingRateRequestFingerprint({
