@@ -17,6 +17,9 @@ import {
   isPrintQueueDurableStatusError,
   isPrintQueueLabelUrlError,
   getMergeJobStatus,
+  // PS-256: durable-aware accessor — falls back to the persisted merged-PDF side-store on an
+  // in-memory miss so the view/download/signed-url routes serve the batch after a server restart.
+  getMergeJobForServe,
   listQueue,
   removeFromQueue,
   startQueueSendJob,
@@ -128,8 +131,12 @@ function pdfDispositionHeader(disposition: 'inline' | 'attachment', filename: st
   return `${disposition}; filename="${filename.replace(/"/g, '')}"`;
 }
 
-function serveMergedPdf(c: Context, jobId: string, disposition: 'inline' | 'attachment') {
-  const job = getMergeJobStatus(jobId);
+// PS-256: durable-aware — getMergeJobForServe returns the in-memory job by default, and on a
+// miss rehydrates the bytes from the persisted merged-PDF side-store (when the flag is ON and the
+// durable snapshot confirms the merge completed) so the batch survives a server restart. With the
+// flag OFF this is exactly the previous in-memory-only behavior.
+async function serveMergedPdf(c: Context, jobId: string, disposition: 'inline' | 'attachment') {
+  const job = await getMergeJobForServe(jobId);
   if (
     !job ||
     job.status !== 'done' ||
@@ -160,7 +167,7 @@ app.get('/print/view/:jobId', async (c) => {
   }
   const disposition =
     c.req.query('disposition') === 'attachment' ? 'attachment' : 'inline';
-  return serveMergedPdf(c, jobId, disposition);
+  return await serveMergedPdf(c, jobId, disposition);
 });
 
 app.use('*', requireInternalPermission('print_queue:write'));
@@ -692,7 +699,9 @@ app.get('/print/signed-url/:jobId', zValidator('query', signedPdfQuery), async (
   const jobId = c.req.param('jobId');
   const q = c.req.valid('query');
   const scope = printQueueScopeFromContext(c);
-  const job = getMergeJobStatus(jobId);
+  // PS-256: durable-aware so a signed link can still be minted for a batch whose bytes were
+  // evicted by a restart (the rehydrated job carries the persisted clientIds for the scope gate).
+  const job = await getMergeJobForServe(jobId);
   if (
     !job ||
     !(await canViewMergeJob(job, scope)) ||
@@ -720,11 +729,12 @@ app.get('/print/signed-url/:jobId', zValidator('query', signedPdfQuery), async (
 
 app.get('/print/download/:jobId', async (c) => {
   const jobId = c.req.param('jobId');
-  const job = getMergeJobStatus(jobId);
+  // PS-256: durable-aware so a download still works after a restart evicts the in-memory bytes.
+  const job = await getMergeJobForServe(jobId);
   if (!job || !(await canViewMergeJob(job, printQueueScopeFromContext(c)))) {
     return c.json({ error: 'Job not found or not ready' }, 404);
   }
-  return serveMergedPdf(c, jobId, 'attachment');
+  return await serveMergedPdf(c, jobId, 'attachment');
 });
 
 // DELETE /print-queue/:entryId — removes a single queue entry by id.

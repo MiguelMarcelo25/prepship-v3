@@ -23,6 +23,14 @@ import {
   NO_SKU_PICK_NOTE,
   type CollapsedQueueLine,
 } from './print-queue-identity';
+// PS-256 (restart-safe print-queue merged PDF): durable side-store for the immutable merged PDF
+// artifact so the view/download/signed-url routes survive a server restart. Env-gated default OFF
+// (DURABLE_PRINT_QUEUE_PDF) — the OFF path is a true no-op, so existing behavior is unchanged.
+import {
+  persistMergedPdf,
+  getMergedPdfBase64,
+  cleanupOldMergedPdfs,
+} from './print-queue-pdf-store';
 
 // PS-138: the pure PDF-rendering helpers live in ./print-queue-pdf. runMergeJob + the staying
 // recipient/DB loaders import them here; the external surface is re-exported so the 8 guard/cert
@@ -461,6 +469,12 @@ function shouldPersistProgress(current: number, total: number): boolean {
   return current === total || current % 10 === 0;
 }
 
+// PS-256: durable merged PDFs are retained LONGER than the 30-min in-memory job retention so a
+// download still works through a restart window (an operator who reopens the batch after the
+// process recycled). 4h is well past the in-memory eviction yet bounded so old binaries don't
+// accumulate. Best-effort + env-gated default OFF (no-op when OFF).
+const DURABLE_PDF_RETENTION_MS = 4 * 60 * 60 * 1000;
+
 function cleanOldJobs() {
   const cutoff = Date.now() - 30 * 60 * 1000;
   for (const [id, job] of mergeJobs.entries()) {
@@ -469,6 +483,10 @@ function cleanOldJobs() {
   for (const [id, job] of queueSendJobs.entries()) {
     if (job.createdAt < cutoff) queueSendJobs.delete(id);
   }
+  // Per user override unlock shipped data on 2026-06-16: PS-256 — prune old rows from the durable
+  // merged-PDF side-store (the NEW print_queue_merged_pdfs table only). DELETEs nothing from
+  // orders/shipments; best-effort + env-gated default OFF.
+  void cleanupOldMergedPdfs(DURABLE_PDF_RETENTION_MS);
 }
 
 async function withConcurrency<T>(
@@ -1187,6 +1205,49 @@ export function getMergeJobStatus(jobId: string): MergeJob | null {
   return mergeJobs.get(jobId) ?? null;
 }
 
+// Per user override unlock shipped data on 2026-06-16: PS-256 — the PDF-serving routes
+// (view / download / signed-url) obtain the merged batch PDF here. The in-memory mergeJobs Map
+// is the fast default; on a MISS (job evicted/never in this process, OR present but with empty
+// bytes) we fall back to the durable snapshot + side-store: if the snapshot says the merge
+// completed, we rehydrate the bytes from print_queue_merged_pdfs so the batch survives a server
+// restart instead of 404ing. Env-gated default OFF — when the flag is OFF this returns exactly
+// the in-memory job (current behavior), since getMergedPdfBase64 is a no-op returning null. This
+// only RE-READS the already-generated PDF artifact; it never re-generates labels, buys postage,
+// notifies a marketplace, or mutates any shipped/cancelled order or shipment.
+export async function getMergeJobForServe(jobId: string): Promise<MergeJob | null> {
+  const inMemory = mergeJobs.get(jobId) ?? null;
+  if (inMemory && inMemory.status === 'done' && inMemory.mergedPdfBase64) {
+    return inMemory; // fast path — bytes already in process memory
+  }
+
+  // In-memory miss (or done-without-bytes). Only attempt a durable rehydrate when the durable
+  // snapshot confirms THIS job completed — otherwise leave the caller's miss as-is.
+  const snapshot = await getLatestMergeJobSnapshot();
+  if (!snapshot || snapshot.jobId !== jobId || snapshot.status !== 'done') {
+    return inMemory;
+  }
+
+  const base64 = await getMergedPdfBase64(jobId);
+  if (!base64) return inMemory; // flag OFF or no durable bytes — unchanged behavior
+
+  return {
+    jobId: snapshot.jobId,
+    status: 'done',
+    clientIds: [...snapshot.clientIds],
+    progress: snapshot.progress,
+    total: snapshot.total,
+    current: snapshot.current,
+    message: snapshot.message,
+    mergedPdfBase64: base64,
+    fileName: snapshot.fileName ?? undefined,
+    errorMessage: snapshot.errorMessage ?? undefined,
+    labelErrors: snapshot.labelErrors,
+    successfulEntryIds: snapshot.successfulEntryIds ?? [],
+    entryIds: [],
+    createdAt: Date.parse(snapshot.createdAt) || Date.now(),
+  };
+}
+
 // PS-109 — canonical product-name resolution for the batch header. When a queued
 // entry's multi_sku_data line (or the entry's primary item) has only a SKU and no real
 // product name — a legacy row enqueued before the batch-send description fix — resolve
@@ -1469,6 +1530,15 @@ async function runMergeJob(
     job.current = success;
     job.message = doneMessage;
     await persistMergeJobSnapshot(job);
+    // Per user override unlock shipped data on 2026-06-16: PS-256 — persist the
+    // already-generated merged batch PDF to a durable side-store so the
+    // view/download/signed-url routes can still serve it after a server restart
+    // (today the bytes live only in process memory and a restart 404s them). This
+    // only STORES the immutable PDF artifact + re-reads it; it never re-generates
+    // labels, buys postage, notifies a marketplace, or mutates any shipped/cancelled
+    // order or shipment row. Best-effort + env-gated default OFF — never blocks the
+    // merge hot path.
+    void persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
     job.message =
       failed > 0
         ? `Done — ${success} merged (${failed} failed — re-create those labels and re-queue).`

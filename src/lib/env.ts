@@ -77,6 +77,14 @@ const schema = z.object({
   // "worker was stuck 14:32-15:17"). Default OFF — a safe canary; the OFF path is a
   // true no-op (no DB, no schema ensure). DJ flips this on Render after a canary.
   WORKER_STATUS_EVENTS_DURABLE: booleanFlag(false),
+  // PS-256 (restart-safe print-queue merged PDF): when ON, the already-generated merged
+  // batch-label PDF is persisted to a durable print_queue_merged_pdfs table and rehydrated on
+  // an in-memory miss, so the view/download/signed-url routes can still serve the batch after a
+  // server restart (today the bytes live only in process memory and a restart 404s them).
+  // Default OFF — a safe canary; the OFF path is a true no-op (no DB, no schema ensure). DJ flips
+  // this on Render after a canary. Stores/reads the immutable PDF artifact only — never
+  // re-generates labels, buys postage, or mutates shipped/cancelled orders or shipments.
+  DURABLE_PRINT_QUEUE_PDF: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY: booleanFlag(false),
   // Tracking-driven print-queue retirement (delivered → History). Two-stage
