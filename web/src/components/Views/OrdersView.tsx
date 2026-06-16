@@ -8351,8 +8351,14 @@ export default function OrdersView({
                     </>
                   ) : panelPreviewRate ? (
                     <>
-                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney((toNumberValue(panelPreviewRate.shipmentCost) ?? 0) + (toNumberValue(panelPreviewRate.otherCost) ?? 0))}
+                      {/* PS-278: the preview rate carries only the RAW carrier cost (shipmentCost/otherCost),
+                          NOT the backend MARKED money tuple the column/SOT shows — adding them here would
+                          invent FE money that diverges from the billed amount whenever a markup applies.
+                          refreshPanelBestRate persists every live result to the SOT, so the authoritative
+                          marked amount appears via the SOT branch above within a tick; until then show a
+                          pending placeholder rather than an un-marked number. */}
+                      <span className="text-[13px] font-semibold leading-none text-ink-3 inline-flex items-center gap-1">
+                        <Loader2 size={11} strokeWidth={2.5} className="animate-spin" /> finalizing rate…
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
                         {panelPreviewAccountLabel} · {formatServiceCode(toStringValue(panelPreviewRate.serviceCode))}

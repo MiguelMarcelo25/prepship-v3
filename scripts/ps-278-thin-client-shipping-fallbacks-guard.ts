@@ -35,6 +35,19 @@ check('FE does NOT read the legacy merged residential boolean (thin client)',
 check('verdict absent -> money-safe residential default (return true)',
   /return true\s*$/.test(body.trimEnd()));
 
+// ── slice 2: the side-panel preview no longer invents operator-facing money ──
+// The SOT branch (getBackendRowMoney markedAmount, pinned by ps-277-panel-reads-sot) is the
+// authoritative marked amount and refetches within a tick; the transient preview branch must show a
+// pending placeholder, NEVER an ad-hoc shipmentCost + otherCost sum (the raw un-marked carrier cost).
+const previewStart = ov.indexOf(') : panelPreviewRate ? (');
+const previewEnd = ov.indexOf(') : (', previewStart);
+const preview = previewStart >= 0 ? ov.slice(previewStart, previewEnd) : '';
+check('panel preview branch exists', previewStart >= 0 && previewEnd > previewStart);
+check('panel preview no longer reads the raw carrier shipmentCost for operator-facing money',
+  !/panelPreviewRate\.shipmentCost/.test(preview));
+check('panel preview no longer sums otherCost into operator-facing money',
+  !/panelPreviewRate\.otherCost/.test(preview));
+
 check('package.json wires test:ps-278-thin-client-shipping-fallbacks',
   /test:ps-278-thin-client-shipping-fallbacks/.test(readFileSync('package.json', 'utf8')));
 
