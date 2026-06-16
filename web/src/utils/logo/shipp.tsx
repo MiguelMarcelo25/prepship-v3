@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Shipp wordmark supplied by the user. The source asset is white for use on
 // Shipp's blue header; this component renders the same paths in Shipp blue so
 // it remains visible on PrepShip's light table and settings surfaces.

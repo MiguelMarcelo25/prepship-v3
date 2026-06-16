@@ -1,4 +1,3 @@
-// @ts-nocheck
 // EasyPost mark supplied by the user. Sized by height; the viewBox is square.
 
 export default function EasyPostLogo({ height = 30, ...props }: { height?: number } & React.SVGProps<SVGSVGElement>) {

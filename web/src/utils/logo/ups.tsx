@@ -1,4 +1,3 @@
-// @ts-nocheck
 // UPS shield logo — full-detail SVG with multiple radial/linear gradients
 // to capture the brown shield + gold rim depth and the UPS lettering with
 // authentic shading. Provided by the user; converted from raw SVG to JSX

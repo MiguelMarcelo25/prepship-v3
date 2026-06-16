@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useEffect, useState } from 'react'
 import { IconMoon, IconSun } from './sidebar-icons'
 

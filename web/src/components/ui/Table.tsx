@@ -1,4 +1,3 @@
-// @ts-nocheck
 // ──────────────────────────────────────────────────────────────────
 // Table — reusable data-table primitive for the whole project.
 //

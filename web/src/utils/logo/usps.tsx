@@ -1,4 +1,3 @@
-// @ts-nocheck
 // USPS "Sonic Eagle" logo — full-detail SVG provided by the user.
 // Two layered paths: the blue parallelogram with eagle silhouette
 // (rgb(29,117,183) — official USPS Pacific blue) and the white

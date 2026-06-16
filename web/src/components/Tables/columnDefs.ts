@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Column definitions — exported from a separate file to avoid
 // Vite Fast Refresh warning about non-component exports in component files.
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Markup types and interfaces
  * Handles per-carrier % and flat markups for PrepShip profit layer

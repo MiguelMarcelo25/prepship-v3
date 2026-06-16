@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * NewOrderModal — manual-order creation surface for PrepShip.
  *

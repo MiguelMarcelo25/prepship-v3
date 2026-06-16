@@ -1,4 +1,3 @@
-// @ts-nocheck
 // FedEx wordmark — full official logo provided by the user.
 // Two-color brand: FedEx Orange (#FF5100) for the package shape +
 // "Ex" arrow + ® mark, FedEx Purple (#31006F) for the "FedEx" text.

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useEffect, useRef, useCallback } from 'react'
 
 interface UseAutoPollingOptions {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { IconSearch, IconX } from './sidebar-icons'
 
 interface SidebarSearchProps {

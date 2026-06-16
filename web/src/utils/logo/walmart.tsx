@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Walmart spark supplied by the user. Sized by height while preserving the
 // original viewBox aspect.
 

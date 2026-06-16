@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { IconHome } from './sidebar-icons'
 
 export function SidebarBrand() {

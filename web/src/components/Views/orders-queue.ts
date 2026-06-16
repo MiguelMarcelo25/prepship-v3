@@ -1,4 +1,3 @@
-// @ts-nocheck
 interface QueueToastItem {
   sku?: string | null
   name?: string | null

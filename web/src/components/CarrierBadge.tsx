@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shared CarrierBadge — single source of truth for how a carrier
  * (UPS, USPS, FedEx, DHL, etc.) renders anywhere in the app.

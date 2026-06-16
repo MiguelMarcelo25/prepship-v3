@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * React-side order domain types used by the incremental parity migration.
  */

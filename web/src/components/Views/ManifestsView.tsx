@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useContext, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ClipboardList, X as XIcon, Calendar, Truck, Loader2, Download } from 'lucide-react'

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Orders view filter utilities
  */

@@ -14,7 +14,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Baseline count on 2026-06-16. Lower this with every file you de-nocheck; never raise it.
-const CEILING = 94;
+// 2026-06-17 (PS-257 blitz slice 1): de-nocheck'd 33 provably-clean files (single bare
+// directive, typecheck-clean once removed, zero residual @ts-nocheck) — 94 -> 61.
+const CEILING = 61;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

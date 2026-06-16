@@ -1,4 +1,3 @@
-// @ts-nocheck
 export interface SkuCompositionInput {
   sku?: string | null
   quantity?: number | null
