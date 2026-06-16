@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { requireInternalPermission } from '../middleware/auth';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { parentSkus } from '../db/schema/parent-skus';
 import { inventory } from '../db/schema/inventory';
@@ -59,7 +60,9 @@ const createBody = z.object({
   baseUnitQty: z.number().int().positive().optional(),
 });
 
-app.post('/', zValidator('json', createBody), async (c) => {
+// PS-252 (Card 7): parent-SKU catalog mutations are internal config — gate writes behind
+// settings:write (matching products/locations/clients). Reads (list + detail) stay open.
+app.post('/', requireInternalPermission('settings:write'), zValidator('json', createBody), async (c) => {
   const body = c.req.valid('json');
   const [row] = await db.insert(parentSkus).values(body).returning();
   return c.json(row, 201);
@@ -67,6 +70,7 @@ app.post('/', zValidator('json', createBody), async (c) => {
 
 app.patch(
   '/:id{[0-9]+}',
+  requireInternalPermission('settings:write'),
   zValidator('json', createBody.partial()),
   async (c) => {
     const id = Number(c.req.param('id'));
@@ -114,7 +118,7 @@ app.get('/:id{[0-9]+}/detail', async (c) => {
   });
 });
 
-app.delete('/:id{[0-9]+}', async (c) => {
+app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db
     .delete(parentSkus)
