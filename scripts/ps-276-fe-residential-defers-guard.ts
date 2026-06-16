@@ -30,13 +30,14 @@ check('backend commercial -> false (defer to backend, not re-derive)',
   /if \(backendClass === 'commercial'\) return false/.test(body));
 check('backend residential -> true',
   /if \(backendClass === 'residential'\) return true/.test(body));
-check('the backend verdict is read BEFORE the legacy local derivation (prefer, not append)',
-  body.indexOf('backendClass') >= 0 &&
-    body.indexOf('backendClass') < body.indexOf('order?.sourceResidential'));
-// Deploy-skew fallback retained (identical to today when the backend field is absent).
-check('legacy fallback retained for deploy-skew (source=false commercial)',
-  /if \(source === false\) return false/.test(body));
-check('legacy fallback default stays residential (money-safe)', /return true\s*$/.test(body.trimEnd()));
+// PS-278: the FE no longer re-derives residential from raw provider fields — it FORWARDS the backend
+// verdict only. This is the stronger invariant that supersedes slice 3's prefer-with-fallback shape:
+// the backend now publishes the money-safe verdict on every order DTO (ps-276-dto-residential-verdict),
+// so any raw-field derivation in the FE would be a second owner of a money-path decision.
+check('the FE no longer re-derives residential from the raw ShipStation source flag',
+  !/order\?\.sourceResidential|sourceResidential/.test(body));
+check('the FE no longer re-derives residential from raw shipTo', !/raw\?\.shipTo|rawShipTo/.test(body));
+check('verdict absent -> money-safe residential default (return true)', /return true\s*$/.test(body.trimEnd()));
 
 check('package.json wires test:ps-276-fe-residential-defers',
   /test:ps-276-fe-residential-defers/.test(readFileSync('package.json', 'utf8')));

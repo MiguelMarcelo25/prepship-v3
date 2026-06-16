@@ -138,15 +138,21 @@ const cls = (i: Parameters<typeof classifyShippingAddress>[0]) => classifyShippi
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
   check('OrdersView defines residentialForRate helper', /function residentialForRate\(/.test(ordersView), true);
   check('OrdersView no longer hardcodes residential: true', /residential:\s*true,/.test(ordersView), false);
-  // PS-180: pin the POSITIVE invariant too (not just the literal's absence) — the helper's
-  // default-true cascade: explicit merged boolean wins, then sourceResidential/raw shipTo,
-  // an explicit source FALSE wins commercial, and the fallback default is RESIDENTIAL (true).
+  // PS-278 (thin client): residentialForRate is now a pure FORWARDER of the BACKEND verdict
+  // (PS-276 recipient.residentialClassification) — it no longer re-derives the classification from
+  // raw provider fields (sourceResidential / raw shipTo / merged boolean). Pin: it reads the backend
+  // verdict, owns no raw-field derivation, and the verdict-absent default is RESIDENTIAL (money-safe —
+  // never under-quote the residential surcharge).
   {
     const helperStart = ordersView.indexOf('function residentialForRate(');
     const helperEnd = ordersView.indexOf('\n  }', helperStart);
     const helperBody = helperStart >= 0 ? ordersView.slice(helperStart, helperEnd) : '';
-    check('residentialForRate honors an explicit source=false (commercial)',
-      /if \(source === false\) return false/.test(helperBody), true);
+    check('residentialForRate defers to the backend residential verdict (reads residentialClassification)',
+      /residentialClassification \?\? order\?\.canonicalOrder\?\.recipient\?\.residentialClassification/.test(helperBody), true);
+    check('residentialForRate no longer re-derives from the raw source flag (thin client)',
+      /sourceResidential/.test(helperBody), false);
+    check('residentialForRate no longer re-derives from raw shipTo (thin client)',
+      /rawShipTo|raw\?\.shipTo/.test(helperBody), false);
     check('residentialForRate defaults to residential (return true fallback)',
       /return true\s*$/.test(helperBody.trimEnd()), true);
   }
