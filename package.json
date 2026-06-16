@@ -324,6 +324,7 @@
     "test:ps-248-persist-mark-shipped-atomic": "tsx scripts/ps-248-persist-mark-shipped-atomic-guard.ts",
     "test:ps-249-billing-write-permission": "tsx scripts/ps-249-billing-write-permission-guard.ts",
     "test:ps-245-lockdown-fence": "tsx scripts/ps-245-lockdown-fence-guard.ts",
+    "test:ps-245-verification-harness": "tsx scripts/ps-245-verification-harness-guard.ts",
     "test:ps-249-storage-atomicity": "tsx scripts/ps-249-storage-atomicity-guard.ts",
     "test:ps-249-billing-details-transaction": "tsx scripts/ps-249-billing-details-transaction-guard.ts",
     "migrate:billing-storage-unique": "tsx scripts/migrate-billing-storage-unique.ts",
