@@ -2661,9 +2661,15 @@ export const apiClient = {
             proofSource: BACKEND_RATE_PROOF_SOURCE,
           }
           : {};
-        const translatedRates = (Array.isArray(res?.rates) ? res.rates : []).map((rate: unknown) => ({
+        const translatedRates = (Array.isArray(res?.rates) ? res.rates : []).map((rate: any) => ({
           ...translateRateToV2Shape(rate),
           ...responseMetadata,
+          // PS-103: a direct-carrier rate carries its OWN backend-issued proof
+          // (requestFingerprint/proofSource stamped by withDirectCarrierProof). Prefer the
+          // per-rate proof; the uniform response-level metadata is only the ShipStation
+          // fallback — never let it clobber a direct carrier's individual proof authority.
+          requestFingerprint: rate.requestFingerprint ?? (responseMetadata as any).requestFingerprint,
+          proofSource: rate.proofSource ?? (responseMetadata as any).proofSource,
         }));
         if (res?.bestRate) {
           Object.defineProperty(translatedRates, 'bestRate', {
@@ -2752,9 +2758,13 @@ export const apiClient = {
             }
             : {};
           const translatedRates = Array.isArray(backendResult?.rates)
-            ? backendResult.rates.map((rate: unknown) => ({
+            ? backendResult.rates.map((rate: any) => ({
                 ...translateRateToV2Shape(rate),
                 ...backendProofMetadata,
+                // PS-103: preserve a direct carrier's own backend-issued proof; the
+                // response-level metadata is only the ShipStation fallback.
+                requestFingerprint: rate.requestFingerprint ?? (backendProofMetadata as any).requestFingerprint,
+                proofSource: rate.proofSource ?? (backendProofMetadata as any).proofSource,
               }))
             : [];
           const bestRate = backendResult?.bestRate

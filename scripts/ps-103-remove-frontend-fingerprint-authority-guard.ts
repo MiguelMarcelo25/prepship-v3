@@ -9,6 +9,10 @@ import { readFileSync } from 'node:fs';
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const directRates = readFileSync('api/carriers/rates.ts', 'utf8');
+// PS-135 re-anchor (2026-06-16): the proof-selection logic moved out of OrdersView's
+// buildSelectedRateProofPayload into web/src/lib/rate-proof.ts (selectProofFromCandidates),
+// which OrdersView now delegates to. Read it so the proof-marker check pins the live owner.
+const rateProof = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -46,8 +50,12 @@ check(
 );
 check(
   'frontend proof builder requires backend proof marker before returning selectedRateProof',
-  /function hasBackendIssuedRateProof/.test(ordersView) &&
-    /candidates\.find\(\(rate\) => hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)\)/.test(proofBuilderBlock),
+  // PS-135 re-anchor: buildSelectedRateProofPayload delegates to selectProofFromCandidates
+  // (web/src/lib/rate-proof.ts), which ONLY selects a rate carrying a backend-issued proof
+  // marker + fingerprint — so the FE still cannot fabricate proof authority. Property unchanged.
+  /export function hasBackendIssuedRateProof/.test(rateProof) &&
+    /list\.find\(\(rate\) => hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)\)/.test(rateProof) &&
+    ordersView.includes('return selectProofFromCandidates('),
 );
 check(
   'strict recalculation stamps proof from backend response request key only',
