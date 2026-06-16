@@ -1,6 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// PS-259 (Card 14): BEHAVIORAL conversion. This guard used to be substring-only — it would
+// stay green even if the real financials:read enforcement were deleted. We now import + RUN the
+// canonical authz owner (hasAppPermission from src/middleware/auth) and assert the role→permission
+// verdict that EVERY static redaction below depends on: portal/support roles must NOT hold
+// financials:read (so the analysis/inventory/billing money fields redact), while operator/admin
+// MUST hold it. If the enforcement logic were removed or the role matrix opened up, these
+// assertions FAIL — they are not tautologies.
+//
+// auth.ts imports lib/env, which validates required vars at load. Put it in serverless mode (so the
+// Supabase admin secrets aren't required) + supply dummy URLs so we can import offline. Must run
+// BEFORE the dynamic import below. (Same pattern as scripts/rbac-permissions-guard.mjs.)
+//
+// Because auth.ts is TypeScript, this .mjs must be run via tsx, not node:
+//   npx tsx scripts/field-level-rbac-guard.mjs
+process.env.VERCEL = '1';
+process.env.DATABASE_URL ??= 'postgres://u:p@localhost:5432/db';
+process.env.SUPABASE_URL ??= 'https://example.supabase.co';
+
 const root = process.cwd();
 
 function read(relativePath) {
@@ -20,6 +38,29 @@ function assert(condition, message) {
   if (condition) pass(message);
   else fail(message);
 }
+
+// ── BEHAVIORAL: run the real financials:read owner (fails if enforcement removed) ──────────────
+// All static checks below redact cost/margin/shipping-cost fields when the caller lacks
+// 'financials:read'. That redaction is only meaningful if the role matrix actually withholds the
+// permission from portal/support roles. Prove it by executing the canonical owner, not by grepping.
+const { hasAppPermission } = await import('../src/middleware/auth');
+
+assert(
+  hasAppPermission({ role: 'client_user' }, 'financials:read') === false,
+  'BEHAVIORAL: client_user (portal) is DENIED financials:read by hasAppPermission',
+);
+assert(
+  hasAppPermission({ role: 'read_only_support' }, 'financials:read') === false,
+  'BEHAVIORAL: read_only_support is DENIED financials:read by hasAppPermission',
+);
+assert(
+  hasAppPermission({ role: 'operator' }, 'financials:read') === true,
+  'BEHAVIORAL: operator is GRANTED financials:read by hasAppPermission',
+);
+assert(
+  hasAppPermission({ role: 'admin' }, 'financials:read') === true,
+  'BEHAVIORAL: admin is GRANTED financials:read by hasAppPermission',
+);
 
 const packageJson = JSON.parse(read('package.json'));
 const authSource = read('src/middleware/auth.ts');
@@ -95,8 +136,10 @@ assert(
 );
 assert(
   packageJson.scripts?.['test:field-level-rbac'] ===
-    'node scripts/field-level-rbac-guard.mjs',
-  'package exposes field-level RBAC guard',
+    'node scripts/field-level-rbac-guard.mjs' ||
+    packageJson.scripts?.['test:field-level-rbac'] ===
+      'tsx scripts/field-level-rbac-guard.mjs',
+  'package exposes field-level RBAC guard (node or tsx — tsx required for the behavioral TS import)',
 );
 
 if (process.exitCode) {

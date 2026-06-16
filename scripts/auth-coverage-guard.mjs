@@ -1,6 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// PS-259 (Card 14): BEHAVIORAL conversion. This guard previously only string-scanned
+// src/main.ts (substring-only — it would still pass even if the route-level authz/scope
+// enforcement were deleted). It now ALSO imports the real enforcement owner
+// (hasAppPermission from src/middleware/auth) and runs it on representative
+// role/permission pairs, asserting the actual security verdict. These assertions FAIL if
+// ROLE_PERMISSIONS or hasAppPermission were removed/weakened — they are not tautologies.
+// auth.ts imports lib/env which validates required vars at load, so set serverless mode +
+// dummy URLs BEFORE the dynamic import.
+//
+// Because auth.ts is TypeScript, this .mjs must be run via tsx, not node:
+//   npx tsx scripts/auth-coverage-guard.mjs
+process.env.VERCEL = '1';
+process.env.DATABASE_URL ??= 'postgres://u:p@localhost:5432/db';
+process.env.SUPABASE_URL ??= 'https://example.supabase.co';
+
 const root = process.cwd();
 const mainSource = fs.readFileSync(path.join(root, 'src/main.ts'), 'utf8');
 
@@ -17,6 +32,55 @@ function assert(condition, message) {
   if (condition) pass(message);
   else fail(message);
 }
+
+// ── BEHAVIORAL: run the real authz/scope owner, not a string scan ──────────────────────────────
+// hasAppPermission(auth, permission) is the authoritative role→permission matrix evaluator that
+// every authz-gated route delegates to. A restricted portal role (client_user) and read-only
+// support must be DENIED out-of-scope WRITE permissions; internal staff (operator/admin) must be
+// ALLOWED them. If the enforcement logic were deleted or the ROLE_PERMISSIONS matrix opened up,
+// these denials would flip to true and this block fails. Note: we pass ONLY { role } (no explicit
+// permissions array) so the verdict is decided by the role matrix, not a self-granted permission.
+const { hasAppPermission } = await import('../src/middleware/auth.ts');
+
+// Restricted scopes are denied out-of-scope WRITE permissions (the security verdict that matters).
+assert(
+  hasAppPermission({ role: 'client_user' }, 'settings:write') === false,
+  'BEHAVIORAL: client_user (portal) is DENIED settings:write',
+);
+assert(
+  hasAppPermission({ role: 'client_user' }, 'credentials:write') === false,
+  'BEHAVIORAL: client_user (portal) is DENIED credentials:write',
+);
+assert(
+  hasAppPermission({ role: 'client_user' }, 'users:manage') === false,
+  'BEHAVIORAL: client_user (portal) is DENIED users:manage',
+);
+assert(
+  hasAppPermission({ role: 'read_only_support' }, 'settings:write') === false,
+  'BEHAVIORAL: read_only_support is DENIED settings:write',
+);
+assert(
+  hasAppPermission({ role: 'read_only_support' }, 'credentials:write') === false,
+  'BEHAVIORAL: read_only_support is DENIED credentials:write',
+);
+// Internal staff are ALLOWED the same writes — proves the matrix actually grants, not blanket-denies.
+assert(
+  hasAppPermission({ role: 'operator' }, 'settings:write') === true,
+  'BEHAVIORAL: operator is ALLOWED settings:write',
+);
+assert(
+  hasAppPermission({ role: 'operator' }, 'credentials:write') === true,
+  'BEHAVIORAL: operator is ALLOWED credentials:write',
+);
+assert(
+  hasAppPermission({ role: 'admin' }, 'users:manage') === true,
+  'BEHAVIORAL: admin is ALLOWED users:manage',
+);
+// An unknown/spoofed role gets nothing (default-deny) — no implicit grant from an unrecognized role.
+assert(
+  hasAppPermission({ role: 'totally-made-up-role' }, 'settings:read') === false,
+  'BEHAVIORAL: unknown role is default-DENIED (no implicit grant)',
+);
 
 function protectedPrefixBlock() {
   const start = mainSource.indexOf('const protectedPrefixes = [');
