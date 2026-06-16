@@ -353,176 +353,189 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   let updated = 0;
   let inserted = 0;
 
-  // Only generated billing_line_items are changed here. Source order,
-  // shipment, package, and marketplace fields remain read-only.
-  for (const [bodyKey, lineType, description] of EDITABLE_BILLING_LINES) {
-    const value = body[bodyKey];
-    if (value === undefined) continue;
+  // PS-249 (Card 4): a single /details save edits MANY rows for one order — a
+  // per-line update/insert loop, a packageId stamp, a box-resolution upsert, and
+  // a missing-line cleanup. Pre-PS-249 these ran as separate statements, so a
+  // mid-save failure left the order's billing TORN (some lines edited, others
+  // not; box resolution maybe unwritten). Wrap them in ONE transaction so the
+  // edit is all-or-nothing; reads inside run on `tx` for a consistent snapshot.
+  // The idempotent CREATE-TABLE ensure is hoisted ABOVE the txn so DDL stays out
+  // of the money transaction. Edits billing_line_items only — never
+  // shipments.selectedPackageId (source of truth) — so this is NOT a shipped-data
+  // change and needs no lockdown override.
+  await ensureBillingBoxResolutionsSchema();
 
-    const amount = money(value);
-    const rows = await db
-      .update(billingLineItems)
-      .set({
-        qty: '1.00',
-        unitCost: amount,
-        totalCost: amount,
-      })
-      .where(
-        and(
-          eq(billingLineItems.clientId, body.clientId),
-          eq(billingLineItems.orderId, orderId),
-          eq(billingLineItems.lineType, lineType)
-        )
-      )
-      .returning({ id: billingLineItems.id });
+  await db.transaction(async (tx) => {
+    // Only generated billing_line_items are changed here. Source order,
+    // shipment, package, and marketplace fields remain read-only.
+    for (const [bodyKey, lineType, description] of EDITABLE_BILLING_LINES) {
+      const value = body[bodyKey];
+      if (value === undefined) continue;
 
-    updated += rows.length;
-
-    if (rows.length === 0 && value > 0) {
-      await db.insert(billingLineItems).values({
-        clientId: body.clientId,
-        orderId,
-        orderNumber: base.orderNumber,
-        shipmentId: base.shipmentId,
-        shipDate: base.shipDate,
-        lineType,
-        description,
-        qty: '1.00',
-        unitCost: amount,
-        totalCost: amount,
-      });
-      inserted += 1;
-    }
-  }
-
-  // PS — billing-line-only Box Size override. Stamp the chosen package id on
-  // every billing line for this order so billingDetails renders the new box
-  // name/dims. Does NOT touch shipments.selectedPackageId (source of truth).
-  if (body.packageId !== undefined) {
-    const pkgRows = await db
-      .update(billingLineItems)
-      .set({ packageId: body.packageId })
-      .where(
-        and(
-          eq(billingLineItems.clientId, body.clientId),
-          eq(billingLineItems.orderId, orderId)
-        )
-      )
-      .returning({ id: billingLineItems.id });
-    updated += pkgRows.length;
-  }
-
-  // ─── PS-207: persist the operator's box decision across regeneration ─────
-  // A box change or a box-price change here IS a review resolution. It is
-  // written to billing_box_resolutions (which range regeneration NEVER
-  // touches) so the directive outlives the line items — pre-PS-207, manual
-  // box-line edits were silently wiped by every regenerate.
-  //
-  // The modal always submits every field, so "decision" is detected by DIFF,
-  // not presence: a box is a decision when it differs from the currently
-  // stamped box; a price is a decision when it differs from the current
-  // package_cost line. A price equal to the chosen box's CONFIGURED price is
-  // the modal's autofill — store the box WITHOUT pinning the price, so later
-  // client price changes still reflow this order on regenerate.
-  {
-    const submittedPkgId = body.packageId !== undefined ? body.packageId : undefined;
-    const boxChanged =
-      submittedPkgId !== undefined && (submittedPkgId ?? null) !== (base.packageId ?? null);
-
-    const [currentPackageCostLine] = await db
-      .select({ totalCost: billingLineItems.totalCost })
-      .from(billingLineItems)
-      .where(
-        and(
-          eq(billingLineItems.clientId, body.clientId),
-          eq(billingLineItems.orderId, orderId),
-          eq(billingLineItems.lineType, 'package_cost')
-        )
-      )
-      .limit(1);
-    const currentBoxAmount = currentPackageCostLine
-      ? money(Number(currentPackageCostLine.totalCost))
-      : null;
-    const priceChanged =
-      body.packageCost !== undefined && money(body.packageCost) !== currentBoxAmount;
-
-    if (boxChanged || priceChanged) {
-      await ensureBillingBoxResolutionsSchema();
-      const [existing] = await db
-        .select()
-        .from(billingBoxResolutions)
-        .where(eq(billingBoxResolutions.orderId, orderId))
-        .limit(1);
-
-      const newPackageId =
-        submittedPkgId !== undefined ? submittedPkgId : existing?.packageId ?? null;
-
-      // Autofill detection: price equal to the chosen box's configured client
-      // price means "price the box from config" — no override pin.
-      let configuredRaw: string | null = null;
-      if (newPackageId != null && body.packageCost !== undefined) {
-        const [priceRow] = await db
-          .select({ price: clientPackagePrices.price })
-          .from(clientPackagePrices)
-          .where(
-            and(
-              eq(clientPackagePrices.clientId, body.clientId),
-              eq(clientPackagePrices.packageId, newPackageId)
-            )
-          )
-          .limit(1);
-        configuredRaw = priceRow ? money(Number(priceRow.price)) : null;
-      }
-      const submittedAmount =
-        body.packageCost !== undefined ? money(body.packageCost) : null;
-      const isAutofillOfConfigured =
-        submittedAmount !== null && configuredRaw !== null && submittedAmount === configuredRaw;
-
-      const overridePrice = priceChanged && !isAutofillOfConfigured
-        ? submittedAmount
-        : boxChanged
-          ? null
-          : existing?.overridePrice ?? null;
-
-      const resolvedBy = (c.get('email' as never) as string | undefined) ?? null;
-      await db
-        .insert(billingBoxResolutions)
-        .values({
-          orderId,
-          shipmentId: base.shipmentId,
-          packageId: newPackageId,
-          overridePrice,
-          note: body.note ?? null,
-          resolvedBy,
+      const amount = money(value);
+      const rows = await tx
+        .update(billingLineItems)
+        .set({
+          qty: '1.00',
+          unitCost: amount,
+          totalCost: amount,
         })
-        .onConflictDoUpdate({
-          target: billingBoxResolutions.orderId,
-          set: {
-            shipmentId: base.shipmentId,
-            packageId: newPackageId,
-            overridePrice,
-            ...(body.note !== undefined ? { note: body.note } : {}),
-            resolvedBy,
-            resolvedAt: new Date(),
-            updatedAt: new Date(),
-          },
-        });
-
-      // The review is resolved — convert the $0.00 package_cost_missing line
-      // immediately (regeneration would also do it; this makes the modal save
-      // take effect right away). The EDITABLE_BILLING_LINES loop above already
-      // wrote the package_cost line itself.
-      await db
-        .delete(billingLineItems)
         .where(
           and(
             eq(billingLineItems.clientId, body.clientId),
             eq(billingLineItems.orderId, orderId),
-            eq(billingLineItems.lineType, 'package_cost_missing')
+            eq(billingLineItems.lineType, lineType)
           )
-        );
+        )
+        .returning({ id: billingLineItems.id });
+
+      updated += rows.length;
+
+      if (rows.length === 0 && value > 0) {
+        await tx.insert(billingLineItems).values({
+          clientId: body.clientId,
+          orderId,
+          orderNumber: base.orderNumber,
+          shipmentId: base.shipmentId,
+          shipDate: base.shipDate,
+          lineType,
+          description,
+          qty: '1.00',
+          unitCost: amount,
+          totalCost: amount,
+        });
+        inserted += 1;
+      }
     }
-  }
+
+    // PS — billing-line-only Box Size override. Stamp the chosen package id on
+    // every billing line for this order so billingDetails renders the new box
+    // name/dims. Does NOT touch shipments.selectedPackageId (source of truth).
+    if (body.packageId !== undefined) {
+      const pkgRows = await tx
+        .update(billingLineItems)
+        .set({ packageId: body.packageId })
+        .where(
+          and(
+            eq(billingLineItems.clientId, body.clientId),
+            eq(billingLineItems.orderId, orderId)
+          )
+        )
+        .returning({ id: billingLineItems.id });
+      updated += pkgRows.length;
+    }
+
+    // ─── PS-207: persist the operator's box decision across regeneration ─────
+    // A box change or a box-price change here IS a review resolution. It is
+    // written to billing_box_resolutions (which range regeneration NEVER
+    // touches) so the directive outlives the line items — pre-PS-207, manual
+    // box-line edits were silently wiped by every regenerate.
+    //
+    // The modal always submits every field, so "decision" is detected by DIFF,
+    // not presence: a box is a decision when it differs from the currently
+    // stamped box; a price is a decision when it differs from the current
+    // package_cost line. A price equal to the chosen box's CONFIGURED price is
+    // the modal's autofill — store the box WITHOUT pinning the price, so later
+    // client price changes still reflow this order on regenerate.
+    {
+      const submittedPkgId = body.packageId !== undefined ? body.packageId : undefined;
+      const boxChanged =
+        submittedPkgId !== undefined && (submittedPkgId ?? null) !== (base.packageId ?? null);
+
+      const [currentPackageCostLine] = await tx
+        .select({ totalCost: billingLineItems.totalCost })
+        .from(billingLineItems)
+        .where(
+          and(
+            eq(billingLineItems.clientId, body.clientId),
+            eq(billingLineItems.orderId, orderId),
+            eq(billingLineItems.lineType, 'package_cost')
+          )
+        )
+        .limit(1);
+      const currentBoxAmount = currentPackageCostLine
+        ? money(Number(currentPackageCostLine.totalCost))
+        : null;
+      const priceChanged =
+        body.packageCost !== undefined && money(body.packageCost) !== currentBoxAmount;
+
+      if (boxChanged || priceChanged) {
+        const [existing] = await tx
+          .select()
+          .from(billingBoxResolutions)
+          .where(eq(billingBoxResolutions.orderId, orderId))
+          .limit(1);
+
+        const newPackageId =
+          submittedPkgId !== undefined ? submittedPkgId : existing?.packageId ?? null;
+
+        // Autofill detection: price equal to the chosen box's configured client
+        // price means "price the box from config" — no override pin.
+        let configuredRaw: string | null = null;
+        if (newPackageId != null && body.packageCost !== undefined) {
+          const [priceRow] = await tx
+            .select({ price: clientPackagePrices.price })
+            .from(clientPackagePrices)
+            .where(
+              and(
+                eq(clientPackagePrices.clientId, body.clientId),
+                eq(clientPackagePrices.packageId, newPackageId)
+              )
+            )
+            .limit(1);
+          configuredRaw = priceRow ? money(Number(priceRow.price)) : null;
+        }
+        const submittedAmount =
+          body.packageCost !== undefined ? money(body.packageCost) : null;
+        const isAutofillOfConfigured =
+          submittedAmount !== null && configuredRaw !== null && submittedAmount === configuredRaw;
+
+        const overridePrice = priceChanged && !isAutofillOfConfigured
+          ? submittedAmount
+          : boxChanged
+            ? null
+            : existing?.overridePrice ?? null;
+
+        const resolvedBy = (c.get('email' as never) as string | undefined) ?? null;
+        await tx
+          .insert(billingBoxResolutions)
+          .values({
+            orderId,
+            shipmentId: base.shipmentId,
+            packageId: newPackageId,
+            overridePrice,
+            note: body.note ?? null,
+            resolvedBy,
+          })
+          .onConflictDoUpdate({
+            target: billingBoxResolutions.orderId,
+            set: {
+              shipmentId: base.shipmentId,
+              packageId: newPackageId,
+              overridePrice,
+              ...(body.note !== undefined ? { note: body.note } : {}),
+              resolvedBy,
+              resolvedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          });
+
+        // The review is resolved — convert the $0.00 package_cost_missing line
+        // immediately (regeneration would also do it; this makes the modal save
+        // take effect right away). The EDITABLE_BILLING_LINES loop above already
+        // wrote the package_cost line itself.
+        await tx
+          .delete(billingLineItems)
+          .where(
+            and(
+              eq(billingLineItems.clientId, body.clientId),
+              eq(billingLineItems.orderId, orderId),
+              eq(billingLineItems.lineType, 'package_cost_missing')
+            )
+          );
+      }
+    }
+  });
 
   return c.json({ ok: true, orderId, clientId: body.clientId, updated, inserted });
 });
