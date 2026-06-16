@@ -305,6 +305,8 @@
     "test:ps-250-rates-scope-enforcement": "tsx scripts/ps-250-rates-scope-enforcement-guard.ts",
     "test:ts-nocheck-ratchet": "tsx scripts/ts-nocheck-ratchet-guard.ts",
     "test:ps-246-financials-write-permission": "tsx scripts/ps-246-financials-write-permission-guard.ts",
+    "test:ps-246-behavioral-rls-matrix": "tsx scripts/ps-246-behavioral-rls-matrix-guard.ts",
+    "test:ps-246-jwt-audit-soak": "tsx scripts/ps-246-jwt-audit-soak-guard.ts",
     "test:ps-251-ssrf-allowlist": "tsx scripts/ps-251-ssrf-allowlist-guard.ts",
     "test:ps-253-automation-rule-lock": "tsx scripts/ps-253-automation-rule-lock-guard.ts",
     "test:ps-253-outbox-stale-reclaim": "tsx scripts/ps-253-outbox-stale-reclaim-guard.ts",
