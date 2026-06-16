@@ -338,6 +338,7 @@
     "test:ps-277-sot-consistency": "tsx scripts/ps-277-sot-consistency-guard.ts",
     "test:ps-277-panel-reads-sot": "tsx scripts/ps-277-panel-reads-sot-guard.ts",
     "test:ps-280-rate-browser-residential-verdict": "tsx scripts/ps-280-rate-browser-residential-verdict-guard.ts",
+    "test:ps-285-marketplace-confirm-boundary": "tsx scripts/ps-285-marketplace-confirm-boundary-guard.ts",
     "test:ps-278-thin-client-shipping-fallbacks": "tsx scripts/ps-278-thin-client-shipping-fallbacks-guard.ts",
     "test:ps-279-web-boundary-guards": "tsx scripts/ps-279-web-boundary-guards.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
