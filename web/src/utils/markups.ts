@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Markup calculation and application utilities
  * Core business logic for carrier markups
@@ -59,7 +58,7 @@ export function applyCarrierMarkup(
 
   if (!markup || !markup.value) return baseCost;
 
-  return markup.type === 'pct' || markup.type === 'percent'
+  return markup.type === 'pct' || (markup.type as string) === 'percent'
     ? baseCost * (1 + markup.value / 100)
     : baseCost + markup.value;
 }
@@ -113,7 +112,7 @@ export function priceDisplay(
 
   let markupAmount = 0;
   if (markup && markup.value) {
-    markupAmount = markup.type === 'pct' || markup.type === 'percent'
+    markupAmount = markup.type === 'pct' || (markup.type as string) === 'percent'
       ? basePrice * (markup.value / 100)
       : markup.value;
   }

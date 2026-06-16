@@ -1,8 +1,12 @@
-// @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { apiClient } from '../../api/client'
-import type { InitCountsDto, InitStoreDto } from '../../types/api'
+// TODO PS-257: InitCountsDto / InitStoreDto are not exported by ../../types/api
+// yet (the counts/store init DTOs were never added there). apiClient.fetchCounts
+// returns `any` and `stores` is passed through untouched, so alias both locally
+// to keep this file's behavior identical until the shared DTOs land.
+type InitCountsDto = any
+type InitStoreDto = any
 import { buildSidebarSections, SIDEBAR_STATUSES, type SidebarOrderStatus } from './sidebar-data'
 import {
   IconBadge,

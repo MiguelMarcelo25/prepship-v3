@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { Box, CalendarClock, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
@@ -14,11 +13,7 @@ import {
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
-import type {
-  PackageDto,
-  PackageLedgerEntryDto,
-  PackageMutationResult,
-} from '../../types/api'
+import type { PackageDto } from '../../types/api'
 import {
   buildPackageAdjustInput,
   buildPackageReceiveInput,
@@ -40,10 +35,18 @@ import {
   type PackagesColumnWidths,
   type PackagesSortKey,
   type PackagesSortState,
+  type PackageLedgerEntryDto,
 } from './PackagesDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
 import { LowStockBanner } from './LowStockBanner'
 import './PackagesView.css'
+
+// PackageLedgerEntryDto is imported from ./PackagesDataTable (its canonical FE
+// owner) so this view's LedgerState rows match the table's prop type exactly.
+// TODO PS-257: PackageMutationResult isn't exported from ../../types/api;
+// aliased locally (apiClient returns `any` for the mutation paths). `ok` is kept
+// explicit because the save flow branches on `result.ok`.
+type PackageMutationResult = { ok: boolean } & Record<string, any>
 
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 

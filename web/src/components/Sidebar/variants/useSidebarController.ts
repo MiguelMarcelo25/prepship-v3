@@ -1,14 +1,19 @@
-// @ts-nocheck
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../../../api/client'
 import { useAuth } from '../../../lib/auth'
-import type { InitCountsDto, InitStoreDto } from '../../../types/api'
 import {
   buildSidebarSections,
   SIDEBAR_STATUSES,
   type SidebarOrderStatus,
 } from '../sidebar-data'
+
+// TODO PS-257: InitCountsDto / InitStoreDto are not (yet) exported from
+// ../../../types/api. Locally aliased to the same structural `any`-record
+// shape that file uses for its DTO shims so this surface can drop the
+// type-suppression directive without changing emitted JS.
+type InitCountsDto = Record<string, any>
+type InitStoreDto = Record<string, any>
 
 export type SidebarViewType =
   | 'orders'

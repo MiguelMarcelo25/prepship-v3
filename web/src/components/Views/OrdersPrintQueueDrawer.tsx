@@ -1,6 +1,6 @@
-// @ts-nocheck — extracted VERBATIM from the @ts-nocheck OrdersView.tsx (the JSX
-// reads loose queue-entry fields with inline casts). Strict-typing is a later
-// Phase 6 part; this extraction stays byte-identical to the source block.
+// PS-257: type-checked. Extracted VERBATIM from OrdersView.tsx. The shipping_hold /
+// held_reason fields it reads are now declared on PrintQueueEntryDto (orders-parity.ts),
+// so no casts are needed. This extraction stays byte-identical to the source block.
 //
 // PS-178 (Phase 6, part 3) — the Print Queue drawer, extracted VERBATIM from
 // OrdersView.tsx. RENDER-ONLY: every piece of state, every derived list, and

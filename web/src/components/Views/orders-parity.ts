@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { OrderPicklistItemDto, OrderSummaryDto, OrdersDailyStatsDto } from '../../types/api'
 
 export type TableColumnKey =
@@ -156,6 +155,10 @@ export interface PrintQueueEntryDto {
   last_printed_at: string | null
   auto_retired_at?: string | null
   queued_at: string
+  // PS-129 shipping-hold: present on live queue entries the merge job excluded
+  // server-side; the drawer reads them to show the operator why (OrdersPrintQueueDrawer).
+  shipping_hold?: boolean
+  held_reason?: string | null
 }
 
 export interface PrintQueueSkuLine {
@@ -413,9 +416,13 @@ export function buildColumnPrefsForStatus(
   }
 
   if (hasLegacyColumnPrefs(currentPrefs) && !currentPrefs?.views) {
-    views.awaiting_shipment = currentPrefs
-    views.shipped = currentPrefs
-    views.cancelled = currentPrefs
+    // hasLegacyColumnPrefs() guarantees currentPrefs is a non-null ColumnPrefs
+    // here; cast bridges that runtime guarantee for the structural assignment
+    // into the ColumnViewPrefs-valued `views` map (TS can't narrow through the
+    // helper call). Runtime value unchanged.
+    views.awaiting_shipment = currentPrefs as ColumnViewPrefs
+    views.shipped = currentPrefs as ColumnViewPrefs
+    views.cancelled = currentPrefs as ColumnViewPrefs
   }
 
   views[currentStatus] = nextStatusPrefs

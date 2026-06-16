@@ -1,8 +1,9 @@
-// @ts-nocheck
-import type {
-  AnalysisDailySalesResponse,
-  AnalysisSkuDto,
-} from '@prepshipv2/contracts/analysis/contracts'
+// TODO PS-257: restore real types — @prepshipv2/contracts is erased at runtime
+// and absent in v4, so these DTO shapes are aliased to `any` locally (matching
+// the manifests-parity.ts / rates-parity.ts precedent) until v4 grows a real
+// analysis contracts module.
+type AnalysisDailySalesResponse = any
+type AnalysisSkuDto = any
 
 export type AnalysisSortKey =
   | 'name'
@@ -553,7 +554,7 @@ export function getChartSelectionRange(data: Pick<AnalysisDailySalesResponse, 'd
 
 export function getAnalysisChartMaxValue(data: AnalysisDailySalesResponse) {
   let maxValue = 1
-  data.topSkus.forEach((sku) => {
+  data.topSkus.forEach((sku: { sku: string }) => {
     const rowMax = Math.max(...(data.series[sku.sku] || [0]))
     if (rowMax > maxValue) maxValue = rowMax
   })

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Order Detail Drawer — v2 parity port from apps/web/public/js/order-detail.js.
  * Opens when the user clicks an order number link in the orders table. Shows
@@ -51,6 +50,9 @@ type Shipment = {
 
 type OrderFull = {
   orderId?: number;
+  // TODO PS-257: clientId is read off the raw order payload (TEST_CLIENT_IDS gate)
+  // but isn't yet in the shared API DTO; typed locally to match runtime usage.
+  clientId?: number;
   orderNumber?: string;
   orderStatus?: string;
   orderDate?: string;

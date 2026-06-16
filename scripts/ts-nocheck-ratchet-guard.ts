@@ -23,7 +23,12 @@ import { join } from 'node:path';
 // 2026-06-17 (PS-257 blitz slice 3): 13 single-error files fixed TYPE-ONLY (phantom
 // @prepshipv2/contracts type imports + missing types/api *Dto imports -> local type
 // aliases; 2 casts) — all type-erased, emitted JS byte-identical — 50 -> 37.
-const CEILING = 37;
+// 2026-06-17 (PS-257 blitz slice 4): 13 type-noise files de-nocheck'd BYTE-IDENTICALLY
+// (as-casts, ! assertions, local type aliases, annotations — all TS-erased, no runtime
+// change). One type-gap flagged for follow-up: orders-parity PrintQueueEntryDto should add
+// optional shipping_hold/held_reason. markups.ts cast `(type as string)==='percent'` (narrow
+// MarkupType union; widen as follow-up). — 37 -> 24.
+const CEILING = 24;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

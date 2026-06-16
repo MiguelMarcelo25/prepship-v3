@@ -1,13 +1,46 @@
-// @ts-nocheck
 import {
   californiaDateInputValue,
   californiaDayEpochMs,
 } from '../../lib/ca-time'
-import type {
-  BulkUpdateInventoryDimensionsInput,
-  InventoryItemDto,
-  ListInventoryLedgerQuery,
-} from '../../types/api'
+
+// These inventory DTO/query shapes aren't exported from the shared `types/api`
+// shim, so declare the locally-consumed shapes here (matching this module's
+// usage). Kept local to avoid touching the shared shim. The item DTO keeps the
+// shim's permissive `Record<string, any>` base so ad-hoc inventory-row field
+// reads stay type-compatible, with the fields this module relies on pinned.
+// TODO PS-257: promote these to canonical exports in types/api.ts.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type InventoryItemDto = Record<string, any> & {
+  id: number
+  clientId: number
+  clientName: string
+  sku: string
+  name: string
+  status?: string | null
+  active?: boolean | null
+  cuFtOverride?: number | null
+  productLength: number
+  productWidth: number
+  productHeight: number
+}
+
+interface ListInventoryLedgerQuery {
+  clientId?: number
+  sku?: string
+  type?: string
+  dateStart?: number
+  dateEnd?: number
+}
+
+interface BulkUpdateInventoryDimensionsInput {
+  updates: Array<{
+    invSkuId: number
+    weightOz: number | undefined
+    productLength: number | undefined
+    productWidth: number | undefined
+    productHeight: number | undefined
+  }>
+}
 
 export type InventoryTab = 'stock' | 'receive' | 'clients' | 'history'
 

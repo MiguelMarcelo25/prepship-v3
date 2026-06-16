@@ -1,4 +1,3 @@
-// @ts-nocheck
 // ──────────────────────────────────────────────────────────────────
 // PackagesDataTable — now a thin consumer of the reusable <Table>
 // primitive (components/ui/Table.tsx). Migrated 2026-05-12 per
@@ -34,13 +33,26 @@
 
 import { type MutableRefObject, type ReactNode } from 'react'
 import { BadgeDollarSign, PackagePlus, PencilLine, SlidersHorizontal, Trash2 } from 'lucide-react'
-import type { PackageDto, PackageLedgerEntryDto } from '../../types/api'
+import type { PackageDto } from '../../types/api'
 import {
   formatPackageDimensionsText,
   formatPackageLedgerDate,
   formatPackageUnitCost,
 } from './packages-parity'
 import { Table, type TableColumn } from '../ui/Table'
+
+// `PackageLedgerEntryDto` isn't exported from the shared `types/api` shim, so
+// declare the consumed shape here (matches the package_ledger rows the ledger
+// expansion renders). Exported so PackagesView reuses the SAME type for its
+// LedgerState rows (single FE source until the shared DTO lands).
+export interface PackageLedgerEntryDto {
+  id?: number | string | null
+  createdAt: number
+  delta: number
+  unitCost?: number | null
+  reason?: string | null
+  orderId?: number | null
+}
 
 export type PackagesColumnKey = 'package' | 'stock' | 'usage30' | 'reorder' | 'cost' | 'actions'
 export type PackagesSortKey = Exclude<PackagesColumnKey, 'actions'>
@@ -185,10 +197,13 @@ function renderLedgerReason(
   if (!onOpenOrderByNumber) return reason
   const match = ORDER_REF_RE.exec(reason)
   if (!match || typeof match.index !== 'number') return reason
-  const orderNumber = match[1]
+  // A successful exec of ORDER_REF_RE (/\border\s+(\S+)/) always populates the
+  // full match (match[0]) and the single (\S+) capture group (match[1]);
+  // non-null assertions reflect that guarantee under noUncheckedIndexedAccess.
+  const orderNumber = match[1]!
   const cleanedNumber = orderNumber.replace(/[.,;:]+$/, '')
   if (!cleanedNumber) return reason
-  const numberStart = match.index + match[0].length - orderNumber.length
+  const numberStart = match.index + match[0]!.length - orderNumber.length
   const before = reason.slice(0, numberStart)
   const after = reason.slice(numberStart + cleanedNumber.length)
   return (

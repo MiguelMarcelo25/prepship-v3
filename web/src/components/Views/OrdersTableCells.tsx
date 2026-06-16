@@ -1,6 +1,6 @@
-// @ts-nocheck — the W2c2 diagnostic-column renderer reads loose DTO rate/label
-// records (order.bestRate?.carrierCode etc. are {}-typed on OrderSummaryDto),
-// following the documented sibling precedent (orders-display-state.ts,
+// PS-257: type-checked. The W2c2 diagnostic-column renderer reads loose DTO
+// rate records (order.bestRate is unknown-typed on OrderSummaryDto) via explicit
+// record casts, following the documented sibling precedent (orders-display-state.ts,
 // orders-row-display.tsx). The leaf renderers below are trivially correct; the
 // renderOrderCell context type stays as in-file documentation.
 //
@@ -210,7 +210,7 @@ export function renderDiagnosticColumnCell(order: OrderSummaryDto, column: Table
           ? getCancelledDisplayCarrierCode(order)
           : getShippedDisplayCarrierCode(order)
         : order.bestRate
-          ? toStringValue(order.bestRate?.carrierCode)
+          ? toStringValue((order.bestRate as Record<string, unknown> | null | undefined)?.carrierCode)
           : null
       return renderDiagnosticCell(value, { monospace: true })
     }
@@ -220,7 +220,7 @@ export function renderDiagnosticColumnCell(order: OrderSummaryDto, column: Table
         ? diagnosticIsCancelled
           ? getCancelledDisplayProviderId(order)
           : getShippedDisplayProviderId(order)
-        : toProviderAccountId(order.bestRate?.shippingProviderId)
+        : toProviderAccountId((order.bestRate as Record<string, unknown> | null | undefined)?.shippingProviderId)
       return renderDiagnosticCell(value, { monospace: true })
     }
     case 'test_clientID':
@@ -237,7 +237,7 @@ export function renderDiagnosticColumnCell(order: OrderSummaryDto, column: Table
         ? diagnosticIsCancelled
           ? getCancelledDisplayServiceCode(order)
           : getShippedDisplayServiceCode(order)
-        : toStringValue(order.bestRate?.serviceCode)
+        : toStringValue((order.bestRate as Record<string, unknown> | null | undefined)?.serviceCode)
       return renderDiagnosticCell(value, {
         fontSize: 10,
         maxWidth: column.width,

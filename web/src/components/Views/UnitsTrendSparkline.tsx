@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Small inline SVG sparkline used in the AnalysisView "Units Trend"
 // column. Renders 50+ rows without a chart library — recharts/svg would
 // each pay a per-row mount cost, plain SVG is essentially free. Line
@@ -83,10 +82,13 @@ export function UnitsTrendSparkline({
   // anchor it on the bottom edge so the area shading reads as "units
   // sitting on a baseline."
   const baseY = yInset + innerHeight
+  // `series.length >= 2` is guaranteed by the early return above, so
+  // `points` has at least two entries — the `!` assertions only satisfy
+  // noUncheckedIndexedAccess and are unreachable-undefined at runtime.
   const areaPath =
-    `M ${points[0][0].toFixed(2)} ${baseY.toFixed(2)} ` +
+    `M ${points[0]![0].toFixed(2)} ${baseY.toFixed(2)} ` +
     points.map(([x, y]) => `L ${x.toFixed(2)} ${y.toFixed(2)}`).join(' ') +
-    ` L ${points[points.length - 1][0].toFixed(2)} ${baseY.toFixed(2)} Z`
+    ` L ${points[points.length - 1]![0].toFixed(2)} ${baseY.toFixed(2)} Z`
 
   const totalUnits = trend.total.toLocaleString()
   const directionWord =

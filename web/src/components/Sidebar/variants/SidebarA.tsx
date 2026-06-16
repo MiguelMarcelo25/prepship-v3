@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Variant A — Clean Linear / Notion-inspired
 // White surface, subtle slate hover, 3px left accent bar for active items.
 // Calm, professional, Software-product feel.
@@ -121,7 +120,9 @@ export default function SidebarA(props: SidebarVariantProps) {
       <nav className="flex-1 overflow-y-auto px-2 pb-3">
         <div className="px-1.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-900">Orders</div>
         {c.SIDEBAR_STATUSES.map((status) => {
-          const { Icon: StatusIcon, tint: statusTint } = STATUS_ICON[status]
+          // STATUS_ICON has an entry for every SidebarOrderStatus; the `!`
+          // drops the noUncheckedIndexedAccess `| undefined` (type-only).
+          const { Icon: StatusIcon, tint: statusTint } = STATUS_ICON[status]!
           const isActive = c.currentView === 'orders' && c.currentStatus === status && c.activeStore == null
           const isExpanded = c.expandedSections.has(status)
           const total = c.counts ? c.sidebarSections[status].total : null
