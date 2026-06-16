@@ -314,6 +314,8 @@
     "test:ps-252-catalog-mutation-authz": "tsx scripts/ps-252-catalog-mutation-authz-guard.ts",
     "test:ps-249-billing-write-permission": "tsx scripts/ps-249-billing-write-permission-guard.ts",
     "test:ps-245-lockdown-fence": "tsx scripts/ps-245-lockdown-fence-guard.ts",
+    "test:ps-249-storage-atomicity": "tsx scripts/ps-249-storage-atomicity-guard.ts",
+    "migrate:billing-storage-unique": "tsx scripts/migrate-billing-storage-unique.ts",
     "verify:lockdown-fence": "tsx scripts/verify-lockdown-fence.ts",
     "test:ps-277-browse-sot-writeback": "tsx scripts/ps-277-browse-sot-writeback-guard.ts",
     "test:ps-277-sot-consistency": "tsx scripts/ps-277-sot-consistency-guard.ts",
