@@ -306,6 +306,7 @@
     "test:ts-nocheck-ratchet": "tsx scripts/ts-nocheck-ratchet-guard.ts",
     "test:ps-246-financials-write-permission": "tsx scripts/ps-246-financials-write-permission-guard.ts",
     "test:ps-251-ssrf-allowlist": "tsx scripts/ps-251-ssrf-allowlist-guard.ts",
+    "test:ps-253-automation-rule-lock": "tsx scripts/ps-253-automation-rule-lock-guard.ts",
     "test:ps-277-browse-sot-writeback": "tsx scripts/ps-277-browse-sot-writeback-guard.ts",
     "test:ps-277-sot-consistency": "tsx scripts/ps-277-sot-consistency-guard.ts",
     "test:ps-277-panel-reads-sot": "tsx scripts/ps-277-panel-reads-sot-guard.ts",

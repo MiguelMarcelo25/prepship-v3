@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import { db } from '../db/client.js';
 import { settings } from '../db/schema/settings.js';
+import { advisoryLockKeyPair } from '../lib/advisory-lock.js';
 import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
   isHugrabShippingContext,
@@ -119,14 +120,30 @@ export function shippingAutomationRulesFingerprint(rules: ShippingAutomationRule
 export async function upsertShippingAutomationRule(
   nextRule: ShippingAutomationRule,
 ): Promise<ShippingAutomationRule[]> {
-  const currentRules = await loadShippingAutomationRules();
-  const matcher = nextRule.type === 'carrier' ? sameCarrierRule : sameServiceRule;
-  const filtered = currentRules.filter((rule) => !matcher(rule, nextRule));
-  const nextRules = nextRule.disabled
-    ? [...filtered, nextRule]
-    : filtered;
-  await saveShippingAutomationRules(nextRules);
-  return nextRules;
+  // PS-253 (Card 8): the load -> filter -> save is read-modify-write. Without a lock,
+  // two concurrent saves both read the old set and the last writer wins, silently
+  // dropping the other's change. Serialize the whole sequence on ONE connection under a
+  // transaction-scoped advisory lock (auto-released on commit) so each save sees the
+  // prior one. The read + write run on `tx` so the lock actually covers them.
+  const [classid, objid] = advisoryLockKeyPair(SHIPPING_AUTOMATION_RULES_KEY);
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${classid}, ${objid})`);
+    const [row] = await tx
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, SHIPPING_AUTOMATION_RULES_KEY))
+      .limit(1);
+    const currentRules = parseRules(row?.value);
+    const matcher = nextRule.type === 'carrier' ? sameCarrierRule : sameServiceRule;
+    const filtered = currentRules.filter((rule) => !matcher(rule, nextRule));
+    const nextRules = nextRule.disabled ? [...filtered, nextRule] : filtered;
+    const payload: RulePayload = { version: 1, rules: nextRules };
+    await tx
+      .insert(settings)
+      .values({ key: SHIPPING_AUTOMATION_RULES_KEY, value: JSON.stringify(payload) })
+      .onConflictDoUpdate({ target: settings.key, set: { value: JSON.stringify(payload) } });
+    return nextRules;
+  });
 }
 
 // PS-139: removed dead export buildHugrabLockedAutomationRule (0 callers).
