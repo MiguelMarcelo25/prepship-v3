@@ -1,5 +1,5 @@
-// @ts-nocheck
-import type { GenerateManifestInput } from '@prepshipv2/contracts/manifests/contracts'
+// TODO PS-257: restore real type — @prepshipv2/contracts is erased at runtime and absent in v4.
+type GenerateManifestInput = any
 
 export interface ManifestFormState {
   startDate: string

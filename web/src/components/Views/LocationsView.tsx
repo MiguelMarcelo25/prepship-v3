@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useContext, useEffect, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -304,7 +303,7 @@ export function LocationsViewContent({
                         </span>
                       ) : null}
                     </div>
-                    <div className="text-[12px] text-ink-2 leading-relaxed">{buildLocationSummary(location)}</div>
+                    <div className="text-[12px] text-ink-2 leading-relaxed">{buildLocationSummary(location as Parameters<typeof buildLocationSummary>[0])}</div>
                     {location.phone ? (
                       <div className="text-tiny text-ink-3 mt-1 font-mono tabular-nums">{location.phone}</div>
                     ) : null}

@@ -1,12 +1,10 @@
-// @ts-nocheck
 // PS-155: the Billing summary table extracted verbatim from BillingView.tsx (behavior-preserving).
-// @ts-nocheck matches the rest of the billing module (BillingView + billing-parity are both @ts-nocheck):
-// the billing DTO types (BillingSummaryDto, etc.) are phantom imports not actually exported from types/api,
-// so this file can't be cleanly strict-typed. The extraction is a verbatim JSX move; build:web is the net.
+// Note: the billing DTO types (BillingSummaryDto, etc.) are phantom names not actually exported from types/api,
+// so they are locally aliased below. The extraction is a verbatim JSX move; build:web is the net.
 // Rows + totals (summaryTotals) + the detail/export handlers stay OWNED by BillingView and are passed
 // in — money totals are parent-computed, so they cannot drift. Thin presentational <Table> wrapper.
 import type { CSSProperties } from 'react'
-import type { BillingSummaryDto } from '../../types/api'
+type BillingSummaryDto = any // TODO PS-257: restore real type
 import { formatBillingMoney, type BillingSummaryTotals } from './billing-parity'
 import { Table } from '../ui/Table'
 

@@ -1,7 +1,7 @@
-// @ts-nocheck
 import { useState, useEffect, useCallback } from "react";
 import { apiClient } from "../api/client";
-import type { ClientDto } from "@prepshipv2/contracts/clients/contracts";
+// TODO PS-257: restore real type — @prepshipv2/contracts is erased at runtime and absent in v4.
+type ClientDto = any;
 
 export interface UseStoresResult {
   stores: ClientDto[];

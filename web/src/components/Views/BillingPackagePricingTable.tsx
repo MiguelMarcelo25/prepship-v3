@@ -1,6 +1,5 @@
-// @ts-nocheck
 // PS-155: "Package Pricing by Client" card extracted verbatim from BillingView.tsx (behavior-preserving).
-// @ts-nocheck matches the rest of the billing module — the package-price rows carry phantom fields
+// Note: the package-price rows carry phantom fields
 // (marginPct / marginColor / ourCost / dimsText / isCustom) produced by buildBillingPackagePriceRows.
 //
 // IMPORTANT — money/state ownership stays in BillingView:
@@ -11,7 +10,7 @@
 //     in BillingView. This component only renders inputs and forwards onChange/onSave.
 //   • getPackageMarginMarkup is the parent's byte-identical PURE render helper (reads only row.marginPct
 //     / row.marginColor), relocated here because it's used only by this table.
-import type { BillingConfigDto } from '../../types/api'
+type BillingConfigDto = any // TODO PS-257: restore real type
 import type { buildBillingPackagePriceRows } from './billing-parity'
 import { Table } from '../ui/Table'
 

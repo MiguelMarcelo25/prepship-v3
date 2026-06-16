@@ -1,7 +1,8 @@
-// @ts-nocheck
 import { useState, useEffect, useCallback } from "react";
 import { apiClient } from "../api/client";
-import type { InitStoreDto } from "../types/api";
+
+// TODO PS-257: restore real InitStoreDto type (not exported by ../types/api)
+type InitStoreDto = any;
 
 export interface UseInitStoresResult {
   stores: InitStoreDto[];

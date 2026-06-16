@@ -1,11 +1,10 @@
-// @ts-nocheck
 // PS-154: pure stock-math helpers extracted VERBATIM from InventoryView.tsx
 // so the effective-stock / display-status / stock-tooltip / sort-value
 // computations live in one shared, side-effect-free module instead of
 // inline in the view. No state, no handlers, no money mutation — these
 // are read-only functions over an InventoryItemDto row. InventoryView
 // imports them; behavior is identical to the previous inline definitions.
-import type { InventoryItemDto } from '../../types/api'
+type InventoryItemDto = any // TODO PS-257: restore real type
 // getInventoryCuFt already lives in the parity module (imported from the
 // same source the view uses) so the 'cuFt' sort branch stays canonical.
 import { getInventoryCuFt } from './inventory-parity'

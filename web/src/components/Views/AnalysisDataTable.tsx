@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import type { AnalysisSkuDto } from '@prepshipv2/contracts/analysis/contracts'
+// TODO PS-257: restore real type — @prepshipv2/contracts is erased at runtime and absent in v4.
+type AnalysisSkuDto = any
 import {
   AnalysisTableHeader,
   type AnalysisTableColumn,

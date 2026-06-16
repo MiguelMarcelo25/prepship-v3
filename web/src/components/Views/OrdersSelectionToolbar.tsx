@@ -1,4 +1,4 @@
-// @ts-nocheck — extracted VERBATIM from the @ts-nocheck OrdersView.tsx; strict
+// Extracted VERBATIM from OrdersView.tsx; strict
 // typing is a later Phase 6 part so this extraction stays byte-identical.
 //
 // PS-178 (Phase 6, part 4) — the selected-rows toolbar, extracted VERBATIM from
@@ -26,7 +26,7 @@ export type OrdersSelectionToolbarProps = {
   batchBusy: boolean
   extShipBusy: boolean
   batchExtShipMenuOpen: boolean
-  setBatchExtShipMenuOpen: (updater: (open: boolean) => boolean) => void
+  setBatchExtShipMenuOpen: (updater: boolean | ((open: boolean) => boolean)) => void
   batchTestMode: boolean
   setBatchTestMode: (checked: boolean) => void
   handleBatchAction: (mode: 'print' | 'queue') => unknown

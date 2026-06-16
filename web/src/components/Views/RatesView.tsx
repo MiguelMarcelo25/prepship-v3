@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useContext, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -12,7 +11,8 @@ import {
   MapPin,
   Award,
 } from 'lucide-react'
-import type { RateDto } from '@prepshipv2/contracts/rates/contracts'
+// TODO PS-257: restore real type — @prepshipv2/contracts is erased at runtime and absent in v4.
+type RateDto = any
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'

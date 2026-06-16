@@ -20,7 +20,10 @@ import { join } from 'node:path';
 // type-check clean once fully stripped (OrdersBatchPanel, OrdersPanelSections,
 // orders-persistent-queue-job, DashboardSkuTableRow) + 7 ratchet FALSE-POSITIVES whose
 // only @ts-nocheck was a prose mention in an already-strict file — 61 -> 50.
-const CEILING = 50;
+// 2026-06-17 (PS-257 blitz slice 3): 13 single-error files fixed TYPE-ONLY (phantom
+// @prepshipv2/contracts type imports + missing types/api *Dto imports -> local type
+// aliases; 2 casts) — all type-erased, emitted JS byte-identical — 50 -> 37.
+const CEILING = 37;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

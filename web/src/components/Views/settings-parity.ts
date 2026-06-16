@@ -1,6 +1,8 @@
-// @ts-nocheck
-import type { CarrierAccountDto, ClearAndRefetchResultDto } from '../../types/api'
+import type { CarrierAccountDto } from '../../types/api'
 import type { MarkupsMap, MarkupType } from '../../types/markups'
+
+// TODO PS-257: restore real ClearAndRefetchResultDto type (not exported by ../../types/api)
+type ClearAndRefetchResultDto = any
 
 export interface SettingsMarkupRow {
   shippingProviderId: number

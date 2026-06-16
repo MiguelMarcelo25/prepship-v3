@@ -1,6 +1,4 @@
-// @ts-nocheck
 import type { ReactNode } from 'react'
-import type { ViewType } from './sidebar-data'
 import {
   IconBadge,
   IconBarChart,
@@ -13,6 +11,9 @@ import {
   IconSettings,
   type IconTone,
 } from './sidebar-icons'
+
+// TODO PS-257: restore real ViewType (not exported by ./sidebar-data)
+type ViewType = string
 
 interface WorkspaceItem {
   view: ViewType

@@ -1,5 +1,7 @@
-// @ts-nocheck
-import type { LocationDto, SaveLocationInput } from '../../types/api'
+import type { LocationDto } from '../../types/api'
+
+// TODO PS-257: restore real SaveLocationInput type (not exported by ../../types/api)
+type SaveLocationInput = any
 
 export interface LocationFormState {
   locationId: string
