@@ -318,6 +318,7 @@
     "test:ps-247-inventory-deduct-atomic": "tsx scripts/ps-247-inventory-deduct-atomic-guard.ts",
     "test:ps-247-inventory-route-scope": "tsx scripts/ps-247-inventory-route-scope-guard.ts",
     "test:ps-248-label-purchase-lock": "tsx scripts/ps-248-label-purchase-lock-guard.ts",
+    "test:ps-248-persist-mark-shipped-atomic": "tsx scripts/ps-248-persist-mark-shipped-atomic-guard.ts",
     "test:ps-249-billing-write-permission": "tsx scripts/ps-249-billing-write-permission-guard.ts",
     "test:ps-245-lockdown-fence": "tsx scripts/ps-245-lockdown-fence-guard.ts",
     "test:ps-249-storage-atomicity": "tsx scripts/ps-249-storage-atomicity-guard.ts",

@@ -821,6 +821,12 @@ function serviceCodeFitsPackage(_: string): string {
   return 'package';
 }
 
+// PS-248 (Per user override unlock shipped data on 2026-06-16): a drizzle transaction handle so
+// persistCreatedLabel + markOrderShipped can COMMIT ATOMICALLY — a crash between them must not leave an
+// orphan shipment row with the order still not-shipped (torn state, broken invariant). Falls back to
+// the pool (db) when no tx is supplied, so existing non-transactional callers are unchanged.
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 async function persistCreatedLabel(args: {
   created: CreatedExternalLabel;
   orderId: number;
@@ -834,8 +840,10 @@ async function persistCreatedLabel(args: {
   source: string;
   insuranceProvider?: string | null;
   insuredValue?: number | null;
+  tx?: DbTx;
 }): Promise<number> {
   const { created } = args;
+  const exec = (args.tx ?? db) as DbTx;
   const createdAt = new Date();
   const shipDate = created.shipDate ? new Date(created.shipDate) : createdAt;
   // PS-108: ShipStation bills the ParcelGuard premium separately (created.insuranceCost,
@@ -868,7 +876,7 @@ async function persistCreatedLabel(args: {
         : insuranceProvider === 'carrier'
           ? 'carrier_declared_value'
           : 'none';
-  const [row] = await db
+  const [row] = await exec
     .insert(shipments)
     .values({
       orderId: args.orderId,
@@ -932,15 +940,17 @@ async function persistCreatedLabel(args: {
 async function markOrderShipped(
   orderId: number,
   trackingNumber: string | null,
-  options: { cleanupQueue?: boolean } = {}
+  options: { cleanupQueue?: boolean; tx?: DbTx } = {}
 ): Promise<void> {
-  void options;
-  await db
+  // PS-248: run on the caller's transaction when supplied so the order-status flip + tracking
+  // override commit ATOMICALLY with the shipment insert (and atomically with each other).
+  const exec = (options.tx ?? db) as DbTx;
+  await exec
     .update(orders)
     .set({ orderStatus: 'shipped', updatedAt: new Date() })
     .where(eq(orders.id, orderId));
   if (trackingNumber) {
-    await db
+    await exec
       .insert(orderOverrides)
       .values({ orderId, trackingNumber, updatedAt: new Date() })
       .onConflictDoUpdate({
@@ -1441,30 +1451,37 @@ async function createLabelV2Impl(
     });
   }
 
-  const localShipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
-    created,
-    orderId: order.id,
-    orderNumber: order.orderNumber ?? null,
-    clientId: clientId ?? null,
-    effectiveWeightOz,
-    length,
-    width,
-    height,
-    // PS-221 (Per user override unlock shipped data on 2026-06-13): persist the
-    // package that was actually RESOLVED + deducted (resolvedPackageId, line ~1482),
-    // not the raw body.customPackageId. Previously the real path dropped the
-    // dims-matched package (selected_package_id NULL on ~99.5% of shipments), so the
-    // box deducted ≠ billed ≠ displayed. The test path (above) already did this.
-    // Forward-only: no backfill of historical NULLs.
-    selectedPackageId: resolvedPackageId != null ? String(resolvedPackageId) : null,
-    // PS-202: direct purchases keep the legacy source attribution (shipments
-    // rows showed source='shipp'/'walmart_shipping') so billing/queries match.
-    source: directProviderKey ?? 'prepship_v2',
-    insuranceProvider: options.insuranceProvider,
-    insuredValue: options.insuredValue,
-  }));
-
-  await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false }));
+  // PS-248 (Per user override unlock shipped data on 2026-06-16): persist the shipment AND flip the
+  // order to 'shipped' in ONE transaction, so a crash between them can't orphan a shipment row while
+  // the order stays awaiting (torn state / broken invariant). The external label buy already happened
+  // above; this txn is DB-only + short. recordFulfillmentDeductions (below) stays its own unit.
+  const localShipmentId = await db.transaction(async (tx) => {
+    const shipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
+      created,
+      orderId: order.id,
+      orderNumber: order.orderNumber ?? null,
+      clientId: clientId ?? null,
+      effectiveWeightOz,
+      length,
+      width,
+      height,
+      // PS-221 (Per user override unlock shipped data on 2026-06-13): persist the
+      // package that was actually RESOLVED + deducted (resolvedPackageId, line ~1482),
+      // not the raw body.customPackageId. Previously the real path dropped the
+      // dims-matched package (selected_package_id NULL on ~99.5% of shipments), so the
+      // box deducted ≠ billed ≠ displayed. The test path (above) already did this.
+      // Forward-only: no backfill of historical NULLs.
+      selectedPackageId: resolvedPackageId != null ? String(resolvedPackageId) : null,
+      // PS-202: direct purchases keep the legacy source attribution (shipments
+      // rows showed source='shipp'/'walmart_shipping') so billing/queries match.
+      source: directProviderKey ?? 'prepship_v2',
+      insuranceProvider: options.insuranceProvider,
+      insuredValue: options.insuredValue,
+      tx,
+    }));
+    await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false, tx }));
+    return shipmentId;
+  });
   timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
     order,
     shipmentId: localShipmentId,
