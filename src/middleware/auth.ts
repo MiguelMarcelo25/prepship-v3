@@ -35,6 +35,9 @@ export const APP_PERMISSIONS = [
   'credentials:read',
   'credentials:write',
   'financials:read',
+  // PS-246 (Card 1): a distinct WRITE permission for billing/financial mutations.
+  // Read != write — Card 4 gates every billing mutation on this.
+  'financials:write',
   'print_queue:write',
   'scope:global',
 ] as const;
@@ -51,6 +54,8 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
     'credentials:read',
     'credentials:write',
     'financials:read',
+    // PS-246 (Card 1): operators run billing, so they get write; warehouse/client/support stay read-only.
+    'financials:write',
     'print_queue:write',
   ],
   warehouse: ['settings:read', 'credentials:read', 'print_queue:write'],
