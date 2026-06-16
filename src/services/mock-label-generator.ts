@@ -1,3 +1,5 @@
+import { escapeHtml } from '../lib/escape-html.js';
+
 export type MockLabelData = {
   shipmentId: number;
   orderNumber: string | null;
@@ -28,7 +30,7 @@ export function generateMockLabelHtml(data: MockLabelData): string {
   const barcode = fakeBarcodeSvg(data.trackingNumber);
   const formattedTracking = data.trackingNumber.replace(/(.{4})/g, '$1 ').trim();
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><title>TEST LABEL — ${data.orderNumber ?? data.shipmentId}</title>
+<html lang="en"><head><meta charset="UTF-8"><title>TEST LABEL — ${escapeHtml(data.orderNumber ?? data.shipmentId)}</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: Arial, sans-serif; background: #f0f0f0; display: flex; justify-content: center; padding: 20px; }
@@ -50,11 +52,11 @@ body { font-family: Arial, sans-serif; background: #f0f0f0; display: flex; justi
 <div class="label">
 <div class="test-watermark">TEST</div>
 <div class="void-banner">⚠ VOID — TEST LABEL — DO NOT SHIP ⚠</div>
-<div class="section"><div class="label-sm">Ship From</div><div class="label-val">${data.shipFrom.name}</div><div class="label-val small">${data.shipFrom.street1}</div><div class="label-val small">${data.shipFrom.city}, ${data.shipFrom.state} ${data.shipFrom.postalCode}</div></div>
-<div class="section"><div class="label-sm">Ship To</div><div class="label-val" style="font-size:16px">${data.shipTo.name}</div><div class="label-val small" style="font-size:13px">${data.shipTo.street1}</div><div class="label-val small" style="font-size:15px">${data.shipTo.city}, ${data.shipTo.state} ${data.shipTo.postalCode}</div></div>
-<div class="service-row"><div class="service-name">${data.serviceLabel}</div><div class="weight-box"><div style="font-size:9px;color:#555">WEIGHT</div><div style="font-weight:bold">${data.weightOz} oz</div></div></div>
-<div class="tracking-section"><div class="label-sm">Tracking Number</div><div class="tracking-num">${formattedTracking}</div><div class="barcode-wrap">${barcode}</div></div>
-<div class="order-row"><span><b>Order #:</b> ${data.orderNumber ?? '-'}</span><span><b>Ship Date:</b> ${data.shipDate}</span></div>
+<div class="section"><div class="label-sm">Ship From</div><div class="label-val">${escapeHtml(data.shipFrom.name)}</div><div class="label-val small">${escapeHtml(data.shipFrom.street1)}</div><div class="label-val small">${escapeHtml(data.shipFrom.city)}, ${escapeHtml(data.shipFrom.state)} ${escapeHtml(data.shipFrom.postalCode)}</div></div>
+<div class="section"><div class="label-sm">Ship To</div><div class="label-val" style="font-size:16px">${escapeHtml(data.shipTo.name)}</div><div class="label-val small" style="font-size:13px">${escapeHtml(data.shipTo.street1)}</div><div class="label-val small" style="font-size:15px">${escapeHtml(data.shipTo.city)}, ${escapeHtml(data.shipTo.state)} ${escapeHtml(data.shipTo.postalCode)}</div></div>
+<div class="service-row"><div class="service-name">${escapeHtml(data.serviceLabel)}</div><div class="weight-box"><div style="font-size:9px;color:#555">WEIGHT</div><div style="font-weight:bold">${data.weightOz} oz</div></div></div>
+<div class="tracking-section"><div class="label-sm">Tracking Number</div><div class="tracking-num">${escapeHtml(formattedTracking)}</div><div class="barcode-wrap">${barcode}</div></div>
+<div class="order-row"><span><b>Order #:</b> ${escapeHtml(data.orderNumber ?? '-')}</span><span><b>Ship Date:</b> ${escapeHtml(data.shipDate)}</span></div>
 <div class="order-row"><span><b>Shipment ID:</b> ${data.shipmentId}</span><span style="color:red;font-weight:bold">TEST MODE</span></div>
 </div>
 </body></html>`;

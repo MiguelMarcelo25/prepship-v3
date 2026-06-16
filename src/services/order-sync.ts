@@ -56,10 +56,14 @@ async function flushNewStorePairs(
   }
   for (const [clientId, storeIdSet] of byClient) {
     const cid = Math.trunc(clientId);
-    const storeList = [...storeIdSet].map((n) => Math.trunc(n)).join(',');
+    const storeIds = [...storeIdSet].map((n) => Math.trunc(n));
+    // PS-254 (Card 9): PIN the integer invariant that makes this sql.raw injection-safe,
+    // instead of trusting only the upstream comment. A non-integer (e.g. NaN from a future
+    // coercion change) can never be spliced into the SQL — we skip the row instead. We keep
+    // sql.raw (not parameterized arrays) on purpose: it sidesteps the pg array-binding issue.
+    if (!Number.isInteger(cid) || !storeIds.every(Number.isInteger)) continue;
+    const storeList = storeIds.join(',');
     if (!storeList) continue;
-    // Inline the ints as literal SQL — both sides are validated upstream
-    // (storeId from SS numeric coercion, clientId from our serial PK).
     await db.execute(
       sql.raw(
         `update clients set store_ids = array(select distinct unnest(
