@@ -312,6 +312,7 @@
     "test:ps-255-ops-confirm-gate": "tsx scripts/ps-255-ops-confirm-gate-guard.ts",
     "test:ps-256-durable-rate-limiter": "tsx scripts/ps-256-durable-rate-limiter-guard.ts",
     "test:ps-252-catalog-mutation-authz": "tsx scripts/ps-252-catalog-mutation-authz-guard.ts",
+    "test:ps-249-billing-write-permission": "tsx scripts/ps-249-billing-write-permission-guard.ts",
     "test:ps-277-browse-sot-writeback": "tsx scripts/ps-277-browse-sot-writeback-guard.ts",
     "test:ps-277-sot-consistency": "tsx scripts/ps-277-sot-consistency-guard.ts",
     "test:ps-277-panel-reads-sot": "tsx scripts/ps-277-panel-reads-sot-guard.ts",

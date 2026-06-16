@@ -150,6 +150,8 @@ const configBody = z.object({
 
 app.put(
   '/config/:clientId{[0-9]+}',
+  // PS-249 (Card 4): billing MUTATIONS require financials:write (read != write).
+  requirePermission('financials:write'),
   zValidator('json', configBody),
   async (c) => {
     const clientId = Number(c.req.param('clientId'));
@@ -255,7 +257,7 @@ function money(value: number): string {
   return (Number.isFinite(value) ? value : 0).toFixed(2);
 }
 
-app.post('/generate', zValidator('json', generateSchema), async (c) => {
+app.post('/generate', requirePermission('financials:write'), zValidator('json', generateSchema), async (c) => {
   const body = c.req.valid('json');
   const result = await generateLineItems(withBillingScope(c, {
     clientId: body.clientId,
@@ -319,7 +321,7 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
 // browser opens it and the user can Ctrl+P → Save as PDF. Mirrors the
 // template from v2 billing-routes.ts:19-128 exactly.
 
-app.patch('/details/:orderId{[0-9]+}', zValidator('json', detailPatchSchema), async (c) => {
+app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zValidator('json', detailPatchSchema), async (c) => {
   const orderId = Number(c.req.param('orderId'));
   const body = c.req.valid('json');
   const scope = billingScopeFromContext(c);
@@ -1106,7 +1108,7 @@ const pricesBody = z.object({
     .max(500),
 });
 
-app.put('/package-prices', zValidator('json', pricesBody), async (c) => {
+app.put('/package-prices', requirePermission('financials:write'), zValidator('json', pricesBody), async (c) => {
   const { clientId, prices } = c.req.valid('json');
   let updated = 0;
   for (const row of prices) {
@@ -1133,6 +1135,7 @@ app.put('/package-prices', zValidator('json', pricesBody), async (c) => {
 
 app.post(
   '/package-prices/set-default',
+  requirePermission('financials:write'),
   zValidator(
     'json',
     z.object({ packageId: z.number().int(), price: z.number().nonnegative() })
@@ -1214,7 +1217,7 @@ const refRatesUpsertBody = z.object({
 //      the cheapest USPS + UPS rates onto order_overrides. Returns the
 //      {ok, filled, missing, total, message?} shape the BillingView
 //      expects (mirrors v2's backfillReferenceRates).
-app.post('/backfill-ref-rates', async (c) => {
+app.post('/backfill-ref-rates', requirePermission('financials:write'), async (c) => {
   const body = await c.req.json().catch(() => ({}));
 
   // Shape A: explicit rates array
@@ -1253,6 +1256,7 @@ app.post('/backfill-ref-rates', async (c) => {
 // Used by the billing UI to compare "what did we pay" vs "what we could've paid".
 app.post(
   '/fetch-ref-rates',
+  requirePermission('financials:write'),
   zValidator(
     'json',
     z
