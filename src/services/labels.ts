@@ -9,6 +9,8 @@ import { clients } from '../db/schema/clients';
 // surface (routes pass them only an id/body); they now require the caller's scope.
 import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
+// PS-248: per-order advisory lock so concurrent buys can't double-purchase postage for one order.
+import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
 import { resolveOrderLabelPackageId } from './package-resolution';
 // PS-262a: single canonical owner of the per-marketplace confirmation identity.
@@ -988,7 +990,28 @@ async function recordFulfillmentDeductions(args: {
  * Create a label (v2-parity). Supports offline testLabel mode (generates a
  * mock PDF with no ShipStation interaction) and real ShipStation creation.
  */
+// PS-248 (Per user override unlock shipped data on 2026-06-16): serialize concurrent label PURCHASES
+// per order so a double-click / double-request can't buy two labels (double postage) for the same
+// order. The per-order advisory lock is NON-BLOCKING — a second in-flight buy for the same order is
+// rejected immediately with LABEL_PURCHASE_IN_PROGRESS, not queued. Every existing guard (PS-233
+// scope, editable, PS-128/129 safe-to-ship) + the buy + persist run UNCHANGED inside the impl; this
+// is pure serialization with no shipped/cancelled mutation. The concurrent behavior is verified by a
+// live canary — offline cert cannot simulate two simultaneous buys.
 export async function createLabelV2(
+  body: CreateLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateLabelResponseDto> {
+  // No orderId → let the impl throw the canonical validation error (nothing to lock on).
+  if (!body.orderId) return createLabelV2Impl(body, scope);
+  const purchaseLock = await acquireLabelPurchaseLock(body.orderId);
+  try {
+    return await createLabelV2Impl(body, scope);
+  } finally {
+    await purchaseLock.release();
+  }
+}
+
+async function createLabelV2Impl(
   body: CreateLabelInputDto,
   scope: ClientStoreScope,
 ): Promise<CreateLabelResponseDto> {
