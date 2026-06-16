@@ -46,6 +46,8 @@ import {
 } from '../../lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../lib/http/cors.js';
 import { sendInternalServerError } from '../../lib/safe-error.js';
+// PS-251 (Card 6): block SSRF via caller-supplied carrier apiBase/swsimEndpoint URLs.
+import { assertPublicHttpUrl } from '../../lib/ssrf-guard.js';
 
 type ProviderType =
   | 'simulator'
@@ -489,6 +491,7 @@ const verifySeko: Verifier = async (creds) => {
   try {
     // Light authenticated probe — SEKO returns 200 for the carriage-types
     // resource on a valid token, 401 otherwise.
+    assertPublicHttpUrl(apiBase, 'SEKO apiBase');
     const res = await fetch(`${apiBase}/api/v1/CarriageTypes`, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
     });
@@ -527,6 +530,7 @@ const verifyEpostGlobal: Verifier = async (creds) => {
     return { ok: false, error: 'accountId and apiKey are required' };
   }
   try {
+    assertPublicHttpUrl(apiBase, 'ePost Global apiBase');
     const res = await fetch(`${apiBase}/v1/services?accountId=${encodeURIComponent(accountId)}`, {
       headers: { 'x-api-key': apiKey, Accept: 'application/json' },
     });
@@ -567,6 +571,7 @@ const verifyIntelliquick: Verifier = async (creds) => {
   }
   try {
     const basic = Buffer.from(`${accountNumber}:${apiKey}`).toString('base64');
+    assertPublicHttpUrl(apiBase, 'IntelliQuick apiBase');
     const res = await fetch(`${apiBase}/v1/account`, {
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json' },
     });
@@ -606,6 +611,7 @@ const verifyGls: Verifier = async (creds) => {
     return { ok: false, error: 'customerId, username, password are required' };
   }
   try {
+    assertPublicHttpUrl(apiBase, 'GLS US apiBase');
     const res = await fetch(`${apiBase}/v1/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -679,6 +685,7 @@ const verifyStampsCom: Verifier = async (creds) => {
   </soap:Body>
 </soap:Envelope>`;
   try {
+    assertPublicHttpUrl(endpoint, 'Stamps.com swsimEndpoint');
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: {
