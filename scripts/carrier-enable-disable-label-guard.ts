@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs';
 
 const card = readFileSync('web/src/components/Settings/CarrierIntegrationsCard.tsx', 'utf8');
+const stateToggle = readFileSync('web/src/components/ui/StateToggle.tsx', 'utf8');
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -16,17 +17,23 @@ function check(name: string, condition: boolean) {
   }
 }
 
+// Re-anchor (2026-06-16): the carrier active control was redesigned from a labeled
+// button into the StateToggle switch (web/src/components/ui/StateToggle.tsx) — the
+// knob position/color IS the state, which reads less ambiguously than a button. The
+// operator preference (Enable/Disable wording, never Activate/Deactivate) is preserved
+// by the switch's Enabling…/Disabling… loading text + the card's "click to enable/
+// disable it" tooltip. Pinned at the live design, not the retired button props.
 check(
-  'active-toggle label is Enable/Disable',
-  /label=\{d\.active === false \? 'Enable' : 'Disable'\}/.test(card),
+  'carrier active control is the StateToggle switch bound to d.active',
+  /<StateToggle\b[\s\S]{0,400}?on=\{d\.active !== false\}/.test(card),
 );
 check(
-  'active-toggle loading label is Enabling/Disabling',
-  /loadingLabel=\{d\.active === false \? 'Enabling…' : 'Disabling…'\}/.test(card),
+  'StateToggle renders Enabling…/Disabling… loading wording (operator Enable/Disable preference)',
+  /'Disabling…' : 'Enabling…'/.test(stateToggle),
 );
 check(
-  'active-toggle tooltips use Enable/Disable wording',
-  /Enable this carrier —/.test(card) && /Disable this carrier —/.test(card),
+  'carrier active tooltip uses enable/disable wording (not Activate/Deactivate)',
+  /click to enable it/.test(card) && /click to disable it/.test(card),
 );
 
 if (failures > 0) {
