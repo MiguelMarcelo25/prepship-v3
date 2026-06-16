@@ -105,6 +105,29 @@ function inventoryScopePredicate(scope: ClientStoreScope): SQL {
   return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
+// PS-247 (Card 2): cross-tenant guards for the inventory MUTATION routes. The read/list routes
+// already filter by inventoryScopePredicate, but the mutations resolved rows by BARE id / trusted a
+// body clientId, so a restricted (client_user) caller could create, patch, receive, adjust, re-parent,
+// or bulk-edit ANY tenant's inventory. These close that IDOR:
+//   - inventoryClientInScope: a body clientId the caller writes to must be in its scope (else 403).
+//   - inventoryIdInScope: the row at :id must be in the caller's scope, else the route 404s (no
+//     existence leak). Unrestricted/global callers pass through unchanged.
+function inventoryClientInScope(scope: ClientStoreScope, clientId: number | null | undefined): boolean {
+  if (!scope.isRestricted) return true;
+  const allowed = normalizeScopeIds(scope.clientIds);
+  return clientId != null && allowed.includes(clientId);
+}
+
+async function inventoryIdInScope(scope: ClientStoreScope, id: number): Promise<boolean> {
+  if (!scope.isRestricted) return true;
+  const [row] = await db
+    .select({ id: inventory.id })
+    .from(inventory)
+    .where(and(eq(inventory.id, id), inventoryScopePredicate(scope)))
+    .limit(1);
+  return Boolean(row);
+}
+
 function inventoryOrderScopePredicate(scope: ClientStoreScope): SQL {
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(scope.clientIds);
@@ -1102,6 +1125,10 @@ const createBody = z.object({
 
 app.post('/', zValidator('json', createBody), async (c) => {
   const body = c.req.valid('json');
+  // PS-247: a restricted caller may only create inventory in its own client scope.
+  if (!inventoryClientInScope(inventoryScopeFromContext(c), body.clientId)) {
+    return c.json({ error: 'Inventory client out of scope' }, 403);
+  }
   const [row] = await db.insert(inventory).values(body).returning();
   return c.json(row, 201);
 });
@@ -1112,10 +1139,15 @@ app.patch(
   async (c) => {
     const id = Number(c.req.param('id'));
     const body = c.req.valid('json');
+    const scope = inventoryScopeFromContext(c);
+    // PS-247: out-of-scope rows fall outside the predicate -> no update -> 404 (no cross-tenant edit).
+    if (inventoryClientInScope(scope, body.clientId) === false) {
+      return c.json({ error: 'Inventory client out of scope' }, 403);
+    }
     const [row] = await db
       .update(inventory)
       .set({ ...body, updatedAt: new Date() })
-      .where(eq(inventory.id, id))
+      .where(and(eq(inventory.id, id), inventoryScopePredicate(scope)))
       .returning();
     if (!row) return c.json({ error: 'Inventory item not found' }, 404);
     return c.json(row);
@@ -1143,6 +1175,10 @@ app.post(
   async (c) => {
     const id = Number(c.req.param('id'));
     const body = c.req.valid('json');
+    // PS-247: a restricted caller may only receive into its own inventory.
+    if (!(await inventoryIdInScope(inventoryScopeFromContext(c), id))) {
+      return c.json({ error: 'Inventory item not found' }, 404);
+    }
     const email = c.get('email' as never) as string | undefined;
     const result = await applyMovement({
       inventoryId: id,
@@ -1165,15 +1201,17 @@ app.put(
   async (c) => {
     const id = Number(c.req.param('id'));
     const { parentSkuId } = c.req.valid('json');
+    const scope = inventoryScopeFromContext(c);
     // Dual-write: update inventory.parentSkuId FK (primary parent — back-compat)
     // AND upsert inventory_sku_parents join (v2-parity multi-parent table).
     // When parentSkuId is null, clear both: null out the FK and delete the
     // primary row from the join.
+    // PS-247: out-of-scope row falls outside the predicate -> no update -> 404 (no cross-tenant re-parent).
     const result = await db.transaction(async (tx) => {
       const [row] = await tx
         .update(inventory)
         .set({ parentSkuId, updatedAt: new Date() })
-        .where(eq(inventory.id, id))
+        .where(and(eq(inventory.id, id), inventoryScopePredicate(scope)))
         .returning();
       if (!row) return null;
 
@@ -1237,10 +1275,11 @@ app.post(
   async (c) => {
     const id = Number(c.req.param('id'));
     const { parentSkuId } = c.req.valid('json');
+    // PS-247: the target inventory row must be in the caller's scope.
     const [inv] = await db
       .select({ id: inventory.id })
       .from(inventory)
-      .where(eq(inventory.id, id))
+      .where(and(eq(inventory.id, id), inventoryScopePredicate(inventoryScopeFromContext(c))))
       .limit(1);
     if (!inv) return c.json({ error: 'Inventory item not found' }, 404);
 
@@ -1261,6 +1300,10 @@ app.delete(
   async (c) => {
     const id = Number(c.req.param('id'));
     const parentSkuId = Number(c.req.param('parentSkuId'));
+    // PS-247: a restricted caller may only edit parent links on its own inventory.
+    if (!(await inventoryIdInScope(inventoryScopeFromContext(c), id))) {
+      return c.json({ error: 'Parent link not found' }, 404);
+    }
     const result = await db.transaction(async (tx) => {
       const [removed] = await tx
         .delete(inventorySkuParents)
@@ -1290,6 +1333,10 @@ app.post(
   async (c) => {
     const id = Number(c.req.param('id'));
     const body = c.req.valid('json');
+    // PS-247: a restricted caller may only adjust its own inventory.
+    if (!(await inventoryIdInScope(inventoryScopeFromContext(c), id))) {
+      return c.json({ error: 'Inventory item not found' }, 404);
+    }
     const email = c.get('email' as never) as string | undefined;
     const result = await applyMovement({
       inventoryId: id,
@@ -1327,13 +1374,15 @@ const bulkReceiveBody = z.object({
 async function findOrCreateInventoryForReceive(
   item: z.infer<typeof bulkReceiveBody>['items'][number],
   clientId: number | null | undefined,
+  scope: ClientStoreScope,
 ) {
   const requestedId = item.invSkuId ?? item.inventoryId;
   if (requestedId != null) {
+    // PS-247: a restricted caller may only receive into an inventory row in its own scope.
     const [row] = await db
       .select()
       .from(inventory)
-      .where(eq(inventory.id, requestedId))
+      .where(and(eq(inventory.id, requestedId), inventoryScopePredicate(scope)))
       .limit(1);
     if (!row) throw new Error(`Inventory item #${requestedId} not found`);
     return row;
@@ -1371,6 +1420,11 @@ app.post(
   zValidator('json', bulkReceiveBody),
   async (c) => {
     const body = c.req.valid('json');
+    // PS-247: a restricted caller may only bulk-receive into its own client scope.
+    const scope = inventoryScopeFromContext(c);
+    if (!inventoryClientInScope(scope, body.clientId)) {
+      return c.json({ error: 'Inventory client out of scope' }, 403);
+    }
     const email = c.get('email' as never) as string | undefined;
     const receivedAt = movementDateFrom(body.receivedAt);
     // v2-parity ReceiveInventoryResultDto adds `newStock` per item so
@@ -1390,7 +1444,7 @@ app.post(
     }> = [];
     for (const item of body.items) {
       try {
-        const inv = await findOrCreateInventoryForReceive(item, body.clientId);
+        const inv = await findOrCreateInventoryForReceive(item, body.clientId, scope);
         const res = await applyMovement({
           inventoryId: inv.id,
           type: 'receive',
@@ -1448,6 +1502,10 @@ app.post(
   ),
   async (c) => {
     const body = c.req.valid('json');
+    // PS-247: a restricted caller may only adjust its own inventory.
+    if (!(await inventoryIdInScope(inventoryScopeFromContext(c), body.invSkuId))) {
+      return c.json({ error: 'Inventory item not found' }, 404);
+    }
     const email = c.get('email' as never) as string | undefined;
     const result = await applyMovement({
       inventoryId: body.invSkuId,
@@ -1502,6 +1560,10 @@ app.post(
   zValidator('json', bulkSetPackageBody),
   async (c) => {
     const { clientId, packageId, skus } = c.req.valid('json');
+    // PS-247: a restricted caller may only set defaults within its own client scope.
+    if (!inventoryClientInScope(inventoryScopeFromContext(c), clientId)) {
+      return c.json({ error: 'Inventory client out of scope' }, 403);
+    }
     let updated = 0;
     for (const rawSku of skus) {
       const sku = rawSku.trim();
@@ -1528,6 +1590,8 @@ app.post(
 
 app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
   const { items } = c.req.valid('json');
+  // PS-247: out-of-scope rows fall outside the predicate -> not updated (counted as skipped).
+  const scope = inventoryScopeFromContext(c);
   let updated = 0;
   for (const item of items) {
     const patch: Record<string, unknown> = { updatedAt: new Date() };
@@ -1542,7 +1606,7 @@ app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
     const [row] = await db
       .update(inventory)
       .set(patch)
-      .where(eq(inventory.id, item.id))
+      .where(and(eq(inventory.id, item.id), inventoryScopePredicate(scope)))
       .returning({ id: inventory.id });
     if (row) updated += 1;
   }
