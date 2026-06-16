@@ -161,7 +161,10 @@ app.get('/:id{[0-9]+}', async (c) => {
   return c.json(publicPackageRow(row, canViewFinancials));
 });
 
-app.post('/', zValidator('json', body), async (c) => {
+// PS-252 (Card 7 finish): package mutations are internal config — gate create/edit behind
+// settings:write (matching DELETE). Warehouse stock is edited via the inventory receive/adjust
+// routes, not here, so a single config gate is safe + backward-compatible.
+app.post('/', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const v = c.req.valid('json');
   const [row] = await db.insert(packages).values(v).returning();
@@ -170,7 +173,7 @@ app.post('/', zValidator('json', body), async (c) => {
   return c.json(publicPackageRow(row, canViewFinancials), 201);
 });
 
-app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
@@ -421,7 +424,7 @@ app.get('/usage-summary', async (c) => {
 });
 
 // v2-parity: PUT /packages/:id — alias for PATCH. v2 apiClient sends PUT.
-app.put('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+app.put('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
