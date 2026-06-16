@@ -36,6 +36,12 @@ type OutboxRow = {
 
 const MAX_ATTEMPTS = 6;
 const DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS = 72;
+// PS-253 (Card 8): a row is flipped to 'processing' when claimed; the worker is multi-process and
+// restart/crash-prone, so if it dies between claim and complete/fail the row would stay 'processing'
+// forever — never re-claimed — and the shipment is NEVER confirmed. A 'processing' row whose lease
+// (updated_at age) exceeds this is treated as orphaned and reclaimed. A genuine confirm finishes in
+// seconds, so a 15-min-stale 'processing' row is crashed, not running.
+const OUTBOX_PROCESSING_LEASE_MINUTES = 15;
 
 let schemaEnsured: Promise<void> | null = null;
 
@@ -826,6 +832,13 @@ async function loadStoreCredentials(provider: string, payload: Record<string, un
 
 async function claimDueOutboxRows(limit: number, orderId?: number): Promise<OutboxRow[]> {
   await ensureFulfillmentSchema();
+  // PS-253 (Per user override unlock shipped data on 2026-06-16): besides due pending/failed rows,
+  // RECLAIM orphaned 'processing' rows whose lease has expired (the worker crashed/restarted between
+  // claim and complete/fail). FOR UPDATE SKIP LOCKED can't protect this — the row lock is released at
+  // claim time, not held during processing — so the lease (updated_at age) is the guard: a row still
+  // being processed has a fresh updated_at (< lease) and is left alone. The write path
+  // (complete/fail/markShipmentConfirmationState) is UNCHANGED; this only recovers stranded rows into
+  // the SAME existing processing so the shipment finally gets confirmed instead of stranding forever.
   return pg`
     UPDATE fulfillment_outbox
     SET status = 'processing', updated_at = NOW()
@@ -833,8 +846,11 @@ async function claimDueOutboxRows(limit: number, orderId?: number): Promise<Outb
       SELECT id
       FROM fulfillment_outbox
       WHERE event_type = 'shipment_confirmation_requested'
-        AND status IN ('pending', 'failed')
-        AND next_run_at <= NOW()
+        AND (
+          (status IN ('pending', 'failed') AND next_run_at <= NOW())
+          OR (status = 'processing'
+              AND updated_at < NOW() - (${OUTBOX_PROCESSING_LEASE_MINUTES} || ' minutes')::interval)
+        )
         ${orderId ? pg`AND order_id = ${orderId}` : pg``}
       ORDER BY next_run_at ASC, id ASC
       LIMIT ${limit}
