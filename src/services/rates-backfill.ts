@@ -12,6 +12,7 @@ import {
 // PS-276 (slice 2b-2b): the live address-classification resolver (cache-or-USPS), env-gated OFF.
 import { resolveAddressClassification } from './shipping-workflow/resolve-address-classification';
 import { finalizeBestRateWithQuote } from './shipping-workflow/rate-quote-snapshot-store';
+import { isPersistedBestDowngrade } from './best-rate-ratchet-db';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 import {
@@ -602,25 +603,38 @@ async function runBackfill(
             rateCount: combined.combinedRates.length,
             matchType: result.cached ? 'exact' : 'live',
           };
-          await db
-            .insert(orderOverrides)
-            .values({
-              orderId: row.id,
-              bestRateJson: bestWithMetadata as unknown,
-              bestRateDims: dimsLabel,
-              bestRateAt: now,
-              updatedAt: now,
-            })
-            .onConflictDoUpdate({
-              target: orderOverrides.orderId,
-              set: {
+          // PS-271: no-downgrade ratchet (automated persist site). Keep a CHEAPER fresh best for the
+          // SAME shipment inputs (same requestFingerprint) instead of overwriting it with a thin Shipp
+          // re-quote that dropped UPS/USPS; a different fingerprint (inputs changed) or a cheaper-or-
+          // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
+          if (await isPersistedBestDowngrade(row.id, bestWithMetadata)) {
+            job.skipped++;
+            if (job.failureSamples.length < 5) {
+              job.failureSamples.push(
+                `order ${row.id} (${row.orderNumber}): kept cheaper fresh best (PS-271 no-downgrade) — re-quote was more expensive for the same inputs`
+              );
+            }
+          } else {
+            await db
+              .insert(orderOverrides)
+              .values({
+                orderId: row.id,
                 bestRateJson: bestWithMetadata as unknown,
                 bestRateDims: dimsLabel,
                 bestRateAt: now,
                 updatedAt: now,
-              },
-            });
-          job.updated++;
+              })
+              .onConflictDoUpdate({
+                target: orderOverrides.orderId,
+                set: {
+                  bestRateJson: bestWithMetadata as unknown,
+                  bestRateDims: dimsLabel,
+                  bestRateAt: now,
+                  updatedAt: now,
+                },
+              });
+            job.updated++;
+          }
         }
       } catch (err) {
         job.failed++;

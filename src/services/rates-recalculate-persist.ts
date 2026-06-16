@@ -14,7 +14,8 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
-import { normalizeOrderBestRateDto } from './order-rate-dto';
+import { normalizeOrderBestRateDto, type OrderBestRateDto } from './order-rate-dto';
+import { isPersistedBestDowngrade } from './best-rate-ratchet-db';
 import {
   describeShippingService,
   evaluateShippingServiceEligibility,
@@ -89,7 +90,7 @@ export async function persistStrictRecalculateOutcome(input: {
     rateCount: input.rateCount,
     matchType: 'strict-live',
   };
-  let canonical: unknown;
+  let canonical: OrderBestRateDto | null;
   try {
     canonical = normalizeOrderBestRateDto(rateWithMetadata, 'bestRateJson');
   } catch (err) {
@@ -102,6 +103,14 @@ export async function persistStrictRecalculateOutcome(input: {
   );
   if (!eligibility.allowed) {
     return { persisted: false, reason: eligibility.reason ?? 'Shipping service is not eligible for this order' };
+  }
+
+  // PS-271: no-downgrade ratchet (automated persist site). A thin/flickery Shipp re-quote must not
+  // overwrite a CHEAPER fresh best for the SAME shipment inputs (same requestFingerprint); a different
+  // fingerprint means the inputs changed -> the prior is stale -> replace it. The operator's
+  // deliberate FE PATCH save is a separate path and is exempt.
+  if (await isPersistedBestDowngrade(input.orderId, canonical)) {
+    return { persisted: false, reason: 'no-downgrade: kept the cheaper fresh best for the same shipment inputs' };
   }
 
   const bestRateDims = `${input.dimsL}x${input.dimsW}x${input.dimsH}`;
