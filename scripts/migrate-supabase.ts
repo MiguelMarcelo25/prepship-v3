@@ -18,6 +18,7 @@
 //   npx tsx scripts/migrate-supabase.ts [--dry-run] [--only=table1,table2]
 
 import postgres from 'postgres';
+import { opsMayMutate } from '../src/lib/ops-confirm';
 
 const SOURCE_URL = process.env.SOURCE_DATABASE_URL;
 const TARGET_URL = process.env.TARGET_DATABASE_URL;
@@ -26,7 +27,10 @@ if (!SOURCE_URL || !TARGET_URL) {
   process.exit(1);
 }
 
-const dryRun = process.argv.includes('--dry-run');
+// PS-255 (Card 10): dry run is now the DEFAULT. This script TRUNCATEs target tables, so it
+// must never mutate by accident — pass --apply (or --confirm) to actually migrate. An explicit
+// --dry-run still forces a dry run.
+const dryRun = process.argv.includes('--dry-run') || !opsMayMutate();
 const onlyArg = process.argv.find((a) => a.startsWith('--only='));
 const onlyTables = onlyArg ? onlyArg.slice('--only='.length).split(',') : null;
 
