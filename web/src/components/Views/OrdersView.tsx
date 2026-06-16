@@ -158,6 +158,7 @@ import {
 import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters'
 import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
+import { classifyQueueOrderRoute } from '../../lib/shipping-routes'
 import {
   buildDailyStripProgress,
   buildBatchRecalculateProgress,
@@ -168,7 +169,6 @@ import {
   canRetryBatchRecalculateRow,
   classifyAwaitingRateCellState,
   classifyAwaitingRateCellStateWithWorkflow,
-  classifyQueueOrderRoute,
   PENDING_RATING_WATCHDOG_MS,
   getColumnMinWidth,
   groupPrintQueueEntries,

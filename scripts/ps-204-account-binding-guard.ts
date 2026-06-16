@@ -30,7 +30,7 @@ import {
   selectProofFromCandidates,
   rateQuoteRefFromCandidates,
 } from '../web/src/lib/rate-proof';
-import { classifyQueueOrderRoute } from '../web/src/components/Views/orders-parity';
+import { classifyQueueOrderRoute } from '../web/src/lib/shipping-routes';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {

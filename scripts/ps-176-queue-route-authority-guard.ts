@@ -29,7 +29,7 @@ import {
   withOrderRowWorkflow,
   type OrderRowWorkflowFacts,
 } from '../src/services/shipping-workflow/best-rate-workflow-dto';
-import { classifyQueueOrderRoute } from '../web/src/components/Views/orders-parity';
+import { classifyQueueOrderRoute } from '../web/src/lib/shipping-routes';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -95,15 +95,20 @@ check('route derives the queueable-label + direct-selection facts',
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('OrdersView passes the DTO queueRoute into the classifier',
   /backendQueueRoute: toStringValue\(toRecord\(order\.bestRateWorkflow\)\?\.queueRoute\)/.test(ordersView));
-const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
+// PS-279 (slice 1): the classifier moved to the shareable web/src/lib boundary, OUT of the
+// component module — a money-path routing decision belongs at a lib boundary. Pin the new home
+// (ladder source order) + that orders-parity no longer owns it.
+const shippingRoutes = readFileSync('web/src/lib/shipping-routes.ts', 'utf8');
 check('classifier consults the backend policy AFTER the never-buy ladder (source order)',
   (() => {
-    const start = parity.indexOf('export function classifyQueueOrderRoute');
-    const block = parity.slice(start, start + 2400);
+    const start = shippingRoutes.indexOf('export function classifyQueueOrderRoute');
+    const block = shippingRoutes.slice(start, start + 2400);
     const ladder = block.indexOf("if (input.hasQueueableLabel) return 'backend'");
     const backend = block.indexOf('input.backendQueueRoute');
     return ladder > 0 && backend > ladder;
   })());
+check('classifyQueueOrderRoute no longer lives in the component module (orders-parity)',
+  !/export function classifyQueueOrderRoute/.test(readFileSync('web/src/components/Views/orders-parity.ts', 'utf8')));
 
 // ── 4. PART 2: localStorage holds no purchase authority ───────────────────────
 // PS-166 Wave 1a re-anchor: the persistent queue-job machinery (incl.

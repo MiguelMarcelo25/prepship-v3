@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { classifyQueueOrderRoute } from '../web/src/components/Views/orders-parity';
+import { classifyQueueOrderRoute } from '../web/src/lib/shipping-routes';
 
 // Send-to-Queue routing: a direct-carrier order that still needs a label is the
 // ONLY case the Render queue job (ShipStation-only createLabelV2) can't handle,
