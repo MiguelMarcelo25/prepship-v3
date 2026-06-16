@@ -1053,6 +1053,28 @@ async function processOutboxRow(row: OutboxRow): Promise<boolean> {
     return false;
   }
 
+  // PS-253 (Per user override unlock shipped data on 2026-06-16): idempotency. A crash between the
+  // connector ack and completeOutboxRow leaves the row 'processing'; the PS-253 stale-reclaim then
+  // re-delivers it — so re-check THIS shipment's confirmation state right before dispatch and DO NOT
+  // re-confirm at the marketplace if it already succeeded. Just settle the outbox row. Read-only on
+  // shipments here; the settle path (completeOutboxRow) is unchanged.
+  const idempotencyShipmentId = Number(payload.shipmentId ?? row.shipment_id ?? 0);
+  if (idempotencyShipmentId > 0) {
+    const [already] = (await pg`
+      SELECT confirmation_status, marketplace_confirmed_at
+      FROM shipments WHERE id = ${idempotencyShipmentId} LIMIT 1
+    `) as Array<{ confirmation_status: string | null; marketplace_confirmed_at: string | null }>;
+    if (already?.confirmation_status === 'succeeded' || already?.marketplace_confirmed_at != null) {
+      await completeOutboxRow(row);
+      console.info('[fulfillment-outbox] shipment already confirmed; settling row idempotently', {
+        orderId: row.order_id,
+        shipmentId: row.shipment_id,
+        provider: row.provider,
+      });
+      return true;
+    }
+  }
+
   const result = await connector.confirmShipment({
     orderId: Number(payload.orderId ?? row.order_id),
     shipmentId: Number(payload.shipmentId ?? row.shipment_id ?? 0),

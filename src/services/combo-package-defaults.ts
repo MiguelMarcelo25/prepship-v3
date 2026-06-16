@@ -1,5 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { withAdvisorySessionLock } from '../lib/advisory-session-lock';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { orderItems } from '../db/schema/order-items';
 import {
@@ -225,23 +226,17 @@ export async function saveComboPackageDefault(
   if (clientId == null) return { saved: false, reason: 'order has no client scope' };
   if (!comboKey) return { saved: false, reason: 'order has no resolvable SKU+qty combination' };
 
-  const now = new Date();
-  await db
-    .insert(clientComboPackageDefaults)
-    .values({
-      clientId,
-      comboKey,
-      packageId: input.packageId ?? null,
-      packageCode: input.packageCode ?? null,
-      length: input.length ?? null,
-      width: input.width ?? null,
-      height: input.height ?? null,
-      weightOz: input.weightOz ?? null,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: [clientComboPackageDefaults.clientId, clientComboPackageDefaults.comboKey],
-      set: {
+  // PS-253 (Card 8): serialize concurrent saves for the SAME (client, combo). The upsert is atomic on
+  // its own, but the sibling-order apply below is a read-modify-write — two concurrent saves (multi-
+  // process worker + API) could interleave the apply and lose updates. A per-(client,combo) session
+  // advisory lock makes the upsert + apply one serialized unit; different combos never contend.
+  return withAdvisorySessionLock(`combo_default:${clientId}:${comboKey}`, async () => {
+    const now = new Date();
+    await db
+      .insert(clientComboPackageDefaults)
+      .values({
+        clientId,
+        comboKey,
         packageId: input.packageId ?? null,
         packageCode: input.packageCode ?? null,
         length: input.length ?? null,
@@ -249,16 +244,28 @@ export async function saveComboPackageDefault(
         height: input.height ?? null,
         weightOz: input.weightOz ?? null,
         updatedAt: now,
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: [clientComboPackageDefaults.clientId, clientComboPackageDefaults.comboKey],
+        set: {
+          packageId: input.packageId ?? null,
+          packageCode: input.packageCode ?? null,
+          length: input.length ?? null,
+          width: input.width ?? null,
+          height: input.height ?? null,
+          weightOz: input.weightOz ?? null,
+          updatedAt: now,
+        },
+      });
 
-  const { appliedMutableOrderCount, affectedOrderIds } =
-    await applyComboPackageDefaultToMatchingMutableOrders(clientId, comboKey, input, {
-      recalcGroup: opts?.recalcGroup === true,
-      sourceOrderId: orderId,
-    });
+    const { appliedMutableOrderCount, affectedOrderIds } =
+      await applyComboPackageDefaultToMatchingMutableOrders(clientId, comboKey, input, {
+        recalcGroup: opts?.recalcGroup === true,
+        sourceOrderId: orderId,
+      });
 
-  return { saved: true, clientId, comboKey, appliedMutableOrderCount, affectedOrderIds };
+    return { saved: true, clientId, comboKey, appliedMutableOrderCount, affectedOrderIds };
+  });
 }
 
 export interface ComboPackageDefaultDto {
