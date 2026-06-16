@@ -1,4 +1,10 @@
-export class TokenBucket {
+// PS-256 (Card 11): the shared shape so callers can hold either the in-memory TokenBucket
+// or the DB-backed DurableTokenBucket (selected by RATE_LIMITER_BACKEND) without changing.
+export interface RateBucket {
+  acquire(): Promise<void>;
+}
+
+export class TokenBucket implements RateBucket {
   private tokens: number;
   private lastRefill = Date.now();
 
