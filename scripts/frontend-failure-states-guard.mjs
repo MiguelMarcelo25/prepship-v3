@@ -8,6 +8,9 @@ const source = fs.readFileSync(path.join(root, 'web/src/lib/v2-apiClient.ts'), '
 // and abort pins below retarget there. Same protections, one transport.
 const apiSource = fs.readFileSync(path.join(root, 'web/src/lib/api.ts'), 'utf8');
 const ordersViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersView.tsx'), 'utf8');
+// PS-258 re-anchor: the queueable-label-URL validator (getQueueableLabelUrl) moved out of OrdersView
+// into the strict module orders-queue-parsers.ts; OrdersView imports + still uses it. Same protection.
+const queueParsersSource = fs.readFileSync(path.join(root, 'web/src/components/Views/orders-queue-parsers.ts'), 'utf8');
 
 function fail(message) {
   console.error(`FAIL ${message}`);
@@ -97,10 +100,11 @@ assert(
 );
 
 assert(
-  /function getQueueableLabelUrl\(/.test(ordersViewSource) &&
-    ordersViewSource.includes('[object Object]') &&
+  /function getQueueableLabelUrl\(/.test(queueParsersSource) &&
+    queueParsersSource.includes('[object Object]') &&
+    /import \{[^}]*getQueueableLabelUrl[^}]*\} from '\.\/orders-queue-parsers'/.test(ordersViewSource) &&
     ordersViewSource.includes('Label URL is not queueable'),
-  'OrdersView has an explicit queueable label URL validator for empty, object, and [object Object] responses',
+  'queueable label URL validator (getQueueableLabelUrl, rejects [object Object]) lives in orders-queue-parsers; OrdersView imports it and still surfaces "Label URL is not queueable"',
 );
 
 assert(

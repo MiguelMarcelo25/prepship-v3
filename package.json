@@ -290,6 +290,7 @@
     "test:ps-261-easypost-insurance-cost": "tsx scripts/ps-261-easypost-insurance-cost-guard.ts",
     "test:ps-271-best-rate-ratchet": "tsx scripts/ps-271-best-rate-ratchet-guard.ts",
     "test:ps-258-daily-stats-rollover": "tsx scripts/ps-258-daily-stats-rollover-guard.ts",
+    "test:ps-258-orders-queue-parsers": "tsx scripts/ps-258-orders-queue-parsers-guard.ts",
     "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",
     "test:ps-265-sync-run-budget": "tsx scripts/ps-265-sync-run-budget-guard.ts",
     "test:ps-244-rate-finalization-single-owner": "tsx scripts/ps-244-rate-finalization-single-owner-guard.ts",

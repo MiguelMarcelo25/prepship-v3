@@ -502,37 +502,10 @@ function buildTestRateBrowserAccounts() {
   return TEST_RATE_BROWSER_ACCOUNTS
 }
 
+// PS-258 (slice): getQueueableLabelUrl + getQueuePayloadEntries (the two pure
+// print-queue payload parsers) moved VERBATIM to ./orders-queue-parsers (strict
+// module). Imported above; call sites below are unchanged.
 // Per user override unlock shipped data on 2026-05-23: queue/recovery paths must reject corrupt saved label URLs without weakening shipped/cancelled edit locks.
-function getQueueableLabelUrl(value: unknown) {
-  const seen = new Set<unknown>()
-  const pick = (candidate: unknown, depth = 0): string | null => {
-    const direct = toStringValue(candidate)?.trim()
-    if (direct) return direct
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || depth > 3 || seen.has(candidate)) return null
-    seen.add(candidate)
-    const record = candidate as Record<string, unknown>
-    return (
-      pick(record.pdf, depth + 1) ??
-      pick(record.href, depth + 1) ??
-      pick(record.url, depth + 1) ??
-      pick(record.downloadUrl, depth + 1) ??
-      pick(record.download_url, depth + 1) ??
-      pick(record.labelUrl, depth + 1) ??
-      pick(record.label_url, depth + 1)
-    )
-  }
-  const labelUrl = pick(value)
-  if (!labelUrl || labelUrl === '[object Object]') return null
-  return labelUrl
-}
-
-function getQueuePayloadEntries(payload: unknown): PrintQueueEntryDto[] {
-  if (payload == null || typeof payload !== 'object') return []
-  const record = payload as Record<string, unknown>
-  if (Array.isArray(record.queuedOrders)) return record.queuedOrders as PrintQueueEntryDto[]
-  if (Array.isArray(record.entries)) return record.entries as PrintQueueEntryDto[]
-  return []
-}
 
 // PS-166 (Wave 1b): the pure display formatters (dates/weight/age/palette/
 // carrier/service + truncate) moved VERBATIM to ./orders-formatting (strict
@@ -542,6 +515,8 @@ function getQueuePayloadEntries(payload: unknown): PrintQueueEntryDto[] {
 import { californiaDateInputValue, CALIFORNIA_TZ } from '../../lib/ca-time'
 // PS-258 (slice): pure daily-stats rollover scheduling math (strict module).
 import { getMsUntilNextDailyStatsRollover } from './daily-stats-rollover'
+// PS-258 (slice): pure print-queue payload parsers (strict module).
+import { getQueueableLabelUrl, getQueuePayloadEntries } from './orders-queue-parsers'
 import {
   ageHours,
   ageLabel,
