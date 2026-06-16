@@ -106,11 +106,18 @@ export async function deductPackageForShipment(input: {
 
     if (!pkg) return { deducted: false, reason: 'package-not-found' as const };
 
-    const balanceAfter = pkg.stockQty - 1;
-    await tx
+    // PS-247 (Per user override unlock shipped data on 2026-06-16): ATOMIC decrement + RETURNING.
+    // Pre-PS-247 this wrote a pre-read balanceAfter, so two concurrent package deductions both read
+    // the same start value and one decrement was LOST (read-modify-write race). `stock_qty - 1`
+    // applies in-DB under the row lock so concurrent deductions compose; balanceAfter is the DB's
+    // post-decrement value (for the ledger + return), not a pre-read guess. No floor — negative stock
+    // is an intentional backorder signal (PS-224, boss directive).
+    const [updatedPkg] = await tx
       .update(packages)
-      .set({ stockQty: balanceAfter, updatedAt: new Date() })
-      .where(eq(packages.id, packageId));
+      .set({ stockQty: sql`${packages.stockQty} - 1`, updatedAt: new Date() })
+      .where(eq(packages.id, packageId))
+      .returning({ stockQty: packages.stockQty });
+    const balanceAfter = updatedPkg?.stockQty ?? pkg.stockQty - 1;
 
     await tx.insert(packageLedger).values({
       packageId,
@@ -230,9 +237,16 @@ export async function deductInventoryForOrder(
         continue;
       }
 
-      const balanceAfter = row.stockQty - line.qty;
+      // PS-247 (Per user override unlock shipped data on 2026-06-16): ATOMIC decrement.
+      // Pre-PS-247 this read row.stockQty (the un-locked SELECT above) and wrote a pre-computed
+      // balanceAfter, so two concurrent ship-deductions both read the same start value and one
+      // decrement was LOST (read-modify-write race under READ COMMITTED — the SELECT takes no row
+      // lock). `stock_qty - qty` applies in-DB under the row lock, so concurrent deductions compose.
+      // No floor — negative stock is an intentional backorder signal (PS-224, boss directive). The
+      // (orderId, inventoryId) ship-ledger idempotency guard above still blocks double-deducting the
+      // SAME order; this only fixes the cross-order concurrency race.
       const patch: Record<string, unknown> = {
-        stockQty: balanceAfter,
+        stockQty: sql`${inventory.stockQty} - ${line.qty}`,
         updatedAt: new Date(),
       };
       if (line.name) {
