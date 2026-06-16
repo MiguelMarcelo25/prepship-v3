@@ -1,6 +1,6 @@
 // PS-166 (Wave 1b): OrdersView's pure display formatters, moved VERBATIM out
 // of OrdersView.tsx (module-level helpers — no hooks, no JSX, no behavior
-// change). Strict TypeScript; OrdersView's @ts-nocheck no longer covers this
+// change). Strict TypeScript; the parent's loose typing no longer covers this
 // code.
 //
 // Date/time formatters DELEGATE to the canonical CA-time module (unchanged

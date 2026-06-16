@@ -4,7 +4,7 @@
 // React component with a typed props interface is the right shape — and the
 // STRICT interface compiler-enforces the dependency set: the body cannot
 // reference a closure dep that isn't a declared prop (defeats the
-// @ts-nocheck silent-missing-dep class from the component side). OrdersView
+// silent-missing-dep class from the component side). The parent OrdersView
 // keeps every piece of state and all the handlers; it passes them in and the
 // behavior is identical.
 //

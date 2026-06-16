@@ -1,8 +1,7 @@
 // PS-166 (Wave 1a): the persistent queue-job localStorage machinery, moved
 // VERBATIM out of OrdersView.tsx (module-level pure helpers — no hooks, no
-// JSX, no behavior change). This module is strict TypeScript; OrdersView's
-// @ts-nocheck no longer covers this code.
-//
+// JSX, no behavior change). This module is strict TypeScript; the parent's
+// loose typing no longer covers it.
 // PS-176 part 2 (preserved contract): the persisted job carries IDENTIFIERS
 // ONLY — never money payloads (rates/proof/label URLs). Resume re-reads
 // everything fresh from the backend; localStorage holds no purchase

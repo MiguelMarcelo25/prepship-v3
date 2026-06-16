@@ -5,9 +5,9 @@
 // props, so the React execution model is UNCHANGED and the offline cert fully
 // verifies these slices (the same proven pattern already shipped in
 // OrdersPanelSections.tsx for the Items/Recipient sections). Markup is moved
-// BYTE-IDENTICAL. These leaves are STRICT (no @ts-nocheck) on purpose: an
+// BYTE-IDENTICAL. These leaves are STRICT on purpose: an
 // explicit props interface makes the compiler refuse any closure dependency
-// that is not declared as a prop — the structural antidote to the @ts-nocheck
+// that is not declared as a prop — the structural antidote to the loose-typed
 // silent-missing-dep crash class.
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { Inbox, Printer as PrinterIcon, Save as SaveIcon, XCircle } from 'lucide-react'

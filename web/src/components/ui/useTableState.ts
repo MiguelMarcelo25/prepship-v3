@@ -303,7 +303,7 @@ export function useTableState<Row>({
     if (!tableViewportWidth || orderedColumns.length === 0) return next
 
     // PS-157: `!` non-null assertions below are TYPE-LEVEL ONLY (erased at
-    // runtime, so behaviour is byte-identical to the original @ts-nocheck
+    // runtime, so behaviour is byte-identical to the original loose-typed
     // Table.tsx). They satisfy `noUncheckedIndexedAccess` — every key read
     // here was populated for all `orderedColumns` by the columnWidths memo.
     const total = orderedColumns.reduce((sum, col) => sum + next[col.key]!, 0)

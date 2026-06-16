@@ -1,6 +1,6 @@
 // PS-155: System Status panel extracted verbatim from SettingsView.tsx (behavior-preserving).
 // Pure presentation — the parent owns systemStatus state + refreshSystemStatus(). This file
-// receives values + the onRefresh callback as props. Strictly typed (not @ts-nocheck): it only
+// receives values + the onRefresh callback as props. Strictly typed: it only
 // uses primitives + a locally-shaped ObservabilityStatus (mirrors the parent's internal type).
 import { motion } from 'framer-motion'
 import { RefreshCcw } from 'lucide-react'

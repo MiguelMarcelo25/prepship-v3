@@ -1,6 +1,6 @@
 // PS-155: presentational helpers extracted verbatim from SettingsView.tsx (behavior-preserving).
 // Self-contained, prop-driven UI primitives + the section accent tokens. SettingsView imports them
-// back. Fully typed (not @ts-nocheck, unlike the parent) — pure presentation, no view state.
+// back. Fully typed (unlike the parent) — pure presentation, no view state.
 import { motion } from 'framer-motion'
 import { CheckCircle2, Loader2, Lock, XCircle } from 'lucide-react'
 import { type ReactNode } from 'react'

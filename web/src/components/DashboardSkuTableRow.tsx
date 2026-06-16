@@ -1,4 +1,3 @@
-// @ts-nocheck
 // PS-154: per-row presentational render for the SKU Performance Summary
 // table, extracted VERBATIM from DashboardView.tsx so the parent's body
 // map collapses to a thin <DashboardSkuTableRow .../> map. This component
@@ -19,8 +18,7 @@ export function DashboardSkuTableRow({
   onToggleFavorite,
   onOpenProduct,
 }: {
-  // Already-computed DashboardSkuRow (typed loosely here; the parent is
-  // @ts-nocheck and owns the DashboardSkuRow shape).
+  // Already-computed DashboardSkuRow (typed loosely here; the parent owns the shape).
   row: any
   // Visible columns, already filtered + resolved to their SKU_COLUMNS
   // metadata in the parent. Each meta.renderCell is a pure display fn.

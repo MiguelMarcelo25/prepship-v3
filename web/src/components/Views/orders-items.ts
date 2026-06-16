@@ -1,6 +1,6 @@
 // PS-166 (Wave 1c): OrdersView's pure item/order/ship-to accessors, moved
 // VERBATIM out of OrdersView.tsx (module-level helpers — no hooks, no JSX,
-// no behavior change). Strict TypeScript; OrdersView's @ts-nocheck no longer
+// no behavior change). Strict TypeScript; the parent's loose typing no longer
 // covers this code. Value coercion + canonical-model readers come from the
 // SAME owners OrdersView already used (./orders-row-display, PS-178), and
 // TEST_CLIENT_IDS from the v2 api client — no logic was duplicated.

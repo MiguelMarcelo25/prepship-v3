@@ -2,7 +2,7 @@
 // Pure presentation — the parent owns refetchState + handleRefetchAllRates(). This file receives
 // values + the onRefetch callback as props. The derived refetchStatus is recomputed here from the
 // refetchState prop via buildSettingsRefetchStatus (same helper the parent used) so behavior is
-// identical. Strictly typed (not @ts-nocheck).
+// identical. Strictly typed.
 import { motion } from 'framer-motion'
 import { RefreshCcw } from 'lucide-react'
 import { ButtonSpinner, StatusLine } from './settings-ui'

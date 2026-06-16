@@ -16,7 +16,11 @@ import { join } from 'node:path';
 // Baseline count on 2026-06-16. Lower this with every file you de-nocheck; never raise it.
 // 2026-06-17 (PS-257 blitz slice 1): de-nocheck'd 33 provably-clean files (single bare
 // directive, typecheck-clean once removed, zero residual @ts-nocheck) — 94 -> 61.
-const CEILING = 61;
+// 2026-06-17 (PS-257 blitz slice 2): recovered 11 more — 4 trailing-text directives that
+// type-check clean once fully stripped (OrdersBatchPanel, OrdersPanelSections,
+// orders-persistent-queue-job, DashboardSkuTableRow) + 7 ratchet FALSE-POSITIVES whose
+// only @ts-nocheck was a prose mention in an already-strict file — 61 -> 50.
+const CEILING = 50;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

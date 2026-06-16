@@ -1,4 +1,4 @@
-// @ts-nocheck — the recipient section reads loose DTO fields
+// The recipient section reads loose DTO fields
 // (panelOrder.residential / sourceResidential, panelDetail.raw), following the
 // documented sibling precedent (orders-display-state.ts, OrdersTableCells.tsx).
 //
