@@ -1,6 +1,7 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
+import { resolveWalmartShipFrom } from './walmart-ship-from.js';
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {
@@ -288,19 +289,22 @@ function walmartBoxItems(rawOrder: any): any[] {
 }
 
 function walmartLabelFromAddress(creds: Record<string, unknown>, shipFrom: any): Record<string, unknown> {
-  const from = shipFrom && typeof shipFrom === 'object' ? shipFrom : {};
-  const addressLine1 = firstString(creds.shipFromAddress1, from?.addressLine1, from?.street1, 'Warehouse');
-  const addressLine2 = firstString(creds.shipFromAddress2, from?.addressLine2, from?.street2);
+  // Root-cause fix (order 1338537): resolve through the SHARED resolver so the purchased
+  // label ships from the SAME origin the rate quoted (snake_case `Address` read correctly,
+  // selected-origin-first). Reading camelCase here silently defaulted labels to Carson too.
+  const from = shipFrom && typeof shipFrom === 'object' ? (shipFrom as Record<string, unknown>) : null;
+  const resolved = resolveWalmartShipFrom(from, creds);
   const result: Record<string, unknown> = {
-    addressLine1,
-    city: firstString(creds.shipFromCity, from?.city, 'Carson'),
-    contactName: firstString(creds.shipFromName, from?.name, 'Seller'),
-    country: firstString(from?.country, 'US').toUpperCase(),
-    phone: firstString(creds.shipFromPhone, from?.phone, '0000000000'),
-    postalCode: firstString(creds.shipFromZip, from?.postalCode, from?.zip, '90248').replace(/[^0-9]/g, '').slice(0, 5),
-    state: firstString(creds.shipFromState, from?.state, 'CA'),
+    addressLine1: resolved.addressLines[0] ?? 'Warehouse',
+    city: resolved.city,
+    contactName: resolved.name,
+    country: resolved.countryCode.toUpperCase(),
+    phone: resolved.phone,
+    postalCode: resolved.postalCode,
+    state: resolved.state,
   };
-  const companyName = firstString(creds.shipFromCompany, from?.company);
+  const addressLine2 = resolved.addressLines[1];
+  const companyName = firstString(creds.shipFromCompany, from?.company_name, from?.company);
   const email = firstString(creds.shipFromEmail, from?.email);
   if (addressLine2) result.addressLine2 = addressLine2;
   if (companyName) result.companyName = companyName;
@@ -754,22 +758,12 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
       }))
     : [{ lineNumber: '1', sku: 'UNKNOWN', quantity: 1 }];
 
-  const credShipFromZip = firstString(creds.shipFromZip).replace(/[^0-9]/g, '').slice(0, 5);
-  const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom as any : {};
-  const fromZip = credShipFromZip ||
-    firstString(shipFromInput?.postalCode, input.fromZip, '90248').replace(/[^0-9]/g, '').slice(0, 5);
-  const fromAddress = {
-    name: firstString(creds.shipFromName, shipFromInput?.name, 'Seller'),
-    addressLines: [
-      firstString(creds.shipFromAddress1, shipFromInput?.addressLine1, shipFromInput?.street1, 'Warehouse'),
-      firstString(creds.shipFromAddress2, shipFromInput?.addressLine2, shipFromInput?.street2),
-    ].filter(Boolean),
-    city: firstString(creds.shipFromCity, shipFromInput?.city, 'Carson'),
-    state: firstString(creds.shipFromState, shipFromInput?.state, 'CA'),
-    postalCode: fromZip,
-    countryCode: firstString(shipFromInput?.country, 'US'),
-    phone: firstString(creds.shipFromPhone, shipFromInput?.phone, '0000000000'),
-  };
+  const shipFromInput =
+    input.shipFrom && typeof input.shipFrom === 'object' ? (input.shipFrom as Record<string, unknown>) : null;
+  // Root-cause fix (order 1338537): read the SELECTED origin (an `Address` — snake_case)
+  // correctly instead of camelCase (which read undefined and fell back to a Carson/
+  // "Warehouse" default), so PrepShip quotes Walmart from the order's real ship-from.
+  const fromAddress = resolveWalmartShipFrom(shipFromInput, creds, input.fromZip);
 
   const addr = rawOrder?.shippingInfo?.postalAddress ?? {};
   const toAddress = {

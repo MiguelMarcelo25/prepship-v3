@@ -1780,6 +1780,11 @@ export async function getDirectCarrierRatesForRateInput(
   // quotes apply the SAME residential classification as ShipStation and match the label.
   const resolvedResidential = residentialForShipping(classifyRateInputResidential(input));
   const fetchedAt = new Date().toISOString();
+  // Resolve the origin ONCE, mirroring the ShipStation path (fetchLiveRatesWithDiagnostics:
+  // `input.shipFrom ?? getDefaultShipFrom()`). Direct carriers (incl. Walmart) must quote from
+  // the SAME canonical ship-from as ShipStation — not from an absent input that silently
+  // defaults inside each connector (the Walmart Carson/90248 default bug).
+  const resolvedShipFrom = input.shipFrom ?? (await getDefaultShipFrom());
   const calls = accounts.map(async (account) => {
     const shippingProviderId = directProviderIdFromAccount(account);
     const label = account.label || account.accountIdentifier || account.provider;
@@ -1837,9 +1842,9 @@ export async function getDirectCarrierRatesForRateInput(
         // compatibility form, NOT the canonical ZIP+4 used for ShipStation quotes.
         toZip: normalizeShippingPostalCode(input.toZip, input.toCountry).zip5 ?? input.toZip,
         fromZip: normalizeShippingPostalCode(
-          (input.shipFrom as any)?.postal_code ?? (input.shipFrom as any)?.postalCode,
-          (input.shipFrom as any)?.country_code,
-        ).zip5 ?? ((input.shipFrom as any)?.postal_code ?? (input.shipFrom as any)?.postalCode),
+          (resolvedShipFrom as any)?.postal_code ?? (resolvedShipFrom as any)?.postalCode,
+          (resolvedShipFrom as any)?.country_code,
+        ).zip5 ?? ((resolvedShipFrom as any)?.postal_code ?? (resolvedShipFrom as any)?.postalCode),
         dimsL: input.dimsL,
         dimsW: input.dimsW,
         dimsH: input.dimsH,
@@ -1850,7 +1855,7 @@ export async function getDirectCarrierRatesForRateInput(
         orderNumber: input.orderNumber,
         purchaseOrderId: walmartPo?.purchaseOrderId ?? input.purchaseOrderId,
         ...(walmartPo?.rawOrder != null ? { rawOrder: walmartPo.rawOrder } : {}),
-        shipFrom: input.shipFrom,
+        shipFrom: resolvedShipFrom,
         // PS-127/PS-135(a): direct carriers rate under the SAME backend-resolved residential
         // classification as ShipStation (classifyRateInputResidential above), NOT the raw FE
         // input.residential, so direct-vs-ShipStation quotes are comparable and the UPS label matches.
