@@ -308,6 +308,7 @@
     "test:ps-246-behavioral-rls-matrix": "tsx scripts/ps-246-behavioral-rls-matrix-guard.ts",
     "test:ps-246-jwt-audit-soak": "tsx scripts/ps-246-jwt-audit-soak-guard.ts",
     "test:ps-251-ssrf-allowlist": "tsx scripts/ps-251-ssrf-allowlist-guard.ts",
+    "test:ps-251-fetch-timeout": "tsx scripts/ps-251-fetch-timeout-guard.ts",
     "test:ps-253-automation-rule-lock": "tsx scripts/ps-253-automation-rule-lock-guard.ts",
     "test:ps-253-outbox-stale-reclaim": "tsx scripts/ps-253-outbox-stale-reclaim-guard.ts",
     "test:ps-253-combo-confirm-atomicity": "tsx scripts/ps-253-combo-confirm-atomicity-guard.ts",

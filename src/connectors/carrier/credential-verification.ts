@@ -48,6 +48,8 @@ import { corsHeaders } from '../../lib/http/cors.js';
 import { sendInternalServerError } from '../../lib/safe-error.js';
 // PS-251 (Card 6): block SSRF via caller-supplied carrier apiBase/swsimEndpoint URLs.
 import { assertPublicHttpUrl } from '../../lib/ssrf-guard.js';
+// PS-251 (Card 6): every credential-verify fetch gets an AbortController timeout (no hung upstream).
+import { fetchWithTimeout } from '../../lib/fetch-timeout.js';
 
 type ProviderType =
   | 'simulator'
@@ -109,7 +111,7 @@ const verifyEasyPost: Verifier = async (creds) => {
   if (!apiKey) return { ok: false, error: 'apiKey is required' };
   try {
     const basic = Buffer.from(`${apiKey}:`).toString('base64');
-    const res = await fetch('https://api.easypost.com/v2/shipments?page_size=1', {
+    const res = await fetchWithTimeout('https://api.easypost.com/v2/shipments?page_size=1', {
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json' },
     });
     if (!res.ok) {
@@ -146,7 +148,7 @@ const verifyShipp: Verifier = async (creds) => {
   }
 
   try {
-    const res = await fetch('https://shipp.to/api/supabase/login', {
+    const res = await fetchWithTimeout('https://shipp.to/api/supabase/login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -184,7 +186,7 @@ const verifyShipEngine: Verifier = async (creds) => {
   const apiKey = String(creds?.apiKey ?? '').trim();
   if (!apiKey) return { ok: false, error: 'apiKey is required' };
   try {
-    const res = await fetch('https://api.shipengine.com/v1/carriers', {
+    const res = await fetchWithTimeout('https://api.shipengine.com/v1/carriers', {
       headers: { 'API-Key': apiKey, Accept: 'application/json' },
     });
     if (!res.ok) {
@@ -233,7 +235,7 @@ const verifyUps: Verifier = async (creds) => {
   }
   try {
     const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-    const res = await fetch('https://onlinetools.ups.com/security/v1/oauth/token', {
+    const res = await fetchWithTimeout('https://onlinetools.ups.com/security/v1/oauth/token', {
       method: 'POST',
       headers: {
         Authorization: `Basic ${basic}`,
@@ -275,7 +277,7 @@ const verifyFedEx: Verifier = async (creds) => {
     client_secret: apiSecret,
   });
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -314,7 +316,7 @@ const verifyDhlExpress: Verifier = async (creds) => {
     : 'https://express.api.dhl.com/mydhlapi';
   const basic = Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
   try {
-    const res = await fetch(`${host}/address-validate?type=delivery&countryCode=US&postalCode=10001`, {
+    const res = await fetchWithTimeout(`${host}/address-validate?type=delivery&countryCode=US&postalCode=10001`, {
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json' },
     });
     if (res.status === 401 || res.status === 403) {
@@ -349,7 +351,7 @@ const verifyUsps: Verifier = async (creds) => {
     scope: 'prices labels addresses tracking',
   });
   try {
-    const res = await fetch('https://apis.usps.com/oauth2/v3/token', {
+    const res = await fetchWithTimeout('https://apis.usps.com/oauth2/v3/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -395,7 +397,7 @@ const verifyAmazonShipping: Verifier = async (creds) => {
       client_id: lwaClientId,
       client_secret: lwaClientSecret,
     });
-    const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    const res = await fetchWithTimeout('https://api.amazon.com/auth/o2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
       body: body.toString(),
@@ -446,7 +448,7 @@ const verifyWalmart: Verifier = async (creds) => {
       'WM_SVC.NAME': 'Walmart Marketplace',
     };
     if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-    const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+    const res = await fetchWithTimeout('https://marketplace.walmartapis.com/v3/token', {
       method: 'POST',
       headers,
       body: 'grant_type=client_credentials',
@@ -492,7 +494,7 @@ const verifySeko: Verifier = async (creds) => {
     // Light authenticated probe — SEKO returns 200 for the carriage-types
     // resource on a valid token, 401 otherwise.
     assertPublicHttpUrl(apiBase, 'SEKO apiBase');
-    const res = await fetch(`${apiBase}/api/v1/CarriageTypes`, {
+    const res = await fetchWithTimeout(`${apiBase}/api/v1/CarriageTypes`, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
     });
     if (res.status === 401 || res.status === 403) {
@@ -531,7 +533,7 @@ const verifyEpostGlobal: Verifier = async (creds) => {
   }
   try {
     assertPublicHttpUrl(apiBase, 'ePost Global apiBase');
-    const res = await fetch(`${apiBase}/v1/services?accountId=${encodeURIComponent(accountId)}`, {
+    const res = await fetchWithTimeout(`${apiBase}/v1/services?accountId=${encodeURIComponent(accountId)}`, {
       headers: { 'x-api-key': apiKey, Accept: 'application/json' },
     });
     if (res.status === 401 || res.status === 403) {
@@ -572,7 +574,7 @@ const verifyIntelliquick: Verifier = async (creds) => {
   try {
     const basic = Buffer.from(`${accountNumber}:${apiKey}`).toString('base64');
     assertPublicHttpUrl(apiBase, 'IntelliQuick apiBase');
-    const res = await fetch(`${apiBase}/v1/account`, {
+    const res = await fetchWithTimeout(`${apiBase}/v1/account`, {
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json' },
     });
     if (res.status === 401 || res.status === 403) {
@@ -612,7 +614,7 @@ const verifyGls: Verifier = async (creds) => {
   }
   try {
     assertPublicHttpUrl(apiBase, 'GLS US apiBase');
-    const res = await fetch(`${apiBase}/v1/auth/login`, {
+    const res = await fetchWithTimeout(`${apiBase}/v1/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ customerId, username, password }),
@@ -686,7 +688,7 @@ const verifyStampsCom: Verifier = async (creds) => {
 </soap:Envelope>`;
   try {
     assertPublicHttpUrl(endpoint, 'Stamps.com swsimEndpoint');
-    const res = await fetch(endpoint, {
+    const res = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'text/xml; charset=utf-8',
@@ -736,7 +738,7 @@ const verifyEndicia: Verifier = async (creds) => {
     </CertifiedIntermediary>
   </AccountStatusRequest>`;
   try {
-    const res = await fetch('https://www.envmgr.com/LabelService/EwsLabelService.asmx/GetAccountStatusXML', {
+    const res = await fetchWithTimeout('https://www.envmgr.com/LabelService/EwsLabelService.asmx/GetAccountStatusXML', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `accountStatusRequestXML=${encodeURIComponent(xml)}`,
@@ -796,7 +798,7 @@ async function verifyEbayScope(
     scope,
   });
   try {
-    const res = await fetch(tokenUrl, {
+    const res = await fetchWithTimeout(tokenUrl, {
       method: 'POST',
       headers: {
         Authorization: `Basic ${basic}`,

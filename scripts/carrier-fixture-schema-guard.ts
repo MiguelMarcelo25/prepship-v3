@@ -61,7 +61,9 @@ check('replay hook is gated by CARRIER_TEST_MODE',
 check('capture sink is gated by CARRIER_TEST_MODE',
   /__captureSink = process\.env\.CARRIER_TEST_MODE \? sink : null/.test(timing));
 check('replay short-circuits BEFORE the real fetch',
-  timing.indexOf('const replayed = takeReplay(name);') < timing.indexOf('const res = await fetch(input, init);'));
+  // PS-251: the real network call is now timeout-bounded via fetchWithTimeout (the carrier-HTTP
+  // chokepoint); replay still returns before it, so the harness never hits the network.
+  timing.indexOf('const replayed = takeReplay(name);') < timing.indexOf('const res = await fetchWithTimeout(input, init ?? {});'));
 
 const seam = readFileSync('src/services/carrier-test-mode.ts', 'utf8');
 check('seam exposes withReplayFixture + withCaptureFixture',

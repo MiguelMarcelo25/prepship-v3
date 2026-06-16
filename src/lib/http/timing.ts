@@ -1,3 +1,7 @@
+// PS-251 (Card 6): every carrier HTTP call through timedFetch gets an AbortController timeout (the
+// shared chokepoint), so a hung upstream can't stall a label/rate/confirm forever.
+import { fetchWithTimeout } from '../fetch-timeout.js';
+
 export type TimingFields = Record<string, string | number | boolean | null | undefined>;
 
 export function nowMs(): number {
@@ -90,7 +94,8 @@ export async function timedFetch(
     return replayed;
   }
   try {
-    const res = await fetch(input, init);
+    // PS-251: timeout-bounded (replay above already returned for the harness path).
+    const res = await fetchWithTimeout(input, init ?? {});
     if (__captureSink && process.env.CARRIER_TEST_MODE) {
       const clone = res.clone();
       const body = await clone.text().catch(() => '');
