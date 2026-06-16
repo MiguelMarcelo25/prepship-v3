@@ -63,6 +63,13 @@ check('parent-skus POST / gated', parentSkus.includes(`app.post('/', ${gate}`));
 check('parent-skus PATCH /:id gated', parentFlat.includes(`app.patch('/:id{[0-9]+}',${gate}`));
 check('parent-skus DELETE /:id gated', parentSkus.includes(`app.delete('/:id{[0-9]+}', ${gate}`));
 
+// PS-252 (sweep completion, 2026-06-16): /clients/sync-stores upserts client rows from
+// ShipStation — the one clients mutation the original catalog sweep missed; now gated.
+// (admin.ts mutations are already gated by requireAdmin at the main.ts /admin/* mount.)
+const clientsRoute = readFileSync('src/routes/clients.ts', 'utf8');
+check('clients POST /sync-stores gated on settings:write',
+  clientsRoute.includes(`app.post('/sync-stores', ${gate}`));
+
 check('package.json wires test:ps-252-catalog-mutation-authz',
   /test:ps-252-catalog-mutation-authz/.test(readFileSync('package.json', 'utf8')));
 

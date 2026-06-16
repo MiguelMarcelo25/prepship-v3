@@ -51,6 +51,14 @@ check('bulk-update-dims update is scope-predicated',
 check('create (POST /) rejects an out-of-scope body clientId (403)',
   /if \(!inventoryClientInScope\(inventoryScopeFromContext\(c\), body\.clientId\)\)/.test(inv));
 
+// PS-247 (orders half, 2026-06-16): the orders /bulk-assign UPDATE is scope-predicated too
+// (defense-in-depth on top of its admin-email gate) — it was the one orders mutation that
+// resolved rows by bare orderIds. Same orderScopePredicate the scoped orders reads use.
+const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+const ordersFlat = ordersRoute.replace(/\s+/g, '');
+check('orders /bulk-assign UPDATE is scope-predicated (not bare orderIds)',
+  ordersFlat.includes('.where(and(orderScopePredicate(bulkAssignScope),inArray(orders.id,orderIds)))'));
+
 check('package.json wires test:ps-247-inventory-route-scope',
   /test:ps-247-inventory-route-scope/.test(readFileSync('package.json', 'utf8')));
 

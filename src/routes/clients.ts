@@ -238,7 +238,11 @@ app.post(
 // store). Existing clients matched by storeIds containing the store_id are
 // updated with name/email/phone; otherwise a new client is created with
 // storeIds: [storeId].
-app.post('/sync-stores', async (c) => {
+// PS-252: gate the store-sync mutation behind settings:write like the other client
+// mutations (it upserts client rows from ShipStation) — the one clients route the
+// original sweep missed. (/admin/* routes are already gated by requireAdmin at the
+// main.ts mount; this was the only genuinely ungated clients mutation.)
+app.post('/sync-stores', requireInternalPermission('settings:write'), async (c) => {
   const stores = await listShipStationStores({
     dedupeKey: 'stores:list',
   });

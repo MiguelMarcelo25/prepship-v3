@@ -3996,6 +3996,11 @@ app.post(
       return c.json({ error: 'userId and email must both be set or both null' }, 400);
     }
 
+    // PS-247 (defense-in-depth): scope the UPDATE to the caller's allowed client/store
+    // ids ON TOP OF the admin-email gate above. For a global admin orderScopePredicate
+    // returns undefined (no-op); for any restricted caller it prevents cross-tenant
+    // assignment by bare orderIds. Mirrors the inventory bulk-update-dims scope pattern.
+    const bulkAssignScope = ordersScopeFromContext(c);
     const updated = await db
       .update(orders)
       .set({
@@ -4004,7 +4009,7 @@ app.post(
         assignedAt: userId ? new Date() : null,
         updatedAt: new Date(),
       })
-      .where(inArray(orders.id, orderIds))
+      .where(and(orderScopePredicate(bulkAssignScope), inArray(orders.id, orderIds)))
       .returning({ id: orders.id });
 
     return c.json({
