@@ -331,15 +331,18 @@ export function normalizeOrderSelectedRateDto(
 
 // PS-137: the Orders list/export bestRate normalizer, co-located with its owner
 // normalizeOrderBestRateDto (rate truth lives in this service per ARCHITECTURE.md). Thin wrapper:
-// normalize, reject an empty rate (no positive amount AND no carrier+service), then add the list
-// DTO aliases (amount/cost/providerAccountId/providerAccountNickname). Behavior-identical to the
-// prior inline routes/orders.ts version; consumed by GET '/' (list) and GET '/export'.
+// normalize, reject a non-chargeable rate (no positive amount), then add the list DTO aliases
+// (amount/cost/providerAccountId/providerAccountNickname). Consumed by GET '/' (list) and GET '/export'.
+// Root-cause fix (order 1338387): a $0 best rate that still carries a carrier+service (an unpriced
+// ShipStation UPS account) must NOT be emitted as a list best — it fails every downstream
+// positive-amount display gate and renders as "Rate unavailable". A best rate with no positive
+// amount is not a usable best rate, regardless of whether carrier/service are present.
 export function normalizeListBestRate(value: unknown) {
   try {
     const bestRate = normalizeOrderBestRateDto(value);
     if (!bestRate) return null;
     const amount = bestRate.shipmentCost + bestRate.otherCost;
-    if (!(amount > 0) && !(bestRate.carrierCode && bestRate.serviceCode)) return null;
+    if (!(amount > 0)) return null;
     return {
       ...bestRate,
       amount,

@@ -50,7 +50,7 @@ import {
   isServiceOrPackageBlocked,
 } from '../lib/rate-block-list';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
-import { withCarrierQuoteTimeout } from './rates-combined';
+import { withCarrierQuoteTimeout, isPricedRate } from './rates-combined';
 import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
@@ -567,7 +567,10 @@ function pickBestRate(rates: Rate[]): Rate | null {
   // PS-108: never auto-select an insured rate whose ParcelGuard premium could not be
   // proven. Such rates are flagged `insuranceCostUnresolved` by the enricher; excluding
   // them here guarantees the saved bestRate is never a postage-only insured rate.
-  const selectable = rates.filter((rate) => isRateInsuranceResolved(rate));
+  // isPricedRate: never select an unpriced/$0 rate as best (root-cause fix for the
+  // "Rate unavailable" / "N/A Recommended" symptom). Defense-in-depth — the source
+  // lift already drops these, but any other caller of pickBestRate is protected too.
+  const selectable = rates.filter((rate) => isRateInsuranceResolved(rate) && isPricedRate(rate));
   if (!selectable.length) return null;
   return [...selectable].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
 }
@@ -1105,9 +1108,26 @@ export async function fetchLiveRatesWithDiagnostics(
       insuredValue: input.insuredValue,
     }),
   );
-  filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
-  const filteredCounts = new Map<string, number>();
+  // Root-cause fix (order 1338387): a ShipStation account can answer with rows that
+  // carry NO usable amount (shipping_amount missing/null → coerced to 0). An unpriced
+  // rate is not a real, chargeable rate — drop it HERE, at the source lift, so it can
+  // never enter the combined set, the cache, the cheapest-pick, or the Rate Browser
+  // display. The direct-carrier path already did this (toDirectRate drops amount<=0);
+  // this makes the guarantee uniform across families. A carrier whose rows were ALL
+  // unpriced then has 0 priced rates → its diagnostic falls to 'empty' below (the UI
+  // shows it as "unavailable" instead of contributing a phantom $0 winner).
+  const priced = filtered.filter(isPricedRate);
   for (const rate of filtered) {
+    if (isPricedRate(rate)) continue;
+    const reason =
+      rate.error_messages?.join('; ') || rate.warning_messages?.join('; ') || 'no shipping amount';
+    console.warn(
+      `[rates] dropped unpriced ${rate.carrier_code ?? rate.carrier_id} ${rate.service_code ?? ''} rate (${reason})`,
+    );
+  }
+  priced.sort((a, b) => rateTotal(a) - rateTotal(b));
+  const filteredCounts = new Map<string, number>();
+  for (const rate of priced) {
     filteredCounts.set(rate.carrier_id, (filteredCounts.get(rate.carrier_id) ?? 0) + 1);
   }
   const unresolvedInsuranceByCarrier = new Map<string, string>();
@@ -1135,7 +1155,7 @@ export async function fetchLiveRatesWithDiagnostics(
     } satisfies CarrierRateDiagnostic;
   });
 
-  if (filtered.length) return { rates: filtered, carrierDiagnostics };
+  if (priced.length) return { rates: priced, carrierDiagnostics };
 
   // v2's /rates/estimate returns empty array when no rates exist for the
   // route — treat that as a normal "no service" condition, not an error.

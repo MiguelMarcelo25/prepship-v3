@@ -81,6 +81,22 @@ export function rateTotal(rate: CombinableRate): number {
   );
 }
 
+/**
+ * The single definition of "a rate that can actually be charged." A missing/null
+ * amount is coerced to 0 by rateTotal's `?? 0`, which makes "no price" look like
+ * "free" — and free always wins a cheapest-first sort. That is the root cause of
+ * the unpriced-ShipStation-UPS rate becoming the "Recommended"/best winner (it
+ * rendered "N/A" in the Rate Browser and "Rate unavailable" in the Orders list).
+ * Selection, the source lift, and the list DTO all gate on THIS predicate so a
+ * non-finite or non-positive total can never be selected or persisted as best.
+ * The direct-carrier path already enforced this (toDirectRate drops amount<=0);
+ * this makes it uniform across families.
+ */
+export function isPricedRate(rate: CombinableRate): boolean {
+  const total = rateTotal(rate);
+  return Number.isFinite(total) && total > 0;
+}
+
 export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[] {
   const byKey = new Map<string, T>();
   for (const rate of rates) {
@@ -148,8 +164,11 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
     ? `${input.ssCacheKey}:direct:${directCarrierIds.sort().join(',')}`
     : input.ssCacheKey;
   // The SINGLE pick, on the uniform charge basis (both families carry the same
-  // markup rules by the time they reach this module).
-  const cheapest = [...combinedRates].sort((a, b) => rateTotal(a) - rateTotal(b))[0] ?? null;
+  // markup rules by the time they reach this module). Only PRICED rates are
+  // eligible — an unpriced/$0 rate (a ShipStation account that returned no amount)
+  // must never be selected as best just because `?? 0` makes it look cheapest.
+  const cheapest =
+    [...combinedRates].filter(isPricedRate).sort((a, b) => rateTotal(a) - rateTotal(b))[0] ?? null;
 
   const statusCarrierIds = input.requestedCarrierIds?.length
     ? input.requestedCarrierIds
