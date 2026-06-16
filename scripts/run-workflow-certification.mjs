@@ -166,6 +166,20 @@ const GROUPS = [
       'test:ps-178-fe-authority-ratchet',
     ],
   },
+  {
+    // PS-254 (Card 9) + PS-255 (Card 10): perimeter hardening (mock-label/pick-list HTML escaping,
+    // order-sync SQLi invariant, generic onError 5xx, FE-bundle secret scan) + the ops-confirm
+    // dry-run/apply gate. The guards were green but NOT release-gated — only test:master:all-safe ran
+    // them, which the Render CI gate (typecheck + build + this cert) does not. Wiring them here puts
+    // them INSIDE the cert, so an escaping/secret-leak/ops-safety regression blocks deploy. All three
+    // are offline static guards (no shipped/cancelled mutation, no live DB).
+    checkpoint: 'PS-254/255 — Perimeter hardening + ops-confirmation gate',
+    scripts: [
+      'test:ps-254-perimeter-hardening',
+      'test:ps-254-secret-scan',
+      'test:ps-255-ops-confirm-gate',
+    ],
+  },
 ];
 
 const seen = new Set();
