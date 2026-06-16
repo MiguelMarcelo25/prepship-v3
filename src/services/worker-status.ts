@@ -1,5 +1,6 @@
 import { env } from '../lib/env';
 import { getSetting, setSetting } from './settings';
+import { recordWorkerStatusEvent } from './worker-status-events';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
 
@@ -96,6 +97,13 @@ export async function setWorkerMode(mode: WorkerMode): Promise<void> {
 export async function recordWorkerHeartbeat(): Promise<void> {
   snapshot.heartbeatAt = new Date().toISOString();
   await persistSnapshot();
+  // PS-256: best-effort durable event (no-op + zero cost when WORKER_STATUS_EVENTS_DURABLE off).
+  void recordWorkerStatusEvent({
+    service: snapshot.service,
+    pid: snapshot.pid,
+    eventType: 'heartbeat',
+    details: { mode: snapshot.mode, currentJob: snapshot.currentJob },
+  });
 }
 
 export async function recordWorkerJobStart(name: string): Promise<void> {
@@ -112,6 +120,14 @@ export async function recordWorkerJobStart(name: string): Promise<void> {
     error: null,
   };
   await persistSnapshot();
+  // PS-256: best-effort durable event (no-op when flag off).
+  void recordWorkerStatusEvent({
+    service: snapshot.service,
+    pid: snapshot.pid,
+    eventType: 'job_start',
+    jobName: name,
+    details: { status: 'running', startedAt: now },
+  });
 }
 
 export async function recordWorkerJobSuccess(
@@ -132,6 +148,14 @@ export async function recordWorkerJobSuccess(
     error: null,
   };
   await persistSnapshot();
+  // PS-256: best-effort durable event (no-op when flag off).
+  void recordWorkerStatusEvent({
+    service: snapshot.service,
+    pid: snapshot.pid,
+    eventType: 'job_complete',
+    jobName: name,
+    details: { status: 'succeeded', durationMs: Date.now() - startedAtMs },
+  });
 }
 
 export async function recordWorkerJobFailure(
@@ -152,6 +176,18 @@ export async function recordWorkerJobFailure(
     error: err instanceof Error ? err.message : String(err),
   };
   await persistSnapshot();
+  // PS-256: best-effort durable event (no-op when flag off).
+  void recordWorkerStatusEvent({
+    service: snapshot.service,
+    pid: snapshot.pid,
+    eventType: 'job_failed',
+    jobName: name,
+    details: {
+      status: 'failed',
+      durationMs: Date.now() - startedAtMs,
+      error: err instanceof Error ? err.message : String(err),
+    },
+  });
 }
 
 export async function recordWorkerJobSkipped(

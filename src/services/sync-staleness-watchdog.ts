@@ -15,6 +15,7 @@
 // handler does not block the loop — it is awaiting.)
 
 import { getPersistedWorkerStatus } from './worker-status';
+import { recordWorkerStatusEvent } from './worker-status-events';
 
 export type SyncStalenessLevel = 'ok' | 'stale' | 'stuck';
 
@@ -100,6 +101,20 @@ export async function runSyncStalenessWatchdogTick(nowMs: number = Date.now()): 
         `(heartbeatAge=${verdict.heartbeatAgeSeconds ?? 'none'}s job=${verdict.currentJob ?? 'none'} ` +
         `jobAge=${verdict.currentJobAgeSeconds ?? 'none'}s)`,
     );
+    // PS-256: persist a durable staleness alert so the wedge survives a restart in the
+    // operator-visible history. Best-effort, no-op when WORKER_STATUS_EVENTS_DURABLE off.
+    void recordWorkerStatusEvent({
+      service: status?.service ?? 'worker',
+      pid: status?.pid ?? process.pid,
+      eventType: 'staleness_alert',
+      jobName: verdict.currentJob,
+      stalenessLevel: verdict.level,
+      details: {
+        reason: verdict.reason,
+        heartbeatAgeSeconds: verdict.heartbeatAgeSeconds,
+        currentJobAgeSeconds: verdict.currentJobAgeSeconds,
+      },
+    });
   }
   return verdict;
 }

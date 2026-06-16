@@ -71,6 +71,12 @@ const schema = z.object({
   RUN_SYNC_SCHEDULER: booleanFlag(true),
   WORKER_PLACEHOLDER: booleanFlag(false),
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
+  // PS-256 (durable worker-status events): when ON, worker heartbeat/job/staleness
+  // events are appended to a durable, append-only worker_status_events table so a
+  // restart no longer erases the operator-visible history of worker liveness (e.g.
+  // "worker was stuck 14:32-15:17"). Default OFF — a safe canary; the OFF path is a
+  // true no-op (no DB, no schema ensure). DJ flips this on Render after a canary.
+  WORKER_STATUS_EVENTS_DURABLE: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY: booleanFlag(false),
   // Tracking-driven print-queue retirement (delivered → History). Two-stage
