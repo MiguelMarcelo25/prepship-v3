@@ -3,6 +3,9 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+// PS-252 (Card 7): the product (SKU) catalog is global config — only internal staff with
+// settings:write may mutate it; a portal/client_user must not edit the shared catalog.
+import { requireInternalPermission } from '../middleware/auth';
 import { inventory } from '../db/schema/inventory';
 import { orderItems } from '../db/schema/order-items';
 import { orderOverrides, orders } from '../db/schema/orders';
@@ -93,13 +96,13 @@ const body = z.object({
   defaultPackageCode: z.string().nullable().optional(),
 });
 
-app.post('/', zValidator('json', body.required({ sku: true })), async (c) => {
+app.post('/', requireInternalPermission('settings:write'), zValidator('json', body.required({ sku: true })), async (c) => {
   const v = c.req.valid('json');
   const [row] = await db.insert(products).values(v).returning();
   return c.json(row, 201);
 });
 
-app.patch('/:id{[0-9]+}', zValidator('json', body), async (c) => {
+app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
   const [row] = await db
@@ -279,7 +282,7 @@ async function applySingleSkuDefaultsToMatchingMutableOrders(input: {
   return { appliedMutableOrderCount, affectedOrderIds };
 }
 
-app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
+app.post('/save-defaults', requireInternalPermission('settings:write'), zValidator('json', saveDefaultsBody), async (c) => {
   const v = c.req.valid('json');
   // appliesToQty governs the per-order push scope only — it is not a `products`
   // column, so keep it out of the upsert values.
@@ -386,7 +389,7 @@ app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
   return c.json({ ...row, appliedMutableOrderCount, affectedOrderIds });
 });
 
-app.delete('/:id{[0-9]+}', async (c) => {
+app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.delete(products).where(eq(products.id, id)).returning();
   if (!row) return c.json({ error: 'Product not found' }, 404);

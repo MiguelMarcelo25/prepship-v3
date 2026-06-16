@@ -20,9 +20,11 @@ const DIR = 'scripts';
 const NAME_RE = /(scope|authz|permission|rbac|auth-coverage)/i;
 const SELF = 'authz-guard-behavioral-ratchet';
 
-// Behavioral = imports + executes real source (src/ or web/src/) rather than only string-scanning files.
+// Behavioral = imports + executes real source (src/ or web/src/) — static `from '../src/...'`
+// OR dynamic `import('../src/...')` (used when the module needs env set up first) — rather than
+// only string-scanning files.
 function isBehavioral(content: string): boolean {
-  return /from '\.\.\/(?:src|web\/src)\//.test(content);
+  return /(?:from |import\()\s*'\.\.\/(?:src|web\/src)\//.test(content);
 }
 
 const files = readdirSync(DIR)

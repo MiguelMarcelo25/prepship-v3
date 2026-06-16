@@ -3,6 +3,9 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
+// PS-252 (Card 7): warehouse locations are global config — only internal staff with
+// settings:write may mutate them; a portal/client_user must not edit them.
+import { requireInternalPermission } from '../middleware/auth';
 import { locations } from '../db/schema/locations';
 import { setDefaultLocation } from '../services/locations';
 import { getDefaultShipFrom } from '../lib/ship-from';
@@ -57,13 +60,13 @@ app.get('/default-ship-from', async (c) => {
   }
 });
 
-app.post('/', zValidator('json', body), async (c) => {
+app.post('/', requireInternalPermission('settings:write'), zValidator('json', body), async (c) => {
   const v = c.req.valid('json');
   const [row] = await db.insert(locations).values(v).returning();
   return c.json(row, 201);
 });
 
-app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidator('json', body.partial()), async (c) => {
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
   const [row] = await db
@@ -75,14 +78,14 @@ app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
   return c.json(row);
 });
 
-app.delete('/:id{[0-9]+}', async (c) => {
+app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.delete(locations).where(eq(locations.id, id)).returning();
   if (!row) return c.json({ error: 'Location not found' }, 404);
   return c.json({ deleted: true });
 });
 
-app.post('/:id{[0-9]+}/default', async (c) => {
+app.post('/:id{[0-9]+}/default', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
   const row = await setDefaultLocation(id);
   return c.json(row);
