@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 // PS-276 (slice 4-UI): resi/comm header tag — reads the backend verdict off the DTO (display-only).
 import { ResidentialTag, residentialTagFacts } from './ui/ResidentialTag';
+import { residentialForRate } from '../lib/residential-for-rate';
 import { apiClient } from '../lib/v2-apiClient';
 import { CALIFORNIA_TZ } from '../lib/ca-time';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
@@ -1368,17 +1369,12 @@ export default function RateBrowserModal({
         (selectedPid != null ? accountByPid.get(selectedPid) : null) ??
         (seededPid != null ? accountByPid.get(seededPid) : null) ??
         rateShippingAccounts[0];
-      // PS-127: reflect the order's backend-resolved residential instead of a hardcoded
-      // 'yes'. Commercial only on a trusted signal (operator override merged into
-      // order.residential, or an explicit source-commercial flag); residential-safe
-      // otherwise so we never under-quote the residential surcharge. The backend remains
-      // authoritative (resolveRateInput + the label parity guard / residentialForShipping).
-      const residentialForQuote =
-        typeof order?.residential === 'boolean'
-          ? order.residential
-          : order?.sourceResidential === false
-            ? false
-            : true;
+      // PS-280: forward the BACKEND residential/commercial verdict (PS-276 owner) via the shared
+      // FE rule — the SAME helper OrdersView uses (residentialForRate). No re-derivation from the
+      // legacy order.residential / sourceResidential, raw shipTo, ZIP, or company name. A missing
+      // verdict defaults residential-safe so the residential surcharge is never under-quoted, and
+      // the backend stays authoritative (resolveRateInput + the label parity guard).
+      const residentialForQuote = residentialForRate(order);
       const browseResult = await apiClient.browseRates({
         fromPostalCode: selectedLocation?.postalCode?.slice(0, 5) ?? undefined,
         toPostalCode: zip,
@@ -2082,8 +2078,15 @@ export default function RateBrowserModal({
                     gap: 5,
                   }}
                 >
-                  <span style={{ color: 'var(--green)' }}>✓</span> Residential Address
-                  <span style={{ color: 'var(--text3)', fontSize: 10 }}>(always)</span>
+                  {/* PS-280: show the BACKEND residential/commercial verdict (never "always
+                      residential"). Reuses the shared ResidentialTag; on deploy-skew with no
+                      verdict, a safe fallback label — never the old hardcoded "always". */}
+                  {(() => {
+                    const facts = residentialTagFacts(order)
+                    return facts
+                      ? <ResidentialTag facts={facts} />
+                      : <span style={{ color: 'var(--text3)', fontSize: 11 }}>Residential · fallback</span>
+                  })()}
                 </div>
               </div>
 

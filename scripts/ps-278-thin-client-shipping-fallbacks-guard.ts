@@ -18,12 +18,17 @@ function check(name: string, cond: boolean): void {
   else console.log(`ok   ${name}`);
 }
 
+// PS-280: residentialForRate moved to the shared owner web/src/lib/residential-for-rate; OrdersView +
+// RateBrowserModal both DELEGATE to it. Pin the forward-only shape at the shared owner + verify delegation.
 const ov = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-const start = ov.indexOf('function residentialForRate(');
-const end = ov.indexOf('\n  }', start);
-const body = start >= 0 ? ov.slice(start, end) : '';
+const rule = readFileSync('web/src/lib/residential-for-rate.ts', 'utf8');
+const start = rule.indexOf('export function residentialForRate(');
+const end = rule.indexOf('\n}', start);
+const body = start >= 0 ? rule.slice(start, end) : '';
 
-check('residentialForRate exists', start >= 0);
+check('OrdersView delegates residentialForRate to the shared rule',
+  /residentialForRate as residentialForRateRule/.test(ov) && /return residentialForRateRule\(order\)/.test(ov));
+check('shared residentialForRate rule exists', start >= 0);
 check('it FORWARDS the backend verdict (recipient.residentialClassification)',
   /order\?\.residentialClassification \?\? order\?\.canonicalOrder\?\.recipient\?\.residentialClassification/.test(body));
 check('FE does NOT re-derive residential from the raw ShipStation source flag (thin client)',

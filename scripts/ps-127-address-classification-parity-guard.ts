@@ -138,22 +138,25 @@ const cls = (i: Parameters<typeof classifyShippingAddress>[0]) => classifyShippi
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
   check('OrdersView defines residentialForRate helper', /function residentialForRate\(/.test(ordersView), true);
   check('OrdersView no longer hardcodes residential: true', /residential:\s*true,/.test(ordersView), false);
-  // PS-278 (thin client): residentialForRate is now a pure FORWARDER of the BACKEND verdict
-  // (PS-276 recipient.residentialClassification) — it no longer re-derives the classification from
-  // raw provider fields (sourceResidential / raw shipTo / merged boolean). Pin: it reads the backend
-  // verdict, owns no raw-field derivation, and the verdict-absent default is RESIDENTIAL (money-safe —
-  // never under-quote the residential surcharge).
+  // PS-280: residentialForRate moved to the shared FE owner web/src/lib/residential-for-rate;
+  // OrdersView + RateBrowserModal both DELEGATE to it (one FE owner, no drift). The forward-only
+  // property is unchanged — read the BACKEND verdict (PS-276 recipient.residentialClassification),
+  // own no raw-field derivation, default residential-safe — but it lives in ONE shared rule now.
+  check('OrdersView delegates residentialForRate to the shared rule',
+    /residentialForRate as residentialForRateRule/.test(ordersView) &&
+      /return residentialForRateRule\(order\)/.test(ordersView), true);
   {
-    const helperStart = ordersView.indexOf('function residentialForRate(');
-    const helperEnd = ordersView.indexOf('\n  }', helperStart);
-    const helperBody = helperStart >= 0 ? ordersView.slice(helperStart, helperEnd) : '';
-    check('residentialForRate defers to the backend residential verdict (reads residentialClassification)',
+    const rule = readFileSync('web/src/lib/residential-for-rate.ts', 'utf8');
+    const helperStart = rule.indexOf('export function residentialForRate(');
+    const helperEnd = rule.indexOf('\n}', helperStart);
+    const helperBody = helperStart >= 0 ? rule.slice(helperStart, helperEnd) : '';
+    check('shared rule defers to the backend residential verdict (reads residentialClassification)',
       /residentialClassification \?\? order\?\.canonicalOrder\?\.recipient\?\.residentialClassification/.test(helperBody), true);
-    check('residentialForRate no longer re-derives from the raw source flag (thin client)',
+    check('shared rule no longer re-derives from the raw source flag (thin client)',
       /sourceResidential/.test(helperBody), false);
-    check('residentialForRate no longer re-derives from raw shipTo (thin client)',
+    check('shared rule no longer re-derives from raw shipTo (thin client)',
       /rawShipTo|raw\?\.shipTo/.test(helperBody), false);
-    check('residentialForRate defaults to residential (return true fallback)',
+    check('shared rule defaults to residential (return true fallback)',
       /return true\s*$/.test(helperBody.trimEnd()), true);
   }
 

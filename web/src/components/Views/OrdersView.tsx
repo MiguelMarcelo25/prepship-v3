@@ -159,6 +159,7 @@ import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters
 import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute } from '../../lib/shipping-routes'
+import { residentialForRate as residentialForRateRule } from '../../lib/residential-for-rate'
 import {
   buildDailyStripProgress,
   buildBatchRecalculateProgress,
@@ -4135,19 +4136,14 @@ export default function OrdersView({
   // Critically: today every site hardcodes `true`, so residential orders keep r=1 (no
   // re-rate churn) and only genuinely-commercial orders correctly flip to r=0.
   function residentialForRate(order: any): boolean {
-    // PS-278 (thin client): the BACKEND (PS-276 resolver) OWNS the residential/commercial verdict and
-    // publishes the money-safe value on every order DTO (recipient.residentialClassification — it already
-    // folds in the operator override, the source flag, and the company heuristic). The FE FORWARDS that
-    // verdict and no longer re-derives the classification from the raw provider fields it used to read;
-    // duplicating the backend's resolution here was a second owner of a money-path decision.
-    // residentialForRate feeds buildRateRequestDraftKey's r= bit, so forwarding the verdict keeps the FE
-    // draft key == the backend requestFingerprint by construction. If the verdict is somehow absent (a
-    // rolled-back API), default residential-safe so the residential surcharge is never under-quoted.
-    const backendClass =
-      order?.residentialClassification ?? order?.canonicalOrder?.recipient?.residentialClassification
-    if (backendClass === 'residential') return true
-    if (backendClass === 'commercial') return false
-    return true
+    // PS-280: delegate to the shared FE-forward rule (web/src/lib/residential-for-rate) so the Orders
+    // table (Best Rate / Recalculate) and the Rate Browser forward the IDENTICAL backend verdict — one
+    // FE owner, no drift (the drift that let the Rate Browser keep showing "Residential (always)").
+    // The BACKEND (PS-276 resolver) OWNS the classification; the FE only forwards it; missing verdict ->
+    // residential-safe so the residential surcharge is never under-quoted. residentialForRate feeds
+    // buildRateRequestDraftKey's r= bit, so forwarding the verdict keeps the FE draft key == the backend
+    // requestFingerprint by construction.
+    return residentialForRateRule(order)
   }
 
   // PS-128 + PS-129: DISPLAY mirror of the backend shipping-safety guard. The backend

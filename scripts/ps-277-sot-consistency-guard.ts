@@ -67,8 +67,13 @@ check('browse RECONCILES the SOT (plain browse, gated) via the awaiting-only per
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('the BEST RATE column reads the persisted SOT (getBestRateBaseCost / getBackendRowMoney)',
   /getBestRateBaseCost\(/.test(ordersView) && /getBackendRowMoney\(/.test(ordersView));
+// PS-280: the residential-verdict read moved to the shared FE rule (web/src/lib/residential-for-rate),
+// which OrdersView AND RateBrowserModal now both DELEGATE to — so NO surface re-derives r= (stronger
+// than before: the Rate Browser used to re-derive from legacy fields, now it forwards the verdict too).
+const residentialRule = readFileSync('web/src/lib/residential-for-rate.ts', 'utf8');
 check('the FE rate key defers to the backend residential verdict (PS-276 slice 3 — no surface re-derives r=)',
-  /order\?\.residentialClassification \?\? order\?\.canonicalOrder\?\.recipient\?\.residentialClassification/.test(ordersView));
+  /order\?\.residentialClassification \?\? order\?\.canonicalOrder\?\.recipient\?\.residentialClassification/.test(residentialRule) &&
+    /return residentialForRateRule\(order\)/.test(ordersView));
 
 check('package.json wires test:ps-277-sot-consistency',
   /test:ps-277-sot-consistency/.test(readFileSync('package.json', 'utf8')));

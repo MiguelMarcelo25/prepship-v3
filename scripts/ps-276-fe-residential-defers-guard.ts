@@ -18,12 +18,18 @@ function check(name: string, cond: boolean): void {
   else console.log(`ok   ${name}`);
 }
 
+// PS-280: the FE residentialForRate rule moved to the shared owner web/src/lib/residential-for-rate;
+// OrdersView + RateBrowserModal both DELEGATE to it (one FE owner, no drift). Pin the
+// prefer-with-fallback shape at the shared owner + verify OrdersView delegates.
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-const start = ordersView.indexOf('function residentialForRate(');
-const end = ordersView.indexOf('\n  }', start);
-const body = start >= 0 ? ordersView.slice(start, end) : '';
+const rule = readFileSync('web/src/lib/residential-for-rate.ts', 'utf8');
+const start = rule.indexOf('export function residentialForRate(');
+const end = rule.indexOf('\n}', start);
+const body = start >= 0 ? rule.slice(start, end) : '';
 
-check('residentialForRate exists', start >= 0);
+check('OrdersView delegates residentialForRate to the shared rule',
+  /residentialForRate as residentialForRateRule/.test(ordersView) && /return residentialForRateRule\(order\)/.test(ordersView));
+check('shared residentialForRate rule exists', start >= 0);
 check('reads the backend verdict (top-level OR canonicalOrder.recipient.residentialClassification)',
   /order\?\.residentialClassification \?\? order\?\.canonicalOrder\?\.recipient\?\.residentialClassification/.test(body));
 check('backend commercial -> false (defer to backend, not re-derive)',
