@@ -10,8 +10,71 @@
  * wired so it cannot silently regress.
  *
  *   npx tsx scripts/ps-233-label-shipment-scope-enforcement-guard.ts
+ *
+ * PS-259 (Card 14) BEHAVIORAL: the block below imports the REAL enforcement owner
+ * (src/lib/client-store-scope + src/lib/scope-predicates) and RUNS it on
+ * representative inputs, asserting the security verdict. These assertions FAIL if the
+ * scope-derivation or the in-scope check is deleted/broken — not a substring match.
+ * The static route/source checks underneath remain and are NOT weakened.
  */
 import { readFileSync } from 'node:fs';
+import {
+  getClientStoreScope,
+  GLOBAL_SCOPE,
+} from '../src/lib/client-store-scope';
+import {
+  assertResourceInScope,
+  isResourceInScope,
+  ResourceScopeError,
+} from '../src/lib/scope-predicates';
+
+let behavioralFailures = 0;
+function behavioral(name: string, cond: boolean): void {
+  if (!cond) { behavioralFailures += 1; console.error(`FAIL ${name}`); }
+  else console.log(`ok   ${name}`);
+}
+
+// ── BEHAVIORAL: run the real scope owner on representative principals ───────────────
+// A restricted client_user scoped to client 7 is DENIED an out-of-scope resource
+// (client 99) — the core cross-tenant defense. Fails if assertResourceInScope or the
+// isRestricted derivation is removed.
+const restricted = getClientStoreScope({ role: 'client_user', clientIds: [7] });
+behavioral('client_user scope is restricted', restricted.isRestricted === true && restricted.isGlobal === false);
+
+let denied = false;
+try {
+  assertResourceInScope(restricted, { clientId: 99, storeId: 99 }, 'Order not found');
+} catch (e) {
+  denied = e instanceof ResourceScopeError;
+}
+behavioral('restricted client_user is DENIED an out-of-scope order (ResourceScopeError)', denied);
+behavioral('restricted client_user is denied via isResourceInScope (cross-tenant)',
+  isResourceInScope(restricted, { clientId: 99, storeId: 99 }) === false);
+
+// The SAME restricted scope ALLOWS its own in-scope resource (client 7) — proves the
+// check discriminates, not a blanket deny.
+let inScopeThrew = false;
+try {
+  assertResourceInScope(restricted, { clientId: 7, storeId: 1 }, 'Order not found');
+} catch {
+  inScopeThrew = true;
+}
+behavioral('restricted client_user is ALLOWED its own in-scope order', inScopeThrew === false);
+behavioral('restricted client_user passes isResourceInScope for in-scope client',
+  isResourceInScope(restricted, { clientId: 7, storeId: 1 }) === true);
+
+// An admin / GLOBAL caller passes any resource (no per-tenant restriction) — proves
+// global callers are not falsely blocked.
+const adminScope = getClientStoreScope({ role: 'admin' });
+behavioral('admin scope is global (unrestricted)', adminScope.isGlobal === true && adminScope.isRestricted === false);
+behavioral('admin scope passes an arbitrary resource', isResourceInScope(adminScope, { clientId: 99, storeId: 99 }) === true);
+behavioral('GLOBAL_SCOPE (trusted worker) passes an arbitrary resource',
+  isResourceInScope(GLOBAL_SCOPE, { clientId: 12345, storeId: 67890 }) === true);
+
+if (behavioralFailures > 0) {
+  console.error(`\nFAIL PS-233 BEHAVIORAL scope enforcement (${behavioralFailures} failing) — real owner verdict wrong`);
+  process.exit(1);
+}
 
 const scopePredicates = readFileSync('src/lib/scope-predicates.ts', 'utf8');
 const clientStoreScope = readFileSync('src/lib/client-store-scope.ts', 'utf8');

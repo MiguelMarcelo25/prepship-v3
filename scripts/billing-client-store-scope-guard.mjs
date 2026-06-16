@@ -1,6 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// PS-259 (Card 14) — BEHAVIORAL: import + RUN the real scope enforcement owners so this
+// guard fails if that enforcement is deleted/broken, not just if a substring disappears.
+// The billing route/service derive their client/store scope from getClientStoreScope and
+// gate already-loaded resources with isResourceInScope — these are the canonical owners.
+// Both modules are pure (no env-validating imports), so a static `from '../src/...'` import
+// is safe; the ratchet (authz-guard-behavioral-ratchet-guard.ts) classifies this guard as
+// behavioral on the presence of that import AND we actually execute the verdicts below.
+import { getClientStoreScope } from '../src/lib/client-store-scope';
+import { isResourceInScope } from '../src/lib/scope-predicates';
+
 const root = process.cwd();
 
 function read(relativePath) {
@@ -20,6 +30,43 @@ function assert(condition, message) {
   if (condition) pass(message);
   else fail(message);
 }
+
+// ── BEHAVIORAL: run the real scope owners on representative billing principals ──────────────
+// A restricted client_user scoped to client #7 must be DENIED an out-of-scope client (#99) and
+// ALLOWED its in-scope client (#7); an admin/global scope must pass any resource. Every
+// assertion below FAILS if getClientStoreScope or isResourceInScope is removed/broken — e.g.
+// if isResourceInScope reverted to `return true`, the deny check flips to a fail.
+const restrictedScope = getClientStoreScope({
+  role: 'client_user',
+  clientIds: [7],
+  storeIds: [42],
+});
+assert(
+  restrictedScope.isRestricted === true && restrictedScope.isGlobal === false,
+  'behavioral: client_user with clientIds is a RESTRICTED (non-global) scope',
+);
+assert(
+  isResourceInScope(restrictedScope, { clientId: 99, storeId: 999 }) === false,
+  'behavioral: restricted billing scope DENIES an out-of-scope client/store resource',
+);
+assert(
+  isResourceInScope(restrictedScope, { clientId: 7, storeId: null }) === true,
+  'behavioral: restricted billing scope ALLOWS its in-scope client resource',
+);
+assert(
+  isResourceInScope(restrictedScope, { clientId: null, storeId: 42 }) === true,
+  'behavioral: restricted billing scope ALLOWS its in-scope store resource',
+);
+
+const adminScope = getClientStoreScope({ role: 'admin', clientIds: [7], storeIds: [42] });
+assert(
+  adminScope.isGlobal === true && adminScope.isRestricted === false,
+  'behavioral: admin role yields a GLOBAL (unrestricted) billing scope, ignoring client/store ids',
+);
+assert(
+  isResourceInScope(adminScope, { clientId: 99, storeId: 999 }) === true,
+  'behavioral: global/admin billing scope passes any resource (no per-tenant restriction)',
+);
 
 const routeSource = read('src/routes/billing.ts');
 const serviceSource = read('src/services/billing.ts');
@@ -94,9 +141,13 @@ assert(
     reportingSource.includes('scopeStoreIds'),
   'billing summary/details/read-model reads apply client/store scope',
 );
+// PS-259: this guard now imports TypeScript owners, so it MUST run via tsx (node cannot
+// import .ts). Accept either runner so the guard does not flash red during the out-of-band
+// package.json flip from `node` -> `tsx`, but require it still targets this script.
 assert(
-  packageJson.scripts?.['test:billing-client-scope'] ===
-    'node scripts/billing-client-store-scope-guard.mjs',
+  ['tsx scripts/billing-client-store-scope-guard.mjs', 'node scripts/billing-client-store-scope-guard.mjs'].includes(
+    packageJson.scripts?.['test:billing-client-scope'],
+  ),
   'package exposes billing client/store scope guard',
 );
 

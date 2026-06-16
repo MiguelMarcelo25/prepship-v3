@@ -13,8 +13,9 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Substring-only authz/scope guards present on 2026-06-16. Lower this as they are converted; never raise it.
-const CEILING = 16;
+// Substring-only authz/scope guards remaining. Lower this as they are converted; never raise it.
+// 2026-06-16: 9 guards converted to genuinely behavioral (PS-259 workflow) -> 16 -> 7.
+const CEILING = 7;
 
 const DIR = 'scripts';
 const NAME_RE = /(scope|authz|permission|rbac|auth-coverage)/i;
