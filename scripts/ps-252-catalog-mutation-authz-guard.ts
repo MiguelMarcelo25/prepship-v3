@@ -46,6 +46,10 @@ check('locations PATCH /:id gated', locations.includes(`app.patch('/:id{[0-9]+}'
 check('locations DELETE /:id gated', locations.includes(`app.delete('/:id{[0-9]+}', ${gate}`));
 check('locations POST /:id/default gated', locations.includes(`app.post('/:id{[0-9]+}/default', ${gate}`));
 
+// packages: only DELETE (pure config) is gated — POST/PATCH/PUT carry stockQty (dual-purpose), left ungated.
+const packages = readFileSync('src/routes/packages.ts', 'utf8');
+check('packages DELETE /:id gated (config-only route)', packages.includes(`app.delete('/:id{[0-9]+}', ${gate}`));
+
 check('package.json wires test:ps-252-catalog-mutation-authz',
   /test:ps-252-catalog-mutation-authz/.test(readFileSync('package.json', 'utf8')));
 

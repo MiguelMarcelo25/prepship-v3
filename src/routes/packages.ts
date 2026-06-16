@@ -8,7 +8,7 @@ import { packageLedger } from '../db/schema/package-ledger';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
-import { hasAppPermission } from '../middleware/auth';
+import { hasAppPermission, requireInternalPermission } from '../middleware/auth';
 
 const app = new Hono();
 const PACKAGE_START_BACKFILL_DATE = new Date('2026-04-01T00:00:00.000Z');
@@ -184,7 +184,12 @@ app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
   return c.json(publicPackageRow(row, canViewFinancials));
 });
 
-app.delete('/:id{[0-9]+}', async (c) => {
+// PS-252 (Card 7): deleting a package DEFINITION is operator/admin config (never a warehouse
+// stock op), so it's gated. NOTE: POST / and PATCH/PUT /:id are deliberately NOT gated — their
+// body accepts stockQty, so they are dual-purpose (catalog edit + warehouse stock edit). Gating
+// them needs a catalog/stock concern-split first (tracked follow-up); blanket-gating would break
+// warehouse stock edits.
+app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.delete(packages).where(eq(packages.id, id)).returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
