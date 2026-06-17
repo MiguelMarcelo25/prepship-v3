@@ -299,6 +299,8 @@
     "test:ps-272-reaper-onpath": "tsx scripts/ps-272-reaper-onpath-guard.ts",
     "test:ps-279-backend-orchestration": "tsx scripts/ps-279-backend-orchestration-guard.ts",
     "test:ps-273-shipp-account-nickname": "tsx scripts/ps-273-shipp-account-nickname-guard.ts",
+    "test:ps-274-shipp-insurance-certainty": "tsx scripts/ps-274-shipp-insurance-certainty-guard.ts",
+    "test:ps-275-zero-shipping-review": "tsx scripts/ps-275-zero-shipping-prep-fee-review-guard.ts",
     "test:ps-258-daily-stats-rollover": "tsx scripts/ps-258-daily-stats-rollover-guard.ts",
     "test:ps-258-non-critical-scheduler": "tsx scripts/ps-258-non-critical-scheduler-guard.ts",
     "test:ps-258-orders-queue-parsers": "tsx scripts/ps-258-orders-queue-parsers-guard.ts",

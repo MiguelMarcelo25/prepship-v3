@@ -219,6 +219,21 @@ export function resolveAccountInsuranceCapability(input: {
   };
 }
 
+// PS-274 — is this account/service a DIRECT, VERIFIED carrier whose declared-value insurance
+// path is proven (the ONLY identity that earns the 'explicitly_included' /
+// 'carrier_declared_value' certainty)? A Shipp-brokered rate is NEVER this (Shipp has no direct
+// verified contract on PrepShip's side; resolveAccountInsuranceCapability returns 'parcelguard'
+// for the brokered `*_walleted` accounts and the verify-gate decides the direct-UPS case). The
+// insurance-certainty resolver delegates here so "verified direct" stays defined in ONE place.
+export function isDirectVerifiedInsuranceAccount(input: {
+  shippingProviderId?: number | string | null;
+  carrierCode?: string | null;
+  serviceCode?: string | number | null;
+}): boolean {
+  const capability = resolveAccountInsuranceCapability(input);
+  return capability.required === 'carrier' && capability.carrierPurchasable;
+}
+
 // PS-170 — carrier declared value insures the FIRST $100 of declared value for $0. Above
 // this cap a direct-carrier account is billed for the excess declared value, so we fall back
 // to ParcelGuard (which prices + insures ANY value via its schedule). DJ verified the $100

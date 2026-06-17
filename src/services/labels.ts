@@ -85,6 +85,11 @@ import {
 // PS-214: direct labels persist the PS-171 schedule premium when the
 // connector reports none (ParcelGuard is third-party — carriers don't bill it).
 import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost';
+// PS-274 / PS-261 (Per user override unlock shipped data on 2026-06-17): the backend-owned
+// insurance-CERTAINTY resolver. Used at persist time so a Shipp-brokered label NEVER records
+// insuranceProvenance='carrier_declared_value' (we cannot prove the carrier applied declared
+// value), and so the honest certainty state is persisted into selected_rate_json.
+import { resolveInsuranceCertainty, isShippBrokered } from './shipping-workflow/insurance-certainty';
 import { loadShippingAutomationRules } from './shipping-automation';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
@@ -869,14 +874,45 @@ async function persistCreatedLabel(args: {
         }) ?? 0
       : 0;
   const insuranceCost = reportedInsuranceCost > 0 ? reportedInsuranceCost : scheduledPremium;
+  // PS-274 (Per user override unlock shipped data on 2026-06-17): identity FIRST. A Shipp-brokered
+  // label (provider 'shipp' / "Shipp" nickname / `shipp_` service code) is NEVER a direct verified
+  // carrier — its declared value is requested-but-unproven. Resolve the honest certainty so it is
+  // persisted AND so the provenance below can never claim carrier_declared_value for a brokered Shipp.
+  const insuranceCertainty = resolveInsuranceCertainty({
+    provider: insuranceProvider === 'carrier' ? 'carrier' : created.carrierCode ?? null,
+    accountIdentity: created.providerAccountNickname ?? null,
+    serviceCode: created.serviceCode ?? null,
+    insuredValue,
+    insuranceCost,
+    isDirectVerifiedAccount: insuranceProvider === 'carrier' && !isShippBrokered({
+      provider: created.carrierCode ?? null,
+      accountIdentity: created.providerAccountNickname ?? null,
+      serviceCode: created.serviceCode ?? null,
+    }),
+  });
+  // PS-261 (Per user override unlock shipped data on 2026-06-17): consume the REAL EasyPost
+  // insurance fee. createLabelEasyPost emits the billed fee (parseEasyPostInsuranceCost) onto
+  // created.insuranceCost via the direct path; bill it as otherCost with provenance 'easypost'
+  // instead of 0/shipstation. Detected identity-first by the EasyPost carrier code. The parser
+  // returns null/0 when unpriced, so reportedInsuranceCost>0 already gates "only when present".
+  const isEasyPostBilled =
+    reportedInsuranceCost > 0 && String(created.carrierCode ?? '').trim().toLowerCase() === 'easypost';
+  // PS-274: a Shipp-brokered label can NEVER be carrier_declared_value (the #1502 dishonesty class).
+  const shippBrokered = isShippBrokered({
+    provider: created.carrierCode ?? null,
+    accountIdentity: created.providerAccountNickname ?? null,
+    serviceCode: created.serviceCode ?? null,
+  });
   const insuranceProvenance =
-    reportedInsuranceCost > 0
-      ? 'shipstation_v2_label'
-      : scheduledPremium > 0
-        ? 'parcelguard_schedule'
-        : insuranceProvider === 'carrier'
-          ? 'carrier_declared_value'
-          : 'none';
+    isEasyPostBilled
+      ? 'easypost'
+      : reportedInsuranceCost > 0
+        ? 'shipstation_v2_label'
+        : scheduledPremium > 0
+          ? 'parcelguard_schedule'
+          : insuranceProvider === 'carrier' && !shippBrokered
+            ? 'carrier_declared_value'
+            : 'none';
   const [row] = await exec
     .insert(shipments)
     .values({
@@ -930,6 +966,11 @@ async function persistCreatedLabel(args: {
         insuredValue,
         insuranceCost,
         insuranceProvenance,
+        // PS-274: persist the honest certainty state into the audit JSON so a Shipp-brokered
+        // label's "requested_application_uncertain" coverage is recoverable downstream (never a
+        // fabricated carrier_declared_value). Display/audit only — does not affect billed totals.
+        insuranceCertainty: insuranceCertainty.certainty,
+        insuranceCertaintyProofSource: insuranceCertainty.proofSource,
         totalCost: Number((created.cost + insuranceCost).toFixed(2)),
         // PS-211: the provider-NATIVE label id (string — direct carriers don't
         // use ShipStation's numeric id space). This is the identity a future

@@ -28,7 +28,11 @@ export type InsuranceCostProvenance =
   // (DIRECT_UPS_CARRIER_INSURANCE_VERIFIED); otherwise the rate stays on the ParcelGuard schedule.
   | 'carrier_declared_value'
   | 'shipstation_v2_label'
-  | 'shipstation_v1_shipment';
+  | 'shipstation_v1_shipment'
+  // PS-261: the REAL insurance fee EasyPost billed on a bought shipment (createLabelEasyPost
+  // emits it via parseEasyPostInsuranceCost; the EasyPost persist path bills it as otherCost).
+  // Distinct from shipstation_v2_label so the stored provenance names the actual biller.
+  | 'easypost';
 
 export type InsuranceCostResolution =
   | { status: 'none' }

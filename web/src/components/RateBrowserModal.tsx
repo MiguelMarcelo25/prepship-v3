@@ -134,6 +134,9 @@ export type RbAppliedRate = {
   insuranceCostUnresolved?: unknown;
   insuranceCostError?: unknown;
   insurance_amount?: unknown;
+  // PS-274: backend-owned insurance-certainty fact (resolveInsuranceCertainty). Pass-through
+  // only — the FE renders the chip via formatInsuranceCertaintyTag, never decides certainty.
+  insuranceCertainty?: unknown;
   // PS-198: backend-issued quote proof carried through Apply so the persisted
   // best rate stays purchasable (Create Label / Print Queue validate the ref
   // server-side against the rate-quote snapshot). Pass-through only.
@@ -212,6 +215,8 @@ export type RateRow = {
   insuranceCostUnresolved?: unknown;
   insuranceCostError?: unknown;
   insurance_amount?: unknown;
+  // PS-274: backend-owned insurance-certainty fact carried onto each rate row (display-only).
+  insuranceCertainty?: unknown;
   // PS-198: backend-issued quote proof (stamped by /rates/browse + the apiClient
   // backendProofMetadata). The modal only passes these through — never synthesizes.
   rateQuoteId?: string | null;
@@ -637,6 +642,8 @@ function buildOrderBestRateSeed(
     insuranceCostUnresolved: bestRate.insuranceCostUnresolved ?? raw.insuranceCostUnresolved,
     insuranceCostError: bestRate.insuranceCostError ?? raw.insuranceCostError,
     insurance_amount: bestRate.insurance_amount ?? raw.insurance_amount,
+    // PS-274: pass the backend insurance-certainty fact through (display-only).
+    insuranceCertainty: bestRate.insuranceCertainty ?? raw.insuranceCertainty,
     raw: bestRate,
   };
 }
@@ -895,6 +902,46 @@ export function formatInsuranceProviderLabel(provider?: string | null): string {
   if (normalized === 'shipsurance') return 'Shipsurance';
   if (normalized === 'carrier') return 'Carrier';
   return provider && provider.trim() ? provider.trim() : 'Insured';
+}
+
+// PS-274 — render-ready insurance-CERTAINTY chip derived from the backend-owned
+// insuranceCertainty fact (resolveInsuranceCertainty, threaded onto the rate by the
+// Shipp connector). Display-only + additive: returns null unless the backend stamped a
+// certainty, so a rate without the fact renders EXACTLY as today. The backend is the
+// source of truth — the FE never decides certainty, it only colors the chip. A
+// Shipp-brokered UPS rate that declared a value comes through as
+// 'requested_application_uncertain' and is tagged "Insurance requested (unconfirmed)" —
+// it is NEVER shown as confirmed/included. The rate STAYS visible/selectable.
+export type RbInsuranceCertaintyTag = {
+  certainty: string;
+  label: string;
+  tone: 'positive' | 'caution' | 'neutral' | 'warning';
+};
+
+const RB_CERTAINTY_TONE_COLORS: Record<RbInsuranceCertaintyTag['tone'], string> = {
+  positive: 'var(--green)',
+  caution: 'var(--amber, #b7791f)',
+  neutral: 'var(--text3)',
+  warning: 'var(--red)',
+};
+
+export function rbInsuranceCertaintyTone(tone: string | null | undefined): string {
+  return RB_CERTAINTY_TONE_COLORS[(tone as RbInsuranceCertaintyTag['tone'])] ?? RB_CERTAINTY_TONE_COLORS.neutral;
+}
+
+export function formatInsuranceCertaintyTag(raw: unknown): RbInsuranceCertaintyTag | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const meta = raw as { certainty?: unknown; tagLabel?: unknown; tagTone?: unknown };
+  const certainty = String(meta.certainty ?? '').trim();
+  if (!certainty) return null;
+  const label = typeof meta.tagLabel === 'string' && meta.tagLabel.trim()
+    ? meta.tagLabel.trim()
+    : certainty.replace(/_/g, ' ');
+  const tone = ((): RbInsuranceCertaintyTag['tone'] => {
+    const t = String(meta.tagTone ?? '');
+    return t === 'positive' || t === 'caution' || t === 'neutral' || t === 'warning' ? t : 'neutral';
+  })();
+  return { certainty, label, tone };
 }
 
 // v2's isBlockedRate uses a per-store service-unblock list the server
@@ -1765,7 +1812,7 @@ export default function RateBrowserModal({
 
   function rateInsuranceProof(r: RateRow): Pick<
     RbAppliedRate,
-    'insuranceCost' | 'insuranceProvenance' | 'insuranceCostUnresolved' | 'insuranceCostError' | 'insurance_amount' | 'raw'
+    'insuranceCost' | 'insuranceProvenance' | 'insuranceCostUnresolved' | 'insuranceCostError' | 'insurance_amount' | 'insuranceCertainty' | 'raw'
   > {
     return {
       insuranceCost: r.insuranceCost ?? r.raw?.insuranceCost,
@@ -1773,6 +1820,8 @@ export default function RateBrowserModal({
       insuranceCostUnresolved: r.insuranceCostUnresolved ?? r.raw?.insuranceCostUnresolved,
       insuranceCostError: r.insuranceCostError ?? r.raw?.insuranceCostError,
       insurance_amount: r.insurance_amount ?? r.raw?.insurance_amount,
+      // PS-274: carry the backend insurance-certainty fact through Apply (display-only).
+      insuranceCertainty: r.insuranceCertainty ?? r.raw?.insuranceCertainty,
       raw: r.raw ?? r,
     };
   }

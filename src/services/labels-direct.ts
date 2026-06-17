@@ -271,8 +271,15 @@ export async function createDirectCarrierLabelForOrder(
     labelUrl,
     labelFormat: String(resultRecord.labelFormat ?? (labelUrl.startsWith('data:application/pdf') ? 'pdf' : 'png')),
     cost: Number(result.cost ?? 0) || 0,
+    // PS-261 (Per user override unlock shipped data on 2026-06-17): the REAL insurance fee the
+    // connector billed (EasyPost emits it via parseEasyPostInsuranceCost; createLabelEasyPost
+    // returns insuranceCost). Threaded onto created.insuranceCost so persistCreatedLabel bills it
+    // as otherCost with provenance 'easypost' instead of $0. Defensive: the parser returns
+    // null/0 when unpriced (`?? 0`), so an unpriced label still persists $0 — never a phantom fee.
     insuranceCost: Number(resultRecord.insuranceCost ?? 0) || 0,
     voided: false,
+    // For EasyPost the connector omits a carrierCode, so this resolves to provider 'easypost' —
+    // the identity persistCreatedLabel keys the 'easypost' insurance provenance on (PS-261).
     carrierCode: String(resultRecord.carrierCode ?? provider),
     serviceCode: String(resultRecord.serviceCode ?? args.serviceCode),
     shipDate: new Date().toISOString(),

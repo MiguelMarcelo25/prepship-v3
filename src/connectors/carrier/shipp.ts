@@ -16,6 +16,12 @@ import {
 // PS-271 (Layer 4): thin-source honesty marker — rides non-enumerably on the rate array so an
 // accepted-thin partial is carried out alongside (never inside) the rates. Default-inert.
 import { attachObservedIncomplete } from './shipp-observed-incomplete-marker.js';
+// PS-274: the backend-owned insurance-CERTAINTY fact. Shipp brokers UPS/FedEx/USPS — it is NEVER
+// a direct verified carrier account, so a Shipp rate that declared an insured value is
+// 'requested_application_uncertain' (we requested it via customsValue; we cannot prove the carrier
+// applied declared value at purchase) and a Shipp rate with no declared value is 'not_included'.
+// Identity FIRST: the connector that brokered the rate stamps the honest certainty here.
+import { resolveInsuranceCertainty } from '../../services/shipping-workflow/insurance-certainty.js';
 import { PDFDocument } from 'pdf-lib';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
@@ -572,14 +578,43 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   throw lastQuoteError ?? new Error('Shipp quote failed after retry.');
 }
 
+// PS-274: read the request's insured value/provider for the certainty fact. The connector input
+// carries the normalized shippingOptions (rates.ts) and the flat fields (labels path); read either.
+function shippInsuranceContext(input: Record<string, unknown>): { insuranceProvider: string | null; insuredValue: number | null } {
+  const opts = (input.shippingOptions && typeof input.shippingOptions === 'object'
+    ? input.shippingOptions
+    : input) as Record<string, unknown>;
+  const insuranceProvider = opts.insuranceProvider != null ? String(opts.insuranceProvider) : null;
+  const rawValue = Number(opts.insuredValue);
+  return {
+    insuranceProvider,
+    insuredValue: Number.isFinite(rawValue) ? rawValue : null,
+  };
+}
+
 async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
   const { rates: rateList, observedMissing } = await quoteShippRatesRaw(input);
+  // PS-274: the declared value we will request via customsValue, mapped through the SAME owner the
+  // body uses. Drives the per-rate certainty tag — Shipp is brokered, so a declared value can only be
+  // 'requested_application_uncertain' (never carrier_declared_value/explicitly_included).
+  const shippInsurance = shippInsuranceContext(input);
+  const declaredValue = shippDeclaredValue(shippInsurance);
   const mapped = rateList
     .map((r: any) => {
       const rawCarrier = r?.carrierType ?? r?.carrier ?? r?.carrierCode ?? r?.carrierName;
       const carrierCode = shippCarrierCode(rawCarrier);
       const carrierName = shippCarrierName(rawCarrier);
       const serviceName = String(r?.serviceName ?? r?.serviceType ?? 'Shipp').trim();
+      const serviceCode = shippServiceCodeForRate(r);
+      // PS-274: identity-first certainty — provider 'shipp' + the `shipp_` service code mark this as
+      // brokered. isDirectVerifiedAccount is FALSE for every Shipp rate (Shipp has no direct verified
+      // carrier contract on PrepShip's side), so declared value -> uncertain, none -> not_included.
+      const insuranceCertainty = resolveInsuranceCertainty({
+        provider: 'shipp',
+        serviceCode,
+        insuredValue: declaredValue,
+        isDirectVerifiedAccount: false,
+      });
       return {
         service: serviceName,
         carrierCode,
@@ -592,8 +627,12 @@ async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ s
         quoted_shipment_id: r?.quoted_shipment_id,
         serviceType: r?.serviceType,
         serviceName,
+        serviceCode,
         deliveryDate: r?.deliveryDate,
         deliveryDay: r?.deliveryDay,
+        // PS-274: backend-owned certainty fact rides onto the rate (toDirectRate spreads it onto the
+        // canonical Rate; the Rate Browser renders the tag). Display/honesty only — never blocks.
+        insuranceCertainty,
       };
     })
     .filter((r) => r.cost > 0)

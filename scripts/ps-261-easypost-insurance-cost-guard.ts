@@ -104,8 +104,31 @@ check('createLabel return VALUE wires parseEasyPostInsuranceCost(purchased)',
 check('postage `cost` is unchanged (still the selected/best rate, NOT insurance)',
   /cost: Number\(purchased\.selected_rate\?\.rate \?\? rate\.rate \?\? 0\),/.test(easypost));
 
+// ── PS-261 BILLING WRITE: the EasyPost insurance fee is now CONSUMED + billed (not discarded) ──
+// Previously createLabelEasyPost discarded its parsed fee. The billing write threads it onto
+// created.insuranceCost (labels-direct.ts) and persistCreatedLabel bills it as otherCost with
+// insuranceProvenance='easypost'. Defensive: an unpriced label (parser -> null/0) still persists $0.
+const labelsDirect = read('src/services/labels-direct.ts');
+check('labels-direct threads the connector insuranceCost onto created.insuranceCost (billed, not discarded)',
+  /insuranceCost: Number\(resultRecord\.insuranceCost \?\? 0\) \|\| 0,/.test(labelsDirect));
+check('labels-direct cites the PS-261 billing-write override',
+  /PS-261 \(Per user override unlock shipped data on 2026-06-17\)/.test(labelsDirect));
+
+const labels = read('src/services/labels.ts');
+check('persistCreatedLabel detects the EasyPost-billed insurance (identity-first via carrier code)',
+  /const isEasyPostBilled\s*=[\s\S]{0,160}=== 'easypost'/.test(labels));
+check("persistCreatedLabel bills EasyPost insurance with provenance 'easypost' (not shipstation/0)",
+  /isEasyPostBilled\s*\n?\s*\?\s*'easypost'/.test(labels));
+check('the EasyPost provenance only bills when present (reportedInsuranceCost > 0 gate)',
+  /reportedInsuranceCost > 0 &&[\s\S]{0,120}=== 'easypost'/.test(labels));
+
+// insurance-cost.ts: the new 'easypost' provenance member exists for the persist write to use.
+check("insurance-cost.ts declares the 'easypost' InsuranceCostProvenance member",
+  /\|\s*'easypost'/.test(insuranceCost));
+
 const pkg = read('package.json');
 check('package.json wires test:ps-261-easypost-insurance-cost', /test:ps-261-easypost-insurance-cost/.test(pkg));
+check('package.json wires test:ps-274-shipp-insurance-certainty', /test:ps-274-shipp-insurance-certainty/.test(pkg));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-261 EasyPost insurance-cost guard (${failures} failing)`);
