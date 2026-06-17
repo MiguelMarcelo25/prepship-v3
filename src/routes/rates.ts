@@ -610,14 +610,24 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         ? ((rest as { clientId?: number }).clientId ?? null)
         : null;
       if (await clientHouseAccountEnabled(houseClientId)) {
+        // PS-220 objective correctness: the customer_rate must be the cheapest non-SHIPP rate the
+        // client could ACTUALLY use, so the competitor pool is filtered on the SAME eligibility basis
+        // the customer faces — admin automation-DISABLED services, and (for an insured order) carriers
+        // that cannot carry the insurance, are excluded. These were previously omitted (null), so the
+        // pool wrongly included ineligible rates and could under-state the margin / bill a rate the
+        // customer can't use. Best-effort: an automation-load failure falls back to no extra rules.
+        const houseStoreId = typeof (rest as { storeId?: unknown }).storeId === 'number'
+          ? ((rest as { storeId?: number }).storeId ?? null)
+          : null;
+        const houseAutomationRules = await loadShippingAutomationRules().catch(() => null);
         const nextBest = resolveNextBestNonHouseRate({
           eligibleRates: combinedRates,
-          context: {
-            clientId: houseClientId,
-            storeId: typeof (rest as { storeId?: unknown }).storeId === 'number'
-              ? ((rest as { storeId?: number }).storeId ?? null)
-              : null,
+          context: { clientId: houseClientId, storeId: houseStoreId },
+          shippingOptions: {
+            insuranceProvider: result.effectiveInsuranceProvider ?? null,
+            insuredValue: result.effectiveInsuredValue ?? null,
           },
+          automationRules: houseAutomationRules,
           client: { houseAccountOptIn: true },
         });
         const drpCost = rateTotal(cheapest);

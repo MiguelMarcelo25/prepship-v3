@@ -121,6 +121,27 @@ check('projected stamp fires only for a SHIPP winner + opted-in client, over com
   ratesRoute.includes('isHouseShippRate(cheapest)') &&
   ratesRoute.includes('clientHouseAccountEnabled') &&
   /resolveNextBestNonHouseRate\(\{[\s\S]*?eligibleRates: combinedRates/.test(ratesRoute));
+
+// ── OBJECTIVE correctness: the competitor pool is the cheapest ELIGIBLE non-SHIPP ─
+// the client could ACTUALLY use (admin automation-disabled + insurance-incompatible excluded).
+{
+  const FEDEX_CHEAP = { provider: 'fedex', carrier_code: 'fedex', service_code: 'fedex_ground', shipping_amount: { amount: 9.0 } };
+  const pool = [
+    { provider: 'shipp', carrier_code: 'ups', service_code: 'ups_ground', shipping_amount: { amount: 8.5 } },
+    FEDEX_CHEAP,
+    USPS_GA, // 9.64
+  ];
+  const noRules = resolveNextBestNonHouseRate({ eligibleRates: pool as never, context: { clientId: 99, storeId: null }, client: { houseAccountOptIn: true } });
+  check('objective: with no automation rules the competitor is the cheapest non-SHIPP (fedex 9.0)',
+    noRules != null && noRules.total === 9.0);
+  const disableFedex = [{ type: 'service', clientId: 99, carrierCode: 'fedex', serviceCode: 'fedex_ground', disabled: true }];
+  const withRules = resolveNextBestNonHouseRate({ eligibleRates: pool as never, context: { clientId: 99, storeId: null }, automationRules: disableFedex as never, client: { houseAccountOptIn: true } });
+  check('objective FIX: an admin automation-DISABLED competitor is EXCLUDED — customer_rate = cheapest ELIGIBLE non-SHIPP (usps 9.64, NOT the ineligible fedex 9.0)',
+    withRules != null && withRules.total === 9.64);
+}
+check('rates.ts feeds the resolver the REAL eligibility basis (automationRules + shippingOptions), not empty placeholders',
+  /resolveNextBestNonHouseRate\(\{[\s\S]*?automationRules: houseAutomationRules/.test(ratesRoute) &&
+  /resolveNextBestNonHouseRate\(\{[\s\S]*?insuranceProvider: result\.effectiveInsuranceProvider/.test(ratesRoute));
 check('opt-in column is NOT declared on the drizzle billing_config schema (avoids the runtime-DDL gotcha)',
   !/house_account_enabled|houseAccountEnabled/.test(readFileSync('src/db/schema/billing.ts', 'utf8')));
 check('opt-in read is fail-safe (false on error) and idempotently ensures the column',
