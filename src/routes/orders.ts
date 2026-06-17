@@ -7,6 +7,8 @@ import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
+import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
+import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
 import { packages } from '../db/schema/packages';
 // PS-207 (B): canonical dims-identity key — shared with the billing box
 // resolver so order-side coherence and billing-side resolution can't drift.
@@ -1761,6 +1763,41 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     }
   }
 
+  // PS-220 (slice 4b-2): per-page bulk-load of the REALIZED house customer_rate (+ drp_cost) for
+  // shipped rows, so the Ship Margin column + HOUSE badge show the billed margin. Best-effort +
+  // bounded (one indexed IN(...) per page) + gated to financial viewers on pages that actually
+  // contain shipped rows, so awaiting views add ZERO queries. A missing table / transient error
+  // must NEVER break the orders list (catch -> empty map -> shipped margin renders as today).
+  const houseRealizedByOrderId = new Map<number, { customerRate: number; drpCost: number | null }>();
+  if (canViewFinancials && joined.some((r) => r.order.orderStatus === 'shipped')) {
+    try {
+      const shippedOrderIds = joined
+        .filter((r) => r.order.orderStatus === 'shipped')
+        .map((r) => finiteNumberOrNull(r.order.id))
+        .filter((id): id is number => id != null);
+      if (shippedOrderIds.length) {
+        await ensureOrderCompetitiveRateSchema();
+        const houseRows = await db
+          .select({
+            orderId: orderCompetitiveRate.orderId,
+            customerRate: orderCompetitiveRate.customerRate,
+            drpCost: orderCompetitiveRate.drpCost,
+          })
+          .from(orderCompetitiveRate)
+          .where(and(eq(orderCompetitiveRate.isHouseOrder, true), inArray(orderCompetitiveRate.orderId, shippedOrderIds)));
+        for (const hr of houseRows) {
+          const customerRate = Number(hr.customerRate);
+          const drpCost = Number(hr.drpCost);
+          if (Number.isFinite(customerRate) && customerRate > 0) {
+            houseRealizedByOrderId.set(hr.orderId, { customerRate, drpCost: Number.isFinite(drpCost) ? drpCost : null });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[ps-220] shipped house customer_rate bulk-load skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -2199,7 +2236,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       },
       carrierMarkupRules,
     );
-    const bestRateWorkflowRow = bestRateWorkflow
+    let bestRateWorkflowRow = bestRateWorkflow
       ? withOrderRowWorkflow(bestRateWorkflow, {
           orderStatus: r.order.orderStatus ?? null,
           externallyShipped: r.order.externallyShipped === true,
@@ -2247,6 +2284,45 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           },
         })
       : null;
+    // PS-220 (slice 4b-2): a shipped row gets no awaiting workflow, but a REALIZED house order should
+    // still show its Ship Margin + HOUSE badge. Build a MINIMAL workflow carrying only the money tuple,
+    // scoped to shipped house rows with a captured customer_rate and a financial viewer. Non-house
+    // shipped rows have no realized capture => bestRateWorkflowRow stays null => byte-identical to today.
+    if (!bestRateWorkflowRow && isShippedBucket && canViewFinancials) {
+      const realizedHouse = houseRealizedByOrderId.get(finiteNumberOrNull(r.order.id) ?? -1);
+      if (realizedHouse) {
+        bestRateWorkflowRow = withOrderRowWorkflow(buildBestRateWorkflowDto({ savedBestRate: null, source: 'none' }), {
+          orderStatus: 'shipped',
+          externallyShipped: r.order.externallyShipped === true,
+          canonicalStatus: r.order.canonicalStatus ?? null,
+          isTest: r.order.clientId != null && testClientIds.has(r.order.clientId),
+          hasCompleteDims: true,
+          hasWeight: true,
+          hasShipment: Boolean(ship),
+          hasQueueableLabel: rowHasQueueableLabel,
+          isDirectCarrierSelection: rowIsDirectCarrierSelection,
+          bestRateCarrierCode: null,
+          bestRateServiceCode: null,
+          canonicalCarrierCode,
+          canonicalServiceCode,
+          canonicalAccountNickname,
+          selectedRateCarrierCode: stringOrNull(selectedRateRecord?.carrierCode),
+          providerAccountId: canonicalProviderAccountId ?? null,
+          money: {
+            canViewFinancials,
+            bestRateBaseAmount: null,
+            // base = DRP's SHIPP cost (the selected/label cost; sidecar drp_cost as a last resort).
+            selectedRateBaseAmount: selectedRateAmount ?? null,
+            labelFinalCost: labelCost ?? realizedHouse.drpCost,
+            markupRule: null, // house: the margin IS the markup; no carrier markup applied
+            insuranceAddOn: extractInsuranceAddOn(selectedRateRecord),
+            houseMarkedAmount: realizedHouse.customerRate,
+            productSubtotal: null,
+            marketplaceFeeRule: null,
+          },
+        });
+      }
+    }
     const shipping = {
       carrierCode: canonicalCarrierCode,
       serviceCode: canonicalServiceCode,

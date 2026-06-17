@@ -6954,6 +6954,15 @@ export default function OrdersView({
       // solely in the dedicated Carrier column; duplicating it here was noisy.
       const shippedBackendMoney = getBackendRowMoney(displayOrder)
       if (shippedBackendMoney) {
+        // PS-220 (slice 4b-2): a realized SHIPP house order shows the customer_rate billed + a HOUSE badge.
+        if (shippedBackendMoney.markupSource === 'house_account') {
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn)}
+              {renderHouseBadge()}
+            </div>
+          )
+        }
         return renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn)
       }
       return renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase, getBackendInsuranceAddOn(displayOrder.selectedRate))
@@ -7009,7 +7018,20 @@ export default function OrdersView({
       return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
     }
 
+    // PS-220 (slice 4b-2): shipped SHIPP house orders show their realized Ship Margin (the spread DRP
+    // earned: customer_rate \u2212 SHIPP cost). Non-house shipped rows keep the existing dash (byte-identical).
     if (order.orderStatus !== 'awaiting_shipment') {
+      const shippedMoney = getBackendRowMoney(order)
+      if (shippedMoney?.markupSource === 'house_account') {
+        const houseDiff = shippedMoney.markupAmount
+        if (houseDiff == null || houseDiff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
+        return (
+          <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(houseDiff)}</div>
+            <div style={{ fontSize: 10, color: 'var(--text3)' }}>{shippedMoney.marginPercent ?? 0}%</div>
+          </div>
+        )
+      }
       return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
     }
 

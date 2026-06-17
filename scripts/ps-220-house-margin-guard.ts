@@ -212,6 +212,18 @@ const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'u
 check('FE: the Best Rate cell renders the HOUSE badge only when markupSource === house_account',
   /markupSource === 'house_account' \? renderHouseBadge\(\)/.test(ordersViewSrc));
 
+// ── slice 4b-2 (shipped realized Ship Margin) ────────────────────────────────
+check('producer (orders.ts): shipped rows bulk-load the REALIZED customer_rate and build a scoped house tuple',
+  /houseRealizedByOrderId/.test(ordersSrc) &&
+  /orderCompetitiveRate\.isHouseOrder/.test(ordersSrc) &&
+  /houseMarkedAmount: realizedHouse\.customerRate/.test(ordersSrc));
+check('producer (orders.ts): the shipped house bulk-load is best-effort + gated (financial viewer + shipped page present)',
+  /canViewFinancials && joined\.some\(\(r\) => r\.order\.orderStatus === 'shipped'\)/.test(ordersSrc) &&
+  /bulk-load skipped/.test(ordersSrc));
+check('FE: shipped Selected Rate cell + Margin cell render the house display ONLY on markupSource house_account',
+  /shippedBackendMoney\.markupSource === 'house_account'/.test(ordersViewSrc) &&
+  /shippedMoney\?\.markupSource === 'house_account'/.test(ordersViewSrc));
+
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').
 // A loose [\s\S]*? would run past the branch into the carrier branches, which legitimately call
