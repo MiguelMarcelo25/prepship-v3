@@ -43,6 +43,22 @@ export interface OrderBestRateDto {
   proofSource: string | null;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
+  // PS-220 house-margin (projected): captured at best-rate SAVE when SHIPP wins for an opted-in
+  // client. nextBestNonHouseRate = the cheapest ELIGIBLE non-SHIPP rate (the customer_rate basis,
+  // portal-OK). houseMargin = customer_rate - drp_cost (>= 0), INTERNAL (redacted from client
+  // serializers via RATE_MONEY_FIELD_KEYS). Both null on non-house orders. MUST live on the DTO —
+  // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
+  nextBestNonHouseRate: NextBestNonHouseRateDto | null;
+  houseMargin: number | null;
+}
+
+export interface NextBestNonHouseRateDto {
+  carrierCode: string | null;
+  serviceCode: string | null;
+  shipmentCost: number;
+  otherCost: number;
+  totalCost: number;
+  providerAccountId: number | null;
 }
 
 export interface OrderSelectedRateDto {
@@ -170,6 +186,25 @@ function hasAnyMeaningfulSelectedRateField(rate: OrderSelectedRateDto): boolean 
 
 // PS-139: removed dead export parseOrderRateJson (0 callers; best_rate_json/selected_rate_json
 // are stored as Postgres jsonb and auto-parsed, so the JSON.parse wrapper was never adopted).
+// PS-220: normalize the projected next-best (competitor) rate carried on best_rate_json. Tolerates
+// camelCase + snake_case; returns null when absent so non-house orders carry null.
+function normalizeNextBestNonHouseRate(value: unknown, path = 'bestRate.nextBestNonHouseRate'): NextBestNonHouseRateDto | null {
+  if (!isRecord(value)) return null;
+  const shipmentCost = readNumber(value.shipmentCost ?? value.shipment_cost ?? 0, `${path}.shipmentCost`);
+  const otherCost = readNumber(value.otherCost ?? value.other_cost ?? 0, `${path}.otherCost`);
+  return {
+    carrierCode: readNullableString(value.carrierCode ?? value.carrier_code ?? null, `${path}.carrierCode`),
+    serviceCode: readNullableString(value.serviceCode ?? value.service_code ?? null, `${path}.serviceCode`),
+    shipmentCost,
+    otherCost,
+    totalCost: readNullableNumber(value.totalCost ?? value.total_cost ?? null, `${path}.totalCost`) ?? shipmentCost + otherCost,
+    providerAccountId: readNullableProviderAccountId(
+      value.providerAccountId ?? value.provider_account_id ?? value.shippingProviderId ?? null,
+      `${path}.providerAccountId`,
+    ),
+  };
+}
+
 export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): OrderBestRateDto | null {
   if (value == null) return null;
 
@@ -253,6 +288,8 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
     proofSource: readNullableString(record.proofSource ?? null, `${path}.proofSource`),
     rateQuoteId: readNullableString(record.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
+    nextBestNonHouseRate: normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`),
+    houseMargin: readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`),
   };
 
   return hasAnyMeaningfulRateField(rate) ? rate : null;

@@ -15,6 +15,8 @@ import {
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
 import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
+import { isHouseShippRate, resolveNextBestNonHouseRate } from '../lib/next-best-non-house-rate';
+import { clientHouseAccountEnabled } from '../services/house-account-opt-in';
 import {
   buildResidentialEvidenceFromOrder,
   residentialEvidenceRateInput,
@@ -165,6 +167,7 @@ const RATE_MONEY_FIELD_KEYS = [
   'labelCost',
   'rawCost',
   'amount',
+  'houseMargin', // PS-220: SHIPP house-account margin is INTERNAL — redact from client-facing rate serializers
 ] as const;
 
 // PS-277 (slice 1): browse-to-SOT writeback canary. OFF by default — when 'on', a PLAIN browse
@@ -594,6 +597,49 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       insuranceProvider: result.effectiveInsuranceProvider,
       insuredValue: result.effectiveInsuredValue,
     } as typeof cheapest;
+  }
+  // PS-220 (projected house-margin): SHIPP is DRP's house carrier. When the saved winner is SHIPP
+  // AND the client is opted in, capture the cheapest ELIGIBLE non-SHIPP competitor HERE —
+  // combinedRates is the only place the full competitor list survives (the orders route discards it,
+  // the purchase snapshot expires). Stamp it onto bestRateOut so the awaiting-only persist
+  // (order_overrides.best_rate_json) carries it with zero re-fetch; realized capture at label
+  // purchase reads it back. No competitor => pass-through (houseMargin 0). Best-effort: never breaks browse.
+  if (bestRateOut && cheapest && isHouseShippRate(cheapest)) {
+    try {
+      const houseClientId = typeof (rest as { clientId?: unknown }).clientId === 'number'
+        ? ((rest as { clientId?: number }).clientId ?? null)
+        : null;
+      if (await clientHouseAccountEnabled(houseClientId)) {
+        const nextBest = resolveNextBestNonHouseRate({
+          eligibleRates: combinedRates,
+          context: {
+            clientId: houseClientId,
+            storeId: typeof (rest as { storeId?: unknown }).storeId === 'number'
+              ? ((rest as { storeId?: number }).storeId ?? null)
+              : null,
+          },
+          client: { houseAccountOptIn: true },
+        });
+        const drpCost = rateTotal(cheapest);
+        const providerMatch = nextBest ? /^se-(\d+)$/i.exec(String(nextBest.rate.carrier_id ?? '')) : null;
+        bestRateOut = {
+          ...(bestRateOut as Record<string, unknown>),
+          nextBestNonHouseRate: nextBest
+            ? {
+                carrierCode: String(nextBest.rate.carrier_code ?? '') || null,
+                serviceCode: String(nextBest.rate.service_code ?? '') || null,
+                shipmentCost: Number(nextBest.rate.shipping_amount?.amount ?? nextBest.total),
+                otherCost: Number(nextBest.rate.other_amount?.amount ?? 0),
+                totalCost: nextBest.total,
+                providerAccountId: providerMatch ? Number.parseInt(providerMatch[1]!, 10) : null,
+              }
+            : null,
+          houseMargin: nextBest ? Math.max(0, nextBest.total - drpCost) : 0,
+        } as typeof cheapest;
+      }
+    } catch (err) {
+      console.warn('[rates/browse] house-margin projection skipped:', err instanceof Error ? err.message : err);
+    }
   }
   // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
   // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no
