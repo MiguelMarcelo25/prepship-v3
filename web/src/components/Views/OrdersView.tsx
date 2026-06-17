@@ -160,6 +160,7 @@ import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
 import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
+import { useTableDensityPreference } from './orders-table-density-prefs'
 import { residentialForRate as residentialForRateRule } from '../../lib/residential-for-rate'
 import {
   buildDailyStripProgress,
@@ -852,21 +853,10 @@ export default function OrdersView({
   // immediately replaces the previous flash.
   const [copiedOrderNum, setCopiedOrderNum] = useState<string | null>(null)
   const [copiedAll, setCopiedAll] = useState(false)
-  // Row-density preference for the orders table. Persists per-browser so a
-  // user who picks Narrow stays Narrow across reloads. Three steps:
-  //   - narrow:  ~24 px row, 11 px font (max rows visible)
-  //   - cozy:    ~34 px row, 12.5 px font (default, what the table had before)
-  //   - wide:    ~48 px row, 13 px font (more breathing room, easier to scan)
-  type TableDensity = 'narrow' | 'cozy' | 'wide'
-  const [tableDensity, setTableDensity] = useState<TableDensity>(() => {
-    if (typeof window === 'undefined') return 'cozy'
-    const saved = window.localStorage.getItem('orders_table_density')
-    return saved === 'narrow' || saved === 'cozy' || saved === 'wide' ? saved : 'cozy'
-  })
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('orders_table_density', tableDensity)
-  }, [tableDensity])
+  // PS-258 (slice C): row-density preference extracted VERBATIM to
+  // useTableDensityPreference (orders-table-density-prefs.ts) — pure localStorage
+  // hook, byte-identical (same key, default 'cozy', validation set).
+  const [tableDensity, setTableDensity] = useTableDensityPreference()
 
   const [singleActionBusy, setSingleActionBusy] = useState(false)
   const singleActionBusyRef = useRef(false)
