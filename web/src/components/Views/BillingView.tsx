@@ -1320,6 +1320,33 @@ export default function BillingView() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Line Items — {detailState.clientName}</h3>
               <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
+              {/* PS-275: surface HOW MANY of the currently-rendered line items
+                  need the $0-shipping prep-fee review, so operators don't have
+                  to open each Edit modal to find them. Count derives from the
+                  SAME sortedDetailRows the table maps over (no refetch). Renders
+                  nothing when zero — additive + default-inert. */}
+              {(() => {
+                const needReview = sortedDetailRows.filter((row) => row.shippingZeroNeedsReview === true).length
+                return needReview > 0 ? (
+                  <span
+                    role="status"
+                    title="Rows with a recorded $0.00 shipping cost awaiting a prep-fee decision (waive or keep). Use the amber Review button on the row."
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 800,
+                      color: '#b45309',
+                      background: '#fef3c7',
+                      border: '1px solid #fde68a',
+                      borderRadius: 6,
+                      padding: '2px 8px',
+                      lineHeight: 1.5,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {needReview} $0-shipping need review
+                  </span>
+                ) : null
+              })()}
             </div>
 
             <BillingDetailClientStrip

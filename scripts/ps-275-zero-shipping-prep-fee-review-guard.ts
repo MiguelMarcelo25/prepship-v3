@@ -21,6 +21,7 @@
  *
  *   npx tsx scripts/ps-275-zero-shipping-prep-fee-review-guard.ts
  */
+import { readFileSync } from 'node:fs';
 import {
   applyPrepFeeWaiver,
   decideZeroShippingReview,
@@ -132,6 +133,41 @@ function sampleOrderLines(): WaivableLine[] {
     !PREP_FEE_LINE_TYPES.has('storage') &&
     !PREP_FEE_LINE_TYPES.has('product') &&
     !PREP_FEE_LINE_TYPES.has('marketplace_fee'));
+}
+
+// ── 7) FE discoverability: operators must be able to SEE which rows need the ──
+//      $0-shipping review without opening every Edit modal. Pure static reads
+//      (no DB, no render) over the billing FE source. These pin that:
+//        (a) the per-row Review control is gated on shippingZeroNeedsReview and
+//            opens the SAME edit modal (onOpenBillingEdit), and
+//        (b) a needs-review count/badge derives from shippingZeroNeedsReview
+//            using the same rows the table renders.
+{
+  // Repo convention (see ps-258/ps-177 FE guards): cwd-relative paths, run from
+  // the repo root via `npx tsx`. Avoids ESM `__dirname is not defined`.
+  const detailTableSrc = readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8');
+  const billingViewSrc = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
+
+  // (a) Row-level Review control: a >Review< button rendered only when the row
+  //     flag is set, wired to the existing modal-open handler (no new handler).
+  const hasReviewLabel = /['"`>\s]Review['"`<\s]/.test(detailTableSrc);
+  const rowGatedOnFlag = /row\.shippingZeroNeedsReview\s*\?/.test(detailTableSrc);
+  const reusesModalOpen = /onOpenBillingEdit\(row\)/.test(detailTableSrc);
+  check('FE(a): per-row Review control is gated on row.shippingZeroNeedsReview',
+    rowGatedOnFlag);
+  check('FE(a): the Review control reuses the existing edit-modal open handler (onOpenBillingEdit(row))',
+    hasReviewLabel && reusesModalOpen);
+
+  // (b) Header count/badge: a needs-review tally derived from
+  //     shippingZeroNeedsReview over the rendered rows array, with the badge copy.
+  const badgeDerivesFromFlag =
+    /sortedDetailRows[\s\S]{0,80}shippingZeroNeedsReview\s*===\s*true/.test(billingViewSrc) ||
+    /shippingZeroNeedsReview\s*===\s*true[\s\S]{0,80}\.length/.test(billingViewSrc);
+  const hasBadgeCopy = /\$0-shipping need review/.test(billingViewSrc);
+  check('FE(b): a needs-review count derives from shippingZeroNeedsReview over sortedDetailRows',
+    badgeDerivesFromFlag);
+  check('FE(b): the header renders the $0-shipping needs-review badge copy',
+    hasBadgeCopy);
 }
 
 if (failures > 0) {

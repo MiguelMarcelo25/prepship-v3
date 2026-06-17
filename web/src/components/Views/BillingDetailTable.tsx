@@ -190,15 +190,46 @@ export function BillingDetailTable({
             switch (column.id) {
               case 'actions':
                 return row.orderId ? (
-                  <button
-                    type="button"
-                    className="billing-detail-edit-button"
-                    title="Edit billing details"
-                    onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
-                  >
-                    <Pencil size={13} aria-hidden="true" />
-                    <span>Edit</span>
-                  </button>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                      type="button"
+                      className="billing-detail-edit-button"
+                      title="Edit billing details"
+                      onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
+                    >
+                      <Pencil size={13} aria-hidden="true" />
+                      <span>Edit</span>
+                    </button>
+                    {/* PS-275: row-level affordance so operators can SEE which
+                        rows need the $0-shipping review without opening every
+                        Edit modal. Gated on the backend per-row flag; opens the
+                        SAME edit modal (the review section already lives there).
+                        Additive — rows without the flag render only Edit. */}
+                    {row.shippingZeroNeedsReview ? (
+                      <button
+                        type="button"
+                        title="$0 shipping — review the prep fee (waive or keep). Opens the edit modal."
+                        onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          minHeight: 26,
+                          padding: '4px 6px',
+                          fontSize: 10.5,
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          color: '#b45309',
+                          background: '#fef3c7',
+                          border: '1px solid #fde68a',
+                          borderRadius: 6,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Review
+                      </button>
+                    ) : null}
+                  </span>
                 ) : (
                   <span style={{ color: 'var(--text4)' }}>—</span>
                 )
