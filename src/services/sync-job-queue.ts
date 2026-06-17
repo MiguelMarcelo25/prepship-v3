@@ -79,6 +79,9 @@ async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
+        // PS-272: explicit per-send expiration so the job row carries an expire deadline pg-boss's own
+        // expire() maintenance loop (now enabled via supervise above) can act on. expireInSeconds is
+        // the canonical unit on SendOptions (ExpirationOptions); 30 min === the queue/constructor value.
         expireInMinutes: 30,
         retentionDays: 7,
       }
@@ -176,7 +179,10 @@ async function createQueues(): Promise<void> {
       retryLimit: 2,
       retryDelay: 30,
       retryBackoff: true,
-      expireInMinutes: 30,
+      // PS-272: explicit per-queue expiration so pg-boss's OWN expire() reaps stale 'active' rows on
+      // this queue (the queue row is the authority pg-boss reads during maintenance). expireInSeconds
+      // is the canonical unit on PgBoss.Queue (ExpirationOptions); 30 min === the constructor value.
+      expireInSeconds: 30 * 60,
       retentionDays: 7,
     });
   }
@@ -197,10 +203,18 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     retryLimit: 2,
     retryDelay: 30,
     retryBackoff: true,
-    expireInMinutes: 30,
+    expireInSeconds: 30 * 60,
     retentionDays: 7,
     deleteAfterDays: 7,
     monitorStateIntervalSeconds: 60,
+    // PS-272 (canonical source-of-truth fix): make pg-boss self-heal stale 'active' rows.
+    // pg-boss only runs its built-in expire()/archive() maintenance loop when supervise is on; the
+    // loop fires every maintenanceIntervalSeconds and is what actually transitions orphaned 'active'
+    // rows (a worker that died mid-job during a Render redeploy) past their expireInSeconds deadline.
+    // Without supervise the deadline above is inert and only the custom reaper clears orphans. With it
+    // ON, pg-boss reaps them itself on a 60s cadence; the SYNC_STUCK_JOB_REAPER stays as a backstop.
+    supervise: true,
+    maintenanceIntervalSeconds: 60,
   });
 
   boss.on('error', (err) => {
