@@ -89,15 +89,21 @@ report.check({
 });
 
 report.check({
-  name: 'Queue defaults to all authorized clients with explicit current-client scope',
-  condition: ordersView.includes("const [queueScope, setQueueScope] = useState<'all' | 'client'>('all')") &&
+  // Re-anchored for the print-queue client-dropdown refactor (commit 6623a944): the fetch still
+  // stays all-authorized-scope (queueScope fixed to 'all' -> queueClientId null -> fetchQueue(null)),
+  // and the dropdown is now a pure client-side VIEW filter (pqClientFilter). A destructive clear
+  // still requires an EXPLICIT single client (the Clear button is disabled until pqClientFilter is set),
+  // preserving the original safety invariant — only the control changed, not the scope/authz.
+  name: 'Queue defaults to all authorized clients; clearing requires an explicit per-client scope',
+  condition: ordersView.includes("const [queueScope] = useState<'all' | 'client'>('all')") &&
     ordersView.includes("const queueClientId = queueScope === 'client' ? inferredQueueClientId : null") &&
     ordersView.includes('apiClient.fetchQueue(queueClientId, queueHistoryVisible)') &&
-    queueDrawer.includes("Switch to Current client before clearing a queue"),
-  why: 'Operators need to see queued labels across authorized clients unless they explicitly narrow scope.',
-  evidence: 'Queue scope defaults to all, fetchQueue receives null for all-client mode, and clearing requires current-client scope.',
-  failure: 'The queue panel may appear empty because it is silently scoped to the wrong client.',
-  fix: 'Keep all-client default scope and require explicit current-client mode for destructive queue clearing.',
+    queueDrawer.includes('Select a client to clear its queue') &&
+    queueDrawer.includes('disabled={pqClientFilter == null}'),
+  why: 'Operators see queued labels across ALL authorized clients by default (the fetch stays all-scope); the per-client dropdown is a view filter, and a destructive clear still requires an explicit single-client selection.',
+  evidence: 'queueScope is fixed to all so fetchQueue receives null (all-client fetch); the per-client dropdown filters the view via pqClientFilter; the Clear button is disabled until a client is selected.',
+  failure: 'The queue panel may appear empty because it is silently scoped to the wrong client, or a blanket clear runs without an explicit client.',
+  fix: 'Keep the all-scope fetch (queueScope all), the pqClientFilter view filter, and require an explicit selected client before clearing.',
 });
 
 report.check({

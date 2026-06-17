@@ -131,15 +131,12 @@ export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[
  */
 function statusesComplete(statuses: ReadonlyArray<{ status: string; thin?: boolean }>): boolean {
   if (!statuses.length) return false;
+  // PS-271 (Layer 4): a carrier that answered THIN (Shipp accepted-partial) is terminal but unproven —
+  // a best sourced from it is not COMPLETE. status.thin is never set unless Layer 1 ran (default-inert);
+  // mirrors isBestRateComplete in best-rate-workflow-dto. The three status checks stay on ONE line so the
+  // PS-206 full-coverage guard's literal (rejects loading/error/uncached) still pins them.
   return statuses.every(
-    (status) =>
-      status.status !== 'loading' &&
-      status.status !== 'error' &&
-      status.status !== 'uncached' &&
-      // PS-271 (Layer 4): a carrier that answered THIN (Shipp accepted-partial) is terminal but
-      // unproven — a best sourced from it is not COMPLETE. Default-inert (no status is ever thin
-      // unless Layer 1 ran). Mirrors isBestRateComplete in best-rate-workflow-dto.
-      status.thin !== true,
+    (status) => status.status !== 'loading' && status.status !== 'error' && status.status !== 'uncached' && status.thin !== true,
   );
 }
 
