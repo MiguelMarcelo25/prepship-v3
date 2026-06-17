@@ -589,6 +589,11 @@ import { OrdersSearchBar } from './OrdersSearchBar'
 // a strict <OrdersBatchPanel> component; OrdersView passes its ~28 state +
 // handler props. The isReadOnly lockdown guard rides inside (R5).
 import { OrdersBatchPanel } from './OrdersBatchPanel'
+// PS-258 (slice): the orders-table "no results" region (Searching… spinner +
+// "No orders match" empty state) moved VERBATIM to a strict presentational
+// <OrdersResultsEmptyState> (no state; gating booleans + display values are
+// passed in). Byte-identical markup; control flow unchanged.
+import { OrdersResultsEmptyState } from './OrdersResultsEmptyState'
 // PS-166 (Wave 3, JSX-safe): the daily-stats strip JSX moved VERBATIM to a
 // strict <OrdersDailyStrip> (state/effects/rollover stay in OrdersView).
 import { OrdersDailyStrip } from './OrdersDailyStrip'
@@ -9223,53 +9228,18 @@ export default function OrdersView({
                 </table>
               ) : null}
 
-              {/* PS-218: while a search/filter request is in flight, show a
-                  Searching… spinner — never the false "No orders match" empty
-                  state. The empty state below only renders once the request has
-                  settled (ordersSearching === false). */}
-              {!loading && !error && orderedFilteredOrders.length === 0 && ordersSearching ? (
-                <motion.div
-                  id="searchingState"
-                  data-testid="orders-searching"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.2 }}
-                  className="flex flex-col items-center justify-center gap-3 py-16 px-6"
-                >
-                  <Loader2 size={26} strokeWidth={2.25} className="animate-spinSlow text-brand" />
-                  <div className="text-sm font-semibold text-ink font-display tracking-tight">
-                    {searchQuery.trim() ? `Searching for “${searchQuery.trim()}”…` : 'Searching orders…'}
-                  </div>
-                  {isGlobalSearchActive ? (
-                    <div className="text-xs2 text-ink-3 max-w-sm text-center leading-relaxed">
-                      Searching all statuses &amp; stores in the selected date range.
-                    </div>
-                  ) : null}
-                </motion.div>
-              ) : null}
-
-              {!loading && !error && !ordersSearching && orderedFilteredOrders.length === 0 ? (
-                <motion.div
-                  id="emptyState"
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                  className="flex flex-col items-center justify-center gap-3 py-16 px-6"
-                >
-                  <motion.div
-                    initial={{ scale: 0.5, rotate: -10 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 280, damping: 14, delay: 0.05 }}
-                    className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 ring-1 ring-line flex items-center justify-center"
-                  >
-                    <Inbox size={30} strokeWidth={2} className="text-ink-3" />
-                  </motion.div>
-                  <div className="text-sm font-semibold text-ink font-display tracking-tight mt-1">No orders match</div>
-                  <div className="text-xs2 text-ink-3 max-w-sm text-center leading-relaxed">
-                    Try clearing the search, broadening your date range, or selecting a different status.
-                  </div>
-                </motion.div>
-              ) : null}
+              {/* PS-258 (slice): the Searching… spinner + "No orders match"
+                  empty state extracted VERBATIM to <OrdersResultsEmptyState/>.
+                  The gating booleans and display values are passed in; the two
+                  mutually exclusive blocks render byte-identically. */}
+              <OrdersResultsEmptyState
+                loading={loading}
+                error={error}
+                ordersSearching={ordersSearching}
+                hasNoFilteredOrders={orderedFilteredOrders.length === 0}
+                searchQuery={searchQuery}
+                isGlobalSearchActive={isGlobalSearchActive}
+              />
             </div>
           </div>
 
