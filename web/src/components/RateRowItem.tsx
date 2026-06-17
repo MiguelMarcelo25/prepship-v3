@@ -16,6 +16,8 @@ import {
   getModalRateSourceLabel,
   priceDisplay,
   formatInsuranceProviderLabel,
+  formatInsuranceCertaintyTag,
+  rbInsuranceCertaintyTone,
 } from './RateBrowserModal';
 
 type RateShippingOptions = {
@@ -210,6 +212,23 @@ export default function RateRowItem({
           return (
             <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>
               Insurance incl. +${amount.toFixed(2)}
+            </div>
+          );
+        })()}
+        {(() => {
+          // PS-274: surface the backend-owned insurance-certainty tag so a
+          // Shipp-brokered rate reads e.g. "insurance requested (unconfirmed)"
+          // instead of implying a confirmed carrier-declared value. Display-only:
+          // the certainty state is owned by insurance-certainty.ts and threaded
+          // through the rate DTO; the row never recomputes it. Renders only when
+          // the backend stamped a certainty tag (null -> nothing, no regression).
+          const tag = formatInsuranceCertaintyTag(r.insuranceCertainty);
+          if (!tag) return null;
+          // tag.label already leads with "Insurance ..." (e.g. "Insurance
+          // requested (unconfirmed)") — render it directly, no extra prefix.
+          return (
+            <div style={{ fontSize: 10.5, color: rbInsuranceCertaintyTone(tag.tone), marginTop: 2, lineHeight: 1.4 }}>
+              {tag.label}
             </div>
           );
         })()}

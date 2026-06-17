@@ -21,7 +21,11 @@ import type { CarrierAccountDto, OrderSummaryDto } from '../../types/api'
 // through this shared loose-record type (type-only — erased at emit).
 import type { LooseBestRate } from './orders-display-state'
 // PS-165: service display precedence owned by ./order-shipping-display (verbatim cascade).
-import { resolveDisplayServiceCode } from './order-shipping-display'
+import {
+  resolveDisplayServiceCode,
+  isShippBrokeredServiceCode,
+  SHIPP_BROKERED_ACCOUNT_LABEL,
+} from './order-shipping-display'
 
 // ── primitives ────────────────────────────────────────────────────────────────
 
@@ -291,7 +295,14 @@ export function getBestRateServiceCode(order: OrderSummaryDto) {
 
 export function getBestRateCarrierNickname(order: OrderSummaryDto) {
   const bestRateRecord = toRecord(order.bestRate)
+  // PS-273: a Shipp-brokered best rate (shipp_* service code) must render "Shipp",
+  // never the fabricated underlying-carrier nickname carried on the raw rate (the
+  // "980006 / GG6381" vector). Delegate the brokered test to the canonical owner.
+  const bestRateServiceCode = order.bestRate
+    ? toStringValue((order.bestRate as LooseBestRate).serviceCode)
+    : null
   const rateNickname =
+    (isShippBrokeredServiceCode(bestRateServiceCode) ? SHIPP_BROKERED_ACCOUNT_LABEL : null) ??
     (order.bestRate ? toStringValue((order.bestRate as LooseBestRate).carrierNickname) : null) ??
     toStringValue(bestRateRecord?.providerAccountNickname) ??
     toStringValue(bestRateRecord?.accountNickname)
@@ -346,6 +357,10 @@ export function getSelectedRateCarrierNickname(order: OrderSummaryDto) {
   return (
     getShippingString(order, 'accountNickname') ??
     toStringValue(order.selectedRate?.providerAccountNickname) ??
+    // PS-273: un-backfilled Shipp-brokered row -> "Shipp", never the fabricated
+    // underlying-carrier nickname on the raw rate. Non-Shipp rows fall through
+    // to the existing carrierNickname fallback unchanged.
+    (isShippBrokeredServiceCode(getSelectedRateServiceCode(order)) ? SHIPP_BROKERED_ACCOUNT_LABEL : null) ??
     toStringValue(order.selectedRate?.carrierNickname) ??
     toStringValue(order.label?.carrierNickname) ??
     getV2CarrierAccountForOrder(order)?.nickname
@@ -356,6 +371,8 @@ export function getAwaitingDisplayAccountNickname(order: OrderSummaryDto) {
   return (
     getShippingString(order, 'accountNickname') ??
     toStringValue(order.selectedRate?.providerAccountNickname) ??
+    // PS-273: brokered awaiting row -> "Shipp" before the raw carrierNickname.
+    (isShippBrokeredServiceCode(getSelectedRateServiceCode(order)) ? SHIPP_BROKERED_ACCOUNT_LABEL : null) ??
     toStringValue(order.selectedRate?.carrierNickname) ??
     normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
     getV2CarrierAccountForOrder(order)?.nickname ??

@@ -276,6 +276,39 @@ check(
   /if \(!apply\) \{\s*process\.exit\(0\)/.test(backfillSrc),
 );
 
+// ── 7. FE orders-table readers gate the RAW carrierNickname behind the brokered ─
+//      check (the "980006 / GG6381" vector). These readers (used by the orders
+//      table + OrdersView) don't all route through resolveDisplayShipAccount, so
+//      each must short-circuit a Shipp-brokered row to "Shipp" BEFORE falling to
+//      the raw rate carrierNickname. Non-Shipp rows keep their exact precedence.
+//      Pure static read; CRLF-safe via indexOf ordering.
+const rowDisplaySrc = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
+function brokeredGuardPrecedesLeak(fnName: string, leakToken: string): boolean {
+  const start = rowDisplaySrc.indexOf(`export function ${fnName}`);
+  if (start < 0) return false;
+  const next = rowDisplaySrc.indexOf('export function', start + 1);
+  const body = rowDisplaySrc.slice(start, next < 0 ? undefined : next);
+  const guardIdx = body.indexOf('isShippBrokeredServiceCode');
+  const leakIdx = body.indexOf(leakToken);
+  return guardIdx > 0 && leakIdx > 0 && guardIdx < leakIdx;
+}
+check(
+  'orders-row-display imports the canonical brokered helpers',
+  /isShippBrokeredServiceCode/.test(rowDisplaySrc) && /SHIPP_BROKERED_ACCOUNT_LABEL/.test(rowDisplaySrc),
+);
+check(
+  'getSelectedRateCarrierNickname: brokered "Shipp" precedes the raw selectedRate.carrierNickname',
+  brokeredGuardPrecedesLeak('getSelectedRateCarrierNickname', 'selectedRate?.carrierNickname'),
+);
+check(
+  'getAwaitingDisplayAccountNickname: brokered "Shipp" precedes the raw selectedRate.carrierNickname',
+  brokeredGuardPrecedesLeak('getAwaitingDisplayAccountNickname', 'selectedRate?.carrierNickname'),
+);
+check(
+  'getBestRateCarrierNickname: brokered "Shipp" precedes the raw bestRate carrierNickname',
+  brokeredGuardPrecedesLeak('getBestRateCarrierNickname', '.carrierNickname'),
+);
+
 if (failures > 0) {
   console.error(`\nFAIL PS-273 Shipp account nickname guard (${failures} failing)`);
   process.exit(1);

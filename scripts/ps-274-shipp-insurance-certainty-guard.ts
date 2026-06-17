@@ -118,6 +118,17 @@ check('RateBrowserModal carries insuranceCertainty through the rate row/applied 
 check('certainty tag returns null when the backend stamped no certainty (additive)',
   /if \(!certainty\) return null;/.test(modal));
 
+// ── RateRowItem.tsx: the certainty tag is actually RENDERED in the rate row ─────
+// The helper existing is not enough — the prior slice exported it but never
+// rendered it. Pin that the row consumes the backend-stamped field and tones it.
+const rateRow = read('web/src/components/RateRowItem.tsx');
+check('RateRowItem imports the certainty tag helpers',
+  rateRow.includes('formatInsuranceCertaintyTag') && rateRow.includes('rbInsuranceCertaintyTone'));
+check('RateRowItem renders the certainty tag from the row DTO (formatInsuranceCertaintyTag(r.insuranceCertainty))',
+  /formatInsuranceCertaintyTag\(r\.insuranceCertainty\)/.test(rateRow));
+check('RateRowItem tones the tag via rbInsuranceCertaintyTone(tag.tone)',
+  /rbInsuranceCertaintyTone\(tag\.tone\)/.test(rateRow));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-274 Shipp insurance-certainty guard (${failures} failing)`);
   process.exit(1);
