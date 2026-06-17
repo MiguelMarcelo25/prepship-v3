@@ -37,6 +37,9 @@ export type CombinableSsDiagnostic = {
   rateCount?: number;
   durationMs?: number;
   error?: string;
+  // PS-271 (Layer 4): a direct-carrier diagnostic for an accepted-thin partial (Shipp Layer 1).
+  // Additive; absent today and for ShipStation / non-thin direct passes.
+  thin?: boolean;
 };
 
 export type CombineCarrierUniversesInput = {
@@ -69,6 +72,11 @@ export type CombinedRateSelection = {
   directCarrierDiagnostics: Array<Record<string, unknown>>;
   combinedCarrierDiagnostics: Array<Record<string, unknown>>;
   bestRateComplete: boolean;
+  // PS-271 (Layer 4): true when the cheapest pick came from a carrier that answered THIN (Shipp
+  // accepted-partial). Display-only/additive — `false` today and whenever the winner is from a full
+  // pass; the FE can label such a best "thin/unproven". Independent of bestRateComplete (a thin best
+  // is already not-complete) so a consumer can distinguish "thin winner" from other incompleteness.
+  bestRateThin: boolean;
 };
 
 /** The uniform CHARGE total a rate costs the customer — the single pick basis. */
@@ -121,10 +129,17 @@ export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[
  * for the LOOKUP but the carrier was never actually checked — a selection over
  * an uncached carrier set is NEVER complete.
  */
-function statusesComplete(statuses: ReadonlyArray<{ status: string }>): boolean {
+function statusesComplete(statuses: ReadonlyArray<{ status: string; thin?: boolean }>): boolean {
   if (!statuses.length) return false;
   return statuses.every(
-    (status) => status.status !== 'loading' && status.status !== 'error' && status.status !== 'uncached',
+    (status) =>
+      status.status !== 'loading' &&
+      status.status !== 'error' &&
+      status.status !== 'uncached' &&
+      // PS-271 (Layer 4): a carrier that answered THIN (Shipp accepted-partial) is terminal but
+      // unproven — a best sourced from it is not COMPLETE. Default-inert (no status is ever thin
+      // unless Layer 1 ran). Mirrors isBestRateComplete in best-rate-workflow-dto.
+      status.thin !== true,
   );
 }
 
@@ -229,6 +244,9 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
     rateCount: diagnostic.rateCount ?? 0,
     durationMs: diagnostic.durationMs,
     error: diagnostic.error,
+    // PS-271 (Layer 4): carry the accepted-thin signal onto the carrier status so completeness
+    // (statusesComplete / isBestRateComplete) and the FE can render thin/unproven. Additive.
+    ...(diagnostic.thin === true ? { thin: true } : {}),
   }));
   const combinedCarrierStatuses = [...carrierStatuses, ...directCarrierStatuses];
   const directCarrierDiagnostics: Array<Record<string, unknown>> = input.directDiagnostics.map(
@@ -238,6 +256,14 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
     ...input.ssDiagnostics.map((diagnostic) => ({ ...diagnostic, source: 'shipstation' })),
     ...directCarrierDiagnostics,
   ];
+
+  // PS-271 (Layer 4): is the cheapest pick from a carrier that answered THIN? Match the winner's
+  // carrier_id to a direct status flagged thin. false today and whenever the winner is from a full
+  // pass — purely additive/displayable.
+  const thinCarrierIds = new Set(
+    directCarrierStatuses.filter((status) => status.thin === true).map((status) => status.carrierId),
+  );
+  const bestRateThin = Boolean(cheapest && thinCarrierIds.has(String(cheapest.carrier_id ?? '')));
 
   return {
     combinedRates,
@@ -249,5 +275,6 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
     directCarrierDiagnostics,
     combinedCarrierDiagnostics,
     bestRateComplete: statusesComplete(combinedCarrierStatuses),
+    bestRateThin,
   };
 }

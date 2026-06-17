@@ -293,6 +293,7 @@
     "test:ps-261-easypost-insurance-cost": "tsx scripts/ps-261-easypost-insurance-cost-guard.ts",
     "test:ps-271-best-rate-ratchet": "tsx scripts/ps-271-best-rate-ratchet-guard.ts",
     "test:ps-271-shipp-observed-set-retry": "tsx scripts/ps-271-shipp-observed-set-retry-guard.ts",
+    "test:ps-271-completeness-honesty": "tsx scripts/ps-271-completeness-honesty-guard.ts",
     "test:ps-272-stuck-job-reaper": "tsx scripts/ps-272-stuck-job-reaper-guard.ts",
     "test:ps-273-shipp-account-nickname": "tsx scripts/ps-273-shipp-account-nickname-guard.ts",
     "test:ps-258-daily-stats-rollover": "tsx scripts/ps-258-daily-stats-rollover-guard.ts",

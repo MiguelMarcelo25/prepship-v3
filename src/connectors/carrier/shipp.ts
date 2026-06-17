@@ -13,6 +13,9 @@ import {
   recordQuoteCooldown,
   shippObservedRetryEnabled,
 } from './shipp-observed-carriers.js';
+// PS-271 (Layer 4): thin-source honesty marker — rides non-enumerably on the rate array so an
+// accepted-thin partial is carried out alongside (never inside) the rates. Default-inert.
+import { attachObservedIncomplete } from './shipp-observed-incomplete-marker.js';
 import { PDFDocument } from 'pdf-lib';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
@@ -385,6 +388,10 @@ async function shippResolveObservedSet(
 async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   session: { apiKey: string; cookieHeader: string };
   rates: any[];
+  // PS-271 (Layer 4): the observed-expected carriers STILL missing when Layer 1 accepted a thin
+  // partial at the cap. [] in every other case (flag OFF, complete set, or transient retry). Default
+  // EMPTY — Layer 1 only fills this when the per-account opt-in ran and accepted a known-thin pass.
+  observedMissing: string[];
 }> {
   // PS-083 — Shipp now supports declaring an insured value via the
   // PackageLineItem customsValue, so insured orders (e.g. HUGRAB $100) are
@@ -552,18 +559,22 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
         // At the cap and STILL missing an observed carrier — accept the partial but start the durable
         // cooldown so the next quote this window doesn't re-ask (fleet-safe negative memory).
         await recordQuoteCooldown(observedRef, missing[0]!).catch(() => {});
+        // PS-271 (Layer 4): surface the accepted-thin partial HONESTLY alongside the (unchanged) rates
+        // so downstream completeness/display can mark it thin/unproven. Only reachable when Layer 1 ran
+        // (per-account opt-in ON) AND accepted a known-thin pass — OFF path never sets this.
+        return { session, rates: rateList, observedMissing: missing };
       }
     }
 
-    return { session, rates: rateList };
+    return { session, rates: rateList, observedMissing: [] };
   }
 
   throw lastQuoteError ?? new Error('Shipp quote failed after retry.');
 }
 
 async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
-  const { rates: rateList } = await quoteShippRatesRaw(input);
-  return rateList
+  const { rates: rateList, observedMissing } = await quoteShippRatesRaw(input);
+  const mapped = rateList
     .map((r: any) => {
       const rawCarrier = r?.carrierType ?? r?.carrier ?? r?.carrierCode ?? r?.carrierName;
       const carrierCode = shippCarrierCode(rawCarrier);
@@ -587,6 +598,11 @@ async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ s
     })
     .filter((r) => r.cost > 0)
     .sort((a, b) => a.cost - b.cost);
+  // PS-271 (Layer 4): ride a NON-ENUMERABLE thin-source marker on the returned array. The array's
+  // enumerable contents (JSON/spread/map/keys) are byte-identical to today; only quoteCarrierRates,
+  // which explicitly reads the marker, sees it. attachObservedIncomplete is a no-op when nothing is
+  // missing — so the flag-OFF path returns the exact same array shape as before this change.
+  return attachObservedIncomplete(mapped, observedMissing);
 }
 
 function shippRawCarrier(rate: any): unknown {

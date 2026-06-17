@@ -44,6 +44,13 @@ export type BestRateWorkflowCarrierStatus = {
   rateCount: number;
   durationMs?: number;
   error?: string;
+  // PS-271 (Layer 4): this carrier answered, but with a KNOWN-THIN set — Shipp's observed-set retry
+  // (Layer 1) accepted a partial at the cap (a non-empty 200 still missing an observed-expected
+  // carrier). The carrier reached a terminal result, so it is NOT 'loading'/'error', but a best rate
+  // sourced from a thin pass is unproven: isBestRateComplete treats a thin carrier as not-complete so
+  // the row honestly shows thin/unproven instead of a false COMPLETE. Additive + display-only; absent
+  // today and for every full (non-thin) pass.
+  thin?: boolean;
 };
 
 export type BestRateWorkflowAllowedActions = {
@@ -222,13 +229,20 @@ function isFreshAt(expiresAt: string | null, now: Date): boolean {
  * a carrier `error`ed. The backend stamps this onto the saved/returned best rate so
  * the frontend consumes it instead of asserting completeness itself. Empty input is
  * NOT complete (nothing was actually rated yet).
+ *
+ * PS-271 (Layer 4) — a carrier flagged `thin` (Shipp's observed-set retry accepted a
+ * partial at the cap: a non-empty 200 still missing an observed-expected carrier) is
+ * ALSO not-complete here. It reached a terminal status, but a best sourced from a
+ * known-thin pass is unproven, so completeness flows through the thin signal the same
+ * way it flows through loading/error — the row honestly shows thin/unproven instead
+ * of a false COMPLETE. Default-inert: no status is ever `thin` unless Layer 1 ran.
  */
 export function isBestRateComplete(
-  carrierStatuses: ReadonlyArray<Pick<BestRateWorkflowCarrierStatus, 'status'>> | null | undefined,
+  carrierStatuses: ReadonlyArray<Pick<BestRateWorkflowCarrierStatus, 'status' | 'thin'>> | null | undefined,
 ): boolean {
   if (!Array.isArray(carrierStatuses) || carrierStatuses.length === 0) return false;
   return carrierStatuses.every(
-    (status) => status.status !== 'loading' && status.status !== 'error',
+    (status) => status.status !== 'loading' && status.status !== 'error' && status.thin !== true,
   );
 }
 
@@ -255,6 +269,8 @@ function sanitizeCarrierStatus(status: BestRateWorkflowCarrierStatus): BestRateW
     rateCount,
     ...(durationMs != null ? { durationMs } : {}),
     ...(error ? { error: error.slice(0, 160) } : {}),
+    // PS-271 (Layer 4): preserve the thin flag through sanitization (additive; absent unless set).
+    ...(status.thin === true ? { thin: true } : {}),
   };
 }
 

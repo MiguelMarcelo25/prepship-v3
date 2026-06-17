@@ -1,4 +1,6 @@
 import { resolveCarrierConnector } from '../connectors/carrier-resolution.js';
+// PS-271 (Layer 4): read the thin-source marker the Shipp connector rides on its rate array.
+import { readObservedIncomplete } from '../connectors/carrier/shipp-observed-incomplete-marker.js';
 import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility.js';
 import { normalizeShippingOptions } from '../lib/shipping-options.js';
 import { loadShippingAutomationRules } from './shipping-automation.js';
@@ -70,9 +72,15 @@ export async function quoteCarrierRates(
   }
 
   const rates = await resolved.connector.getRates(input);
+  // PS-271 (Layer 4): if the connector rode a thin-source marker on its rate array (the Shipp
+  // accepted-thin partial), lift it into the result's `diagnostics` so the rates service can mark the
+  // pass thin/unproven. Reads a NON-ENUMERABLE property — absent for every other connector and for the
+  // OFF Shipp path, so `diagnostics` stays undefined exactly as today.
+  const observedIncomplete = readObservedIncomplete(rates);
   return {
     provider: resolved.provider,
     rates,
+    ...(observedIncomplete ? { diagnostics: { observedIncomplete } } : {}),
   };
 }
 

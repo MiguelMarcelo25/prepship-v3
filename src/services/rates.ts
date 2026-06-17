@@ -720,6 +720,10 @@ export type CarrierRateDiagnostic = {
   rateCount: number;
   durationMs?: number;
   error?: string;
+  // PS-271 (Layer 4): true when this direct-carrier pass was an accepted-thin partial (Shipp Layer 1
+  // returned a non-empty-but-thin set). Additive + display-only; absent today and for every non-thin
+  // pass. combineCarrierUniverses reads it to mark the carrier status / best as thin/unproven.
+  thin?: boolean;
 };
 
 // Cheap mini-carrier lookup so we can tell stamps_com apart (needs city/state
@@ -2007,6 +2011,19 @@ export async function getDirectCarrierRatesForRateInput(
               insurance_amount: { amount: easyPostPremium, currency: rate.insurance_amount?.currency ?? 'USD' },
             }))
           : markedUp;
+      // PS-271 (Layer 4): the Shipp connector rides a thin-source marker out via quoted.diagnostics
+      // when Layer 1 accepted a known-thin partial (a non-empty 200 still missing an observed-expected
+      // carrier). Carry it onto the meta AND the diagnostic so the combined-universe owner can mark the
+      // pass / a best sourced from it as thin/unproven. Undefined for every other provider and for the
+      // OFF Shipp path — meta/diagnostic stay byte-identical to today.
+      const observedIncomplete =
+        quoted.diagnostics && typeof quoted.diagnostics === 'object'
+          ? (quoted.diagnostics as Record<string, unknown>).observedIncomplete
+          : undefined;
+      const thin =
+        observedIncomplete && typeof observedIncomplete === 'object'
+          ? { observedIncomplete: true as const, missing: Array.isArray((observedIncomplete as any).missing) ? (observedIncomplete as any).missing.map(String) : [] }
+          : null;
       const meta = {
         accountId: account.id,
         sourceTable: account.sourceTable,
@@ -2015,6 +2032,8 @@ export async function getDirectCarrierRatesForRateInput(
         // PS-199: surfaced in the Rate Browser ("Resolved on-the-fly via Walmart
         // Marketplace API" / cache badge) — the FE modal already renders it.
         ...(walmartPo ? { purchaseOrderSource: walmartPo.purchaseOrderSource } : {}),
+        // PS-271 (Layer 4): display-only thin-source signal (additive; absent today).
+        ...(thin ? { thin } : {}),
       };
       return {
         rates,
@@ -2026,6 +2045,8 @@ export async function getDirectCarrierRatesForRateInput(
           nickname: label,
           status: rates.length ? 'ok' as CarrierRateDiagnosticStatus : 'empty' as CarrierRateDiagnosticStatus,
           rateCount: rates.length,
+          // PS-271 (Layer 4): the thin signal flows to combineCarrierUniverses via this diagnostic.
+          ...(thin ? { thin: true } : {}),
         },
       };
     } catch (err) {
