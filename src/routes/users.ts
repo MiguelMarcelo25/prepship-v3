@@ -83,6 +83,11 @@ app.get('/me', (c) => {
     id: userId ?? null,
     email,
     isAdmin: isAdminEmail(email),
+    // PS-279: surface the backend print-queue orchestration flag so the FE can
+    // delegate the buy-vs-defer route decision to /print-queue/route-plan ONLY
+    // when it's enabled. Default OFF => the FE keeps using its local classifier
+    // (no behavior change). The server still gates /route-plan itself.
+    printQueueBackendOrchestration: env.PRINT_QUEUE_BACKEND_ORCHESTRATION === true,
   });
 });
 

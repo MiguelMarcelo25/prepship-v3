@@ -133,13 +133,34 @@ check('hasQueueableLabel OUTRANKS an explicit direct payload (never re-buy)',
     envText.includes('PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)'));
 }
 
-// ── 6) the FE buy-path (apiClient.createLabel) was NOT deleted (cutover deferred) ──
+// ── 6) FE cutover is FLAG-GATED (default OFF); the local fallback is PRESERVED ──
 {
   const orders = readText('web/src/components/Views/OrdersView.tsx');
-  check('FE OrdersView still calls apiClient.createLabel (cutover deferred)',
+  // The local classifier + the direct createLabel path remain as the OFF/fallback.
+  check('FE OrdersView still calls apiClient.createLabel (fallback preserved)',
     orders.includes('apiClient.createLabel'));
-  check('FE classifyQueueOrderRoute call is still present (not yet rewired)',
+  check('FE classifyQueueOrderRoute is still the fallback (not deleted)',
     orders.includes('classifyQueueOrderRoute('));
+  // The new delegation only runs behind the backend flag, with a per-order fallback.
+  check('FE reads the backend printQueueBackendOrchestration flag',
+    orders.includes('printQueueBackendOrchestration'));
+  check('FE delegates to the backend ONLY behind the flag (default OFF => no call)',
+    /if \(printQueueBackendOrchestration\)[\s\S]{0,500}resolveBackendRoutePlan\(/.test(orders));
+  check('FE route uses the backend plan with a per-order fallback to the local classifier',
+    /backendRoutePlan\?\.get\(order\.orderId\) \?\? classifyQueueOrderRoute\(/.test(orders));
+  check('FE posts to /print-queue/route-plan via the isolated helper',
+    orders.includes("api.post('/print-queue/route-plan'") && orders.includes('resolveBackendRoutePlan'));
+
+  // The helper is fail-safe: returns null on any error so the caller falls back.
+  const helper = readText('web/src/lib/resolve-backend-route-plan.ts');
+  check('the route-plan helper exists and returns null on failure (fail-safe)',
+    helper.includes('export async function resolveBackendRoutePlan') &&
+    /catch\s*\{[\s\S]{0,200}return null/.test(helper));
+
+  // Backend exposes the flag in /users/me so the FE gates without reading env.
+  const users = readText('src/routes/users.ts');
+  check('GET /users/me exposes printQueueBackendOrchestration from the env flag',
+    /printQueueBackendOrchestration:\s*env\.PRINT_QUEUE_BACKEND_ORCHESTRATION/.test(users));
 }
 
 if (failures > 0) {

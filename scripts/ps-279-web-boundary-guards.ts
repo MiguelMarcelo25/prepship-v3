@@ -31,7 +31,7 @@ check('orders-parity no longer defines the QueueOrderRoute type', !/export type 
 // ── OrdersView imports the classifier FROM the lib boundary (not the component module) ──
 const ov = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('OrdersView imports classifyQueueOrderRoute from the lib boundary',
-  /import \{ classifyQueueOrderRoute \} from '\.\.\/\.\.\/lib\/shipping-routes'/.test(ov));
+  /import \{[^}]*\bclassifyQueueOrderRoute\b[^}]*\} from '\.\.\/\.\.\/lib\/shipping-routes'/.test(ov));
 
 // ── smoke: the moved function still decides correctly (full matrix lives in ps-176/204) ──
 const shipStation: QueueOrderRoute = classifyQueueOrderRoute({ hasQueueableLabel: false, isTest: false, isDirectCarrier: false });

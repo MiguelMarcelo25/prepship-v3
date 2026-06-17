@@ -158,7 +158,8 @@ import {
 import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters'
 import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
-import { classifyQueueOrderRoute } from '../../lib/shipping-routes'
+import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
+import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
 import { residentialForRate as residentialForRateRule } from '../../lib/residential-for-rate'
 import {
   buildDailyStripProgress,
@@ -659,10 +660,18 @@ export default function OrdersView({
   // defaults to non-admin until the backend answers (the server still enforces every
   // admin-only route regardless of this display flag).
   const [callerIsAdmin, setCallerIsAdmin] = useState(false)
+  // PS-279: backend-owned flag (default OFF). When true the buy path delegates the
+  // route decision to /print-queue/route-plan; when false the local classifier
+  // stays authoritative (zero behavior change). Defaults false until /users/me answers.
+  const [printQueueBackendOrchestration, setPrintQueueBackendOrchestration] = useState(false)
   useEffect(() => {
     let cancelled = false
-    void api.get<{ id: string | null; email: string | null; isAdmin: boolean }>('/users/me')
-      .then((res) => { if (!cancelled) setCallerIsAdmin(res.isAdmin === true) })
+    void api.get<{ id: string | null; email: string | null; isAdmin: boolean; printQueueBackendOrchestration?: boolean }>('/users/me')
+      .then((res) => {
+        if (cancelled) return
+        setCallerIsAdmin(res.isAdmin === true)
+        setPrintQueueBackendOrchestration(res.printQueueBackendOrchestration === true)
+      })
       .catch((err) => console.warn('[orders] failed to load caller identity:', err))
     return () => { cancelled = true }
   }, [])
@@ -3350,6 +3359,32 @@ export default function OrdersView({
       batchTestMode: options.batchTestMode,
     })
 
+    // PS-279: when the backend orchestrator is enabled (flag default OFF), let it
+    // own the per-order buy-vs-defer route. Default OFF => this block is skipped
+    // entirely and the local classifier below stays authoritative (byte-identical
+    // to before). On any failure resolveBackendRoutePlan returns null and each
+    // order falls back to the local classifier — the plan is an override, never a
+    // hard dependency on the money path.
+    let backendRoutePlan: Map<number, QueueOrderRoute> | null = null
+    if (printQueueBackendOrchestration) {
+      backendRoutePlan = await resolveBackendRoutePlan(
+        (body) => api.post('/print-queue/route-plan', body),
+        {
+          existingLabelOnly: options.existingLabelOnly,
+          batchTestMode: options.batchTestMode,
+          orders: jobOrders.map((order) => ({
+            order_id: order.orderId,
+            has_queueable_label: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
+            is_test: isBackendTestOrder(order),
+            is_direct_carrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
+            backend_queue_route: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
+            explicit_payload_provider_id:
+              toNumberValue(toRecord(options.labelPayloadOverrides?.get(order.orderId))?.shippingProviderId) ?? null,
+          })),
+        },
+      )
+    }
+
     // Split direct-carrier orders that still need a label (the Render queue job
     // can't create those) from everything else. Direct ones buy + queue via the
     // Vercel path; the rest flow through the backend create/recover job below.
@@ -3363,7 +3398,9 @@ export default function OrdersView({
       // it, not the stale saved DTO. (Batch flows have no override → null.)
       const overridePayload = options.labelPayloadOverrides?.get(order.orderId) ?? null
       const overrideProviderId = toNumberValue(toRecord(overridePayload)?.shippingProviderId) ?? null
-      const route = classifyQueueOrderRoute(
+      // PS-279: backend plan wins when present (flag ON); otherwise fall back to
+      // the local classifier (flag OFF / plan unavailable) — same decision as before.
+      const route = backendRoutePlan?.get(order.orderId) ?? classifyQueueOrderRoute(
         {
           hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
           // PS-186: queue ROUTING is a money-path decision — backend fact only.
