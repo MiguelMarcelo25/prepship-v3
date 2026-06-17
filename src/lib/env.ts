@@ -155,6 +155,11 @@ const schema = z.object({
   // /batch-send path is byte-identical to today. The FE buy-path cutover is DEFERRED to
   // a DJ canary; DJ flips this on Render after route-plan reads parity-equal on a live order.
   PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false),
+  // PS-279: separate, deliberate switch for the FE buy-path cutover. Decoupled
+  // from PRINT_QUEUE_BACKEND_ORCHESTRATION (which only makes the /route-plan
+  // endpoint live) so enabling the endpoint never auto-activates the money-path
+  // FE delegation. Flip this ON only AFTER canarying a test label.
+  PRINT_QUEUE_FE_DELEGATION: booleanFlag(false),
 });
 
 const parsed = schema.safeParse(process.env);

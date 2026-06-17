@@ -660,17 +660,18 @@ export default function OrdersView({
   // defaults to non-admin until the backend answers (the server still enforces every
   // admin-only route regardless of this display flag).
   const [callerIsAdmin, setCallerIsAdmin] = useState(false)
-  // PS-279: backend-owned flag (default OFF). When true the buy path delegates the
-  // route decision to /print-queue/route-plan; when false the local classifier
-  // stays authoritative (zero behavior change). Defaults false until /users/me answers.
-  const [printQueueBackendOrchestration, setPrintQueueBackendOrchestration] = useState(false)
+  // PS-279: dedicated FE-delegation flag (default OFF), decoupled from the backend
+  // endpoint flag so the money-path cutover is a deliberate, post-canary switch.
+  // When true the buy path delegates the route decision to /print-queue/route-plan;
+  // when false the local classifier stays authoritative (zero behavior change).
+  const [printQueueFeDelegation, setPrintQueueFeDelegation] = useState(false)
   useEffect(() => {
     let cancelled = false
-    void api.get<{ id: string | null; email: string | null; isAdmin: boolean; printQueueBackendOrchestration?: boolean }>('/users/me')
+    void api.get<{ id: string | null; email: string | null; isAdmin: boolean; printQueueFeDelegation?: boolean }>('/users/me')
       .then((res) => {
         if (cancelled) return
         setCallerIsAdmin(res.isAdmin === true)
-        setPrintQueueBackendOrchestration(res.printQueueBackendOrchestration === true)
+        setPrintQueueFeDelegation(res.printQueueFeDelegation === true)
       })
       .catch((err) => console.warn('[orders] failed to load caller identity:', err))
     return () => { cancelled = true }
@@ -3366,7 +3367,7 @@ export default function OrdersView({
     // order falls back to the local classifier — the plan is an override, never a
     // hard dependency on the money path.
     let backendRoutePlan: Map<number, QueueOrderRoute> | null = null
-    if (printQueueBackendOrchestration) {
+    if (printQueueFeDelegation) {
       backendRoutePlan = await resolveBackendRoutePlan(
         (body) => api.post('/print-queue/route-plan', body),
         {

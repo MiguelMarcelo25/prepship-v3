@@ -83,11 +83,13 @@ app.get('/me', (c) => {
     id: userId ?? null,
     email,
     isAdmin: isAdminEmail(email),
-    // PS-279: surface the backend print-queue orchestration flag so the FE can
-    // delegate the buy-vs-defer route decision to /print-queue/route-plan ONLY
-    // when it's enabled. Default OFF => the FE keeps using its local classifier
-    // (no behavior change). The server still gates /route-plan itself.
+    // PS-279: surface the print-queue flags so the FE can decide whether to
+    // delegate the buy-vs-defer route to /print-queue/route-plan. The FE gates on
+    // the DEDICATED feDelegation flag (default OFF) so the money-path cutover is a
+    // deliberate, post-canary switch — NOT auto-activated by the endpoint flag.
+    // backendOrchestration is exposed for diagnostics/visibility only.
     printQueueBackendOrchestration: env.PRINT_QUEUE_BACKEND_ORCHESTRATION === true,
+    printQueueFeDelegation: env.PRINT_QUEUE_FE_DELEGATION === true,
   });
 });
 

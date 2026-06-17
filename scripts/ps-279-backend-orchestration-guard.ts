@@ -131,6 +131,8 @@ check('hasQueueableLabel OUTRANKS an explicit direct payload (never re-buy)',
   const envText = readText('src/lib/env.ts');
   check('PRINT_QUEUE_BACKEND_ORCHESTRATION is declared default-OFF booleanFlag(false)',
     envText.includes('PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)'));
+  check('PRINT_QUEUE_FE_DELEGATION (the FE cutover switch) is declared default-OFF booleanFlag(false)',
+    envText.includes('PRINT_QUEUE_FE_DELEGATION: booleanFlag(false)'));
 }
 
 // ── 6) FE cutover is FLAG-GATED (default OFF); the local fallback is PRESERVED ──
@@ -141,11 +143,12 @@ check('hasQueueableLabel OUTRANKS an explicit direct payload (never re-buy)',
     orders.includes('apiClient.createLabel'));
   check('FE classifyQueueOrderRoute is still the fallback (not deleted)',
     orders.includes('classifyQueueOrderRoute('));
-  // The new delegation only runs behind the backend flag, with a per-order fallback.
-  check('FE reads the backend printQueueBackendOrchestration flag',
-    orders.includes('printQueueBackendOrchestration'));
-  check('FE delegates to the backend ONLY behind the flag (default OFF => no call)',
-    /if \(printQueueBackendOrchestration\)[\s\S]{0,500}resolveBackendRoutePlan\(/.test(orders));
+  // The new delegation only runs behind the DEDICATED FE-delegation flag (default
+  // OFF, decoupled from the endpoint flag), with a per-order fallback.
+  check('FE reads the dedicated printQueueFeDelegation flag (NOT the endpoint flag)',
+    orders.includes('printQueueFeDelegation'));
+  check('FE delegates ONLY behind printQueueFeDelegation (default OFF => no call)',
+    /if \(printQueueFeDelegation\)[\s\S]{0,500}resolveBackendRoutePlan\(/.test(orders));
   check('FE route uses the backend plan with a per-order fallback to the local classifier',
     /backendRoutePlan\?\.get\(order\.orderId\) \?\? classifyQueueOrderRoute\(/.test(orders));
   check('FE posts to /print-queue/route-plan via the isolated helper',
@@ -157,10 +160,10 @@ check('hasQueueableLabel OUTRANKS an explicit direct payload (never re-buy)',
     helper.includes('export async function resolveBackendRoutePlan') &&
     /catch\s*\{[\s\S]{0,200}return null/.test(helper));
 
-  // Backend exposes the flag in /users/me so the FE gates without reading env.
+  // Backend exposes the dedicated flag in /users/me so the FE gates without reading env.
   const users = readText('src/routes/users.ts');
-  check('GET /users/me exposes printQueueBackendOrchestration from the env flag',
-    /printQueueBackendOrchestration:\s*env\.PRINT_QUEUE_BACKEND_ORCHESTRATION/.test(users));
+  check('GET /users/me exposes printQueueFeDelegation from the dedicated env flag',
+    /printQueueFeDelegation:\s*env\.PRINT_QUEUE_FE_DELEGATION/.test(users));
 }
 
 if (failures > 0) {
