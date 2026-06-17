@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { Suspense, lazy, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -18,7 +17,11 @@ import {
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
 import { api } from './lib/api'
-import type { SyncWorkerStatusDto } from './types/api'
+// TODO PS-257: SyncWorkerStatusDto is not exported by ./types/api (the worker
+// status DTO was never added there). Until v4 grows a real worker contract it's
+// aliased to `any` locally — matching the per-file DTO alias precedent used
+// across the strict-typing migration pass.
+type SyncWorkerStatusDto = any
 import { useInitStores } from './hooks'
 import PageSkeleton from './components/PageSkeleton'
 import Sidebar from './components/Sidebar/Sidebar'
@@ -131,7 +134,11 @@ function timingHealthTone(route: ApiTimingRoute | null | undefined) {
   return timingTone(route.lastDurationMs)
 }
 
-const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
+// 'locations' is intentionally absent: Ship-From Locations moved into Settings
+// (2026-05-13) and pathToRoute rewrites /locations → 'settings' before this map
+// is ever read, so displayView never resolves to 'locations'. The key type
+// excludes it to match the literal (no runtime 'locations' entry is emitted).
+const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests' | 'locations'>, string> = {
   dashboard: 'Dashboard',
   inventory: 'Inventory',
   clients: 'Clients',
@@ -368,7 +375,7 @@ export default function Home() {
     ? activeStoreName
       ? `${STATUS_LABELS[currentStatus]} · ${activeStoreName}`
       : STATUS_LABELS[currentStatus]
-    : VIEW_LABELS[displayView as Exclude<ContentView, 'orders'>]
+    : VIEW_LABELS[displayView as Exclude<ContentView, 'orders' | 'locations'>]
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -664,7 +671,7 @@ export default function Home() {
           closeMobileMenu()
         }}
         onShowView={(view) => {
-          navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
+          navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders' | 'locations'>] ?? '/')
           closeMobileMenu()
         }}
         mobileMenuOpen={mobileMenuOpen}
@@ -1166,8 +1173,8 @@ export default function Home() {
                   setActiveOrderId(nextId)
                 }}
                 onNavigateView={(view) => {
-                  if (view === 'orders') navigate(`/orders/${currentStatus}`)
-                  else navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
+                  if ((view as string) === 'orders') navigate(`/orders/${currentStatus}`)
+                  else navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders' | 'locations'>] ?? '/')
                 }}
                 columnMenuRequestId={columnMenuRequestId}
                 labelsActionRequestId={labelsActionRequestId}
@@ -1246,7 +1253,7 @@ export default function Home() {
                 const target =
                   lastContentView === 'orders'
                     ? `/orders/${currentStatus}`
-                    : VIEW_PATHS[lastContentView as Exclude<ViewType, 'orders'>] ?? '/'
+                    : VIEW_PATHS[lastContentView as Exclude<ViewType, 'orders' | 'locations'>] ?? '/'
                 navigate(target)
               }}
             />

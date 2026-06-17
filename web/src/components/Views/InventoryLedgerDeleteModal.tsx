@@ -1,12 +1,32 @@
-// @ts-nocheck
 // PS-154 extraction: pure-presentation confirm modal lifted verbatim out
 // of InventoryView.tsx. The stock-reversal logic + API call
 // (confirmDeleteLedgerEntry) and the ledgerDeleteModal / in-flight state
 // stay in the parent; this component only renders and forwards intent.
-// @ts-nocheck mirrors the parent (phantom DTO types).
 import { formatCaDateTime } from '../../lib/ca-time'
 
-function formatDateTime(value) {
+// Mirrors lib/ca-time's (non-exported) DateInput union — the value forwarded
+// straight into formatCaDateTime.
+type LedgerDateInput = Date | string | number | null | undefined
+
+// Local subset of the parent's InventoryLedgerEntryDto (that DTO isn't
+// exported from types/api). This component only reads the fields below; the
+// parent passes the full entry, which is structurally assignable here.
+export interface InventoryLedgerDeleteModalEntry {
+  sku?: string | null
+  type?: string | null
+  qty: number
+  note?: string | null
+  createdAt?: LedgerDateInput
+}
+
+export interface InventoryLedgerDeleteModalProps {
+  ledgerDeleteModal: InventoryLedgerDeleteModalEntry | null
+  onClose: () => void
+  onConfirmDelete: () => void | Promise<void>
+  isDeleting: boolean
+}
+
+function formatDateTime(value: LedgerDateInput) {
   return formatCaDateTime(value)
 }
 
@@ -15,7 +35,7 @@ export function InventoryLedgerDeleteModal({
   onClose,
   onConfirmDelete,
   isDeleting,
-}) {
+}: InventoryLedgerDeleteModalProps) {
   if (!ledgerDeleteModal) return null
   return (
     <div className="inventory-overlay" onClick={() => !isDeleting && onClose()}>

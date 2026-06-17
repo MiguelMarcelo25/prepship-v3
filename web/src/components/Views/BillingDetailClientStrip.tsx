@@ -1,15 +1,20 @@
-// @ts-nocheck
 // PS-155: Billing detail client-selector strip extracted verbatim from BillingView.tsx
-// (behavior-preserving). @ts-nocheck matches the rest of the billing module — the summary rows
-// carry phantom fields (grandTotal/total) not on the real BillingSummaryDto. All money totals
-// are parent-computed and read-only here; detailState + handleLoadDetails stay in BillingView.
-import { formatBillingMoney } from './billing-parity'
+// (behavior-preserving). The summary rows carry phantom fields (grandTotal/total) not on the
+// real BillingSummaryDto, so the index-signature BillingSummaryDto from ./billing-parity covers
+// them. All money totals are parent-computed and read-only here; detailState + handleLoadDetails
+// stay in BillingView.
+import { formatBillingMoney, type BillingSummaryDto } from './billing-parity'
 
 export function BillingDetailClientStrip({
   sortedSummaryRows,
   detailState,
   selectedDetailSummary,
   onLoadDetails,
+}: {
+  sortedSummaryRows: BillingSummaryDto[]
+  detailState: { clientId: number | null }
+  selectedDetailSummary: BillingSummaryDto | null
+  onLoadDetails: (clientId: number, clientName: string | null | undefined) => void
 }) {
   return (
     <div className="billing-detail-client-strip" aria-label="Line item client selector">

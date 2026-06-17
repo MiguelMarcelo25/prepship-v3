@@ -1,8 +1,9 @@
-// @ts-nocheck — extracted VERBATIM from the @ts-nocheck OrdersView.tsx; the loose
-// DTO field reads (order.flags / order.externalShipped / order.expedited /
-// order.bestRateWorkflow / nested label-rate records) follow the SAME documented
-// precedent as the PS-178 sibling orders-row-display.tsx: display readers over
-// loose DTOs stay un-strict rather than burying verbatim bodies under casts.
+// PS-257: this module is now strict-typed. The loose DTO field reads
+// (order.flags / order.externalShipped / order.expedited / order.bestRateWorkflow
+// / nested label-rate records) come from the index-signature side of
+// OrderSummaryDto and stay `any`; only `order.bestRate` is declared `unknown` in
+// types/api.ts, so its property reads are routed through the exported LooseBestRate
+// cast below (type-erased — no runtime behavior change).
 //
 // PS-166 (Wave 2a): OrdersView's shipped/cancelled/awaiting display-state and
 // badge resolvers, moved VERBATIM (module-level pure helpers — no hooks, no
@@ -36,6 +37,13 @@ import { ageHours, formatCarrierCode } from './orders-formatting'
 import { isTestOrder } from './orders-items'
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
 
+// PS-257: `order.bestRate` is declared `unknown` in types/api.ts (out of scope to
+// widen there). Display readers cast it through this loose record so its property
+// reads type as `unknown` and forward to toStringValue / toProviderAccountId /
+// normalizeShippingAccountName. Type-only — erased at emit, no runtime change.
+// Shared with orders-table-columns.ts (imported from here).
+export type LooseBestRate = Record<string, unknown>
+
 export function getRequestedService(order: OrderSummaryDto, detail: OrderFullDto | null) {
   return getPanelRequestedService(order, detail)
 }
@@ -55,7 +63,7 @@ export function getCarrierCodeForDisplay(order: OrderSummaryDto) {
     isAwaiting,
     // PS-173: backend-owned display tuple — preferred when the row carried it.
     backendDisplayCarrierCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.carrierCode),
-    bestRateCarrierCode: toStringValue(order.bestRate?.carrierCode),
+    bestRateCarrierCode: toStringValue((order.bestRate as LooseBestRate | undefined)?.carrierCode),
     canonicalCarrierCode: getShippingString(order, 'carrierCode'),
     selectedRateCarrierCode: toStringValue(order.selectedRate?.carrierCode),
     bestRateNickname,
@@ -72,7 +80,7 @@ export function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierA
   if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
     const bestRateRecord = toRecord(order.bestRate)
     awaitingBestRateNickname =
-      normalizeShippingAccountName(order.bestRate.carrierNickname) ??
+      normalizeShippingAccountName((order.bestRate as LooseBestRate).carrierNickname) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname)) ??
       getCarrierAccountLabelByProviderId(accounts, getBestRateShippingProviderId(order))
@@ -82,7 +90,7 @@ export function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierA
 
   let labelAccountLabel: string | null = null
   if (order.label?.shippingProviderId != null) {
-    const account = accounts.find((candidate) => candidate.shippingProviderId === order.label.shippingProviderId)
+    const account = accounts.find((candidate) => candidate.shippingProviderId === order.label!.shippingProviderId)
     labelAccountLabel = getCarrierAccountDisplay(account) ?? null
   }
 
@@ -90,7 +98,7 @@ export function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierA
   if (order.bestRate) {
     const bestRateRecord = toRecord(order.bestRate)
     bestRateNickname =
-      normalizeShippingAccountName(order.bestRate.carrierNickname) ??
+      normalizeShippingAccountName((order.bestRate as LooseBestRate).carrierNickname) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
       normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname))
   }
@@ -104,7 +112,7 @@ export function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierA
     hasSelectedRate: Boolean(order.selectedRate),
     labelAccountLabel,
     bestRateNickname,
-    carrierCodeFallback: formatCarrierCode(order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode),
+    carrierCodeFallback: formatCarrierCode(order.selectedRate?.carrierCode ?? (order.bestRate as LooseBestRate | undefined)?.carrierCode),
   })
 }
 
@@ -203,7 +211,7 @@ export function getShippedDisplayProviderId(order: OrderSummaryDto) {
     toProviderAccountId(order.selectedRate?.shippingProviderId) ??
     toProviderAccountId(order.selectedRate?.providerAccountId) ??
     toProviderAccountId(order.label?.shippingProviderId) ??
-    toProviderAccountId(order.bestRate?.shippingProviderId) ??
+    toProviderAccountId((order.bestRate as LooseBestRate | undefined)?.shippingProviderId) ??
     getV2CarrierAccountForOrder(order)?.shippingProviderId ??
     null
   )
@@ -229,14 +237,14 @@ export function getCancelledDisplayCarrierCode(order: OrderSummaryDto) {
     toStringValue(order.selectedRate?.carrierCode) ??
     toStringValue(order.label?.carrierCode) ??
     toStringValue(order.carrierCode) ??
-    toStringValue(order.bestRate?.carrierCode)
+    toStringValue((order.bestRate as LooseBestRate | undefined)?.carrierCode)
   )
 }
 
 export function getCancelledDisplayProviderId(order: OrderSummaryDto) {
   return (
     getSelectedRateShippingProviderId(order) ??
-    toProviderAccountId(order.bestRate?.shippingProviderId) ??
+    toProviderAccountId((order.bestRate as LooseBestRate | undefined)?.shippingProviderId) ??
     getV2CarrierAccountForOrder(order)?.shippingProviderId ??
     null
   )
@@ -248,7 +256,7 @@ export function getCancelledDisplayServiceCode(order: OrderSummaryDto) {
     toStringValue(order.selectedRate?.serviceCode) ??
     toStringValue(order.label?.serviceCode) ??
     toStringValue(order.serviceCode) ??
-    toStringValue(order.bestRate?.serviceCode)
+    toStringValue((order.bestRate as LooseBestRate | undefined)?.serviceCode)
   )
 }
 

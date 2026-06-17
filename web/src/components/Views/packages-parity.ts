@@ -1,11 +1,31 @@
-// @ts-nocheck
-import type {
-  PackageAdjustmentInput,
-  PackageDto,
-  SavePackageInput,
-  SetDefaultBillingPackagePriceResult,
-} from '../../types/api'
+import type { PackageDto } from '../../types/api'
 import { formatCaDateLong } from '../../lib/ca-time'
+
+// Local DTO shapes for the package mutation payloads + results. These are
+// not yet in the hand-maintained types/api shim, so they live here (the
+// most-shared package-domain module) and are exported for any sibling
+// consumer. They mirror the structures produced/read by the builders below.
+// TODO PS-257: promote to types/api once that file is fleshed out.
+export interface SavePackageInput {
+  name: string
+  type: string
+  tareWeightOz: number
+  length: number
+  width: number
+  height: number
+  unitCost: number | null
+}
+
+export interface PackageAdjustmentInput {
+  qty: number
+  note: string
+  costPerUnit?: number | null
+}
+
+export interface SetDefaultBillingPackagePriceResult {
+  updated: number
+  skipped?: number
+}
 
 export interface PackageFormState {
   packageId: string
@@ -105,7 +125,7 @@ export function buildLowStockBannerText(packages: PackageDto[]) {
 }
 
 export function formatPackageDimensionsText(pkg: PackageDto) {
-  const dims = pkg.length > 0 && pkg.width > 0 && pkg.height > 0
+  const dims = pkg.length! > 0 && pkg.width! > 0 && pkg.height! > 0
     ? `${pkg.length}×${pkg.width}×${pkg.height}"`
     : '—'
   const tare = pkg.tareWeightOz > 0 ? `${pkg.tareWeightOz} oz` : ''

@@ -1,15 +1,57 @@
-// @ts-nocheck
-import type {
-  BackfillBillingReferenceRatesResult,
-  BillingConfigDto,
-  BillingDetailDto,
-  BillingPackagePriceDto,
-  BillingReferenceRateFetchStatusDto,
-  BillingSummaryDto,
-  FetchBillingReferenceRatesResult,
-  PackageDto,
-  UpdateBillingConfigInput,
-} from '../../types/api'
+import type { PackageDto } from '../../types/api'
+
+// PS-257: the billing DTOs below are phantom names that were imported from
+// types/api but never actually exported there. They're defined locally (and
+// exported) here — billing-parity is the most-shared billing module — so the
+// sibling billing components can import them from one place. Shapes are index-
+// signature records (matching the AnyRecord convention in types/api.ts) so the
+// mixed camelCase/snake_case field reads across the billing pipeline type-check
+// without changing any runtime behavior.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BillingAnyRecord = Record<string, any>
+
+export type BillingConfigDto = BillingAnyRecord & {
+  clientId: number
+  clientName?: string | null
+}
+export type BillingSummaryDto = BillingAnyRecord & {
+  clientId: number
+  clientName?: string | null
+}
+export type BillingDetailDto = BillingAnyRecord
+export type BillingPackagePriceDto = BillingAnyRecord & {
+  packageId: number
+  price: number
+  is_custom?: boolean
+}
+export type BillingReferenceRateFetchStatusDto = BillingAnyRecord & {
+  done: number
+  total: number
+  errors?: number
+}
+export type FetchBillingReferenceRatesResult = BillingAnyRecord & {
+  ok?: boolean
+  message?: string
+  total?: number
+  orders?: number
+  queued?: number
+}
+export type BackfillBillingReferenceRatesResult = BillingAnyRecord & {
+  message?: string
+  filled?: number
+  missing?: number
+}
+export type UpdateBillingConfigInput = {
+  pickPackFee: number
+  pickPackMaxUnits: number
+  additionalUnitFee: number
+  packageCostMarkup: number
+  shippingMarkupPct: number
+  shippingMarkupFlat: number
+  storageFeePerCuFt: number
+  billingMode: string
+  active: boolean
+}
 
 export type BillingPresetId = 'all' | 'this_month' | 'last_month' | 'last_30' | 'last_90'
 

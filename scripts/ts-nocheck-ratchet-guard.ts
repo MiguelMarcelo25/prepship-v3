@@ -28,7 +28,12 @@ import { join } from 'node:path';
 // change). One type-gap flagged for follow-up: orders-parity PrintQueueEntryDto should add
 // optional shipping_hold/held_reason. markups.ts cast `(type as string)==='percent'` (narrow
 // MarkupType union; widen as follow-up). — 37 -> 24.
-const CEILING = 24;
+// 2026-06-17 (PS-257 blitz slice 5): 14 mid-error files de-nocheck'd BYTE-IDENTICALLY,
+// domain-grouped (billing/orders/inventory/sidebar/cards). Cross-file ripples from the
+// now-structured parity types were resolved at the consumers (PackagesView casts, sidebar/
+// billing draft casts, orders-display-state LooseBestRate shared export) — all type-erased.
+// PrintQueueEntryDto + PackageLedgerEntryDto follow-up fixes already landed in slice 4. — 24 -> 10.
+const CEILING = 10;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

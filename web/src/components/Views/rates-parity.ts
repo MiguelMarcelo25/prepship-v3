@@ -1,7 +1,11 @@
-// @ts-nocheck
-import type { LiveRatesRequestDto, RateDto } from '@prepshipv2/contracts/rates/contracts'
-import type { Rate } from '../../types/orders.ts'
-import { isBlockedRate } from '../../utils/markups.ts'
+// TODO PS-257: restore real types — @prepshipv2/contracts is erased at runtime
+// and absent in v4, so these DTO shapes are aliased to `any` locally (matching
+// the analysis-parity.ts / RatesView.tsx precedent) until v4 grows a real rates
+// contracts module.
+type LiveRatesRequestDto = any
+type RateDto = any
+import type { Rate } from '../../types/orders'
+import { isBlockedRate } from '../../utils/markups'
 
 export interface RatesFormState {
   // Weight is split into pounds + ounces in the UI so operators can
@@ -275,7 +279,7 @@ function sourceToneFor(value: unknown): string {
   for (let i = 0; i < text.length; i += 1) {
     hash = (hash * 31 + text.charCodeAt(i)) >>> 0
   }
-  return PROVIDER_TONE_CLASSES[hash % PROVIDER_TONE_CLASSES.length]
+  return PROVIDER_TONE_CLASSES[hash % PROVIDER_TONE_CLASSES.length]!
 }
 
 export function getRateSourceLabel(
@@ -411,9 +415,9 @@ export function buildRateRows(
 
   const cheapest = rows.reduce<number | null>((bestIndex, row, index) => {
     if (bestIndex == null) return index
-    return row.yourPrice < rows[bestIndex].yourPrice ? index : bestIndex
+    return row.yourPrice < rows[bestIndex]!.yourPrice ? index : bestIndex
   }, null)
-  if (cheapest != null) rows[cheapest].isBest = true
+  if (cheapest != null) rows[cheapest]!.isBest = true
   return rows
 }
 

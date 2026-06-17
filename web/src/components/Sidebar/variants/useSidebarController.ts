@@ -134,7 +134,7 @@ export function useSidebarController(props: SidebarVariantProps) {
   }, [dateStart, dateEnd])
 
   const sidebarSections = useMemo(
-    () => buildSidebarSections(stores, counts),
+    () => buildSidebarSections(stores as Parameters<typeof buildSidebarSections>[0], counts),
     [stores, counts],
   )
 

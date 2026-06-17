@@ -1,13 +1,31 @@
-// @ts-nocheck
 // PS-155: Sandbox — Test Orders panel extracted verbatim from SettingsView.tsx (behavior-preserving).
 // Pure presentation — the parent owns all seed/purge handlers + confirm dialogs + the sandboxState
-// union. This file receives values + callbacks as props. @ts-nocheck because the sandboxState union
-// type is declared inline in the parent (phantom DTO type from the parent's perspective). The derived
+// union. This file receives values + callbacks as props. The sandboxState union type mirrors the one
+// declared inline in the parent (the panel's view of that DTO). The derived
 // sandboxBusy/isSeeding/isPurging flags are recomputed here from the sandboxState prop so the JSX
 // stays verbatim and behavior is identical.
 import { motion } from 'framer-motion'
 import { AlertTriangle, Plus, Trash2 } from 'lucide-react'
 import { ButtonSpinner, SkeletonStack, StatusLine } from './settings-ui'
+
+type SandboxTestClient = { id: number; name: string; order_count: number }
+
+type SandboxState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; op: 'seed' | 'purge' | 'refresh' }
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string }
+
+interface SandboxTestOrdersPanelProps {
+  testClients: SandboxTestClient[]
+  testClientsLoading: boolean
+  seedCount: string
+  sandboxState: SandboxState
+  onSeedCountChange: (value: string) => void
+  onSeed: () => void | Promise<void>
+  onPurge: () => void | Promise<void>
+  onRefreshClients: () => void | Promise<void>
+}
 
 export function SandboxTestOrdersPanel({
   testClients,
@@ -18,7 +36,7 @@ export function SandboxTestOrdersPanel({
   onSeed,
   onPurge,
   onRefreshClients,
-}) {
+}: SandboxTestOrdersPanelProps) {
   const sandboxBusy = sandboxState.kind === 'loading'
   const isSeeding = sandboxBusy && sandboxState.op === 'seed'
   const isPurging = sandboxBusy && sandboxState.op === 'purge'

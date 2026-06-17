@@ -1,8 +1,7 @@
-// @ts-nocheck
 // PS-155: Client Billing Config table extracted verbatim from BillingView.tsx (behavior-preserving).
-// @ts-nocheck matches the rest of the billing module (BillingView + billing-parity are @ts-nocheck):
-// the billing DTO types (BillingConfigDto, etc.) are phantom imports not actually exported from
-// types/api, so this file can't be cleanly strict-typed. The extraction is a verbatim JSX move.
+// The billing DTO types (BillingConfigDto, etc.) are phantom names not actually exported from
+// types/api, so they're defined locally in ./billing-parity (the most-shared billing module) and
+// imported from there. The extraction is a verbatim JSX move.
 //
 // IMPORTANT — money/state ownership stays in BillingView:
 //   • The config DRAFT map (configDrafts) and its setter (setConfigDrafts) are OWNED by BillingView
@@ -11,8 +10,7 @@
 //     — stays in BillingView. This component only renders the cells and forwards onChange/onSave.
 //   • renderConfigNumberCell is the parent's byte-identical inline cell helper, relocated here because
 //     it only closes over the draft map + setter, both of which arrive as props.
-import type { BillingConfigDto } from '../../types/api'
-import type { BillingConfigDraft } from './billing-parity'
+import type { BillingConfigDto, BillingConfigDraft } from './billing-parity'
 import { Table } from '../ui/Table'
 
 export function BillingConfigTable({
@@ -34,7 +32,7 @@ export function BillingConfigTable({
   // from this inline style (Table hardcodes cell text-align to left).
   function renderConfigNumberCell(
     config: BillingConfigDto,
-    field: keyof BillingConfigDraft,
+    field: Exclude<keyof BillingConfigDraft, 'active'>,
     fallback: string,
     step: string,
     min: string,
@@ -52,7 +50,7 @@ export function BillingConfigTable({
         value={draft?.[field] ?? fallback}
         onChange={(event) => setConfigDrafts((current) => ({
           ...current,
-          [config.clientId]: { ...current[config.clientId], [field]: event.target.value },
+          [config.clientId]: { ...current[config.clientId], [field]: event.target.value } as BillingConfigDraft,
         }))}
       />
     )
@@ -171,7 +169,7 @@ export function BillingConfigTable({
                     value={draft?.billingMode ?? 'per_shipment'}
                     onChange={(event) => setConfigDrafts((current) => ({
                       ...current,
-                      [row.clientId]: { ...current[row.clientId], billingMode: event.target.value },
+                      [row.clientId]: { ...current[row.clientId], billingMode: event.target.value } as BillingConfigDraft,
                     }))}
                   >
                     <option value="label_cost">Label Cost</option>
@@ -199,7 +197,7 @@ export function BillingConfigTable({
                     title="Disable to skip billing-line generation for this client"
                     onChange={(event) => setConfigDrafts((current) => ({
                       ...current,
-                      [row.clientId]: { ...current[row.clientId], active: event.target.checked },
+                      [row.clientId]: { ...current[row.clientId], active: event.target.checked } as BillingConfigDraft,
                     }))}
                   />
                 )

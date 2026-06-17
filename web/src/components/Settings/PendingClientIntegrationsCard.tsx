@@ -1,8 +1,9 @@
-// @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../lib/api'
 import { formatCaDateShort, formatCaTimeOnly } from '../../lib/ca-time'
-import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
+import { SortableHeader, nextSortState, sortRows, type SortState } from '../SortableTable'
+
+type PendingSortKey = 'provider' | 'label' | 'client' | 'account' | 'source' | 'submitted'
 
 interface PendingIntegration {
   id: number
@@ -44,7 +45,7 @@ export function PendingClientIntegrationsCard() {
   // two buttons can show distinct loading labels without colliding.
   const [approving, setApproving] = useState<Record<number, boolean>>({})
   const [actionError, setActionError] = useState<string | null>(null)
-  const [sortState, setSortState] = useState(null)
+  const [sortState, setSortState] = useState<SortState<PendingSortKey>>(null)
   const sortedItems = useMemo(() => sortRows(
     items,
     sortState,

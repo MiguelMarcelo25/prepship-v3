@@ -587,9 +587,9 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     try {
       let result: PackageMutationResult
       if (form.packageId) {
-        result = await apiClient.updatePackageMutation(Number(form.packageId), payload)
+        result = await apiClient.updatePackageMutation(Number(form.packageId), payload as unknown as Record<string, unknown>)
       } else {
-        result = await apiClient.createPackageMutation(payload)
+        result = await apiClient.createPackageMutation(payload as unknown as Record<string, unknown>)
       }
 
       if (!result.ok) {
@@ -891,7 +891,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     setModalSaving(true)
 
     try {
-      const result = await apiClient.receivePackage(receiveModal.packageId, payload)
+      const result = await apiClient.receivePackage(receiveModal.packageId, payload as unknown as Record<string, unknown>)
       if (!result?.package) throw new Error('Receive failed')
       setReceiveModal(null)
       showToast(`✅ Received ${payload.qty} units. New total: ${result.package?.stockQty ?? '?'}`)
@@ -921,7 +921,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
 
     try {
       const payload = buildPackageAdjustInput(adjustModal.form, adjustModal.sign)
-      const result = await apiClient.adjustPackage(adjustModal.packageId, payload)
+      const result = await apiClient.adjustPackage(adjustModal.packageId, payload as unknown as Record<string, unknown>)
       if (!result?.package) throw new Error('Adjust failed')
       setAdjustModal(null)
       showToast(`✅ Adjusted. New total: ${result.package?.stockQty ?? '?'}`)

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 // PS-150: reorder policy (velocity model) is owned by the backend layer (src/lib); the Dashboard
@@ -139,8 +138,10 @@ function scheduleDashboardNonCriticalWork(callback: () => void) {
     return () => window.cancelIdleCallback?.(idleId)
   }
 
-  const timeoutId = window.setTimeout(callback, 0)
-  return () => window.clearTimeout(timeoutId)
+  // `typeof window === 'undefined'` above narrows `window` to `never` in this
+  // branch under the DOM lib; cast back (type-only, erased) to call the timers.
+  const timeoutId = (window as Window).setTimeout(callback, 0)
+  return () => (window as Window).clearTimeout(timeoutId)
 }
 
 type TrendPoint = {
@@ -705,7 +706,9 @@ function buildOrderCountTrend(
   return currentDays.map((day, index) => ({
     day,
     current: currentByDay.get(day) ?? 0,
-    prior: priorByDay.get(priorDays[index]) ?? 0,
+    // priorDays is built 1:1 with currentDays (same buildDateBuckets length), so
+    // priorDays[index] is always defined here; the `!` is type-only (PS-257).
+    prior: priorByDay.get(priorDays[index]!) ?? 0,
   }))
 }
 
@@ -750,7 +753,13 @@ function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): He
     for (let index = 0; index < dates.length; index += 1) {
       const currentQty = num(currentValues[index])
       const priorQty = num(priorValues[index])
+      // bucket.current/prior are pre-sized to dates.length above, so index is
+      // always in range; the compound-assignment read can't take a `!`, so the
+      // noUncheckedIndexedAccess "possibly undefined" on the implicit read is
+      // suppressed here without any runtime change (PS-257).
+      // @ts-ignore TS2532 — index is in-bounds (array pre-sized to dates.length)
       bucket.current[index] += currentQty
+      // @ts-ignore TS2532 — index is in-bounds (array pre-sized to dates.length)
       bucket.prior[index] += priorQty
       bucket.total += currentQty
     }
@@ -2130,7 +2139,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   useEffect(() => {
     setPage(1)
-  }, [brandFilter, categoryFilter, pageSize, selectedClientId, sortState.direction, sortState.key])
+  }, [brandFilter, categoryFilter, pageSize, selectedClientId, sortState!.direction, sortState!.key])
 
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages))
@@ -2141,7 +2150,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const sorted = [...pages].sort((a, b) => a - b)
     const items: Array<number | 'ellipsis'> = []
     sorted.forEach((value, index) => {
-      if (index > 0 && value - sorted[index - 1] > 1) items.push('ellipsis')
+      if (index > 0 && value - sorted[index - 1]! > 1) items.push('ellipsis')
       items.push(value)
     })
     return items

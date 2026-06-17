@@ -1,10 +1,36 @@
-// @ts-nocheck
 // PS-154 extraction: pure-presentation modal lifted verbatim out of
 // InventoryView.tsx. ALL state (adjustModal) and the payload-building /
 // API-calling handler (handleAdjustSubmit) stay in the parent; this
 // component only renders the modal and forwards user intent through the
-// callback props below. @ts-nocheck mirrors the parent (phantom DTO types).
+// callback props below.
 import { californiaDateInputValue } from '../../lib/ca-time'
+
+// Local mirrors of the parent's AdjustType/AdjustSign/AdjustModalState
+// (those live in InventoryView.tsx and aren't exported). This component
+// only reads the fields below; the parent passes the full state object,
+// which is structurally assignable to this subset.
+export type InventoryAdjustType = 'receive' | 'return' | 'damage' | 'adjust'
+export type InventoryAdjustSign = 1 | -1
+
+export interface InventoryAdjustModalState {
+  sku: string
+  qty: string
+  note: string
+  date: string
+  type: InventoryAdjustType
+  sign: InventoryAdjustSign
+}
+
+export interface InventoryAdjustModalProps {
+  adjustModal: InventoryAdjustModalState | null
+  onClose: () => void
+  onSubmit: () => void
+  onChangeType: (type: InventoryAdjustType) => void
+  onChangeSign: (sign: InventoryAdjustSign) => void
+  onChangeQty: (qty: string) => void
+  onChangeNote: (note: string) => void
+  onChangeDate: (date: string) => void
+}
 
 export function InventoryAdjustModal({
   adjustModal,
@@ -15,7 +41,7 @@ export function InventoryAdjustModal({
   onChangeQty,
   onChangeNote,
   onChangeDate,
-}) {
+}: InventoryAdjustModalProps) {
   if (!adjustModal) return null
   return (
     <div className="inventory-overlay" onClick={onClose}>
@@ -31,7 +57,7 @@ export function InventoryAdjustModal({
               ['return', '↩ Return'],
               ['damage', '⚠ Damage'],
               ['adjust', '± Adjust'],
-            ]).map(([type, label]) => {
+            ] as [InventoryAdjustType, string][]).map(([type, label]) => {
               const isActive = adjustModal.type === type
               const accent = type === 'damage' ? 'var(--red)' : type === 'return' ? '#d97706' : 'var(--ss-blue)'
               return (

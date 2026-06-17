@@ -1,5 +1,26 @@
-// @ts-nocheck
-import type { InitCountsDto, InitStoreDto } from "../../types/api";
+// TODO PS-257: InitCountsDto / InitStoreDto are not exported by ../../types/api
+// (the counts/store init DTOs were never added there). Until v4 grows real init
+// contracts, the structural shapes consumed by buildSidebarSections are declared
+// locally — matching the SidebarOrders.tsx / useSidebarController.ts precedent —
+// so the index narrowing below stays well-typed.
+interface InitStoreDto {
+  storeId: number;
+  storeName: string;
+  isTest?: boolean;
+}
+interface InitCountsByStatusRow {
+  orderStatus: string;
+  cnt: number;
+}
+interface InitCountsByStatusStoreRow {
+  orderStatus: string;
+  storeId: number | null;
+  cnt: number;
+}
+interface InitCountsDto {
+  byStatus?: InitCountsByStatusRow[];
+  byStatusStore?: InitCountsByStatusStoreRow[];
+}
 
 export type SidebarOrderStatus = "awaiting_shipment" | "shipped" | "cancelled";
 

@@ -1,9 +1,9 @@
-// @ts-nocheck — extracted VERBATIM from the @ts-nocheck OrdersView.tsx; the
-// sort-value resolver reads loose rate records (order.bestRate?./
-// order.selectedRate?. are `{}`-typed on the DTO), following the SAME
-// documented precedent as orders-row-display.tsx and orders-display-state.ts.
-// The exported types (OrderStatus/SortKey/TableColumnKey/TableColumn) remain
-// fully typed for consumers.
+// PS-257: this module is now strict-typed. The sort-value resolver reads loose
+// rate records: `order.selectedRate` is `AnyRecord` (its reads stay `any`), while
+// `order.bestRate` is declared `unknown` in types/api.ts, so its property reads are
+// routed through the LooseBestRate cast (exported from orders-display-state.ts).
+// Casts are type-erased — no runtime behavior change. The exported types
+// (OrderStatus/SortKey/TableColumnKey/TableColumn) remain fully typed for consumers.
 //
 // PS-166 (Wave 2a2): OrdersView's column system — the status/sort/column key
 // types, the TABLE_COLUMNS definition table, per-status column visibility,
@@ -13,7 +13,7 @@
 // (orders-items, orders-display-state, orders-row-display).
 import type { CarrierAccountDto, OrderFullDto, OrderSummaryDto } from '../../types/api'
 import { getOrderWeightOz, getPrimaryItem, getShipTo, getTotalQuantity } from './orders-items'
-import { getShipAccountDisplay, isStrictShippedOrder } from './orders-display-state'
+import { getShipAccountDisplay, isStrictShippedOrder, type LooseBestRate } from './orders-display-state'
 import {
   getBackendRowMoney,
   getBackendRowMarketplace,
@@ -116,7 +116,7 @@ export function getSortValue(
       if (isStrictShippedOrder(order)) {
         return `${getShippingString(order, 'carrierCode') ?? ''}${getShippingString(order, 'serviceCode') ?? ''}`.toLowerCase()
       }
-      return `${getShippingString(order, 'carrierCode') ?? order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode ?? ''}${getShippingString(order, 'serviceCode') ?? order.selectedRate?.serviceCode ?? getBestRateServiceCode(order) ?? ''}`.toLowerCase()
+      return `${getShippingString(order, 'carrierCode') ?? order.selectedRate?.carrierCode ?? (order.bestRate as LooseBestRate | undefined)?.carrierCode ?? ''}${getShippingString(order, 'serviceCode') ?? order.selectedRate?.serviceCode ?? getBestRateServiceCode(order) ?? ''}`.toLowerCase()
     case 'custcarrier':
       return String(getShipAccountDisplay(order, accounts)).toLowerCase()
     case 'total':
@@ -148,11 +148,11 @@ export function getSortValue(
     case 'labelcreated':
       return order.label?.createdAt ?? ''
     case 'test_carrierCode':
-      return (getShippingString(order, 'carrierCode') ?? toStringValue(order.bestRate?.carrierCode) ?? '').toLowerCase()
+      return (getShippingString(order, 'carrierCode') ?? toStringValue((order.bestRate as LooseBestRate | undefined)?.carrierCode) ?? '').toLowerCase()
     case 'test_serviceCode':
-      return (getShippingString(order, 'serviceCode') ?? toStringValue(order.bestRate?.serviceCode) ?? '').toLowerCase()
+      return (getShippingString(order, 'serviceCode') ?? toStringValue((order.bestRate as LooseBestRate | undefined)?.serviceCode) ?? '').toLowerCase()
     case 'test_shippingProviderID':
-      return (toStringValue(order.bestRate?.shippingProviderId) ?? toStringValue(getBestRateShippingProviderId(order)) ?? '').toLowerCase()
+      return (toStringValue((order.bestRate as LooseBestRate | undefined)?.shippingProviderId) ?? toStringValue(getBestRateShippingProviderId(order)) ?? '').toLowerCase()
     case 'test_clientID':
       return Number(order.clientId ?? -1)
     case 'test_shippingAccount':
