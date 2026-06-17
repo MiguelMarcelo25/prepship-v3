@@ -309,6 +309,22 @@ check(
   brokeredGuardPrecedesLeak('getBestRateCarrierNickname', '.carrierNickname'),
 );
 
+// ── 7b. OrderDetailDrawer.tsx is a LIVE lazy-loaded drawer (OrdersView:110/9471),
+//        not dead code. Its accountLabel cascade must resolve the brokered "Shipp"
+//        BEFORE the raw selectedRate.carrierNickname (the 980006/GG6381 vector).
+{
+  const drawerSrc = readFileSync('web/src/components/OrderDetailDrawer.tsx', 'utf8');
+  const start = drawerSrc.indexOf('const accountLabel = textValue(');
+  const end = start >= 0 ? drawerSrc.indexOf(');', start) : -1;
+  const body = start >= 0 && end > start ? drawerSrc.slice(start, end) : '';
+  const guardIdx = body.indexOf('isShippBrokeredServiceCode');
+  const leakIdx = body.indexOf('selectedRate.carrierNickname');
+  check('OrderDetailDrawer imports the brokered helpers',
+    /isShippBrokeredServiceCode/.test(drawerSrc) && /SHIPP_BROKERED_ACCOUNT_LABEL/.test(drawerSrc));
+  check('OrderDetailDrawer accountLabel: brokered "Shipp" precedes selectedRate.carrierNickname',
+    guardIdx > 0 && leakIdx > 0 && guardIdx < leakIdx);
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-273 Shipp account nickname guard (${failures} failing)`);
   process.exit(1);

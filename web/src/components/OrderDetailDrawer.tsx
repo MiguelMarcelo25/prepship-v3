@@ -10,6 +10,9 @@
 
 import { useEffect, useState } from 'react';
 import { apiClient, TEST_CLIENT_IDS } from '../lib/v2-apiClient';
+// PS-273: brokered-Shipp display helpers (canonical owner) so a Shipp-brokered
+// row shows "Shipp", never a fabricated direct-carrier nickname.
+import { isShippBrokeredServiceCode, SHIPP_BROKERED_ACCOUNT_LABEL } from './Views/order-shipping-display';
 
 type ShipTo = {
   name?: string;
@@ -482,6 +485,11 @@ export default function OrderDetailDrawer({
     const accountLabel = textValue(
       shipmentRecord.providerAccountNickname,
       selectedRate.providerAccountNickname,
+      // PS-273: a Shipp-brokered row (shipp_* service code) resolves "Shipp"
+      // BEFORE the raw rate carrierNickname (the fabricated direct-carrier
+      // account, the 980006/GG6381 vector). Persisted nicknames above still win;
+      // non-brokered rows fall through to the existing cascade unchanged.
+      isShippBrokeredServiceCode(serviceCode) ? SHIPP_BROKERED_ACCOUNT_LABEL : null,
       selectedRate.carrierNickname,
       selectedRate.carrier_nickname,
       canonicalShipping.accountNickname,
