@@ -2,6 +2,10 @@ import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type 
 import { motion } from 'framer-motion'
 import { Check, ListFilter, Loader2, Pencil, Receipt, SlidersHorizontal, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
+// PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
+// (that adapter is out of this ticket's scope); call the shared low-level
+// client directly. Additive, behind the backend shippingZeroNeedsReview flag.
+import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -291,6 +295,10 @@ export default function BillingView() {
   const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
   const [billingEditModal, setBillingEditModal] = useState<BillingEditModalState>(null)
+  // PS-275: in-flight flag for the $0-shipping prep-fee review POST. Separate
+  // from the edit-modal save state so the review action does not entangle with
+  // the line-item save. Additive — only used when shippingZeroNeedsReview.
+  const [zeroShippingReviewSaving, setZeroShippingReviewSaving] = useState(false)
   // PS — client package prices (packageId -> charge) for the open detail
   // client, used to auto-fill Box Cost when the operator changes the Box Size.
   const [billingEditPackagePrices, setBillingEditPackagePrices] = useState<Record<number, number>>({})
@@ -426,7 +434,30 @@ export default function BillingView() {
   // the same order shows up 2-5 times in the table — once per fee type
   // — which is what we're fixing here.
   const mergedDetailRows = useMemo(
-    () => aggregateBillingDetailRowsByOrder(detailState.rows),
+    () => {
+      const merged = aggregateBillingDetailRowsByOrder(detailState.rows)
+      // PS-275: the $0-shipping review flag rides on the per-order SHIPPING line
+      // only; the order-merge seeds from whichever line is first (often
+      // pick_pack), so OR it back across the order's raw lines here. feeWaived is
+      // order-level (set on every raw line by the backend), so it already
+      // survives the seed spread — this only rescues shippingZeroNeedsReview.
+      // Additive: rows without the flag are untouched.
+      const zeroReviewByOrderId = new Map<unknown, boolean>()
+      for (const raw of detailState.rows) {
+        const oid = (raw as { orderId?: unknown }).orderId
+        if (oid == null || oid === '') continue
+        if ((raw as { shippingZeroNeedsReview?: unknown }).shippingZeroNeedsReview === true) {
+          zeroReviewByOrderId.set(oid, true)
+        }
+      }
+      if (zeroReviewByOrderId.size === 0) return merged
+      return merged.map((row) => {
+        const oid = (row as { orderId?: unknown }).orderId
+        return oid != null && zeroReviewByOrderId.get(oid)
+          ? ({ ...(row as Record<string, unknown>), shippingZeroNeedsReview: true } as typeof row)
+          : row
+      })
+    },
     [detailState.rows],
   )
   const sortedDetailRows = useMemo(() => sortRows(
@@ -977,6 +1008,48 @@ export default function BillingView() {
     }
   }
 
+  // PS-275: record the operator's $0-shipping review decision (waive the prep
+  // fee, or keep it). Thin — the backend owns what may be waived and persists a
+  // durable, reversible billing_fee_waivers row; we just POST the decision and
+  // re-pull the details + summary so the screen reflects the new state. A
+  // 'waived' decision needs an "Update Billing" regenerate to zero the prep
+  // lines (the toast says so); the badge updates immediately from the refresh.
+  async function handleZeroShippingReview(decision: 'waived' | 'not_waived') {
+    if (!billingEditModal || !detailState.clientId) return
+    const orderId = Number(billingEditModal.row.orderId)
+    if (!Number.isFinite(orderId) || orderId <= 0) return
+
+    setZeroShippingReviewSaving(true)
+    try {
+      await api.post(`/billing/zero-shipping-review/${orderId}`, {
+        clientId: detailState.clientId,
+        decision,
+      })
+
+      const [rows] = await Promise.all([
+        apiClient.fetchBillingDetails(from, to, detailState.clientId),
+        apiClient.fetchBillingSummary(from, to).then((nextRows) => {
+          setSummaryRows(nextRows)
+          setSummaryError(null)
+        }),
+      ])
+
+      setDetailState((current) => ({ ...current, rows, loading: false, error: null }))
+      setBillingEditModal(null)
+      toastContext?.addToast(
+        decision === 'waived'
+          ? 'Prep fee marked waived — run "Update Billing" for this range to zero the prep lines.'
+          : 'Recorded: prep fee kept for this $0-shipping order.',
+        'success',
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to record review'
+      toastContext?.addToast(message, 'error')
+    } finally {
+      setZeroShippingReviewSaving(false)
+    }
+  }
+
   async function handleSavePackagePrices() {
     if (!selectedPkgClientId) {
       toastContext?.addToast('Select a client first', 'error')
@@ -1329,6 +1402,71 @@ export default function BillingView() {
                 <strong style={{ color: '#b45309' }}>Box needs review:</strong>{' '}
                 {billingEditModal.row.packageCostReviewReason || 'the shipped box could not be matched to a known package.'}
                 {' '}Pick the correct Box Size (or set a Box Cost) and Save — the decision persists across billing regeneration.
+              </div>
+            ) : null}
+
+            {/* PS-275: $0-shipping review. The backend flags a billed shipping
+                line of EXACTLY $0.00 (shippingZeroNeedsReview) — a real recorded
+                zero-dollar label, distinct from a missing cost. The operator
+                decides: WAIVE the prep fee (the order shipped free, so comp the
+                prep), or KEEP it. The decision is durable + reversible; a waive
+                takes effect on the next "Update Billing". Additive, behind the
+                backend flag — canary; needs DJ eyeball. */}
+            {billingEditModal.row.shippingZeroNeedsReview ? (
+              <div
+                role="group"
+                aria-label="Review $0 shipping"
+                style={{
+                  margin: '8px 0',
+                  padding: '8px 12px',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: 8,
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  fontSize: 11.5,
+                  color: 'var(--text)',
+                }}
+              >
+                <div style={{ marginBottom: 6 }}>
+                  <strong style={{ color: '#1d4ed8' }}>$0 shipping — review:</strong>{' '}
+                  this order has a recorded shipping cost of exactly $0.00.
+                  {billingEditModal.row.feeWaived
+                    ? ' Prep fee is currently WAIVED.'
+                    : ' Waive the prep fee (shipped free) or keep it.'}
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn btn-secondary btn-xs"
+                    type="button"
+                    disabled={zeroShippingReviewSaving}
+                    onClick={() => void handleZeroShippingReview('waived')}
+                  >
+                    {zeroShippingReviewSaving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : null}
+                    Waive prep fee
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-xs"
+                    type="button"
+                    disabled={zeroShippingReviewSaving}
+                    onClick={() => void handleZeroShippingReview('not_waived')}
+                  >
+                    Keep prep fee
+                  </button>
+                </div>
+              </div>
+            ) : billingEditModal.row.feeWaived ? (
+              <div
+                role="status"
+                style={{
+                  margin: '8px 0',
+                  padding: '6px 12px',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: 8,
+                  background: 'rgba(34, 197, 94, 0.08)',
+                  fontSize: 11.5,
+                  color: '#166534',
+                }}
+              >
+                <strong>Prep fee waived</strong> for this order (reversible via Update Billing).
               </div>
             ) : null}
 

@@ -32,6 +32,13 @@ import {
 } from './reporting-metrics';
 import { summarizeBillingItemsForDetail } from './billing-detail-utils';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
+// PS-275: backend owns the $0-shipping review decision + prep-fee waiver
+// (pure policy) and the durable, reversible waiver state (runtime-DDL store).
+import {
+  applyPrepFeeWaiver,
+  decideZeroShippingReview,
+} from './billing-shipping-policy';
+import { readBillingFeeWaivers } from './billing-fee-waiver-store';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -853,6 +860,17 @@ export async function generateLineItems(input: GenerateInput) {
     /* best-effort: sidecar absent or unreadable -> no house billing (today's behavior) */
   }
 
+  // PS-275: prep-fee waivers (operator's $0-shipping review decisions). Durable,
+  // reversible, default-inert: with NO waiver row the map is empty and billing is
+  // byte-identical to today. Read once for every order in scope; the per-order
+  // loop zeroes ONLY prep/fulfillment/pick-pack fee lines when an order is waived
+  // (never product/marketplace/box/storage/shipping). Best-effort — the store
+  // already returns an empty Map on any error and never throws.
+  const orderIdsInScope = [
+    ...new Set(billableRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
+  ];
+  const feeWaiverByOrderId = await readBillingFeeWaivers(orderIdsInScope);
+
   for (const s of billableRows) {
     if (s.clientId === null) {
       skipped += 1;
@@ -1047,8 +1065,20 @@ export async function generateLineItems(input: GenerateInput) {
       });
     }
 
+    // ─── PS-275: prep-fee waiver (the $0-shipping review outcome) ───────────
+    // When the operator has WAIVED this order's prep fee, zero ONLY the
+    // prep/fulfillment/pick-pack fee lines (applyPrepFeeWaiver — the pure
+    // owner). Product/marketplace/box/storage/shipping label lines are NEVER
+    // touched. No waiver (the default for every order) => byte-identical rows.
+    // Applied BEFORE the batch collect so details, summary metrics, and the
+    // PDF/XLSX exports all read the SAME adjusted billing_line_items — no forked
+    // export math.
+    const waiver = s.orderId != null ? feeWaiverByOrderId.get(s.orderId) : undefined;
+    const waived = waiver?.decision === 'waived';
+    const effectiveRows = applyPrepFeeWaiver(rows, waived);
+
     // Collect for batch insert instead of inserting one at a time.
-    for (const row of rows) {
+    for (const row of effectiveRows) {
       allRows.push(row);
       total += toNum(row.totalCost);
     }
@@ -1657,6 +1687,15 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
     }
   }
 
+  // PS-275: load any prep-fee waiver decisions for the orders on screen so the
+  // detail rows can show the current state (waived / decided-not / undecided).
+  // Default-inert: the store returns an empty Map when there are no rows or on
+  // any error, so this leaves today's detail payload unchanged.
+  const detailOrderIds = Array.from(
+    new Set(rows.map((row) => row.orderId).filter((id): id is number => id != null))
+  );
+  const feeWaiverByOrderId = await readBillingFeeWaivers(detailOrderIds);
+
   return Promise.all(
     rows.map(async (row) => {
       const fallbackShipment =
@@ -1714,6 +1753,16 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const lineType = row.lineType ?? '';
       const isShippingLine = lineType === 'shipping';
       const isMissingShippingLine = lineType === 'shipping_missing';
+      // PS-275: a billed shipping line of EXACTLY $0.00 needs operator review
+      // (a real recorded $0 label — distinct from the missing-cost review,
+      // which fires when the cost is unknown). The decision is owned by the
+      // pure policy module; this just reads its boolean off the billed line.
+      const isZeroShippingReviewLine =
+        isShippingLine &&
+        decideZeroShippingReview({
+          shippingAmount: toFiniteNumber(row.totalCost),
+          hasShipmentRow: row.shipmentId != null,
+        }).needsReview;
       // PS-207: $0.00 box review line — the shipped box could not be resolved
       // to a known package (or selected box and shipment dims disagree). The
       // FE renders a NEEDS REVIEW chip from these flags; it does no policy
@@ -1776,6 +1825,9 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         overridePackageId: _overridePackageId,
         ...rest
       } = row;
+      // PS-275: this order's prep-fee waiver decision (if any), for the FE chip.
+      const feeWaiver = row.orderId != null ? feeWaiverByOrderId.get(row.orderId) ?? null : null;
+      const feeWaived = feeWaiver?.decision === 'waived';
       return {
         ...rest,
         shipmentId: row.shipmentId ?? fallbackShipment?.id ?? null,
@@ -1810,6 +1862,17 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         // the range should be regenerated. Only meaningful for box lines.
         stalePackagePrice,
         stale_package_price: stalePackagePrice,
+        // PS-275: a billed shipping line of EXACTLY $0.00 — the FE shows a
+        // "Review $0 shipping" affordance from this flag (it does NO policy math
+        // of its own; the decision is owned by decideZeroShippingReview).
+        shippingZeroNeedsReview: isZeroShippingReviewLine,
+        shipping_zero_needs_review: isZeroShippingReviewLine,
+        // PS-275: the order's prep-fee waiver decision (durable, reversible).
+        // null = undecided; the FE badges "Prep fee waived" when true.
+        feeWaived,
+        fee_waived: feeWaived,
+        feeWaiverDecision: feeWaiver?.decision ?? null,
+        fee_waiver_decision: feeWaiver?.decision ?? null,
       };
     })
   );

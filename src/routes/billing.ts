@@ -30,6 +30,9 @@ import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
 import { backfillReferenceRates } from '../services/billing-ref-rates';
+// PS-275: durable, reversible prep-fee waiver state ($0-shipping review).
+import { upsertBillingFeeWaiver } from '../services/billing-fee-waiver-store';
+import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 
 const app = new Hono();
 
@@ -539,6 +542,86 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
 
   return c.json({ ok: true, orderId, clientId: body.clientId, updated, inserted });
 });
+
+// ─── PS-275: $0-shipping review → prep-fee waiver decision ──────────────────
+// Thin POST that records the operator's review of a $0-shipping order. The
+// DECISION (what may be waived) lives in the pure policy + the durable store;
+// this route only validates auth/client-scope, captures the order's CURRENT
+// prep total (so the waiver is reversible), and persists. It edits NO billing
+// line itself — the next "Update Billing" regenerate applies the waiver via
+// the generator's applyPrepFeeWaiver, so details/summary/exports stay in sync
+// off the same data. Touches billing_fee_waivers only (never shipments / the
+// shipped-data lock), so no lockdown override is needed.
+const zeroShippingReviewSchema = z.object({
+  clientId: z.coerce.number().int().positive(),
+  decision: z.enum(['waived', 'not_waived']),
+  note: z.string().max(500).optional(),
+});
+
+const PREP_FEE_LINE_TYPE_LIST = [...PREP_FEE_LINE_TYPES];
+
+app.post(
+  '/zero-shipping-review/:orderId{[0-9]+}',
+  requirePermission('financials:write'),
+  zValidator('json', zeroShippingReviewSchema),
+  async (c) => {
+    const orderId = Number(c.req.param('orderId'));
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+
+    // Scope gate — identical posture to the /details PATCH: the order must
+    // belong to an active client this caller can see.
+    const [base] = await db
+      .select({ clientId: billingLineItems.clientId })
+      .from(billingLineItems)
+      .innerJoin(clients, eq(billingLineItems.clientId, clients.id))
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId),
+          eq(clients.active, true),
+          billingClientScopePredicate(scope)
+        )
+      )
+      .limit(1);
+
+    if (!base) return c.json({ error: 'Billing line item not found' }, 404);
+
+    // Capture the order's CURRENT prep total so the waiver is reversible
+    // (clearing it restores the original charge on the next regenerate). The
+    // prep line-type list is the pure policy module's canonical set.
+    const [prepSumRow] = await db.execute<{ original_prep_amount: string | null }>(sql`
+      select coalesce(sum(total_cost), 0)::text as original_prep_amount
+      from billing_line_items
+      where client_id = ${body.clientId}
+        and order_id = ${orderId}
+        and line_type in (${sql.join(PREP_FEE_LINE_TYPE_LIST.map((t) => sql`${t}`), sql`, `)})
+    `);
+    const originalPrepAmount = prepSumRow?.original_prep_amount != null
+      ? Number(prepSumRow.original_prep_amount)
+      : null;
+
+    await upsertBillingFeeWaiver({
+      orderId,
+      decision: body.decision,
+      reviewer: (c.get('email' as never) as string | undefined) ?? null,
+      note: body.note ?? null,
+      originalPrepAmount: Number.isFinite(originalPrepAmount as number) ? originalPrepAmount : null,
+    });
+
+    // PS-234: audit the decision (facts only — no PII/secret values).
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'billing_fee_waiver',
+      resourceId: orderId,
+      action: body.decision,
+      details: { clientId: body.clientId, orderId, decision: body.decision, originalPrepAmount },
+    });
+
+    return c.json({ ok: true, orderId, clientId: body.clientId, decision: body.decision });
+  }
+);
 
 // PS-208: accept plain YYYY-MM-DD (canonical) AND legacy ISO instants — the
 // route normalizes through billingDayRange like every other billing endpoint.
