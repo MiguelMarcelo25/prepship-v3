@@ -21,6 +21,7 @@ import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
 import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house-row-marked-amount';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../src/services/shipping-workflow/best-rate-workflow-dto';
+import { redactOrderFinancials, RATE_MONEY_FIELD_KEYS } from '../src/services/orders-financial-redaction';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -279,9 +280,35 @@ const HOUSE_ROW_FACTS = {
   check('portal proof: NON-financial (client_user portal) viewer gets money === null at BUILD — no base/margin/markupSource leak',
     portal.money === null);
 }
-check('portal serializer: redactOrderFinancials ALSO nulls bestRateWorkflow money + marketplace for non-financial viewers (defense-in-depth, not only the build gate)',
-  /function redactOrderFinancials[\s\S]*?money: null, marketplace: null/.test(ordersSrc) &&
-  /function redactOrderFinancials[\s\S]*?bestRateWorkflow: workflow/.test(ordersSrc));
+// BEHAVIORAL portal-leak proof (was the boss/audit's #1 defect: houseMargin + nextBestNonHouseRate
+// leaked via overrides.bestRateJson on the list + both detail routes). Exercise the real redactor.
+{
+  const leakyRow = {
+    id: 1,
+    overrides: { bestRateJson: { carrierCode: 'shipp', totalCost: 8.5, houseMargin: 1.14, nextBestNonHouseRate: { carrierCode: 'usps', totalCost: 9.64 } } },
+    bestRateWorkflow: { bestRateState: 'fresh', money: { baseAmount: 8.5, markedAmount: 9.64, markupAmount: 1.14, markupSource: 'house_account' }, marketplace: { profit: 5 } },
+    bestRate: { amount: 8.5, houseMargin: 1.14 },
+  } as Record<string, unknown>;
+
+  const client = redactOrderFinancials(leakyRow, false) as any;
+  check('portal leak FIX: client_user (non-financial) gets overrides.bestRateJson.houseMargin + nextBestNonHouseRate.totalCost + the SHIPP totalCost NULLED',
+    client.overrides.bestRateJson.houseMargin === null &&
+    client.overrides.bestRateJson.totalCost === null &&
+    client.overrides.bestRateJson.nextBestNonHouseRate.totalCost === null &&
+    client.overrides.bestRateJson.nextBestNonHouseRate.carrierCode === 'usps');
+  check('portal leak FIX: client_user gets bestRateWorkflow.money + .marketplace nulled (no base/margin/markupSource)',
+    client.bestRateWorkflow.money === null && client.bestRateWorkflow.marketplace === null);
+  check('portal leak FIX: houseMargin is in the canonical redaction key set',
+    RATE_MONEY_FIELD_KEYS.has('houseMargin'));
+
+  const operator = redactOrderFinancials(leakyRow, true) as any;
+  check('redaction is identity for INTERNAL financial viewers (operator sees houseMargin + the money tuple unchanged)',
+    operator.overrides.bestRateJson.houseMargin === 1.14 && operator.bestRateWorkflow.money.markupSource === 'house_account');
+}
+check('portal serializer: redaction extracted to the pure owner + BOTH detail routes apply it (list already did)',
+  /from '\.\.\/services\/orders-financial-redaction'/.test(ordersSrc) &&
+  (ordersSrc.match(/redactOrderFinancials\(\{/g) || []).length >= 2 &&
+  /overrides: redactRateMoneyFields\(row\.overrides\)/.test(readFileSync('src/services/orders-financial-redaction.ts', 'utf8')));
 
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').

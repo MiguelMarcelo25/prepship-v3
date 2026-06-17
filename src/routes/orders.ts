@@ -97,6 +97,7 @@ import {
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
+import { redactRateMoneyFields, redactOrderFinancials } from '../services/orders-financial-redaction';
 // PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
 // (the value the rate path uses) via the SAME classifier + money-safe policy, so every
 // surface — incl. the FE rate draft key — can read one residential instead of re-deriving.
@@ -415,59 +416,11 @@ function canViewOrderFinancials(c: Context): boolean {
   );
 }
 
-const RATE_MONEY_FIELD_KEYS = new Set([
-  'amount',
-  'cost',
-  'shipmentCost',
-  'otherCost',
-  'labelCost',
-  'rawCost',
-  'rateCost',
-  'totalCost',
-  'shippingCost',
-  'shippingTotal',
-  'standardShippingCost',
-  'standardShippingTotal',
-  'houseMargin', // PS-220: the SHIPP house-account margin is INTERNAL — never to non-financial / client viewers
-]);
-
-function redactRateMoneyFields<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((item) => redactRateMoneyFields(item)) as T;
-  }
-  if (!value || typeof value !== 'object') return value;
-  const out: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = RATE_MONEY_FIELD_KEYS.has(key)
-      ? null
-      : redactRateMoneyFields(nested);
-  }
-  return out as T;
-}
-
-function redactOrderFinancials<T extends Record<string, unknown>>(row: T, canViewFinancials: boolean): T {
-  if (canViewFinancials) return row;
-  // PS-220 (portal serializer, defense-in-depth): the backend money tuple
-  // (bestRateWorkflow.money) carries internal base = SHIPP drp_cost, markupAmount = the
-  // house margin, and markupSource. Its field names are NOT in RATE_MONEY_FIELD_KEYS, so
-  // redactRateMoneyFields can't scrub it — and although withOrderRowWorkflow only BUILDS it
-  // for canViewFinancials viewers, the portal must not depend on that single build-time gate.
-  // Null the money + marketplace tuples outright for non-financial / client_user sessions, so
-  // a house order's internal cost/margin/source can never reach a client even if a future
-  // path populates the tuple. Clients get their shipping cost from billing (the customer_rate).
-  const workflow = row.bestRateWorkflow && typeof row.bestRateWorkflow === 'object' && !Array.isArray(row.bestRateWorkflow)
-    ? { ...(row.bestRateWorkflow as Record<string, unknown>), money: null, marketplace: null }
-    : row.bestRateWorkflow;
-  return {
-    ...row,
-    label: redactRateMoneyFields(row.label),
-    selectedRate: redactRateMoneyFields(row.selectedRate),
-    bestRate: redactRateMoneyFields(row.bestRate),
-    shipping: redactRateMoneyFields(row.shipping),
-    canonicalOrder: redactRateMoneyFields(row.canonicalOrder),
-    bestRateWorkflow: workflow,
-  };
-}
+// PS-220: order financial redaction (RATE_MONEY_FIELD_KEYS + redactRateMoneyFields +
+// redactOrderFinancials) now lives in its own pure, behaviorally-testable module. This route
+// still owns WHO can view financials (canViewOrderFinancials above); the module owns WHAT is
+// scrubbed — including overrides.bestRateJson (the projected houseMargin/nextBestNonHouseRate
+// stamp) and bestRateWorkflow.money, the two house surfaces a client must never see.
 
 function orderScopePredicate(scope: ClientStoreScope): SQL | undefined {
   if (!scope.isRestricted) return undefined;
@@ -2939,7 +2892,11 @@ app.get('/:id{[0-9]+}', async (c) => {
   const comboPackageDefault = await getComboPackageDefaultForOrder(id);
   const detailClientIsTest = await loadClientIsTest(order.clientId);
 
-  return c.json({
+  // PS-220 (portal redaction): the detail payload carries overrides.bestRateJson (the projected
+  // houseMargin + nextBestNonHouseRate stamp) and bestRateWorkflow.money — both INTERNAL. The
+  // detail routes previously returned them raw; scope them with the SAME redactor the list uses.
+  const detailCanViewFinancials = canViewOrderFinancials(c);
+  return c.json(redactOrderFinancials({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
     comboPackageDefault,
     // PS-177 (Phase 5): backend-owned dims/weight/package DEFAULTS from product
@@ -2961,7 +2918,7 @@ app.get('/:id{[0-9]+}', async (c) => {
     // side panel ("Delivered Jun 12" / "In transit"). Null until the poller has seen
     // this order; never blocks the payload (the loader swallows its own errors).
     tracking: await loadOrderTrackingSummary(id),
-  });
+  }, detailCanViewFinancials));
 });
 
 // Alias of GET /orders/:id — old API exposed both shapes. Same payload.
@@ -2993,7 +2950,10 @@ app.get('/:id{[0-9]+}/full', async (c) => {
   const comboPackageDefault = await getComboPackageDefaultForOrder(id);
   const detailClientIsTest = await loadClientIsTest(order.clientId);
 
-  return c.json({
+  // PS-220 (portal redaction): same scrub as GET /:id — overrides.bestRateJson + bestRateWorkflow.money
+  // carry internal house cost/margin/source that a non-financial / client_user viewer must never see.
+  const fullCanViewFinancials = canViewOrderFinancials(c);
+  return c.json(redactOrderFinancials({
     ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
     comboPackageDefault,
     // PS-177 (Phase 5): same backend-owned dims/weight/package defaults as GET /:id.
@@ -3008,7 +2968,7 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     labelVoidability: resolveOrderLabelVoidability(shipmentRows, detailClientIsTest),
     // Tracking-driven queue retirement: same read-only tracking summary as GET /:id.
     tracking: await loadOrderTrackingSummary(id),
-  });
+  }, fullCanViewFinancials));
 });
 
 const manualOrderNumberPart = z.union([z.string(), z.number()]).optional();
