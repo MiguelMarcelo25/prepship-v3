@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -2769,12 +2768,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         {pullResults[d.id] ? (
           <div style={{
             fontSize: 11,
-            color: pullResults[d.id].ok ? 'var(--green)' : 'var(--red)',
+            color: pullResults[d.id]!.ok ? 'var(--green)' : 'var(--red)',
             paddingLeft: 4,
             marginTop: 2,
           }}>
             {(() => {
-              const r = pullResults[d.id]
+              const r = pullResults[d.id]!
               if (!r.ok) return `❌ Pull failed: ${r.error ?? 'Unknown error'}`
               const fetched = r.fetched ?? r.count ?? 0
               const inserted = r.inserted ?? 0
@@ -2797,12 +2796,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         {feePullResults[d.id] ? (
           <div style={{
             fontSize: 11,
-            color: feePullResults[d.id].ok !== false ? 'var(--green)' : 'var(--red)',
+            color: feePullResults[d.id]!.ok !== false ? 'var(--green)' : 'var(--red)',
             paddingLeft: 4,
             marginTop: 2,
           }}>
             {(() => {
-              const r = feePullResults[d.id]
+              const r = feePullResults[d.id]!
               if (r.ok === false) return `❌ Fees pull failed: ${r.error ?? 'Unknown error'}`
               const fetched = r.fetched ?? 0
               const updated = r.ordersUpdated ?? 0
@@ -2832,12 +2831,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         {rateResults[d.id] ? (
           <div style={{
             fontSize: 11,
-            color: rateResults[d.id].ok ? 'var(--green)' : 'var(--red)',
+            color: rateResults[d.id]!.ok ? 'var(--green)' : 'var(--red)',
             paddingLeft: 4,
             marginTop: 2,
           }}>
             {(() => {
-              const r = rateResults[d.id]
+              const r = rateResults[d.id]!
               if (!r.ok) return `❌ ${carrierRateErrorMessage(d.provider, r.error)}`
               const tag = r.simulated ? '🧪 Simulated' : '💰 Live'
               const ratesText = (r.rates ?? [])
@@ -2922,7 +2921,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       {showStores ? (
         <>
           {renderSectionHeader(
-            Store,
+            Store as React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>,
             'Your Stores',
             'Marketplace order sources. Use these to pull orders into PrepShip and push tracking back. Stores do not return shipping rates.',
             'Add Store',
@@ -2967,7 +2966,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       {showCarriers ? (
         <>
           {renderSectionHeader(
-            Truck,
+            Truck as React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>,
             'Your Carriers',
             'Direct shipping carriers — used for rate shopping and label purchase. These appear in the Rate Browser sidebar.',
             'Add Carrier',

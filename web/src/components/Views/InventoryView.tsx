@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -28,19 +27,25 @@ import {
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
-import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
-import type {
-  ClientDto,
-  CreateParentSkuResult,
-  InventoryAlertDto,
-  InventoryItemDto,
-  InventoryLedgerEntryDto,
-  InventorySkuOrdersDto,
-  PackageDto,
-  ParentSkuDto,
-  UpdateClientInput,
-  UpdateInventoryItemInput,
-} from '../../types/api'
+import { SortableHeader, nextSortState, sortRows, type SortState } from '../SortableTable'
+import type { PackageDto } from '../../types/api'
+// TODO PS-257: these inventory DTO/input shapes are not exported from the
+// `types/api` shim (which only re-exports a handful of order/package DTOs) nor
+// from the parity sibling, and every consumer here reads them as permissive
+// `any`-ish rows whose fields originate from `any`-returning apiClient methods.
+// Aliasing to `any` keeps the existing (erased-at-runtime) behavior intact;
+// promote to canonical exports when the shim is hardened.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type ClientDto = any
+type CreateParentSkuResult = any
+type InventoryAlertDto = any
+type InventoryItemDto = any
+type InventoryLedgerEntryDto = any
+type InventorySkuOrdersDto = any
+type ParentSkuDto = any
+type UpdateClientInput = any
+type UpdateInventoryItemInput = any
+/* eslint-enable @typescript-eslint/no-explicit-any */
 import {
   applyReceiveSkuInput,
   buildBulkDimensionUpdates,
@@ -550,7 +555,7 @@ function getClientRateSourceLabel(client: ClientDto) {
 }
 
 function getClientSourceSortLabel(client: ClientDto) {
-  const hasShipStationId = client.storeIds.some((id) => id > 0 && id < 9_000_000)
+  const hasShipStationId = client.storeIds.some((id: number) => id > 0 && id < 9_000_000)
   const lowerName = (client.name ?? '').toLowerCase()
 
   if (hasShipStationId) return 'ShipStation'
@@ -637,7 +642,7 @@ function drawSkuSalesChart(canvas: HTMLCanvasElement, dailySales: InventorySkuOr
   const padBottom = 28
   const chartWidth = width - padLeft - padRight
   const chartHeight = height - padTop - padBottom
-  const maxValue = Math.max(...dailySales.map((row) => row.units), 1)
+  const maxValue = Math.max(...dailySales.map((row: any) => row.units), 1) // TODO PS-257
   const totalBars = dailySales.length || 1
   const barWidth = Math.max(2, (chartWidth / totalBars) * 0.72)
   const gap = chartWidth / totalBars
@@ -665,7 +670,7 @@ function drawSkuSalesChart(canvas: HTMLCanvasElement, dailySales: InventorySkuOr
   }
   context.setLineDash([])
 
-  dailySales.forEach((row, index) => {
+  dailySales.forEach((row: any, index: number) => { // TODO PS-257
     const currentBarHeight = row.units > 0 ? Math.max(2, (row.units / maxValue) * chartHeight) : 0
     const x = padLeft + index * gap + (gap - barWidth) / 2
     const y = padTop + chartHeight - currentBarHeight
@@ -1013,11 +1018,11 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   // dropping them costs nothing at runtime and removes their hooks
   // dependency on state that no longer exists.
 
-  const [clientsSort, setClientsSort] = useState(null)
-  const [historySort, setHistorySort] = useState(null)
-  const [alertsSort, setAlertsSort] = useState(null)
-  const [parentsSort, setParentsSort] = useState(null)
-  const [skuOrdersSort, setSkuOrdersSort] = useState(null)
+  const [clientsSort, setClientsSort] = useState<SortState>(null)
+  const [historySort, setHistorySort] = useState<SortState>(null)
+  const [alertsSort, setAlertsSort] = useState<SortState>(null)
+  const [parentsSort, setParentsSort] = useState<SortState>(null)
+  const [skuOrdersSort, setSkuOrdersSort] = useState<SortState>(null)
   const [bulkEditMode, setBulkEditMode] = useState(false)
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, { weightOz: string; productLength: string; productWidth: string; productHeight: string }>>({})
   const [receiveClientId, setReceiveClientId] = useState('')
@@ -1761,7 +1766,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const sortedSkuOrders = useMemo(() => sortRows(
     skuDrawer?.orders ?? [],
     skuOrdersSort,
-    (order, key) => {
+    (order: any, key) => { // TODO PS-257
       switch (key) {
         case 'order':
           return order.orderNumber || order.orderId
@@ -1777,7 +1782,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
           return ''
       }
     },
-    (order) => order.orderNumber || order.orderId,
+    (order: any) => order.orderNumber || order.orderId, // TODO PS-257
   ), [skuDrawer?.orders, skuOrdersSort])
 
   function handleClientsSort(key: string) {
@@ -1818,7 +1823,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     options: { align?: 'left' | 'center' | 'right'; title?: string } = {},
   ) {
     const isActive = stockSort?.key === key
-    const directionLabel = isActive && stockSort.direction === 'asc' ? 'descending' : 'ascending'
+    const directionLabel = isActive && stockSort!.direction === 'asc' ? 'descending' : 'ascending'
     const alignClass = options.align ? `inventory-sort-header--${options.align}` : ''
     const className = ['inventory-sort-header', alignClass, isActive ? 'is-active' : '']
       .filter(Boolean)
@@ -1826,7 +1831,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
     return (
       <th
-        aria-sort={isActive ? (stockSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+        aria-sort={isActive ? (stockSort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
         style={options.align ? { textAlign: options.align } : undefined}
         title={options.title}
       >
@@ -1837,7 +1842,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
           title={`Sort by ${label} ${directionLabel}`}
         >
           <span>{label}</span>
-          <span className="inventory-sort-indicator">{isActive ? (stockSort.direction === 'asc' ? '^' : 'v') : ''}</span>
+          <span className="inventory-sort-indicator">{isActive ? (stockSort!.direction === 'asc' ? '^' : 'v') : ''}</span>
         </button>
       </th>
     )
@@ -1967,7 +1972,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         type: historyType,
         from: historyFrom,
         to: historyTo,
-      }))
+      }) as unknown as Record<string, unknown>)
       if (options?.signal && !options.signal.active) return
       setLedger(nextLedger)
     } catch (error) {
@@ -2279,7 +2284,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
           type: historyType,
           from: historyFrom,
           to: historyTo,
-        }))
+        }) as unknown as Record<string, unknown>)
         setLedger(nextLedger)
       }
     } catch (error) {
@@ -2409,7 +2414,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
   async function handleSaveBulkDims() {
     try {
-      const result = await apiClient.bulkUpdateInventoryDimensions(buildBulkDimensionUpdates(filteredRows, bulkDrafts))
+      const result = await apiClient.bulkUpdateInventoryDimensions(buildBulkDimensionUpdates(filteredRows, bulkDrafts) as unknown as Record<string, unknown>)
       setBulkEditMode(false)
       toastContext?.addToast(`✅ Saved dims for ${result.updated} SKUs`, 'success')
       await refreshInventoryView()
@@ -2587,7 +2592,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       const dateLabel = formatCaDateLong(receivedAt)
       const failureNote = result.failed ? ` (${result.failed} failed)` : ''
-      setReceiveResultMessage(`✅ Received ${receivedRows.length} SKU(s) on ${dateLabel}${failureNote}: ${receivedRows.map((row) => `${row.sku} (${row.qty} units → ${row.newStock} total)`).join(', ')}`)
+      setReceiveResultMessage(`✅ Received ${receivedRows.length} SKU(s) on ${dateLabel}${failureNote}: ${receivedRows.map((row: any) => `${row.sku} (${row.qty} units → ${row.newStock} total)`).join(', ')}`)
       setHistoryClientId(receiveClientId)
       setHistoryType('receive')
       setHistoryFrom(receiveDate)
@@ -2868,7 +2873,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         // and the section header stay in sync. Falls back to the first
         // entry if activeTab is somehow unknown — defensive, shouldn't
         // happen given the typed state machine.
-        const activeMeta = INVENTORY_TAB_META.find((t) => t.id === activeTab) ?? INVENTORY_TAB_META[0]
+        const activeMeta = (INVENTORY_TAB_META.find((t) => t.id === activeTab) ?? INVENTORY_TAB_META[0])!
         const ActiveIcon = activeMeta.icon
         return (
           <div className="mb-4">
@@ -4218,7 +4223,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                     // convention used in this codebase to flag non-ShipStation
                     // store rows. Real ShipStation store IDs are 6 digits.
                     const SHIPSTATION_MAX = 9_000_000
-                    const hasShipStationId = client.storeIds.some((id) => id > 0 && id < SHIPSTATION_MAX)
+                    const hasShipStationId = client.storeIds.some((id: number) => id > 0 && id < SHIPSTATION_MAX)
                     const lowerName = (client.name ?? '').toLowerCase()
                     const sourceInfo: { label: string; cls: string } = hasShipStationId
                       ? { label: 'ShipStation', cls: 'bg-indigo-50 text-indigo-700 ring-indigo-200' }
@@ -4256,7 +4261,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           <span style={{ color: 'var(--text4)' }}>—</span>
                         ) : (
                           <div className="flex flex-wrap items-center gap-1">
-                            {client.storeIds.map((id) => {
+                            {client.storeIds.map((id: number) => {
                               const storeName = storeNameMap.get(id)
                               return (
                                 <span
@@ -4840,7 +4845,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         skuDrawerLoading={skuDrawerLoading}
         skuDrawerError={skuDrawerError}
         skuOrdersSort={skuOrdersSort}
-        sortedSkuOrders={sortedSkuOrders}
+        sortedSkuOrders={sortedSkuOrders as unknown as React.ComponentProps<typeof InventorySKUDetailDrawer>['sortedSkuOrders']}
         onClose={() => setSkuDrawerOpen(false)}
         onOrderClick={openSkuDrawerOrder}
         onSortChange={handleSkuOrdersSort}

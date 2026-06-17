@@ -37,7 +37,10 @@ import { join } from 'node:path';
 // BillingDetailTable, AutomationAvailabilityPanel, InventorySKUDetailDrawer, SettingsView) — 91
 // type-erased fixes. Flagged: MarkupType union drift (MarkupsContext 'amount'|'percent'|'pct'|'flat'
 // vs types/markups 'pct'|'flat') to unify at source. — 10 -> 5.
-const CEILING = 5;
+// 2026-06-17 (PS-257 blitz slice 7): 3 of the biggest views de-nocheck'd BYTE-IDENTICALLY
+// (orders-row-display, CarrierIntegrationsCard, InventoryView). Only AnalysisView + OrdersView
+// (the 74-error money-path file) remain. — 5 -> 2.
+const CEILING = 2;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];
