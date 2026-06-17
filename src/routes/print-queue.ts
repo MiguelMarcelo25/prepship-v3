@@ -34,6 +34,10 @@ import {
   type ClientStoreScope,
 } from '../lib/client-store-scope';
 import { env } from '../lib/env';
+// PS-279: server-side owner of the Send-to-Queue route decision (the money-path
+// direct-buy-vs-backend-job ladder). Consumed only by the INERT /route-plan route
+// below, which is gated on PRINT_QUEUE_BACKEND_ORCHESTRATION (default OFF).
+import { planQueueRouteForOrders } from '../services/print-queue/queue-route-orchestrator';
 
 const app = new Hono();
 const DURABLE_STATUS_TIMEOUT_MS = 1500;
@@ -539,6 +543,61 @@ app.get('/batch-send/status/:jobId', async (c) => {
     results: job.results,
     error: job.errorMessage ?? null,
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
+  });
+});
+
+// PS-279: backend-owned Send-to-Queue ROUTE PLAN. INERT unless
+// PRINT_QUEUE_BACKEND_ORCHESTRATION is ON — when OFF it returns 503
+// FEATURE_DISABLED before any work (no DB, no provider call, no postage), and the
+// existing /batch-send route above is unchanged. When ON it RETURNS the route plan
+// only (it does not start a job and never buys postage); the FE buy-path cutover is
+// DEFERRED to a DJ canary. The classifier is the pure ported never-buy ladder.
+const routePlanBody = z.object({
+  existingLabelOnly: z.boolean().optional(),
+  batchTestMode: z.boolean().optional(),
+  orders: z
+    .array(
+      z.object({
+        order_id: z.number().int().positive(),
+        has_queueable_label: z.boolean(),
+        is_test: z.boolean(),
+        is_direct_carrier: z.boolean(),
+        backend_queue_route: z.string().nullable().optional(),
+        explicit_payload_provider_id: z.number().int().nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+app.post('/route-plan', zValidator('json', routePlanBody), async (c) => {
+  if (!env.PRINT_QUEUE_BACKEND_ORCHESTRATION) {
+    return c.json(
+      {
+        error: 'Backend Send-to-Queue orchestration is disabled',
+        code: 'FEATURE_DISABLED',
+      },
+      503,
+    );
+  }
+  const b = c.req.valid('json');
+  const plan = planQueueRouteForOrders(
+    b.orders.map((order) => ({
+      orderId: order.order_id,
+      route: {
+        hasQueueableLabel: order.has_queueable_label,
+        isTest: order.is_test,
+        isDirectCarrier: order.is_direct_carrier,
+        backendQueueRoute: order.backend_queue_route ?? null,
+        explicitPayloadProviderId: order.explicit_payload_provider_id ?? null,
+      },
+    })),
+    { existingLabelOnly: b.existingLabelOnly, batchTestMode: b.batchTestMode },
+  );
+  return c.json({
+    plans: plan.plans.map((p) => ({ order_id: p.orderId, route: p.route })),
+    backend_order_ids: plan.backendOrderIds,
+    direct_create_order_ids: plan.directCreateOrderIds,
   });
 });
 

@@ -146,6 +146,15 @@ const schema = z.object({
   // confirmations, never order/shipment data. Default OFF — the OFF path is a TRUE no-op (no DB, no
   // mutation). DJ flips this on Render.
   SYNC_STUCK_JOB_REAPER: booleanFlag(false),
+  // PS-279: default-OFF backend ownership of the Send-to-Queue ROUTE decision (the
+  // money-path direct-buy-vs-backend-job ladder, ported from the FE classifier into
+  // src/services/print-queue/queue-route-orchestrator.ts). When ON, the new
+  // POST /print-queue/route-plan route returns the server-computed route plan so the
+  // FE can delegate instead of owning the decision. When OFF the route is INERT (503
+  // FEATURE_DISABLED before any work — no DB, no provider, no postage) and the existing
+  // /batch-send path is byte-identical to today. The FE buy-path cutover is DEFERRED to
+  // a DJ canary; DJ flips this on Render after route-plan reads parity-equal on a live order.
+  PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false),
 });
 
 const parsed = schema.safeParse(process.env);
