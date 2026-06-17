@@ -19,6 +19,7 @@ import {
 import { houseMarginFromProjection } from '../src/services/shipping-workflow/house-margin-capture';
 import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
 import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
+import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house-row-marked-amount';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -183,6 +184,34 @@ check('billing: house branch reads the sidecar (is_house_order) and suppresses t
   });
   check('non-house tuple: markupSource=carrier_markup', carrierTuple != null && carrierTuple.markupSource === 'carrier_markup');
 }
+// ── slice 4b (producer + FE display): house customer_rate reaches the row tuple, badge renders ──
+check('house-row-marked-amount: awaiting reads the PROJECTED next-best total ($9.64), shipped reads the REALIZED customer_rate',
+  houseMarkedAmountForRow({ isAwaiting: true, projectedNextBestTotalCost: 9.64, realizedCustomerRate: null }) === 9.64 &&
+  houseMarkedAmountForRow({ isAwaiting: false, projectedNextBestTotalCost: null, realizedCustomerRate: 9.64 }) === 9.64);
+check('house-row-marked-amount: non-positive / missing source => null (not a house row)',
+  houseMarkedAmountForRow({ isAwaiting: true, projectedNextBestTotalCost: 0, realizedCustomerRate: null }) === null &&
+  houseMarkedAmountForRow({ isAwaiting: true, projectedNextBestTotalCost: null, realizedCustomerRate: 9.64 }) === null &&
+  houseMarkedAmountForRow({ isAwaiting: false, projectedNextBestTotalCost: 9.64, realizedCustomerRate: -1 }) === null);
+
+const dtoSrc = readFileSync('src/services/shipping-workflow/best-rate-workflow-dto.ts', 'utf8');
+check('producer DTO: facts.money carries houseMarkedAmount and passes it to buildOrderRowMoneyDisplay',
+  /houseMarkedAmount\?: number \| null/.test(dtoSrc) &&
+  /houseMarkedAmount: facts\.money\.houseMarkedAmount/.test(dtoSrc));
+
+const ordersSrc = readFileSync('src/routes/orders.ts', 'utf8');
+check('producer (orders.ts): awaiting houseMarkedAmount sourced from the projected nextBestNonHouseRate.totalCost',
+  /houseMarkedAmountForRow\(\{/.test(ordersSrc) &&
+  /projectedNextBestTotalCost:[\s\S]*?nextBestNonHouseRate\)\?\.totalCost/.test(ordersSrc));
+
+const rowDisplaySrc = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
+check('FE: getBackendRowMoney exposes markupSource (defaults carrier_markup on deploy-skew); renderHouseBadge exists',
+  /markupSource: money\.markupSource === 'house_account'/.test(rowDisplaySrc) &&
+  /export function renderHouseBadge\(\)/.test(rowDisplaySrc));
+
+const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+check('FE: the Best Rate cell renders the HOUSE badge only when markupSource === house_account',
+  /markupSource === 'house_account' \? renderHouseBadge\(\)/.test(ordersViewSrc));
+
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').
 // A loose [\s\S]*? would run past the branch into the carrier branches, which legitimately call

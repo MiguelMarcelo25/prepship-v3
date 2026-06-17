@@ -97,6 +97,7 @@ import {
   renderRateAmountWithMarkup,
   renderExtLabelBadge,
   renderShipmentSyncErrorBadge,
+  renderHouseBadge,
 } from './orders-row-display'
 import {
   fetchRecalculateAllJob,
@@ -6996,6 +6997,8 @@ export default function OrdersView({
         {backendMoney
           ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)
           : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate))}
+        {/* PS-220 (slice 4b): SHIPP house order — the shown amount is the customer_rate billed. */}
+        {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
         {recalculatingSpinner}
       </div>
     )

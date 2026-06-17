@@ -94,6 +94,7 @@ import {
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
+import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
 // PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
 // (the value the rate path uses) via the SAME classifier + money-safe policy, so every
 // surface — incl. the FE rate draft key — can read one residential instead of re-deriving.
@@ -2223,6 +2224,16 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             labelFinalCost: labelCost ?? null,
             markupRule: rowMarkupRule,
             insuranceAddOn: extractInsuranceAddOn(rowIsAwaiting ? bestRateRecord : selectedRateRecord),
+            // PS-220 (slice 4b): SHIPP house customer_rate. Awaiting reads the PROJECTED stamp on the
+            // raw best_rate_json (nextBestNonHouseRate.totalCost); realized (shipped) is wired in 4b-2.
+            // null => not a house row => the tuple owner uses the normal carrier-markup branch.
+            houseMarkedAmount: houseMarkedAmountForRow({
+              isAwaiting: rowIsAwaiting,
+              projectedNextBestTotalCost: finiteNumberOrNull(
+                recordOrNull(recordOrNull(overrideBestRate)?.nextBestNonHouseRate)?.totalCost,
+              ),
+              realizedCustomerRate: null,
+            }),
             // PS-239: marketplace-fee facts. Subtotal from the order items (Σ
             // non-adjustment unitPrice×qty); rule resolved most-specific-wins. The
             // marketplace axis is an optional refinement — store/client scope covers

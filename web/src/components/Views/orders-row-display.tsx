@@ -400,6 +400,10 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     markupAmount: toNumberValue(money.markupAmount),
     insuranceAddOn: toNumberValue(money.insuranceAddOn),
     marginPercent: toNumberValue(money.marginPercent),
+    // PS-220 (slice 4b): 'house_account' => SHIPP house order (marked = the customer_rate DRP bills,
+    // base = DRP's SHIPP cost, markup = the house margin). Defaults to 'carrier_markup' on deploy-skew
+    // (older backends omit the field), so the badge only ever shows on a confirmed house tuple.
+    markupSource: money.markupSource === 'house_account' ? ('house_account' as const) : ('carrier_markup' as const),
   }
 }
 
@@ -465,6 +469,30 @@ export function renderExtLabelBadge() {
       title="Shipped via external carrier (Amazon/marketplace/eBay)"
     >
       Ext. Label
+    </span>
+  )
+}
+
+// PS-220 (slice 4b): SHIPP house-account order. The displayed Best/Selected Rate is the
+// customer_rate DRP bills (cheapest eligible non-SHIPP); the green Margin is DRP's spread
+// over its actual SHIPP cost. Shows ONLY when the backend money tuple is markupSource
+// 'house_account' — never inferred client-side.
+export function renderHouseBadge() {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        background: '#dcfce7',
+        color: '#166534',
+        padding: '1px 5px',
+        borderRadius: 3,
+        fontSize: 9.5,
+        fontWeight: 700,
+        cursor: 'help',
+      }}
+      title="SHIPP house account: the shown rate is the customer_rate billed (cheapest eligible non-SHIPP); the green margin is DRP's spread over its SHIPP cost."
+    >
+      HOUSE
     </span>
   )
 }

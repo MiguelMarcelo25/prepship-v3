@@ -377,6 +377,10 @@ export type OrderRowWorkflowFacts = {
     labelFinalCost: number | null;
     markupRule: MarkupRule | null;
     insuranceAddOn: number | null;
+    // PS-220 (slice 4b): the SHIPP house customer_rate for this row (projected for
+    // awaiting, realized for shipped). Present => the money tuple's house branch
+    // fires (marked = customer_rate, base = SHIPP drp_cost, carrier markup suppressed).
+    houseMarkedAmount?: number | null;
     // PS-239: marketplace-fee facts (display-only, redacted with the rest of money).
     productSubtotal?: number | null;
     marketplaceFeeRule?: MarketplaceFeeRule | null;
@@ -501,6 +505,7 @@ export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWo
           labelFinalCost: facts.money.labelFinalCost,
           markupRule: facts.money.markupRule,
           insuranceAddOn: facts.money.insuranceAddOn,
+          houseMarkedAmount: facts.money.houseMarkedAmount ?? null,
         })
       : null;
     const marketplace = facts.money.canViewFinancials
