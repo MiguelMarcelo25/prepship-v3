@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * SettingsView — refined "Calm Command Center" aesthetic.
  *
@@ -80,7 +79,7 @@ import { formatCaDateTimeLabeled } from '../../lib/ca-time'
 import { useShippingAccounts, useClients } from '../../hooks'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
-import type { MarkupType } from '../../types/markups'
+import type { MarkupType, MarkupsMap as SettingsMarkupsMap } from '../../types/markups'
 import {
   HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
@@ -301,7 +300,11 @@ export default function SettingsView() {
   const latestSaveRequestRef = useRef(0)
 
   const markupRows = useMemo(
-    () => buildSettingsMarkupRows(accounts, markups, drafts),
+    // PS-257: MarkupsContext.MarkupsMap carries a wider MarkupType union
+    // ('amount' | 'percent' | 'pct' | 'flat') than the settings-parity
+    // MarkupsMap ('pct' | 'flat'); cast at the boundary (runtime values are
+    // already 'pct' | 'flat').
+    () => buildSettingsMarkupRows(accounts, markups as SettingsMarkupsMap, drafts),
     [accounts, markups, drafts],
   )
   const clientPlaceholders = useMemo(
@@ -985,7 +988,7 @@ export default function SettingsView() {
     },
   ]
 
-  const activeMeta = DRAWER_SECTIONS.find((s) => s.id === activeSection) ?? DRAWER_SECTIONS[0]
+  const activeMeta = DRAWER_SECTIONS.find((s) => s.id === activeSection) ?? DRAWER_SECTIONS[0]!
   const ActiveIcon = activeMeta.icon
   const automationClientGroups = useMemo(() => {
     const groups = new Map<number, {

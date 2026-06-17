@@ -1,14 +1,46 @@
-// @ts-nocheck
 // PS-154 extraction: pure-presentation drawer lifted verbatim out of
 // InventoryView.tsx. ALL data loading, sorting, canvas drawing
 // (drawSkuSalesChart), and the nested order-drawer logic stay in the
 // parent. The canvasRef is created in the parent and passed in so the
-// parent keeps owning the chart render effect. @ts-nocheck mirrors the
-// parent (phantom DTO types).
+// parent keeps owning the chart render effect.
+import type { RefObject } from 'react'
 import { SortableHeader } from '../SortableTable'
+import type { SortState } from '../SortableTable'
 import { formatCaDateLong } from '../../lib/ca-time'
 
-function formatDateOnly(value) {
+// TODO PS-257: the inventory SKU-orders DTO isn't exported from the shared
+// `types/api` shim, so the locally-consumed shapes are declared here to match
+// the parent InventoryView usage. Promote to a canonical export later.
+interface SkuOrderRow {
+  orderId: number | string
+  orderNumber?: string | null
+  shipToName?: string | null
+  qty?: number | null
+  orderStatus?: string | null
+  orderDate?: string | number | Date | null
+}
+
+interface SkuDrawerDto {
+  sku?: string | null
+  totalUnits: number
+  orders: SkuOrderRow[]
+}
+
+interface InventorySKUDetailDrawerProps {
+  skuDrawerOpen: boolean
+  skuDrawer: SkuDrawerDto | null
+  skuDrawerTitle: string
+  skuDrawerLoading: boolean
+  skuDrawerError: string | null
+  skuOrdersSort: SortState
+  sortedSkuOrders: SkuOrderRow[]
+  onClose: () => void
+  onOrderClick: (order: SkuOrderRow) => void
+  onSortChange: (key: string) => void
+  canvasRef: RefObject<HTMLCanvasElement | null>
+}
+
+function formatDateOnly(value: string | number | Date | null | undefined) {
   return formatCaDateLong(value)
 }
 
@@ -24,7 +56,7 @@ export function InventorySKUDetailDrawer({
   onOrderClick,
   onSortChange,
   canvasRef,
-}) {
+}: InventorySKUDetailDrawerProps) {
   if (!skuDrawerOpen) return null
   return (
     <div className="inventory-drawer-overlay" onClick={onClose}>
@@ -60,7 +92,7 @@ export function InventorySKUDetailDrawer({
 
               <div className="inventory-sku-chart-card" style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px', marginBottom: 18 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>Units Sold — Last 30 Days</div>
-                <canvas ref={canvasRef} className="inventory-sku-chart-canvas" width={620} height={160} />
+                <canvas ref={canvasRef as React.LegacyRef<HTMLCanvasElement>} className="inventory-sku-chart-canvas" width={620} height={160} />
               </div>
 
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Recent Orders ({skuDrawer.orders.length})</div>

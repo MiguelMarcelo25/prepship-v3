@@ -1,7 +1,7 @@
-// @ts-nocheck
 // PS-155: Automation availability panel extracted verbatim from SettingsView.tsx
-// (behavior-preserving). @ts-nocheck matches the parent module — the automation rows carry
-// loose union types (carrierId/carrier_id, serviceCode/code) not pinned to a single DTO.
+// (behavior-preserving). The automation rows carry loose union types
+// (carrierId/carrier_id, serviceCode/code) not pinned to a single DTO; the local
+// type aliases below mirror the parent module's shapes (PS-257 type-only restore).
 //
 // PURE PRESENTATION ONLY. The parent (SettingsView) keeps ALL state, every handler
 // (toggleAutomationCarrier / toggleAutomationService / toggleAutomationStoreCarriers /
@@ -28,6 +28,114 @@ import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
 } from '../../../../src/lib/shipping-service-eligibility'
 
+// PS-257: local type aliases mirroring the parent SettingsView's loose automation
+// shapes (those types are module-private there). Type-only — erased at emit.
+type AutomationStoreRow = {
+  storeId: number
+  clientId: number
+  clientName: string
+  active: boolean
+}
+
+type AutomationServiceEligibilityRow = {
+  code?: string | null
+  serviceCode?: string | null
+  name: string
+  allowed: boolean
+  disabled?: boolean
+  locked?: boolean
+  ruleId?: string | null
+  reason?: string
+}
+
+type AutomationCarrierRow = {
+  carrierId?: string | null
+  carrierCode?: string | null
+  nickname?: string | null
+  friendlyName?: string | null
+  sourceClientId?: number | null
+  sourceClientName?: string | null
+  disabled?: boolean
+  disabledReason?: string | null
+  services?: AutomationServiceEligibilityRow[]
+  carrier_id?: string | null
+  carrier_code?: string | null
+  friendly_name?: string | null
+  source_client_id?: number | null
+  source_client_name?: string | null
+}
+
+type AutomationCarrierService = {
+  serviceCode?: string | null
+  name?: string | null
+  domestic?: boolean | null
+  international?: boolean | null
+}
+
+type AutomationStoreAvailability = {
+  store: AutomationStoreRow
+  loading: boolean
+  error: string | null
+  carriers: AutomationCarrierRow[]
+}
+
+type AutomationClientGroup = {
+  clientId: number
+  clientName: string
+  stores: AutomationStoreAvailability[]
+  carrierCount: number
+  loadingCount: number
+  errorCount: number
+}
+
+type HugrabClientContext = {
+  clientId: number
+  clientName: string
+  storeId: number
+}
+
+type HugrabCarrierContext = {
+  carrierId: string | null | undefined
+  carrierCode: string
+  carrierName: string
+}
+
+type AutomationAvailabilityPanelProps = {
+  automationUpdatedAt: string | null
+  automationLoading: boolean
+  automationError: string | null
+  automationRows: AutomationStoreAvailability[]
+  automationServiceCatalog: Record<string, AutomationCarrierService[]>
+  automationSavingKey: string | null
+  automationQuery: string
+  automationStatusFilter: 'all' | 'disabled' | 'enabled'
+  automationClientGroups: AutomationClientGroup[]
+  automationDisabledCount: number
+  automationFilteredGroups: AutomationClientGroup[]
+  setAutomationQuery: (value: string) => void
+  setAutomationStatusFilter: (value: 'all' | 'disabled' | 'enabled') => void
+  refreshAutomationAvailability: () => void | Promise<void>
+  toggleAutomationCarrier: (
+    row: AutomationStoreAvailability,
+    carrier: AutomationCarrierRow,
+    enabled: boolean,
+  ) => void | Promise<void>
+  toggleAutomationService: (
+    row: AutomationStoreAvailability,
+    carrier: AutomationCarrierRow,
+    service: AutomationServiceEligibilityRow,
+    enabled: boolean,
+  ) => void | Promise<void>
+  toggleAutomationStoreCarriers: (
+    row: AutomationStoreAvailability,
+    enabled: boolean,
+  ) => void | Promise<void>
+  isHugrabCarrierDisableProtected: (
+    client: HugrabClientContext,
+    carrier: HugrabCarrierContext,
+  ) => boolean
+}
+
 const AUTOMATION_UPS_FALLBACK_SERVICES = [
   { serviceCode: 'ups_ground', name: 'UPS Ground' },
   { serviceCode: 'ups_2nd_day_air', name: 'UPS 2nd Day Air' },
@@ -37,7 +145,7 @@ const AUTOMATION_UPS_FALLBACK_SERVICES = [
   { serviceCode: 'ups_surepost_less_than_1_lb', name: 'UPS Ground Saver (<1 lb)' },
 ]
 
-function automationCarrierLabel(carrier) {
+function automationCarrierLabel(carrier: AutomationCarrierRow) {
   return (
     carrier.friendlyName ??
     carrier.friendly_name ??
@@ -50,7 +158,7 @@ function automationCarrierLabel(carrier) {
   )
 }
 
-function automationCarrierCode(carrier) {
+function automationCarrierCode(carrier: AutomationCarrierRow) {
   return (
     carrier.carrierCode ??
     carrier.carrier_code ??
@@ -60,15 +168,18 @@ function automationCarrierCode(carrier) {
   )
 }
 
-function isHugrabClient(name) {
+function isHugrabClient(name: string) {
   return name.trim().toLowerCase() === 'hugrab'
 }
 
-function automationCatalogKey(value) {
+function automationCatalogKey(value: string | null | undefined) {
   return String(value ?? '').trim().toLowerCase()
 }
 
-function automationServicesForCarrier(carrier, catalog) {
+function automationServicesForCarrier(
+  carrier: AutomationCarrierRow,
+  catalog: Record<string, AutomationCarrierService[]>,
+) {
   const keys = [
     carrier.carrierCode,
     carrier.carrier_code,
@@ -84,7 +195,7 @@ function automationServicesForCarrier(carrier, catalog) {
   return []
 }
 
-function automationServiceCode(service) {
+function automationServiceCode(service: AutomationServiceEligibilityRow) {
   return String(service.serviceCode ?? service.serviceCode ?? service.code ?? '').trim()
 }
 
@@ -108,7 +219,7 @@ export function AutomationAvailabilityPanel({
   toggleAutomationStoreCarriers,
   // PS-057 protection predicate — decision logic stays in SettingsView, passed in here.
   isHugrabCarrierDisableProtected,
-}) {
+}: AutomationAvailabilityPanelProps) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -321,7 +432,7 @@ export function AutomationAvailabilityPanel({
                                     name: service.name ?? service.serviceCode ?? 'Service',
                                     allowed: true,
                                     disabled: false,
-                                  }))
+                                  })) as AutomationServiceEligibilityRow[]
                               const serviceEligibility = services
                               const allowedServices = serviceEligibility.filter((service) => service.allowed)
                               const disabledServices = serviceEligibility.filter((service) => !service.allowed)

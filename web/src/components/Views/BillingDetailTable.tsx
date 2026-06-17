@@ -1,8 +1,7 @@
-// @ts-nocheck
 // PS-155: Per-client billing detail table extracted verbatim from BillingView.tsx
-// (behavior-preserving). @ts-nocheck matches the rest of the billing module — detail rows carry
-// phantom fields (carrier_nickname / ref_ups_rate / stalePackagePrice / packageId …) not on the
-// real BillingDetailDto.
+// (behavior-preserving). Detail rows carry phantom fields
+// (carrier_nickname / ref_ups_rate / stalePackagePrice / packageId …) not on a hand-written
+// DTO — the index-signature BillingDetailDto from ./billing-parity covers them.
 //
 // The money cells call computeBillingDetailMetrics(row) — a PURE helper from ./billing-parity
 // (same input → byte-identical output), so calling it here is equivalent to the parent computing
@@ -10,8 +9,9 @@
 // handlers stay in BillingView and arrive as props. detailSortValueOf / marginColor /
 // DETAIL_COLUMN_WIDTHS / DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET / BILLING_DETAIL_PAGE_SIZE_OPTIONS
 // are byte-identical copies of the parent's pure module-level helpers/constants.
+import type { CSSProperties } from 'react'
 import { Pencil } from 'lucide-react'
-import type { BillingDetailColumnId } from './billing-parity'
+import type { BillingDetailColumnId, BillingDetailDto, BillingDetailPanelState } from './billing-parity'
 import {
   BILLING_DETAIL_COLUMNS,
   computeBillingDetailMetrics,
@@ -20,7 +20,6 @@ import {
   getDefaultBillingDetailColumnIds,
 } from './billing-parity'
 import { Table, type TableColumn } from '../ui/Table'
-import type { BillingDetailDto } from '../../types/api'
 
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 
@@ -95,6 +94,22 @@ export function BillingDetailTable({
   detailTotals,
   onOpenBillingEdit,
   onOpenOrderDetail,
+}: {
+  detailState: { open: boolean; loading: boolean; clientName: string; error: string | null }
+  detailPanelState: BillingDetailPanelState
+  selectedSummaryOrders: number
+  selectedSummaryTotal: number
+  sortedDetailRows: BillingDetailDto[]
+  detailTotals: {
+    pickPack: number
+    additional: number
+    packageCost: number
+    shipping: number
+    total: number
+    margin: number
+  }
+  onOpenBillingEdit: (row: BillingDetailDto) => void
+  onOpenOrderDetail: (orderId: number) => void
 }) {
   if (detailState.error) {
     return (
@@ -150,7 +165,7 @@ export function BillingDetailTable({
       columns={BILLING_DETAIL_COLUMNS.map((column) => {
         const defaultHidden = !DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET.has(column.id)
         const baseWidth = DETAIL_COLUMN_WIDTHS[column.id] ?? 110
-        const tdStyleBase: React.CSSProperties = {
+        const tdStyleBase: CSSProperties = {
           padding: '5px 10px',
           textAlign: column.align === 'right' ? 'right' : column.align === 'center' ? 'center' : 'left',
         }
@@ -210,7 +225,7 @@ export function BillingDetailTable({
               case 'itemNames':
                 return (
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={lineLabel}>
-                    {lineLabel ? lineLabel.split(' | ').map((name, index) => (
+                    {lineLabel ? lineLabel.split(' | ').map((name: string, index: number) => (
                       <div key={`name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                     )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                   </div>
@@ -219,7 +234,7 @@ export function BillingDetailTable({
                 const skuText = row.itemSkus || ''
                 return (
                   <div style={{ fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
-                    {skuText ? skuText.split(' | ').map((sku, index) => (
+                    {skuText ? skuText.split(' | ').map((sku: string, index: number) => (
                       <div key={`sku-${index}`}>{sku || '—'}</div>
                     )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                   </div>
@@ -357,7 +372,7 @@ export function BillingDetailTable({
       emptyMessage="No line items found."
       rowClassName={(row) => (computeBillingDetailMetrics(row).ssCharged ? 'billing-detail-ss-row' : undefined)}
       footerRow={(cols) => cols.map((c) => {
-        const td: React.CSSProperties = {
+        const td: CSSProperties = {
           padding: '6px 10px',
           textAlign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left',
           fontWeight: 700,

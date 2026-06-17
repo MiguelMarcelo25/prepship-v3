@@ -33,7 +33,11 @@ import { join } from 'node:path';
 // now-structured parity types were resolved at the consumers (PackagesView casts, sidebar/
 // billing draft casts, orders-display-state LooseBestRate shared export) — all type-erased.
 // PrintQueueEntryDto + PackageLedgerEntryDto follow-up fixes already landed in slice 4. — 24 -> 10.
-const CEILING = 10;
+// 2026-06-17 (PS-257 blitz slice 6): 5 heavy views de-nocheck'd BYTE-IDENTICALLY (BillingView,
+// BillingDetailTable, AutomationAvailabilityPanel, InventorySKUDetailDrawer, SettingsView) — 91
+// type-erased fixes. Flagged: MarkupType union drift (MarkupsContext 'amount'|'percent'|'pct'|'flat'
+// vs types/markups 'pct'|'flat') to unify at source. — 10 -> 5.
+const CEILING = 5;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

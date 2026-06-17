@@ -1,16 +1,9 @@
-// @ts-nocheck
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Check, ListFilter, Loader2, Pencil, Receipt, SlidersHorizontal, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
-import type {
-  BillingConfigDto,
-  BillingDetailDto,
-  BillingPackagePriceDto,
-  BillingSummaryDto,
-  PackageDto,
-} from '../../types/api'
+import type { PackageDto } from '../../types/api'
 import {
   BILLING_DETAIL_COLUMNS,
   aggregateBillingDetailRowsByOrder,
@@ -37,11 +30,15 @@ import {
   reorderBillingDetailColumnIds,
   toggleBillingDetailColumnIds,
   type BillingConfigDraft,
+  type BillingConfigDto,
   type BillingDetailColumnId,
+  type BillingDetailDto,
+  type BillingPackagePriceDto,
   type BillingPresetId,
+  type BillingSummaryDto,
 } from './billing-parity'
 import { AnalysisPagination } from './AnalysisPagination'
-import { nextSortState, sortRows } from '../SortableTable'
+import { nextSortState, sortRows, type SortState } from '../SortableTable'
 import { Table, type TableColumn } from '../ui/Table'
 // PS-155: Billing summary table extracted to ./BillingSummaryTable (behavior-preserving).
 import { BillingSummaryTable } from './BillingSummaryTable'
@@ -265,14 +262,14 @@ export default function BillingView() {
   const [packagePriceDrafts, setPackagePriceDrafts] = useState<Record<number, string>>({})
   const [packagePricingLoading, setPackagePricingLoading] = useState(false)
   const [packagePricingError, setPackagePricingError] = useState<string | null>(null)
-  const [activePreset, setActivePreset] = useState<BillingPresetId>('last_30')
+  const [activePreset, setActivePreset] = useState<BillingPresetId | null>('last_30')
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
-  const [summarySort, setSummarySort] = useState(null)
-  const [detailSort, setDetailSort] = useState(null)
+  const [summarySort, setSummarySort] = useState<SortState<string>>(null)
+  const [detailSort, setDetailSort] = useState<SortState<BillingDetailColumnId>>(null)
   const [summaryPage, setSummaryPage] = useState(1)
   const [summaryPageSize, setSummaryPageSize] = useState(25)
   const [summaryLoading, setSummaryLoading] = useState(true)
@@ -633,7 +630,7 @@ export default function BillingView() {
 
         setSelectedPkgClientId((current) => {
           if (current && nextConfigs.some((config) => String(config.clientId) === current)) return current
-          return nextConfigs.length > 0 ? String(nextConfigs[0].clientId) : ''
+          return nextConfigs.length > 0 ? String(nextConfigs[0]!.clientId) : ''
         })
       } catch (error) {
         if (!active) return
@@ -761,7 +758,7 @@ export default function BillingView() {
         const batchPlan: Array<{ clientId: number; clientName: string; batches: Array<{ from: string; to: string }> }> = []
 
         for (let index = 0; index < targetClientIds.length; index += 1) {
-          const clientId = targetClientIds[index]
+          const clientId = targetClientIds[index]!
           const clientName = availableBillingClients.find((client) => client.clientId === clientId)?.clientName ?? 'client'
           let batchFrom = from
           let batchTo = to
@@ -813,7 +810,7 @@ export default function BillingView() {
         }
 
         for (let index = 0; index < batches.length; index += 1) {
-          const batch = batches[index]
+          const batch = batches[index]!
           setGenerateStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
           const result = await apiClient.generateBilling(batch.from, batch.to)
           generated += Number(result.generated ?? result.count ?? 0)
@@ -998,7 +995,10 @@ export default function BillingView() {
       setSavedPackagePrices(packagePricingRows.map((row) => ({
         packageId: row.packageId,
         price: Number.parseFloat(packagePriceDrafts[row.packageId] ?? String(row.charge)) || 0,
-        is_custom: row.isCustom ? 1 : 0,
+        // TODO PS-257: BillingPackagePriceDto.is_custom is typed boolean but the
+        // billing pipeline round-trips it as a 0/1 int (DB convention) — cast keeps
+        // the existing 0/1 runtime value byte-identical.
+        is_custom: (row.isCustom ? 1 : 0) as unknown as boolean,
         name: row.name,
         length: packages.find((pkg) => pkg.packageId === row.packageId)?.length ?? null,
         width: packages.find((pkg) => pkg.packageId === row.packageId)?.width ?? null,
@@ -1199,10 +1199,10 @@ export default function BillingView() {
         <BillingClientFilterPanel
           clientFilterOpen={clientFilterOpen}
           selectedBillingClientCount={selectedBillingClientCount}
-          availableBillingClients={availableBillingClients}
+          availableBillingClients={availableBillingClients as { clientId: number; clientName: string; inShipStation: boolean }[]}
           summaryRowsLength={summaryRows.length}
           billingClientFilterActive={billingClientFilterActive}
-          excludedBillingClientNames={excludedBillingClientNames}
+          excludedBillingClientNames={excludedBillingClientNames as string[]}
           selectedBillingClientIdSet={selectedBillingClientIdSet}
           missingShipStationClientNames={missingShipStationClientNames}
           onToggleAdvanced={() => setClientFilterOpen((open) => !open)}
@@ -1240,7 +1240,7 @@ export default function BillingView() {
               sortedSummaryRows={sortedSummaryRows}
               detailState={detailState}
               selectedDetailSummary={selectedDetailSummary}
-              onLoadDetails={handleLoadDetails}
+              onLoadDetails={handleLoadDetails as unknown as (clientId: number, clientName: string | null | undefined) => void}
             />
 
             {/* Detail table — migrated 2026-05-12 to the reusable
@@ -1261,7 +1261,7 @@ export default function BillingView() {
               selectedSummaryOrders={selectedSummaryOrders}
               selectedSummaryTotal={selectedSummaryTotal}
               sortedDetailRows={sortedDetailRows}
-              detailTotals={detailTotals}
+              detailTotals={detailTotals as { pickPack: number; additional: number; packageCost: number; shipping: number; total: number; margin: number }}
               onOpenBillingEdit={handleOpenBillingEdit}
               onOpenOrderDetail={setOrderDetailModalId}
             />
