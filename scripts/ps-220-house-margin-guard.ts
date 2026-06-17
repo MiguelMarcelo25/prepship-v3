@@ -16,6 +16,8 @@ import {
   isHouseShippRate,
   resolveNextBestNonHouseRate,
 } from '../src/lib/next-best-non-house-rate';
+import { houseMarginFromProjection } from '../src/services/shipping-workflow/house-margin-capture';
+import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -119,6 +121,35 @@ check('opt-in column is NOT declared on the drizzle billing_config schema (avoid
 check('opt-in read is fail-safe (false on error) and idempotently ensures the column',
   /clientHouseAccountEnabled/.test(readFileSync('src/services/house-account-opt-in.ts', 'utf8')) &&
   /ADD COLUMN IF NOT EXISTS house_account_enabled/.test(readFileSync('src/services/house-account-opt-in.ts', 'utf8')));
+
+// ── slice 3: realized capture (reads the projected stamp; freezes the sidecar) ─
+{
+  const projected = normalizeOrderBestRateDto({
+    shipmentCost: 8.5, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_surepost',
+    nextBestNonHouseRate: { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, otherCost: 0, totalCost: 9.64, providerAccountId: 442007 },
+    houseMargin: 1.14,
+  });
+  const r = houseMarginFromProjection(projected, 8.5);
+  check('realized: customer_rate = projected competitor (9.64), margin = 1.14',
+    r != null && r.customerRate === 9.64 && r.margin === 1.14 && r.competitorCount === 1, JSON.stringify(r));
+
+  const passThrough = normalizeOrderBestRateDto({ shipmentCost: 8.5, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_surepost', houseMargin: 0 });
+  const rp = houseMarginFromProjection(passThrough, 8.5);
+  check('realized pass-through (no competitor): customer_rate = drp_cost, margin 0, count 0',
+    rp != null && rp.customerRate === 8.5 && rp.margin === 0 && rp.competitorCount === 0);
+
+  const nonHouse = normalizeOrderBestRateDto({ shipmentCost: 9, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_ground' });
+  check('non-house order (no projected stamp) => null (no sidecar written)', houseMarginFromProjection(nonHouse, 9) === null);
+
+  const clamped = houseMarginFromProjection(projected, 10.0); // actual SHIPP cost > projected competitor
+  check('realized margin is never negative (clamped to 0)', clamped != null && clamped.margin === 0);
+}
+const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
+check('realized capture INSERTs the sidecar and NEVER updates the locked shipments table',
+  /INSERT INTO order_competitive_rate/.test(captureSrc) && !/UPDATE\s+shipments/i.test(captureSrc));
+const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');
+check('realized capture fires only for a SHIPP purchase, best-effort, AFTER the committed ship txn',
+  /directProviderKey === 'shipp'/.test(labelsSrc) && labelsSrc.includes('captureRealizedHouseMargin'));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-220 house-margin guard (${failures} failing)`);

@@ -11,6 +11,7 @@ import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
 // PS-248: per-order advisory lock so concurrent buys can't double-purchase postage for one order.
 import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
+import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
 import { resolveOrderLabelPackageId } from './package-resolution';
 // PS-262a: single canonical owner of the per-marketplace confirmation identity.
@@ -1511,6 +1512,18 @@ async function createLabelV2Impl(
     source: 'label',
     timer,
   }));
+  // PS-220 (realized house-margin): SHIPP is DRP's house carrier. After the committed ship txn, freeze
+  // the captured margin into the order_competitive_rate sidecar — it READS the projected next-best stamp
+  // (best_rate_json), never re-fetches. Best-effort + a SEPARATE write OUTSIDE the locked ship txn —
+  // reads order.id/localShipmentId only, never UPDATEs shipments / shipped rows (lockdown-safe).
+  if (directProviderKey === 'shipp') {
+    timer.background('house-margin capture', () => captureRealizedHouseMargin({
+      orderId: order.id,
+      shipmentId: localShipmentId,
+      clientId: clientId ?? null,
+      drpCost: Number(created.cost ?? 0),
+    }).catch((err) => console.warn('[labels] house-margin capture skipped:', err instanceof Error ? err.message : err)));
+  }
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.
   const confirmationProvider = confirmationProviderForOrder(order);
