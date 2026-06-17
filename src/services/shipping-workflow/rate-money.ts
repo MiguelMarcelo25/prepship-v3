@@ -128,6 +128,10 @@ export type OrderRowMoneyDisplay = {
   /** Margin % for the Margin cell: round(markup/base*100); null below the 0.005 display floor. */
   marginPercent: number | null;
   source: 'best_rate' | 'selected_rate';
+  // PS-220: discriminates a normal carrier markup (ORION-style rule) from the SHIPP house-account
+  // margin so display + guards never double-apply. 'house_account' => marked is the customer_rate
+  // (next-best non-SHIPP), base is the SHIPP drp_cost, and NO carrier markupRule was applied.
+  markupSource: 'carrier_markup' | 'house_account';
 };
 
 export type OrderRowMoneyFacts = {
@@ -137,6 +141,9 @@ export type OrderRowMoneyFacts = {
   labelFinalCost: number | null;
   markupRule: MarkupRule | null;
   insuranceAddOn: number | null;
+  // PS-220: presence => this is a SHIPP house order. The captured customer_rate (cheapest eligible
+  // non-SHIPP) becomes the bold marked amount; the carrier markupRule is suppressed (margin = spread).
+  houseMarkedAmount?: number | null;
 };
 
 /**
@@ -146,9 +153,29 @@ export type OrderRowMoneyFacts = {
  * is known so the breakdown line hides exactly as the FE does today.
  */
 export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMoneyDisplay | null {
-  const positive = (value: number | null): number | null =>
+  const positive = (value: number | null | undefined): number | null =>
     value != null && Number.isFinite(value) && value > 0 ? value : null;
   const insuranceAddOn = positive(facts.insuranceAddOn);
+  // PS-220 house order: marked = customer_rate (cheapest eligible non-SHIPP), base = drp_cost (the
+  // SHIPP cost), markup = the spread. The carrier markupRule is SUPPRESSED (the margin IS the markup);
+  // markupSource='house_account' so display + the guard never double-apply a carrier markup.
+  const houseMarked = positive(facts.houseMarkedAmount);
+  if (houseMarked != null) {
+    const base = facts.isAwaiting
+      ? positive(facts.bestRateBaseAmount)
+      : (positive(facts.selectedRateBaseAmount) ?? positive(facts.labelFinalCost));
+    if (base == null) return null;
+    const markupAmount = Math.max(0, round2(houseMarked - base));
+    return {
+      baseAmount: round2(base),
+      markedAmount: round2(houseMarked),
+      markupAmount,
+      insuranceAddOn,
+      marginPercent: markupAmount >= 0.005 && base > 0 ? Math.round((markupAmount / base) * 100) : null,
+      source: facts.isAwaiting ? 'best_rate' : 'selected_rate',
+      markupSource: 'house_account',
+    };
+  }
   if (facts.isAwaiting) {
     const base = positive(facts.bestRateBaseAmount);
     if (base == null) return null;
@@ -161,6 +188,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       insuranceAddOn,
       marginPercent: markupAmount >= 0.005 && base > 0 ? Math.round((markupAmount / base) * 100) : null,
       source: 'best_rate',
+      markupSource: 'carrier_markup',
     };
   }
   const base = positive(facts.selectedRateBaseAmount);
@@ -178,6 +206,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
         ? Math.round((markupAmount / base) * 100)
         : null,
     source: 'selected_rate',
+    markupSource: 'carrier_markup',
   };
 }
 

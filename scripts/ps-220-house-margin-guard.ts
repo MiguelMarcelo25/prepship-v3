@@ -18,6 +18,7 @@ import {
 } from '../src/lib/next-best-non-house-rate';
 import { houseMarginFromProjection } from '../src/services/shipping-workflow/house-margin-capture';
 import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
+import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -159,6 +160,36 @@ check('billing: house branch reads the sidecar (is_house_order) and suppresses t
   billingSrc.includes('orderCompetitiveRate') && /isHouseOrder/.test(billingSrc) &&
   // the house push has NO pct/flat markup applied (suppressed) — markup only in the else branch
   /houseCustomerRate != null[\s\S]*?unitCost: houseCustomerRate/.test(billingSrc));
+
+// ── slice 4 (P7 money tuple): house mapping + carrier-markup suppression ──────
+{
+  const houseTuple = buildOrderRowMoneyDisplay({
+    isAwaiting: true,
+    bestRateBaseAmount: 8.5,        // drp_cost (SHIPP)
+    selectedRateBaseAmount: null,
+    labelFinalCost: null,
+    markupRule: { type: 'percent', value: 50 } as never, // a carrier rule that MUST be ignored for house
+    insuranceAddOn: null,
+    houseMarkedAmount: 9.64,        // customer_rate (cheapest eligible non-SHIPP)
+  });
+  check('house tuple: markupSource=house_account, base=drp_cost(8.5), marked=customer_rate(9.64), markup=spread(1.14), carrier rule suppressed',
+    houseTuple != null && houseTuple.markupSource === 'house_account' &&
+    houseTuple.baseAmount === 8.5 && houseTuple.markedAmount === 9.64 && houseTuple.markupAmount === 1.14,
+    JSON.stringify(houseTuple));
+
+  const carrierTuple = buildOrderRowMoneyDisplay({
+    isAwaiting: true, bestRateBaseAmount: 10, selectedRateBaseAmount: null, labelFinalCost: null,
+    markupRule: null, insuranceAddOn: null,
+  });
+  check('non-house tuple: markupSource=carrier_markup', carrierTuple != null && carrierTuple.markupSource === 'carrier_markup');
+}
+const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
+// Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').
+// A loose [\s\S]*? would run past the branch into the carrier branches, which legitimately call
+// applyMarkupToAmount — so isolate the branch, then assert no carrier markup math inside it.
+const houseBranchSrc = rateMoneySrc.match(/const houseMarked[\s\S]*?markupSource: 'house_account',/);
+check('rate-money: house branch exists and does NOT apply the carrier markupRule (no double markup)',
+  houseBranchSrc != null && !/applyMarkupToAmount/.test(houseBranchSrc[0]));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-220 house-margin guard (${failures} failing)`);
