@@ -13,6 +13,7 @@ import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
+import { decideShippingLineBilling } from './billing-shipping-line';
 // PS-207: the `inventory` import is deliberately GONE — billing must never
 // consult inventory/SKU package defaults (the storage-fee block reads
 // inventory via raw SQL for cubic-feet, which is not box resolution).
@@ -954,40 +955,20 @@ export async function generateLineItems(input: GenerateInput) {
     const labelCost = (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
     if (labelCost > 0) {
       const houseCustomerRate = s.id != null ? houseCustomerRateByShipmentId.get(Number(s.id)) : undefined;
-      if (houseCustomerRate != null) {
-        // PS-220 house order: bill the captured customer_rate (cheapest eligible non-SHIPP). The SHIPP
-        // drp_cost (labelCost) is never billed, and the carrier markup is SUPPRESSED — the margin IS
-        // the spread. drp_cost / margin are INTERNAL and never appear on the invoice.
-        rows.push({
-          clientId,
-          orderId: s.orderId,
-          orderNumber: s.orderNumber,
-          shipmentId: s.id,
-          shipDate: s.shipDate,
-          lineType: 'shipping',
-          description: `Shipping · order ${s.orderNumber ?? s.orderId}`,
-          qty: '1',
-          unitCost: houseCustomerRate.toFixed(2),
-          totalCost: houseCustomerRate.toFixed(2),
-          packageId: billedPackageId,
-        });
-      } else {
-      let billedCost = labelCost;
-      const billingMode = cfg.billingMode ?? 'label_cost';
-      if (
-        (billingMode === 'reference_rate' || billingMode === 'ss_ref_rate') &&
-        !SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? '')
-      ) {
-        const referenceCandidates = [toNum(s.refUspsRate), toNum(s.refUpsRate)].filter(
-          (value) => value > 0
-        );
-        if (referenceCandidates.length > 0) {
-          billedCost = Math.max(labelCost, Math.min(...referenceCandidates));
-        }
-      }
-      const pct = toNum(cfg.shippingMarkupPct);
-      const flat = toNum(cfg.shippingMarkupFlat);
-      const shipCost = billedCost * (1 + pct / 100) + flat;
+      // PS-220: single source of truth for the billed shipping amount. A captured house
+      // customer_rate is billed verbatim (carrier markup + reference-rate suppressed); otherwise
+      // the label cost flows through optional reference-rate flooring + the carrier markup. The
+      // SHIPP drp_cost and the margin are INTERNAL and never appear on the invoice.
+      const shippingDecision = decideShippingLineBilling({
+        labelCost,
+        houseCustomerRate,
+        billingMode: cfg.billingMode,
+        isBaselineCarrier: SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? ''),
+        refUspsRate: toNum(s.refUspsRate),
+        refUpsRate: toNum(s.refUpsRate),
+        shippingMarkupPct: toNum(cfg.shippingMarkupPct),
+        shippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
+      });
       rows.push({
         clientId,
         orderId: s.orderId,
@@ -995,13 +976,12 @@ export async function generateLineItems(input: GenerateInput) {
         shipmentId: s.id,
         shipDate: s.shipDate,
         lineType: 'shipping',
-        description: `Shipping${pct > 0 || flat > 0 ? ` (${pct}% + $${flat.toFixed(2)})` : ''} · order ${s.orderNumber ?? s.orderId}`,
+        description: `Shipping${shippingDecision.descriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
         qty: '1',
-        unitCost: shipCost.toFixed(2),
-        totalCost: shipCost.toFixed(2),
+        unitCost: shippingDecision.billedAmount.toFixed(2),
+        totalCost: shippingDecision.billedAmount.toFixed(2),
         packageId: billedPackageId,
       });
-      }
     } else if (s.externallyShipped || s.externallyFulfilled || s.id === null) {
       rows.push({
         clientId,

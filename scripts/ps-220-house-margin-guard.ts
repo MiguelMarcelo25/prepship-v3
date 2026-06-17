@@ -22,6 +22,7 @@ import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rat
 import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house-row-marked-amount';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../src/services/shipping-workflow/best-rate-workflow-dto';
 import { redactOrderFinancials, RATE_MONEY_FIELD_KEYS } from '../src/services/orders-financial-redaction';
+import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -157,12 +158,12 @@ check('realized capture fires only for a SHIPP purchase, best-effort, AFTER the 
 
 // ── slice 3: billing branch (bill customer_rate, suppress markup) ─────────────
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
-check('billing: house order bills the captured customer_rate (never the SHIPP drp_cost/labelCost)',
-  /houseCustomerRateByShipmentId/.test(billingSrc) && /unitCost: houseCustomerRate\.toFixed\(2\)/.test(billingSrc));
-check('billing: house branch reads the sidecar (is_house_order) and suppresses the carrier markup',
+check('billing: the captured customer_rate is loaded by shipment id + fed to the pure shipping-line decision (billed verbatim — proven behaviorally below)',
+  /houseCustomerRateByShipmentId/.test(billingSrc) &&
+  /decideShippingLineBilling\(\{[\s\S]*?houseCustomerRate,/.test(billingSrc));
+check('billing: the sidecar (orderCompetitiveRate / isHouseOrder) supplies the house rate; markup suppression is proven behaviorally (decideShippingLineBilling house => markupApplied=false, suffix empty)',
   billingSrc.includes('orderCompetitiveRate') && /isHouseOrder/.test(billingSrc) &&
-  // the house push has NO pct/flat markup applied (suppressed) — markup only in the else branch
-  /houseCustomerRate != null[\s\S]*?unitCost: houseCustomerRate/.test(billingSrc));
+  /unitCost: shippingDecision\.billedAmount\.toFixed\(2\)/.test(billingSrc));
 
 // ── slice 4 (P7 money tuple): house mapping + carrier-markup suppression ──────
 {
@@ -309,6 +310,38 @@ check('portal serializer: redaction extracted to the pure owner + BOTH detail ro
   /from '\.\.\/services\/orders-financial-redaction'/.test(ordersSrc) &&
   (ordersSrc.match(/redactOrderFinancials\(\{/g) || []).length >= 2 &&
   /overrides: redactRateMoneyFields\(row\.overrides\)/.test(readFileSync('src/services/orders-financial-redaction.ts', 'utf8')));
+
+// ── slice 4c (BEHAVIORAL proof of the money-committing billing decision) ──────
+{
+  const markupCfg = { billingMode: 'label_cost', isBaselineCarrier: false, refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: 20, shippingMarkupFlat: 1 };
+
+  // HOUSE order: bills the captured customer_rate EXACTLY; carrier markup suppressed even when a rule exists.
+  const house = decideShippingLineBilling({ labelCost: 8.5, houseCustomerRate: 9.64, ...markupCfg });
+  check('billing decision (house): bills customer_rate 9.64 verbatim, NOT the SHIPP drp_cost 8.5, markup suppressed, no suffix',
+    house.billedAmount === 9.64 && house.source === 'house_customer_rate' && house.markupApplied === false && house.descriptionSuffix === '');
+
+  // NON-house order with the SAME config: byte-identical to before — label cost + carrier markup (20% + $1).
+  const carrier = decideShippingLineBilling({ labelCost: 10, houseCustomerRate: null, ...markupCfg });
+  check('billing decision (non-house): label cost 10 + 20% + $1 = 13, markup applied, suffix " (20% + $1.00)" (carrier path byte-identical)',
+    carrier.billedAmount === 13 && carrier.source === 'label_cost' && carrier.markupApplied === true && carrier.descriptionSuffix === ' (20% + $1.00)');
+
+  // NON-house, no markup config: bills the bare label cost, no suffix (proves house != "no markup" alias).
+  const bare = decideShippingLineBilling({ labelCost: 7.25, houseCustomerRate: null, billingMode: 'label_cost', isBaselineCarrier: false, refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: 0, shippingMarkupFlat: 0 });
+  check('billing decision (non-house, no markup): bills bare label cost 7.25, no suffix', bare.billedAmount === 7.25 && bare.descriptionSuffix === '');
+
+  // Reference-rate mode (non-baseline carrier): floors to the cheaper ref but never below the label cost.
+  const ref = decideShippingLineBilling({ labelCost: 6, houseCustomerRate: null, billingMode: 'ss_ref_rate', isBaselineCarrier: false, refUspsRate: 9, refUpsRate: 8, shippingMarkupPct: 0, shippingMarkupFlat: 0 });
+  check('billing decision (ref-rate): max(labelCost 6, min(9,8)=8) = 8, source reference_rate', ref.billedAmount === 8 && ref.source === 'reference_rate');
+
+  // House order is INDEPENDENT of billing mode (a house order under ss_ref_rate still bills customer_rate, no ref floor).
+  const houseUnderRef = decideShippingLineBilling({ labelCost: 6, houseCustomerRate: 9.64, billingMode: 'ss_ref_rate', isBaselineCarrier: false, refUspsRate: 9, refUpsRate: 8, shippingMarkupPct: 20, shippingMarkupFlat: 1 });
+  check('billing decision: house order ignores billing mode + ref rates + markup — still bills customer_rate 9.64',
+    houseUnderRef.billedAmount === 9.64 && houseUnderRef.source === 'house_customer_rate');
+}
+const billingDelegateSrc = readFileSync('src/services/billing.ts', 'utf8');
+check('billing.ts delegates the shipping-line amount to the pure decideShippingLineBilling owner (single source of truth)',
+  /import \{ decideShippingLineBilling \}/.test(billingDelegateSrc) &&
+  /unitCost: shippingDecision\.billedAmount\.toFixed\(2\)/.test(billingDelegateSrc));
 
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').
