@@ -40,7 +40,10 @@ import { join } from 'node:path';
 // 2026-06-17 (PS-257 blitz slice 7): 3 of the biggest views de-nocheck'd BYTE-IDENTICALLY
 // (orders-row-display, CarrierIntegrationsCard, InventoryView). Only AnalysisView + OrdersView
 // (the 74-error money-path file) remain. — 5 -> 2.
-const CEILING = 2;
+// 2026-06-17 (PS-257 blitz slice 8): AnalysisView de-nocheck'd BYTE-IDENTICALLY (24 errors;
+// useState<SortState|null> widenings, comparator casts, local DTO aliases, SortValue/SortState
+// type-only imports). Only OrdersView (the 74-error money-path file) remains. — 2 -> 1.
+const CEILING = 1;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

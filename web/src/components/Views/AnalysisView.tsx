@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
@@ -13,13 +12,17 @@ import {
   BarChart,
   Bar,
 } from 'recharts'
-import type {
-  AnalysisDailySalesResponse,
-  AnalysisSkuDto,
-} from '@prepshipv2/contracts/analysis/contracts'
+// TODO PS-257: @prepshipv2/contracts is erased at runtime and absent in v4, so
+// these DTO shapes are aliased to `any` locally (matching the analysis-parity.ts
+// / AnalysisDataTable.tsx precedent) until v4 grows a real analysis contracts module.
+type AnalysisDailySalesResponse = any
+type AnalysisSkuDto = any
 import { ApiError, apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
-import type { ClientDto, InventorySkuOrdersDto } from '../../types/api'
+// TODO PS-257: ClientDto / InventorySkuOrdersDto are not exported by ../../types/api
+// in v4; aliased to `any` locally until those DTOs are restored.
+type ClientDto = any
+type InventorySkuOrdersDto = any
 import {
   filterAnalysisRows,
   formatAnalysisMoney,
@@ -41,7 +44,7 @@ import {
 import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
 import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
-import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
+import { SortableHeader, nextSortState, sortRows, type SortState, type SortValue } from '../SortableTable'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
 import './AnalysisView.css'
@@ -686,9 +689,9 @@ export default function AnalysisView({
     useState<DrawerOrdersColumnKey>(DEFAULT_DRAWER_ORDERS_SORT_KEY)
   const [drawerOrdersSortDir, setDrawerOrdersSortDir] =
     useState<DrawerOrdersSortDir>(DEFAULT_DRAWER_ORDERS_SORT_DIR)
-  const [modalItemsSort, setModalItemsSort] = useState(null)
-  const [modalAdjustmentsSort, setModalAdjustmentsSort] = useState(null)
-  const [modalShipmentsSort, setModalShipmentsSort] = useState(null)
+  const [modalItemsSort, setModalItemsSort] = useState<SortState<'sku' | 'product' | 'qty' | 'unit' | 'total'> | null>(null)
+  const [modalAdjustmentsSort, setModalAdjustmentsSort] = useState<SortState<'code' | 'description' | 'qty' | 'unit' | 'total'> | null>(null)
+  const [modalShipmentsSort, setModalShipmentsSort] = useState<SortState<'tracking' | 'carrier' | 'service' | 'cost' | 'shipDate'> | null>(null)
   const [orderDetailDrawer, setOrderDetailDrawer] = useState<{ orderId: number; status?: string | null } | null>(null)
   const [orderModal, setOrderModal] = useState({
     open: false,
@@ -987,7 +990,7 @@ export default function AnalysisView({
         COLUMN_SIZES.length - 1,
         Math.max(0, index + direction),
       )
-      return COLUMN_SIZES[next]
+      return COLUMN_SIZES[next]!
     })
   }
 
@@ -1144,7 +1147,7 @@ export default function AnalysisView({
   const sortedModalItems = useMemo(() => sortRows(
     modalItems,
     modalItemsSort,
-    (item, key) => {
+    ((item, key) => {
       const itemRecord = asRecord(item)
       switch (key) {
         case 'sku':
@@ -1160,13 +1163,13 @@ export default function AnalysisView({
         default:
           return ''
       }
-    },
-    (item) => asRecord(item).sku ?? asRecord(item).name,
+    }) as (row: any, key: string) => SortValue,
+    ((item) => asRecord(item).sku ?? asRecord(item).name) as (row: any) => SortValue,
   ), [modalItems, modalItemsSort])
   const sortedModalAdjustments = useMemo(() => sortRows(
     modalAdjustments,
     modalAdjustmentsSort,
-    (item, key) => {
+    ((item, key) => {
       const itemRecord = asRecord(item)
       const adjustmentCode =
         displayText(itemRecord.sku, '').trim()
@@ -1191,13 +1194,13 @@ export default function AnalysisView({
         default:
           return ''
       }
-    },
-    (item) => asRecord(item).sku ?? asRecord(item).name,
+    }) as (row: any, key: string) => SortValue,
+    ((item) => asRecord(item).sku ?? asRecord(item).name) as (row: any) => SortValue,
   ), [modalAdjustments, modalAdjustmentsSort])
   const sortedModalShipments = useMemo(() => sortRows(
     modalShipments,
     modalShipmentsSort,
-    (shipment, key) => {
+    ((shipment, key) => {
       const shipmentRecord = asRecord(shipment)
       switch (key) {
         case 'tracking':
@@ -1215,8 +1218,8 @@ export default function AnalysisView({
         default:
           return ''
       }
-    },
-    (shipment) => asRecord(shipment).trackingNumber,
+    }) as (row: any, key: string) => SortValue,
+    ((shipment) => asRecord(shipment).trackingNumber) as (row: any) => SortValue,
   ), [modalShipments, modalShipmentsSort])
 
   return (
@@ -1792,7 +1795,7 @@ export default function AnalysisView({
                           <Bar dataKey="units" fill="#e07a00" isAnimationActive={false}>
                             <LabelList
                               dataKey="units"
-                              content={(props) => <DrawerBarValueLabel {...props} />}
+                              content={(props) => <DrawerBarValueLabel {...(props as any)} />}
                             />
                           </Bar>
                         </BarChart>
@@ -1898,7 +1901,7 @@ export default function AnalysisView({
                           </tr>
                         </thead>
                         <tbody>
-                          {sortedDrawerOrders.map((order) => {
+                          {sortedDrawerOrders.map((order: any) => {
                             const orderStatus = displayText(order.orderStatus, '').trim()
                             const statusClass =
                               orderStatus === 'shipped'
