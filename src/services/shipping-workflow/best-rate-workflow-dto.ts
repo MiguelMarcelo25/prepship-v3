@@ -534,6 +534,17 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
   const hasCarrierFailure = carrierStatuses.some(
     (status) => status.status === 'error' || status.status === 'blocked',
   );
+  // PS-271 (Layer 4) — reconcile the thin-source signal with the PS-111 completeness owner at the
+  // WORKFLOW DTO too (not only in rates-combined). A carrier flagged `thin` (Shipp's observed-set
+  // retry accepted a non-empty-but-thin partial at the cap) reached a TERMINAL status, but a best
+  // sourced from a thin pass is unproven — so it must NOT resolve to `fresh`, exactly like a
+  // still-loading/errored carrier blocks completeness in isBestRateComplete. We treat a live thin
+  // carrier as a partial-completeness signal: it demotes `fresh` to `partial_carrier_failure`
+  // (re-rate required, saved value may still display via PS-196). Scoped to `thin === true` ONLY
+  // (NOT general !isBestRateComplete, which is false for the common EMPTY/loading carrier set and
+  // would wrongly demote saved-rate-only DTOs) — default-inert: `status.thin` is never set unless
+  // Layer 1 ran, so today's full/empty passes are byte-identical.
+  const hasThinCarrier = carrierStatuses.some((status) => status.thin === true);
   const hasSavedRate = amountIsPositive(savedRate);
   const matchesRequest =
     Boolean(currentFingerprint && savedFingerprint && currentFingerprint === savedFingerprint) ||
@@ -546,7 +557,9 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     bestRateState = hasCarrierFailure ? 'blocked' : 'missing';
   } else if (currentFingerprint && savedFingerprint && currentFingerprint !== savedFingerprint) {
     bestRateState = 'mismatched_request';
-  } else if (hasCarrierFailure) {
+  } else if (hasCarrierFailure || hasThinCarrier) {
+    // PS-271 (Layer 4): a thin carrier is treated exactly like a failed carrier here — the saved
+    // best is unproven, so the row shows partial (re-rate required) instead of a false `fresh`.
     bestRateState = 'partial_carrier_failure';
   } else if (matchesRequest && complete && fresh) {
     bestRateState = 'fresh';
