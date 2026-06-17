@@ -756,6 +756,18 @@ export default function BillingView() {
     }
   }
 
+  // PS-220 (P4): opt a client in/out of the SHIPP house-account margin model. Immediate (not draft-
+  // based) — the flag is written via a dedicated admin endpoint, not the drizzle billing-config save.
+  async function handleToggleHouseAccount(clientId: number, enabled: boolean) {
+    try {
+      await apiClient.setClientHouseAccount(clientId, enabled)
+      setConfigs((current) => current.map((config) => config.clientId === clientId ? { ...config, houseAccountEnabled: enabled } : config))
+      toastContext?.addToast(enabled ? '✅ House account enabled' : 'House account disabled', 'success')
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update house account', 'error')
+    }
+  }
+
   async function handleGenerateBilling(forceRegenerate = false) {
     if (!from || !to) {
       toastContext?.addToast('Select a date range first', 'error')
@@ -1218,6 +1230,7 @@ export default function BillingView() {
           configDrafts={configDrafts}
           setConfigDrafts={setConfigDrafts}
           onSaveConfig={handleSaveConfig}
+          onToggleHouseAccount={handleToggleHouseAccount}
         />
 
         {/* PS-155: Package Pricing card extracted to <BillingPackagePricingTable />.

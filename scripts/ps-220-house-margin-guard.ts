@@ -224,6 +224,36 @@ check('FE: shipped Selected Rate cell + Margin cell render the house display ONL
   /shippedBackendMoney\.markupSource === 'house_account'/.test(ordersViewSrc) &&
   /shippedMoney\?\.markupSource === 'house_account'/.test(ordersViewSrc));
 
+// ── slice 4b-3 (P4: per-client opt-in write + toggle UI) ─────────────────────
+const optInSrc = readFileSync('src/services/house-account-opt-in.ts', 'utf8');
+check('opt-in write: setClientHouseAccountEnabled UPSERTs billing_config (PK client_id) via raw SQL, not swallowed',
+  /export async function setClientHouseAccountEnabled/.test(optInSrc) &&
+  /INSERT INTO billing_config[\s\S]*?ON CONFLICT \(client_id\) DO UPDATE/.test(optInSrc));
+check('opt-in read: houseAccountEnabledClientIds reads ONLY opted-in rows (no IN/ANY array binding)',
+  /export async function houseAccountEnabledClientIds/.test(optInSrc) &&
+  /WHERE house_account_enabled = true/.test(optInSrc) &&
+  !/= ANY\(/.test(optInSrc));
+
+const adminSrc = readFileSync('src/routes/admin.ts', 'utf8');
+check('admin endpoint: PATCH /clients/:id/house-account (admin-gated) calls setClientHouseAccountEnabled',
+  /\/clients\/:id\{\[0-9\]\+\}\/house-account/.test(adminSrc) &&
+  /setClientHouseAccountEnabled\(id, enabled\)/.test(adminSrc));
+
+const billingRouteSrc = readFileSync('src/routes/billing.ts', 'utf8');
+check('billing /config read enriches each row with houseAccountEnabled from the opt-in set',
+  /houseAccountEnabledClientIds\(\)/.test(billingRouteSrc) &&
+  /houseAccountEnabled: houseAccountIds\.has\(r\.clientId\)/.test(billingRouteSrc));
+
+const apiClientSrc = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+check('apiClient.setClientHouseAccount PATCHes the admin opt-in endpoint',
+  /setClientHouseAccount\(clientId: number, enabled: boolean\)/.test(apiClientSrc) &&
+  /\/admin\/clients\/\$\{clientId\}\/house-account/.test(apiClientSrc));
+
+const configTableSrc = readFileSync('web/src/components/Views/BillingConfigTable.tsx', 'utf8');
+check('FE: Billing Config grid has a House Acct toggle wired to onToggleHouseAccount',
+  /onToggleHouseAccount/.test(configTableSrc) &&
+  /houseAccountEnabled/.test(configTableSrc));
+
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').
 // A loose [\s\S]*? would run past the branch into the carrier branches, which legitimately call

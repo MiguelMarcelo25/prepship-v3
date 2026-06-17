@@ -18,6 +18,7 @@ import { backfillMissingOrderItems, getOrderItemsBackfillStatus, syncOrderItemOr
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { printQueue } from '../db/schema/print-queue';
+import { setClientHouseAccountEnabled } from '../services/house-account-opt-in';
 
 const app = new Hono();
 
@@ -76,6 +77,23 @@ app.patch(
       .returning();
     if (!row) return c.json({ error: 'Client not found' }, 404);
     return c.json(row);
+  }
+);
+
+// PS-220 (P4): opt a client IN/OUT of the SHIPP house-account margin model. Admin-only (this
+// route is requireAdmin-gated in main.ts). The flag lives on billing_config.house_account_enabled
+// and is written via raw SQL (it is deliberately off the drizzle schema — see house-account-opt-in.ts).
+// Default-off; flipping ON makes that client's SHIPP-winning orders bill the captured customer_rate.
+app.patch(
+  '/clients/:id{[0-9]+}/house-account',
+  zValidator('json', z.object({ enabled: z.boolean() })),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const { enabled } = c.req.valid('json');
+    const [client] = await db.select({ id: clients.id }).from(clients).where(eq(clients.id, id));
+    if (!client) return c.json({ error: 'Client not found' }, 404);
+    await setClientHouseAccountEnabled(id, enabled);
+    return c.json({ clientId: id, houseAccountEnabled: enabled });
   }
 );
 

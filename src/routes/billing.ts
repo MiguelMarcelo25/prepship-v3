@@ -21,6 +21,7 @@ import {
   generateLineItems,
   upsertBillingConfig,
 } from '../services/billing';
+import { houseAccountEnabledClientIds } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
 import { requirePermission } from '../middleware/auth';
@@ -119,9 +120,14 @@ app.get('/config', async (c) => {
     )
     .orderBy(asc(clients.name));
 
+  // PS-220 (P4): the house-account opt-in flag lives off the drizzle schema (raw SQL), so enrich
+  // the grid here. Best-effort — an empty set just shows every toggle OFF.
+  const houseAccountIds = await houseAccountEnabledClientIds();
+
   const data = rows.map((r) => ({
     clientId: r.clientId,
     clientName: r.clientName,
+    houseAccountEnabled: houseAccountIds.has(r.clientId),
     pickPackFee: r.pickPackFee ?? '0.00',
     pickPackMaxUnits: r.pickPackMaxUnits ?? 1,
     additionalUnitFee: r.additionalUnitFee ?? '0.00',

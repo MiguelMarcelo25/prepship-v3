@@ -2454,6 +2454,20 @@ export const apiClient = {
     );
   },
 
+  // PS-220 (P4): opt a client in/out of the SHIPP house-account margin model. Admin-only
+  // endpoint (the flag is off the drizzle schema; written via raw SQL server-side).
+  setClientHouseAccount(clientId: number, enabled: boolean): Promise<any> {
+    return safe(
+      'setClientHouseAccount',
+      async () => {
+        const res = await api.patch<any>(`/admin/clients/${clientId}/house-account`, { enabled });
+        clearCachedReads('fetchBillingConfigs');
+        return res;
+      },
+      {}
+    );
+  },
+
   generateBilling(from: string, to: string, clientId?: number): Promise<any> {
     return safe(
       'generateBilling',

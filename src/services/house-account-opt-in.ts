@@ -36,3 +36,38 @@ export async function clientHouseAccountEnabled(clientId: number | null | undefi
     return false;
   }
 }
+
+/**
+ * Opt a client IN/OUT of the house-account model (P4). Raw-SQL UPSERT keyed on the
+ * billing_config PK (client_id); a client with no billing_config row yet gets one with column
+ * defaults. Unlike the read this is NOT swallowed — the admin endpoint surfaces any failure so a
+ * silent no-op can't masquerade as a successful opt-in. Returns the value written.
+ */
+export async function setClientHouseAccountEnabled(clientId: number, enabled: boolean): Promise<boolean> {
+  await ensureHouseAccountColumn();
+  await pg`
+    INSERT INTO billing_config (client_id, house_account_enabled)
+    VALUES (${clientId}, ${enabled})
+    ON CONFLICT (client_id) DO UPDATE SET house_account_enabled = ${enabled}, updated_at = now()
+  `;
+  return enabled;
+}
+
+/**
+ * The set of client_ids opted into the house-account model — for the Billing Config grid toggle
+ * state. Reads ONLY the opted-in rows (no array binding — sidesteps the IN/ANY param gotcha; the
+ * opted-in set is tiny). Best-effort: an empty set just shows every toggle OFF (the safe default).
+ */
+export async function houseAccountEnabledClientIds(): Promise<Set<number>> {
+  const out = new Set<number>();
+  try {
+    await ensureHouseAccountColumn();
+    const rows = (await pg`
+      SELECT client_id FROM billing_config WHERE house_account_enabled = true
+    `) as Array<{ client_id: number }>;
+    for (const row of rows) out.add(Number(row.client_id));
+  } catch {
+    /* best-effort */
+  }
+  return out;
+}
