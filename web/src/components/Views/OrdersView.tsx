@@ -315,28 +315,9 @@ interface OrdersViewProps {
   stores?: Array<{ storeId?: number | null; clientId?: number | null; storeName?: string | null; name?: string | null }>
 }
 
-function scheduleNonCriticalOrdersWork(callback: () => void, delayMs = 2500) {
-  if (typeof window === 'undefined') return () => { }
-  let cancelled = false
-  const run = () => {
-    if (cancelled || document.visibilityState !== 'visible') return
-    callback()
-  }
-
-  if ('requestIdleCallback' in window) {
-    const idleId = window.requestIdleCallback(run, { timeout: delayMs })
-    return () => {
-      cancelled = true
-      window.cancelIdleCallback?.(idleId)
-    }
-  }
-
-  const timeoutId = (window as Window).setTimeout(run, delayMs)
-  return () => {
-    cancelled = true
-    window.clearTimeout(timeoutId)
-  }
-}
+// PS-258 (slice B): scheduleNonCriticalOrdersWork (the pure, closure-free
+// idle-time scheduler) moved VERBATIM to ./orders-non-critical-scheduler
+// (strict module). Imported below; the two call sites are unchanged.
 
 // PS-258 (slice): the daily-stats rollover scheduling math (getDailyStats-
 // RolloverParts, addCalendarDays, getTimeZoneOffsetMs, zonedDateToUtcDate, and
@@ -498,6 +479,8 @@ import { californiaDateInputValue, CALIFORNIA_TZ } from '../../lib/ca-time'
 import { getMsUntilNextDailyStatsRollover } from './daily-stats-rollover'
 // PS-258 (slice): pure print-queue payload parsers (strict module).
 import { getQueueableLabelUrl, getQueuePayloadEntries } from './orders-queue-parsers'
+// PS-258 (slice B): pure idle-time non-critical scheduler (strict module).
+import { scheduleNonCriticalOrdersWork } from './orders-non-critical-scheduler'
 import {
   ageHours,
   ageLabel,
