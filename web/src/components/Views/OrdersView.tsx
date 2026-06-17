@@ -186,6 +186,7 @@ import {
   type ResolvedColumnPrefs,
   type TableColumnConfig,
 } from './orders-parity'
+import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
 import {
   buildFilteredAwaitingRecalculateQuery,
   formatBatchRecalculateFinishedMessage,
@@ -312,27 +313,6 @@ interface OrdersViewProps {
   // ("Show panel"). Updates the same localStorage-backed pref in Home.tsx.
   onHideEmptyPanelChange?: (hide: boolean) => void
   stores?: Array<{ storeId?: number | null; clientId?: number | null; storeName?: string | null; name?: string | null }>
-}
-
-const COLUMN_PREFS_LOCAL_STORAGE_KEY = 'prepship.orders.columnPrefs'
-
-function readLocalColumnPrefs() {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(COLUMN_PREFS_LOCAL_STORAGE_KEY)
-    return raw ? JSON.parse(raw) as ColumnPrefs : null
-  } catch {
-    return null
-  }
-}
-
-function writeLocalColumnPrefs(prefs: ColumnPrefs) {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(COLUMN_PREFS_LOCAL_STORAGE_KEY, JSON.stringify(prefs))
-  } catch {
-    // Server persistence is still the source of truth when localStorage is unavailable.
-  }
 }
 
 function scheduleNonCriticalOrdersWork(callback: () => void, delayMs = 2500) {
