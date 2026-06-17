@@ -11,6 +11,8 @@ import { shipments } from '../db/schema/shipments';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
+import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
+import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
 // PS-207: the `inventory` import is deliberately GONE — billing must never
 // consult inventory/SKU package defaults (the storage-fee block reads
 // inventory via raw SQL for cubic-feet, which is not box resolution).
@@ -828,6 +830,29 @@ export async function generateLineItems(input: GenerateInput) {
   };
   const allRows: LineRow[] = [];
 
+  // PS-220 (billing branch): for opted-in SHIPP house orders, bill the captured customer_rate
+  // (cheapest eligible non-SHIPP) instead of the SHIPP drp_cost, and suppress the carrier markup —
+  // the margin IS the spread. Best-effort bulk load keyed by shipment id; empty when the sidecar is
+  // absent or no house orders exist (then billing is byte-identical to today). Reads only.
+  const houseCustomerRateByShipmentId = new Map<number, number>();
+  try {
+    const houseShipmentIds = [
+      ...new Set(billableRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
+    ];
+    if (houseShipmentIds.length) {
+      await ensureOrderCompetitiveRateSchema();
+      const houseRows = await db
+        .select({ shipmentId: orderCompetitiveRate.shipmentId, customerRate: orderCompetitiveRate.customerRate })
+        .from(orderCompetitiveRate)
+        .where(and(eq(orderCompetitiveRate.isHouseOrder, true), inArray(orderCompetitiveRate.shipmentId, houseShipmentIds)));
+      for (const hr of houseRows) {
+        if (hr.shipmentId != null) houseCustomerRateByShipmentId.set(Number(hr.shipmentId), Number(hr.customerRate));
+      }
+    }
+  } catch {
+    /* best-effort: sidecar absent or unreadable -> no house billing (today's behavior) */
+  }
+
   for (const s of billableRows) {
     if (s.clientId === null) {
       skipped += 1;
@@ -910,6 +935,25 @@ export async function generateLineItems(input: GenerateInput) {
     // created before the synced cost was available.
     const labelCost = (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
     if (labelCost > 0) {
+      const houseCustomerRate = s.id != null ? houseCustomerRateByShipmentId.get(Number(s.id)) : undefined;
+      if (houseCustomerRate != null) {
+        // PS-220 house order: bill the captured customer_rate (cheapest eligible non-SHIPP). The SHIPP
+        // drp_cost (labelCost) is never billed, and the carrier markup is SUPPRESSED — the margin IS
+        // the spread. drp_cost / margin are INTERNAL and never appear on the invoice.
+        rows.push({
+          clientId,
+          orderId: s.orderId,
+          orderNumber: s.orderNumber,
+          shipmentId: s.id,
+          shipDate: s.shipDate,
+          lineType: 'shipping',
+          description: `Shipping · order ${s.orderNumber ?? s.orderId}`,
+          qty: '1',
+          unitCost: houseCustomerRate.toFixed(2),
+          totalCost: houseCustomerRate.toFixed(2),
+          packageId: billedPackageId,
+        });
+      } else {
       let billedCost = labelCost;
       const billingMode = cfg.billingMode ?? 'label_cost';
       if (
@@ -939,6 +983,7 @@ export async function generateLineItems(input: GenerateInput) {
         totalCost: shipCost.toFixed(2),
         packageId: billedPackageId,
       });
+      }
     } else if (s.externallyShipped || s.externallyFulfilled || s.id === null) {
       rows.push({
         clientId,

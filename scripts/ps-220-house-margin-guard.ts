@@ -151,6 +151,15 @@ const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');
 check('realized capture fires only for a SHIPP purchase, best-effort, AFTER the committed ship txn',
   /directProviderKey === 'shipp'/.test(labelsSrc) && labelsSrc.includes('captureRealizedHouseMargin'));
 
+// ── slice 3: billing branch (bill customer_rate, suppress markup) ─────────────
+const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
+check('billing: house order bills the captured customer_rate (never the SHIPP drp_cost/labelCost)',
+  /houseCustomerRateByShipmentId/.test(billingSrc) && /unitCost: houseCustomerRate\.toFixed\(2\)/.test(billingSrc));
+check('billing: house branch reads the sidecar (is_house_order) and suppresses the carrier markup',
+  billingSrc.includes('orderCompetitiveRate') && /isHouseOrder/.test(billingSrc) &&
+  // the house push has NO pct/flat markup applied (suppressed) — markup only in the else branch
+  /houseCustomerRate != null[\s\S]*?unitCost: houseCustomerRate/.test(billingSrc));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-220 house-margin guard (${failures} failing)`);
   process.exit(1);
