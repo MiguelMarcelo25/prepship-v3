@@ -123,6 +123,20 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => value === 'true' || value === '1'),
+  // PS-271 (Layer 2): 60s per-carrier union cache for direct-carrier rates (the additive
+  // backstop for Shipp's non-deterministic thin response — see #1502/HUGRAB). When ON, live
+  // direct-carrier rates are unioned with fresh-cached rows (live-wins-per-carrier) so a thin
+  // pass that drops UPS still surfaces the recently-cached UPS, and each live rate is written
+  // back best-effort. Default OFF — the OFF path is a TRUE no-op (no DB, no schema ensure) and
+  // is byte-identical to today's ShipStation-only cache. DJ flips this on Render after a canary.
+  DIRECT_CARRIER_RATE_CACHE: booleanFlag(false),
+  // PS-271 (Layer 2): cache + negative-memory cooldown TTL in seconds (default 60s). The cooldown
+  // (Layer 1 guardrail) is keyed (account_id, lane fingerprint, carrier_code) and lives in the same
+  // direct_carrier_rate_cache table (durable, survives both worker processes); it bounds how often a
+  // missing observed carrier triggers a re-quote. Kept >= the order-sync cadence so a phantom retry
+  // can't fire fleet-wide. Only consulted when DIRECT_CARRIER_RATE_CACHE is ON.
+  DIRECT_CARRIER_RATE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
+  DIRECT_CARRIER_QUOTE_COOLDOWN_SECONDS: z.coerce.number().int().positive().default(180),
 });
 
 const parsed = schema.safeParse(process.env);

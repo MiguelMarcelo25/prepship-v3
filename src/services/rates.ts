@@ -67,6 +67,14 @@ import {
   type MarkupRule,
 } from './shipping-workflow/rate-money';
 import { resolveWalmartPurchaseOrder } from './walmart-po-resolution';
+// PS-271 (Layer 2): 60s per-carrier union cache (additive backstop for Shipp's non-deterministic
+// thin response). Default-OFF; a COLD cache / flag OFF is byte-for-byte identical to today.
+import {
+  directCarrierRateCacheEnabled,
+  readFreshDirectCarrierRates,
+  writeDirectCarrierRates,
+  type DirectCarrierCacheRow,
+} from './direct-carrier-rate-cache';
 
 type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
@@ -1734,6 +1742,84 @@ async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<Direc
   );
 }
 
+// PS-271 (Layer 2): the per-carrier union dedup key — carrier_code | service_code | amount(4dp).
+// Identical to the spec's "dedup by carrier|service|amount.toFixed(4)". Live-wins-per-carrier is
+// achieved by inserting the live rates into the map FIRST, then only adding a cached row whose key is
+// absent.
+function directRateUnionKey(rate: Pick<Rate, 'carrier_code' | 'service_code' | 'shipping_amount'>): string {
+  return [
+    rateTextKey(rate.carrier_code),
+    rateTextKey(rate.service_code),
+    rateMoneyKey(rate.shipping_amount?.amount),
+  ].join('|');
+}
+
+// PS-271 (Layer 2): rebuild a Rate from a fresh-cached row. The cache stores the already-lifted Rate
+// (pre-markup), so this is just a typed read with the live carrier_id stamped from the current
+// account (the synthetic se-<pid> id is account-derived and stable, but we re-stamp defensively).
+function cachedRowToDirectRate(row: DirectCarrierCacheRow, shippingProviderId: number): Rate | null {
+  const stored = row.rateJson;
+  if (!stored || typeof stored !== 'object') return null;
+  const rate = { ...(stored as Record<string, unknown>) } as Rate;
+  const amount = Number(rate.shipping_amount?.amount ?? row.amount ?? 0);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return { ...rate, carrier_id: `se-${shippingProviderId}` } as Rate;
+}
+
+// PS-271 (Layer 2): union live direct-carrier rates with fresh-cached rows for the SAME
+// (account, source_table, request_key) lane. Live wins per carrier|service|amount key (live inserted
+// first; a cached row is only added when its key is absent). When the cache is OFF or returns nothing
+// fresh, returns `live` UNCHANGED — so a COLD cache / flag OFF is monotonic-additive (identical to
+// today). Best-effort: never throws into the rate hot path.
+async function unionDirectRatesWithCache(
+  live: Rate[],
+  account: DirectCarrierAccountInfo,
+  shippingProviderId: number,
+  requestKey: string,
+): Promise<Rate[]> {
+  if (!directCarrierRateCacheEnabled() || !requestKey) return live;
+  let cachedRows: DirectCarrierCacheRow[] = [];
+  try {
+    cachedRows = await readFreshDirectCarrierRates(account.id, account.sourceTable, requestKey);
+  } catch (err) {
+    console.warn('[rates] direct-carrier cache union skipped:', err instanceof Error ? err.message : err);
+    return live;
+  }
+  if (!cachedRows.length) return live;
+  const byKey = new Map<string, Rate>();
+  for (const rate of live) byKey.set(directRateUnionKey(rate), rate); // live wins
+  for (const row of cachedRows) {
+    const rate = cachedRowToDirectRate(row, shippingProviderId);
+    if (!rate) continue;
+    const key = directRateUnionKey(rate);
+    if (!byKey.has(key)) byKey.set(key, rate);
+  }
+  return [...byKey.values()];
+}
+
+// PS-271 (Layer 2): fire-and-forget UPSERT each LIVE direct-carrier rate into the 60s cache. NO-OP
+// when the cache is OFF. Stores the lifted (pre-markup) Rate so a later union re-applies the same
+// markup uniformly. request_key is REQUIRED (the per-account fingerprint). Never throws.
+function writeDirectRatesToCache(
+  live: Rate[],
+  account: DirectCarrierAccountInfo,
+  requestKey: string,
+): void {
+  if (!directCarrierRateCacheEnabled() || !requestKey || !live.length) return;
+  const writes = live.map((rate) => ({
+    accountId: account.id,
+    sourceTable: account.sourceTable,
+    carrierCode: String(rate.carrier_code ?? '').trim().toLowerCase(),
+    serviceCode: String(rate.service_code ?? '').trim().toLowerCase(),
+    requestKey,
+    amount: Number(rate.shipping_amount?.amount ?? 0),
+    rateJson: rate,
+  })).filter((w) => w.carrierCode && w.serviceCode);
+  void writeDirectCarrierRates(writes).catch((err) => {
+    console.warn('[rates] direct-carrier cache write skipped:', err instanceof Error ? err.message : err);
+  });
+}
+
 export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
   options: { cachedOnly?: boolean } = {},
@@ -1860,6 +1946,12 @@ export async function getDirectCarrierRatesForRateInput(
         // classification as ShipStation (classifyRateInputResidential above), NOT the raw FE
         // input.residential, so direct-vs-ShipStation quotes are comparable and the UPS label matches.
         residential: resolvedResidential,
+        // PS-271 (Layer 1): the Shipp connector's observed-set retry keys its durable observed-set
+        // read + negative-memory cooldown on the account + this per-account request fingerprint. Inert
+        // for every other provider (only the Shipp connector reads these).
+        directCarrierAccountId: account.id,
+        directCarrierSourceTable: account.sourceTable,
+        requestKey: requestFingerprint,
         shippingOptions,
       }), label);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
@@ -1872,12 +1964,28 @@ export async function getDirectCarrierRatesForRateInput(
         directRateServiceDescriptor(rate as Record<string, unknown>, account.provider),
         shippingOptions,
       ).allowed);
-      const markedUp = applyMarkups(
-        eligible
-          .map((rate) => toDirectRate(rate as Record<string, unknown>, account, requestFingerprint, fetchedAt, eligible.length))
-          .filter((rate): rate is Rate => rate != null),
-        directMarkups,
+      // Lift live connector rates into the canonical Rate shape (pre-markup) so the markup applies
+      // uniformly to BOTH live and the PS-271 union-cached rows below.
+      const liftedLive = eligible
+        .map((rate) => toDirectRate(rate as Record<string, unknown>, account, requestFingerprint, fetchedAt, eligible.length))
+        .filter((rate): rate is Rate => rate != null);
+
+      // PS-271 (Layer 2): union the live rates with fresh-cached rows (live-wins-per-carrier; dedup by
+      // carrier|service|amount(4dp)). When the cache is OFF or COLD this returns liftedLive UNCHANGED
+      // (byte-for-byte identical to today). Best-effort: a read failure degrades to live-only and is
+      // logged inside the cache module, never thrown into this hot path.
+      const liftedUnion = await unionDirectRatesWithCache(
+        liftedLive,
+        account,
+        shippingProviderId,
+        requestFingerprint,
       );
+
+      // Fire-and-forget UPSERT of the LIVE rates only (never the cached ones) so the cache always
+      // reflects what this account actually returned this pass. NO-OP when the cache is OFF.
+      void writeDirectRatesToCache(liftedLive, account, requestFingerprint);
+
+      const markedUp = applyMarkups(liftedUnion, directMarkups);
       // PS-261: EasyPost charges its OWN insurance fee and its rates never pass through the
       // ShipStation enrichRatesWithInsuranceCost path (the direct universe is merged AFTER
       // enrichment via combineCarrierUniverses), so an insured EasyPost rate would carry

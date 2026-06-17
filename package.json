@@ -289,6 +289,8 @@
     "test:ps-260-premature-best-rate": "tsx scripts/ps-260-premature-best-rate-guard.ts",
     "test:ps-261-easypost-insurance-cost": "tsx scripts/ps-261-easypost-insurance-cost-guard.ts",
     "test:ps-271-best-rate-ratchet": "tsx scripts/ps-271-best-rate-ratchet-guard.ts",
+    "test:ps-271-shipp-observed-set-retry": "tsx scripts/ps-271-shipp-observed-set-retry-guard.ts",
+    "test:ps-273-shipp-account-nickname": "tsx scripts/ps-273-shipp-account-nickname-guard.ts",
     "test:ps-258-daily-stats-rollover": "tsx scripts/ps-258-daily-stats-rollover-guard.ts",
     "test:ps-258-orders-queue-parsers": "tsx scripts/ps-258-orders-queue-parsers-guard.ts",
     "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",

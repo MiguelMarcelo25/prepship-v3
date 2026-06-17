@@ -24,6 +24,7 @@ Current status: inventory and guard created. Phase 11 Batch 4 moved reporting me
 | `api/carriers/walmart/fees.ts` | selling-fee order columns | requires separate shipped/label review | Move to migration-readiness only after shipped-fee sync is reviewed |
 | `api/cron/sync-walmart-fees.ts` | selling-fee order columns | requires separate shipped/label review | Move to migration-readiness only after shipped-fee sync is reviewed |
 | `src/services/orders-performance-maintenance.ts` | shipment support indexes only | requires separate shipped/label review | Move to migration-readiness only after label/shipment performance paths are reviewed |
+| `src/services/direct-carrier-rate-cache.ts` | `direct_carrier_rate_cache` (PS-271 Layer 2 60s per-carrier union cache + durable Layer 1 cooldown), RLS-enabled, no open policy | compatibility fallback to keep temporarily | Promote to a drizzle migration after DJ flips `DIRECT_CARRIER_RATE_CACHE` on Render and the additive table is confirmed in prod (default-OFF canary; OFF path never touches the DB) |
 
 ## Resolved Runtime DDL
 

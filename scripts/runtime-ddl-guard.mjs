@@ -71,6 +71,11 @@ const expectedRuntimeDdlFiles = [
   // column-bootstrap fallback lives in src/connectors/store/walmart-fees.ts.
   'src/services/orders-performance-maintenance.ts',
   'src/routes/analysis.ts',
+  // PS-271 (Layer 2): the additive direct_carrier_rate_cache runtime-DDL table (60s per-carrier
+  // union cache + durable Layer 1 cooldown). Intentional default-OFF canary (no drizzle migration
+  // by design until DJ confirms the table in prod), mirroring the PS-256 worker-status-events /
+  // print-queue-pdf-store runtime-DDL pattern. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
+  'src/services/direct-carrier-rate-cache.ts',
 ];
 
 const requiredClassifications = [

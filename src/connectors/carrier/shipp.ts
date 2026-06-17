@@ -2,6 +2,17 @@ import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 import { readShipFrom } from './ship-from-address.js';
+// PS-271 (Layer 1): observed-set thin-response retry. Default-OFF per account; with the opt-in flag
+// absent NONE of this runs and the connector does today's exact single POST.
+import {
+  acquireShippQuoteBudget,
+  isQuoteInCooldown,
+  missingObservedCarriers,
+  normalizeObservedCarrier,
+  readObservedCarriers,
+  recordQuoteCooldown,
+  shippObservedRetryEnabled,
+} from './shipp-observed-carriers.js';
 import { PDFDocument } from 'pdf-lib';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
@@ -77,7 +88,22 @@ function shippFirstString(...values: unknown[]): string {
 }
 
 const shippZipCache = new Map<string, { city?: string; state?: string }>();
-const SHIPP_QUOTE_MAX_ATTEMPTS = 2;
+// Hard cap on TOTAL /quote POSTs per quote — SHARED by the transient (5xx/429) retry loop AND the
+// PS-271 observed-set thin-response re-ask (they do NOT stack a second budget). At 2 this is the
+// today behavior + at most ONE thin re-ask; bump to 3 to allow one transient retry AND one thin
+// re-ask in the same quote (documented 3x ceiling). Login is never counted (a re-POST reuses the
+// session). Env-overridable but clamped to [1,3] so a misconfig can't fan out provider calls.
+const SHIPP_QUOTE_MAX_ATTEMPTS = Math.max(
+  1,
+  Math.min(3, Number.parseInt(process.env.SHIPP_QUOTE_MAX_ATTEMPTS ?? '2', 10) || 2),
+);
+// Backoff before a re-POST. The transient (5xx/429) path already sleeps 500ms; the new PS-271 thin
+// re-ask gets its OWN (slightly longer) backoff so a non-deterministic carrier set has a moment to
+// settle before we re-ask.
+const SHIPP_THIN_RETRY_BACKOFF_MS = Math.max(
+  0,
+  Number.parseInt(process.env.SHIPP_THIN_RETRY_BACKOFF_MS ?? '750', 10) || 750,
+);
 
 function shippShouldRetryQuoteStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
@@ -315,6 +341,47 @@ export function shippDeclaredValue(options: {
   return Number.isFinite(value) && value > 0 ? Number(value.toFixed(2)) : 0;
 }
 
+// PS-271 (Layer 1): the carriers a non-empty Shipp 200 actually returned (normalized lowercase),
+// used to decide whether an observed-expected carrier is missing (a "thin" response).
+function shippReturnedCarriers(rateList: any[]): string[] {
+  const carriers = new Set<string>();
+  for (const rate of rateList) {
+    const code = shippCarrierCode(shippRawCarrier(rate));
+    const normalized = normalizeObservedCarrier(code);
+    if (normalized) carriers.add(normalized);
+  }
+  return [...carriers];
+}
+
+// PS-271 (Layer 1): a stable per-shipment lane fingerprint for the durable negative-memory cooldown.
+// Keyed on the shipment facts that determine the carrier set (weight/dims/destination), NOT the
+// account — the account is a separate key column.
+function shippLaneFingerprint(input: Record<string, unknown>): string {
+  return [
+    Math.round(Number(input.weightOz ?? 0)),
+    Number(input.dimsL ?? 0),
+    Number(input.dimsW ?? 0),
+    Number(input.dimsH ?? 0),
+    String(input.toZip ?? '').replace(/\D/g, '').slice(0, 5),
+    input.residential === false ? 'com' : 'res',
+  ].join('|');
+}
+
+// PS-271 (Layer 1): resolve the OBSERVED-recently expected carrier set for this account+lane. Prefers
+// an explicitly injected set (used by the offline behavioral guard — no DB) and otherwise reads the
+// durable cache. Returns [] when the feature can't derive an expectation cheaply, which the caller
+// treats as "no retry" (fail-safe to today's behavior).
+async function shippResolveObservedSet(
+  input: Record<string, unknown>,
+  ref: { accountId: number | null; sourceTable: string | null; requestKey: string | null; laneFingerprint: string },
+): Promise<string[]> {
+  const injected = (input as any).shippObservedCarriers;
+  if (Array.isArray(injected)) {
+    return injected.map(normalizeObservedCarrier).filter(Boolean);
+  }
+  return readObservedCarriers(ref).catch(() => []);
+}
+
 async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   session: { apiKey: string; cookieHeader: string };
   rates: any[];
@@ -399,9 +466,25 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
     ],
   };
 
+  // PS-271 (Layer 1): observed-set thin-response retry context. DEFAULT OFF — when the per-account
+  // opt-in flag is absent, `observedRetryOn` is false and the loop below behaves EXACTLY like today
+  // (single POST + transient retry only; no observed-set logic, no extra POST, no DB read).
+  const observedRetryOn = shippObservedRetryEnabled(creds);
+  const observedRef = {
+    accountId: typeof input.directCarrierAccountId === 'number' ? input.directCarrierAccountId : null,
+    sourceTable: typeof input.directCarrierSourceTable === 'string' ? input.directCarrierSourceTable : null,
+    requestKey: typeof input.requestKey === 'string' ? input.requestKey : null,
+    laneFingerprint: shippLaneFingerprint(input),
+  };
+  const expectedCarriers = observedRetryOn ? await shippResolveObservedSet(input, observedRef) : [];
+
   let lastQuoteError: Error | null = null;
   for (let attempt = 1; attempt <= SHIPP_QUOTE_MAX_ATTEMPTS; attempt += 1) {
     let res: Response;
+    // PS-271 (Layer 1): route /quote through a per-provider token bucket (Shipp /quote bypasses the
+    // global limiter today). Only runs when the observed-set feature is opted in, so the OFF path is
+    // unchanged. Bounds /quote burst; the login floor is untouched.
+    if (observedRetryOn) await acquireShippQuoteBudget();
     try {
       res = await timedFetch(attempt > 1 ? 'shipp.rates.retry' : 'shipp.rates', 'https://shipp.to/api/shipping/quote', {
         method: 'POST',
@@ -439,10 +522,37 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
 
     const rateList: any[] = Array.isArray(data?.rates) ? data.rates : [];
     if (rateList.length === 0) {
+      // PRESERVED EXACTLY: an empty 200 is still a hard error (accept-partial is ONLY for the
+      // non-empty-but-thin case below). Do NOT weaken this.
       const errors = Array.isArray(data?.errors) && data.errors.length
         ? ` Carrier errors: ${JSON.stringify(data.errors).slice(0, 500)}`
         : '';
       throw new Error(`Shipp returned 0 rates for this shipment.${errors}`);
+    }
+
+    // PS-271 (Layer 1): observed-set thin-response retry. ONLY runs when opted in. On a NON-EMPTY 200
+    // where an observed-expected carrier is missing, re-ask once (within the SHARED attempt cap, and
+    // only if not in negative-memory cooldown). After the cap, ACCEPT the partial — we NEVER throw on
+    // a non-empty-but-thin response; a real (cheaper) rate that came back is always better than an
+    // error. The 31oz #1502 case: pass 1 returns FedEx-only while {ups,fedex} is expected -> re-ask;
+    // pass 2 returns UPS+FedEx -> complete (or, if still FedEx-only at the cap, accept FedEx + start
+    // the cooldown so we don't hammer Shipp next quote).
+    if (observedRetryOn && expectedCarriers.length) {
+      const missing = missingObservedCarriers(expectedCarriers, shippReturnedCarriers(rateList));
+      if (missing.length && attempt < SHIPP_QUOTE_MAX_ATTEMPTS) {
+        const inCooldown = await isQuoteInCooldown(observedRef, missing[0]!).catch(() => false);
+        if (!inCooldown) {
+          lastQuoteError = new Error(
+            `Shipp returned a thin rate set (missing ${missing.join(',')}); re-asking before the cap.`,
+          );
+          if (SHIPP_THIN_RETRY_BACKOFF_MS > 0) await shippSleep(SHIPP_THIN_RETRY_BACKOFF_MS);
+          continue;
+        }
+      } else if (missing.length) {
+        // At the cap and STILL missing an observed carrier — accept the partial but start the durable
+        // cooldown so the next quote this window doesn't re-ask (fleet-safe negative memory).
+        await recordQuoteCooldown(observedRef, missing[0]!).catch(() => {});
+      }
     }
 
     return { session, rates: rateList };
