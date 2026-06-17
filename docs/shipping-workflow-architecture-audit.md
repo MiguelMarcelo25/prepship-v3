@@ -9,6 +9,25 @@ does not modify shipped/cancelled lockdown paths or the shipment persistence
 flow. Code work in this slice is limited to a pure backend fingerprint and
 selected-rate authority utility plus a guard script.
 
+> Correction 2026-06-17 (PS-285): Several rows below describe
+> `api/carriers/labels.ts` as a live "direct-carrier Vercel path" with its own
+> immediate marketplace-confirmation flow (importing `confirmStoreShipment`),
+> calling out a "duplicate boundary risk" / "duplicate immediate-confirm logic".
+> Those statements are now HISTORICAL. PS-209 retired `api/carriers/labels.ts`
+> to a no-import 410 stub (`LEGACY_LABEL_ENDPOINT_RETIRED`); it makes no provider
+> or connector calls and does not import `confirmStoreShipment`. The duplicate
+> direct-label confirm path no longer exists. Accordingly, the
+> `confirmStoreShipment` resolve+dispatch wrapper in
+> `src/services/store-connector-orchestrator.ts` has ZERO live callers — the
+> canonical outbox owner (`src/services/fulfillment/outbox.ts`) dispatches
+> `connector.confirmShipment` directly, and the ShipStation relay
+> (`ssMarkOrderShippedV1`) is pinned to three audited owners. The PS-285 boundary
+> guard (`scripts/ps-285-marketplace-confirm-boundary-guard.ts`) regression-proofs
+> all three facts. Read the affected rows (Marketplace/Source Confirmation table,
+> the Marketplace confirmation state-machine row, the Duplicate Logic Inventory
+> "Marketplace confirmation" row, and the Provider Boundary Map "Direct carrier"
+> / "Marketplace confirmation" rows) with that correction in mind.
+
 ## Executive Summary
 
 PrepShip's shipping workflow already has several strong safety pieces:

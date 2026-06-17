@@ -13,6 +13,14 @@
  * notification — it only fails the build if a NEW marketplace-confirm dispatch appears outside the
  * canonical owner.
  *
+ * It also hardens two adjacent confirm legs (added 2026-06-17):
+ *  - confirmStoreShipment (the connector resolve+dispatch wrapper) must have ZERO callers outside its
+ *    own file. After PS-209 retired api/carriers/labels.ts to a 410 stub, its old direct-label Walmart
+ *    confirm via this wrapper is gone, leaving no live caller; a new one would be a second dispatch path.
+ *  - ssMarkOrderShippedV1 (the ShipStation relay leg) call sites are pinned to exactly three owners
+ *    (the ShipStation store connector, mark-shipped-externally, and the admin retry route); a new call
+ *    site means a new place asking ShipStation to notify a marketplace.
+ *
  *   npx tsx scripts/ps-285-marketplace-confirm-boundary-guard.ts
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -70,6 +78,44 @@ check('the void-retract owner stops pending confirmations (PS-263, no zombie con
 const markExt = readFileSync('src/services/fulfillment/mark-shipped-externally.ts', 'utf8');
 check('mark-shipped-externally delegates to the owner confirmShipmentDirectNow (not a raw dispatch)',
   /confirmShipmentDirectNow\(/.test(markExt) && !DISPATCH_CALL.test(markExt));
+
+// confirmStoreShipment is the connector RESOLVE+DISPATCH wrapper. It must be reachable only from its
+// own file. After PS-209 retired api/carriers/labels.ts to a 410 stub (its old direct-label immediate
+// Walmart confirm via confirmStoreShipment is GONE), the wrapper has no live caller — the canonical
+// outbox owner dispatches connector.confirmShipment directly. A NEW external caller would resurrect a
+// second marketplace-confirm dispatch path outside the outbox idempotency/retract guards. FAIL on one.
+const CONFIRM_STORE_WRAPPER_CALL = /confirmStoreShipment\(/;
+const confirmStoreCallers: string[] = [];
+for (const file of [...walkTs('src'), ...walkTs('api')]) {
+  const rel = file.replace(/\\/g, '/');
+  if (rel === 'src/services/store-connector-orchestrator.ts') continue; // the file that DEFINES it
+  if (CONFIRM_STORE_WRAPPER_CALL.test(readFileSync(file, 'utf8'))) confirmStoreCallers.push(rel);
+}
+check('confirmStoreShipment wrapper has ZERO callers outside its own file (no second confirm path)',
+  confirmStoreCallers.length === 0);
+if (confirmStoreCallers.length) console.error('  unexpected confirmStoreShipment callers:', confirmStoreCallers.join(', '));
+
+// ssMarkOrderShippedV1 is the ShipStation V1 "mark shipped -> ShipStation relays to the marketplace"
+// call. It is the ShipStation relay leg of marketplace confirmation. Pin its CALL sites (not the
+// definition, not imports) within src/+api/ to exactly the three allowed owners. A NEW call site means
+// a new place asking ShipStation to notify a marketplace, outside the audited confirm/recover surfaces.
+const SS_RELAY_CALL = /ssMarkOrderShippedV1\(/;
+const ALLOWED_SS_RELAY = new Set([
+  'src/connectors/store/shipstation.ts',
+  'src/services/fulfillment/mark-shipped-externally.ts',
+  'src/routes/admin.ts',
+]);
+const ssRelayDefiner = 'src/lib/shipstation/labels.ts'; // exports the function; not a call site
+const ssRelayOffenders: string[] = [];
+for (const file of [...walkTs('src'), ...walkTs('api')]) {
+  const rel = file.replace(/\\/g, '/');
+  if (rel === ssRelayDefiner) continue; // the low-level wrapper that DEFINES it
+  if (!SS_RELAY_CALL.test(readFileSync(file, 'utf8'))) continue;
+  if (!ALLOWED_SS_RELAY.has(rel)) ssRelayOffenders.push(rel);
+}
+check('ssMarkOrderShippedV1 relay call sites are pinned to exactly the 3 allowed owners',
+  ssRelayOffenders.length === 0);
+if (ssRelayOffenders.length) console.error('  unexpected ssMarkOrderShippedV1 call sites:', ssRelayOffenders.join(', '));
 
 check('package.json wires test:ps-285-marketplace-confirm-boundary',
   /test:ps-285-marketplace-confirm-boundary/.test(readFileSync('package.json', 'utf8')));

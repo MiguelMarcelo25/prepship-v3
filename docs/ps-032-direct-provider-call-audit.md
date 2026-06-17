@@ -249,6 +249,17 @@ Phase 4 Walmart post-label confirmation slice added on 2026-05-28:
 - `src/connectors/store/walmart.ts` remains the owner of the Walmart `/v3/orders/{purchaseOrderId}/shipping` marketplace confirmation call.
 - The labels route still owns local shipment/outbox status updates after the StoreConnector confirmation result.
 
+> Update 2026-06-17 (PS-285): the bullet above is HISTORICAL. PS-209 retired
+> `api/carriers/labels.ts` to a no-import 410 stub (`LEGACY_LABEL_ENDPOINT_RETIRED`),
+> so it no longer imports or calls `confirmStoreShipment` — the "duplicate boundary
+> risk" from a parallel direct-label confirm path is gone. The `confirmStoreShipment`
+> resolve+dispatch wrapper in `src/services/store-connector-orchestrator.ts` now has
+> ZERO live callers; the canonical outbox owner (`src/services/fulfillment/outbox.ts`)
+> dispatches `connector.confirmShipment` directly. The PS-285 boundary guard
+> (`scripts/ps-285-marketplace-confirm-boundary-guard.ts`) regression-proofs both:
+> the wrapper stays caller-free and the ShipStation relay (`ssMarkOrderShippedV1`)
+> stays pinned to its three audited owners.
+
 Phase 4 Walmart label-context lookup cleanup added on 2026-05-28:
 
 - `api/carriers/labels.ts` now uses connector-owned `lookupWalmartOrderByCustomerOrderId(...)` for Walmart source-order lookup during Walmart Shipping label creation.
