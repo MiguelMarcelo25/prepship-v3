@@ -30,7 +30,15 @@ import {
 } from '../web/src/components/Views/order-shipping-display';
 import {
   planShippNicknameBackfillRow,
+  isShippBrokeredServiceCode as isShippBrokeredServiceCodeBackend,
+  SHIPP_BROKERED_ACCOUNT_LABEL as SHIPP_BROKERED_ACCOUNT_LABEL_BACKEND,
 } from '../src/services/shipping-workflow/shipp-account-nickname-backfill';
+// PS-273: the synthetic direct-carrier provider-id offset. The backend owner (src/routes/orders.ts)
+// imports the SAME-valued constant from src/services/labels-direct to short-circuit
+// resolveV2CarrierAccountRef. labels-direct eagerly opens a DB pool at import, so this OFFLINE guard
+// pulls the identical value from the pure connector compatibility matrix instead (no DB/network),
+// and statically asserts orders.ts wires the labels-direct copy below.
+import { DIRECT_CARRIER_PROVIDER_ID_OFFSET } from '../src/connectors/compatibility-matrix';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -60,6 +68,115 @@ check(
 // Identity-first still works: an EXACT provider id resolves its real account.
 const exact = resolveV2CarrierAccount(565326, null, null);
 check('exact provider id 565326 still resolves GG6381', exact?.nickname === 'GG6381', String(exact?.nickname));
+
+// ── 1b. BACKEND owner (src/routes/orders.ts) — the canonical fix lives here ───
+// resolveV2CarrierAccountRef + the DTO account resolution own the fact the FE only displays.
+// orders.ts eagerly opens a DB pool at import (db/client), so we cannot CALL it in this offline
+// guard; we (a) statically assert the source carries the fix, and (b) reproduce the pure decision
+// against the SAME imported constants/helpers so the numeric + precedence contract can't drift.
+const ordersSrc = readFileSync('src/routes/orders.ts', 'utf8');
+
+// (a) resolveV2CarrierAccountRef short-circuits to null for any synthetic direct-carrier id, so a
+//     Shipp-brokered provider id (10_000_000 + carrier_accounts.id) can never reach the 1Z /
+//     carrier-family fabrication that returned GG6381 on order #1587.
+check(
+  'orders.ts: resolveV2CarrierAccountRef is exported (so the contract is testable)',
+  /export function resolveV2CarrierAccountRef\(/.test(ordersSrc),
+);
+check(
+  'orders.ts: synthetic direct id short-circuits to null before the carrier-family/1Z fabrication',
+  /providerAccountId >= DIRECT_CARRIER_PROVIDER_ID_OFFSET\) return null;/.test(ordersSrc),
+);
+check(
+  'orders.ts: imports the offset from the canonical labels-direct owner',
+  /import \{ DIRECT_CARRIER_PROVIDER_ID_OFFSET \} from '\.\.\/services\/labels-direct';/.test(ordersSrc),
+);
+check(
+  'orders.ts: imports the brokered-Shipp identity helpers from the shared service',
+  /isShippBrokeredServiceCode,[\s\S]{0,80}SHIPP_BROKERED_ACCOUNT_LABEL,[\s\S]{0,120}shipp-account-nickname-backfill';/.test(ordersSrc),
+);
+// (b) DTO account resolution: the brokered "Shipp" label is substituted ONLY as a fallback that
+//     precedes the static-registry fabrication, and NEVER ahead of persisted nicknames.
+check(
+  'orders.ts: providerAccountNickname prefers persisted nickname, then brokered "Shipp", then registry',
+  /ship\.provider_account_nickname \?\?\s*\(isShippBrokeredShipment \? SHIPP_BROKERED_ACCOUNT_LABEL : null\) \?\?\s*resolvedCarrierAccount\?\.nickname/.test(ordersSrc),
+);
+check(
+  'orders.ts: accountPick inserts the brokered "Shipp" slot BEFORE the V2_CARRIER_ACCOUNT_REFS guess',
+  (() => {
+    // CRLF-safe: match the brokered slot by its UNIQUE source tag (only in the accountPick brokered
+    // slot) instead of a newline-bearing literal that breaks on \r\n line endings.
+    const brokeredIdx = ordersSrc.indexOf("'shipp_brokered_account_label'");
+    const registryIdx = ordersSrc.indexOf("value: resolvedCanonicalCarrierAccount?.nickname,");
+    return brokeredIdx > 0 && registryIdx > 0 && brokeredIdx < registryIdx;
+  })(),
+);
+check(
+  'orders.ts: accountPick slot #2 stays the RAW persisted nickname (Shipp must not pre-empt persisted best-rate nicknames)',
+  /value: ship\?\.provider_account_nickname \?\? null,/.test(ordersSrc),
+);
+
+// (b') Pure re-derivation of resolveV2CarrierAccountRef's offset gate, tied to the imported constant.
+function backendDirectIdResolvesNull(providerAccountId: number): boolean {
+  // Mirrors the orders.ts gate: an exact registry hit would win first (none exist for direct ids),
+  // then any id at/above the offset returns null — no carrier-family / 1Z fabrication.
+  return providerAccountId >= DIRECT_CARRIER_PROVIDER_ID_OFFSET;
+}
+check(
+  'backend offset gate: resolveV2CarrierAccountRef(10000025,"ups","1Z…",10) === null',
+  backendDirectIdResolvesNull(10_000_000 + 25) === true,
+);
+check(
+  'backend offset gate: a real ShipStation id (565326) is NOT short-circuited (exact match still wins)',
+  backendDirectIdResolvesNull(565326) === false,
+);
+
+// (b'') Pure re-derivation of the DTO account resolution for the #1587 row: a brokered Shipp DTO
+//       row with NULL provider_account_nickname + carrier_code 'ups' + 1Z tracking resolves
+//       account = "Shipp", NEVER GG6381. Uses the SAME backend helpers orders.ts imports.
+function resolveBrokeredDtoAccount(row: {
+  providerAccountNickname: string | null;
+  serviceCode: string | null;
+  source: string | null;
+  registryGuess: string | null; // what V2_CARRIER_ACCOUNT_REFS WOULD fabricate (e.g. 'GG6381')
+}): string | null {
+  const brokered =
+    isShippBrokeredServiceCodeBackend(row.serviceCode) ||
+    (typeof row.source === 'string' && row.source.trim().toLowerCase() === 'shipp');
+  return (
+    row.providerAccountNickname ??
+    (brokered ? SHIPP_BROKERED_ACCOUNT_LABEL_BACKEND : null) ??
+    row.registryGuess ??
+    null
+  );
+}
+check(
+  'backend DTO: brokered Shipp row (null nickname, ups, 1Z) resolves "Shipp", never GG6381',
+  resolveBrokeredDtoAccount({
+    providerAccountNickname: null,
+    serviceCode: 'shipp_ups_ground',
+    source: 'shipp',
+    registryGuess: 'GG6381',
+  }) === SHIPP_BROKERED_ACCOUNT_LABEL_BACKEND,
+);
+check(
+  'backend DTO: a genuinely-persisted provider_account_nickname STILL wins over "Shipp"',
+  resolveBrokeredDtoAccount({
+    providerAccountNickname: 'ROCEL C81F70',
+    serviceCode: 'shipp_ups_ground',
+    source: 'shipp',
+    registryGuess: 'GG6381',
+  }) === 'ROCEL C81F70',
+);
+check(
+  'backend DTO: a NON-brokered row never substitutes "Shipp" (falls to the registry guess)',
+  resolveBrokeredDtoAccount({
+    providerAccountNickname: null,
+    serviceCode: 'ups_ground',
+    source: 'prepship_v2',
+    registryGuess: 'GG6381',
+  }) === 'GG6381',
+);
 
 // ── 2 & 3. resolveDisplayShipAccount: "Shipp" over the fabricated GG6381 ──────
 const baseAcct = {

@@ -133,6 +133,16 @@ import {
   type StoredMarketplaceFeeRule,
 } from '../services/marketplace-fee';
 import { getOrderDimsDefaultsForOrder } from '../services/order-dims-defaults';
+// PS-273: synthetic direct-carrier provider-id offset (10_000_000 + carrier_accounts.id).
+// Any provider id at/above this offset is a DIRECT/brokered account that has no entry in the
+// static ShipStation registry — it must NEVER be back-resolved to a carrier-family/1Z guess.
+import { DIRECT_CARRIER_PROVIDER_ID_OFFSET } from '../services/labels-direct';
+// PS-273: brokered-Shipp identity helpers (pure, no DB/network). A Shipp-brokered shipment is
+// shipp_-prefixed (service code) or source='shipp'; its account label is the literal "Shipp".
+import {
+  isShippBrokeredServiceCode,
+  SHIPP_BROKERED_ACCOUNT_LABEL,
+} from '../services/shipping-workflow/shipp-account-nickname-backfill';
 
 const app = new Hono();
 
@@ -415,6 +425,7 @@ const RATE_MONEY_FIELD_KEYS = new Set([
   'shippingTotal',
   'standardShippingCost',
   'standardShippingTotal',
+  'houseMargin', // PS-220: the SHIPP house-account margin is INTERNAL — never to non-financial / client viewers
 ]);
 
 function redactRateMoneyFields<T>(value: T): T {
@@ -534,7 +545,9 @@ function resolveLegacyClientId(
   return clientId ?? null;
 }
 
-function resolveV2CarrierAccountRef(
+// PS-273: exported so the offline guard (scripts/ps-273-shipp-account-nickname-guard.ts)
+// can pin the identity-first contract directly against the backend owner.
+export function resolveV2CarrierAccountRef(
   providerAccountId: number | null | undefined,
   carrierCode: string | null | undefined,
   trackingNumber: string | null | undefined,
@@ -543,6 +556,14 @@ function resolveV2CarrierAccountRef(
   if (providerAccountId != null) {
     const exact = V2_CARRIER_ACCOUNT_REFS.find((account) => account.shippingProviderId === providerAccountId);
     if (exact) return exact;
+    // PS-273: a synthetic direct/brokered provider id (>= 10_000_000 + carrier_accounts.id) is
+    // NOT a ShipStation registry account. Before this gate, a Shipp-brokered UPS label
+    // (provider id 10_000_025, carrier 'ups', 1Z tracking) fell through to the 1Z / carrier-family
+    // fabrication below and resolved the first shared UPS account (GG6381 on order #1587) — a
+    // direct account the label was never bought on. Identity FIRST: there is no registry truth
+    // for a direct id, so return null and let the persisted provider_account_nickname or the
+    // Shipp brokered-fallback own the display. No carrier-family guess.
+    if (providerAccountId >= DIRECT_CARRIER_PROVIDER_ID_OFFSET) return null;
   }
 
   if ((carrierCode === 'ups' || carrierCode === 'ups_walleted') && trackingNumber) {
@@ -1594,6 +1615,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           label_shipment_id,
           provider_account_id,
           provider_account_nickname,
+          source,
           selected_rate_json
         from shipments
         where order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})
@@ -1626,6 +1648,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           label_shipment_id,
           provider_account_id,
           provider_account_nickname,
+          source,
           selected_rate_json
         from shipments
         where order_id is null
@@ -1788,10 +1811,24 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           legacyClientId,
         )
       : null;
+    // Per user override unlock shipped data on 2026-06-17 (PS-273): DISPLAY-ONLY shipped/cancelled
+    // account-label correction. A Shipp-brokered shipment is shipp_-prefixed (service code) or
+    // carries source='shipp'. Its account label is the literal "Shipp" — never a fabricated
+    // direct carrier account. This flag selects that label as a fallback that beats the static
+    // registry guess but LOSES to genuinely-persisted provider_account_nickname / selected_rate_json
+    // nicknames (which still win first below). No mutation; reads the same row the DTO already loaded.
+    const isShippBrokeredShipment = Boolean(
+      ship &&
+        (isShippBrokeredServiceCode(ship.service_code) ||
+          (typeof ship.source === 'string' && ship.source.trim().toLowerCase() === 'shipp')),
+    );
     const storedProviderAccountId = ship?.provider_account_id ?? null;
     const providerAccountId = storedProviderAccountId ?? resolvedCarrierAccount?.shippingProviderId ?? null;
     const providerAccountNickname = ship
-      ? ship.provider_account_nickname ?? resolvedCarrierAccount?.nickname ?? null
+      ? ship.provider_account_nickname ??
+        (isShippBrokeredShipment ? SHIPP_BROKERED_ACCOUNT_LABEL : null) ??
+        resolvedCarrierAccount?.nickname ??
+        null
       : null;
     const baseShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
     const shipmentOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : null;
@@ -2033,7 +2070,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         source: sourceOf('v2', 'shipments.selected_rate_json.providerAccountNickname', 'ShipStation v2 label/rate payload'),
       },
       {
-        value: providerAccountNickname,
+        // Genuinely-persisted nickname only (PS-273: the brokered "Shipp" fallback is a SEPARATE
+        // lower-priority slot below — it must not pre-empt persisted best-rate nicknames here).
+        value: ship?.provider_account_nickname ?? null,
         source: sourceOf('v2', 'shipments.provider_account_nickname', 'ShipStation v2 /carriers nickname cached on shipment'),
       },
       {
@@ -2043,6 +2082,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       {
         value: bestRateRecord?.carrierNickname,
         source: sourceOf('v2', 'order_overrides.best_rate_json.carrierNickname', 'ShipStation v2 /rates/estimate account metadata'),
+      },
+      {
+        // Per user override unlock shipped data on 2026-06-17 (PS-273): DISPLAY-ONLY. A Shipp-brokered
+        // label with no persisted nickname renders the literal "Shipp" BEFORE the static-registry
+        // guess — so it can never fabricate the direct GG6381 account the label was not bought on.
+        // Loses to every persisted nickname above.
+        value: isShippBrokeredShipment ? SHIPP_BROKERED_ACCOUNT_LABEL : null,
+        source: sourceOf('derived', 'shipp_brokered_account_label', 'PS-273 brokered Shipp account label (shipp_ service code or source=shipp)'),
       },
       {
         value: resolvedCanonicalCarrierAccount?.nickname,
@@ -2343,6 +2390,9 @@ type LatestShipmentRow = {
   label_shipment_id: number | null;
   provider_account_id: number | null;
   provider_account_nickname: string | null;
+  // PS-273: shipments.source ('shipp' for brokered labels) — read DISPLAY-ONLY to label the
+  // account as "Shipp" instead of fabricating a direct carrier account. Additive projection.
+  source: string | null;
   selected_rate_json: Record<string, unknown> | null;
 };
 
@@ -3769,6 +3819,7 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
           cost,
           label_cost,
           other_cost,
+          source,
           selected_rate_json
         from shipments
         where (${sql.join(shipmentPredicates, sql` or `)})

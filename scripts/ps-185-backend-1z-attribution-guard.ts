@@ -48,7 +48,8 @@ check('no 1Z tracking-prefix attribution anywhere in web/src', offenders.length 
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 check('backend resolveV2CarrierAccountRef still owns the 1Z derivation',
-  /function resolveV2CarrierAccountRef[\s\S]{0,800}startsWith\('1Z'\)[\s\S]{0,200}slice\(2, 8\)/.test(ordersRoute));
+  // window widened for PS-273's identity-first null-gate + comments inserted before the 1Z block
+  /function resolveV2CarrierAccountRef[\s\S]{0,2000}startsWith\('1Z'\)[\s\S]{0,200}slice\(2, 8\)/.test(ordersRoute));
 check('the derived attribution feeds the canonical provider pick',
   /resolvedCarrierAccount\?\.shippingProviderId[\s\S]{0,200}Derived from provider id, carrier code, tracking account number/.test(ordersRoute));
 
