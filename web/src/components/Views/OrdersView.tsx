@@ -787,7 +787,13 @@ export default function OrdersView({
   // plus sort direction for the printed-history list (newest first by default).
   const [pqSearch, setPqSearch] = useState('')
   const [pqHistoryAsc, setPqHistoryAsc] = useState(false)
-  const [queueScope, setQueueScope] = useState<'all' | 'client'>('all')
+  // queueScope stays 'all' (fetch every authorized client's entries); the Print Queue client
+  // dropdown now filters the view client-side via pqClientFilter (below).
+  const [queueScope] = useState<'all' | 'client'>('all')
+  // Print Queue per-client view filter. The queue fetch stays 'all' scope (every AUTHORIZED
+  // client's entries, each carrying client_id), so this is a pure client-side display filter:
+  // null = show all clients, a clientId = show only that client. Backend scope is unchanged.
+  const [pqClientFilter, setPqClientFilter] = useState<number | null>(null)
   const [queueEntries, setQueueEntries] = useState<PrintQueueEntryDto[]>([])
   const [queueEntriesClientId, setQueueEntriesClientId] = useState<number | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
@@ -6391,7 +6397,24 @@ export default function OrdersView({
     window.open(`https://ship.shipstation.com/orders/${orderId}`, '_blank', 'noopener,noreferrer')
   }
 
-  const activeQueueEntries = queueEntriesClientId === queueClientId ? queueEntries : []
+  const allActiveQueueEntries = queueEntriesClientId === queueClientId ? queueEntries : []
+  // The distinct clients present in the (all-scope) queue — drives the Print Queue client dropdown.
+  const queueClients = (() => {
+    const byId = new Map<number, string>()
+    for (const entry of allActiveQueueEntries) {
+      const id = Number((entry as { client_id?: unknown }).client_id)
+      if (!Number.isFinite(id) || id <= 0 || byId.has(id)) continue
+      const matchingOrder = [panelOrder, ...orders].find((order) => order?.clientId === id)
+      const matchingStore = stores.find((store) => store.clientId === id)
+      byId.set(id, matchingOrder?.clientName || matchingStore?.storeName || matchingStore?.name || `Client ${id}`)
+    }
+    return [...byId.entries()].map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label))
+  })()
+  // Display set: when a client is selected, show only that client's entries. null ref-stable
+  // pass-through keeps the downstream useMemos from recomputing when no filter is active.
+  const activeQueueEntries = pqClientFilter == null
+    ? allActiveQueueEntries
+    : allActiveQueueEntries.filter((entry) => Number((entry as { client_id?: unknown }).client_id) === pqClientFilter)
   const queuedEntries = useMemo(
     () => activeQueueEntries.filter((entry) => entry.status === 'queued'),
     [activeQueueEntries],
@@ -9363,10 +9386,10 @@ export default function OrdersView({
           lists, and handlers stay here and flow down as props. */}
       {queueOpen ? (
         <OrdersPrintQueueDrawer
-          queueScope={queueScope}
-          setQueueScope={setQueueScope}
+          queueClients={queueClients}
+          pqClientFilter={pqClientFilter}
+          setPqClientFilter={setPqClientFilter}
           queueClientLabel={queueClientLabel}
-          inferredQueueClientId={inferredQueueClientId}
           queueClientId={queueClientId}
           queueHistoryVisible={queueHistoryVisible}
           setQueueHistoryVisible={setQueueHistoryVisible}

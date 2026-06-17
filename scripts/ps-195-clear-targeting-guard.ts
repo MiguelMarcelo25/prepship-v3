@@ -71,7 +71,7 @@ assert.ok(/clearQueue\(clientId: number, entryIds: string\[\]\)/.test(apiClient)
 assert.ok(apiClient.includes('queue_entry_ids: entryIds'),
   'apiClient must send the ids');
 assert.ok(drawer.includes('queuedEntries.map((entry) => entry.queue_entry_id)') &&
-  /clearQueue\(queueClientId, queuedEntries\.map/.test(drawer),
+  /clearQueue\(pqClientFilter, queuedEntries\.map/.test(drawer),
   'the drawer Clear must pass the listed entry ids — no blanket clear');
 assert.ok(drawer.includes('blocked_in_flight'),
   'the drawer must surface the in-flight refusal count');

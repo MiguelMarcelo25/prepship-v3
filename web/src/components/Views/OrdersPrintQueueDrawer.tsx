@@ -21,10 +21,10 @@ import type { PrintQueueEntryDto } from '../../types/api'
 import type { PrintQueueGroup } from './orders-parity'
 
 export type OrdersPrintQueueDrawerProps = {
-  queueScope: 'all' | 'client'
-  setQueueScope: (scope: 'all' | 'client') => void
+  queueClients: Array<{ id: number; label: string }>
+  pqClientFilter: number | null
+  setPqClientFilter: (id: number | null) => void
   queueClientLabel: string
-  inferredQueueClientId: number | null
   queueClientId: number | null
   queueHistoryVisible: boolean
   setQueueHistoryVisible: Dispatch<SetStateAction<boolean>>
@@ -54,10 +54,10 @@ export type OrdersPrintQueueDrawerProps = {
 }
 
 export function OrdersPrintQueueDrawer({
-  queueScope,
-  setQueueScope,
+  queueClients,
+  pqClientFilter,
+  setPqClientFilter,
   queueClientLabel,
-  inferredQueueClientId,
   queueClientId,
   queueHistoryVisible,
   setQueueHistoryVisible,
@@ -111,15 +111,17 @@ export function OrdersPrintQueueDrawer({
               <strong className="block text-ink text-[13px]">Print Queue</strong>
               <select
                 className="mt-1 h-7 max-w-[210px] rounded-md bg-surface-2 px-2 text-[11px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/40"
-                value={queueScope}
-                onChange={(event) => setQueueScope(event.target.value === 'client' ? 'client' : 'all')}
-                aria-label="Print Queue scope"
-                title={queueScope === 'all' ? 'Showing all authorized client queues' : `Showing ${queueClientLabel} only`}
+                value={pqClientFilter == null ? 'all' : String(pqClientFilter)}
+                onChange={(event) =>
+                  setPqClientFilter(event.target.value === 'all' ? null : Number(event.target.value))
+                }
+                aria-label="Filter Print Queue by client"
+                title={pqClientFilter == null ? 'Showing all authorized client queues' : 'Filtering to one client'}
               >
-                <option value="all">All clients</option>
-                {inferredQueueClientId != null ? (
-                  <option value="client">Current client: {queueClientLabel}</option>
-                ) : null}
+                <option value="all">All clients{queueClients.length ? ` (${queueClients.length})` : ''}</option>
+                {queueClients.map((client) => (
+                  <option key={client.id} value={String(client.id)}>{client.label}</option>
+                ))}
               </select>
             </div>
             <div className="flex shrink-0 gap-1.5">
@@ -134,16 +136,16 @@ export function OrdersPrintQueueDrawer({
               <button
                 className="btn btn-ghost btn-xs"
                 type="button"
-                disabled={queueScope !== 'client' || queueClientId == null}
-                title={queueScope === 'client' ? 'Clear active queue entries for this client' : 'Switch to Current client before clearing a queue'}
+                disabled={pqClientFilter == null}
+                title={pqClientFilter != null ? 'Clear active queue entries for the selected client' : 'Select a client to clear its queue'}
                 onClick={() =>
-                  queueScope === 'client' && queueClientId != null
+                  pqClientFilter != null
                     ? window.confirm(`This removes the ${queuedEntries.length} listed unprinted label${queuedEntries.length === 1 ? '' : 's'} from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?`)
                       // PS-195: the clear names EXACTLY the entries on screen —
                       // the backend rejects blanket clears without explicit ids
                       // and refuses entries inside a running merge job.
                       ? void apiClient
-                        .clearQueue(queueClientId, queuedEntries.map((entry) => entry.queue_entry_id))
+                        .clearQueue(pqClientFilter, queuedEntries.map((entry) => entry.queue_entry_id))
                         .then((result: any) => {
                           const blocked = Number(result?.blocked_in_flight ?? 0)
                           if (blocked > 0) {
@@ -222,7 +224,7 @@ export function OrdersPrintQueueDrawer({
             <div><span className="font-semibold text-ink">{queueCount}</span> Orders</div>
             <div><span className="font-semibold text-ink">{queuedEntries.reduce((sum, entry) => sum + (entry.order_qty ?? 1), 0)}</span> Total Qty</div>
             <div><span className="font-semibold text-ink">{visibleQueueGroups.length}</span> SKU Groups</div>
-            <div className="hidden sm:block text-ink-3">{queueScope === 'all' ? 'All clients' : queueClientLabel}</div>
+            <div className="hidden sm:block text-ink-3">{pqClientFilter == null ? 'All clients' : (queueClients.find((client) => client.id === pqClientFilter)?.label ?? queueClientLabel)}</div>
             {pqSearchLower ? (
               <div className="ml-auto text-ink-3 italic">filtered</div>
             ) : null}
