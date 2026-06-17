@@ -16,6 +16,9 @@ import {
   syncRunBudgetExhausted,
   syncRunBudgetTimeExhausted,
 } from '../lib/sync-run-budget';
+// PS-286 (per user override `unlock shipped data` on 2026-06-17): best-effort capture of
+// shipments.label_url after each account's sync — the v1 list payload omits it.
+import { enrichLabelUrls } from './shipment-label-url-enrich';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
@@ -496,6 +499,20 @@ export async function syncShipments(
           // Best-effort enrichment — never block the V1 sync on V2 failures.
           console.warn(
             `[shipment-sync] V2 enrichment failed for "${acct.label}":`,
+            (err as Error).message
+          );
+        }
+
+        // PS-286: fill any null shipments.label_url from the account's recent v2 labels so
+        // shipped orders are re-queueable. Best-effort — never block the sync on this.
+        try {
+          const filled = await enrichLabelUrls(acct, lastSync);
+          if (filled > 0) {
+            console.log(`[shipment-sync] filled label_url on ${filled} shipments for "${acct.label}"`);
+          }
+        } catch (err) {
+          console.warn(
+            `[shipment-sync] label_url enrichment failed for "${acct.label}":`,
             (err as Error).message
           );
         }
