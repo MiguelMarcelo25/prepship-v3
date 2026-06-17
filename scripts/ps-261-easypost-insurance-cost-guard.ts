@@ -20,6 +20,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { easyPostScheduledPremium } from '../src/services/shipping-workflow/insurance-cost';
+import { parseEasyPostInsuranceCost } from '../src/connectors/carrier/easypost-insurance-fee';
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -54,6 +55,54 @@ check('a POSITIVE shipstation_estimate stays confirmed:true (real estimate trust
   /amount: Number\(estimateAmount[\s\S]{0,120}provenance: 'shipstation_estimate',\s*\n\s*confirmed: true,/.test(insuranceCost));
 check('the genuine carrier free-tier $0 stays confirmed (unchanged)',
   /provenance: 'carrier_declared_value',\s*\n\s*confirmed: true,/.test(insuranceCost));
+
+// ── easypost-insurance-fee.ts: PURE parser maps the bought-shipment fees to dollars ──
+// A representative EasyPost bought-shipment payload: the InsuranceFee line is what was billed.
+check('fees[] InsuranceFee maps to its dollar amount',
+  parseEasyPostInsuranceCost({
+    fees: [
+      { type: 'LabelFee', amount: '0.00' },
+      { type: 'PostageFee', amount: '7.10' },
+      { type: 'InsuranceFee', amount: '0.50' },
+    ],
+  }) === 0.5);
+check('InsuranceFee match is case-insensitive on type',
+  parseEasyPostInsuranceCost({ fees: [{ type: 'insurancefee', amount: '1.27' }] }) === 1.27);
+check('a numeric (not String) InsuranceFee amount is tolerated',
+  parseEasyPostInsuranceCost({ fees: [{ type: 'InsuranceFee', amount: 2 }] }) === 2);
+check('the InsuranceFee dollar amount is rounded to cents',
+  parseEasyPostInsuranceCost({ fees: [{ type: 'InsuranceFee', amount: '0.505' }] }) === 0.51);
+check('no fees[] -> falls back to the shipment `insurance` value',
+  parseEasyPostInsuranceCost({ insurance: '100.00', fees: [] }) === 100);
+check('fees[] InsuranceFee wins over the `insurance` fallback',
+  parseEasyPostInsuranceCost({ insurance: '100.00', fees: [{ type: 'InsuranceFee', amount: '0.50' }] }) === 0.5);
+
+// ── REGRESSION-PIN the #1502 false-confirmation class: unpriced $0 is NOT confirmed ──
+// The parser returns null (NOT 0) for any absent / zero / non-finite insurance line, so a
+// downstream consumer can never mistake an unpriced label for a confirmed $0 insurance cost.
+check('no insurance line at all -> null (never a confirmed $0)',
+  parseEasyPostInsuranceCost({ fees: [{ type: 'PostageFee', amount: '7.10' }] }) === null);
+check('a $0.00 InsuranceFee -> null (unpriced, NOT confirmed $0)',
+  parseEasyPostInsuranceCost({ fees: [{ type: 'InsuranceFee', amount: '0.00' }] }) === null);
+check('insurance="0" / empty / missing -> null',
+  parseEasyPostInsuranceCost({ insurance: '0' }) === null
+  && parseEasyPostInsuranceCost({ insurance: '' }) === null
+  && parseEasyPostInsuranceCost({}) === null);
+check('a non-object / null / array purchase response -> null (no throw)',
+  parseEasyPostInsuranceCost(null) === null
+  && parseEasyPostInsuranceCost(undefined) === null
+  && parseEasyPostInsuranceCost('nope') === null);
+check('a non-numeric amount -> null (never coerced to 0)',
+  parseEasyPostInsuranceCost({ fees: [{ type: 'InsuranceFee', amount: 'free' }] }) === null);
+
+// ── easypost.ts connector: the createLabel RETURN now carries insuranceCost (read-only) ──
+const easypost = read('src/connectors/carrier/easypost.ts');
+check('easypost.ts imports the pure parser', easypost.includes('parseEasyPostInsuranceCost'));
+check('createLabel return TYPE declares insuranceCost', /insuranceCost\?: number \| null;/.test(easypost));
+check('createLabel return VALUE wires parseEasyPostInsuranceCost(purchased)',
+  /insuranceCost: parseEasyPostInsuranceCost\(purchased\),/.test(easypost));
+check('postage `cost` is unchanged (still the selected/best rate, NOT insurance)',
+  /cost: Number\(purchased\.selected_rate\?\.rate \?\? rate\.rate \?\? 0\),/.test(easypost));
 
 const pkg = read('package.json');
 check('package.json wires test:ps-261-easypost-insurance-cost', /test:ps-261-easypost-insurance-cost/.test(pkg));

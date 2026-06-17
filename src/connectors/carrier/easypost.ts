@@ -1,6 +1,7 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { timedFetch } from '../../lib/http/timing.js';
 import { normalizeShippingOptions } from '../../lib/shipping-options.js';
+import { parseEasyPostInsuranceCost } from './easypost-insurance-fee.js';
 import { readShipFrom } from './ship-from-address.js';
 
 type EasyPostRate = { service: string; cost: number; days: number; currency: string };
@@ -142,6 +143,11 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
   cost: number;
   currency: string;
   shipmentId: string;
+  // PS-261: the REAL insurance fee EasyPost billed on the bought shipment, parsed read-only
+  // from the purchase response (fees[].InsuranceFee, else the `insurance` value). null when no
+  // positive fee is present — an unpriced line is never reported as a confirmed $0 cost.
+  // Does NOT change `cost` (postage); accurate post-purchase billing in labels.ts stays deferred.
+  insuranceCost?: number | null;
   raw: unknown;
 }> {
   const creds = input.credentials && typeof input.credentials === 'object'
@@ -223,6 +229,8 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
     cost: Number(purchased.selected_rate?.rate ?? rate.rate ?? 0),
     currency: String(purchased.selected_rate?.currency ?? rate.currency ?? 'USD'),
     shipmentId: String(purchased.id ?? shipment.id),
+    // PS-261: read-only enrich — the actual insurance fee EasyPost billed (null if none).
+    insuranceCost: parseEasyPostInsuranceCost(purchased),
     raw: purchased,
   };
 }
