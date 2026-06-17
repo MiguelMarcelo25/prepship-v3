@@ -272,9 +272,24 @@ const shippedNoNickname = baseRow(980004, 'shipped', 1, {
   shipping: { carrierCode: 'ups', serviceCode: 'ups_ground_saver', trackingNumber: '1Z999AA1010980004', providerAccountId: 7381, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
 })
 
+// 5c) PS-273 — Shipped with a SHIPP-BROKERED label. The connector prefixes the
+//     service code with shipp_ and persists a synthetic provider id
+//     (10_000_000 + carrier_accounts.id = 10000025), but on un-backfilled rows
+//     there is NO provider_account_nickname. The Shipping Account / diagnostic
+//     "Acct Nickname" columns must render "Shipp" (derived from the shipp_
+//     service-code prefix) and must NEVER fabricate a direct UPS account
+//     (GG6381) the label was not bought on. Mirrors order #1587 / client HUGRAB.
+const shippedShippBrokered = baseRow(980005, 'shipped', 1, {
+  orderNumber: 'SHIPPED-980005',
+  bestRate: null,
+  selectedRate: { carrierCode: 'ups', serviceCode: 'shipp_ups_ground', serviceName: 'Shipp UPS Ground', amount: 9.86, cost: 9.86, shipmentCost: 9.86, otherCost: 0 },
+  label: { trackingNumber: '1Z999AA1010980005', carrierCode: 'ups', serviceCode: 'shipp_ups_ground', shippingProviderId: 10000025, cost: 9.86, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
+  shipping: { carrierCode: 'ups', serviceCode: 'shipp_ups_ground', trackingNumber: '1Z999AA1010980005', providerAccountId: 10000025, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
+})
+
 const ordersByStatus = {
   awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem, awaitingSingleQuantity, awaitingBestRateDivergent],
-  shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname],
+  shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname, shippedShippBrokered],
   cancelled: [],
 }
 
@@ -527,6 +542,17 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     orderNum: { contains: 'SHIPPED-980004' },
     test_carrierCode: { contains: 'ups' },        // carrier-code column legitimately shows ups
     test_shippingAccount: { notContains: 'ups' }, // Acct Nickname must NEVER be the carrier code
+  })
+
+  // PS-273 — Shipp-brokered label (shipp_* service code, synthetic provider id
+  // 10000025, NO persisted nickname). The account line must render "Shipp" and
+  // must NEVER be a fabricated direct carrier nickname (GG6381) the label was not
+  // bought on. The carrier-code column legitimately shows the underlying carrier.
+  await assertColumns(page, shippedShippBrokered.orderId, {
+    orderNum: { contains: 'SHIPPED-980005' },
+    test_carrierCode: { contains: 'ups' },                 // underlying carrier is fine here
+    custcarrier: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
+    test_shippingAccount: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
   })
 })
 

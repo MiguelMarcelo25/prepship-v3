@@ -9,6 +9,10 @@ import {
   type OrderSummaryDto,
   toProviderAccountId,
 } from './v2Hooks-shared';
+// PS-273: detect a Shipp-brokered shipment by its shipp_-prefixed service code so
+// the normalizer never leaks a direct-account best-rate nickname into the
+// canonical shipping.accountNickname. Pure leaf module (no hook deps).
+import { isShippBrokeredServiceCode } from '../components/Views/order-shipping-display';
 
 // ──────────────────────────────────────────────────────────────────
 // useOrders
@@ -307,6 +311,22 @@ function transformOrderRowV4toV2(
     (hasPositiveRateAmount(apiBestRate) ? apiBestRate : null) ??
     (hasPositiveRateAmount(bestRateLegacy) ? bestRateLegacy : null) ??
     (orderStatus === 'cancelled' ? null : selectedRateBestFallback);
+  const resolvedServiceCode =
+    (shippingModel?.serviceCode as string | null | undefined) ??
+    (selectedRate?.serviceCode as string | null | undefined) ??
+    (displayBestRate?.serviceCode as string | null | undefined) ??
+    (label?.serviceCode as string | null | undefined) ??
+    null;
+  // Per user override unlock shipped data on 2026-06-17 (PS-273): a Shipp-brokered
+  // label (shipp_* service code) was bought on Shipp's broker account, NOT on the
+  // direct carrier whose nickname the pre-purchase best rate happened to carry.
+  // Falling back to displayBestRate.carrierNickname here leaked that direct account
+  // (e.g. "ROCEL C81F70" / order #1587's GG6381 class) into the canonical
+  // shipping.accountNickname, masquerading as persisted truth. Suppress the best-
+  // rate carrier-nickname leak for brokered rows so the honest "Shipp" fallback
+  // (resolveDisplayShipAccount / getShippedDisplayAccountNickname) owns the display.
+  // Display-only: this is the FE useOrders DTO normalizer, not a shipped-row write.
+  const isBrokeredRow = isShippBrokeredServiceCode(resolvedServiceCode);
   const shipping = shippingModel
     ? {
         ...shippingModel,
@@ -320,7 +340,7 @@ function transformOrderRowV4toV2(
         accountNickname:
           shippingModel.accountNickname ??
           selectedRate?.providerAccountNickname ??
-          displayBestRate?.carrierNickname ??
+          (isBrokeredRow ? null : displayBestRate?.carrierNickname) ??
           null,
         selectedRateAmount: toFiniteNumber(shippingModel.selectedRateAmount) ?? toFiniteNumber(selectedRate?.cost),
         bestRateAmount: toFiniteNumber(shippingModel.bestRateAmount) ?? toFiniteNumber(displayBestRate?.amount),

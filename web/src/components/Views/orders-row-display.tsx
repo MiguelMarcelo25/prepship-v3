@@ -181,22 +181,30 @@ export const V2_CARRIER_ACCOUNT_REFS: V2CarrierAccountRef[] = [
 // this lookup reads FIRST. The FE's duplicate tracking-prefix block could only fire
 // when the backend (same data, same registry) had already failed — deleted.
 // What remains is display lookup of the backend-stamped id.
+//
+// PS-273: identity FIRST, carrier family NEVER. This now ONLY resolves an EXACT
+// providerAccountId match against the static registry. The previous carrier-code
+// fallback (return the single match, or the client/shared UPS account) FABRICATED
+// an account the label was not bought on: a Shipp-brokered label stores a synthetic
+// provider id (10_000_000 + carrier_accounts.id) that has no registry entry, so the
+// old fallback matched carrierCode='ups' and returned the first shared UPS account
+// (GG6381 on order #1587) — a direct account, not Shipp's broker account. Returning
+// null for carrier-code-only input matches the backend's identity-first stance and
+// lets the persisted provider_account_nickname (or the Shipp brokered-fallback in
+// resolveDisplayShipAccount) own the display. No fabrication from carrier family.
 export function resolveV2CarrierAccount(
   providerAccountId: number | null,
   carrierCode: string | null,
   clientId: number | null,
 ) {
+  // carrierCode/clientId retained for signature parity with the backend twin
+  // (resolveV2CarrierAccountRef); intentionally unused now that the carrier-code
+  // fabrication is removed.
+  void carrierCode
+  void clientId
   if (providerAccountId != null) {
     const exact = V2_CARRIER_ACCOUNT_REFS.find((account) => account.shippingProviderId === providerAccountId)
     if (exact) return exact
-  }
-
-  const matching = V2_CARRIER_ACCOUNT_REFS.filter((account) => account.carrierCode === carrierCode)
-  if (matching.length === 1) return matching[0]
-  if (matching.length > 1) {
-    const clientMatch = clientId != null ? matching.find((account) => account.clientId === clientId) : null
-    const sharedMatch = matching.find((account) => account.clientId === null)
-    return clientMatch ?? sharedMatch ?? null
   }
 
   return null

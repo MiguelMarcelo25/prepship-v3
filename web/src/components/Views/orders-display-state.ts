@@ -30,7 +30,12 @@ import {
   toRecord,
   toStringValue,
 } from './orders-row-display'
-import { resolveDisplayCarrierCode, resolveDisplayShipAccount } from './order-shipping-display'
+import {
+  resolveDisplayCarrierCode,
+  resolveDisplayShipAccount,
+  isShippBrokeredServiceCode,
+  SHIPP_BROKERED_ACCOUNT_LABEL,
+} from './order-shipping-display'
 import { getPanelRequestedService } from './orders-panel-state'
 import { classifyCarrier } from '../CarrierBadge'
 import { ageHours, formatCarrierCode } from './orders-formatting'
@@ -113,6 +118,12 @@ export function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierA
     labelAccountLabel,
     bestRateNickname,
     carrierCodeFallback: formatCarrierCode(order.selectedRate?.carrierCode ?? (order.bestRate as LooseBestRate | undefined)?.carrierCode),
+    // PS-273: the shipment's service code drives the Shipp brokered-account
+    // fallback for rows whose provider_account_nickname has not been backfilled.
+    brokeredServiceCode:
+      toStringValue(order.label?.serviceCode) ??
+      toStringValue(order.selectedRate?.serviceCode) ??
+      getShippingString(order, 'serviceCode'),
   })
 }
 
@@ -217,13 +228,34 @@ export function getShippedDisplayProviderId(order: OrderSummaryDto) {
   )
 }
 
+// PS-273: a Shipp-brokered shipment's service code is shipp_-prefixed by the
+// connector. On un-backfilled rows (no persisted provider_account_nickname) this
+// derives the honest "Shipp" account label so the diagnostic nickname column can
+// never fall through to a fabricated direct carrier account (GG6381). Reads the
+// shipment's service code (label/selected/canonical), display-only.
+export function getBrokeredShippAccountNickname(order: OrderSummaryDto): string | null {
+  const serviceCode =
+    toStringValue(order.label?.serviceCode) ??
+    toStringValue(order.selectedRate?.serviceCode) ??
+    getShippingString(order, 'serviceCode')
+  return isShippBrokeredServiceCode(serviceCode) ? SHIPP_BROKERED_ACCOUNT_LABEL : null
+}
+
 export function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
   if (getIsExternallyFulfilled(order)) return null
   // Per user override unlock shipped data on 2026-06-01: PS-048 keeps this
   // shipped-row diagnostic display-only and forbids carrier-code nickname fallbacks.
+  // Per user override unlock shipped data on 2026-06-17 (PS-273): the Shipp brokered
+  // fallback now precedes the carrier-nickname / best-rate-nickname / static-registry
+  // GUESSES (it still loses to a genuinely-persisted accountNickname or the selected
+  // rate's providerAccountNickname). On an un-backfilled brokered row the selectedRate
+  // / bestRate carry the pre-purchase DIRECT account's nickname (e.g. "ROCEL C81F70")
+  // — that account is NOT the Shipp broker account the label was bought on, so it must
+  // never name this shipment. Display-only; no shipped/cancelled mutation.
   return (
     getShippingString(order, 'accountNickname') ??
     toStringValue(order.selectedRate?.providerAccountNickname) ??
+    getBrokeredShippAccountNickname(order) ??
     toStringValue(order.selectedRate?.carrierNickname) ??
     normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
     getV2CarrierAccountForOrder(order)?.nickname ??
@@ -261,7 +293,17 @@ export function getCancelledDisplayServiceCode(order: OrderSummaryDto) {
 }
 
 export function getCancelledDisplayAccountNickname(order: OrderSummaryDto) {
+  // Per user override unlock shipped data on 2026-06-17 (PS-273): a cancelled
+  // Shipp-brokered row must also show "Shipp" rather than fabricating a direct
+  // carrier account. Genuinely-persisted identity (canonical accountNickname,
+  // the selected rate's providerAccountNickname) still wins; the Shipp fallback
+  // then precedes every carrier-nickname / best-rate / static-registry GUESS so an
+  // un-backfilled brokered row never shows the pre-purchase DIRECT account nickname
+  // the label was not bought on. Display-only — no mutation, no read-only gate.
   return (
+    getShippingString(order, 'accountNickname') ??
+    toStringValue(order.selectedRate?.providerAccountNickname) ??
+    getBrokeredShippAccountNickname(order) ??
     getSelectedRateCarrierNickname(order) ??
     normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
     getV2CarrierAccountForOrder(order)?.nickname ??

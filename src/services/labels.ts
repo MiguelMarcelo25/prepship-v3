@@ -904,10 +904,19 @@ async function persistCreatedLabel(args: {
       labelShipmentId: created.shipmentId || null,
       labelProvider: created.providerAccountId,
       providerAccountId: created.providerAccountId,
+      // Per user override unlock shipped data on 2026-06-17 (PS-273): persist the
+      // REAL account nickname captured at purchase (direct: the loaded account's
+      // label or "Shipp" for Shipp-brokered; ShipStation: resolveCarrierNickname).
+      // This is the stored source of truth the DTO/readers consume FIRST
+      // (orders.ts ship.provider_account_nickname), so a Shipp label can no longer
+      // fall through to a fabricated direct UPS account (GG6381). Falls back to
+      // null when a producer didn't set it (existing behavior unchanged).
+      providerAccountNickname: created.providerAccountNickname ?? null,
       selectedPackageId: args.selectedPackageId,
       selectedRateJson: {
         providerAccountId: created.providerAccountId,
         shippingProviderId: created.providerAccountId,
+        providerAccountNickname: created.providerAccountNickname ?? null,
         carrierCode: created.carrierCode,
         serviceCode: created.serviceCode,
         serviceName: created.serviceCode,
@@ -1449,6 +1458,19 @@ async function createLabelV2Impl(
       });
       return label as CreatedExternalLabel;
     });
+    // Per user override unlock shipped data on 2026-06-17 (PS-273): stamp the
+    // ShipStation account's REAL nickname at purchase time so the shipment row
+    // records account identity. resolveCarrierNickname resolves the synthetic
+    // provider id / 1Z tracking against the live SS carriers list; persisting it
+    // here means readers consume stored truth instead of re-deriving (and
+    // mis-deriving) account identity from carrier family.
+    created.providerAccountNickname =
+      (await resolveCarrierNickname(
+        created.providerAccountId,
+        created.carrierCode,
+        created.trackingNumber,
+        clientId ?? null,
+      )) ?? created.providerAccountNickname ?? null;
   }
 
   // PS-248 (Per user override unlock shipped data on 2026-06-16): persist the shipment AND flip the

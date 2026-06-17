@@ -250,6 +250,20 @@ export async function createDirectCarrierLabelForOrder(
     providerLabelId: resultRecord.labelId != null ? String(resultRecord.labelId) : null,
     fallbackLabelId: `${provider}-${tracking}`,
   });
+  // Per user override unlock shipped data on 2026-06-17 (PS-273): capture the
+  // REAL direct account identity at purchase time. The synthetic providerAccountId
+  // (10_000_000 + carrier_accounts.id) is NOT resolvable by any reader's static
+  // carrier registry, so without a persisted nickname the Shipped "Shipping
+  // Account" column fell back to carrier-family and fabricated the first shared
+  // direct UPS account (GG6381 on order #1587). A Shipp-brokered label is bought
+  // on Shipp's broker account — never a direct UPS account — so its nickname is
+  // the literal "Shipp"; every other direct family uses the loaded account's
+  // own label (e.g. a direct UPS account's own nickname). Identity FIRST,
+  // carrier family second.
+  const providerAccountNickname =
+    provider === 'shipp'
+      ? 'Shipp'
+      : (args.account.label?.trim() || args.account.provider);
   const created: CreatedExternalLabel = {
     shipmentId: directShipmentId,
     labelId: directLabelId,
@@ -263,6 +277,7 @@ export async function createDirectCarrierLabelForOrder(
     serviceCode: String(resultRecord.serviceCode ?? args.serviceCode),
     shipDate: new Date().toISOString(),
     providerAccountId: args.providerAccountId,
+    providerAccountNickname,
   };
 
   return { created, walmartContext };

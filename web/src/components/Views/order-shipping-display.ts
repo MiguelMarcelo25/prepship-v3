@@ -113,31 +113,60 @@ export type DisplayShipAccountInput = {
   v2AccountNickname: string | null
   /** order.selectedRate is present. */
   hasSelectedRate: boolean
-  /** label.shippingProviderId → matched account display label. */
+  /** label.shippingProviderId → matched account display label (LIVE accounts array). */
   labelAccountLabel: string | null
   /** order.bestRate nickname (carrier/provider/account), normalized. */
   bestRateNickname: string | null
   /** formatCarrierCode(selectedRate.carrierCode ?? bestRate.carrierCode) — final fallback. */
   carrierCodeFallback: string | null
+  /**
+   * PS-273: the shipment's service code (label/selected/canonical), used ONLY to
+   * detect a Shipp-brokered label (shipp_* prefix). When set and brokered, the
+   * display shows "Shipp" for rows whose provider_account_nickname has not been
+   * backfilled yet — never a fabricated direct carrier account.
+   */
+  brokeredServiceCode?: string | null
+}
+
+/** PS-273: a Shipp-brokered label's service code is ALWAYS prefixed shipp_ by the
+ * connector (src/connectors/carrier/shipp.ts shippServiceCodeForRate). This is the
+ * un-backfilled-row signal that the account is Shipp's broker account, not the
+ * carrier-family account the synthetic provider id would otherwise resolve to. */
+export const SHIPP_BROKERED_ACCOUNT_LABEL = 'Shipp'
+export function isShippBrokeredServiceCode(serviceCode: string | null | undefined): boolean {
+  return typeof serviceCode === 'string' && /^shipp_/i.test(serviceCode.trim())
 }
 
 /**
  * PS-165 — the Orders shipping-ACCOUNT column display precedence (the account/provider-nickname
- * resolver), ported VERBATIM from OrdersView.getShipAccountDisplay. The candidate RESOLUTION (incl.
- * the FE scoped-carrier-cache lookup and the live accounts array) necessarily stays in OrdersView —
- * the backend serializer doesn't have the live scoped carrier accounts — but the PRECEDENCE POLICY
- * now lives here (one tested place, alongside the carrier/service precedence). First-non-null cascade:
- *   test → awaiting best-rate → canonical → selected → v2-cache account → 'External' (if a selected
- *   rate exists) → label account → best-rate → formatted carrier code.
+ * resolver), ported from OrdersView.getShipAccountDisplay. The candidate RESOLUTION (incl. the FE
+ * scoped-carrier-cache lookup and the live accounts array) necessarily stays in OrdersView — the
+ * backend serializer doesn't have the live scoped carrier accounts — but the PRECEDENCE POLICY lives
+ * here (one tested place, alongside the carrier/service precedence).
+ *
+ * PS-273 (reader honesty): identity/persisted truth now wins over the STATIC carrier-cache guess and
+ * over the generic 'External'. New first-non-null cascade:
+ *   test → awaiting best-rate → canonical (persisted) → selected (persisted) → live label account →
+ *   Shipp brokered fallback (shipp_* service code) → v2 static-registry exact account → 'External'
+ *   (if a selected rate exists) → best-rate → formatted carrier code.
+ * The Shipp fallback and the live `labelAccountLabel` deliberately precede the static `v2AccountNickname`
+ * and 'External' so an un-backfilled Shipp-brokered row renders "Shipp", never a fabricated direct UPS
+ * account (GG6381 — order #1587). resolveV2CarrierAccount no longer fabricates from carrier family, so
+ * v2AccountNickname is now an honest exact-id match when present.
  */
 export function resolveDisplayShipAccount(input: DisplayShipAccountInput): string | null {
   if (input.isTest) return DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL
   if (input.awaitingBestRateNickname) return input.awaitingBestRateNickname
   if (input.canonicalNickname) return input.canonicalNickname
   if (input.selectedNickname) return input.selectedNickname
+  // Live/persisted truth (matched against the live accounts array) wins over the
+  // static-registry guess and the generic 'External'.
+  if (input.labelAccountLabel) return input.labelAccountLabel
+  // PS-273: un-backfilled Shipp-brokered row — derive "Shipp" from the shipp_
+  // service-code prefix instead of letting the static registry fabricate GG6381.
+  if (isShippBrokeredServiceCode(input.brokeredServiceCode)) return SHIPP_BROKERED_ACCOUNT_LABEL
   if (input.v2AccountNickname) return input.v2AccountNickname
   if (input.hasSelectedRate) return 'External'
-  if (input.labelAccountLabel) return input.labelAccountLabel
   if (input.bestRateNickname) return input.bestRateNickname
   return input.carrierCodeFallback
 }

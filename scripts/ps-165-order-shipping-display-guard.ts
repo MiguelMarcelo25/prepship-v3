@@ -89,7 +89,13 @@ check('account: awaiting best-rate nickname wins', resolveDisplayShipAccount({ .
 check('account: falls to canonical', resolveDisplayShipAccount({ ...acct, canonicalNickname: 'Chase', selectedNickname: 'Sel' }), 'Chase');
 check('account: falls to selected', resolveDisplayShipAccount({ ...acct, selectedNickname: 'Sel', v2AccountNickname: 'V2' }), 'Sel');
 check('account: falls to v2 carrier-cache account', resolveDisplayShipAccount({ ...acct, v2AccountNickname: 'GG6381' }), 'GG6381');
-check('account: selectedRate present but no nickname -> External', resolveDisplayShipAccount({ ...acct, hasSelectedRate: true, labelAccountLabel: 'L' }), 'External');
+// PS-273 (reader honesty): live/persisted label-account truth now beats the generic 'External'
+// static guess, so a real label account wins even when a selected rate exists.
+check('account: live label account wins over External (PS-273)', resolveDisplayShipAccount({ ...acct, hasSelectedRate: true, labelAccountLabel: 'L' }), 'L');
+check('account: selectedRate present, NO live label/brokered/v2 -> External (preserved)', resolveDisplayShipAccount({ ...acct, hasSelectedRate: true }), 'External');
+// PS-273 (#1587): an un-backfilled Shipp-brokered row (shipp_* service) renders "Shipp", NOT the
+// fabricated direct UPS account the static registry would otherwise return.
+check('account: Shipp-brokered row -> "Shipp" not fabricated direct account (PS-273)', resolveDisplayShipAccount({ ...acct, hasSelectedRate: true, brokeredServiceCode: 'shipp_ups_ground', v2AccountNickname: 'GG6381' }), 'Shipp');
 check('account: label account when no selectedRate', resolveDisplayShipAccount({ ...acct, labelAccountLabel: 'UPS by SS', bestRateNickname: 'BR' }), 'UPS by SS');
 check('account: best-rate nickname fallback', resolveDisplayShipAccount({ ...acct, bestRateNickname: 'BR', carrierCodeFallback: 'UPS' }), 'BR');
 check('account: formatted carrier code is the final fallback', resolveDisplayShipAccount({ ...acct, carrierCodeFallback: 'UPS' }), 'UPS');

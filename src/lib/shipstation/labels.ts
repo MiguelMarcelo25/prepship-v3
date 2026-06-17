@@ -56,6 +56,13 @@ export type CreatedExternalLabel = {
   serviceCode: string;
   shipDate: string;
   providerAccountId: number | null;
+  // Per user override unlock shipped data on 2026-06-17 (PS-273): carry the REAL
+  // account nickname the label was bought on (e.g. "ORION", or the literal
+  // "Shipp" for Shipp-brokered labels) so the shipment write records account
+  // identity at purchase time. Without it, readers fall back to carrier-family
+  // and fabricate a direct UPS account (GG6381) the label was never bought on.
+  // Optional so existing producers that don't set it are unchanged.
+  providerAccountNickname?: string | null;
 };
 
 export type ShipstationLabelRecord = {
