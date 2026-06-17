@@ -173,7 +173,7 @@ check('FE Best Rate cell prefers the backend tuple',
   /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(ordersView) &&
   /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn\)/.test(ordersView));
 check('FE Margin cell prefers the backend tuple',
-  /backendMoney\?\.markupAmount/.test(ordersView) && /backendMoney\.marginPercent/.test(ordersView));
+  /backendMoney\?\.markupAmount/.test(ordersView) && /backendMoney!?\.marginPercent/.test(ordersView));
 // Shipped-row DTO phase: shipped rows now carry the workflow DTO (money priced
 // from the SELECTED rate by the same canonical rules), so the LAST FE markup
 // call is deleted — zero applyCarrierMarkup anywhere in OrdersView.

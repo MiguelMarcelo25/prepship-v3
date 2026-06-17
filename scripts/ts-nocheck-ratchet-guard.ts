@@ -43,7 +43,14 @@ import { join } from 'node:path';
 // 2026-06-17 (PS-257 blitz slice 8): AnalysisView de-nocheck'd BYTE-IDENTICALLY (24 errors;
 // useState<SortState|null> widenings, comparator casts, local DTO aliases, SortValue/SortState
 // type-only imports). Only OrdersView (the 74-error money-path file) remains. — 2 -> 1.
-const CEILING = 1;
+// 2026-06-17 (PS-257 blitz slice 9 — FINAL): OrdersView (74 errors, money-path lockdown file)
+// de-nocheck'd BYTE-IDENTICALLY (window/bestRate/TableColumnKey casts, ! assertions, useRef type
+// args, 12 `(mode as string)==='queue'` casts on dead-but-preserved branches). Reviewed: zero logic
+// change; isReadOnly + shipped/cancelled + batch gates untouched. PS-257 COMPLETE — ZERO @ts-nocheck
+// remain in web/src; the ratchet now permanently bans any new one. Flagged follow-up: handleBatchAction's
+// inline queue path (~5903-6105) is DEAD CODE (queue handled by the early-return sendOrdersToQueueBackend
+// at ~5881-5900) — a cleanup, not a bug. — 1 -> 0.
+const CEILING = 0;
 
 const ROOT = 'web/src';
 const EXTS = ['.ts', '.tsx'];

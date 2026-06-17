@@ -94,7 +94,10 @@ assert(singleCreateOrQueue.includes('sendOrdersToQueueBackend([order]'), 'single
 assert(singleCreateOrQueue.includes('openLabelPdfUrl(queueableLabelUrl, labelPopup)'), 'single-order Create+Print must open the created label');
 
 const batchAction = sliceBetween(ordersView, "async function handleBatchAction(mode: 'print' | 'queue')", '// Batch Mark-as-Shipped');
-assert(batchAction.includes("if (mode === 'queue' && queueableLabelUrl && order.clientId != null)"), 'batch queue must add labels to print queue only in queue mode');
+// PS-257: `mode` carries a type-only `(mode as string)` cast in handleBatchAction (the inline queue
+// branch is dead but preserved — queue is handled by the early-return sendOrdersToQueueBackend path).
+// Runtime comparison unchanged; match the cast form.
+assert(batchAction.includes("if ((mode as string) === 'queue' && queueableLabelUrl && order.clientId != null)"), 'batch queue must add labels to print queue only in queue mode');
 assert(batchAction.includes('await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))'), 'batch queue must call addToQueue');
 assert(batchAction.includes('} else if (queueableLabelUrl)') && batchAction.includes('await apiClient.openLabelPdf(queueableLabelUrl)'), 'batch Create+Print must open labels instead of queueing them');
 

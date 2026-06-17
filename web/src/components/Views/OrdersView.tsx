@@ -1,4 +1,3 @@
-// @ts-nocheck
 import './OrdersView.css'
 import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -184,6 +183,8 @@ import {
   type BatchRecalculateScope,
   type ColumnPrefs,
   type PrintQueueGroup,
+  type ResolvedColumnPrefs,
+  type TableColumnConfig,
 } from './orders-parity'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -350,7 +351,7 @@ function scheduleNonCriticalOrdersWork(callback: () => void, delayMs = 2500) {
     }
   }
 
-  const timeoutId = window.setTimeout(run, delayMs)
+  const timeoutId = (window as Window).setTimeout(run, delayMs)
   return () => {
     cancelled = true
     window.clearTimeout(timeoutId)
@@ -360,7 +361,7 @@ function scheduleNonCriticalOrdersWork(callback: () => void, delayMs = 2500) {
 // PS-258 (slice): the daily-stats rollover scheduling math (getDailyStats-
 // RolloverParts, addCalendarDays, getTimeZoneOffsetMs, zonedDateToUtcDate, and
 // the public getMsUntilNextDailyStatsRollover) moved VERBATIM to the strict
-// (non-@ts-nocheck) ./daily-stats-rollover module. Pure functions, identical
+// (strictly-typed) ./daily-stats-rollover module. Pure functions, identical
 // logic; the DAILY_STATS_ROLLOVER_* constants moved with them. The lone call
 // site (the rollover-refresh effect) now reads the import.
 
@@ -914,7 +915,7 @@ export default function OrdersView({
   const [panelRatePreview, setPanelRatePreview] = useState<Array<Record<string, unknown>>>([])
   const [panelRateLoading, setPanelRateLoading] = useState(false)
   const columnMenuRef = useRef<HTMLDivElement | null>(null)
-  const resolvedColumnPrefsRef = useRef(null)
+  const resolvedColumnPrefsRef = useRef<ResolvedColumnPrefs | null>(null)
   const columnPrefsRef = useRef<ColumnPrefs | null>(null)
   const currentStatusRef = useRef(currentStatus)
 
@@ -1259,7 +1260,7 @@ export default function OrdersView({
 
   const selectedIdSet = useMemo(() => new Set(selectedOrderIds), [selectedOrderIds])
   const resolvedColumnPrefs = useMemo(
-    () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })), currentStatus, columnPrefs),
+    () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })) as TableColumnConfig[], currentStatus, columnPrefs),
     [currentStatus, columnPrefs],
   )
 
@@ -1795,11 +1796,11 @@ export default function OrdersView({
       // PS-077: status-aware floor — Shipped/Cancelled "Selected Rate" (key
       // 'bestrate') can shrink below the Awaiting "Best Rate" 175 floor. Read the
       // status from the always-fresh ref (this listener lives in a [] effect).
-      const nextWidth = Math.max(getColumnMinWidth(resizeState.key, currentStatusRef.current), resizeState.startWidth + (event.clientX - resizeState.startX))
+      const nextWidth = Math.max(getColumnMinWidth(resizeState.key as any, currentStatusRef.current), resizeState.startWidth + (event.clientX - resizeState.startX))
       const nextWidths = {
         ...prefs.widths,
         [resizeState.key]: nextWidth,
-      }
+      } as Record<string, number>
       pendingResizeWidthsRef.current = nextWidths
       if (resizeFrameRef.current == null) {
         resizeFrameRef.current = window.requestAnimationFrame(() => {
@@ -1831,7 +1832,7 @@ export default function OrdersView({
       setResizingColumnKey(null)
       document.body.classList.remove('resizing-active')
 
-      void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
+      void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths as any))
       window.setTimeout(() => {
         suppressHeaderClickRef.current = false
       }, 150)
@@ -2054,13 +2055,13 @@ export default function OrdersView({
         setPanelForm((current) => {
           const nextWeightLb = current.weightLb || current.weightOz
             ? current.weightLb
-            : payload && payload.weightOz > 0
-              ? String(Math.floor(payload.weightOz / 16))
+            : payload && (payload.weightOz as number) > 0
+              ? String(Math.floor((payload.weightOz as number) / 16))
               : ''
           const nextWeightOz = current.weightLb || current.weightOz
             ? current.weightOz
-            : payload && payload.weightOz > 0
-              ? String(Math.round(payload.weightOz % 16))
+            : payload && (payload.weightOz as number) > 0
+              ? String(Math.round((payload.weightOz as number) % 16))
               : ''
           const nextLength = current.length || !derivedDims?.length ? current.length : String(derivedDims.length)
           const nextWidth = current.width || !derivedDims?.width ? current.width : String(derivedDims.width)
@@ -2298,7 +2299,7 @@ export default function OrdersView({
   const updateSelection = (ids: number[]) => {
     const nextIds = [...new Set(ids)]
     onSelectedOrderIdsChange?.(nextIds)
-    onActiveOrderIdChange?.(nextIds.length === 1 ? nextIds[0] : null)
+    onActiveOrderIdChange?.((nextIds.length === 1 ? nextIds[0] : null) as number | null)
   }
 
   const openOrderDetails = (orderId: number) => {
@@ -2959,8 +2960,8 @@ export default function OrdersView({
     return buildColumnPrefsForStatus(
       columnPrefsRef.current,
       currentStatusRef.current,
-      columns,
-      getPersistableHiddenColumns(hiddenColumns),
+      columns as any,
+      getPersistableHiddenColumns(hiddenColumns) as any,
       widths,
     )
   }
@@ -2975,8 +2976,8 @@ export default function OrdersView({
     if (sourceIndex < 0 || targetIndex < 0) return null
 
     const [column] = nextOrdered.splice(sourceIndex, 1)
-    nextOrdered.splice(targetIndex, 0, column)
-    return buildSavedColumnPrefs(nextOrdered, prefs.hiddenColumns, prefs.widths)
+    nextOrdered.splice(targetIndex, 0, column!)
+    return buildSavedColumnPrefs(nextOrdered, prefs.hiddenColumns, prefs.widths as any)
   }
 
   function moveColumn(sourceKey: TableColumnKey, targetKey: TableColumnKey) {
@@ -3035,12 +3036,12 @@ export default function OrdersView({
     if (column.key === 'select') return
 
     const prefs = getLatestColumnPrefs()
-    const currentWidth = prefs.widths[column.key] ?? column.width
+    const currentWidth = (prefs.widths as Record<string, number>)[column.key] ?? column.width
     const nextWidths = {
       ...prefs.widths,
-      [column.key]: Math.max(getColumnMinWidth(column.key, currentStatusRef.current), currentWidth + delta),
+      [column.key]: Math.max(getColumnMinWidth(column.key as any, currentStatusRef.current), currentWidth + delta),
     }
-    void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
+    void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths as any))
   }
 
   function handleHeaderKeyDown(event: React.KeyboardEvent<HTMLTableCellElement>, column: TableColumn) {
@@ -3103,7 +3104,7 @@ export default function OrdersView({
     resizeStateRef.current = {
       key: column.key,
       startX: event.clientX,
-      startWidth: prefs.widths[column.key] ?? column.width,
+      startWidth: (prefs.widths as Record<string, number>)[column.key] ?? column.width,
     }
     pendingResizeWidthsRef.current = null
     suppressHeaderClickRef.current = true
@@ -3171,12 +3172,12 @@ export default function OrdersView({
 
       const bestRate = order.bestRate
       const selectedRate = order.selectedRate
-      const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-      const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
-      const serviceName = toStringValue(bestRate?.serviceName) ?? toStringValue((bestRate as any)?.service_type) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
+      const shippingProviderId = toNumberValue((bestRate as any)?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
+      const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
+      const serviceName = toStringValue((bestRate as any)?.serviceName) ?? toStringValue((bestRate as any)?.service_type) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
       const serviceType = toStringValue((bestRate as any)?.serviceType) ?? toStringValue((bestRate as any)?.service_type) ?? selectedRate?.serviceType ?? selectedRate?.serviceName
-      const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
-      const carrierName = toStringValue(bestRate?.carrierName) ?? toStringValue((bestRate as any)?.carrier_name) ?? selectedRate?.carrierName
+      const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
+      const carrierName = toStringValue((bestRate as any)?.carrierName) ?? toStringValue((bestRate as any)?.carrier_name) ?? selectedRate?.carrierName
       const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
@@ -3273,7 +3274,7 @@ export default function OrdersView({
   // → any existing label), used to detect a direct carrier_accounts carrier.
   function resolveOrderShippingProviderId(order: OrderSummaryDto): number | null {
     return (
-      toNumberValue(order.bestRate?.shippingProviderId) ??
+      toNumberValue((order.bestRate as any)?.shippingProviderId) ??
       order.selectedRate?.shippingProviderId ??
       order.label?.shippingProviderId ??
       null
@@ -3297,10 +3298,10 @@ export default function OrdersView({
     const bestRate = order.bestRate
     const selectedRate = order.selectedRate
     const shippingProviderId = resolveOrderShippingProviderId(order)
-    const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
-    const serviceName = toStringValue(bestRate?.serviceName) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
-    const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
-    const carrierName = toStringValue(bestRate?.carrierName) ?? selectedRate?.carrierName
+    const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
+    const serviceName = toStringValue((bestRate as any)?.serviceName) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
+    const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
+    const carrierName = toStringValue((bestRate as any)?.carrierName) ?? selectedRate?.carrierName
     const dims = getDimensions(order, orderDetail)
     const weightOz = getOrderWeightOz(order, orderDetail)
     const shippingOptions = buildOrderShippingOptionsPayload(order)
@@ -3732,7 +3733,7 @@ export default function OrdersView({
     const payload: CreateLabelRequestDto = {
       orderId: order.orderId,
       orderNumber: order.orderNumber ?? undefined,
-      carrierCode: isTest ? testCarrierCode : account.code,
+      carrierCode: isTest ? testCarrierCode : account!.code,
       serviceCode: isTest ? testServiceCode : panelForm.serviceCode,
       // PS-078 req 2/invariant "display best-rate and label-payload selected-rate
       // must not diverge": the non-test label name/type come ONLY from the
@@ -4613,8 +4614,8 @@ export default function OrdersView({
           shipAccountId: String(decision.selectedPid),
           serviceCode: decision.serviceCode,
         }
-        shipmentLastSavedKeyRef.current = getShipmentDetailsKey(order.orderId, next)
-        return next
+        shipmentLastSavedKeyRef.current = getShipmentDetailsKey(order.orderId, next as any)
+        return next as any
       })
       setPanelRatePreview([rateWithMetadata])
     }
@@ -4951,7 +4952,7 @@ export default function OrdersView({
           .map((result) => [Number(result.orderId), result])
       )
       for (let index = queue.length - 1; index >= 0; index -= 1) {
-        const item = queue[index]
+        const item = queue[index]!
         const exact = exactByOrderId.get(item.order.orderId)
         if (!exact) continue
         const cachedRate = withRateRequestMetadata(exact.hit.bestRate, item.request, exact)
@@ -5089,7 +5090,7 @@ export default function OrdersView({
         // PS — `autoRequest` MUST be declared before it is used. Previously
         // `clearAutoBestRateWatchdog(autoRequest.key)` ran above the
         // `const autoRequest = ...` line below, which is a temporal-dead-zone
-        // ReferenceError at runtime (this file is @ts-nocheck, so tsc never
+        // ReferenceError at runtime (this file was untyped, so tsc never
         // caught it). The throw aborted the refresh BEFORE the panel preview,
         // the table's autoBestRateEntries sync, and persistAppliedRateForOrder
         // ran — leaving the Orders table spinning even though a valid rate was
@@ -5123,8 +5124,8 @@ export default function OrdersView({
             [order.orderId]: { key: autoRequest.key, rate: bestRateWithMetadata },
           }))
         }
-        const shippingProviderId = toProviderAccountId(bestRateWithMetadata.shippingProviderId)
-        const serviceCode = toStringValue(bestRateWithMetadata.serviceCode)
+        const shippingProviderId = toProviderAccountId((bestRateWithMetadata as any).shippingProviderId)
+        const serviceCode = toStringValue((bestRateWithMetadata as any).serviceCode)
         if (shippingProviderId != null && serviceCode) {
           setPanelForm((current) => ({
             ...current,
@@ -5635,7 +5636,7 @@ export default function OrdersView({
         storeId: activeStore ?? undefined,
         dateStart: dateRange.start,
         dateEnd: dateRange.end,
-      })
+      } as any)
       if (!data.skus.length) {
         showToast('No items found for current filter')
         return
@@ -5901,7 +5902,7 @@ export default function OrdersView({
     }
 
     setBatchBusy(true)
-    const queueJobId = mode === 'queue'
+    const queueJobId = (mode as string) === 'queue'
       ? beginPersistentQueueJob('batch-queue', batchOrders, { label: 'Sending to queue', batchTestMode })
       : null
     let created = 0
@@ -5914,9 +5915,9 @@ export default function OrdersView({
     const processOrder = async (order: OrderSummaryDto) => {
       let bestRate = order.bestRate
       const selectedRate = order.selectedRate
-      let shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-      let serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
-      let carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
+      let shippingProviderId = toNumberValue((bestRate as any)?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
+      let serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
+      let carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
       const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
@@ -5955,9 +5956,9 @@ export default function OrdersView({
           // this same fresh rate on the next line, so proof and payload account
           // are coherent by construction.
           selectedRateProof = buildSelectedRateProofPayload(order, proofRate)
-          shippingProviderId = toNumberValue(proofRate.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-          serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(proofRate.serviceCode) ?? selectedRate?.serviceCode
-          carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(proofRate.carrierCode) ?? selectedRate?.carrierCode
+          shippingProviderId = toNumberValue((proofRate as any).shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
+          serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((proofRate as any).serviceCode) ?? selectedRate?.serviceCode
+          carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((proofRate as any).carrierCode) ?? selectedRate?.carrierCode
           effectiveServiceCode = serviceCode
           effectiveCarrierCode = carrierCode
         }
@@ -6002,7 +6003,7 @@ export default function OrdersView({
         const response = await apiClient.createLabel(payload)
         const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
 
-        if (mode === 'queue' && queueableLabelUrl && order.clientId != null) {
+        if ((mode as string) === 'queue' && queueableLabelUrl && order.clientId != null) {
           await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
           queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
         } else if (queueableLabelUrl) {
@@ -6056,20 +6057,20 @@ export default function OrdersView({
 
           transitionalTimeoutsRef.current.set(order.orderId, timer)
         }
-        if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, false)
-        if (mode === 'queue') advanceQueueActionProgress()
+        if ((mode as string) === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, false)
+        if ((mode as string) === 'queue') advanceQueueActionProgress()
       } catch (err) {
         failed += 1
         // Capture WHY this order failed. A reason like "Cannot create label for shipped order" /
         // "Label already exists" tells the operator the postage was likely already spent — do NOT
         // re-buy; use Reprint / Queue Existing Labels — vs a fixable "select a carrier/service".
         failureReasons.push(`${order.orderNumber ?? order.orderId}: ${err instanceof Error ? err.message : String(err)}`)
-        if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-        if (mode === 'queue') advanceQueueActionProgress(1)
+        if ((mode as string) === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, true)
+        if ((mode as string) === 'queue') advanceQueueActionProgress(1)
       }
     }
 
-    if (mode === 'queue') {
+    if ((mode as string) === 'queue') {
       await runWithConcurrency(batchOrders, BATCH_QUEUE_CONCURRENCY, async (order) => {
         await processOrder(order)
       })
@@ -6080,7 +6081,7 @@ export default function OrdersView({
     }
 
     setBatchBusy(false)
-    if (mode === 'queue' && created > 0) {
+    if ((mode as string) === 'queue' && created > 0) {
       setQueueActionProgressLabel('Refreshing queue')
       await hydrateQueue(true)
     }
@@ -6091,19 +6092,19 @@ export default function OrdersView({
     if (mode !== 'print' || created === 0) {
       await refetchOrders()
     }
-    if (mode === 'queue') {
+    if ((mode as string) === 'queue') {
       finishPersistentQueueJob(queueJobId)
       finishQueueActionProgress(created > 0 ? 'Queue updated' : 'Queue checked')
     }
     const reasonSuffix = failureReasons.length
       ? ` — ${failureReasons.slice(0, 3).join('; ')}${failureReasons.length > 3 ? ` (+${failureReasons.length - 3} more)` : ''}`
       : ''
-    if (mode === 'queue' && created > 0) {
+    if ((mode as string) === 'queue' && created > 0) {
       showToast(`${formatQueuedOrdersToast(created, queuedItems, failed)}${failed > 0 ? reasonSuffix : ''}`, 'success')
     } else if (failed === 0) {
-      showToast(`✅ ${mode === 'queue' ? 'Queued' : 'Created'} ${created} orders`, 'success')
+      showToast(`✅ ${(mode as string) === 'queue' ? 'Queued' : 'Created'} ${created} orders`, 'success')
     } else {
-      showToast(`⚠ ${created} ${mode === 'queue' ? 'queued' : 'created'}, ${failed} failed${reasonSuffix}`)
+      showToast(`⚠ ${created} ${(mode as string) === 'queue' ? 'queued' : 'created'}, ${failed} failed${reasonSuffix}`)
     }
   }
 
@@ -6422,7 +6423,7 @@ export default function OrdersView({
     [activeQueueEntries, queueHistoryVisible],
   )
   const queueGroups = useMemo<PrintQueueGroup[]>(
-    () => groupPrintQueueEntries(activeQueueEntries),
+    () => groupPrintQueueEntries(activeQueueEntries as any),
     [activeQueueEntries],
   )
   const queueCount = queuedEntries.length
@@ -6490,7 +6491,7 @@ export default function OrdersView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueGroups, pqSearchLower])
   const visiblePrintedEntries = useMemo(() => {
-    const filtered = pqSearchLower ? printedEntries.filter(matchesPqSearch) : printedEntries
+    const filtered = pqSearchLower ? printedEntries.filter(matchesPqSearch as any) : printedEntries
     // History timestamp: printed entries sort by their confirm time, delivered
     // entries by the tracking-retirement time.
     const historyTime = (entry: { last_printed_at?: string | null; auto_retired_at?: string | null }) => {
@@ -6910,7 +6911,7 @@ export default function OrdersView({
 
     if (isTestOrder(displayOrder)) {
       const testAmount = displayOrder.bestRate
-        ? (toNumberValue(displayOrder.bestRate.shipmentCost) ?? 0) + (toNumberValue(displayOrder.bestRate.otherCost) ?? 0)
+        ? (toNumberValue((displayOrder.bestRate as any).shipmentCost) ?? 0) + (toNumberValue((displayOrder.bestRate as any).otherCost) ?? 0)
         : 0
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -6980,7 +6981,7 @@ export default function OrdersView({
     // the operator SEES the recalculation; the fresh best rate replaces it on the
     // next mid-job row refresh. Bounded by the same watchdog the rate-state
     // classifier uses, so a stuck job can never spin forever.
-    const rowWorkflowRecord = toRecord(displayOrder.bestRateWorkflow)
+    const rowWorkflowRecord = toRecord((displayOrder as any).bestRateWorkflow)
     const rowRateJobState = toStringValue(rowWorkflowRecord?.bestRateState)
     const rowRateJobAgeMs = toNumberValue(rowWorkflowRecord?.bestRateStateAgeMs)
     const isRowRecalculating =
@@ -7038,7 +7039,7 @@ export default function OrdersView({
     return (
       <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney.marginPercent ?? 0}%</div>
+        <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney!.marginPercent ?? 0}%</div>
       </div>
     )
   }
@@ -7099,7 +7100,7 @@ export default function OrdersView({
     const displayOrder = getOrderWithAutoBestRate(order)
 
     if (isTestOrder(displayOrder)) {
-      const testAccount = normalizeShippingAccountName(displayOrder.bestRate?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
+      const testAccount = normalizeShippingAccountName((displayOrder.bestRate as any)?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
       return (
         <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{testAccount}</div>
@@ -7443,7 +7444,7 @@ export default function OrdersView({
                   event.stopPropagation()
                   setTrackingModal({
                     tracking: trackingNumber,
-                    carrierCode: toStringValue(order.label?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode) ?? toStringValue(order.carrierCode),
+                    carrierCode: toStringValue(order.label?.carrierCode) ?? toStringValue((order.bestRate as any)?.carrierCode) ?? toStringValue(order.carrierCode),
                   })
                 }}
                 title="Track package"
@@ -8575,7 +8576,7 @@ export default function OrdersView({
                             const nextHidden = new Set(resolvedColumnPrefs.hiddenColumns)
                             if (event.target.checked) nextHidden.delete(column.key)
                             else nextHidden.add(column.key)
-                            void saveColumnPrefsToServer(buildSavedColumnPrefs(resolvedColumnPrefs.orderedColumns, nextHidden, resolvedColumnPrefs.widths))
+                            void saveColumnPrefsToServer(buildSavedColumnPrefs(resolvedColumnPrefs.orderedColumns, nextHidden, resolvedColumnPrefs.widths as any))
                           }}
                         />
                         {column.label}
@@ -9438,7 +9439,7 @@ export default function OrdersView({
           queuePrintProgress={queuePrintProgress}
           queuePrintInFlight={queuePrintInFlight}
           hydrateQueue={hydrateQueue}
-          showToast={showToast}
+          showToast={showToast as (message: string, type?: string) => void}
           printQueueEntries={printQueueEntries}
           confirmQueueEntriesPrinted={confirmQueueEntriesPrinted}
           openDetailDrawer={openDetailDrawer}
@@ -9478,7 +9479,7 @@ export default function OrdersView({
             locations={locations}
             onClose={() => setNewOrderOpen(false)}
             onSave={async (payload: NewOrderPayload) => {
-              const result = await apiClient.createManualOrder(payload)
+              const result = await apiClient.createManualOrder(payload as unknown as Record<string, unknown>)
               const orderNumber = result?.data?.order?.orderNumber ?? payload.orderNumber
               setNewOrderOpen(false)
               showToast(`Manual order created${orderNumber ? `: ${orderNumber}` : ''}`, 'success')
@@ -9496,7 +9497,7 @@ export default function OrdersView({
             open={rateBrowserOpen}
             order={panelOrder}
             locations={locations}
-            packages={packages}
+            packages={packages as any}
             shippingAccounts={panelOrder && isTestOrder(panelOrder, panelDetail) ? buildTestRateBrowserAccounts() : shippingAccounts}
             testMode={Boolean(panelOrder && isTestOrder(panelOrder, panelDetail))}
             initialDims={{

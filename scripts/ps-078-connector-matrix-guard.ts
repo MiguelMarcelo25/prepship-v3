@@ -126,7 +126,7 @@ check('label payload exists', labelPayloadBlock.length > 0);
 check('non-test label name/type do NOT fall back to order.bestRate (no stale rate in payload)',
   !/order\.bestRate\?\.serviceName|order\.bestRate\?\.serviceType/.test(labelPayloadBlock));
 check('label payload selected tuple comes from panel (account.code / panelForm.serviceCode / shippingProviderId)',
-  /carrierCode: isTest \? testCarrierCode : account\.code/.test(labelPayloadBlock) &&
+  /carrierCode: isTest \? testCarrierCode : account!?\.code/.test(labelPayloadBlock) &&
   /serviceCode: isTest \? testServiceCode : panelForm\.serviceCode/.test(labelPayloadBlock));
 
 // PS-078 req 4 — the "proceed with current operator selection" decision (no
