@@ -20,6 +20,7 @@ import { houseMarginFromProjection } from '../src/services/shipping-workflow/hou
 import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
 import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house-row-marked-amount';
+import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../src/services/shipping-workflow/best-rate-workflow-dto';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -253,6 +254,34 @@ const configTableSrc = readFileSync('web/src/components/Views/BillingConfigTable
 check('FE: Billing Config grid has a House Acct toggle wired to onToggleHouseAccount',
   /onToggleHouseAccount/.test(configTableSrc) &&
   /houseAccountEnabled/.test(configTableSrc));
+
+// ── slice 4b-4 (PORTAL serializer proof: internal sees it, client never does) ──
+const HOUSE_ROW_FACTS = {
+  orderStatus: 'awaiting_shipment', externallyShipped: false, canonicalStatus: 'awaiting_shipment',
+  isTest: false, hasCompleteDims: true, hasWeight: true, hasShipment: false,
+  hasQueueableLabel: false, isDirectCarrierSelection: false,
+  bestRateCarrierCode: 'shipp', bestRateServiceCode: 'ground', canonicalCarrierCode: 'shipp',
+  canonicalServiceCode: 'ground', canonicalAccountNickname: 'SHIPP', selectedRateCarrierCode: null,
+  providerAccountId: 1,
+} as const;
+{
+  const internal = withOrderRowWorkflow(buildBestRateWorkflowDto({ savedBestRate: null, source: 'none' }), {
+    ...HOUSE_ROW_FACTS,
+    money: { canViewFinancials: true, bestRateBaseAmount: 8.5, selectedRateBaseAmount: null, labelFinalCost: null, markupRule: null, insuranceAddOn: null, houseMarkedAmount: 9.64 },
+  });
+  check('portal proof: INTERNAL financial viewer DOES get the house tuple (markupSource=house_account, marked=customer_rate 9.64, base=drp_cost 8.5)',
+    internal.money != null && internal.money.markupSource === 'house_account' && internal.money.markedAmount === 9.64 && internal.money.baseAmount === 8.5);
+
+  const portal = withOrderRowWorkflow(buildBestRateWorkflowDto({ savedBestRate: null, source: 'none' }), {
+    ...HOUSE_ROW_FACTS,
+    money: { canViewFinancials: false, bestRateBaseAmount: 8.5, selectedRateBaseAmount: null, labelFinalCost: null, markupRule: null, insuranceAddOn: null, houseMarkedAmount: 9.64 },
+  });
+  check('portal proof: NON-financial (client_user portal) viewer gets money === null at BUILD — no base/margin/markupSource leak',
+    portal.money === null);
+}
+check('portal serializer: redactOrderFinancials ALSO nulls bestRateWorkflow money + marketplace for non-financial viewers (defense-in-depth, not only the build gate)',
+  /function redactOrderFinancials[\s\S]*?money: null, marketplace: null/.test(ordersSrc) &&
+  /function redactOrderFinancials[\s\S]*?bestRateWorkflow: workflow/.test(ordersSrc));
 
 const rateMoneySrc = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 // Bound the assertion to the HOUSE branch body only (const houseMarked … markupSource:'house_account').

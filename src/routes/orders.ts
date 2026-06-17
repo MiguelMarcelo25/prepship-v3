@@ -447,6 +447,17 @@ function redactRateMoneyFields<T>(value: T): T {
 
 function redactOrderFinancials<T extends Record<string, unknown>>(row: T, canViewFinancials: boolean): T {
   if (canViewFinancials) return row;
+  // PS-220 (portal serializer, defense-in-depth): the backend money tuple
+  // (bestRateWorkflow.money) carries internal base = SHIPP drp_cost, markupAmount = the
+  // house margin, and markupSource. Its field names are NOT in RATE_MONEY_FIELD_KEYS, so
+  // redactRateMoneyFields can't scrub it — and although withOrderRowWorkflow only BUILDS it
+  // for canViewFinancials viewers, the portal must not depend on that single build-time gate.
+  // Null the money + marketplace tuples outright for non-financial / client_user sessions, so
+  // a house order's internal cost/margin/source can never reach a client even if a future
+  // path populates the tuple. Clients get their shipping cost from billing (the customer_rate).
+  const workflow = row.bestRateWorkflow && typeof row.bestRateWorkflow === 'object' && !Array.isArray(row.bestRateWorkflow)
+    ? { ...(row.bestRateWorkflow as Record<string, unknown>), money: null, marketplace: null }
+    : row.bestRateWorkflow;
   return {
     ...row,
     label: redactRateMoneyFields(row.label),
@@ -454,6 +465,7 @@ function redactOrderFinancials<T extends Record<string, unknown>>(row: T, canVie
     bestRate: redactRateMoneyFields(row.bestRate),
     shipping: redactRateMoneyFields(row.shipping),
     canonicalOrder: redactRateMoneyFields(row.canonicalOrder),
+    bestRateWorkflow: workflow,
   };
 }
 
