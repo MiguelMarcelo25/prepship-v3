@@ -1016,6 +1016,29 @@ export async function generateLineItems(input: GenerateInput) {
         totalCost: '0.00',
         packageId: billedPackageId,
       });
+    } else if (s.id != null) {
+      // PS-275 (Per user override unlock shipped data on 2026-06-17): an order
+      // WE fulfilled (a real internal shipment exists) whose recorded shipping
+      // cost is exactly $0 / blank. Previously this fell through every branch
+      // above and produced NO shipping line at all, so the order silently
+      // dropped out of billing and the $0-shipping review could never fire.
+      // Emit an explicit $0.00 shipping line so the operator gets the
+      // waive-prep-fee review affordance (decideZeroShippingReview below reads
+      // totalCost === 0 + a shipment row). $0.00 never inflates the invoice
+      // total; this is a derived display line, not a mutation of shipped data.
+      rows.push({
+        clientId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber,
+        shipmentId: s.id,
+        shipDate: s.shipDate,
+        lineType: 'shipping',
+        description: `Shipping · order ${s.orderNumber ?? s.orderId} (no recorded cost — review)`,
+        qty: '1',
+        unitCost: '0.00',
+        totalCost: '0.00',
+        packageId: billedPackageId,
+      });
     }
 
     // ─── Package cost (PS-207: shipment box ONLY, review when unsure) ───────

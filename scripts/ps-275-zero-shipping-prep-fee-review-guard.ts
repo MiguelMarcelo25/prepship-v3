@@ -170,6 +170,29 @@ function sampleOrderLines(): WaivableLine[] {
     hasBadgeCopy);
 }
 
+// ── 8) ROOT CAUSE: the generator must EMIT a $0.00 shipping review line for ──
+//      internal $0-cost shipments, or the review is unreachable. billing.ts
+//      only emits a normal shipping line when labelCost>0 (so its amount is
+//      always >0), and externally-shipped orders go to 'shipping_missing'. An
+//      order WE fulfilled (a real shipment) with $0/blank recorded cost used to
+//      fall through every branch and produce NO shipping line — dropping the
+//      order out of billing entirely, so decideZeroShippingReview never saw a
+//      $0 shipping line. This pins the dedicated fall-through branch that fixes
+//      it. Pure static read (the generator needs a DB; this asserts the source).
+{
+  const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
+  const hasInternalZeroBranch = /else if \(s\.id != null\)/.test(billingSrc);
+  const emitsZeroShippingReviewLine = /no recorded cost/.test(billingSrc);
+  const citesOverride =
+    /Per user override unlock shipped data on 2026-06-17[\s\S]{0,1200}no recorded cost/.test(billingSrc);
+  check('GEN: internal $0-cost shipments hit a dedicated fall-through branch (else if s.id != null)',
+    hasInternalZeroBranch);
+  check('GEN: that branch emits an explicit $0.00 shipping review line so detection can fire',
+    emitsZeroShippingReviewLine);
+  check('GEN: the locked-surface billing edit cites the unlock override',
+    citesOverride);
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-275 zero-shipping prep-fee review guard (${failures} failing)`);
   process.exit(1);
