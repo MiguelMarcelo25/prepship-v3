@@ -137,6 +137,15 @@ const schema = z.object({
   // can't fire fleet-wide. Only consulted when DIRECT_CARRIER_RATE_CACHE is ON.
   DIRECT_CARRIER_RATE_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   DIRECT_CARRIER_QUOTE_COOLDOWN_SECONDS: z.coerce.number().int().positive().default(180),
+  // Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears
+  // stale pgboss active rows only, never shipped/cancelled order/shipment data.
+  // PS-272: default-OFF "stuck-active pgboss job reaper". When ON, a boot + 10-min reaper flips
+  // orphaned pgboss 'active' rows (worker died mid-job during a Render redeploy; pg-boss's
+  // expireInMinutes reap didn't fire) to 'failed' so the heavy syncs can drain their 'created'
+  // backlog. Allow-list is idempotent sync/reporting/tracking jobs only — never marketplace
+  // confirmations, never order/shipment data. Default OFF — the OFF path is a TRUE no-op (no DB, no
+  // mutation). DJ flips this on Render.
+  SYNC_STUCK_JOB_REAPER: booleanFlag(false),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -1,6 +1,8 @@
+// Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
 import PgBoss from 'pg-boss';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
+import { reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
   runBackfillTick,
@@ -223,6 +225,15 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   heartbeatTimer = setInterval(() => {
     void recordWorkerHeartbeat();
   }, 30_000);
+
+  // PS-272: default-OFF stuck-active reaper. When SYNC_STUCK_JOB_REAPER is OFF this is a true no-op
+  // (no DB, no mutation). One boot pass + a 10-min cadence flips orphaned pgboss 'active' rows (from
+  // a worker that died mid-job during a Render redeploy) to 'failed' so the heavy syncs can drain
+  // their 'created' backlog. The interval is pushed into timers[] so stopQueuedSyncScheduler clears it.
+  void reapStuckActiveJobs().then(
+    (r) => r.reaped && console.log(`[job-queue] stuck-active reaper cleared ${r.reaped} orphan(s): ${r.names.join(', ')}`)
+  );
+  timers.push(setInterval(() => void reapStuckActiveJobs(), 10 * 60_000));
 
   console.log('[job-queue] pg-boss scheduler started');
   console.log(
