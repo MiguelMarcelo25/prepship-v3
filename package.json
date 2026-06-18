@@ -181,6 +181,7 @@
     "test:ps-176-queue-route-authority": "tsx scripts/ps-176-queue-route-authority-guard.ts",
     "test:ps-177-queue-sku-identity": "tsx scripts/ps-177-queue-sku-identity-guard.ts",
     "test:ps-177-row-money-display": "tsx scripts/ps-177-row-money-display-guard.ts",
+    "test:markup-single-source": "tsx scripts/markup-single-source-guard.ts",
     "test:ps-177-dims-defaults": "tsx scripts/ps-177-dims-defaults-guard.ts",
     "test:ps-220-house-margin": "tsx scripts/ps-220-house-margin-guard.ts",
     "test:ps-292-house-tuple-display": "tsx scripts/ps-292-house-tuple-display-guard.ts",
