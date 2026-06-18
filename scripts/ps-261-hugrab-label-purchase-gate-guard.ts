@@ -172,6 +172,12 @@ check('preflight runs BEFORE the ShipStation purchase call',
 // the block surfaces a structured, operator-facing code (the FE branches on code, not message).
 check('labels.ts throws a structured HUGRAB coverage block code',
   /HUGRAB_INSURANCE_COVERAGE_UNPROVEN/.test(labels));
+// The BLOCK is a money-path change, so it ships behind a DEFAULT-OFF canary (HUGRAB_PURCHASE_GATE):
+// OFF (default) is byte-identical to pre-PS-261, DJ flips it on after a live canary (never auto-active).
+check('labels.ts gates the BLOCK behind the default-OFF HUGRAB_PURCHASE_GATE canary',
+  /HUGRAB_PURCHASE_GATE/.test(labels) &&
+  /hugrabPurchaseGateEnabled\(\)\s*&&\s*!hugrabCoveragePreflight\.allow/.test(labels) &&
+  /process\.env\.HUGRAB_PURCHASE_GATE === 'on'/.test(labels));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-261 HUGRAB label-purchase-gate guard (${failures} failing)`);

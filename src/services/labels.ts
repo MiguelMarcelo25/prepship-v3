@@ -79,6 +79,14 @@ import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carr
 // BLOCKS before any postage is bought when the mandatory $100 coverage is not proven
 // (unknown / not_included / unsupported). Pure decision; never alters a successful buy.
 import { resolveHugrabLabelPurchasePreflight } from './shipping-workflow/hugrab-label-purchase-preflight';
+
+// PS-261: the HUGRAB coverage label-purchase BLOCK is a money-path change, so it ships behind a
+// default-OFF canary (HUGRAB_PURCHASE_GATE), per the project norm that money-path features ship OFF
+// and DJ flips them on after a canary (never auto-active). OFF (default) => byte-identical to
+// pre-PS-261 (no block); 'on' => the coverage block is enforced before any postage is purchased.
+function hugrabPurchaseGateEnabled(): boolean {
+  return process.env.HUGRAB_PURCHASE_GATE === 'on';
+}
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
@@ -1418,7 +1426,7 @@ async function createLabelV2Impl(
     serviceCode: body.serviceCode,
     isDirectVerifiedAccount: options.insuranceProvider === 'carrier',
   });
-  if (!hugrabCoveragePreflight.allow) {
+  if (hugrabPurchaseGateEnabled() && !hugrabCoveragePreflight.allow) {
     const err = new Error(
       `HUGRAB $100 insurance coverage is not proven on this rate (${hugrabCoveragePreflight.status}) — ` +
         `${hugrabCoveragePreflight.reason} No postage was purchased. Re-rate the order on an account that ` +
