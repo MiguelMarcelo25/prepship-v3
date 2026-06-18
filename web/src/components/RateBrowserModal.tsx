@@ -49,6 +49,9 @@ import {
 // PS-135: the backend owns best-rate selection; the modal consumes its canonical winner
 // (matched into the eligible set) instead of re-ranking rows client-side.
 import { findCanonicalBestRate } from '../lib/rate-proof';
+// PS-279: the emission boundary — the modal may ONLY emit the backend canonical best; absent
+// it, emit NOTHING (no FE-ranked local cheapest) and show an unresolved/retry diagnostic state.
+import { decideBestRateEmission } from '../lib/rate-browser-best-emission';
 // PS-157: presentation-only subcomponents extracted from this file. They own no state
 // and no rate/blocked/money policy — the modal passes values + callbacks down.
 import RateRowItem from './RateRowItem';
@@ -1030,6 +1033,11 @@ export default function RateBrowserModal({
   const [rateErrorsByPid, setRateErrorsByPid] = useState<Record<string, string>>({});
   const [carrierStatusByPid, setCarrierStatusByPid] = useState<Record<string, CarrierRateStatus>>({});
   const [rateBrowseInfo, setRateBrowseInfo] = useState<RateBrowseInfo>({ source: null });
+  // PS-279: true when the fan-out finished but the backend returned no canonical best for the
+  // eligible set. The modal then emits NOTHING (never a FE-ranked local cheapest) and shows a
+  // retry diagnostic so the operator re-runs the browse instead of silently persisting a wrong
+  // "best". Cleared whenever a canonical best resolves or a fresh browse begins.
+  const [bestRateUnresolved, setBestRateUnresolved] = useState(false);
   // Per-carrier resolution metadata from the direct-carrier path. Used to
   // render the "rates came from X" hint under Walmart / Amazon / eBay
   // shipping panels so operators can tell whether the quote came from
@@ -1354,6 +1362,8 @@ export default function RateBrowserModal({
     );
     setRateErrorsByPid({});
     setRateMetaByPid({});
+    // PS-279: a fresh browse clears any prior unresolved-best diagnostic.
+    setBestRateUnresolved(false);
     if (seededPid != null) {
       setSelectedPid((current) => current ?? seededPid);
     }
@@ -1657,21 +1667,28 @@ export default function RateBrowserModal({
       // already-saved best rate so the modal stays consistent with the row.
       const ratesToRank = liveFetchedRates.length ? liveFetchedRates : [seededBestRate!];
       const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r, order, currentRateShippingOptions));
-      // PS-135: the backend owns best-rate selection (src/services/rates.ts picks the cheapest
-      // ELIGIBLE rate POST-markup). Consume that canonical winner — matched WITHIN the eligible
-      // set so the operator's service-class filter + blocked rules still apply — instead of a
-      // parallel client-side re-rank that can silently diverge from the backend (markup-map
-      // drift, eligibility differences) and save a different "best" than the table shows. Fall
-      // back to the local cheapest only when the backend winner isn't in the eligible set
-      // (service-class narrowed it out, or no backend best was returned).
+      // PS-135 / PS-279: the backend owns best-rate selection (src/services/rates.ts picks the
+      // cheapest ELIGIBLE rate POST-markup). Consume that canonical winner — matched WITHIN the
+      // eligible set so the operator's service-class filter + blocked rules still apply. We must
+      // NOT substitute a parallel client-side re-rank when the backend winner is absent: a FE
+      // "local cheapest" can silently diverge from the backend (markup-map drift, eligibility
+      // differences) and persist a different "best" than the table/row shows. When no canonical
+      // best resolves, emit NOTHING and flag an unresolved/retry diagnostic instead.
       const canonicalBest = findCanonicalBestRate(canonicalBackendBest, available);
-      const best =
-        canonicalBest ??
-        [...available].sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0];
-      const applied = best ? toAppliedRate(best) : null;
-      if (applied) {
-        setSelectedPid(applied.shippingProviderId);
-        onBestRateResolved(applied);
+      const decision = decideBestRateEmission(canonicalBest);
+      if (decision.kind === 'emit') {
+        const applied = toAppliedRate(decision.rate);
+        if (applied) {
+          setBestRateUnresolved(false);
+          setSelectedPid(applied.shippingProviderId);
+          onBestRateResolved(applied);
+        } else {
+          setBestRateUnresolved(true);
+        }
+      } else {
+        // No backend canonical best for the eligible set — do not fabricate/persist a FE-ranked
+        // local cheapest. Surface the unresolved state so the operator can retry the browse.
+        setBestRateUnresolved(true);
       }
     }
 
@@ -2587,6 +2604,16 @@ export default function RateBrowserModal({
                       ? ' | cached + live'
                       : ''}
               </span>
+              {/* PS-279: backend returned no canonical best for the eligible set — we persist
+                  NOTHING (never a FE-ranked local cheapest); prompt the operator to retry. */}
+              {bestRateUnresolved && !browsing && totalCarriersLoading === 0 ? (
+                <span
+                  role="status"
+                  style={{ fontSize: 11.5, color: 'var(--warn, #b45309)', whiteSpace: 'nowrap' }}
+                >
+                  Best rate unresolved — retry
+                </span>
+              ) : null}
               <label
                 style={{
                   display: 'flex',
