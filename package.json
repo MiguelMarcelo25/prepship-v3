@@ -375,6 +375,7 @@
     "test:ps-278-thin-client-shipping-fallbacks": "tsx scripts/ps-278-thin-client-shipping-fallbacks-guard.ts",
     "test:ps-279-web-boundary-guards": "tsx scripts/ps-279-web-boundary-guards.ts",
     "test:ps-279-rate-browser-no-fallback-best": "tsx scripts/ps-279-rate-browser-no-fallback-best-guard.ts",
+    "test:ps-279-backend-eligibility-stamp": "tsx scripts/ps-279-backend-eligibility-stamp.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",

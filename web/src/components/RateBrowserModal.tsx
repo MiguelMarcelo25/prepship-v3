@@ -231,6 +231,10 @@ export type RateRow = {
   insurance_amount?: unknown;
   // PS-274: backend-owned insurance-certainty fact carried onto each rate row (display-only).
   insuranceCertainty?: unknown;
+  // PS-279: backend-owned rate BLOCK/eligibility verdict stamped by order-rate-dto. The modal
+  // PREFERS these over its local evaluateShippingServiceEligibility fallback (rateBlockedReason).
+  eligibilityBlocked?: boolean;
+  eligibilityBlockReason?: string | null;
   // PS-198: backend-issued quote proof (stamped by /rates/browse + the apiClient
   // backendProofMetadata). The modal only passes these through — never synthesizes.
   rateQuoteId?: string | null;
@@ -967,6 +971,17 @@ function rateBlockedReason(
   shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
 ): string | null {
   const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
+  // PS-279 (backend-ownership pillar): PREFER the backend-stamped eligibility verdict carried on the
+  // rate (order-rate-dto stamps eligibilityBlocked/eligibilityBlockReason). The backend owns the
+  // block-list rule; the FE renders its reason verbatim. The local evaluateShippingServiceEligibility
+  // call below is kept ONLY as a deploy-skew fallback for older payloads that predate the stamp.
+  const stampedBlocked = (rate as { eligibilityBlocked?: unknown }).eligibilityBlocked ?? raw.eligibilityBlocked;
+  if (stampedBlocked === true || stampedBlocked === false) {
+    if (stampedBlocked === false) return null;
+    const stampedReason =
+      (rate as { eligibilityBlockReason?: unknown }).eligibilityBlockReason ?? raw.eligibilityBlockReason;
+    return typeof stampedReason === 'string' && stampedReason ? stampedReason : HUGRAB_GROUND_SAVER_BLOCK_REASON;
+  }
   const eligibility = evaluateShippingServiceEligibility(
     {
       clientId: order?.clientId ?? null,

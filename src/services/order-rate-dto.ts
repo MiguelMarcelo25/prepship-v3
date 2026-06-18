@@ -25,6 +25,12 @@ import {
 // pre-purchase indicator and the buy-path BLOCK agree by construction. The DTO DELEGATES to it over
 // the already-resolved PS-290 coverage status; the FE renders the {allow,reason} verbatim.
 import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label-purchase-gate';
+// PS-279 (backend-ownership pillar): the rate BLOCK/eligibility REASON is backend-owned. The DTO
+// STAMPS the eligibility verdict (delegating to the canonical evaluateShippingServiceEligibility
+// owner) so the Rate Browser READS {eligibilityBlocked, eligibilityBlockReason} verbatim instead of
+// re-deriving the block-list reason client-side. Inert (UNBLOCKED) until a caller passes ctx.eligibility.
+import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibility-stamp';
+import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
 
 // ── Inlined DTO types (v2 parity) ────────────────────────────────────────────
 
@@ -79,6 +85,14 @@ export interface OrderBestRateDto {
   // allow === true + empty reason on non-HUGRAB rows (the indicator renders nothing).
   hugrabPurchaseAllowed: boolean;
   hugrabPurchaseBlockReason: string;
+  // PS-279 (backend-ownership pillar): the backend-owned rate BLOCK/eligibility verdict for THIS
+  // rate, delegated to evaluateShippingServiceEligibility. eligibilityBlocked === true means the
+  // rate fails an eligibility rule (e.g. HUGRAB UPS Ground Saver, an insurance-unsupported carrier,
+  // or a disabled Automation service) and must NOT be selectable; eligibilityBlockReason carries the
+  // operator-facing reason. The Rate Browser renders this verbatim instead of re-deriving the
+  // block-list reason. Defaults to UNBLOCKED (null reason) when no eligibility context is supplied.
+  eligibilityBlocked: boolean;
+  eligibilityBlockReason: string | null;
 }
 
 export interface NextBestNonHouseRateDto {
@@ -114,6 +128,9 @@ export interface OrderSelectedRateDto {
   // PS-261 (display slice): HUGRAB label-PURCHASE-GATE verdict (see OrderBestRateDto).
   hugrabPurchaseAllowed: boolean;
   hugrabPurchaseBlockReason: string;
+  // PS-279 (backend-ownership pillar): backend-owned rate BLOCK/eligibility verdict (see OrderBestRateDto).
+  eligibilityBlocked: boolean;
+  eligibilityBlockReason: string | null;
 }
 
 // ── Local 400-class error (v4 has no contracts/input-validation module) ──────
@@ -244,6 +261,30 @@ function resolveCoverageFields(args: {
   };
 }
 
+// PS-279 — stamp the backend-owned eligibility BLOCK verdict for this rate, delegating to the
+// canonical resolver. Builds the eligibility descriptor from the normalized rate identity + raw
+// provider key. Inert (UNBLOCKED) when no eligibility context is supplied — older callers unchanged.
+function resolveEligibilityFields(args: {
+  record: Record<string, unknown>;
+  carrierCode: string | null;
+  serviceCode: string | null;
+  serviceName: string | null;
+  carrierNickname: string | null;
+  context?: ShippingServiceEligibilityContext | null;
+}): { eligibilityBlocked: boolean; eligibilityBlockReason: string | null } {
+  return resolveRateEligibilityStamp({
+    context: args.context,
+    service: {
+      carrierCode: args.carrierCode,
+      carrierName: args.carrierNickname,
+      provider: readNullableString(args.record.provider ?? null, 'rate.provider'),
+      serviceCode: args.serviceCode,
+      serviceName: args.serviceName,
+      serviceType: readNullableString(args.record.service_type ?? args.record.serviceType ?? null, 'rate.serviceType'),
+    },
+  });
+}
+
 // PS-290 — the insured value / certainty the resolver reads, sourced from the raw rate JSON
 // (the normalizers do not otherwise carry insuredValue/certainty as DTO fields).
 function readRateInsuredValue(record: Record<string, unknown>): number | null {
@@ -325,7 +366,9 @@ export function normalizeOrderBestRateDto(
   path = 'bestRate',
   // PS-290 — optional HUGRAB signal. When omitted, isHugrab is read off an isHugrab/is_hugrab
   // key on the rate JSON (defaulting to false), so non-HUGRAB rows resolve to 'not_required'.
-  ctx?: { isHugrab?: boolean | null },
+  // PS-279 — optional eligibility context (client/store identity). When supplied, the DTO stamps
+  // the backend-owned eligibility block verdict; when omitted, the rate defaults to UNBLOCKED.
+  ctx?: { isHugrab?: boolean | null; eligibility?: ShippingServiceEligibilityContext | null },
 ): OrderBestRateDto | null {
   if (value == null) return null;
 
@@ -420,6 +463,21 @@ export function normalizeOrderBestRateDto(
       insuranceProvenance,
       insuranceCertainty: readRateInsuranceCertainty(record),
     }),
+    // PS-279 — backend-owned rate BLOCK/eligibility verdict (delegated to the canonical evaluator).
+    ...resolveEligibilityFields({
+      record,
+      carrierCode: readNullableString(record.carrierCode ?? record.carrier_code ?? record.carrier ?? null, `${path}.carrierCode`),
+      serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
+      serviceName: readNullableString(
+        record.serviceName ?? record.service_type ?? record.serviceCode ?? record.service_code ?? null,
+        `${path}.serviceName`,
+      ),
+      carrierNickname: readNullableString(
+        record.carrierNickname ?? record.carrier_nickname ?? record._carrierName ?? null,
+        `${path}.carrierNickname`,
+      ),
+      context: ctx?.eligibility,
+    }),
   };
 
   return hasAnyMeaningfulRateField(rate) ? rate : null;
@@ -450,7 +508,8 @@ export function normalizeOrderSelectedRateDto(
   },
   path = 'selectedRate',
   // PS-290 — optional HUGRAB signal (same semantics as normalizeOrderBestRateDto).
-  ctx?: { isHugrab?: boolean | null },
+  // PS-279 — optional eligibility context (same semantics as normalizeOrderBestRateDto).
+  ctx?: { isHugrab?: boolean | null; eligibility?: ShippingServiceEligibilityContext | null },
 ): OrderSelectedRateDto | null {
   if (value == null) return null;
 
@@ -501,6 +560,18 @@ export function normalizeOrderSelectedRateDto(
       insuranceCost,
       insuranceProvenance,
       insuranceCertainty: readRateInsuranceCertainty(record),
+    }),
+    // PS-279 — backend-owned rate BLOCK/eligibility verdict (delegated to the canonical evaluator).
+    ...resolveEligibilityFields({
+      record,
+      carrierCode: readNullableString(record.carrierCode ?? fallback?.carrierCode ?? null, `${path}.carrierCode`),
+      serviceCode: readNullableString(record.serviceCode ?? fallback?.serviceCode ?? null, `${path}.serviceCode`),
+      serviceName: readNullableString(
+        record.serviceName ?? record.serviceCode ?? fallback?.serviceCode ?? null,
+        `${path}.serviceName`,
+      ),
+      carrierNickname: readNullableString(record.providerAccountNickname ?? null, `${path}.providerAccountNickname`),
+      context: ctx?.eligibility,
     }),
   };
 
