@@ -23,6 +23,7 @@ import {
   attachObservedIncomplete,
   readObservedIncomplete,
 } from '../src/connectors/carrier/shipp-observed-incomplete-marker';
+import { expectedCarrierAbsentFromThin } from '../src/connectors/carrier/observed-missing-carrier-names';
 import {
   isBestRateComplete,
   type BestRateWorkflowCarrierStatus,
@@ -56,6 +57,24 @@ function check(name: string, cond: boolean): void {
   const off = attachObservedIncomplete([{ carrier_id: 'se-shipp', cost: 11.66 }], []);
   check('OFF path: empty missing -> no marker attached', readObservedIncomplete(off) === null);
   check('readObservedIncomplete tolerates a non-array', readObservedIncomplete(null) === null);
+}
+
+// ── 1b) the NAMED missing-carrier list rides the marker -> CarrierRateDiagnostic.expectedCarrierAbsent ──
+// The diagnostic must be able to say WHICH carriers were expected-but-absent (not just a thin boolean).
+// The connector's observedMissing[] is the only authority; expectedCarrierAbsentFromThin normalizes it.
+{
+  // Round-trip the connector marker the way the rates pipeline reads it, then derive the named list.
+  const rates = attachObservedIncomplete([{ carrier_id: 'se-shipp', cost: 11.66 }], ['UPS', 'ups', ' usps ']);
+  const thin = readObservedIncomplete(rates);
+  const absent = expectedCarrierAbsentFromThin(thin);
+  check('expectedCarrierAbsent names the missing carrier(s) from the marker',
+    JSON.stringify(absent) === JSON.stringify(['ups', 'usps']));
+  check('expectedCarrierAbsent de-dupes + normalizes the names', absent?.length === 2);
+  // OFF / non-thin pass -> the field is OMITTED (undefined, never an empty array).
+  check('OFF path: no marker -> expectedCarrierAbsent is undefined',
+    expectedCarrierAbsentFromThin(null) === undefined);
+  check('OFF path: empty observed-missing -> expectedCarrierAbsent is undefined',
+    expectedCarrierAbsentFromThin({ observedIncomplete: true, missing: [] }) === undefined);
 }
 
 // ── 2) isBestRateComplete: a THIN carrier is not-complete (like loading/error) ──

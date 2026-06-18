@@ -50,6 +50,7 @@ import {
   isServiceOrPackageBlocked,
 } from '../lib/rate-block-list';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
+import { expectedCarrierAbsentFromThin } from '../connectors/carrier/observed-missing-carrier-names';
 import { withCarrierQuoteTimeout, isPricedRate } from './rates-combined';
 import {
   loadShippingAutomationRules,
@@ -724,6 +725,10 @@ export type CarrierRateDiagnostic = {
   // returned a non-empty-but-thin set). Additive + display-only; absent today and for every non-thin
   // pass. combineCarrierUniverses reads it to mark the carrier status / best as thin/unproven.
   thin?: boolean;
+  // PS-271 (Layer 4): the NAMED observed-expected carriers that were absent from the accepted-thin pass
+  // (the connector's observedMissing[]) — the out-of-band diagnostic that says WHICH carriers we never
+  // saw, not just a thin boolean. Additive + display-only; omitted on every non-thin pass (never empty).
+  expectedCarrierAbsent?: string[];
 };
 
 // Cheap mini-carrier lookup so we can tell stamps_com apart (needs city/state
@@ -2047,6 +2052,12 @@ export async function getDirectCarrierRatesForRateInput(
           rateCount: rates.length,
           // PS-271 (Layer 4): the thin signal flows to combineCarrierUniverses via this diagnostic.
           ...(thin ? { thin: true } : {}),
+          // PS-271 (Layer 4): surface the NAMED observed-missing carriers (the connector's
+          // observedMissing[]) as the out-of-band diagnostic. Omitted on every non-thin pass.
+          ...((() => {
+            const absent = expectedCarrierAbsentFromThin(thin);
+            return absent ? { expectedCarrierAbsent: absent } : {};
+          })()),
         },
       };
     } catch (err) {
