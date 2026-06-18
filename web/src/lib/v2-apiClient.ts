@@ -1541,6 +1541,46 @@ export const apiClient = {
     }
   },
 
+  // PS-468: download the SAME invoice as a CSV. Identical query params and auth
+  // pattern as openBillingInvoiceXlsx — the backend serializes the CSV from the
+  // same billingInvoiceData dataset with the same column derivation as the XLSX
+  // Line Items sheet, so the exports can never disagree.
+  async openBillingInvoiceCsv(
+    clientId: number,
+    from: string,
+    to: string
+  ): Promise<boolean> {
+    try {
+      const accessToken = await getCachedAuthToken();
+      if (!accessToken) throw new Error('Not authenticated');
+      const qs = new URLSearchParams({
+        clientId: String(clientId),
+        dateFrom: from,
+        dateTo: to,
+      }).toString();
+      const res = await fetch(`${API_BASE}/billing/invoice.csv?${qs}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(`Invoice CSV failed: ${msg}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice-${clientId}-${from}-${to}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return true;
+    } catch (err) {
+      console.error('[invoice] csv download failed:', (err as Error).message);
+      return false;
+    }
+  },
+
   // ─── Products ──────────────────────────────────────────────────────────────
 
   async fetchProductsBySku(sku: string): Promise<any> {

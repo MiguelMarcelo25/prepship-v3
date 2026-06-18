@@ -1192,6 +1192,22 @@ export default function BillingView() {
     })
   }
 
+  // PS-468: same invoice, CSV download. Passes the picked days verbatim — the
+  // backend owns all calendar-day semantics and the column derivation.
+  function handleExportInvoiceCsv(clientId: number, clientName: string) {
+    if (!from || !to) {
+      toastContext?.addToast('⚠ Select a date range first', 'error')
+      return
+    }
+
+    toastContext?.addToast(`📑 Downloading CSV invoice for ${clientName || 'client'}…`, 'success')
+    void apiClient.openBillingInvoiceCsv(clientId, from, to).then((ok) => {
+      if (!ok) {
+        toastContext?.addToast('Failed to download CSV invoice — check console', 'error')
+      }
+    })
+  }
+
   const billingEditMetrics = billingEditModal ? computeBillingDetailMetrics(billingEditModal.row) : null
   const billingEditDraftTotal = billingEditModal
     ? parseMoneyDraft(billingEditModal.draft.pickPack)
@@ -1313,6 +1329,7 @@ export default function BillingView() {
           handleLoadDetails={handleLoadDetails}
           handleExportInvoice={handleExportInvoice}
           handleExportInvoiceXlsx={handleExportInvoiceXlsx}
+          handleExportInvoiceCsv={handleExportInvoiceCsv}
         />
 
         {detailState.open ? (

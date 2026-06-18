@@ -34,6 +34,8 @@ import { backfillReferenceRates } from '../services/billing-ref-rates';
 // PS-275: durable, reversible prep-fee waiver state ($0-shipping review).
 import { upsertBillingFeeWaiver } from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
+// PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
+import { renderInvoiceCsv } from './billing-invoice-csv';
 
 const app = new Hono();
 
@@ -1165,6 +1167,32 @@ app.get('/invoice.xlsx', zValidator('query', invoiceQuery), async (c) => {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'content-disposition': `attachment; filename="invoice-${safeClient}-${range.fromDay}-${range.toDay}.xlsx"`,
       'content-length': String(bytes.byteLength),
+      'x-content-type-options': 'nosniff',
+    },
+  });
+});
+
+// ─── Invoice (CSV) ────────────────────────────────────────────────────
+// PS-468: CSV export of the SAME invoice. Consumes billingInvoiceData — the
+// exact dataset behind the HTML + XLSX exports (no forked query) — and
+// serializes data.details via renderInvoiceCsv, whose column derivation is
+// IDENTICAL to the XLSX Line Items sheet. Auth (financials:read), client-scope
+// and financial-visibility gating are exactly the XLSX route's.
+
+app.get('/invoice.csv', zValidator('query', invoiceQuery), async (c) => {
+  const { clientId, dateFrom, dateTo } = c.req.valid('query');
+  const range = billingDayRange(dateFrom, dateTo);
+  if (!range) return c.text('Invalid dateFrom/dateTo — expected YYYY-MM-DD', 400);
+  const invoiceScope = billingScopeFromContext(c);
+  const data = await billingInvoiceData(invoiceScope, clientId, range.fromUtc, range.toUtcExclusive);
+  if (!data) return c.text('Client not found', 404);
+  const csv = renderInvoiceCsv(data.details);
+  const safeClient = data.clientName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || String(clientId);
+  return new Response(csv, {
+    status: 200,
+    headers: {
+      'content-type': 'text/csv; charset=utf-8',
+      'content-disposition': `attachment; filename="invoice-${safeClient}-${range.fromDay}-${range.toDay}.csv"`,
       'x-content-type-options': 'nosniff',
     },
   });

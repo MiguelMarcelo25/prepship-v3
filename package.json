@@ -191,6 +191,7 @@
     "test:ps-195-clear-targeting": "tsx scripts/ps-195-clear-targeting-guard.ts",
     "test:ps-207-shipped-box-billing-policy": "tsx scripts/ps-207-shipped-box-billing-policy-guard.ts",
     "test:ps-208-billing-calendar-day-invoice-xlsx": "tsx scripts/ps-208-billing-calendar-day-invoice-xlsx-guard.ts",
+    "test:ps-468-invoice-csv": "tsx scripts/ps-468-invoice-csv-guard.ts",
     "test:ps-206-rate-browser-full-coverage": "tsx scripts/ps-206-rate-browser-full-coverage-guard.ts",
     "test:ps-216-rate-browser-account-labels": "tsx scripts/ps-216-rate-browser-account-labels-guard.ts",
     "test:dashboard-client-sku-filter": "tsx scripts/dashboard-client-sku-filter-guard.ts",

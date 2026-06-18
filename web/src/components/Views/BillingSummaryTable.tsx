@@ -19,6 +19,7 @@ export function BillingSummaryTable({
   handleLoadDetails,
   handleExportInvoice,
   handleExportInvoiceXlsx,
+  handleExportInvoiceCsv,
 }: {
   sortedSummaryRows: BillingSummaryDto[]
   summaryLoading: boolean
@@ -29,6 +30,8 @@ export function BillingSummaryTable({
   handleExportInvoice: (clientId: number, clientName: string) => void
   // PS-208: Excel download of the same invoice (backend /billing/invoice.xlsx).
   handleExportInvoiceXlsx: (clientId: number, clientName: string) => void
+  // PS-468: CSV download of the same invoice (backend /billing/invoice.csv).
+  handleExportInvoiceCsv: (clientId: number, clientName: string) => void
 }) {
   return summaryError ? (
     <div style={{ padding: 24, textAlign: 'center', color: 'var(--red)' }}>{summaryError}</div>
@@ -65,6 +68,15 @@ export function BillingSummaryTable({
                 onClick={(event) => { event.stopPropagation(); handleExportInvoiceXlsx(row.clientId, row.clientName) }}
               >
                 📊 Excel
+              </button>
+              <button
+                className="btn btn-ghost btn-xs"
+                type="button"
+                title="Download invoice as CSV (.csv)"
+                style={{ marginLeft: 4, fontSize: 10, padding: '1px 6px', opacity: 0.7 }}
+                onClick={(event) => { event.stopPropagation(); handleExportInvoiceCsv(row.clientId, row.clientName) }}
+              >
+                📑 CSV
               </button>
             </span>
           ),
