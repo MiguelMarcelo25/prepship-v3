@@ -611,6 +611,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
                 otherCost: Number(nextBest.rate.other_amount?.amount ?? 0),
                 totalCost: nextBest.total,
                 providerAccountId: providerMatch ? Number.parseInt(providerMatch[1]!, 10) : null,
+                // PS-220-D: stamp the REAL eligible-priced-non-SHIPP competitor count so the realized
+                // capture reports the true number instead of the legacy hardcoded 1.
+                competitorCount: nextBest.competitorCount,
               }
             : null,
           houseMargin: nextBest ? Math.max(0, nextBest.total - drpCost) : 0,

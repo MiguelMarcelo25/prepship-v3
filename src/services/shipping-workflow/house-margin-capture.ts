@@ -31,7 +31,9 @@ export function houseMarginFromProjection(best: OrderBestRateDto | null, drpCost
   return {
     customerRate: Number(customerRate.toFixed(2)),
     margin,
-    competitorCount: competitor ? 1 : 0,
+    // PS-220-D: use the REAL competitor count threaded on the projected stamp; fall back to the
+    // legacy `competitor ? 1 : 0` (byte-identical) when an older stamp did not carry the count.
+    competitorCount: competitor?.competitorCount ?? (competitor ? 1 : 0),
     sourceCarrier: competitor?.carrierCode ?? null,
     sourceService: competitor?.serviceCode ?? null,
     sourceProviderAccountId: competitor?.providerAccountId ?? null,

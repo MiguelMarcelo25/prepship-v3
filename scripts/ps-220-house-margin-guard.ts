@@ -198,7 +198,42 @@ check('opt-in read is fail-safe (false on error) and idempotently ensures the co
   const clamped = houseMarginFromProjection(projected, 10.0); // actual SHIPP cost > projected competitor
   check('realized margin is never negative (clamped to 0)', clamped != null && clamped.margin === 0);
 }
+
+// ── PS-220-D (Blocker D): the REAL competitor count threads end-to-end ────────
+// The resolver counts every eligible priced non-SHIPP rate (competitors.length). That count must
+// reach the realized sidecar VERBATIM — not be re-collapsed to the old hardcoded `competitor ? 1 : 0`,
+// which silently reported "1" no matter how many competitors actually existed. A projected stamp that
+// carries competitorCount: 3 (three real competitors, USPS won) must capture competitor_count = 3.
+{
+  const projectedMulti = normalizeOrderBestRateDto({
+    shipmentCost: 8.5, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_surepost',
+    nextBestNonHouseRate: { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, otherCost: 0, totalCost: 9.64, providerAccountId: 442007, competitorCount: 3 },
+    houseMargin: 1.14,
+  });
+  const rm = houseMarginFromProjection(projectedMulti, 8.5);
+  check('PS-220-D: the REAL competitor count (3) threads through to the realized capture — NOT collapsed to 1',
+    rm != null && rm.competitorCount === 3, JSON.stringify(rm));
+
+  // Fallback parity: when the projected stamp carries NO competitorCount (older stamp), fall back to
+  // the byte-identical legacy value (competitor present => 1).
+  const projectedNoCount = normalizeOrderBestRateDto({
+    shipmentCost: 8.5, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_surepost',
+    nextBestNonHouseRate: { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, otherCost: 0, totalCost: 9.64, providerAccountId: 442007 },
+    houseMargin: 1.14,
+  });
+  const rf = houseMarginFromProjection(projectedNoCount, 8.5);
+  check('PS-220-D: absent competitorCount falls back byte-identically to the legacy 1 (competitor present)',
+    rf != null && rf.competitorCount === 1, JSON.stringify(rf));
+}
+// Structural pins: the count is carried on the DTO, stamped from the resolver in rates.ts, and the
+// capture uses the threaded value (with the legacy fallback) rather than a bare hardcoded literal.
+check('PS-220-D: NextBestNonHouseRateDto carries the optional competitorCount + the normalizer reads it',
+  /competitorCount\?: number \| null/.test(dto) && /competitorCount/.test(dto));
+check('PS-220-D: rates.ts stamps the resolver competitorCount onto the projected next-best',
+  /competitorCount: nextBest\.competitorCount/.test(ratesRoute));
 const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
+check('PS-220-D: capture uses the threaded competitorCount (falls back to competitor?1:0 when absent)',
+  /competitorCount: competitor\?\.competitorCount \?\? \(competitor \? 1 : 0\)/.test(captureSrc));
 check('realized capture INSERTs the sidecar and NEVER updates the locked shipments table',
   /INSERT INTO order_competitive_rate/.test(captureSrc) && !/UPDATE\s+shipments/i.test(captureSrc));
 const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');

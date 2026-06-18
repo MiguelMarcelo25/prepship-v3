@@ -76,6 +76,10 @@ export interface NextBestNonHouseRateDto {
   otherCost: number;
   totalCost: number;
   providerAccountId: number | null;
+  // PS-220-D: the REAL number of eligible priced non-SHIPP competitors the resolver saw
+  // (competitors.length). Carried verbatim so the realized capture reports the true count instead
+  // of the legacy hardcoded `competitor ? 1 : 0`. Optional/null on older stamps (capture falls back).
+  competitorCount?: number | null;
 }
 
 export interface OrderSelectedRateDto {
@@ -282,6 +286,9 @@ function normalizeNextBestNonHouseRate(value: unknown, path = 'bestRate.nextBest
       value.providerAccountId ?? value.provider_account_id ?? value.shippingProviderId ?? null,
       `${path}.providerAccountId`,
     ),
+    // PS-220-D: the REAL eligible-priced-non-SHIPP competitor count from the resolver, threaded
+    // through verbatim (null on older stamps that did not carry it).
+    competitorCount: readNullableNumber(value.competitorCount ?? value.competitor_count ?? null, `${path}.competitorCount`),
   };
 }
 
