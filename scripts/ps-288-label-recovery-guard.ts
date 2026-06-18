@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { matchRecoverableLabelUrl } from '../src/services/print-queue-label-recovery';
+import { resolveSecondaryShipstationLabelKey } from '../src/services/print-queue-secondary-ss-account';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -34,6 +35,27 @@ check('empty recent-labels list => null',
 check('skips a matching record that has no downloadable url',
   matchRecoverableLabelUrl([{ labelId: '1', shipmentId: 1, trackingNumber: 'T', labelUrl: null }], { trackingNumber: 'T', labelShipmentId: 1 }) === null);
 
+// ── PS-288 continuation: SECOND ShipStation account key resolution (the KFG account) ──
+check('resolves the secondary (KFG) account key from env',
+  resolveSecondaryShipstationLabelKey({ SHIPSTATION_KFG_API_KEY_V2: 'kfg-key', SHIPSTATION_API_KEY_V2: 'primary-key' }) === 'kfg-key');
+check('no secondary key configured => null (single-account behavior unchanged)',
+  resolveSecondaryShipstationLabelKey({ SHIPSTATION_API_KEY_V2: 'primary-key' }) === null);
+check('blank secondary key => null',
+  resolveSecondaryShipstationLabelKey({ SHIPSTATION_KFG_API_KEY_V2: '   ', SHIPSTATION_API_KEY_V2: 'primary-key' }) === null);
+check('secondary identical to primary => null (avoids a redundant re-read of the same labels)',
+  resolveSecondaryShipstationLabelKey({ SHIPSTATION_KFG_API_KEY_V2: 'same', SHIPSTATION_API_KEY_V2: 'same' }) === null);
+
+// ── PS-288 continuation: the multi-account fallback matches the SECOND account's labels by the
+// SAME exact matcher, so the KFG account recovers a label the primary account never sold while a
+// non-matching second-account label set still yields null (no cross-account false positive) ──
+const KFG_LABELS = [
+  { labelId: '888', shipmentId: 7001, trackingNumber: '1Z-KFG', labelUrl: 'https://ss/label/kfg.pdf' },
+];
+check('second account recovers by tracking when the primary set had no match',
+  matchRecoverableLabelUrl(KFG_LABELS, { trackingNumber: '1Z-KFG', labelShipmentId: 0 }) === 'https://ss/label/kfg.pdf');
+check('a non-matching second-account set still yields null (exact match, no cross-account false positive)',
+  matchRecoverableLabelUrl(KFG_LABELS, { trackingNumber: '1Z-NOPE', labelShipmentId: 12345 }) === null);
+
 // ── structural pins on the print-queue recovery wiring (lockdown-safe) ──
 const pq = readFileSync('src/services/print-queue.ts', 'utf8').replace(/\r\n/g, '\n');
 const fnBody = pq.match(/async function findExistingQueueableLabelForOrder[\s\S]*?\n}\n/)?.[0] ?? '';
@@ -48,6 +70,16 @@ check('recovery only touches NON-voided shipments (no cancelled/voided rows)',
   fnBody.includes('shipments.voided, false') || pq.includes('eq(shipments.voided, false)'));
 check('recovery write carries the unlock-shipped-data override note (2026-06-18)',
   /Per user override unlock shipped data on 2026-06-18/.test(pq));
+
+// ── PS-288 continuation: multi-account recovery wiring (try the SECOND ShipStation account) ──
+check('recovery falls back to the SECOND ShipStation account key when the primary set had no match',
+  fnBody.includes('resolveSecondaryShipstationLabelKey'));
+check('the secondary fallback re-reads recent labels (ssListRecentLabels called with the secondary key)',
+  /ssListRecentLabels\(\s*secondaryKey/.test(fnBody) || /resolveSecondaryShipstationLabelKey[\s\S]*ssListRecentLabels\(/.test(fnBody));
+check('the secondary fallback reuses the EXISTING pure matcher (no second matcher, exact-match only)',
+  (fnBody.match(/matchRecoverableLabelUrl/g) ?? []).length >= 2);
+check('the secondary fallback still buys NO postage (no createLabelV2 in the recovery function)',
+  fnBody.length > 0 && !fnBody.includes('createLabelV2'));
 
 if (failures > 0) { console.error(`\nFAIL PS-288 label-recovery guard (${failures} failing)`); process.exit(1); }
 console.log('\nPASS PS-288 label-recovery guard');

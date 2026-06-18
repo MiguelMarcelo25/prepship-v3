@@ -10,6 +10,7 @@ import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
 import { matchRecoverableLabelUrl } from './print-queue-label-recovery';
+import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
@@ -555,10 +556,21 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
   // shipments, so "Send to Queue" greys out even though the label was already purchased). Recover the
   // EXISTING ShipStation label by tracking number, then label_id — a READ of /v2/labels, never a new
   // postage purchase. No match => return null (no guess).
-  const recoveredUrl = matchRecoverableLabelUrl(await ssListRecentLabels(), {
-    trackingNumber: row.trackingNumber,
-    labelShipmentId: row.labelShipmentId,
-  });
+  const recoveryKey = { trackingNumber: row.trackingNumber, labelShipmentId: row.labelShipmentId };
+  let recoveredUrl = matchRecoverableLabelUrl(await ssListRecentLabels(), recoveryKey);
+
+  // PS-288 (continuation) — the label may have been bought on the SECOND ShipStation account
+  // (the KFG account — env SHIPSTATION_KFG_API_KEY_V2), which the PRIMARY account's recent labels
+  // never list. When the primary set had no match, ALSO read the second account's recent labels and
+  // re-run the SAME exact-match matchRecoverableLabelUrl (tracking, then label_id), so a second
+  // account can never produce a cross-account false positive. Still a READ of /v2/labels — never a
+  // new postage purchase. No second account configured (or no match there) => null (no guess).
+  if (!recoveredUrl) {
+    const secondaryKey = resolveSecondaryShipstationLabelKey(process.env);
+    if (secondaryKey) {
+      recoveredUrl = matchRecoverableLabelUrl(await ssListRecentLabels(secondaryKey), recoveryKey);
+    }
+  }
   if (!recoveredUrl) return null;
   // Per user override unlock shipped data on 2026-06-18: PS-288 — backfill ONLY the recovered
   // label_url + label_format of the ALREADY-purchased label onto this existing (non-voided) shipment
