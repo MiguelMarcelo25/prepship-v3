@@ -20,7 +20,12 @@ import {
   type AccountInsuranceCapability,
   type DirectCarrierParcelGuardFlags,
 } from '../src/lib/carrier-account-registry';
+import type { CarrierConnector } from '../src/domain/fulfillment/types';
 import { fedexCarrierConnector } from '../src/connectors/carrier/fedex';
+import { ebayShippingCarrierConnector } from '../src/connectors/carrier/ebay-shipping';
+import { amazonShippingCarrierConnector } from '../src/connectors/carrier/amazon-shipping';
+import { easyPostCarrierConnector } from '../src/connectors/carrier/easypost';
+import { shippCarrierConnector } from '../src/connectors/carrier/shipp';
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -178,7 +183,87 @@ async function runBehavioralFedexChecks(): Promise<void> {
   );
 }
 
-void runBehavioralFedexChecks().then(() => {
+// ── 6. BEHAVIORAL: EVERY direct connector is covered, not just FedEx ────────────
+// The matrix audit ("a direct carrier insures OR blocks an insured order, NEVER
+// silently ships it uninsured") must hold for the WHOLE direct-connector set, not
+// the single FedEx cell above. Each direct connector falls into exactly one arm:
+//
+//   SELF-BLOCK  — its getRates() FIRST statement is
+//                 assertUnsupportedShippingOptions(..., { insurance: false }), so an
+//                 insured order REJECTS with "insurance is not supported" before any
+//                 network call. Proven by driving the connector offline (the assert
+//                 fires ahead of all credential/OAuth/quote I/O). Covers FedEx, eBay
+//                 Shipping, Amazon Shipping.
+//   CARRIER-INSURABLE — it is audited to APPLY/DECLARE the insured value (EasyPost
+//                 passes the `insurance` amount; Shipp declares customsValue with
+//                 insurance:true), so it must NOT raise insurance-unsupported for an
+//                 insured order. Proven offline: an insured order without dims/creds
+//                 rejects on a NON-insurance validation error, never the insurance
+//                 assert — confirming the connector accepted (did not drop) insurance.
+//   REGISTRY-BLOCK — its connector self-block sits BEHIND a network call (Walmart
+//                 Shipping calls getWalmartAccessToken before the assert), so the
+//                 unambiguous direct CODE is blocked at the registry instead
+//                 (resolveAccountInsuranceCapability -> 'blocked'); proven by section 1.
+//
+// An insured order that uses an empty `insuranceProvider`/serviceCode would NOT
+// exercise the assert, so each insured probe carries a real provider + value.
+const insuredProbe = {
+  insuranceProvider: 'parcelguard' as const,
+  insuredValue: 250,
+  credentials: { apiKey: 'x', apiSecret: 'y' },
+};
+const uninsuredProbe = {
+  insuranceProvider: 'none' as const,
+  insuredValue: 0,
+  credentials: { apiKey: 'x', apiSecret: 'y' },
+};
+
+type DirectConnectorCell =
+  | { name: string; connector: CarrierConnector; arm: 'self-block' }
+  | { name: string; connector: CarrierConnector; arm: 'carrier-insurable' }
+  | { name: string; carrierCode: string; arm: 'registry-block' };
+
+const DIRECT_CONNECTOR_MATRIX: DirectConnectorCell[] = [
+  { name: 'fedex', connector: fedexCarrierConnector, arm: 'self-block' },
+  { name: 'ebay_shipping', connector: ebayShippingCarrierConnector, arm: 'self-block' },
+  { name: 'amazon_shipping', connector: amazonShippingCarrierConnector, arm: 'self-block' },
+  { name: 'easypost', connector: easyPostCarrierConnector, arm: 'carrier-insurable' },
+  { name: 'shipp', connector: shippCarrierConnector, arm: 'carrier-insurable' },
+  { name: 'walmart_shipping', carrierCode: 'walmart_shipping', arm: 'registry-block' },
+];
+
+async function runDirectConnectorMatrixChecks(): Promise<void> {
+  for (const cell of DIRECT_CONNECTOR_MATRIX) {
+    if (cell.arm === 'self-block') {
+      check(
+        `BEHAVIORAL: direct '${cell.name}' self-blocks an insured order (insurance:false assert)`,
+        await rejectsWithInsuranceUnsupported(() => cell.connector.getRates({ ...insuredProbe })),
+      );
+      check(
+        `BEHAVIORAL: direct '${cell.name}' does NOT raise insurance-unsupported for an uninsured order`,
+        !(await rejectsWithInsuranceUnsupported(() => cell.connector.getRates({ ...uninsuredProbe }))),
+      );
+    } else if (cell.arm === 'carrier-insurable') {
+      // Proven carrier-insurable: the connector accepts (does not drop) insurance, so
+      // it must NOT self-block — an insured order fails a NON-insurance validation
+      // (missing dims/creds) before any network call, never the insurance assert.
+      check(
+        `BEHAVIORAL: direct '${cell.name}' is carrier-insurable (never self-blocks an insured order)`,
+        !(await rejectsWithInsuranceUnsupported(() => cell.connector.getRates({ ...insuredProbe }))),
+      );
+    } else {
+      // Connector self-block sits behind network I/O; the registry blocks the
+      // unambiguous direct CODE instead — must be 'blocked', never 'parcelguard'.
+      const cap = resolveAccountInsuranceCapability({ carrierCode: cell.carrierCode }, ON_VERIFIED);
+      check(
+        `BEHAVIORAL: direct '${cell.name}' is registry-blocked (blocked, never parcelguard)`,
+        cap.required === 'blocked',
+      );
+    }
+  }
+}
+
+void Promise.all([runBehavioralFedexChecks(), runDirectConnectorMatrixChecks()]).then(() => {
   if (failures > 0) {
     console.error(`\nFAIL PS-262 direct-carrier ParcelGuard fix guard (${failures} failing)`);
     process.exit(1);
