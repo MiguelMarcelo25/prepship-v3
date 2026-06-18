@@ -25,6 +25,10 @@ import {
   placeArtworkOnCanvas,
 } from '../src/services/print-queue-artwork-fit.js';
 import { deriveLabelContentRegion } from '../src/services/print-queue-artwork-region.js';
+import {
+  oversized4x6AspectRegion,
+  recenteredLabelBandRegion,
+} from '../src/services/print-queue-artwork-oversize.js';
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -152,6 +156,56 @@ const TARGET_H = 432;
     check('deriveArtworkBounds uses the content-region heuristic on a hint-less letter sheet',
       (bounds.width < 612 - 1 || bounds.height < 792 - 1)
         && near(bounds.width / bounds.height, TARGET_W / TARGET_H, 0.02));
+  }
+
+  // ── 2c) Two MORE bounded box-geometry cases (PS-287 follow-on slice) ───────
+  // (a) A page that is ALREADY ~4×6 aspect but OVERSIZED (e.g. a 600×900 label
+  //     exported at 2× DPI): it must NOT be corner-cropped — the whole page is
+  //     the label, returned whole so the downstream scale-to-fit + center on
+  //     288×432 keeps it intact and centred.
+  {
+    const region = oversized4x6AspectRegion({ width: 600, height: 900 });
+    check('oversize-4×6: 600×900 (2:3, 4× area) is recognized as a 4×6-aspect page',
+      region !== null);
+    check('oversize-4×6: oversized 4×6 page is returned WHOLE (never corner-cropped)',
+      region !== null && near(region.x, 0) && near(region.y, 0)
+        && near(region.width, 600) && near(region.height, 900));
+    // A non-4×6 sheet is not this case (helper returns null so the caller falls
+    // through to the corner-crop / band heuristics).
+    check('oversize-4×6: a letter sheet is NOT treated as an oversized 4×6 page',
+      oversized4x6AspectRegion({ width: 612, height: 792 }) === null);
+    // deriveLabelContentRegion already leaves an oversized 4×6 page whole; assert
+    // it stays uncropped (no spurious top-left corner region).
+    const derived = deriveLabelContentRegion({ width: 600, height: 900 });
+    check('content-region: oversized 4×6 page is returned whole (no spurious crop)',
+      near(derived.width, 600) && near(derived.height, 900)
+        && near(derived.x, 0) && near(derived.y, 0));
+  }
+  {
+    // (b) ASYMMETRIC margins: a 288-wide sheet (real 4×6 label width) that is
+    //     taller than 432, so the 4×6-aspect label band has uneven top/bottom
+    //     whitespace. Re-center the band vertically instead of anchoring it to
+    //     the top-left corner.
+    const region = recenteredLabelBandRegion({ width: 288, height: 600 });
+    check('asymmetric-band: a 288×600 sheet yields a re-centered 4×6 band',
+      region !== null);
+    check('asymmetric-band: band keeps the 4×6 (2:3) aspect and label width',
+      region !== null && near(region.width, 288)
+        && near(region.width / region.height, TARGET_W / TARGET_H, 0.02));
+    check('asymmetric-band: band is vertically CENTERED (equal top/bottom margin)',
+      region !== null && near(region.y, (600 - 432) / 2));
+    // A genuinely wider sheet (letter) is not a label-width band — helper returns
+    // null and the existing top-left corner crop stays in charge.
+    check('asymmetric-band: a wider letter sheet is left to the corner-crop path',
+      recenteredLabelBandRegion({ width: 612, height: 792 }) === null);
+    // Integration: deriveLabelContentRegion must DELEGATE to the band re-center
+    // for a label-width sheet (288×600) instead of returning the whole page
+    // (which would scale all the whitespace down and shrink the real label).
+    const integrated = deriveLabelContentRegion({ width: 288, height: 600 });
+    check('content-region: 288×600 label-width sheet yields a re-centered 4×6 band (not the whole page)',
+      integrated.height < 600 - 1
+        && near(integrated.width / integrated.height, TARGET_W / TARGET_H, 0.02)
+        && near(integrated.y, (600 - 432) / 2));
   }
 
   // ── 3) Content-aware normalization end-to-end ──────────────────────────────

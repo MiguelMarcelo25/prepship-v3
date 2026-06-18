@@ -20,10 +20,18 @@
 
 export type Region = { x: number; y: number; width: number; height: number };
 
+// Two more bounded box-geometry cases (oversized-but-4×6 page; label-width sheet
+// with asymmetric top/bottom whitespace) live in their own small module and are
+// delegated to from deriveLabelContentRegion below. Imported at the bottom of
+// the file is not possible (ESM hoists), so import here.
+import { oversized4x6AspectRegion, recenteredLabelBandRegion } from './print-queue-artwork-oversize';
+
 // Standard 4×6 label @72dpi (the print-queue canvas target) and its aspect.
-export const LABEL_4X6_W = 288;
-export const LABEL_4X6_H = 432;
-const LABEL_ASPECT = LABEL_4X6_W / LABEL_4X6_H; // 2:3
+// Sourced from a leaf dims module so sibling helpers can share them without a
+// circular import; re-exported here to keep existing import sites working.
+import { LABEL_4X6_W, LABEL_4X6_H, LABEL_4X6_ASPECT } from './print-queue-label-4x6-dims';
+export { LABEL_4X6_W, LABEL_4X6_H };
+const LABEL_ASPECT = LABEL_4X6_ASPECT; // 2:3
 
 // A page whose total area is within this multiple of a 4×6 label's area AND
 // whose aspect is already close to 4×6 is treated as a single label (returned
@@ -70,8 +78,19 @@ export function deriveLabelContentRegion(page: { width: number; height: number }
   const pageArea = pageW * pageH;
   const oversized = pageArea > labelArea * OVERSIZE_AREA_RATIO;
 
+  // Case (a): a page that is itself 4×6-shaped (any size, oversized or not) is
+  // the label — return it whole so the downstream scale-to-fit + center keeps it
+  // intact and never corner-crops a genuine (possibly high-DPI) 4×6 page.
+  const oversized4x6 = oversized4x6AspectRegion({ width: pageW, height: pageH });
+  if (oversized4x6) return oversized4x6;
+
   // Already a single 4×6-ish label (right size AND right shape): leave whole.
   if (!oversized || aspectIsNear4x6(pageW, pageH)) {
+    // Case (b): a label-WIDTH sheet (≈288 wide) that is too TALL has its
+    // 4×6-aspect band sitting with asymmetric top/bottom whitespace — re-center
+    // the band vertically instead of returning the whole whitespace-heavy page.
+    const band = recenteredLabelBandRegion({ width: pageW, height: pageH });
+    if (band) return band;
     return { x: 0, y: 0, width: pageW, height: pageH };
   }
 
