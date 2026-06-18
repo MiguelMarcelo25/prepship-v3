@@ -74,6 +74,11 @@ import {
 } from './shipping-workflow/address-classification';
 import { assertLabelPurchaseRateSelection } from './shipping-workflow/rate-quote-snapshot-store';
 import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carrier-eligibility-policy';
+// PS-261 (Per user override unlock shipped data on 2026-06-18): backend-owned HUGRAB
+// label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
+// BLOCKS before any postage is bought when the mandatory $100 coverage is not proven
+// (unknown / not_included / unsupported). Pure decision; never alters a successful buy.
+import { resolveHugrabLabelPurchasePreflight } from './shipping-workflow/hugrab-label-purchase-preflight';
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
@@ -1382,6 +1387,47 @@ async function createLabelV2Impl(
     // ShipStation branch.
     purchaseShippingProviderId: body.shippingProviderId,
   });
+  // PS-261 (Per user override unlock shipped data on 2026-06-18): HUGRAB label-purchase
+  // coverage preflight — a backend-owned BLOCK that runs BEFORE either provider purchase
+  // call (direct or ShipStation). It DELEGATES to the PS-290 coverage owner + PS-274
+  // certainty + the pure PS-261 gate: a HUGRAB rate whose mandatory $100 coverage is
+  // unproven/missing/unsupported (e.g. a Shipp-brokered declared value with no direct
+  // proof) is blocked here, so no postage is bought on uncovered coverage. ALLOWs verbatim
+  // on a proven-included rate or a non-HUGRAB row — it NEVER alters a successful buy.
+  //
+  // The ParcelGuard premium is only billed AFTER purchase, but the rate-time SCHEDULE premium
+  // (the same one persisted on a bought ParcelGuard label) is knowable now — it is the positive
+  // premium proof PS-290 reads for 'included'. A direct-carrier-declared-value account resolves to
+  // provider 'carrier' (PS-170) and earns 'included' via certainty instead.
+  const preflightInsuredValue = Number(options.insuredValue ?? 0) || 0;
+  const preflightScheduledPremium =
+    options.insuranceProvider === 'parcelguard' && preflightInsuredValue > 0
+      ? parcelGuardScheduledPremium(preflightInsuredValue, {
+          carrier_code: body.carrierCode ?? null,
+          service_code: body.serviceCode,
+        }) ?? 0
+      : 0;
+  const hugrabCoveragePreflight = resolveHugrabLabelPurchasePreflight({
+    isHugrab: isHugrabShippingContext({ clientId, storeId: order.storeId ?? null }),
+    insuranceProvider: options.insuranceProvider,
+    insuredValue: options.insuredValue,
+    insuranceCost: preflightScheduledPremium,
+    insuranceProvenance: preflightScheduledPremium > 0 ? 'parcelguard_schedule' : null,
+    provider: body.carrierCode ?? serviceDescriptor.provider ?? null,
+    accountIdentity: body.carrierName ?? null,
+    serviceCode: body.serviceCode,
+    isDirectVerifiedAccount: options.insuranceProvider === 'carrier',
+  });
+  if (!hugrabCoveragePreflight.allow) {
+    const err = new Error(
+      `HUGRAB $100 insurance coverage is not proven on this rate (${hugrabCoveragePreflight.status}) — ` +
+        `${hugrabCoveragePreflight.reason} No postage was purchased. Re-rate the order on an account that ` +
+        `proves the $100 coverage, then buy the label.`,
+    ) as Error & { code?: string; details?: Record<string, unknown> };
+    err.code = 'HUGRAB_INSURANCE_COVERAGE_UNPROVEN';
+    err.details = { coverageStatus: hugrabCoveragePreflight.status };
+    throw err;
+  }
   // PS-127 rate↔label parity guard: if the order classifies as TRUSTED residential/commercial
   // (operator override, provider/source flag, or validated business) but the selected rate
   // was quoted under the OPPOSITE residential bit, the quote won't match the bill — block

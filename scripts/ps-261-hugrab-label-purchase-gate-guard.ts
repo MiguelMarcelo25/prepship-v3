@@ -85,6 +85,94 @@ const pkg = read('package.json');
 check('package.json wires test:ps-261-hugrab-label-purchase-gate',
   /test:ps-261-hugrab-label-purchase-gate/.test(pkg));
 
+// ── PS-261 (this slice): the gate is WIRED into the label-purchase PREFLIGHT as a
+//    backend-owned BLOCK. A small preflight resolver (its own file) maps a pre-purchase
+//    rate context to the gate decision by reusing the PS-290 coverage resolver + PS-274
+//    certainty resolver, and labels.ts calls it BEFORE any postage is bought. ─────────
+import {
+  resolveHugrabLabelPurchasePreflight,
+} from '../src/services/shipping-workflow/hugrab-label-purchase-preflight';
+
+// BEHAVIOR: an UNCERTAIN HUGRAB rate (Shipp-brokered declared value, no direct proof) is
+// coverage 'unknown' (PS-290) -> the preflight BLOCKS before postage.
+const uncertainHugrab = resolveHugrabLabelPurchasePreflight({
+  isHugrab: true,
+  insuranceProvider: 'parcelguard',
+  insuredValue: 100,
+  insuranceCost: 0,
+  serviceCode: 'shipp_ups_ground',
+  provider: 'shipp',
+  accountIdentity: 'Shipp',
+  isDirectVerifiedAccount: false,
+});
+check('preflight BLOCKS an uncertain HUGRAB rate (Shipp-brokered, unproven coverage)',
+  uncertainHugrab.allow === false);
+check('preflight uncertain-HUGRAB verdict is unknown (consumes the PS-290 coverage owner)',
+  uncertainHugrab.status === 'unknown');
+check('preflight block carries a non-empty operator-facing reason',
+  typeof uncertainHugrab.reason === 'string' && uncertainHugrab.reason.length > 0);
+
+// BEHAVIOR: a HUGRAB rate with PROVEN coverage (positive ParcelGuard premium) is
+// 'included' -> the preflight is a NO-OP (allow), buying proceeds unchanged.
+const includedHugrab = resolveHugrabLabelPurchasePreflight({
+  isHugrab: true,
+  insuranceProvider: 'parcelguard',
+  insuredValue: 100,
+  insuranceCost: 0.99,
+  insuranceProvenance: 'parcelguard_schedule',
+  serviceCode: 'usps_ground_advantage',
+  provider: 'stamps_com',
+  accountIdentity: 'USPS',
+  isDirectVerifiedAccount: false,
+});
+check('preflight is a NO-OP on a proven-included HUGRAB rate (allow)',
+  includedHugrab.allow === true);
+check('preflight proven-included verdict is included', includedHugrab.status === 'included');
+
+// BEHAVIOR: a non-HUGRAB rate -> 'not_required' -> the preflight is a NO-OP (allow).
+const nonHugrab = resolveHugrabLabelPurchasePreflight({
+  isHugrab: false,
+  insuranceProvider: 'none',
+  insuredValue: 0,
+  serviceCode: 'usps_ground_advantage',
+});
+check('preflight is a NO-OP on a non-HUGRAB rate (mandate does not apply -> allow)',
+  nonHugrab.allow === true);
+check('preflight non-HUGRAB verdict is not_required', nonHugrab.status === 'not_required');
+
+// the preflight resolver lives in its OWN small file + DELEGATES to the gate (no re-derive).
+const preflight = read('src/services/shipping-workflow/hugrab-label-purchase-preflight.ts');
+check('hugrab-label-purchase-preflight is its own file', preflight.length > 0);
+check('preflight exports resolveHugrabLabelPurchasePreflight',
+  /export function resolveHugrabLabelPurchasePreflight\(/.test(preflight));
+check('preflight DELEGATES to the PS-261 gate (does not re-implement the decision table)',
+  /resolveHugrabLabelPurchaseGate\s*\(/.test(preflight));
+check('preflight CONSUMES the PS-290 coverage owner (reuses the verdict resolver)',
+  /resolveInsuranceCoverageStatus\s*\(/.test(preflight));
+check('preflight is PURE — no DB / network / fs / label IO',
+  !/\b(fetch|axios|db\.|drizzle|readFile|writeFile|process\.env)\b/.test(preflight));
+
+// labels.ts WIRES the preflight BLOCK into the real-postage purchase path.
+const labels = read('src/services/labels.ts');
+check('labels.ts imports the HUGRAB label-purchase preflight',
+  /resolveHugrabLabelPurchasePreflight/.test(labels) &&
+  /from '\.\/shipping-workflow\/hugrab-label-purchase-preflight'/.test(labels));
+check('labels.ts calls the preflight in the buy path (BLOCK before postage)',
+  /resolveHugrabLabelPurchasePreflight\s*\(/.test(labels));
+// the BLOCK must fire BEFORE either provider purchase call (direct or ShipStation).
+const preflightIdx = labels.indexOf('resolveHugrabLabelPurchasePreflight(');
+const directBuyIdx = labels.indexOf('createDirectCarrierLabelForOrder({');
+// `ssOrderId:` is present ONLY in the real-postage ShipStation buy (the legacy
+// createLabelFromShipment helper does not carry it), so it pins the real purchase boundary.
+const ssBuyIdx = labels.indexOf('ssOrderId:');
+check('preflight runs BEFORE the direct-carrier purchase call',
+  preflightIdx > 0 && directBuyIdx > 0 && preflightIdx < directBuyIdx);
+check('preflight runs BEFORE the ShipStation purchase call',
+  preflightIdx > 0 && ssBuyIdx > 0 && preflightIdx < ssBuyIdx);
+// the block surfaces a structured, operator-facing code (the FE branches on code, not message).
+check('labels.ts throws a structured HUGRAB coverage block code',
+  /HUGRAB_INSURANCE_COVERAGE_UNPROVEN/.test(labels));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-261 HUGRAB label-purchase-gate guard (${failures} failing)`);
   process.exit(1);
