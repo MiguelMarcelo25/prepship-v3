@@ -144,6 +144,46 @@ const manualRouteSrc = manualRouteStart >= 0
     /shipFromOrigin|originLocationId|customOrigin|useCustomOrigin/.test(modalSrc));
 }
 
+// ── 7) FE: marketplace-owned providers EXCLUDED + account nickname displayed ──
+{
+  // 7a — the marketplace-exclusion + nickname helpers live in their own small
+  // file (repo convention: new functions in new files). The modal imports them
+  // rather than re-deriving the marketplace provider set inline.
+  let helperSrc = '';
+  try { helperSrc = readFileSync('web/src/components/new-order-rate-preview-rows.ts', 'utf8'); }
+  catch { helperSrc = ''; }
+  check('FE: new-order-rate-preview-rows helper file exists', helperSrc.length > 0);
+
+  // The helper names the canonical marketplace-owned providers the manual
+  // preview must drop (they need a real marketplace order id and cannot be
+  // quoted/purchased from an unsaved manual order).
+  check('FE(7a): helper excludes ebay_shipping + walmart_shipping marketplace providers',
+    /ebay_shipping/.test(helperSrc) && /walmart_shipping/.test(helperSrc));
+
+  // The helper exposes a predicate and a row-filter the modal delegates to.
+  check('FE(7b): helper exposes a marketplace predicate + row filter',
+    /export\s+function\s+isMarketplaceOwnedProvider\b/.test(helperSrc) &&
+    /export\s+function\s+excludeMarketplaceOwnedRows\b/.test(helperSrc));
+
+  // 7c — the modal applies the marketplace exclusion to the preview rows.
+  const getRatesMatch2 = /async function handleGetRates\(\)[\s\S]*?\r?\n  }\r?\n\s*\r?\n  async function handleSubmit/.exec(modalSrc);
+  const getRatesSrc2 = getRatesMatch2 ? getRatesMatch2[0] : '';
+  check('FE(7c): rate preview applies excludeMarketplaceOwnedRows to the rows',
+    /excludeMarketplaceOwnedRows\s*\(/.test(getRatesSrc2));
+
+  // 7d — the RatePreviewRow carries an account nickname sourced from the
+  // backend rate's carrierNickname (the Rate Browser nickname field).
+  check('FE(7d): RatePreviewRow carries an accountNickname field',
+    /interface RatePreviewRow\s*\{[\s\S]*?accountNickname[\s\S]*?\}/.test(modalSrc));
+  check('FE(7e): preview maps accountNickname from the rate carrierNickname',
+    /accountNickname:\s*[^\n]*carrierNickname/.test(modalSrc));
+
+  // 7f — the row renders the nickname ABOVE the service name (a stacked block:
+  // nickname line then serviceLabel line), gated on a present nickname.
+  check('FE(7f): the preview row renders the account nickname above the service name',
+    /r\.accountNickname\b/.test(modalSrc));
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-291 manual-order real + optional-items guard (${failures} failing)`);
   process.exit(1);

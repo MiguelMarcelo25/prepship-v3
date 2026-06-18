@@ -55,6 +55,9 @@ import CarrierBadge from './CarrierBadge'
 // PS-291: resolve the operator-selected Ship-From origin (saved location OR
 // custom typed origin) into the camelCase shape the backend readShipFrom reads.
 import { resolveShipFromOrigin } from './new-order-ship-from-origin'
+// PS-291: exclude marketplace-owned providers (ebay_shipping/walmart_shipping)
+// from the manual rate preview — they need a real marketplace order id.
+import { excludeMarketplaceOwnedRows } from './new-order-rate-preview-rows'
 
 interface LineItem {
   id: string
@@ -68,6 +71,12 @@ interface RatePreviewRow {
   carrierCode: string
   serviceCode: string
   serviceLabel: string
+  /**
+   * PS-291: shipping account nickname shown above the service name (Rate
+   * Browser parity). Sourced verbatim from the backend rate's carrierNickname;
+   * null when the rate carries no nickname (e.g. a generic provider rate).
+   */
+  accountNickname: string | null
   cost: number
 }
 
@@ -416,13 +425,23 @@ export default function NewOrderModal({
         },
       }
       const result = await apiClient.fetchRates(payload)
-      const rows: RatePreviewRow[] = (Array.isArray(result) ? result : [])
+      const mapped: RatePreviewRow[] = (Array.isArray(result) ? result : [])
         .map((r: any) => ({
           carrierCode: r.carrierCode ?? '',
           serviceCode: r.serviceCode ?? '',
           serviceLabel: r.serviceName ?? r.serviceLabel ?? r.serviceCode ?? '',
+          // PS-291: account nickname shown above the service (Rate Browser
+          // parity). Verbatim from the backend rate's carrierNickname.
+          accountNickname:
+            typeof r.carrierNickname === 'string' && r.carrierNickname.trim()
+              ? r.carrierNickname.trim()
+              : null,
           cost: Number(r.shipmentCost ?? 0) + Number(r.otherCost ?? 0),
         }))
+      // PS-291: drop marketplace-owned providers (ebay_shipping/walmart_shipping)
+      // — they need a real marketplace order id and can't be quoted for an
+      // unsaved manual order.
+      const rows: RatePreviewRow[] = excludeMarketplaceOwnedRows(mapped)
         .sort((a, b) => a.cost - b.cost)
         .slice(0, 8) // Show top 8 cheapest — ShipStation overwhelms with 30+
       setRates(rows)
@@ -953,7 +972,18 @@ export default function NewOrderModal({
                                   service label gets full width
                                   without overlapping. */}
                               <CarrierBadge code={r.carrierCode} size="md" />
-                              <span className="text-[11.5px] text-ink truncate min-w-0 flex-1">{r.serviceLabel}</span>
+                              {/* PS-291: stack the shipping ACCOUNT NICKNAME
+                                  (Rate Browser parity) above the service name.
+                                  Nickname is verbatim from the backend rate;
+                                  hidden when the rate carries none. */}
+                              <div className="flex flex-col min-w-0 flex-1">
+                                {r.accountNickname ? (
+                                  <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-3 truncate">
+                                    {r.accountNickname}
+                                  </span>
+                                ) : null}
+                                <span className="text-[11.5px] text-ink truncate min-w-0">{r.serviceLabel}</span>
+                              </div>
                             </div>
                             <span className="text-[12px] font-bold tabular-nums text-ink">${r.cost.toFixed(2)}</span>
                           </div>
