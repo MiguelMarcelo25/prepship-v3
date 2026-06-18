@@ -99,6 +99,10 @@ import {
   renderShipmentSyncErrorBadge,
   renderHouseBadge,
 } from './orders-row-display'
+// PS-166: backend best-rate completeness reader, extracted to its own small file
+// (pure backend-DTO read; PS-111 backend-owned completeness). Not coupled to
+// buildRateRequestDraftKey (PS-143 — the FE draft key stays independent).
+import { deriveBackendBestRateComplete } from './orders-rate-proof'
 import {
   fetchRecalculateAllJob,
   isRecalculateAllJobDone,
@@ -4110,26 +4114,8 @@ export default function OrdersView({
     )
   }
 
-  // PS-111: completeness is BACKEND-OWNED. Prefer the backend-stamped
-  // `bestRate.isComplete`; otherwise derive it from the backend carrier statuses
-  // (complete only when no carrier is still loading or errored). The frontend must
-  // NOT assert `isComplete: true` just because a rate exists — a rate found while a
-  // carrier failed/loaded is partial, and the workflow status must reflect that.
-  function deriveBackendBestRateComplete(
-    response: Record<string, unknown> | null | undefined,
-    rate?: Record<string, unknown> | null,
-  ): boolean {
-    const stamped = toRecord(rate)?.isComplete
-    if (typeof stamped === 'boolean') return stamped
-    const statuses = Array.isArray(response?.carrierStatuses)
-      ? response!.carrierStatuses as Array<Record<string, unknown>>
-      : []
-    if (!statuses.length) return false
-    return statuses.every((status) => {
-      const value = toStringValue(toRecord(status)?.status)
-      return value !== 'loading' && value !== 'error'
-    })
-  }
+  // PS-166: deriveBackendBestRateComplete moved to ./orders-rate-proof (its own small
+  // file; pure backend-DTO reader). Imported at the top of this module and called below.
 
   function withRateRequestMetadata(
     rate: Record<string, unknown>,
