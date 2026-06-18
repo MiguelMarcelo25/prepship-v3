@@ -10,6 +10,8 @@
 // to place a small/off-center label artwork centered on a clean 4×6 page
 // instead of copying the page byte-for-byte.
 
+import { deriveLabelContentRegion } from './print-queue-artwork-region';
+
 export type ArtworkBounds = { x: number; y: number; width: number; height: number };
 
 // A page box (CropBox/TrimBox/MediaBox) is "meaningful" as an artwork hint only
@@ -39,12 +41,16 @@ export type BoxHintPage = {
 
 // Derive the visible-artwork bounds for a label page. Prefer the tightest
 // meaningful box hint (TrimBox, then CropBox) that actually trims whitespace
-// relative to the MediaBox; otherwise fall back to the full MediaBox. The
-// returned bounds are in the page's own coordinate space (origin + size), so
-// callers can clip/embed exactly that region.
+// relative to the MediaBox. When NO box hint trims the page (the common case
+// where CropBox == MediaBox), fall back to the pure content-region heuristic
+// (deriveLabelContentRegion): an oversized sheet (full letter/A4) holding a
+// corner 4×6 label yields that conservative 4×6-aspect corner region instead of
+// the whole whitespace-heavy sheet, while a genuine 4×6 / near-4×6 page is left
+// whole. The returned bounds are in the page's own coordinate space (origin +
+// size), so callers can clip/embed exactly that region.
 export function deriveArtworkBounds(page: BoxHintPage): ArtworkBounds {
   const media = page.getMediaBox();
-  let best: ArtworkBounds = media;
+  let best: ArtworkBounds | null = null;
 
   const candidates: Array<ArtworkBounds | undefined> = [];
   try {
@@ -59,11 +65,23 @@ export function deriveArtworkBounds(page: BoxHintPage): ArtworkBounds {
   }
 
   for (const box of candidates) {
-    if (isTighterBox(box, media) && box.width * box.height < best.width * best.height) {
+    if (isTighterBox(box, media) && (best === null || box.width * box.height < best.width * best.height)) {
       best = box;
     }
   }
-  return { x: best.x, y: best.y, width: best.width, height: best.height };
+  if (best !== null) {
+    return { x: best.x, y: best.y, width: best.width, height: best.height };
+  }
+
+  // No trim signal: derive a content region from the page geometry. The region
+  // is expressed in the page's own coordinate space (media origin + offset).
+  const region = deriveLabelContentRegion({ width: media.width, height: media.height });
+  return {
+    x: media.x + region.x,
+    y: media.y + region.y,
+    width: region.width,
+    height: region.height,
+  };
 }
 
 export type PlaceArtworkInput = {

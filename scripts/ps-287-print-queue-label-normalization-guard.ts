@@ -24,6 +24,7 @@ import {
   deriveArtworkBounds,
   placeArtworkOnCanvas,
 } from '../src/services/print-queue-artwork-fit.js';
+import { deriveLabelContentRegion } from '../src/services/print-queue-artwork-region.js';
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -101,6 +102,56 @@ const TARGET_H = 432;
     const bounds = deriveArtworkBounds(page);
     check('deriveArtworkBounds falls back to MediaBox when no smaller box hint',
       near(bounds.width, TARGET_W) && near(bounds.height, TARGET_H));
+  }
+
+  // ── 2b) No box-hint content-region heuristic (CropBox == MediaBox) ─────────
+  // The most common real failure: a carrier returns the 4×6 label printed in a
+  // CORNER of a full letter/A4 sheet but leaves CropBox == MediaBox, so there
+  // is no trim signal. The full-MediaBox fallback would shrink the whole sheet
+  // (mostly whitespace) into the 4×6 canvas and the actual label prints tiny.
+  // deriveLabelContentRegion() must derive a conservative 4×6-aspect corner
+  // region (top-left, the standard PDF label anchor) for such pages, and leave
+  // a genuine 4×6 / near-4×6 page untouched.
+  {
+    // Pure helper: a US-letter sheet (612×792) with no trim hint -> a top-left
+    // 4×6-aspect (2:3) region, NOT the whole sheet.
+    const region = deriveLabelContentRegion({ width: 612, height: 792 });
+    check('content-region: letter sheet yields a tighter-than-page region',
+      region.width < 612 - 1 || region.height < 792 - 1);
+    check('content-region: letter region keeps the 4×6 (2:3) aspect',
+      near(region.width / region.height, TARGET_W / TARGET_H, 0.02));
+    check('content-region: letter region is anchored to the page TOP-LEFT',
+      near(region.x, 0) && near(region.y, 792 - region.height));
+  }
+  {
+    // Second standard page size: ISO A4 (595.28 × 841.89 pt) behaves the same.
+    const region = deriveLabelContentRegion({ width: 595.28, height: 841.89 });
+    check('content-region: A4 sheet yields a tighter-than-page region',
+      region.width < 595.28 - 1 || region.height < 841.89 - 1);
+    check('content-region: A4 region keeps the 4×6 (2:3) aspect',
+      near(region.width / region.height, TARGET_W / TARGET_H, 0.02));
+    check('content-region: A4 region is anchored to the page TOP-LEFT',
+      near(region.x, 0) && near(region.y, 841.89 - region.height));
+  }
+  {
+    // A genuine 4×6 page (and a near-4×6 page) carry NO sub-region signal: the
+    // heuristic must return the full page unchanged so we never crop real art.
+    const exact = deriveLabelContentRegion({ width: TARGET_W, height: TARGET_H });
+    check('content-region: exact 4×6 page is returned whole (no spurious crop)',
+      near(exact.width, TARGET_W) && near(exact.height, TARGET_H) && near(exact.x, 0) && near(exact.y, 0));
+    const near46 = deriveLabelContentRegion({ width: 300, height: 444 });
+    check('content-region: near-4×6 page is returned whole (no spurious crop)',
+      near(near46.width, 300) && near(near46.height, 444));
+  }
+  {
+    // deriveArtworkBounds delegates to the heuristic when there is no box hint:
+    // a letter page with CropBox == MediaBox now yields the corner 4×6 region.
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const bounds = deriveArtworkBounds(page);
+    check('deriveArtworkBounds uses the content-region heuristic on a hint-less letter sheet',
+      (bounds.width < 612 - 1 || bounds.height < 792 - 1)
+        && near(bounds.width / bounds.height, TARGET_W / TARGET_H, 0.02));
   }
 
   // ── 3) Content-aware normalization end-to-end ──────────────────────────────
