@@ -356,10 +356,10 @@ interface OrdersViewProps {
 // name / store id / current id) are deleted; getLegacyClientIdForDisplay passes
 // the backend value through.
 
-const TEST_SHIPPING_ACCOUNT_LABEL = 'PrepShip Test'
 // PS-166 (#685): TEST_CARRIER_CODE + the test-mock rate-builder cluster moved to
 // ./orders/test-rate-mock (its own small module). Re-imported below.
-const TEST_SERVICE_CODE = 'prepship_test_standard'
+// PS-166 (this slice): TEST_SERVICE_CODE + TEST_SHIPPING_ACCOUNT_LABEL +
+// buildTestMockRate also moved VERBATIM to ./orders/test-mock-rate-normalizer; re-imported below.
 // PS-135: BACKEND_RATE_PROOF_SOURCE now imported from ../../lib/rate-proof (single source).
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
 // Passive auto-rating now rates EVERY visible rateable awaiting order (so each
@@ -374,43 +374,6 @@ const BATCH_QUEUE_CONCURRENCY = 2
 const BACKEND_QUEUE_SEND_CONCURRENCY = 5
 const BACKEND_TEST_QUEUE_SEND_CONCURRENCY = 8
 const BACKEND_QUEUE_SEND_POLL_MS = 750
-
-function buildTestMockRate(source?: Record<string, unknown>) {
-  const readString = (value: unknown) => typeof value === 'string' && value.trim() ? value : null
-  const readNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null
-  const raw = source && typeof source.raw === 'object' && source.raw !== null ? source.raw as Record<string, unknown> : {}
-  const shipmentCost = Math.max(0, readNumber(source?.shipmentCost) ?? readNumber(source?.amount) ?? 0)
-  const otherCost = Math.max(0, readNumber(source?.otherCost) ?? 0)
-  const amount = shipmentCost + otherCost
-  const carrierCode = readString(source?.carrierCode) ?? TEST_CARRIER_CODE
-  const serviceCode = readString(source?.serviceCode) ?? TEST_SERVICE_CODE
-  const serviceName = readString(source?.serviceName) ?? readString(raw.serviceName) ?? 'PrepShip Test Standard'
-  const carrierNickname = readString(source?.carrierNickname) ?? readString(raw.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
-  return {
-    carrierCode,
-    serviceCode,
-    serviceName,
-    carrierNickname,
-    providerAccountNickname: carrierNickname,
-    shippingProviderId: null,
-    providerAccountId: null,
-    amount,
-    cost: amount,
-    shipmentCost,
-    otherCost,
-    raw: {
-      ...raw,
-      testRate: true,
-      simulatedProviderId: source?.shippingProviderId ?? null,
-      carrierCode,
-      serviceCode,
-      serviceName,
-      carrierNickname,
-      shipmentCost,
-      otherCost,
-    },
-  }
-}
 
 // PS-258 (slice): getQueueableLabelUrl + getQueuePayloadEntries (the two pure
 // print-queue payload parsers) moved VERBATIM to ./orders-queue-parsers (strict
@@ -437,6 +400,13 @@ import {
   buildBestTestRateForShipment,
   buildTestRateBrowserAccounts,
 } from './orders/test-rate-mock'
+// PS-166 (this slice): buildTestMockRate + TEST_SERVICE_CODE +
+// TEST_SHIPPING_ACCOUNT_LABEL moved VERBATIM to their own small file.
+import {
+  TEST_SERVICE_CODE,
+  TEST_SHIPPING_ACCOUNT_LABEL,
+  buildTestMockRate,
+} from './orders/test-mock-rate-normalizer'
 import {
   ageHours,
   ageLabel,
