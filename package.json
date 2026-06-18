@@ -309,6 +309,7 @@
     "test:ps-258-non-critical-scheduler": "tsx scripts/ps-258-non-critical-scheduler-guard.ts",
     "test:ps-258-orders-queue-parsers": "tsx scripts/ps-258-orders-queue-parsers-guard.ts",
     "test:ps-258-orders-table-density-prefs": "tsx scripts/ps-258-orders-table-density-prefs-guard.ts",
+    "test:ps-258-component-boundary": "tsx scripts/ps-258-component-boundary-lockdown-guard.ts",
     "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",
     "test:ps-265-sync-run-budget": "tsx scripts/ps-265-sync-run-budget-guard.ts",
     "test:ps-244-rate-finalization-single-owner": "tsx scripts/ps-244-rate-finalization-single-owner-guard.ts",
