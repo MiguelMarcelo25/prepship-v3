@@ -15,6 +15,8 @@
 // credential/account tables on top of this (DB wins, this is the fallback) without changing
 // any consumer — they call the resolvers below.
 
+import { resolveDirectCarrierInsuranceOverride } from './direct-carrier-insurance-capability.js';
+
 export type KnownCarrierAccount = {
   shippingProviderId: number;
   carrierCode: string;
@@ -115,6 +117,41 @@ export type AccountInsuranceCapability = {
   reason: string;
 };
 
+// PS-262 — canary flags governing the direct-carrier-never-parcelguard override.
+// Read lazily from process.env (same booleanFlag semantics as src/lib/env.ts) so the
+// registry stays dependency-free and serverless-safe; callers may inject explicit
+// flags (the offline guard does, to test ON and OFF deterministically in one process).
+export type DirectCarrierParcelGuardFlags = {
+  directCarrierParcelGuardFix: boolean;
+  easyPostInsuranceVerified: boolean;
+  shippInsuranceVerified: boolean;
+};
+
+function envBooleanFlag(name: string): boolean {
+  // Read process.env defensively: the registry is bundled into BOTH the Node backend
+  // and the web (Vite) build, and the web tsconfig has no `node` types. Probe
+  // globalThis so this compiles + runs in either environment (web has no process →
+  // flag reads false, which is the correct default-OFF behavior on the client).
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+  const raw = proc?.env?.[name];
+  if (raw === undefined) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
+}
+
+function resolveDirectCarrierParcelGuardFlags(
+  injected?: Partial<DirectCarrierParcelGuardFlags>,
+): DirectCarrierParcelGuardFlags {
+  return {
+    directCarrierParcelGuardFix:
+      injected?.directCarrierParcelGuardFix ?? envBooleanFlag('DIRECT_CARRIER_PARCELGUARD_FIX'),
+    easyPostInsuranceVerified:
+      injected?.easyPostInsuranceVerified ?? envBooleanFlag('EASYPOST_INSURANCE_VERIFIED'),
+    shippInsuranceVerified:
+      injected?.shippInsuranceVerified ?? envBooleanFlag('SHIPP_INSURANCE_VERIFIED'),
+  };
+}
+
 function normalizeIdentity(value: string | number | null | undefined): string {
   return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
@@ -158,7 +195,7 @@ export function resolveAccountInsuranceCapability(input: {
   shippingProviderId?: number | string | null;
   carrierCode?: string | null;
   serviceCode?: string | number | null;
-}): AccountInsuranceCapability {
+}, flags?: Partial<DirectCarrierParcelGuardFlags>): AccountInsuranceCapability {
   if (isGroundSaverOrSurePostService(input.serviceCode)) {
     return { required: 'blocked', carrierPurchasable: false, reason: 'Ground Saver / SurePost — insurance unavailable (PS-057)' };
   }
@@ -180,6 +217,23 @@ export function resolveAccountInsuranceCapability(input: {
         ? 'Direct UPS account — carrier declared value purchasable'
         : 'Direct UPS account — carrier insurance NOT yet verified, defaulting to ParcelGuard',
     };
+  }
+
+  // PS-262 canary (DIRECT_CARRIER_PARCELGUARD_FIX, default OFF): generalize the
+  // PS-262b Walmart point fix — a DIRECT (non-ShipStation) carrier identifiable by
+  // code alone must resolve to 'carrier' (audited to insure) or 'blocked' (cannot),
+  // NEVER 'parcelguard'. With the flag OFF this whole branch is skipped and the
+  // resolver is BYTE-IDENTICAL to today (the PS-262b Walmart block + ParcelGuard
+  // fallback below). The override intentionally covers ONLY the unambiguous direct
+  // codes (easypost/shipp + the marketplace shipping family); ambiguous bare
+  // ups/fedex/usps codes (Shipp-/SS-brokered) stay on the existing paths.
+  const resolvedFlags = resolveDirectCarrierParcelGuardFlags(flags);
+  if (resolvedFlags.directCarrierParcelGuardFix) {
+    const override = resolveDirectCarrierInsuranceOverride(carrierCode, {
+      easyPostInsuranceVerified: resolvedFlags.easyPostInsuranceVerified,
+      shippInsuranceVerified: resolvedFlags.shippInsuranceVerified,
+    });
+    if (override) return override;
   }
 
   // PS-262b (Per user override unlock shipped data on 2026-06-14): a DIRECT

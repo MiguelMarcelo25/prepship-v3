@@ -440,7 +440,65 @@ export function getBackendRowMarketplace(order: OrderSummaryDto) {
 
 // ── stateless row renderers ───────────────────────────────────────────────────
 
-export function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: number | null, insuranceAddOn?: number | null) {
+// PS-290 (slice 1): the HUGRAB $100-insurance coverage BADGE the Best Rate money cell renders
+// UNDER the price. The verdict is BACKEND-owned — the DTO carries insuranceCoverageStatus /
+// insuranceBadgeLabel / insuranceBadgeTone (order-rate-dto.ts -> resolveInsuranceCoverageStatus);
+// this reader is a PURE pass-through of those fields, NOT a FE heuristic. Returns null for
+// non-HUGRAB rows (status 'not_required') or rows the backend has not stamped, so the cell renders
+// EXACTLY as today unless the backend asserted a HUGRAB coverage status.
+export type RowInsuranceCoverage = {
+  status: string
+  label: string
+  tone: string
+}
+
+export function getRowInsuranceCoverage(rate: unknown): RowInsuranceCoverage | null {
+  const record = toRecord(rate)
+  if (!record) return null
+  const status = toStringValue(record.insuranceCoverageStatus)
+  if (!status || status === 'not_required') return null
+  return {
+    status,
+    label: toStringValue(record.insuranceBadgeLabel) ?? '',
+    tone: toStringValue(record.insuranceBadgeTone) ?? 'neutral',
+  }
+}
+
+export function getBestRateInsuranceCoverage(order: OrderSummaryDto): RowInsuranceCoverage | null {
+  return getRowInsuranceCoverage(order.bestRate)
+}
+
+// Backend tone -> swatch. Mirrors the PS-274 certainty-chip palette; the FE only colors what the
+// backend decided (green INCLUDED / red NO INSURANCE / amber UNKNOWN|UNSUPPORTED).
+const COVERAGE_TONE_COLORS: Record<string, string> = {
+  green: 'var(--green)',
+  red: 'var(--red)',
+  amber: 'var(--amber, #b7791f)',
+  neutral: 'var(--text3)',
+}
+
+export function renderInsuranceCoverageBadge(coverage: RowInsuranceCoverage | null | undefined) {
+  if (!coverage || !coverage.label) return null
+  const color: string = COVERAGE_TONE_COLORS[coverage.tone] ?? 'var(--text3)'
+  return (
+    <div
+      data-insurance-coverage-status={coverage.status}
+      style={{ fontSize: 9.5, color, fontWeight: 700, whiteSpace: 'nowrap', letterSpacing: 0.2 }}
+      title="HUGRAB $100 insurance coverage status (backend-verified)"
+    >
+      {coverage.label}
+    </div>
+  )
+}
+
+export function renderRateAmountWithMarkup(
+  baseAmount: number | null,
+  markedAmount: number | null,
+  insuranceAddOn?: number | null,
+  // PS-290 — backend-owned HUGRAB coverage verdict, rendered UNDER the price (HUGRAB rows only).
+  // Optional + additive: omit it (or pass null) and the cell renders EXACTLY as before.
+  coverage?: RowInsuranceCoverage | null,
+) {
   const displayAmount = markedAmount ?? baseAmount
   if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'—'}</span>
 
@@ -466,6 +524,8 @@ export function renderRateAmountWithMarkup(baseAmount: number | null, markedAmou
           {formatMoney(baseAmount)}
         </div>
       ) : null}
+      {/* PS-290: HUGRAB $100-insurance coverage badge under the price (backend verdict only). */}
+      {renderInsuranceCoverageBadge(coverage)}
     </div>
   )
 }

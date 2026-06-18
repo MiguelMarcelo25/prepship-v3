@@ -381,7 +381,8 @@ export default function NewOrderModal({
     if (!city.trim()) errors.push('City')
     if (!state) errors.push('State')
     if (!zip.trim()) errors.push('Zip')
-    if (items.every((i) => !i.sku.trim() && !i.name.trim())) errors.push('At least one line item')
+    // PS-291 (slice 1): line items are OPTIONAL — a manual order may be saved
+    // with zero items (subtotal stays $0). No line-item gate.
 
     if (errors.length > 0) {
       setError(`Required: ${errors.join(', ')}`)

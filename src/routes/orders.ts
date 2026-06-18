@@ -2997,12 +2997,13 @@ const manualOrderBody = z.object({
   rateLength: manualOrderNumberPart,
   rateWidth: manualOrderNumberPart,
   rateHeight: manualOrderNumberPart,
+  // PS-291 (slice 1): line items are OPTIONAL — allow items:[] (no .min(1)).
   items: z.array(z.object({
     sku: z.string().optional().default(''),
     name: z.string().optional().default(''),
     quantity: z.coerce.number().positive().optional().default(1),
     price: z.coerce.number().nonnegative().optional().default(0),
-  })).min(1),
+  })).optional().default([]),
 });
 
 function manualNumber(value: unknown, fallback = 0): number {
@@ -3035,9 +3036,13 @@ async function ensureManualOrdersClient() {
     .limit(1);
 
   if (existing) {
+    // PS-291 (slice 1): manual orders are REAL operational orders, not test
+    // fixtures — the Manual Orders client carries isTest:false so its orders
+    // enter the real Awaiting/billing/rate flows (clients.isTest is the
+    // backend-owned source of truth the row/detail DTOs derive `isTest` from).
     const [updated] = await db
       .update(clients)
-      .set({ active: true, isTest: true, updatedAt: new Date() })
+      .set({ active: true, isTest: false, updatedAt: new Date() })
       .where(eq(clients.id, existing.id))
       .returning();
     return updated ?? existing;
@@ -3049,7 +3054,8 @@ async function ensureManualOrdersClient() {
       name: 'Manual Orders',
       storeIds: [],
       active: true,
-      isTest: true,
+      // PS-291 (slice 1): real operational client (see note above).
+      isTest: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     })
@@ -3075,9 +3081,10 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
     }))
     .filter((item) => item.sku || item.name);
 
-  if (activeItems.length === 0) {
-    return c.json({ error: 'At least one line item is required' }, 400);
-  }
+  // PS-291 (slice 1): line items are OPTIONAL — an operator may save a manual
+  // order with zero items (e.g. a shipping-only / placeholder order). Persist
+  // `items: []` safely; the order total falls back to explicit
+  // totalPaid/shippingPaid/taxPaid (and 0 when none are provided) below.
 
   const manualClient = await ensureManualOrdersClient();
   const weightOz = (manualNumber(body.rateWeightLb) * 16) + manualNumber(body.rateWeightOz);
@@ -3099,7 +3106,7 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
   const raw = {
     source: 'manual',
     manual: true,
-    test: true,
+    // PS-291 (slice 1): manual orders are REAL — do NOT mark raw.test true.
     orderNumber,
     orderDate: body.orderDate,
     paidDate: body.paidDate,

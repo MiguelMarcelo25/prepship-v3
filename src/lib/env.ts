@@ -160,6 +160,22 @@ const schema = z.object({
   // endpoint live) so enabling the endpoint never auto-activates the money-path
   // FE delegation. Flip this ON only AFTER canarying a test label.
   PRINT_QUEUE_FE_DELEGATION: booleanFlag(false),
+  // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
+  // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
+  // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'
+  // (a ShipStation-only product a direct carrier can't actually buy, which would
+  // silently ship the insured order UNINSURED). When OFF, resolveAccountInsuranceCapability
+  // is BYTE-IDENTICAL to today (PS-262b Walmart block + PS-170 UPS gate + ParcelGuard
+  // fallback). When ON, direct-only unambiguous codes (easypost/shipp/walmart_shipping/
+  // ebay_shipping/amazon_shipping) map to carrier|blocked; ShipStation-brokered accounts
+  // keep ParcelGuard unchanged. DJ flips this on Render after a canary.
+  DIRECT_CARRIER_PARCELGUARD_FIX: booleanFlag(false),
+  // PS-262 per-connector verify gates (DIRECT_CARRIER_PARCELGUARD_FIX only). Default OFF:
+  // the audited-insuring direct connectors resolve to 'blocked' until proven, never to
+  // 'carrier' (no under-charge) and never to 'parcelguard' (no silent-uninsured). Flip ON
+  // once a read-only check (or DJ confirmation) proves the connector applies the insurance.
+  EASYPOST_INSURANCE_VERIFIED: booleanFlag(false),
+  SHIPP_INSURANCE_VERIFIED: booleanFlag(false),
 });
 
 const parsed = schema.safeParse(process.env);

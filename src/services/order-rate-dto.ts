@@ -9,7 +9,18 @@
  * v4 note: contracts package does not exist here — DTO types are inlined below.
  * v4 note: InputValidationError is a local 400-class error that the Hono error
  *           handler (or callers) can map to a 400 response.
+ *
+ * PS-290 (slice 1): the HUGRAB $100-insurance COVERAGE STATUS verdict is backend-owned. The
+ * coverage status/label/tone are populated HERE by delegating to the canonical pure resolver
+ * (shipping-workflow/insurance-coverage-status) from the rate's existing insurance fields +
+ * an isHugrab signal — the FE only renders the result, it never recomputes the verdict.
  */
+
+import {
+  resolveInsuranceCoverageStatus,
+  type InsuranceCoverageStatus,
+  type InsuranceCoverageBadgeTone,
+} from './shipping-workflow/insurance-coverage-status';
 
 // ── Inlined DTO types (v2 parity) ────────────────────────────────────────────
 
@@ -50,6 +61,12 @@ export interface OrderBestRateDto {
   // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
+  // PS-290 (slice 1): HUGRAB $100-insurance COVERAGE STATUS verdict — backend-owned, derived
+  // from the insurance fields above + isHugrab via resolveInsuranceCoverageStatus. 'not_required'
+  // on non-HUGRAB rows; the FE renders insuranceBadgeLabel/insuranceBadgeTone, never recomputes.
+  insuranceCoverageStatus: InsuranceCoverageStatus;
+  insuranceBadgeLabel: string;
+  insuranceBadgeTone: InsuranceCoverageBadgeTone;
 }
 
 export interface NextBestNonHouseRateDto {
@@ -74,6 +91,10 @@ export interface OrderSelectedRateDto {
   insuranceCost: number | null;
   insuranceProvenance: string | null;
   totalCost: number | null;
+  // PS-290 (slice 1): HUGRAB $100-insurance COVERAGE STATUS verdict (see OrderBestRateDto).
+  insuranceCoverageStatus: InsuranceCoverageStatus;
+  insuranceBadgeLabel: string;
+  insuranceBadgeTone: InsuranceCoverageBadgeTone;
 }
 
 // ── Local 400-class error (v4 has no contracts/input-validation module) ──────
@@ -157,6 +178,65 @@ function readArray(value: unknown, path: string): unknown[] {
   return value;
 }
 
+// PS-290 — derive the HUGRAB signal: an explicit ctx flag wins; otherwise read an
+// isHugrab / is_hugrab key the caller stamped onto the rate JSON. Defaults to false so
+// non-HUGRAB rows resolve to coverage 'not_required' (no badge).
+function readIsHugrab(record: Record<string, unknown>, ctxIsHugrab?: boolean | null): boolean {
+  if (typeof ctxIsHugrab === 'boolean') return ctxIsHugrab;
+  const raw = record.isHugrab ?? record.is_hugrab;
+  return raw === true;
+}
+
+// PS-290 — populate the backend-owned HUGRAB $100-insurance coverage triple by delegating to
+// the canonical pure resolver. The DTO is the ONLY place that calls it; the FE renders the result.
+function resolveCoverageFields(args: {
+  isHugrab: boolean;
+  insuranceProvider: string | null;
+  insuredValue: number | null;
+  insuranceCost: number | null;
+  insuranceProvenance: string | null;
+  insuranceCertainty: unknown;
+}): { insuranceCoverageStatus: InsuranceCoverageStatus; insuranceBadgeLabel: string; insuranceBadgeTone: InsuranceCoverageBadgeTone } {
+  const verdict = resolveInsuranceCoverageStatus({
+    isHugrab: args.isHugrab,
+    insuranceProvider: args.insuranceProvider,
+    insuredValue: args.insuredValue,
+    insuranceCost: args.insuranceCost,
+    insuranceProvenance: args.insuranceProvenance,
+    insuranceCertainty: typeof args.insuranceCertainty === 'string' ? args.insuranceCertainty : null,
+  });
+  return {
+    insuranceCoverageStatus: verdict.status,
+    insuranceBadgeLabel: verdict.badgeLabel,
+    insuranceBadgeTone: verdict.badgeTone,
+  };
+}
+
+// PS-290 — the insured value / certainty the resolver reads, sourced from the raw rate JSON
+// (the normalizers do not otherwise carry insuredValue/certainty as DTO fields).
+function readRateInsuredValue(record: Record<string, unknown>): number | null {
+  const insuranceMeta = isRecord(record.insuranceCost) ? record.insuranceCost : null;
+  return (
+    readNullableNumber(
+      record.insuredValue ?? record.insured_value ?? insuranceMeta?.insuredValue ?? null,
+      'rate.insuredValue',
+    )
+  );
+}
+
+function readRateInsuranceProvider(record: Record<string, unknown>): string | null {
+  const insuranceMeta = isRecord(record.insuranceCost) ? record.insuranceCost : null;
+  return readNullableString(
+    record.insuranceProvider ?? record.insurance_provider ?? insuranceMeta?.insuranceProvider ?? null,
+    'rate.insuranceProvider',
+  );
+}
+
+function readRateInsuranceCertainty(record: Record<string, unknown>): unknown {
+  const certaintyMeta = isRecord(record.insuranceCertainty) ? record.insuranceCertainty : null;
+  return certaintyMeta?.certainty ?? record.insuranceCertainty ?? null;
+}
+
 function hasAnyMeaningfulRateField(rate: OrderBestRateDto): boolean {
   return (
     rate.serviceCode != null ||
@@ -205,7 +285,13 @@ function normalizeNextBestNonHouseRate(value: unknown, path = 'bestRate.nextBest
   };
 }
 
-export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): OrderBestRateDto | null {
+export function normalizeOrderBestRateDto(
+  value: unknown,
+  path = 'bestRate',
+  // PS-290 — optional HUGRAB signal. When omitted, isHugrab is read off an isHugrab/is_hugrab
+  // key on the rate JSON (defaulting to false), so non-HUGRAB rows resolve to 'not_required'.
+  ctx?: { isHugrab?: boolean | null },
+): OrderBestRateDto | null {
   if (value == null) return null;
 
   const record = expectRecord(value, path);
@@ -290,6 +376,15 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
     nextBestNonHouseRate: normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`),
     houseMargin: readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`),
+    // PS-290 — backend-owned HUGRAB $100-insurance coverage verdict (delegated to the resolver).
+    ...resolveCoverageFields({
+      isHugrab: readIsHugrab(record, ctx?.isHugrab),
+      insuranceProvider: readRateInsuranceProvider(record),
+      insuredValue: readRateInsuredValue(record),
+      insuranceCost,
+      insuranceProvenance,
+      insuranceCertainty: readRateInsuranceCertainty(record),
+    }),
   };
 
   return hasAnyMeaningfulRateField(rate) ? rate : null;
@@ -319,6 +414,8 @@ export function normalizeOrderSelectedRateDto(
     otherCost?: number | null;
   },
   path = 'selectedRate',
+  // PS-290 — optional HUGRAB signal (same semantics as normalizeOrderBestRateDto).
+  ctx?: { isHugrab?: boolean | null },
 ): OrderSelectedRateDto | null {
   if (value == null) return null;
 
@@ -361,6 +458,15 @@ export function normalizeOrderSelectedRateDto(
     insuranceCost,
     insuranceProvenance,
     totalCost: readNullableNumber(record.totalCost ?? record.total_cost ?? null, `${path}.totalCost`),
+    // PS-290 — backend-owned HUGRAB $100-insurance coverage verdict (delegated to the resolver).
+    ...resolveCoverageFields({
+      isHugrab: readIsHugrab(record, ctx?.isHugrab),
+      insuranceProvider: readRateInsuranceProvider(record),
+      insuredValue: readRateInsuredValue(record),
+      insuranceCost,
+      insuranceProvenance,
+      insuranceCertainty: readRateInsuranceCertainty(record),
+    }),
   };
 
   return hasAnyMeaningfulSelectedRateField(rate) ? rate : null;

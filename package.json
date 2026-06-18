@@ -288,6 +288,7 @@
     "test:ps-265-walmart-throttle": "tsx scripts/ps-265-walmart-throttle-guard.ts",
     "test:ps-264-cached-rate-insurance-enrich": "tsx scripts/ps-264-cached-rate-insurance-enrich-guard.ts",
     "test:ps-262b-direct-carrier-insurance": "tsx scripts/ps-262b-direct-carrier-insurance-guard.ts",
+    "test:ps-262-direct-carrier-parcelguard-fix": "tsx scripts/ps-262-direct-carrier-parcelguard-fix-guard.ts",
     "test:ps-262a-confirmation-payload-funnel": "tsx scripts/ps-262a-confirmation-payload-funnel-guard.ts",
     "test:ps-262c-walmart-store-correlation": "tsx scripts/ps-262c-walmart-store-correlation-guard.ts",
     "test:ps-263-void-confirmation-retract": "tsx scripts/ps-263-void-confirmation-retract-guard.ts",
