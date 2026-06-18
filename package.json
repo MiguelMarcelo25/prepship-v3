@@ -319,6 +319,7 @@
     "test:ps-258-orders-table-density-prefs": "tsx scripts/ps-258-orders-table-density-prefs-guard.ts",
     "test:ps-258-component-boundary": "tsx scripts/ps-258-component-boundary-lockdown-guard.ts",
     "test:ps-258-empty-state-props-contract": "tsx scripts/ps-258-orders-empty-state-props-contract-guard.ts",
+    "test:ps-258-empty-panel-contract": "tsx scripts/ps-258-orders-empty-panel-contract-guard.ts",
     "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",
     "test:ps-265-sync-run-budget": "tsx scripts/ps-265-sync-run-budget-guard.ts",
     "test:ps-272-bounded-sync": "tsx scripts/ps-272-bounded-sync-drain-guard.ts",
