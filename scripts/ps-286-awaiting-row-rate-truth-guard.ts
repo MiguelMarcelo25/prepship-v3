@@ -32,6 +32,11 @@ import {
 // verdict, so the queue can never silently buy/queue a confident-looking STALE
 // saved rate the Awaiting column is refusing to show as a dollar figure.
 import { classifyPrintQueuePreflightFromAwaitingState } from '../web/src/components/Views/print-queue-preflight-state'
+// PS-286 (slice): DIRECT-CARRIER proof parity — a direct-carrier saved rate
+// (synthetic provider id >= 10M) must run through the SAME backend SOT verdict ->
+// explicit Awaiting state -> preflight as a ShipStation rate, so a stale/incomplete/
+// expired/eligibility-mismatched direct-carrier rate can NEVER silently queue either.
+import { classifyPrintQueuePreflightForSavedRate } from '../web/src/components/Views/print-queue-preflight-saved-rate'
 import type { OrderSummaryDto } from '../web/src/types/api'
 
 let failures = 0
@@ -247,6 +252,105 @@ check(
   classifyPrintQueuePreflightFromAwaitingState(freshAwaitingState).queueableAsCurrent,
   true,
 )
+
+// ── (4) DIRECT-CARRIER proof parity ─────────────────────────────────────────────
+//
+// A direct-carrier saved rate stores a SYNTHETIC provider id (DIRECT_CARRIER_PROVIDER_ID
+// _OFFSET 10_000_000 + carrier_accounts.id) that the ShipStation registry never carries.
+// classifyPrintQueuePreflightForSavedRate runs that rate through the IDENTICAL backend SOT
+// verdict (savedBestRateCanDisplayForCurrentRequest -> classifyAwaitingBestRateDisplay ->
+// classifyPrintQueuePreflightFromAwaitingState). It surfaces an isDirectCarrier flag for
+// diagnostics ONLY — it must NEVER let the carrier family change the queueable verdict, so
+// a stale/incomplete/expired/eligibility-mismatch direct rate is blocked exactly like a
+// ShipStation rate with the same verdict inputs.
+
+const DIRECT_PROVIDER_ID = 10_000_025 // 10M offset + carrier_accounts.id 25 (synthetic)
+const SHIPSTATION_PROVIDER_ID = FRESH_BESTRATE.shippingProviderId // a real registry id (< 10M)
+
+function preflightForSavedRate(partial: {
+  shippingProviderId: number
+  isComplete: boolean | null
+  cacheExpiresAt: string | null
+  eligibilityVersion: string | null
+  hasBackendIssuedRateProof?: boolean
+}) {
+  return classifyPrintQueuePreflightForSavedRate({
+    shippingProviderId: partial.shippingProviderId,
+    hasSavedBestRate: true,
+    hasDimsAndWeight: true,
+    clientRequestKey: 'order|current',
+    requestKey: 'order|current',
+    hasBackendIssuedRateProof: partial.hasBackendIssuedRateProof ?? true,
+    isComplete: partial.isComplete,
+    cacheExpiresAt: partial.cacheExpiresAt,
+    eligibilityVersion: partial.eligibilityVersion,
+    requiredEligibilityVersion: REQUIRED_ELIG,
+    matchType: 'live',
+    baseAmount: 7.78,
+    backendWorkflowCanUseSavedRate: null,
+    nowMs: NOW,
+  })
+}
+
+// The helper correctly recognizes a synthetic id as a direct carrier (diagnostic only).
+check(
+  'direct: synthetic provider id is flagged isDirectCarrier',
+  preflightForSavedRate({
+    shippingProviderId: DIRECT_PROVIDER_ID,
+    isComplete: true,
+    cacheExpiresAt: FUTURE,
+    eligibilityVersion: REQUIRED_ELIG,
+  }).isDirectCarrier,
+  true,
+)
+check(
+  'shipstation: registry provider id is NOT flagged isDirectCarrier',
+  preflightForSavedRate({
+    shippingProviderId: SHIPSTATION_PROVIDER_ID,
+    isComplete: true,
+    cacheExpiresAt: FUTURE,
+    eligibilityVersion: REQUIRED_ELIG,
+  }).isDirectCarrier,
+  false,
+)
+
+// A FRESH direct-carrier rate is queueable-as-current (the queue is not broken for direct).
+check(
+  'direct: fresh complete in-window matching-eligibility rate IS queueable-as-current',
+  preflightForSavedRate({
+    shippingProviderId: DIRECT_PROVIDER_ID,
+    isComplete: true,
+    cacheExpiresAt: FUTURE,
+    eligibilityVersion: REQUIRED_ELIG,
+  }).queueableAsCurrent,
+  true,
+)
+
+// PARITY: for EACH actionable verdict, a direct-carrier rate and a ShipStation rate with
+// IDENTICAL verdict inputs must produce the SAME state, same blockedReason, same (non-)queueable.
+const ACTIONABLE_VERDICTS: Array<{
+  name: string
+  isComplete: boolean | null
+  cacheExpiresAt: string | null
+  eligibilityVersion: string | null
+}> = [
+  { name: 'eligibility-mismatch', isComplete: true, cacheExpiresAt: FUTURE, eligibilityVersion: 'old-v1' },
+  { name: 'coverage-incomplete', isComplete: false, cacheExpiresAt: FUTURE, eligibilityVersion: REQUIRED_ELIG },
+  { name: 'expired', isComplete: true, cacheExpiresAt: PAST, eligibilityVersion: REQUIRED_ELIG },
+]
+
+for (const v of ACTIONABLE_VERDICTS) {
+  const direct = preflightForSavedRate({ ...v, shippingProviderId: DIRECT_PROVIDER_ID })
+  const shipstation = preflightForSavedRate({ ...v, shippingProviderId: SHIPSTATION_PROVIDER_ID })
+  check(`direct "${v.name}" is NOT queueable-as-current`, direct.queueableAsCurrent, false)
+  check(`direct "${v.name}" state == shipstation state`, direct.state, shipstation.state)
+  check(`direct "${v.name}" blockedReason == shipstation blockedReason`, direct.blockedReason, shipstation.blockedReason)
+  check(
+    `direct "${v.name}" queueable == shipstation queueable (carrier family is NOT a bypass)`,
+    direct.queueableAsCurrent,
+    shipstation.queueableAsCurrent,
+  )
+}
 
 if (failures > 0) {
   console.error(`\nFAIL ps-286 awaiting row rate-truth guard (${failures} failing)`)

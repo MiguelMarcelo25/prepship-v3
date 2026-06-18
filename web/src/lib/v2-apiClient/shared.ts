@@ -53,8 +53,24 @@ export function parseDownloadFilename(
 // predate the flag and haven't been migrated yet.
 export const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
 export const STALE_MOCK_LABEL_HOSTS = new Set(['prepshipv4-api.onrender.com']);
-export const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
-export const DIRECT_STORE_PROVIDER_ID_OFFSET = 20_000_000;
+// PS-286 (slice): the offsets + the synthetic-id predicate now live in the PURE
+// web/src/lib/direct-carrier-id module (importable without the network-client
+// barrel). Imported here and re-exported so every existing import site of
+// `../v2-apiClient/...` keeps working and there is still ONE source of truth.
+import {
+  DIRECT_CARRIER_PROVIDER_ID_OFFSET,
+  DIRECT_STORE_PROVIDER_ID_OFFSET,
+  directAccountRefFromProviderId,
+  isDirectCarrierId,
+  type DirectAccountRef,
+} from '../direct-carrier-id';
+export {
+  DIRECT_CARRIER_PROVIDER_ID_OFFSET,
+  DIRECT_STORE_PROVIDER_ID_OFFSET,
+  directAccountRefFromProviderId,
+  isDirectCarrierId,
+  type DirectAccountRef,
+};
 export const STORE_PROVIDER_KEYS = new Set([
   'walmart',
   'amazon',
@@ -765,37 +781,14 @@ export function normalizeClientIdList(value: unknown): number[] {
     : [];
 }
 
-export type DirectAccountRef = {
-  accountId: number;
-  sourceTable: 'carrier_accounts' | 'store_accounts';
-};
-
+// PS-286 (slice): DirectAccountRef, directAccountRefFromProviderId, and isDirectCarrierId
+// moved to the PURE ../direct-carrier-id module and are re-exported near the offset block
+// above. directProviderIdFromAccount stays here (it depends on the local DirectCarrierAccountRow).
 export function directProviderIdFromAccount(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceTable'>): number {
   const offset = account.sourceTable === 'store_accounts'
     ? DIRECT_STORE_PROVIDER_ID_OFFSET
     : DIRECT_CARRIER_PROVIDER_ID_OFFSET;
   return offset + account.id;
-}
-
-export function directAccountRefFromProviderId(providerId: number | null): DirectAccountRef | null {
-  if (providerId == null) return null;
-  if (providerId >= DIRECT_STORE_PROVIDER_ID_OFFSET) {
-    const accountId = providerId - DIRECT_STORE_PROVIDER_ID_OFFSET;
-    return Number.isFinite(accountId) && accountId > 0
-      ? { accountId, sourceTable: 'store_accounts' }
-      : null;
-  }
-  if (providerId >= DIRECT_CARRIER_PROVIDER_ID_OFFSET) {
-    const accountId = providerId - DIRECT_CARRIER_PROVIDER_ID_OFFSET;
-    return Number.isFinite(accountId) && accountId > 0
-      ? { accountId, sourceTable: 'carrier_accounts' }
-      : null;
-  }
-  return null;
-}
-
-export function isDirectCarrierId(value: unknown): boolean {
-  return directAccountRefFromProviderId(toProviderAccountId(value)) != null;
 }
 
 // PS-078 req 7 (routing CLASS, not endpoint — PS-202/PS-209 update): every
