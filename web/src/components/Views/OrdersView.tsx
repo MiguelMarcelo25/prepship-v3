@@ -103,6 +103,14 @@ import {
 // (pure backend-DTO read; PS-111 backend-owned completeness). Not coupled to
 // buildRateRequestDraftKey (PS-143 — the FE draft key stays independent).
 import { deriveBackendBestRateComplete } from './orders-rate-proof'
+// PS-286: pure classifier that turns the backend rate SOT verdict (isComplete /
+// cacheExpiresAt / eligibilityVersion, via savedBestRateCanDisplayForCurrentRequest)
+// into an explicit Best-Rate-column state so a stale/incomplete/expired saved rate
+// renders an actionable label instead of a confident dollar figure.
+import {
+  classifyAwaitingBestRateDisplay,
+  AWAITING_BEST_RATE_STATE_LABELS,
+} from './awaiting-best-rate-display-state'
 import {
   fetchRecalculateAllJob,
   isRecalculateAllJobDone,
@@ -4364,6 +4372,28 @@ export default function OrdersView({
     return hasSavedBestRateForRequest(order, request)
   }
 
+  // PS-286: derive the EXPLICIT Best-Rate-column state for an awaiting row from the
+  // backend rate source-of-truth verdict. The Best Rate column is a thin consumer:
+  // it shows the $ amount only when savedBestRateCanDisplayForCurrentRequest agrees,
+  // otherwise it surfaces the specific actionable reason (eligibility mismatch /
+  // coverage incomplete / expired / add dims / recalculate required) that the
+  // backend verdict implies — it never invents its own money or eligibility rule.
+  function getAwaitingBestRateDisplayState(order: OrderSummaryDto) {
+    const savedRate = getSavedBestRateRecord(order)
+    const dims = getDimensions(order, orderDetailsById.get(order.orderId) ?? null)
+    const hasDimsAndWeight =
+      hasCompleteDims(dims) && Boolean(order.weight?.value && order.weight.value > 0)
+    return classifyAwaitingBestRateDisplay({
+      hasSavedBestRate: hasAnySavedBestRateForDisplay(order),
+      canDisplaySavedRate: hasDisplayableBestRateForCurrentRequest(order),
+      isComplete: savedRate ? savedRate.isComplete === true : null,
+      cacheExpiresAt: savedRate ? toStringValue(savedRate.cacheExpiresAt) : null,
+      eligibilityVersion: savedRate ? toStringValue(savedRate.eligibilityVersion) : null,
+      requiredEligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+      hasDimsAndWeight,
+    })
+  }
+
   function getRateBaseAmount(rate: Record<string, unknown>) {
     const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
     const otherCost = toNumberValue(rate.otherCost) ?? 0
@@ -6988,6 +7018,24 @@ export default function OrdersView({
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
     if (!hasDisplayableBestRate || bestRateBaseCost == null) {
       // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
+      // PS-286: when the row HAS a saved best rate that no longer satisfies the
+      // backend display contract, render the SPECIFIC actionable reason (Rate
+      // expired / Carrier coverage incomplete / Recalculate required) instead of a
+      // bare dash that reads like a missing rate. The dollar figure is suppressed
+      // because the saved rate is stale — the operator must re-rate.
+      const sotState = getAwaitingBestRateDisplayState(displayOrder)
+      const sotLabel = AWAITING_BEST_RATE_STATE_LABELS[sotState]
+      if (sotLabel) {
+        return (
+          <span
+            data-rate-state={`sot-${sotState}`}
+            title={`${sotLabel} — the saved best rate is no longer valid for the current request; re-rate this order.`}
+            style={{ color: 'var(--text3)', fontSize: 10.5, whiteSpace: 'nowrap' }}
+          >
+            {sotLabel}
+          </span>
+        )
+      }
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
     // Recalculate-in-flight indicator: the backfill stamps pending/rating on the

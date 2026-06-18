@@ -215,16 +215,31 @@ export function resolveV2CarrierAccount(
 }
 
 export function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
-  const providerAccountId =
+  // PS-286: an awaiting_shipment row's CURRENT best rate is the source of truth
+  // for the displayed carrier/account — required-behavior #2. The previously-
+  // selected rate / partially-written label can be STALE (the operator re-rated,
+  // or a saved rate moved to a different account), so on awaiting rows the
+  // bestRate provider id / carrier wins over selectedRate + label. getBestRateBaseCost
+  // already prefers bestRate for the awaiting COST; this aligns the account.
+  // Shipped/cancelled keep the selected-first precedence (the bought label is the
+  // truth there) — no shipped path is changed.
+  const isAwaiting = order.orderStatus === 'awaiting_shipment'
+  const bestRateProviderId = toProviderAccountId((order.bestRate as LooseBestRate | undefined)?.shippingProviderId)
+  const selectedProviderId =
     getShippingProviderAccountId(order) ??
     toProviderAccountId(order.selectedRate?.shippingProviderId) ??
     toProviderAccountId(order.selectedRate?.providerAccountId) ??
-    toProviderAccountId(order.label?.shippingProviderId) ??
-    toProviderAccountId((order.bestRate as LooseBestRate | undefined)?.shippingProviderId)
-  const carrierCode =
+    toProviderAccountId(order.label?.shippingProviderId)
+  const providerAccountId = isAwaiting
+    ? bestRateProviderId ?? selectedProviderId
+    : selectedProviderId ?? bestRateProviderId
+  const bestRateCarrierCode = toStringValue((order.bestRate as LooseBestRate | undefined)?.carrierCode)
+  const selectedCarrierCode =
     getShippingString(order, 'carrierCode') ??
-    toStringValue(order.selectedRate?.carrierCode) ??
-    toStringValue((order.bestRate as LooseBestRate | undefined)?.carrierCode)
+    toStringValue(order.selectedRate?.carrierCode)
+  const carrierCode = isAwaiting
+    ? bestRateCarrierCode ?? selectedCarrierCode
+    : selectedCarrierCode ?? bestRateCarrierCode
   const clientId = getLegacyClientIdForDisplay(order)
 
   return resolveV2CarrierAccount(providerAccountId, carrierCode, clientId)

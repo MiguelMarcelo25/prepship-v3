@@ -114,6 +114,7 @@
     "test:ps-105-backend-rate-snapshot-id": "tsx scripts/ps-105-backend-rate-snapshot-id-guard.ts",
     "test:ps-108-parcelguard-insured-best-rate": "tsx scripts/ps-108-parcelguard-insured-best-rate-guard.ts",
     "test:ps-286-label-url-backfill": "tsx scripts/ps-286-shipment-label-url-backfill-guard.ts",
+    "test:ps-286-awaiting-row-rate-truth": "tsx scripts/ps-286-awaiting-row-rate-truth-guard.ts",
     "test:ps-287-print-queue-label-normalization": "tsx scripts/ps-287-print-queue-label-normalization-guard.ts",
     "test:ps-106-carrier-family-eligibility": "tsx scripts/ps-106-carrier-family-eligibility-guard.ts",
     "test:carrier-test-mode-seam": "tsx scripts/carrier-test-mode-seam-guard.ts",
