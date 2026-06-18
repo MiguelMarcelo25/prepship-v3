@@ -27,7 +27,16 @@
 //   • the PS-083 guard test               (scripts/ps-083-…-guard.ts)
 // Keeping one copy means frontend hiding and backend rejection can never drift.
 
-/** Marketplace-owned shipping APIs are scoped by store, never globally shared. */
+/** Marketplace-owned shipping APIs are scoped by store, never globally shared.
+ *
+ * PS-262 (store/account correlation): this set is WHY a Walmart Shipping rate/label
+ * can only ever be offered/bought for its own store. A walmart_shipping account lives
+ * in store_accounts keyed by client_id; the rate path (rates.ts
+ * loadVisibleDirectCarrierAccounts) and the label path (labels-direct.ts
+ * loadDirectAccountForLabel) BOTH gate it through directCarrierVisibleForScope, so a
+ * cross-store request is hidden (rate) or rejected with DIRECT_CARRIER_NOT_ASSIGNED
+ * (label). Proven by scripts/ps-262c-walmart-store-correlation-guard.ts. (The broad
+ * "direct never ParcelGuard" invariant for direct FedEx is owned by PS-261.) */
 const STORE_SCOPED_SHIPPING_PROVIDERS = new Set<string>([
   'walmart_shipping',
   'ebay_shipping',
