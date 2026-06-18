@@ -112,6 +112,10 @@ check('OrderBestRateDto carries nextBestNonHouseRate + houseMargin (survives the
   /nextBestNonHouseRate:/.test(dto) && /houseMargin:/.test(dto) && dto.includes('normalizeNextBestNonHouseRate'));
 
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+// PS-293: the projected house stamp moved OUT of the rates.ts inline block into the shared owner
+// src/services/shipping-workflow/house-tuple-stamp.ts (so /rates/browse AND the rates-backfill stamp
+// it identically). The behavioral pins below now target that owner; rates.ts must DELEGATE to it.
+const houseStamp = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');
 // houseMargin must be redacted from BOTH the rate (browser) and the orders (list/export) serializers.
 // The rates.ts redaction ships in this slice; the orders.ts RATE_MONEY_FIELD_KEYS line ships with the
 // orders.ts slice (that file is mid-edit by a parallel ticket). Both MUST land before any client opts
@@ -145,10 +149,12 @@ check('rates.ts delegates browse money redaction to the pure rate-browser-money-
     RATE_BROWSER_MONEY_FIELD_KEYS.has('shipmentCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('otherCost') &&
     RATE_BROWSER_MONEY_FIELD_KEYS.has('totalCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('houseMargin'));
 }
-check('projected stamp fires only for a SHIPP winner + opted-in client, over combinedRates',
-  ratesRoute.includes('isHouseShippRate(cheapest)') &&
-  ratesRoute.includes('clientHouseAccountEnabled') &&
-  /resolveNextBestNonHouseRate\(\{[\s\S]*?eligibleRates: combinedRates/.test(ratesRoute));
+check('projected stamp fires only for a SHIPP winner + opted-in client, over combinedRates (shared owner)',
+  houseStamp.includes('isHouseShippRate(input.cheapest)') &&
+  houseStamp.includes('clientHouseAccountEnabled') &&
+  /resolveNextBestNonHouseRate\(\{[\s\S]*?eligibleRates: input\.combinedRates/.test(houseStamp));
+check('rates.ts (/rates/browse) DELEGATES the house stamp to the shared stampHouseTuple owner',
+  /await stampHouseTuple\(/.test(ratesRoute) && /import \{ stampHouseTuple \}/.test(ratesRoute));
 
 // ── OBJECTIVE correctness: the competitor pool is the cheapest ELIGIBLE non-SHIPP ─
 // the client could ACTUALLY use (admin automation-disabled + insurance-incompatible excluded).
@@ -167,9 +173,11 @@ check('projected stamp fires only for a SHIPP winner + opted-in client, over com
   check('objective FIX: an admin automation-DISABLED competitor is EXCLUDED — customer_rate = cheapest ELIGIBLE non-SHIPP (usps 9.64, NOT the ineligible fedex 9.0)',
     withRules != null && withRules.total === 9.64);
 }
-check('rates.ts feeds the resolver the REAL eligibility basis (automationRules + shippingOptions), not empty placeholders',
-  /resolveNextBestNonHouseRate\(\{[\s\S]*?automationRules: houseAutomationRules/.test(ratesRoute) &&
-  /resolveNextBestNonHouseRate\(\{[\s\S]*?insuranceProvider: result\.effectiveInsuranceProvider/.test(ratesRoute));
+check('the stamp owner feeds the resolver the REAL eligibility basis (automationRules + shippingOptions), not empty placeholders',
+  /resolveNextBestNonHouseRate\(\{[\s\S]*?automationRules: houseAutomationRules/.test(houseStamp) &&
+  /resolveNextBestNonHouseRate\(\{[\s\S]*?insuranceProvider: input\.insuranceProvider/.test(houseStamp));
+check('rates.ts passes the REAL insurance basis (result.effectiveInsuranceProvider) into stampHouseTuple',
+  /insuranceProvider: result\.effectiveInsuranceProvider/.test(ratesRoute));
 check('opt-in column is NOT declared on the drizzle billing_config schema (avoids the runtime-DDL gotcha)',
   !/house_account_enabled|houseAccountEnabled/.test(readFileSync('src/db/schema/billing.ts', 'utf8')));
 check('opt-in read is fail-safe (false on error) and idempotently ensures the column',
@@ -229,8 +237,8 @@ check('opt-in read is fail-safe (false on error) and idempotently ensures the co
 // capture uses the threaded value (with the legacy fallback) rather than a bare hardcoded literal.
 check('PS-220-D: NextBestNonHouseRateDto carries the optional competitorCount + the normalizer reads it',
   /competitorCount\?: number \| null/.test(dto) && /competitorCount/.test(dto));
-check('PS-220-D: rates.ts stamps the resolver competitorCount onto the projected next-best',
-  /competitorCount: nextBest\.competitorCount/.test(ratesRoute));
+check('PS-220-D: the stamp owner stamps the resolver competitorCount onto the projected next-best',
+  /competitorCount: nextBest\.competitorCount/.test(houseStamp));
 const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
 check('PS-220-D: capture uses the threaded competitorCount (falls back to competitor?1:0 when absent)',
   /competitorCount: competitor\?\.competitorCount \?\? \(competitor \? 1 : 0\)/.test(captureSrc));

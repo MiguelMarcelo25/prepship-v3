@@ -15,8 +15,10 @@ import {
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
 import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
-import { isHouseShippRate, resolveNextBestNonHouseRate } from '../lib/next-best-non-house-rate';
-import { clientHouseAccountEnabled } from '../services/house-account-opt-in';
+// PS-293: the SHIPP house-tuple stamp is the ONE owner shared with the rates-backfill, so a HUGRAB
+// house order gets the same nextBestNonHouseRate/houseMargin whether it was rated by /rates/browse or
+// the backend backfill (no "two competing rate truths").
+import { stampHouseTuple } from '../services/shipping-workflow/house-tuple-stamp';
 import { redactRateBrowserMoney } from '../services/rate-browser-money-redaction';
 import {
   buildResidentialEvidenceFromOrder,
@@ -573,55 +575,18 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // the purchase snapshot expires). Stamp it onto bestRateOut so the awaiting-only persist
   // (order_overrides.best_rate_json) carries it with zero re-fetch; realized capture at label
   // purchase reads it back. No competitor => pass-through (houseMargin 0). Best-effort: never breaks browse.
-  if (bestRateOut && cheapest && isHouseShippRate(cheapest)) {
-    try {
-      const houseClientId = typeof (rest as { clientId?: unknown }).clientId === 'number'
-        ? ((rest as { clientId?: number }).clientId ?? null)
-        : null;
-      if (await clientHouseAccountEnabled(houseClientId)) {
-        // PS-220 objective correctness: the customer_rate must be the cheapest non-SHIPP rate the
-        // client could ACTUALLY use, so the competitor pool is filtered on the SAME eligibility basis
-        // the customer faces — admin automation-DISABLED services, and (for an insured order) carriers
-        // that cannot carry the insurance, are excluded. These were previously omitted (null), so the
-        // pool wrongly included ineligible rates and could under-state the margin / bill a rate the
-        // customer can't use. Best-effort: an automation-load failure falls back to no extra rules.
-        const houseStoreId = typeof (rest as { storeId?: unknown }).storeId === 'number'
-          ? ((rest as { storeId?: number }).storeId ?? null)
-          : null;
-        const houseAutomationRules = await loadShippingAutomationRules().catch(() => null);
-        const nextBest = resolveNextBestNonHouseRate({
-          eligibleRates: combinedRates,
-          context: { clientId: houseClientId, storeId: houseStoreId },
-          shippingOptions: {
-            insuranceProvider: result.effectiveInsuranceProvider ?? null,
-            insuredValue: result.effectiveInsuredValue ?? null,
-          },
-          automationRules: houseAutomationRules,
-          client: { houseAccountOptIn: true },
-        });
-        const drpCost = rateTotal(cheapest);
-        const providerMatch = nextBest ? /^se-(\d+)$/i.exec(String(nextBest.rate.carrier_id ?? '')) : null;
-        bestRateOut = {
-          ...(bestRateOut as Record<string, unknown>),
-          nextBestNonHouseRate: nextBest
-            ? {
-                carrierCode: String(nextBest.rate.carrier_code ?? '') || null,
-                serviceCode: String(nextBest.rate.service_code ?? '') || null,
-                shipmentCost: Number(nextBest.rate.shipping_amount?.amount ?? nextBest.total),
-                otherCost: Number(nextBest.rate.other_amount?.amount ?? 0),
-                totalCost: nextBest.total,
-                providerAccountId: providerMatch ? Number.parseInt(providerMatch[1]!, 10) : null,
-                // PS-220-D: stamp the REAL eligible-priced-non-SHIPP competitor count so the realized
-                // capture reports the true number instead of the legacy hardcoded 1.
-                competitorCount: nextBest.competitorCount,
-              }
-            : null,
-          houseMargin: nextBest ? Math.max(0, nextBest.total - drpCost) : 0,
-        } as typeof cheapest;
-      }
-    } catch (err) {
-      console.warn('[rates/browse] house-margin projection skipped:', err instanceof Error ? err.message : err);
-    }
+  // PS-293: delegate the house-tuple stamp to the shared owner (the SAME one the rates-backfill calls).
+  // stampHouseTuple is the gate + projection + best-effort try/catch — it returns bestRateOut unchanged
+  // for a non-SHIPP winner or a non-opted-in client (default-OFF inert), so this is byte-identical.
+  if (bestRateOut && cheapest) {
+    bestRateOut = await stampHouseTuple(bestRateOut as Record<string, unknown>, {
+      cheapest,
+      combinedRates,
+      clientId: (rest as { clientId?: unknown }).clientId,
+      storeId: (rest as { storeId?: unknown }).storeId,
+      insuranceProvider: result.effectiveInsuranceProvider ?? null,
+      insuredValue: result.effectiveInsuredValue ?? null,
+    }) as typeof cheapest;
   }
   // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
   // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no

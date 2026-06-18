@@ -30,6 +30,10 @@ import {
 // order with forceRefresh, so each fan-out queues behind the global rate limiter and the per-order
 // timeout wrapped the QUEUE WAIT — under a 40+ order burst most orders timed out waiting for a permit.
 import { runWithTimeoutAndRetry, withTimeout } from './with-timeout-retry';
+// PS-293: the SHIPP house-tuple stamp owner shared with /rates/browse — the backfill previously
+// persisted a tuple-LESS best rate for HUGRAB house orders, so which surface rated the row decided
+// whether the House tuple appeared. Now both stamp it identically (default-OFF inert).
+import { stampHouseTuple } from './shipping-workflow/house-tuple-stamp';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -607,11 +611,23 @@ async function runBackfill(
             rateCount: combined.combinedRates.length,
             matchType: result.cached ? 'exact' : 'live',
           };
+          // PS-293: stamp the SHIPP house tuple via the SAME owner /rates/browse uses, so a HUGRAB
+          // house order rated by the backfill carries nextBestNonHouseRate/houseMargin identically to
+          // the live Rate Browser (default-OFF inert: non-SHIPP winner / non-opted-in client => the
+          // best rate is returned unchanged). The added fields don't affect the no-downgrade total.
+          const stampedBest = await stampHouseTuple(bestWithMetadata as Record<string, unknown>, {
+            cheapest: best,
+            combinedRates: combined.combinedRates,
+            clientId: row.clientId,
+            storeId: row.storeId,
+            insuranceProvider: (result as { effectiveInsuranceProvider?: string | null }).effectiveInsuranceProvider ?? null,
+            insuredValue: (result as { effectiveInsuredValue?: number | null }).effectiveInsuredValue ?? null,
+          });
           // PS-271: no-downgrade ratchet (automated persist site). Keep a CHEAPER fresh best for the
           // SAME shipment inputs (same requestFingerprint) instead of overwriting it with a thin Shipp
           // re-quote that dropped UPS/USPS; a different fingerprint (inputs changed) or a cheaper-or-
           // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
-          if (await isPersistedBestDowngrade(row.id, bestWithMetadata)) {
+          if (await isPersistedBestDowngrade(row.id, stampedBest)) {
             job.skipped++;
             if (job.failureSamples.length < 5) {
               job.failureSamples.push(
@@ -623,7 +639,7 @@ async function runBackfill(
               .insert(orderOverrides)
               .values({
                 orderId: row.id,
-                bestRateJson: bestWithMetadata as unknown,
+                bestRateJson: stampedBest as unknown,
                 bestRateDims: dimsLabel,
                 bestRateAt: now,
                 updatedAt: now,
@@ -631,7 +647,7 @@ async function runBackfill(
               .onConflictDoUpdate({
                 target: orderOverrides.orderId,
                 set: {
-                  bestRateJson: bestWithMetadata as unknown,
+                  bestRateJson: stampedBest as unknown,
                   bestRateDims: dimsLabel,
                   bestRateAt: now,
                   updatedAt: now,
