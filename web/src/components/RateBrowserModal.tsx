@@ -49,6 +49,11 @@ import {
 // PS-135: the backend owns best-rate selection; the modal consumes its canonical winner
 // (matched into the eligible set) instead of re-ranking rows client-side.
 import { findCanonicalBestRate } from '../lib/rate-proof';
+// PS-292: the SHIPP house-account tuple (customer_rate basis + margin) is backend-owned and rides
+// the canonical bestRate (not the rows array). These pure helpers lift it onto the applied rate (so
+// a manual SHIPP-row apply persists it) and onto the recommended row's two-tier display. The modal
+// NEVER computes the margin — it only forwards what the backend issued.
+import { houseTupleForRow, houseDisplayForRow } from '../lib/rate-browser-house-tuple';
 // PS-279: the emission boundary — the modal may ONLY emit the backend canonical best; absent
 // it, emit NOTHING (no FE-ranked local cheapest) and show an unresolved/retry diagnostic state.
 import { decideBestRateEmission } from '../lib/rate-browser-best-emission';
@@ -149,6 +154,12 @@ export type RbAppliedRate = {
   cacheKey?: string;
   cacheCreatedAt?: string;
   proofSource?: string;
+  // PS-292: backend-owned SHIPP house tuple carried through Apply so a manually-selected SHIPP best
+  // persists best_rate_json.nextBestNonHouseRate/houseMargin (the Awaiting row reads totalCost off it
+  // to render the customer_rate-over-drp_cost two-tier). Pass-through only — lifted from the canonical
+  // backend best, never recomputed from visible rows.
+  nextBestNonHouseRate?: unknown;
+  houseMargin?: number | null;
   raw?: unknown;
   weight?: { lb: number; oz: number };
   dims?: { length: number; width: number; height: number };
@@ -1052,6 +1063,10 @@ export default function RateBrowserModal({
   const [scopedAccountsLoading, setScopedAccountsLoading] = useState(false);
   const [scopedAccountsError, setScopedAccountsError] = useState<string | null>(null);
   const browseSequenceRef = useRef(0);
+  // PS-292: the backend canonical bestRate from the latest browse (carries the SHIPP house tuple).
+  // The apply helpers (handleRateClick/toAppliedRate) and the recommended-row renderer read it from
+  // here because the rows array never carries the stamp — only bestRate does.
+  const canonicalBestRef = useRef<unknown>(null);
 
   const rateShippingAccounts = useMemo(
     () => (testMode ? shippingAccounts : scopedShippingAccounts),
@@ -1377,6 +1392,9 @@ export default function RateBrowserModal({
     // consumed after every carrier finishes so the modal's auto-applied best matches the
     // backend selection instead of a divergent client-side re-rank.
     let canonicalBackendBest: unknown = null;
+    // PS-292: clear any prior run's house tuple up front so a stale SHIPP best can't bleed into a
+    // fresh browse before the new canonical best is captured below.
+    canonicalBestRef.current = null;
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
     if (order?.orderId) {
@@ -1473,6 +1491,8 @@ export default function RateBrowserModal({
       // PS-135: capture the backend-selected bestRate for the auto-apply step (the browseResult
       // const is scoped to this try block; the selection runs after the finally).
       canonicalBackendBest = (browseResult as { bestRate?: unknown } | null)?.bestRate ?? null;
+      // PS-292: expose it to the apply/render closures so a SHIPP house best carries its tuple.
+      canonicalBestRef.current = canonicalBackendBest;
       const raw = (Array.isArray(browseResult)
         ? browseResult
         : Array.isArray(browseResult?.rates)
@@ -1893,6 +1913,9 @@ export default function RateBrowserModal({
       ...currentAppliedInsurance(),
       ...rateInsuranceProof(r),
       ...rateBackendProof(r),
+      // PS-292: if this clicked row IS the backend canonical SHIPP best, carry its house tuple so the
+      // saved best_rate_json keeps the customer_rate/margin (the Awaiting row renders the two-tier).
+      ...houseTupleForRow(r, canonicalBestRef.current),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     });
@@ -1918,6 +1941,9 @@ export default function RateBrowserModal({
       ...currentAppliedInsurance(),
       ...rateInsuranceProof(r),
       ...rateBackendProof(r),
+      // PS-292: carry the backend SHIPP house tuple when this row is the canonical best (auto-recommend
+      // emission path), so onBestRateResolved persists the customer_rate/margin like the manual click.
+      ...houseTupleForRow(r, canonicalBestRef.current),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     };
@@ -1937,6 +1963,13 @@ export default function RateBrowserModal({
       typeof r.shippingProviderId === 'number'
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
+    // PS-292: when THIS row is the backend canonical SHIPP best for a house-account order, show the
+    // two-tier tuple — bold customer_rate (backend nextBestNonHouseRate.totalCost) over the SHIPP
+    // drp_cost (the row's own base) + a HOUSE badge. null for every other row / non-house / redacted
+    // (non-financial viewers get a nulled totalCost from the backend, so this stays hidden).
+    const houseTuple = isRecommended
+      ? houseDisplayForRow(r, canonicalBestRef.current, rateBaseTotal(r))
+      : null;
     return (
       <RateRowItem
         key={`${pid}-${r.serviceCode}-${index}`}
@@ -1952,6 +1985,7 @@ export default function RateBrowserModal({
         rateBlockedReason={rateBlockedReason}
         rateBaseTotal={rateBaseTotal}
         rateDisplayTotal={rateDisplayTotal}
+        houseTuple={houseTuple}
       />
     );
   }

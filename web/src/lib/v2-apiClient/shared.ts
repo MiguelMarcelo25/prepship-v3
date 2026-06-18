@@ -15,6 +15,11 @@ import { api, qs } from '../api';
 import { API_BASE } from '../api-base';
 import { getCachedAuthToken } from '../auth-session-cache';
 import { buildManifestCsv, manifestRowsFromResponse } from '../../components/Views/manifests-parity';
+// PS-292: the SHIPP house-account tuple (backend-owned, src/routes/rates.ts) must SURVIVE this v2
+// translation. The allowlist below historically dropped nextBestNonHouseRate/houseMargin (they
+// remained only under `raw`), so every FE save persisted best_rate_json without the tuple and the
+// Awaiting/Rate-Browser UI had nothing to render. Pass them through via the single FE owner.
+import { houseTuplePassThrough } from '../rate-browser-house-tuple';
 // PS-083: shared "is this direct carrier usable for this scope?" decision —
 // the SAME module the backend `/carriers/rates` + `/carriers/labels` gates use,
 // so Rate Browser hiding and server-side rejection can never drift apart.
@@ -947,7 +952,15 @@ export const rateBrowseInflight = new Map<string, Promise<any>>();
 export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
   if (r && typeof r === 'object') {
     const obj = r as Record<string, unknown>;
-    if ('amount' in obj && 'carrierCode' in obj) return obj;
+    if ('amount' in obj && 'carrierCode' in obj) {
+      // PS-292: already-v2-shaped input (a re-translation or a pre-translated cached hit). Keep it
+      // unchanged, but surface the SHIPP house tuple at the top level if it only survived under
+      // `raw`, so this function's output shape is house-consistent no matter which path produced the
+      // input. Idempotent — once the key is present we return verbatim.
+      return 'nextBestNonHouseRate' in obj
+        ? obj
+        : { ...obj, ...houseTuplePassThrough((obj as { raw?: unknown }).raw ?? obj) };
+    }
     const shipping = obj.shipping_amount as { amount?: unknown } | undefined;
     const originalShipping = obj.original_amount as { amount?: unknown } | undefined;
     const other = obj.other_amount as { amount?: unknown } | undefined;
@@ -991,6 +1004,10 @@ export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       insuranceCost: obj.insuranceCost ?? null,
       insuranceCostUnresolved: obj.insuranceCostUnresolved ?? false,
       insuranceCostError: obj.insuranceCostError ?? null,
+      // PS-292: lift the backend-owned SHIPP house tuple (customer_rate basis + margin) to the TOP
+      // level so the FE save path persists it and the row/Rate-Browser can render the two-tier
+      // display. Pass-through ONLY (backend nulls it for non-financial viewers before it gets here).
+      ...houseTuplePassThrough(obj),
       raw: obj,
     };
   }

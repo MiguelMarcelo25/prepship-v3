@@ -29,6 +29,7 @@ import {
 import {
   getRowInsuranceCoverage,
   renderInsuranceCoverageBadge,
+  renderHouseBadge,
 } from './Views/orders-row-display';
 
 type RateShippingOptions = {
@@ -55,6 +56,10 @@ type RateRowItemProps = {
   ) => string | null;
   rateBaseTotal: (rate: RateRow) => number;
   rateDisplayTotal: (rate: RateRow, markups: Record<string, Markup>) => number;
+  // PS-292: backend-owned SHIPP house tuple for the recommended row — { drpCost, customerRate }
+  // (computed by the parent from the canonical bestRate). null on every other row / non-house /
+  // redacted-for-non-financial. When present the row shows customer_rate over drp_cost + HOUSE badge.
+  houseTuple?: { drpCost: number; customerRate: number } | null;
 };
 
 export default function RateRowItem({
@@ -70,6 +75,7 @@ export default function RateRowItem({
   rateBlockedReason,
   rateBaseTotal,
   rateDisplayTotal,
+  houseTuple,
 }: RateRowItemProps): ReactNode {
   const blockedReason = rateBlockedReason(r, order, currentRateShippingOptions);
   const blocked = blockedReason != null;
@@ -275,9 +281,20 @@ export default function RateRowItem({
         )}
         {carrierBadgeLarge(r.carrierCode)}
         <div style={{ textAlign: 'right', minWidth: 145 }}>
-          {priceDisplay(base, marked, {
-            mainColor: blocked ? 'var(--text3)' : 'var(--green)',
-          })}
+          {/* PS-292: SHIPP house-account recommended row — bold customer_rate (cheapest eligible
+              non-SHIPP) over the SHIPP drp_cost, plus the HOUSE badge. Backend-owned (houseTuple is
+              the parent's pass-through of the canonical bestRate); the row never computes the margin.
+              Falls back to the normal single price for every other row / non-house / redacted view. */}
+          {houseTuple && !blocked ? (
+            <>
+              {priceDisplay(houseTuple.drpCost, houseTuple.customerRate, { mainColor: 'var(--green)' })}
+              <div style={{ marginTop: 2 }}>{renderHouseBadge()}</div>
+            </>
+          ) : (
+            priceDisplay(base, marked, {
+              mainColor: blocked ? 'var(--text3)' : 'var(--green)',
+            })
+          )}
           {/* PS-290: HUGRAB $100-insurance coverage badge under the price — same backend
               verdict + renderer as the Awaiting column (parity, not a fork). */}
           {renderInsuranceCoverageBadge(insuranceCoverage)}
