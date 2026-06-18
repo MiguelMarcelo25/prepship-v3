@@ -147,6 +147,29 @@ check('orders-row-display does NOT call the resolver (no FE recompute)',
 check('orders-row-display does NOT do its own $100 floor math (no insuredValue comparison)',
   !/insuredValue\s*[<>=]/.test(rowDisplay));
 
+// ── (4) Rate Browser per-rate row renders the SAME backend verdict as Awaiting ──
+// PS-290 (slice 2): RateRowItem.tsx must render the HUGRAB $100 coverage badge with the SAME
+// backend-owned reader + renderer the Awaiting column uses (getRowInsuranceCoverage +
+// renderInsuranceCoverageBadge in orders-row-display) — TRUE parity, not a fork. The FE renders
+// the backend verdict verbatim; it must NEVER call the resolver or do its own coverage/$100 math.
+const rateRowItem = read('web/src/components/RateRowItem.tsx');
+check('RateRowItem imports the SHARED Awaiting coverage reader (getRowInsuranceCoverage)',
+  /getRowInsuranceCoverage/.test(rateRowItem));
+check('RateRowItem imports the SHARED Awaiting coverage renderer (renderInsuranceCoverageBadge)',
+  /renderInsuranceCoverageBadge/.test(rateRowItem));
+check('RateRowItem reads the backend coverage verdict off the rate (pure pass-through)',
+  /getRowInsuranceCoverage\(/.test(rateRowItem));
+check('RateRowItem renders the coverage badge in the row',
+  /renderInsuranceCoverageBadge\(/.test(rateRowItem));
+check('RateRowItem does NOT call the resolver (no FE recompute)',
+  !/resolveInsuranceCoverageStatus\s*\(/.test(rateRowItem));
+check('RateRowItem does NOT do its own $100 floor math (no insuredValue comparison)',
+  !/insuredValue\s*[<>=]/.test(rateRowItem));
+// Parity is by CONSTRUCTION: both surfaces import the same reader + renderer from the single
+// orders-row-display owner, so the Rate Browser badge can never diverge from the Awaiting badge.
+check('RateRowItem sources the coverage reader/renderer from orders-row-display (one owner, no fork)',
+  /from\s+['"]\.\/Views\/orders-row-display['"]/.test(rateRowItem));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-290 HUGRAB insurance-coverage-badge guard (${failures} failing)`);
   process.exit(1);

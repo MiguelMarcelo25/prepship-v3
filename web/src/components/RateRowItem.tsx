@@ -19,6 +19,17 @@ import {
   formatInsuranceCertaintyTag,
   rbInsuranceCertaintyTone,
 } from './RateBrowserModal';
+// PS-290 (slice 2): render the HUGRAB $100-insurance coverage badge with the SAME backend-owned
+// reader + renderer the Awaiting column uses — TRUE parity by construction, not a forked copy.
+// getRowInsuranceCoverage is a PURE pass-through of the backend verdict (insuranceCoverageStatus /
+// insuranceBadgeLabel / insuranceBadgeTone, owned by order-rate-dto -> resolveInsuranceCoverageStatus);
+// the Rate Browser row never recomputes the coverage verdict. Returns null for non-HUGRAB rows
+// (status 'not_required') or rows the backend has not stamped, so the row renders EXACTLY as before
+// unless the backend asserted a HUGRAB coverage status.
+import {
+  getRowInsuranceCoverage,
+  renderInsuranceCoverageBadge,
+} from './Views/orders-row-display';
 
 type RateShippingOptions = {
   insuranceProvider?: string | null;
@@ -78,6 +89,12 @@ export default function RateRowItem({
   const primaryText = showCarrier ? acctName : svcName;
   const secondaryText = showCarrier ? svcName : '';
   const sourceText = getModalRateSourceLabel(r, rateShippingAccounts);
+
+  // PS-290 (slice 2): the backend-owned HUGRAB $100-insurance coverage verdict for THIS rate,
+  // read with the SAME pure pass-through the Awaiting column uses. The verdict may ride the rate
+  // top-level or its raw payload; both are read verbatim (no recompute). null -> renders nothing,
+  // so non-HUGRAB / unstamped rates are unchanged.
+  const insuranceCoverage = getRowInsuranceCoverage(r) ?? getRowInsuranceCoverage(r.raw);
 
   const detailsArr: any[] = (r.raw?.rate_details ?? r.raw?.rateDetails ?? []) as any[];
   const surcharges = detailsArr.filter(
@@ -261,6 +278,9 @@ export default function RateRowItem({
           {priceDisplay(base, marked, {
             mainColor: blocked ? 'var(--text3)' : 'var(--green)',
           })}
+          {/* PS-290: HUGRAB $100-insurance coverage badge under the price — same backend
+              verdict + renderer as the Awaiting column (parity, not a fork). */}
+          {renderInsuranceCoverageBadge(insuranceCoverage)}
         </div>
       </div>
     </div>
