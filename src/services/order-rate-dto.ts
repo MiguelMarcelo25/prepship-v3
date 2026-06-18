@@ -21,6 +21,10 @@ import {
   type InsuranceCoverageStatus,
   type InsuranceCoverageBadgeTone,
 } from './shipping-workflow/insurance-coverage-status';
+// PS-261 (display slice): the SAME gate the label-purchase preflight uses, so the Rate Browser's
+// pre-purchase indicator and the buy-path BLOCK agree by construction. The DTO DELEGATES to it over
+// the already-resolved PS-290 coverage status; the FE renders the {allow,reason} verbatim.
+import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label-purchase-gate';
 
 // ── Inlined DTO types (v2 parity) ────────────────────────────────────────────
 
@@ -67,6 +71,14 @@ export interface OrderBestRateDto {
   insuranceCoverageStatus: InsuranceCoverageStatus;
   insuranceBadgeLabel: string;
   insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  // PS-261 (display slice): the HUGRAB label-PURCHASE-GATE verdict for THIS rate — backend-owned,
+  // mapped from insuranceCoverageStatus via the SAME PS-261 gate the buy-path preflight uses
+  // (resolveHugrabLabelPurchaseGate). true when the mandatory $100 coverage is PROVEN (purchase
+  // allowed); false when it is missing / unproven / unsupported (purchase BLOCKED). The Rate Browser
+  // renders this pre-purchase so the operator sees the BLOCK before buying — verbatim, no recompute.
+  // allow === true + empty reason on non-HUGRAB rows (the indicator renders nothing).
+  hugrabPurchaseAllowed: boolean;
+  hugrabPurchaseBlockReason: string;
 }
 
 export interface NextBestNonHouseRateDto {
@@ -99,6 +111,9 @@ export interface OrderSelectedRateDto {
   insuranceCoverageStatus: InsuranceCoverageStatus;
   insuranceBadgeLabel: string;
   insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  // PS-261 (display slice): HUGRAB label-PURCHASE-GATE verdict (see OrderBestRateDto).
+  hugrabPurchaseAllowed: boolean;
+  hugrabPurchaseBlockReason: string;
 }
 
 // ── Local 400-class error (v4 has no contracts/input-validation module) ──────
@@ -200,7 +215,14 @@ function resolveCoverageFields(args: {
   insuranceCost: number | null;
   insuranceProvenance: string | null;
   insuranceCertainty: unknown;
-}): { insuranceCoverageStatus: InsuranceCoverageStatus; insuranceBadgeLabel: string; insuranceBadgeTone: InsuranceCoverageBadgeTone } {
+}): {
+  insuranceCoverageStatus: InsuranceCoverageStatus;
+  insuranceBadgeLabel: string;
+  insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  // PS-261 (display slice) — the purchase-gate verdict, derived from the SAME coverage status.
+  hugrabPurchaseAllowed: boolean;
+  hugrabPurchaseBlockReason: string;
+} {
   const verdict = resolveInsuranceCoverageStatus({
     isHugrab: args.isHugrab,
     insuranceProvider: args.insuranceProvider,
@@ -209,10 +231,16 @@ function resolveCoverageFields(args: {
     insuranceProvenance: args.insuranceProvenance,
     insuranceCertainty: typeof args.insuranceCertainty === 'string' ? args.insuranceCertainty : null,
   });
+  // PS-261 — map the PS-290 coverage status to the label-purchase decision with the SAME gate the
+  // buy-path preflight uses, so the Rate Browser pre-purchase indicator and the buy-path BLOCK
+  // agree by construction. The reason is empty on non-HUGRAB rows (allow + no indicator).
+  const gate = resolveHugrabLabelPurchaseGate(verdict.status);
   return {
     insuranceCoverageStatus: verdict.status,
     insuranceBadgeLabel: verdict.badgeLabel,
     insuranceBadgeTone: verdict.badgeTone,
+    hugrabPurchaseAllowed: gate.allow,
+    hugrabPurchaseBlockReason: verdict.status === 'not_required' ? '' : gate.reason,
   };
 }
 

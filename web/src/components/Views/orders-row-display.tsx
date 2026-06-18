@@ -506,6 +506,44 @@ export function renderInsuranceCoverageBadge(coverage: RowInsuranceCoverage | nu
   )
 }
 
+// PS-261 (display slice): the HUGRAB label-PURCHASE-GATE verdict the Rate Browser row shows
+// pre-purchase, so the operator sees whether the mandatory $100 coverage is PROVEN (purchase
+// allowed) vs BLOCKED (missing / unproven / unsupported) BEFORE buying. The verdict is BACKEND-owned
+// — order-rate-dto stamps hugrabPurchaseAllowed / hugrabPurchaseBlockReason by delegating to the
+// SAME PS-261 gate (resolveHugrabLabelPurchaseGate) the buy-path preflight uses, so display and
+// purchase agree by construction. This reader is a PURE pass-through of those fields; the FE NEVER
+// recomputes the purchase verdict. Returns null for non-HUGRAB / unstamped rows (allow + no reason),
+// and for allowed rows (the indicator only warns about a BLOCK) so the row is unchanged unless the
+// backend asserted a purchase BLOCK.
+export type RowHugrabPurchaseGate = {
+  allow: boolean
+  reason: string
+}
+
+export function getRowHugrabPurchaseGate(rate: unknown): RowHugrabPurchaseGate | null {
+  const record = toRecord(rate)
+  if (!record) return null
+  // Only a backend-asserted BLOCK is surfaced — `false` is the explicit signal. Allowed/unstamped
+  // rows (missing flag, or allow === true) render nothing, so the row is unchanged.
+  if (record.hugrabPurchaseAllowed !== false) return null
+  const reason = toStringValue(record.hugrabPurchaseBlockReason) ?? ''
+  if (!reason) return null
+  return { allow: false, reason }
+}
+
+export function renderHugrabPurchaseGateBadge(gate: RowHugrabPurchaseGate | null | undefined) {
+  if (!gate || gate.allow || !gate.reason) return null
+  return (
+    <div
+      data-hugrab-purchase-gate="blocked"
+      style={{ fontSize: 9.5, color: 'var(--red)', fontWeight: 700, whiteSpace: 'nowrap', letterSpacing: 0.2 }}
+      title={gate.reason}
+    >
+      ⚠ COVERAGE BLOCKED
+    </div>
+  )
+}
+
 export function renderRateAmountWithMarkup(
   baseAmount: number | null,
   markedAmount: number | null,

@@ -30,6 +30,14 @@ import {
   getRowInsuranceCoverage,
   renderInsuranceCoverageBadge,
   renderHouseBadge,
+  // PS-261 (display slice): the HUGRAB label-PURCHASE-GATE verdict for this rate, read with the
+  // SAME backend-owned pass-through the Awaiting column owns. getRowHugrabPurchaseGate is a PURE
+  // reader of the backend hugrabPurchaseAllowed / hugrabPurchaseBlockReason fields (owned by
+  // order-rate-dto -> resolveHugrabLabelPurchaseGate over the PS-290 coverage status); the Rate
+  // Browser row never recomputes the purchase verdict. Returns null unless the backend asserted a
+  // pre-purchase BLOCK, so allowed / non-HUGRAB / unstamped rates render EXACTLY as before.
+  getRowHugrabPurchaseGate,
+  renderHugrabPurchaseGateBadge,
 } from './Views/orders-row-display';
 
 type RateShippingOptions = {
@@ -101,6 +109,12 @@ export default function RateRowItem({
   // top-level or its raw payload; both are read verbatim (no recompute). null -> renders nothing,
   // so non-HUGRAB / unstamped rates are unchanged.
   const insuranceCoverage = getRowInsuranceCoverage(r) ?? getRowInsuranceCoverage(r.raw);
+
+  // PS-261 (display slice): the backend-owned HUGRAB label-PURCHASE-GATE verdict for THIS rate,
+  // read with the SAME pure pass-through as above. The verdict may ride the rate top-level or its
+  // raw payload; both are read verbatim (no recompute). null -> renders nothing, so allowed /
+  // non-HUGRAB / unstamped rates are unchanged; only a backend-asserted BLOCK shows the indicator.
+  const hugrabPurchaseGate = getRowHugrabPurchaseGate(r) ?? getRowHugrabPurchaseGate(r.raw);
 
   const detailsArr: any[] = (r.raw?.rate_details ?? r.raw?.rateDetails ?? []) as any[];
   const surcharges = detailsArr.filter(
@@ -298,6 +312,10 @@ export default function RateRowItem({
           {/* PS-290: HUGRAB $100-insurance coverage badge under the price — same backend
               verdict + renderer as the Awaiting column (parity, not a fork). */}
           {renderInsuranceCoverageBadge(insuranceCoverage)}
+          {/* PS-261: pre-purchase HUGRAB label-PURCHASE-GATE indicator — the operator sees a
+              backend-asserted coverage BLOCK BEFORE buying (verbatim, no recompute). Renders only
+              when the backend blocked the purchase; allowed rows show nothing. */}
+          {renderHugrabPurchaseGateBadge(hugrabPurchaseGate)}
         </div>
       </div>
     </div>

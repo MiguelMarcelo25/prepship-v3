@@ -179,6 +179,63 @@ check('labels.ts gates the BLOCK behind the default-OFF HUGRAB_PURCHASE_GATE can
   /hugrabPurchaseGateEnabled\(\)\s*&&\s*!hugrabCoveragePreflight\.allow/.test(labels) &&
   /process\.env\.HUGRAB_PURCHASE_GATE === 'on'/.test(labels));
 
+// ── PS-261 (this slice): the PURCHASE-GATE verdict is DISPLAYED, pre-purchase, on the Rate
+//    Browser HUGRAB rate row. The operator sees whether the mandatory $100 coverage is PROVEN
+//    (purchase allowed) vs BLOCKED (coverage missing / unproven / unsupported) BEFORE buying —
+//    the SAME backend gate the purchase preflight uses, rendered VERBATIM by the FE. ───────────
+//
+// Source of truth: the gate verdict for display is stamped on the rate DTO by DELEGATING to the
+// PS-261 gate (resolveHugrabLabelPurchaseGate) over the DTO's already-resolved PS-290 coverage
+// status. The FE renders the backend {allow,reason}; it NEVER recomputes a purchase verdict.
+
+// BEHAVIOR: the gate reasons are non-empty + render-safe operator copy (the FE shows reason text).
+check('gate ALLOW reason is non-empty render-safe copy (included)',
+  resolveHugrabLabelPurchaseGate('included').allow === true &&
+  resolveHugrabLabelPurchaseGate('included').reason.length > 0);
+check('gate BLOCK reason is non-empty render-safe copy (unknown)',
+  resolveHugrabLabelPurchaseGate('unknown').allow === false &&
+  resolveHugrabLabelPurchaseGate('unknown').reason.length > 0);
+
+// (A) order-rate-dto STAMPS the backend purchase-gate verdict by DELEGATING to the PS-261 gate
+//     over the already-resolved PS-290 coverage status (one owner; no FE/DTO re-derivation).
+const dto = read('src/services/order-rate-dto.ts');
+check('order-rate-dto imports the PS-261 purchase gate (resolveHugrabLabelPurchaseGate)',
+  /resolveHugrabLabelPurchaseGate/.test(dto) &&
+  /from '\.\/shipping-workflow\/hugrab-label-purchase-gate'/.test(dto));
+check('order-rate-dto declares the backend purchase-gate display fields',
+  /hugrabPurchaseAllowed:\s*boolean/.test(dto) &&
+  /hugrabPurchaseBlockReason:\s*string/.test(dto));
+check('order-rate-dto populates the gate verdict via the gate over the coverage status (delegation)',
+  /resolveHugrabLabelPurchaseGate\(/.test(dto));
+
+// (B) orders-row-display exposes a PURE pass-through reader + a renderer for the gate verdict.
+const rowDisplay2 = read('web/src/components/Views/orders-row-display.tsx');
+check('orders-row-display exposes a pure HUGRAB purchase-gate reader',
+  /export function getRowHugrabPurchaseGate\(/.test(rowDisplay2));
+check('orders-row-display reads hugrabPurchaseAllowed off the backend DTO (pass-through)',
+  /hugrabPurchaseAllowed/.test(rowDisplay2));
+check('orders-row-display reads hugrabPurchaseBlockReason off the backend DTO (pass-through)',
+  /hugrabPurchaseBlockReason/.test(rowDisplay2));
+check('orders-row-display exposes a HUGRAB purchase-gate renderer',
+  /export function renderHugrabPurchaseGateBadge\(/.test(rowDisplay2));
+check('orders-row-display does NOT call the PS-261 gate (no FE recompute of a purchase verdict)',
+  !/resolveHugrabLabelPurchaseGate\s*\(/.test(rowDisplay2));
+
+// (C) RateRowItem RENDERS the gate verdict on the HUGRAB rate row, sourced from the one owner.
+const rateRowItem2 = read('web/src/components/RateRowItem.tsx');
+check('RateRowItem imports the shared purchase-gate reader (getRowHugrabPurchaseGate)',
+  /getRowHugrabPurchaseGate/.test(rateRowItem2));
+check('RateRowItem imports the shared purchase-gate renderer (renderHugrabPurchaseGateBadge)',
+  /renderHugrabPurchaseGateBadge/.test(rateRowItem2));
+check('RateRowItem reads the backend gate verdict off the rate (pure pass-through)',
+  /getRowHugrabPurchaseGate\(/.test(rateRowItem2));
+check('RateRowItem renders the purchase-gate indicator in the row',
+  /renderHugrabPurchaseGateBadge\(/.test(rateRowItem2));
+check('RateRowItem does NOT call the PS-261 gate (no FE recompute of a purchase verdict)',
+  !/resolveHugrabLabelPurchaseGate\s*\(/.test(rateRowItem2));
+check('RateRowItem sources the gate reader/renderer from orders-row-display (one owner, no fork)',
+  /from\s+['"]\.\/Views\/orders-row-display['"]/.test(rateRowItem2));
+
 if (failures > 0) {
   console.error(`\nFAIL PS-261 HUGRAB label-purchase-gate guard (${failures} failing)`);
   process.exit(1);
