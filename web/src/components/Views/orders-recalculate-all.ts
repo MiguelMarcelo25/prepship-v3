@@ -20,8 +20,12 @@ export type RecalculateAllJob = {
 }
 
 /** Kick the backend backfill over ALL awaiting orders. Returns the job id. */
-export async function startRecalculateAllBestRates(): Promise<{ jobId: string }> {
-  const response = await api.post<{ job_id: string }>('/rates/backfill-best', { maxAgeHours: 0 })
+// PS-293: maxAgeHours selects the backend rating mode. 0 = the manual "Recalculate All" force-live
+// fan-out (re-rate every awaiting order). A POSITIVE value is the cache-friendly passive backfill the
+// Awaiting page uses for its overflow rows: re-rate only stale/missing rows and reuse fresh cache, so
+// auto-triggering it on page load never force-live-re-rates the whole table.
+export async function startRecalculateAllBestRates(maxAgeHours = 0): Promise<{ jobId: string }> {
+  const response = await api.post<{ job_id: string }>('/rates/backfill-best', { maxAgeHours })
   return { jobId: response.job_id }
 }
 

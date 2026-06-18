@@ -395,6 +395,15 @@ const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order be
 // process-wide ShipStation rate limiter with the interactive Rate Browser, so a
 // smaller background footprint stops the modal's live fan-out from being starved.
 const PASSIVE_LIVE_BEST_RATE_CONCURRENCY = 2
+// PS-293: the browser may live-rate at most this many Awaiting rows per mount; the rest are handed to
+// the backend backfill so the frontend NEVER drains a 40+ job live-rating queue (the reported bug:
+// rows only got correct rates after clicking Browse Rates one-by-one). This is the card's explicit
+// "immediate safety requirement".
+const PASSIVE_LIVE_BEST_RATE_MAX_ROWS = 5
+// PS-293: the passive overflow uses a CACHE-FRIENDLY backfill (re-rate stale/missing rows, reuse fresh
+// cache) — NOT the force-live maxAgeHours:0 the manual Recalculate All button uses — so auto-triggering
+// it on page load doesn't force-live-re-rate the whole table or re-create the #750 rate-limiter burst.
+const PASSIVE_BACKFILL_MAX_AGE_HOURS = 24
 const BATCH_QUEUE_CONCURRENCY = 2
 const BACKEND_QUEUE_SEND_CONCURRENCY = 5
 const BACKEND_TEST_QUEUE_SEND_CONCURRENCY = 8
@@ -583,6 +592,8 @@ export default function OrdersView({
         setRecalcAllSummary(summarizeRecalculateAllJob(job))
         if (isRecalculateAllJobDone(job)) {
           setRecalcAllJobId(null)
+          // PS-293: allow a future passive overflow to re-trigger the backfill once this job is done.
+          passiveBackfillStartedRef.current = false
           showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, job.failed ? 'error' : 'success')
           setTimeout(() => setRecalcAllSummary(null), 8000)
           await refetchOrders()
@@ -883,6 +894,12 @@ export default function OrdersView({
   )
   const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
   const autoBestRateTimeoutsRef = useRef<Map<string, number>>(new Map())
+  // PS-293: mount-scoped count of live best-rate requests the BROWSER has fired for the Awaiting view.
+  // Capped at PASSIVE_LIVE_BEST_RATE_MAX_ROWS so the frontend never drains the full table; the backend
+  // backfill rates the rest. passiveBackfillStartedRef de-dupes the overflow handoff so a mid-job
+  // refetch (which re-runs the passive effect) can't kick a second backend job.
+  const passiveLiveBestRateCountRef = useRef(0)
+  const passiveBackfillStartedRef = useRef(false)
   // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
   // auto-rating effect for an order whose rate came back unavailable.
   const [rateRetryNonce, setRateRetryNonce] = useState(0)
@@ -4900,12 +4917,15 @@ export default function OrdersView({
         queue.splice(index, 1)
       }
 
-      // Drain the ENTIRE remaining queue (no count cap) so every rateable row
-      // is live-rated and its spinner resolves to a real rate / "unavailable" /
-      // error — instead of parking off-slice rows on a terminal "—". Concurrency
-      // stays bounded by PASSIVE_LIVE_BEST_RATE_CONCURRENCY so carrier APIs are
-      // not hammered; rows simply resolve progressively.
-      const liveQueue = queue.splice(0)
+      // PS-293: the browser live-rates at most PASSIVE_LIVE_BEST_RATE_MAX_ROWS rows per mount (a
+      // mount-scoped running budget), then HANDS the rest to the backend backfill — instead of
+      // draining the ENTIRE queue from the browser (the old "no count cap" behavior that fired 40+
+      // live carrier-rate jobs and left HUGRAB tuples needing per-row Browse Rates clicks). Concurrency
+      // stays bounded by PASSIVE_LIVE_BEST_RATE_CONCURRENCY.
+      const liveBudget = Math.max(0, PASSIVE_LIVE_BEST_RATE_MAX_ROWS - passiveLiveBestRateCountRef.current)
+      const liveQueue = queue.splice(0, liveBudget)
+      passiveLiveBestRateCountRef.current += liveQueue.length
+      const overflow = queue.splice(0)
       const workerCount = Math.min(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue.length)
       const workers = Array.from({ length: workerCount }, async () => {
         while (!cancelled && liveQueue.length > 0) {
@@ -4915,6 +4935,21 @@ export default function OrdersView({
         }
       })
       await Promise.all(workers)
+
+      // PS-293: the overflow rows (beyond the browser budget) are rated SERVER-SIDE by the canonical
+      // backend backfill — the same job the manual Recalculate All uses, but cache-friendly (only
+      // stale/missing rows). The existing recalc poll refetches as each order resolves, so the rows
+      // populate without per-row Browse Rates clicks. De-duped so a mid-job refetch can't double-kick.
+      if (!cancelled && overflow.length > 0 && !passiveBackfillStartedRef.current) {
+        passiveBackfillStartedRef.current = true
+        try {
+          const { jobId } = await startRecalculateAllBestRates(PASSIVE_BACKFILL_MAX_AGE_HOURS)
+          if (!cancelled) setRecalcAllJobId(jobId)
+          else passiveBackfillStartedRef.current = false
+        } catch {
+          passiveBackfillStartedRef.current = false
+        }
+      }
     }
 
     void runPassiveAutoRating()
