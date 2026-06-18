@@ -70,24 +70,38 @@ check('any carrier ERROR -> NOT complete',
   check('DTO: no saved rate -> missing', missing.bestRateState, 'missing');
 }
 
-// ── 3) Backend /browse no longer hardcodes completeness ──────────────────────
+// ── 3) Backend owns completeness in the combined-universe owner (no hardcoded true) ──
+// PS-166/203/271 moved the combine + completeness derivation out of the route and into
+// combineCarrierUniverses (rates-combined.ts), the single owner both /browse and the
+// backfill producer delegate to. The route is a thin consumer: it destructures
+// bestRateComplete and stamps it. Reconcile the assertions to the current SOT location.
 {
+  const ratesCombined = readFileSync('src/services/rates-combined.ts', 'utf8');
+  check('combine owner unions ShipStation + direct-carrier statuses before completeness',
+    /const combinedCarrierStatuses = \[\.\.\.carrierStatuses, \.\.\.directCarrierStatuses\]/.test(ratesCombined), true);
+  check('combine owner derives completeness from the combined statuses (never hardcoded true)',
+    /bestRateComplete: statusesComplete\(combinedCarrierStatuses\)/.test(ratesCombined), true);
+
   const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
-  check('backend /browse combines ShipStation + direct-carrier statuses before completeness',
-    /const combinedCarrierStatuses = \[\.\.\.carrierStatuses, \.\.\.directCarrierStatuses\]/.test(ratesRoute), true);
-  check('backend /browse derives completeness via isBestRateComplete(combinedCarrierStatuses)',
-    /const bestRateComplete = isBestRateComplete\(combinedCarrierStatuses\)/.test(ratesRoute), true);
-  check('backend /browse stamps the computed completeness onto bestRateMetadata',
+  check('route consumes the owner-computed completeness (destructures bestRateComplete)',
+    /\bbestRateComplete,/.test(ratesRoute), true);
+  check('route stamps the computed completeness onto the best rate (isComplete: bestRateComplete)',
     /isComplete: bestRateComplete/.test(ratesRoute), true);
-  check('backend /browse no longer hardcodes isComplete: true in bestRateMetadata',
+  check('route no longer hardcodes isComplete: true on the best-rate metadata',
     /requestFingerprint: result\.cacheKey[\s\S]{0,200}isComplete: true/.test(ratesRoute), false);
 }
 
 // ── 4) Frontend consumes backend completeness (no hardcoded true) ────────────
+// PS-166 extracted deriveBackendBestRateComplete into its own small file
+// (orders-rate-proof.ts); OrdersView imports and consumes it. Reconcile the locations.
 {
+  const rateProof = readFileSync('web/src/components/Views/orders-rate-proof.ts', 'utf8');
+  check('frontend has a backend-owned completeness resolver (in its own small file)',
+    /export function deriveBackendBestRateComplete/.test(rateProof), true);
+
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-  check('frontend has a backend-owned completeness resolver',
-    /function deriveBackendBestRateComplete/.test(ordersView), true);
+  check('OrdersView imports the backend-owned completeness resolver',
+    /import \{ deriveBackendBestRateComplete \} from '\.\/orders-rate-proof'/.test(ordersView), true);
   check('passive auto-rating uses backendComplete (not a hardcoded true)',
     /const backendComplete = deriveBackendBestRateComplete\(response, bestRate\)/.test(ordersView)
     && /isComplete: backendComplete/.test(ordersView), true);
@@ -110,8 +124,11 @@ check('any carrier ERROR -> NOT complete',
   // /browse — so backend-pre-rated orders are never marked complete while a carrier
   // failed/loaded.
   const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
-  check('backend backfill derives isComplete from carrier diagnostics (not hardcoded true)',
-    /isComplete:\s*result\.carrierDiagnostics\.every\(/.test(backfill), true);
+  // PS-203/271: the backfill now delegates completeness to the SAME combined-universe owner
+  // as /browse (combined.bestRateComplete from combineCarrierUniverses) instead of re-deriving
+  // it inline — still never a hardcoded true.
+  check('backend backfill derives isComplete from the combined-universe owner (not hardcoded true)',
+    /isComplete:\s*combined\.bestRateComplete\b/.test(backfill), true);
 
   // ── 6) HUGRAB insured-total certification (PS-111 ↔ PS-108) ────────────────
   // The backend pre-rating path must produce INSURED HUGRAB totals: backfill -> getRates
@@ -121,9 +138,15 @@ check('any carrier ERROR -> NOT complete',
   // browser session.
   check('backend pre-rating rates HUGRAB orders through getRates (the insured path)',
     /getRates\(/.test(backfill), true);
+  // PS-170: the HUGRAB ParcelGuard request-level default moved out of resolveRateInput into the
+  // single eligibility owner (resolveHugrabRequestInsurance in shipping-service-eligibility.ts);
+  // resolveRateInput now DELEGATES to it. Assert the owner sets the default and the route delegates.
   const ratesSrc = readFileSync('src/services/rates.ts', 'utf8');
-  check('resolveRateInput applies the HUGRAB ParcelGuard default insurance',
-    /isHugrabShippingContext\(/.test(ratesSrc) && /insuranceProvider = 'parcelguard'/.test(ratesSrc), true);
+  check('resolveRateInput delegates the HUGRAB insurance default to the eligibility owner',
+    /resolveHugrabRequestInsurance\(/.test(ratesSrc), true);
+  const eligibilitySrc = readFileSync('src/lib/shipping-service-eligibility.ts', 'utf8');
+  check('the eligibility owner applies the HUGRAB ParcelGuard default insurance',
+    /isHugrabShippingContext\(/.test(eligibilitySrc) && /insuranceProvider: 'parcelguard'/.test(eligibilitySrc), true);
   check('the live-rate fan enriches the ParcelGuard premium before best-rate selection',
     /enrichRatesWithInsuranceCost\(/.test(ratesSrc) && /pickBestRate/.test(ratesSrc), true);
   check('rate cache busts when the insurance config changes (no stale insured premium)',

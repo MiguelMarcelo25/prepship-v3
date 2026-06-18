@@ -36,6 +36,14 @@ export async function persistStrictRecalculateOutcome(input: {
   rateCount: number;
   fetchedAt: string;
   requestFingerprint: string;
+  /**
+   * PS-271 (Layer 4 honesty): the route's honest completeness verdict for the COMBINED
+   * carrier universe (isBestRateComplete(combinedCarrierStatuses)). A thin-but-accepted
+   * strict best (one carrier live, another live-but-thin) plans an `apply` yet is NOT
+   * complete — so the persisted rate must record this truth, never a hardcoded true.
+   * Optional for back-compat: when omitted, completeness is treated as unproven (false).
+   */
+  bestRateComplete?: boolean;
 }): Promise<StrictPersistResult> {
   if (input.decision.action === 'blocked') {
     return { persisted: false, reason: 'blocked decisions never write' };
@@ -81,12 +89,17 @@ export async function persistStrictRecalculateOutcome(input: {
   if (!input.bestRate) return { persisted: false, reason: 'apply decision without a best rate' };
   if (!hasDims) return { persisted: false, reason: 'Complete dimensions are required before saving a best rate' };
 
+  // PS-271 (Layer 4 honesty): record the route's honest completeness verdict, NOT a hardcoded
+  // true. A strict-recalc `apply` can win on a thin/unproven pass (status live, but a carrier
+  // came back thin) — that best is real and saved, but isComplete must stay false so the Orders/
+  // RateBrowser column shows coverage-incomplete instead of a false "complete". The completeness
+  // truth is owned upstream by isBestRateComplete(combinedCarrierStatuses) on the route.
   const rateWithMetadata = {
     ...input.bestRate,
     requestFingerprint: input.requestFingerprint,
     cacheKey: input.requestFingerprint,
     cacheCreatedAt: input.fetchedAt,
-    isComplete: true,
+    isComplete: input.bestRateComplete === true,
     rateCount: input.rateCount,
     matchType: 'strict-live',
   };

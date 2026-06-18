@@ -19,6 +19,7 @@
  *
  *   npx tsx scripts/ps-271-completeness-honesty-guard.ts
  */
+import { readFileSync } from 'node:fs';
 import {
   attachObservedIncomplete,
   readObservedIncomplete,
@@ -150,6 +151,30 @@ function check(name: string, cond: boolean): void {
   check('OFF path: bestRateThin=false', combined.bestRateThin === false);
   check('OFF path: the cheapest is UPS $10.14 (the #1502 win)',
     Number(combined.cheapest?.shipping_amount?.amount) === 10.14);
+}
+
+// ── 5) Layer 4 honesty: the strict-recalc PERSIST writer must not hardcode isComplete:true ──
+// A thin-but-accepted strict-recalculate best (one carrier reports live, another came back
+// thin → status live but unproven) plans an `apply`, but the COMBINED set is NOT complete.
+// The persist writer must record the route's honest completeness verdict, never a hardcoded
+// true, so the saved bestRateJson.isComplete tells the truth on the Orders/RateBrowser column.
+{
+  const persistSrc = readFileSync('src/services/rates-recalculate-persist.ts', 'utf8');
+  check('persist writer no longer hardcodes isComplete: true on the persisted rate',
+    !/isComplete:\s*true\b/.test(persistSrc));
+  check('persist writer accepts a bestRateComplete completeness input from the route',
+    /bestRateComplete\??:\s*boolean/.test(persistSrc));
+  check('persist writer stamps the threaded completeness (isComplete: input.bestRateComplete)',
+    /isComplete:\s*input\.bestRateComplete\b/.test(persistSrc));
+
+  // The route call sites must FEED the honest completeness (the same bestRateComplete the
+  // response already exposes) into the persist writer — both the strict-recalc and the
+  // SOT-reconcile persist sites.
+  const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+  const persistCalls = ratesRoute.match(/persistStrictRecalculateOutcome\(\{[\s\S]*?\}\)/g) ?? [];
+  check('both persist call sites exist in the route', persistCalls.length === 2);
+  check('every persist call site passes bestRateComplete',
+    persistCalls.length === 2 && persistCalls.every((c) => /bestRateComplete\b/.test(c)));
 }
 
 if (failures > 0) {

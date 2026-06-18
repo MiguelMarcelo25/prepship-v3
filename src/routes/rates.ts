@@ -684,6 +684,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
           rateCount: combinedRates.length,
           fetchedAt: result.fetchedAt,
           requestFingerprint: combinedRequestKey,
+          // PS-271 (Layer 4 honesty): feed the route's honest combined-universe completeness so a
+          // thin-but-accepted strict best is NOT persisted as complete.
+          bestRateComplete,
         });
       } catch (err) {
         // Persist is best-effort from the response's perspective: the FE falls
@@ -726,6 +729,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
           rateCount: combinedRates.length,
           fetchedAt: result.fetchedAt,
           requestFingerprint: combinedRequestKey,
+          // PS-271 (Layer 4 honesty): the reconcile path only fires when bestRateComplete is true
+          // (guarded above), but thread it explicitly so the persisted truth never diverges.
+          bestRateComplete,
         });
       } catch (err) {
         // Best-effort: a browse never fails on a reconcile-write error (the column just stays as-is).
