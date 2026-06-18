@@ -22,6 +22,13 @@
  *
  * Frontend — web/src/components/NewOrderModal.tsx:
  *   5. No >=1-line-item blocking validation remains (Save works with 0 items).
+ *   6. Ship-From selector (this slice): the rate preview no longer hard-codes
+ *      `fromPostalCode: defaultFromZip`. It reads the operator-selected origin
+ *      (saved location OR a custom expandable origin) and threads the full
+ *      origin (postal/state/country/street) into the /rates preview payload so
+ *      the preview reflects the real ship-from. The backend rate quoter remains
+ *      the origin source-of-truth (readShipFrom); the modal only passes the
+ *      selected origin verbatim via fromPostalCode + a shipFrom object.
  *
  *   npx tsx scripts/ps-291-manual-order-real-optional-items-guard.ts
  */
@@ -102,6 +109,39 @@ const manualRouteSrc = manualRouteStart >= 0
   // And no items-emptiness guard feeds the blocking errors[] / setError abort.
   check('FE(5b): no items.every(... no sku/name ...) blocking check remains',
     !/items\.every\(\([^)]*\)\s*=>\s*![^)]*sku[\s\S]{0,40}\)\)\s*errors\.push/.test(modalSrc));
+}
+
+// ── 6) FE: Ship-From selector threads the selected origin into rate preview ──
+{
+  // Isolate the handleGetRates body so the origin assertions pin the rate
+  // preview specifically (not the save payload).
+  // CRLF-tolerant: NewOrderModal.tsx uses \r\n line endings. Bound the body at
+  // the next top-level `async function handleSubmit` declaration.
+  const getRatesMatch = /async function handleGetRates\(\)[\s\S]*?\r?\n  }\r?\n\s*\r?\n  async function handleSubmit/.exec(modalSrc);
+  const getRatesSrc = getRatesMatch ? getRatesMatch[0] : '';
+  check('FE: handleGetRates body located', getRatesSrc.length > 0);
+
+  // The preview must NOT hard-code fromPostalCode: defaultFromZip — that
+  // ignored the operator's chosen ship-from. defaultFromZip may still be a
+  // fallback, but the literal `fromPostalCode: defaultFromZip` assignment is
+  // the symptom this slice removes.
+  check('FE(6a): rate preview no longer hard-codes fromPostalCode: defaultFromZip',
+    getRatesSrc.length > 0 && !/fromPostalCode:\s*defaultFromZip\b/.test(getRatesSrc));
+
+  // The preview reads a resolved selected-origin object (the ship-from the
+  // operator picked or typed) for the fromPostalCode.
+  check('FE(6b): rate preview sources fromPostalCode from the selected origin',
+    /fromPostalCode:\s*(selectedOrigin|origin|shipFromOrigin)\b/.test(getRatesSrc));
+
+  // The full origin is threaded so the backend quoter sees street/state/country,
+  // not just a ZIP — passed as a shipFrom object the canonical readShipFrom reads.
+  check('FE(6c): rate preview threads the full origin via a shipFrom object',
+    /shipFrom:\s*\{/.test(getRatesSrc) || /shipFrom:\s*(selectedOrigin|origin|shipFromOrigin)\b/.test(getRatesSrc));
+
+  // There must be a Ship-From origin selector state/UI in the modal: a saved
+  // locations origin selection PLUS a custom expandable origin.
+  check('FE(6d): a Ship-From origin selector exists (saved + custom origin state)',
+    /shipFromOrigin|originLocationId|customOrigin|useCustomOrigin/.test(modalSrc));
 }
 
 if (failures > 0) {

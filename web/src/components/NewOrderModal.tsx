@@ -52,6 +52,9 @@ import {
 // modal, OrdersView, RateBrowserModal, and RatesView all show
 // identical carrier marks.
 import CarrierBadge from './CarrierBadge'
+// PS-291: resolve the operator-selected Ship-From origin (saved location OR
+// custom typed origin) into the camelCase shape the backend readShipFrom reads.
+import { resolveShipFromOrigin } from './new-order-ship-from-origin'
 
 interface LineItem {
   id: string
@@ -204,6 +207,54 @@ export default function NewOrderModal({
   const [ratesError, setRatesError] = useState<string | null>(null)
   const [rates, setRates] = useState<RatePreviewRow[] | null>(null)
 
+  // PS-291 Ship-From selector — the operator picks the origin the rate preview
+  // (and later the saved order) quotes FROM: a saved location, or a custom
+  // typed origin. The backend rate quoter (readShipFrom) stays the source of
+  // truth; we only pass the selected origin verbatim into the preview payload.
+  const [originLocationId, setOriginLocationId] = useState<string>('')
+  const [useCustomOrigin, setUseCustomOrigin] = useState(false)
+  const [customOriginStreet, setCustomOriginStreet] = useState('')
+  const [customOriginCity, setCustomOriginCity] = useState('')
+  const [customOriginState, setCustomOriginState] = useState('')
+  const [customOriginZip, setCustomOriginZip] = useState('')
+  const [customOriginCountry, setCustomOriginCountry] = useState('US')
+
+  // Saved Ship-From locations (active only). Same source the recipient picker
+  // and LocationsView use; default location floats to the top.
+  const originLocations = useMemo(() => {
+    const active = (Array.isArray(locations) ? locations : []).filter((l) => l?.active !== false)
+    return [...active].sort((a, b) => (b?.isDefault ? 1 : 0) - (a?.isDefault ? 1 : 0))
+  }, [locations])
+
+  // The resolved Ship-From origin the rate preview quotes from.
+  const shipFromOrigin = useMemo(
+    () =>
+      resolveShipFromOrigin({
+        useCustom: useCustomOrigin,
+        custom: {
+          street1: customOriginStreet,
+          city: customOriginCity,
+          state: customOriginState,
+          zip: customOriginZip,
+          country: customOriginCountry,
+        },
+        locations: originLocations,
+        selectedLocationId: originLocationId,
+        fallbackZip: defaultFromZip,
+      }),
+    [
+      useCustomOrigin,
+      customOriginStreet,
+      customOriginCity,
+      customOriginState,
+      customOriginZip,
+      customOriginCountry,
+      originLocations,
+      originLocationId,
+      defaultFromZip,
+    ],
+  )
+
   // Reset form when modal opens fresh (not re-pre-filled)
   useEffect(() => {
     if (!open) {
@@ -340,8 +391,20 @@ export default function NewOrderModal({
     setRates(null)
     try {
       const { apiClient } = await import('../api/client')
+      // PS-291: quote FROM the operator-selected origin (saved location or
+      // custom typed origin), not a hard-coded defaultFromZip. The backend
+      // rate quoter (readShipFrom) is the origin source of truth — we pass
+      // the full selected origin (postal/state/country/street) via fromPostalCode
+      // + a shipFrom object so the preview reflects the real ship-from.
       const payload = {
-        fromPostalCode: defaultFromZip,
+        fromPostalCode: shipFromOrigin.postalCode || defaultFromZip,
+        shipFrom: {
+          street1: shipFromOrigin.street1,
+          city: shipFromOrigin.city,
+          state: shipFromOrigin.state,
+          postalCode: shipFromOrigin.postalCode || defaultFromZip,
+          country: shipFromOrigin.country || 'US',
+        },
         toPostalCode: zip.trim(),
         toCountry: country || 'US',
         weight: { value: totalOz, units: 'ounces' },
@@ -744,6 +807,101 @@ export default function NewOrderModal({
                       </h4>
                       <span className="text-[10px] text-ink-3 italic">no save required</span>
                     </div>
+
+                    {/* ─── Ship-From origin selector (PS-291) ───
+                        Saved-location dropdown PLUS a custom expandable origin.
+                        The chosen origin is what the preview (and the saved
+                        order) quotes FROM. */}
+                    <div className="mb-3 rounded-lg ring-1 ring-line bg-surface/70 p-3">
+                      <label className={labelCls}>
+                        <MapPin size={10} strokeWidth={2.5} /> Ship From
+                      </label>
+                      <select
+                        className={fieldCls + (useCustomOrigin ? ' opacity-50 pointer-events-none' : '')}
+                        value={originLocationId}
+                        onChange={(e) => {
+                          setOriginLocationId(e.target.value)
+                          setUseCustomOrigin(false)
+                        }}
+                        disabled={useCustomOrigin}
+                        aria-label="Saved ship-from location"
+                      >
+                        <option value="">
+                          {originLocations.length
+                            ? `Default origin (ZIP ${defaultFromZip})`
+                            : `No saved locations (ZIP ${defaultFromZip})`}
+                        </option>
+                        {originLocations.map((loc) => {
+                          const id = String(loc.locationId ?? loc.id ?? loc.name)
+                          const line = [loc.name ?? loc.company, loc.city, loc.state, loc.postalCode]
+                            .filter(Boolean)
+                            .join(' · ')
+                          return (
+                            <option key={id} value={id}>
+                              {line || 'Saved location'}
+                              {loc.isDefault ? ' (Default)' : ''}
+                            </option>
+                          )
+                        })}
+                      </select>
+                      <label className="inline-flex items-center gap-2 mt-2 text-[11px] text-ink-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={useCustomOrigin}
+                          onChange={(e) => {
+                            setUseCustomOrigin(e.target.checked)
+                            if (e.target.checked) setOriginLocationId('')
+                          }}
+                          className="w-3.5 h-3.5 accent-brand"
+                        />
+                        Use a custom ship-from origin
+                      </label>
+                      {useCustomOrigin ? (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <input
+                            className={fieldCls + ' col-span-2 h-8 text-[12px]'}
+                            value={customOriginStreet}
+                            onChange={(e) => setCustomOriginStreet(e.target.value)}
+                            placeholder="Street"
+                          />
+                          <input
+                            className={fieldCls + ' h-8 text-[12px]'}
+                            value={customOriginCity}
+                            onChange={(e) => setCustomOriginCity(e.target.value)}
+                            placeholder="City"
+                          />
+                          <select
+                            className={fieldCls + ' h-8 text-[12px]'}
+                            value={customOriginState}
+                            onChange={(e) => setCustomOriginState(e.target.value)}
+                            aria-label="Custom origin state"
+                          >
+                            <option value="">State</option>
+                            {US_STATES.map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                          <input
+                            className={fieldCls + ' h-8 text-[12px]'}
+                            value={customOriginZip}
+                            onChange={(e) => setCustomOriginZip(e.target.value)}
+                            placeholder="ZIP"
+                            inputMode="numeric"
+                          />
+                          <select
+                            className={fieldCls + ' h-8 text-[12px]'}
+                            value={customOriginCountry}
+                            onChange={(e) => setCustomOriginCountry(e.target.value)}
+                            aria-label="Custom origin country"
+                          >
+                            <option value="US">US</option>
+                            <option value="CA">CA</option>
+                            <option value="MX">MX</option>
+                          </select>
+                        </div>
+                      ) : null}
+                    </div>
+
                     <div className="grid grid-cols-5 gap-2 mb-3">
                       <div>
                         <label className={labelCls}>Lb</label>
