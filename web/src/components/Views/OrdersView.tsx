@@ -289,7 +289,22 @@ import {
   normalizeInsuranceForRates,
 } from './orders-rate-input'
 
-type ShipmentDims = { length: number; width: number; height: number }
+// PS-166 (this slice): the pure panel/package dimension + shipment-key helpers
+// (getPanelWeightOzFromForm / getPanelDimsFromForm / getShipmentDetailsKey /
+// hasCompleteDims / getDimsKey / getPackageIdentifier / getPackageDims) plus the
+// ShipmentDims shape moved VERBATIM to ./orders/panel-shipment-dims (pure, no
+// state). Re-imported here; the state-closing getPanelWeightOz/getPanelDims
+// wrappers below stay in the component and delegate to the *FromForm helpers.
+import {
+  getDimsKey,
+  getPackageDims,
+  getPackageIdentifier,
+  getPanelDimsFromForm,
+  getPanelWeightOzFromForm,
+  getShipmentDetailsKey,
+  hasCompleteDims,
+  type ShipmentDims,
+} from './orders/panel-shipment-dims'
 
 interface OrdersViewProps {
   currentStatus: OrderStatus
@@ -2379,19 +2394,6 @@ export default function OrdersView({
     />
   )
 
-  function getPanelWeightOzFromForm(form: PanelFormState) {
-    const lb = Number.parseFloat(form.weightLb) || 0
-    const oz = Number.parseFloat(form.weightOz) || 0
-    return (lb * 16) + oz
-  }
-
-  function getPanelDimsFromForm(form: PanelFormState) {
-    const length = Number.parseFloat(form.length) || 0
-    const width = Number.parseFloat(form.width) || 0
-    const height = Number.parseFloat(form.height) || 0
-    return { length, width, height }
-  }
-
   function getPanelWeightOz() {
     return getPanelWeightOzFromForm(panelForm)
   }
@@ -2422,46 +2424,6 @@ export default function OrdersView({
 
   function getPanelDims() {
     return getPanelDimsFromForm(panelForm)
-  }
-
-  function getShipmentDetailsKey(orderId: number | null | undefined, form: PanelFormState) {
-    if (orderId == null) return ''
-    const dims = getPanelDimsFromForm(form)
-    return [
-      orderId,
-      getPanelWeightOzFromForm(form).toFixed(3),
-      dims.length.toFixed(3),
-      dims.width.toFixed(3),
-      dims.height.toFixed(3),
-      form.packageId || '',
-    ].join(':')
-  }
-
-  function hasCompleteDims(dims: ShipmentDims | null | undefined): dims is ShipmentDims {
-    if (!dims) return false
-    return dims.length > 0 && dims.width > 0 && dims.height > 0
-  }
-
-  function getDimsKey(dims: ShipmentDims) {
-    return [dims.length, dims.width, dims.height]
-      .map((value) => Number(value).toFixed(3))
-      .join('x')
-  }
-
-  function getPackageIdentifier(pkg: PackageDto | null | undefined) {
-    const raw = pkg?.packageId ?? (pkg as any)?.id
-    const numeric = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? ''), 10)
-    return Number.isFinite(numeric) ? String(numeric) : ''
-  }
-
-  function getPackageDims(pkg: PackageDto | null | undefined) {
-    if (!pkg) return null
-    const dims = {
-      length: Number.parseFloat(String(pkg.length ?? '')) || 0,
-      width: Number.parseFloat(String(pkg.width ?? '')) || 0,
-      height: Number.parseFloat(String(pkg.height ?? '')) || 0,
-    }
-    return hasCompleteDims(dims) ? dims : null
   }
 
   function getPanelSkuDefaultDims(packageId: string | null) {
