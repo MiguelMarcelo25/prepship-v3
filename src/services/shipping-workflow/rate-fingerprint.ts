@@ -1,3 +1,5 @@
+import { readRateInsuranceCertaintyState } from './rate-insurance-certainty-key.js';
+
 export type ShippingRateRequestFingerprintInput = {
   version: string;
   shipDateBucket: string;
@@ -19,6 +21,11 @@ export type ShippingRateRequestFingerprintInput = {
   insuredValue?: number | null;
   carrierIds?: string[] | null;
   automationRulesVersion?: string | null;
+  // PS-274: OPTIONAL insurance-CERTAINTY state (e.g. 'requested_application_uncertain'
+  // vs 'explicitly_included'). When present it binds the certainty verdict into the
+  // fingerprint so an uncertain Shipp rate survives save/purchase and can never
+  // round-trip as proven-insured. Absent -> fingerprint is byte-identical to before.
+  insuranceCertainty?: string | null;
 };
 
 export type SelectedRateValidationReason =
@@ -147,6 +154,10 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
     parts.push(`c=${[...input.carrierIds].sort().join(',')}`);
   }
   if (input.automationRulesVersion) parts.push(`ar=${input.automationRulesVersion}`);
+  // PS-274: bind the insurance-certainty verdict ONLY when one is supplied — keeps
+  // the fingerprint byte-identical for every legacy/non-Shipp caller (additive).
+  const certaintyState = textKey(input.insuranceCertainty);
+  if (certaintyState) parts.push(`ic=${certaintyState}`);
   return parts.join('|');
 }
 
@@ -219,7 +230,7 @@ export function selectedRateAuthorityKey(rate: unknown): string {
     nestedAmount(raw, 'insurance_amount'),
     0,
   );
-  return [
+  const parts = [
     provider,
     carrier,
     service,
@@ -228,7 +239,16 @@ export function selectedRateAuthorityKey(rate: unknown): string {
     moneyKey(otherCost),
     moneyKey(confirmationCost),
     moneyKey(insuranceCost),
-  ].join('|');
+  ];
+  // PS-274: bind the stamped insurance-certainty STATE into the authority key ONLY
+  // when the rate carries one. This is what makes an uncertain Shipp rate fail to
+  // round-trip as proven-insured: its key holds 'requested_application_uncertain',
+  // which an eligible rate claiming 'explicitly_included' cannot match. Absent ->
+  // byte-identical to the pre-PS-274 key (legacy/non-Shipp rows unchanged).
+  const certaintyState =
+    readRateInsuranceCertaintyState(row) || readRateInsuranceCertaintyState(raw);
+  if (certaintyState) parts.push(`ic=${certaintyState}`);
+  return parts.join('|');
 }
 
 export function validateExactSelectedRate(input: {

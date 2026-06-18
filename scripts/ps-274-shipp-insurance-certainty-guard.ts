@@ -19,6 +19,12 @@ import {
   resolveInsuranceCertainty,
   isShippBrokered,
 } from '../src/services/shipping-workflow/insurance-certainty';
+import {
+  buildShippingRateRequestFingerprint,
+  selectedRateAuthorityKey,
+  validateExactSelectedRate,
+  type ShippingRateRequestFingerprintInput,
+} from '../src/services/shipping-workflow/rate-fingerprint';
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -128,6 +134,67 @@ check('RateRowItem renders the certainty tag from the row DTO (formatInsuranceCe
   /formatInsuranceCertaintyTag\(r\.insuranceCertainty\)/.test(rateRow));
 check('RateRowItem tones the tag via rbInsuranceCertaintyTone(tag.tone)',
   /rbInsuranceCertaintyTone\(tag\.tone\)/.test(rateRow));
+
+// ── card req 5: certainty rides the rate FINGERPRINT + selected-rate proof ─────
+// An uncertain Shipp verdict must survive save/purchase: the certainty state is
+// woven into the request fingerprint AND the selected-rate authority key so an
+// uncertain rate can never round-trip as proven-insured. Additive/optional —
+// absent certainty leaves the fingerprint and authority key byte-identical.
+const baseFp: ShippingRateRequestFingerprintInput = {
+  version: 'ps-274',
+  shipDateBucket: '2026-06-17',
+  weightOz: 16,
+  toZip: '11364',
+  toCountry: 'US',
+};
+const fpNoCertainty = buildShippingRateRequestFingerprint(baseFp);
+const fpUncertain = buildShippingRateRequestFingerprint({ ...baseFp, insuranceCertainty: 'requested_application_uncertain' });
+const fpIncluded = buildShippingRateRequestFingerprint({ ...baseFp, insuranceCertainty: 'explicitly_included' });
+
+check('fingerprint omits the certainty segment when none is supplied (byte-identical for legacy callers)',
+  fpNoCertainty === buildShippingRateRequestFingerprint({ ...baseFp }) && !fpNoCertainty.includes('ic='));
+check('an uncertain Shipp certainty changes the request fingerprint',
+  fpUncertain !== fpNoCertainty && fpUncertain.includes('ic=requested_application_uncertain'));
+check('uncertain vs explicitly_included produce DIFFERENT fingerprints (cannot collide)',
+  fpUncertain !== fpIncluded);
+
+// The selected-rate authority key binds the stamped certainty state, so a rate
+// quoted UNCERTAIN cannot masquerade as an explicitly_included eligible rate.
+const baseRate = {
+  shippingProviderId: 'se-565377',
+  carrierCode: 'ups',
+  serviceCode: 'shipp_ups_ground',
+  packageCode: 'package',
+  shipmentCost: 12.34,
+  otherCost: 0,
+};
+const uncertainRate = { ...baseRate, insuranceCertainty: { certainty: 'requested_application_uncertain' } };
+const includedRate = { ...baseRate, insuranceCertainty: { certainty: 'explicitly_included' } };
+check('authority key omits certainty when the rate carries none (byte-identical)',
+  selectedRateAuthorityKey(baseRate) === selectedRateAuthorityKey({ ...baseRate }) && !selectedRateAuthorityKey(baseRate).includes('ic='));
+check('authority key changes when the rate is stamped uncertain',
+  selectedRateAuthorityKey(uncertainRate) !== selectedRateAuthorityKey(baseRate)
+  && selectedRateAuthorityKey(uncertainRate).includes('requested_application_uncertain'));
+check('an uncertain rate and an explicitly_included rate have DIFFERENT authority keys',
+  selectedRateAuthorityKey(uncertainRate) !== selectedRateAuthorityKey(includedRate));
+
+// THE GUARD: an uncertain Shipp rate cannot round-trip as proven-insured. The
+// eligible set quoted it uncertain; a proof claiming explicitly_included is
+// rejected (not_in_current_eligible_rates) BEFORE any postage spend.
+const fp = buildShippingRateRequestFingerprint({ ...baseFp, insuranceCertainty: 'requested_application_uncertain' });
+const honestUncertain = validateExactSelectedRate({
+  currentRequestFingerprint: fp,
+  selectedRate: { ...uncertainRate, requestFingerprint: fp },
+  eligibleRates: [uncertainRate],
+});
+check('an honestly-uncertain Shipp rate still validates against its uncertain eligible set', honestUncertain.ok);
+const upgradedProof = validateExactSelectedRate({
+  currentRequestFingerprint: fp,
+  selectedRate: { ...includedRate, requestFingerprint: fp },
+  eligibleRates: [uncertainRate],
+});
+check('an uncertain Shipp rate CANNOT round-trip as proven-insured (proof upgraded to explicitly_included is rejected)',
+  !upgradedProof.ok && upgradedProof.reason === 'not_in_current_eligible_rates');
 
 if (failures > 0) {
   console.error(`\nFAIL PS-274 Shipp insurance-certainty guard (${failures} failing)`);
