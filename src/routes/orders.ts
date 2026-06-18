@@ -8,6 +8,8 @@ import { orderOverrides, orders } from '../db/schema/orders';
 import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
+// PS-798 (slice 2b): per-client shipping markup (billing_config) for the Best Rate column reconciliation.
+import { billingConfig } from '../db/schema/billing';
 import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
 import { packages } from '../db/schema/packages';
 // PS-207 (B): canonical dims-identity key — shared with the billing box
@@ -133,6 +135,8 @@ import {
   type MarkupRule,
 } from '../services/shipping-workflow/rate-money';
 import { loadCarrierMarkups } from '../services/rates';
+// PS-798: the ONE markup resolver (per-account override -> per-client default) billing also consumes.
+import { resolveCanonicalMarkup } from '../services/shipping-workflow/markup-resolver';
 // PS-239: marketplace-fee rules (loaded once per request) + per-row resolution + subtotal.
 import {
   loadMarketplaceFeeRules,
@@ -1767,6 +1771,43 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     }
   }
 
+  // PS-798 (slice 2b): per-page bulk-load of each client's PER-CLIENT shipping markup (billing_config),
+  // so the Best Rate column resolves the SAME canonical markup (per-account override -> per-client
+  // default) the invoice bills -- quote == invoice for a per-client markup. Mirrors the PS-220 house
+  // load: gated to financial viewers, one indexed IN(...) per page, best-effort (a failure -> empty map
+  // -> per-account-only display exactly as today). Display-only; never breaks /orders. Only non-zero
+  // markups are mapped, so default (0/0) clients stay byte-identical.
+  const clientShippingMarkupByClientId = new Map<number, { pct: number; flat: number }>();
+  if (canViewFinancials) {
+    try {
+      const markupClientIds = [...new Set(
+        joined.map((r) => finiteNumberOrNull(r.order.clientId)).filter((id): id is number => id != null),
+      )];
+      if (markupClientIds.length) {
+        const cfgRows = await db
+          .select({
+            clientId: billingConfig.clientId,
+            pct: billingConfig.shippingMarkupPct,
+            flat: billingConfig.shippingMarkupFlat,
+          })
+          .from(billingConfig)
+          .where(inArray(billingConfig.clientId, markupClientIds));
+        for (const cfg of cfgRows) {
+          const pct = Number(cfg.pct);
+          const flat = Number(cfg.flat);
+          if ((Number.isFinite(pct) && pct !== 0) || (Number.isFinite(flat) && flat !== 0)) {
+            clientShippingMarkupByClientId.set(cfg.clientId, {
+              pct: Number.isFinite(pct) ? pct : 0,
+              flat: Number.isFinite(flat) ? flat : 0,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[ps-798] client shipping markup bulk-load skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -2205,6 +2246,19 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       },
       carrierMarkupRules,
     );
+    // PS-798 (slice 2b): resolve the CANONICAL markup (per-account override from rowMarkupRule -> the
+    // per-client billing_config default) so the Best Rate column matches what the invoice bills.
+    // Financial-only (non-financial money is null anyway); undefined keeps rate-money's legacy
+    // per-account path. Byte-identical for existing per-account markups (resolver returns the account
+    // override verbatim) and for default clients (0/0 -> null -> base unchanged).
+    const rowClientMarkup = r.order.clientId != null ? clientShippingMarkupByClientId.get(r.order.clientId) : undefined;
+    const rowCanonicalMarkup = canViewFinancials
+      ? resolveCanonicalMarkup({
+          carrierAccountMarkup: rowMarkupRule,
+          clientShippingMarkupPct: rowClientMarkup?.pct ?? 0,
+          clientShippingMarkupFlat: rowClientMarkup?.flat ?? 0,
+        })
+      : undefined;
     let bestRateWorkflowRow = bestRateWorkflow
       ? withOrderRowWorkflow(bestRateWorkflow, {
           orderStatus: r.order.orderStatus ?? null,
@@ -2229,6 +2283,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             selectedRateBaseAmount: selectedRateAmount ?? null,
             labelFinalCost: labelCost ?? null,
             markupRule: rowMarkupRule,
+            markupRuleCanonical: rowCanonicalMarkup,
             insuranceAddOn: extractInsuranceAddOn(rowIsAwaiting ? bestRateRecord : selectedRateRecord),
             // PS-220 (slice 4b): SHIPP house customer_rate. Awaiting reads the PROJECTED stamp on the
             // raw best_rate_json (nextBestNonHouseRate.totalCost); realized (shipped) is wired in 4b-2.

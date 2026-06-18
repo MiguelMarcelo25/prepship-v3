@@ -376,6 +376,9 @@ export type OrderRowWorkflowFacts = {
     selectedRateBaseAmount: number | null;
     labelFinalCost: number | null;
     markupRule: MarkupRule | null;
+    // PS-798 (slice 2b): the canonical (per-account override -> per-client default) markup; supersedes
+    // markupRule in the row money tuple so the Best Rate column matches the invoice. Pass-through only.
+    markupRuleCanonical?: { pct: number; flat: number } | null;
     insuranceAddOn: number | null;
     // PS-220 (slice 4b): the SHIPP house customer_rate for this row (projected for
     // awaiting, realized for shipped). Present => the money tuple's house branch
@@ -504,6 +507,7 @@ export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWo
           selectedRateBaseAmount: facts.money.selectedRateBaseAmount,
           labelFinalCost: facts.money.labelFinalCost,
           markupRule: facts.money.markupRule,
+          markupRuleCanonical: facts.money.markupRuleCanonical,
           insuranceAddOn: facts.money.insuranceAddOn,
           houseMarkedAmount: facts.money.houseMarkedAmount ?? null,
         })

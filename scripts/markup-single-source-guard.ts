@@ -16,7 +16,7 @@ import {
   resolveCanonicalMarkup,
   applyCanonicalMarkup,
 } from '../src/services/shipping-workflow/markup-resolver';
-import { applyMarkupToAmount, parseMarkupSettingValue } from '../src/services/shipping-workflow/rate-money';
+import { applyMarkupToAmount, parseMarkupSettingValue, buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -82,6 +82,50 @@ check('billing.ts resolves the shipping-line markup via resolveCanonicalMarkup (
 check('billing.ts feeds the RESOLVED markup into decideShippingLineBilling (not cfg directly)',
   /shippingMarkupPct: resolvedShippingMarkup\?\.pct \?\? 0/.test(billingSrc) &&
   /shippingMarkupFlat: resolvedShippingMarkup\?\.flat \?\? 0/.test(billingSrc));
+
+// ── slice 2b: the order-row Best Rate column applies the SAME canonical markup (display == billing) ──
+const rowFacts = (over: Record<string, unknown>) => ({
+  isAwaiting: true, bestRateBaseAmount: null, selectedRateBaseAmount: null, labelFinalCost: null,
+  markupRule: null, insuranceAddOn: null, ...over,
+}) as Parameters<typeof buildOrderRowMoneyDisplay>[0];
+
+// (1) rate-money's inlined canonical row markup == the resolver's applyCanonicalMarkup (no drift between
+// the two impls — rate-money stays zero-import pure, so the math is duplicated and MUST stay in parity).
+{
+  const base = 10, m = { pct: 15, flat: 1 };
+  const row = buildOrderRowMoneyDisplay(rowFacts({ bestRateBaseAmount: base, markupRuleCanonical: m }));
+  check('row Best Rate canonical markup == resolver applyCanonicalMarkup (no drift)',
+    row?.markedAmount === applyCanonicalMarkup(base, m) && row?.markedAmount === 12.5);
+}
+// (2) byte-identical: a per-account 15% resolved canonically == the legacy per-account markupRule path.
+{
+  const base = 12.5;
+  const viaCanonical = buildOrderRowMoneyDisplay(rowFacts({ bestRateBaseAmount: base, markupRuleCanonical: { pct: 15, flat: 0 } }));
+  const viaLegacy = buildOrderRowMoneyDisplay(rowFacts({ bestRateBaseAmount: base, markupRule: { type: 'percent', value: 15 } }));
+  check('row display byte-identical: canonical {pct:15} == legacy per-account percent 15',
+    viaCanonical?.markedAmount === viaLegacy?.markedAmount &&
+    viaCanonical?.markedAmount === applyCanonicalMarkup(base, { pct: 15, flat: 0 }) &&
+    viaCanonical?.markupSource === 'carrier_markup');
+}
+// (3) default-OFF: no canonical markup => base unchanged (a per-client 0/0 client is byte-identical).
+{
+  const row = buildOrderRowMoneyDisplay(rowFacts({ bestRateBaseAmount: 9.27, markupRuleCanonical: null }));
+  check('row display default-off: canonical null => base unchanged', row?.markedAmount === 9.27);
+}
+
+// ── slice 2b wiring: orders route resolves canonically + threads it; rate-money prefers it ──
+const ordersSrc = readFileSync('src/routes/orders.ts', 'utf8');
+check('orders.ts bulk-loads the per-client billing markup (gated to financial viewers)',
+  /clientShippingMarkupByClientId/.test(ordersSrc) && /billingConfig\.shippingMarkupPct/.test(ordersSrc));
+check('orders.ts resolves the row markup via the canonical resolver (account override -> client default) and threads it',
+  /resolveCanonicalMarkup\(\{[\s\S]*?carrierAccountMarkup: rowMarkupRule/.test(ordersSrc) &&
+  /markupRuleCanonical: rowCanonicalMarkup/.test(ordersSrc));
+const workflowDto = readFileSync('src/services/shipping-workflow/best-rate-workflow-dto.ts', 'utf8');
+check('best-rate-workflow-dto threads markupRuleCanonical into buildOrderRowMoneyDisplay (no whitelist drop)',
+  /markupRuleCanonical: facts\.money\.markupRuleCanonical/.test(workflowDto));
+const rateMoneySrc2 = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
+check('rate-money PREFERS the canonical markup in the carrier branch (falls back to legacy per-account)',
+  /facts\.markupRuleCanonical !== undefined[\s\S]*?applyCanonicalRowMarkup/.test(rateMoneySrc2));
 
 if (failures > 0) {
   console.error(`\nFAIL markup single-source guard (${failures} failing)`);

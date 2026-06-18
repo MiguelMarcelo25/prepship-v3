@@ -58,6 +58,16 @@ export function applyMarkupToAmount(amount: number, rule: MarkupRule | null | un
   return round2(rule.type === 'percent' ? amount * (1 + rule.value / 100) : amount + rule.value);
 }
 
+// PS-798 (slice 2b): apply the CANONICAL per-client+per-account markup ({pct,flat}, additive) — the
+// SAME formula markup-resolver.applyCanonicalMarkup uses (parity pinned by the markup-single-source
+// guard), inlined here to preserve this module's zero-import purity. A SUPERSET of applyMarkupToAmount
+// (percent-only => {pct,flat:0}; flat-only => {pct:0,flat}), so a resolved canonical markup keeps the
+// existing per-account display byte-identical while also honoring the per-client default. null => base.
+function applyCanonicalRowMarkup(base: number, markup: { pct: number; flat: number } | null | undefined): number {
+  if (!markup) return round2(base);
+  return round2(base * (1 + markup.pct / 100) + markup.flat);
+}
+
 export type OrderRowMarkupLookupFacts = {
   isAwaiting: boolean;
   bestRateProviderAccountId: number | null;
@@ -140,6 +150,12 @@ export type OrderRowMoneyFacts = {
   selectedRateBaseAmount: number | null;
   labelFinalCost: number | null;
   markupRule: MarkupRule | null;
+  // PS-798 (slice 2b): the CANONICAL markup the orders route resolved (per-account override -> per-
+  // client billing_config default) via markup-resolver.resolveCanonicalMarkup — the SAME owner billing
+  // consumes, so a per-client markup is identical on the Best Rate column and the invoice. When set it
+  // SUPERSEDES the per-account-only markupRule (byte-identical for existing per-account markups; adds
+  // the per-client default). Absent => the legacy per-account markupRule path (unchanged).
+  markupRuleCanonical?: { pct: number; flat: number } | null;
   insuranceAddOn: number | null;
   // PS-220: presence => this is a SHIPP house order. The captured customer_rate (cheapest eligible
   // non-SHIPP) becomes the bold marked amount; the carrier markupRule is suppressed (margin = spread).
@@ -179,7 +195,11 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
   if (facts.isAwaiting) {
     const base = positive(facts.bestRateBaseAmount);
     if (base == null) return null;
-    const marked = applyMarkupToAmount(base, facts.markupRule);
+    // PS-798: prefer the canonical (per-account override -> per-client default) markup when the orders
+    // route resolved one; fall back to the legacy per-account markupRule otherwise (byte-identical).
+    const marked = facts.markupRuleCanonical !== undefined
+      ? applyCanonicalRowMarkup(base, facts.markupRuleCanonical)
+      : applyMarkupToAmount(base, facts.markupRule);
     const markupAmount = Math.max(0, round2(marked - base));
     return {
       baseAmount: round2(base),
@@ -194,7 +214,10 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
   const base = positive(facts.selectedRateBaseAmount);
   const markupBasis = base ?? positive(facts.labelFinalCost);
   if (markupBasis == null) return null;
-  const marked = applyMarkupToAmount(markupBasis, facts.markupRule);
+  // PS-798: prefer the canonical markup (see the awaiting branch) — byte-identical fallback otherwise.
+  const marked = facts.markupRuleCanonical !== undefined
+    ? applyCanonicalRowMarkup(markupBasis, facts.markupRuleCanonical)
+    : applyMarkupToAmount(markupBasis, facts.markupRule);
   const markupAmount = base != null ? Math.max(0, round2(marked - base)) : null;
   return {
     baseAmount: base != null ? round2(base) : null,
