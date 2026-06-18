@@ -22,7 +22,15 @@
  *
  * Frontend — web/src/components/NewOrderModal.tsx:
  *   5. No >=1-line-item blocking validation remains (Save works with 0 items).
- *   6. Ship-From selector (this slice): the rate preview no longer hard-codes
+ *   8. Selected-rate persistence (this slice, card DoD item 6): when the
+ *      operator SELECTS a preview rate and saves, the chosen rate
+ *      (carrier/service/amount + account nickname + selected ship-from origin)
+ *      is persisted onto the created order in the canonical bestRate shape
+ *      (order_overrides.bestRateJson via normalizeOrderBestRateDto), so Create
+ *      Label / Print Queue reuse it without a silent re-rate. Backend owns the
+ *      normalization; the modal only passes the selected row + origin verbatim.
+ *
+ *   6. Ship-From selector (earlier slice): the rate preview no longer hard-codes
  *      `fromPostalCode: defaultFromZip`. It reads the operator-selected origin
  *      (saved location OR a custom expandable origin) and threads the full
  *      origin (postal/state/country/street) into the /rates preview payload so
@@ -182,6 +190,71 @@ const manualRouteSrc = manualRouteStart >= 0
   // nickname line then serviceLabel line), gated on a present nickname.
   check('FE(7f): the preview row renders the account nickname above the service name',
     /r\.accountNickname\b/.test(modalSrc));
+}
+
+// ── 8) SELECT a preview rate → persist it onto the saved order ─────────────
+// Card DoD item 6: when the operator SELECTS a preview rate and Saves, the
+// chosen rate (carrier/service/amount/account nickname + the selected ship-from
+// origin) is persisted onto the created order in the CANONICAL best-rate shape,
+// so Create Label / Print Queue reuse it without a silent re-rate. The backend
+// is the source of truth: it normalizes the selected rate through
+// normalizeOrderBestRateDto (the same canonical owner the PATCH best-rate path
+// uses) and writes it into order_overrides.bestRateJson.
+{
+  // 8a — a small backend helper owns building the canonical bestRate DTO from a
+  // manual-order selected preview rate (repo convention: new function, new file).
+  let selectedRateHelperSrc = '';
+  try { selectedRateHelperSrc = readFileSync('src/routes/orders/manual-selected-rate.ts', 'utf8'); }
+  catch { selectedRateHelperSrc = ''; }
+  check('BE: orders/manual-selected-rate helper file exists', selectedRateHelperSrc.length > 0);
+
+  // The helper delegates to the canonical normalizer (it does not re-derive the
+  // persisted rate shape inline) and is exported for the route to consume.
+  check('BE(8a): helper builds the canonical bestRate via normalizeOrderBestRateDto',
+    /normalizeOrderBestRateDto\s*\(/.test(selectedRateHelperSrc));
+  check('BE(8b): helper exports buildManualSelectedBestRate',
+    /export\s+function\s+buildManualSelectedBestRate\b/.test(selectedRateHelperSrc));
+
+  // 8c — manualOrderBody accepts an OPTIONAL selectedRate (carrier/service/amount
+  // + account nickname + ship-from origin). Optional so save-without-selection
+  // still works (line items remain optional too).
+  const selectedRateSchemaMatch = /selectedRate:\s*z\.object\([\s\S]*?\)\.optional\(\)/.exec(ordersSrc);
+  check('BE(8c): manualOrderBody declares an optional selectedRate object',
+    selectedRateSchemaMatch != null);
+
+  // 8d — the POST /manual route persists the selected rate into
+  // order_overrides.bestRateJson (the column Create Label / Print Queue read),
+  // by delegating to the helper. Bounded to the /manual route body.
+  check('BE(8d): the /manual route delegates to buildManualSelectedBestRate',
+    /buildManualSelectedBestRate\s*\(/.test(manualRouteSrc));
+  check('BE(8e): the persisted overrides carry the selected bestRateJson',
+    /bestRateJson:/.test(manualRouteSrc));
+
+  // 8f — FE: the modal tracks which preview rate the operator SELECTED. A
+  // clickable preview row sets a selected-rate state (index or row).
+  check('FE(8a): the modal tracks a selected preview rate (selectedRate state)',
+    /selectedRateIndex|selectedRate\b|setSelectedRate/.test(modalSrc));
+
+  // 8g — the save payload threads the selected rate + the selected ship-from
+  // origin so the backend can persist them. The NewOrderPayload type carries a
+  // selectedRate field, and handleSubmit populates it from the chosen row.
+  const handleSubmitMatch = /async function handleSubmit\([\s\S]*?\n  }\r?\n/.exec(modalSrc);
+  const handleSubmitSrc = handleSubmitMatch ? handleSubmitMatch[0] : '';
+  check('FE: handleSubmit body located', handleSubmitSrc.length > 0);
+  check('FE(8b): NewOrderPayload declares a selectedRate field',
+    /selectedRate\?:\s*\{[\s\S]*?\}\s*\|\s*null/.test(modalSrc) || /selectedRate:\s*[A-Za-z]/.test(modalSrc));
+  check('FE(8c): handleSubmit threads the selected rate into the save payload',
+    /selectedRate:/.test(handleSubmitSrc));
+  check('FE(8d): handleSubmit threads the selected ship-from origin',
+    /shipFrom(?:Origin)?\b/.test(handleSubmitSrc));
+
+  // 8h — the preview rows are clickable to select (an onClick that sets the
+  // selected rate). Bounded to the rates.map render block.
+  const ratesRenderMatch = /\{rates\.map\(\(r, idx\)[\s\S]*?\}\)\}/.exec(modalSrc);
+  const ratesRenderSrc = ratesRenderMatch ? ratesRenderMatch[0] : '';
+  check('FE: rates.map render block located', ratesRenderSrc.length > 0);
+  check('FE(8e): preview rows are clickable to select a rate',
+    /onClick=\{[^}]*setSelectedRate|onClick=\{[^}]*selectedRate/.test(ratesRenderSrc));
 }
 
 if (failures > 0) {

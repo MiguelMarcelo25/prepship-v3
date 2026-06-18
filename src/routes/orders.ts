@@ -42,6 +42,10 @@ import {
   normalizeOrderSelectedRateDto,
   normalizeListBestRate,
 } from '../services/order-rate-dto';
+// PS-291 (slice, card DoD item 6): build the canonical bestRate DTO from the
+// operator-selected New Order preview rate, so the saved manual order carries it
+// for Create Label / Print Queue (delegates to normalizeOrderBestRateDto).
+import { buildManualSelectedBestRate } from './orders/manual-selected-rate';
 // PS-137: pure orders DTO helpers extracted from this route into shared service modules
 // (behavior-preserving). Primitives + CSV formatters are consumed by the list row-map, /export,
 // and order-detail; co-locating them keeps the route a thinner consumer.
@@ -3004,6 +3008,30 @@ const manualOrderBody = z.object({
     quantity: z.coerce.number().positive().optional().default(1),
     price: z.coerce.number().nonnegative().optional().default(0),
   })).optional().default([]),
+  // PS-291 (slice, card DoD item 6): the rate the operator SELECTED in the
+  // preview, echoed back verbatim from the backend quoter. OPTIONAL — saving
+  // without a selection still works. When present it is normalized through the
+  // canonical owner (buildManualSelectedBestRate → normalizeOrderBestRateDto)
+  // and persisted onto order_overrides.bestRateJson so Create Label / Print
+  // Queue reuse it without a silent re-rate. The selected ship-from origin rides
+  // alongside (carried into raw.shipFromOrigin for label provenance).
+  selectedRate: z.object({
+    carrierCode: z.string().optional().default(''),
+    serviceCode: z.string().optional().default(''),
+    serviceName: z.string().optional().default(''),
+    carrierNickname: z.string().nullable().optional().default(null),
+    shippingProviderId: z.coerce.number().int().nullable().optional().default(null),
+    shipmentCost: z.coerce.number().nonnegative().optional().default(0),
+    otherCost: z.coerce.number().nonnegative().optional().default(0),
+    cost: z.coerce.number().nonnegative().optional().default(0),
+  }).optional(),
+  shipFrom: z.object({
+    street1: z.string().optional().default(''),
+    city: z.string().optional().default(''),
+    state: z.string().optional().default(''),
+    postalCode: z.string().optional().default(''),
+    country: z.string().optional().default('US'),
+  }).optional(),
 });
 
 function manualNumber(value: unknown, fallback = 0): number {
@@ -3086,6 +3114,23 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
   // `items: []` safely; the order total falls back to explicit
   // totalPaid/shippingPaid/taxPaid (and 0 when none are provided) below.
 
+  // PS-291 (slice, card DoD item 6): if the operator SELECTED a preview rate,
+  // normalize it into the canonical bestRate DTO here (backend is the SOT — the
+  // modal echoed the quoter's numbers, it did not recompute them). Persisted to
+  // order_overrides.bestRateJson below so Create Label / Print Queue reuse it.
+  const selectedBestRate = buildManualSelectedBestRate(body.selectedRate ?? null);
+  // The ship-from origin the operator picked for the quote — carried into raw for
+  // label provenance (readShipFrom stays the runtime origin source of truth).
+  const shipFromOrigin = body.shipFrom
+    ? {
+        street1: body.shipFrom.street1.trim() || null,
+        city: body.shipFrom.city.trim() || null,
+        state: body.shipFrom.state.trim() || null,
+        postalCode: body.shipFrom.postalCode.trim() || null,
+        country: body.shipFrom.country.trim() || 'US',
+      }
+    : null;
+
   const manualClient = await ensureManualOrdersClient();
   const weightOz = (manualNumber(body.rateWeightLb) * 16) + manualNumber(body.rateWeightOz);
   const dims = {
@@ -3130,6 +3175,9 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
     orderTotal,
     shippingAmount,
     taxAmount,
+    // PS-291 (slice, card DoD item 6): the operator-selected ship-from origin
+    // (label provenance). null when no origin was selected (legacy default).
+    shipFromOrigin,
   };
 
   const [created] = await db
@@ -3170,6 +3218,9 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
     details: { orderNumber, itemCount: activeItems.length },
   });
 
+  // PS-291 (slice, card DoD item 6): persist the selected bestRate + its SAVE
+  // timestamp so Create Label / Print Queue read it back like any other saved
+  // best rate. null when no rate was selected (bestRateAt stays null too).
   const [overrides] = await db
     .insert(orderOverrides)
     .values({
@@ -3180,6 +3231,8 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
       rateDimsW: hasDims ? dims.width : null,
       rateDimsH: hasDims ? dims.height : null,
       bestRateDims: hasDims ? `${dims.length}x${dims.width}x${dims.height}` : null,
+      bestRateJson: selectedBestRate,
+      bestRateAt: selectedBestRate ? now : null,
       updatedAt: now,
     })
     .onConflictDoUpdate({
@@ -3191,6 +3244,8 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
         rateDimsW: hasDims ? dims.width : null,
         rateDimsH: hasDims ? dims.height : null,
         bestRateDims: hasDims ? `${dims.length}x${dims.width}x${dims.height}` : null,
+        bestRateJson: selectedBestRate,
+        bestRateAt: selectedBestRate ? now : null,
         updatedAt: now,
       },
     })

@@ -78,6 +78,14 @@ interface RatePreviewRow {
    */
   accountNickname: string | null
   cost: number
+  /**
+   * PS-291 (card DoD item 6): the verbatim quoter cost components + provider id
+   * for the SELECTED rate, so Save can persist the canonical bestRate without a
+   * re-rate. Display still uses `cost` (shipmentCost + otherCost).
+   */
+  shipmentCost: number
+  otherCost: number
+  shippingProviderId: number | null
 }
 
 interface NewOrderModalProps {
@@ -125,6 +133,31 @@ export interface NewOrderPayload {
   rateHeight: string
   // Line items
   items: Array<{ sku: string; name: string; quantity: number; price: number }>
+  /**
+   * PS-291 (card DoD item 6): the rate the operator SELECTED in the preview,
+   * echoed back verbatim from the backend quoter. Optional — saving without a
+   * selection is allowed. The backend normalizes this into the canonical
+   * bestRate and persists it onto the order so Create Label / Print Queue reuse
+   * it without a silent re-rate.
+   */
+  selectedRate?: {
+    carrierCode: string
+    serviceCode: string
+    serviceName: string
+    carrierNickname: string | null
+    shippingProviderId: number | null
+    shipmentCost: number
+    otherCost: number
+    cost: number
+  } | null
+  /** PS-291: the operator-selected ship-from origin the preview quoted from. */
+  shipFrom?: {
+    street1: string
+    city: string
+    state: string
+    postalCode: string
+    country: string
+  } | null
 }
 
 function newLineItem(): LineItem {
@@ -215,6 +248,10 @@ export default function NewOrderModal({
   const [ratesLoading, setRatesLoading] = useState(false)
   const [ratesError, setRatesError] = useState<string | null>(null)
   const [rates, setRates] = useState<RatePreviewRow[] | null>(null)
+  // PS-291 (card DoD item 6): which preview rate the operator SELECTED to
+  // persist onto the saved order. Defaults to the cheapest (index 0) once rates
+  // load; the operator can click another row to override. -1 = no selection.
+  const [selectedRateIndex, setSelectedRateIndex] = useState<number>(-1)
 
   // PS-291 Ship-From selector — the operator picks the origin the rate preview
   // (and later the saved order) quotes FROM: a saved location, or a custom
@@ -270,6 +307,7 @@ export default function NewOrderModal({
       setError(null)
       setRates(null)
       setRatesError(null)
+      setSelectedRateIndex(-1)
     }
   }, [open])
 
@@ -426,18 +464,27 @@ export default function NewOrderModal({
       }
       const result = await apiClient.fetchRates(payload)
       const mapped: RatePreviewRow[] = (Array.isArray(result) ? result : [])
-        .map((r: any) => ({
-          carrierCode: r.carrierCode ?? '',
-          serviceCode: r.serviceCode ?? '',
-          serviceLabel: r.serviceName ?? r.serviceLabel ?? r.serviceCode ?? '',
-          // PS-291: account nickname shown above the service (Rate Browser
-          // parity). Verbatim from the backend rate's carrierNickname.
-          accountNickname:
-            typeof r.carrierNickname === 'string' && r.carrierNickname.trim()
-              ? r.carrierNickname.trim()
-              : null,
-          cost: Number(r.shipmentCost ?? 0) + Number(r.otherCost ?? 0),
-        }))
+        .map((r: any) => {
+          const shipmentCost = Number(r.shipmentCost ?? 0)
+          const otherCost = Number(r.otherCost ?? 0)
+          const providerId = Number(r.shippingProviderId ?? r.providerAccountId ?? NaN)
+          return {
+            carrierCode: r.carrierCode ?? '',
+            serviceCode: r.serviceCode ?? '',
+            serviceLabel: r.serviceName ?? r.serviceLabel ?? r.serviceCode ?? '',
+            // PS-291: account nickname shown above the service (Rate Browser
+            // parity). Verbatim from the backend rate's carrierNickname.
+            accountNickname:
+              typeof r.carrierNickname === 'string' && r.carrierNickname.trim()
+                ? r.carrierNickname.trim()
+                : null,
+            cost: shipmentCost + otherCost,
+            // PS-291: carry the verbatim quoter components for the Save persist.
+            shipmentCost,
+            otherCost,
+            shippingProviderId: Number.isFinite(providerId) ? providerId : null,
+          }
+        })
       // PS-291: drop marketplace-owned providers (ebay_shipping/walmart_shipping)
       // — they need a real marketplace order id and can't be quoted for an
       // unsaved manual order.
@@ -445,6 +492,9 @@ export default function NewOrderModal({
         .sort((a, b) => a.cost - b.cost)
         .slice(0, 8) // Show top 8 cheapest — ShipStation overwhelms with 30+
       setRates(rows)
+      // PS-291: default the selection to the cheapest row (index 0) so a Save
+      // right after fetching persists the recommended rate; -1 when empty.
+      setSelectedRateIndex(rows.length > 0 ? 0 : -1)
     } catch (err) {
       setRatesError(err instanceof Error ? err.message : 'Could not fetch rates')
     } finally {
@@ -474,6 +524,10 @@ export default function NewOrderModal({
     setError(null)
     setSaving(true)
     try {
+      // PS-291 (card DoD item 6): the preview row the operator selected (or the
+      // cheapest default). null when no rates were fetched/selected.
+      const selectedRow =
+        rates && selectedRateIndex >= 0 ? rates[selectedRateIndex] ?? null : null
       const payload: NewOrderPayload = {
         shipToName: name.trim(),
         shipToCompany: company.trim(),
@@ -506,6 +560,29 @@ export default function NewOrderModal({
             quantity: Number.parseFloat(i.quantity) || 1,
             price: Number.parseFloat(i.price) || 0,
           })),
+        // PS-291 (card DoD item 6): thread the SELECTED preview rate (verbatim
+        // quoter values) + the selected ship-from origin so the backend persists
+        // the canonical bestRate onto the saved order. null when no row is
+        // selected — the order saves without a pre-applied rate.
+        selectedRate: selectedRow
+          ? {
+              carrierCode: selectedRow.carrierCode,
+              serviceCode: selectedRow.serviceCode,
+              serviceName: selectedRow.serviceLabel,
+              carrierNickname: selectedRow.accountNickname,
+              shippingProviderId: selectedRow.shippingProviderId,
+              shipmentCost: selectedRow.shipmentCost,
+              otherCost: selectedRow.otherCost,
+              cost: selectedRow.cost,
+            }
+          : null,
+        shipFrom: {
+          street1: shipFromOrigin.street1,
+          city: shipFromOrigin.city,
+          state: shipFromOrigin.state,
+          postalCode: shipFromOrigin.postalCode || defaultFromZip,
+          country: shipFromOrigin.country || 'US',
+        },
       }
       const ok = await onSave(payload)
       if (ok) {
@@ -960,12 +1037,24 @@ export default function NewOrderModal({
                     {rates && rates.length > 0 ? (
                       <div className="mt-3 space-y-1 max-h-[200px] overflow-y-auto">
                         {rates.map((r, idx) => (
+                          // PS-291 (card DoD item 6): clicking a row SELECTS that
+                          // rate to persist onto the saved order. The selected
+                          // row (cheapest by default) gets the emerald highlight.
                           <div
                             key={`${r.carrierCode}-${r.serviceCode}-${idx}`}
-                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md ${idx === 0 ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'hover:bg-surface-2'}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedRateIndex(idx)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                setSelectedRateIndex(idx)
+                              }
+                            }}
+                            className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md cursor-pointer ${selectedRateIndex === idx ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'hover:bg-surface-2'}`}
                           >
                             <div className="flex items-center gap-2 min-w-0">
-                              {idx === 0 ? <CheckIcon size={12} strokeWidth={3} className="text-emerald-600 flex-shrink-0" /> : <span className="w-3 flex-shrink-0" />}
+                              {selectedRateIndex === idx ? <CheckIcon size={12} strokeWidth={3} className="text-emerald-600 flex-shrink-0" /> : <span className="w-3 flex-shrink-0" />}
                               {/* Carrier badge — branded pill instead
                                   of plain text so the row identifies
                                   the carrier at a glance and the
