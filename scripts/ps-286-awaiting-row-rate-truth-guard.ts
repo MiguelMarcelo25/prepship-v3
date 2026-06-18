@@ -28,6 +28,10 @@ import {
   classifyAwaitingBestRateDisplay,
   type AwaitingBestRateDisplayState,
 } from '../web/src/components/Views/awaiting-best-rate-display-state'
+// PS-286 (slice): the Print Queue preflight consumes the SAME explicit Awaiting
+// verdict, so the queue can never silently buy/queue a confident-looking STALE
+// saved rate the Awaiting column is refusing to show as a dollar figure.
+import { classifyPrintQueuePreflightFromAwaitingState } from '../web/src/components/Views/print-queue-preflight-state'
 import type { OrderSummaryDto } from '../web/src/types/api'
 
 let failures = 0
@@ -175,6 +179,73 @@ check(
     nowMs: NOW,
   }),
   'add_dims',
+)
+
+// ── (3) Print-Queue <-> Awaiting AGREEMENT off the SAME backend verdict ─────────
+//
+// The Print Queue preflight must NOT treat a saved rate as queueable-as-current
+// when the Awaiting column is simultaneously surfacing an actionable
+// (stale/incomplete/expired/eligibility-mismatch) state for it. Both consumers
+// read the SAME classifyAwaitingBestRateDisplay output, so they agree by
+// construction: only show_amount (the state that renders a dollar figure) is
+// queueable; every other state blocks the queue with the IDENTICAL reason.
+
+const ALL_AWAITING_STATES: AwaitingBestRateDisplayState[] = [
+  'show_amount',
+  'eligibility_mismatch',
+  'coverage_incomplete',
+  'expired',
+  'add_dims',
+  'recalculate_required',
+  'no_rate',
+]
+
+for (const s of ALL_AWAITING_STATES) {
+  const verdict = classifyPrintQueuePreflightFromAwaitingState(s)
+  // Queueable-as-current iff the Awaiting column would show the dollar figure.
+  check(`preflight queueable matches show_amount for "${s}"`, verdict.queueableAsCurrent, s === 'show_amount')
+  // The verdict mirrors the column state verbatim — no generic re-labeling.
+  check(`preflight mirrors awaiting state "${s}"`, verdict.state, s)
+  // Blocked reason is the exact column state (the actionable cause), null when OK.
+  check(`preflight blockedReason for "${s}"`, verdict.blockedReason, s === 'show_amount' ? null : s)
+}
+
+// End-to-end: a STALE saved rate (eligibility moved) the Awaiting column refuses
+// to show as a dollar figure must NOT be queueable-as-current at the preflight.
+const staleAwaitingState = classifyAwaitingBestRateDisplay({
+  hasSavedBestRate: true,
+  canDisplaySavedRate: false,
+  isComplete: true,
+  cacheExpiresAt: FUTURE,
+  eligibilityVersion: 'old-v1',
+  requiredEligibilityVersion: REQUIRED_ELIG,
+  hasDimsAndWeight: true,
+  nowMs: NOW,
+})
+check('end-to-end: eligibility-stale saved rate is eligibility_mismatch', staleAwaitingState, 'eligibility_mismatch')
+check(
+  'end-to-end: eligibility-stale saved rate is NOT queueable-as-current',
+  classifyPrintQueuePreflightFromAwaitingState(staleAwaitingState).queueableAsCurrent,
+  false,
+)
+
+// And a fresh complete in-window matching-eligibility saved rate (the column
+// shows the dollar figure) IS queueable-as-current — the queue is not broken.
+const freshAwaitingState = classifyAwaitingBestRateDisplay({
+  hasSavedBestRate: true,
+  canDisplaySavedRate: true,
+  isComplete: true,
+  cacheExpiresAt: FUTURE,
+  eligibilityVersion: REQUIRED_ELIG,
+  requiredEligibilityVersion: REQUIRED_ELIG,
+  hasDimsAndWeight: true,
+  nowMs: NOW,
+})
+check('end-to-end: fresh saved rate is show_amount', freshAwaitingState, 'show_amount')
+check(
+  'end-to-end: fresh saved rate IS queueable-as-current',
+  classifyPrintQueuePreflightFromAwaitingState(freshAwaitingState).queueableAsCurrent,
+  true,
 )
 
 if (failures > 0) {

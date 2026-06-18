@@ -111,6 +111,11 @@ import {
   classifyAwaitingBestRateDisplay,
   AWAITING_BEST_RATE_STATE_LABELS,
 } from './awaiting-best-rate-display-state'
+// PS-286 (slice): the Send-to-Queue preflight consumes the SAME explicit Awaiting
+// verdict, so a stale/incomplete/expired/eligibility-mismatched saved rate is
+// treated as NOT queueable-as-current (the queue can't silently buy a rate the
+// Best Rate column is refusing to show as a dollar figure).
+import { classifyPrintQueuePreflightFromAwaitingState } from './print-queue-preflight-state'
 import {
   fetchRecalculateAllJob,
   isRecalculateAllJobDone,
@@ -3091,6 +3096,39 @@ export default function OrdersView({
     } else {
       if (options.existingLabelOnly) {
         return { payload: null, items: [], error: 'Label URL is not queueable for this order', order }
+      }
+
+      // PS-286 (slice): an order with no already-bought queueable label would have
+      // a label payload built BELOW from order.bestRate and handed to the purchase
+      // boundary. Gate that on the SAME backend rate verdict the Awaiting "Best
+      // Rate" column consumes — so a stale / incomplete / expired / eligibility-
+      // mismatched saved rate is treated as NOT queueable-as-current and skipped
+      // with the column's exact actionable reason, instead of silently buying a
+      // rate the column is simultaneously refusing to show as a dollar figure.
+      //
+      // Scope: AWAITING rows only (the verdict is awaiting-only — no shipped path is
+      // touched), real (non-test) orders, and only when the caller did NOT supply a
+      // live panel payload override (PS-204: the side-panel Print-to-Queue retry
+      // hands a freshly re-rated proof, which is current by construction and must
+      // not be blocked by the saved-DTO verdict).
+      const hasLivePanelOverride = options.labelPayloadOverrides?.has(order.orderId) === true
+      if (
+        order.orderStatus === 'awaiting_shipment' &&
+        !isBackendTestOrder(order) &&
+        !hasLivePanelOverride
+      ) {
+        const preflight = classifyPrintQueuePreflightFromAwaitingState(
+          getAwaitingBestRateDisplayState(order),
+        )
+        if (!preflight.queueableAsCurrent) {
+          const reasonLabel = AWAITING_BEST_RATE_STATE_LABELS[preflight.state] || 'Recalculate required'
+          return {
+            payload: null,
+            items: [],
+            error: `Saved rate not current (${reasonLabel}) — recalculate before queueing; no postage was purchased`,
+            order,
+          }
+        }
       }
 
       const bestRate = order.bestRate
