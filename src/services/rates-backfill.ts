@@ -26,6 +26,10 @@ import {
   setOrderRatePending,
   setOrderRateRating,
 } from './shipping-workflow/order-rate-job-status';
+// #750 resilience: shared timeout + retry-on-timeout owner. The live Recalculate All re-rates every
+// order with forceRefresh, so each fan-out queues behind the global rate limiter and the per-order
+// timeout wrapped the QUEUE WAIT — under a 40+ order burst most orders timed out waiting for a permit.
+import { runWithTimeoutAndRetry, withTimeout } from './with-timeout-retry';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -145,25 +149,15 @@ export type BackfillJobSnapshot = {
 };
 
 const PER_ORDER_TIMEOUT_MS = 30_000;
-
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms}ms`)),
-      ms
-    );
-    p.then(
-      (v) => {
-        clearTimeout(t);
-        resolve(v);
-      },
-      (err) => {
-        clearTimeout(t);
-        reject(err);
-      }
-    );
-  });
-}
+// #750 resilience (live Recalculate All): the live path re-rates EVERY awaiting order with forceRefresh
+// (no cache), so each order's carrier fan-out queues behind the global rate limiter
+// (RATE_FETCH_CONCURRENCY). The 30s per-order cap wrapped that queue wait, so a 40+ order burst timed
+// out 37/43 orders waiting for a permit (single Browse Rate works fine). Give the live path a larger
+// budget + ONE retry (the burst drains by the retry) and a smaller burst so orders stop starving each
+// other. Passive/nightly sweeps (cache-allowed, fast) keep the 30s cap + no retry.
+const LIVE_PER_ORDER_TIMEOUT_MS = 90_000;
+const LIVE_MAX_RETRIES = 1;
+const LIVE_BACKFILL_CONCURRENCY = 2;
 
 const jobs = new Map<string, BackfillJob>();
 let activeJobId: string | null = null;
@@ -416,7 +410,11 @@ async function runBackfill(
       }),
     );
 
-    const CONCURRENCY = Math.max(1, Math.min(4, RATE_FETCH_CONCURRENCY));
+    // #750: throttle the LIVE burst so 40+ forceRefresh orders don't starve each other for the global
+    // rate-limiter's permits (the cause of the 30s queue-wait timeouts); passive sweeps keep 4.
+    const CONCURRENCY = Math.max(1, Math.min(liveRecalculate ? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY));
+    // #750: the live path needs a larger per-order budget (it wraps the limiter queue wait), passive 30s.
+    const perOrderTimeoutMs = liveRecalculate ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
 
@@ -514,10 +512,16 @@ async function runBackfill(
           storeId: row.storeId,
           clientId: row.clientId,
         };
-        const result = await withTimeout(
-          getRates(rateInput, liveRecalculate ? { forceRefresh: true } : undefined),
-          PER_ORDER_TIMEOUT_MS,
-          `getRates(order=${row.id})`
+        // #750: retry a TIMED-OUT live fetch once — by the retry the initial burst has drained, so the
+        // order that was stuck waiting for a limiter permit now gets its rate. Non-timeout errors throw
+        // immediately (a real rate error is recorded honestly). Passive sweeps get no retry.
+        const result = await runWithTimeoutAndRetry(
+          () => getRates(rateInput, liveRecalculate ? { forceRefresh: true } : undefined),
+          {
+            timeoutMs: perOrderTimeoutMs,
+            maxRetries: liveRecalculate ? LIVE_MAX_RETRIES : 0,
+            label: `getRates(order=${row.id})`,
+          },
         );
         // PS-203 (stage 4): the persisted best rate is the COMBINED winner —
         // visible direct carriers (Shipp / Walmart Shipping / direct UPS) join
@@ -531,7 +535,7 @@ async function runBackfill(
             orderId: row.id,
             orderNumber: row.orderNumber ?? undefined,
           }),
-          PER_ORDER_TIMEOUT_MS,
+          perOrderTimeoutMs,
           `getDirectCarrierRates(order=${row.id})`
         ).catch((err) => ({
           rates: [],

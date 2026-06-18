@@ -186,6 +186,7 @@
     "test:ps-292-house-tuple-display": "tsx scripts/ps-292-house-tuple-display-guard.ts",
     "test:ps-178-fe-authority-ratchet": "tsx scripts/ps-178-fe-authority-ratchet-guard.ts",
     "test:recalculate-all-live": "tsx scripts/recalculate-all-live-guard.ts",
+    "test:recalculate-all-timeout-resilience": "tsx scripts/recalculate-all-timeout-resilience-guard.ts",
     "test:ps-199-walmart-po-resolution": "tsx scripts/ps-199-walmart-po-resolution-guard.ts",
     "test:ps-203-best-rate-universe": "tsx scripts/ps-203-best-rate-universe-guard.ts",
     "test:ps-191-retry-eligibility": "tsx scripts/ps-191-retry-eligibility-guard.ts",
