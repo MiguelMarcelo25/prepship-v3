@@ -8,7 +8,8 @@ import { orderItems } from '../db/schema/order-items';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
-import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
+import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
+import { matchRecoverableLabelUrl } from './print-queue-label-recovery';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
@@ -529,7 +530,13 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
   // Per user override unlock shipped data on 2026-05-23: read-only recovery for
   // shipped orders whose label exists but was not queued after creation.
   const [row] = await db
-    .select({ labelUrl: shipments.labelUrl })
+    .select({
+      id: shipments.id,
+      labelUrl: shipments.labelUrl,
+      labelFormat: shipments.labelFormat,
+      trackingNumber: shipments.trackingNumber,
+      labelShipmentId: shipments.labelShipmentId,
+    })
     .from(shipments)
     .where(
       and(
@@ -541,8 +548,27 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
     .orderBy(desc(shipments.createdAt))
     .limit(1);
 
-  if (!row?.labelUrl) return null;
-  return normalizePrintQueueLabelUrl(row.labelUrl);
+  if (!row) return null;
+  if (row.labelUrl) return normalizePrintQueueLabelUrl(row.labelUrl);
+
+  // PS-288 — the local label_url went NULL (shipment-sync never wrote it; ~72% of synced shipped
+  // shipments, so "Send to Queue" greys out even though the label was already purchased). Recover the
+  // EXISTING ShipStation label by tracking number, then label_id — a READ of /v2/labels, never a new
+  // postage purchase. No match => return null (no guess).
+  const recoveredUrl = matchRecoverableLabelUrl(await ssListRecentLabels(), {
+    trackingNumber: row.trackingNumber,
+    labelShipmentId: row.labelShipmentId,
+  });
+  if (!recoveredUrl) return null;
+  // Per user override unlock shipped data on 2026-06-18: PS-288 — backfill ONLY the recovered
+  // label_url + label_format of the ALREADY-purchased label onto this existing (non-voided) shipment
+  // row. No other shipped/cancelled column is written, no postage is bought, no shipment is
+  // created/voided. This is the documented label_url sync gap (recoverable via tracking/label_id).
+  await db
+    .update(shipments)
+    .set({ labelUrl: recoveredUrl, labelFormat: row.labelFormat ?? 'pdf' })
+    .where(eq(shipments.id, row.id));
+  return normalizePrintQueueLabelUrl(recoveredUrl);
 }
 
 function printQueueScopePredicate(scope: PrintQueueListScope): SQL {

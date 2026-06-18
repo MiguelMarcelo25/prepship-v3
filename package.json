@@ -116,6 +116,7 @@
     "test:ps-286-label-url-backfill": "tsx scripts/ps-286-shipment-label-url-backfill-guard.ts",
     "test:ps-286-awaiting-row-rate-truth": "tsx scripts/ps-286-awaiting-row-rate-truth-guard.ts",
     "test:ps-287-print-queue-label-normalization": "tsx scripts/ps-287-print-queue-label-normalization-guard.ts",
+    "test:ps-288-label-recovery": "tsx scripts/ps-288-label-recovery-guard.ts",
     "test:ps-106-carrier-family-eligibility": "tsx scripts/ps-106-carrier-family-eligibility-guard.ts",
     "test:carrier-test-mode-seam": "tsx scripts/carrier-test-mode-seam-guard.ts",
     "test:carrier-harness": "tsx scripts/carrier-harness-e2e.ts --self-check",
