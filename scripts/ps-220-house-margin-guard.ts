@@ -23,6 +23,7 @@ import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../src/services/shipping-workflow/best-rate-workflow-dto';
 import { redactOrderFinancials, RATE_MONEY_FIELD_KEYS } from '../src/services/orders-financial-redaction';
 import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
+import { redactRateBrowserMoney, RATE_BROWSER_MONEY_FIELD_KEYS } from '../src/services/rate-browser-money-redaction';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -115,8 +116,35 @@ const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 // The rates.ts redaction ships in this slice; the orders.ts RATE_MONEY_FIELD_KEYS line ships with the
 // orders.ts slice (that file is mid-edit by a parallel ticket). Both MUST land before any client opts
 // in (P4 default-off ⇒ houseMargin is never populated until then, so no leak window in between).
-check('houseMargin redacted from the rates (rate browser) serializer RATE_MONEY_FIELD_KEYS',
-  ratesRoute.includes("'houseMargin'"));
+check('rates.ts delegates browse money redaction to the pure rate-browser-money-redaction owner (single key set, no drift)',
+  ratesRoute.includes('redactRateBrowserMoney') &&
+  /from '\.\.\/services\/rate-browser-money-redaction'/.test(ratesRoute));
+// BEHAVIORAL browse-leak proof (Blocker B): the projected house stamp writes the competitor's camelCase
+// cost keys (shipmentCost/otherCost/totalCost) onto bestRate.nextBestNonHouseRate. The browse redactor
+// MUST null them (plus houseMargin and the SHIPP totalCost) for a non-financial / client_user viewer —
+// the rates.ts set previously omitted them, leaking the competitor's internal cost the instant a client
+// opted in. Non-money identity (carrier/service codes) must survive.
+{
+  const browseResult = {
+    bestRate: {
+      carrierCode: 'shipp', totalCost: 8.5, houseMargin: 1.14,
+      nextBestNonHouseRate: { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, otherCost: 0, totalCost: 9.64, providerAccountId: 442007 },
+    },
+  };
+  const redacted = redactRateBrowserMoney(browseResult) as any;
+  check('browse leak FIX: competitor shipmentCost/otherCost/totalCost + houseMargin + SHIPP totalCost all NULLED for a non-financial viewer',
+    redacted.bestRate.houseMargin === null &&
+    redacted.bestRate.totalCost === null &&
+    redacted.bestRate.nextBestNonHouseRate.totalCost === null &&
+    redacted.bestRate.nextBestNonHouseRate.shipmentCost === null &&
+    redacted.bestRate.nextBestNonHouseRate.otherCost === null);
+  check('browse redaction is identity for non-money fields (competitor carrierCode/serviceCode survive)',
+    redacted.bestRate.nextBestNonHouseRate.carrierCode === 'stamps_com' &&
+    redacted.bestRate.nextBestNonHouseRate.serviceCode === 'usps_ground_advantage');
+  check('rate-browser key set includes the camelCase competitor cost keys + houseMargin',
+    RATE_BROWSER_MONEY_FIELD_KEYS.has('shipmentCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('otherCost') &&
+    RATE_BROWSER_MONEY_FIELD_KEYS.has('totalCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('houseMargin'));
+}
 check('projected stamp fires only for a SHIPP winner + opted-in client, over combinedRates',
   ratesRoute.includes('isHouseShippRate(cheapest)') &&
   ratesRoute.includes('clientHouseAccountEnabled') &&
@@ -358,6 +386,19 @@ check('portal serializer: redaction extracted to the pure owner + BOTH detail ro
   const houseUnderRef = decideShippingLineBilling({ labelCost: 6, houseCustomerRate: 9.64, billingMode: 'ss_ref_rate', isBaselineCarrier: false, refUspsRate: 9, refUpsRate: 8, shippingMarkupPct: 20, shippingMarkupFlat: 1 });
   check('billing decision: house order ignores billing mode + ref rates + markup — still bills customer_rate 9.64',
     houseUnderRef.billedAmount === 9.64 && houseUnderRef.source === 'house_customer_rate');
+
+  // PS-220 (Blocker C — defense-in-depth cost floor): a house order must NEVER bill BELOW DRP's own
+  // SHIPP cost. The margin>=0 invariant is enforced by the DB CHECK and the capture clamp; this is the
+  // third layer at the money-commit point. Under the card's model this never fires (SHIPP won => every
+  // competitor >= SHIPP cost), so the happy path (9.64 vs 8.5) is unchanged; it only protects against a
+  // stale/forged customer_rate below cost (the FE-carried-stamp risk) — bill cost, margin 0, never a loss.
+  const houseBelowCost = decideShippingLineBilling({ labelCost: 10, houseCustomerRate: 9.0, billingMode: 'label_cost', isBaselineCarrier: false, refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: 0, shippingMarkupFlat: 0 });
+  check('billing decision (house cost floor): customer_rate 9.0 below SHIPP cost 10 => bills 10 (margin 0), never below cost',
+    houseBelowCost.billedAmount === 10 && houseBelowCost.source === 'house_customer_rate' && houseBelowCost.markupApplied === false);
+  // Happy path unchanged: customer_rate 9.64 above SHIPP cost 8.5 still bills 9.64 (floor is a no-op).
+  const houseAboveCost = decideShippingLineBilling({ labelCost: 8.5, houseCustomerRate: 9.64, billingMode: 'label_cost', isBaselineCarrier: false, refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: 0, shippingMarkupFlat: 0 });
+  check('billing decision (house floor no-op on happy path): customer_rate 9.64 above cost 8.5 still bills 9.64',
+    houseAboveCost.billedAmount === 9.64);
 }
 const billingDelegateSrc = readFileSync('src/services/billing.ts', 'utf8');
 check('billing.ts delegates the shipping-line amount to the pure decideShippingLineBilling owner (single source of truth)',

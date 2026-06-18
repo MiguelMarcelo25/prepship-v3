@@ -36,10 +36,15 @@ export type ShippingLineBillingResult = {
 };
 
 export function decideShippingLineBilling(input: ShippingLineBillingInput): ShippingLineBillingResult {
-  // HOUSE: bill the captured customer_rate verbatim; markup + reference-rate suppressed.
+  // HOUSE: bill the captured customer_rate; markup + reference-rate suppressed. Floor at the SHIPP
+  // drp_cost (labelCost) so a house order can NEVER bill below DRP's own cost — the margin>=0 invariant
+  // (enforced by the order_competitive_rate CHECK and the capture clamp) held at the money-commit point.
+  // Under the model this is a no-op (SHIPP won => customer_rate >= drp_cost); it only guards a stale/forged
+  // customer_rate below cost. labelCost <= 0 (unknown cost) leaves the customer_rate untouched.
   if (input.houseCustomerRate != null) {
+    const floor = input.labelCost > 0 ? input.labelCost : input.houseCustomerRate;
     return {
-      billedAmount: input.houseCustomerRate,
+      billedAmount: Math.max(input.houseCustomerRate, floor),
       source: 'house_customer_rate',
       markupApplied: false,
       descriptionSuffix: '',

@@ -17,6 +17,7 @@ import {
 import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
 import { isHouseShippRate, resolveNextBestNonHouseRate } from '../lib/next-best-non-house-rate';
 import { clientHouseAccountEnabled } from '../services/house-account-opt-in';
+import { redactRateBrowserMoney } from '../services/rate-browser-money-redaction';
 import {
   buildResidentialEvidenceFromOrder,
   residentialEvidenceRateInput,
@@ -154,22 +155,6 @@ async function selectRateCachePublicRowsByWeightZip(weightOz: number, toZip: str
   }
 }
 
-const RATE_MONEY_FIELD_KEYS = [
-  'shipping_amount',
-  'other_amount',
-  'insurance_amount',
-  'confirmation_amount',
-  'original_amount',
-  'list_amount',
-  'retail_amount',
-  'negotiated_amount',
-  'cost',
-  'labelCost',
-  'rawCost',
-  'amount',
-  'houseMargin', // PS-220: SHIPP house-account margin is INTERNAL — redact from client-facing rate serializers
-] as const;
-
 // PS-277 (slice 1): browse-to-SOT writeback canary. OFF by default — when 'on', a PLAIN browse
 // (modal open) that returns a fresh LIVE complete best for an awaiting order reconciles the
 // persisted SOT, so opening the Rate Browser corrects the BEST RATE column instead of leaving a
@@ -200,22 +185,6 @@ function canViewRateAccountMetadata(c: Context): boolean {
   );
 }
 
-function redactRateMoneyFields<T>(value: T): T {
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactRateMoneyFields(entry)) as T;
-  }
-  if (typeof value !== 'object') return value;
-  const source = value as Record<string, unknown>;
-  const redacted: Record<string, unknown> = {};
-  for (const [key, nestedValue] of Object.entries(source)) {
-    redacted[key] = RATE_MONEY_FIELD_KEYS.includes(key as never)
-      ? null
-      : redactRateMoneyFields(nestedValue);
-  }
-  return redacted as T;
-}
-
 function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown }>(
   result: T,
   canViewFinancials: boolean
@@ -223,8 +192,8 @@ function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown }>(
   if (canViewFinancials) return result;
   return {
     ...result,
-    rates: redactRateMoneyFields(result.rates),
-    bestRate: redactRateMoneyFields(result.bestRate),
+    rates: redactRateBrowserMoney(result.rates),
+    bestRate: redactRateBrowserMoney(result.bestRate),
   };
 }
 
@@ -673,7 +642,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         ? manual.rates.filter((r) => requestedSet.has(r.carrier_id))
         : manual.rates;
       manualEstimate = {
-        rates: canViewFinancials ? manualFiltered : (redactRateMoneyFields(manualFiltered) as unknown[]),
+        rates: canViewFinancials ? manualFiltered : (redactRateBrowserMoney(manualFiltered) as unknown[]),
         fetchedAt: manual.fetchedAt,
         cached: manual.cached,
       };
