@@ -10,6 +10,7 @@
  *
  *   npx tsx scripts/markup-single-source-guard.ts
  */
+import { readFileSync } from 'node:fs';
 import {
   markupRuleToCanonical,
   resolveCanonicalMarkup,
@@ -71,6 +72,16 @@ for (const base of [9.27, 10.54, 11.21, 100, 0.01]) {
   check('parity: 15% via account-override == 15% via client-default (display == billing)',
     viaAccount === viaClient && approx(viaAccount, 11.33));
 }
+
+// ── slice 2 wiring: BILLING resolves its shipping markup through the canonical owner ──
+const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
+check('billing.ts imports the canonical markup owner (resolveCanonicalMarkup)',
+  /import \{ resolveCanonicalMarkup \} from '\.\/shipping-workflow\/markup-resolver'/.test(billingSrc));
+check('billing.ts resolves the shipping-line markup via resolveCanonicalMarkup (single owner)',
+  /resolveCanonicalMarkup\(\{[\s\S]*?clientShippingMarkupPct: toNum\(cfg\.shippingMarkupPct\)/.test(billingSrc));
+check('billing.ts feeds the RESOLVED markup into decideShippingLineBilling (not cfg directly)',
+  /shippingMarkupPct: resolvedShippingMarkup\?\.pct \?\? 0/.test(billingSrc) &&
+  /shippingMarkupFlat: resolvedShippingMarkup\?\.flat \?\? 0/.test(billingSrc));
 
 if (failures > 0) {
   console.error(`\nFAIL markup single-source guard (${failures} failing)`);

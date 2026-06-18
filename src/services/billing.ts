@@ -14,6 +14,12 @@ import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
 import { decideShippingLineBilling } from './billing-shipping-line';
+// #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
+// resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
+// carrierAccountMarkup is null here: the billing line-item path carries carrierCode + clientId but NOT
+// the carrier ACCOUNT, so the per-account OVERRIDE is deferred (display-only) until the shipment->
+// account linkage exists — per-CLIENT reconciliation lands now, byte-identical while markups are 0.
+import { resolveCanonicalMarkup } from './shipping-workflow/markup-resolver';
 // PS-207: the `inventory` import is deliberately GONE — billing must never
 // consult inventory/SKU package defaults (the storage-fee block reads
 // inventory via raw SQL for cubic-feet, which is not box resolution).
@@ -959,6 +965,14 @@ export async function generateLineItems(input: GenerateInput) {
       // customer_rate is billed verbatim (carrier markup + reference-rate suppressed); otherwise
       // the label cost flows through optional reference-rate flooring + the carrier markup. The
       // SHIPP drp_cost and the margin are INTERNAL and never appear on the invoice.
+      // #798: resolve the shipping markup through the canonical owner (per-account override -> per-
+      // client default -> none). Account override is null here (see import note); with markups at 0
+      // the resolver returns null -> 0pct/0flat, byte-identical to passing cfg.shippingMarkup* directly.
+      const resolvedShippingMarkup = resolveCanonicalMarkup({
+        carrierAccountMarkup: null,
+        clientShippingMarkupPct: toNum(cfg.shippingMarkupPct),
+        clientShippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
+      });
       const shippingDecision = decideShippingLineBilling({
         labelCost,
         houseCustomerRate,
@@ -966,8 +980,8 @@ export async function generateLineItems(input: GenerateInput) {
         isBaselineCarrier: SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? ''),
         refUspsRate: toNum(s.refUspsRate),
         refUpsRate: toNum(s.refUpsRate),
-        shippingMarkupPct: toNum(cfg.shippingMarkupPct),
-        shippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
+        shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
+        shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
       });
       rows.push({
         clientId,
