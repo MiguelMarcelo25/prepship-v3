@@ -20,11 +20,28 @@ import {
   type AccountInsuranceCapability,
   type DirectCarrierParcelGuardFlags,
 } from '../src/lib/carrier-account-registry';
+import { fedexCarrierConnector } from '../src/connectors/carrier/fedex';
 
 let failures = 0;
 function check(name: string, cond: boolean) {
   if (!cond) { failures += 1; console.error(`FAIL ${name}`); }
   else console.log(`ok   ${name}`);
+}
+
+/**
+ * Run an async thunk and report whether it REJECTED with an insurance-unsupported
+ * error. Used to prove the direct-FedEx connector self-blocks an insured order
+ * BEFORE any network call (the assert fires synchronously inside getRates, ahead of
+ * credential/OAuth/rate-quote I/O), so the guard never reaches the FedEx API.
+ */
+async function rejectsWithInsuranceUnsupported(thunk: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await thunk();
+    return false; // resolved → did NOT self-block
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return /insurance is not supported/i.test(message);
+  }
 }
 
 const OFF: DirectCarrierParcelGuardFlags = {
@@ -120,8 +137,51 @@ for (const { input, expected } of OFF_EXPECTED) {
 }
 if (priorFix !== undefined) process.env.DIRECT_CARRIER_PARCELGUARD_FIX = priorFix;
 
-if (failures > 0) {
-  console.error(`\nFAIL PS-262 direct-carrier ParcelGuard fix guard (${failures} failing)`);
-  process.exit(1);
+// ── 5. BEHAVIORAL: the DIRECT FedEx connector self-blocks an insured order ──────
+// Acceptance item #5 ("direct FedEx: insures or block") is the ONE matrix cell the
+// registry cannot prove by carrier code alone: a bare 'fedex' code is ambiguous with
+// Shipp-/ShipStation-brokered FedEx (which DOES insure via ParcelGuard), so
+// resolveAccountInsuranceCapability intentionally leaves bare 'fedex' on the
+// ParcelGuard fallback (PS-261 owns the account-context disambiguation). The proof
+// that the DIRECT connector itself refuses to ship an insured order UNINSURED lives
+// in the connector: fedex.ts declares insurance:false via
+// assertUnsupportedShippingOptions, which throws before any FedEx network call. We
+// assert that behavior here so the matrix audit is complete end-to-end.
+//
+// OFFLINE BY CONSTRUCTION: both orders reject synchronously inside getRates, BEFORE
+// any FedEx OAuth/network call, so the guard never touches a live provider. The
+// insured order has insuranceProvider + insuredValue>0 (normalizeInsurance yields a
+// non-'none' provider) and so trips the insurance:false assert at the very top of
+// getRates. The uninsured control order omits accountNumber, so it rejects on the
+// next synchronous validation ('FedEx accountNumber is required') WITHOUT an
+// insurance-unsupported message — proving the block is insurance-specific, not a
+// blanket getRates failure, while still issuing zero network requests.
+const fedexInsuredOrder = {
+  insuranceProvider: 'parcelguard' as const,
+  insuredValue: 250,
+  credentials: { apiKey: 'x', apiSecret: 'y' },
+};
+const fedexUninsuredOrder = {
+  insuranceProvider: 'none' as const,
+  insuredValue: 0,
+  credentials: { apiKey: 'x', apiSecret: 'y' },
+};
+
+async function runBehavioralFedexChecks(): Promise<void> {
+  check(
+    'BEHAVIORAL: direct FedEx connector self-blocks an insured order (insurance:false assert)',
+    await rejectsWithInsuranceUnsupported(() => fedexCarrierConnector.getRates(fedexInsuredOrder)),
+  );
+  check(
+    'BEHAVIORAL: direct FedEx does NOT raise insurance-unsupported for an uninsured order',
+    !(await rejectsWithInsuranceUnsupported(() => fedexCarrierConnector.getRates(fedexUninsuredOrder))),
+  );
 }
-console.log('\nPASS PS-262 direct-carrier ParcelGuard fix guard');
+
+void runBehavioralFedexChecks().then(() => {
+  if (failures > 0) {
+    console.error(`\nFAIL PS-262 direct-carrier ParcelGuard fix guard (${failures} failing)`);
+    process.exit(1);
+  }
+  console.log('\nPASS PS-262 direct-carrier ParcelGuard fix guard');
+});
