@@ -14,6 +14,7 @@ import {
   NO_SKU_PICK_NOTE,
   type CollapsedQueueLine,
 } from './print-queue-identity';
+import { deriveArtworkBounds, placeArtworkOnCanvas } from './print-queue-artwork-fit';
 
 // Per user override unlock shipped data on 2026-06-02: display-only print
 // layout. Append a label PDF's pages to the merged print document, normalizing
@@ -21,11 +22,19 @@ import {
 // (e.g. FedEx Home Delivery, which returns a larger page) prints the SAME size
 // as the USPS/UPS labels instead of dwarfing them.
 //
-//  - A page already at 4x6 (within tolerance) is copied byte-for-byte — zero
-//    risk to the working USPS/UPS labels.
-//  - A rotated page is also copied as-is so its orientation is never altered.
-//  - Only an oversized, un-rotated page is embedded and scaled to FIT the 4x6
-//    page (aspect-ratio preserved, centered).
+// PS-287 (display/PDF-rendering only): the standard-4x6 branch is now
+// CONTENT-AWARE. Instead of copying a near-4x6 page byte-for-byte (which
+// preserved internally shifted/small/off-center artwork — e.g. a UPS Ground
+// Saver / USPS handoff label with excess whitespace), we derive the visible
+// artwork bounds from the page's PDF box hints (CropBox / TrimBox vs the
+// MediaBox) and place that artwork scaled-to-fit + centered on a clean 288x432
+// canvas (aspect preserved, small safe margin). The geometry lives in the pure
+// print-queue-artwork-fit.ts helper.
+//
+//  - A rotated page is still copied as-is so its orientation is never altered.
+//  - An oversized, un-rotated page is content-aware fitted to the 4x6 canvas.
+//  - A near-4x6, un-rotated page is also content-aware fitted (its artwork
+//    re-centered/scaled) rather than copied byte-for-byte.
 //
 // Mutates nothing but the in-memory merged print PDF — no label bytes, postage,
 // shipments, or shipped/cancelled order data are touched.
@@ -35,30 +44,38 @@ export async function appendNormalizedLabelPages(
 ): Promise<void> {
   const TARGET_W = 288;
   const TARGET_H = 432;
-  const SIZE_TOL = 8;
+  const ARTWORK_MARGIN = 6;
   const labelPages = labelDoc.getPages();
   const indices = labelDoc.getPageIndices();
   for (const [i, src] of labelPages.entries()) {
-    const { width, height } = src.getSize();
     const rotation = (((src.getRotation().angle ?? 0) % 360) + 360) % 360;
-    const isStandard =
-      Math.abs(width - TARGET_W) <= SIZE_TOL && Math.abs(height - TARGET_H) <= SIZE_TOL;
-    if (isStandard || rotation !== 0) {
+    // A rotated page is copied as-is so its orientation is never altered.
+    if (rotation !== 0) {
       const [copied] = await merged.copyPages(labelDoc, [indices[i]!]);
       if (copied) merged.addPage(copied);
       continue;
     }
-    const [embedded] = await merged.embedPages([src]);
+    // Content-aware: clip to the visible-artwork bounds (box hints) and place it
+    // scaled-to-fit + centered on a clean 4x6 canvas.
+    const bounds = deriveArtworkBounds(src);
+    const [embedded] = await merged.embedPages(
+      [src],
+      [{ left: bounds.x, bottom: bounds.y, right: bounds.x + bounds.width, top: bounds.y + bounds.height }],
+    );
     if (!embedded) continue;
-    const scale = Math.min(TARGET_W / embedded.width, TARGET_H / embedded.height);
-    const drawWidth = embedded.width * scale;
-    const drawHeight = embedded.height * scale;
+    const placed = placeArtworkOnCanvas({
+      artworkW: embedded.width,
+      artworkH: embedded.height,
+      canvasW: TARGET_W,
+      canvasH: TARGET_H,
+      margin: ARTWORK_MARGIN,
+    });
     const page = merged.addPage([TARGET_W, TARGET_H]);
     page.drawPage(embedded, {
-      x: (TARGET_W - drawWidth) / 2,
-      y: (TARGET_H - drawHeight) / 2,
-      width: drawWidth,
-      height: drawHeight,
+      x: placed.x,
+      y: placed.y,
+      width: placed.drawWidth,
+      height: placed.drawHeight,
     });
   }
 }
