@@ -306,6 +306,16 @@ import {
   type ShipmentDims,
 } from './orders/panel-shipment-dims'
 
+// PS-166 (this slice): the pure FE rate-request key normalizers
+// (normalizeRateZip / rateShipDateBucket) moved VERBATIM to
+// ./orders/rate-request-normalizers. They feed buildRateRequestDraftKey, which
+// stays in this component — PS-143: the FE draft key is NOT coupled to the
+// backend response fingerprint; these are pure input-shaping helpers.
+import {
+  normalizeRateZip,
+  rateShipDateBucket,
+} from './orders/rate-request-normalizers'
+
 interface OrdersViewProps {
   currentStatus: OrderStatus
   searchQuery?: string
@@ -3920,22 +3930,10 @@ export default function OrdersView({
     )]
   }
 
-  // PS-126: preserve the EXACT postal (US ZIP+4) in the draft request key so the
-  // frontend cache-match key matches the backend's exact-postal fingerprint. ZIP5-only
-  // orders are unchanged. Backend proof/fingerprint stays authoritative.
-  function normalizeRateZip(value: unknown) {
-    const raw = (toStringValue(value) ?? '').trim()
-    if (!raw) return ''
-    if (/[^0-9-]/.test(raw)) return raw.toUpperCase()
-    const digits = raw.replace(/\D/g, '')
-    if (digits.length >= 9) return `${digits.slice(0, 5)}-${digits.slice(5, 9)}`
-    if (digits.length >= 5) return digits.slice(0, 5)
-    return digits || raw.toUpperCase()
-  }
-
-  function rateShipDateBucket(date = new Date()) {
-    return date.toISOString().slice(0, 10)
-  }
+  // PS-166 (this slice): normalizeRateZip (PS-126 exact-postal) + rateShipDateBucket
+  // moved VERBATIM to ./orders/rate-request-normalizers (pure FE input normalizers
+  // for the draft cache key). buildRateRequestDraftKey stays here and delegates to the
+  // imports — PS-143: the FE draft key remains independent of the backend fingerprint.
 
   // PS-127: mirror the BACKEND shipping consumption policy so the rate the operator sees
   // (and the local r=1/r=0 cache key) matches what the backend resolveRateInput will quote
