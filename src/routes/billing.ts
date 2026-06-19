@@ -32,7 +32,7 @@ import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
 import { backfillReferenceRates } from '../services/billing-ref-rates';
 // PS-275: durable, reversible prep-fee waiver state ($0-shipping review).
-import { upsertBillingFeeWaiver } from '../services/billing-fee-waiver-store';
+import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
@@ -686,10 +686,15 @@ type InvoiceDetailRow = {
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
+  // PS-275 (item 2): true when this order's prep/fulfillment fee was WAIVED ($0-shipping review).
+  // A pure READ of billing_fee_waivers — the dollar columns already reflect the regenerate; this
+  // flag only drives a visible "Waived" indicator in the exports. False on every non-waived order.
+  fee_waived: boolean;
 };
 
 // PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
-type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review'> & {
+// fee_waived is NOT from the SQL aggregate (it's a separate billing_fee_waivers read) — omit it here.
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived'> & {
   billed_package_id: number | null;
   box_cost_desc: string | null;
   box_review_reason: string | null;
@@ -809,6 +814,16 @@ async function billingInvoiceData(
     }
   }
 
+  // PS-275 (item 2): surface the durable prep-fee WAIVER decision so the exports can show a "Waived"
+  // indicator. Pure READ of billing_fee_waivers — the dollar columns ALREADY reflect the regenerate;
+  // this never re-zeroes anything. Reads only orders already in the scoped detail set (no cross-client
+  // leak). Default-inert: no waiver rows => fee_waived false everywhere (readBillingFeeWaivers returns
+  // an empty Map on none/error, never throwing into the export path).
+  const waiverOrderIds = [
+    ...new Set(rawDetails.map((r) => r.order_id).filter((id): id is number => id != null)),
+  ];
+  const feeWaiverByOrderId = await readBillingFeeWaivers(waiverOrderIds);
+
   const details: InvoiceDetailRow[] = rawDetails.map((r) => {
     const { box_label, box_review } = resolveInvoiceBoxLabel(r, packagesById);
     return {
@@ -826,6 +841,7 @@ async function billingInvoiceData(
       package_cost_amt: r.package_cost_amt,
       box_label,
       box_review,
+      fee_waived: r.order_id != null && feeWaiverByOrderId.get(r.order_id)?.decision === 'waived',
     };
   });
 

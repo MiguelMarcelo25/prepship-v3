@@ -33,6 +33,8 @@ export type InvoiceCsvDetailRow = {
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
+  // PS-275 (item 2): prep-fee WAIVED indicator (the dollars already reflect it; this drives a column).
+  fee_waived: boolean;
 };
 
 /** Column order mirrors the XLSX "Line Items" sheet exactly. */
