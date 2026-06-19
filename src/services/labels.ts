@@ -52,6 +52,7 @@ import {
   directLabelAccountRefFromProviderId,
   loadDirectAccountForLabel,
 } from './labels-direct';
+import { resolveCarrierRecipientName } from './carrier-recipient-name';
 import { normalizeProviderKey } from '../lib/direct-carrier-scope';
 import {
   cancelShipmentConfirmationsForVoid,
@@ -1258,6 +1259,16 @@ async function createLabelV2Impl(
   });
   const labelResidential = residentialForShipping(labelClassification);
   shipTo.residential = labelResidential;
+  const carrierRecipient = resolveCarrierRecipientName({
+    name: shipTo.name,
+    company: shipTo.company,
+    customerEmail: order.customerEmail,
+  });
+  const carrierShipTo: ShipstationAddressInput = {
+    ...shipTo,
+    name: carrierRecipient.name,
+    company: carrierRecipient.company,
+  };
   let shipFrom: ShipstationAddressInput;
   if (body.shipFrom?.street1) {
     shipFrom = mergeAddress(body.shipFrom, defaultShipFromAddress());
@@ -1524,7 +1535,7 @@ async function createLabelV2Impl(
         length,
         width,
         height,
-        shipTo,
+        shipTo: carrierShipTo,
         shipFrom,
         shippingOptions: options,
         rawOrder: order.raw ?? null,
@@ -1567,7 +1578,7 @@ async function createLabelV2Impl(
         length,
         width,
         height,
-        shipTo,
+        shipTo: carrierShipTo,
         shipFrom,
         confirmation: options.confirmation,
         insuranceProvider: options.insuranceProvider,

@@ -104,6 +104,7 @@
     "test:selected-rate-proof-boundary": "tsx scripts/selected-rate-proof-purchase-boundary-guard.ts",
     "test:ps-098-shipping-purchase-boundary": "tsx scripts/ps-098-shipping-purchase-boundary-certification-guard.ts",
     "test:print-to-queue-selected-rate-proof": "tsx scripts/print-to-queue-selected-rate-proof-guard.ts",
+    "test:carrier-safe-recipient-name": "tsx scripts/carrier-safe-recipient-name-guard.ts",
     "test:batch-send-proof-forwarding": "tsx scripts/batch-send-selected-rate-proof-forwarding-guard.ts",
     "test:ebay-nosku-title-fallback-grouping": "tsx scripts/ebay-nosku-title-fallback-grouping-guard.ts",
     "test:batch-header-package-size": "tsx scripts/batch-header-package-size-guard.ts",

@@ -430,7 +430,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   const to = shippShipTo(
     rawOrder,
     String(input.toZip ?? ''),
-    undefined,
+    input.shipTo,
     typeof input.residential === 'boolean' ? input.residential : undefined,
   );
   const hasRawShipTo = shippHasRawShipTo(rawOrder);

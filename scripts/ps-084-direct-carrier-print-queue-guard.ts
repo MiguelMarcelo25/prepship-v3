@@ -11,7 +11,8 @@ function check(name: string, passed: boolean): void {
   console.log(`${passed ? 'ok  ' : 'FAIL'} ${name}`);
 }
 
-const directLabels = read('api/carriers/labels.ts');
+const labelsSvc = read('src/services/labels.ts');
+const labelsDirect = read('src/services/labels-direct.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const directQueueStart = ordersView.indexOf('async function createDirectCarrierLabelThenQueue');
 const directQueueEnd = ordersView.indexOf('async function sendOrdersToQueueBackend', directQueueStart);
@@ -20,28 +21,25 @@ const directQueueFn = directQueueStart >= 0 && directQueueEnd > directQueueStart
   : '';
 
 check(
-  'direct-carrier resolver accepts loaded local order row as ship-to source',
-  /function resolveShipTo\(body: any, rawOrder: any, orderRow: any\)/.test(directLabels) &&
-    directLabels.includes('resolveLocalOrderShipTo(orderRow'),
+  'v4 label owner resolves carrier-safe ship-to from the loaded order row',
+  labelsSvc.includes('resolveCarrierRecipientName') &&
+    labelsSvc.includes('customerEmail: order.customerEmail'),
 );
 
 check(
-  'local order query selects canonical ship-to columns before provider calls',
-  directLabels.includes('o.ship_to_name') &&
-    directLabels.includes('o.ship_to_city') &&
-    directLabels.includes('o.ship_to_state') &&
-    directLabels.includes('o.ship_to_postal_code'),
+  'v4 label owner keeps original shipTo for classification before provider calls',
+  /classifyShippingAddress\(\{[\s\S]*?name: shipTo\.name[\s\S]*?company: shipTo\.company/.test(labelsSvc),
 );
 
 check(
-  'ship-to validation blocks incomplete local address before label purchase',
-  directLabels.includes('validateResolvedShipTo') &&
-    directLabels.includes('no postage was purchased'),
+  'v4 label owner creates a separate carrierShipTo payload',
+  /const carrierShipTo: ShipstationAddressInput = \{[\s\S]*?name: carrierRecipient\.name[\s\S]*?company: carrierRecipient\.company/.test(labelsSvc),
 );
 
 check(
-  'direct-carrier provider branches resolve ship-to with local order fallback',
-  directLabels.includes('const shipTo = resolveShipTo(body, rawOrder, orderRow);'),
+  'direct-carrier provider branch receives carrierShipTo through labels-direct',
+  /shipTo: carrierShipTo,[\s\S]*?shippingOptions: options/.test(labelsSvc) &&
+    labelsDirect.includes('shipTo: args.shipTo'),
 );
 
 check(
