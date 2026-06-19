@@ -111,6 +111,7 @@
     "test:daily-orders-trend-count": "tsx scripts/daily-orders-trend-count-not-value-guard.ts",
     "test:daily-orders-trend-total-line": "tsx scripts/daily-orders-trend-total-line-guard.ts",
     "test:carrier-enable-disable-label": "tsx scripts/carrier-enable-disable-label-guard.ts",
+    "test:carrier-assigned-badge-palette": "tsx scripts/carrier-assigned-badge-palette-guard.ts",
     "test:ps-104-print-queue-selected-rate-proof-pass-through": "tsx scripts/batch-send-selected-rate-proof-forwarding-guard.ts",
     "test:ps-105-backend-rate-snapshot-id": "tsx scripts/ps-105-backend-rate-snapshot-id-guard.ts",
     "test:ps-108-parcelguard-insured-best-rate": "tsx scripts/ps-108-parcelguard-insured-best-rate-guard.ts",

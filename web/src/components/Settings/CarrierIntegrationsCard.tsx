@@ -30,6 +30,7 @@ import WalmartLogo from '../../utils/logo/walmart'
 import { ModernCheckbox } from '../ui/ModernCheckbox'
 import { ActionButton } from '../ui/ActionButton'
 import { StateToggle } from '../ui/StateToggle'
+import { getClientPalette } from '../Views/orders-formatting'
 
 // Phase 2 frontend stub. Each provider declares the credential fields its
 // "Add integration" form needs. When the backend route POST /carrier-accounts
@@ -1926,6 +1927,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               d.assignedClientIds.map((cid) => {
                 const client = clientById.get(cid)
                 const isInactive = client ? !client.active : false
+                const clientName = client?.name ?? `#${cid}`
+                const clientPalette = getClientPalette(clientName)
                 return (
                   <span
                     key={cid}
@@ -1935,21 +1938,21 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                       alignItems: 'center',
                       gap: 3,
                       padding: '2px 7px',
-                      borderRadius: 10,
+                      borderRadius: 4,
                       background: isInactive
                         ? 'var(--surface2)'
-                        : 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
-                      color: isInactive ? 'var(--text3)' : 'rgb(var(--brand-rgb, 42 91 215))',
+                        : clientPalette.bg,
+                      color: isInactive ? 'var(--text3)' : clientPalette.color,
                       fontSize: 10.5,
                       fontWeight: 700,
                       lineHeight: 1.3,
                       textDecoration: isInactive ? 'line-through' : 'none',
                       textDecorationColor: 'var(--text4)',
                       textDecorationThickness: '1px',
-                      border: isInactive ? '1px dashed var(--border2)' : '1px solid transparent',
+                      border: isInactive ? '1px dashed var(--border2)' : `1px solid ${clientPalette.border}`,
                     }}
                   >
-                    {client?.name ?? `#${cid}`}
+                    {clientName}
                     {isInactive ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', textDecoration: 'none', opacity: 0.85 }}>·inactive</span> : null}
                   </span>
                 )
