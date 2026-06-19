@@ -356,6 +356,13 @@ export function shippDeclaredValue(options: {
   return Number.isFinite(value) && value > 0 ? Number(value.toFixed(2)) : 0;
 }
 
+function shippCustomsValue(options: {
+  insuranceProvider?: string | null;
+  insuredValue?: number | null;
+}): { amount: number; currency: 'USD' } {
+  return { amount: shippDeclaredValue(options), currency: 'USD' };
+}
+
 // PS-271 (Layer 1): the carriers a non-empty Shipp 200 actually returned (normalized lowercase),
 // used to decide whether an observed-expected carrier is missing (a "thin" response).
 function shippReturnedCarriers(rateList: any[]): string[] {
@@ -479,7 +486,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
         itemDescription: String(creds?.packageDescription ?? 'Merchandise'),
         // PS-083 — declare the insured value here (Shipp reads customsValue as
         // the declared/insured amount). 0 when the order is not insured.
-        customsValue: { amount: shippDeclaredValue(shippingOptions), currency: 'USD' },
+        customsValue: shippCustomsValue(shippingOptions),
         countryOfManufacture: 'US',
       },
     ],
@@ -817,6 +824,7 @@ async function createLabelShipp(input: Record<string, unknown>): Promise<Record<
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
+  const labelShippingOptions = assertUnsupportedShippingOptions('Shipp', input, { confirmation: ['delivery', 'none'], insurance: true });
   const { session, rates } = await quoteShippRatesRaw(input);
   const selectedRate = selectShippRate(rates, input.serviceCode);
   const quotedShipmentId = String(selectedRate?.quoted_shipment_id ?? '').trim();
@@ -841,6 +849,7 @@ async function createLabelShipp(input: Record<string, unknown>): Promise<Record<
       quoted_shipment_id: quotedShipmentId,
       serviceType,
       saturdayDelivery: /saturday/i.test(shippRateServiceName(selectedRate)),
+      customsValue: shippCustomsValue(labelShippingOptions),
     }),
   });
   const text = await labelRes.text().catch(() => '');
