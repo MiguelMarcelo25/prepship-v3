@@ -199,6 +199,7 @@ const PROTECTS = {
   'test:multi-sku-product-dims-rate-fallback': ['multi-sku-product-dims-rate-fallback'],
   'test:best-rate-saved-display-contract': ['best-rate-saved-display-contract'],
   'test:carrier-enable-disable-label': ['carrier-enable-disable'],
+  'test:ps-262-direct-carrier-parcelguard-fix': ['PS-262'],
   'test:carrier-test-mode-seam': ['carrier-harness', 'carrier-test-mode-seam'],
   'test:carrier-harness': ['carrier-harness'],
   'test:carrier-fixture-schema': ['carrier-harness', 'carrier-fixture-replay'],

@@ -118,6 +118,7 @@ const requiredRegressions = [
   'test:multi-sku-product-dims-rate-fallback',
   'test:best-rate-saved-display-contract',
   'test:carrier-enable-disable-label',
+  'test:ps-262-direct-carrier-parcelguard-fix',       // PS-262 (DoD #9: direct carriers must never resolve to ParcelGuard)
 ];
 for (const cmd of requiredRegressions) {
   check(`regression "${cmd}" is in the manifest`, byCommand.has(cmd));
