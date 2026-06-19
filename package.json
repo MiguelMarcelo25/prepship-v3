@@ -322,6 +322,7 @@
     "test:ps-258-daily-stats-rollover": "tsx scripts/ps-258-daily-stats-rollover-guard.ts",
     "test:ps-258-non-critical-scheduler": "tsx scripts/ps-258-non-critical-scheduler-guard.ts",
     "test:ps-258-orders-queue-parsers": "tsx scripts/ps-258-orders-queue-parsers-guard.ts",
+    "test:ps-258-orders-filtered-sort": "tsx scripts/ps-258-orders-filtered-sort-guard.ts",
     "test:ps-258-orders-table-density-prefs": "tsx scripts/ps-258-orders-table-density-prefs-guard.ts",
     "test:ps-258-component-boundary": "tsx scripts/ps-258-component-boundary-lockdown-guard.ts",
     "test:ps-258-empty-state-props-contract": "tsx scripts/ps-258-orders-empty-state-props-contract-guard.ts",
