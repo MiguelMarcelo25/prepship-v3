@@ -2517,7 +2517,7 @@ export const apiClient = {
           to,
           ...(clientId != null ? { clientId } : {}),
         });
-        clearCachedReads('fetchBillingSummary');
+        clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
         return res;
       },
       {}
@@ -2596,6 +2596,37 @@ export const apiClient = {
     );
   },
 
+  fetchShippingMarginAnalytics(from: string, to: string, clientId?: number): Promise<any> {
+    const dateFrom = toIsoDayStart(from);
+    const dateTo = toIsoDayEnd(to);
+    return cachedSafe(
+      'fetchShippingMarginAnalytics',
+      `fetchShippingMarginAnalytics:${dateFrom ?? ''}:${dateTo ?? ''}:${clientId ?? ''}`,
+      60_000,
+      10 * 60_000,
+      async () => {
+        const res = await api.get<any>(`/billing/shipping-margin${qs({ dateFrom, dateTo, clientId })}`);
+        return res?.data ?? res;
+      },
+      {
+        summary: {
+          rowCount: 0,
+          marginRowCount: 0,
+          frozenCount: 0,
+          projectedCount: 0,
+          missingBillableCount: 0,
+          actualShippingTotal: 0,
+          billableShippingTotal: 0,
+          marginTotal: 0,
+          marginPct: null,
+        },
+        clients: [],
+        rows: [],
+      },
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
+    );
+  },
+
   fetchBillingDetails(from: string, to: string, clientId: number): Promise<any[]> {
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
@@ -2620,7 +2651,7 @@ export const apiClient = {
       clientId,
       ...data,
     }).then((res) => {
-      clearCachedReads('fetchBillingSummary');
+      clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
       return res;
     });
   },

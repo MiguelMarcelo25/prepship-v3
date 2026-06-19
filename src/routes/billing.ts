@@ -21,6 +21,7 @@ import {
   generateLineItems,
   upsertBillingConfig,
 } from '../services/billing';
+import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { houseAccountEnabledClientIds } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
@@ -321,6 +322,16 @@ app.get('/summary', zValidator('query', generateSchema), async (c) => {
     clients: summary.clients,
     grandTotal: summary.grandTotal,
   });
+});
+
+app.get('/shipping-margin', zValidator('query', generateSchema), async (c) => {
+  const q = c.req.valid('query');
+  const analytics = await shippingMarginAnalytics(withBillingScope(c, {
+    clientId: q.clientId,
+    dateFrom: q.dateFrom!,
+    dateTo: q.dateTo!,
+  }));
+  return c.json({ data: analytics, ...analytics });
 });
 
 app.get('/details', zValidator('query', detailsSchema), async (c) => {

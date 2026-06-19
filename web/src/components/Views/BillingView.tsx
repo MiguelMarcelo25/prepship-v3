@@ -87,6 +87,30 @@ type BillingEditModalState = {
   error: string | null
 } | null
 
+type ShippingMarginSummaryDto = {
+  rowCount: number
+  marginRowCount: number
+  frozenCount: number
+  projectedCount: number
+  missingBillableCount: number
+  actualShippingTotal: number
+  billableShippingTotal: number
+  marginTotal: number
+  marginPct: number | null
+}
+
+const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummaryDto = {
+  rowCount: 0,
+  marginRowCount: 0,
+  frozenCount: 0,
+  projectedCount: 0,
+  missingBillableCount: 0,
+  actualShippingTotal: 0,
+  billableShippingTotal: 0,
+  marginTotal: 0,
+  marginPct: null,
+}
+
 const SUMMARY_COL_COUNT = 8
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 const BILLING_CLIENT_FILTER_STORAGE_KEY = 'billing_summary_client_filter_v1'
@@ -278,6 +302,9 @@ export default function BillingView() {
   const [summaryPageSize, setSummaryPageSize] = useState(25)
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [shippingMarginSummary, setShippingMarginSummary] = useState<ShippingMarginSummaryDto>(EMPTY_SHIPPING_MARGIN_SUMMARY)
+  const [shippingMarginLoading, setShippingMarginLoading] = useState(false)
+  const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
   const [generateLoading, setGenerateLoading] = useState(false)
   const [generateStatus, setGenerateStatus] = useState('')
   const [fetchRefRunning, setFetchRefRunning] = useState(false)
@@ -719,17 +746,28 @@ export default function BillingView() {
     const loadSummary = async () => {
       setSummaryLoading(true)
       setSummaryError(null)
+      setShippingMarginLoading(true)
+      setShippingMarginError(null)
 
       try {
-        const rows = await apiClient.fetchBillingSummary(from, to)
+        const [rows, marginAnalytics] = await Promise.all([
+          apiClient.fetchBillingSummary(from, to),
+          apiClient.fetchShippingMarginAnalytics(from, to),
+        ])
         if (!active) return
         setSummaryRows(rows)
+        setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
       } catch (error) {
         if (!active) return
         setSummaryRows([])
+        setShippingMarginSummary(EMPTY_SHIPPING_MARGIN_SUMMARY)
         setSummaryError(error instanceof Error ? error.message : 'Error loading summary')
+        setShippingMarginError(error instanceof Error ? error.message : 'Error loading shipping margin')
       } finally {
-        if (active) setSummaryLoading(false)
+        if (active) {
+          setSummaryLoading(false)
+          setShippingMarginLoading(false)
+        }
       }
     }
 
@@ -866,13 +904,18 @@ export default function BillingView() {
         toastContext?.addToast('Billing is already up to date', 'success')
       }
 
-      const rows = await apiClient.fetchBillingSummary(from, to)
+      const [rows, marginAnalytics] = await Promise.all([
+        apiClient.fetchBillingSummary(from, to),
+        apiClient.fetchShippingMarginAnalytics(from, to),
+      ])
       const rowsForStatus = targetClientIds.length > 0
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
       setGenerateStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`)
       setSummaryRows(rows)
+      setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+      setShippingMarginError(null)
       setSummaryError(null)
       const detailTarget =
         detailState.open && detailState.clientId
@@ -1003,6 +1046,10 @@ export default function BillingView() {
           setSummaryRows(nextRows)
           setSummaryError(null)
         }),
+        apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
+          setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+          setShippingMarginError(null)
+        }),
       ])
 
       setDetailState((current) => ({
@@ -1043,6 +1090,10 @@ export default function BillingView() {
         apiClient.fetchBillingSummary(from, to).then((nextRows) => {
           setSummaryRows(nextRows)
           setSummaryError(null)
+        }),
+        apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
+          setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+          setShippingMarginError(null)
         }),
       ])
 
@@ -1312,6 +1363,42 @@ export default function BillingView() {
           onSelectAll={handleSelectAllBillingClients}
           onToggleClient={handleToggleBillingClient}
         />
+
+        <div
+          aria-label="Shipping margin analytics"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+            gap: 10,
+            margin: '14px 0',
+            padding: '10px 0',
+            borderTop: '1px solid var(--border)',
+            borderBottom: '1px solid var(--border)',
+          }}
+        >
+          {[
+            ['Actual shipping', formatBillingMoney(shippingMarginSummary.actualShippingTotal, { dashIfZero: true })],
+            ['Billable shipping', formatBillingMoney(shippingMarginSummary.billableShippingTotal, { dashIfZero: true })],
+            ['Margin', formatBillingMoney(shippingMarginSummary.marginTotal, { dashIfZero: true })],
+            ['Margin %', shippingMarginSummary.marginPct == null ? '—' : `${shippingMarginSummary.marginPct.toFixed(2)}%`],
+            ['Rows', `${shippingMarginSummary.marginRowCount}/${shippingMarginSummary.rowCount}`],
+            ['State', `${shippingMarginSummary.frozenCount} frozen · ${shippingMarginSummary.projectedCount} projected`],
+          ].map(([label, value]) => (
+            <div key={label} style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: label === 'Margin' ? marginColor(shippingMarginSummary.marginTotal) : 'var(--text)' }}>{value}</div>
+            </div>
+          ))}
+          {(shippingMarginLoading || shippingMarginError || shippingMarginSummary.missingBillableCount > 0) ? (
+            <div style={{ gridColumn: '1 / -1', fontSize: 11, color: shippingMarginError ? 'var(--red)' : 'var(--text3)' }}>
+              {shippingMarginLoading
+                ? 'Loading shipping margin...'
+                : shippingMarginError
+                  ? shippingMarginError
+                  : `${shippingMarginSummary.missingBillableCount} shipment(s) missing billable shipping proof`}
+            </div>
+          ) : null}
+        </div>
 
         {/* Summary table — migrated 2026-05-12 to the reusable <Table>
             primitive (components/ui/Table.tsx). Operator-controlled
