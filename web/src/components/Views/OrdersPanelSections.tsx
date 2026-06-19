@@ -107,7 +107,7 @@ export function OrdersPanelRecipientSection({
   panelOrder,
   panelDetail,
   toggleResidential,
-  showToast,
+  onEditRecipient,
   activeOrderLoading,
   activeOrderError,
 }: {
@@ -118,7 +118,7 @@ export function OrdersPanelRecipientSection({
   panelOrder: OrderSummaryDto
   panelDetail: OrderFullDto | null
   toggleResidential: () => void | Promise<void>
-  showToast: (message: string, type?: 'success' | 'error' | 'info') => void
+  onEditRecipient: () => void
   activeOrderLoading: boolean
   activeOrderError: unknown
 }) {
@@ -152,7 +152,7 @@ export function OrdersPanelRecipientSection({
           </button>
           <button
             type="button"
-            onClick={() => showToast('Edit recipient — Phase 3')}
+            onClick={onEditRecipient}
             title="Edit recipient"
             className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-[10.5px] font-semibold text-brand hover:bg-brand/5 transition"
           >

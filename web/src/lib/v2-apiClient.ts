@@ -913,6 +913,23 @@ export const apiClient = {
     );
   },
 
+  saveOrderRecipientOverride(
+    orderId: number,
+    recipientOverride: {
+      name?: string | null
+      company?: string | null
+      street1?: string | null
+      street2?: string | null
+      city?: string | null
+      state?: string | null
+      postalCode?: string | null
+      country?: string | null
+      phone?: string | null
+    }
+  ): Promise<any> {
+    return api.patch<any>(`/orders/${orderId}`, { recipientOverride });
+  },
+
   // PS-037: persist the chosen package as the reusable default for this order's
   // exact client + SKU+qty combination. Backend derives the combo key from the
   // order's items (the client only supplies package + optional dims snapshot).

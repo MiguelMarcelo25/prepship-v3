@@ -366,6 +366,18 @@ interface OrdersViewProps {
   stores?: Array<{ storeId?: number | null; clientId?: number | null; storeName?: string | null; name?: string | null }>
 }
 
+type RecipientDraft = {
+  name: string
+  company: string
+  street1: string
+  street2: string
+  city: string
+  state: string
+  postalCode: string
+  country: string
+  phone: string
+}
+
 // PS-258 (slice B): scheduleNonCriticalOrdersWork (the pure, closure-free
 // idle-time scheduler) moved VERBATIM to ./orders-non-critical-scheduler
 // (strict module). Imported below; the two call sites are unchanged.
@@ -851,6 +863,19 @@ export default function OrdersView({
     confirmation: 'none',
     insurance: 'none',
     insuranceValue: '',
+  })
+  const [recipientEditorOpen, setRecipientEditorOpen] = useState(false)
+  const [recipientEditorSaving, setRecipientEditorSaving] = useState(false)
+  const [recipientDraft, setRecipientDraft] = useState<RecipientDraft>({
+    name: '',
+    company: '',
+    street1: '',
+    street2: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    country: 'US',
+    phone: '',
   })
   const [panelRatePreview, setPanelRatePreview] = useState<Array<Record<string, unknown>>>([])
   const [panelRateLoading, setPanelRateLoading] = useState(false)
@@ -2221,6 +2246,80 @@ export default function OrdersView({
   const openOrderDetails = (orderId: number) => {
     onActiveOrderIdChange?.(orderId)
   }
+
+  const openRecipientEditor = () => {
+    if (!panelOrder) return
+    const shipTo = getShipTo(panelOrder, panelDetail)
+    setRecipientDraft({
+      name: shipTo.name ?? '',
+      company: shipTo.company ?? '',
+      street1: shipTo.street1 ?? '',
+      street2: shipTo.street2 ?? '',
+      city: shipTo.city ?? '',
+      state: shipTo.state ?? '',
+      postalCode: shipTo.postalCode ?? '',
+      country: shipTo.country ?? 'US',
+      phone: shipTo.phone ?? '',
+    })
+    setRecipientEditorOpen(true)
+  }
+
+  const updateRecipientDraft = (key: keyof RecipientDraft, value: string) => {
+    setRecipientDraft((current) => ({ ...current, [key]: value }))
+  }
+
+  async function saveRecipientOverride() {
+    if (!panelOrder || recipientEditorSaving) return
+    const missing = [
+      ['name', recipientDraft.name],
+      ['street', recipientDraft.street1],
+      ['city', recipientDraft.city],
+      ['state', recipientDraft.state],
+      ['postal code', recipientDraft.postalCode],
+    ].filter(([, value]) => !String(value ?? '').trim())
+    if (missing.length > 0) {
+      showToast(`Recipient missing ${missing.map(([label]) => label).join(', ')}`, 'error')
+      return
+    }
+
+    setRecipientEditorSaving(true)
+    try {
+      await apiClient.saveOrderRecipientOverride(panelOrder.orderId, {
+        name: recipientDraft.name,
+        company: recipientDraft.company,
+        street1: recipientDraft.street1,
+        street2: recipientDraft.street2,
+        city: recipientDraft.city,
+        state: recipientDraft.state,
+        postalCode: recipientDraft.postalCode,
+        country: recipientDraft.country || 'US',
+        phone: recipientDraft.phone,
+      })
+      setRecipientEditorOpen(false)
+      showToast('Recipient saved', 'success')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', panelOrder.orderId] }),
+        refetchOrders(),
+      ])
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to save recipient', 'error')
+    } finally {
+      setRecipientEditorSaving(false)
+    }
+  }
+
+  const recipientInput = (key: keyof RecipientDraft, label: string, autoComplete?: string) => (
+    <label className="block">
+      <span className="block text-[10px] font-bold uppercase tracking-[0.08em] text-ink-4 mb-1">{label}</span>
+      <input
+        value={recipientDraft[key]}
+        autoComplete={autoComplete}
+        disabled={recipientEditorSaving}
+        onChange={(event) => updateRecipientDraft(key, event.target.value)}
+        className="w-full h-9 rounded-md border border-line bg-surface px-2.5 text-[12.5px] text-ink outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand disabled:opacity-60"
+      />
+    </label>
+  )
 
   const openDetailDrawer = (orderId: number | null, fromQueue = false) => {
     setDetailDrawerFromQueue(fromQueue)
@@ -8473,7 +8572,7 @@ export default function OrdersView({
             panelOrder={panelOrder}
             panelDetail={panelDetail}
             toggleResidential={toggleResidential}
-            showToast={showToast}
+            onEditRecipient={openRecipientEditor}
             activeOrderLoading={activeOrderLoading}
             activeOrderError={activeOrderError}
           />
@@ -9411,6 +9510,59 @@ export default function OrdersView({
       {/* PS-178 (Phase 6, part 3): the drawer JSX moved VERBATIM to
           ./OrdersPrintQueueDrawer — render-only; all queue state, derived
           lists, and handlers stay here and flow down as props. */}
+      {recipientEditorOpen && panelOrder ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 px-4">
+          <div className="w-full max-w-[560px] rounded-lg bg-surface shadow-xl ring-1 ring-line">
+            <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+              <MapPin size={15} strokeWidth={2.25} className="text-brand" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-bold text-ink truncate">Edit recipient</div>
+                <div className="text-[11px] text-ink-3 font-mono truncate">{panelOrder.orderNumber ?? panelOrder.orderId}</div>
+              </div>
+              <button
+                type="button"
+                title="Close"
+                disabled={recipientEditorSaving}
+                onClick={() => setRecipientEditorOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink disabled:opacity-60"
+              >
+                <XIcon size={15} strokeWidth={2.25} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4">
+              {recipientInput('name', 'Name', 'shipping name')}
+              {recipientInput('company', 'Company', 'shipping organization')}
+              <div className="sm:col-span-2">{recipientInput('street1', 'Address 1', 'shipping address-line1')}</div>
+              <div className="sm:col-span-2">{recipientInput('street2', 'Address 2', 'shipping address-line2')}</div>
+              {recipientInput('city', 'City', 'shipping address-level2')}
+              {recipientInput('state', 'State', 'shipping address-level1')}
+              {recipientInput('postalCode', 'Postal code', 'shipping postal-code')}
+              {recipientInput('country', 'Country', 'shipping country')}
+              <div className="sm:col-span-2">{recipientInput('phone', 'Phone', 'shipping tel')}</div>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+              <button
+                type="button"
+                disabled={recipientEditorSaving}
+                onClick={() => setRecipientEditorOpen(false)}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-line px-3 text-[12px] font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={recipientEditorSaving}
+                onClick={() => void saveRecipientOverride()}
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-brand px-3 text-[12px] font-bold text-white hover:bg-brand-dark disabled:opacity-60"
+              >
+                {recipientEditorSaving ? <Loader2 size={13} className="animate-spin" /> : <CheckIcon size={13} />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {queueOpen ? (
         <OrdersPrintQueueDrawer
           queueClients={queueClients}

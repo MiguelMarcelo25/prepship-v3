@@ -122,6 +122,7 @@ export const orderOverrides = pgTable('order_overrides', {
   bestRateJson: jsonb(),
   bestRateAt: timestamp({ withTimezone: true }),
   bestRateDims: text(),
+  recipientOverride: jsonb('recipient_override').$type<Record<string, unknown> | null>(),
   shippingAccount: text(),
   externallyShippedSource: text(),
   updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),

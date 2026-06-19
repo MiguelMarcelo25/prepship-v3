@@ -126,6 +126,11 @@ import {
   type ResidentialProviderMarker,
 } from '../services/shipping-workflow/residential-evidence';
 import {
+  normalizeRecipientOverride,
+  recipientOverrideFromRecord,
+  resolveRecipientForShipping,
+} from '../services/order-recipient-override';
+import {
   addressClassificationKey,
   getCachedAddressClassifications,
 } from '../services/shipping-workflow/address-classification-cache';
@@ -641,6 +646,19 @@ function buildCanonicalOrderModel(
 ) {
   const raw = recordOrNull(order.raw) ?? {};
   const rawShipTo = recordOrNull(raw.shipTo) ?? {};
+  const recipientOverride = recipientOverrideFromRecord(overrides?.recipientOverride);
+  const resolvedRecipient = resolveRecipientForShipping({
+    override: recipientOverride,
+    rawShipTo,
+    fallback: {
+      name: stringOrNull(order.shipToName),
+      city: stringOrNull(order.shipToCity),
+      state: stringOrNull(order.shipToState),
+      postalCode: stringOrNull(order.shipToPostalCode),
+    },
+  });
+  const recipientAddress = resolvedRecipient.address;
+  const recipientOverrideSource = sourceOf('local', 'order_overrides.recipient_override', 'PrepShip recipient override');
   const rawDimensions = recordOrNull(raw.dimensions) ?? {};
   const overrideDimensionLength = finiteNumberOrNull(overrides?.rateDimsL);
   const overrideDimensionWidth = finiteNumberOrNull(overrides?.rateDimsW);
@@ -696,25 +714,35 @@ function buildCanonicalOrderModel(
     'client.storeId': sourceOf('v1', 'orders.store_id', 'ShipStation v1 /orders.advancedOptions.storeId'),
     'customer.email': sourceOf('v1', 'orders.customer_email', 'ShipStation v1 /orders.customerEmail'),
     'customer.username': sourceOf('v1', 'orders.raw.customerUsername', 'ShipStation v1 /orders.customerUsername'),
-    'recipient.name': stringOrNull(rawShipTo.name)
+    'recipient.name': recipientOverride
+      ? recipientOverrideSource
+      : stringOrNull(rawShipTo.name)
       ? sourceOf('v1', 'orders.raw.shipTo.name', 'ShipStation v1 /orders.shipTo.name')
       : sourceOf('local', 'orders.ship_to_name', 'Synced fallback column from ShipStation v1 shipTo.name'),
-    'recipient.company': sourceOf('v1', 'orders.raw.shipTo.company', 'ShipStation v1 /orders.shipTo.company'),
-    'recipient.street1': sourceOf('v1', 'orders.raw.shipTo.street1', 'ShipStation v1 /orders.shipTo.street1'),
-    'recipient.street2': sourceOf('v1', 'orders.raw.shipTo.street2', 'ShipStation v1 /orders.shipTo.street2'),
-    'recipient.city': stringOrNull(rawShipTo.city)
+    'recipient.company': recipientOverride ? recipientOverrideSource : sourceOf('v1', 'orders.raw.shipTo.company', 'ShipStation v1 /orders.shipTo.company'),
+    'recipient.street1': recipientOverride ? recipientOverrideSource : sourceOf('v1', 'orders.raw.shipTo.street1', 'ShipStation v1 /orders.shipTo.street1'),
+    'recipient.street2': recipientOverride ? recipientOverrideSource : sourceOf('v1', 'orders.raw.shipTo.street2', 'ShipStation v1 /orders.shipTo.street2'),
+    'recipient.city': recipientOverride
+      ? recipientOverrideSource
+      : stringOrNull(rawShipTo.city)
       ? sourceOf('v1', 'orders.raw.shipTo.city', 'ShipStation v1 /orders.shipTo.city')
       : sourceOf('local', 'orders.ship_to_city', 'Synced fallback column from ShipStation v1 shipTo.city'),
-    'recipient.state': stringOrNull(rawShipTo.state)
+    'recipient.state': recipientOverride
+      ? recipientOverrideSource
+      : stringOrNull(rawShipTo.state)
       ? sourceOf('v1', 'orders.raw.shipTo.state', 'ShipStation v1 /orders.shipTo.state')
       : sourceOf('local', 'orders.ship_to_state', 'Synced fallback column from ShipStation v1 shipTo.state'),
-    'recipient.postalCode': stringOrNull(rawShipTo.postalCode)
+    'recipient.postalCode': recipientOverride
+      ? recipientOverrideSource
+      : stringOrNull(rawShipTo.postalCode)
       ? sourceOf('v1', 'orders.raw.shipTo.postalCode', 'ShipStation v1 /orders.shipTo.postalCode')
       : sourceOf('local', 'orders.ship_to_postal_code', 'Synced fallback column from ShipStation v1 shipTo.postalCode'),
-    'recipient.country': stringOrNull(rawShipTo.country)
+    'recipient.country': recipientOverride
+      ? recipientOverrideSource
+      : stringOrNull(rawShipTo.country)
       ? sourceOf('v1', 'orders.raw.shipTo.country', 'ShipStation v1 /orders.shipTo.country')
       : sourceOf('derived', 'default recipient.country', 'Defaulted to US when ShipStation did not send a country'),
-    'recipient.phone': sourceOf('v1', 'orders.raw.shipTo.phone', 'ShipStation v1 /orders.shipTo.phone'),
+    'recipient.phone': recipientOverride ? recipientOverrideSource : sourceOf('v1', 'orders.raw.shipTo.phone', 'ShipStation v1 /orders.shipTo.phone'),
     'recipient.residential': overrides?.residential != null
       ? sourceOf('local', 'order_overrides.residential', 'PrepShip user override')
       : sourceOf('v1', 'orders.raw.shipTo.residential', 'ShipStation v1 /orders.shipTo.residential'),
@@ -722,7 +750,7 @@ function buildCanonicalOrderModel(
     'recipient.residentialClassification': sourceOf('derived', 'classifyShippingAddress', 'PS-276 backend residential classifier (residentialForShipping money-safe policy)'),
     'recipient.residentialSource': sourceOf('derived', 'classifyShippingAddress', 'PS-276 classification provenance tier'),
     'recipient.residentialConfidence': sourceOf('derived', 'classifyShippingAddress', 'PS-276 classification confidence tier'),
-    'recipient.addressVerified': sourceOf('v1', 'orders.raw.shipTo.addressVerified', 'ShipStation v1 /orders.shipTo.addressVerified'),
+    'recipient.addressVerified': recipientOverride ? recipientOverrideSource : sourceOf('v1', 'orders.raw.shipTo.addressVerified', 'ShipStation v1 /orders.shipTo.addressVerified'),
     weight: overrideWeightOz != null
       ? sourceOf('local', 'order_overrides.rateWeightOz', 'PrepShip weight override')
       : sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
@@ -757,9 +785,13 @@ function buildCanonicalOrderModel(
   // (addressValidation/providerMarker resolver tiers arrive in slice 2b; until then this is
   // override+source, exactly what the rate path computes today.)
   const residentialEvidence = buildResidentialEvidenceFromOrder({
-    rawShipTo,
+    rawShipTo: {
+      ...rawShipTo,
+      name: recipientAddress.name,
+      company: recipientAddress.company,
+    },
     manualOverrideResidential: overrides?.residential,
-    shipToName: stringOrNull(rawShipTo.name) ?? stringOrNull(order.shipToName),
+    shipToName: recipientAddress.name,
     resolved: resolvedResidential ?? null,
   });
   const residentialResult = classifyShippingAddress({
@@ -769,10 +801,10 @@ function buildCanonicalOrderModel(
     shipTo: {
       name: residentialEvidence.toName,
       company: residentialEvidence.toCompany,
-      city: stringOrNull(rawShipTo.city) ?? stringOrNull(order.shipToCity),
-      state: stringOrNull(rawShipTo.state) ?? stringOrNull(order.shipToState),
-      postalCode: stringOrNull(rawShipTo.postalCode) ?? stringOrNull(order.shipToPostalCode),
-      country: stringOrNull(rawShipTo.country) ?? 'US',
+      city: recipientAddress.city,
+      state: recipientAddress.state,
+      postalCode: recipientAddress.postalCode,
+      country: recipientAddress.country,
     },
     manualOverrideResidential: residentialEvidence.manualOverrideResidential,
     sourceResidential: residentialEvidence.sourceResidential,
@@ -806,21 +838,21 @@ function buildCanonicalOrderModel(
       username: stringOrNull(raw.customerUsername),
     },
     recipient: {
-      name: stringOrNull(rawShipTo.name) ?? stringOrNull(order.shipToName),
-      company: stringOrNull(rawShipTo.company),
-      street1: stringOrNull(rawShipTo.street1),
-      street2: stringOrNull(rawShipTo.street2),
-      city: stringOrNull(rawShipTo.city) ?? stringOrNull(order.shipToCity),
-      state: stringOrNull(rawShipTo.state) ?? stringOrNull(order.shipToState),
-      postalCode: stringOrNull(rawShipTo.postalCode) ?? stringOrNull(order.shipToPostalCode),
-      country: stringOrNull(rawShipTo.country) ?? 'US',
-      phone: stringOrNull(rawShipTo.phone),
+      name: recipientAddress.name,
+      company: recipientAddress.company,
+      street1: recipientAddress.street1,
+      street2: recipientAddress.street2,
+      city: recipientAddress.city,
+      state: recipientAddress.state,
+      postalCode: recipientAddress.postalCode,
+      country: recipientAddress.country,
+      phone: recipientAddress.phone,
       residential: booleanOrNull(overrides?.residential) ?? booleanOrNull(rawShipTo.residential),
       // PS-276 (slice 4): the resolved verdict (what the rate uses) + provenance for the resi/comm tag.
       residentialClassification: (residentialResolved ? 'residential' : 'commercial') as 'residential' | 'commercial',
       residentialSource: residentialResult.source,
       residentialConfidence: residentialResult.confidence,
-      addressVerified: stringOrNull(rawShipTo.addressVerified),
+      addressVerified: recipientAddress.addressVerified,
     },
     weight: weightOz != null ? { value: weightOz, units: 'ounces' } : null,
     weightOz,
@@ -3324,6 +3356,18 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
   }, 201);
 });
 
+const recipientOverrideBody = z.object({
+  name: z.string().nullable().optional(),
+  company: z.string().nullable().optional(),
+  street1: z.string().nullable().optional(),
+  street2: z.string().nullable().optional(),
+  city: z.string().nullable().optional(),
+  state: z.string().nullable().optional(),
+  postalCode: z.string().nullable().optional(),
+  country: z.string().nullable().optional(),
+  phone: z.string().nullable().optional(),
+});
+
 const patchBody = z.object({
   residential: z.boolean().nullable().optional(),
   notes: z.string().optional(),
@@ -3339,6 +3383,7 @@ const patchBody = z.object({
   // the shipments insert consumes it (labels.ts).
   selectedRateJson: z.unknown().optional(),
   shippingAccount: z.string().nullable().optional(),
+  recipientOverride: recipientOverrideBody.optional(),
   externallyShipped: z.boolean().optional(),
   externallyShippedSource: z.string().nullable().optional(),
 });
@@ -3395,6 +3440,14 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   // selectedRateJson is not a column on order_overrides — drop it from the
   // overrides payload (it rides along into shipments via the label flow).
   const { externallyShipped, selectedRateJson, ...overridesBody } = body;
+
+  if (overridesBody.recipientOverride !== undefined) {
+    try {
+      overridesBody.recipientOverride = normalizeRecipientOverride(body.recipientOverride);
+    } catch (err) {
+      return c.json({ error: (err as Error).message, code: 'INVALID_RECIPIENT_OVERRIDE' }, 400);
+    }
+  }
 
   // v2-parity: canonicalize incoming bestRateJson before persisting.
   // Accepts raw ShipStation shapes (snake_case) or the already-normalized DTO.

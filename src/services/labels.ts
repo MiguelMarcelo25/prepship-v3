@@ -83,6 +83,10 @@ import {
   resolveHugrabLabelPurchasePreflight,
   resolveShippCustomsValueProofSource,
 } from './shipping-workflow/hugrab-label-purchase-preflight';
+import {
+  recipientOverrideFromRecord,
+  resolveRecipientForShipping,
+} from './order-recipient-override';
 
 // PS-261: the HUGRAB coverage label-purchase BLOCK is a money-path change, so it ships behind a
 // default-OFF canary (HUGRAB_PURCHASE_GATE), per the project norm that money-path features ship OFF
@@ -453,19 +457,30 @@ function orderShipToFromRaw(rawOrder: {
   shipToCity: string | null;
   shipToState: string | null;
   shipToPostalCode: string | null;
-}): ShipstationAddressInput {
+}, recipientOverride?: unknown | null): ShipstationAddressInput {
   const raw = rawOrder.raw ?? {};
   const shipTo = (raw.shipTo as Record<string, unknown> | undefined) ?? {};
+  const resolved = resolveRecipientForShipping({
+    override: recipientOverride,
+    rawShipTo: shipTo,
+    fallback: {
+      name: rawOrder.shipToName,
+      city: rawOrder.shipToCity,
+      state: rawOrder.shipToState,
+      postalCode: rawOrder.shipToPostalCode,
+    },
+  });
+  const address = resolved.address;
   return {
-    name: (shipTo.name as string | undefined) ?? rawOrder.shipToName ?? 'Customer',
-    company: (shipTo.company as string | undefined) ?? undefined,
-    street1: (shipTo.street1 as string | undefined) ?? '',
-    street2: (shipTo.street2 as string | undefined) ?? undefined,
-    city: (shipTo.city as string | undefined) ?? rawOrder.shipToCity ?? '',
-    state: (shipTo.state as string | undefined) ?? rawOrder.shipToState ?? '',
-    postalCode: (shipTo.postalCode as string | undefined) ?? rawOrder.shipToPostalCode ?? '',
-    country: (shipTo.country as string | undefined) ?? 'US',
-    phone: (shipTo.phone as string | undefined) ?? undefined,
+    name: address.name,
+    company: address.company ?? undefined,
+    street1: address.street1,
+    street2: address.street2 ?? undefined,
+    city: address.city,
+    state: address.state,
+    postalCode: address.postalCode,
+    country: address.country,
+    phone: address.phone ?? undefined,
   };
 }
 
@@ -846,6 +861,11 @@ async function loadOrderDimsOverride(orderId: number) {
     .where(eq(orderOverrides.orderId, orderId))
     .limit(1);
   return row ?? null;
+}
+
+async function loadOrderRecipientOverride(orderId: number) {
+  const row = await loadOrderDimsOverride(orderId);
+  return recipientOverrideFromRecord(row?.recipientOverride);
 }
 
 function serviceCodeFitsPackage(_: string): string {
@@ -1230,7 +1250,7 @@ async function createLabelV2Impl(
   const width = Number(body.width ?? overrides?.rateDimsW ?? 0) || null;
   const height = Number(body.height ?? overrides?.rateDimsH ?? 0) || null;
 
-  const fallbackShipTo = orderShipToFromRaw(order);
+  const fallbackShipTo = orderShipToFromRaw(order, overrides?.recipientOverride);
   const shipTo = mergeAddress(body.shipTo, fallbackShipTo);
   // PS-127: the label is the authoritative rate↔label parity point. Classify
   // residential/commercial from the order's OWN evidence (operator override >
@@ -1823,8 +1843,9 @@ async function createMockShipmentForOrder(args: {
   order: typeof orders.$inferSelect;
   clientId: number | null;
   serviceCode: string;
+  recipientOverride?: unknown | null;
 }) {
-  const { order, clientId, serviceCode } = args;
+  const { order, clientId, serviceCode, recipientOverride } = args;
   const fakeShipmentId = generateFakeShipmentId();
   const fakeTracking = generateFakeTrackingNumber();
   const createdAt = new Date();
@@ -1836,6 +1857,16 @@ async function createMockShipmentForOrder(args: {
 
   const raw = (order.raw as { shipTo?: Record<string, unknown> } | null) ?? {};
   const shipToRaw = (raw.shipTo ?? {}) as Record<string, unknown>;
+  const shipTo = resolveRecipientForShipping({
+    override: recipientOverride,
+    rawShipTo: shipToRaw,
+    fallback: {
+      name: order.shipToName,
+      city: order.shipToCity,
+      state: order.shipToState,
+      postalCode: order.shipToPostalCode,
+    },
+  }).address;
 
   const mockData: MockLabelData = {
     shipmentId: fakeShipmentId,
@@ -1851,11 +1882,11 @@ async function createMockShipmentForOrder(args: {
       postalCode: '',
     },
     shipTo: {
-      name: order.shipToName ?? 'Ship To',
-      street1: (shipToRaw.street1 as string | undefined) ?? '',
-      city: order.shipToCity ?? '',
-      state: order.shipToState ?? '',
-      postalCode: order.shipToPostalCode ?? '',
+      name: shipTo.name,
+      street1: shipTo.street1,
+      city: shipTo.city,
+      state: shipTo.state,
+      postalCode: shipTo.postalCode,
     },
     shipDate: createdAt.toISOString().slice(0, 10),
   };
@@ -1915,10 +1946,21 @@ async function createLabelFromOrderId(args: {
 
   const raw = (order.raw as { shipTo?: Record<string, unknown> } | null) ?? {};
   const shipToRaw = (raw.shipTo ?? {}) as Record<string, unknown>;
-  const street1 = (shipToRaw.street1 as string | undefined) ?? '';
-  const city = (shipToRaw.city as string | undefined) ?? order.shipToCity ?? '';
-  const state = (shipToRaw.state as string | undefined) ?? order.shipToState ?? '';
-  const postal = (shipToRaw.postalCode as string | undefined) ?? order.shipToPostalCode ?? '';
+  const recipientOverride = await loadOrderRecipientOverride(order.id);
+  const shipTo = resolveRecipientForShipping({
+    override: recipientOverride,
+    rawShipTo: shipToRaw,
+    fallback: {
+      name: order.shipToName,
+      city: order.shipToCity,
+      state: order.shipToState,
+      postalCode: order.shipToPostalCode,
+    },
+  }).address;
+  const street1 = shipTo.street1;
+  const city = shipTo.city;
+  const state = shipTo.state;
+  const postal = shipTo.postalCode;
 
   const missing: string[] = [];
   if (!street1) missing.push('street');
@@ -1943,6 +1985,7 @@ async function createLabelFromOrderId(args: {
       order,
       clientId: effectiveClientId!,
       serviceCode: args.serviceCode,
+      recipientOverride,
     });
   }
 
@@ -1952,14 +1995,15 @@ async function createLabelFromOrderId(args: {
     weightOz: order.weightOz,
     serviceCode: args.serviceCode,
     shipTo: {
-      name: order.shipToName ?? undefined,
+      name: shipTo.name,
+      company_name: shipTo.company ?? undefined,
       address_line1: street1,
-      address_line2: (shipToRaw.street2 as string | undefined) ?? undefined,
+      address_line2: shipTo.street2 ?? undefined,
       city_locality: city,
       state_province: state,
       postal_code: postal,
-      country_code: (shipToRaw.country as string | undefined) ?? 'US',
-      phone: (shipToRaw.phone as string | undefined) ?? undefined,
+      country_code: shipTo.country,
+      phone: shipTo.phone ?? undefined,
     },
   });
 }
