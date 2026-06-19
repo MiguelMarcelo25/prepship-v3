@@ -335,6 +335,7 @@
     "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",
     "test:ps-265-sync-run-budget": "tsx scripts/ps-265-sync-run-budget-guard.ts",
     "test:ps-272-bounded-sync": "tsx scripts/ps-272-bounded-sync-drain-guard.ts",
+    "test:ps-272-bounded-sync-closeout": "tsx scripts/ps-272-bounded-sync-closeout-guard.ts",
     "test:ps-244-rate-finalization-single-owner": "tsx scripts/ps-244-rate-finalization-single-owner-guard.ts",
     "test:ps-244-purchase-enforcement-canary": "tsx scripts/ps-244-purchase-enforcement-canary-guard.ts",
     "test:ps-276-backfill-residential-parity": "tsx scripts/ps-276-backfill-residential-parity-guard.ts",
