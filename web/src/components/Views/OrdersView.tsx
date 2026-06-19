@@ -173,7 +173,10 @@ import {
   type PersistentQueueOrderRef,
 } from './orders-persistent-queue-job'
 import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters'
-import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
+import { groupOrdersBySku } from './orders-grouping'
+// PS-258/PS-166: the Awaiting orders ORDER/sort computation lifted to a pure, testable owner.
+// (buildSkuCompositionKey now lives only in orders-filtered-sort, where the sku-sort moved.)
+import { computeOrderedFilteredOrders } from './orders-filtered-sort'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
 import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
@@ -1352,45 +1355,13 @@ export default function OrdersView({
     })
   }, [orders, orderDetailsById, hideTestOrdersInAllAwaiting, searchQuery, skuFilter])
 
-  const orderedFilteredOrders = useMemo(() => {
-    const next = [...searchedOrders]
-
-    if (skuSortActive) {
-      next.sort((left, right) => {
-        const leftDetail = orderDetailsById.get(left.orderId) ?? null
-        const rightDetail = orderDetailsById.get(right.orderId) ?? null
-        const leftKey = buildSkuCompositionKey(getActiveItems(left, leftDetail), { titleFallback: isEbayOrder(left) }).key
-        const rightKey = buildSkuCompositionKey(getActiveItems(right, rightDetail), { titleFallback: isEbayOrder(right) }).key
-        if (leftKey < rightKey) return -1
-        if (leftKey > rightKey) return 1
-        const dateDelta = getOrderSortTimeMs(right) - getOrderSortTimeMs(left)
-        if (dateDelta !== 0) return dateDelta
-        return (right.orderId ?? 0) - (left.orderId ?? 0)
-      })
-      return next
-    }
-
-    if (preSkuSortSnapshot) {
-      const rank = new Map(preSkuSortSnapshot.map((orderId, index) => [orderId, index]))
-      next.sort((left, right) => {
-        return (rank.get(left.orderId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.orderId) ?? Number.MAX_SAFE_INTEGER)
-      })
-      return next
-    }
-
-    next.sort((left, right) => {
-      const leftDetail = orderDetailsById.get(left.orderId) ?? null
-      const rightDetail = orderDetailsById.get(right.orderId) ?? null
-      const leftValue = getSortValue(left, leftDetail, sortState.key, shippingAccounts)
-      const rightValue = getSortValue(right, rightDetail, sortState.key, shippingAccounts)
-      const direction = sortState.dir === 'asc' ? 1 : -1
-      if (leftValue < rightValue) return -direction
-      if (leftValue > rightValue) return direction
-      return 0
-    })
-
-    return next
-  }, [searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts])
+  const orderedFilteredOrders = useMemo(
+    () => computeOrderedFilteredOrders(
+      { searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts },
+      { getActiveItems, getOrderSortTimeMs, isEbayOrder, getSortValue },
+    ),
+    [searchedOrders, skuSortActive, preSkuSortSnapshot, sortState, orderDetailsById, shippingAccounts],
+  )
   const skuOrderGroups = useMemo(
     () => (
       skuSortActive
