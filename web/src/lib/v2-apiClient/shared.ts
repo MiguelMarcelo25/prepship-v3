@@ -997,6 +997,12 @@ export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       insuranceCost: obj.insuranceCost ?? null,
       insuranceCostUnresolved: obj.insuranceCostUnresolved ?? false,
       insuranceCostError: obj.insuranceCostError ?? null,
+      insuranceCoverageStatus: obj.insuranceCoverageStatus ?? null,
+      insuranceBadgeLabel: obj.insuranceBadgeLabel ?? null,
+      insuranceBadgeTone: obj.insuranceBadgeTone ?? null,
+      insuranceCoverageProofSource: obj.insuranceCoverageProofSource ?? null,
+      hugrabPurchaseAllowed: obj.hugrabPurchaseAllowed ?? null,
+      hugrabPurchaseBlockReason: obj.hugrabPurchaseBlockReason ?? null,
       // PS-292: lift the backend-owned SHIPP house tuple (customer_rate basis + margin) to the TOP
       // level so the FE save path persists it and the row/Rate-Browser can render the two-tier
       // display. Pass-through ONLY (backend nulls it for non-financial viewers before it gets here).

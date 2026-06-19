@@ -20,7 +20,9 @@ import {
   resolveInsuranceCoverageStatus,
   type InsuranceCoverageStatus,
   type InsuranceCoverageBadgeTone,
+  type InsuranceCoverageProofSource,
 } from './shipping-workflow/insurance-coverage-status';
+import { isShippBrokered } from './shipping-workflow/insurance-certainty';
 // PS-261 (display slice): the SAME gate the label-purchase preflight uses, so the Rate Browser's
 // pre-purchase indicator and the buy-path BLOCK agree by construction. The DTO DELEGATES to it over
 // the already-resolved PS-290 coverage status; the FE renders the {allow,reason} verbatim.
@@ -86,6 +88,7 @@ export interface OrderBestRateDto {
   insuranceCoverageStatus: InsuranceCoverageStatus;
   insuranceBadgeLabel: string;
   insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null;
   // PS-261 (display slice): the HUGRAB label-PURCHASE-GATE verdict for THIS rate — backend-owned,
   // mapped from insuranceCoverageStatus via the SAME PS-261 gate the buy-path preflight uses
   // (resolveHugrabLabelPurchaseGate). true when the mandatory $100 coverage is PROVEN (purchase
@@ -134,6 +137,7 @@ export interface OrderSelectedRateDto {
   insuranceCoverageStatus: InsuranceCoverageStatus;
   insuranceBadgeLabel: string;
   insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null;
   // PS-261 (display slice): HUGRAB label-PURCHASE-GATE verdict (see OrderBestRateDto).
   hugrabPurchaseAllowed: boolean;
   hugrabPurchaseBlockReason: string;
@@ -241,10 +245,13 @@ function resolveCoverageFields(args: {
   insuranceCost: number | null;
   insuranceProvenance: string | null;
   insuranceCertainty: unknown;
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null;
+  isShippBrokered: boolean;
 }): {
   insuranceCoverageStatus: InsuranceCoverageStatus;
   insuranceBadgeLabel: string;
   insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null;
   // PS-261 (display slice) — the purchase-gate verdict, derived from the SAME coverage status.
   hugrabPurchaseAllowed: boolean;
   hugrabPurchaseBlockReason: string;
@@ -256,6 +263,8 @@ function resolveCoverageFields(args: {
     insuranceCost: args.insuranceCost,
     insuranceProvenance: args.insuranceProvenance,
     insuranceCertainty: typeof args.insuranceCertainty === 'string' ? args.insuranceCertainty : null,
+    insuranceCoverageProofSource: args.insuranceCoverageProofSource,
+    isShippBrokered: args.isShippBrokered,
   });
   // PS-261 — map the PS-290 coverage status to the label-purchase decision with the SAME gate the
   // buy-path preflight uses, so the Rate Browser pre-purchase indicator and the buy-path BLOCK
@@ -265,6 +274,7 @@ function resolveCoverageFields(args: {
     insuranceCoverageStatus: verdict.status,
     insuranceBadgeLabel: verdict.badgeLabel,
     insuranceBadgeTone: verdict.badgeTone,
+    insuranceCoverageProofSource: verdict.insuranceCoverageProofSource,
     hugrabPurchaseAllowed: gate.allow,
     hugrabPurchaseBlockReason: verdict.status === 'not_required' ? '' : gate.reason,
   };
@@ -317,6 +327,22 @@ function readRateInsuranceProvider(record: Record<string, unknown>): string | nu
 function readRateInsuranceCertainty(record: Record<string, unknown>): unknown {
   const certaintyMeta = isRecord(record.insuranceCertainty) ? record.insuranceCertainty : null;
   return certaintyMeta?.certainty ?? record.insuranceCertainty ?? null;
+}
+
+function readRateInsuranceCoverageProofSource(record: Record<string, unknown>): InsuranceCoverageProofSource | null {
+  const raw = record.insuranceCoverageProofSource ?? record.insurance_coverage_proof_source ?? null;
+  return raw === 'shipp_customs_value' ? 'shipp_customs_value' : null;
+}
+
+function readRateIsShippBrokered(record: Record<string, unknown>): boolean {
+  return isShippBrokered({
+    provider: readNullableString(record.provider ?? null, 'rate.provider'),
+    accountIdentity: readNullableString(
+      record.accountIdentity ?? record.carrierNickname ?? record.carrier_nickname ?? record._carrierName ?? null,
+      'rate.accountIdentity',
+    ),
+    serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, 'rate.serviceCode'),
+  });
 }
 
 function hasAnyMeaningfulRateField(rate: OrderBestRateDto): boolean {
@@ -479,6 +505,8 @@ export function normalizeOrderBestRateDto(
       insuranceCost,
       insuranceProvenance,
       insuranceCertainty: readRateInsuranceCertainty(record),
+      insuranceCoverageProofSource: readRateInsuranceCoverageProofSource(record),
+      isShippBrokered: readRateIsShippBrokered(record),
     }),
     // PS-279 — backend-owned rate BLOCK/eligibility verdict (delegated to the canonical evaluator).
     ...resolveEligibilityFields({
@@ -577,6 +605,8 @@ export function normalizeOrderSelectedRateDto(
       insuranceCost,
       insuranceProvenance,
       insuranceCertainty: readRateInsuranceCertainty(record),
+      insuranceCoverageProofSource: readRateInsuranceCoverageProofSource(record),
+      isShippBrokered: readRateIsShippBrokered(record),
     }),
     // PS-279 — backend-owned rate BLOCK/eligibility verdict (delegated to the canonical evaluator).
     ...resolveEligibilityFields({

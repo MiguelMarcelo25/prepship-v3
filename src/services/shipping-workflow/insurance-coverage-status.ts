@@ -44,12 +44,15 @@ export type InsuranceCoverageStatus =
   | 'not_required';
 
 export type InsuranceCoverageBadgeTone = 'green' | 'red' | 'amber' | 'neutral';
+export type InsuranceCoverageProofSource = 'shipp_customs_value';
 
 export type InsuranceCoverageStatusResult = {
   status: InsuranceCoverageStatus;
   /** Short operator-facing badge text (display-only). */
   badgeLabel: string;
   badgeTone: InsuranceCoverageBadgeTone;
+  /** Optional audit source proving why an otherwise uncertain HUGRAB rate may be purchased. */
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null;
 };
 
 export type ResolveInsuranceCoverageStatusInput = {
@@ -65,6 +68,10 @@ export type ResolveInsuranceCoverageStatusInput = {
   insuranceProvenance?: InsuranceCostProvenance | string | null;
   /** PS-274 certainty state, when the backend stamped it (insurance-certainty.ts). */
   insuranceCertainty?: InsuranceCertaintyState | string | null;
+  /** Provider-specific proof source, validated by the caller and re-checked here. */
+  insuranceCoverageProofSource?: InsuranceCoverageProofSource | string | null;
+  /** True only when the provider/account/service identity is SHIPP-brokered. */
+  isShippBrokered?: boolean | null;
 };
 
 /** HUGRAB's mandatory minimum declared value mirrors the carrier-declared-value free cap ($100). */
@@ -80,12 +87,19 @@ function finiteValue(value: unknown): number {
 }
 
 const RESULT: Record<InsuranceCoverageStatus, InsuranceCoverageStatusResult> = {
-  included: { status: 'included', badgeLabel: '$100 INS. INCL.', badgeTone: 'green' },
-  not_included: { status: 'not_included', badgeLabel: 'NO INSURANCE', badgeTone: 'red' },
-  unknown: { status: 'unknown', badgeLabel: 'INSURANCE UNKNOWN', badgeTone: 'amber' },
-  unsupported: { status: 'unsupported', badgeLabel: 'INSURANCE UNSUPPORTED', badgeTone: 'amber' },
-  not_required: { status: 'not_required', badgeLabel: '', badgeTone: 'neutral' },
+  included: { status: 'included', badgeLabel: '$100 INS. INCL.', badgeTone: 'green', insuranceCoverageProofSource: null },
+  not_included: { status: 'not_included', badgeLabel: 'NO INSURANCE', badgeTone: 'red', insuranceCoverageProofSource: null },
+  unknown: { status: 'unknown', badgeLabel: 'INSURANCE UNKNOWN', badgeTone: 'amber', insuranceCoverageProofSource: null },
+  unsupported: { status: 'unsupported', badgeLabel: 'INSURANCE UNSUPPORTED', badgeTone: 'amber', insuranceCoverageProofSource: null },
+  not_required: { status: 'not_required', badgeLabel: '', badgeTone: 'neutral', insuranceCoverageProofSource: null },
 };
+
+function withProofSource(
+  result: InsuranceCoverageStatusResult,
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null,
+): InsuranceCoverageStatusResult {
+  return insuranceCoverageProofSource ? { ...result, insuranceCoverageProofSource } : result;
+}
 
 /**
  * PS-290 — resolve the authoritative HUGRAB $100-insurance coverage status for one rate.
@@ -100,6 +114,7 @@ export function resolveInsuranceCoverageStatus(
   const provider = norm(input.insuranceProvider);
   const provenance = norm(input.insuranceProvenance);
   const certainty = norm(input.insuranceCertainty);
+  const proofSource = norm(input.insuranceCoverageProofSource);
   const insuredValue = finiteValue(input.insuredValue);
   const premium = finiteValue(input.insuranceCost);
 
@@ -113,12 +128,23 @@ export function resolveInsuranceCoverageStatus(
     return RESULT.not_included;
   }
 
-  // (3) Requested but UNPROVEN — below the $100 floor, or an uncertain/unproven certainty.
-  if (
-    insuredValue < HUGRAB_REQUIRED_INSURED_VALUE ||
-    certainty === 'requested_application_uncertain' ||
-    certainty === 'proof_unavailable'
-  ) {
+  // (3) Requested but UNPROVEN - below the $100 floor is never enough.
+  if (insuredValue < HUGRAB_REQUIRED_INSURED_VALUE) {
+    return RESULT.unknown;
+  }
+
+  // (3b) Explicit SHIPP customsValue proof can satisfy the purchase gate only when the caller
+  // intentionally enabled it and the identity is SHIPP-brokered. This does not change PS-274
+  // certainty: the rate remains requested_application_uncertain, but HUGRAB can buy under flag.
+  const hasShippCustomsValueProof =
+    proofSource === 'shipp_customs_value' && input.isShippBrokered === true;
+  if (hasShippCustomsValueProof) {
+    return withProofSource(RESULT.included, 'shipp_customs_value');
+  }
+
+  // (3c) Requested but UNPROVEN - uncertain/unproven certainty remains blocked unless the
+  // provider-specific proof source above intentionally allowed it.
+  if (certainty === 'requested_application_uncertain' || certainty === 'proof_unavailable') {
     return RESULT.unknown;
   }
 

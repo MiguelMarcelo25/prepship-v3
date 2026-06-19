@@ -17,7 +17,10 @@
 // postage is purchased; it never alters a successful purchase.
 
 import {
+  HUGRAB_REQUIRED_INSURED_VALUE,
   resolveInsuranceCoverageStatus,
+  type InsuranceCoverageBadgeTone,
+  type InsuranceCoverageProofSource,
   type InsuranceCoverageStatus,
 } from './insurance-coverage-status';
 import { resolveInsuranceCertainty, isShippBrokered } from './insurance-certainty';
@@ -46,12 +49,43 @@ export type HugrabLabelPurchasePreflightInput = {
   serviceCode?: string | null;
   /** True ONLY for a direct carrier account whose declared-value path is verified-insured. */
   isDirectVerifiedAccount?: boolean | null;
+  /** Optional provider-specific proof source, supplied only by flagged callers. */
+  insuranceCoverageProofSource?: InsuranceCoverageProofSource | string | null;
 };
 
 export type HugrabLabelPurchasePreflightResult = HugrabLabelPurchaseDecision & {
   /** The PS-290 coverage verdict the decision was made on (audit / operator-facing). */
   status: InsuranceCoverageStatus;
+  /** Display-only badge fields from the PS-290 coverage owner. */
+  insuranceBadgeLabel: string;
+  insuranceBadgeTone: InsuranceCoverageBadgeTone;
+  /** Optional audit source explaining why the gate allowed an otherwise uncertain rate. */
+  insuranceCoverageProofSource: InsuranceCoverageProofSource | null;
 };
+
+function finiteValue(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function resolveShippCustomsValueProofSource(input: {
+  enabled?: boolean | null;
+  provider?: string | null;
+  accountIdentity?: string | null;
+  serviceCode?: string | null;
+  insuredValue?: number | null;
+}): InsuranceCoverageProofSource | null {
+  if (input.enabled !== true) return null;
+  if (finiteValue(input.insuredValue) < HUGRAB_REQUIRED_INSURED_VALUE) return null;
+  return isShippBrokered({
+    provider: input.provider ?? null,
+    accountIdentity: input.accountIdentity ?? null,
+    serviceCode: input.serviceCode ?? null,
+    insuredValue: input.insuredValue ?? null,
+  })
+    ? 'shipp_customs_value'
+    : null;
+}
 
 /**
  * PS-261 — resolve the HUGRAB label-purchase preflight decision for one rate, pre-purchase.
@@ -81,6 +115,13 @@ export function resolveHugrabLabelPurchasePreflight(
     accountIdentity: input.accountIdentity ?? null,
     serviceCode: input.serviceCode ?? null,
   });
+  const insuranceCoverageProofSource = resolveShippCustomsValueProofSource({
+    enabled: input.insuranceCoverageProofSource === 'shipp_customs_value',
+    provider: input.provider ?? null,
+    accountIdentity: input.accountIdentity ?? null,
+    serviceCode: input.serviceCode ?? null,
+    insuredValue: input.insuredValue ?? null,
+  });
 
   const coverage = resolveInsuranceCoverageStatus({
     isHugrab: input.isHugrab ?? null,
@@ -88,6 +129,8 @@ export function resolveHugrabLabelPurchasePreflight(
     insuredValue: input.insuredValue ?? null,
     insuranceCost: input.insuranceCost ?? null,
     insuranceProvenance: input.insuranceProvenance ?? null,
+    insuranceCoverageProofSource,
+    isShippBrokered: brokered,
     // Forward certainty only when it is DECISIVE: brokered-uncertain or unsupported (so coverage
     // reads 'unknown' / 'unsupported' and blocks), or a direct-verified 'explicitly_included' (so a
     // $0-premium carrier-declared-value account earns 'included'). Otherwise leave it null and let
@@ -102,5 +145,11 @@ export function resolveHugrabLabelPurchasePreflight(
   });
 
   const decision = resolveHugrabLabelPurchaseGate(coverage.status);
-  return { ...decision, status: coverage.status };
+  return {
+    ...decision,
+    status: coverage.status,
+    insuranceBadgeLabel: coverage.badgeLabel,
+    insuranceBadgeTone: coverage.badgeTone,
+    insuranceCoverageProofSource: coverage.insuranceCoverageProofSource,
+  };
 }

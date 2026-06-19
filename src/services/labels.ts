@@ -78,7 +78,10 @@ import { assertCarrierFamilyEligibleForPurchase } from './shipping-workflow/carr
 // label-purchase preflight. Consumes the PS-290 coverage verdict + PS-274 certainty and
 // BLOCKS before any postage is bought when the mandatory $100 coverage is not proven
 // (unknown / not_included / unsupported). Pure decision; never alters a successful buy.
-import { resolveHugrabLabelPurchasePreflight } from './shipping-workflow/hugrab-label-purchase-preflight';
+import {
+  resolveHugrabLabelPurchasePreflight,
+  resolveShippCustomsValueProofSource,
+} from './shipping-workflow/hugrab-label-purchase-preflight';
 
 // PS-261: the HUGRAB coverage label-purchase BLOCK is a money-path change, so it ships behind a
 // default-OFF canary (HUGRAB_PURCHASE_GATE), per the project norm that money-path features ship OFF
@@ -86,6 +89,10 @@ import { resolveHugrabLabelPurchasePreflight } from './shipping-workflow/hugrab-
 // pre-PS-261 (no block); 'on' => the coverage block is enforced before any postage is purchased.
 function hugrabPurchaseGateEnabled(): boolean {
   return process.env.HUGRAB_PURCHASE_GATE === 'on';
+}
+
+function hugrabShippCustomsValueProofEnabled(): boolean {
+  return process.env.HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF === 'on';
 }
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
@@ -1419,16 +1426,26 @@ async function createLabelV2Impl(
           service_code: body.serviceCode,
         }) ?? 0
       : 0;
+  const preflightProvider = body.carrierCode ?? serviceDescriptor.provider ?? null;
+  const preflightAccountIdentity = body.carrierName ?? null;
+  const preflightServiceCode = body.serviceCode;
   const hugrabCoveragePreflight = resolveHugrabLabelPurchasePreflight({
     isHugrab: isHugrabShippingContext({ clientId, storeId: order.storeId ?? null }),
     insuranceProvider: options.insuranceProvider,
     insuredValue: options.insuredValue,
     insuranceCost: preflightScheduledPremium,
     insuranceProvenance: preflightScheduledPremium > 0 ? 'parcelguard_schedule' : null,
-    provider: body.carrierCode ?? serviceDescriptor.provider ?? null,
-    accountIdentity: body.carrierName ?? null,
-    serviceCode: body.serviceCode,
+    provider: preflightProvider,
+    accountIdentity: preflightAccountIdentity,
+    serviceCode: preflightServiceCode,
     isDirectVerifiedAccount: options.insuranceProvider === 'carrier',
+    insuranceCoverageProofSource: resolveShippCustomsValueProofSource({
+      enabled: hugrabShippCustomsValueProofEnabled(),
+      provider: preflightProvider,
+      accountIdentity: preflightAccountIdentity,
+      serviceCode: preflightServiceCode,
+      insuredValue: options.insuredValue,
+    }),
   });
   if (hugrabPurchaseGateEnabled() && !hugrabCoveragePreflight.allow) {
     const err = new Error(
@@ -1437,7 +1454,10 @@ async function createLabelV2Impl(
         `proves the $100 coverage, then buy the label.`,
     ) as Error & { code?: string; details?: Record<string, unknown> };
     err.code = 'HUGRAB_INSURANCE_COVERAGE_UNPROVEN';
-    err.details = { coverageStatus: hugrabCoveragePreflight.status };
+    err.details = {
+      coverageStatus: hugrabCoveragePreflight.status,
+      insuranceCoverageProofSource: hugrabCoveragePreflight.insuranceCoverageProofSource,
+    };
     throw err;
   }
   // PS-127 rate↔label parity guard: if the order classifies as TRUSTED residential/commercial

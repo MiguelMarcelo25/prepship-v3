@@ -59,6 +59,11 @@ import {
   getCarrierEligibilityMode,
   evaluateOrderCarrierEligibility,
 } from '../services/shipping-workflow/carrier-eligibility-policy';
+import {
+  resolveHugrabLabelPurchasePreflight,
+  resolveShippCustomsValueProofSource,
+} from '../services/shipping-workflow/hugrab-label-purchase-preflight';
+import { isHugrabShippingContext } from '../lib/shipping-service-eligibility';
 import { orderOverrides, orders } from '../db/schema/orders';
 
 const app = new Hono();
@@ -163,6 +168,87 @@ async function selectRateCachePublicRowsByWeightZip(weightOz: number, toZip: str
 // stale number beside the live one. Flip after a canary (live write on a high-frequency endpoint).
 function browseSotWritebackEnabled(): boolean {
   return process.env.BROWSE_SOT_WRITEBACK === 'on';
+}
+
+function hugrabShippCustomsValueProofEnabled(): boolean {
+  return process.env.HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF === 'on';
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readText(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim();
+    return text ? text : null;
+  }
+  return null;
+}
+
+function readMoneyObjectAmount(value: unknown): number {
+  if (!isPlainRecord(value)) return 0;
+  const amount = Number(value.amount ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function readRateInsuranceCost(rate: Record<string, unknown>): number {
+  const meta = isPlainRecord(rate.insuranceCost) ? rate.insuranceCost : null;
+  const metaAmount = Number(meta?.amount ?? NaN);
+  if (Number.isFinite(metaAmount)) return metaAmount;
+  return readMoneyObjectAmount(rate.insurance_amount);
+}
+
+function readRateInsuranceProvenance(rate: Record<string, unknown>): string | null {
+  const meta = isPlainRecord(rate.insuranceCost) ? rate.insuranceCost : null;
+  return readText(meta?.provenance ?? rate.insuranceProvenance ?? rate.insurance_provenance ?? null);
+}
+
+function stampHugrabCoverageDisplayFields<T extends Record<string, unknown>>(
+  rate: T,
+  context: {
+    isHugrab: boolean;
+    insuranceProvider: string | null;
+    insuredValue: number | null;
+    shippCustomsValueProofEnabled: boolean;
+  },
+): T {
+  const provider = readText(rate.provider ?? rate.carrierProvider ?? rate.carrier_code ?? null);
+  const accountIdentity = readText(
+    rate.accountIdentity ?? rate.carrierNickname ?? rate.carrier_nickname ?? rate._carrierName ?? null,
+  );
+  const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? null);
+  const proofSource = resolveShippCustomsValueProofSource({
+    enabled: context.shippCustomsValueProofEnabled,
+    provider,
+    accountIdentity,
+    serviceCode,
+    insuredValue: context.insuredValue,
+  });
+  const preflight = resolveHugrabLabelPurchasePreflight({
+    isHugrab: context.isHugrab,
+    insuranceProvider: context.insuranceProvider,
+    insuredValue: context.insuredValue,
+    insuranceCost: readRateInsuranceCost(rate),
+    insuranceProvenance: readRateInsuranceProvenance(rate),
+    provider,
+    accountIdentity,
+    serviceCode,
+    isDirectVerifiedAccount: context.insuranceProvider === 'carrier' && provider !== 'shipp',
+    insuranceCoverageProofSource: proofSource,
+  });
+  return {
+    ...rate,
+    insuranceProvider: context.insuranceProvider,
+    insuredValue: context.insuredValue,
+    insuranceCoverageStatus: preflight.status,
+    insuranceBadgeLabel: preflight.insuranceBadgeLabel,
+    insuranceBadgeTone: preflight.insuranceBadgeTone,
+    insuranceCoverageProofSource: preflight.insuranceCoverageProofSource,
+    hugrabPurchaseAllowed: preflight.allow,
+    hugrabPurchaseBlockReason: preflight.status === 'not_required' ? '' : preflight.reason,
+  };
 }
 
 function canViewRateFinancials(c: Context): boolean {
@@ -370,12 +456,23 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // only ever be a source-signal and silently forced r=1 on #1461-style orders). The label
   // boundary already classifies from this same order evidence (PS-127), so browse == label
   // classification BY CONSTRUCTION. Best-effort: any load failure falls back to the FE boolean.
-  let orderForBrowse: { sourceProvider: string | null; raw: unknown } | null = null;
+  let orderForBrowse: {
+    sourceProvider: string | null;
+    raw: unknown;
+    clientId: number | null;
+    storeId: number | null;
+  } | null = null;
   let residentialEvidence: ResidentialEvidence | null = null;
   if (body.orderId) {
     try {
       const [ord] = await db
-        .select({ sourceProvider: orders.sourceProvider, raw: orders.raw, shipToName: orders.shipToName })
+        .select({
+          sourceProvider: orders.sourceProvider,
+          raw: orders.raw,
+          shipToName: orders.shipToName,
+          clientId: orders.clientId,
+          storeId: orders.storeId,
+        })
         .from(orders)
         .where(eq(orders.id, body.orderId))
         .limit(1);
@@ -587,6 +684,24 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       insuranceProvider: result.effectiveInsuranceProvider ?? null,
       insuredValue: result.effectiveInsuredValue ?? null,
     }) as typeof cheapest;
+  }
+  const hugrabCoverageDisplayContext = {
+    isHugrab: isHugrabShippingContext({
+      clientId: orderForBrowse?.clientId ?? rest.clientId ?? null,
+      storeId: orderForBrowse?.storeId ?? rest.storeId ?? null,
+    }),
+    insuranceProvider: result.effectiveInsuranceProvider ?? null,
+    insuredValue: result.effectiveInsuredValue ?? null,
+    shippCustomsValueProofEnabled: hugrabShippCustomsValueProofEnabled(),
+  };
+  responseRates = responseRates.map((rate) =>
+    stampHugrabCoverageDisplayFields(rate as Record<string, unknown>, hugrabCoverageDisplayContext),
+  );
+  if (bestRateOut) {
+    bestRateOut = stampHugrabCoverageDisplayFields(
+      bestRateOut as Record<string, unknown>,
+      hugrabCoverageDisplayContext,
+    ) as typeof cheapest;
   }
   // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
   // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no

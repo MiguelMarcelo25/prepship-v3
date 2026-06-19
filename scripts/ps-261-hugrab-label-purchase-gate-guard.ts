@@ -111,6 +111,61 @@ check('preflight uncertain-HUGRAB verdict is unknown (consumes the PS-290 covera
   uncertainHugrab.status === 'unknown');
 check('preflight block carries a non-empty operator-facing reason',
   typeof uncertainHugrab.reason === 'string' && uncertainHugrab.reason.length > 0);
+check('preflight default-off SHIPP customs-value proof source is absent',
+  uncertainHugrab.insuranceCoverageProofSource === null);
+
+// BEHAVIOR: the explicit SHIPP customsValue proof flag is modeled as a backend proof source.
+// When callers intentionally pass that source for a SHIPP-brokered HUGRAB rate with $100+ value,
+// the coverage owner treats it as included for the purchase gate only.
+const flaggedShippHugrab = resolveHugrabLabelPurchasePreflight({
+  isHugrab: true,
+  insuranceProvider: 'parcelguard',
+  insuredValue: 100,
+  insuranceCost: 0,
+  serviceCode: 'shipp_ups_ground',
+  provider: 'shipp',
+  accountIdentity: 'Shipp',
+  isDirectVerifiedAccount: false,
+  insuranceCoverageProofSource: 'shipp_customs_value',
+});
+check('preflight ALLOWS a flagged SHIPP HUGRAB rate with customsValue proof',
+  flaggedShippHugrab.allow === true);
+check('preflight flagged SHIPP HUGRAB verdict is included',
+  flaggedShippHugrab.status === 'included');
+check('preflight flagged SHIPP HUGRAB reports proof source shipp_customs_value',
+  flaggedShippHugrab.insuranceCoverageProofSource === 'shipp_customs_value');
+
+const flaggedShippUnderFloor = resolveHugrabLabelPurchasePreflight({
+  isHugrab: true,
+  insuranceProvider: 'parcelguard',
+  insuredValue: 99,
+  insuranceCost: 0,
+  serviceCode: 'shipp_ups_ground',
+  provider: 'shipp',
+  accountIdentity: 'Shipp',
+  isDirectVerifiedAccount: false,
+  insuranceCoverageProofSource: 'shipp_customs_value',
+});
+check('preflight BLOCKS flagged SHIPP customsValue proof below the $100 HUGRAB floor',
+  flaggedShippUnderFloor.allow === false);
+check('preflight flagged SHIPP below-floor verdict is unknown',
+  flaggedShippUnderFloor.status === 'unknown');
+
+const forcedNonShippProof = resolveHugrabLabelPurchasePreflight({
+  isHugrab: true,
+  insuranceProvider: 'parcelguard',
+  insuredValue: 100,
+  insuranceCost: 0,
+  serviceCode: 'usps_ground_advantage',
+  provider: 'stamps_com',
+  accountIdentity: 'USPS',
+  isDirectVerifiedAccount: false,
+  insuranceCoverageProofSource: 'shipp_customs_value',
+});
+check('preflight ignores SHIPP customsValue proof source for a non-SHIPP rate',
+  forcedNonShippProof.allow === false);
+check('preflight non-SHIPP forced-proof verdict remains unknown',
+  forcedNonShippProof.status === 'unknown');
 
 // BEHAVIOR: a HUGRAB rate with PROVEN coverage (positive ParcelGuard premium) is
 // 'included' -> the preflight is a NO-OP (allow), buying proceeds unchanged.
@@ -149,6 +204,8 @@ check('preflight DELEGATES to the PS-261 gate (does not re-implement the decisio
   /resolveHugrabLabelPurchaseGate\s*\(/.test(preflight));
 check('preflight CONSUMES the PS-290 coverage owner (reuses the verdict resolver)',
   /resolveInsuranceCoverageStatus\s*\(/.test(preflight));
+check('preflight accepts/pass-throughs an optional insuranceCoverageProofSource',
+  /insuranceCoverageProofSource/.test(preflight));
 check('preflight is PURE — no DB / network / fs / label IO',
   !/\b(fetch|axios|db\.|drizzle|readFile|writeFile|process\.env)\b/.test(preflight));
 
@@ -178,6 +235,9 @@ check('labels.ts gates the BLOCK behind the default-OFF HUGRAB_PURCHASE_GATE can
   /HUGRAB_PURCHASE_GATE/.test(labels) &&
   /hugrabPurchaseGateEnabled\(\)\s*&&\s*!hugrabCoveragePreflight\.allow/.test(labels) &&
   /process\.env\.HUGRAB_PURCHASE_GATE === 'on'/.test(labels));
+check('labels.ts gates SHIPP customsValue proof behind default-OFF HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF',
+  /HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF/.test(labels) &&
+  /process\.env\.HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF === 'on'/.test(labels));
 
 // ── PS-261 (this slice): the PURCHASE-GATE verdict is DISPLAYED, pre-purchase, on the Rate
 //    Browser HUGRAB rate row. The operator sees whether the mandatory $100 coverage is PROVEN
@@ -205,6 +265,8 @@ check('order-rate-dto imports the PS-261 purchase gate (resolveHugrabLabelPurcha
 check('order-rate-dto declares the backend purchase-gate display fields',
   /hugrabPurchaseAllowed:\s*boolean/.test(dto) &&
   /hugrabPurchaseBlockReason:\s*string/.test(dto));
+check('order-rate-dto declares the backend insurance coverage proof source field',
+  /insuranceCoverageProofSource:/.test(dto));
 check('order-rate-dto populates the gate verdict via the gate over the coverage status (delegation)',
   /resolveHugrabLabelPurchaseGate\(/.test(dto));
 
