@@ -27,6 +27,7 @@ type RateBrowserCarrierSidebarProps = {
   ratesByPid: Record<string, RateRow[]>;
   rateErrorsByPid: Record<string, string>;
   carrierStatusByPid: Record<string, CarrierRateStatus>;
+  carrierTimingByPid: Record<string, number>;
   hideUnavail: boolean;
   pendingPids: Set<number>;
   order: RbOrderSummaryDto | null;
@@ -49,6 +50,7 @@ export default function RateBrowserCarrierSidebar({
   ratesByPid,
   rateErrorsByPid,
   carrierStatusByPid,
+  carrierTimingByPid,
   hideUnavail,
   pendingPids,
   order,
@@ -57,6 +59,12 @@ export default function RateBrowserCarrierSidebar({
   formatSidebarAccountDisplay,
   onSelectCarrier,
 }: RateBrowserCarrierSidebarProps): ReactNode {
+  function formatRateTimingLabel(durationMs: unknown): string | null {
+    const ms = Number(durationMs);
+    if (!Number.isFinite(ms) || ms < 1000) return null;
+    return `${Math.max(1, Math.round(ms / 1000))}s`;
+  }
+
   return (
     <div
       style={{
@@ -101,6 +109,7 @@ export default function RateBrowserCarrierSidebar({
               : rates.length
             : null;
         const pending = pendingPids.has(c.shippingProviderId);
+        const timingLabel = pending ? null : formatRateTimingLabel(carrierTimingByPid[String(c.shippingProviderId)]);
         return (
           <div
             key={c.shippingProviderId}
@@ -210,6 +219,20 @@ export default function RateBrowserCarrierSidebar({
                 )}
               </span>
             )}
+            {timingLabel ? (
+              <span
+                title={`Checked in ${timingLabel}`}
+                style={{
+                  color: isSel ? 'rgba(255,255,255,.7)' : 'var(--text3)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  minWidth: 22,
+                  textAlign: 'right',
+                }}
+              >
+                {timingLabel}
+              </span>
+            ) : null}
           </div>
         );
       })}

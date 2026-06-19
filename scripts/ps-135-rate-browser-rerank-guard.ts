@@ -3,8 +3,8 @@
  *
  * The modal used to auto-apply `sort(rateDisplayTotal)[0]` — a parallel client-side selector
  * that can diverge from the backend's authoritative pick. It now consumes the backend bestRate
- * matched WITHIN the eligible set (service-class + blocked rules preserved), falling back to the
- * local cheapest only when the backend winner isn't eligible.
+ * matched WITHIN the eligible set (service-class + blocked rules preserved). When the backend
+ * winner is absent, the modal must flag unresolved instead of falling back to a local re-rank.
  *
  * Pure/static only — no browser, DB, provider calls, labels, postage, or marketplace notifications.
  */
@@ -50,13 +50,13 @@ assert.ok(matched);
 check('the consumed best is the backend pick even when another eligible row is cheaper by amount',
   matched.shippingProviderId === 433542 && matched.serviceCode === 'usps_ground_advantage');
 
-// backend winner excluded from the eligible set (e.g. operator service-class filter) → null → caller falls back
+// backend winner excluded from the eligible set (e.g. operator service-class filter) → null → unresolved
 const groundOnly: Row[] = eligible.filter((r) => r.serviceCode === 'ups_ground');
 check('returns null when the backend winner is NOT in the eligible set (service-class narrowed it out)',
   findCanonicalBestRate(backendBest, groundOnly) === null);
 
-// no backend best returned → null → caller falls back to the local cheapest
-check('returns null when no backend best was returned (caller falls back to local pick)',
+// no backend best returned → null → unresolved
+check('returns null when no backend best was returned (caller flags unresolved)',
   findCanonicalBestRate(null, eligible) === null && findCanonicalBestRate(undefined, eligible) === null);
 
 // string-pid backend best still matches a numeric-pid row (translateRateToV2Shape vs row drift)
@@ -72,9 +72,10 @@ check('RateBrowserModal imports findCanonicalBestRate from the canonical lib',
   /import \{ findCanonicalBestRate \} from '\.\.\/lib\/rate-proof'/.test(modal));
 check('RateBrowserModal captures the backend bestRate from the browse response',
   /canonicalBackendBest = \(browseResult as \{ bestRate\?: unknown \} \| null\)\?\.bestRate \?\? null/.test(modal));
-check('auto-apply consumes the backend winner first, then falls back to the local cheapest',
+check('auto-apply consumes the backend winner and never falls back to a local cheapest',
   /const canonicalBest = findCanonicalBestRate\(canonicalBackendBest, available\)/.test(modal) &&
-    /const best =\s*canonicalBest \?\?\s*\[\.\.\.available\]\.sort\(\(a, b\) => rateDisplayTotal\(a, markups\) - rateDisplayTotal\(b, markups\)\)\[0\]/.test(modal));
+    /const decision = decideBestRateEmission\(canonicalBest\)/.test(modal) &&
+    !/const best =\s*canonicalBest \?\?\s*\[\.\.\.available\]\.sort\(\(a, b\) => rateDisplayTotal\(a, markups\) - rateDisplayTotal\(b, markups\)\)\[0\]/.test(modal));
 check('the eligible set still applies the service-class filter + blocked rules before selection',
   /const available = filterBySvcClass\(ratesToRank\)\.filter\(\(r\) => !isBlockedRate\(r, order, currentRateShippingOptions\)\)/.test(modal));
 

@@ -253,6 +253,11 @@ type DirectCarrierRateError = {
   message?: string | null;
 };
 
+type RateBrowseTimingCarrier = {
+  carrierId?: string | null;
+  durationMs?: number | string | null;
+};
+
 // PS-206: 'uncached' = TERMINAL "no cached coverage; this account was not
 // checked in the cached-only probe — a live check is required". Distinct from
 // 'loading' (a request is actually in flight) and 'unavailable' (checked,
@@ -1059,6 +1064,7 @@ export default function RateBrowserModal({
   const [rateErrorsByPid, setRateErrorsByPid] = useState<Record<string, string>>({});
   const [carrierStatusByPid, setCarrierStatusByPid] = useState<Record<string, CarrierRateStatus>>({});
   const [rateBrowseInfo, setRateBrowseInfo] = useState<RateBrowseInfo>({ source: null });
+  const [carrierTimingByPid, setCarrierTimingByPid] = useState<Record<string, number>>({});
   // PS-279: true when the fan-out finished but the backend returned no canonical best for the
   // eligible set. The modal then emits NOTHING (never a FE-ranked local cheapest) and shows a
   // retry diagnostic so the operator re-runs the browse instead of silently persisting a wrong
@@ -1228,6 +1234,7 @@ export default function RateBrowserModal({
     setCarrierStatusByPid({});
     setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
     setRateMetaByPid({});
+    setCarrierTimingByPid({});
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1392,6 +1399,7 @@ export default function RateBrowserModal({
     );
     setRateErrorsByPid({});
     setRateMetaByPid({});
+    setCarrierTimingByPid({});
     // PS-279: a fresh browse clears any prior unresolved-best diagnostic.
     setBestRateUnresolved(false);
     if (seededPid != null) {
@@ -1588,8 +1596,20 @@ export default function RateBrowserModal({
       }
       setRateMetaByPid(nextMetaByPid);
       const nextStatusByPid: Record<string, CarrierRateStatus> = {};
+      const nextTimingByPid: Record<string, number> = {};
+      const timingCarriers = Array.isArray((browseResult as any)?.rateBrowseTiming?.carriers)
+        ? (browseResult as any).rateBrowseTiming.carriers as RateBrowseTimingCarrier[]
+        : [];
+      for (const timing of timingCarriers) {
+        const carrierId = toOptionalString(timing.carrierId);
+        const account = carrierId ? accountByCarrierId.get(carrierId) : undefined;
+        const durationMs = toFiniteNumber(timing.durationMs);
+        if (account && durationMs != null) {
+          nextTimingByPid[String(account.shippingProviderId)] = durationMs;
+        }
+      }
       const carrierStatuses = Array.isArray(browseResult?.carrierStatuses)
-        ? browseResult.carrierStatuses as Array<{ carrierId?: string; status?: CarrierRateStatus; error?: string }>
+        ? browseResult.carrierStatuses as Array<{ carrierId?: string; status?: CarrierRateStatus; error?: string; durationMs?: number }>
         : [];
       for (const status of carrierStatuses) {
         if (!status.carrierId) continue;
@@ -1598,8 +1618,11 @@ export default function RateBrowserModal({
           const key = String(account.shippingProviderId);
           nextStatusByPid[key] = status.status ?? 'unavailable';
           if (status.error) nextErrorsByPid[key] = status.error;
+          const durationMs = toFiniteNumber(status.durationMs);
+          if (durationMs != null && nextTimingByPid[key] == null) nextTimingByPid[key] = durationMs;
         }
       }
+      setCarrierTimingByPid(nextTimingByPid);
 
       liveFetchedRates = dedupeRateRows(
         (raw ?? [])
@@ -1676,6 +1699,7 @@ export default function RateBrowserModal({
       );
       setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
       setRateMetaByPid({});
+      setCarrierTimingByPid({});
       setRatesByPid(
         seededBestRate && seededPid != null
           ? { [String(seededPid)]: [seededBestRate] }
@@ -1811,6 +1835,29 @@ export default function RateBrowserModal({
       rateShippingAccounts.filter((c) => pendingPids.has(c.shippingProviderId)).length,
     [pendingPids, rateShippingAccounts]
   );
+  const totalVisibleRates = combinedAll.length;
+  const rateBrowserHeaderText = useMemo(() => {
+    if (!anyFetched) return '';
+    const rateLabel = totalVisibleRates === 1 ? 'rate' : 'rates';
+    const accountLabel = totalCarriersLoading === 1 ? 'account' : 'accounts';
+    if (totalCarriersLoading > 0) {
+      return `${totalVisibleRates} ${rateLabel} found · checking ${totalCarriersLoading} ${accountLabel}`;
+    }
+    if (browsing) {
+      return totalVisibleRates > 0
+        ? `${totalVisibleRates} ${rateLabel} found · finalizing`
+        : 'Checking carriers...';
+    }
+    return `${totalCarriersChecked} of ${rateShippingAccounts.length} carriers checked · ${totalCarriersAvailable} with rates`;
+  }, [
+    anyFetched,
+    browsing,
+    rateShippingAccounts.length,
+    totalCarriersAvailable,
+    totalCarriersChecked,
+    totalCarriersLoading,
+    totalVisibleRates,
+  ]);
   const carrierDisplayCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const account of rateShippingAccounts) {
@@ -2602,6 +2649,7 @@ export default function RateBrowserModal({
             ratesByPid={ratesByPid}
             rateErrorsByPid={rateErrorsByPid}
             carrierStatusByPid={carrierStatusByPid}
+            carrierTimingByPid={carrierTimingByPid}
             hideUnavail={hideUnavail}
             pendingPids={pendingPids}
             order={order}
@@ -2640,11 +2688,7 @@ export default function RateBrowserModal({
                 Rates
               </span>
               <span style={{ fontSize: 11.5, color: 'var(--text3)', flex: 1 }}>
-                {anyFetched
-                  ? totalCarriersLoading > 0 || browsing
-                    ? `Checking carriers...${totalCarriersAvailable > 0 ? ` ${totalCarriersAvailable} with rates` : ''}`
-                    : `${totalCarriersChecked} of ${rateShippingAccounts.length} carriers checked · ${totalCarriersAvailable} with rates`
-                  : ''}
+                {rateBrowserHeaderText}
                 {rateBrowseInfo.source === 'cache'
                   ? ` | cached ${formatCacheAge(rateBrowseInfo.cacheAgeMs) ?? ''}`.trimEnd()
                   : rateBrowseInfo.source === 'live'

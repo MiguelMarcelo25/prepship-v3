@@ -1855,6 +1855,7 @@ export async function getDirectCarrierRatesForRateInput(
           nickname: account.label || account.accountIdentifier || account.provider,
           status: 'uncached' as CarrierRateDiagnosticStatus,
           rateCount: 0,
+          durationMs: 0,
         };
       }),
     };
@@ -1883,6 +1884,7 @@ export async function getDirectCarrierRatesForRateInput(
   const calls = accounts.map(async (account) => {
     const shippingProviderId = directProviderIdFromAccount(account);
     const label = account.label || account.accountIdentifier || account.provider;
+    const startedAt = Date.now();
     const scope = evaluateDirectCarrierScope(account, input);
     if (!scope.allowed) {
       return {
@@ -1903,6 +1905,7 @@ export async function getDirectCarrierRatesForRateInput(
           nickname: label,
           status: 'failed' as CarrierRateDiagnosticStatus,
           rateCount: 0,
+          durationMs: Date.now() - startedAt,
           error: scope.reason,
         },
       };
@@ -2050,6 +2053,7 @@ export async function getDirectCarrierRatesForRateInput(
           nickname: label,
           status: rates.length ? 'ok' as CarrierRateDiagnosticStatus : 'empty' as CarrierRateDiagnosticStatus,
           rateCount: rates.length,
+          durationMs: Date.now() - startedAt,
           // PS-271 (Layer 4): the thin signal flows to combineCarrierUniverses via this diagnostic.
           ...(thin ? { thin: true } : {}),
           // PS-271 (Layer 4): surface the NAMED observed-missing carriers (the connector's
@@ -2080,6 +2084,7 @@ export async function getDirectCarrierRatesForRateInput(
           nickname: label,
           status: 'failed' as CarrierRateDiagnosticStatus,
           rateCount: 0,
+          durationMs: Date.now() - startedAt,
           error: message,
         },
       };

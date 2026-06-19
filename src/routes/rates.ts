@@ -15,6 +15,7 @@ import {
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
 import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
+import { buildRateBrowseTimingDiagnostics } from '../services/rate-browser-timing-diagnostics';
 // PS-293: the SHIPP house-tuple stamp is the ONE owner shared with the rates-backfill, so a HUGRAB
 // house order gets the same nextBestNonHouseRate/houseMargin whether it was rated by /rates/browse or
 // the backend backfill (no "two competing rate truths").
@@ -420,6 +421,7 @@ function cacheMetadata(
 }
 
 app.post('/browse', zValidator('json', browseBody), async (c) => {
+  const browseStartedAt = Date.now();
   const body = c.req.valid('json');
   const canViewFinancials = canViewRateFinancials(c);
   // PS-250 (Card 5): an order-scoped browse must belong to the caller. A restricted
@@ -517,6 +519,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
     ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),
   };
+  const shipStationStartedAt = Date.now();
   const result = await getRates(
     browseRateInput,
     {
@@ -524,6 +527,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
     }
   );
+  const shipStationDurationMs = Date.now() - shipStationStartedAt;
   // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family
   // eligibility. ShipStation candidates are filtered separately from PS-124
   // backend-owned direct-carrier candidates. In
@@ -562,11 +566,13 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // returns terminal 'uncached' coverage diagnostics for every visible direct
   // account instead, and the Rate Browser decides its live follow-up from
   // that coverage identity (never from a carrier count).
+  const directStartedAt = Date.now();
   const directRates = await getDirectCarrierRatesForRateInput({
     ...rest,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: requestedCarrierIds,
   }, { cachedOnly: isCachedOnlyLookup });
+  const directCarrierDurationMs = Date.now() - directStartedAt;
   const accounts = await getCarrierAccountsForRateContext({
     storeId: rest.storeId ?? null,
     clientId: rest.clientId ?? null,
@@ -819,6 +825,13 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       }
     }
   }
+  const rateBrowseTiming = buildRateBrowseTimingDiagnostics({
+    startedAtMs: browseStartedAt,
+    completedAtMs: Date.now(),
+    shipStationDurationMs,
+    directCarrierDurationMs,
+    carrierDiagnostics: combinedCarrierDiagnostics,
+  });
   const payload = {
     ...result,
     ...(strictRecalculation ? { strictRecalculation } : {}),
@@ -843,6 +856,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     bestRate: bestRateOut,
     carrierStatuses: combinedCarrierStatuses,
     carrierDiagnostics: combinedCarrierDiagnostics,
+    rateBrowseTiming,
     bestRateWorkflow: buildBestRateWorkflowDto({
       currentRequestFingerprint: combinedRequestKey,
       backendRequestKey: combinedRequestKey,
