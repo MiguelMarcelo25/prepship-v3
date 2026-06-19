@@ -23,6 +23,8 @@ import { attachObservedIncomplete } from './shipp-observed-incomplete-marker.js'
 // Identity FIRST: the connector that brokered the rate stamps the honest certainty here.
 import { resolveInsuranceCertainty } from '../../services/shipping-workflow/insurance-certainty.js';
 import { PDFDocument } from 'pdf-lib';
+// PS-294: the single owner of the SHIPP label 4×6 placement math (was duplicated inline below).
+import { computeFourBySixPlacement } from './shipp-label-4x6-placement';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
 
@@ -695,6 +697,9 @@ function shippTrackingFromLabel(label: any): string {
   );
 }
 
+// 4×6 @72dpi. The page-size literal stays here (pinned by the PS-099 static 4x6 guard); PS-294 moved
+// only the duplicated PLACEMENT MATH out to shipp-label-4x6-placement.ts (the single graft point),
+// and feeds these dims in as the target so addPage and the placement can never diverge.
 const SHIPP_LABEL_PAGE_WIDTH = 288;
 const SHIPP_LABEL_PAGE_HEIGHT = 432;
 
@@ -719,15 +724,13 @@ async function appendShippPdfPages(output: PDFDocument, bytes: Uint8Array): Prom
   for (const pageIndex of src.getPageIndices()) {
     const [embedded] = await output.embedPages([src.getPage(pageIndex)!]);
     if (!embedded) continue;
-    const scale = Math.min(SHIPP_LABEL_PAGE_WIDTH / embedded.width, SHIPP_LABEL_PAGE_HEIGHT / embedded.height);
-    const drawWidth = embedded.width * scale;
-    const drawHeight = embedded.height * scale;
+    const placement = computeFourBySixPlacement({ srcWidth: embedded.width, srcHeight: embedded.height, targetWidth: SHIPP_LABEL_PAGE_WIDTH, targetHeight: SHIPP_LABEL_PAGE_HEIGHT });
     const page = output.addPage([SHIPP_LABEL_PAGE_WIDTH, SHIPP_LABEL_PAGE_HEIGHT]);
     page.drawPage(embedded, {
-      x: (SHIPP_LABEL_PAGE_WIDTH - drawWidth) / 2,
-      y: (SHIPP_LABEL_PAGE_HEIGHT - drawHeight) / 2,
-      width: drawWidth,
-      height: drawHeight,
+      x: placement.x,
+      y: placement.y,
+      width: placement.drawWidth,
+      height: placement.drawHeight,
     });
     pages += 1;
   }
@@ -738,15 +741,13 @@ async function appendShippImagePage(output: PDFDocument, bytes: Uint8Array, form
   const image = format === 'image/png' || format === 'png'
     ? await output.embedPng(bytes)
     : await output.embedPng(shippPngBytesFromGifBytes(bytes));
-  const scale = Math.min(SHIPP_LABEL_PAGE_WIDTH / image.width, SHIPP_LABEL_PAGE_HEIGHT / image.height);
-  const drawWidth = image.width * scale;
-  const drawHeight = image.height * scale;
+  const placement = computeFourBySixPlacement({ srcWidth: image.width, srcHeight: image.height, targetWidth: SHIPP_LABEL_PAGE_WIDTH, targetHeight: SHIPP_LABEL_PAGE_HEIGHT });
   const page = output.addPage([SHIPP_LABEL_PAGE_WIDTH, SHIPP_LABEL_PAGE_HEIGHT]);
   page.drawImage(image, {
-    x: (SHIPP_LABEL_PAGE_WIDTH - drawWidth) / 2,
-    y: (SHIPP_LABEL_PAGE_HEIGHT - drawHeight) / 2,
-    width: drawWidth,
-    height: drawHeight,
+    x: placement.x,
+    y: placement.y,
+    width: placement.drawWidth,
+    height: placement.drawHeight,
   });
   return 1;
 }

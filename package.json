@@ -186,6 +186,7 @@
     "test:ps-177-dims-defaults": "tsx scripts/ps-177-dims-defaults-guard.ts",
     "test:ps-220-house-margin": "tsx scripts/ps-220-house-margin-guard.ts",
     "test:ps-292-house-tuple-display": "tsx scripts/ps-292-house-tuple-display-guard.ts",
+    "test:ps-294-shipp-4x6-placement": "tsx scripts/ps-294-shipp-4x6-placement-guard.ts",
     "test:ps-178-fe-authority-ratchet": "tsx scripts/ps-178-fe-authority-ratchet-guard.ts",
     "test:recalculate-all-live": "tsx scripts/recalculate-all-live-guard.ts",
     "test:recalculate-all-timeout-resilience": "tsx scripts/recalculate-all-timeout-resilience-guard.ts",
