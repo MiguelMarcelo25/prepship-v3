@@ -155,6 +155,9 @@ check('api client exposes fetchShippingMarginAnalytics as a thin billing API con
 check('api client exposes dashboard shipping margin as a thin dashboard API consumer',
   /fetchDashboardShippingMarginAnalytics\(/.test(apiClientSrc) &&
   apiClientSrc.includes('/dashboard/shipping-margin'));
+check('dashboard shipping margin falls back to billing endpoint during deploy route skew',
+  apiClientSrc.includes('err instanceof ApiRequestError && err.status === 404') &&
+  apiClientSrc.includes('fetchShippingMarginAnalytics(query.from, query.to, query.clientId)'));
 check('BillingView consumes shipping margin analytics without computing margin itself',
   /fetchShippingMarginAnalytics\(/.test(billingViewSrc) &&
   /shippingMarginSummary/.test(billingViewSrc) &&

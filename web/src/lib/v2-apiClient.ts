@@ -8,7 +8,7 @@
  * See the original module JSDoc in ./v2-apiClient/shared.ts.
  */
 
-import { api, qs } from './api';
+import { ApiRequestError, api, qs } from './api';
 import { API_BASE } from './api-base';
 import { getCachedAuthToken } from './auth-session-cache';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
@@ -2981,7 +2981,14 @@ export const apiClient = {
     };
     if (query.clientId !== undefined) q.clientId = query.clientId;
     if (query.storeId !== undefined) q.storeId = query.storeId;
-    return api.get<any>(`/dashboard/shipping-margin${qs(q)}`).then((res: any) => res?.data ?? res);
+    return api.get<any>(`/dashboard/shipping-margin${qs(q)}`)
+      .then((res: any) => res?.data ?? res)
+      .catch((err: unknown) => {
+        if (err instanceof ApiRequestError && err.status === 404) {
+          return apiClient.fetchShippingMarginAnalytics(query.from, query.to, query.clientId);
+        }
+        throw err;
+      });
   },
 
   fetchDashboardSkuTrends(query: {
