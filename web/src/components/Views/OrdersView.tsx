@@ -9511,8 +9511,14 @@ export default function OrdersView({
           ./OrdersPrintQueueDrawer — render-only; all queue state, derived
           lists, and handlers stay here and flow down as props. */}
       {recipientEditorOpen && panelOrder ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 px-4">
-          <div className="w-full max-w-[560px] rounded-lg bg-surface shadow-xl ring-1 ring-line">
+        <div
+          data-recipient-editor-backdrop
+          className="fixed inset-0 z-[80] isolate flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm"
+        >
+          <div
+            data-recipient-editor-modal
+            className="relative z-[81] w-full max-w-[560px] rounded-lg bg-surface shadow-xl ring-1 ring-line"
+          >
             <div className="flex items-center gap-2 border-b border-line px-4 py-3">
               <MapPin size={15} strokeWidth={2.25} className="text-brand" />
               <div className="flex-1 min-w-0">

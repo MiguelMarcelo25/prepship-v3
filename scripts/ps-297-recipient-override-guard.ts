@@ -127,6 +127,11 @@ check('recipient edit button opens real editor, not Phase 3 placeholder toast',
   panelSectionsSrc.includes('onEditRecipient') &&
   ordersViewSrc.includes('recipientEditorOpen') &&
   ordersViewSrc.includes('saveOrderRecipientOverride'));
+check('recipient editor backdrop suppresses table row highlights behind the modal',
+  ordersViewSrc.includes('data-recipient-editor-backdrop') &&
+  ordersViewSrc.includes('bg-slate-950/70') &&
+  ordersViewSrc.includes('backdrop-blur-sm') &&
+  ordersViewSrc.includes('data-recipient-editor-modal'));
 check('package wires PS-297 guard',
   packageJson.includes('"test:ps-297-recipient-override"'));
 
