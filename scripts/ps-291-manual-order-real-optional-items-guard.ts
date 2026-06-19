@@ -257,6 +257,51 @@ const manualRouteSrc = manualRouteStart >= 0
     /onClick=\{[^}]*setSelectedRate|onClick=\{[^}]*selectedRate/.test(ratesRenderSrc));
 }
 
+// ── 9) FE: "Save this location" persists the typed custom origin (card DoD #2) ─
+// When the operator checks "Save this location", the custom ship-from they typed is
+// kept as a saved Ship-From location via the CANONICAL owner (POST /locations →
+// apiClient.createLocation → the locations table). A small pure helper shapes the
+// body; the modal renders the checkbox + a nickname and invokes the owner on save.
+// The backend owns persistence; the FE only invokes it (ARCHITECTURE.md).
+{
+  let saveLocSrc = '';
+  try { saveLocSrc = readFileSync('web/src/components/new-order-save-location.ts', 'utf8'); }
+  catch { saveLocSrc = ''; }
+  check('FE: new-order-save-location helper file exists', saveLocSrc.length > 0);
+
+  // 9a — pure helpers in their own small file (repo convention).
+  check('FE(9a): helper exports shouldSaveCustomOrigin + buildSaveLocationBody',
+    /export\s+function\s+shouldSaveCustomOrigin\b/.test(saveLocSrc) &&
+    /export\s+function\s+buildSaveLocationBody\b/.test(saveLocSrc));
+
+  // 9b — the builder shapes the custom origin into the POST /locations body
+  // (a name + the address fields the locations route's zod schema accepts).
+  check('FE(9b): buildSaveLocationBody shapes the POST /locations body (name + address)',
+    /name:/.test(saveLocSrc) && /street1:/.test(saveLocSrc) &&
+    /postalCode:/.test(saveLocSrc) && /country:/.test(saveLocSrc));
+
+  // 9c — the predicate only opts in when useCustom + save are on AND a name is
+  // given (no empty rows), so an un-checked / un-named origin never persists.
+  check('FE(9c): shouldSaveCustomOrigin gates on useCustom + save + a name',
+    /useCustom/.test(saveLocSrc) && /\bsave\b/.test(saveLocSrc) && /name/.test(saveLocSrc));
+
+  // 9d — the modal renders a "Save this location" checkbox + a nickname field.
+  check('FE(9d): the modal renders a "Save this location" checkbox bound to state',
+    /Save this location/.test(modalSrc) && /saveCustomOrigin/.test(modalSrc));
+  check('FE(9e): the modal has a saved-location name field',
+    /customOriginName/.test(modalSrc));
+
+  // 9f — handleSubmit gates the persist on the helper predicate and writes via the
+  // canonical createLocation owner (it does not POST an ad-hoc shape inline).
+  const handleSubmitMatch9 = /async function handleSubmit\([\s\S]*?\n  }\r?\n/.exec(modalSrc);
+  const handleSubmitSrc9 = handleSubmitMatch9 ? handleSubmitMatch9[0] : '';
+  check('FE: handleSubmit body located (DoD #2)', handleSubmitSrc9.length > 0);
+  check('FE(9f): handleSubmit gates the save on shouldSaveCustomOrigin',
+    /shouldSaveCustomOrigin\s*\(/.test(handleSubmitSrc9));
+  check('FE(9g): handleSubmit persists via the canonical createLocation owner + the builder',
+    /createLocation\s*\(/.test(handleSubmitSrc9) && /buildSaveLocationBody\s*\(/.test(handleSubmitSrc9));
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-291 manual-order real + optional-items guard (${failures} failing)`);
   process.exit(1);
