@@ -236,6 +236,24 @@ check('RateRowItem does NOT call the PS-261 gate (no FE recompute of a purchase 
 check('RateRowItem sources the gate reader/renderer from orders-row-display (one owner, no fork)',
   /from\s+['"]\.\/Views\/orders-row-display['"]/.test(rateRowItem2));
 
+// ── PS-261 GATE SCOPE (2026-06-19, A re-audit + DJ disposition) ────────────────────
+// The HUGRAB $100-coverage purchase gate covers FORWARD labels (createLabelV2 + batch +
+// print-queue). RETURN labels (createReturnLabelV2 -> ssCreateReturnLabel) are EXEMPT by
+// design — the forward-coverage mandate does not apply to inbound return postage (which
+// carries no rate/insurance selection). Pin the EXPLICIT exemption + the dead-code
+// landmine so a future adversarial audit recognizes them as intentional scope, not a
+// missed bypass.
+{
+  const returnFn = /export async function createReturnLabelV2\([\s\S]*?\r?\n}\r?\n/.exec(labels)?.[0] ?? '';
+  check('createReturnLabelV2 body located', returnFn.length > 0);
+  check('createReturnLabelV2 DOCUMENTS the PS-261 return-coverage EXEMPTION (forward-only mandate)',
+    /PS-261/.test(returnFn) && /EXEMPT/i.test(returnFn) && /HUGRAB/.test(returnFn));
+  // the legacy dead-code path stays pinned as an ungated HUGRAB landmine (revival must add the gate).
+  const deadCodeNote = /dead-code note:[\s\S]*?export async function createLabelFromShipment/.exec(labels)?.[0] ?? '';
+  check('createLabelFromShipment dead-code note warns it is ungated for HUGRAB (PS-261 preflight)',
+    deadCodeNote.length > 0 && /PS-261/.test(deadCodeNote) && /preflight/i.test(deadCodeNote));
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-261 HUGRAB label-purchase-gate guard (${failures} failing)`);
   process.exit(1);

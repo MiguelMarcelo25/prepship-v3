@@ -593,6 +593,10 @@ export type CreateFromShipmentInput = {
 // insurance. If it is ever revived for real label creation, route it through
 // createLabelV2 (or call resolveEffectiveInsurance here) or HUGRAB ground labels
 // would ship uninsured.
+// PS-261 (2026-06-19): it ALSO does not run the HUGRAB label-purchase preflight
+// (resolveHugrabLabelPurchasePreflight). Confirmed NO active caller (only the
+// commented-out createLabelBatch). If revived, add the PS-261 preflight gate here too,
+// or a HUGRAB order could buy a real label bypassing the $100-coverage block.
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
   const automationRules = await loadShippingAutomationRules();
   assertShippingServiceEligible(
@@ -2119,6 +2123,12 @@ export async function createReturnLabelV2(
 
   const creds = await loadClientCredentials(row.clientId);
   const reason = body.reason || 'Customer Return';
+  // PS-261 GATE SCOPE — return labels are EXEMPT from the HUGRAB $100 forward-coverage
+  // gate BY DESIGN (DJ-confirmed 2026-06-19): the mandate applies to FORWARD shipping
+  // labels (createLabelV2 + batch + print-queue), not to inbound return postage, which
+  // carries no rate/insurance selection. So resolveHugrabLabelPurchasePreflight is NOT
+  // run here. If HUGRAB returns ever require $100 coverage, gate this path on its OWN
+  // flag (NOT the forward HUGRAB_PURCHASE_GATE) + add return-insurance handling.
   const result = await ssCreateReturnLabel(row.labelShipmentId, reason, creds.apiKeyV2 ?? undefined);
   const now = new Date();
 
