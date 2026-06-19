@@ -9,7 +9,7 @@ import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
-import { matchRecoverableLabelUrl } from './print-queue-label-recovery';
+import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
@@ -557,30 +557,32 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
   // EXISTING ShipStation label by tracking number, then label_id — a READ of /v2/labels, never a new
   // postage purchase. No match => return null (no guess).
   const recoveryKey = { trackingNumber: row.trackingNumber, labelShipmentId: row.labelShipmentId };
-  let recoveredUrl = matchRecoverableLabelUrl(await ssListRecentLabels(), recoveryKey);
+  let recovered = matchRecoverableLabel(await ssListRecentLabels(), recoveryKey);
 
   // PS-288 (continuation) — the label may have been bought on the SECOND ShipStation account
   // (the KFG account — env SHIPSTATION_KFG_API_KEY_V2), which the PRIMARY account's recent labels
   // never list. When the primary set had no match, ALSO read the second account's recent labels and
-  // re-run the SAME exact-match matchRecoverableLabelUrl (tracking, then label_id), so a second
+  // re-run the SAME exact-match matchRecoverableLabel (tracking, then label_id), so a second
   // account can never produce a cross-account false positive. Still a READ of /v2/labels — never a
   // new postage purchase. No second account configured (or no match there) => null (no guess).
-  if (!recoveredUrl) {
+  if (!recovered) {
     const secondaryKey = resolveSecondaryShipstationLabelKey(process.env);
     if (secondaryKey) {
-      recoveredUrl = matchRecoverableLabelUrl(await ssListRecentLabels(secondaryKey), recoveryKey);
+      recovered = matchRecoverableLabel(await ssListRecentLabels(secondaryKey), recoveryKey);
     }
   }
-  if (!recoveredUrl) return null;
+  if (!recovered?.labelUrl) return null;
   // Per user override unlock shipped data on 2026-06-18: PS-288 — backfill ONLY the recovered
-  // label_url + label_format of the ALREADY-purchased label onto this existing (non-voided) shipment
-  // row. No other shipped/cancelled column is written, no postage is bought, no shipment is
-  // created/voided. This is the documented label_url sync gap (recoverable via tracking/label_id).
+  // label_url + the ALREADY-purchased label's OWN label_format (from /v2/labels) onto this existing
+  // (non-voided) shipment row; only fall back to the row's stored format (then 'pdf') when the
+  // recovered label didn't carry one. No other shipped/cancelled column is written, no postage is
+  // bought, no shipment is created/voided. This is the documented label_url sync gap (recoverable
+  // via tracking/label_id) — the format source is now the real label, not the stale local default.
   await db
     .update(shipments)
-    .set({ labelUrl: recoveredUrl, labelFormat: row.labelFormat ?? 'pdf' })
+    .set({ labelUrl: recovered.labelUrl, labelFormat: recovered.labelFormat ?? row.labelFormat ?? 'pdf' })
     .where(eq(shipments.id, row.id));
-  return normalizePrintQueueLabelUrl(recoveredUrl);
+  return normalizePrintQueueLabelUrl(recovered.labelUrl);
 }
 
 function printQueueScopePredicate(scope: PrintQueueListScope): SQL {

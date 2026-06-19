@@ -70,6 +70,9 @@ export type ShipstationLabelRecord = {
   shipmentId: number | null;
   trackingNumber: string | null;
   labelUrl: string | null;
+  // PS-288 — the label's own format ('pdf'|'png'|'zpl'), so label-url recovery can backfill the
+  // real format of the already-purchased label rather than the stale local default.
+  labelFormat?: string | null;
 };
 
 export type ShipstationShipmentDetailsV1 = {
@@ -348,6 +351,7 @@ export async function ssListRecentLabels(
         shipmentId: stripSePrefix(label.shipment_id),
         trackingNumber: label.tracking_number ? String(label.tracking_number) : null,
         labelUrl: extractShipstationLabelUrl(labelDownload),
+        labelFormat: label.label_format ? String(label.label_format) : null,
       };
     });
   } catch {

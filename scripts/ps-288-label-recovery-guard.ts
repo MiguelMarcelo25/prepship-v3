@@ -6,7 +6,7 @@
  *   npx tsx scripts/ps-288-label-recovery-guard.ts
  */
 import { readFileSync } from 'node:fs';
-import { matchRecoverableLabelUrl } from '../src/services/print-queue-label-recovery';
+import { matchRecoverableLabelUrl, matchRecoverableLabel } from '../src/services/print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from '../src/services/print-queue-secondary-ss-account';
 
 let failures = 0;
@@ -35,6 +35,19 @@ check('empty recent-labels list => null',
 check('skips a matching record that has no downloadable url',
   matchRecoverableLabelUrl([{ labelId: '1', shipmentId: 1, trackingNumber: 'T', labelUrl: null }], { trackingNumber: 'T', labelShipmentId: 1 }) === null);
 
+// ── PS-288 (continuation): the RICH matcher returns the matched RECORD incl. the ACTUAL label
+// format, so the backfill recovers the real label_format of the already-purchased label instead of
+// stamping the stale local row default. matchRecoverableLabelUrl stays a thin wrapper over it. ──
+const LABELS_FMT = [
+  { labelId: '444', shipmentId: 6001, trackingNumber: '1Z-ZPL', labelUrl: 'https://ss/label/zpl.pdf', labelFormat: 'zpl' },
+];
+check('matchRecoverableLabel returns the matched record carrying the recovered labelFormat',
+  matchRecoverableLabel(LABELS_FMT, { trackingNumber: '1Z-ZPL', labelShipmentId: 0 })?.labelFormat === 'zpl');
+check('matchRecoverableLabel returns null on no match (no guess, no postage)',
+  matchRecoverableLabel(LABELS_FMT, { trackingNumber: 'NOPE', labelShipmentId: 0 }) === null);
+check('matchRecoverableLabelUrl stays a thin wrapper over matchRecoverableLabel (same url)',
+  matchRecoverableLabelUrl(LABELS_FMT, { trackingNumber: '1Z-ZPL', labelShipmentId: 0 }) === 'https://ss/label/zpl.pdf');
+
 // ── PS-288 continuation: SECOND ShipStation account key resolution (the KFG account) ──
 check('resolves the secondary (KFG) account key from env',
   resolveSecondaryShipstationLabelKey({ SHIPSTATION_KFG_API_KEY_V2: 'kfg-key', SHIPSTATION_API_KEY_V2: 'primary-key' }) === 'kfg-key');
@@ -60,12 +73,14 @@ check('a non-matching second-account set still yields null (exact match, no cros
 const pq = readFileSync('src/services/print-queue.ts', 'utf8').replace(/\r\n/g, '\n');
 const fnBody = pq.match(/async function findExistingQueueableLabelForOrder[\s\S]*?\n}\n/)?.[0] ?? '';
 check('recovery wiring exists in findExistingQueueableLabelForOrder', fnBody.length > 0);
-check('recovery reads ShipStation recent labels + uses the pure matcher',
-  fnBody.includes('ssListRecentLabels') && fnBody.includes('matchRecoverableLabelUrl'));
+check('recovery reads ShipStation recent labels + uses the pure record matcher',
+  fnBody.includes('ssListRecentLabels') && /matchRecoverableLabel\(/.test(fnBody));
 check('recovery buys NO postage (no createLabelV2 in the recovery function)',
   fnBody.length > 0 && !fnBody.includes('createLabelV2'));
 check('recovery backfills ONLY labelUrl + labelFormat (no other shipped column written)',
   /\.set\(\{[^}]*labelUrl:[^}]*labelFormat:[^}]*\}\)/.test(fnBody));
+check('recovery stamps the RECOVERED label format (prefers the actual label_format, falls back to the row then pdf)',
+  /labelFormat:\s*recovered\.labelFormat\s*\?\?\s*row\.labelFormat\s*\?\?\s*'pdf'/.test(fnBody));
 check('recovery only touches NON-voided shipments (no cancelled/voided rows)',
   fnBody.includes('shipments.voided, false') || pq.includes('eq(shipments.voided, false)'));
 check('recovery write carries the unlock-shipped-data override note (2026-06-18)',
@@ -76,8 +91,8 @@ check('recovery falls back to the SECOND ShipStation account key when the primar
   fnBody.includes('resolveSecondaryShipstationLabelKey'));
 check('the secondary fallback re-reads recent labels (ssListRecentLabels called with the secondary key)',
   /ssListRecentLabels\(\s*secondaryKey/.test(fnBody) || /resolveSecondaryShipstationLabelKey[\s\S]*ssListRecentLabels\(/.test(fnBody));
-check('the secondary fallback reuses the EXISTING pure matcher (no second matcher, exact-match only)',
-  (fnBody.match(/matchRecoverableLabelUrl/g) ?? []).length >= 2);
+check('the secondary fallback reuses the EXISTING pure record matcher twice (primary + KFG, exact-match only)',
+  (fnBody.match(/matchRecoverableLabel\(/g) ?? []).length >= 2);
 check('the secondary fallback still buys NO postage (no createLabelV2 in the recovery function)',
   fnBody.length > 0 && !fnBody.includes('createLabelV2'));
 
