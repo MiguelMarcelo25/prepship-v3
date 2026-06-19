@@ -906,8 +906,8 @@ function renderInvoiceHtml(args: {
     year: 'numeric',
   });
 
-  // PS-275 item 2: count the orders whose prep fee was WAIVED so the export can
-  // show a period note alongside the per-row "Waived" badge. Default-inert:
+  // PS-275 item 2: count the orders whose prep fee was WAIVED so the invoice can
+  // show a period note without adding a trailing per-row waiver column. Default-inert:
   // 0 waived => waiverNote is '' and no note is rendered.
   const waivedCount = details.filter((d) => d.fee_waived).length;
   const waiverNote = waivedSummaryNote(waivedCount);
@@ -929,7 +929,7 @@ function renderInvoiceHtml(args: {
       const shipDate = formatBillingDay(d.ship_date);
       return `
       <tr>
-        <td>${escHtml(shipDate)}</td>
+        <td class="ship-date">${escHtml(shipDate)}</td>
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
@@ -940,7 +940,6 @@ function renderInvoiceHtml(args: {
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
-        <td class="waiver-cell">${d.fee_waived ? `<span class="waiver-badge">${escHtml(waivedCellText(d.fee_waived))}</span>` : ''}</td>
       </tr>`;
     })
     .join('');
@@ -972,6 +971,7 @@ function renderInvoiceHtml(args: {
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     thead th { background: #f9fafb; border: 1px solid #e5e7eb; padding: 7px 10px; font-weight: 700; color: #374151; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
     thead th.num { text-align: right; }
+    th.ship-date, td.ship-date { width: 118px; min-width: 118px; white-space: nowrap; }
     tbody td { border: 1px solid #e5e7eb; padding: 6px 10px; color: #374151; vertical-align: middle; }
     tbody tr:nth-child(even) { background: #fafafa; }
     td.num { text-align: right; }
@@ -979,8 +979,6 @@ function renderInvoiceHtml(args: {
     td.sku { font-family: monospace; font-size: 10px; color: #6b7280; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     td.bold { font-weight: 700; }
     td.review { color: #b45309; font-size: 11px; }
-    td.waiver-cell { text-align: center; }
-    .waiver-badge { display: inline-block; background: #fef3c7; color: #92400e; border: 1px solid #fde68a; border-radius: 9999px; padding: 1px 8px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
     .waiver-note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 8px 14px; margin-bottom: 16px; font-size: 11px; color: #92400e; }
     tfoot td { border: 1px solid #d1d5db; padding: 8px 10px; font-weight: 700; background: #f3f4f6; }
     tfoot td.num { text-align: right; }
@@ -1017,7 +1015,7 @@ function renderInvoiceHtml(args: {
   <table>
     <thead>
       <tr>
-        <th>Ship Date</th>
+        <th class="ship-date">Ship Date</th>
         <th>Order #</th>
         <th>SKU(s)</th>
         <th>Box Size</th>
@@ -1028,7 +1026,6 @@ function renderInvoiceHtml(args: {
         <th class="num">Shipping</th>
         <th class="num">Storage</th>
         <th class="num">Fulfillment Fee</th>
-        <th>${WAIVED_COLUMN_HEADER}</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -1042,7 +1039,6 @@ function renderInvoiceHtml(args: {
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
         <td class="num" style="font-size:14px">${fmt(fulfillmentFeeTotal || grandTotal)}</td>
-        <td></td>
       </tr>
     </tfoot>
   </table>

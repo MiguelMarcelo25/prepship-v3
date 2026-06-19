@@ -54,7 +54,7 @@ assert.deepEqual(
     'Storage',
     'Total',
     // PS-275 item 2: the prep-fee waiver indicator column (last, mirroring the
-    // XLSX Line Items sheet + the HTML invoice table).
+    // XLSX Line Items sheet; HTML keeps only the period-level waiver note).
     'Prep Fee Waiver',
   ],
   'CSV columns must mirror the XLSX Line Items sheet, in order',

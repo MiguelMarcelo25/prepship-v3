@@ -1,19 +1,20 @@
 /**
  * PS-275 item 2 — the SINGLE owner of the prep-fee WAIVER indicator shown on the
- * billing invoice exports (XLSX, HTML/PDF, CSV).
+ * row-level billing invoice exports (XLSX, CSV) plus the HTML/PDF period note.
  *
  * The waiver DECISION is owned by the billing_fee_waivers table and read through
  * readBillingFeeWaivers (the SAME source-of-truth the billing detail view's
  * "Prep fee waived" chip already delegates to). billingInvoiceData turns that
  * decision into a per-order `fee_waived` boolean; these helpers turn that boolean
- * into the user-visible column header + cell text + period note, so all three
- * exports render the indicator IDENTICALLY and can never drift apart.
+ * into the user-visible export column header + cell text + period note. The
+ * HTML/PDF invoice intentionally omits the trailing row-level waiver column but
+ * keeps the period note.
  *
  * PURE (zero imports, no DB) so the PS-275 guard can exercise it offline. A
  * waived order is now visibly distinguishable from a genuinely free/$0 order.
  */
 
-/** Column title used by all three invoice exports for the waiver indicator. */
+/** Column title used by row-level invoice exports for the waiver indicator. */
 export const WAIVED_COLUMN_HEADER = 'Prep Fee Waiver';
 
 /** The per-row cell text: a visible "Waived" marker when this order's prep fee

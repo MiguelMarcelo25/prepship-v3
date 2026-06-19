@@ -271,18 +271,18 @@ function sampleOrderLines(): WaivableLine[] {
   check('route: persists the decision via upsertBillingFeeWaiver', /upsertBillingFeeWaiver\(\{/.test(route));
 }
 
-// ── 11. PS-275 item 2: the prep-fee WAIVER is VISIBLE in all three invoice ─────
-//       exports (XLSX / HTML-PDF / CSV). Before this, a waived order's zeroed
+// ── 11. PS-275 item 2: the prep-fee WAIVER stays visible in invoice exports ────
+//       (XLSX / CSV) and as an HTML period note. Before this, a waived order's zeroed
 //       prep fee was indistinguishable from a genuinely free/$0 order, so the
 //       PS-275 DoD's "review/waived indicator" was unmet on the exports.
 //
 //       Source of truth: the waiver DECISION stays owned by billing_fee_waivers
 //       and is read via the canonical readBillingFeeWaivers — the SAME owner the
 //       billing detail view's "Prep fee waived" chip already delegates to.
-//       billingInvoiceData threads it onto each row as fee_waived; every renderer
-//       shows it through ONE shared indicator owner (waivedCellText /
-//       waivedSummaryNote / WAIVED_COLUMN_HEADER) so the three exports cannot
-//       disagree. No line-item denormalization, no schema migration, and the
+//       billingInvoiceData threads it onto each row as fee_waived; row-level exports
+//       show it through ONE shared indicator owner (waivedCellText /
+//       WAIVED_COLUMN_HEADER), while HTML keeps the shared waivedSummaryNote and no
+//       longer shows the per-row waiver column. No line-item denormalization, no schema migration, and the
 //       generator's (order_id, line_type, description) ON CONFLICT key is untouched.
 {
   // (a) The shared indicator owner: a WAIVED order shows a visible "Waived"
@@ -319,17 +319,24 @@ function sampleOrderLines(): WaivableLine[] {
   // (c) Data + the heavy route renderers live in routes/billing.ts behind
   //     DB/app imports (renderInvoiceHtml / renderInvoiceXlsx) — static source
   //     pins, same approach as sections 7/8. billingInvoiceData must read the
-  //     waiver SOT and stamp fee_waived; BOTH exports must render the indicator
-  //     through the shared owner and carry the column header.
+  //     waiver SOT and stamp fee_waived. CSV/XLSX retain the row-level marker
+  //     for export/audit; the HTML invoice uses the period summary note only
+  //     so the visible table stays compact.
   const routeSrc = readFileSync('src/routes/billing.ts', 'utf8');
+  const htmlStart = routeSrc.indexOf('function renderInvoiceHtml(');
+  const htmlEnd = routeSrc.indexOf("app.get('/invoice'", htmlStart);
+  const htmlRenderer = htmlStart >= 0 && htmlEnd > htmlStart ? routeSrc.slice(htmlStart, htmlEnd) : '';
+  const xlsxStart = routeSrc.indexOf('async function renderInvoiceXlsx(');
+  const xlsxEnd = routeSrc.indexOf("app.get('/invoice.xlsx'", xlsxStart);
+  const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? routeSrc.slice(xlsxStart, xlsxEnd) : '';
   check('DATA: billingInvoiceData reads the waiver SOT (readBillingFeeWaivers) and stamps fee_waived',
     /readBillingFeeWaivers\(/.test(routeSrc) && /fee_waived/.test(routeSrc));
-  check('HTML+XLSX: BOTH invoice renderers render the indicator via the shared waivedCellText owner',
-    (routeSrc.split('waivedCellText(').length - 1) >= 2);
-  check('HTML+XLSX: both exports title the column via the shared WAIVED_COLUMN_HEADER constant',
-    (routeSrc.split('WAIVED_COLUMN_HEADER').length - 1) >= 2);
-  check('HTML/XLSX: a period summary note is rendered from the shared waivedSummaryNote owner',
-    /waivedSummaryNote\(/.test(routeSrc));
+  check('HTML: invoice table hides the per-row prep-fee waiver column',
+    !/WAIVED_COLUMN_HEADER|waiver-cell|waiver-badge|waivedCellText\(/.test(htmlRenderer));
+  check('HTML: invoice still renders the period summary note from waivedSummaryNote',
+    /waiverNote/.test(htmlRenderer) && /waivedSummaryNote\(/.test(routeSrc));
+  check('XLSX: invoice keeps the row-level waiver column via shared owners',
+    /WAIVED_COLUMN_HEADER/.test(xlsxRenderer) && /waivedCellText\(d\.fee_waived\)/.test(xlsxRenderer));
 }
 
 if (failures > 0) {
