@@ -78,8 +78,8 @@ check(
   /async function createDirectCarrierLabelThenQueue\(\s*order: OrderSummaryDto,\s*overridePayload\?: Record<string, unknown> \| null,/.test(directFn),
 );
 check(
-  'direct-carrier label path prefers the override selectedRateProof before rebuilding from the stale order',
-  /overridePayload\?\.selectedRateProof[\s\S]*?\?\?\s*buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate\)/.test(directFn),
+  'direct-carrier label path prefers the override selectedRateProof and account-binds the fallback proof',
+  /const selectedRateProof =\s*toRecord\(overrideRecord\?\.selectedRateProof\)\s*\?\?\s*buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(directFn),
 );
 check(
   'sendOrdersToQueueBackend forwards the per-order override into the direct-carrier label path',

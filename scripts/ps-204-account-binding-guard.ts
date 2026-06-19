@@ -181,6 +181,10 @@ check('panel payload proof + quote-ref are account-bound (isTest skips)',
   /buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView));
 check('batch queue payload proof is account-bound',
   /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
+check('direct queue payload honors override purchase account and account-binds fallback proof',
+  /toNumberValue\(overrideRecord\?\.shippingProviderId\)[\s\S]{0,160}\?\?\s*resolveOrderShippingProviderId\(order\)/.test(ordersView) &&
+  /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+  /buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
 check('Ship Acct change drops a preview rate from another account (no mixed-source card)',
   /setPanelRatePreview\(\(current\) => \{\s*\n\s*const belongs = rateBelongsToProviderAccount\(current\[0\], nextValue\)/.test(ordersView));
 check('mixed-source purchase shows the re-rate action instead of a generic failure',

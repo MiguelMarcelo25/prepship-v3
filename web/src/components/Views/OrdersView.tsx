@@ -3299,11 +3299,13 @@ export default function OrdersView({
     const orderDetail = orderDetailsById.get(order.orderId) ?? null
     const bestRate = order.bestRate
     const selectedRate = order.selectedRate
-    const shippingProviderId = resolveOrderShippingProviderId(order)
-    const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
-    const serviceName = toStringValue((bestRate as any)?.serviceName) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
-    const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
-    const carrierName = toStringValue((bestRate as any)?.carrierName) ?? selectedRate?.carrierName
+    const overrideRecord = toRecord(overridePayload)
+    const shippingProviderId =
+      toNumberValue(overrideRecord?.shippingProviderId) ?? resolveOrderShippingProviderId(order)
+    const serviceCode = toStringValue(overrideRecord?.serviceCode) ?? getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
+    const serviceName = toStringValue(overrideRecord?.serviceName) ?? toStringValue((bestRate as any)?.serviceName) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
+    const carrierCode = toStringValue(overrideRecord?.carrierCode) ?? getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
+    const carrierName = toStringValue(overrideRecord?.carrierName) ?? toStringValue((bestRate as any)?.carrierName) ?? selectedRate?.carrierName
     const dims = getDimensions(order, orderDetail)
     const weightOz = getOrderWeightOz(order, orderDetail)
     const shippingOptions = buildOrderShippingOptionsPayload(order)
@@ -3311,6 +3313,14 @@ export default function OrdersView({
     if (!shipTo.street1 || !shipTo.city || !shipTo.state || !shipTo.postalCode) {
       return { queued: false, items: [], error: 'Missing ship-to address - no postage was purchased' }
     }
+    const selectedRateProof =
+      toRecord(overrideRecord?.selectedRateProof) ??
+      buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId)
+    const overrideRateQuoteId = toStringValue(overrideRecord?.rateQuoteId)
+    const overrideSelectedRateKey = toStringValue(overrideRecord?.selectedRateKey)
+    const rateQuoteRef = overrideRateQuoteId && overrideSelectedRateKey
+      ? { rateQuoteId: overrideRateQuoteId, selectedRateKey: overrideSelectedRateKey }
+      : buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId)
     const payload: Record<string, unknown> = {
       orderId: order.orderId,
       orderNumber: order.orderNumber ?? undefined,
@@ -3318,23 +3328,21 @@ export default function OrdersView({
       serviceName: serviceName ?? undefined,
       carrierCode,
       carrierName: carrierName ?? undefined,
-      packageCode: 'package',
-      weightOz: weightOz > 0 ? weightOz : undefined,
-      length: dims?.length,
-      width: dims?.width,
-      height: dims?.height,
-      confirmation: shippingOptions.confirmation,
-      insuranceProvider: shippingOptions.insuranceProvider,
-      insuredValue: shippingOptions.insuredValue,
+      packageCode: toStringValue(overrideRecord?.packageCode) ?? 'package',
+      weightOz: toNumberValue(overrideRecord?.weightOz) ?? (weightOz > 0 ? weightOz : undefined),
+      length: toNumberValue(overrideRecord?.length) ?? dims?.length,
+      width: toNumberValue(overrideRecord?.width) ?? dims?.width,
+      height: toNumberValue(overrideRecord?.height) ?? dims?.height,
+      confirmation: toStringValue(overrideRecord?.confirmation) ?? shippingOptions.confirmation,
+      insuranceProvider: toStringValue(overrideRecord?.insuranceProvider) ?? shippingOptions.insuranceProvider,
+      insuredValue: toNumberValue(overrideRecord?.insuredValue) ?? shippingOptions.insuredValue,
       // Print-to-Queue loop fix: when the caller supplies a payload override
       // (the side-panel Print to Queue retry hands us the freshly re-rated
-      // proof here), honor its selectedRateProof instead of rebuilding from the
-      // captured order's stale bestRate. Direct-carrier orders route here and
-      // ignored labelPayloadOverrides, so the refreshed proof was discarded and
-      // the purchase boundary rejected every retry ("Rate changed or expired").
-      selectedRateProof:
-        (overridePayload?.selectedRateProof as Record<string, unknown> | undefined) ??
-        buildSelectedRateProofPayload(order, bestRate ?? selectedRate),
+      // proof/account here), honor those values instead of rebuilding from the
+      // captured order's stale bestRate. Fallback proof/quote refs stay bound
+      // to the same purchase account, matching the backend purchase boundary.
+      selectedRateProof,
+      ...rateQuoteRef,
       shipTo: {
         name: shipTo.name ?? '',
         company: shipTo.company ?? '',
