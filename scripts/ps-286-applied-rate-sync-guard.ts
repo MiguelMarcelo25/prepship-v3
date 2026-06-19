@@ -78,6 +78,18 @@ async function main(): Promise<void> {
     !/void persistAppliedRateForOrder\s*\(/.test(ov));
   check('the Rate Browser modal onClose routes through the close-after-persist gate',
     /onClose=\{\(\)\s*=>\s*\{?\s*void closeRateBrowserAfterPersist\(\)/.test(ov));
+  // The Escape-key close is the 4th close path — it must route through the gate too,
+  // else Esc during an in-flight persist re-opens the stale-row race.
+  check('the Escape-key close routes through the gate (4th close path)',
+    /event\.key === 'Escape'[\s\S]{0,400}?closeRateBrowserAfterPersist\(\)/.test(ov));
+  // The ONLY setRateBrowserOpen(false) in the file is the real close INSIDE the gate
+  // (after the persist await). No close path (apply x2, onClose, Escape) bare-closes
+  // the modal and bypasses the wait.
+  const closeFn = /async function closeRateBrowserAfterPersist\([\s\S]*?\r?\n  }\r?\n/.exec(ov)?.[0] ?? '';
+  check('closeRateBrowserAfterPersist holds the single real setRateBrowserOpen(false)',
+    /setRateBrowserOpen\(false\)/.test(closeFn));
+  check('NO bare setRateBrowserOpen(false) on any close path (only the gate closes the modal)',
+    (ov.match(/setRateBrowserOpen\(false\)/g) ?? []).length === 1);
 
   check('package.json wires test:ps-286-applied-rate-sync',
     /test:ps-286-applied-rate-sync/.test(readFileSync('package.json', 'utf8')));

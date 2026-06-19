@@ -2202,7 +2202,9 @@ export default function OrdersView({
 
       if (event.key === 'Escape') {
         if (rateBrowserOpen) {
-          setRateBrowserOpen(false)
+          // PS-286: the Escape-key close is the 4th close path — route it through the
+          // gate too so Esc during an in-flight persist can't re-open the stale-row race.
+          void closeRateBrowserAfterPersist()
           return
         }
         clearSelection()
@@ -4654,7 +4656,10 @@ export default function OrdersView({
   const appliedRatePersistsRef = useRef(new Map<number, Promise<unknown>>())
 
   async function closeRateBrowserAfterPersist(): Promise<void> {
-    await awaitAppliedRatePersists(appliedRatePersistsRef.current, [panelOrderId ?? 0])
+    // Await EVERY in-flight applied-rate persist (the map auto-clears settled ones),
+    // not just the current panel's, so the gate stays correct even when called from a
+    // stale closure — e.g. the Escape-key keydown handler captured inside a useEffect.
+    await awaitAppliedRatePersists(appliedRatePersistsRef.current, [...appliedRatePersistsRef.current.keys()])
     setRateBrowserOpen(false)
   }
 
