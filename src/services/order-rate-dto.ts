@@ -31,6 +31,10 @@ import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label
 // re-deriving the block-list reason client-side. Inert (UNBLOCKED) until a caller passes ctx.eligibility.
 import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibility-stamp';
 import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
+// PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
+// (the route has client opt-in + the raw provider); persisted into best_rate_json and round-tripped
+// here so the awaiting row renders 'House rate needs refresh' verbatim instead of a plain SHIPP amount.
+import type { HouseTupleStatus } from './shipping-workflow/house-tuple-save-policy';
 
 // ── Inlined DTO types (v2 parity) ────────────────────────────────────────────
 
@@ -71,6 +75,11 @@ export interface OrderBestRateDto {
   // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
+  // PS-292 (item 2): backend-owned house-tuple freshness verdict, stamped at SAVE + persisted here.
+  // 'needs_refresh' = a SHIPP/house winner for an opted-in client whose competitor tuple is ABSENT
+  // (re-rate required); 'present' = tuple resolved (incl. the genuine $0-margin pass-through);
+  // 'not_house' = non-house. null on legacy rows never stamped. The FE renders it; it never recomputes.
+  houseTupleStatus: HouseTupleStatus | null;
   // PS-290 (slice 1): HUGRAB $100-insurance COVERAGE STATUS verdict — backend-owned, derived
   // from the insurance fields above + isHugrab via resolveInsuranceCoverageStatus. 'not_required'
   // on non-HUGRAB rows; the FE renders insuranceBadgeLabel/insuranceBadgeTone, never recomputes.
@@ -454,6 +463,14 @@ export function normalizeOrderBestRateDto(
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
     nextBestNonHouseRate: normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`),
     houseMargin: readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`),
+    // PS-292 (item 2): round-trip the persisted house-tuple verdict (stamped at SAVE). Unknown/absent
+    // (legacy rows) => null, byte-identical for non-house rows.
+    houseTupleStatus:
+      record.houseTupleStatus === 'present' ||
+      record.houseTupleStatus === 'needs_refresh' ||
+      record.houseTupleStatus === 'not_house'
+        ? (record.houseTupleStatus as HouseTupleStatus)
+        : null,
     // PS-290 — backend-owned HUGRAB $100-insurance coverage verdict (delegated to the resolver).
     ...resolveCoverageFields({
       isHugrab: readIsHugrab(record, ctx?.isHugrab),

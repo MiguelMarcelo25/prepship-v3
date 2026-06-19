@@ -25,6 +25,12 @@ import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
 import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house-row-marked-amount';
 import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 import { redactRateBrowserMoney } from '../src/services/rate-browser-money-redaction';
+import { houseTupleStatus, shouldRejectHalfHouseSave } from '../src/services/shipping-workflow/house-tuple-save-policy';
+import { houseMarginFromProjection } from '../src/services/shipping-workflow/house-margin-capture';
+import {
+  classifyAwaitingBestRateDisplay,
+  AWAITING_BEST_RATE_STATE_LABELS,
+} from '../web/src/components/Views/awaiting-best-rate-display-state';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -184,6 +190,81 @@ check('RateBrowserModal: the apply path lifts the tuple via houseTupleForRow (ma
 const rowItemSrc = readFileSync('web/src/components/RateRowItem.tsx', 'utf8');
 check('RateRowItem: recommended SHIPP row renders the house tuple (houseTuple prop) + HOUSE badge',
   /renderHouseBadge/.test(rowItemSrc) && /houseTuple/.test(rowItemSrc));
+
+// ── 8. CARD ITEM 4 (backend reject): a half-house SHIPP save is rejected; legitimate saves are NOT ──
+{
+  // SHIPP + opted-in + competitor tuple ABSENT (both null) => needs_refresh => reject.
+  const half = houseTupleStatus({ rawProvider: 'shipp', nextBestNonHouseRate: null, houseMargin: null, optedIn: true });
+  check('item4: SHIPP + opted-in + missing tuple => needs_refresh', half === 'needs_refresh');
+  check('item4: a half-house save is rejected', shouldRejectHalfHouseSave(half) === true);
+
+  // HAPPY PATH — a legitimate SHIPP house win WITH a real competitor must STILL save (no reject).
+  const withComp = houseTupleStatus({
+    rawProvider: 'shipp', nextBestNonHouseRate: { totalCost: 11.21 }, houseMargin: 0.67, optedIn: true,
+  });
+  check('item4 HAPPY PATH: SHIPP + real competitor => present', withComp === 'present');
+  check('item4 HAPPY PATH: a legitimate SHIPP house win still saves (no reject)',
+    shouldRejectHalfHouseSave(withComp) === false);
+
+  // DEFAULT-OFF: a non-opted-in client is never a house row, even with a missing tuple.
+  const notOpted = houseTupleStatus({ rawProvider: 'shipp', nextBestNonHouseRate: null, houseMargin: null, optedIn: false });
+  check('item4 DEFAULT-OFF: non-opted-in => not_house (no reject)',
+    notOpted === 'not_house' && shouldRejectHalfHouseSave(notOpted) === false);
+
+  // A non-SHIPP winner is never a house row (carrier_code trap is moot — identity is provider-only).
+  const nonShipp = houseTupleStatus({ rawProvider: 'ups', nextBestNonHouseRate: null, houseMargin: null, optedIn: true });
+  check('item4: non-SHIPP winner => not_house (no reject)',
+    nonShipp === 'not_house' && shouldRejectHalfHouseSave(nonShipp) === false);
+}
+
+// ── 9. SAFETY LINCHPIN: a GENUINE no-competitor SHIPP win (houseMargin 0, nextBest null) is NOT half ─
+{
+  // stampHouseTuple writes nextBestNonHouseRate=null but houseMargin=0 (NOT null) for a real pass-
+  // through — so 'both null' (=> reject) only happens when the save NEVER went through the stamp owner.
+  const passThrough = houseTupleStatus({ rawProvider: 'shipp', nextBestNonHouseRate: null, houseMargin: 0, optedIn: true });
+  check('linchpin: SHIPP no-competitor pass-through (houseMargin 0) => present, NOT rejected',
+    passThrough === 'present' && shouldRejectHalfHouseSave(passThrough) === false);
+}
+
+// ── 10. CARD ITEM 2 (verdict persistence): normalizeOrderBestRateDto round-trips houseTupleStatus ───
+{
+  const dto = normalizeOrderBestRateDto({ serviceCode: 'shipp_ups_ground', shipmentCost: 10.54, carrierCode: 'shipp', houseTupleStatus: 'needs_refresh' });
+  check('item2: normalizeOrderBestRateDto round-trips houseTupleStatus (needs_refresh)', dto?.houseTupleStatus === 'needs_refresh');
+  const dtoPlain = normalizeOrderBestRateDto({ serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, carrierCode: 'usps' });
+  check('item2: a rate with no verdict => null (byte-identical legacy)', dtoPlain?.houseTupleStatus === null);
+}
+
+// ── 11. CARD ITEM 2 (FE diagnostic): a needs_refresh row shows the diagnostic, beating show_amount ──
+{
+  const base = { hasSavedBestRate: true, canDisplaySavedRate: true, isComplete: true, cacheExpiresAt: null, eligibilityVersion: null, requiredEligibilityVersion: null, hasDimsAndWeight: true };
+  check('item2 FE: needs_refresh WINS over show_amount (never a confident plain SHIPP amount)',
+    classifyAwaitingBestRateDisplay({ ...base, houseTupleNeedsRefresh: true }) === 'house_needs_refresh');
+  check('item2 FE: a non-house row is byte-identical (show_amount)',
+    classifyAwaitingBestRateDisplay({ ...base }) === 'show_amount');
+  check('item2 FE: the diagnostic label is "House rate needs refresh"',
+    AWAITING_BEST_RATE_STATE_LABELS.house_needs_refresh === 'House rate needs refresh');
+}
+
+// ── 12. CARD ITEM 3 (shipped realized — audit's "absent" REFUTED, already wired): pin the two-tier ──
+{
+  const projected = normalizeOrderBestRateDto({ shipmentCost: 8.5, carrierCode: 'ups', serviceCode: 'ups_surepost', nextBestNonHouseRate: { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, otherCost: 0, totalCost: 9.64, providerAccountId: 442007 }, houseMargin: 1.14 });
+  const realized = houseMarginFromProjection(projected, 8.5);
+  check('item3: realized two-tier => customer_rate 9.64 over drp_cost 8.5', realized != null && realized.customerRate === 9.64);
+  check('item3: a non-house best => no realized tuple (forward-only / historical-plain)',
+    houseMarginFromProjection(normalizeOrderBestRateDto({ shipmentCost: 9, carrierCode: 'ups', serviceCode: 'ups_ground' }), 9) === null);
+}
+
+// ── 13. STATIC: the SAVE handlers + the shipped read + the opt-in gate are wired (anti-regression) ──
+const ordersSrc = readFileSync('src/routes/orders.ts', 'utf8');
+check('static: orders SAVE rejects a half-house behind the HOUSE_TUPLE_SAVE_GUARD canary',
+  /shouldRejectHalfHouseSave\(hStatus\) && process\.env\.HOUSE_TUPLE_SAVE_GUARD === 'on'/.test(ordersSrc));
+check('static: orders SAVE stamps the houseTupleStatus verdict onto the persisted best rate (both routes)',
+  /houseTupleStatus = hStatus/.test(ordersSrc) && /canonical\.houseTupleStatus = hStatus/.test(ordersSrc));
+check('static: item3 shipped realized read present + financially gated (orderCompetitiveRate + canViewFinancials)',
+  /orderCompetitiveRate/.test(ordersSrc) && /canViewFinancials/.test(ordersSrc));
+const stampSrc = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');
+check('static: stampHouseTuple still gates on isHouseShippRate + clientHouseAccountEnabled (default-OFF inert)',
+  /isHouseShippRate/.test(stampSrc) && /clientHouseAccountEnabled/.test(stampSrc));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-292 house-tuple-display guard (${failures} failing)`);

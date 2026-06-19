@@ -27,6 +27,11 @@ export type AwaitingBestRateDisplayState =
   // A saved rate exists but does not satisfy the display contract for any of the
   // generic reasons above (e.g. unproven / request-key mismatch) — must re-rate.
   | 'recalculate_required'
+  // PS-292 (item 2): a SHIPP/house winner for an opted-in client whose competitor tuple is ABSENT
+  // (backend verdict houseTupleStatus === 'needs_refresh'). The saved SHIPP amount may LOOK
+  // displayable, so this MUST win over show_amount — never render a confident plain SHIPP-only figure
+  // for a half-house rate; the operator must re-rate via Rate Browser so the tuple is stamped.
+  | 'house_needs_refresh'
   // No saved rate at all for this row.
   | 'no_rate'
 
@@ -46,6 +51,10 @@ export type AwaitingBestRateDisplayInput = {
   requiredEligibilityVersion: string | null
   // Whether the row currently has complete dims + weight (so a rate is even possible).
   hasDimsAndWeight: boolean
+  // PS-292 (item 2): backend verdict (OrderBestRateDto.houseTupleStatus === 'needs_refresh') that this
+  // is a half-house SHIPP rate missing its competitor tuple. Optional — omitted/false on every non-house
+  // row, so existing callers are byte-identical. The FE NEVER recomputes this; it renders the verdict.
+  houseTupleNeedsRefresh?: boolean
   nowMs?: number
 }
 
@@ -55,6 +64,9 @@ export type AwaitingBestRateDisplayInput = {
 export function classifyAwaitingBestRateDisplay(
   input: AwaitingBestRateDisplayInput,
 ): AwaitingBestRateDisplayState {
+  // PS-292 (item 2): a half-house SHIPP rate (tuple missing) MUST win over show_amount — its saved SHIPP
+  // amount looks displayable, but rendering it would be a confident plain SHIPP-only figure. Re-rate.
+  if (input.houseTupleNeedsRefresh) return 'house_needs_refresh'
   if (input.canDisplaySavedRate) return 'show_amount'
   if (!input.hasSavedBestRate) {
     return input.hasDimsAndWeight ? 'no_rate' : 'add_dims'
@@ -85,5 +97,6 @@ export const AWAITING_BEST_RATE_STATE_LABELS: Record<AwaitingBestRateDisplayStat
   expired: 'Rate expired',
   add_dims: 'Add Dims',
   recalculate_required: 'Recalculate required',
+  house_needs_refresh: 'House rate needs refresh',
   no_rate: '',
 }

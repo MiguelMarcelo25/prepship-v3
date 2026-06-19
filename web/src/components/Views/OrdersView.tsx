@@ -4312,6 +4312,10 @@ export default function OrdersView({
       eligibilityVersion: savedRate ? toStringValue(savedRate.eligibilityVersion) : null,
       requiredEligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
       hasDimsAndWeight,
+      // PS-292 (item 2): render the backend half-house verdict verbatim — a SHIPP/house row whose
+      // tuple is missing shows 'House rate needs refresh' instead of a confident plain SHIPP amount.
+      houseTupleNeedsRefresh:
+        (savedRate as { houseTupleStatus?: unknown } | null)?.houseTupleStatus === 'needs_refresh',
     })
   }
 

@@ -44,6 +44,15 @@ import {
   normalizeOrderSelectedRateDto,
   normalizeListBestRate,
 } from '../services/order-rate-dto';
+// PS-292 (items 2/4): backend-owned house-tuple verdict + half-house reject at the best-rate SAVE
+// boundary. clientHouseAccountEnabled gives the per-client opt-in (default-OFF). The reject is gated
+// behind the HOUSE_TUPLE_SAVE_GUARD canary; the verdict stamp is always applied (inert for non-house).
+import {
+  houseTupleStatus,
+  shouldRejectHalfHouseSave,
+  HOUSE_TUPLE_REQUIRED_MESSAGE,
+} from '../services/shipping-workflow/house-tuple-save-policy';
+import { clientHouseAccountEnabled } from '../services/house-account-opt-in';
 // PS-291 (slice, card DoD item 6): build the canonical bestRate DTO from the
 // operator-selected New Order preview rate, so the saved manual order carries it
 // for Create Label / Print Queue (delegates to normalizeOrderBestRateDto).
@@ -3398,6 +3407,11 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
       return c.json({ error: 'Complete dimensions are required before saving a best rate' }, 400);
     }
     overridesBody.bestRateDims = validatedDims;
+    // PS-292: capture the RAW provider before normalize drops it. SHIPP identity is provider-only
+    // (the connector rewrites carrier_code) and translateRateToV2Shape preserves the original under .raw.
+    const rawIncoming = overridesBody.bestRateJson as Record<string, unknown> | null;
+    const rawHouseProvider =
+      (rawIncoming?.provider ?? (rawIncoming?.raw as Record<string, unknown> | undefined)?.provider) ?? null;
     try {
       overridesBody.bestRateJson = normalizeOrderBestRateDto(
         overridesBody.bestRateJson,
@@ -3413,6 +3427,23 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     if (eligibilityReason) {
       return c.json({ error: eligibilityReason, code: 'SHIPPING_SERVICE_NOT_ELIGIBLE' }, 400);
     }
+    // PS-292 (items 2/4): stamp the backend house-tuple verdict (always — inert 'not_house' for
+    // non-house) + reject a half-house SHIPP save (gated behind the default-OFF HOUSE_TUPLE_SAVE_GUARD
+    // canary). The verdict persists into best_rate_json so the awaiting row renders 'House rate needs
+    // refresh' verbatim. Lockdown-safe: only the awaiting order_overrides.best_rate_json is touched.
+    const normalizedBest = overridesBody.bestRateJson as
+      | { nextBestNonHouseRate?: unknown; houseMargin?: number | null; houseTupleStatus?: ReturnType<typeof houseTupleStatus> }
+      | null;
+    const hStatus = houseTupleStatus({
+      rawProvider: rawHouseProvider,
+      nextBestNonHouseRate: normalizedBest?.nextBestNonHouseRate ?? null,
+      houseMargin: normalizedBest?.houseMargin ?? null,
+      optedIn: await clientHouseAccountEnabled(existing.clientId ?? null),
+    });
+    if (shouldRejectHalfHouseSave(hStatus) && process.env.HOUSE_TUPLE_SAVE_GUARD === 'on') {
+      return c.json({ error: HOUSE_TUPLE_REQUIRED_MESSAGE, code: 'HOUSE_TUPLE_REQUIRED' }, 400);
+    }
+    if (normalizedBest) normalizedBest.houseTupleStatus = hStatus;
   }
 
   // Normalize the selected rate the same way so downstream consumers see a
@@ -3752,6 +3783,23 @@ app.post(
     if (eligibilityReason) {
       return c.json({ error: eligibilityReason, code: 'SHIPPING_SERVICE_NOT_ELIGIBLE' }, 400);
     }
+
+    // PS-292 (items 2/4): same backend house-tuple verdict + half-house reject as the PATCH route.
+    // Raw provider comes off the un-normalized body (.raw preserves it); the verdict is stamped onto
+    // the canonical DTO so it persists + renders. Reject gated behind the default-OFF canary flag.
+    const rawBody = body.bestRateJson as Record<string, unknown> | null;
+    const rawHouseProvider =
+      (rawBody?.provider ?? (rawBody?.raw as Record<string, unknown> | undefined)?.provider) ?? null;
+    const hStatus = houseTupleStatus({
+      rawProvider: rawHouseProvider,
+      nextBestNonHouseRate: canonical.nextBestNonHouseRate,
+      houseMargin: canonical.houseMargin,
+      optedIn: await clientHouseAccountEnabled(existing.clientId ?? null),
+    });
+    if (shouldRejectHalfHouseSave(hStatus) && process.env.HOUSE_TUPLE_SAVE_GUARD === 'on') {
+      return c.json({ error: HOUSE_TUPLE_REQUIRED_MESSAGE, code: 'HOUSE_TUPLE_REQUIRED' }, 400);
+    }
+    canonical.houseTupleStatus = hStatus;
 
     const row = await applyOverridesPatch(id, {
       bestRateJson: canonical,
