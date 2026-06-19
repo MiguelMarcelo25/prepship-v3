@@ -387,6 +387,8 @@
     "test:ps-279-rate-browser-no-fallback-best": "tsx scripts/ps-279-rate-browser-no-fallback-best-guard.ts",
     "test:ps-279-backend-eligibility-stamp": "tsx scripts/ps-279-backend-eligibility-stamp.ts",
     "test:ps-279-backend-boundary-closeout": "tsx scripts/ps-279-backend-boundary-closeout-guard.ts",
+    "test:ps-291-manual-order-preview": "tsx scripts/ps-291-manual-order-real-optional-items-guard.ts",
+    "test:ps-291-manual-order-preview-closeout": "tsx scripts/ps-291-manual-order-preview-closeout-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",
     "ps-222:pricing:audit": "tsx scripts/ps-222-package-pricing-seed.ts",
