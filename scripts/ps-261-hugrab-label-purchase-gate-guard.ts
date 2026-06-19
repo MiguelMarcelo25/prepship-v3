@@ -12,9 +12,9 @@
  *   unknown       -> BLOCK (requested but UNPROVEN — never buy on an unproven coverage)
  *   unsupported   -> BLOCK (the rate cannot insure at all)
  *
- * This is a PURE decision: no DB, no network, no live label. It is NOT wired into Create Label /
- * Print Queue / Rate Browser yet — those are follow-on slices. This guard pins ONLY the decision
- * table + the every-status totality (every InsuranceCoverageStatus value maps to a decision).
+ * This is a PURE decision: no DB, no network, no live label. The follow-on wiring pins below prove
+ * Create Label, Print Queue, and Rate Browser all delegate to this backend-owned decision instead
+ * of re-deriving purchase safety in their own layers.
  *
  *   npx tsx scripts/ps-261-hugrab-label-purchase-gate-guard.ts
  */
@@ -238,6 +238,26 @@ check('labels.ts gates the BLOCK behind the default-OFF HUGRAB_PURCHASE_GATE can
 check('labels.ts gates SHIPP customsValue proof behind default-OFF HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF',
   /HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF/.test(labels) &&
   /process\.env\.HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF === 'on'/.test(labels));
+
+// Print Queue must share the SAME label-purchase preflight by delegating missing-label creation to
+// createLabelV2. It may queue existing labels, but when it needs to buy a missing forward label it
+// must not own a second HUGRAB coverage resolver or call provider purchase APIs directly.
+const printQueue = read('src/services/print-queue.ts');
+const printQueueRoute = read('src/routes/print-queue.ts');
+check('print-queue service imports createLabelV2 as the missing-label purchase boundary',
+  /import \{ createLabelV2, type CreateLabelInputDto \} from '\.\/labels'/.test(printQueue));
+check('print-queue missing-label path delegates to createLabelV2 (therefore uses the same PS-261 preflight)',
+  /const created = await createLabelV2\(\{[\s\S]*?\.\.\.order\.label,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? order\.label\.orderNumber,[\s\S]*?\}, GLOBAL_SCOPE\)/.test(printQueue));
+check('print-queue does NOT recompute HUGRAB coverage or call provider purchase APIs directly',
+  !/resolveHugrabLabelPurchasePreflight|resolveHugrabLabelPurchaseGate|createDirectCarrierLabelForOrder|createLabelShipp|createLabelEasyPost/.test(printQueue));
+check('print-queue route schema preserves selectedRateProof for the createLabelV2 purchase boundary',
+  /selectedRateProof: z[\s\S]*?\.passthrough\(\)[\s\S]*?\.optional\(\)/.test(printQueueRoute));
+check('print-queue route forwards selectedRateProof + rateQuoteId + selectedRateKey into the worker label payload',
+  /selectedRateProof: order\.label\.selectedRateProof/.test(printQueueRoute) &&
+  /rateQuoteId: order\.label\.rateQuoteId/.test(printQueueRoute) &&
+  /selectedRateKey: order\.label\.selectedRateKey/.test(printQueueRoute));
+check('print-queue failed label purchases stay failed job results, not queued successes',
+  /const retry = classifyLabelPurchaseRetry\(err\);[\s\S]*?job\.results\.push\(\{[\s\S]*?success: false/.test(printQueue));
 
 // ── PS-261 (this slice): the PURCHASE-GATE verdict is DISPLAYED, pre-purchase, on the Rate
 //    Browser HUGRAB rate row. The operator sees whether the mandatory $100 coverage is PROVEN
