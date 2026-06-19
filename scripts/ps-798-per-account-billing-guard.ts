@@ -26,6 +26,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolveCanonicalMarkup, applyCanonicalMarkup } from '../src/services/shipping-workflow/markup-resolver';
+import { resolvePerAccountMarkupRule } from '../src/services/shipping-workflow/per-account-markup-key';
+import type { MarkupRule } from '../src/services/shipping-workflow/rate-money';
 import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
 
 let failures = 0;
@@ -39,16 +41,53 @@ const approx = (a: number, b: number) => Math.abs(a - b) < 0.005;
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
 check('billing imports loadCarrierMarkups from the rates SOT (the SAME map the quote reads)',
   /import \{[^}]*\bloadCarrierMarkups\b[^}]*\} from '\.\/rates'/.test(billingSrc));
-check('billing query selects the shipment frozen carrierAccountId (read of shipped data)',
-  /carrierAccountId: shipments\.carrierAccountId/.test(billingSrc));
-check('BillableRow carries carrierAccountId',
-  /carrierAccountId: string \| null/.test(billingSrc));
+check('billing query selects the shipment providerAccountId (the reliably-written account id, not the NULL-on-sync carrierAccountId)',
+  /providerAccountId: shipments\.providerAccountId/.test(billingSrc));
+check('REGRESSION: billing no longer keys the per-account markup on carrierAccountId (NULL on synced rows)',
+  !/\.get\(s\.carrierAccountId\)/.test(billingSrc));
+check('BillableRow carries providerAccountId (number)',
+  /providerAccountId: number \| null/.test(billingSrc));
 check('per-account markup is gated DEFAULT-OFF behind BILLING_PER_ACCOUNT_MARKUP === "on"',
   /process\.env\.BILLING_PER_ACCOUNT_MARKUP === 'on'/.test(billingSrc));
 check('OFF path loads NO per-account map (null) — only loadCarrierMarkups() when the flag is on',
   /\?\s*await loadCarrierMarkups\(\)\s*:\s*null/.test(billingSrc));
-check('billing feeds settings markup.<account> as the resolver carrierAccountMarkup (per-account override)',
-  /carrierAccountMarkup:\s*[\s\S]*?perAccountMarkups[\s\S]*?\.get\(s\.carrierAccountId\)/.test(billingSrc));
+check('billing resolves the per-account override via resolvePerAccountMarkupRule(perAccountMarkups, s.providerAccountId)',
+  /carrierAccountMarkup:\s*perAccountMarkups[\s\S]*?resolvePerAccountMarkupRule\(perAccountMarkups, s\.providerAccountId\)/.test(billingSrc));
+
+// ── the FIX: key NAMESPACE alignment. Billing keys on providerAccountId, matching the SAME settings
+//    key the rate DISPLAY uses (applyMarkups: markups.get(carrier_id) ?? markups.get(bare "se-<n>")).
+//    The earlier slice keyed on carrierAccountId (NULL on synced rows + wrong namespace) => never billed.
+{
+  const rule15: MarkupRule = { type: 'percent', value: 15 };
+  const bareMap = new Map<string, MarkupRule>([['595995', rule15]]);   // settings markup.595995
+  const seMap = new Map<string, MarkupRule>([['se-595995', rule15]]);  // settings markup.se-595995
+  check('account key: providerAccountId 595995 matches a BARE markup.595995 key (applyMarkups bare fallback)',
+    JSON.stringify(resolvePerAccountMarkupRule(bareMap, 595995)) === JSON.stringify(rule15));
+  check('account key: providerAccountId 595995 matches an markup.se-595995 key (applyMarkups carrier_id form)',
+    JSON.stringify(resolvePerAccountMarkupRule(seMap, 595995)) === JSON.stringify(rule15));
+  check('account key: a DIFFERENT account (596001) does NOT match markup.595995',
+    resolvePerAccountMarkupRule(bareMap, 596001) === null);
+  check('account key: null/NaN providerAccountId => null (no markup, no crash — what synced NULL rows hit before)',
+    resolvePerAccountMarkupRule(bareMap, null) === null && resolvePerAccountMarkupRule(bareMap, Number.NaN) === null);
+}
+
+// ── END-TO-END chain (drives the REAL key resolver, not a hand-built rule — the audit's "vacuous
+//    guard" fix): a synced shipment with providerAccountId 595995 + settings markup.595995=15% on a
+//    flag-ON generate bills $14.37 — the SAME number the rate quote shows. ──
+{
+  const perAccountMarkups = new Map<string, MarkupRule>([['595995', { type: 'percent', value: 15 }]]);
+  const providerAccountId = 595995; // what shipment-sync writes for a "se-595995" ShipStation account
+  const carrierAccountMarkup = resolvePerAccountMarkupRule(perAccountMarkups, providerAccountId);
+  const resolved = resolveCanonicalMarkup({ carrierAccountMarkup, clientShippingMarkupPct: 0, clientShippingMarkupFlat: 0 });
+  const d = decideShippingLineBilling({
+    labelCost: 12.5, houseCustomerRate: null, billingMode: 'per_shipment', isBaselineCarrier: false,
+    refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
+  });
+  check('e2e: providerAccountId 595995 + markup.595995=15% => billed $14.37 (quote == invoice, keyed correctly)',
+    d.billedAmount.toFixed(2) === '14.37' && d.markupApplied === true, `billed=${d.billedAmount}`);
+  check('e2e: display == invoice for the same account markup (single source of truth)',
+    applyCanonicalMarkup(12.5, resolved).toFixed(2) === d.billedAmount.toFixed(2));
+}
 
 // ── functional: DEFAULT-OFF byte-identical (null per-account map + per-client 0/0) ───────────────
 {

@@ -16,11 +16,14 @@ import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive
 import { decideShippingLineBilling } from './billing-shipping-line';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
-// Slice 2c: the per-account OVERRIDE is now wired too — the shipment's FROZEN carrierAccountId
-// (shipments.carrierAccountId) keys settings markup.<account> (the SAME loadCarrierMarkups map the
-// quote reads), fed in as carrierAccountMarkup. Gated DEFAULT-OFF behind BILLING_PER_ACCOUNT_MARKUP:
-// OFF => null per-account map => per-CLIENT-only behavior, byte-identical to slice 2a.
+// Slice 2c (fixed): the per-account OVERRIDE is wired via the shipment's providerAccountId — the
+// reliably-written account id (sync + labels both write it) — keyed through resolvePerAccountMarkupRule
+// into settings markup.<account> in the SAME namespace the rate display uses. (The earlier slice keyed
+// on shipments.carrierAccountId, which is NULL on synced rows + a different namespace → never billed.)
+// Gated DEFAULT-OFF behind BILLING_PER_ACCOUNT_MARKUP: OFF => null per-account map => per-CLIENT-only
+// behavior, byte-identical to slice 2a.
 import { resolveCanonicalMarkup } from './shipping-workflow/markup-resolver';
+import { resolvePerAccountMarkupRule } from './shipping-workflow/per-account-markup-key';
 // PS-207: the `inventory` import is deliberately GONE — billing must never
 // consult inventory/SKU package defaults (the storage-fee block reads
 // inventory via raw SQL for cubic-feet, which is not box resolution).
@@ -615,9 +618,10 @@ export async function generateLineItems(input: GenerateInput) {
       cost: shipments.cost,
       otherCost: shipments.otherCost,
       carrierCode: shipments.carrierCode,
-      // #798 2c: the shipment's frozen carrier ACCOUNT — keys settings markup.<account> so a per-
-      // account markup bills exactly the shipments that used that account (READ of shipped data).
-      carrierAccountId: shipments.carrierAccountId,
+      // #798 2c (fixed): the shipment's reliably-written provider ACCOUNT id (sync + labels both write
+      // it; carrierAccountId was NULL on synced rows). Keys settings markup.<account> in the SAME
+      // namespace the rate display uses (see per-account-markup-key). READ of shipped data.
+      providerAccountId: shipments.providerAccountId,
       selectedPid: shipments.selectedPid,
       selectedPackageId: shipments.selectedPackageId,
       dimsL: shipments.dimsL,
@@ -674,7 +678,7 @@ export async function generateLineItems(input: GenerateInput) {
     cost: string | null;
     otherCost: string | null;
     carrierCode: string | null;
-    carrierAccountId: string | null;
+    providerAccountId: number | null;
     selectedPid: number | null;
     selectedPackageId: string | null;
     dimsL: number | null;
@@ -711,7 +715,7 @@ export async function generateLineItems(input: GenerateInput) {
         cost: row.cost,
         otherCost: row.otherCost,
         carrierCode: row.carrierCode,
-        carrierAccountId: row.carrierAccountId,
+        providerAccountId: row.providerAccountId,
         selectedPid: row.selectedPid,
         selectedPackageId: row.selectedPackageId,
         dimsL: row.dimsL,
@@ -985,16 +989,16 @@ export async function generateLineItems(input: GenerateInput) {
       // the label cost flows through optional reference-rate flooring + the carrier markup. The
       // SHIPP drp_cost and the margin are INTERNAL and never appear on the invoice.
       // #798: resolve the shipping markup through the canonical owner (per-account override -> per-
-      // client default -> none). Slice 2c: the per-account override is the shipment's account markup
-      // from settings markup.<carrierAccountId> — present only when BILLING_PER_ACCOUNT_MARKUP=on
-      // (perAccountMarkups non-null). DEFAULT-OFF: perAccountMarkups null -> carrierAccountMarkup null
-      // -> per-client default; with markups at 0 the resolver returns null -> 0pct/0flat, byte-identical
-      // to passing cfg.shippingMarkup* directly. House orders below suppress markup regardless.
+      // client default -> none). Slice 2c (fixed): the per-account override is the shipment's account
+      // markup from settings markup.<account>, keyed on providerAccountId in the SAME namespace the rate
+      // display uses (resolvePerAccountMarkupRule mirrors applyMarkups' se-<id>/bare lookup). Present
+      // only when BILLING_PER_ACCOUNT_MARKUP=on (perAccountMarkups non-null). DEFAULT-OFF:
+      // perAccountMarkups null -> carrierAccountMarkup null -> per-client default; with markups at 0 the
+      // resolver returns null -> 0pct/0flat, byte-identical to slice 2a. House orders suppress markup.
       const resolvedShippingMarkup = resolveCanonicalMarkup({
-        carrierAccountMarkup:
-          perAccountMarkups && s.carrierAccountId
-            ? perAccountMarkups.get(s.carrierAccountId) ?? null
-            : null,
+        carrierAccountMarkup: perAccountMarkups
+          ? resolvePerAccountMarkupRule(perAccountMarkups, s.providerAccountId)
+          : null,
         clientShippingMarkupPct: toNum(cfg.shippingMarkupPct),
         clientShippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
       });
