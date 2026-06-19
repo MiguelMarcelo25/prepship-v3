@@ -193,6 +193,35 @@ function sampleOrderLines(): WaivableLine[] {
     citesOverride);
 }
 
+// ── 9. The GENERATOR consumes the persisted waiver (the pure policy is wired, not just defined) ────
+//      Static pins so a refactor cannot silently stop applying a saved waiver. The amounts that flow to
+//      details/summary/exports are the WAIVED rows (effectiveRows), persisted under the idempotent
+//      DELETE-then-rebuild + ON CONFLICT contract.
+{
+  const gen = readFileSync('src/services/billing.ts', 'utf8');
+  check('gen: the generate path LOADS the persisted waivers (readBillingFeeWaivers)',
+    /await readBillingFeeWaivers\(/.test(gen));
+  check('gen: each order resolves its decision (waived = waiver?.decision === \'waived\')',
+    /const waived = waiver\?\.decision === 'waived'/.test(gen));
+  check('gen: the PERSISTED rows are the WAIVED rows (effectiveRows = applyPrepFeeWaiver(rows, waived) is what is collected)',
+    /const effectiveRows = applyPrepFeeWaiver\(rows, waived\)/.test(gen) &&
+    /for \(const row of effectiveRows\)/.test(gen));
+  check('gen: regenerate DELETEs the period then rebuilds with ON CONFLICT DO NOTHING (idempotent)',
+    /\.delete\(billingLineItems\)/.test(gen) && /onConflictDoNothing\(/.test(gen));
+}
+
+// ── 10. The review ROUTE is auth + client-scope gated, reversible-capture, and read-gated ──────────
+{
+  const route = readFileSync('src/routes/billing.ts', 'utf8');
+  check('route: POST /zero-shipping-review requires financials:write',
+    /zero-shipping-review/.test(route) && /requirePermission\('financials:write'\)/.test(route));
+  check('route: enforces client scope + 404s when the order is out of scope',
+    /billingClientScopePredicate\(scope\)/.test(route) && /'Billing line item not found' \}, 404/.test(route));
+  check('route: captures the REVERSIBLE original prep total from the canonical PREP_FEE_LINE_TYPE_LIST',
+    /PREP_FEE_LINE_TYPE_LIST/.test(route) && /original_prep_amount/.test(route));
+  check('route: persists the decision via upsertBillingFeeWaiver', /upsertBillingFeeWaiver\(\{/.test(route));
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-275 zero-shipping prep-fee review guard (${failures} failing)`);
   process.exit(1);
