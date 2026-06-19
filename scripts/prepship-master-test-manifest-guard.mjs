@@ -119,6 +119,11 @@ const requiredRegressions = [
   'test:best-rate-saved-display-contract',
   'test:carrier-enable-disable-label',
   'test:ps-262-direct-carrier-parcelguard-fix',       // PS-262 (DoD #9: direct carriers must never resolve to ParcelGuard)
+  // Anti-rot PIN: these auto-derive into all-safe today, but the manifest is built FROM package.json —
+  // deleting their script would silently drop them with no failure. Pinning here makes the manifest
+  // guard fail if the command is ever removed, so the guard file can't be orphaned undetected.
+  'test:ps-272-bounded-sync',                         // PS-272 bounded sync-drain budget
+  'test:ps-288-label-recovery',                       // PS-288 label recovery
 ];
 for (const cmd of requiredRegressions) {
   check(`regression "${cmd}" is in the manifest`, byCommand.has(cmd));
