@@ -32,10 +32,18 @@ import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
 import { backfillReferenceRates } from '../services/billing-ref-rates';
 // PS-275: durable, reversible prep-fee waiver state ($0-shipping review).
-import { upsertBillingFeeWaiver } from '../services/billing-fee-waiver-store';
+import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
+// PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
+// title + per-row marker + period note) so the HTML/XLSX/CSV exports render it
+// identically off the fee_waived flag billingInvoiceData stamps from the SOT.
+import {
+  WAIVED_COLUMN_HEADER,
+  waivedCellText,
+  waivedSummaryNote,
+} from './billing-invoice-waiver-indicator';
 
 const app = new Hono();
 
@@ -686,10 +694,15 @@ type InvoiceDetailRow = {
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
+  // PS-275 (item 2): true when this order's prep/fulfillment fee was WAIVED ($0-shipping review).
+  // A pure READ of billing_fee_waivers — the dollar columns already reflect the regenerate; this
+  // flag only drives a visible "Waived" indicator in the exports. False on every non-waived order.
+  fee_waived: boolean;
 };
 
 // PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
-type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review'> & {
+// fee_waived is NOT from the SQL aggregate (it's a separate billing_fee_waivers read) — omit it here.
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived'> & {
   billed_package_id: number | null;
   box_cost_desc: string | null;
   box_review_reason: string | null;
@@ -809,6 +822,16 @@ async function billingInvoiceData(
     }
   }
 
+  // PS-275 (item 2): surface the durable prep-fee WAIVER decision so the exports can show a "Waived"
+  // indicator. Pure READ of billing_fee_waivers — the dollar columns ALREADY reflect the regenerate;
+  // this never re-zeroes anything. Reads only orders already in the scoped detail set (no cross-client
+  // leak). Default-inert: no waiver rows => fee_waived false everywhere (readBillingFeeWaivers returns
+  // an empty Map on none/error, never throwing into the export path).
+  const waiverOrderIds = [
+    ...new Set(rawDetails.map((r) => r.order_id).filter((id): id is number => id != null)),
+  ];
+  const feeWaiverByOrderId = await readBillingFeeWaivers(waiverOrderIds);
+
   const details: InvoiceDetailRow[] = rawDetails.map((r) => {
     const { box_label, box_review } = resolveInvoiceBoxLabel(r, packagesById);
     return {
@@ -826,6 +849,7 @@ async function billingInvoiceData(
       package_cost_amt: r.package_cost_amt,
       box_label,
       box_review,
+      fee_waived: r.order_id != null && feeWaiverByOrderId.get(r.order_id)?.decision === 'waived',
     };
   });
 
@@ -871,6 +895,12 @@ function renderInvoiceHtml(args: {
     year: 'numeric',
   });
 
+  // PS-275 item 2: count the orders whose prep fee was WAIVED so the export can
+  // show a period note alongside the per-row "Waived" badge. Default-inert:
+  // 0 waived => waiverNote is '' and no note is rendered.
+  const waivedCount = details.filter((d) => d.fee_waived).length;
+  const waiverNote = waivedSummaryNote(waivedCount);
+
   const rowsHtml = details
     .map((d) => {
       const baseQty = Number(d.base_qty);
@@ -899,6 +929,7 @@ function renderInvoiceHtml(args: {
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
+        <td class="waiver-cell">${d.fee_waived ? `<span class="waiver-badge">${escHtml(waivedCellText(d.fee_waived))}</span>` : ''}</td>
       </tr>`;
     })
     .join('');
@@ -937,6 +968,9 @@ function renderInvoiceHtml(args: {
     td.sku { font-family: monospace; font-size: 10px; color: #6b7280; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     td.bold { font-weight: 700; }
     td.review { color: #b45309; font-size: 11px; }
+    td.waiver-cell { text-align: center; }
+    .waiver-badge { display: inline-block; background: #fef3c7; color: #92400e; border: 1px solid #fde68a; border-radius: 9999px; padding: 1px 8px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+    .waiver-note { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 8px 14px; margin-bottom: 16px; font-size: 11px; color: #92400e; }
     tfoot td { border: 1px solid #d1d5db; padding: 8px 10px; font-weight: 700; background: #f3f4f6; }
     tfoot td.num { text-align: right; }
     .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; text-align: center; }
@@ -968,6 +1002,7 @@ function renderInvoiceHtml(args: {
     <div class="gtl">Total Amount Due — ${fromDisplay} → ${toDisplay}</div>
     <div class="gtv">${fmt(fulfillmentFeeTotal || grandTotal)}</div>
   </div>
+  ${waiverNote ? `<div class="waiver-note">${escHtml(waiverNote)}</div>` : ''}
   <table>
     <thead>
       <tr>
@@ -982,6 +1017,7 @@ function renderInvoiceHtml(args: {
         <th class="num">Shipping</th>
         <th class="num">Storage</th>
         <th class="num">Fulfillment Fee</th>
+        <th>${WAIVED_COLUMN_HEADER}</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
@@ -995,6 +1031,7 @@ function renderInvoiceHtml(args: {
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
         <td class="num" style="font-size:14px">${fmt(fulfillmentFeeTotal || grandTotal)}</td>
+        <td></td>
       </tr>
     </tfoot>
   </table>
@@ -1049,6 +1086,9 @@ async function renderInvoiceXlsx(args: {
   // Lazy import: exceljs is heavy and only this route needs it.
   const { default: ExcelJS } = await import('exceljs');
   const { clientName, fromDay, toDay, totals, details } = args;
+  // PS-275 item 2: orders whose prep fee was WAIVED (for the per-row marker +
+  // the Summary-sheet note). Default-inert: 0 waived => no note added.
+  const waivedCount = details.filter((d) => d.fee_waived).length;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'PrepShip';
 
@@ -1077,6 +1117,13 @@ async function renderInvoiceXlsx(args: {
   // Same fallback as the HTML tfoot: fulfillmentFeeTotal || grandTotal.
   const grand = addSummaryRow('Total', totals.fulfillmentFeeTotal || totals.grandTotal, MONEY_FMT);
   grand.getCell(2).font = { bold: true };
+  // PS-275 item 2: a Summary-sheet note when any prep fee was waived this period
+  // (in addition to the per-row "Waived" marker on the Line Items sheet).
+  if (waivedCount > 0) {
+    summary.addRow([]);
+    const note = addSummaryRow('Prep fee waivers', waivedSummaryNote(waivedCount));
+    note.getCell(2).font = { italic: true };
+  }
 
   // ── Sheet 2: Line Items (one row per order, mirroring the HTML table) ──
   const items = workbook.addWorksheet('Line Items', {
@@ -1095,6 +1142,9 @@ async function renderInvoiceXlsx(args: {
     { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: MONEY_FMT } },
     { header: 'Storage', key: 'storage', width: 12, style: { numFmt: MONEY_FMT } },
     { header: 'Total', key: 'total', width: 14, style: { numFmt: MONEY_FMT } },
+    // PS-275 item 2: the prep-fee waiver indicator — "Waived" for a waived
+    // order, blank otherwise (so a waived $0 is distinct from a genuine $0).
+    { header: WAIVED_COLUMN_HEADER, key: 'waiver', width: 16 },
   ];
   items.getRow(1).font = { bold: true };
   for (const d of details) {
@@ -1118,6 +1168,7 @@ async function renderInvoiceXlsx(args: {
       shipping: shippingAmt,
       storage: storageAmt,
       total: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,
+      waiver: waivedCellText(d.fee_waived),
     });
   }
   if (details.length) {

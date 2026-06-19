@@ -28,6 +28,7 @@ import assert from 'node:assert/strict';
 import {
   INVOICE_CSV_HEADERS,
   renderInvoiceCsv,
+  renderInvoiceCsvRow,
   type InvoiceCsvDetailRow,
 } from '../src/routes/billing-invoice-csv';
 
@@ -52,6 +53,9 @@ assert.deepEqual(
     'Shipping',
     'Storage',
     'Total',
+    // PS-275 item 2: the prep-fee waiver indicator column (last, mirroring the
+    // XLSX Line Items sheet + the HTML invoice table).
+    'Prep Fee Waiver',
   ],
   'CSV columns must mirror the XLSX Line Items sheet, in order',
 );
@@ -73,6 +77,7 @@ const richRow: InvoiceCsvDetailRow = {
   package_cost_amt: '2.00',
   box_label: 'Small (6x4x4)',
   box_review: false,
+  fee_waived: false,
 };
 
 // An order with NO row_total (0) — the Total must fall back to
@@ -93,6 +98,7 @@ const fallbackRow: InvoiceCsvDetailRow = {
   package_cost_amt: '0',
   box_label: '—',
   box_review: false,
+  fee_waived: false,
 };
 
 const csv = renderInvoiceCsv([richRow, fallbackRow]);
@@ -105,16 +111,29 @@ assert.equal(lines[0], INVOICE_CSV_HEADERS.join(','), 'first CSV line is the hea
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  '2026-05-04,PO-9001,"SKU-A, SKU-B",Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
-  'rich row must serialize the XLSX-identical derived columns (qty/fee/additional/total)',
+  '2026-05-04,PO-9001,"SKU-A, SKU-B",Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,',
+  'rich row must serialize the XLSX-identical derived columns (qty/fee/additional/total) + blank waiver cell',
 );
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
 // pickPackFee(3) + shipping(2) + storage(1) = 6. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '2026-05-05,PO-9002,,—,0,1,3,0,2,1,6',
-  'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
+  '2026-05-05,PO-9002,,—,0,1,3,0,2,1,6,',
+  'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop + blank waiver cell',
+);
+
+// PS-275 item 2: the prep-fee WAIVER indicator is a real CSV column. A waived
+// order serializes the "Waived" marker in the trailing column; a non-waived
+// order leaves it blank. The dollar columns are untouched — the waiver only
+// drives the indicator (billingInvoiceData already reflects the zeroed prep).
+assert.ok(
+  renderInvoiceCsvRow({ ...richRow, fee_waived: true }).endsWith(',Waived'),
+  'a WAIVED order must serialize the "Waived" marker in the trailing prep-fee-waiver column',
+);
+assert.ok(
+  renderInvoiceCsvRow({ ...richRow, fee_waived: false }).endsWith(',14.5,'),
+  'a non-waived order must leave the trailing prep-fee-waiver column blank',
 );
 
 // CSV injection / comma / quote safety: a field with a comma or a leading "="

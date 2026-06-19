@@ -1485,10 +1485,18 @@ export default function BillingView() {
               >
                 <div style={{ marginBottom: 6 }}>
                   <strong style={{ color: '#1d4ed8' }}>$0 shipping — review:</strong>{' '}
-                  this order has a recorded shipping cost of exactly $0.00.
-                  {billingEditModal.row.feeWaived
-                    ? ' Prep fee is currently WAIVED.'
-                    : ' Waive the prep fee (shipped free) or keep it.'}
+                  this order shipped at a recorded cost of exactly $0.00 — often the customer handled
+                  shipping themselves. If they did, waive the DR PREPPER prep/fulfillment fees.
+                  {billingEditModal.row.feeWaived ? ' Prep fee is currently WAIVED.' : ''}
+                </div>
+                {/* PS-275 (item 1): enumerate exactly what a waive zeroes — ONLY the prep/fulfillment
+                    fee lines, for THIS client — so the operator decides safely. */}
+                <div style={{ marginBottom: 8, fontSize: 11, opacity: 0.85 }}>
+                  Client <strong>{detailState.clientName || '—'}</strong> — waiving sets these to $0:{' '}
+                  Pick &amp; Pack <strong>{formatBillingMoney(Number(billingEditModal.draft.pickPack || 0))}</strong>
+                  {' '}+ Add&apos;l Units <strong>{formatBillingMoney(Number(billingEditModal.draft.additional || 0))}</strong>
+                  {' '}= <strong>{formatBillingMoney(Number(billingEditModal.draft.pickPack || 0) + Number(billingEditModal.draft.additional || 0))}</strong>
+                  {' '}prep. Box, storage, shipping label, product &amp; marketplace fees are NOT touched.
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
@@ -1498,7 +1506,7 @@ export default function BillingView() {
                     onClick={() => void handleZeroShippingReview('waived')}
                   >
                     {zeroShippingReviewSaving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : null}
-                    Waive prep fee
+                    Customer handled shipping — set prep fees to $0
                   </button>
                   <button
                     className="btn btn-ghost btn-xs"
@@ -1506,25 +1514,40 @@ export default function BillingView() {
                     disabled={zeroShippingReviewSaving}
                     onClick={() => void handleZeroShippingReview('not_waived')}
                   >
-                    Keep prep fee
+                    DR PREPPER handled — keep fees
                   </button>
                 </div>
               </div>
             ) : billingEditModal.row.feeWaived ? (
-              <div
-                role="status"
-                style={{
-                  margin: '8px 0',
-                  padding: '6px 12px',
-                  border: '1px solid #bbf7d0',
-                  borderRadius: 8,
-                  background: 'rgba(34, 197, 94, 0.08)',
-                  fontSize: 11.5,
-                  color: '#166534',
-                }}
-              >
-                <strong>Prep fee waived</strong> for this order (reversible via Update Billing).
-              </div>
+              // PS-275 (item 3): a recorded waive only takes effect on the next "Update Billing"
+              // regenerate (which re-applies applyPrepFeeWaiver). Until then the prep lines still bill,
+              // so DISTINGUISH "pending" (decision saved, prep not yet zeroed) from "applied" — never let
+              // the operator believe the fee is already off the invoice. Pending = feeWaived AND the
+              // row's prep total is still > 0.
+              (Number(billingEditModal.draft.pickPack || 0) + Number(billingEditModal.draft.additional || 0)) > 0 ? (
+                <div
+                  role="status"
+                  style={{
+                    margin: '8px 0', padding: '6px 12px',
+                    border: '1px solid #fde68a', borderRadius: 8,
+                    background: 'rgba(245, 158, 11, 0.10)', fontSize: 11.5, color: '#92400e',
+                  }}
+                >
+                  <strong>Prep fee waived — pending.</strong> The decision is saved; run{' '}
+                  <strong>Update Billing</strong> for this range to zero the prep lines on the invoice. (Reversible.)
+                </div>
+              ) : (
+                <div
+                  role="status"
+                  style={{
+                    margin: '8px 0', padding: '6px 12px',
+                    border: '1px solid #bbf7d0', borderRadius: 8,
+                    background: 'rgba(34, 197, 94, 0.08)', fontSize: 11.5, color: '#166534',
+                  }}
+                >
+                  <strong>Prep fee waived — applied</strong> ($0 prep). Reversible via Update Billing.
+                </div>
+              )
             ) : null}
 
             <div className="billing-edit-money-grid">

@@ -15,6 +15,10 @@
  * UTC-anchored day the XLSX `excelDayCell` renders.
  */
 
+// PS-275 (item 2): the prep-fee waiver indicator column comes from the ONE shared owner so the CSV,
+// XLSX, and HTML exports cannot disagree.
+import { WAIVED_COLUMN_HEADER, waivedCellText } from './billing-invoice-waiver-indicator';
+
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
  *  so the route passes data.details straight through. */
@@ -33,6 +37,8 @@ export type InvoiceCsvDetailRow = {
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
+  // PS-275 (item 2): prep-fee WAIVED indicator (the dollars already reflect it; this drives a column).
+  fee_waived: boolean;
 };
 
 /** Column order mirrors the XLSX "Line Items" sheet exactly. */
@@ -48,6 +54,7 @@ export const INVOICE_CSV_HEADERS = [
   'Shipping',
   'Storage',
   'Total',
+  WAIVED_COLUMN_HEADER,
 ] as const;
 
 /** YYYY-MM-DD for a UTC-midnight ship day — the leading date component verbatim,
@@ -96,6 +103,8 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     num(shippingAmt),
     num(storageAmt),
     num(rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt),
+    // PS-275 (item 2): the waiver indicator — last column, mirrors the XLSX/HTML "Prep Fee Waiver".
+    waivedCellText(row.fee_waived),
   ];
   return cells.map(csvField).join(',');
 }

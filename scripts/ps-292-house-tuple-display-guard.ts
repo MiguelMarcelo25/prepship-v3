@@ -266,6 +266,17 @@ const stampSrc = readFileSync('src/services/shipping-workflow/house-tuple-stamp.
 check('static: stampHouseTuple still gates on isHouseShippRate + clientHouseAccountEnabled (default-OFF inert)',
   /isHouseShippRate/.test(stampSrc) && /clientHouseAccountEnabled/.test(stampSrc));
 
+// ── 14. A's FE follow-up: a PERSISTED half-house rate (houseTupleStatus 'needs_refresh') must be
+//        NON-displayable so the awaiting cell falls through to the 'House rate needs refresh' diagnostic.
+//        Without this, the only caller of getAwaitingBestRateDisplayState (gated on
+//        hasDisplayableBestRateForCurrentRequest) is bypassed for legacy rows and a confident plain SHIPP
+//        amount renders. Static pin on the gate (the function is a closure in OrdersView).
+{
+  const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  check('FE follow-up: the displayable gate treats a persisted needs_refresh half-house rate as NON-displayable',
+    /getSavedBestRateRecord\(order\)[\s\S]{0,90}houseTupleStatus === 'needs_refresh'\)[\s\S]{0,40}return false/.test(ordersViewSrc));
+}
+
 if (failures > 0) {
   console.error(`\nFAIL PS-292 house-tuple-display guard (${failures} failing)`);
   process.exit(1);
