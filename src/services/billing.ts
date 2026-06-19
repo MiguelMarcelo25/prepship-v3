@@ -16,14 +16,17 @@ import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive
 import { decideShippingLineBilling } from './billing-shipping-line';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
-// carrierAccountMarkup is null here: the billing line-item path carries carrierCode + clientId but NOT
-// the carrier ACCOUNT, so the per-account OVERRIDE is deferred (display-only) until the shipment->
-// account linkage exists — per-CLIENT reconciliation lands now, byte-identical while markups are 0.
+// Slice 2c: the per-account OVERRIDE is now wired too — the shipment's FROZEN carrierAccountId
+// (shipments.carrierAccountId) keys settings markup.<account> (the SAME loadCarrierMarkups map the
+// quote reads), fed in as carrierAccountMarkup. Gated DEFAULT-OFF behind BILLING_PER_ACCOUNT_MARKUP:
+// OFF => null per-account map => per-CLIENT-only behavior, byte-identical to slice 2a.
 import { resolveCanonicalMarkup } from './shipping-workflow/markup-resolver';
 // PS-207: the `inventory` import is deliberately GONE — billing must never
 // consult inventory/SKU package defaults (the storage-fee block reads
 // inventory via raw SQL for cubic-feet, which is not box resolution).
-import { SS_BASELINE_CARRIER_CODES } from './rates';
+// #798 2c: loadCarrierMarkups is the SOT loader for settings markup.<account> (same map the rate
+// display + orders row-money read) — billing delegates to it rather than re-deriving the rules.
+import { SS_BASELINE_CARRIER_CODES, loadCarrierMarkups } from './rates';
 import {
   boxDimsKey,
   decidePackageCostLine,
@@ -612,6 +615,9 @@ export async function generateLineItems(input: GenerateInput) {
       cost: shipments.cost,
       otherCost: shipments.otherCost,
       carrierCode: shipments.carrierCode,
+      // #798 2c: the shipment's frozen carrier ACCOUNT — keys settings markup.<account> so a per-
+      // account markup bills exactly the shipments that used that account (READ of shipped data).
+      carrierAccountId: shipments.carrierAccountId,
       selectedPid: shipments.selectedPid,
       selectedPackageId: shipments.selectedPackageId,
       dimsL: shipments.dimsL,
@@ -668,6 +674,7 @@ export async function generateLineItems(input: GenerateInput) {
     cost: string | null;
     otherCost: string | null;
     carrierCode: string | null;
+    carrierAccountId: string | null;
     selectedPid: number | null;
     selectedPackageId: string | null;
     dimsL: number | null;
@@ -704,6 +711,7 @@ export async function generateLineItems(input: GenerateInput) {
         cost: row.cost,
         otherCost: row.otherCost,
         carrierCode: row.carrierCode,
+        carrierAccountId: row.carrierAccountId,
         selectedPid: row.selectedPid,
         selectedPackageId: row.selectedPackageId,
         dimsL: row.dimsL,
@@ -816,6 +824,17 @@ export async function generateLineItems(input: GenerateInput) {
       note: r.note,
     });
   }
+
+  // #798 slice 2c: per-ACCOUNT markup on the invoice. DEFAULT-OFF — only when
+  // BILLING_PER_ACCOUNT_MARKUP=on do we load settings markup.<account> (the SAME loadCarrierMarkups
+  // map the rate display + orders row-money read) and key it by the shipment's frozen carrierAccountId
+  // as the per-account OVERRIDE. OFF => null map => the resolver keeps per-CLIENT-only behavior,
+  // byte-identical to slice 2a (carrierAccountMarkup stays null). One load per generate, not per row.
+  // ACTIVATION CAVEAT: the regenerate DELETE above is date-windowed and does NOT honor billing_line_
+  // items.invoiced, so flipping this ON then regenerating an already-invoiced PAST period retroactively
+  // applies the markup — flip ON, then only generate/regenerate go-forward periods.
+  const perAccountMarkups =
+    process.env.BILLING_PER_ACCOUNT_MARKUP === 'on' ? await loadCarrierMarkups() : null;
 
   let generated = 0;
   let skipped = 0;
@@ -966,10 +985,16 @@ export async function generateLineItems(input: GenerateInput) {
       // the label cost flows through optional reference-rate flooring + the carrier markup. The
       // SHIPP drp_cost and the margin are INTERNAL and never appear on the invoice.
       // #798: resolve the shipping markup through the canonical owner (per-account override -> per-
-      // client default -> none). Account override is null here (see import note); with markups at 0
-      // the resolver returns null -> 0pct/0flat, byte-identical to passing cfg.shippingMarkup* directly.
+      // client default -> none). Slice 2c: the per-account override is the shipment's account markup
+      // from settings markup.<carrierAccountId> — present only when BILLING_PER_ACCOUNT_MARKUP=on
+      // (perAccountMarkups non-null). DEFAULT-OFF: perAccountMarkups null -> carrierAccountMarkup null
+      // -> per-client default; with markups at 0 the resolver returns null -> 0pct/0flat, byte-identical
+      // to passing cfg.shippingMarkup* directly. House orders below suppress markup regardless.
       const resolvedShippingMarkup = resolveCanonicalMarkup({
-        carrierAccountMarkup: null,
+        carrierAccountMarkup:
+          perAccountMarkups && s.carrierAccountId
+            ? perAccountMarkups.get(s.carrierAccountId) ?? null
+            : null,
         clientShippingMarkupPct: toNum(cfg.shippingMarkupPct),
         clientShippingMarkupFlat: toNum(cfg.shippingMarkupFlat),
       });
