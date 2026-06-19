@@ -127,8 +127,10 @@ check('summary groups client margins without UI math',
 
 const serviceSrc = readText('src/services/shipping-margin-analytics.ts');
 const billingRouteSrc = readText('src/routes/billing.ts');
+const dashboardRouteSrc = readText('src/routes/dashboard.ts');
 const apiClientSrc = readText('web/src/lib/v2-apiClient.ts');
 const billingViewSrc = readText('web/src/components/Views/BillingView.tsx');
+const dashboardViewSrc = readText('web/src/components/Views/DashboardView.tsx');
 const packageJson = readText('package.json');
 
 check('service owns DB read model and reads shipments + billing line truth',
@@ -141,13 +143,27 @@ check('service does not mutate billing, orders, shipments, labels, or queue',
 check('billing route exposes GET /shipping-margin behind financials read middleware',
   billingRouteSrc.includes("app.get('/shipping-margin'") &&
   billingRouteSrc.includes('shippingMarginAnalytics(withBillingScope'));
+check('dashboard route exposes scoped shipping margin behind financials visibility',
+  dashboardRouteSrc.includes("app.get('/shipping-margin'") &&
+  dashboardRouteSrc.includes('canViewDashboardFinancials(c)') &&
+  dashboardRouteSrc.includes('dashboardScopeFromContext(c)') &&
+  dashboardRouteSrc.includes('storeId: q.storeId') &&
+  dashboardRouteSrc.includes('shippingMarginAnalytics({'));
 check('api client exposes fetchShippingMarginAnalytics as a thin billing API consumer',
   /fetchShippingMarginAnalytics\(/.test(apiClientSrc) &&
   apiClientSrc.includes('/billing/shipping-margin'));
+check('api client exposes dashboard shipping margin as a thin dashboard API consumer',
+  /fetchDashboardShippingMarginAnalytics\(/.test(apiClientSrc) &&
+  apiClientSrc.includes('/dashboard/shipping-margin'));
 check('BillingView consumes shipping margin analytics without computing margin itself',
   /fetchShippingMarginAnalytics\(/.test(billingViewSrc) &&
   /shippingMarginSummary/.test(billingViewSrc) &&
   !/billableShippingTotal\s*-\s*actualShippingTotal/.test(billingViewSrc));
+check('DashboardView consumes dashboard shipping margin without computing margin itself',
+  /fetchDashboardShippingMarginAnalytics\(/.test(dashboardViewSrc) &&
+  /aria-label="Dashboard shipping margin"/.test(dashboardViewSrc) &&
+  /shippingMarginSummary/.test(dashboardViewSrc) &&
+  !/billableShippingTotal\s*-\s*actualShippingTotal/.test(dashboardViewSrc));
 check('package wires PS-296 guard',
   packageJson.includes('"test:ps-296-shipping-margin"'));
 

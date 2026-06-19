@@ -19,6 +19,7 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import { hasAppPermission } from '../middleware/auth';
 import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
+import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { getComboBreakdownFromOrderItems, getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
 const app = new Hono();
@@ -456,6 +457,61 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
 
 app.get('/summary', zValidator('query', dashboardSummaryQuery), async (c) => {
   return c.json(await loadDashboardSummary(c, c.req.valid('query')));
+});
+
+app.get('/shipping-margin', zValidator('query', dashboardRangeQuery), async (c) => {
+  const q = c.req.valid('query');
+  const scope = dashboardScopeFromContext(c);
+  const canViewFinancials = canViewDashboardFinancials(c);
+  const dateFrom = isoDayStart(q.from);
+  const dateTo = isoDayEnd(q.to);
+  const cacheKey = analyticsCacheKey('dashboard.shipping-margin.v1', {
+    from: q.from,
+    to: q.to,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    caller: dashboardCallerCacheScope(c, scope),
+    financials: canViewFinancials,
+  });
+  const cached = await getAnalyticsCache<unknown>(cacheKey);
+  if (cached) return c.json(cached);
+
+  if (!canViewFinancials) {
+    const payload = {
+      canViewFinancials: false,
+      dateFrom,
+      dateTo,
+      summary: {
+        rowCount: 0,
+        marginRowCount: 0,
+        frozenCount: 0,
+        projectedCount: 0,
+        missingBillableCount: 0,
+        actualShippingTotal: 0,
+        billableShippingTotal: 0,
+        marginTotal: 0,
+        marginPct: null,
+      },
+      clients: [],
+      rows: [],
+    };
+    void setAnalyticsCache(cacheKey, payload, 60);
+    return c.json(payload);
+  }
+
+  const analytics = await shippingMarginAnalytics({
+    clientId: q.clientId,
+    storeId: q.storeId,
+    dateFrom,
+    dateTo,
+    scopeClientIds: scope.clientIds,
+    scopeStoreIds: scope.storeIds,
+    scopeIsGlobal: !scope.isRestricted,
+    scopeRestricted: scope.isRestricted,
+  });
+  const payload = { canViewFinancials: true, ...analytics };
+  void setAnalyticsCache(cacheKey, payload, 60);
+  return c.json(payload);
 });
 
 // Alias for dashboard panels that think of this payload as chart trend data.

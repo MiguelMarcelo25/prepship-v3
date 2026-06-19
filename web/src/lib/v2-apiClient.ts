@@ -2969,6 +2969,21 @@ export const apiClient = {
     );
   },
 
+  fetchDashboardShippingMarginAnalytics(query: {
+    from: string;
+    to: string;
+    clientId?: number;
+    storeId?: number;
+  }): Promise<any> {
+    const q: Record<string, string | number> = {
+      from: query.from,
+      to: query.to,
+    };
+    if (query.clientId !== undefined) q.clientId = query.clientId;
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    return api.get<any>(`/dashboard/shipping-margin${qs(q)}`).then((res: any) => res?.data ?? res);
+  },
+
   fetchDashboardSkuTrends(query: {
     from: string;
     to: string;

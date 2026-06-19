@@ -80,6 +80,7 @@ export type ShippingMarginAnalytics = {
 
 export type ShippingMarginAnalyticsInput = {
   clientId?: number;
+  storeId?: number;
   dateFrom: string;
   dateTo: string;
   scopeClientIds?: number[];
@@ -336,6 +337,7 @@ export async function shippingMarginAnalytics(
       and ${shippedAt} >= ${input.dateFrom}::timestamptz
       and ${shippedAt} < ${input.dateTo}::timestamptz
       ${input.clientId !== undefined ? sql`and coalesce(bli.client_id, ${shipments.clientId}) = ${input.clientId}` : sql``}
+      ${input.storeId !== undefined ? sql`and ${clients.storeIds} && ${intArraySql([input.storeId])}` : sql``}
       and ${scopePredicate}
     order by ${shippedAt} desc, ${shipments.id} desc
   `);

@@ -107,6 +107,18 @@ type DashboardOrderAgg = {
   dailyRevenue: Map<string, number>
 }
 
+type ShippingMarginSummary = {
+  rowCount: number
+  marginRowCount: number
+  frozenCount: number
+  projectedCount: number
+  missingBillableCount: number
+  actualShippingTotal: number
+  billableShippingTotal: number
+  marginTotal: number
+  marginPct: number | null
+}
+
 type DashboardPanelKey = 'metrics' | 'inventory' | 'trend' | 'topSkus' | 'heatmap' | 'table'
 
 const createDashboardPanelLoading = (value: boolean): Record<DashboardPanelKey, boolean> => ({
@@ -444,6 +456,38 @@ function formatMoneySmall(value: number) {
 function formatPct(value: number) {
   if (!Number.isFinite(value)) return '0%'
   return `${value > 0 ? '+' : ''}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`
+}
+
+function emptyShippingMarginSummary(): ShippingMarginSummary {
+  return {
+    rowCount: 0,
+    marginRowCount: 0,
+    frozenCount: 0,
+    projectedCount: 0,
+    missingBillableCount: 0,
+    actualShippingTotal: 0,
+    billableShippingTotal: 0,
+    marginTotal: 0,
+    marginPct: null,
+  }
+}
+
+function normalizeShippingMarginSummary(value: unknown): ShippingMarginSummary {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return emptyShippingMarginSummary()
+  }
+  const row = value as Partial<Record<keyof ShippingMarginSummary, unknown>>
+  return {
+    rowCount: num(row.rowCount),
+    marginRowCount: num(row.marginRowCount),
+    frozenCount: num(row.frozenCount),
+    projectedCount: num(row.projectedCount),
+    missingBillableCount: num(row.missingBillableCount),
+    actualShippingTotal: num(row.actualShippingTotal),
+    billableShippingTotal: num(row.billableShippingTotal),
+    marginTotal: num(row.marginTotal),
+    marginPct: row.marginPct == null ? null : num(row.marginPct),
+  }
 }
 
 function dateOffsetFrom(day: string, daysBack: number) {
@@ -1000,6 +1044,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [panelErrors, setPanelErrors] = useState<Record<DashboardPanelKey, string | null>>(() =>
     createDashboardPanelErrors(),
   )
+  const [shippingMarginSummary, setShippingMarginSummary] = useState<ShippingMarginSummary>(() =>
+    emptyShippingMarginSummary(),
+  )
+  const [shippingMarginLoading, setShippingMarginLoading] = useState(true)
+  const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
+  const [shippingMarginAvailable, setShippingMarginAvailable] = useState(true)
   const [sortState, setSortState] = useState<SortState<DashboardSortKey>>({ key: 'units30', direction: 'desc' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE)
@@ -1633,6 +1683,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     }
     setError(null)
     setPanelErrors(createDashboardPanelErrors())
+    setShippingMarginLoading(true)
+    setShippingMarginError(null)
 
     const finishPanels = (keys: DashboardPanelKey[]) => {
       if (loadSeq !== dashboardLoadSeqRef.current) return
@@ -1724,6 +1776,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           failPanels(['metrics'], loadError, 'Failed to load dashboard metrics')
         })
 
+      const shippingMarginPromise = apiClient
+        .fetchDashboardShippingMarginAnalytics({ from: currentFrom, to: currentTo, clientId: cid })
+        .then((shippingMarginRes: any) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          const canViewFinancials = shippingMarginRes?.canViewFinancials !== false
+          setShippingMarginAvailable(canViewFinancials)
+          setShippingMarginSummary(normalizeShippingMarginSummary(shippingMarginRes?.summary))
+          setShippingMarginError(null)
+          setShippingMarginLoading(false)
+        })
+        .catch((loadError: unknown) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setShippingMarginAvailable(true)
+          setShippingMarginSummary(emptyShippingMarginSummary())
+          setShippingMarginError(loadError instanceof Error ? loadError.message : 'Failed to load shipping margin')
+          setShippingMarginLoading(false)
+        })
+
       const runNonCriticalDashboardWork = () => {
         if (loadSeq !== dashboardLoadSeqRef.current) return
 
@@ -1774,6 +1844,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       }
 
       void clientsPromise
+      void shippingMarginPromise
       await criticalMetricsPromise
       if (loadSeq === dashboardLoadSeqRef.current) {
         setLoading(false)
@@ -2521,6 +2592,74 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           )}
         </div>
       )}
+
+      {shippingMarginAvailable ? (
+        <section
+          aria-label="Dashboard shipping margin"
+          className="mb-3 rounded-card border border-line bg-surface px-3 py-3 shadow-sm sm:px-4"
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="text-xs font-semibold text-ink-2">Shipping Margin</div>
+              <div className="mt-1 text-tiny text-ink-3">
+                {shippingMarginLoading
+                  ? 'Loading'
+                  : shippingMarginError
+                    ? 'Unavailable'
+                    : `${formatInt(shippingMarginSummary.marginRowCount)} of ${formatInt(shippingMarginSummary.rowCount)} shipments with margin`}
+              </div>
+            </div>
+            {shippingMarginError ? (
+              <div className="rounded-card border border-danger/25 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger">
+                {shippingMarginError}
+              </div>
+            ) : null}
+          </div>
+
+          {shippingMarginLoading ? (
+            <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={index} className="h-14 animate-pulse rounded-card bg-surface-2" />
+              ))}
+            </div>
+          ) : !shippingMarginError ? (
+            <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 lg:grid-cols-4">
+              <div>
+                <div className="text-tiny font-semibold uppercase text-ink-3">Billable</div>
+                <div className="mt-1 font-mono text-lg font-extrabold tabular-nums text-ink">
+                  {formatMoneySmall(shippingMarginSummary.billableShippingTotal)}
+                </div>
+              </div>
+              <div>
+                <div className="text-tiny font-semibold uppercase text-ink-3">Actual</div>
+                <div className="mt-1 font-mono text-lg font-extrabold tabular-nums text-ink">
+                  {formatMoneySmall(shippingMarginSummary.actualShippingTotal)}
+                </div>
+              </div>
+              <div>
+                <div className="text-tiny font-semibold uppercase text-ink-3">Margin</div>
+                <div className={`mt-1 font-mono text-lg font-extrabold tabular-nums ${
+                  shippingMarginSummary.marginTotal < 0 ? 'text-danger' : 'text-ok'
+                }`}>
+                  {formatMoneySmall(shippingMarginSummary.marginTotal)}
+                </div>
+              </div>
+              <div>
+                <div className="text-tiny font-semibold uppercase text-ink-3">Proof</div>
+                <div className="mt-1 font-mono text-sm font-bold tabular-nums text-ink">
+                  {formatInt(shippingMarginSummary.frozenCount)} frozen / {formatInt(shippingMarginSummary.projectedCount)} projected
+                </div>
+                <div className="mt-1 text-tiny text-ink-3">
+                  Margin {shippingMarginSummary.marginPct == null ? '-' : formatPct(shippingMarginSummary.marginPct)}
+                  {shippingMarginSummary.missingBillableCount > 0
+                    ? ` - ${formatInt(shippingMarginSummary.missingBillableCount)} missing`
+                    : ''}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* Unified panel grid — all 4 dashboard panels share ONE
           grid container so CSS `order` can freely reposition them
