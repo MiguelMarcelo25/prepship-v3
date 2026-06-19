@@ -38,6 +38,11 @@ export interface SidebarSection {
 
 export const SIDEBAR_STATUSES: SidebarOrderStatus[] = ["awaiting_shipment", "shipped", "cancelled"];
 
+const SIDEBAR_STORE_NAME_COLLATOR = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+
 function isSidebarStatus(value: string): value is SidebarOrderStatus {
   return SIDEBAR_STATUSES.includes(value as SidebarOrderStatus);
 }
@@ -98,13 +103,6 @@ export function buildSidebarSections(
     });
   }
 
-  const globalTotals = new Map<number, number>();
-  for (const status of SIDEBAR_STATUSES) {
-    for (const store of sections[status].stores) {
-      globalTotals.set(store.storeId, (globalTotals.get(store.storeId) ?? 0) + store.cnt);
-    }
-  }
-
   for (const status of SIDEBAR_STATUSES) {
     const mergedStores = [...sections[status].stores];
     const seenStoreIds = new Set(mergedStores.map((store) => store.storeId));
@@ -120,9 +118,10 @@ export function buildSidebarSections(
     }
 
     mergedStores.sort((left, right) => {
+      if (left.isTest !== right.isTest) return left.isTest ? 1 : -1;
       return (
-        (globalTotals.get(right.storeId) ?? 0) - (globalTotals.get(left.storeId) ?? 0) ||
-        left.name.localeCompare(right.name)
+        SIDEBAR_STORE_NAME_COLLATOR.compare(left.name, right.name) ||
+        left.storeId - right.storeId
       );
     });
 

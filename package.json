@@ -472,6 +472,7 @@
     "test:maintenance-page": "node scripts/maintenance-page-guard.mjs",
     "test:maintenance-gate:browser": "playwright test web/e2e/maintenance-gate.spec.js --reporter=line",
     "test:orders-ux": "node scripts/orders-ux-guard.mjs",
+    "test:sidebar-client-sort": "tsx scripts/sidebar-client-sort-guard.ts",
     "test:test-order-queue-label": "node scripts/test-order-queue-label-guard.mjs",
     "test:walmart-dual-dedupe": "node scripts/walmart-dual-dedupe-guard.mjs",
     "test:orders-startup-requests": "node scripts/orders-startup-requests-guard.mjs",
