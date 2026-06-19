@@ -19,7 +19,9 @@
  *   npx tsx scripts/ps-294-shipp-4x6-placement-guard.ts
  */
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { PDFDocument, rgb } from 'pdf-lib';
+import UPNG from '@pdf-lib/upng';
 import {
   computeFourBySixPlacement,
   FOUR_BY_SIX_WIDTH_PT,
@@ -30,12 +32,63 @@ import {
 import { deriveArtworkBounds, placeArtworkOnCanvas } from '../src/services/print-queue-artwork-fit';
 import { __test_normalizeShippLabelPartsToPdfDataUrl } from '../src/connectors/carrier/shipp';
 
+const require = createRequire(import.meta.url);
+const UPNG_API = (UPNG as any).default ?? (UPNG as any);
+const { GifWriter } = require('omggif') as {
+  GifWriter: new (
+    buffer: Uint8Array,
+    width: number,
+    height: number,
+    options: { palette: number[] },
+  ) => {
+    addFrame: (x: number, y: number, width: number, height: number, indexedPixels: Uint8Array) => void;
+    end: () => number;
+  };
+};
+
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
   if (!cond) { failures += 1; console.error(`FAIL ${name}${detail ? ` — ${detail}` : ''}`); }
   else console.log(`ok   ${name}`);
 }
 const approx = (a: number, b: number, eps = 0.01) => Math.abs(a - b) <= eps;
+
+function dataUrlBytes(dataUrl: string): Uint8Array {
+  const [, base64 = ''] = dataUrl.split(',', 2);
+  return Uint8Array.from(Buffer.from(base64, 'base64'));
+}
+
+async function assertFourBySixPdf(name: string, dataUrl: string | null): Promise<void> {
+  check(`${name}: returns a PDF data URL`, typeof dataUrl === 'string' && dataUrl.startsWith('data:application/pdf;base64,'));
+  if (typeof dataUrl !== 'string') return;
+  const out = await PDFDocument.load(dataUrlBytes(dataUrl));
+  check(`${name}: produces exactly one page`, out.getPageCount() === 1, `pages=${out.getPageCount()}`);
+  const page0 = out.getPage(0);
+  check(`${name}: normalizes to 4x6 / 288x432`,
+    approx(page0.getWidth(), 288) && approx(page0.getHeight(), 432),
+    `${page0.getWidth()}x${page0.getHeight()}`);
+}
+
+function makePngBase64(width: number, height: number): string {
+  const rgba = new Uint8Array(width * height * 4);
+  for (let i = 0; i < rgba.length; i += 4) {
+    rgba[i] = 20;
+    rgba[i + 1] = 80;
+    rgba[i + 2] = 160;
+    rgba[i + 3] = 255;
+  }
+  const buffer = rgba.buffer.slice(rgba.byteOffset, rgba.byteOffset + rgba.byteLength);
+  return Buffer.from(UPNG_API.encode([buffer], width, height, 0)).toString('base64');
+}
+
+function makeGifBase64(width: number, height: number): string {
+  const buffer = new Uint8Array(1024 * 1024);
+  const writer = new GifWriter(buffer, width, height, { palette: [0xffffff, 0x111827] });
+  const pixels = new Uint8Array(width * height);
+  for (let i = 0; i < pixels.length; i += 1) pixels[i] = i % 2;
+  writer.addFrame(0, 0, width, height, pixels);
+  return Buffer.from(buffer.subarray(0, writer.end())).toString('base64');
+}
 
 async function main() {
   // ── the 4×6 canvas is the postage standard (4in × 6in @ 72dpi) ───────────────
@@ -101,7 +154,17 @@ async function main() {
 
   // ── content-aware FILL: an oversized sheet with a 4×6 label region fills the canvas (PS-287 crop) ──
   {
-    // a 4×6 label centered inside a US-letter sheet (the "oversized / corner label" class)
+    // Raster fixtures exercise the real PNG/GIF image path.
+    await assertFourBySixPdf(
+      'SHIPP PNG raster fixture',
+      await __test_normalizeShippLabelPartsToPdfDataUrl([{ base64: makePngBase64(500, 700), format: 'image/png' }]),
+    );
+    await assertFourBySixPdf(
+      'SHIPP GIF raster fixture',
+      await __test_normalizeShippLabelPartsToPdfDataUrl([{ base64: makeGifBase64(120, 180), format: 'image/gif' }]),
+    );
+
+    // A 4x6 label centered inside a US-letter sheet (the oversized/corner-label class).
     const oversizedWithCrop = {
       getMediaBox: () => ({ x: 0, y: 0, width: 612, height: 792 }),
       getCropBox: () => ({ x: 162, y: 180, width: 288, height: 432 }),
