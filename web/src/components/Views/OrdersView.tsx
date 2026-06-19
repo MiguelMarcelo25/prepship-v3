@@ -4290,6 +4290,15 @@ export default function OrdersView({
     const entry = autoBestRateEntries[order.orderId]
     if (entry?.key === request.key && entry.rate) return true
     if (entry?.key === request.key && (entry.error || entry.rate === null)) return false
+    // PS-292 (A's follow-up): a PERSISTED half-house SHIPP rate (backend verdict houseTupleStatus
+    // 'needs_refresh') is NOT displayable — the saved SHIPP amount looks valid but its competitor tuple
+    // is missing. Returning false here lets the cell fall through to getAwaitingBestRateDisplayState's
+    // 'House rate needs refresh' diagnostic instead of a confident plain SHIPP figure. This covers LEGACY
+    // persisted rows; new saves are caught by the backend item-4 reject when the canary is on. Placed
+    // AFTER the live-entry checks so a fresh current re-rate still wins.
+    if ((getSavedBestRateRecord(order) as { houseTupleStatus?: unknown } | null)?.houseTupleStatus === 'needs_refresh') {
+      return false
+    }
     return hasSavedBestRateForRequest(order, request)
   }
 
