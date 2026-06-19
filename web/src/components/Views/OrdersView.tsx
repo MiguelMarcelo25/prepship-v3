@@ -6816,10 +6816,11 @@ export default function OrdersView({
             Rate unavailable · Retry
           </button>
         )
-      // 'deferred' = rateable but not yet reached by the live drain. Passive
-      // auto-rating now drains the full queue, so every deferred row WILL be
-      // rated and resolve; show a loading spinner (not a parked "—") while it
-      // waits its turn. Mirrors the calculating/pending spinner exactly.
+      // PS-293: 'deferred' = rateable but BEYOND the browser's live-rate cap
+      // (PASSIVE_LIVE_BEST_RATE_MAX_ROWS=5). The backend backfill rates these rows
+      // server-side (slices 1-2), so show a loading spinner (not a parked "—")
+      // while it resolves; once the job stamps the row it flows through the PS-120
+      // workflow state + watchdog. Mirrors the calculating/pending spinner exactly.
       case 'deferred':
       case 'calculating':
       case 'pending':

@@ -191,6 +191,7 @@
     "test:recalculate-all-timeout-resilience": "tsx scripts/recalculate-all-timeout-resilience-guard.ts",
     "test:ps-293-awaiting-passive-cap": "tsx scripts/ps-293-awaiting-passive-cap-guard.ts",
     "test:ps-293-canonical-house-tuple": "tsx scripts/ps-293-canonical-house-tuple-guard.ts",
+    "test:ps-293-passive-cap-parity": "tsx scripts/ps-293-passive-cap-parity-guard.ts",
     "test:ps-199-walmart-po-resolution": "tsx scripts/ps-199-walmart-po-resolution-guard.ts",
     "test:ps-203-best-rate-universe": "tsx scripts/ps-203-best-rate-universe-guard.ts",
     "test:ps-191-retry-eligibility": "tsx scripts/ps-191-retry-eligibility-guard.ts",

@@ -62,11 +62,11 @@ check('no carrier ctx + loading => loading-carriers', S({ hasCarrierContext: fal
 check('no carrier ctx + loaded => no-carrier-account', S({ hasCarrierContext: false, accountsLoading: false }), 'no-carrier-account');
 
 // Page-load auto-rating is cache-first and visible-first. A rateable row that
-// isn't yet in-flight classifies as 'deferred' — but passive auto-rating now
-// drains the FULL visible queue, so every deferred row is guaranteed to resolve.
-// It therefore shows a loading spinner (not a parked "—") while it waits.
+// isn't yet in-flight classifies as 'deferred' — PS-293: rows beyond the browser
+// live-rate cap are rated by the backend backfill, so a deferred row still
+// resolves (server-side). It shows a loading spinner (not a parked "—") while it waits.
 check('rateable but not active => deferred', S({ isAutoRatingActive: false }), 'deferred');
-check('deferred IS a spinner (full-drain guarantees it resolves)', awaitingRateCellIsSpinner('deferred' as AwaitingRateCellState), true);
+check('deferred IS a spinner (backfill resolves it server-side)', awaitingRateCellIsSpinner('deferred' as AwaitingRateCellState), true);
 
 // Bounded spinners (a real request is in flight / refreshing).
 check('stale saved rate refreshing => calculating', S({ isCalculatingBestRate: true }), 'calculating');
