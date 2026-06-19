@@ -15,6 +15,24 @@ export type OrderRecipientOverride = OrderRecipientAddress;
 
 type RawRecipientInput = Record<string, unknown> | null | undefined;
 
+let ensureRecipientOverrideSchemaPromise: Promise<void> | null = null;
+
+export async function ensureOrderRecipientOverrideSchema(): Promise<void> {
+  if (!ensureRecipientOverrideSchemaPromise) {
+    ensureRecipientOverrideSchemaPromise = (async () => {
+      const [{ db }, drizzle] = await Promise.all([
+        import('../db/client'),
+        import('drizzle-orm'),
+      ]);
+      await db.execute(drizzle.sql`ALTER TABLE order_overrides ADD COLUMN IF NOT EXISTS recipient_override jsonb`);
+    })().catch((err) => {
+      ensureRecipientOverrideSchemaPromise = null;
+      throw err;
+    });
+  }
+  return ensureRecipientOverrideSchemaPromise;
+}
+
 function cleanText(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const cleaned = String(value).replace(/\s+/g, ' ').trim();

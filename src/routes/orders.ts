@@ -126,6 +126,7 @@ import {
   type ResidentialProviderMarker,
 } from '../services/shipping-workflow/residential-evidence';
 import {
+  ensureOrderRecipientOverrideSchema,
   normalizeRecipientOverride,
   recipientOverrideFromRecord,
   resolveRecipientForShipping,
@@ -1454,6 +1455,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   );
 
   try {
+    await ensureOrderRecipientOverrideSchema();
   // No ROW_NUMBER() dedup: orders.external_order_id is already UNIQUE, so
   // ShipStation's orderId is the true key. Two rows with the same order_number
   // are legitimately distinct (different store / orderId) — v2 never collapses
@@ -2973,6 +2975,7 @@ app.get('/:id{[0-9]+}', async (c) => {
     .limit(1);
   if (!order) return c.json({ error: 'Order not found' }, 404);
 
+  await ensureOrderRecipientOverrideSchema();
   const [overrides, shipmentRows] = await Promise.all([
     db
       .select()
@@ -3031,6 +3034,7 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     .where(and(eq(orders.id, id), orderScopePredicate(fullDetailScope)))
     .limit(1);
   if (!order) return c.json({ error: 'Order not found' }, 404);
+  await ensureOrderRecipientOverrideSchema();
   const [overrides, shipmentRows] = await Promise.all([
     db
       .select()
@@ -3317,6 +3321,7 @@ app.post('/manual', requireInternalPermission('print_queue:write'), zValidator('
   // PS-291 (slice, card DoD item 6): persist the selected bestRate + its SAVE
   // timestamp so Create Label / Print Queue read it back like any other saved
   // best rate. null when no rate was selected (bestRateAt stays null too).
+  await ensureOrderRecipientOverrideSchema();
   const [overrides] = await db
     .insert(orderOverrides)
     .values({
@@ -3533,6 +3538,7 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     : overridesBody.bestRateJson === null
       ? null
       : new Date();
+  await ensureOrderRecipientOverrideSchema();
   const [row] = await db
     .insert(orderOverrides)
     .values({ orderId: id, ...coherentBody.patch, bestRateAt, updatedAt: new Date() })
@@ -3659,6 +3665,7 @@ async function applyOverridesPatch(
     : patch.bestRateJson === null
       ? null
       : new Date();
+  await ensureOrderRecipientOverrideSchema();
   const [row] = await db
     .insert(orderOverrides)
     .values({ orderId: id, ...patch, bestRateAt, updatedAt: new Date() })
@@ -3967,6 +3974,7 @@ app.post(
     );
     if (!coherent.ok) return c.json({ error: coherent.error, code: 'BOX_DIMS_MISMATCH' }, 400);
 
+    await ensureOrderRecipientOverrideSchema();
     const [row] = await db
       .insert(orderOverrides)
       .values({ orderId: id, ...coherent.patch, updatedAt: new Date() })
@@ -4056,6 +4064,7 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
+  await ensureOrderRecipientOverrideSchema();
   const rows = await db
     .select({ order: orders, overrides: orderOverrides })
     .from(orders)

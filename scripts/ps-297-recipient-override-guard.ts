@@ -98,6 +98,9 @@ const packageJson = readText('package.json');
 check('schema maps order_overrides.recipient_override',
   schemaSrc.includes('recipientOverride') &&
   schemaSrc.includes("jsonb('recipient_override')"));
+check('recipient override service includes additive runtime schema ensure',
+  readText('src/services/order-recipient-override.ts').includes('export async function ensureOrderRecipientOverrideSchema') &&
+  readText('src/services/order-recipient-override.ts').includes('ALTER TABLE order_overrides ADD COLUMN IF NOT EXISTS recipient_override jsonb'));
 check('migration adds recipient_override without destructive shipped/cancelled changes',
   migrationSrc.includes('ALTER TABLE public.order_overrides') &&
   migrationSrc.includes('ADD COLUMN IF NOT EXISTS recipient_override jsonb') &&
@@ -105,6 +108,7 @@ check('migration adds recipient_override without destructive shipped/cancelled c
 check('orders route accepts recipientOverride and never writes raw shipTo for PS-297',
   ordersRouteSrc.includes('recipientOverride: recipientOverrideBody.optional()') &&
   ordersRouteSrc.includes('normalizeRecipientOverride(body.recipientOverride)') &&
+  ordersRouteSrc.includes('ensureOrderRecipientOverrideSchema()') &&
   ordersRouteSrc.includes('order_overrides.recipient_override') &&
   !/raw\s*=\s*jsonb_set[\s\S]{0,160}shipTo/i.test(ordersRouteSrc));
 check('canonical order DTO prefers recipient override over raw marketplace shipTo',
@@ -112,6 +116,7 @@ check('canonical order DTO prefers recipient override over raw marketplace shipT
   ordersRouteSrc.includes("sourceOf('local', 'order_overrides.recipient_override'"));
 check('label creation paths prefer recipient override for provider payloads',
   labelsSrc.includes('loadOrderRecipientOverride') &&
+  labelsSrc.includes('ensureOrderRecipientOverrideSchema()') &&
   labelsSrc.includes('resolveRecipientForShipping({') &&
   labelsSrc.includes('recipientOverride'));
 check('api client exposes saveOrderRecipientOverride via guarded order patch',

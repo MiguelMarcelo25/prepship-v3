@@ -84,6 +84,7 @@ import {
   resolveShippCustomsValueProofSource,
 } from './shipping-workflow/hugrab-label-purchase-preflight';
 import {
+  ensureOrderRecipientOverrideSchema,
   recipientOverrideFromRecord,
   resolveRecipientForShipping,
 } from './order-recipient-override';
@@ -855,6 +856,7 @@ function marketplaceConfirmationPayload(
 }
 
 async function loadOrderDimsOverride(orderId: number) {
+  await ensureOrderRecipientOverrideSchema();
   const [row] = await db
     .select()
     .from(orderOverrides)
