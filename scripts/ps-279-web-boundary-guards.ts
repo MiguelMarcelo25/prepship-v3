@@ -41,6 +41,24 @@ check('moved classifier: direct carrier needing a label -> direct-create',
 check('moved classifier: existing label never re-buys -> backend',
   classifyQueueOrderRoute({ hasQueueableLabel: true, isTest: false, isDirectCarrier: true }) === 'backend');
 
+// ── the FE direct-create SPEND boundary refuses test orders (no silent postage) ──
+// createDirectCarrierLabelThenQueue is the ONLY FE path that buys a direct-carrier
+// label (apiClient.createLabel — the Render queue job's createLabelV2 is
+// ShipStation-only). PS-279/PS-186: a test order must NEVER spend real postage from
+// the FE. Test rows already route to the backend mock path upstream; this pins the
+// enforcement at the SPEND boundary too, so no future FE change can silently buy a
+// real direct-carrier label for a test row.
+{
+  const directFnMatch = /async function createDirectCarrierLabelThenQueue\([\s\S]*?\r?\n  }\r?\n/.exec(ov);
+  const directFn = directFnMatch ? directFnMatch[0] : '';
+  check('OrdersView: createDirectCarrierLabelThenQueue body located', directFn.length > 0);
+  const blockIdx = directFn.search(/isBackendTestOrder\s*\(\s*order\s*\)/);
+  const spendIdx = directFn.indexOf('apiClient.createLabel');
+  check('OrdersView: the FE direct-create fn hard-blocks a test order', blockIdx >= 0);
+  check('OrdersView: the test-order block precedes the apiClient.createLabel spend (no silent postage)',
+    blockIdx >= 0 && spendIdx >= 0 && blockIdx < spendIdx);
+}
+
 check('package.json wires test:ps-279-web-boundary-guards',
   /test:ps-279-web-boundary-guards/.test(readFileSync('package.json', 'utf8')));
 

@@ -177,6 +177,9 @@ import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
 import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
+// PS-286: close the Rate-Browser-apply -> persist+refetch -> close race by awaiting
+// the in-flight persist before the modal actually closes (exposes the row to Send).
+import { trackAppliedRatePersist, awaitAppliedRatePersists } from './orders-applied-rate-sync'
 import { useTableDensityPreference } from './orders-table-density-prefs'
 import { residentialForRate as residentialForRateRule } from '../../lib/residential-for-rate'
 import {
@@ -2199,7 +2202,9 @@ export default function OrdersView({
 
       if (event.key === 'Escape') {
         if (rateBrowserOpen) {
-          setRateBrowserOpen(false)
+          // PS-286: the Escape-key close is the 4th close path — route it through the
+          // gate too so Esc during an in-flight persist can't re-open the stale-row race.
+          void closeRateBrowserAfterPersist()
           return
         }
         clearSelection()
@@ -3214,6 +3219,13 @@ export default function OrdersView({
     overridePayload?: Record<string, unknown> | null,
   ): Promise<{ queued: boolean; items: ReturnType<typeof getActiveItems>; error?: string }> {
     if (order.clientId == null) return { queued: false, items: [], error: 'Missing client id' }
+    // PS-279/PS-186: the FE must NEVER spend real postage on a test order. Test rows
+    // route to the backend mock path upstream (classifyQueueOrderRoute), but enforce
+    // it HERE at the spend boundary too (defense in depth) so no future FE change can
+    // silently buy a real direct-carrier label for a test row.
+    if (isBackendTestOrder(order)) {
+      return { queued: false, items: [], error: 'Test order - no FE postage purchased (backend mock path owns test labels)' }
+    }
     const orderDetail = orderDetailsById.get(order.orderId) ?? null
     const bestRate = order.bestRate
     const selectedRate = order.selectedRate
@@ -4642,6 +4654,19 @@ export default function OrdersView({
     return toNumberValue(rate.weightOz) ?? toNumberValue(rate.weight_oz) ?? null
   }
 
+  // PS-286: in-flight applied-rate persists keyed by orderId. The Rate Browser close
+  // awaits the relevant one (closeRateBrowserAfterPersist) so the operator can never
+  // Send/Print-Queue a row whose just-applied rate hasn't persisted + refetched yet.
+  const appliedRatePersistsRef = useRef(new Map<number, Promise<unknown>>())
+
+  async function closeRateBrowserAfterPersist(): Promise<void> {
+    // Await EVERY in-flight applied-rate persist (the map auto-clears settled ones),
+    // not just the current panel's, so the gate stays correct even when called from a
+    // stale closure — e.g. the Escape-key keydown handler captured inside a useEffect.
+    await awaitAppliedRatePersists(appliedRatePersistsRef.current, [...appliedRatePersistsRef.current.keys()])
+    setRateBrowserOpen(false)
+  }
+
   async function persistAppliedRateForOrder(
     orderId: number,
     rate: Record<string, unknown>,
@@ -5535,17 +5560,21 @@ export default function OrdersView({
         serviceCode: testRate.serviceCode,
       }))
       setPanelRatePreview([testRate])
-      setRateBrowserOpen(false)
-      void apiClient
-        .saveOrderDims(panelOrder.orderId, {
-          ...(dims ? { length: Number(dims.length) || 0, width: Number(dims.width) || 0, height: Number(dims.height) || 0 } : {}),
-          weightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-        })
-        .then(() => apiClient.saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel))
-        .then(() => refetchOrders())
-        .catch((error) => {
-          showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
-        })
+      trackAppliedRatePersist(
+        appliedRatePersistsRef.current,
+        panelOrder.orderId,
+        apiClient
+          .saveOrderDims(panelOrder.orderId, {
+            ...(dims ? { length: Number(dims.length) || 0, width: Number(dims.width) || 0, height: Number(dims.height) || 0 } : {}),
+            weightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+          })
+          .then(() => apiClient.saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel))
+          .then(() => refetchOrders())
+          .catch((error) => {
+            showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
+          }),
+      )
+      void closeRateBrowserAfterPersist()
       return
     }
 
@@ -5575,20 +5604,24 @@ export default function OrdersView({
         [panelOrderId]: { key: autoRequest.key, rate: rateForTable },
       }))
     }
-    setRateBrowserOpen(false)
-    void persistAppliedRateForOrder(panelOrderId ?? 0, rate, {
-      fallbackDims: getPanelDims(),
-      fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-      ...(autoRequest
-        ? {
-          request: autoRequest,
-          metadata: { isComplete: true, rateCount: 1, matchType: 'manual' },
-        }
-        : {}),
-      refetch: true,
-    }).catch((error) => {
-      showToast(error instanceof Error ? error.message : 'Failed to save selected rate', 'error')
-    })
+    trackAppliedRatePersist(
+      appliedRatePersistsRef.current,
+      panelOrderId ?? 0,
+      persistAppliedRateForOrder(panelOrderId ?? 0, rate, {
+        fallbackDims: getPanelDims(),
+        fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+        ...(autoRequest
+          ? {
+            request: autoRequest,
+            metadata: { isComplete: true, rateCount: 1, matchType: 'manual' },
+          }
+          : {}),
+        refetch: true,
+      }).catch((error) => {
+        showToast(error instanceof Error ? error.message : 'Failed to save selected rate', 'error')
+      }),
+    )
+    void closeRateBrowserAfterPersist()
   }
 
   async function printPicklist() {
@@ -9499,7 +9532,7 @@ export default function OrdersView({
             initialConfirmation={panelForm.confirmation}
             initialInsurance={panelForm.insurance}
             initialInsuranceValue={panelForm.insuranceValue}
-            onClose={() => setRateBrowserOpen(false)}
+            onClose={() => { void closeRateBrowserAfterPersist() }}
             onBestRateResolved={(best) => {
               if (!panelOrderId) return
               if (panelOrder && isTestOrder(panelOrder, panelDetail)) {
@@ -9519,14 +9552,18 @@ export default function OrdersView({
                   serviceCode: testRate.serviceCode,
                 }))
                 const dims = best.dims
-                void persistAppliedRateForOrder(panelOrderId, testRate, {
-                  fallbackDims: dims ?? getPanelDims(),
-                  fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-                  refetch: true,
-                })
-                  .catch((error) => {
-                    showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
+                trackAppliedRatePersist(
+                  appliedRatePersistsRef.current,
+                  panelOrderId,
+                  persistAppliedRateForOrder(panelOrderId, testRate, {
+                    fallbackDims: dims ?? getPanelDims(),
+                    fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+                    refetch: true,
                   })
+                    .catch((error) => {
+                      showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
+                    }),
+                )
                 return
               }
               setPanelRatePreview([best])
@@ -9556,25 +9593,29 @@ export default function OrdersView({
                 }))
               }
               const dims = best.dims
-              void persistAppliedRateForOrder(panelOrderId, best, {
-                fallbackDims: dims ?? getPanelDims(),
-                fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-                // PS-083 follow-up: stamp the browse-resolved best rate with the
-                // order's request metadata (fingerprint + freshness) exactly like
-                // applyRateSelection — otherwise the saved rate fails the reload
-                // freshness gate (savedRateIsFreshAndComplete) and the row reverts
-                // to the auto/recalc value on refresh ("browse rate not saved").
-                ...(autoRequest
-                  ? {
-                      request: autoRequest,
-                      metadata: { isComplete: true, rateCount: 1, matchType: 'browse' },
-                    }
-                  : {}),
-                refetch: true,
-              })
-                .catch((error) => {
-                  showToast(error instanceof Error ? error.message : 'Failed to save best rate', 'error')
+              trackAppliedRatePersist(
+                appliedRatePersistsRef.current,
+                panelOrderId,
+                persistAppliedRateForOrder(panelOrderId, best, {
+                  fallbackDims: dims ?? getPanelDims(),
+                  fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+                  // PS-083 follow-up: stamp the browse-resolved best rate with the
+                  // order's request metadata (fingerprint + freshness) exactly like
+                  // applyRateSelection — otherwise the saved rate fails the reload
+                  // freshness gate (savedRateIsFreshAndComplete) and the row reverts
+                  // to the auto/recalc value on refresh ("browse rate not saved").
+                  ...(autoRequest
+                    ? {
+                        request: autoRequest,
+                        metadata: { isComplete: true, rateCount: 1, matchType: 'browse' },
+                      }
+                    : {}),
+                  refetch: true,
                 })
+                  .catch((error) => {
+                    showToast(error instanceof Error ? error.message : 'Failed to save best rate', 'error')
+                  }),
+              )
             }}
             onApplyRate={(applied) => {
               // Push rate back into the panel using the existing applyRateSelection

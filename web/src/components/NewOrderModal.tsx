@@ -58,6 +58,10 @@ import { resolveShipFromOrigin } from './new-order-ship-from-origin'
 // PS-291: exclude marketplace-owned providers (ebay_shipping/walmart_shipping)
 // from the manual rate preview — they need a real marketplace order id.
 import { excludeMarketplaceOwnedRows } from './new-order-rate-preview-rows'
+// PS-291 (DoD #2): keep a typed custom Ship-From origin as a saved location via
+// the canonical POST /locations owner (apiClient.createLocation).
+import { shouldSaveCustomOrigin, buildSaveLocationBody } from './new-order-save-location'
+import { useQueryClient } from '@tanstack/react-query'
 
 interface LineItem {
   id: string
@@ -264,6 +268,10 @@ export default function NewOrderModal({
   const [customOriginState, setCustomOriginState] = useState('')
   const [customOriginZip, setCustomOriginZip] = useState('')
   const [customOriginCountry, setCustomOriginCountry] = useState('US')
+  // PS-291 (DoD #2): opt-in to persist the typed custom origin as a saved location.
+  const [saveCustomOrigin, setSaveCustomOrigin] = useState(false)
+  const [customOriginName, setCustomOriginName] = useState('')
+  const queryClient = useQueryClient()
 
   // Saved Ship-From locations (active only). Same source the recipient picker
   // and LocationsView use; default location floats to the top.
@@ -586,6 +594,39 @@ export default function NewOrderModal({
       }
       const ok = await onSave(payload)
       if (ok) {
+        // PS-291 (DoD #2): keep the typed custom origin as a saved Ship-From
+        // location via the canonical POST /locations owner. Best-effort — the
+        // order already saved; a failed location-save must never block it.
+        if (
+          shouldSaveCustomOrigin({
+            useCustom: useCustomOrigin,
+            save: saveCustomOrigin,
+            name: customOriginName,
+            custom: {
+              street1: customOriginStreet,
+              city: customOriginCity,
+              state: customOriginState,
+              zip: customOriginZip,
+              country: customOriginCountry,
+            },
+          })
+        ) {
+          try {
+            const { apiClient } = await import('../api/client')
+            await apiClient.createLocation(
+              buildSaveLocationBody(customOriginName, {
+                street1: customOriginStreet,
+                city: customOriginCity,
+                state: customOriginState,
+                zip: customOriginZip,
+                country: customOriginCountry,
+              }),
+            )
+            queryClient.invalidateQueries({ queryKey: ['v2-hooks:locations'] })
+          } catch {
+            /* non-blocking: the order saved; the custom origin just isn't kept */
+          }
+        }
         // Modal will close from the outside (parent sets open=false).
       }
     } catch (err) {
@@ -953,6 +994,7 @@ export default function NewOrderModal({
                         Use a custom ship-from origin
                       </label>
                       {useCustomOrigin ? (
+                        <>
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <input
                             className={fieldCls + ' col-span-2 h-8 text-[12px]'}
@@ -995,6 +1037,26 @@ export default function NewOrderModal({
                             <option value="MX">MX</option>
                           </select>
                         </div>
+                        {/* PS-291 (DoD #2): keep the typed custom origin as a saved Ship-From location. */}
+                        <label className="inline-flex items-center gap-2 mt-2 text-[11px] text-ink-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={saveCustomOrigin}
+                            onChange={(e) => setSaveCustomOrigin(e.target.checked)}
+                            className="w-3.5 h-3.5 accent-brand"
+                          />
+                          Save this location
+                        </label>
+                        {saveCustomOrigin ? (
+                          <input
+                            className={fieldCls + ' h-8 text-[12px] mt-2 w-full'}
+                            value={customOriginName}
+                            onChange={(e) => setCustomOriginName(e.target.value)}
+                            placeholder="Location name (e.g. Carson Warehouse)"
+                            aria-label="Saved location name"
+                          />
+                        ) : null}
+                        </>
                       ) : null}
                     </div>
 

@@ -19,7 +19,11 @@
  *   npx tsx scripts/ps-287-print-queue-label-normalization-guard.ts
  */
 import { PDFDocument, degrees } from 'pdf-lib';
-import { appendNormalizedLabelPages } from '../src/services/print-queue.js';
+// Import the normalizer from the PURE pdf module where it is DEFINED, not the
+// print-queue.ts barrel (which drags in db/client + env validation). This keeps the
+// box-geometry guard runnable in any worktree/CI without a .env — it tests the exact
+// same appendNormalizedLabelPages, just without the backend env dependency.
+import { appendNormalizedLabelPages } from '../src/services/print-queue-pdf.js';
 import {
   deriveArtworkBounds,
   placeArtworkOnCanvas,
