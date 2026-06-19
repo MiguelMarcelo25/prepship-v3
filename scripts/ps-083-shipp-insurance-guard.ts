@@ -14,6 +14,7 @@
  * Read-only: no DB, no carrier IO, never buys a label. Pure logic only.
  */
 import { PDFDocument } from 'pdf-lib';
+import { readFileSync } from 'node:fs';
 import { createShippCarrierConnector, shippDeclaredValue } from '../src/connectors/carrier/shipp.js';
 import { assertUnsupportedShippingOptions } from '../src/connectors/carrier/shipping-option-support.js';
 
@@ -241,6 +242,33 @@ expectNoThrow('non-insured order still passes the gate', () =>
     { confirmation: ['delivery', 'none'], insurance: true },
   ),
 );
+
+const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+{
+  const callStart = ratesRoute.indexOf('const directRates = await getDirectCarrierRatesForRateInput({');
+  const callEnd = ratesRoute.indexOf('}, { cachedOnly: isCachedOnlyLookup });', callStart);
+  const directFanoutCall = callStart >= 0 && callEnd > callStart ? ratesRoute.slice(callStart, callEnd) : '';
+  check(
+    '/rates/browse direct fanout forwards resolved insurance provider',
+    /insuranceProvider:\s*result\.effectiveInsuranceProvider/.test(directFanoutCall),
+    true,
+  );
+  check(
+    '/rates/browse direct fanout forwards resolved insured value',
+    /insuredValue:\s*result\.effectiveInsuredValue/.test(directFanoutCall),
+    true,
+  );
+  check(
+    '/rates/browse direct fanout carries effective insurance provider metadata',
+    /effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(directFanoutCall),
+    true,
+  );
+  check(
+    '/rates/browse direct fanout carries effective insured value metadata',
+    /effectiveInsuredValue:\s*result\.effectiveInsuredValue/.test(directFanoutCall),
+    true,
+  );
+}
 
 async function run() {
   const insuredPayload = await captureShippLabelPayload('carrier', 100);

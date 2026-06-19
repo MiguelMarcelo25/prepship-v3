@@ -571,6 +571,11 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     ...rest,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: requestedCarrierIds,
+    insuranceProvider: result.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
+    insuredValue: result.effectiveInsuredValue ?? rest.insuredValue ?? null,
+    effectiveInsuranceProvider: result.effectiveInsuranceProvider ?? null,
+    effectiveInsuredValue: result.effectiveInsuredValue ?? null,
+    effectiveInsuranceSource: result.effectiveInsuranceSource ?? null,
   }, { cachedOnly: isCachedOnlyLookup });
   const directCarrierDurationMs = Date.now() - directStartedAt;
   const accounts = await getCarrierAccountsForRateContext({
