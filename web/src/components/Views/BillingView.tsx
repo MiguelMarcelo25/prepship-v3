@@ -1343,7 +1343,7 @@ export default function BillingView() {
                   SAME sortedDetailRows the table maps over (no refetch). Renders
                   nothing when zero — additive + default-inert. */}
               {(() => {
-                const needReview = sortedDetailRows.filter((row) => row.shippingZeroNeedsReview === true).length
+                const needReview = sortedDetailRows.filter((row) => row.shippingZeroNeedsReview === true && row.feeWaiverDecision == null).length
                 return needReview > 0 ? (
                   <span
                     role="status"
@@ -1469,7 +1469,7 @@ export default function BillingView() {
                 prep), or KEEP it. The decision is durable + reversible; a waive
                 takes effect on the next "Update Billing". Additive, behind the
                 backend flag — canary; needs DJ eyeball. */}
-            {billingEditModal.row.shippingZeroNeedsReview ? (
+            {billingEditModal.row.shippingZeroNeedsReview && billingEditModal.row.feeWaiverDecision == null ? (
               <div
                 role="group"
                 aria-label="Review $0 shipping"
@@ -1548,6 +1548,32 @@ export default function BillingView() {
                   <strong>Prep fee waived — applied</strong> ($0 prep). Reversible via Update Billing.
                 </div>
               )
+            ) : billingEditModal.row.feeWaiverDecision === 'not_waived' ? (
+              <div
+                role="status"
+                style={{
+                  margin: '8px 0',
+                  padding: '6px 12px',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: 8,
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  fontSize: 11.5,
+                  color: '#1d4ed8',
+                }}
+              >
+                <strong>$0 shipping reviewed — prep fee kept.</strong> Reversible via the $0-shipping review action if this order should be waived later.
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button
+                    className="btn btn-secondary btn-xs"
+                    type="button"
+                    disabled={zeroShippingReviewSaving}
+                    onClick={() => void handleZeroShippingReview('waived')}
+                  >
+                    {zeroShippingReviewSaving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : null}
+                    Change to waive prep fees
+                  </button>
+                </div>
+              </div>
             ) : null}
 
             <div className="billing-edit-money-grid">

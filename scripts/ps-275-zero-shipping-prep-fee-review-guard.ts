@@ -165,7 +165,8 @@ function sampleOrderLines(): WaivableLine[] {
   // (a) Row-level Review control: a >Review< button rendered only when the row
   //     flag is set, wired to the existing modal-open handler (no new handler).
   const hasReviewLabel = /['"`>\s]Review['"`<\s]/.test(detailTableSrc);
-  const rowGatedOnFlag = /row\.shippingZeroNeedsReview\s*\?/.test(detailTableSrc);
+  const rowGatedOnFlag =
+    /row\.shippingZeroNeedsReview\s*&&\s*row\.feeWaiverDecision\s*==\s*null/.test(detailTableSrc);
   const reusesModalOpen = /onOpenBillingEdit\(row\)/.test(detailTableSrc);
   check('FE(a): per-row Review control is gated on row.shippingZeroNeedsReview',
     rowGatedOnFlag);
@@ -182,6 +183,21 @@ function sampleOrderLines(): WaivableLine[] {
     badgeDerivesFromFlag);
   check('FE(b): the header renders the $0-shipping needs-review badge copy',
     hasBadgeCopy);
+
+  // (c) Resolved rows are no longer "Needs Review": once the durable waiver
+  // decision exists (waived OR kept), the unresolved count and row-level Review
+  // affordance must drop. This is the DJ live-fail regression: the decision
+  // saved, but the badge stayed visible.
+  const unresolvedCountPredicate =
+    /sortedDetailRows\.filter\(\(row\) => row\.shippingZeroNeedsReview === true && row\.feeWaiverDecision == null\)\.length/.test(billingViewSrc);
+  check('FE(c): the unresolved count excludes rows that already have a feeWaiverDecision',
+    unresolvedCountPredicate);
+  check('FE(c): the row Review button only renders for unresolved $0-shipping rows',
+    /row\.shippingZeroNeedsReview\s*&&\s*row\.feeWaiverDecision\s*==\s*null/.test(detailTableSrc));
+  check('FE(c): reviewed-kept rows keep a neutral action to change the decision to waived',
+    /feeWaiverDecision === 'not_waived'/.test(billingViewSrc) &&
+    /Change to waive prep fees/.test(billingViewSrc) &&
+    /handleZeroShippingReview\('waived'\)/.test(billingViewSrc));
 }
 
 // ── 8) ROOT CAUSE: the generator must EMIT a $0.00 shipping review line for ──
@@ -222,6 +238,25 @@ function sampleOrderLines(): WaivableLine[] {
     /for \(const row of effectiveRows\)/.test(gen));
   check('gen: regenerate DELETEs the period then rebuilds with ON CONFLICT DO NOTHING (idempotent)',
     /\.delete\(billingLineItems\)/.test(gen) && /onConflictDoNothing\(/.test(gen));
+}
+
+// ── 9b. A saved waiver decision must make "Update Billing" rebuild the range ──
+// DJ live failure: POST /zero-shipping-review saved the decision, then normal
+// Update Billing called /billing/generate/status, saw no new shipments/prices,
+// returned upToDate, and skipped the generator. The fee waiver was therefore
+// durable but never applied to billing_line_items/details/exports.
+{
+  const gen = readFileSync('src/services/billing.ts', 'utf8');
+  const freshnessBlock = gen.match(/let feeWaiverStale = false[\s\S]+?const sourceLowerBound/)?.[0] ?? '';
+  check('status: billingGenerationStatus checks billing_fee_waivers updated after generated billing rows',
+    /billing_fee_waivers/.test(freshnessBlock) &&
+    /fw\.updated_at/.test(freshnessBlock) &&
+    />\s*\(\s*select max\(b\.created_at\)/.test(freshnessBlock));
+  check('status: fee-waiver freshness check fails closed so Update Billing does not silently no-op',
+    /catch \(err\)[\s\S]{0,240}feeWaiverStale = true/.test(freshnessBlock));
+  check('status: a stale waiver returns upToDate=false and rebuilds the whole selected range',
+    /if \((?:pricingStale \|\| feeWaiverStale|feeWaiverStale \|\| pricingStale)\)/.test(gen) &&
+    /missingFrom:\s*isoDayStart\(from\)/.test(gen));
 }
 
 // ── 10. The review ROUTE is auth + client-scope gated, reversible-capture, and read-gated ──────────

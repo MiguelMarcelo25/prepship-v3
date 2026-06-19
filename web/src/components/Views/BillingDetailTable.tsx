@@ -205,7 +205,7 @@ export function BillingDetailTable({
                         Edit modal. Gated on the backend per-row flag; opens the
                         SAME edit modal (the review section already lives there).
                         Additive — rows without the flag render only Edit. */}
-                    {row.shippingZeroNeedsReview ? (
+                    {row.shippingZeroNeedsReview && row.feeWaiverDecision == null ? (
                       <button
                         type="button"
                         title="$0 shipping — review the prep fee (waive or keep). Opens the edit modal."

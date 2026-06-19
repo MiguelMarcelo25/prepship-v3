@@ -51,7 +51,10 @@ import {
   applyPrepFeeWaiver,
   decideZeroShippingReview,
 } from './billing-shipping-policy';
-import { readBillingFeeWaivers } from './billing-fee-waiver-store';
+import {
+  ensureBillingFeeWaiverSchema,
+  readBillingFeeWaivers,
+} from './billing-fee-waiver-store';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -321,6 +324,41 @@ export async function billingGenerationStatus(
   `);
   const pricingStale = staleRow?.pricing_stale === true;
 
+  let feeWaiverStale = false;
+  try {
+    await ensureBillingFeeWaiverSchema();
+    const [feeWaiverRow] = await db.execute<{ fee_waiver_stale: boolean }>(sql`
+      select exists (
+        select 1
+        from billing_fee_waivers fw
+        inner join billing_line_items b on b.order_id = fw.order_id
+        inner join clients c on c.id = b.client_id
+        where b.ship_date >= ${fromIso}::timestamptz
+          and b.ship_date < ${toIso}::timestamptz
+          and b.order_id is not null
+          and c.active = true
+          and c.name not in (${systemClientNamesSql})
+          ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
+          and ${billingClientScopePredicate(input)}
+          and fw.updated_at > (
+            select max(b.created_at)
+            from billing_line_items b
+            where b.order_id = fw.order_id
+              and b.ship_date >= ${fromIso}::timestamptz
+              and b.ship_date < ${toIso}::timestamptz
+              ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
+          )
+      ) as fee_waiver_stale
+    `);
+    feeWaiverStale = feeWaiverRow?.fee_waiver_stale === true;
+  } catch (err) {
+    console.warn(
+      '[billing] fee-waiver freshness check skipped:',
+      err instanceof Error ? err.message : err,
+    );
+    feeWaiverStale = true;
+  }
+
   const sourceLowerBound = latestBilling?.toISOString() ?? fromIso;
   const [sourceRow] = await db.execute<{
     latest_source_ship_date: string | null;
@@ -446,7 +484,7 @@ export async function billingGenerationStatus(
   if (!latestSource) {
     // No new shipments to bill. Still rebuild if prices changed after the
     // existing lines were generated, so a box-price edit re-prices them.
-    if (pricingStale) {
+    if (pricingStale || feeWaiverStale) {
       return {
         upToDate: false,
         dateFrom: fromIso,
@@ -475,7 +513,7 @@ export async function billingGenerationStatus(
   // A price/config change requires rebuilding the WHOLE range (to re-price the
   // existing lines), not just the missing tail after the last billed day.
   const missingFrom =
-    pricingStale || !latestBilling
+    pricingStale || feeWaiverStale || !latestBilling
       ? isoDayStart(from)
       : latestBillingDay === latestSourceDay
         ? latestBillingDay
