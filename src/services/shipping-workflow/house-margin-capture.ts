@@ -40,6 +40,25 @@ export function houseMarginFromProjection(best: OrderBestRateDto | null, drpCost
   };
 }
 
+/**
+ * Pure writer GATE for the realized capture: the record to write, or null to SKIP — composes the three
+ * skip conditions the IO shell must honor so they are provable OFFLINE (the audit flagged this gate as
+ * behaviorally untested). The money-safety invariant lives here: a NON-opted-in client never yields a
+ * row, regardless of cost or stamp.
+ *   - invalid / non-positive drp_cost -> null (unknown cost; never write)
+ *   - client NOT opted in             -> null (DEFAULT-OFF: no house billing without explicit opt-in)
+ *   - no projected house stamp        -> null (rated before opt-in / not a SHIPP-winning save)
+ */
+export function planRealizedHouseCapture(input: {
+  drpCost: number;
+  optedIn: boolean;
+  best: OrderBestRateDto | null;
+}): RealizedHouseMargin | null {
+  if (!Number.isFinite(input.drpCost) || input.drpCost <= 0) return null;
+  if (!input.optedIn) return null;
+  return houseMarginFromProjection(input.best, input.drpCost);
+}
+
 /** Best-effort realized capture. A failure NEVER affects the already-committed label (caller backgrounds it). */
 export async function captureRealizedHouseMargin(input: {
   orderId: number;
@@ -47,14 +66,18 @@ export async function captureRealizedHouseMargin(input: {
   clientId: number | null;
   drpCost: number;
 }): Promise<void> {
+  // Cheap gates first to avoid the best_rate_json read when we already know we won't write:
+  // invalid cost (free) then the opt-in check (one query). The pure planner re-validates them so
+  // the full gate is provable offline; live behavior + ordering stay byte-identical.
   if (!Number.isFinite(input.drpCost) || input.drpCost <= 0) return;
-  if (!(await clientHouseAccountEnabled(input.clientId))) return;
+  const optedIn = await clientHouseAccountEnabled(input.clientId);
+  if (!optedIn) return;
   const rows = (await pg`
     SELECT best_rate_json FROM order_overrides WHERE order_id = ${input.orderId} LIMIT 1
   `) as Array<{ best_rate_json?: unknown }>;
   const best = normalizeOrderBestRateDto(rows[0]?.best_rate_json ?? null);
-  const realized = houseMarginFromProjection(best, input.drpCost);
-  if (!realized) return; // no projected house stamp -> not a captured house order
+  const realized = planRealizedHouseCapture({ drpCost: input.drpCost, optedIn, best });
+  if (!realized) return; // gate said skip -> not a captured house order
   await ensureOrderCompetitiveRateSchema();
   await pg`
     INSERT INTO order_competitive_rate

@@ -16,7 +16,7 @@ import {
   isHouseShippRate,
   resolveNextBestNonHouseRate,
 } from '../src/lib/next-best-non-house-rate';
-import { houseMarginFromProjection } from '../src/services/shipping-workflow/house-margin-capture';
+import { houseMarginFromProjection, planRealizedHouseCapture } from '../src/services/shipping-workflow/house-margin-capture';
 import { normalizeOrderBestRateDto } from '../src/services/order-rate-dto';
 import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
 import { houseMarkedAmountForRow } from '../src/services/shipping-workflow/house-row-marked-amount';
@@ -242,6 +242,38 @@ check('PS-220-D: the stamp owner stamps the resolver competitorCount onto the pr
 const captureSrc = readFileSync('src/services/shipping-workflow/house-margin-capture.ts', 'utf8');
 check('PS-220-D: capture uses the threaded competitorCount (falls back to competitor?1:0 when absent)',
   /competitorCount: competitor\?\.competitorCount \?\? \(competitor \? 1 : 0\)/.test(captureSrc));
+
+// ── realized-capture WRITER GATE (pure, offline-provable) ─────────────────────
+// The audit flagged that the IO shell's gate (cost + opt-in + stamp) had NO behavioral test — "green
+// proved nothing" about the money-safety invariant. planRealizedHouseCapture now owns the decision so
+// it is provable offline: a NON-opted-in client never yields a sidecar row, even with a perfect stamp.
+{
+  const stamp = normalizeOrderBestRateDto({
+    shipmentCost: 8.5, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_surepost',
+    nextBestNonHouseRate: { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shipmentCost: 9.64, otherCost: 0, totalCost: 9.64, providerAccountId: 442007 },
+    houseMargin: 1.14,
+  });
+  const ok = planRealizedHouseCapture({ drpCost: 8.5, optedIn: true, best: stamp });
+  check('writer-gate: opted-in + valid cost + house stamp => row (customer_rate 9.64, margin 1.14)',
+    ok != null && ok.customerRate === 9.64 && ok.margin === 1.14, JSON.stringify(ok));
+  // THE money-safety invariant: opt-in is mandatory — a perfect stamp + valid cost still writes nothing.
+  check('writer-gate (DEFAULT-OFF): NOT opted in => null even with a valid stamp + cost',
+    planRealizedHouseCapture({ drpCost: 8.5, optedIn: false, best: stamp }) === null);
+  check('writer-gate: non-positive / non-finite drp_cost => null (unknown cost, never write)',
+    planRealizedHouseCapture({ drpCost: 0, optedIn: true, best: stamp }) === null &&
+    planRealizedHouseCapture({ drpCost: -1, optedIn: true, best: stamp }) === null &&
+    planRealizedHouseCapture({ drpCost: NaN, optedIn: true, best: stamp }) === null);
+  const nonHouseStamp = normalizeOrderBestRateDto({ shipmentCost: 9, otherCost: 0, carrierCode: 'ups', serviceCode: 'ups_ground' });
+  check('writer-gate: opted-in but no house stamp (or null best) => null',
+    planRealizedHouseCapture({ drpCost: 9, optedIn: true, best: nonHouseStamp }) === null &&
+    planRealizedHouseCapture({ drpCost: 8.5, optedIn: true, best: null }) === null);
+  // delegation parity: when the gate opens, it IS the pure core — no drift between the two.
+  check('writer-gate: opted-in path delegates to houseMarginFromProjection (no drift)',
+    JSON.stringify(planRealizedHouseCapture({ drpCost: 8.5, optedIn: true, best: stamp })) === JSON.stringify(houseMarginFromProjection(stamp, 8.5)));
+}
+// Structural pin: the IO shell DELEGATES its write decision to the pure gate (still sidecar-INSERT only).
+check('writer-gate: captureRealizedHouseMargin delegates to planRealizedHouseCapture (thin IO shell)',
+  /const realized = planRealizedHouseCapture\(\{ drpCost: input\.drpCost, optedIn, best \}\)/.test(captureSrc));
 check('realized capture INSERTs the sidecar and NEVER updates the locked shipments table',
   /INSERT INTO order_competitive_rate/.test(captureSrc) && !/UPDATE\s+shipments/i.test(captureSrc));
 const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');
