@@ -29,6 +29,20 @@ import {
   PREP_FEE_LINE_TYPES,
   type WaivableLine,
 } from '../src/services/billing-shipping-policy';
+// PS-275 item 2: the prep-fee WAIVER indicator surfaced on the invoice exports
+// (XLSX / HTML-PDF / CSV). The CSV serializer + the shared indicator owner are
+// pure and importable offline; the heavy HTML/XLSX renderers (DB/app imports)
+// are pinned by static source read, mirroring sections 7/8.
+import {
+  INVOICE_CSV_HEADERS,
+  renderInvoiceCsvRow,
+  type InvoiceCsvDetailRow,
+} from '../src/routes/billing-invoice-csv';
+import {
+  WAIVED_COLUMN_HEADER,
+  waivedCellText,
+  waivedSummaryNote,
+} from '../src/routes/billing-invoice-waiver-indicator';
 
 let failures = 0;
 function check(name: string, cond: boolean): void {
@@ -220,6 +234,67 @@ function sampleOrderLines(): WaivableLine[] {
   check('route: captures the REVERSIBLE original prep total from the canonical PREP_FEE_LINE_TYPE_LIST',
     /PREP_FEE_LINE_TYPE_LIST/.test(route) && /original_prep_amount/.test(route));
   check('route: persists the decision via upsertBillingFeeWaiver', /upsertBillingFeeWaiver\(\{/.test(route));
+}
+
+// ── 11. PS-275 item 2: the prep-fee WAIVER is VISIBLE in all three invoice ─────
+//       exports (XLSX / HTML-PDF / CSV). Before this, a waived order's zeroed
+//       prep fee was indistinguishable from a genuinely free/$0 order, so the
+//       PS-275 DoD's "review/waived indicator" was unmet on the exports.
+//
+//       Source of truth: the waiver DECISION stays owned by billing_fee_waivers
+//       and is read via the canonical readBillingFeeWaivers — the SAME owner the
+//       billing detail view's "Prep fee waived" chip already delegates to.
+//       billingInvoiceData threads it onto each row as fee_waived; every renderer
+//       shows it through ONE shared indicator owner (waivedCellText /
+//       waivedSummaryNote / WAIVED_COLUMN_HEADER) so the three exports cannot
+//       disagree. No line-item denormalization, no schema migration, and the
+//       generator's (order_id, line_type, description) ON CONFLICT key is untouched.
+{
+  // (a) The shared indicator owner: a WAIVED order shows a visible "Waived"
+  //     marker; a genuinely $0/free order leaves the cell BLANK (so the two are
+  //     no longer indistinguishable). The summary note names the waived count
+  //     only when something was waived (default-inert otherwise).
+  check('indicator: a waived order renders the visible "Waived" marker',
+    waivedCellText(true) === 'Waived');
+  check('indicator: a genuinely $0/free order leaves the waiver cell BLANK',
+    waivedCellText(false) === '');
+  check('indicator: the period summary note names the waived-order count',
+    /\b1 order\b/.test(waivedSummaryNote(1)) && /waiv/i.test(waivedSummaryNote(1)));
+  check('indicator: pluralizes the summary note for multiple waived orders',
+    /\b3 orders\b/.test(waivedSummaryNote(3)));
+  check('indicator: NO summary note when nothing in the period was waived (default-inert)',
+    waivedSummaryNote(0) === '' && waivedSummaryNote(-1) === '');
+
+  // (b) CSV (behavioral, offline): the waiver column exists and a WAIVED row
+  //     serializes the marker in that column; a non-waived row leaves it blank.
+  //     Proves the CSV export — not just the HTML — carries the indicator.
+  const csvBase: InvoiceCsvDetailRow = {
+    order_id: 7001, order_number: 'PO-7001', ship_date: '2026-05-04',
+    base_qty: '1', addl_qty: '0', pickpack_amt: '2.50', additional_amt: '0',
+    shipping_amt: '0', storage_amt: '0', row_total: '2.50', skus: 'SKU-1',
+    package_cost_amt: '0', box_label: '—', box_review: false, fee_waived: false,
+  };
+  check('CSV: the header row carries the waiver column',
+    INVOICE_CSV_HEADERS.includes(WAIVED_COLUMN_HEADER));
+  check('CSV: a WAIVED order serializes the "Waived" marker in the last column',
+    renderInvoiceCsvRow({ ...csvBase, fee_waived: true }).endsWith(',Waived'));
+  check('CSV: a non-waived order leaves the waiver column blank (trailing empty cell)',
+    renderInvoiceCsvRow({ ...csvBase, fee_waived: false }).endsWith(','));
+
+  // (c) Data + the heavy route renderers live in routes/billing.ts behind
+  //     DB/app imports (renderInvoiceHtml / renderInvoiceXlsx) — static source
+  //     pins, same approach as sections 7/8. billingInvoiceData must read the
+  //     waiver SOT and stamp fee_waived; BOTH exports must render the indicator
+  //     through the shared owner and carry the column header.
+  const routeSrc = readFileSync('src/routes/billing.ts', 'utf8');
+  check('DATA: billingInvoiceData reads the waiver SOT (readBillingFeeWaivers) and stamps fee_waived',
+    /readBillingFeeWaivers\(/.test(routeSrc) && /fee_waived/.test(routeSrc));
+  check('HTML+XLSX: BOTH invoice renderers render the indicator via the shared waivedCellText owner',
+    (routeSrc.split('waivedCellText(').length - 1) >= 2);
+  check('HTML+XLSX: both exports title the column via the shared WAIVED_COLUMN_HEADER constant',
+    (routeSrc.split('WAIVED_COLUMN_HEADER').length - 1) >= 2);
+  check('HTML/XLSX: a period summary note is rendered from the shared waivedSummaryNote owner',
+    /waivedSummaryNote\(/.test(routeSrc));
 }
 
 if (failures > 0) {
