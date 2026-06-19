@@ -23,6 +23,12 @@ import { attachObservedIncomplete } from './shipp-observed-incomplete-marker.js'
 // Identity FIRST: the connector that brokered the rate stamps the honest certainty here.
 import { resolveInsuranceCertainty } from '../../services/shipping-workflow/insurance-certainty.js';
 import { PDFDocument } from 'pdf-lib';
+// PS-294: the single owner of the SHIPP label 4×6 placement math (raster/image path).
+import { computeFourBySixPlacement } from './shipp-label-4x6-placement';
+// PS-294 slice 2: B's PS-287 content-aware 4×6 normalizer — the PURE print-queue-pdf module (NOT the
+// print-queue.ts barrel, which drags in db/client + env). Crops the PDF label to its visible artwork
+// bounds + scales it to FILL the 4×6 canvas, so an oversized/corner SHIPP label fills 4×6.
+import { appendNormalizedLabelPages } from '../../services/print-queue-pdf';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
 
@@ -695,6 +701,9 @@ function shippTrackingFromLabel(label: any): string {
   );
 }
 
+// 4×6 @72dpi. The page-size literal stays here (pinned by the PS-099 static 4x6 guard); PS-294 moved
+// only the duplicated PLACEMENT MATH out to shipp-label-4x6-placement.ts (the single graft point),
+// and feeds these dims in as the target so addPage and the placement can never diverge.
 const SHIPP_LABEL_PAGE_WIDTH = 288;
 const SHIPP_LABEL_PAGE_HEIGHT = 432;
 
@@ -715,38 +724,26 @@ function shippPdfDataUrl(bytes: Uint8Array): string {
 
 async function appendShippPdfPages(output: PDFDocument, bytes: Uint8Array): Promise<number> {
   const src = await PDFDocument.load(bytes);
-  let pages = 0;
-  for (const pageIndex of src.getPageIndices()) {
-    const [embedded] = await output.embedPages([src.getPage(pageIndex)!]);
-    if (!embedded) continue;
-    const scale = Math.min(SHIPP_LABEL_PAGE_WIDTH / embedded.width, SHIPP_LABEL_PAGE_HEIGHT / embedded.height);
-    const drawWidth = embedded.width * scale;
-    const drawHeight = embedded.height * scale;
-    const page = output.addPage([SHIPP_LABEL_PAGE_WIDTH, SHIPP_LABEL_PAGE_HEIGHT]);
-    page.drawPage(embedded, {
-      x: (SHIPP_LABEL_PAGE_WIDTH - drawWidth) / 2,
-      y: (SHIPP_LABEL_PAGE_HEIGHT - drawHeight) / 2,
-      width: drawWidth,
-      height: drawHeight,
-    });
-    pages += 1;
-  }
-  return pages;
+  // PS-294 slice 2: delegate to B's PS-287 content-aware normalizer instead of a whole-page contain-fit.
+  // It crops each page to its visible artwork bounds (deriveArtworkBounds) and scales that to FILL the
+  // 4×6 canvas (placeArtworkOnCanvas), so an oversized / corner-positioned SHIPP or FedEx label fills
+  // 4×6 instead of shrinking. A rotated page is copied as-is so its orientation is never altered.
+  const before = output.getPageCount();
+  await appendNormalizedLabelPages(output, src);
+  return output.getPageCount() - before;
 }
 
 async function appendShippImagePage(output: PDFDocument, bytes: Uint8Array, format: string): Promise<number> {
   const image = format === 'image/png' || format === 'png'
     ? await output.embedPng(bytes)
     : await output.embedPng(shippPngBytesFromGifBytes(bytes));
-  const scale = Math.min(SHIPP_LABEL_PAGE_WIDTH / image.width, SHIPP_LABEL_PAGE_HEIGHT / image.height);
-  const drawWidth = image.width * scale;
-  const drawHeight = image.height * scale;
+  const placement = computeFourBySixPlacement({ srcWidth: image.width, srcHeight: image.height, targetWidth: SHIPP_LABEL_PAGE_WIDTH, targetHeight: SHIPP_LABEL_PAGE_HEIGHT });
   const page = output.addPage([SHIPP_LABEL_PAGE_WIDTH, SHIPP_LABEL_PAGE_HEIGHT]);
   page.drawImage(image, {
-    x: (SHIPP_LABEL_PAGE_WIDTH - drawWidth) / 2,
-    y: (SHIPP_LABEL_PAGE_HEIGHT - drawHeight) / 2,
-    width: drawWidth,
-    height: drawHeight,
+    x: placement.x,
+    y: placement.y,
+    width: placement.drawWidth,
+    height: placement.drawHeight,
   });
   return 1;
 }
