@@ -3214,6 +3214,13 @@ export default function OrdersView({
     overridePayload?: Record<string, unknown> | null,
   ): Promise<{ queued: boolean; items: ReturnType<typeof getActiveItems>; error?: string }> {
     if (order.clientId == null) return { queued: false, items: [], error: 'Missing client id' }
+    // PS-279/PS-186: the FE must NEVER spend real postage on a test order. Test rows
+    // route to the backend mock path upstream (classifyQueueOrderRoute), but enforce
+    // it HERE at the spend boundary too (defense in depth) so no future FE change can
+    // silently buy a real direct-carrier label for a test row.
+    if (isBackendTestOrder(order)) {
+      return { queued: false, items: [], error: 'Test order - no FE postage purchased (backend mock path owns test labels)' }
+    }
     const orderDetail = orderDetailsById.get(order.orderId) ?? null
     const bestRate = order.bestRate
     const selectedRate = order.selectedRate
