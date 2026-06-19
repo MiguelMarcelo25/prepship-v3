@@ -1519,20 +1519,35 @@ export default function BillingView() {
                 </div>
               </div>
             ) : billingEditModal.row.feeWaived ? (
-              <div
-                role="status"
-                style={{
-                  margin: '8px 0',
-                  padding: '6px 12px',
-                  border: '1px solid #bbf7d0',
-                  borderRadius: 8,
-                  background: 'rgba(34, 197, 94, 0.08)',
-                  fontSize: 11.5,
-                  color: '#166534',
-                }}
-              >
-                <strong>Prep fee waived</strong> for this order (reversible via Update Billing).
-              </div>
+              // PS-275 (item 3): a recorded waive only takes effect on the next "Update Billing"
+              // regenerate (which re-applies applyPrepFeeWaiver). Until then the prep lines still bill,
+              // so DISTINGUISH "pending" (decision saved, prep not yet zeroed) from "applied" — never let
+              // the operator believe the fee is already off the invoice. Pending = feeWaived AND the
+              // row's prep total is still > 0.
+              (Number(billingEditModal.draft.pickPack || 0) + Number(billingEditModal.draft.additional || 0)) > 0 ? (
+                <div
+                  role="status"
+                  style={{
+                    margin: '8px 0', padding: '6px 12px',
+                    border: '1px solid #fde68a', borderRadius: 8,
+                    background: 'rgba(245, 158, 11, 0.10)', fontSize: 11.5, color: '#92400e',
+                  }}
+                >
+                  <strong>Prep fee waived — pending.</strong> The decision is saved; run{' '}
+                  <strong>Update Billing</strong> for this range to zero the prep lines on the invoice. (Reversible.)
+                </div>
+              ) : (
+                <div
+                  role="status"
+                  style={{
+                    margin: '8px 0', padding: '6px 12px',
+                    border: '1px solid #bbf7d0', borderRadius: 8,
+                    background: 'rgba(34, 197, 94, 0.08)', fontSize: 11.5, color: '#166534',
+                  }}
+                >
+                  <strong>Prep fee waived — applied</strong> ($0 prep). Reversible via Update Billing.
+                </div>
+              )
             ) : null}
 
             <div className="billing-edit-money-grid">
