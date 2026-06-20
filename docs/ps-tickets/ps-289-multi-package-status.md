@@ -4,18 +4,19 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 35%.
+Current completion estimate: PS-289 43%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
-foundation, and mocked per-package label identity workflow exist, but the real product still needs
-DB-backed orchestration, print queue, marketplace confirmation, and UI work before any operator
-should use it.
+foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
+exist, but the real product still needs real label purchase, print queue, marketplace confirmation,
+and UI work before any operator should use it.
 
 ## Evidence now wired
 
 - `test:ps-289-multi-package-plan`
 - `test:ps-289-multi-package-schema`
 - `test:ps-289-multi-package-mock-label-flow`
+- `test:ps-289-multi-package-db-orchestration`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -28,12 +29,14 @@ should use it.
 - The persistence draft maps a plan into one group row plus one row per package without writing to DB.
 - The mocked label flow emits one deterministic non-live label result per package.
 - Existing package label idempotency keys block duplicate mocked labels.
+- The DB-backed orchestration owner writes planned group/package rows, applies mocked package label
+  transitions, and marks the group as `mock_labels_created`.
+- Duplicate package label idempotency is checked before any sidecar writes.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
 ## Missing before close
 
-- DB-backed orchestration that writes group/package status transitions safely.
 - Real idempotent per-package label purchase workflow behind mocked proof.
 - Group-aware print queue and duplicate-label protection.
 - Marketplace confirmation planner that can send the correct N tracking numbers.

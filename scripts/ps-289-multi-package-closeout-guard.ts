@@ -21,6 +21,7 @@ const doc = readFileSync('docs/ps-tickets/ps-289-multi-package-status.md', 'utf8
 const planner = readFileSync('src/services/shipping-workflow/multi-package-shipment-plan.ts', 'utf8');
 const schema = readFileSync('src/db/schema/shipment-groups.ts', 'utf8');
 const mockFlow = readFileSync('src/services/shipping-workflow/multi-package-mock-label-flow.ts', 'utf8');
+const orchestration = readFileSync('src/services/shipping-workflow/multi-package-mock-label-orchestration.ts', 'utf8');
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
@@ -29,6 +30,8 @@ check('package wires PS-289 schema guard',
   packageJson.includes('"test:ps-289-multi-package-schema"'));
 check('package wires PS-289 mocked label flow guard',
   packageJson.includes('"test:ps-289-multi-package-mock-label-flow"'));
+check('package wires PS-289 DB orchestration guard',
+  packageJson.includes('"test:ps-289-multi-package-db-orchestration"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -37,18 +40,22 @@ check('status doc lists schema guard',
   doc.includes('`test:ps-289-multi-package-schema`'));
 check('status doc lists mocked label flow guard',
   doc.includes('`test:ps-289-multi-package-mock-label-flow`'));
+check('status doc lists DB orchestration guard',
+  doc.includes('`test:ps-289-multi-package-db-orchestration`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 35%',
-  /PS-289 35%/.test(doc));
+check('status doc keeps PS-289 conservative at 43%',
+  /PS-289 43%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
 check('status doc says sidecar persistence foundation exists',
-  /additive persistence\s+foundation, and/.test(doc));
+  /additive persistence\s+foundation, mocked/.test(doc));
 check('status doc says mocked per-package label identity exists',
-  /mocked per-package label identity workflow exist/.test(doc));
-check('status doc lists DB-backed orchestration as missing',
-  /DB-backed orchestration/.test(doc));
+  /mocked per-package label identity workflow, and/.test(doc));
+check('status doc says DB-backed mocked orchestration exists',
+  /DB-backed mocked status orchestration\s+exist/.test(doc));
+check('status doc lists real per-package purchase as missing',
+  /Real idempotent per-package label purchase workflow/.test(doc));
 check('status doc lists marketplace confirmation planner as missing',
   /Marketplace confirmation planner/.test(doc));
 check('status doc requires mocked workflow before live postage',
@@ -68,6 +75,11 @@ check('mocked flow exports buildMockedMultiPackageLabelFlow',
   /export function buildMockedMultiPackageLabelFlow/.test(mockFlow));
 check('mocked flow remains non-live and zero-postage',
   /isLivePostage: false/.test(mockFlow) && /postageCost: 0/.test(mockFlow));
+check('orchestration exports orchestrateMockedMultiPackageLabels',
+  /export async function orchestrateMockedMultiPackageLabels/.test(orchestration));
+check('orchestration remains mocked-only and sidecar-owned',
+  /Mocked-only orchestration/.test(orchestration) &&
+    orchestration.includes("from '../../db/schema/shipment-groups'"));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 
