@@ -40,6 +40,10 @@ const printQueueSidecar = readFileSync(
   'src/services/shipping-workflow/multi-package-print-queue-sidecar.ts',
   'utf8',
 );
+const marketplaceConfirmationSidecar = readFileSync(
+  'src/services/shipping-workflow/multi-package-marketplace-confirmation-sidecar.ts',
+  'utf8',
+);
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
@@ -62,6 +66,8 @@ check('package wires PS-289 purchased label orchestration guard',
   packageJson.includes('"test:ps-289-multi-package-purchased-label-orchestration"'));
 check('package wires PS-289 print queue sidecar guard',
   packageJson.includes('"test:ps-289-multi-package-print-queue-sidecar"'));
+check('package wires PS-289 marketplace confirmation sidecar guard',
+  packageJson.includes('"test:ps-289-multi-package-marketplace-confirmation-sidecar"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -84,10 +90,12 @@ check('status doc lists purchased label orchestration guard',
   doc.includes('`test:ps-289-multi-package-purchased-label-orchestration`'));
 check('status doc lists print queue sidecar guard',
   doc.includes('`test:ps-289-multi-package-print-queue-sidecar`'));
+check('status doc lists marketplace confirmation sidecar guard',
+  doc.includes('`test:ps-289-multi-package-marketplace-confirmation-sidecar`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 83%',
-  /PS-289 83%/.test(doc));
+check('status doc keeps PS-289 conservative at 88%',
+  /PS-289 88%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
 check('status doc says sidecar persistence foundation exists',
@@ -108,12 +116,14 @@ check('status doc says purchased label sidecar orchestration exists',
   /purchased-label sidecar orchestration now exists/i.test(doc));
 check('status doc says print queue sidecar persistence exists',
   /print queue sidecar persistence now\s+exists/i.test(doc));
+check('status doc says marketplace confirmation sidecar persistence exists',
+  /marketplace confirmation sidecar persistence now\s+exists/i.test(doc));
 check('status doc lists real carrier adapter wiring as missing',
   /Real carrier adapter wiring for per-package label purchase/.test(doc));
 check('status doc lists real print queue insertion as missing',
   /Real print queue insertion\/printer integration/.test(doc));
-check('status doc lists marketplace confirmation integration as missing',
-  /marketplace confirmation persistence\/integration/.test(doc));
+check('status doc lists real marketplace notification integration as missing',
+  /Real marketplace notification connector\/integration/.test(doc));
 check('status doc still blocks live/canary use',
   /No live postage, marketplace notification, or operator canary/.test(doc));
 
@@ -168,6 +178,12 @@ check('print queue sidecar does not write the real print queue',
   /No real print queue table writes, printer calls/.test(printQueueSidecar) &&
     printQueueSidecar.includes("from '../../db/schema/shipment-groups'") &&
     !/from ['"].*(routes|connector|shipstation|shipp|easypost|walmart|print-queue|marketplace|orders|shipments)/i.test(printQueueSidecar));
+check('marketplace confirmation sidecar exports orchestrateMultiPackageMarketplaceConfirmationSidecar',
+  /export async function orchestrateMultiPackageMarketplaceConfirmationSidecar/.test(marketplaceConfirmationSidecar));
+check('marketplace confirmation sidecar writes only shipment group sidecars',
+  /No marketplace API calls, live marketplace notifications/.test(marketplaceConfirmationSidecar) &&
+    marketplaceConfirmationSidecar.includes("from '../../db/schema/shipment-groups'") &&
+    !/from ['"].*(routes|connector|shipstation|shipp|easypost|walmart|print-queue|orders|shipments)/i.test(marketplaceConfirmationSidecar));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 
