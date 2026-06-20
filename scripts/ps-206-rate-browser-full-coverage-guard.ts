@@ -113,7 +113,7 @@ check('rates service: direct quoting is wrapped in the bounded per-carrier timeo
   /withCarrierQuoteTimeout\(quoteCarrierRates\(/.test(ratesService));
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 check('/rates/browse passes cachedOnly through to the direct universe',
-  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,200}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(ratesRoute));
+  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,500}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(ratesRoute));
 check('the misleading source ternary is gone (cache+live-direct reports mixed)',
   !/source: result\.cached \? 'cache' : filtered\.length \? 'live' : 'live'/.test(ratesRoute) &&
   /'mixed' : 'cache'/.test(ratesRoute));

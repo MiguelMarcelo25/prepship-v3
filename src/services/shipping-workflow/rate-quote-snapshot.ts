@@ -23,6 +23,7 @@
 import { createHash } from 'node:crypto';
 import {
   assertSelectedRateProofForLabelPurchase,
+  SelectedRateProofError,
   selectedRateAuthorityKey,
   validateExactSelectedRate,
   type SelectedRateProofInput,
@@ -43,6 +44,10 @@ export type RateQuoteSnapshot = {
   rates: unknown[];
   /** When the quote was fetched (ISO string or epoch ms). */
   fetchedAt: string | number | null;
+  /** Opaque selectedRateKey for the finalized rank-1 best rate, when known. */
+  bestRateKey?: string | null;
+  /** True only when the required carrier universe completed for this quote. */
+  bestRateComplete?: boolean | null;
 };
 
 export type ResolveRateQuoteResult =
@@ -53,6 +58,8 @@ export type RateQuoteResolveFailure =
   | 'snapshot_missing'
   | 'snapshot_expired'
   | 'selected_rate_not_in_snapshot'
+  | 'snapshot_not_final'
+  | 'selected_rate_not_best'
   | 'proof_invalid';
 
 /**
@@ -151,6 +158,13 @@ export function resolveRateQuoteForPurchase(input: {
   }
   const proof = buildSelectedRateProofFromSnapshot(snapshot, selectedRateKey);
   if (!proof) return { ok: false, reason: 'selected_rate_not_in_snapshot' };
+  if (snapshot.bestRateComplete === false) {
+    return { ok: false, reason: 'snapshot_not_final' };
+  }
+  const bestRateKey = typeof snapshot.bestRateKey === 'string' ? snapshot.bestRateKey.trim() : '';
+  if (snapshot.bestRateComplete === true && bestRateKey && String(selectedRateKey ?? '').trim() !== bestRateKey) {
+    return { ok: false, reason: 'selected_rate_not_best' };
+  }
 
   // Final authority: the reconstructed proof must pass the same strict check the
   // legacy carried-proof path uses. This guarantees the snapshot path can never
@@ -179,6 +193,18 @@ export function assertRateQuoteForLabelPurchase(input: {
 }): SelectedRateProofInput {
   const resolved = resolveRateQuoteForPurchase(input);
   if (!resolved.ok) {
+    if (resolved.reason === 'snapshot_not_final' || resolved.reason === 'selected_rate_not_best') {
+      throw new SelectedRateProofError(
+        resolved.reason === 'snapshot_not_final'
+          ? 'Rate shopping is still finalizing. Re-rate this order before creating the label.'
+          : 'Selected rate is not the finalized Best Rate. Re-rate this order before creating the label.',
+        {
+          ok: false,
+          reason: resolved.reason,
+          selectedAuthorityKey: null,
+        },
+      );
+    }
     // Reuse the canonical assertion so the thrown error type/shape matches the
     // legacy path. A missing/expired/mismatched snapshot yields no proof → the
     // assertion throws SelectedRateProofError (missing_*) before any provider call.

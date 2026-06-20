@@ -610,6 +610,7 @@ async function runBackfill(
             bestRate: rawAmountBest,
             rates: combined.combinedRates as Array<Record<string, unknown>>,
             cacheKey: combined.combinedRequestKey,
+            bestRateComplete: combined.bestRateComplete,
             fetchedAt: result.fetchedAt,
           });
           const secondBestRate =

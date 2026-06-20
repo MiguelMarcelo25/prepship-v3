@@ -34,8 +34,9 @@ const rateA = { carrierCode: 'ups', serviceCode: 'ups_ground', shippingProviderI
 const rateB = { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', shippingProviderId: 433542, shipmentCost: 9.21, otherCost: 0, packageCode: 'package' };
 const keyA = selectedRateOpaqueKey(rateA);
 const keyB = selectedRateOpaqueKey(rateB);
-const freshSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() };
-const expiredSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() - 7 * 60 * 60 * 1000 };
+const freshSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now(), bestRateKey: keyA, bestRateComplete: true };
+const expiredSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() - 7 * 60 * 60 * 1000, bestRateKey: keyA, bestRateComplete: true };
+const incompleteSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now(), bestRateKey: keyA, bestRateComplete: false };
 
 // ── 1. Opaque ID: no PII recoverable, deterministic, distinct from cacheKey. ──
 const id = deriveRateQuoteId(cacheKey);
@@ -65,6 +66,12 @@ const badKey = resolveRateQuoteForPurchase({ snapshot: freshSnapshot, selectedRa
 check('unknown selectedRateKey does not resolve', badKey.ok === false && badKey.reason === 'selected_rate_not_in_snapshot');
 const missing = resolveRateQuoteForPurchase({ snapshot: null, selectedRateKey: keyA });
 check('missing snapshot does not resolve', missing.ok === false && missing.reason === 'snapshot_missing');
+const notBest = resolveRateQuoteForPurchase({ snapshot: freshSnapshot, selectedRateKey: keyB });
+check('fresh finalized snapshot blocks a selected rate that is not rank 1',
+  notBest.ok === false && notBest.reason === 'selected_rate_not_best');
+const notFinal = resolveRateQuoteForPurchase({ snapshot: incompleteSnapshot, selectedRateKey: keyA });
+check('incomplete carrier-universe snapshot blocks purchase even for its provisional rank 1',
+  notFinal.ok === false && notFinal.reason === 'snapshot_not_final');
 check('distinct rates produce distinct authority keys', keyA !== keyB);
 check('buildSelectedRateProofFromSnapshot returns null for unknown key',
   buildSelectedRateProofFromSnapshot(freshSnapshot, 'x|y') === null);
@@ -77,6 +84,10 @@ check('assertRateQuoteForLabelPurchase throws on missing snapshot',
   throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: null, selectedRateKey: keyA })));
 check('assertRateQuoteForLabelPurchase throws on expired snapshot',
   throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: expiredSnapshot, selectedRateKey: keyA })));
+check('assertRateQuoteForLabelPurchase throws when selected snapshot rate is not finalized best',
+  throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: freshSnapshot, selectedRateKey: keyB })));
+check('assertRateQuoteForLabelPurchase throws when the snapshot is not carrier-universe complete',
+  throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: incompleteSnapshot, selectedRateKey: keyA })));
 check('assertRateQuoteForLabelPurchase returns a proof on the happy path',
   !throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: freshSnapshot, selectedRateKey: keyA })));
 
@@ -93,6 +104,11 @@ check('snapshot module adds no force/bypass/skip-proof flag code',
   !/(force|bypass|skipProof|skipValidation|allowStale|disableProof)\s*[:=?]/i.test(codeOnly));
 check('snapshot module delegates final authority to validateExactSelectedRate',
   /validateExactSelectedRate/.test(moduleSrc) && /assertSelectedRateProofForLabelPurchase/.test(moduleSrc));
+check('snapshot module stores finalized best identity and completeness',
+  /bestRateKey\?: string \| null/.test(moduleSrc) &&
+  /bestRateComplete\?: boolean \| null/.test(moduleSrc) &&
+  /selected_rate_not_best/.test(moduleSrc) &&
+  /snapshot_not_final/.test(moduleSrc));
 
 // ── 8. selectedRateKey is opaque (hashed) — no cost/money digest leaks. ──
 check('selectedRateKey is opaque (srk_ prefix)', keyA.startsWith('srk_') && keyA !== keyB);
@@ -107,6 +123,8 @@ const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-s
 // (finalizeBestRateWithQuote) now, not inline storeRateQuoteSnapshot/withSelectedRateKeys.
 check('rates /browse emits rateQuoteId + selectedRateKeys via the single finalizer',
   /finalizeBestRateWithQuote\(/.test(ratesRoute) && /responseRates = finalized\.rates/.test(ratesRoute) && /rateQuoteId/.test(ratesRoute));
+check('rates /browse stamps snapshot completeness into the single finalizer',
+  /finalizeBestRateWithQuote\(\{[\s\S]*?bestRateComplete,/.test(ratesRoute));
 check('createLabelV2 boundary uses the unified rate-selection resolver',
   /await assertLabelPurchaseRateSelection\(/.test(labelsService));
 check('createLabelV2 input accepts rateQuoteId + selectedRateKey',
@@ -115,7 +133,8 @@ check('labels route schema accepts rateQuoteId + selectedRateKey',
   /rateQuoteId: z\.string\(\)/.test(labelsRoute) && /selectedRateKey: z\.string\(\)/.test(labelsRoute));
 check('purchase resolver PREFERS snapshot id but FALLS BACK to legacy proof (never weaker)',
   /body\.rateQuoteId && body\.selectedRateKey/.test(store) &&
-    /assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof \?\? null\)/.test(store));
+    /assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof \?\? null\)/.test(store) &&
+    /selected_rate_not_best|snapshot_not_final/.test(store));
 check('snapshot persistence is backed by analytics_cache (no migration)',
   /from '\.\.\/analytics-cache\.js'/.test(store) && /rate_quote:/.test(store));
 
@@ -148,7 +167,8 @@ check('frontend does NOT pass a stale ref on the direct-carrier retry/override p
   // site 2 keeps the override-wrapper proof only; no buildRateQuoteRefForOrder next to it.
   !/overridePayload\?\.selectedRateProof[\s\S]{0,200}?buildRateQuoteRefForOrder/.test(ordersView));
 check('frontend ref is additive (proof still passed at every site)',
-  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+  /const selectedRateProof =[\s\S]{0,120}?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
   ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)'));
 
 if (failures > 0) {

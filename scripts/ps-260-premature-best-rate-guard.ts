@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+const rowsView = readFileSync('web/src/components/RateRowsView.tsx', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
 let failures = 0;
@@ -52,6 +53,22 @@ check('PS-196 cache-first seed paint preserved (seededBestRate still rendered)',
 // 6. PS-135 preserved — the emitted best is still the canonical backend winner, not a re-rank.
 check('emitted best still consumes the canonical backend winner',
   modal.includes('findCanonicalBestRate(canonicalBackendBest'));
+
+// 7. The visible "Recommended" badge must be tied to the backend-final canonical
+//    winner, not the first row of an in-flight/provisional local sort.
+check('RateRowsView delegates recommended badge ownership to backend-final predicate',
+  /isRecommendedRate: \(rate: RateRow\) => boolean/.test(rowsView) &&
+  /renderRateRow\(r, i, true, isRecommendedRate\(r\)\)/.test(rowsView) &&
+  /renderRateRow\(r, i, false, isRecommendedRate\(r\)\)/.test(rowsView) &&
+  !/renderRateRow\(r, i, true, i === firstOk\)/.test(rowsView) &&
+  !/renderRateRow\(r, i, false, i === firstOk\)/.test(rowsView));
+
+check('RateBrowserModal recommends only the backend complete canonical best after carrier checks finish',
+  /function isRecommendedRate\(r: RateRow\): boolean/.test(modal) &&
+  /totalCarriersLoading > 0/.test(modal) &&
+  /findCanonicalBestRate\(canonicalBestRef\.current, \[r\]\) === r/.test(modal) &&
+  /rateIsBackendComplete\(r\)/.test(modal) &&
+  /isRecommendedRate=\{isRecommendedRate\}/.test(modal));
 
 // Self-wiring.
 check('package.json exposes test:ps-260-premature-best-rate', /test:ps-260-premature-best-rate/.test(pkg));

@@ -2076,13 +2076,18 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           nowMs: rateJobReadNowMs,
         });
         if (override) {
-          bestRateWorkflow.bestRateState = override.bestRateState;
-          bestRateWorkflow.bestRateStateAgeMs = override.bestRateStateAgeMs;
-          bestRateWorkflow.canDisplayFinalRate = false;
-          bestRateWorkflow.savedRateDisplay = 'none';
-          bestRateWorkflow.allowedActions.canUseSavedRate = false;
-          bestRateWorkflow.allowedActions.canCreateLabel = false;
-          bestRateWorkflow.allowedActions.requiresRerate = true;
+          bestRateWorkflow.activeRateCheckState = override.bestRateState;
+          bestRateWorkflow.activeRateCheckAgeMs = override.bestRateStateAgeMs;
+          if (!bestRateWorkflow.canDisplayFinalRate) {
+            bestRateWorkflow.bestRateState = override.bestRateState;
+            bestRateWorkflow.bestRateStateAgeMs = override.bestRateStateAgeMs;
+            bestRateWorkflow.canDisplayFinalRate = false;
+            bestRateWorkflow.canUseDisplayedRateForPurchase = false;
+            bestRateWorkflow.savedRateDisplay = 'none';
+            bestRateWorkflow.allowedActions.canUseSavedRate = false;
+            bestRateWorkflow.allowedActions.canCreateLabel = false;
+            bestRateWorkflow.allowedActions.requiresRerate = true;
+          }
         }
       }
     }

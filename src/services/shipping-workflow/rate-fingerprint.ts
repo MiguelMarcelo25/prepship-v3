@@ -35,6 +35,8 @@ export type SelectedRateValidationReason =
   | 'missing_fingerprint'
   | 'fingerprint_mismatch'
   | 'not_in_current_eligible_rates'
+  | 'snapshot_not_final'
+  | 'selected_rate_not_best'
   // PS-204: the purchase payload names one carrier account while the validated
   // proof rate belongs to a different one (the order-1484 class: payload
   // shippingProviderId=10000025 with proof carrier_id=se-565377).
@@ -390,6 +392,8 @@ const RETRY_ELIGIBLE_PROOF_REASONS: ReadonlySet<string> = new Set([
   'missing_fingerprint',
   'fingerprint_mismatch',
   'not_in_current_eligible_rates',
+  'snapshot_not_final',
+  'selected_rate_not_best',
 ]);
 
 export function classifyLabelPurchaseRetry(err: unknown): {

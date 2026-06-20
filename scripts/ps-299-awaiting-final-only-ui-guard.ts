@@ -42,12 +42,14 @@ check(
   true,
 );
 check(
-  'backend stale verdict is not displayable',
+  'backend stable-display verdict can show expired cache',
   savedBestRateCanDisplayForCurrentRequest({
     ...finalDisplayInput,
+    cacheExpiresAt: '2026-06-20T14:59:59.000Z',
+    backendWorkflowCanDisplayFinalRate: true,
     backendSavedRateDisplay: 'stale',
   }),
-  false,
+  true,
 );
 check(
   'backend saved-unproven verdict is not displayable',
@@ -66,16 +68,20 @@ const stalePreflight = classifyPrintQueuePreflightForSavedRate({
   hasSavedBestRate: true,
   hasDimsAndWeight: true,
   ...finalDisplayInput,
+  cacheExpiresAt: '2026-06-20T14:59:59.000Z',
+  backendWorkflowCanDisplayFinalRate: true,
+  backendWorkflowCanUseDisplayedRateForPurchase: false,
   backendSavedRateDisplay: 'stale',
 });
-check('print queue blocks stale saved rate', stalePreflight.queueableAsCurrent, false);
-check('print queue stale state asks for recalculation', stalePreflight.blockedReason, 'recalculate_required');
+check('print queue blocks display-only expired saved rate', stalePreflight.queueableAsCurrent, false);
+check('print queue display-only expired state asks for fresh rate', stalePreflight.blockedReason, 'expired');
 
 const ratingState = classifyAwaitingRateCellStateWithWorkflow(
   {
     bestRateState: 'rating',
     savedRateDisplay: 'fresh',
-    canDisplayFinalRate: false,
+    canDisplayFinalRate: true,
+    activeRateCheckState: 'rating',
     allowedActions: { canUseSavedRate: false, requiresRerate: true, canCreateLabel: false },
   } as any,
   {
@@ -89,13 +95,14 @@ const ratingState = classifyAwaitingRateCellStateWithWorkflow(
     accountsLoading: false,
   },
 );
-check('rating workflow hides previous amount and shows calculating', ratingState, 'calculating');
+check('rating workflow keeps stable amount visible', ratingState, 'ready');
 
 const staleState = classifyAwaitingRateCellStateWithWorkflow(
   {
     bestRateState: 'stale',
     savedRateDisplay: 'stale',
-    canDisplayFinalRate: false,
+    canDisplayFinalRate: true,
+    canUseDisplayedRateForPurchase: false,
     allowedActions: { canUseSavedRate: false, requiresRerate: true, canCreateLabel: false },
   } as any,
   {
@@ -109,7 +116,28 @@ const staleState = classifyAwaitingRateCellStateWithWorkflow(
     accountsLoading: false,
   },
 );
-check('stale workflow hides previous amount and shows calculating', staleState, 'calculating');
+check('stale workflow keeps cached amount visible', staleState, 'ready');
+
+const emptyRatingState = classifyAwaitingRateCellStateWithWorkflow(
+  {
+    bestRateState: 'rating',
+    savedRateDisplay: 'none',
+    canDisplayFinalRate: false,
+    activeRateCheckState: 'rating',
+    allowedActions: { canUseSavedRate: false, requiresRerate: true, canCreateLabel: false },
+  } as any,
+  {
+    hasDims: true,
+    hasWeight: true,
+    hasDisplayableBestRate: false,
+    isCalculatingBestRate: false,
+    resolvedNoRate: false,
+    resolvedError: false,
+    hasCarrierContext: true,
+    accountsLoading: false,
+  },
+);
+check('rating workflow without finalized cache still shows calculating', emptyRatingState, 'calculating');
 
 if (failures > 0) {
   console.error(`\nFAIL PS-299 awaiting final-only UI guard (${failures} failing)`);

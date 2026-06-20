@@ -56,7 +56,10 @@ const fresh = buildBestRateWorkflowDto({
   currentRequestFingerprint: 'rate:v4:current',
   savedBestRate: {
     amount: 7.25,
+    serviceCode: 'ups_ground',
+    carrierCode: 'ups',
     requestFingerprint: 'rate:v4:current',
+    proofSource: 'backend_rate_response',
     cacheExpiresAt: '2026-06-05T12:10:00.000Z',
     isComplete: true,
   },
@@ -75,7 +78,10 @@ const stale = buildBestRateWorkflowDto({
   currentRequestFingerprint: 'rate:v4:current',
   savedBestRate: {
     amount: 8.4,
+    serviceCode: 'ups_ground',
+    carrierCode: 'ups',
     requestFingerprint: 'rate:v4:current',
+    proofSource: 'backend_rate_response',
     cacheExpiresAt: '2026-06-05T11:59:59.000Z',
     isComplete: true,
   },

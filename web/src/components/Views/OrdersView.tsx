@@ -116,6 +116,7 @@ import {
 // treated as NOT queueable-as-current (the queue can't silently buy a rate the
 // Best Rate column is refusing to show as a dollar figure).
 import { classifyPrintQueuePreflightFromAwaitingState } from './print-queue-preflight-state'
+import { classifyPrintQueuePreflightForSavedRate } from './print-queue-preflight-saved-rate'
 import {
   fetchRecalculateAllJob,
   isRecalculateAllJobDone,
@@ -3149,9 +3150,38 @@ export default function OrdersView({
         !isBackendTestOrder(order) &&
         !hasLivePanelOverride
       ) {
-        const preflight = classifyPrintQueuePreflightFromAwaitingState(
-          getAwaitingBestRateDisplayState(order),
-        )
+        const request = getAutoBestRateRequest(order)
+        const savedRate = getSavedBestRateRecord(order)
+        const workflowRecord = toRecord(getBestRateWorkflowModel(order))
+        const dims = getDimensions(order, orderDetailsById.get(order.orderId) ?? null)
+        const hasDimsAndWeight =
+          hasCompleteDims(dims) && Boolean(order.weight?.value && order.weight.value > 0)
+        const preflight = request && savedRate
+          ? classifyPrintQueuePreflightForSavedRate({
+              shippingProviderId: toNumberValue(savedRate.shippingProviderId),
+              hasSavedBestRate: hasAnySavedBestRateForDisplay(order),
+              hasDimsAndWeight,
+              clientRequestKey: toStringValue(savedRate.clientRequestKey),
+              requestKey: request.key,
+              hasBackendIssuedRateProof: hasBackendIssuedRateProof(savedRate),
+              isComplete: savedRate.isComplete === true,
+              cacheExpiresAt: toStringValue(savedRate.cacheExpiresAt),
+              eligibilityVersion: toStringValue(savedRate.eligibilityVersion),
+              requiredEligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+              matchType: toStringValue(savedRate.matchType),
+              baseAmount: getRateBaseAmount(savedRate),
+              backendWorkflowCanUseSavedRate: toRecord(workflowRecord?.allowedActions)?.canUseSavedRate === true,
+              backendWorkflowCanDisplayFinalRate:
+                typeof workflowRecord?.canDisplayFinalRate === 'boolean' ? workflowRecord.canDisplayFinalRate : null,
+              backendWorkflowCanUseDisplayedRateForPurchase:
+                typeof workflowRecord?.canUseDisplayedRateForPurchase === 'boolean'
+                  ? workflowRecord.canUseDisplayedRateForPurchase
+                  : null,
+              backendSavedRateDisplay: toStringValue(workflowRecord?.savedRateDisplay),
+            })
+          : classifyPrintQueuePreflightFromAwaitingState(
+              getAwaitingBestRateDisplayState(order),
+            )
         if (!preflight.queueableAsCurrent) {
           const reasonLabel = AWAITING_BEST_RATE_STATE_LABELS[preflight.state] || 'Recalculate required'
           return {
@@ -3860,6 +3890,22 @@ export default function OrdersView({
       }
     }
 
+    const workflowRecord = toRecord(getBestRateWorkflowModel(order))
+    const usingSavedDisplayedRateProof =
+      order.orderStatus === 'awaiting_shipment' &&
+      !isTest &&
+      !panelRatePreview[0] &&
+      Boolean(order.bestRate) &&
+      (Boolean(payload.selectedRateProof) || Boolean(payload.rateQuoteId))
+    if (
+      usingSavedDisplayedRateProof &&
+      workflowRecord?.canUseDisplayedRateForPurchase === false
+    ) {
+      showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
+      void refreshStaleRateForOrder(order, mode === 'queue' ? 'Print to Queue' : 'Create + Print')
+      return null
+    }
+
     const labelPopup = mode === 'queue' ? null : openLabelPdfPlaceholder()
     const schedulePostLabelFollowups = (response: any) => {
       void (async () => {
@@ -4311,6 +4357,10 @@ export default function OrdersView({
       backendWorkflowCanUseSavedRate: toRecord(workflowRecord?.allowedActions)?.canUseSavedRate === true,
       backendWorkflowCanDisplayFinalRate:
         typeof workflowRecord?.canDisplayFinalRate === 'boolean' ? workflowRecord.canDisplayFinalRate : null,
+      backendWorkflowCanUseDisplayedRateForPurchase:
+        typeof workflowRecord?.canUseDisplayedRateForPurchase === 'boolean'
+          ? workflowRecord.canUseDisplayedRateForPurchase
+          : null,
       // PS-196: the backend's display-only verdict — legacy saved rates (no newer proof
       // metadata) render immediately as saved/stale instead of a spinner. Display only; the
       // purchase paths still require current backend proof.
@@ -7117,8 +7167,12 @@ export default function OrdersView({
     // next mid-job row refresh. Bounded by the same watchdog the rate-state
     // classifier uses, so a stuck job can never spin forever.
     const rowWorkflowRecord = toRecord((displayOrder as any).bestRateWorkflow)
-    const rowRateJobState = toStringValue(rowWorkflowRecord?.bestRateState)
-    const rowRateJobAgeMs = toNumberValue(rowWorkflowRecord?.bestRateStateAgeMs)
+    const rowRateJobState =
+      toStringValue(rowWorkflowRecord?.activeRateCheckState) ??
+      toStringValue(rowWorkflowRecord?.bestRateState)
+    const rowRateJobAgeMs =
+      toNumberValue(rowWorkflowRecord?.activeRateCheckAgeMs) ??
+      toNumberValue(rowWorkflowRecord?.bestRateStateAgeMs)
     const isRowRecalculating =
       (rowRateJobState === 'pending' || rowRateJobState === 'rating') &&
       (rowRateJobAgeMs == null || rowRateJobAgeMs <= PENDING_RATING_WATCHDOG_MS)

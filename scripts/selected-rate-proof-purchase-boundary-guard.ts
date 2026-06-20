@@ -75,7 +75,8 @@ check(
     // since the PS-178 decomposition and failing silently outside the cert.
     // STRENGTHENED: the panel + batch property sites must now be ACCOUNT-BOUND
     // (third arg = the payload's shippingProviderId) per PS-204.
-    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+    /const selectedRateProof =[\s\S]{0,120}?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
     /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView),

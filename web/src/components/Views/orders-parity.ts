@@ -779,6 +779,9 @@ export type AwaitingBestRateWorkflowInput = {
   // Display authority only — purchase still requires allowedActions/current backend proof.
   savedRateDisplay?: string | null
   canDisplayFinalRate?: boolean | null
+  canUseDisplayedRateForPurchase?: boolean | null
+  activeRateCheckState?: string | null
+  activeRateCheckAgeMs?: number | null
   allowedActions?: {
     canUseSavedRate?: boolean | null
     requiresRerate?: boolean | null
@@ -856,12 +859,18 @@ export function classifyAwaitingRateCellStateWithWorkflow(
       ) {
         return 'unavailable'
       }
+      if (workflow.canDisplayFinalRate === true && fallbackInput.hasDisplayableBestRate) {
+        return 'ready'
+      }
       return workflow.bestRateState === 'rating' ? 'calculating' : 'pending'
     case 'stale':
     case 'mismatched_request':
       // PS-196: cache-first — a displayable saved rate (incl. the backend savedRateDisplay
       // verdict for proven-but-stale rows) renders immediately instead of wiping the cell into
       // a spinner on reload. Purchase still requires a re-rate (allowedActions unchanged).
+      if (workflow.canDisplayFinalRate === true && fallbackInput.hasDisplayableBestRate) {
+        return 'ready'
+      }
       return fallbackInput.hasDims && fallbackInput.hasWeight
         ? fallbackInput.isAutoRatingActive === false
           ? 'deferred'
@@ -887,6 +896,7 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   baseAmount: number
   backendWorkflowCanUseSavedRate?: boolean | null
   backendWorkflowCanDisplayFinalRate?: boolean | null
+  backendWorkflowCanUseDisplayedRateForPurchase?: boolean | null
   // PS-196: the backend's display-only verdict (BestRateWorkflowDto.savedRateDisplay). When the
   // canonical owner says the saved rate is displayable (fresh/stale/saved_unproven), render it —
   // legacy rates without the newer proof metadata included. DISPLAY ONLY: label purchase / Print
@@ -895,7 +905,11 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
 }): boolean {
   if (input.baseAmount <= 0) return false
   if (input.backendWorkflowCanDisplayFinalRate === false) return false
-  if (input.backendSavedRateDisplay && input.backendSavedRateDisplay !== 'fresh') return false
+  if (
+    input.backendSavedRateDisplay &&
+    input.backendSavedRateDisplay !== 'fresh' &&
+    input.backendSavedRateDisplay !== 'stale'
+  ) return false
   if (
     input.requireEligibilityVersion !== false &&
     input.requiredEligibilityVersion &&
@@ -905,6 +919,7 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   }
   if (!input.hasBackendIssuedRateProof && input.matchType !== 'test') return false
   if (input.isComplete !== true) return false
+  if (input.backendWorkflowCanDisplayFinalRate === true) return true
   const expiresAt = input.cacheExpiresAt
   if (!expiresAt) return false
   const expiresMs = Date.parse(expiresAt)

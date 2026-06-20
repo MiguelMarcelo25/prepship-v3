@@ -49,6 +49,7 @@ type RateRowsViewProps = {
     showCarrier: boolean,
     isRecommended: boolean,
   ) => ReactNode;
+  isRecommendedRate: (rate: RateRow) => boolean;
 };
 
 export default function RateRowsView({
@@ -71,6 +72,7 @@ export default function RateRowsView({
   filterBySvcClass,
   isBlockedRate,
   renderRateRow,
+  isRecommendedRate,
 }: RateRowsViewProps): ReactNode {
   function renderAllRatesView(): ReactNode {
     const displayed = hideUnavail
@@ -98,7 +100,6 @@ export default function RateRowsView({
       );
     }
 
-    const firstOk = displayed.findIndex((r) => !isBlockedRate(r, order, currentRateShippingOptions));
     return (
       <>
         <div
@@ -123,7 +124,7 @@ export default function RateRowsView({
           </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 16 }}>
-          {displayed.map((r, i) => renderRateRow(r, i, true, i === firstOk))}
+          {displayed.map((r, i) => renderRateRow(r, i, true, isRecommendedRate(r)))}
         </div>
       </>
     );
@@ -224,7 +225,6 @@ export default function RateRowsView({
       );
     }
 
-    const firstOk = displayed.findIndex((r) => !isBlockedRate(r, order, currentRateShippingOptions));
     return (
       <>
         <div
@@ -264,7 +264,7 @@ export default function RateRowsView({
           ) : null}
         </div>
         <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 16 }}>
-          {displayed.map((r, i) => renderRateRow(r, i, false, i === firstOk))}
+          {displayed.map((r, i) => renderRateRow(r, i, false, isRecommendedRate(r)))}
         </div>
       </>
     );

@@ -666,6 +666,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       bestRate: cheapest as Record<string, unknown>,
       rates: combinedRates as Array<Record<string, unknown>>,
       cacheKey: combinedRequestKey,
+      bestRateComplete,
       fetchedAt: result.fetchedAt,
     });
     rateQuoteId = finalized.rateQuoteId;

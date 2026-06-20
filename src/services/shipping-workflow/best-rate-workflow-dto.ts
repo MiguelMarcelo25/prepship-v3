@@ -110,6 +110,8 @@ export type { OrderRowMoneyDisplay };
 
 export type BestRateSelectedRateState = 'matches_best_rate' | 'mismatched_best_rate' | 'missing' | 'unknown';
 
+const BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response';
+
 // PS-196 — DISPLAY-ONLY classification of the saved best rate, deliberately separate from the
 // purchase authority (allowedActions + the selected-rate proof asserts, which are unchanged):
 //   'fresh'          proven + current → display AND purchase-authorized (canCreateLabel)
@@ -139,6 +141,12 @@ export type BestRateWorkflowDto = {
   // PS-299: backend-owned final-display verdict. Awaiting UI may show a
   // dollar amount only when this is true.
   canDisplayFinalRate: boolean;
+  // PS-300: display and purchase are separate backend-owned decisions. A stale
+  // exact saved rate may remain visible while a checker runs, but purchase stays
+  // blocked until the saved proof is fresh/current/complete.
+  canUseDisplayedRateForPurchase: boolean;
+  activeRateCheckState: 'none' | 'pending' | 'rating';
+  activeRateCheckAgeMs?: number;
   // PS-173 (Phase 1): backend-owned row state + display tuple — present ONLY when the
   // route enriched the DTO with row context via withOrderRowWorkflow (additive).
   rowState?: OrderRowWorkflowState;
@@ -230,6 +238,17 @@ function savedRateExpiresAt(rate: Record<string, unknown> | null): string | null
   if (!rate) return null;
   const metadata = isRecord(rate.metadata) ? rate.metadata : null;
   return stringOrNull(rate.cacheExpiresAt) ?? stringOrNull(metadata?.cacheExpiresAt);
+}
+
+function savedRateHasBackendIssuedProof(rate: Record<string, unknown> | null): boolean {
+  if (!rate) return false;
+  const metadata = isRecord(rate.metadata) ? rate.metadata : null;
+  const raw = isRecord(rate.raw) ? rate.raw : null;
+  return (
+    stringOrNull(rate.proofSource) === BACKEND_RATE_PROOF_SOURCE ||
+    stringOrNull(metadata?.proofSource) === BACKEND_RATE_PROOF_SOURCE ||
+    stringOrNull(raw?.proofSource) === BACKEND_RATE_PROOF_SOURCE
+  );
 }
 
 function isFreshAt(expiresAt: string | null, now: Date): boolean {
@@ -356,6 +375,7 @@ function savedRateDisplayFor(
 ): BestRateSavedRateDisplay {
   if (!hasSavedRate || !savedRateHasDisplayIdentity(savedRate)) return 'none';
   if (state === 'fresh') return 'fresh';
+  if (state === 'stale') return 'stale';
   // 'unknown' is the legacy bucket: saved amount + identity, but no fingerprint/isComplete/expiry.
   // missing/blocked have no saved rate (hasSavedRate=false) — unreachable here; pending/rating are
   // reader-side overrides applied AFTER this builder runs.
@@ -580,6 +600,8 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     Boolean(savedFingerprint && !input.currentRequestFingerprint);
   const complete = savedRateIsComplete(savedRate);
   const fresh = isFreshAt(savedRateExpiresAt(savedRate), now);
+  const hasDisplayIdentity = savedRateHasDisplayIdentity(savedRate);
+  const hasBackendIssuedProof = savedRateHasBackendIssuedProof(savedRate);
 
   let bestRateState: BestRateWorkflowState;
   if (!hasSavedRate) {
@@ -598,6 +620,23 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     bestRateState = 'unknown';
   }
 
+  const hasCompleteCarrierCoverage =
+    !hasCarrierFailure && !hasThinCarrier && !hasIncompleteCarrierCoverage;
+  const canDisplayFinalRate =
+    hasSavedRate &&
+    hasDisplayIdentity &&
+    hasBackendIssuedProof &&
+    matchesRequest &&
+    complete &&
+    hasCompleteCarrierCoverage &&
+    (bestRateState === 'fresh' || bestRateState === 'stale');
+  const canUseDisplayedRateForPurchase =
+    canDisplayFinalRate && fresh && bestRateState === 'fresh';
+  const allowedActions = actionsFor(bestRateState);
+  allowedActions.canUseSavedRate = canUseDisplayedRateForPurchase;
+  allowedActions.canCreateLabel = canUseDisplayedRateForPurchase;
+  allowedActions.requiresRerate = !canUseDisplayedRateForPurchase;
+
   return {
     bestRateState,
     requestFingerprint: currentFingerprint,
@@ -605,8 +644,10 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     sourceConfidence: sourceConfidenceFor({ state: bestRateState, source: input.source ?? null }),
     carrierStatuses,
     ...(input.selectedRateState ? { selectedRateState: input.selectedRateState } : {}),
-    allowedActions: actionsFor(bestRateState),
+    allowedActions,
     savedRateDisplay: savedRateDisplayFor(bestRateState, savedRate, hasSavedRate),
-    canDisplayFinalRate: bestRateState === 'fresh',
+    canDisplayFinalRate,
+    canUseDisplayedRateForPurchase,
+    activeRateCheckState: 'none',
   };
 }

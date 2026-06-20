@@ -114,6 +114,7 @@ const freshWorkflow = buildBestRateWorkflowDto({
     serviceCode: 'usps_ground_advantage',
     carrierCode: 'usps',
     requestFingerprint: 'fp-current',
+    proofSource: 'backend_rate_response',
     cacheExpiresAt: '2026-06-20T15:30:00.000Z',
     isComplete: true,
   },
@@ -130,6 +131,7 @@ const staleWorkflow = buildBestRateWorkflowDto({
     serviceCode: 'usps_ground_advantage',
     carrierCode: 'usps',
     requestFingerprint: 'fp-current',
+    proofSource: 'backend_rate_response',
     cacheExpiresAt: '2026-06-20T14:59:59.000Z',
     isComplete: true,
   },
@@ -137,8 +139,10 @@ const staleWorkflow = buildBestRateWorkflowDto({
   carrierStatuses: [{ carrierId: 'se-ss', carrierName: 'ShipStation', status: 'cached', rateCount: 2 }],
   now: new Date('2026-06-20T15:00:00.000Z'),
 });
-check('stale workflow does not allow final display', (staleWorkflow as any).canDisplayFinalRate === false, staleWorkflow);
-check('stale workflow no longer marks saved rate displayable', staleWorkflow.savedRateDisplay === 'none', staleWorkflow);
+check('stale exact workflow still allows stable final display', (staleWorkflow as any).canDisplayFinalRate === true, staleWorkflow);
+check('stale exact workflow blocks purchase use', (staleWorkflow as any).canUseDisplayedRateForPurchase === false, staleWorkflow);
+check('stale exact workflow marks saved rate displayable as stale', staleWorkflow.savedRateDisplay === 'stale', staleWorkflow);
+check('fresh workflow allows purchase use', (freshWorkflow as any).canUseDisplayedRateForPurchase === true, freshWorkflow);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-299 finalized best-rate guard (${failures} failing)`);

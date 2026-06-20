@@ -51,6 +51,7 @@ const LEGACY_SAVED = {
     savedBestRate: {
       ...LEGACY_SAVED,
       requestFingerprint: 'fp-1',
+      proofSource: 'backend_rate_response',
       isComplete: true,
       cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     },
@@ -68,6 +69,7 @@ const LEGACY_SAVED = {
     savedBestRate: {
       ...LEGACY_SAVED,
       requestFingerprint: 'fp-OLD',
+      proofSource: 'backend_rate_response',
       isComplete: true,
       cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     },

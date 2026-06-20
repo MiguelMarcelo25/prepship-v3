@@ -1211,6 +1211,7 @@ export default function RateBrowserModal({
     setInsuredValue(initialInsuranceValue != null ? String(initialInsuranceValue) : '');
     setSvcClass('');
     setViewMode('all');
+    canonicalBestRef.current = null;
     const initialTotalOz =
       initialWeight && ((initialWeight.lb ?? 0) > 0 || (initialWeight.oz ?? 0) > 0)
         ? (initialWeight.lb ?? 0) * 16 + (initialWeight.oz ?? 0)
@@ -1981,6 +1982,11 @@ export default function RateBrowserModal({
         ? (canonicalBestRef.current as Record<string, unknown>)
         : null;
     return (r as Record<string, unknown>).isComplete === true || raw?.isComplete === true || canonical?.isComplete === true;
+  }
+
+  function isRecommendedRate(r: RateRow): boolean {
+    if (browsing || totalCarriersLoading > 0 || bestRateUnresolved) return false;
+    return findCanonicalBestRate(canonicalBestRef.current, [r]) === r && rateIsBackendComplete(r);
   }
 
   function handleRateClick(r: RateRow): void {
@@ -2800,6 +2806,7 @@ export default function RateBrowserModal({
                 filterBySvcClass={filterBySvcClass}
                 isBlockedRate={isBlockedRate}
                 renderRateRow={renderRateRow}
+                isRecommendedRate={isRecommendedRate}
               />
             </div>
           </div>

@@ -15,6 +15,7 @@ import { getAnalyticsCache, setAnalyticsCache } from '../analytics-cache.js';
 import {
   assertPurchaseAccountMatchesProof,
   assertSelectedRateProofForLabelPurchase,
+  SelectedRateProofError,
   type SelectedRateProofInput,
 } from './rate-fingerprint.js';
 import {
@@ -45,6 +46,8 @@ const snapshotCacheKey = (rateQuoteId: string) => `rate_quote:${rateQuoteId}`;
 export async function storeRateQuoteSnapshot(input: {
   cacheKey: string;
   rates: unknown[];
+  bestRate?: unknown | null;
+  bestRateComplete?: boolean | null;
   fetchedAt?: string | number;
 }): Promise<string | null> {
   const rateQuoteId = deriveRateQuoteId(input.cacheKey);
@@ -53,6 +56,8 @@ export async function storeRateQuoteSnapshot(input: {
     cacheKey: input.cacheKey,
     rates: Array.isArray(input.rates) ? input.rates : [],
     fetchedAt: input.fetchedAt ?? new Date().toISOString(),
+    bestRateKey: input.bestRate ? selectedRateOpaqueKey(input.bestRate) : null,
+    bestRateComplete: input.bestRateComplete === true,
   };
   try {
     await setAnalyticsCache(snapshotCacheKey(rateQuoteId), snapshot, RATE_QUOTE_SNAPSHOT_TTL_SECONDS);
@@ -93,6 +98,7 @@ export async function finalizeBestRateWithQuote<T extends Record<string, unknown
   bestRate: T;
   rates: Array<Record<string, unknown>>;
   cacheKey: string;
+  bestRateComplete?: boolean | null;
   fetchedAt?: string | number;
 }): Promise<{
   bestRate: T & { selectedRateKey: string; rateQuoteId?: string; proofSource: string };
@@ -103,6 +109,8 @@ export async function finalizeBestRateWithQuote<T extends Record<string, unknown
   const rateQuoteId = await storeRateQuoteSnapshot({
     cacheKey: input.cacheKey,
     rates: ratesWithKeys,
+    bestRate: input.bestRate,
+    bestRateComplete: input.bestRateComplete,
     fetchedAt: input.fetchedAt,
   });
   // Stamp the opaque rateQuoteId onto each rate too (the FE passes back { rateQuoteId,
@@ -183,6 +191,18 @@ export async function assertLabelPurchaseRateSelection(body: LabelPurchaseRateSe
     // legacy carried proof below, which itself throws if missing/invalid. Either way
     // no purchase proceeds without a valid proof.
     recordRateProofCanary('snapshot_fallback', resolved.reason);
+    if (resolved.reason === 'snapshot_not_final' || resolved.reason === 'selected_rate_not_best') {
+      throw new SelectedRateProofError(
+        resolved.reason === 'snapshot_not_final'
+          ? 'Rate shopping is still finalizing. Re-rate this order before creating the label.'
+          : 'Selected rate is not the finalized Best Rate. Re-rate this order before creating the label.',
+        {
+          ok: false,
+          reason: resolved.reason,
+          selectedAuthorityKey: null,
+        },
+      );
+    }
     if (rateProofEnforcementMode() === 'strict') {
       assertSelectedRateProofForLabelPurchase(
         resolved.reason === 'snapshot_missing' ? null : { requestFingerprint: null },

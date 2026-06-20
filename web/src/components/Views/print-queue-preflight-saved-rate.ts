@@ -59,6 +59,7 @@ export type PrintQueuePreflightForSavedRateInput = {
   baseAmount: number
   backendWorkflowCanUseSavedRate?: boolean | null
   backendWorkflowCanDisplayFinalRate?: boolean | null
+  backendWorkflowCanUseDisplayedRateForPurchase?: boolean | null
   backendSavedRateDisplay?: string | null
   nowMs?: number
 }
@@ -87,6 +88,7 @@ export function classifyPrintQueuePreflightForSavedRate(
     baseAmount: input.baseAmount,
     backendWorkflowCanUseSavedRate: input.backendWorkflowCanUseSavedRate ?? null,
     backendWorkflowCanDisplayFinalRate: input.backendWorkflowCanDisplayFinalRate ?? null,
+    backendWorkflowCanUseDisplayedRateForPurchase: input.backendWorkflowCanUseDisplayedRateForPurchase ?? null,
     backendSavedRateDisplay: input.backendSavedRateDisplay,
   })
 
@@ -103,7 +105,13 @@ export function classifyPrintQueuePreflightForSavedRate(
 
   // The queueable verdict comes from the SAME mapping the ShipStation rows use —
   // carrier family is NOT consulted here.
-  const verdict = classifyPrintQueuePreflightFromAwaitingState(state)
+  const purchaseState: AwaitingBestRateDisplayState =
+    state === 'show_amount' && input.backendWorkflowCanUseDisplayedRateForPurchase === false
+      ? input.cacheExpiresAt && Number.isFinite(Date.parse(input.cacheExpiresAt)) && Date.parse(input.cacheExpiresAt) <= (input.nowMs ?? Date.now())
+        ? 'expired'
+        : 'recalculate_required'
+      : state
+  const verdict = classifyPrintQueuePreflightFromAwaitingState(purchaseState)
 
   return {
     ...verdict,
