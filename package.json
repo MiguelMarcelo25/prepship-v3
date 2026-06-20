@@ -402,6 +402,7 @@
     "test:ps-289-multi-package-schema": "tsx scripts/ps-289-multi-package-schema-guard.ts",
     "test:ps-289-multi-package-mock-label-flow": "tsx scripts/ps-289-multi-package-mock-label-flow-guard.ts",
     "test:ps-289-multi-package-db-orchestration": "tsx scripts/ps-289-multi-package-db-orchestration-guard.ts",
+    "test:ps-289-multi-package-print-queue-plan": "tsx scripts/ps-289-multi-package-print-queue-plan-guard.ts",
     "test:ps-289-multi-package-closeout": "tsx scripts/ps-289-multi-package-closeout-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",

@@ -4,12 +4,13 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 43%.
+Current completion estimate: PS-289 51%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
-exist, but the real product still needs real label purchase, print queue, marketplace confirmation,
-and UI work before any operator should use it.
+exist. Group-aware print queue planning also exists, but the real product still needs real label
+purchase, print queue persistence/integration, marketplace confirmation, and UI work before any
+operator should use it.
 
 ## Evidence now wired
 
@@ -17,6 +18,7 @@ and UI work before any operator should use it.
 - `test:ps-289-multi-package-schema`
 - `test:ps-289-multi-package-mock-label-flow`
 - `test:ps-289-multi-package-db-orchestration`
+- `test:ps-289-multi-package-print-queue-plan`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -32,13 +34,15 @@ and UI work before any operator should use it.
 - The DB-backed orchestration owner writes planned group/package rows, applies mocked package label
   transitions, and marks the group as `mock_labels_created`.
 - Duplicate package label idempotency is checked before any sidecar writes.
+- The print queue planner emits one deterministic queue candidate per package label.
+- Print queue candidates use package-aware queue IDs and block duplicate queued label idempotency.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
 ## Missing before close
 
 - Real idempotent per-package label purchase workflow behind mocked proof.
-- Group-aware print queue and duplicate-label protection.
+- Group-aware print queue persistence/integration with the existing printer path.
 - Marketplace confirmation planner that can send the correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.
 - End-to-end mocked workflow proof before any live postage or marketplace notification.
