@@ -4,14 +4,14 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 66%.
+Current completion estimate: PS-289 72%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
 exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
-and end-to-end mocked workflow proof now exists. The real product still needs real label purchase,
-print queue persistence/integration, marketplace confirmation persistence/integration, and UI work
-before any operator should use it.
+end-to-end mocked workflow proof now exists, and a test-gated per-package label purchase boundary now
+exists. The real product still needs real carrier adapter wiring, print queue persistence/integration,
+marketplace confirmation persistence/integration, and UI work before any operator should use it.
 
 ## Evidence now wired
 
@@ -22,6 +22,7 @@ before any operator should use it.
 - `test:ps-289-multi-package-print-queue-plan`
 - `test:ps-289-multi-package-marketplace-confirmation-plan`
 - `test:ps-289-multi-package-mocked-workflow`
+- `test:ps-289-multi-package-label-purchase-boundary`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -47,12 +48,16 @@ before any operator should use it.
   marketplace confirmation candidates with the same package idempotency keys.
 - The mocked workflow proof preserves all tracking numbers in package order and keeps every stage
   explicitly non-live.
+- The per-package label purchase boundary builds one idempotent purchase request per package through
+  an injected purchaser dependency.
+- The purchase boundary refuses to buy labels without an explicit purchaser, rejects mismatched
+  package idempotency keys, and blocks live postage results by default.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
 ## Missing before close
 
-- Real idempotent per-package label purchase workflow behind mocked proof.
+- Real carrier adapter wiring for per-package label purchase plus DJ-approved live canary proof.
 - Group-aware print queue persistence/integration with the existing printer path.
 - Marketplace confirmation persistence/integration that can send the correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.

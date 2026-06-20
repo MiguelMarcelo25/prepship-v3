@@ -28,6 +28,10 @@ const marketplacePlan = readFileSync(
   'utf8',
 );
 const mockedWorkflow = readFileSync('src/services/shipping-workflow/multi-package-mocked-workflow.ts', 'utf8');
+const labelPurchaseBoundary = readFileSync(
+  'src/services/shipping-workflow/multi-package-label-purchase-boundary.ts',
+  'utf8',
+);
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
@@ -44,6 +48,8 @@ check('package wires PS-289 marketplace confirmation plan guard',
   packageJson.includes('"test:ps-289-multi-package-marketplace-confirmation-plan"'));
 check('package wires PS-289 mocked workflow guard',
   packageJson.includes('"test:ps-289-multi-package-mocked-workflow"'));
+check('package wires PS-289 label purchase boundary guard',
+  packageJson.includes('"test:ps-289-multi-package-label-purchase-boundary"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -60,10 +66,12 @@ check('status doc lists marketplace confirmation plan guard',
   doc.includes('`test:ps-289-multi-package-marketplace-confirmation-plan`'));
 check('status doc lists mocked workflow guard',
   doc.includes('`test:ps-289-multi-package-mocked-workflow`'));
+check('status doc lists label purchase boundary guard',
+  doc.includes('`test:ps-289-multi-package-label-purchase-boundary`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 66%',
-  /PS-289 66%/.test(doc));
+check('status doc keeps PS-289 conservative at 72%',
+  /PS-289 72%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
 check('status doc says sidecar persistence foundation exists',
@@ -78,8 +86,10 @@ check('status doc says marketplace confirmation planning exists',
   /Marketplace confirmation planning now exists/.test(doc));
 check('status doc says end-to-end mocked workflow proof exists',
   /end-to-end mocked workflow proof now exists/i.test(doc));
-check('status doc lists real per-package purchase as missing',
-  /Real idempotent per-package label purchase workflow/.test(doc));
+check('status doc says test-gated label purchase boundary exists',
+  /test-gated per-package label purchase boundary now\s+exists/.test(doc));
+check('status doc lists real carrier adapter wiring as missing',
+  /Real carrier adapter wiring for per-package label purchase/.test(doc));
 check('status doc lists print queue persistence as missing',
   /print queue persistence\/integration/.test(doc));
 check('status doc lists marketplace confirmation integration as missing',
@@ -121,6 +131,11 @@ check('mocked workflow exports buildMockedMultiPackageWorkflow',
 check('mocked workflow stays pure and non-live',
   /No DB writes, provider calls, real labels, postage, print queue writes, marketplace API calls/.test(mockedWorkflow) &&
     !/from ['"].*(db|schema|routes|connector|shipstation|shipp|easypost|walmart|orders|shipments)/i.test(mockedWorkflow));
+check('label purchase boundary exports purchaseMultiPackageLabels',
+  /export async function purchaseMultiPackageLabels/.test(labelPurchaseBoundary));
+check('label purchase boundary has no default live purchase path',
+  /No default provider calls, live postage, print queue writes, marketplace API calls/.test(labelPurchaseBoundary) &&
+    !/from ['"].*(db|schema|routes|connector|shipstation|shipp|easypost|walmart|print-queue|marketplace|orders|shipments)/i.test(labelPurchaseBoundary));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 
