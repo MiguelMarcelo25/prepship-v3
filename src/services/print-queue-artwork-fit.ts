@@ -10,7 +10,7 @@
 // to place a small/off-center label artwork centered on a clean 4×6 page
 // instead of copying the page byte-for-byte.
 
-import { deriveLabelContentRegion } from './print-queue-artwork-region';
+import { deriveLabelContentRegion } from './print-queue-artwork-region.js';
 
 export type ArtworkBounds = { x: number; y: number; width: number; height: number };
 

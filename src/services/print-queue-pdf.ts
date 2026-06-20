@@ -6,15 +6,15 @@
 // The layout arithmetic / constants / closures are kept char-for-char (PDF byte-identity is
 // pinned by the offline cert guards: ps-070, ps-073-*, ps-109, batch-header-package-size,
 // print-queue-batch-names, ps-084).
-import { type PrintQueueEntry } from '../db/schema/print-queue';
+import { type PrintQueueEntry } from '../db/schema/print-queue.js';
 import {
   collapseIdentityLines,
   resolveQueueLineIdentity,
   headerCardTitle,
   NO_SKU_PICK_NOTE,
   type CollapsedQueueLine,
-} from './print-queue-identity';
-import { deriveArtworkBounds, placeArtworkOnCanvas } from './print-queue-artwork-fit';
+} from './print-queue-identity.js';
+import { deriveArtworkBounds, placeArtworkOnCanvas } from './print-queue-artwork-fit.js';
 
 // Per user override unlock shipped data on 2026-06-02: display-only print
 // layout. Append a label PDF's pages to the merged print document, normalizing

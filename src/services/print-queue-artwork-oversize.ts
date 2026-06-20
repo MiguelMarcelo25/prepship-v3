@@ -23,8 +23,8 @@
 // offline; that is a deliberate follow-on slice. These helpers use box geometry
 // only.
 
-import { type Region } from './print-queue-artwork-region';
-import { LABEL_4X6_W, LABEL_4X6_ASPECT } from './print-queue-label-4x6-dims';
+import { type Region } from './print-queue-artwork-region.js';
+import { LABEL_4X6_W, LABEL_4X6_ASPECT } from './print-queue-label-4x6-dims.js';
 
 const LABEL_ASPECT = LABEL_4X6_ASPECT; // 2:3
 // Same aspect tolerance the region module uses to call a page "4×6 shaped".

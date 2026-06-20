@@ -24,12 +24,12 @@ export type Region = { x: number; y: number; width: number; height: number };
 // with asymmetric top/bottom whitespace) live in their own small module and are
 // delegated to from deriveLabelContentRegion below. Imported at the bottom of
 // the file is not possible (ESM hoists), so import here.
-import { oversized4x6AspectRegion, recenteredLabelBandRegion } from './print-queue-artwork-oversize';
+import { oversized4x6AspectRegion, recenteredLabelBandRegion } from './print-queue-artwork-oversize.js';
 
 // Standard 4×6 label @72dpi (the print-queue canvas target) and its aspect.
 // Sourced from a leaf dims module so sibling helpers can share them without a
 // circular import; re-exported here to keep existing import sites working.
-import { LABEL_4X6_W, LABEL_4X6_H, LABEL_4X6_ASPECT } from './print-queue-label-4x6-dims';
+import { LABEL_4X6_W, LABEL_4X6_H, LABEL_4X6_ASPECT } from './print-queue-label-4x6-dims.js';
 export { LABEL_4X6_W, LABEL_4X6_H };
 const LABEL_ASPECT = LABEL_4X6_ASPECT; // 2:3
 

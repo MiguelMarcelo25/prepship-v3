@@ -24,11 +24,11 @@ import { attachObservedIncomplete } from './shipp-observed-incomplete-marker.js'
 import { resolveInsuranceCertainty } from '../../services/shipping-workflow/insurance-certainty.js';
 import { PDFDocument } from 'pdf-lib';
 // PS-294: the single owner of the SHIPP label 4×6 placement math (raster/image path).
-import { computeFourBySixPlacement } from './shipp-label-4x6-placement';
+import { computeFourBySixPlacement } from './shipp-label-4x6-placement.js';
 // PS-294 slice 2: B's PS-287 content-aware 4×6 normalizer — the PURE print-queue-pdf module (NOT the
 // print-queue.ts barrel, which drags in db/client + env). Crops the PDF label to its visible artwork
 // bounds + scales it to FILL the 4×6 canvas, so an oversized/corner SHIPP label fills 4×6.
-import { appendNormalizedLabelPages } from '../../services/print-queue-pdf';
+import { appendNormalizedLabelPages } from '../../services/print-queue-pdf.js';
 import { createRequire } from 'node:module';
 import UPNG from '@pdf-lib/upng';
 
