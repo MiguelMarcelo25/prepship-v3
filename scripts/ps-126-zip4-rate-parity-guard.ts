@@ -69,8 +69,15 @@ function check(name: string, got: unknown, want: unknown) {
   check('Rate Browser sanitizes postal (ZIP+4 aware)', /sanitizePostalInput/.test(modal), true);
   check('Rate Browser browseRates sends exact toPostalCode', /toPostalCode:\s*zip/.test(modal), true);
 
+  // PS-166: normalizeRateZip (PS-126 exact-postal preservation) moved VERBATIM to
+  // ./orders/rate-request-normalizers; OrdersView imports it and feeds it into the
+  // rate-request draft key (`z=${normalizeRateZip(...)}`). Assert at the new owner
+  // + that OrdersView delegates.
+  const normalizers = readFileSync('web/src/components/Views/orders/rate-request-normalizers.ts', 'utf8');
+  check('rate-request normalizer draft-key preserves +4', /digits\.slice\(5,\s*9\)/.test(normalizers), true);
   const orders = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-  check('OrdersView draft-key preserves +4', /digits\.slice\(5,\s*9\)/.test(orders), true);
+  check('OrdersView draft-key delegates to normalizeRateZip (preserves +4)',
+    /normalizeRateZip/.test(orders) && /z=\$\{normalizeRateZip\(/.test(orders), true);
 }
 
 if (failures > 0) {

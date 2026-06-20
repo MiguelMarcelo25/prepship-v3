@@ -115,10 +115,13 @@ assert(
 )
 
 assert(
+  // PS-209: api/carriers/labels.ts is a retired 410 stub. The v4 label owner
+  // (src/services/labels.ts createLabelV2) now passes normalized shipping
+  // options to the direct-carrier connector path.
   apiClient.includes('insuranceProvider') &&
     apiClient.includes('insuredValue') &&
     directRates.includes('shippingOptions') &&
-    directLabels.includes('shippingOptions') &&
+    labelsService.includes('shippingOptions') &&
     connectorTypes.includes('shippingOptions?: NormalizedShippingOptions'),
   'direct carrier rate/label endpoints and connector inputs receive normalized shipping options',
 )
@@ -141,11 +144,15 @@ assert(
 )
 
 assert(
-  directLabels.includes('enqueueShipmentConfirmationSql') &&
-    directLabels.includes('payload: {') &&
-    directLabels.includes('rawOrder') &&
-    directLabels.includes('confirmationProvider') &&
-    directLabels.includes('shippingOptions'),
+  // PS-209: the direct-label purchase path is now the v4 createLabelV2 owner.
+  // It enqueues the marketplace confirmation (enqueueShipmentConfirmation) with
+  // the store-connector confirmation payload (confirmationProvider + rawOrder)
+  // while the carrier connector receives the normalized shippingOptions.
+  labelsService.includes('enqueueShipmentConfirmation(') &&
+    labelsService.includes('payload: confirmationPayload') &&
+    labelsService.includes('rawOrder') &&
+    labelsService.includes('confirmationProvider') &&
+    labelsService.includes('shippingOptions'),
   'direct label purchase keeps store connector confirmation context while carrier connector receives shipping options',
 )
 

@@ -52,8 +52,12 @@ check('withRateRequestMetadata prefers metadata then the rate-stamped backend ex
   /toStringValue\(metadata\.cacheExpiresAt\) \?\? toStringValue\(rate\.cacheExpiresAt\)/.test(ordersView));
 check('the local mint is reached only when the backend sent nothing, and warns',
   /if \(!backendExpiresAt\) \{\s*\n\s*console\.warn\('\[orders\] backend rate carried no cacheExpiresAt/.test(ordersView));
-check('exactly one display-fallback mint site remains in OrdersView',
-  (ordersView.match(/new Date\(Date\.now\(\) \+ 6 \* 60 \* 60 \* 1000\)/g) ?? []).length === 1);
+// The 6h display-fallback mint was REMOVED entirely: OrdersView now does
+// `expiresAt = backendExpiresAt ?? null` (it only warns). Zero FE mint sites is
+// strictly more conservative — a stale rate can never be made to look fresh by a
+// client-minted window. This still fails if any 6h mint is re-introduced.
+check('no display-fallback 6h mint site remains in OrdersView (FE never mints an expiry)',
+  (ordersView.match(/new Date\(Date\.now\(\) \+ 6 \* 60 \* 60 \* 1000\)/g) ?? []).length === 0);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-183 backend cache TTL guard (${failures} failing)`);

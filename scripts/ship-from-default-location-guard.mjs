@@ -5,57 +5,59 @@ function assert(condition, message) {
   if (!condition) process.exitCode = 1;
 }
 
-const labels = readFileSync('api/carriers/labels.ts', 'utf8');
+// PS-209/PS-202: api/carriers/labels.ts is a retired 410 stub. The direct-label
+// purchase path is now the v4 owner src/services/labels.ts (createLabelV2), which
+// resolves the ship-from from the SAME default-Location source (getDefaultShipFrom)
+// and maps every Location field into the connector ship-from. The invariant —
+// default Location is the authoritative ship-from, best-effort, before the carrier
+// connector runs — is unchanged; repointed to the new owner + shape.
+const labels = readFileSync('src/services/labels.ts', 'utf8');
 const shipFrom = readFileSync('src/lib/ship-from.ts', 'utf8');
 const locations = readFileSync('src/services/locations.ts', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
-// 1. The default-Location ship-from helper exists and is loaded from the same
-//    source the ShipStation path uses (getDefaultShipFrom -> default Location).
+// 1. The default-Location ship-from is resolved from the same source-of-truth the
+//    ShipStation path uses (getDefaultShipFrom -> default Location record).
 assert(
-  labels.includes('async function applyDefaultLocationShipFrom('),
-  'api/carriers/labels.ts defines applyDefaultLocationShipFrom()',
+  labels.includes("import { getDefaultShipFrom } from '../lib/ship-from'"),
+  'src/services/labels.ts imports getDefaultShipFrom from the default-Location source',
 );
 assert(
-  labels.includes("getDefaultShipFrom = (await import('../../src/lib/ship-from.js')).getDefaultShipFrom"),
-  'ensureLabelDeps lazy-loads getDefaultShipFrom from the default-Location source',
+  labels.includes('const fromLoc = await getDefaultShipFrom();'),
+  'createLabelV2 resolves the default-Location ship-from via getDefaultShipFrom()',
 );
 
-// 2. It is actually invoked on the direct-label path, right after creds is built
-//    (i.e. before any carrier branch reads creds.shipFrom*).
-assert(
-  labels.includes('await applyDefaultLocationShipFrom(creds)'),
-  'direct-label path invokes applyDefaultLocationShipFrom(creds)',
-);
+// 2. It is invoked on the direct-label path and the resolved shipFrom flows into
+//    the connector call (i.e. before any carrier branch ships the package).
 {
-  const credsIdx = labels.indexOf('const creds = (credentials ?? {}) as Record<string, unknown>;');
-  const applyIdx = labels.indexOf('await applyDefaultLocationShipFrom(creds)');
+  const resolveIdx = labels.indexOf('const fromLoc = await getDefaultShipFrom();');
+  const connectorIdx = labels.indexOf('shipFrom,', resolveIdx);
   assert(
-    credsIdx !== -1 && applyIdx !== -1 && applyIdx > credsIdx && applyIdx - credsIdx < 400,
-    'applyDefaultLocationShipFrom runs immediately after creds is built (before carrier branches)',
+    resolveIdx !== -1 && connectorIdx !== -1 && connectorIdx > resolveIdx,
+    'default-Location ship-from is resolved before it is passed to the carrier connector',
   );
 }
 
-// 3. The helper overwrites the creds.shipFrom* keys that every direct connector
-//    reads first — this is what makes the default Location authoritative and
-//    removes the stale SHIPPHQ / 'Seller'/'Warehouse'/'Carson' values.
+// 3. Every default-Location field is mapped into the connector ship-from — this is
+//    what makes the default Location authoritative and removes stale SHIPPHQ /
+//    'Seller'/'Warehouse'/'Carson' values.
 assert(
-  labels.includes('creds.shipFromName = loc.name') &&
-    labels.includes('creds.shipFromAddress1 = loc.address_line1') &&
-    labels.includes('creds.shipFromCity = loc.city_locality') &&
-    labels.includes('creds.shipFromState = loc.state_province') &&
-    labels.includes('creds.shipFromZip = loc.postal_code'),
-  'applyDefaultLocationShipFrom overwrites creds.shipFrom* from the default Location',
+  labels.includes('name: fromLoc.name') &&
+    labels.includes('street1: fromLoc.address_line1') &&
+    labels.includes('city: fromLoc.city_locality') &&
+    labels.includes('state: fromLoc.state_province') &&
+    labels.includes('postalCode: fromLoc.postal_code'),
+  'createLabelV2 maps the default-Location fields into the connector ship-from',
 );
 
-// 4. The helper must be best-effort: a missing default Location / env must NOT
-//    break label creation (it falls back to prior per-account behavior).
+// 4. It must be best-effort: a missing default Location / env must NOT break label
+//    creation (it falls back to defaultShipFromAddress()).
 {
-  const start = labels.indexOf('async function applyDefaultLocationShipFrom(');
-  const body = start !== -1 ? labels.slice(start, start + 1200) : '';
+  const start = labels.indexOf('const fromLoc = await getDefaultShipFrom();');
+  const body = start !== -1 ? labels.slice(Math.max(0, start - 200), start + 600) : '';
   assert(
-    /try\s*\{/.test(body) && /catch\b/.test(body),
-    'applyDefaultLocationShipFrom is wrapped in try/catch so a missing default Location never breaks label creation',
+    /try\s*\{/.test(body) && /catch\b/.test(body) && /defaultShipFromAddress\(\)/.test(body),
+    'the default-Location ship-from resolution is wrapped in try/catch so a missing default Location never breaks label creation',
   );
 }
 

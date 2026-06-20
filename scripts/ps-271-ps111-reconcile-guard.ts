@@ -52,6 +52,9 @@ const savedFreshBest = {
   isComplete: true,
   cacheExpiresAt: futureExpiry,
   serviceCode: 'usps_ground_advantage',
+  // PS-299/PS-300: a genuine backend-issued saved rate stamps proofSource; the
+  // display/purchase gate requires it, so a "fresh" fixture must carry it.
+  proofSource: 'backend_rate_response',
 };
 
 // ── 1) isBestRateComplete still treats a THIN carrier as not-complete (canonical owner) ──

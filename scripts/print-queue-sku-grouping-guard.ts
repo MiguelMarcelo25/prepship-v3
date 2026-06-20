@@ -85,7 +85,11 @@ assert.equal(
 const comboGroup = groups.find((group) => group.orders.some((entry) => entry.order_id === '1149'));
 assert.ok(comboGroup, 'multi-SKU combo group should exist');
 assert.equal(comboGroup.orders.length, 2, 'identical SKU+qty combos should merge regardless of input line order');
-assert.match(comboGroup.groupId, /^COMBO:booster-gel-001:1\|hu-10:1\|qty:2$/);
+// PS-177: each combo segment now embeds the line groupToken (SKU:/NOSKU:) so the
+// combo key is `${groupToken}:${qty}` per line, sorted + joined, with the trailing
+// `|qty:<orderQty>` on the grouped id. Same deterministic identity — repointed to
+// the current shape (mirrors test:ps-177-queue-sku-identity).
+assert.match(comboGroup.groupId, /^COMBO:SKU:booster-gel-001:1\|SKU:hu-10:1\|qty:2$/);
 assert.deepEqual(
   comboGroup.skuLines?.map((line) => `${line.sku} x${line.qty}`),
   ['Booster-gel-001 x1', 'HU-10 x1'],
@@ -111,7 +115,9 @@ const payload = buildQueueAddPayload({
   ],
 } as any, 'https://example.com/1149.pdf');
 
-assert.equal(payload.sku_group_id, 'COMBO:booster-gel-001:1|hu-10:1');
+// PS-177: persisted sku_group_id embeds the SKU: groupToken per segment (no
+// trailing |qty: on the persisted key — that suffix lives only on the grouped id).
+assert.equal(payload.sku_group_id, 'COMBO:SKU:booster-gel-001:1|SKU:hu-10:1');
 assert.deepEqual(
   payload.multi_sku_data,
   [
@@ -122,8 +128,13 @@ assert.deepEqual(
 );
 
 const ordersViewSource = fs.readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-257: the Print Queue drawer presentation (bordered multi-SKU chips + the
+// SKU-aware search placeholder) was extracted VERBATIM into
+// OrdersPrintQueueDrawer.tsx. The group search-text FILTER (the actual all-SKU
+// match) still lives in the OrdersView parent (group.searchText.includes).
+const printQueueDrawerSource = fs.readFileSync('web/src/components/Views/OrdersPrintQueueDrawer.tsx', 'utf8');
 assert.match(
-  ordersViewSource,
+  printQueueDrawerSource,
   /border border-brand\/35 bg-brand\/5/,
   'Print Queue UI should render bordered SKU+qty chips for multi-SKU groups',
 );
@@ -133,21 +144,31 @@ assert.match(
   'Print Queue search should include normalized all-SKU group search text',
 );
 assert.match(
-  ordersViewSource,
+  printQueueDrawerSource,
   /Search order #, ID, SKU/,
   'Print Queue search placeholder should tell operators SKU search is supported',
 );
 
-const printQueueServiceSource = fs.readFileSync('src/services/print-queue.ts', 'utf8');
+// PS-073/PS-138: the batch-header PDF rendering was reshaped (drawRectangle +
+// chipText → an outlined rounded card per SKU via drawSvgPath/roundedRectSvgPath)
+// and then EXTRACTED from print-queue.ts into the pure print-queue-pdf.ts module.
+// Same invariant — every SKU line in a (multi-)SKU combo gets its own bordered
+// card — repointed to the current owner + primitive.
+const printQueuePdfSource = fs.readFileSync('src/services/print-queue-pdf.ts', 'utf8');
 assert.match(
-  printQueueServiceSource,
-  /page\.drawRectangle\(\{[\s\S]*borderColor:[\s\S]*borderWidth:[\s\S]*chipText/,
-  'PDF Batch Header should draw a bordered block for each multi-SKU SKU+qty line',
+  printQueuePdfSource,
+  /page\.drawSvgPath\(roundedRectSvgPath\([\s\S]*?borderColor:[\s\S]*?borderWidth:/,
+  'PDF Batch Header should draw a bordered (outlined) card for each SKU+qty line',
 );
 assert.match(
-  printQueueServiceSource,
-  /const isMultiSkuHeader = skuLines\.length > 1/,
-  'PDF Batch Header should apply bordered chip treatment only to multi-SKU groups',
+  printQueuePdfSource,
+  /Every SKU in a multi-SKU combo gets its own outlined card/,
+  'PDF Batch Header should give every SKU in a multi-SKU combo its own bordered card',
+);
+assert.match(
+  printQueuePdfSource,
+  /for \(const item of visibleCards\)/,
+  'PDF Batch Header should iterate the collapsed per-SKU cards (one card per SKU line)',
 );
 
 console.log('PS-063 print queue SKU grouping guard passed');

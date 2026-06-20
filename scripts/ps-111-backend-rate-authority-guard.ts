@@ -51,9 +51,18 @@ check('any carrier ERROR -> NOT complete',
   check('DTO: partial state cannot use the saved rate / requires re-rate', partial.allowedActions.canUseSavedRate, false);
 
   // All carriers terminal, fresh, complete -> fresh + usable.
+  // PS-299/PS-300: a genuinely usable saved rate is a backend-issued (proofSource)
+  // rate with a display identity (serviceCode) — the purchase gate requires both.
   const fresh = buildBestRateWorkflowDto({
     currentRequestFingerprint: 'fp1',
-    savedBestRate: { amount: 7.5, requestFingerprint: 'fp1', isComplete: true, cacheExpiresAt: new Date(Date.now() + 3600_000).toISOString() },
+    savedBestRate: {
+      amount: 7.5,
+      requestFingerprint: 'fp1',
+      isComplete: true,
+      cacheExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      serviceCode: 'usps_ground_advantage',
+      proofSource: 'backend_rate_response',
+    },
     carrierStatuses: [cs('live'), cs('cached')],
     source: 'live',
   });

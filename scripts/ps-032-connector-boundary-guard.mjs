@@ -75,6 +75,11 @@ const ignoredFiles = new Set([
   'scripts/ps-032-connector-orchestrator-guard.mjs',
   // References ssRequest/v2 tracking ONLY inside source-pin regexes (no provider calls).
   'scripts/shipment-tracking-retirement-guard.ts',
+  // PS-289 guards: ssRequest/ssV1Request appear ONLY inside NEGATIVE assertion
+  // regexes that prove the multi-package adapter does NOT call ShipStation
+  // directly. They are guard scripts, not provider callers.
+  'scripts/ps-289-multi-package-closeout-guard.ts',
+  'scripts/ps-289-multi-package-shipstation-adapter-guard.ts',
 ]);
 
 function normalize(filePath) {

@@ -22,7 +22,10 @@ const REMOVED = [
   'bulkSetInventoryPackageDefault', 'fetchClientDetail', 'fetchDashboardOrderSales', 'fetchInitData',
   'fetchInventoryDetail', 'fetchInventoryItemLedger', 'fetchLocationDetail', 'fetchLowStockPackages',
   'fetchOrderDetail', 'fetchOrderDims', 'fetchOrdersDailyCounts', 'fetchParentSkuDetail', 'fetchProducts',
-  'fetchShipmentSyncStatus', 'saveProductDefaults', 'setToken', 'triggerShipmentSync', 'updateOrder', 'voidLabel',
+  'fetchShipmentSyncStatus', 'saveProductDefaults', 'setToken', 'triggerShipmentSync', 'updateOrder',
+  // PS-211/219: voidLabel was intentionally RE-ADDED as the universal label-void
+  // method (live def v2-apiClient.ts; caller OrdersView.tsx). It is no longer a
+  // dead method, so it is removed from the removed-methods list.
   // PS-179: FE strict persisters — the backend persists strict-recalc outcomes
   // inside /browse (PS-175/PS-178); their last FE callers were deleted there.
   'saveOrderDimsStrict', 'updateOrderBestRateSelectionStrict',

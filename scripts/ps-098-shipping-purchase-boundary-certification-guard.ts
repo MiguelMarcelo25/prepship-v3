@@ -101,12 +101,16 @@ check(
 check(
   'frontend passes backend-issued selectedRateProof through label and queue payloads',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    // PS-204 re-anchor (2026-06-16): honest census is THREE `selectedRateProof:
-    // buildSelectedRateProofPayload(order...` property sites (panel single, direct-
-    // carrier override wrapper, batch queue); the 4th proof path is the batch-create
-    // `let selectedRateProof = buildSelectedRateProofPayload(...)` with the PS-204
-    // account-binding 3rd arg (pinned below). Aligns with the selected-rate-proof-boundary guard.
-    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+    // After the PS-178/PS-204 decomposition the proof flows on all 4 paths in 2
+    // shapes: 2 INLINE property sites `selectedRateProof: buildSelectedRateProofPayload(order, ...)`
+    // (panel single + panel-live), the OVERRIDE-WRAPPER `const selectedRateProof =
+    // toRecord(overrideRecord?.selectedRateProof) ?? buildSelectedRateProofPayload(order, ...)`
+    // (direct-carrier/queue override), and the BATCH-CREATE `let selectedRateProof =
+    // buildSelectedRateProofPayload(order, proofRate, ...)` with the PS-204 account-binding
+    // 3rd arg. Pin each shape so all 4 paths are verified (the old single >= 3 regex
+    // only matched the inline property sites). Aligns with the proof-boundary guard.
+    (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+    /const selectedRateProof =\s*\n\s*toRecord\(overrideRecord\?\.selectedRateProof\) \?\?\s*\n\s*buildSelectedRateProofPayload\(order/.test(ordersView) &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,'),
 );

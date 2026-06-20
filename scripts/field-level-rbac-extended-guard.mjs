@@ -122,7 +122,10 @@ assert(
   'rates route checks financial and credential permissions for rate DTOs',
 );
 assert(
-  ratesSource.includes('redactRateMoneyFields') &&
+  // The rates route uses redactRateBrowserMoney (rate-browser-specific money
+  // redactor, gated by canViewFinancials); redactRateMoneyFields is the ORDERS
+  // route redactor. Repointed to the rates owner's redactor.
+  ratesSource.includes('redactRateBrowserMoney') &&
     ratesSource.includes('publicRatesResult') &&
     ratesSource.includes('publicRateCacheRow') &&
     ratesSource.includes('sourceClientId: canViewAccountMetadata ?') &&

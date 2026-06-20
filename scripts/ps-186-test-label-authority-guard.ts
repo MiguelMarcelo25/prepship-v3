@@ -86,8 +86,13 @@ check('money-path locals/payload fields come from isBackendTestOrder',
 check('orders list loads the test-client set', /testClientIds = new Set<number>\(\)/.test(ordersRoute));
 check('orders rows carry isTest from clients.isTest',
   /isTest: r\.order\.clientId != null && testClientIds\.has\(r\.order\.clientId\)/.test(ordersRoute));
+// The detail handlers refactored to a named local `detailClientIsTest = await
+// loadClientIsTest(order.clientId)` (one canonical lookup, reused for isTest +
+// labelVoidability) then assign `isTest: detailClientIsTest`. Same canonical
+// authority — pin both the lookup and the assignment at their current shape (×2).
 check('order detail mirrors isTest via the canonical lookup',
-  (ordersRoute.match(/isTest: await loadClientIsTest\(order\.clientId\)/g) ?? []).length >= 2);
+  (ordersRoute.match(/const detailClientIsTest = await loadClientIsTest\(order\.clientId\)/g) ?? []).length >= 2 &&
+  (ordersRoute.match(/isTest: detailClientIsTest\b/g) ?? []).length >= 2);
 
 // ── 6. BEHAVIOR: the pure decision matrix (no DB) ─────────────────────────────
 check('isTest client + requested mock -> forced mock',

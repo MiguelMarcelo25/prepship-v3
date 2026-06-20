@@ -35,6 +35,8 @@ const routeFileByMount = new Map([
   ['observability', 'observability.ts'],
   ['cron', 'cron.ts'],
   ['health', 'health.ts'],
+  ['store-accounts', 'store-accounts.ts'],
+  ['automation', 'automation.ts'],
 ]);
 
 const ignoredFrontendPaths = [

@@ -67,7 +67,10 @@ assert(
     apiClientSource.includes('openQueuePrintJobPdf') &&
     apiClientSource.includes("'inline' | 'attachment'") &&
     apiClientSource.includes("options?.disposition ?? 'inline'") &&
-    apiClientSource.includes("fetchQueuePrintJobSignedUrl(jobId, 'inline')"),
+    // openQueuePrintJobPdf calls fetchQueuePrintJobSignedUrl(jobId, <disposition>).
+    // The call was reshaped to multiline, so match across line breaks while still
+    // pinning jobId as the first arg and the inline-default disposition.
+    /fetchQueuePrintJobSignedUrl\(\s*jobId,\s*options\?\.disposition \?\? 'inline'\s*\)/.test(apiClientSource),
   'frontend API client supports signed inline and attachment PDF URLs',
 );
 assert(

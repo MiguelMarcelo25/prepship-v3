@@ -15,6 +15,12 @@ const main = read('src/main.ts');
 const route = read('src/routes/observability.ts');
 const metrics = read('src/lib/http/api-metrics.ts');
 const settingsView = read('web/src/components/Views/SettingsView.tsx');
+// PS-155: the System Status panel presentation was extracted VERBATIM from
+// SettingsView into SystemStatusPanel.tsx. The parent still owns the
+// 'System Status' tab label, the /observability/status fetch, and the
+// systemStatus state + panel mount; the child owns the DB Check / Hot API
+// Routes / Runtime Flags presentation.
+const systemStatusPanel = read('web/src/components/Views/SystemStatusPanel.tsx');
 const devTasks = read('DEV_TASKS_README.md');
 const enterprise = read('ENTERPRISE_READINESS_AUDIT.md');
 const observability = read('OBSERVABILITY_ALERTING_PLAN.md');
@@ -63,9 +69,10 @@ expect(
   settingsView.includes("label: 'System Status'") &&
     settingsView.includes("'/observability/status'") &&
     settingsView.includes('systemStatus') &&
-    settingsView.includes('DB Check') &&
-    settingsView.includes('Hot API Routes') &&
-    settingsView.includes('Runtime Flags')
+    settingsView.includes('<SystemStatusPanel') &&
+    systemStatusPanel.includes('DB Check') &&
+    systemStatusPanel.includes('Hot API Routes') &&
+    systemStatusPanel.includes('Runtime Flags')
 );
 
 expect(

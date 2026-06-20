@@ -44,7 +44,8 @@ assert(
   'OrdersView must provide an explicit Select all matching orders action.',
 );
 assert(
-  /Select page/.test(ordersView) && /Select all/.test(ordersView) && /matching/.test(ordersView),
+  /Select current page orders/.test(ordersView) &&
+    /Select all .* matching orders across pages/.test(ordersView),
   'OrdersView toolbar must label current-page selection separately from all matching orders across pages.',
 );
 assert(

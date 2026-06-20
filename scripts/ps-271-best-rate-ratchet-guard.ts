@@ -70,8 +70,10 @@ check('the DB wrapper delegates to the pure isNoDowngradeBlocked',
   /isNoDowngradeBlocked/.test(wrapper) && /from '\.\/best-rate-ratchet'/.test(wrapper));
 
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
+// PS-293: the persisted/ratcheted object is the house-tuple-STAMPED best
+// (stampedBest = bestWithMetadata + the inert house tuple).
 check('the backfill persist routes through the ratchet wrapper',
-  /isPersistedBestDowngrade\(row\.id, bestWithMetadata\)/.test(backfill));
+  /isPersistedBestDowngrade\(row\.id, stampedBest\)/.test(backfill));
 
 const recalc = readFileSync('src/services/rates-recalculate-persist.ts', 'utf8');
 check('the strict-recalc persist routes through the ratchet wrapper',

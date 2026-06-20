@@ -64,11 +64,14 @@ const ddlPattern =
   /(?:create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists|alter\s+table\s+[\s\S]{0,160}?add\s+column\s+if\s+not\s+exists)/i;
 
 const expectedRuntimeDdlFiles = [
-  'api/_lib/walmart-fees-sync.ts',
-  'api/carriers/walmart/fees.ts',
   // PS-200 S3 (2026-06-12): api/cron/sync-walmart-fees.ts deleted — the daily
   // fee sync runs on the v4 worker (sync-scheduler runWalmartFeesTick) and its
-  // column-bootstrap fallback lives in src/connectors/store/walmart-fees.ts.
+  // column-bootstrap fallback now lives in src/connectors/store/walmart-fees.ts.
+  // The retired api/_lib/walmart-fees-sync.ts + api/carriers/walmart/fees.ts no
+  // longer hold the selling-fee runtime DDL (it migrated to the connector), so
+  // they were removed from this inventory (they are still discoverable as the
+  // resolved entries in RUNTIME_DDL_MIGRATION_AUDIT.md).
+  'src/connectors/store/walmart-fees.ts',
   'src/services/orders-performance-maintenance.ts',
   'src/routes/analysis.ts',
   // PS-271 (Layer 2): the additive direct_carrier_rate_cache runtime-DDL table (60s per-carrier
@@ -76,6 +79,23 @@ const expectedRuntimeDdlFiles = [
   // by design until DJ confirms the table in prod), mirroring the PS-256 worker-status-events /
   // print-queue-pdf-store runtime-DDL pattern. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
   'src/services/direct-carrier-rate-cache.ts',
+  // Additive canary / compatibility runtime-DDL owners (CREATE ... IF NOT EXISTS /
+  // ADD COLUMN IF NOT EXISTS). Each is an intentional bootstrap that no-ops once
+  // the matching migration is applied. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
+  'src/db/ensure-order-competitive-rate.ts',
+  'src/lib/shipstation/durable-rate-limiter.ts',
+  'src/services/audit-log.ts',
+  'src/services/billing-fee-waiver-store.ts',
+  'src/services/billing.ts',
+  'src/services/fulfillment/webhook-ledger.ts',
+  'src/services/house-account-opt-in.ts',
+  'src/services/order-recipient-override.ts',
+  'src/services/packaging-rules.ts',
+  'src/services/print-queue-pdf-store.ts',
+  'src/services/shipment-tracking.ts',
+  'src/services/shipping-workflow/address-classification-cache.ts',
+  'src/services/shipping-workflow/order-rate-job-status.ts',
+  'src/services/worker-status-events.ts',
 ];
 
 const requiredClassifications = [

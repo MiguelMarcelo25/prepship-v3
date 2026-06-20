@@ -135,8 +135,15 @@ function check(name: string, got: unknown, want: unknown) {
   const labels = readFileSync('src/services/labels.ts', 'utf8');
   check('createLabelV2 calls assertOrderSafeToShip', /assertOrderSafeToShip\(/.test(labels), true);
 
-  const apiLabels = readFileSync('api/carriers/labels.ts', 'utf8');
-  check('direct-carrier (Vercel) label path calls assertOrderSafeToShip', /assertOrderSafeToShip\(/.test(apiLabels), true);
+  // PS-209: api/carriers/labels.ts is a retired 410 stub. The direct-carrier purchase
+  // path moved into createLabelV2 (src/services/labels.ts), which runs the SAME
+  // assertOrderSafeToShip BEFORE the direct-carrier branch (createDirectCarrierLabelForOrder).
+  // Assert the ORDERING so a future edit can't reach the direct branch without the safety gate —
+  // stricter than the old "stub contains the call" string check (the live invariant, not a dead file).
+  const safeIdx = labels.indexOf('assertOrderSafeToShip(');
+  const directBranchIdx = labels.indexOf('createDirectCarrierLabelForOrder(');
+  check('direct-carrier label path runs assertOrderSafeToShip before the direct-carrier branch',
+    safeIdx !== -1 && directBranchIdx !== -1 && safeIdx < directBranchIdx, true);
 
   const route = readFileSync('src/routes/webhooks.ts', 'utf8');
   check('webhook route verifies signature', /verifyWebhookSignature\(/.test(route), true);
@@ -171,7 +178,11 @@ function check(name: string, got: unknown, want: unknown) {
   check('OrdersView gates label actions on the hold', /panelHold\?\.blocked/.test(ordersView), true);
   check('OrdersView skips rating a held order (rate-flow gating)', /orderShippingHold\(order\)\?\.blocked\)\s*return null/.test(ordersView), true);
   check('OrdersView shows a list-row hold pill', /rowHold\?\.blocked/.test(ordersView), true);
-  check('OrdersView shows Print Queue hold badge', /entry\.shipping_hold/.test(ordersView), true);
+  // PS-257: the Print Queue drawer (with the per-entry shipping-hold badge) was
+  // extracted VERBATIM from OrdersView into OrdersPrintQueueDrawer.tsx. The badge
+  // invariant still holds — just at the new owner.
+  const printQueueDrawer = readFileSync('web/src/components/Views/OrdersPrintQueueDrawer.tsx', 'utf8');
+  check('Print Queue drawer shows hold badge', /entry\.shipping_hold/.test(printQueueDrawer), true);
 
   const pq = readFileSync('src/services/print-queue.ts', 'utf8');
   check('print-queue merge excludes held orders', /loadShippingHoldsByOrderId/.test(pq), true);

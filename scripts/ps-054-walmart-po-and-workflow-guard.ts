@@ -145,7 +145,10 @@ function assertMockedLabelQueueAndConfirmationWorkflow() {
 
 function assertPrintQueueAndOutboxContracts() {
   const printQueue = readFileSync('src/services/print-queue.ts', 'utf8');
-  const labelsRoute = readFileSync('api/carriers/labels.ts', 'utf8');
+  // PS-209: api/carriers/labels.ts is a retired 410 stub. The v4 label owner
+  // (src/services/labels.ts createLabelV2) now owns the confirmation/outbox
+  // decoupling, with marketplace-GENERIC wording (no longer Walmart-specific).
+  const labelsService = readFileSync('src/services/labels.ts', 'utf8');
   const walmartStore = readFileSync('src/connectors/store/walmart.ts', 'utf8');
 
   assert(
@@ -167,8 +170,13 @@ function assertPrintQueueAndOutboxContracts() {
     'print queue must recover by queueing an existing label instead of buying duplicate postage',
   );
   assert(
-    labelsRoute.includes('walmart confirmation outbox enqueue failed') &&
-      labelsRoute.includes('walmart immediate confirmation failed'),
+    // createLabelV2 queues the marketplace confirmation separately from the label
+    // purchase: the enqueue is wrapped in try/catch and only warns (never rethrown)
+    // and the outbox is processed in the background — a confirmation/outbox failure
+    // can never fail a successful label. Now marketplace-generic, not Walmart-only.
+    labelsService.includes('confirmation separately from label purchase') &&
+      labelsService.includes("console.warn('[labels] marketplace confirmation enqueue failed:") &&
+      labelsService.includes("timer.background('marketplace confirmation outbox'"),
     'Walmart label success must be decoupled from confirmation/outbox failures',
   );
 }

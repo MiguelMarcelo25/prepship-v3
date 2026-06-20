@@ -63,7 +63,15 @@ check('barrel still `export type V2ApiClient = typeof apiClient`',
 for (const sym of ['HIDDEN_CLIENT_IDS', 'TEST_CLIENT_IDS']) {
   check(`shared.ts owns export const ${sym}`, new RegExp(`export const ${sym}\\b`).test(shared));
 }
-check('shared.ts owns export function isDirectCarrierId', /export function isDirectCarrierId\b/.test(shared));
+// PS-286: isDirectCarrierId moved to the PURE web/src/lib/direct-carrier-id leaf
+// (importable without the network barrel). shared.ts re-exports it so the single
+// source of truth + barrel-free reachability invariant still holds.
+const DIRECT_CARRIER_ID_PATH = 'web/src/lib/direct-carrier-id.ts';
+const directCarrierId = existsSync(DIRECT_CARRIER_ID_PATH) ? readFileSync(DIRECT_CARRIER_ID_PATH, 'utf8') : '';
+check('direct-carrier-id.ts owns export function isDirectCarrierId',
+  /export function isDirectCarrierId\b/.test(directCarrierId));
+check('shared.ts re-exports isDirectCarrierId from the pure leaf',
+  /isDirectCarrierId/.test(shared) && /from ['"]\.\.\/direct-carrier-id['"]/.test(shared));
 check('shared.ts owns export type DirectCarrierRateError', /export type DirectCarrierRateError\b/.test(shared));
 
 // ── (5) text-blob-anchored helpers must remain DEFINED IN THE BARREL ──

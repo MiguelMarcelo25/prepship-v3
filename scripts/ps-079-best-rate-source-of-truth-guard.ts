@@ -101,17 +101,25 @@ check('PS-111: passive auto-rating derives completeness from the backend, not ha
 check('PS-135: panel-live best rate derives completeness from the backend (not hardcoded isComplete: true)',
   ordersView.includes('isComplete: deriveBackendBestRateComplete(response, bestRate),') &&
   ordersView.includes("matchType: 'panel-live'"));
-// PS-165: the carrier display precedence moved VERBATIM into resolveDisplayCarrierCode
-// (order-shipping-display.ts); OrdersView.getCarrierCodeForDisplay delegates. Assert the BEHAVIOR
-// at the owner (awaiting prefers bestRate over canonical/selected; shipped/history prefers
-// canonical) + that OrdersView delegates — stronger than the prior source-regex.
+// PS-165/PS-166: the carrier display precedence is owned VERBATIM by
+// resolveDisplayCarrierCode (order-shipping-display.ts). The OrdersView-facing
+// wrapper getCarrierCodeForDisplay moved to orders-display-state.ts (PS-166 Wave
+// 2a) and OrdersView now consumes THAT wrapper. Assert the BEHAVIOR at the pure
+// owner (awaiting prefers bestRate over canonical/selected; shipped prefers
+// canonical) + that the wrapper delegates to it + that OrdersView uses the wrapper.
+const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
 const ps165CarrierBase = { isTest: false, bestRateCarrierCode: 'ups', canonicalCarrierCode: 'fedex', selectedRateCarrierCode: 'usps', bestRateNickname: null, bestRateNicknameIsKnownCarrier: false };
 check('Awaiting carrier column prefers the bestRate carrier over canonical/selected',
   resolveDisplayCarrierCode({ ...ps165CarrierBase, isAwaiting: true }) === 'ups' &&
   resolveDisplayCarrierCode({ ...ps165CarrierBase, isAwaiting: false }) === 'fedex' &&
-  /resolveDisplayCarrierCode\(/.test(ordersView));
+  // getCarrierCodeForDisplay delegates to the pure owner, preferring bestRate when awaiting.
+  /export function getCarrierCodeForDisplay/.test(displayState) &&
+  /return resolveDisplayCarrierCode\(/.test(displayState) &&
+  /bestRateCarrierCode: toStringValue\(\(order\.bestRate as LooseBestRate \| undefined\)\?\.carrierCode\)/.test(displayState) &&
+  /getCarrierCodeForDisplay\(/.test(ordersView));
 check('Awaiting shipping-account column prefers the bestRate account nickname',
-  /order\.orderStatus === 'awaiting_shipment' && order\.bestRate\)\s*\{[\s\S]{0,260}?order\.bestRate\.carrierNickname/.test(ordersView));
+  // getShipAccountDisplay (orders-display-state.ts) — awaiting prefers the bestRate nickname.
+  /order\.orderStatus === 'awaiting_shipment' && order\.bestRate\)\s*\{[\s\S]{0,260}?\(order\.bestRate as LooseBestRate\)\.carrierNickname/.test(displayState));
 // DECISION (DJ, 2026-06-04): keep the BOUNDED SKIP when carrier accounts aren't
 // loaded yet (it re-rates once they load; it is not an infinite spinner). Do NOT
 // switch to "call backend without carrierIds" without DJ's sign-off.

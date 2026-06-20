@@ -41,7 +41,7 @@ function shipStationScheduleWithinBudget({ requestCount, perMinute, burst }) {
   return true
 }
 
-const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient] = await Promise.all([
+const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient, ratesCombined] = await Promise.all([
   read('src/services/rates.ts'),
   read('src/routes/rates.ts'),
   read('src/services/rates-backfill.ts'),
@@ -49,6 +49,9 @@ const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiC
   read('package.json'),
   read('web/src/lib/v2-apiClient.ts'),
   read('src/lib/shipstation/client.ts'),
+  // PS-203 (stage 3): the merge + SINGLE cheapest pick moved to the canonical
+  // combined-selection owner. The route + backfill both delegate to it.
+  read('src/services/rates-combined.ts'),
 ])
 
 assert(
@@ -120,11 +123,17 @@ assert(
 )
 
 assert(
-  ratesRoute.includes('combinedRates = dedupeBrowseRates([...filtered, ...directRates.rates])') &&
-    ratesRoute.includes('const cheapest = [...combinedRates].sort') &&
+  // PS-203: the cheapest combined ShipStation/direct-carrier selection lives in
+  // the canonical owner rates-combined.ts (merge via dedupeBrowseRates + the single
+  // cheapest pick by rateTotal). The route delegates via combineCarrierUniverses.
+  ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates])') &&
+    ratesCombined.includes('const cheapest = rankedEligibleRates[0]') &&
+    ratesRoute.includes('combineCarrierUniverses({') &&
+    ratesRoute.includes('combinedRates,') &&
+    ratesRoute.includes('cheapest,') &&
     v2ApiClient.includes('backendResult?.bestRate') &&
     !v2ApiClient.includes('const combinedBestRate = combined[0]'),
-  'backend /rates/browse selects the cheapest combined ShipStation/direct-carrier rate and v2 client preserves backend bestRate',
+  'backend /rates/browse selects the cheapest combined ShipStation/direct-carrier rate (canonical rates-combined owner) and v2 client preserves backend bestRate',
 )
 
 assert(

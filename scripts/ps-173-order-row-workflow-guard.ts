@@ -38,6 +38,10 @@ const FRESH_RATE = {
   requestFingerprint: 'fp_1',
   isComplete: true,
   cacheExpiresAt: '2026-06-11T18:00:00Z',
+  // PS-299/PS-300: a real backend-issued rate stamps proofSource. The purchase
+  // gate (canUseDisplayedRateForPurchase → canCreateLabel/canUseSavedRate)
+  // requires it, so a "fresh" fixture must carry it to reflect a genuine rate.
+  proofSource: 'backend_rate_response',
 };
 
 const baseFacts: OrderRowWorkflowFacts = {

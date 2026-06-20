@@ -51,17 +51,19 @@ check(
 
 check(
   'frontend passes selectedRateProof through all single, batch, backend-queue, and direct-carrier payload paths',
-  // PS-104 direct-carrier path uses the override-wrapper form
-  // `selectedRateProof: overridePayload?.selectedRateProof ?? buildSelectedRateProofPayload(order, ...)`,
-  // so count the wrapper-aware pattern (matches the boundary guard) — the proof is
-  // genuinely passed on all 4 single/batch/queue/direct-carrier paths.
-  //
-  // PS-204 re-anchor (2026-06-12): the property-site census is THREE (the
-  // fourth path is the batch-create `let selectedRateProof = ...` pinned
-  // below — the property regex never matched it; the old >= 4 was stale since
-  // the PS-178 decomposition). The batch-create pin gains PS-204's account
-  // binding (third arg) — stricter, never weaker.
-  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 3 &&
+  // The proof flows on all 4 paths, in 2 distinct shapes after the PS-178/PS-204
+  // decomposition:
+  //   (a) 2 INLINE property sites `selectedRateProof: buildSelectedRateProofPayload(order, ...)`
+  //       — the single-create and the panel-live paths.
+  //   (b) the OVERRIDE-WRAPPER `const selectedRateProof = toRecord(overrideRecord?.selectedRateProof) ??
+  //       buildSelectedRateProofPayload(order, ...)` — the queue/override path.
+  //   (c) the BATCH-CREATE `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
+  //       — with PS-204 account binding (3rd arg).
+  // Count both inline sites AND pin the override-wrapper + batch-create shapes so
+  // the proof is verified on every path (stricter than the old single >= 3 regex
+  // that never matched the wrapper/let shapes).
+  (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+    /const selectedRateProof =\s*\n\s*toRecord\(overrideRecord\?\.selectedRateProof\) \?\?\s*\n\s*buildSelectedRateProofPayload\(order/.test(ordersView) &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,') &&
     proofBoundaryGuard.includes('Orders single/batch/queue label payloads pass selectedRateProof'),

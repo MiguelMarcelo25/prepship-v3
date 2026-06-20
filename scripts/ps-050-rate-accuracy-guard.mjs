@@ -82,9 +82,14 @@ assert(
 )
 
 assert(
+  // PS-111/PS-203: completeness is now derived over the COMBINED universe
+  // (combined.bestRateComplete), not the raw carrierDiagnostics.every check.
+  // PS-293: the persisted object is the house-tuple-STAMPED best (stampedBest),
+  // which is bestWithMetadata + the (default-OFF inert) house tuple; the
+  // fingerprint/freshness/completeness metadata is preserved unchanged.
   ratesBackfill.includes('requestFingerprint') &&
-    ratesBackfill.includes('isComplete: result.carrierDiagnostics.every') &&
-    ratesBackfill.includes('bestRateJson: bestWithMetadata'),
+    ratesBackfill.includes('isComplete: combined.bestRateComplete') &&
+    ratesBackfill.includes('bestRateJson: stampedBest'),
   'Rate backfill persists fingerprint/freshness/completeness metadata',
 )
 
