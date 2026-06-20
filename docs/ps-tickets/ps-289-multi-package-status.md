@@ -10,10 +10,11 @@ PS-289 is not Final Review-ready. The backend-owned planning slice, additive per
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
 exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
 end-to-end mocked workflow proof now exists, and a test-gated per-package label purchase boundary now
-exists. Purchased-label sidecar orchestration now exists, and print queue sidecar persistence now
-exists. Marketplace confirmation sidecar persistence now exists. The real product still needs real
-carrier adapter wiring, real print queue insertion/printer integration, real marketplace notification
-connector/integration, and UI work before any operator should use it.
+exists. An injected carrier adapter boundary now exists. Purchased-label sidecar orchestration now exists,
+print queue sidecar persistence now exists, and marketplace confirmation sidecar persistence now exists.
+The real product still needs real provider-specific carrier adapter wiring, real print queue
+insertion/printer integration, real marketplace notification connector/integration, and UI work before
+any operator should use it.
 
 ## Evidence now wired
 
@@ -25,6 +26,7 @@ connector/integration, and UI work before any operator should use it.
 - `test:ps-289-multi-package-marketplace-confirmation-plan`
 - `test:ps-289-multi-package-mocked-workflow`
 - `test:ps-289-multi-package-label-purchase-boundary`
+- `test:ps-289-multi-package-carrier-adapter`
 - `test:ps-289-multi-package-purchased-label-orchestration`
 - `test:ps-289-multi-package-print-queue-sidecar`
 - `test:ps-289-multi-package-marketplace-confirmation-sidecar`
@@ -57,6 +59,10 @@ connector/integration, and UI work before any operator should use it.
   an injected purchaser dependency.
 - The purchase boundary refuses to buy labels without an explicit purchaser, rejects mismatched
   package idempotency keys, and blocks live postage results by default.
+- The injected carrier adapter boundary shapes one carrier label request per package and carries
+  provider, carrier account, ship-from, ship-to, package identity, dimensions, and item facts.
+- The carrier adapter has no direct provider imports and still relies on the purchase boundary to
+  block live postage unless a caller explicitly approves it.
 - The purchased-label orchestration owner writes planned group/package sidecars, invokes the injected
   purchaser, applies purchased label shipment/tracking/URL results back to sidecar packages, and marks
   the sidecar group as `labels_purchased`.
@@ -73,7 +79,8 @@ connector/integration, and UI work before any operator should use it.
 
 ## Missing before close
 
-- Real carrier adapter wiring for per-package label purchase plus DJ-approved live canary proof.
+- Real provider-specific carrier adapter wiring for per-package label purchase plus DJ-approved live
+  canary proof.
 - Real print queue insertion/printer integration with the existing printer path.
 - Real marketplace notification connector/integration plus DJ-approved live canary proof for the
   correct N tracking numbers.
