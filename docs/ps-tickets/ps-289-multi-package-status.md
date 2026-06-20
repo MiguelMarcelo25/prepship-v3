@@ -4,13 +4,14 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 59%.
+Current completion estimate: PS-289 66%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
 exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
-but the real product still needs real label purchase, print queue persistence/integration,
-marketplace confirmation persistence/integration, and UI work before any operator should use it.
+and end-to-end mocked workflow proof now exists. The real product still needs real label purchase,
+print queue persistence/integration, marketplace confirmation persistence/integration, and UI work
+before any operator should use it.
 
 ## Evidence now wired
 
@@ -20,6 +21,7 @@ marketplace confirmation persistence/integration, and UI work before any operato
 - `test:ps-289-multi-package-db-orchestration`
 - `test:ps-289-multi-package-print-queue-plan`
 - `test:ps-289-multi-package-marketplace-confirmation-plan`
+- `test:ps-289-multi-package-mocked-workflow`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -41,6 +43,10 @@ marketplace confirmation persistence/integration, and UI work before any operato
   tracking number.
 - Marketplace confirmation candidates preserve package order, group identity, and all tracking
   numbers without calling a marketplace API.
+- The mocked workflow owner composes planning, mocked labels, print queue candidates, and
+  marketplace confirmation candidates with the same package idempotency keys.
+- The mocked workflow proof preserves all tracking numbers in package order and keeps every stage
+  explicitly non-live.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
@@ -50,7 +56,8 @@ marketplace confirmation persistence/integration, and UI work before any operato
 - Group-aware print queue persistence/integration with the existing printer path.
 - Marketplace confirmation persistence/integration that can send the correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.
-- End-to-end mocked workflow proof before any live postage or marketplace notification.
+- No live postage, marketplace notification, or operator canary until the real integrations are
+  mocked, guarded, and explicitly approved.
 
 ## Recommendation
 

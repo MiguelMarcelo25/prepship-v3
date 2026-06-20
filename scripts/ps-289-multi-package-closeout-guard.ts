@@ -2,7 +2,7 @@
  * PS-289 closeout checkpoint.
  *
  * Keeps the multi-package card honest after the planner + sidecar schema
- * foundation: workflow/UI/live-safety proof is still missing.
+ * foundation: live integrations/UI/live-safety proof are still missing.
  */
 import { readFileSync } from 'node:fs';
 
@@ -27,6 +27,7 @@ const marketplacePlan = readFileSync(
   'src/services/shipping-workflow/multi-package-marketplace-confirmation-plan.ts',
   'utf8',
 );
+const mockedWorkflow = readFileSync('src/services/shipping-workflow/multi-package-mocked-workflow.ts', 'utf8');
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
@@ -41,6 +42,8 @@ check('package wires PS-289 print queue plan guard',
   packageJson.includes('"test:ps-289-multi-package-print-queue-plan"'));
 check('package wires PS-289 marketplace confirmation plan guard',
   packageJson.includes('"test:ps-289-multi-package-marketplace-confirmation-plan"'));
+check('package wires PS-289 mocked workflow guard',
+  packageJson.includes('"test:ps-289-multi-package-mocked-workflow"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -55,10 +58,12 @@ check('status doc lists print queue plan guard',
   doc.includes('`test:ps-289-multi-package-print-queue-plan`'));
 check('status doc lists marketplace confirmation plan guard',
   doc.includes('`test:ps-289-multi-package-marketplace-confirmation-plan`'));
+check('status doc lists mocked workflow guard',
+  doc.includes('`test:ps-289-multi-package-mocked-workflow`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 59%',
-  /PS-289 59%/.test(doc));
+check('status doc keeps PS-289 conservative at 66%',
+  /PS-289 66%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
 check('status doc says sidecar persistence foundation exists',
@@ -71,14 +76,16 @@ check('status doc says group-aware print queue planning exists',
   /Group-aware print queue planning also exists/.test(doc));
 check('status doc says marketplace confirmation planning exists',
   /Marketplace confirmation planning now exists/.test(doc));
+check('status doc says end-to-end mocked workflow proof exists',
+  /end-to-end mocked workflow proof now exists/i.test(doc));
 check('status doc lists real per-package purchase as missing',
   /Real idempotent per-package label purchase workflow/.test(doc));
 check('status doc lists print queue persistence as missing',
   /print queue persistence\/integration/.test(doc));
 check('status doc lists marketplace confirmation integration as missing',
   /marketplace confirmation persistence\/integration/.test(doc));
-check('status doc requires mocked workflow before live postage',
-  /End-to-end mocked workflow proof before any live postage/.test(doc));
+check('status doc still blocks live/canary use',
+  /No live postage, marketplace notification, or operator canary/.test(doc));
 
 check('planner exports buildMultiPackageShipmentPlan',
   /export function buildMultiPackageShipmentPlan/.test(planner));
@@ -109,6 +116,11 @@ check('marketplace confirmation planner exports buildMultiPackageMarketplaceConf
 check('marketplace confirmation planner stays pure and planned-only',
   /No marketplace API calls, live notifications/.test(marketplacePlan) &&
     !/from ['"].*(db|schema|print-queue|connector|labels|marketplace)/i.test(marketplacePlan));
+check('mocked workflow exports buildMockedMultiPackageWorkflow',
+  /export function buildMockedMultiPackageWorkflow/.test(mockedWorkflow));
+check('mocked workflow stays pure and non-live',
+  /No DB writes, provider calls, real labels, postage, print queue writes, marketplace API calls/.test(mockedWorkflow) &&
+    !/from ['"].*(db|schema|routes|connector|shipstation|shipp|easypost|walmart|orders|shipments)/i.test(mockedWorkflow));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 
