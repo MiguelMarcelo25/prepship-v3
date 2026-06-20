@@ -1,0 +1,47 @@
+# PS-166 / PS-258 OrdersView decomposition status
+
+Date: 2026-06-20
+
+## Current status
+
+Current completion estimate: PS-166 66%, PS-258 72%.
+
+These cards are not Final Review-ready. The current code has multiple proven extraction slices and
+component-boundary guards, but the umbrella goal is broader than the slices currently pinned.
+
+## Evidence now wired
+
+- `test:ps-166-orders-rate-proof`
+- `test:ps-258-daily-stats-rollover`
+- `test:ps-258-non-critical-scheduler`
+- `test:ps-258-orders-queue-parsers`
+- `test:ps-258-orders-filtered-sort`
+- `test:ps-258-orders-column-prefs-local`
+- `test:ps-258-orders-table-density-prefs`
+- `test:ps-258-component-boundary`
+- `test:ps-258-empty-state-props-contract`
+- `test:ps-258-empty-panel-contract`
+- `test:ps-258-search-bar-contract`
+
+## What is proven
+
+- Backend best-rate proof reading is isolated in a small PS-166 owner.
+- Awaiting order sort/order logic delegates to the extracted pure owner.
+- Daily stats rollover math, non-critical scheduling, queue payload parsing, local column
+  preferences, and table-density preferences are extracted and guarded.
+- Search bar, empty panel, empty-results region, and batch-panel/read-only boundaries have static
+  contract guards.
+- Shipped/cancelled selection lockdown is still pinned by `test:ps-258-component-boundary`.
+
+## Missing before Final Review
+
+- Real DOM or byte-equality certification for the next larger OrdersView extraction slice.
+- Continue one small extraction at a time: passive auto-rating, panel state, filtered order rows,
+  memoized row rendering, or another low-risk leaf.
+- Keep each extraction backed by a focused guard before moving to the next slice.
+- Do not change shipped/cancelled lockdown behavior without the required user override.
+
+## Recommendation
+
+Keep PS-166 and PS-258 in progress. They are healthier than the older audit percentages, but still
+too broad to move to Final Review based only on the current slice guards.
