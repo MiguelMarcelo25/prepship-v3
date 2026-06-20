@@ -4,15 +4,16 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 78%.
+Current completion estimate: PS-289 83%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
 exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
 end-to-end mocked workflow proof now exists, and a test-gated per-package label purchase boundary now
-exists. Purchased-label sidecar orchestration now exists. The real product still needs real carrier
-adapter wiring, print queue persistence/integration, marketplace confirmation persistence/integration,
-and UI work before any operator should use it.
+exists. Purchased-label sidecar orchestration now exists, and print queue sidecar persistence now
+exists. The real product still needs real carrier adapter wiring, real print queue insertion/printer
+integration, marketplace confirmation persistence/integration, and UI work before any operator should
+use it.
 
 ## Evidence now wired
 
@@ -25,6 +26,7 @@ and UI work before any operator should use it.
 - `test:ps-289-multi-package-mocked-workflow`
 - `test:ps-289-multi-package-label-purchase-boundary`
 - `test:ps-289-multi-package-purchased-label-orchestration`
+- `test:ps-289-multi-package-print-queue-sidecar`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -58,13 +60,16 @@ and UI work before any operator should use it.
   purchaser, applies purchased label shipment/tracking/URL results back to sidecar packages, and marks
   the sidecar group as `labels_purchased`.
 - Duplicate purchased label idempotency keys are checked before any sidecar writes or purchaser calls.
+- The print queue sidecar owner derives one package-aware queue candidate per purchased label, stores
+  package rows as `print_queue_sidecar_planned`, and marks the group with deterministic queue IDs.
+- Duplicate queued label idempotency keys are checked before any sidecar print queue updates.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
 ## Missing before close
 
 - Real carrier adapter wiring for per-package label purchase plus DJ-approved live canary proof.
-- Group-aware print queue persistence/integration with the existing printer path.
+- Real print queue insertion/printer integration with the existing printer path.
 - Marketplace confirmation persistence/integration that can send the correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.
 - No live postage, marketplace notification, or operator canary until the real integrations are
