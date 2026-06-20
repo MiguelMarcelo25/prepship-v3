@@ -111,6 +111,7 @@ function savedBestRateNeedsEligibilityRefresh(row: {
 export type BackfillJob = {
   jobId: string;
   status: 'pending' | 'running' | 'done' | 'error';
+  mode: BackfillJobMode;
   total: number;
   processed: number;
   updated: number;
@@ -123,6 +124,8 @@ export type BackfillJob = {
   finishedAt: number | null;
 };
 
+export type BackfillJobMode = 'manual_force_live' | 'cache_friendly';
+
 type BackfillOptions = {
   clientId?: number;
   limit?: number;
@@ -134,13 +137,21 @@ type BackfillOptions = {
   orderIds?: number[];
 };
 
+type QueuedBackfillRequest = {
+  jobId: string;
+  opts: BackfillOptions;
+  mode: BackfillJobMode;
+};
+
 export const RATE_BACKFILL_STATUS_KEY = 'rate_backfill_best_rates.last_run';
+export const RATE_BACKFILL_JOB_STATUS_KEY_PREFIX = 'rate_backfill_best_rates.job.';
 
 export type BackfillJobSnapshot = {
   version: 1;
   durableKey: typeof RATE_BACKFILL_STATUS_KEY;
   jobId: string;
   status: BackfillJob['status'];
+  mode: BackfillJobMode;
   active: boolean;
   total: number;
   processed: number;
@@ -170,6 +181,11 @@ const LIVE_BACKFILL_CONCURRENCY = 2;
 const jobs = new Map<string, BackfillJob>();
 let activeJobId: string | null = null;
 let latestJobId: string | null = null;
+const queuedBackfillRequests: QueuedBackfillRequest[] = [];
+
+export function backfillJobModeForOptions(opts: BackfillOptions): BackfillJobMode {
+  return opts.maxAgeHours === 0 ? 'manual_force_live' : 'cache_friendly';
+}
 
 export function getBackfillJob(jobId: string): BackfillJob | null {
   return jobs.get(jobId) ?? null;
@@ -192,6 +208,7 @@ function toBackfillSnapshot(
     durableKey: RATE_BACKFILL_STATUS_KEY,
     jobId: job.jobId,
     status: job.status,
+    mode: job.mode,
     active: activeJobId === job.jobId && job.status === 'running',
     total: job.total,
     processed: job.processed,
@@ -212,24 +229,35 @@ function toBackfillSnapshot(
   };
 }
 
+function backfillJobStatusKey(jobId: string): string {
+  return `${RATE_BACKFILL_JOB_STATUS_KEY_PREFIX}${jobId}`;
+}
+
+async function persistBackfillSnapshotAtKey(key: string, value: string): Promise<void> {
+  await db
+    .insert(settings)
+    .values({
+      key,
+      value,
+    })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: {
+        value,
+      },
+    });
+}
+
 async function persistBackfillJobSnapshot(
   job: BackfillJob,
   opts: BackfillOptions,
 ): Promise<void> {
   try {
     const value = JSON.stringify(toBackfillSnapshot(job, opts));
-    await db
-      .insert(settings)
-      .values({
-        key: RATE_BACKFILL_STATUS_KEY,
-        value,
-      })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: {
-          value,
-        },
-      });
+    await Promise.all([
+      persistBackfillSnapshotAtKey(RATE_BACKFILL_STATUS_KEY, value),
+      persistBackfillSnapshotAtKey(backfillJobStatusKey(job.jobId), value),
+    ]);
   } catch (err) {
     console.warn(
       '[rates-backfill] failed to persist durable status:',
@@ -238,15 +266,23 @@ async function persistBackfillJobSnapshot(
   }
 }
 
-export async function getLatestBackfillJobSnapshot(): Promise<BackfillJobSnapshot | null> {
+function parseBackfillJobSnapshot(value: string): BackfillJobSnapshot | null {
+  const parsed = JSON.parse(value) as BackfillJobSnapshot & { mode?: BackfillJobMode };
+  return {
+    ...parsed,
+    mode: parsed.mode === 'manual_force_live' ? 'manual_force_live' : 'cache_friendly',
+  };
+}
+
+async function readBackfillJobSnapshot(key: string): Promise<BackfillJobSnapshot | null> {
   try {
     const [row] = await db
       .select({ value: settings.value })
       .from(settings)
-      .where(eq(settings.key, RATE_BACKFILL_STATUS_KEY))
+      .where(eq(settings.key, key))
       .limit(1);
     if (!row?.value) return null;
-    return JSON.parse(row.value) as BackfillJobSnapshot;
+    return parseBackfillJobSnapshot(row.value);
   } catch (err) {
     console.warn(
       '[rates-backfill] failed to read durable status:',
@@ -256,30 +292,92 @@ export async function getLatestBackfillJobSnapshot(): Promise<BackfillJobSnapsho
   }
 }
 
-export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
-  if (activeJobId && jobs.get(activeJobId)?.status === 'running') {
-    return jobs.get(activeJobId)!;
-  }
+export async function getLatestBackfillJobSnapshot(): Promise<BackfillJobSnapshot | null> {
+  return readBackfillJobSnapshot(RATE_BACKFILL_STATUS_KEY);
+}
+
+export async function getBackfillJobSnapshot(jobId: string): Promise<BackfillJobSnapshot | null> {
+  const trimmed = String(jobId ?? '').trim();
+  if (!trimmed) return null;
+  return readBackfillJobSnapshot(backfillJobStatusKey(trimmed));
+}
+
+function createBackfillJob(opts: BackfillOptions, mode: BackfillJobMode, message = 'Starting…'): BackfillJob {
   const jobId = randomUUID();
   const job: BackfillJob = {
     jobId,
     status: 'pending',
+    mode,
     total: 0,
     processed: 0,
     updated: 0,
     skipped: 0,
     failed: 0,
-    message: 'Starting…',
+    message,
     error: null,
     failureSamples: [],
     startedAt: Date.now(),
     finishedAt: null,
   };
   jobs.set(jobId, job);
-  activeJobId = jobId;
   latestJobId = jobId;
+  return job;
+}
+
+function isActiveJob(job: BackfillJob | null | undefined): job is BackfillJob {
+  return !!job && (job.status === 'pending' || job.status === 'running');
+}
+
+function findQueuedManualForceLiveJob(): BackfillJob | null {
+  const queued = queuedBackfillRequests.find((request) => request.mode === 'manual_force_live');
+  return queued ? (jobs.get(queued.jobId) ?? null) : null;
+}
+
+function startQueuedBackfillIfIdle(): void {
+  const active = activeJobId ? jobs.get(activeJobId) : null;
+  if (isActiveJob(active)) return;
+
+  const next = queuedBackfillRequests.shift();
+  if (!next) return;
+
+  const job = jobs.get(next.jobId);
+  if (!job) {
+    startQueuedBackfillIfIdle();
+    return;
+  }
+
+  activeJobId = job.jobId;
+  job.message = 'Starting queued force-live backfill…';
+  void persistBackfillJobSnapshot(job, next.opts);
+  void runBackfill(job.jobId, next.opts);
+}
+
+export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
+  const requestedMode = backfillJobModeForOptions(opts);
+  const active = activeJobId ? jobs.get(activeJobId) : null;
+  if (isActiveJob(active)) {
+    const activeMode = active.mode;
+    if (requestedMode === 'manual_force_live' && activeMode === 'cache_friendly') {
+      const existingQueued = findQueuedManualForceLiveJob();
+      if (existingQueued) return existingQueued;
+
+      const queuedJob = createBackfillJob(
+        opts,
+        requestedMode,
+        'Manual force-live Recalculate All queued behind active cache-friendly backfill',
+      );
+      queuedBackfillRequests.push({ jobId: queuedJob.jobId, opts, mode: requestedMode });
+      void persistBackfillJobSnapshot(queuedJob, opts);
+      return queuedJob;
+    }
+
+    return active;
+  }
+
+  const job = createBackfillJob(opts, requestedMode);
+  activeJobId = job.jobId;
   void persistBackfillJobSnapshot(job, opts);
-  void runBackfill(jobId, opts);
+  void runBackfill(job.jobId, opts);
   return job;
 }
 
@@ -735,5 +833,6 @@ async function runBackfill(
     await persistBackfillJobSnapshot(job, opts);
   } finally {
     if (activeJobId === jobId) activeJobId = null;
+    startQueuedBackfillIfIdle();
   }
 }

@@ -196,6 +196,7 @@
     "test:ps-178-fe-authority-ratchet": "tsx scripts/ps-178-fe-authority-ratchet-guard.ts",
     "test:recalculate-all-live": "tsx scripts/recalculate-all-live-guard.ts",
     "test:recalculate-all-timeout-resilience": "tsx scripts/recalculate-all-timeout-resilience-guard.ts",
+    "test:recalculate-all-job-coordination": "tsx scripts/recalculate-all-job-coordination-guard.ts",
     "test:ps-293-awaiting-passive-cap": "tsx scripts/ps-293-awaiting-passive-cap-guard.ts",
     "test:ps-293-canonical-house-tuple": "tsx scripts/ps-293-canonical-house-tuple-guard.ts",
     "test:ps-293-passive-cap-parity": "tsx scripts/ps-293-passive-cap-parity-guard.ts",

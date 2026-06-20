@@ -34,6 +34,7 @@ import { listCarrierAccounts } from '../services/carrier-connector-orchestrator'
 import {
   getActiveBackfillJob,
   getBackfillJob,
+  getBackfillJobSnapshot,
   getLatestBackfillJob,
   getLatestBackfillJobSnapshot,
   startBackfillBestRates,
@@ -1255,9 +1256,31 @@ app.post(
   }
 );
 
-app.get('/backfill-best/status/:jobId', (c) => {
+app.get('/backfill-best/status/:jobId', async (c) => {
+  const jobId = c.req.param('jobId');
   const job = getBackfillJob(c.req.param('jobId'));
-  if (!job) return c.json({ error: 'Job not found' }, 404);
+  if (!job) {
+    const durableJob = await getBackfillJobSnapshot(jobId);
+    if (durableJob?.jobId === jobId) {
+      return c.json({
+        jobId: durableJob.jobId,
+        status: durableJob.status,
+        mode: durableJob.mode,
+        total: durableJob.total,
+        processed: durableJob.processed,
+        updated: durableJob.updated,
+        skipped: durableJob.skipped,
+        failed: durableJob.failed,
+        message: durableJob.message,
+        error: durableJob.error,
+        failureSamples: durableJob.failureSamples,
+        startedAt: Date.parse(durableJob.startedAt),
+        finishedAt: durableJob.finishedAt ? Date.parse(durableJob.finishedAt) : null,
+        durableJob,
+      });
+    }
+    return c.json({ error: 'Job not found', durableJob }, 404);
+  }
   return c.json(job);
 });
 

@@ -602,10 +602,12 @@ export default function OrdersView({
     if (!recalcAllJobId) return
     let cancelled = false
     let refreshInflight = false
+    let recalcAllPollFailures = 0
     const timer = setInterval(async () => {
       try {
         const job = await fetchRecalculateAllJob(recalcAllJobId)
         if (cancelled) return
+        recalcAllPollFailures = 0
         setRecalcAllSummary(summarizeRecalculateAllJob(job))
         if (isRecalculateAllJobDone(job)) {
           setRecalcAllJobId(null)
@@ -625,7 +627,15 @@ export default function OrdersView({
           void refetchOrders().finally(() => { refreshInflight = false })
         }
       } catch {
-        /* transient poll failure — keep polling */
+        if (cancelled) return
+        recalcAllPollFailures += 1
+        if (recalcAllPollFailures >= 3) {
+          setRecalcAllJobId(null)
+          passiveBackfillStartedRef.current = false
+          setRecalcAllSummary('status unavailable')
+          showToast('Recalculate All status unavailable — refresh and retry if needed', 'error')
+          setTimeout(() => setRecalcAllSummary(null), 8000)
+        }
       }
     }, 2500)
     return () => { cancelled = true; clearInterval(timer) }
