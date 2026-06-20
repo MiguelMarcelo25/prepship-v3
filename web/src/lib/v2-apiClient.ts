@@ -2779,6 +2779,12 @@ export const apiClient = {
             enumerable: false,
           });
         }
+        if (res?.secondBestRate) {
+          Object.defineProperty(translatedRates, 'secondBestRate', {
+            value: { ...translateRateToV2Shape(res.secondBestRate), ...responseMetadata },
+            enumerable: false,
+          });
+        }
         Object.defineProperty(translatedRates, 'directCarrierErrors', {
           value: Array.isArray(res?.directCarrierErrors) ? res.directCarrierErrors : [],
           enumerable: false,
@@ -2872,11 +2878,15 @@ export const apiClient = {
           const bestRate = backendResult?.bestRate
             ? { ...translateRateToV2Shape(backendResult.bestRate), ...backendProofMetadata }
             : null;
+          const secondBestRate = backendResult?.secondBestRate
+            ? { ...translateRateToV2Shape(backendResult.secondBestRate), ...backendProofMetadata }
+            : null;
           return {
             ...backendResult,
             requestKey: backendResult?.requestKey ?? requestKey,
             rates: translatedRates,
             bestRate,
+            secondBestRate,
             carrierStatuses: Array.isArray(backendResult?.carrierStatuses) ? backendResult.carrierStatuses : [],
             carrierDiagnostics: Array.isArray(backendResult?.carrierDiagnostics) ? backendResult.carrierDiagnostics : [],
             directCarrierErrors: Array.isArray(backendResult?.directCarrierErrors) ? backendResult.directCarrierErrors : [],

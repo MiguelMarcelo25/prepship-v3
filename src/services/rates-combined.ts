@@ -63,7 +63,9 @@ export type CombineCarrierUniversesInput = {
 
 export type CombinedRateSelection = {
   combinedRates: CombinableRate[];
+  rankedEligibleRates: CombinableRate[];
   cheapest: CombinableRate | null;
+  secondCheapest: CombinableRate | null;
   combinedRequestKey: string;
   carrierStatuses: BestRateWorkflowCarrierStatus[];
   directCarrierStatuses: BestRateWorkflowCarrierStatus[];
@@ -179,8 +181,9 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
   // markup rules by the time they reach this module). Only PRICED rates are
   // eligible — an unpriced/$0 rate (a ShipStation account that returned no amount)
   // must never be selected as best just because `?? 0` makes it look cheapest.
-  const cheapest =
-    [...combinedRates].filter(isPricedRate).sort((a, b) => rateTotal(a) - rateTotal(b))[0] ?? null;
+  const rankedEligibleRates = [...combinedRates].filter(isPricedRate).sort((a, b) => rateTotal(a) - rateTotal(b));
+  const cheapest = rankedEligibleRates[0] ?? null;
+  const secondCheapest = rankedEligibleRates[1] ?? null;
 
   const statusCarrierIds = input.requestedCarrierIds?.length
     ? input.requestedCarrierIds
@@ -264,7 +267,9 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
 
   return {
     combinedRates,
+    rankedEligibleRates,
     cheapest,
+    secondCheapest,
     combinedRequestKey,
     carrierStatuses,
     directCarrierStatuses,

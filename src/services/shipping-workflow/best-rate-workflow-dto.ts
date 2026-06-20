@@ -136,6 +136,9 @@ export type BestRateWorkflowDto = {
   // saved rate immediately on reload when this is fresh/stale/saved_unproven; purchase authority
   // is UNCHANGED (allowedActions + backend proof asserts still require a current fresh rate).
   savedRateDisplay: BestRateSavedRateDisplay;
+  // PS-299: backend-owned final-display verdict. Awaiting UI may show a
+  // dollar amount only when this is true.
+  canDisplayFinalRate: boolean;
   // PS-173 (Phase 1): backend-owned row state + display tuple — present ONLY when the
   // route enriched the DTO with row context via withOrderRowWorkflow (additive).
   rowState?: OrderRowWorkflowState;
@@ -185,7 +188,20 @@ function amountIsPositive(rate: Record<string, unknown> | null): boolean {
   if (amount != null) return amount > 0;
   const shipmentCost = finiteNumberOrNull(rate.shipmentCost) ?? finiteNumberOrNull(rate.cost) ?? 0;
   const otherCost = finiteNumberOrNull(rate.otherCost) ?? 0;
-  return shipmentCost + otherCost > 0;
+  if (shipmentCost + otherCost > 0) return true;
+  const shippingAmount = isRecord(rate.shipping_amount)
+    ? finiteNumberOrNull(rate.shipping_amount.amount)
+    : null;
+  const rawOtherAmount = isRecord(rate.other_amount)
+    ? finiteNumberOrNull(rate.other_amount.amount)
+    : null;
+  const confirmationAmount = isRecord(rate.confirmation_amount)
+    ? finiteNumberOrNull(rate.confirmation_amount.amount)
+    : null;
+  const insuranceAmount = isRecord(rate.insurance_amount)
+    ? finiteNumberOrNull(rate.insurance_amount.amount)
+    : null;
+  return (shippingAmount ?? 0) + (rawOtherAmount ?? 0) + (confirmationAmount ?? 0) + (insuranceAmount ?? 0) > 0;
 }
 
 function savedRateFingerprint(rate: Record<string, unknown> | null): string | null {
@@ -242,7 +258,12 @@ export function isBestRateComplete(
 ): boolean {
   if (!Array.isArray(carrierStatuses) || carrierStatuses.length === 0) return false;
   return carrierStatuses.every(
-    (status) => status.status !== 'loading' && status.status !== 'error' && status.thin !== true,
+    (status) =>
+      status.status !== 'loading' &&
+      status.status !== 'error' &&
+      status.status !== 'uncached' &&
+      status.status !== 'unknown' &&
+      status.thin !== true,
   );
 }
 
@@ -254,7 +275,8 @@ function sanitizeCarrierStatus(status: BestRateWorkflowCarrierStatus): BestRateW
     status.status === 'loading' ||
     status.status === 'error' ||
     status.status === 'blocked' ||
-    status.status === 'unknown'
+    status.status === 'unknown' ||
+    status.status === 'uncached'
       ? status.status
       : 'unknown';
   const rateCount = Number.isFinite(status.rateCount) ? Math.max(0, Math.trunc(status.rateCount)) : 0;
@@ -334,11 +356,7 @@ function savedRateDisplayFor(
 ): BestRateSavedRateDisplay {
   if (!hasSavedRate || !savedRateHasDisplayIdentity(savedRate)) return 'none';
   if (state === 'fresh') return 'fresh';
-  if (state === 'stale' || state === 'mismatched_request' || state === 'partial_carrier_failure') {
-    return 'stale';
-  }
   // 'unknown' is the legacy bucket: saved amount + identity, but no fingerprint/isComplete/expiry.
-  if (state === 'unknown') return 'saved_unproven';
   // missing/blocked have no saved rate (hasSavedRate=false) — unreachable here; pending/rating are
   // reader-side overrides applied AFTER this builder runs.
   return 'none';
@@ -554,6 +572,8 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
   // would wrongly demote saved-rate-only DTOs) — default-inert: `status.thin` is never set unless
   // Layer 1 ran, so today's full/empty passes are byte-identical.
   const hasThinCarrier = carrierStatuses.some((status) => status.thin === true);
+  const hasIncompleteCarrierCoverage =
+    carrierStatuses.length > 0 && !isBestRateComplete(carrierStatuses);
   const hasSavedRate = amountIsPositive(savedRate);
   const matchesRequest =
     Boolean(currentFingerprint && savedFingerprint && currentFingerprint === savedFingerprint) ||
@@ -566,7 +586,7 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     bestRateState = hasCarrierFailure ? 'blocked' : 'missing';
   } else if (currentFingerprint && savedFingerprint && currentFingerprint !== savedFingerprint) {
     bestRateState = 'mismatched_request';
-  } else if (hasCarrierFailure || hasThinCarrier) {
+  } else if (hasCarrierFailure || hasThinCarrier || hasIncompleteCarrierCoverage) {
     // PS-271 (Layer 4): a thin carrier is treated exactly like a failed carrier here — the saved
     // best is unproven, so the row shows partial (re-rate required) instead of a false `fresh`.
     bestRateState = 'partial_carrier_failure';
@@ -587,5 +607,6 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     ...(input.selectedRateState ? { selectedRateState: input.selectedRateState } : {}),
     allowedActions: actionsFor(bestRateState),
     savedRateDisplay: savedRateDisplayFor(bestRateState, savedRate, hasSavedRate),
+    canDisplayFinalRate: bestRateState === 'fresh',
   };
 }

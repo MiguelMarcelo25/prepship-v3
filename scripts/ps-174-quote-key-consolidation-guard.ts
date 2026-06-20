@@ -54,7 +54,7 @@ const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 // fingerprint is the combined request key (SS + direct), not the SS-only one.
 check('rates-backfill persists THROUGH the finalizer (PS-244 single owner; destructured bestRate)',
   /const \{ bestRate: finalizedBest \} = await finalizeBestRateWithQuote\(\{/.test(backfill) &&
-  /\.\.\.finalizedBest,\s*\n\s*requestFingerprint: combined\.combinedRequestKey/.test(backfill));
+  /\.\.\.finalizedBest,[\s\S]{0,160}requestFingerprint: combined\.combinedRequestKey/.test(backfill));
 check('backfill keeps its existing metadata stamps (expiry/eligibility/completeness)',
   /cacheExpiresAt: new Date\(new Date\(result\.fetchedAt\)\.getTime\(\) \+ CACHE_TTL_MS\)/.test(backfill) &&
   /eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION/.test(backfill));

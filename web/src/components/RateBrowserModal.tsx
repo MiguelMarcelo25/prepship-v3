@@ -153,7 +153,11 @@ export type RbAppliedRate = {
   requestFingerprint?: string;
   cacheKey?: string;
   cacheCreatedAt?: string;
+  cacheExpiresAt?: string;
+  isComplete?: boolean;
+  rateCount?: number;
   proofSource?: string;
+  secondBestRate?: unknown;
   // PS-292: backend-owned SHIPP house tuple carried through Apply so a manually-selected SHIPP best
   // persists best_rate_json.nextBestNonHouseRate/houseMargin (the Awaiting row reads totalCost off it
   // to render the customer_rate-over-drp_cost two-tier). Pass-through only — lifted from the canonical
@@ -242,7 +246,10 @@ export type RateRow = {
   requestFingerprint?: string | null;
   cacheKey?: string | null;
   cacheCreatedAt?: string | null;
+  cacheExpiresAt?: string | null;
+  isComplete?: boolean | null;
   proofSource?: string | null;
+  secondBestRate?: unknown;
   raw?: any;
 };
 
@@ -1735,7 +1742,7 @@ export default function RateBrowserModal({
       // best resolves, emit NOTHING and flag an unresolved/retry diagnostic instead.
       const canonicalBest = findCanonicalBestRate(canonicalBackendBest, available);
       const decision = decideBestRateEmission(canonicalBest);
-      if (decision.kind === 'emit') {
+      if (decision.kind === 'emit' && rateIsBackendComplete(decision.rate)) {
         const applied = toAppliedRate(decision.rate);
         if (applied) {
           setBestRateUnresolved(false);
@@ -1934,23 +1941,46 @@ export default function RateBrowserModal({
   function rateBackendProof(r: RateRow): Partial<
     Pick<
       RbAppliedRate,
-      'rateQuoteId' | 'selectedRateKey' | 'requestFingerprint' | 'cacheKey' | 'cacheCreatedAt' | 'proofSource'
+      'rateQuoteId' | 'selectedRateKey' | 'requestFingerprint' | 'cacheKey' | 'cacheCreatedAt' | 'cacheExpiresAt' | 'proofSource' | 'isComplete' | 'secondBestRate'
     >
   > {
     const raw = (r.raw && typeof r.raw === 'object' ? r.raw : null) as Record<string, unknown> | null;
-    const out: Record<string, string> = {};
+    const canonical =
+      findCanonicalBestRate(canonicalBestRef.current, [r]) === r &&
+      canonicalBestRef.current &&
+      typeof canonicalBestRef.current === 'object'
+        ? (canonicalBestRef.current as Record<string, unknown>)
+        : null;
+    const out: Partial<RbAppliedRate> = {};
     for (const key of [
       'rateQuoteId',
       'selectedRateKey',
       'requestFingerprint',
       'cacheKey',
       'cacheCreatedAt',
+      'cacheExpiresAt',
       'proofSource',
     ] as const) {
-      const value = (r as Record<string, unknown>)[key] ?? raw?.[key];
-      if (typeof value === 'string' && value) out[key] = value;
+      const value = (r as Record<string, unknown>)[key] ?? raw?.[key] ?? canonical?.[key];
+      if (typeof value === 'string' && value) out[key] = value as any;
     }
+    const isComplete = (r as Record<string, unknown>).isComplete ?? raw?.isComplete ?? canonical?.isComplete;
+    if (typeof isComplete === 'boolean') out.isComplete = isComplete;
+    const secondBestRate = (r as Record<string, unknown>).secondBestRate ?? raw?.secondBestRate ?? canonical?.secondBestRate;
+    if (secondBestRate != null) out.secondBestRate = secondBestRate;
     return out;
+  }
+
+  function rateIsBackendComplete(r: RateRow | null | undefined): boolean {
+    if (!r) return false;
+    const raw = (r.raw && typeof r.raw === 'object' ? r.raw : null) as Record<string, unknown> | null;
+    const canonical =
+      findCanonicalBestRate(canonicalBestRef.current, [r]) === r &&
+      canonicalBestRef.current &&
+      typeof canonicalBestRef.current === 'object'
+        ? (canonicalBestRef.current as Record<string, unknown>)
+        : null;
+    return (r as Record<string, unknown>).isComplete === true || raw?.isComplete === true || canonical?.isComplete === true;
   }
 
   function handleRateClick(r: RateRow): void {

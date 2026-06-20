@@ -778,6 +778,7 @@ export type AwaitingBestRateWorkflowInput = {
   // PS-196: backend display-only saved-rate verdict ('fresh' | 'stale' | 'saved_unproven' | 'none').
   // Display authority only — purchase still requires allowedActions/current backend proof.
   savedRateDisplay?: string | null
+  canDisplayFinalRate?: boolean | null
   allowedActions?: {
     canUseSavedRate?: boolean | null
     requiresRerate?: boolean | null
@@ -835,7 +836,7 @@ export function classifyAwaitingRateCellStateWithWorkflow(
       // the row has been re-rated — fall through to the live classifier so the
       // cell shows a loading spinner while it re-rates, instead of a "ready"
       // cell that renders an empty rate (the "—" / blank Best Rate symptom).
-      return fallbackInput.hasDisplayableBestRate
+      return workflow.canDisplayFinalRate !== false && fallbackInput.hasDisplayableBestRate
         ? 'ready'
         : classifyAwaitingRateCellState(fallbackInput)
     case 'partial_carrier_failure':
@@ -853,16 +854,14 @@ export function classifyAwaitingRateCellStateWithWorkflow(
         typeof workflow.bestRateStateAgeMs === 'number' &&
         workflow.bestRateStateAgeMs > PENDING_RATING_WATCHDOG_MS
       ) {
-        return fallbackInput.hasDisplayableBestRate ? 'ready' : 'unavailable'
+        return 'unavailable'
       }
-      if (fallbackInput.hasDisplayableBestRate) return 'ready'
       return workflow.bestRateState === 'rating' ? 'calculating' : 'pending'
     case 'stale':
     case 'mismatched_request':
       // PS-196: cache-first — a displayable saved rate (incl. the backend savedRateDisplay
       // verdict for proven-but-stale rows) renders immediately instead of wiping the cell into
       // a spinner on reload. Purchase still requires a re-rate (allowedActions unchanged).
-      if (fallbackInput.hasDisplayableBestRate) return 'ready'
       return fallbackInput.hasDims && fallbackInput.hasWeight
         ? fallbackInput.isAutoRatingActive === false
           ? 'deferred'
@@ -887,6 +886,7 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   matchType?: string | null
   baseAmount: number
   backendWorkflowCanUseSavedRate?: boolean | null
+  backendWorkflowCanDisplayFinalRate?: boolean | null
   // PS-196: the backend's display-only verdict (BestRateWorkflowDto.savedRateDisplay). When the
   // canonical owner says the saved rate is displayable (fresh/stale/saved_unproven), render it —
   // legacy rates without the newer proof metadata included. DISPLAY ONLY: label purchase / Print
@@ -894,13 +894,8 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   backendSavedRateDisplay?: string | null
 }): boolean {
   if (input.baseAmount <= 0) return false
-  if (
-    input.backendSavedRateDisplay === 'fresh' ||
-    input.backendSavedRateDisplay === 'stale' ||
-    input.backendSavedRateDisplay === 'saved_unproven'
-  ) {
-    return true
-  }
+  if (input.backendWorkflowCanDisplayFinalRate === false) return false
+  if (input.backendSavedRateDisplay && input.backendSavedRateDisplay !== 'fresh') return false
   if (
     input.requireEligibilityVersion !== false &&
     input.requiredEligibilityVersion &&

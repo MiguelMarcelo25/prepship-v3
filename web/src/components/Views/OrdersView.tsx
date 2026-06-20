@@ -405,10 +405,8 @@ type RecipientDraft = {
 // buildTestMockRate also moved VERBATIM to ./orders/test-mock-rate-normalizer; re-imported below.
 // PS-135: BACKEND_RATE_PROOF_SOURCE now imported from ../../lib/rate-proof (single source).
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
-// Passive auto-rating now rates EVERY visible rateable awaiting order (so each
-// row shows a spinner until it resolves, never a parked "—"). This is the
-// bounded concurrency of live rate fetches that drain the full queue — keeps
-// carrier-API load in check while still resolving every row.
+// Passive auto-rating live-rates a small visible slice in the browser; overflow
+// rows show a spinner and are handed to the backend backfill/checker.
 // Lowered 4 -> 2 (Phase 1 rate-browser speedup): the background drain shares one
 // process-wide ShipStation rate limiter with the interactive Rate Browser, so a
 // smaller background footprint stops the modal's live fan-out from being starved.
@@ -4160,9 +4158,13 @@ export default function OrdersView({
     if (!backendExpiresAt) {
       console.warn('[orders] backend rate carried no cacheExpiresAt — minting a display-only 6h fallback (PS-183)')
     }
-    const expiresAt =
-      backendExpiresAt ??
-      new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
+    const expiresAt = backendExpiresAt ?? null
+    const metadataComplete =
+      typeof metadata.isComplete === 'boolean'
+        ? metadata.isComplete
+        : typeof rate.isComplete === 'boolean'
+          ? rate.isComplete
+          : false
     return {
       ...rateWithoutProof,
       ...(backendRequestFingerprint
@@ -4193,7 +4195,7 @@ export default function OrdersView({
         request.insuredValue ??
         null,
       eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-      isComplete: metadata.isComplete === true,
+      isComplete: metadataComplete,
       rateCount: toNumberValue(metadata.rateCount) ?? 1,
       matchType: toStringValue(metadata.matchType) ?? 'live',
     }
@@ -4294,6 +4296,7 @@ export default function OrdersView({
     const savedRate = getSavedBestRateRecord(order)
     if (!savedRate) return false
     const workflow = getBestRateWorkflowModel(order)
+    const workflowRecord = toRecord(workflow)
     return savedBestRateCanDisplayForCurrentRequest({
       clientRequestKey: toStringValue(savedRate.clientRequestKey),
       requestKey: request.key,
@@ -4305,11 +4308,13 @@ export default function OrdersView({
       requireEligibilityVersion: options.requireEligibilityVersion,
       matchType: toStringValue(savedRate.matchType),
       baseAmount: getRateBaseAmount(savedRate),
-      backendWorkflowCanUseSavedRate: toRecord(workflow?.allowedActions)?.canUseSavedRate === true,
+      backendWorkflowCanUseSavedRate: toRecord(workflowRecord?.allowedActions)?.canUseSavedRate === true,
+      backendWorkflowCanDisplayFinalRate:
+        typeof workflowRecord?.canDisplayFinalRate === 'boolean' ? workflowRecord.canDisplayFinalRate : null,
       // PS-196: the backend's display-only verdict — legacy saved rates (no newer proof
       // metadata) render immediately as saved/stale instead of a spinner. Display only; the
       // purchase paths still require current backend proof.
-      backendSavedRateDisplay: toStringValue(toRecord(workflow)?.savedRateDisplay),
+      backendSavedRateDisplay: toStringValue(workflowRecord?.savedRateDisplay),
     })
   }
 
@@ -4637,8 +4642,9 @@ export default function OrdersView({
 
     const rateCount = Array.isArray(response?.rates) ? response.rates.length : 1
     const backendRequestFingerprint = getBackendRateResponseFingerprint(response) ?? getBackendRateResponseFingerprint(null, decision.rate)
+    const backendComplete = deriveBackendBestRateComplete(response, decision.rate)
     const rateWithMetadata = withRateRequestMetadata(decision.rate, request, {
-      isComplete: true,
+      isComplete: backendComplete,
       rateCount,
       matchType: 'strict-live',
       cacheCreatedAt: response?.fetchedAt,
@@ -5670,10 +5676,12 @@ export default function OrdersView({
     if (!panelOrderId || shippingProviderId == null || !serviceCode) return
 
     const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
+    const appliedRateComplete = rate.isComplete === true
+    const appliedRateCount = toNumberValue(rate.rateCount) ?? 1
     const rateForTable = autoRequest
       ? withRateRequestMetadata(rate, autoRequest, {
-        isComplete: true,
-        rateCount: 1,
+        isComplete: appliedRateComplete,
+        rateCount: appliedRateCount,
         matchType: 'manual',
       })
       : rate
@@ -5700,7 +5708,7 @@ export default function OrdersView({
         ...(autoRequest
           ? {
             request: autoRequest,
-            metadata: { isComplete: true, rateCount: 1, matchType: 'manual' },
+            metadata: { isComplete: appliedRateComplete, rateCount: appliedRateCount, matchType: 'manual' },
           }
           : {}),
         refetch: true,
@@ -7127,14 +7135,23 @@ export default function OrdersView({
     // Operator request (2026-05-12, under `unlock shipped data` override): no
     // per-carrier SVG badge in this cell — the Carrier column already shows it.
     const backendMoney = getBackendRowMoney(displayOrder)
+    const secondBestRate = toRecord(toRecord(displayOrder.bestRate)?.secondBestRate)
+    const secondBestAmount = secondBestRate ? getRateBaseAmount(secondBestRate) : null
     return (
-      <div data-rate-state="ready" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div data-rate-state="ready" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {backendMoney
           ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)
           : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate))}
         {/* PS-220 (slice 4b): SHIPP house order — the shown amount is the customer_rate billed. */}
         {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
         {recalculatingSpinner}
+        </div>
+        {secondBestAmount != null && secondBestAmount > 0 ? (
+          <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.15 }}>
+            2nd {formatMoney(secondBestAmount)}
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -9753,7 +9770,11 @@ export default function OrdersView({
                   ...(autoRequest
                     ? {
                         request: autoRequest,
-                        metadata: { isComplete: true, rateCount: 1, matchType: 'browse' },
+                        metadata: {
+                          isComplete: best.isComplete === true,
+                          rateCount: toNumberValue(best.rateCount) ?? 1,
+                          matchType: 'browse',
+                        },
                       }
                     : {}),
                   refetch: true,

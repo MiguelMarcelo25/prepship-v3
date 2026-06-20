@@ -582,7 +582,7 @@ export function startSyncScheduler(
       `[scheduler] rate backfill enabled — every ${RATE_BACKFILL_INTERVAL_MS / 1000}s`
     );
     // Rate backfill — fires every 10 min, fetches rates for any awaiting order
-    // that has no rate yet OR whose rate is older than 24h (maxAgeHours default).
+    // that has no rate yet OR whose saved rate is past the backend cache TTL.
     // Start 3 min after boot so the first order-sync has time to pull any new
     // orders in before we try to rate them.
     setTimeout(() => {

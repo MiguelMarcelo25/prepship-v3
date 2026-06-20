@@ -58,6 +58,7 @@ export type PrintQueuePreflightForSavedRateInput = {
   matchType?: string | null
   baseAmount: number
   backendWorkflowCanUseSavedRate?: boolean | null
+  backendWorkflowCanDisplayFinalRate?: boolean | null
   backendSavedRateDisplay?: string | null
   nowMs?: number
 }
@@ -85,6 +86,7 @@ export function classifyPrintQueuePreflightForSavedRate(
     matchType: input.matchType,
     baseAmount: input.baseAmount,
     backendWorkflowCanUseSavedRate: input.backendWorkflowCanUseSavedRate ?? null,
+    backendWorkflowCanDisplayFinalRate: input.backendWorkflowCanDisplayFinalRate ?? null,
     backendSavedRateDisplay: input.backendSavedRateDisplay,
   })
 

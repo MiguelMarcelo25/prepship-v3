@@ -2078,6 +2078,11 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         if (override) {
           bestRateWorkflow.bestRateState = override.bestRateState;
           bestRateWorkflow.bestRateStateAgeMs = override.bestRateStateAgeMs;
+          bestRateWorkflow.canDisplayFinalRate = false;
+          bestRateWorkflow.savedRateDisplay = 'none';
+          bestRateWorkflow.allowedActions.canUseSavedRate = false;
+          bestRateWorkflow.allowedActions.canCreateLabel = false;
+          bestRateWorkflow.allowedActions.requiresRerate = true;
         }
       }
     }

@@ -990,6 +990,7 @@ export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       // legacy cache), which keeps those rates structurally non-purchasable.
       rateQuoteId: obj.rateQuoteId ?? null,
       selectedRateKey: obj.selectedRateKey ?? null,
+      secondBestRate: obj.secondBestRate ? translateRateToV2Shape(obj.secondBestRate) : null,
       isComplete: obj.isComplete ?? null,
       rateCount: obj.rateCount ?? null,
       matchType: obj.matchType ?? null,

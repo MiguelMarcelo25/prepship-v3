@@ -70,6 +70,10 @@ export interface OrderBestRateDto {
   proofSource: string | null;
   rateQuoteId: string | null;
   selectedRateKey: string | null;
+  // PS-299: generic runner-up rate for Awaiting Shipment. This is the second cheapest
+  // eligible/priced result from the SAME finalized backend rate-shopping pass as this
+  // bestRate. It is not the house-account nextBestNonHouseRate competitor.
+  secondBestRate: SecondBestRateDto | null;
   // PS-220 house-margin (projected): captured at best-rate SAVE when SHIPP wins for an opted-in
   // client. nextBestNonHouseRate = the cheapest ELIGIBLE non-SHIPP rate (the customer_rate basis,
   // portal-OK). houseMargin = customer_rate - drp_cost (>= 0), INTERNAL (redacted from client
@@ -329,6 +333,29 @@ function readRateInsuranceCertainty(record: Record<string, unknown>): unknown {
   return certaintyMeta?.certainty ?? record.insuranceCertainty ?? null;
 }
 
+export interface SecondBestRateDto {
+  carrierCode: string | null;
+  serviceCode: string | null;
+  serviceName: string | null;
+  carrierNickname: string | null;
+  shippingProviderId: number | null;
+  shipmentCost: number;
+  otherCost: number;
+  insuranceCost: number | null;
+  totalCost: number | null;
+  requestFingerprint: string | null;
+  cacheKey: string | null;
+  cacheCreatedAt: string | null;
+  cacheExpiresAt: string | null;
+  eligibilityVersion: string | null;
+  isComplete: boolean | null;
+  rateCount: number | null;
+  matchType: string | null;
+  proofSource: string | null;
+  rateQuoteId: string | null;
+  selectedRateKey: string | null;
+}
+
 function readRateInsuranceCoverageProofSource(record: Record<string, unknown>): InsuranceCoverageProofSource | null {
   const raw = record.insuranceCoverageProofSource ?? record.insurance_coverage_proof_source ?? null;
   return raw === 'shipp_customs_value' ? 'shipp_customs_value' : null;
@@ -394,6 +421,63 @@ function normalizeNextBestNonHouseRate(value: unknown, path = 'bestRate.nextBest
     // through verbatim (null on older stamps that did not carry it).
     competitorCount: readNullableNumber(value.competitorCount ?? value.competitor_count ?? null, `${path}.competitorCount`),
   };
+}
+
+function normalizeSecondBestRate(value: unknown, path = 'bestRate.secondBestRate'): SecondBestRateDto | null {
+  if (!isRecord(value)) return null;
+  const shippingAmount = isRecord(value.shipping_amount) ? value.shipping_amount : null;
+  const otherAmount = isRecord(value.other_amount) ? value.other_amount : null;
+  const confirmationAmount = isRecord(value.confirmation_amount) ? value.confirmation_amount : null;
+  const insuranceAmount = isRecord(value.insurance_amount) ? value.insurance_amount : null;
+  const insuranceCost = readMoneyAmount(value.insuranceCost ?? value.insuranceAmount ?? insuranceAmount) ?? null;
+  const shipmentCost = readNumber(
+    value.shipmentCost ?? shippingAmount?.amount ?? value.cost ?? value.amount ?? 0,
+    `${path}.shipmentCost`,
+  );
+  const otherCost =
+    readNumber(value.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`) +
+    (typeof confirmationAmount?.amount === 'number' && Number.isFinite(confirmationAmount.amount)
+      ? confirmationAmount.amount
+      : 0) +
+    (typeof value.otherCost === 'number'
+      ? 0
+      : typeof insuranceAmount?.amount === 'number' && Number.isFinite(insuranceAmount.amount)
+        ? insuranceAmount.amount
+        : 0);
+  const rate: SecondBestRateDto = {
+    carrierCode: readNullableString(value.carrierCode ?? value.carrier_code ?? value.carrier ?? null, `${path}.carrierCode`),
+    serviceCode: readNullableString(value.serviceCode ?? value.service_code ?? null, `${path}.serviceCode`),
+    serviceName: readNullableString(
+      value.serviceName ?? value.service_type ?? value.serviceCode ?? value.service_code ?? null,
+      `${path}.serviceName`,
+    ),
+    carrierNickname: readNullableString(
+      value.carrierNickname ?? value.carrier_nickname ?? value._carrierName ?? null,
+      `${path}.carrierNickname`,
+    ),
+    shippingProviderId: readNullableProviderAccountId(
+      value.shippingProviderId ?? value.providerAccountId ?? value.carrier_id ?? null,
+      `${path}.shippingProviderId`,
+    ),
+    shipmentCost,
+    otherCost,
+    insuranceCost,
+    totalCost: readNullableNumber(value.totalCost ?? value.total_cost ?? null, `${path}.totalCost`) ?? shipmentCost + otherCost,
+    requestFingerprint: readNullableString(value.requestFingerprint ?? null, `${path}.requestFingerprint`),
+    cacheKey: readNullableString(value.cacheKey ?? null, `${path}.cacheKey`),
+    cacheCreatedAt: readNullableString(value.cacheCreatedAt ?? null, `${path}.cacheCreatedAt`),
+    cacheExpiresAt: readNullableString(value.cacheExpiresAt ?? null, `${path}.cacheExpiresAt`),
+    eligibilityVersion: readNullableString(value.eligibilityVersion ?? null, `${path}.eligibilityVersion`),
+    isComplete: value.isComplete == null ? null : readBoolean(value.isComplete, `${path}.isComplete`),
+    rateCount: readNullableNumber(value.rateCount ?? null, `${path}.rateCount`),
+    matchType: readNullableString(value.matchType ?? null, `${path}.matchType`),
+    proofSource: readNullableString(value.proofSource ?? null, `${path}.proofSource`),
+    rateQuoteId: readNullableString(value.rateQuoteId ?? null, `${path}.rateQuoteId`),
+    selectedRateKey: readNullableString(value.selectedRateKey ?? null, `${path}.selectedRateKey`),
+  };
+  return rate.serviceCode || rate.carrierCode || rate.shippingProviderId != null || rate.shipmentCost + rate.otherCost > 0
+    ? rate
+    : null;
 }
 
 export function normalizeOrderBestRateDto(
@@ -487,6 +571,7 @@ export function normalizeOrderBestRateDto(
     proofSource: readNullableString(record.proofSource ?? null, `${path}.proofSource`),
     rateQuoteId: readNullableString(record.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
+    secondBestRate: normalizeSecondBestRate(record.secondBestRate ?? record.second_best_rate, `${path}.secondBestRate`),
     nextBestNonHouseRate: normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`),
     houseMargin: readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`),
     // PS-292 (item 2): round-trip the persisted house-tuple verdict (stamped at SAVE). Unknown/absent

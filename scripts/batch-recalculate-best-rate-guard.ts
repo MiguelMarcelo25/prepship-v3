@@ -166,7 +166,9 @@ check('Browse Rates no longer uses fetchRates fallback source', !/apiClient\.fet
 check('Browse Rates modal owns strict live browse trigger',
   /onClick=\{\(\) => void browseRates\(undefined, \{ forceLive: true \}\)\}/.test(rateBrowserModalStart));
 check('Browse Rates modal applies backend best-rate callback',
-  /onBestRateResolved/.test(ordersView) && /const applied = best \? toAppliedRate\(best\) : null/.test(rateBrowserModalStart));
+  /onBestRateResolved/.test(ordersView) &&
+  /decision\.kind === 'emit' && rateIsBackendComplete\(decision\.rate\)/.test(rateBrowserModalStart) &&
+  /const applied = toAppliedRate\(decision\.rate\)/.test(rateBrowserModalStart));
 
 const bestRateProviderStart = rowDisplay.indexOf('export function getBestRateShippingProviderId(');
 const bestRateProviderEnd = rowDisplay.indexOf('\nexport function getBestRateServiceCode', bestRateProviderStart);
@@ -237,11 +239,15 @@ check('passive auto-rating cannot persist from legacy fetchRates fallback',
   !/pickBestPanelRate/.test(passiveBlock) &&
   /apiClient\.browseRates/.test(passiveBlock) &&
   /response\?\.bestRate/.test(passiveBlock));
-check('passive auto-rating drains the full queue at bounded concurrency after cache sweep',
+check('passive auto-rating caps browser live work and hands overflow to backend backfill',
   /PASSIVE_LIVE_BEST_RATE_CONCURRENCY/.test(ordersView) &&
-  /const liveQueue = queue\.splice\(0\)/.test(passiveRunnerBlock) &&
+  /PASSIVE_LIVE_BEST_RATE_MAX_ROWS/.test(ordersView) &&
+  /const liveBudget = Math\.max\(0, PASSIVE_LIVE_BEST_RATE_MAX_ROWS - passiveLiveBestRateCountRef\.current\)/.test(passiveRunnerBlock) &&
+  /const liveQueue = queue\.splice\(0, liveBudget\)/.test(passiveRunnerBlock) &&
   /const workerCount = Math\.min\(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue\.length\)/.test(passiveRunnerBlock) &&
-  /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock));
+  /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock) &&
+  /const overflow = queue\.splice\(0\)/.test(passiveRunnerBlock) &&
+  /startRecalculateAllBestRates\(PASSIVE_BACKFILL_MAX_AGE_HOURS\)/.test(passiveRunnerBlock));
 
 const bestRateBaseStart = rowDisplay.indexOf('export function getBestRateBaseCost(');
 const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateShippingProviderId', bestRateBaseStart);

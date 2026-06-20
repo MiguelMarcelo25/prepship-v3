@@ -11,7 +11,11 @@ import {
 } from './shipping-workflow/residential-evidence';
 // PS-276 (slice 2b-2b): the live address-classification resolver (cache-or-USPS), env-gated OFF.
 import { resolveAddressClassification } from './shipping-workflow/resolve-address-classification';
-import { finalizeBestRateWithQuote } from './shipping-workflow/rate-quote-snapshot-store';
+import {
+  BACKEND_RATE_PROOF_SOURCE,
+  finalizeBestRateWithQuote,
+  selectedRateOpaqueKey,
+} from './shipping-workflow/rate-quote-snapshot-store';
 import { isPersistedBestDowngrade } from './best-rate-ratchet-db';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
@@ -306,10 +310,8 @@ async function runBackfill(
   await persistBackfillJobSnapshot(job, opts);
 
   try {
-    const staleCutoff =
-      opts.maxAgeHours !== undefined
-        ? new Date(Date.now() - opts.maxAgeHours * 60 * 60 * 1000)
-        : null;
+    const effectiveMaxAgeHours = opts.maxAgeHours ?? CACHE_TTL_MS / (60 * 60 * 1000);
+    const staleCutoff = new Date(Date.now() - effectiveMaxAgeHours * 60 * 60 * 1000);
     // Recalculate All (maxAgeHours: 0) is an OPERATOR demand for current prices:
     // bypass the rate cache and live-fan-out every carrier, exactly like manual
     // Browse Rates with forceLive. Without this the job re-served cached rate
@@ -567,6 +569,7 @@ async function runBackfill(
           isCachedOnlyLookup: false,
         });
         const best = combined.cheapest;
+        const secondBest = combined.secondCheapest;
 
         if (!best) {
           job.skipped++;
@@ -586,6 +589,16 @@ async function runBackfill(
           };
           delete rawAmountBest.original_amount;
           delete rawAmountBest.markup;
+          const rawAmountSecondBest: Record<string, unknown> | null = secondBest
+            ? {
+                ...secondBest,
+                ...(secondBest.original_amount ? { shipping_amount: secondBest.original_amount } : {}),
+              }
+            : null;
+          if (rawAmountSecondBest) {
+            delete rawAmountSecondBest.original_amount;
+            delete rawAmountSecondBest.markup;
+          }
           // PS-174 (Phase 2): stamp the backend quote snapshot ref + proof marker —
           // the SAME finalization /rates/browse performs — so the persisted best
           // rate is snapshot-purchasable on reload without a re-browse. Best-effort
@@ -599,8 +612,26 @@ async function runBackfill(
             cacheKey: combined.combinedRequestKey,
             fetchedAt: result.fetchedAt,
           });
+          const secondBestRate =
+            rawAmountSecondBest && combined.bestRateComplete
+              ? {
+                  ...rawAmountSecondBest,
+                  selectedRateKey: selectedRateOpaqueKey(secondBest),
+                  ...(finalizedBest.rateQuoteId ? { rateQuoteId: finalizedBest.rateQuoteId } : {}),
+                  proofSource: BACKEND_RATE_PROOF_SOURCE,
+                  requestFingerprint: combined.combinedRequestKey,
+                  cacheKey: combined.combinedRequestKey,
+                  cacheCreatedAt: result.fetchedAt,
+                  cacheExpiresAt: new Date(new Date(result.fetchedAt).getTime() + CACHE_TTL_MS).toISOString(),
+                  eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+                  isComplete: combined.bestRateComplete,
+                  rateCount: combined.combinedRates.length,
+                  matchType: result.cached ? 'exact' : 'live',
+                }
+              : null;
           const bestWithMetadata = {
             ...finalizedBest,
+            secondBestRate,
             requestFingerprint: combined.combinedRequestKey,
             cacheKey: combined.combinedRequestKey,
             cacheCreatedAt: result.fetchedAt,

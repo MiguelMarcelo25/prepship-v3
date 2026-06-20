@@ -55,6 +55,7 @@ import {
   storeRateQuoteSnapshot,
   withSelectedRateKeys,
   selectedRateOpaqueKey,
+  BACKEND_RATE_PROOF_SOURCE,
 } from '../services/shipping-workflow/rate-quote-snapshot-store';
 import {
   getCarrierEligibilityMode,
@@ -64,7 +65,10 @@ import {
   resolveHugrabLabelPurchasePreflight,
   resolveShippCustomsValueProofSource,
 } from '../services/shipping-workflow/hugrab-label-purchase-preflight';
-import { isHugrabShippingContext } from '../lib/shipping-service-eligibility';
+import {
+  isHugrabShippingContext,
+  SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+} from '../lib/shipping-service-eligibility';
 import { orderOverrides, orders } from '../db/schema/orders';
 
 const app = new Hono();
@@ -274,7 +278,7 @@ function canViewRateAccountMetadata(c: Context): boolean {
   );
 }
 
-function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown }>(
+function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown; secondBestRate?: unknown }>(
   result: T,
   canViewFinancials: boolean
 ): T {
@@ -283,10 +287,11 @@ function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown }>(
     ...result,
     rates: redactRateBrowserMoney(result.rates),
     bestRate: redactRateBrowserMoney(result.bestRate),
+    secondBestRate: redactRateBrowserMoney(result.secondBestRate),
   };
 }
 
-function publicRateCacheRow<T extends { rates?: unknown; bestRate?: unknown }>(
+function publicRateCacheRow<T extends { rates?: unknown; bestRate?: unknown; secondBestRate?: unknown }>(
   row: T | null | undefined,
   canViewFinancials: boolean
 ): T | null {
@@ -607,6 +612,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   const {
     combinedRates,
     cheapest,
+    secondCheapest,
     combinedRequestKey,
     combinedCarrierStatuses,
     directCarrierDiagnostics,
@@ -654,6 +660,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   let responseRates: Array<Record<string, unknown>> = withSelectedRateKeys(combinedRates);
   let rateQuoteId: string | undefined;
   let bestRateOut = cheapest;
+  let secondBestRateOut: Record<string, unknown> | null = null;
   if (cheapest) {
     const finalized = await finalizeBestRateWithQuote({
       bestRate: cheapest as Record<string, unknown>,
@@ -663,8 +670,36 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     });
     rateQuoteId = finalized.rateQuoteId;
     responseRates = finalized.rates;
+    const finalizedSecondBestRate = secondCheapest
+      ? {
+          ...(secondCheapest as Record<string, unknown>),
+          selectedRateKey: selectedRateOpaqueKey(secondCheapest),
+          ...(rateQuoteId ? { rateQuoteId } : {}),
+          proofSource: BACKEND_RATE_PROOF_SOURCE,
+        }
+      : null;
+    secondBestRateOut =
+      finalizedSecondBestRate && bestRateComplete
+        ? {
+            ...finalizedSecondBestRate,
+            isComplete: bestRateComplete,
+            requestFingerprint: combinedRequestKey,
+            cacheKey: combinedRequestKey,
+            cacheCreatedAt: result.fetchedAt,
+            cacheExpiresAt: browseCacheExpiresAt,
+            effectiveInsuranceProvider: result.effectiveInsuranceProvider,
+            effectiveInsuredValue: result.effectiveInsuredValue,
+            effectiveInsuranceSource: result.effectiveInsuranceSource,
+            insuranceProvider: result.effectiveInsuranceProvider,
+            insuredValue: result.effectiveInsuredValue,
+            eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+            rateCount: combinedRates.length,
+            matchType: result.cached ? 'cache' : 'live',
+          }
+        : null;
     bestRateOut = {
       ...finalized.bestRate,
+      secondBestRate: secondBestRateOut,
       isComplete: bestRateComplete,
       requestFingerprint: combinedRequestKey,
       cacheKey: combinedRequestKey,
@@ -675,6 +710,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       effectiveInsuranceSource: result.effectiveInsuranceSource,
       insuranceProvider: result.effectiveInsuranceProvider,
       insuredValue: result.effectiveInsuredValue,
+      eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+      rateCount: combinedRates.length,
+      matchType: result.cached ? 'cache' : 'live',
     } as typeof cheapest;
   }
   // PS-220 (projected house-margin): SHIPP is DRP's house carrier. When the saved winner is SHIPP
@@ -713,6 +751,18 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       bestRateOut as Record<string, unknown>,
       hugrabCoverageDisplayContext,
     ) as typeof cheapest;
+  }
+  if (secondBestRateOut) {
+    secondBestRateOut = stampHugrabCoverageDisplayFields(
+      secondBestRateOut,
+      hugrabCoverageDisplayContext,
+    );
+    if (bestRateOut) {
+      bestRateOut = {
+        ...(bestRateOut as Record<string, unknown>),
+        secondBestRate: secondBestRateOut,
+      } as typeof cheapest;
+    }
   }
   // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
   // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no
@@ -859,6 +909,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     cacheAgeMs: result.cacheAgeMs,
     rates: responseRates,
     bestRate: bestRateOut,
+    secondBestRate: secondBestRateOut,
     carrierStatuses: combinedCarrierStatuses,
     carrierDiagnostics: combinedCarrierDiagnostics,
     rateBrowseTiming,
