@@ -79,8 +79,13 @@ check('canonical: thin alongside a clean carrier still -> NOT complete',
     thin.allowedActions.canUseSavedRate === false);
   check('DTO: thin best cannot create a label (canCreateLabel=false)',
     thin.allowedActions.canCreateLabel === false);
-  check('DTO: thin best still DISPLAYS the saved value (PS-196 savedRateDisplay=stale)',
-    thin.savedRateDisplay === 'stale');
+  // PS-299 (DJ decision 2026-06-20): a PARTIAL carrier failure means the rate set is
+  // INCOMPLETE, so the saved best could be the wrong number (the true cheapest may be the
+  // carrier that errored). The cell must NOT display a figure — it shows 'Recalculate required'
+  // (savedRateDisplay='none'), unlike a transient full-refresh failure which keeps the cached
+  // value marked 'stale'. This pins that display-safety invariant for the incomplete-set case.
+  check('DTO: thin best (incomplete set) does NOT display a number (savedRateDisplay=none, requires recalc)',
+    thin.savedRateDisplay === 'none');
   check('DTO: thin best -> source confidence is partial (not live/cache_fresh)',
     thin.sourceConfidence === 'partial');
   // The DTO's own carrierStatuses preserve the thin flag, and isBestRateComplete over them is false.

@@ -122,13 +122,13 @@ async function main() {
   // ── wiring: PDF path delegates to B's normalizer; raster path keeps the placement owner ──
   const shipp = readFileSync('src/connectors/carrier/shipp.ts', 'utf8');
   check('shipp.ts imports the raster placement owner (computeFourBySixPlacement)',
-    /from '\.\/shipp-label-4x6-placement'/.test(shipp) && /computeFourBySixPlacement/.test(shipp));
+    /from '\.\/shipp-label-4x6-placement(\.js)?'/.test(shipp) && /computeFourBySixPlacement/.test(shipp));
   const placementCalls = (shipp.match(/computeFourBySixPlacement\(/g) || []).length;
   check('the raster/image path still uses the placement owner', placementCalls >= 1, `calls=${placementCalls}`);
   check("the PDF path delegates to B's content-aware 4×6 normalizer (appendNormalizedLabelPages)",
     /appendNormalizedLabelPages\s*\(/.test(shipp));
   check('the normalizer is imported from the PURE print-queue-pdf module',
-    /from '\.\.\/\.\.\/services\/print-queue-pdf'/.test(shipp));
+    /from '\.\.\/\.\.\/services\/print-queue-pdf(\.js)?'/.test(shipp));
   check('NOT imported from the env-dragging print-queue.ts barrel',
     !/from '\.\.\/\.\.\/services\/print-queue'/.test(shipp));
   check('the duplicated inline Math.min placement math is gone from shipp.ts',

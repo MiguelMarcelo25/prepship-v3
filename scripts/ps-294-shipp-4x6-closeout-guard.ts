@@ -63,7 +63,7 @@ check(
 check(
   'shipp connector delegates PDF labels to the pure print-queue-pdf normalizer',
   /appendNormalizedLabelPages/.test(shippConnector) &&
-    /from '\.\.\/\.\.\/services\/print-queue-pdf'/.test(shippConnector),
+    /from '\.\.\/\.\.\/services\/print-queue-pdf(\.js)?'/.test(shippConnector),
 );
 check(
   'shipp connector does not import the env-dragging print-queue barrel',
