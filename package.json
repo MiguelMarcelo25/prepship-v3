@@ -406,6 +406,7 @@
     "test:ps-289-multi-package-marketplace-confirmation-plan": "tsx scripts/ps-289-multi-package-marketplace-confirmation-plan-guard.ts",
     "test:ps-289-multi-package-mocked-workflow": "tsx scripts/ps-289-multi-package-mocked-workflow-guard.ts",
     "test:ps-289-multi-package-label-purchase-boundary": "tsx scripts/ps-289-multi-package-label-purchase-boundary-guard.ts",
+    "test:ps-289-multi-package-purchased-label-orchestration": "tsx scripts/ps-289-multi-package-purchased-label-orchestration-guard.ts",
     "test:ps-289-multi-package-closeout": "tsx scripts/ps-289-multi-package-closeout-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",

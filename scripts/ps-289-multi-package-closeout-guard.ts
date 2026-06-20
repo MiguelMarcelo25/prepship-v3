@@ -32,6 +32,10 @@ const labelPurchaseBoundary = readFileSync(
   'src/services/shipping-workflow/multi-package-label-purchase-boundary.ts',
   'utf8',
 );
+const purchasedLabelOrchestration = readFileSync(
+  'src/services/shipping-workflow/multi-package-purchased-label-orchestration.ts',
+  'utf8',
+);
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
@@ -50,6 +54,8 @@ check('package wires PS-289 mocked workflow guard',
   packageJson.includes('"test:ps-289-multi-package-mocked-workflow"'));
 check('package wires PS-289 label purchase boundary guard',
   packageJson.includes('"test:ps-289-multi-package-label-purchase-boundary"'));
+check('package wires PS-289 purchased label orchestration guard',
+  packageJson.includes('"test:ps-289-multi-package-purchased-label-orchestration"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -68,10 +74,12 @@ check('status doc lists mocked workflow guard',
   doc.includes('`test:ps-289-multi-package-mocked-workflow`'));
 check('status doc lists label purchase boundary guard',
   doc.includes('`test:ps-289-multi-package-label-purchase-boundary`'));
+check('status doc lists purchased label orchestration guard',
+  doc.includes('`test:ps-289-multi-package-purchased-label-orchestration`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 72%',
-  /PS-289 72%/.test(doc));
+check('status doc keeps PS-289 conservative at 78%',
+  /PS-289 78%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
 check('status doc says sidecar persistence foundation exists',
@@ -88,6 +96,8 @@ check('status doc says end-to-end mocked workflow proof exists',
   /end-to-end mocked workflow proof now exists/i.test(doc));
 check('status doc says test-gated label purchase boundary exists',
   /test-gated per-package label purchase boundary now\s+exists/.test(doc));
+check('status doc says purchased label sidecar orchestration exists',
+  /purchased-label sidecar orchestration now exists/i.test(doc));
 check('status doc lists real carrier adapter wiring as missing',
   /Real carrier adapter wiring for per-package label purchase/.test(doc));
 check('status doc lists print queue persistence as missing',
@@ -136,6 +146,12 @@ check('label purchase boundary exports purchaseMultiPackageLabels',
 check('label purchase boundary has no default live purchase path',
   /No default provider calls, live postage, print queue writes, marketplace API calls/.test(labelPurchaseBoundary) &&
     !/from ['"].*(db|schema|routes|connector|shipstation|shipp|easypost|walmart|print-queue|marketplace|orders|shipments)/i.test(labelPurchaseBoundary));
+check('purchased label orchestration exports orchestratePurchasedMultiPackageLabels',
+  /export async function orchestratePurchasedMultiPackageLabels/.test(purchasedLabelOrchestration));
+check('purchased label orchestration stays sidecar-owned',
+  /No provider calls by default, no print queue writes, no marketplace API calls/.test(purchasedLabelOrchestration) &&
+    purchasedLabelOrchestration.includes("from '../../db/schema/shipment-groups'") &&
+    !/from ['"].*(routes|connector|shipstation|shipp|easypost|walmart|print-queue|marketplace|orders|shipments)/i.test(purchasedLabelOrchestration));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 

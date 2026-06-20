@@ -4,14 +4,15 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 72%.
+Current completion estimate: PS-289 78%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
 exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
 end-to-end mocked workflow proof now exists, and a test-gated per-package label purchase boundary now
-exists. The real product still needs real carrier adapter wiring, print queue persistence/integration,
-marketplace confirmation persistence/integration, and UI work before any operator should use it.
+exists. Purchased-label sidecar orchestration now exists. The real product still needs real carrier
+adapter wiring, print queue persistence/integration, marketplace confirmation persistence/integration,
+and UI work before any operator should use it.
 
 ## Evidence now wired
 
@@ -23,6 +24,7 @@ marketplace confirmation persistence/integration, and UI work before any operato
 - `test:ps-289-multi-package-marketplace-confirmation-plan`
 - `test:ps-289-multi-package-mocked-workflow`
 - `test:ps-289-multi-package-label-purchase-boundary`
+- `test:ps-289-multi-package-purchased-label-orchestration`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -52,6 +54,10 @@ marketplace confirmation persistence/integration, and UI work before any operato
   an injected purchaser dependency.
 - The purchase boundary refuses to buy labels without an explicit purchaser, rejects mismatched
   package idempotency keys, and blocks live postage results by default.
+- The purchased-label orchestration owner writes planned group/package sidecars, invokes the injected
+  purchaser, applies purchased label shipment/tracking/URL results back to sidecar packages, and marks
+  the sidecar group as `labels_purchased`.
+- Duplicate purchased label idempotency keys are checked before any sidecar writes or purchaser calls.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
