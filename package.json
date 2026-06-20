@@ -407,6 +407,7 @@
     "test:ps-289-multi-package-mocked-workflow": "tsx scripts/ps-289-multi-package-mocked-workflow-guard.ts",
     "test:ps-289-multi-package-label-purchase-boundary": "tsx scripts/ps-289-multi-package-label-purchase-boundary-guard.ts",
     "test:ps-289-multi-package-carrier-adapter": "tsx scripts/ps-289-multi-package-carrier-adapter-guard.ts",
+    "test:ps-289-multi-package-shipstation-adapter": "tsx scripts/ps-289-multi-package-shipstation-adapter-guard.ts",
     "test:ps-289-multi-package-purchased-label-orchestration": "tsx scripts/ps-289-multi-package-purchased-label-orchestration-guard.ts",
     "test:ps-289-multi-package-print-queue-sidecar": "tsx scripts/ps-289-multi-package-print-queue-sidecar-guard.ts",
     "test:ps-289-multi-package-marketplace-confirmation-sidecar": "tsx scripts/ps-289-multi-package-marketplace-confirmation-sidecar-guard.ts",

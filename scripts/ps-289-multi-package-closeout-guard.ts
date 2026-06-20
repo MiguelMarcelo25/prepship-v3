@@ -36,6 +36,10 @@ const carrierAdapter = readFileSync(
   'src/services/shipping-workflow/multi-package-carrier-adapter.ts',
   'utf8',
 );
+const shipStationAdapter = readFileSync(
+  'src/services/shipping-workflow/multi-package-shipstation-adapter.ts',
+  'utf8',
+);
 const purchasedLabelOrchestration = readFileSync(
   'src/services/shipping-workflow/multi-package-purchased-label-orchestration.ts',
   'utf8',
@@ -68,6 +72,8 @@ check('package wires PS-289 label purchase boundary guard',
   packageJson.includes('"test:ps-289-multi-package-label-purchase-boundary"'));
 check('package wires PS-289 carrier adapter guard',
   packageJson.includes('"test:ps-289-multi-package-carrier-adapter"'));
+check('package wires PS-289 ShipStation adapter guard',
+  packageJson.includes('"test:ps-289-multi-package-shipstation-adapter"'));
 check('package wires PS-289 purchased label orchestration guard',
   packageJson.includes('"test:ps-289-multi-package-purchased-label-orchestration"'));
 check('package wires PS-289 print queue sidecar guard',
@@ -94,6 +100,8 @@ check('status doc lists label purchase boundary guard',
   doc.includes('`test:ps-289-multi-package-label-purchase-boundary`'));
 check('status doc lists carrier adapter guard',
   doc.includes('`test:ps-289-multi-package-carrier-adapter`'));
+check('status doc lists ShipStation adapter guard',
+  doc.includes('`test:ps-289-multi-package-shipstation-adapter`'));
 check('status doc lists purchased label orchestration guard',
   doc.includes('`test:ps-289-multi-package-purchased-label-orchestration`'));
 check('status doc lists print queue sidecar guard',
@@ -122,14 +130,16 @@ check('status doc says test-gated label purchase boundary exists',
   /test-gated per-package label purchase boundary now\s+exists/.test(doc));
 check('status doc says injected carrier adapter boundary exists',
   /injected carrier adapter boundary now\s+exists/i.test(doc));
+check('status doc says ShipStation-shaped adapter proof exists',
+  /ShipStation-shaped adapter proof now\s+exists/i.test(doc));
 check('status doc says purchased label sidecar orchestration exists',
   /purchased-label sidecar orchestration now exists/i.test(doc));
 check('status doc says print queue sidecar persistence exists',
   /print queue sidecar persistence now\s+exists/i.test(doc));
 check('status doc says marketplace confirmation sidecar persistence exists',
   /marketplace confirmation sidecar persistence now\s+exists/i.test(doc));
-check('status doc lists real provider-specific carrier adapter wiring as missing',
-  /Real provider-specific carrier adapter wiring/.test(doc));
+check('status doc lists real production label creator wiring as missing',
+  /Real production label creator wiring/.test(doc));
 check('status doc lists real print queue insertion as missing',
   /Real print queue insertion\/printer integration/.test(doc));
 check('status doc lists real marketplace notification integration as missing',
@@ -181,6 +191,12 @@ check('carrier adapter exports createMultiPackageCarrierLabelPurchaser',
 check('carrier adapter remains injected-only and provider-free',
   /No provider module imports, default provider calls, live postage/.test(carrierAdapter) &&
     !/from ['"].*(db|schema|routes|connector|shipstation|shipp|easypost|walmart|print-queue|marketplace|orders|shipments)/i.test(carrierAdapter));
+check('ShipStation adapter exports createShipStationMultiPackageLabelPurchaser',
+  /export function createShipStationMultiPackageLabelPurchaser/.test(shipStationAdapter));
+check('ShipStation adapter uses pure request builder without network creator',
+  /buildSsLabelRequestBody/.test(shipStationAdapter) &&
+    /No ShipStation network call, default live postage/.test(shipStationAdapter) &&
+    !/ssCreateLabel|ssRequest|ssV1Request|from ['"].*(routes|connector|print-queue|marketplace|orders|shipments)/i.test(shipStationAdapter));
 check('purchased label orchestration exports orchestratePurchasedMultiPackageLabels',
   /export async function orchestratePurchasedMultiPackageLabels/.test(purchasedLabelOrchestration));
 check('purchased label orchestration stays sidecar-owned',
