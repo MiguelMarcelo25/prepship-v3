@@ -23,6 +23,10 @@ const schema = readFileSync('src/db/schema/shipment-groups.ts', 'utf8');
 const mockFlow = readFileSync('src/services/shipping-workflow/multi-package-mock-label-flow.ts', 'utf8');
 const orchestration = readFileSync('src/services/shipping-workflow/multi-package-mock-label-orchestration.ts', 'utf8');
 const printQueuePlan = readFileSync('src/services/shipping-workflow/multi-package-print-queue-plan.ts', 'utf8');
+const marketplacePlan = readFileSync(
+  'src/services/shipping-workflow/multi-package-marketplace-confirmation-plan.ts',
+  'utf8',
+);
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
@@ -35,6 +39,8 @@ check('package wires PS-289 DB orchestration guard',
   packageJson.includes('"test:ps-289-multi-package-db-orchestration"'));
 check('package wires PS-289 print queue plan guard',
   packageJson.includes('"test:ps-289-multi-package-print-queue-plan"'));
+check('package wires PS-289 marketplace confirmation plan guard',
+  packageJson.includes('"test:ps-289-multi-package-marketplace-confirmation-plan"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -47,10 +53,12 @@ check('status doc lists DB orchestration guard',
   doc.includes('`test:ps-289-multi-package-db-orchestration`'));
 check('status doc lists print queue plan guard',
   doc.includes('`test:ps-289-multi-package-print-queue-plan`'));
+check('status doc lists marketplace confirmation plan guard',
+  doc.includes('`test:ps-289-multi-package-marketplace-confirmation-plan`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 51%',
-  /PS-289 51%/.test(doc));
+check('status doc keeps PS-289 conservative at 59%',
+  /PS-289 59%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
 check('status doc says sidecar persistence foundation exists',
@@ -61,12 +69,14 @@ check('status doc says DB-backed mocked orchestration exists',
   /DB-backed mocked status orchestration\s+exist/.test(doc));
 check('status doc says group-aware print queue planning exists',
   /Group-aware print queue planning also exists/.test(doc));
+check('status doc says marketplace confirmation planning exists',
+  /Marketplace confirmation planning now exists/.test(doc));
 check('status doc lists real per-package purchase as missing',
   /Real idempotent per-package label purchase workflow/.test(doc));
 check('status doc lists print queue persistence as missing',
   /print queue persistence\/integration/.test(doc));
-check('status doc lists marketplace confirmation planner as missing',
-  /Marketplace confirmation planner/.test(doc));
+check('status doc lists marketplace confirmation integration as missing',
+  /marketplace confirmation persistence\/integration/.test(doc));
 check('status doc requires mocked workflow before live postage',
   /End-to-end mocked workflow proof before any live postage/.test(doc));
 
@@ -94,6 +104,11 @@ check('print queue planner exports buildMultiPackagePrintQueuePlan',
 check('print queue planner stays pure and planned-only',
   /No real print queue writes/.test(printQueuePlan) &&
     !/from ['"].*(db|schema|print-queue|connector|labels|marketplace)/i.test(printQueuePlan));
+check('marketplace confirmation planner exports buildMultiPackageMarketplaceConfirmationPlan',
+  /export function buildMultiPackageMarketplaceConfirmationPlan/.test(marketplacePlan));
+check('marketplace confirmation planner stays pure and planned-only',
+  /No marketplace API calls, live notifications/.test(marketplacePlan) &&
+    !/from ['"].*(db|schema|print-queue|connector|labels|marketplace)/i.test(marketplacePlan));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 

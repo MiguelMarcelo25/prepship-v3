@@ -4,13 +4,13 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 51%.
+Current completion estimate: PS-289 59%.
 
 PS-289 is not Final Review-ready. The backend-owned planning slice, additive persistence
 foundation, mocked per-package label identity workflow, and DB-backed mocked status orchestration
-exist. Group-aware print queue planning also exists, but the real product still needs real label
-purchase, print queue persistence/integration, marketplace confirmation, and UI work before any
-operator should use it.
+exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
+but the real product still needs real label purchase, print queue persistence/integration,
+marketplace confirmation persistence/integration, and UI work before any operator should use it.
 
 ## Evidence now wired
 
@@ -19,6 +19,7 @@ operator should use it.
 - `test:ps-289-multi-package-mock-label-flow`
 - `test:ps-289-multi-package-db-orchestration`
 - `test:ps-289-multi-package-print-queue-plan`
+- `test:ps-289-multi-package-marketplace-confirmation-plan`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -36,6 +37,10 @@ operator should use it.
 - Duplicate package label idempotency is checked before any sidecar writes.
 - The print queue planner emits one deterministic queue candidate per package label.
 - Print queue candidates use package-aware queue IDs and block duplicate queued label idempotency.
+- The marketplace confirmation planner emits one deterministic confirmation candidate per package
+  tracking number.
+- Marketplace confirmation candidates preserve package order, group identity, and all tracking
+  numbers without calling a marketplace API.
 - The current slices have no provider, real label, print queue, marketplace, postage, or
   shipped/cancelled mutation behavior.
 
@@ -43,7 +48,7 @@ operator should use it.
 
 - Real idempotent per-package label purchase workflow behind mocked proof.
 - Group-aware print queue persistence/integration with the existing printer path.
-- Marketplace confirmation planner that can send the correct N tracking numbers.
+- Marketplace confirmation persistence/integration that can send the correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.
 - End-to-end mocked workflow proof before any live postage or marketplace notification.
 
