@@ -4,15 +4,16 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-289 18%.
+Current completion estimate: PS-289 26%.
 
-PS-289 is not Final Review-ready. The first backend-owned planning slice exists, but the real
-product still needs schema, label-purchase workflow, print queue, marketplace confirmation, and UI
-work before any operator should use it.
+PS-289 is not Final Review-ready. The backend-owned planning slice and additive persistence
+foundation exist, but the real product still needs label-purchase workflow, print queue,
+marketplace confirmation, and UI work before any operator should use it.
 
 ## Evidence now wired
 
 - `test:ps-289-multi-package-plan`
+- `test:ps-289-multi-package-schema`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -21,12 +22,13 @@ work before any operator should use it.
 - The planner marks single-package versus multi-package mode.
 - Package keys are normalized and duplicate keys are rejected before any label purchase planning.
 - Per-package label idempotency keys are stable.
-- The first slice has no DB, provider, label, print queue, marketplace, postage, or shipped/cancelled
+- `shipment_groups` and `shipment_group_packages` are additive sidecar tables.
+- The persistence draft maps a plan into one group row plus one row per package without writing to DB.
+- The current slices have no provider, label, print queue, marketplace, postage, or shipped/cancelled
   mutation behavior.
 
 ## Missing before close
 
-- Shipment group and package-plan persistence model.
 - Idempotent per-package label purchase workflow.
 - Group-aware print queue and duplicate-label protection.
 - Marketplace confirmation planner that can send the correct N tracking numbers.
@@ -35,5 +37,5 @@ work before any operator should use it.
 
 ## Recommendation
 
-Keep PS-289 in progress. The current slice is a good foundation, but the card remains mostly net-new
-product work and should not move to Final Review.
+Keep PS-289 in progress. The current foundation is now stronger, but the card remains substantial
+net-new product work and should not move to Final Review.

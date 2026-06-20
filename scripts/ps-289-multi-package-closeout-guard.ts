@@ -1,9 +1,8 @@
 /**
  * PS-289 closeout checkpoint.
  *
- * Keeps the multi-package card honest after the first pure planner slice:
- * the foundation is present, but schema/workflow/UI/live-safety proof is still
- * missing.
+ * Keeps the multi-package card honest after the planner + sidecar schema
+ * foundation: workflow/UI/live-safety proof is still missing.
  */
 import { readFileSync } from 'node:fs';
 
@@ -20,22 +19,27 @@ function check(name: string, condition: boolean): void {
 const packageJson = readFileSync('package.json', 'utf8');
 const doc = readFileSync('docs/ps-tickets/ps-289-multi-package-status.md', 'utf8');
 const planner = readFileSync('src/services/shipping-workflow/multi-package-shipment-plan.ts', 'utf8');
+const schema = readFileSync('src/db/schema/shipment-groups.ts', 'utf8');
 const sourceGuard = readFileSync('scripts/ps-289-multi-package-shipment-plan-guard.ts', 'utf8');
 
 check('package wires PS-289 planner guard',
   packageJson.includes('"test:ps-289-multi-package-plan"'));
+check('package wires PS-289 schema guard',
+  packageJson.includes('"test:ps-289-multi-package-schema"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
   doc.includes('`test:ps-289-multi-package-plan`'));
+check('status doc lists schema guard',
+  doc.includes('`test:ps-289-multi-package-schema`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
-check('status doc keeps PS-289 conservative at 18%',
-  /PS-289 18%/.test(doc));
+check('status doc keeps PS-289 conservative at 26%',
+  /PS-289 26%/.test(doc));
 check('status doc explicitly blocks Final Review',
   /not Final Review-ready/.test(doc));
-check('status doc lists schema/persistence as missing',
-  /Shipment group and package-plan persistence model/.test(doc));
+check('status doc says sidecar persistence foundation exists',
+  /additive persistence\s+foundation exist/.test(doc));
 check('status doc lists per-package purchase as missing',
   /Idempotent per-package label purchase workflow/.test(doc));
 check('status doc lists marketplace confirmation planner as missing',
@@ -47,8 +51,12 @@ check('planner exports buildMultiPackageShipmentPlan',
   /export function buildMultiPackageShipmentPlan/.test(planner));
 check('planner exports multiPackageLabelIdempotencyKey',
   /export function multiPackageLabelIdempotencyKey/.test(planner));
+check('planner exports buildMultiPackagePersistenceDraft',
+  /export function buildMultiPackagePersistenceDraft/.test(planner));
 check('planner remains pure and side-effect-free',
   /No label purchase, postage, queue, marketplace, or shipped\/cancelled mutation/.test(planner));
+check('schema has additive group and package tables',
+  /shipmentGroups = pgTable/.test(schema) && /shipmentGroupPackages = pgTable/.test(schema));
 check('source guard rejects duplicate package keys',
   sourceGuard.includes('duplicate package keys are rejected before any label purchase planning'));
 

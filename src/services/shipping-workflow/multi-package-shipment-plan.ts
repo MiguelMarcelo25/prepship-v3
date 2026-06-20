@@ -59,6 +59,31 @@ export type MultiPackageShipmentPlan = {
   packages: PlannedShipmentPackage[];
 };
 
+export type MultiPackagePersistenceDraft = {
+  group: {
+    orderId: number;
+    clientId: number | null;
+    orderNumber: string | null;
+    groupKey: string;
+    status: 'planned';
+    packageCount: number;
+  };
+  packages: Array<{
+    orderId: number;
+    clientId: number | null;
+    packageKey: string;
+    packageSequence: number;
+    labelIdempotencyKey: string;
+    weightOz: number | null;
+    dimsL: number | null;
+    dimsW: number | null;
+    dimsH: number | null;
+    items: PlannedShipmentPackage['items'];
+    status: 'planned';
+    shipmentId: null;
+  }>;
+};
+
 function stableText(value: string | number): string {
   return String(value).trim();
 }
@@ -134,5 +159,46 @@ export function buildMultiPackageShipmentPlan(input: MultiPackageShipmentPlanInp
     shipmentGroupKey: `order:${orderId}`,
     packageCount: packages.length,
     packages,
+  };
+}
+
+function persistedOrderId(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0 || String(parsed) !== value) {
+    throw new Error('A persisted numeric orderId is required for multi-package persistence');
+  }
+  return parsed;
+}
+
+export function buildMultiPackagePersistenceDraft(
+  plan: MultiPackageShipmentPlan,
+  options: { clientId?: number | null } = {},
+): MultiPackagePersistenceDraft {
+  const orderId = persistedOrderId(plan.orderId);
+  const clientId = Number.isInteger(options.clientId) ? options.clientId! : null;
+
+  return {
+    group: {
+      orderId,
+      clientId,
+      orderNumber: plan.orderNumber,
+      groupKey: plan.shipmentGroupKey,
+      status: 'planned',
+      packageCount: plan.packageCount,
+    },
+    packages: plan.packages.map((pkg) => ({
+      orderId,
+      clientId,
+      packageKey: pkg.packageKey,
+      packageSequence: pkg.packageSequence,
+      labelIdempotencyKey: pkg.labelIdempotencyKey,
+      weightOz: pkg.weightOz,
+      dimsL: pkg.dimensions.length,
+      dimsW: pkg.dimensions.width,
+      dimsH: pkg.dimensions.height,
+      items: pkg.items,
+      status: 'planned',
+      shipmentId: null,
+    })),
   };
 }

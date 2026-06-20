@@ -9,6 +9,7 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  buildMultiPackagePersistenceDraft,
   buildMultiPackageShipmentPlan,
   multiPackageLabelIdempotencyKey,
 } from '../src/services/shipping-workflow/multi-package-shipment-plan';
@@ -85,11 +86,34 @@ check('duplicate package keys are rejected before any label purchase planning', 
 check('standalone idempotency helper matches the planner',
   multiPackageLabelIdempotencyKey({ orderId: 28901, packageKey: 'box-a' }) === 'order:28901:package:box-a');
 
+const persistenceDraft = buildMultiPackagePersistenceDraft(plan, { clientId: 77 });
+check('persistence draft keeps one group row per planned order',
+  persistenceDraft.group.orderId === 28901 &&
+    persistenceDraft.group.clientId === 77 &&
+    persistenceDraft.group.groupKey === 'order:28901' &&
+    persistenceDraft.group.status === 'planned' &&
+    persistenceDraft.group.packageCount === 2);
+check('persistence draft keeps one package row per planned package',
+  persistenceDraft.packages.length === 2 &&
+    persistenceDraft.packages[0]?.packageKey === 'box-a' &&
+    persistenceDraft.packages[0]?.shipmentId === null &&
+    persistenceDraft.packages[1]?.dimsH === 4);
+
+let nonPersistedOrderThrown = false;
+try {
+  buildMultiPackagePersistenceDraft(single);
+} catch (err) {
+  nonPersistedOrderThrown = /persisted numeric orderId/.test(err instanceof Error ? err.message : String(err));
+}
+check('persistence draft requires a real persisted numeric order id', nonPersistedOrderThrown);
+
 const ownerSrc = readFileSync('src/services/shipping-workflow/multi-package-shipment-plan.ts', 'utf8');
 check('owner is pure: no DB/provider/label/queue imports',
   !/from ['"].*(db|schema|connector|labels|print-queue|shipstation|shipp|easypost|walmart)/i.test(ownerSrc));
 check('owner documents no live label/postage mutation in this slice',
   /No label purchase, postage, queue, marketplace, or shipped\/cancelled mutation/.test(ownerSrc));
+check('owner exports the pure persistence draft mapper',
+  /export function buildMultiPackagePersistenceDraft/.test(ownerSrc));
 
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json wires test:ps-289-multi-package-plan',

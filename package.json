@@ -399,6 +399,7 @@
     "test:ps-296-shipping-margin": "tsx scripts/ps-296-shipping-margin-guard.ts",
     "test:ps-296-shipping-margin-closeout": "tsx scripts/ps-296-shipping-margin-closeout-guard.ts",
     "test:ps-289-multi-package-plan": "tsx scripts/ps-289-multi-package-shipment-plan-guard.ts",
+    "test:ps-289-multi-package-schema": "tsx scripts/ps-289-multi-package-schema-guard.ts",
     "test:ps-289-multi-package-closeout": "tsx scripts/ps-289-multi-package-closeout-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",

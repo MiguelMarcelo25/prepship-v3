@@ -24,3 +24,4 @@ export * from './carrier-accounts.js';
 export * from './fulfillment-outbox.js';
 export * from './analytics-cache.js';
 export * from './order-competitive-rate.js';
+export * from './shipment-groups.js';

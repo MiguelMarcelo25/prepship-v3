@@ -26,6 +26,7 @@ export default defineConfig({
     './src/db/schema/carrier-accounts.ts',
     './src/db/schema/fulfillment-outbox.ts',
     './src/db/schema/analytics-cache.ts',
+    './src/db/schema/shipment-groups.ts',
   ],
   out: './drizzle',
   dialect: 'postgresql',
