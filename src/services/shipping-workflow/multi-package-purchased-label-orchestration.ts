@@ -4,7 +4,7 @@
  * Persists purchased label results into additive shipment group sidecars.
  * No provider calls by default, no print queue writes, no marketplace API calls, and no shipped/cancelled mutation happens here.
  */
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { shipmentGroupPackages, shipmentGroups } from '../../db/schema/shipment-groups';
 import {
@@ -21,6 +21,26 @@ import {
 
 type PlannedGroup = MultiPackagePersistenceDraft['group'];
 type PlannedPackage = MultiPackagePersistenceDraft['packages'][number];
+
+const PURCHASED_OR_DOWNSTREAM_PACKAGE_STATUSES = [
+  'label_purchased',
+  'print_queue_sidecar_planned',
+  'marketplace_confirmation_sidecar_planned',
+] as const;
+
+export function multiPackageSidecarHasPurchasedLabelFacts(row: {
+  status?: string | null;
+  shipmentId?: number | null;
+  trackingNumber?: string | null;
+  labelUrl?: string | null;
+}): boolean {
+  return (
+    PURCHASED_OR_DOWNSTREAM_PACKAGE_STATUSES.includes(row.status as typeof PURCHASED_OR_DOWNSTREAM_PACKAGE_STATUSES[number]) ||
+    row.shipmentId != null ||
+    Boolean(row.trackingNumber?.trim()) ||
+    Boolean(row.labelUrl?.trim())
+  );
+}
 
 export type PersistedPurchasedMultiPackageGroup = {
   id: number;
@@ -45,13 +65,26 @@ export function createDbMultiPackagePurchasedLabelOrchestrationRepository(): Mul
     async findExistingPurchasedLabelKeys(keys) {
       if (!keys.length) return [];
       const rows = await db
-        .select({ key: shipmentGroupPackages.labelIdempotencyKey })
+        .select({
+          key: shipmentGroupPackages.labelIdempotencyKey,
+          status: shipmentGroupPackages.status,
+          shipmentId: shipmentGroupPackages.shipmentId,
+          trackingNumber: shipmentGroupPackages.trackingNumber,
+          labelUrl: shipmentGroupPackages.labelUrl,
+        })
         .from(shipmentGroupPackages)
         .where(and(
           inArray(shipmentGroupPackages.labelIdempotencyKey, keys),
-          eq(shipmentGroupPackages.status, 'label_purchased'),
+          or(
+            inArray(shipmentGroupPackages.status, [...PURCHASED_OR_DOWNSTREAM_PACKAGE_STATUSES]),
+            isNotNull(shipmentGroupPackages.shipmentId),
+            isNotNull(shipmentGroupPackages.trackingNumber),
+            isNotNull(shipmentGroupPackages.labelUrl),
+          ),
         ));
-      return rows.map((row) => row.key);
+      return rows
+        .filter((row) => multiPackageSidecarHasPurchasedLabelFacts(row))
+        .map((row) => row.key);
     },
 
     async upsertPlannedGroup(group) {
@@ -116,10 +149,6 @@ export function createDbMultiPackagePurchasedLabelOrchestrationRepository(): Mul
               dimsW: pkg.dimsW,
               dimsH: pkg.dimsH,
               items: pkg.items,
-              status: pkg.status,
-              shipmentId: null,
-              trackingNumber: null,
-              labelUrl: null,
               updatedAt: new Date(),
             },
           });

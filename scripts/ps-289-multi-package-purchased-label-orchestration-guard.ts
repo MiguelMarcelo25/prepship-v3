@@ -11,6 +11,7 @@ import type {
   MultiPackagePurchasedLabel,
 } from '../src/services/shipping-workflow/multi-package-label-purchase-boundary';
 import {
+  multiPackageSidecarHasPurchasedLabelFacts,
   orchestratePurchasedMultiPackageLabels,
   type MultiPackagePurchasedLabelOrchestrationRepository,
 } from '../src/services/shipping-workflow/multi-package-purchased-label-orchestration';
@@ -137,6 +138,46 @@ check('orchestration marks the group purchased with total postage',
     markedGroup?.totalPostageCost === 11.6);
 check('orchestration does not create live postage by itself',
   result.flow.labels.every((label) => label.isLivePostage === false && label.provider === 'injected_test_purchaser'));
+check('sidecar idempotency treats downstream print-queue status as purchased proof',
+  multiPackageSidecarHasPurchasedLabelFacts({
+    status: 'print_queue_sidecar_planned',
+    shipmentId: null,
+    trackingNumber: null,
+    labelUrl: null,
+  }));
+check('sidecar idempotency treats downstream marketplace status as purchased proof',
+  multiPackageSidecarHasPurchasedLabelFacts({
+    status: 'marketplace_confirmation_sidecar_planned',
+    shipmentId: null,
+    trackingNumber: null,
+    labelUrl: null,
+  }));
+check('sidecar idempotency treats persisted label facts as purchased proof',
+  multiPackageSidecarHasPurchasedLabelFacts({
+    status: 'planned',
+    shipmentId: 7101,
+    trackingNumber: null,
+    labelUrl: null,
+  }) &&
+    multiPackageSidecarHasPurchasedLabelFacts({
+      status: 'planned',
+      shipmentId: null,
+      trackingNumber: '1ZPS289',
+      labelUrl: null,
+    }) &&
+    multiPackageSidecarHasPurchasedLabelFacts({
+      status: 'planned',
+      shipmentId: null,
+      trackingNumber: null,
+      labelUrl: 'mock://label/ps-289',
+    }));
+check('sidecar idempotency does not block an empty planned row',
+  !multiPackageSidecarHasPurchasedLabelFacts({
+    status: 'planned',
+    shipmentId: null,
+    trackingNumber: null,
+    labelUrl: null,
+  }));
 
 let duplicateBlocked = false;
 let duplicateEvents: string[] = [];
@@ -188,6 +229,23 @@ check('purchased label orchestration writes only shipment group sidecars',
     !/from ['"].*(routes|connector|shipstation|shipp|easypost|walmart|print-queue|marketplace|orders|shipments)/i.test(ownerSrc));
 check('purchased label orchestration documents no provider or live mutation behavior',
   /No provider calls by default, no print queue writes, no marketplace API calls, and no shipped\/cancelled mutation/.test(ownerSrc));
+check('DB duplicate lookup treats downstream sidecars and label facts as purchased proof',
+  ownerSrc.includes('PURCHASED_OR_DOWNSTREAM_PACKAGE_STATUSES') &&
+    ownerSrc.includes('print_queue_sidecar_planned') &&
+    ownerSrc.includes('marketplace_confirmation_sidecar_planned') &&
+    /isNotNull\(shipmentGroupPackages\.shipmentId\)/.test(ownerSrc) &&
+    /isNotNull\(shipmentGroupPackages\.trackingNumber\)/.test(ownerSrc) &&
+    /isNotNull\(shipmentGroupPackages\.labelUrl\)/.test(ownerSrc));
+const plannedPackageUpsertOwner = ownerSrc.slice(
+  ownerSrc.indexOf('async upsertPlannedPackages'),
+  ownerSrc.indexOf('async applyPurchasedLabels'),
+);
+check('planned package conflict update preserves purchased label sidecar facts',
+  Boolean(plannedPackageUpsertOwner) &&
+    !/onConflictDoUpdate\([\s\S]*set:\s*\{[\s\S]*status:\s*pkg\.status/.test(plannedPackageUpsertOwner) &&
+    !/onConflictDoUpdate\([\s\S]*set:\s*\{[\s\S]*shipmentId:\s*null/.test(plannedPackageUpsertOwner) &&
+    !/onConflictDoUpdate\([\s\S]*set:\s*\{[\s\S]*trackingNumber:\s*null/.test(plannedPackageUpsertOwner) &&
+    !/onConflictDoUpdate\([\s\S]*set:\s*\{[\s\S]*labelUrl:\s*null/.test(plannedPackageUpsertOwner));
 
 const packageJson = readFileSync('package.json', 'utf8');
 check('package wires PS-289 purchased label orchestration guard',
