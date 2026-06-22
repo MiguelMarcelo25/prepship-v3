@@ -146,6 +146,7 @@ checklist is evidence-backed and no known blocker remains for review. A card is
 ## Required Focused Guards
 
 - PS-287 and PS-294: `test:ps-287-print-queue-label-normalization`,
+  `test:ps-287-print-queue-label-normalization-closeout`,
   `test:ps-294-shipp-4x6-placement`, `test:ps-294-shipp-4x6-closeout`
 - PS-289: all `test:ps-289-multi-package-*` scripts plus
   `test:ps-289-multi-package-closeout`

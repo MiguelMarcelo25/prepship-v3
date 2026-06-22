@@ -137,6 +137,7 @@ check('package still wires PS-279 closeout guard',
   packageJson.includes('"test:ps-279-backend-boundary-closeout"'));
 check('package wires PS-287/294 label guards',
   packageJson.includes('"test:ps-287-print-queue-label-normalization"') &&
+  packageJson.includes('"test:ps-287-print-queue-label-normalization-closeout"') &&
   packageJson.includes('"test:ps-294-shipp-4x6-placement"') &&
   packageJson.includes('"test:ps-294-shipp-4x6-closeout"'));
 check('package wires PS-292/295/296 money guards',
