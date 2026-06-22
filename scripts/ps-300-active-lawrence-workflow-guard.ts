@@ -113,6 +113,9 @@ check('package wires PS-300 workflow guard',
   /"test:ps-300-active-lawrence-workflow"\s*:\s*"tsx scripts\/ps-300-active-lawrence-workflow-guard\.ts"/.test(packageJson));
 check('package wires PS-300 backend authority guard',
   /"test:ps-300-backend-shipping-authority"\s*:\s*"tsx scripts\/ps-300-backend-shipping-authority-guard\.ts"/.test(packageJson));
+check('package wires PS-300 lane closeout guard',
+  /"test:ps-300-backend-authority-lane-closeout"\s*:\s*"tsx scripts\/ps-300-backend-authority-lane-closeout-guard\.ts"/.test(packageJson) &&
+    doc.includes('test:ps-300-backend-authority-lane-closeout'));
 check('package wires PS-301 row workflow authority guard',
   /"test:ps-301-row-workflow-authority"\s*:\s*"tsx scripts\/ps-301-row-workflow-authority-guard\.ts"/.test(packageJson));
 check('package wires PS-302 apply-best-rate authority guard',

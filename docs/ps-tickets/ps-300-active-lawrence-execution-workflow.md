@@ -162,6 +162,7 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-290-hugrab-insurance-coverage-badge-closeout`,
   `test:ps-300-active-lawrence-workflow`,
   `test:ps-300-backend-shipping-authority`,
+  `test:ps-300-backend-authority-lane-closeout`,
   `test:ps-301-row-workflow-authority`,
   `test:ps-302-apply-best-rate-authority`,
   `test:ps-303-print-queue-authority`,
