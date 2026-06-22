@@ -175,7 +175,9 @@ check('orders route resolves the row rule via the pure module and passes money f
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('FE Best Rate cell prefers the backend tuple',
   /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(ordersView) &&
-  /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn\)/.test(ordersView));
+  // PS-290 appended an optional 4th `coverage` arg (getBestRateInsuranceCoverage) — still the
+  // backend tuple's base/marked/insurance, just with the coverage badge. Tolerate `,` or `)`.
+  /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn[,)]/.test(ordersView));
 check('FE Margin cell prefers the backend tuple',
   /backendMoney\?\.markupAmount/.test(ordersView) && /backendMoney!?\.marginPercent/.test(ordersView));
 // Shipped-row DTO phase: shipped rows now carry the workflow DTO (money priced
