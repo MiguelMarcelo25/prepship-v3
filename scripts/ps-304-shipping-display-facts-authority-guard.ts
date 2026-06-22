@@ -257,6 +257,8 @@ check('frontend account display now consumes backend tuple before compatibility 
 const packageJson = read('package.json');
 check('package wires PS-304 shipping display facts authority guard',
   /"test:ps-304-shipping-display-facts-authority"\s*:\s*"tsx scripts\/ps-304-shipping-display-facts-authority-guard\.ts"/.test(packageJson));
+check('package wires PS-304 account fallback debt guard',
+  /"test:ps-304-account-fallback-debt"\s*:\s*"tsx scripts\/ps-304-account-fallback-debt-guard\.ts"/.test(packageJson));
 check('package still wires predecessor package/display guards',
   packageJson.includes('"test:ps-205-package-facts-precedence"') &&
   packageJson.includes('"test:ps-165-order-shipping-display"') &&
@@ -266,16 +268,17 @@ const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workf
 check('workflow doc records PS-304 shipping display facts authority guard',
   workflowDoc.includes('test:ps-304-shipping-display-facts-authority'));
 
-check('PS-304 status doc keeps the card conservative until fallback debt is closed',
-  /Current completion estimate: PS-304 86%/.test(statusDoc) &&
-    /not Final Review-ready yet/.test(statusDoc));
+check('PS-304 status doc marks the card scoped Final Review-ready',
+  /Current completion estimate: PS-304 89%/.test(statusDoc) &&
+    /Final Review-ready/.test(statusDoc) &&
+    /PS-306 cutover debt/.test(statusDoc));
 check('PS-304 status doc separates this card from PS-166 and PS-258',
   /does not complete PS-166 or PS-258/.test(statusDoc) &&
     /DOM\/byte-equality certification/.test(statusDoc));
 check('PS-304 status doc lists backend display tuple and remaining compatibility fallback debt',
   /bestRateWorkflow\.display\.accountNickname/.test(statusDoc) &&
     /compatibility[\s\S]*fallbacks/.test(statusDoc) &&
-    /need final cutover review/.test(statusDoc));
+    /accepted as PS-306 cutover debt/.test(statusDoc));
 check('PS-304 status doc documents offline-only safety',
   /offline-only/.test(statusDoc) &&
     /does not run labels/.test(statusDoc) &&

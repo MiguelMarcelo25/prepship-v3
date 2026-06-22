@@ -68,6 +68,7 @@ const finalReviewReady = [
   ['PS-301', '90%', 'Final Review-ready'],
   ['PS-302', '90%', 'Final Review-ready'],
   ['PS-303', '89%', 'Final Review-ready, scoped'],
+  ['PS-304', '89%', 'Final Review-ready, scoped'],
   ['PS-305', '90%', 'Final Review-ready'],
 ] as const;
 
@@ -76,11 +77,12 @@ for (const [ticket, percent, recommendation] of finalReviewReady) {
     doc.includes(`| ${ticket} | ${percent} | ${recommendation} |`));
 }
 
-check('PS-304 remains conservative and references fallback debt',
-  doc.includes('| PS-304 | 86% | Keep in progress |') &&
-    doc.includes('frontend compatibility fallback debt remains') &&
-    /Current completion estimate: PS-304 86%/.test(ps304Doc) &&
-    /not Final Review-ready yet/.test(ps304Doc));
+check('PS-304 is scoped Final Review-ready with fallback debt assigned to PS-306',
+  doc.includes('| PS-304 | 89% | Final Review-ready, scoped |') &&
+    doc.includes('PS-306 cutover debt') &&
+    /Current completion estimate: PS-304 89%/.test(ps304Doc) &&
+    /Final Review-ready/.test(ps304Doc) &&
+    /PS-306 cutover debt/.test(ps304Doc));
 check('PS-306 remains conservative because UI read-only lockdown is disabled',
   doc.includes('| PS-306 | 86% | Keep in progress |') &&
     doc.includes('const isReadOnly = false') &&

@@ -13,7 +13,7 @@ PS-300 through PS-306.
 | PS-301 | 90% | Final Review-ready | None found |
 | PS-302 | 90% | Final Review-ready | None found |
 | PS-303 | 89% | Final Review-ready, scoped | Backend queue authority exists; frontend local fallback remains until cutover |
-| PS-304 | 86% | Keep in progress | Account display now prefers backend tuple, but frontend compatibility fallback debt remains |
+| PS-304 | 89% | Final Review-ready, scoped | Backend tuple wins; remaining frontend account fallbacks are accepted as PS-306 cutover debt |
 | PS-305 | 90% | Final Review-ready | None for guardrail scope |
 | PS-306 | 86% | Keep in progress | `OrdersView.tsx` currently has `const isReadOnly = false`; UI lockdown is not final-ready |
 
@@ -42,8 +42,8 @@ PS-300 through PS-306.
 - PS-303 proves backend Print Queue create/recover/queue authority exists. Its
   Final Review recommendation is scoped because the frontend local fallback
   remains until the flagged cutover.
-- PS-304 now prefers backend account display tuple too, but remains below Final
-  Review until fallback debt is fully reviewed.
+- PS-304 now prefers backend account display tuple too, and its remaining
+  frontend account fallbacks are explicitly tracked as PS-306 cutover debt.
 - PS-305 pins backend authority drift guardrails and CI wiring.
 - PS-306 is a useful dependency gate, but not Final Review-ready while the
   shipped/cancelled UI read-only gate is disabled in `OrdersView.tsx`.

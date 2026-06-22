@@ -124,6 +124,9 @@ check('package wires PS-303 print queue authority guard',
   /"test:ps-303-print-queue-authority"\s*:\s*"tsx scripts\/ps-303-print-queue-authority-guard\.ts"/.test(packageJson));
 check('package wires PS-304 shipping display facts authority guard',
   /"test:ps-304-shipping-display-facts-authority"\s*:\s*"tsx scripts\/ps-304-shipping-display-facts-authority-guard\.ts"/.test(packageJson));
+check('package wires PS-304 account fallback debt guard',
+  /"test:ps-304-account-fallback-debt"\s*:\s*"tsx scripts\/ps-304-account-fallback-debt-guard\.ts"/.test(packageJson) &&
+    doc.includes('test:ps-304-account-fallback-debt'));
 check('package wires PS-305 authority drift guard',
   /"test:ps-305-authority-drift"\s*:\s*"tsx scripts\/ps-305-authority-drift-guard\.ts"/.test(packageJson));
 check('package wires PS-306 OrdersView parity cutover guard',

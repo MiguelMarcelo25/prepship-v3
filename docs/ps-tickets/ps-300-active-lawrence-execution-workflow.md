@@ -167,6 +167,7 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-302-apply-best-rate-authority`,
   `test:ps-303-print-queue-authority`,
   `test:ps-304-shipping-display-facts-authority`,
+  `test:ps-304-account-fallback-debt`,
   `test:ps-305-authority-drift`,
   `test:ps-306-ordersview-parity-cutover`,
   `test:ps-307-marked-rate-comparison`
