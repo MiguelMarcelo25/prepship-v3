@@ -101,9 +101,9 @@ check('phase 1 is complete in checklist and matrix',
 check('phase 1 remains complete after later PS-285 evidence slices',
   completeRows.some((line) => /^\|\s*1\s*\|/.test(line)),
   completeRows);
-check('checklist and matrix keep PS-285 at 60% and not Final Review-ready',
-  /Current completion estimate: PS-285 60%/.test(checklist) &&
-    /Current completion estimate: PS-285 60%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 65% and not Final Review-ready',
+  /Current completion estimate: PS-285 65%/.test(checklist) &&
+    /Current completion estimate: PS-285 65%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 check('package wires PS-285 protected-file proof guard',

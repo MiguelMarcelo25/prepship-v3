@@ -5,12 +5,12 @@ single slice of evidence. This checklist is the status owner for the card until
 the umbrella is split into smaller cards or each phase has its own source-of-
 truth guard.
 
-Current completion estimate: PS-285 60%.
+Current completion estimate: PS-285 65%.
 
 Current recommendation: PS-285 is not Final Review-ready. Phases 1, 4, 5, 7,
-8, and 10 are complete, but the remaining phases still include lockdown
-preservation, recovery, certification, and final closeout work. A current
-evidence matrix maps guard coverage across PS-245 through PS-259 so the
+8, 9, and 10 are complete, but the remaining phases still include lockdown
+preservation, certification, and final closeout work. A current evidence
+matrix maps guard coverage across PS-245 through PS-259 so the
 remaining phases can be finished or split without duplicating tickets.
 
 | # | Phase | Status | Evidence | Missing |
@@ -23,7 +23,7 @@ remaining phases can be finished or split without duplicating tickets.
 | 6 | Shipped/cancelled lockdown preservation | In progress | `test:ps-245-lockdown-fence`, `test:ps-258-component-boundary` | Keep locked runtime behavior untouched without override |
 | 7 | Void/retract and cancellation safety | Complete | `test:ps-253-combo-confirm-atomicity`, `test:ps-263-void-confirmation-retract`, `test:ps-211-universal-void`, `test:ps-129-upstream-cancellation-hold`, `docs/ps-tickets/ps-285-void-retract-evidence.md`, `test:ps-285-void-retract-evidence` | None for this phase |
 | 8 | Marketplace confirmation boundary | Complete | test:ps-285-marketplace-confirm-boundary | None for this phase |
-| 9 | Recovery/retry tooling safety | In progress | `test:ps-255-ops-confirm-gate`, `test:ps-256-durable-worker-status` | Split remaining live retry/canary tails or keep explicitly out of PS-285 closeout |
+| 9 | Recovery/retry tooling safety | Complete | `test:ps-255-ops-confirm-gate`, `test:ps-256-durable-worker-status`, `test:ps-256-durable-rate-limiter`, `test:ps-288-label-recovery`, `docs/ps-tickets/ps-285-recovery-retry-evidence.md`, `test:ps-285-recovery-retry-evidence` | None for this offline/static phase |
 | 10 | Observability and runbook coverage | Complete | `docs/security-readiness-checklist.md`, `docs/shipping-certification-harness.md`, `docs/ps-tickets/ps-285-runbook-evidence.md`, `test:ps-285-runbook-evidence` | None for this phase |
 | 11 | End-to-end certification matrix | In progress | `docs/full-workflow-certification-matrix.md`, `scripts/run-workflow-certification.mjs` | Run the mapped safe suite and summarize failures |
 | 12 | Final umbrella closeout packet | In progress | This checklist, `docs/ps-tickets/ps-285-phase-evidence-matrix.md`, `test:ps-285-umbrella-closeout` | Complete every phase or split unfinished phases into separate cards |

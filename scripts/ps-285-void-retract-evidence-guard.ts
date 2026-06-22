@@ -137,9 +137,9 @@ check('shipping safety blocks cancelled and shipped source signals',
 check('phase 7 is complete in checklist and matrix',
   /\|\s*7\s*\|\s*Void\/retract and cancellation safety\s*\|\s*Complete\s*\|/i.test(checklist) &&
     /\|\s*7\s*\|\s*Void\/retract and cancellation safety\s*\|\s*Complete\s*\|/i.test(matrix));
-check('checklist and matrix keep PS-285 at 60% and not Final Review-ready',
-  /Current completion estimate: PS-285 60%/.test(checklist) &&
-    /Current completion estimate: PS-285 60%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 65% and not Final Review-ready',
+  /Current completion estimate: PS-285 65%/.test(checklist) &&
+    /Current completion estimate: PS-285 65%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 
