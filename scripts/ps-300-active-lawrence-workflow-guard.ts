@@ -125,6 +125,8 @@ check('package wires PS-305 authority drift guard',
   /"test:ps-305-authority-drift"\s*:\s*"tsx scripts\/ps-305-authority-drift-guard\.ts"/.test(packageJson));
 check('package wires PS-306 OrdersView parity cutover guard',
   /"test:ps-306-ordersview-parity-cutover"\s*:\s*"tsx scripts\/ps-306-ordersview-parity-cutover-guard\.ts"/.test(packageJson));
+check('package wires PS-307 marked-rate comparison guard',
+  /"test:ps-307-marked-rate-comparison"\s*:\s*"tsx scripts\/ps-307-marked-rate-comparison-guard\.ts"/.test(packageJson));
 check('package wires PS-290 HUGRAB insurance badge guard',
   /"test:ps-290-hugrab-insurance-coverage-badge"\s*:\s*"tsx scripts\/ps-290-hugrab-insurance-coverage-badge-guard\.ts"/.test(packageJson));
 check('package still wires PS-279 backend orchestration guard',

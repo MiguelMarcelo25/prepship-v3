@@ -154,6 +154,7 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-296-shipping-margin`, `test:ps-296-shipping-margin-closeout`
 - PS-279/PS-300 authority regression: `test:ps-279-*` plus PS-300 through
   PS-308 guards as they are added
+- PS-307: `test:ps-307-marked-rate-comparison`
 - PS-290/PS-300 first authority gates:
   `test:ps-290-hugrab-insurance-coverage-badge`,
   `test:ps-300-active-lawrence-workflow`,
@@ -163,7 +164,8 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-303-print-queue-authority`,
   `test:ps-304-shipping-display-facts-authority`,
   `test:ps-305-authority-drift`,
-  `test:ps-306-ordersview-parity-cutover`
+  `test:ps-306-ordersview-parity-cutover`,
+  `test:ps-307-marked-rate-comparison`
 
 ## Safety
 

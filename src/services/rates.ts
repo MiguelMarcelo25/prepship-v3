@@ -51,7 +51,7 @@ import {
 } from '../lib/rate-block-list';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
 import { expectedCarrierAbsentFromThin } from '../connectors/carrier/observed-missing-carrier-names';
-import { withCarrierQuoteTimeout, isPricedRate } from './rates-combined';
+import { withCarrierQuoteTimeout, isPricedRate, rateTotal as combinedRateTotal } from './rates-combined';
 import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
@@ -519,12 +519,7 @@ export function rateCacheKey(input: RateInput): string {
 }
 
 function rateTotal(rate: Rate): number {
-  return (
-    Number(rate.shipping_amount?.amount ?? 0) +
-    Number(rate.confirmation_amount?.amount ?? 0) +
-    Number(rate.insurance_amount?.amount ?? 0) +
-    Number(rate.other_amount?.amount ?? 0)
-  );
+  return combinedRateTotal(rate as any);
 }
 
 function rateMoneyKey(value: unknown): string {
@@ -599,7 +594,23 @@ function genericRateTotal(rate: unknown): number {
   if (!rate || typeof rate !== 'object') return Number.POSITIVE_INFINITY;
   const row = rate as Record<string, any>;
   return (
-    Number(row.shipping_amount?.amount ?? row.shipmentCost ?? row.amount ?? row.cost ?? 0) +
+    Number(
+      row.customerShippingAmount ??
+      row.customer_shipping_amount ??
+      row.customerChargeAmount ??
+      row.customer_charge_amount ??
+      row.customerRateAmount ??
+      row.customer_rate_amount ??
+      row.markedShippingAmount ??
+      row.marked_shipping_amount ??
+      row.billableShippingAmount ??
+      row.billable_shipping_amount ??
+      row.shipping_amount?.amount ??
+      row.shipmentCost ??
+      row.amount ??
+      row.cost ??
+      0,
+    ) +
     Number(row.other_amount?.amount ?? row.otherCost ?? 0) +
     Number(row.confirmation_amount?.amount ?? row.confirmationCost ?? 0) +
     Number(row.insurance_amount?.amount ?? row.insuranceCost ?? 0)
@@ -1589,6 +1600,45 @@ function directRateServiceDescriptor(rate: Record<string, unknown>, provider: st
   };
 }
 
+function directFiniteAmount(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (value == null || value === '') continue;
+    const amount = Number(value);
+    if (Number.isFinite(amount)) return amount;
+  }
+  return null;
+}
+
+function directCustomerShippingAmount(rate: Record<string, unknown>): number {
+  return directFiniteAmount(
+    rate.customerShippingAmount,
+    rate.customer_shipping_amount,
+    rate.customerChargeAmount,
+    rate.customer_charge_amount,
+    rate.customerRateAmount,
+    rate.customer_rate_amount,
+    rate.markedShippingAmount,
+    rate.marked_shipping_amount,
+    rate.billableShippingAmount,
+    rate.billable_shipping_amount,
+    rate.amount,
+    rate.price,
+    rate.cost,
+  ) ?? 0;
+}
+
+function directRawShippingCost(rate: Record<string, unknown>, fallback: number): number {
+  return directFiniteAmount(
+    rate.rawShippingAmount,
+    rate.raw_shipping_amount,
+    rate.internalShippingAmount,
+    rate.internal_shipping_amount,
+    rate.cost,
+    rate.price,
+    fallback,
+  ) ?? fallback;
+}
+
 function toDirectRate(
   rate: Record<string, unknown>,
   account: DirectCarrierAccountInfo,
@@ -1596,8 +1646,9 @@ function toDirectRate(
   fetchedAt: string,
   rateCount: number,
 ): Rate | null {
-  const amount = Number(rate.cost ?? rate.price ?? rate.amount ?? 0);
+  const amount = directCustomerShippingAmount(rate);
   if (!Number.isFinite(amount) || amount <= 0) return null;
+  const rawShippingCost = directRawShippingCost(rate, amount);
   const provider = normalizeProviderKey(account.provider);
   const shippingProviderId = directProviderIdFromAccount(account);
   const service = String(rate.serviceCode ?? rate.service ?? rate.serviceName ?? rate.serviceType ?? provider).trim();
@@ -1613,6 +1664,11 @@ function toDirectRate(
     service_code: service || provider,
     service_type: serviceName || service || provider,
     rate_type: serviceName || service || provider,
+    cost: rawShippingCost,
+    rawShippingAmount: rawShippingCost,
+    raw_shipping_amount: rawShippingCost,
+    customerShippingAmount: amount,
+    customer_shipping_amount: amount,
     shipping_amount: { amount, currency: String(rate.currency ?? 'USD') },
     other_amount: { amount: Number(rate.otherCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },
     confirmation_amount: { amount: Number(rate.confirmationCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },

@@ -17,7 +17,8 @@ notifications, or shipped/cancelled safety.
 Rates and proof:
 
 - `src/services/rates-combined.ts` owns carrier-universe merge, diagnostics, and
-  final best-rate comparison across ShipStation plus direct carriers.
+  final best-rate comparison across ShipStation plus direct carriers, including
+  the customer/marked charge basis used for PS-307.
 - `src/services/shipping-workflow/rate-quote-snapshot-store.ts` owns backend
   rate quote snapshots, selected-rate keys, and purchase-boundary validation.
 - `src/routes/rates.ts` remains the thin route that validates inputs, calls
@@ -61,6 +62,7 @@ Rates/proof:
 - `test:ps-124-backend-combined-best-rate`
 - `test:ps-244-rate-finalization-single-owner`
 - `test:ps-302-apply-best-rate-authority`
+- `test:ps-307-marked-rate-comparison`
 
 Labels/queue:
 

@@ -87,6 +87,7 @@ const requiredCommands = [
   'test:ps-124-backend-combined-best-rate',
   'test:ps-244-rate-finalization-single-owner',
   'test:ps-302-apply-best-rate-authority',
+  'test:ps-307-marked-rate-comparison',
   'test:selected-rate-proof-boundary',
   'test:ps-202-direct-label-owner',
   'test:print-to-queue-selected-rate-proof',
@@ -143,6 +144,8 @@ checkPatterns('backend rates owner exports final carrier-universe combiner', rat
   /export function combineCarrierUniverses/,
   /DIRECT_CARRIER_QUOTE_TIMEOUT_MS/,
   /dedupeBrowseRates/,
+  /customerShippingAmount/,
+  /export function rateTotal/,
 ]);
 check('rates route delegates final combination to backend combiner',
   read('src/routes/rates.ts').includes('combineCarrierUniverses({'));

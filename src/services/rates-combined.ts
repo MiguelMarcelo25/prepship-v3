@@ -27,6 +27,16 @@ export type CombinableRate = Record<string, any> & {
   other_amount?: MoneyAmount;
   confirmation_amount?: MoneyAmount;
   insurance_amount?: MoneyAmount;
+  customerShippingAmount?: number | string | null;
+  customer_shipping_amount?: number | string | null;
+  customerChargeAmount?: number | string | null;
+  customer_charge_amount?: number | string | null;
+  customerRateAmount?: number | string | null;
+  customer_rate_amount?: number | string | null;
+  markedShippingAmount?: number | string | null;
+  marked_shipping_amount?: number | string | null;
+  billableShippingAmount?: number | string | null;
+  billable_shipping_amount?: number | string | null;
 };
 
 export type CombinableSsDiagnostic = {
@@ -82,9 +92,38 @@ export type CombinedRateSelection = {
 };
 
 /** The uniform CHARGE total a rate costs the customer — the single pick basis. */
+function finiteAmount(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function firstFiniteAmount(...values: unknown[]): number | null {
+  for (const value of values) {
+    const amount = finiteAmount(value);
+    if (amount != null) return amount;
+  }
+  return null;
+}
+
+function customerShippingAmount(rate: CombinableRate): number | null {
+  return firstFiniteAmount(
+    rate.customerShippingAmount,
+    rate.customer_shipping_amount,
+    rate.customerChargeAmount,
+    rate.customer_charge_amount,
+    rate.customerRateAmount,
+    rate.customer_rate_amount,
+    rate.markedShippingAmount,
+    rate.marked_shipping_amount,
+    rate.billableShippingAmount,
+    rate.billable_shipping_amount,
+  );
+}
+
 export function rateTotal(rate: CombinableRate): number {
   return (
-    Number(rate.shipping_amount?.amount ?? 0) +
+    Number(customerShippingAmount(rate) ?? rate.shipping_amount?.amount ?? 0) +
     Number(rate.other_amount?.amount ?? 0) +
     Number(rate.confirmation_amount?.amount ?? 0) +
     Number(rate.insurance_amount?.amount ?? 0)
@@ -113,7 +152,7 @@ export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[
     const key = [
       String(rate.carrier_id ?? rate.carrierId ?? '').toLowerCase(),
       String(rate.service_code ?? rate.serviceCode ?? rate.service ?? '').toLowerCase(),
-      Number(rate.shipping_amount?.amount ?? rate.shipmentCost ?? rate.cost ?? rate.amount ?? 0).toFixed(4),
+      Number(customerShippingAmount(rate) ?? rate.shipping_amount?.amount ?? rate.shipmentCost ?? rate.cost ?? rate.amount ?? 0).toFixed(4),
       Number(rate.other_amount?.amount ?? rate.otherCost ?? 0).toFixed(4),
       String(rate.requestFingerprint ?? rate.cacheKey ?? ''),
     ].join('|');
