@@ -137,9 +137,9 @@ check('status docs list PS-166/258 leaf render parity guard',
 check('closeout guard tracks PS-166/258 leaf render parity guard',
   closeoutGuard.includes('test:ps-166-ps-258-orders-leaf-render-parity'));
 check('status docs stay below Final Review after leaf-level render parity',
-  /PS-166 74%, PS-258 80%/.test(statusDoc) &&
+  /PS-166 75%, PS-258 81%/.test(statusDoc) &&
     /not Final Review-ready/.test(statusDoc) &&
-    /PS-166 74%, PS-258 80%/.test(certificationDoc) &&
+    /PS-166 75%, PS-258 81%/.test(certificationDoc) &&
     /not Final Review-ready/.test(certificationDoc));
 check('status docs preserve no-live/no-mutation safety',
   /does not change runtime UI behavior/.test(certificationDoc) &&
