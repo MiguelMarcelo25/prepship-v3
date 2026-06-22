@@ -86,6 +86,17 @@ treat it as misplaced until proven the backend owner is already correct (Fast re
 - **Inventory movements** / effective-stock ledger
 - **Auth / RBAC / client / store scope**
 
+> **Frontend Boundary Law — enforcement (PS-305).** The list above is not advisory.
+> `scripts/ps-305-authority-drift-guard.ts` recursively scans `web/src` and FAILS the CI
+> gate when a backend-critical authority pattern appears in a non-allowlisted frontend
+> file: direct label-purchase orchestration (`createDirectCarrierLabelThenQueue`),
+> money-path queue routing (`classifyQueueOrderRoute`), hard-coded HUGRAB insurance
+> (`HUGRAB_DEFAULT_INSURED_VALUE`), or frontend-minted rate fingerprints / selected-rate
+> proof (`buildShippingRateRequestFingerprint`, `selectedRateAuthorityKey`, `createHash`).
+> Known existing debt (OrdersView / shipping-routes) is narrowly allowlisted pending the
+> PS-302/303/306 cutover, and the guard RATCHETS — these patterns may not spread to new
+> files. A frontend-only diff that introduces one of them is rejected by CI, not review.
+
 ## Backend-Owned Truth Without Backend Monoliths
 
 **Backend owns decisions. Frontend owns interaction. Workers own slow provider work.
