@@ -158,6 +158,7 @@ checklist is evidence-backed and no known blocker remains for review. A card is
 - PS-307: `test:ps-307-marked-rate-comparison`
 - PS-290/PS-300 first authority gates:
   `test:ps-290-hugrab-insurance-coverage-badge`,
+  `test:ps-290-hugrab-insurance-coverage-badge-closeout`,
   `test:ps-300-active-lawrence-workflow`,
   `test:ps-300-backend-shipping-authority`,
   `test:ps-301-row-workflow-authority`,

@@ -399,6 +399,7 @@
     "test:ps-279-backend-eligibility-stamp": "tsx scripts/ps-279-backend-eligibility-stamp.ts",
     "test:ps-279-backend-boundary-closeout": "tsx scripts/ps-279-backend-boundary-closeout-guard.ts",
     "test:ps-290-hugrab-insurance-coverage-badge": "tsx scripts/ps-290-hugrab-insurance-coverage-badge-guard.ts",
+    "test:ps-290-hugrab-insurance-coverage-badge-closeout": "tsx scripts/ps-290-hugrab-insurance-coverage-badge-closeout-guard.ts",
     "test:ps-300-active-lawrence-workflow": "tsx scripts/ps-300-active-lawrence-workflow-guard.ts",
     "test:ps-300-backend-shipping-authority": "tsx scripts/ps-300-backend-shipping-authority-guard.ts",
     "test:ps-301-row-workflow-authority": "tsx scripts/ps-301-row-workflow-authority-guard.ts",

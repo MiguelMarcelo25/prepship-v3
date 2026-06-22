@@ -131,6 +131,8 @@ check('package wires PS-308 separated rate-cost guard',
   /"test:ps-308-rate-cost-columns"\s*:\s*"tsx scripts\/ps-308-rate-cost-columns-guard\.ts"/.test(packageJson));
 check('package wires PS-290 HUGRAB insurance badge guard',
   /"test:ps-290-hugrab-insurance-coverage-badge"\s*:\s*"tsx scripts\/ps-290-hugrab-insurance-coverage-badge-guard\.ts"/.test(packageJson));
+check('package wires PS-290 HUGRAB insurance badge closeout guard',
+  /"test:ps-290-hugrab-insurance-coverage-badge-closeout"\s*:\s*"tsx scripts\/ps-290-hugrab-insurance-coverage-badge-closeout-guard\.ts"/.test(packageJson));
 check('package still wires PS-279 backend orchestration guard',
   packageJson.includes('"test:ps-279-backend-orchestration"'));
 check('package still wires PS-279 closeout guard',
