@@ -23,6 +23,9 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Authority drift guard (PS-305)
+        run: npm run test:ps-305-authority-drift
+
       - name: Typecheck (backend + frontend)
         run: npm run typecheck
 
