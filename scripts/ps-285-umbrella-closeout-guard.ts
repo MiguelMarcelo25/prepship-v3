@@ -30,12 +30,14 @@ const printQueueEvidence = readFileSync('docs/ps-tickets/ps-285-print-queue-evid
 const voidRetractEvidence = readFileSync('docs/ps-tickets/ps-285-void-retract-evidence.md', 'utf8');
 const recoveryRetryEvidence = readFileSync('docs/ps-tickets/ps-285-recovery-retry-evidence.md', 'utf8');
 const workflowCertificationEvidence = readFileSync('docs/ps-tickets/ps-285-workflow-certification-evidence.md', 'utf8');
+const authScopeEvidence = readFileSync('docs/ps-tickets/ps-285-auth-scope-evidence.md', 'utf8');
 const normalizedRunbook = runbook.replace(/\s+/g, ' ');
 const normalizedLabelPurchaseEvidence = labelPurchaseEvidence.replace(/\s+/g, ' ');
 const normalizedPrintQueueEvidence = printQueueEvidence.replace(/\s+/g, ' ');
 const normalizedVoidRetractEvidence = voidRetractEvidence.replace(/\s+/g, ' ');
 const normalizedRecoveryRetryEvidence = recoveryRetryEvidence.replace(/\s+/g, ' ');
 const normalizedWorkflowCertificationEvidence = workflowCertificationEvidence.replace(/\s+/g, ' ');
+const normalizedAuthScopeEvidence = authScopeEvidence.replace(/\s+/g, ' ');
 const phaseRows = checklist
   .split(/\r?\n/)
   .filter((line) => /^\|\s*\d+\s*\|/.test(line));
@@ -50,6 +52,10 @@ check('phase checklist has exactly 12 phases', phaseRows.length === 12);
 check('phase evidence matrix has exactly 12 phases', matrixPhaseRows.length === 12);
 check('phase 1 protected-file audit is explicitly complete',
   /\|\s*1\s*\|\s*Lockdown fence and protected-file audit\s*\|\s*Complete\s*\|/.test(checklist));
+check('phase 2 verification harness remains in progress',
+  /\|\s*2\s*\|\s*Verification harness and baseline resolver\s*\|\s*In progress\s*\|/.test(checklist));
+check('phase 3 auth/scope ratchets are explicitly complete',
+  /\|\s*3\s*\|\s*Auth and scope behavioral ratchets\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 4 label purchase boundary safety is explicitly complete',
   /\|\s*4\s*\|\s*Label purchase boundary safety\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 5 print queue durability is explicitly complete',
@@ -64,9 +70,10 @@ check('phase 10 runbook evidence is explicitly complete',
   /\|\s*10\s*\|\s*Observability and runbook coverage\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 11 workflow certification is explicitly complete',
   /\|\s*11\s*\|\s*End-to-end certification matrix\s*\|\s*Complete\s*\|/.test(checklist));
-check('only phases 1, 4, 5, 7, 8, 9, 10, and 11 are marked complete in this evidence slice',
-  completeRows.length === 8 &&
+check('only phases 1, 3, 4, 5, 7, 8, 9, 10, and 11 are marked complete in this evidence slice',
+  completeRows.length === 9 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*3\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*7\s*\|/.test(line)) &&
@@ -76,10 +83,10 @@ check('only phases 1, 4, 5, 7, 8, 9, 10, and 11 are marked complete in this evid
     completeRows.some((line) => /^\|\s*11\s*\|/.test(line)));
 check('remaining phases are still tracked as in progress or not started',
   completeRows.length + inProgressRows.length + notStartedRows.length === 12);
-check('checklist records the current conservative 70% estimate',
-  /Current completion estimate: PS-285 70%/.test(checklist));
-check('matrix records the current conservative 70% estimate',
-  /Current completion estimate: PS-285 70%/.test(matrix));
+check('checklist records the current conservative 75% estimate',
+  /Current completion estimate: PS-285 75%/.test(checklist));
+check('matrix records the current conservative 75% estimate',
+  /Current completion estimate: PS-285 75%/.test(matrix));
 check('checklist says PS-285 is not Final Review-ready yet',
   /PS-285 is not Final Review-ready/i.test(checklist));
 check('matrix says PS-285 is not Final Review-ready yet',
@@ -88,6 +95,8 @@ check('checklist names the existing phase-8 guard as evidence',
   /test:ps-285-marketplace-confirm-boundary/.test(checklist));
 check('checklist names the phase-1 protected-file proof guard as evidence',
   /test:ps-285-protected-file-diff-proof/.test(checklist));
+check('checklist names the phase-3 auth/scope evidence guard as evidence',
+  /test:ps-285-auth-scope-evidence/.test(checklist));
 check('checklist names the phase-4 label purchase evidence guard as evidence',
   /test:ps-285-label-purchase-evidence/.test(checklist));
 check('checklist names the phase-5 print queue evidence guard as evidence',
@@ -102,6 +111,8 @@ check('checklist names the phase-11 workflow certification guard as evidence',
   /test:ps-285-workflow-certification-evidence/.test(checklist));
 check('protected-file proof says phase 1 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(protectedFileProof));
+check('auth/scope evidence says phase 3 completion does not close PS-285',
+  /does not make PS-285 Final Review-ready/i.test(normalizedAuthScopeEvidence));
 check('label-purchase evidence says phase 4 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(normalizedLabelPurchaseEvidence));
 check('print queue evidence says phase 5 completion does not close PS-285',
@@ -128,6 +139,8 @@ check('matrix forbids live labels, queue/order mutation, Trello mutation, and sh
     /shipped\/cancelled data/.test(matrix));
 
 const pkg = readFileSync('package.json', 'utf8');
+check('package.json wires test:ps-285-auth-scope-evidence',
+  /"test:ps-285-auth-scope-evidence"\s*:\s*"tsx scripts\/ps-285-auth-scope-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-workflow-certification-evidence',
   /"test:ps-285-workflow-certification-evidence"\s*:\s*"tsx scripts\/ps-285-workflow-certification-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-recovery-retry-evidence',

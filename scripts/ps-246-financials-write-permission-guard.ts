@@ -6,11 +6,20 @@
  */
 import { readFileSync } from 'node:fs';
 
+// auth.ts imports lib/env, which validates required vars at load. Put it in
+// serverless mode and supply dummy URLs so we can import the real permission
+// logic offline.
+process.env.VERCEL = '1';
+process.env.DATABASE_URL ??= 'postgres://u:p@localhost:5432/db';
+process.env.SUPABASE_URL ??= 'https://example.supabase.co';
+
 let failures = 0;
 function check(name: string, cond: boolean): void {
   if (!cond) { failures += 1; console.error(`FAIL ${name}`); }
   else console.log(`ok   ${name}`);
 }
+
+const { hasAppPermission } = await import('../src/middleware/auth');
 
 const auth = readFileSync('src/middleware/auth.ts', 'utf8');
 
@@ -31,6 +40,19 @@ check('warehouse has NO financials:write', !/'financials:write'/.test(warehouseA
 check('client_user has NO financials:read/write',
   !/'financials:(read|write)'/.test(clientArr));
 check('read_only_support has NO financials:write', !/'financials:write'/.test(supportArr));
+
+// Behavioral role matrix: run the real permission owner, not just the source text.
+check('operator can write financials through hasAppPermission',
+  hasAppPermission({ role: 'operator' }, 'financials:write') === true);
+check('admin can write financials through hasAppPermission',
+  hasAppPermission({ role: 'admin' }, 'financials:write') === true);
+check('warehouse cannot write financials through hasAppPermission',
+  hasAppPermission({ role: 'warehouse' }, 'financials:write') === false);
+check('client_user cannot read or write financials through hasAppPermission',
+  hasAppPermission({ role: 'client_user' }, 'financials:read') === false &&
+    hasAppPermission({ role: 'client_user' }, 'financials:write') === false);
+check('read_only_support cannot write financials through hasAppPermission',
+  hasAppPermission({ role: 'read_only_support' }, 'financials:write') === false);
 
 // The permission type must still be derived from the tuple (so financials:write is a valid AppPermission).
 check('AppPermission is derived from APP_PERMISSIONS',

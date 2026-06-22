@@ -130,9 +130,9 @@ check('shipping certification harness documents the safe roundtrip and real-labe
 check('phase 11 is complete in checklist and matrix',
   /\|\s*11\s*\|\s*End-to-end certification matrix\s*\|\s*Complete\s*\|/i.test(checklist) &&
     /\|\s*11\s*\|\s*End-to-end certification matrix\s*\|\s*Complete\s*\|/i.test(matrix));
-check('checklist and matrix keep PS-285 at 70% and not Final Review-ready',
-  /Current completion estimate: PS-285 70%/.test(checklist) &&
-    /Current completion estimate: PS-285 70%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 75% and not Final Review-ready',
+  /Current completion estimate: PS-285 75%/.test(checklist) &&
+    /Current completion estimate: PS-285 75%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 

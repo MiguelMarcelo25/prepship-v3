@@ -43,6 +43,8 @@ check('package wires recovery/retry evidence guard',
   /"test:ps-285-recovery-retry-evidence"\s*:\s*"tsx scripts\/ps-285-recovery-retry-evidence-guard\.ts"/.test(packageJson));
 check('package wires workflow certification evidence guard',
   /"test:ps-285-workflow-certification-evidence"\s*:\s*"tsx scripts\/ps-285-workflow-certification-evidence-guard\.ts"/.test(packageJson));
+check('package wires auth/scope evidence guard',
+  /"test:ps-285-auth-scope-evidence"\s*:\s*"tsx scripts\/ps-285-auth-scope-evidence-guard\.ts"/.test(packageJson));
 check('package wires print queue evidence guard',
   /"test:ps-285-print-queue-evidence"\s*:\s*"tsx scripts\/ps-285-print-queue-evidence-guard\.ts"/.test(packageJson));
 check('package wires label purchase evidence guard',
@@ -100,6 +102,17 @@ check('phase 1 protected-file proof is complete in the umbrella matrix',
   completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
     matrix.includes('`test:ps-285-protected-file-diff-proof`') &&
     matrix.includes('`docs/ps-tickets/ps-285-protected-file-diff-proof.md`'));
+check('phase 2 verification harness remains in progress due operational capture',
+  inProgressRows.some((line) => /^\|\s*2\s*\|/.test(line)) &&
+    matrix.includes('Golden/baseline operational capture remains separate'));
+check('phase 3 auth/scope evidence is complete in the umbrella matrix',
+  completeRows.some((line) => /^\|\s*3\s*\|/.test(line)) &&
+    matrix.includes('`test:ps-246-*`') &&
+    matrix.includes('`test:ps-250-rates-scope-enforcement`') &&
+    matrix.includes('`test:ps-252-catalog-mutation-authz`') &&
+    matrix.includes('`test:authz-guard-behavioral-ratchet`') &&
+    matrix.includes('`docs/ps-tickets/ps-285-auth-scope-evidence.md`') &&
+    matrix.includes('`test:ps-285-auth-scope-evidence`'));
 check('phase 4 label-purchase boundary evidence is complete in the umbrella matrix',
   completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     matrix.includes('`test:ps-248-label-purchase-lock`') &&
@@ -141,9 +154,10 @@ check('phase 11 workflow certification evidence is complete in the umbrella matr
     matrix.includes('`docs/ps-tickets/ps-285-workflow-certification-evidence.md`') &&
     matrix.includes('`test:workflow-suites`') &&
     matrix.includes('`test:ps-285-workflow-certification-evidence`'));
-check('only phases 1, 4, 5, 7, 8, 9, 10, and 11 are complete in the umbrella matrix',
-  completeRows.length === 8 &&
+check('only phases 1, 3, 4, 5, 7, 8, 9, 10, and 11 are complete in the umbrella matrix',
+  completeRows.length === 9 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*3\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*7\s*\|/.test(line)) &&
@@ -152,10 +166,10 @@ check('only phases 1, 4, 5, 7, 8, 9, 10, and 11 are complete in the umbrella mat
     completeRows.some((line) => /^\|\s*10\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*11\s*\|/.test(line)));
 check('remaining phases stay tracked as in progress, not complete',
-  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 3);
+  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 2);
 
-check('matrix keeps PS-285 conservative at 70%',
-  /Current completion estimate: PS-285 70%/.test(matrix));
+check('matrix keeps PS-285 conservative at 75%',
+  /Current completion estimate: PS-285 75%/.test(matrix));
 check('matrix and checklist do not claim Final Review readiness',
   /not Final Review-ready/.test(matrix) && /not Final Review-ready/.test(checklist));
 check('board audit still documents the old one-slice overclaim risk',
