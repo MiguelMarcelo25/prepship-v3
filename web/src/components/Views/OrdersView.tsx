@@ -96,6 +96,7 @@ import {
   getBackendRowMarketplace,
   renderRateAmountWithMarkup,
   getBestRateInsuranceCoverage,
+  getRowInsuranceCoverage,
   renderExtLabelBadge,
   renderShipmentSyncErrorBadge,
   renderHouseBadge,
@@ -7135,14 +7136,15 @@ export default function OrdersView({
         if (shippedBackendMoney.markupSource === 'house_account') {
           return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn)}
+              {/* PS-290 parity: same backend coverage verdict on the Selected Rate cell. */}
+              {renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn, getRowInsuranceCoverage(displayOrder.selectedRate))}
               {renderHouseBadge()}
             </div>
           )
         }
-        return renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn)
+        return renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn, getRowInsuranceCoverage(displayOrder.selectedRate))
       }
-      return renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase, getBackendInsuranceAddOn(displayOrder.selectedRate))
+      return renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase, getBackendInsuranceAddOn(displayOrder.selectedRate), getRowInsuranceCoverage(displayOrder.selectedRate))
     }
 
     const awaitingFallback = renderAwaitingRateFallback(order, displayOrder, 'full')
