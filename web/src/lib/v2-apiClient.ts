@@ -979,6 +979,34 @@ export const apiClient = {
     );
   },
 
+  // PS-302: the backend-owned Apply Best Rate COMMAND. Persists dims + weight + selected
+  // provider + best_rate_json in ONE atomic backend operation (no partial-save race),
+  // replacing the FE's saveOrderDims + setOrderSelectedPid + saveOrderBestRate orchestration.
+  // currentRequestFingerprint is intentionally NOT sent here: the optional backend proof
+  // check is omitted so this is behavior-equivalent to the legacy 3-call save (same fields
+  // persisted, same eligibility gate) — just atomic. Backend owns the validation/persist.
+  applyBestRate(
+    orderId: number,
+    payload: {
+      bestRateJson: unknown
+      bestRateDims?: string | null
+      selectedPid?: number | null
+      weightOz?: number | null
+    }
+  ): Promise<any> {
+    return safe(
+      'applyBestRate',
+      () =>
+        api.post<any>(`/orders/${orderId}/apply-best-rate`, {
+          bestRateJson: payload.bestRateJson,
+          bestRateDims: payload.bestRateDims ?? null,
+          selectedPid: payload.selectedPid ?? null,
+          weightOz: payload.weightOz ?? null,
+        }),
+      {}
+    );
+  },
+
   // PS-179: updateOrderBestRateSelectionStrict removed — the backend persists
   // strict-recalc outcomes inside /browse (PS-175/PS-178); zero FE callers
   // remained. Pinned removed by test:ps-159-apiclient-deadmethods.

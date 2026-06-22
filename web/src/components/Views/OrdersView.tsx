@@ -4841,22 +4841,32 @@ export default function OrdersView({
     const dimsLabel = dims ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}` : null
     const shippingProviderId = toNumberValue(rate.shippingProviderId)
 
-    const tasks: Promise<unknown>[] = []
-    if (dims || (weightOz != null && weightOz > 0)) {
-      tasks.push(apiClient.saveOrderDims(orderId, {
-        ...(dims ? { length: dims.length, width: dims.width, height: dims.height } : {}),
-        ...(weightOz != null && weightOz > 0 ? { weightOz } : {}),
-      }))
-    }
-    if (shippingProviderId != null) {
-      tasks.push(apiClient.setOrderSelectedPid(orderId, shippingProviderId))
-    }
-
     const rateToPersist = options.request
       ? withRateRequestMetadata(rate, options.request, options.metadata)
       : rate
-    tasks.push(apiClient.saveOrderBestRate(orderId, rateToPersist, dimsLabel))
-    await Promise.all(tasks)
+
+    // PS-302: delegate to the backend-owned Apply Best Rate command — ONE atomic persist
+    // of dims + weight + selected provider + best_rate_json — instead of the 3 independent
+    // browser writes (which could partially fail). The legacy 3-call path remains ONLY as a
+    // fallback for the rare no-provider edge (the command requires a selected provider id).
+    if (shippingProviderId != null) {
+      await apiClient.applyBestRate(orderId, {
+        bestRateJson: rateToPersist,
+        bestRateDims: dimsLabel,
+        selectedPid: shippingProviderId,
+        weightOz: weightOz != null && weightOz > 0 ? weightOz : null,
+      })
+    } else {
+      const tasks: Promise<unknown>[] = []
+      if (dims || (weightOz != null && weightOz > 0)) {
+        tasks.push(apiClient.saveOrderDims(orderId, {
+          ...(dims ? { length: dims.length, width: dims.width, height: dims.height } : {}),
+          ...(weightOz != null && weightOz > 0 ? { weightOz } : {}),
+        }))
+      }
+      tasks.push(apiClient.saveOrderBestRate(orderId, rateToPersist, dimsLabel))
+      await Promise.all(tasks)
+    }
     if (options.refetch) await refetchOrders()
   }
 
