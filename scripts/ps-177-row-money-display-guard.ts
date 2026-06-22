@@ -156,7 +156,11 @@ check('DTO: redacted viewer → money null (never leaks amounts)',
 // ── wiring pins ───────────────────────────────────────────────────────────────
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 check('rates.ts applyMarkups delegates the math to the canonical owner',
-  /amount: applyMarkupToAmount\(orig, m\)/.test(ratesService));
+  // PS-307 moved the result into a `marked` const (then stamped on shipping_amount.amount
+  // AND the explicit customerShippingAmount); the markup math still delegates to the
+  // canonical applyMarkupToAmount owner, and the marked value flows to shipping_amount.
+  /const marked = applyMarkupToAmount\(orig, m\)/.test(ratesService) &&
+  /amount: marked/.test(ratesService));
 check('rates.ts loadCarrierMarkups is exported and parses via the canonical owner',
   /export async function loadCarrierMarkups/.test(ratesService) &&
   /parseMarkupSettingValue\(row\.value\)/.test(ratesService));
