@@ -422,6 +422,7 @@
     "test:ps-305-authority-drift": "tsx scripts/ps-305-authority-drift-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",
+    "test:ps-307-marked-rate-comparison-closeout": "tsx scripts/ps-307-marked-rate-comparison-closeout-guard.ts",
     "test:ps-308-rate-cost-columns": "tsx scripts/ps-308-rate-cost-columns-guard.ts",
     "test:ps-291-manual-order-preview": "tsx scripts/ps-291-manual-order-real-optional-items-guard.ts",
     "test:ps-291-rate-origin-schema": "tsx scripts/ps-291-rate-origin-schema-guard.ts",

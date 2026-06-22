@@ -120,7 +120,7 @@ check('GitHub CI runs PS-305 authority drift guard before typecheck/build',
 check('PS-300 workflow records PS-305 guard command',
   workflowDoc.includes('test:ps-305-authority-drift'));
 check('PS-300 workflow first authority gate includes PS-305 after PS-304',
-  /test:ps-304-shipping-display-facts-authority`,\s+`test:ps-305-authority-drift`/.test(workflowDoc));
+  /test:ps-304-shipping-display-facts-authority[\s\S]*test:ps-304-account-fallback-debt[\s\S]*test:ps-305-authority-drift/.test(workflowDoc));
 
 check('architecture rejects frontend backend-critical authority',
   architecture.includes('Frontend must not own backend-critical decisions') &&
