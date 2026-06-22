@@ -59,6 +59,8 @@ export type ShippingMarginSummary = {
   frozenCount: number;
   projectedCount: number;
   missingBillableCount: number;
+  missingActualCostCount: number;
+  missingAnyProofCount: number;
   actualShippingTotal: number;
   billableShippingTotal: number;
   marginTotal: number;
@@ -203,6 +205,8 @@ function emptySummary(): ShippingMarginSummary {
     frozenCount: 0,
     projectedCount: 0,
     missingBillableCount: 0,
+    missingActualCostCount: 0,
+    missingAnyProofCount: 0,
     actualShippingTotal: 0,
     billableShippingTotal: 0,
     marginTotal: 0,
@@ -215,6 +219,8 @@ function addRow(summary: ShippingMarginSummary, row: ShippingMarginRow): void {
   if (row.state === 'frozen_billing') summary.frozenCount += 1;
   if (row.state === 'projected') summary.projectedCount += 1;
   if (row.state === 'missing_billable') summary.missingBillableCount += 1;
+  if (row.actualShippingCost == null) summary.missingActualCostCount += 1;
+  if (row.actualShippingCost == null || row.billableShippingAmount == null) summary.missingAnyProofCount += 1;
 
   if (row.actualShippingCost == null || row.billableShippingAmount == null || row.marginAmount == null) return;
   summary.marginRowCount += 1;

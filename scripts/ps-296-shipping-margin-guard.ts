@@ -119,7 +119,9 @@ check('summary totals only aggregate rows with both actual and billable amounts'
 check('summary reports frozen/projected/missing counts separately',
   analytics.summary.frozenCount === 1 &&
   analytics.summary.projectedCount === 1 &&
-  analytics.summary.missingBillableCount === 1);
+  analytics.summary.missingBillableCount === 1 &&
+  analytics.summary.missingActualCostCount === 1 &&
+  analytics.summary.missingAnyProofCount === 1);
 check('summary groups client margins without UI math',
   analytics.clients.length === 2 &&
   analytics.clients[0]?.clientName === 'HUGRAB' &&
@@ -161,11 +163,15 @@ check('dashboard shipping margin falls back to billing endpoint during deploy ro
 check('BillingView consumes shipping margin analytics without computing margin itself',
   /fetchShippingMarginAnalytics\(/.test(billingViewSrc) &&
   /shippingMarginSummary/.test(billingViewSrc) &&
+  /missingActualCostCount/.test(billingViewSrc) &&
+  /missingAnyProofCount/.test(billingViewSrc) &&
   !/billableShippingTotal\s*-\s*actualShippingTotal/.test(billingViewSrc));
 check('DashboardView consumes dashboard shipping margin without computing margin itself',
   /fetchDashboardShippingMarginAnalytics\(/.test(dashboardViewSrc) &&
   /aria-label="Dashboard shipping margin"/.test(dashboardViewSrc) &&
   /shippingMarginSummary/.test(dashboardViewSrc) &&
+  /missingActualCostCount/.test(dashboardViewSrc) &&
+  /missingAnyProofCount/.test(dashboardViewSrc) &&
   !/billableShippingTotal\s*-\s*actualShippingTotal/.test(dashboardViewSrc));
 check('package wires PS-296 guard',
   packageJson.includes('"test:ps-296-shipping-margin"'));

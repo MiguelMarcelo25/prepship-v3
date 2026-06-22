@@ -22,6 +22,8 @@ math into the UI.
 - Actual cost provenance comes from shipment cost, label cost, and other cost sources.
 - Billable provenance prefers frozen billing line item shipping totals, then explicit projected
   billable sources such as house customer rate.
+- Summary evidence now separates missing billable proof, missing actual-cost proof, and any missing
+  proof so the canary packet can identify exactly why a row is excluded from margin totals.
 - Billing and Dashboard routes expose thin scoped readers.
 - The web API client consumes both routes and has a dashboard-to-billing fallback for deploy route
   skew.
@@ -34,8 +36,8 @@ math into the UI.
 - Read-only production canary confirming dashboard and billing views agree for the same date/client
   scope after deploy.
 - A short evidence packet with totals, missing-row count, and representative frozen/projected rows.
-- Follow-up cleanup for rows reported as missing billable or missing actual cost if DJ wants those
-  included in the margin proof.
+- Follow-up cleanup for rows reported as missing billable proof or missing actual-cost proof if DJ
+  wants those included in the margin proof.
 
 ## Recommendation
 

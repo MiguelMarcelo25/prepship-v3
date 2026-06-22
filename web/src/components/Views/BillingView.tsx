@@ -93,6 +93,8 @@ type ShippingMarginSummaryDto = {
   frozenCount: number
   projectedCount: number
   missingBillableCount: number
+  missingActualCostCount: number
+  missingAnyProofCount: number
   actualShippingTotal: number
   billableShippingTotal: number
   marginTotal: number
@@ -105,6 +107,8 @@ const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummaryDto = {
   frozenCount: 0,
   projectedCount: 0,
   missingBillableCount: 0,
+  missingActualCostCount: 0,
+  missingAnyProofCount: 0,
   actualShippingTotal: 0,
   billableShippingTotal: 0,
   marginTotal: 0,
@@ -1389,13 +1393,13 @@ export default function BillingView() {
               <div style={{ fontSize: 14, fontWeight: 800, color: label === 'Margin' ? marginColor(shippingMarginSummary.marginTotal) : 'var(--text)' }}>{value}</div>
             </div>
           ))}
-          {(shippingMarginLoading || shippingMarginError || shippingMarginSummary.missingBillableCount > 0) ? (
+          {(shippingMarginLoading || shippingMarginError || shippingMarginSummary.missingAnyProofCount > 0) ? (
             <div style={{ gridColumn: '1 / -1', fontSize: 11, color: shippingMarginError ? 'var(--red)' : 'var(--text3)' }}>
               {shippingMarginLoading
                 ? 'Loading shipping margin...'
                 : shippingMarginError
                   ? shippingMarginError
-                  : `${shippingMarginSummary.missingBillableCount} shipment(s) missing billable shipping proof`}
+                  : `${shippingMarginSummary.missingAnyProofCount} shipment(s) missing proof (${shippingMarginSummary.missingBillableCount} billable, ${shippingMarginSummary.missingActualCostCount} actual)`}
             </div>
           ) : null}
         </div>

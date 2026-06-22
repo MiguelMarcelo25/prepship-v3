@@ -44,6 +44,8 @@ check('status doc preserves no live label/postage safety',
 
 check('source guard pins dashboard fallback for deploy route skew',
   guard.includes('dashboard shipping margin falls back to billing endpoint during deploy route skew'));
+check('source guard pins missing actual-cost proof counts',
+  guard.includes('missingActualCostCount') && guard.includes('missingAnyProofCount'));
 check('service exports the shippingMarginAnalytics backend owner',
   /export async function shippingMarginAnalytics/.test(service));
 check('service reads shipments but does not mutate them',

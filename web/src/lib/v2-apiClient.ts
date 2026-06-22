@@ -2632,6 +2632,8 @@ export const apiClient = {
           frozenCount: 0,
           projectedCount: 0,
           missingBillableCount: 0,
+          missingActualCostCount: 0,
+          missingAnyProofCount: 0,
           actualShippingTotal: 0,
           billableShippingTotal: 0,
           marginTotal: 0,

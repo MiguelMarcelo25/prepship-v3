@@ -113,6 +113,8 @@ type ShippingMarginSummary = {
   frozenCount: number
   projectedCount: number
   missingBillableCount: number
+  missingActualCostCount: number
+  missingAnyProofCount: number
   actualShippingTotal: number
   billableShippingTotal: number
   marginTotal: number
@@ -465,6 +467,8 @@ function emptyShippingMarginSummary(): ShippingMarginSummary {
     frozenCount: 0,
     projectedCount: 0,
     missingBillableCount: 0,
+    missingActualCostCount: 0,
+    missingAnyProofCount: 0,
     actualShippingTotal: 0,
     billableShippingTotal: 0,
     marginTotal: 0,
@@ -483,6 +487,8 @@ function normalizeShippingMarginSummary(value: unknown): ShippingMarginSummary {
     frozenCount: num(row.frozenCount),
     projectedCount: num(row.projectedCount),
     missingBillableCount: num(row.missingBillableCount),
+    missingActualCostCount: num(row.missingActualCostCount),
+    missingAnyProofCount: num(row.missingAnyProofCount),
     actualShippingTotal: num(row.actualShippingTotal),
     billableShippingTotal: num(row.billableShippingTotal),
     marginTotal: num(row.marginTotal),
@@ -2651,8 +2657,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 </div>
                 <div className="mt-1 text-tiny text-ink-3">
                   Margin {shippingMarginSummary.marginPct == null ? '-' : formatPct(shippingMarginSummary.marginPct)}
-                  {shippingMarginSummary.missingBillableCount > 0
-                    ? ` - ${formatInt(shippingMarginSummary.missingBillableCount)} missing`
+                  {shippingMarginSummary.missingAnyProofCount > 0
+                    ? ` - ${formatInt(shippingMarginSummary.missingAnyProofCount)} missing (${formatInt(shippingMarginSummary.missingBillableCount)} billable / ${formatInt(shippingMarginSummary.missingActualCostCount)} actual)`
                     : ''}
                 </div>
               </div>
