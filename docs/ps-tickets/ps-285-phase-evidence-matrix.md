@@ -4,7 +4,7 @@ Date: 2026-06-22
 
 ## Status
 
-Current completion estimate: PS-285 50%.
+Current completion estimate: PS-285 55%.
 
 PS-285 is not Final Review-ready. The current repo has meaningful child-ticket
 guard coverage across PS-245 through PS-259, but PS-285 remains an umbrella:
@@ -40,7 +40,7 @@ whole umbrella.
 | 2 | Verification harness and baseline resolver | In progress | `test:ps-245-verification-harness`, `src/verification/verify-card.ts` | Golden/baseline operational capture remains separate |
 | 3 | Auth and scope behavioral ratchets | In progress | `test:ps-246-*`, `test:ps-250-rates-scope-enforcement`, `test:ps-252-catalog-mutation-authz`, `test:authz-guard-behavioral-ratchet` | Remaining auth/scope guards need full behavioral conversion where still ratcheted |
 | 4 | Label purchase boundary safety | Complete | `test:ps-248-label-purchase-lock`, `test:ps-248-persist-mark-shipped-atomic`, `docs/ps-tickets/ps-285-label-purchase-evidence.md`, `test:ps-285-label-purchase-evidence` | None for this phase |
-| 5 | Print queue durability and idempotency | In progress | `test:ps-253-outbox-stale-reclaim`, `test:ps-256-durable-print-queue-pdf` | Cross-path duplicate label/queue regression packet still needed |
+| 5 | Print queue durability and idempotency | Complete | `test:ps-253-outbox-stale-reclaim`, `test:ps-256-durable-print-queue-pdf`, `test:ps-053-print-queue-atomic`, `test:ps-303-print-queue-authority`, `docs/ps-tickets/ps-285-print-queue-evidence.md`, `test:ps-285-print-queue-evidence` | None for this phase |
 | 6 | Shipped/cancelled lockdown preservation | In progress | `test:ps-245-lockdown-fence`, `test:ps-258-component-boundary` | Cannot touch locked runtime behavior without the required override |
 | 7 | Void/retract and cancellation safety | In progress | `test:ps-253-combo-confirm-atomicity`, `test:ps-263-void-confirmation-retract` | Attach focused void/retract run in the PS-285 packet |
 | 8 | Marketplace confirmation boundary | Complete | `test:ps-285-marketplace-confirm-boundary` | None for this phase |

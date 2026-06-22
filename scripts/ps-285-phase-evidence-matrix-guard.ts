@@ -37,6 +37,8 @@ const boardAudit = read('docs/ps-board-audit-verification-2026-06-18.md');
 
 check('phase evidence matrix exists', existsSync(matrixPath));
 check('phase checklist exists', existsSync(checklistPath));
+check('package wires print queue evidence guard',
+  /"test:ps-285-print-queue-evidence"\s*:\s*"tsx scripts\/ps-285-print-queue-evidence-guard\.ts"/.test(packageJson));
 check('package wires label purchase evidence guard',
   /"test:ps-285-label-purchase-evidence"\s*:\s*"tsx scripts\/ps-285-label-purchase-evidence-guard\.ts"/.test(packageJson));
 check('package wires protected-file diff proof guard',
@@ -98,21 +100,30 @@ check('phase 4 label-purchase boundary evidence is complete in the umbrella matr
     matrix.includes('`test:ps-248-persist-mark-shipped-atomic`') &&
     matrix.includes('`docs/ps-tickets/ps-285-label-purchase-evidence.md`') &&
     matrix.includes('`test:ps-285-label-purchase-evidence`'));
+check('phase 5 print queue evidence is complete in the umbrella matrix',
+  completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
+    matrix.includes('`test:ps-253-outbox-stale-reclaim`') &&
+    matrix.includes('`test:ps-256-durable-print-queue-pdf`') &&
+    matrix.includes('`test:ps-053-print-queue-atomic`') &&
+    matrix.includes('`test:ps-303-print-queue-authority`') &&
+    matrix.includes('`docs/ps-tickets/ps-285-print-queue-evidence.md`') &&
+    matrix.includes('`test:ps-285-print-queue-evidence`'));
 check('phase 10 runbook evidence is complete in the umbrella matrix',
   completeRows.some((line) => /^\|\s*10\s*\|/.test(line)) &&
     matrix.includes('`test:ps-285-runbook-evidence`') &&
     matrix.includes('`docs/ps-tickets/ps-285-runbook-evidence.md`'));
-check('only phases 1, 4, 8, and 10 are complete in the umbrella matrix',
-  completeRows.length === 4 &&
+check('only phases 1, 4, 5, 8, and 10 are complete in the umbrella matrix',
+  completeRows.length === 5 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
 check('remaining phases stay tracked as in progress, not complete',
-  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 7);
+  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 6);
 
-check('matrix keeps PS-285 conservative at 50%',
-  /Current completion estimate: PS-285 50%/.test(matrix));
+check('matrix keeps PS-285 conservative at 55%',
+  /Current completion estimate: PS-285 55%/.test(matrix));
 check('matrix and checklist do not claim Final Review readiness',
   /not Final Review-ready/.test(matrix) && /not Final Review-ready/.test(checklist));
 check('board audit still documents the old one-slice overclaim risk',
