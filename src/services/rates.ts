@@ -144,16 +144,26 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
     const m = markups.get(String(r.carrier_id ?? '')) ?? (providerId ? markups.get(providerId) : undefined);
     if (!m) return r;
     const orig = r.shipping_amount.amount;
+    // PS-177: same math, one owner (rate-money.applyMarkupToAmount).
+    const marked = applyMarkupToAmount(orig, m);
     return {
       ...r,
       shipping_amount: {
         ...r.shipping_amount,
-        // PS-177: same math, one owner (rate-money.applyMarkupToAmount).
-        amount: applyMarkupToAmount(orig, m),
+        amount: marked,
       },
       original_amount: { ...r.shipping_amount },
       markup: m,
-    };
+      // PS-307: stamp the explicit marked CUSTOMER charge so the comparison owner
+      // (rates-combined.rateTotal, which pickBestRate/priced.sort delegate to) and
+      // downstream consumers read an authoritative customer amount instead of inferring
+      // it from shipping_amount. Ranking-neutral: every reader already fell back to
+      // shipping_amount.amount, which now equals this marked value — so normal/HUGRAB
+      // rate selection is byte-identical; only rows that carry a DIFFERENT customer
+      // charge (e.g. SHIPP house customer_rate) can change which rate wins.
+      customerShippingAmount: marked,
+      markedShippingAmount: marked,
+    } as Rate;
   });
 }
 
