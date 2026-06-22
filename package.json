@@ -425,6 +425,7 @@
     "test:ps-303-print-queue-authority": "tsx scripts/ps-303-print-queue-authority-guard.ts",
     "test:ps-304-shipping-display-facts-authority": "tsx scripts/ps-304-shipping-display-facts-authority-guard.ts",
     "test:ps-304-package-facts-row-owner": "tsx scripts/ps-304-package-facts-row-owner-guard.ts",
+    "test:ps-304-fe-package-facts-consume": "tsx scripts/ps-304-fe-package-facts-consume-guard.ts",
     "test:ps-304-account-fallback-debt": "tsx scripts/ps-304-account-fallback-debt-guard.ts",
     "test:ps-305-authority-drift": "tsx scripts/ps-305-authority-drift-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",

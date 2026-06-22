@@ -51,6 +51,42 @@ export function OrdersPanelPackageDimsLine({ dims }: { dims: ShipmentDims | null
   )
 }
 
+// PS-304 (FE consumption): surface the BACKEND-owned row package-facts verdict
+// (order.packageFacts) in the panel — the first consumer of that deployed read model.
+// Pure/display-only: renders the immutable lock reason (shipped/cancelled/has-label) or a
+// "re-rate needed" warning when the saved rate no longer matches the package. Renders
+// NOTHING when there is no warning (resolved + editable), so the panel is unchanged for the
+// common case and never re-derives the verdict (PS-305 boundary).
+export type PanelPackageFacts = {
+  staleRateImpact?: boolean | null
+  requiresRerate?: boolean | null
+  immutableReason?: 'shipped' | 'cancelled' | 'has_label' | string | null
+} | null | undefined
+
+export function OrdersPanelPackageFactsLine({ packageFacts }: { packageFacts: PanelPackageFacts }) {
+  if (!packageFacts) return null
+  const lockLabel =
+    packageFacts.immutableReason === 'shipped' ? 'shipped'
+      : packageFacts.immutableReason === 'cancelled' ? 'cancelled'
+      : packageFacts.immutableReason === 'has_label' ? 'label created'
+      : null
+  if (lockLabel) {
+    return (
+      <div id="p-package-facts" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 600, color: 'var(--text3,#6b7280)', whiteSpace: 'nowrap' }} title="Backend package-facts verdict (PS-304): this order's package is locked.">
+        🔒 Package locked — {lockLabel}
+      </div>
+    )
+  }
+  if (packageFacts.staleRateImpact || packageFacts.requiresRerate) {
+    return (
+      <div id="p-package-facts" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 700, color: 'var(--amber,#b7791f)', whiteSpace: 'nowrap' }} title="Backend package-facts verdict (PS-304): the saved best rate no longer matches the current package — re-rate before purchasing.">
+        ⚠ Re-rate needed — package changed
+      </div>
+    )
+  }
+  return null
+}
+
 // W4c — the "Ship From" location row (first row of the panel body). The
 // setPanelForm setter and locations list stay owned by the OrdersView shell;
 // the trivial location onChange and the 📍 manage-locations button (with its

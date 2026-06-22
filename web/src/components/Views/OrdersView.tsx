@@ -544,7 +544,7 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
-import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
+import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelPackageFactsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
 // PS-219: shared danger-tone confirm dialog for the operator Void Label action.
 import { ConfirmModal } from '../ui/ConfirmModal'
 // PS-276 (slice 4-UI): compact resi/comm tag on the Orders table customer cell (display-only).
@@ -8284,6 +8284,9 @@ export default function OrdersView({
 
               {/* PS-166 W4b: package-dims line extracted to OrdersPanelPackageDimsLine (byte-identical). */}
               <OrdersPanelPackageDimsLine dims={dims} />
+              {/* PS-304 (FE consumption): the backend-owned row package-facts verdict — first
+                  consumer of order.packageFacts. Display-only; renders nothing unless locked/stale. */}
+              <OrdersPanelPackageFactsLine packageFacts={panelOrder?.packageFacts ?? null} />
 
               {/* User override "unlock shipped data" on 2026-05-15: expose shipped PrepShip label reprint/queue actions while keeping external labels disabled.
                   PS-166 W4d — Per user override unlock shipped data on 2026-06-13: the shipped-label-actions surface moved VERBATIM to
