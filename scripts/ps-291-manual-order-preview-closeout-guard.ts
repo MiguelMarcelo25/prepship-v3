@@ -40,9 +40,12 @@ const ordersSrc = readText('src/routes/orders.ts');
 const modalSrc = readText('web/src/components/NewOrderModal.tsx');
 const existingGuardSrc = readText('scripts/ps-291-manual-order-real-optional-items-guard.ts');
 const statusDoc = readText('docs/ps-tickets/ps-291-manual-order-preview-status.md');
+const originSchemaGuard = readText('scripts/ps-291-rate-origin-schema-guard.ts');
 
 check('package wires the focused PS-291 manual order preview guard',
   packageJson.includes('"test:ps-291-manual-order-preview"'));
+check('package wires the PS-291 backend origin schema guard',
+  packageJson.includes('"test:ps-291-rate-origin-schema"'));
 check('package wires the PS-291 closeout guard',
   packageJson.includes('"test:ps-291-manual-order-preview-closeout"'));
 check('package wires the PS-291 status guard',
@@ -50,9 +53,11 @@ check('package wires the PS-291 status guard',
 check('focused PS-291 guard file exists',
   existingGuardSrc.includes('PASS PS-291 manual-order real + optional-items guard'));
 check('PS-291 status doc keeps current percentage and canary blocker honest',
-  statusDoc.includes('Current completion estimate: PS-291 86%') &&
+  statusDoc.includes('Current completion estimate: PS-291 88%') &&
     statusDoc.includes('not Final Review-ready') &&
     statusDoc.includes('DJ-approved runtime manual-order canary'));
+check('PS-291 backend origin schema guard exists',
+  originSchemaGuard.includes('PASS PS-291 backend selected-origin schema guard'));
 
 const selected = buildManualSelectedBestRate({
   carrierCode: 'ups',
@@ -187,6 +192,10 @@ check('manual route keeps manual orders real and line items optional',
 check('NewOrderModal threads selected origin into /rates preview payload',
   /fromPostalCode:\s*shipFromOrigin\.postalCode/.test(modalSrc) &&
   /shipFrom:\s*\{[\s\S]*postalCode:\s*shipFromOrigin\.postalCode/.test(modalSrc));
+check('backend /rates/browse accepts selected origin instead of stripping it',
+  /fromZip:\s*z\.string\(\)\.min\(3\)\.optional\(\)/.test(readText('src/routes/rates.ts')) &&
+    /shipFrom:\s*z\.object\(\{\}\)\.catchall\(z\.unknown\(\)\)\.optional\(\)/.test(readText('src/routes/rates.ts')) &&
+    /normalizeRateShipFromOrigin\(c\.req\.valid\('json'\)\)/.test(readText('src/routes/rates.ts')));
 check('NewOrderModal filters marketplace-owned preview rows and displays account nickname',
   /excludeMarketplaceOwnedRows\s*\(/.test(modalSrc) &&
   /accountNickname:\s*[\s\S]{0,220}carrierNickname/.test(modalSrc) &&

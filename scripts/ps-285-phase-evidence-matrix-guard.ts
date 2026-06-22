@@ -84,12 +84,19 @@ const inProgressRows = phaseRows.filter((line) => /\|\s*In progress\s*\|/i.test(
 const notStartedRows = phaseRows.filter((line) => /\|\s*Not started\s*\|/i.test(line));
 
 check('matrix has exactly 12 phase rows', phaseRows.length === 12);
-check('only phase 8 is complete in the umbrella matrix', completeRows.length === 1 && /^\|\s*8\s*\|/.test(completeRows[0] ?? ''));
+check('phase 10 runbook evidence is complete in the umbrella matrix',
+  completeRows.some((line) => /^\|\s*10\s*\|/.test(line)) &&
+    matrix.includes('`test:ps-285-runbook-evidence`') &&
+    matrix.includes('`docs/ps-tickets/ps-285-runbook-evidence.md`'));
+check('only phases 8 and 10 are complete in the umbrella matrix',
+  completeRows.length === 2 &&
+    completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
 check('remaining phases stay tracked as in progress, not complete',
-  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 10);
+  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 9);
 
-check('matrix keeps PS-285 conservative at 35%',
-  /Current completion estimate: PS-285 35%/.test(matrix));
+check('matrix keeps PS-285 conservative at 40%',
+  /Current completion estimate: PS-285 40%/.test(matrix));
 check('matrix and checklist do not claim Final Review readiness',
   /not Final Review-ready/.test(matrix) && /not Final Review-ready/.test(checklist));
 check('board audit still documents the old one-slice overclaim risk',

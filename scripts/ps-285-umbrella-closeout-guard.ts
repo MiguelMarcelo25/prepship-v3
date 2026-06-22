@@ -23,6 +23,8 @@ function check(name: string, condition: boolean) {
 
 const checklist = readFileSync('docs/ps-tickets/ps-285-phase-checklist.md', 'utf8');
 const matrix = readFileSync('docs/ps-tickets/ps-285-phase-evidence-matrix.md', 'utf8');
+const runbook = readFileSync('docs/ps-tickets/ps-285-runbook-evidence.md', 'utf8');
+const normalizedRunbook = runbook.replace(/\s+/g, ' ');
 const phaseRows = checklist
   .split(/\r?\n/)
   .filter((line) => /^\|\s*\d+\s*\|/.test(line));
@@ -37,19 +39,29 @@ check('phase checklist has exactly 12 phases', phaseRows.length === 12);
 check('phase evidence matrix has exactly 12 phases', matrixPhaseRows.length === 12);
 check('phase 8 marketplace-confirm boundary is explicitly complete',
   /\|\s*8\s*\|\s*Marketplace confirmation boundary\s*\|\s*Complete\s*\|/.test(checklist));
-check('only one phase is marked complete in this evidence slice', completeRows.length === 1);
+check('phase 10 runbook evidence is explicitly complete',
+  /\|\s*10\s*\|\s*Observability and runbook coverage\s*\|\s*Complete\s*\|/.test(checklist));
+check('only phases 8 and 10 are marked complete in this evidence slice',
+  completeRows.length === 2 &&
+    completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
 check('remaining phases are still tracked as in progress or not started',
   completeRows.length + inProgressRows.length + notStartedRows.length === 12);
-check('checklist records the current conservative 35% estimate',
-  /Current completion estimate: PS-285 35%/.test(checklist));
-check('matrix records the current conservative 35% estimate',
-  /Current completion estimate: PS-285 35%/.test(matrix));
+check('checklist records the current conservative 40% estimate',
+  /Current completion estimate: PS-285 40%/.test(checklist));
+check('matrix records the current conservative 40% estimate',
+  /Current completion estimate: PS-285 40%/.test(matrix));
 check('checklist says PS-285 is not Final Review-ready yet',
   /PS-285 is not Final Review-ready/i.test(checklist));
 check('matrix says PS-285 is not Final Review-ready yet',
   /PS-285 is not Final Review-ready/i.test(matrix));
 check('checklist names the existing phase-8 guard as evidence',
   /test:ps-285-marketplace-confirm-boundary/.test(checklist));
+check('checklist names the phase-10 runbook guard as evidence',
+  /test:ps-285-runbook-evidence/.test(checklist));
+check('runbook says phase 10 completion does not close PS-285',
+  /does not make PS-285 Final Review-ready/i.test(normalizedRunbook) &&
+    /not a substitute for the remaining/i.test(normalizedRunbook));
 check('matrix maps every child PS-245 through PS-259',
   Array.from({ length: 15 }, (_, index) => `PS-${245 + index}`).every((ticket) => matrix.includes(ticket)));
 check('checklist forbids live marketplace or shipped\/cancelled mutation during audit',
@@ -65,6 +77,8 @@ check('matrix forbids live labels, queue/order mutation, Trello mutation, and sh
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json wires test:ps-285-phase-evidence-matrix',
   /"test:ps-285-phase-evidence-matrix"\s*:\s*"tsx scripts\/ps-285-phase-evidence-matrix-guard\.ts"/.test(pkg));
+check('package.json wires test:ps-285-runbook-evidence',
+  /"test:ps-285-runbook-evidence"\s*:\s*"tsx scripts\/ps-285-runbook-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-umbrella-closeout',
   /"test:ps-285-umbrella-closeout"\s*:\s*"tsx scripts\/ps-285-umbrella-closeout-guard\.ts"/.test(pkg));
 

@@ -66,6 +66,7 @@ import {
   resolveHugrabLabelPurchasePreflight,
   resolveShippCustomsValueProofSource,
 } from '../services/shipping-workflow/hugrab-label-purchase-preflight';
+import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
 import {
   isHugrabShippingContext,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
@@ -302,6 +303,8 @@ function publicRateCacheRow<T extends { rates?: unknown; bestRate?: unknown; sec
 
 const rateBody = z.object({
   weightOz: z.number().positive(),
+  fromZip: z.string().min(3).optional(),
+  shipFrom: z.object({}).catchall(z.unknown()).optional(),
   toZip: z.string().min(3),
   toCountry: z.string().optional(),
   toState: z.string().optional(),
@@ -325,7 +328,7 @@ const rateBody = z.object({
 });
 
 app.post('/', zValidator('json', rateBody), async (c) => {
-  const body = c.req.valid('json');
+  const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
   const { forceRefresh, signature, confirmation, ...input } = body;
   const result = await getRates(
@@ -428,7 +431,7 @@ function cacheMetadata(
 
 app.post('/browse', zValidator('json', browseBody), async (c) => {
   const browseStartedAt = Date.now();
-  const body = c.req.valid('json');
+  const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
   // PS-250 (Card 5): an order-scoped browse must belong to the caller. A restricted
   // (client_user) caller passing another tenant's orderId gets 404 — blocking the

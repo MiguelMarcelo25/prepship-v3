@@ -4,7 +4,7 @@ Date: 2026-06-22
 
 ## Current status
 
-Current completion estimate: PS-291 86%.
+Current completion estimate: PS-291 88%.
 
 PS-291 is not Final Review-ready yet. The manual-order preview implementation
 has strong offline code and guard proof, but the card still needs a
@@ -13,6 +13,7 @@ DJ-approved runtime manual-order canary before it can move to Final Review.
 ## Evidence
 
 - `test:ps-291-manual-order-preview`
+- `test:ps-291-rate-origin-schema`
 - `test:ps-291-manual-order-preview-closeout`
 - `test:ps-291-manual-order-preview-status`
 
@@ -22,6 +23,9 @@ What is proven:
 - Line items are optional.
 - Rate preview uses the operator-selected Ship-From origin instead of a
   hard-coded default ZIP.
+- `/rates/browse` accepts the selected-origin `fromZip` and `shipFrom` payload
+  fields and normalizes them into the canonical backend address shape before
+  quoting.
 - Custom Ship-From origin can be saved through the canonical location owner.
 - Marketplace-owned providers are excluded from unsaved manual-order preview.
 - Account nickname appears above the service name.
@@ -30,7 +34,8 @@ What is proven:
 ## Missing
 
 - DJ-approved manual-order runtime/canary proof.
-- Read-only evidence that selected origin/rate persist in the deployed workflow.
+- Read-only deployed evidence that selected origin/rate persist in the live
+  manual-order workflow.
 - Documentation that the canary did not buy postage, print labels, notify
   marketplaces, mutate production queues, repair production data, or alter
   shipped/cancelled data.

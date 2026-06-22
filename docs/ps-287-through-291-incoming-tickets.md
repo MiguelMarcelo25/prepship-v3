@@ -9,7 +9,7 @@ REAL % is verified against the current source (not self-reported). Updated as wo
 | PS-288 | Recover ShipStation labels when Print-to-Queue buys but persistence fails | 32 | PS-286 label_url recovery + idempotent (order,client) upsert + partial-label recovery exist; orphan-detection + queue-recovery-for-shipped + label_id≠shipment_id fix + operator path = net-new |
 | PS-289 | Multi-package shipment groups (N labels/tracking per order) | 3 | XL; NO shipment_groups/packages model; one-order-one-label everywhere (labels.ts findActiveLabelForOrder LIMIT 1, markOrderShipped, print_queue unique(order,client)). Almost entirely net-new |
 | PS-290 | HUGRAB Best Rate explicit $100 insurance coverage badges | 30 | STRONG overlap w/ PS-274 (insurance-certainty resolver + tag + RateRowItem render ALL exist — audit agent wrongly said helpers missing). Net-new: typed InsuranceCoverageStatus on order-rate-dto + Awaiting Best Rate column green/red/amber badge + HUGRAB-specific verdict |
-| PS-291 | New Manual Order rate preview: real ship-from, saved/custom origins, account-labeled rates | 86 | Current code/test proof is strong: selected Ship-From origin, custom-origin save, marketplace exclusion, account nickname display, selected-rate persistence, real manual orders, and optional line items are guarded. Not Final Review-ready until DJ-approved runtime manual-order canary. |
+| PS-291 | New Manual Order rate preview: real ship-from, saved/custom origins, account-labeled rates | 88 | Current code/test proof is strong: selected Ship-From origin, backend `/rates/browse` selected-origin schema preservation, custom-origin save, marketplace exclusion, account nickname display, selected-rate persistence, real manual orders, and optional line items are guarded. Not Final Review-ready until DJ-approved runtime manual-order canary. |
 | PS-258 (Card 13) | OrdersView decomposition (hooks + memoized rows) | 40 | slices A+B+C shipped; bulk (usePassiveAutoRating/usePanelState/useFilteredOrders + memoized rows) = canary-loop; needs real PS-166 DOM-contract cert (does not exist) |
 | PS-166 | Deep OrdersView extraction (~10 hooks + ~8 components) | 75 (boss) | many W3/W4 slices merged; no dedicated test:ps-166-* guard / DOM-contract cert; needs remaining-extraction checklist |
 
@@ -49,7 +49,8 @@ REAL % is verified against the current source (not self-reported). Updated as wo
 - **Note:** operator-facing + shipping-money-path adjacent (selected-rate proof must hold).
 - **Current evidence (2026-06-22):** `test:ps-291-manual-order-preview`,
   `test:ps-291-manual-order-preview-closeout`, and
-  `test:ps-291-manual-order-preview-status` pin the code/test proof at 86%.
+  `test:ps-291-rate-origin-schema`, and `test:ps-291-manual-order-preview-status`
+  pin the code/test proof at 88%.
   Remaining blocker is a DJ-approved runtime manual-order canary only; no live
   label, postage, marketplace, queue, production repair, or shipped/cancelled
   mutation is authorized by this monitor.

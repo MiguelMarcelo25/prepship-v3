@@ -2,7 +2,7 @@
  * PS-291 status guard.
  *
  * Keeps manual-order preview reporting honest: current offline proof is strong
- * enough for 86%, but the card is not Final Review-ready until DJ approves and
+ * enough for 88%, but the card is not Final Review-ready until DJ approves and
  * observes a manual-order runtime canary.
  */
 import { existsSync, readFileSync } from 'node:fs';
@@ -37,6 +37,7 @@ check('PS-291 status document exists', existsSync(statusPath));
 
 const requiredScripts = [
   'test:ps-291-manual-order-preview',
+  'test:ps-291-rate-origin-schema',
   'test:ps-291-manual-order-preview-closeout',
   'test:ps-291-manual-order-preview-status',
 ];
@@ -48,10 +49,10 @@ for (const scriptName of requiredScripts) {
 
 check('package wires status guard to this file',
   /"test:ps-291-manual-order-preview-status"\s*:\s*"tsx scripts\/ps-291-manual-order-preview-status-guard\.ts"/.test(packageJson));
-check('status doc records PS-291 at 86%',
-  /Current completion estimate: PS-291 86%/.test(statusDoc));
-check('incoming ticket monitor row has been corrected from stale 38% to 86%',
-  /\| PS-291 \|[^\n]*\|\s*86\s*\|/.test(incomingDoc) &&
+check('status doc records PS-291 at 88%',
+  /Current completion estimate: PS-291 88%/.test(statusDoc));
+check('incoming ticket monitor row has been corrected from stale 38% to 88%',
+  /\| PS-291 \|[^\n]*\|\s*88\s*\|/.test(incomingDoc) &&
     !/\| PS-291 \|[^\n]*\|\s*38\s*\|/.test(incomingDoc));
 check('incoming ticket monitor no longer claims manual route sets isTest:true',
   !/PS-291[^\n]*isTest:true/.test(incomingDoc));
@@ -63,6 +64,9 @@ check('focused guard still proves the core manual-order DoD items',
     focusedGuard.includes('excludeMarketplaceOwnedRows') &&
     focusedGuard.includes('buildManualSelectedBestRate') &&
     focusedGuard.includes('Save this location'));
+check('status doc records backend selected-origin schema proof',
+  statusDoc.includes('`test:ps-291-rate-origin-schema`') &&
+    /normalizes them into the canonical backend address shape/.test(statusDoc));
 check('closeout guard separates code proof from runtime canary',
   closeoutGuard.includes('code/test proof complete') &&
     closeoutGuard.includes('real non-test manual order behavior still needs explicit safety review') &&

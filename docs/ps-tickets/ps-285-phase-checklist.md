@@ -5,12 +5,12 @@ single slice of evidence. This checklist is the status owner for the card until
 the umbrella is split into smaller cards or each phase has its own source-of-
 truth guard.
 
-Current completion estimate: PS-285 35%.
+Current completion estimate: PS-285 40%.
 
 Current recommendation: PS-285 is not Final Review-ready. Phase 8 is the only
-fully complete phase, but a current evidence matrix now maps guard coverage
-across PS-245 through PS-259 so the remaining phases can be finished or split
-without duplicating tickets.
+runtime-boundary phase complete, and phase 10 runbook coverage is now complete.
+A current evidence matrix maps guard coverage across PS-245 through PS-259 so
+the remaining phases can be finished or split without duplicating tickets.
 
 | # | Phase | Status | Evidence | Missing |
 |---|---|---|---|---|
@@ -23,7 +23,7 @@ without duplicating tickets.
 | 7 | Void/retract and cancellation safety | In progress | `test:ps-253-combo-confirm-atomicity`, `test:ps-263-void-confirmation-retract` | Attach focused void/retract run in the PS-285 packet |
 | 8 | Marketplace confirmation boundary | Complete | test:ps-285-marketplace-confirm-boundary | None for this phase |
 | 9 | Recovery/retry tooling safety | In progress | `test:ps-255-ops-confirm-gate`, `test:ps-256-durable-worker-status` | Split remaining live retry/canary tails or keep explicitly out of PS-285 closeout |
-| 10 | Observability and runbook coverage | In progress | `docs/security-readiness-checklist.md`, `docs/shipping-certification-harness.md` | Add PS-285-specific runbook evidence before review |
+| 10 | Observability and runbook coverage | Complete | `docs/security-readiness-checklist.md`, `docs/shipping-certification-harness.md`, `docs/ps-tickets/ps-285-runbook-evidence.md`, `test:ps-285-runbook-evidence` | None for this phase |
 | 11 | End-to-end certification matrix | In progress | `docs/full-workflow-certification-matrix.md`, `scripts/run-workflow-certification.mjs` | Run the mapped safe suite and summarize failures |
 | 12 | Final umbrella closeout packet | In progress | This checklist, `docs/ps-tickets/ps-285-phase-evidence-matrix.md`, `test:ps-285-umbrella-closeout` | Complete every phase or split unfinished phases into separate cards |
 
