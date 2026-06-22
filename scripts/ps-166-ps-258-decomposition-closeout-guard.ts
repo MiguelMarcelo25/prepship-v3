@@ -35,6 +35,7 @@ const requiredScripts = [
   'test:ps-258-search-bar-contract',
   'test:ps-166-ps-258-orders-leaf-render-parity',
   'test:ps-166-ps-258-orders-selection-render-parity',
+  'test:ps-166-ps-258-orders-daily-strip-render-parity',
   'test:ps-166-ps-258-decomposition-certification',
   'test:ps-166-ps-258-decomposition-closeout',
 ];
@@ -45,18 +46,20 @@ for (const scriptName of requiredScripts) {
   check(`certification doc lists ${scriptName}`, certificationDoc.includes(`\`${scriptName}\``));
 }
 
-check('status doc keeps PS-166 conservative at 75%', /PS-166 75%/.test(doc));
-check('status doc keeps PS-258 conservative at 81%', /PS-258 81%/.test(doc));
-check('certification doc keeps PS-166 conservative at 75%', /PS-166 75%/.test(certificationDoc));
-check('certification doc keeps PS-258 conservative at 81%', /PS-258 81%/.test(certificationDoc));
+check('status doc keeps PS-166 conservative at 76%', /PS-166 76%/.test(doc));
+check('status doc keeps PS-258 conservative at 82%', /PS-258 82%/.test(doc));
+check('certification doc keeps PS-166 conservative at 76%', /PS-166 76%/.test(certificationDoc));
+check('certification doc keeps PS-258 conservative at 82%', /PS-258 82%/.test(certificationDoc));
 check('status doc explicitly says cards are not Final Review-ready', /not Final Review-ready/.test(doc));
 check('certification doc explicitly says cards are not Final Review-ready', /not Final Review-ready/.test(certificationDoc));
 check('status doc records extracted render parity but still requires larger parity proof',
   /selected-order toolbar/.test(doc) &&
+    /daily strip/.test(doc) &&
     /not the full table shell or row renderer/.test(doc));
 check('certification doc records extracted render parity but still requires larger parity proof',
   /selected-toolbar branches/.test(certificationDoc) &&
-    /not the full table shell\s+or row renderer/.test(certificationDoc));
+    /daily stats strip/.test(certificationDoc) &&
+    /not\s+the\s+full table shell or row renderer/.test(certificationDoc));
 check('status doc preserves shipped/cancelled lockdown warning', /shipped\/cancelled lockdown/.test(doc));
 check('certification doc preserves safety boundaries',
   /offline\/static only/.test(certificationDoc) &&

@@ -4,14 +4,15 @@ Date: 2026-06-22
 
 ## Status
 
-Current completion estimate: PS-166 75%, PS-258 81%.
+Current completion estimate: PS-166 76%, PS-258 82%.
 
 These cards are still not Final Review-ready. The current state is stronger
 than the prior 70% / 76% checkpoint because the known extraction slices now have
-an explicit certification guard, server-render parity proof for extracted leaves
-and selected-toolbar branches, and a safety packet. Batch-panel read-only branches
-are statically pinned. The broad decomposition objective still needs the next
-guarded extraction or larger OrdersView shell/row parity proof before review.
+an explicit certification guard, server-render parity proof for extracted leaves,
+selected-toolbar branches, and the daily stats strip, and a safety packet.
+Batch-panel read-only branches are statically pinned. The broad decomposition
+objective still needs the next guarded extraction or larger OrdersView shell/row
+parity proof before review.
 
 ## Certified evidence
 
@@ -28,6 +29,7 @@ guarded extraction or larger OrdersView shell/row parity proof before review.
 - `test:ps-258-search-bar-contract`
 - `test:ps-166-ps-258-orders-leaf-render-parity`
 - `test:ps-166-ps-258-orders-selection-render-parity`
+- `test:ps-166-ps-258-orders-daily-strip-render-parity`
 - `test:ps-166-ps-258-decomposition-certification`
 - `test:ps-166-ps-258-decomposition-closeout`
 
@@ -44,6 +46,8 @@ guarded extraction or larger OrdersView shell/row parity proof before review.
   conditional branches.
 - The extracted selected-orders toolbar also has server-rendered parity proof
   for awaiting, shipped, cancelled, and no-label-action branches.
+- The extracted daily stats strip also has server-rendered parity proof for
+  data, loading, refresh-failed-with-data, and hard-error branches.
 - The batch-actions panel's read-only and no-label-action branches are
   statically pinned without importing its Vite-only helper chain into the Node
   guard.
@@ -58,8 +62,8 @@ guarded extraction or larger OrdersView shell/row parity proof before review.
 
 - A real DOM-render or byte-equivalent parity certification for the next larger
   OrdersView shell or row-rendering extraction slice. Current render proof covers
-  extracted leaves plus the selected-orders toolbar, but not the full table shell
-  or row renderer.
+  extracted leaves plus the selected-orders toolbar and daily strip, but not the
+  full table shell or row renderer.
 - One additional guarded extraction slice, chosen and frozen before coding:
   passive auto-rating, panel state, filtered order row rendering, memoized row
   rendering, or backend-account-display fallback removal after DTO proof.

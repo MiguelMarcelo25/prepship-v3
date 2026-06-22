@@ -42,6 +42,7 @@ const emptyPanelGuard = read('scripts/ps-258-orders-empty-panel-contract-guard.t
 const searchBarGuard = read('scripts/ps-258-orders-search-bar-contract-guard.ts');
 const leafRenderGuard = read('scripts/ps-166-ps-258-orders-leaf-render-parity-guard.ts');
 const selectionRenderGuard = read('scripts/ps-166-ps-258-orders-selection-render-parity-guard.ts');
+const dailyStripRenderGuard = read('scripts/ps-166-ps-258-orders-daily-strip-render-parity-guard.ts');
 
 check('certification document exists', existsSync(certificationDocPath));
 
@@ -59,6 +60,7 @@ const requiredScripts: ReadonlyArray<[string, string]> = [
   ['test:ps-258-search-bar-contract', 'scripts/ps-258-orders-search-bar-contract-guard.ts'],
   ['test:ps-166-ps-258-orders-leaf-render-parity', 'scripts/ps-166-ps-258-orders-leaf-render-parity-guard.ts'],
   ['test:ps-166-ps-258-orders-selection-render-parity', 'scripts/ps-166-ps-258-orders-selection-render-parity-guard.ts'],
+  ['test:ps-166-ps-258-orders-daily-strip-render-parity', 'scripts/ps-166-ps-258-orders-daily-strip-render-parity-guard.ts'],
   ['test:ps-166-ps-258-decomposition-certification', 'scripts/ps-166-ps-258-decomposition-certification-guard.ts'],
   ['test:ps-166-ps-258-decomposition-closeout', 'scripts/ps-166-ps-258-decomposition-closeout-guard.ts'],
 ];
@@ -71,16 +73,18 @@ for (const [scriptName, path] of requiredScripts) {
 }
 
 check('status doc records the updated conservative percentages',
-  /PS-166 75%/.test(statusDoc) && /PS-258 81%/.test(statusDoc));
+  /PS-166 76%/.test(statusDoc) && /PS-258 82%/.test(statusDoc));
 check('certification doc records the updated conservative percentages',
-  /PS-166 75%/.test(certificationDoc) && /PS-258 81%/.test(certificationDoc));
+  /PS-166 76%/.test(certificationDoc) && /PS-258 82%/.test(certificationDoc));
 check('status and certification docs keep the cards out of Final Review',
   /not Final Review-ready/.test(statusDoc) && /not Final Review-ready/.test(certificationDoc));
 check('docs record extracted render parity and still require larger shell/row parity before review',
   /selected-order toolbar/.test(statusDoc) &&
+    /daily strip/.test(statusDoc) &&
     /not the full table shell or row renderer/.test(statusDoc) &&
     /selected-toolbar branches/.test(certificationDoc) &&
-    /not the full table shell\s+or row renderer/.test(certificationDoc));
+    /daily stats strip/.test(certificationDoc) &&
+    /not\s+the\s+full table shell or row renderer/.test(certificationDoc));
 
 check('filtered sort owner is pure and exported',
   filteredSort.includes('export function computeOrderedFilteredOrders') &&
@@ -125,6 +129,12 @@ checkIncludesAll('selection render parity guard pins selected/batch DOM branches
   'OrdersSelectionToolbar awaiting mobile render keeps print and queue actions',
   'OrdersBatchPanel source keeps isReadOnly null gate',
   'OrdersBatchPanel source keeps non-awaiting read-only fallback',
+]);
+checkIncludesAll('daily strip render parity guard pins server-rendered strip branches', dailyStripRenderGuard, [
+  'renderToStaticMarkup',
+  'OrdersDailyStrip data branch keeps the public strip anchor',
+  'OrdersDailyStrip refresh-failed-with-data branch keeps data plus retry affordance',
+  'OrdersDailyStrip hard-error branch renders retry affordance without fake stats',
 ]);
 
 check('OrdersView lockdown caveat remains explicitly visible',
