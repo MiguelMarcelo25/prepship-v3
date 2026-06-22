@@ -174,7 +174,10 @@ check('row workflow lives on BestRateWorkflowDto, not a parallel object',
   owner.includes('allowedActions: BestRateWorkflowAllowedActions'));
 check('withOrderRowWorkflow sets rowState, allowedActions, display, and queueRoute in one backend owner',
   /export function withOrderRowWorkflow\(/.test(owner) &&
-  /rowState,\s*\n\s*allowedActions: rowActionsFor\(rowState, dto\.allowedActions\),\s*\n\s*display: displayTupleFor\(facts\),\s*\n\s*queueRoute: queueRouteFor\(facts\)/.test(owner));
+  // PS-301: the return object sets all four in one owner. Whitespace-tolerant (the PS-301
+  // named axes — lifecycleState/rateState/labelState/queueState/packageState/blockedReasons —
+  // are emitted additively between rowState and display), so this verifies intent, not formatting.
+  /return \{[\s\S]*\browState,[\s\S]*\ballowedActions,[\s\S]*display: displayTupleFor\(facts\),[\s\S]*queueRoute: queueRouteFor\(facts\)[\s\S]*\}/.test(owner));
 check('backend row workflow owner is pure',
   !owner.includes('fetch(') &&
   !/\bfrom\s+['"][^'"]*\/db/.test(owner) &&

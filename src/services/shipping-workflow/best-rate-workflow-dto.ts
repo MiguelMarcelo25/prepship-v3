@@ -64,6 +64,14 @@ export type BestRateWorkflowAllowedActions = {
   canRecalculate?: boolean;
   canQueueLabel?: boolean;
   canMarkExternalShipped?: boolean;
+  // PS-301: the card's named verbs on top of the PS-173 booleans. Present ONLY when
+  // the route enriched the DTO via withOrderRowWorkflow (additive; absent for legacy
+  // callers). canEditPackage/canSelectRow are awaiting-only, which REINFORCES the
+  // shipped/cancelled lock (shipped/cancelled rows report not-selectable/not-editable).
+  canApplyBestRate?: boolean;
+  canPrintToQueue?: boolean;
+  canEditPackage?: boolean;
+  canSelectRow?: boolean;
 };
 
 // PS-173 (Phase 1) — the backend-owned ROW workflow state. A superset of the rate
@@ -107,6 +115,34 @@ import {
 } from './rate-money';
 
 export type { OrderRowMoneyDisplay };
+
+// PS-301 — the named state-axis contract. Axes + the named action policy live in
+// small pure modules; this DTO is their single consumer (extend-never-parallel).
+import type {
+  OrderRowLifecycleState,
+  OrderRowRateState,
+  OrderRowLabelState,
+  OrderRowQueueState,
+  OrderRowPackageState,
+  OrderRowBlockedReasons,
+} from './order-row-states';
+import {
+  deriveOrderRowLifecycleState,
+  deriveOrderRowRateState,
+  deriveOrderRowLabelState,
+  deriveOrderRowQueueState,
+  deriveOrderRowPackageState,
+} from './order-row-state-axes';
+import { deriveOrderRowNamedActions, deriveOrderRowBlockedReasons } from './order-row-allowed-actions';
+
+export type {
+  OrderRowLifecycleState,
+  OrderRowRateState,
+  OrderRowLabelState,
+  OrderRowQueueState,
+  OrderRowPackageState,
+  OrderRowBlockedReasons,
+} from './order-row-states';
 
 export type BestRateSelectedRateState = 'matches_best_rate' | 'mismatched_best_rate' | 'missing' | 'unknown';
 
@@ -157,6 +193,15 @@ export type BestRateWorkflowDto = {
   // test order, operator options) still runs LIVE before consulting this, so a
   // stale list-time value can never cause a re-buy.
   queueRoute?: 'backend' | 'direct-create';
+  // PS-301: the named state-axis contract + per-verb blocked reasons — present ONLY
+  // when enriched via withOrderRowWorkflow (additive; absent for legacy callers). The
+  // FE renders/gates from these instead of reconstructing shippability decisions.
+  lifecycleState?: OrderRowLifecycleState;
+  rateState?: OrderRowRateState;
+  labelState?: OrderRowLabelState;
+  queueState?: OrderRowQueueState;
+  packageState?: OrderRowPackageState;
+  blockedReasons?: OrderRowBlockedReasons;
   // PS-177 (Phase 5): backend-owned row MONEY display (base/marked/markup/
   // insurance/margin) — present only when the route passed money facts AND the
   // viewer can see financials. Display-only: purchase amounts still come from
@@ -405,6 +450,15 @@ export type OrderRowWorkflowFacts = {
   canonicalAccountNickname: string | null;
   selectedRateCarrierCode: string | null;
   providerAccountId: number | null;
+  // PS-301: OPTIONAL granular label/package facts for the named state axes. Absent for
+  // callers that don't provide them; the derivers degrade to the safest value, so
+  // existing callers emit byte-identical lifecycle/rate/queue axes without them.
+  labelQueued?: boolean;
+  labelPrinted?: boolean;
+  labelDuplicateRisk?: boolean;
+  hasLabelUrl?: boolean;
+  packageSource?: string | null;
+  packageStaleRateImpact?: boolean;
   // PS-177 (Phase 5): OPTIONAL money facts — when present (and canViewFinancials),
   // the DTO carries the backend-owned money tuple. Optional so existing callers
   // (guards, earlier routes) compile and emit byte-identical output unchanged.
@@ -533,6 +587,29 @@ function queueRouteFor(facts: OrderRowWorkflowFacts): 'backend' | 'direct-create
  */
 export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWorkflowFacts): BestRateWorkflowDto {
   const rowState = rowStateFor(facts, dto.bestRateState);
+  // PS-301 — the named state axes + action policy, derived from the SAME facts/rowState
+  // the DTO already classified (no new heuristics). Read-model only.
+  const lifecycleState = deriveOrderRowLifecycleState(facts);
+  const rateState = deriveOrderRowRateState(facts, dto.bestRateState);
+  const labelState = deriveOrderRowLabelState(facts);
+  const queueState = deriveOrderRowQueueState(facts, rowState);
+  const packageState = deriveOrderRowPackageState(facts);
+  const baseActions = rowActionsFor(rowState, dto.allowedActions);
+  const named = deriveOrderRowNamedActions(rowState, lifecycleState, baseActions);
+  const allowedActions: BestRateWorkflowAllowedActions = { ...baseActions, ...named };
+  const blockedReasons = deriveOrderRowBlockedReasons(
+    {
+      browseRates: allowedActions.canBrowseRates === true,
+      recalculate: allowedActions.canRecalculate === true,
+      applyBestRate: named.canApplyBestRate,
+      createLabel: allowedActions.canCreateLabel === true,
+      printToQueue: named.canPrintToQueue,
+      markExternalShipped: allowedActions.canMarkExternalShipped === true,
+      editPackage: named.canEditPackage,
+      selectRow: named.canSelectRow,
+    },
+    { lifecycle: lifecycleState, rateState, labelState },
+  );
   // PS-177 money + PS-239 marketplace: only when the route provided facts;
   // redacted (non-financial) viewers get null for both. Marketplace rides a
   // SEPARATE field so the existing money tuple + its FE getter are untouched.
@@ -562,7 +639,13 @@ export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWo
   return {
     ...dto,
     rowState,
-    allowedActions: rowActionsFor(rowState, dto.allowedActions),
+    lifecycleState,
+    rateState,
+    labelState,
+    queueState,
+    packageState,
+    allowedActions,
+    blockedReasons,
     display: displayTupleFor(facts),
     queueRoute: queueRouteFor(facts),
     ...moneyPatch,

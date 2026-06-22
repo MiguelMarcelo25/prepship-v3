@@ -418,6 +418,7 @@
     "test:ps-300-backend-shipping-authority": "tsx scripts/ps-300-backend-shipping-authority-guard.ts",
     "test:ps-300-backend-authority-lane-closeout": "tsx scripts/ps-300-backend-authority-lane-closeout-guard.ts",
     "test:ps-301-row-workflow-authority": "tsx scripts/ps-301-row-workflow-authority-guard.ts",
+    "test:ps-301-orders-row-workflow-dto": "tsx scripts/ps-301-orders-row-workflow-dto-guard.ts",
     "test:ps-302-apply-best-rate-authority": "tsx scripts/ps-302-apply-best-rate-authority-guard.ts",
     "test:ps-303-print-queue-authority": "tsx scripts/ps-303-print-queue-authority-guard.ts",
     "test:ps-304-shipping-display-facts-authority": "tsx scripts/ps-304-shipping-display-facts-authority-guard.ts",
