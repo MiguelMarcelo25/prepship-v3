@@ -31,6 +31,12 @@ export type EffectivePackageFacts = {
   dims: PackageFactsDims | null;
   selectedPackageId: string | null;
   comboKey?: string;
+  // PS-304: display-safe provenance affordances. canSaveComboDefault = the resolved
+  // facts are complete enough AND scoped to a combo key, so the operator could save
+  // them as the client-scoped combo default. canPropagateDefault = those facts are an
+  // operator override (not already the default), so they can be propagated. Additive.
+  canSaveComboDefault?: boolean;
+  canPropagateDefault?: boolean;
 };
 
 export type PackageFactsRung = {
@@ -110,13 +116,23 @@ export type ResolvePackageFactsInput = {
  */
 export function resolvePackageFactsFromInputs(input: ResolvePackageFactsInput): EffectivePackageFacts {
   const comboKey = input.comboKey?.trim() || undefined;
-  const build = (source: PackageFactsSource, rung: PackageFactsRung | null): EffectivePackageFacts => ({
-    source,
-    weightOz: positive(rung?.weightOz),
-    dims: dimsOf(rung),
-    selectedPackageId: packageIdOf(rung),
-    ...(comboKey ? { comboKey } : {}),
-  });
+  const build = (source: PackageFactsSource, rung: PackageFactsRung | null): EffectivePackageFacts => {
+    const weightOz = positive(rung?.weightOz);
+    const dims = dimsOf(rung);
+    // PS-304: complete facts scoped to a combo key can be saved as the combo default;
+    // operator overrides (not already the materialized default) can be propagated.
+    const canSaveComboDefault = Boolean(comboKey) && weightOz != null && dims != null;
+    const canPropagateDefault = canSaveComboDefault && source === 'override';
+    return {
+      source,
+      weightOz,
+      dims,
+      selectedPackageId: packageIdOf(rung),
+      canSaveComboDefault,
+      canPropagateDefault,
+      ...(comboKey ? { comboKey } : {}),
+    };
+  };
 
   if (rungHasFacts(input.override)) {
     const materialized = rungHasFacts(input.comboDefault) && rungsCarrySameFacts(input.override, input.comboDefault);

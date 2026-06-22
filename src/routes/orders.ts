@@ -111,6 +111,7 @@ import {
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
+import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
 import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
 import { redactRateMoneyFields, redactOrderFinancials } from '../services/orders-financial-redaction';
 // PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
@@ -2491,6 +2492,24 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
       bestRateWorkflow: bestRateWorkflowRow,
+      // PS-304: backend-owned package facts ON THE ROW (not just the detail panel),
+      // projected from the PS-301 axes + lifecycle/label already in scope — no extra
+      // query. immutableReason reinforces the shipped/cancelled lock.
+      packageFacts: buildOrderRowPackageFacts({
+        orderStatus: effectiveOrderStatus,
+        externallyShipped: r.order.externallyShipped === true,
+        canonicalStatus: r.order.canonicalStatus ?? null,
+        hasActiveLabel: rowHasQueueableLabel || Boolean(ship),
+        packageState: bestRateWorkflowRow?.packageState ?? null,
+        rateState: bestRateWorkflowRow?.rateState ?? null,
+        requiresRerate: bestRateWorkflowRow?.allowedActions?.requiresRerate ?? null,
+        weightOz: rowWeightOz,
+        dims:
+          rowDimsL != null && rowDimsW != null && rowDimsH != null
+            ? { length: rowDimsL, width: rowDimsW, height: rowDimsH }
+            : null,
+        selectedPackageId: safeOverrides?.selectedPid != null ? String(safeOverrides.selectedPid) : null,
+      }),
       shipping,
       canonicalOrder,
       sourceLink: walmartSourceLink,
