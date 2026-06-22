@@ -420,6 +420,7 @@
     "test:ps-301-row-workflow-authority": "tsx scripts/ps-301-row-workflow-authority-guard.ts",
     "test:ps-301-orders-row-workflow-dto": "tsx scripts/ps-301-orders-row-workflow-dto-guard.ts",
     "test:ps-302-apply-best-rate-authority": "tsx scripts/ps-302-apply-best-rate-authority-guard.ts",
+    "test:ps-302-apply-best-rate-owner": "tsx scripts/ps-302-apply-best-rate-owner-guard.ts",
     "test:ps-303-print-queue-authority": "tsx scripts/ps-303-print-queue-authority-guard.ts",
     "test:ps-304-shipping-display-facts-authority": "tsx scripts/ps-304-shipping-display-facts-authority-guard.ts",
     "test:ps-304-package-facts-row-owner": "tsx scripts/ps-304-package-facts-row-owner-guard.ts",

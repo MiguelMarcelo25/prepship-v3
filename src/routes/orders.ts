@@ -112,6 +112,7 @@ import {
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
+import { buildApplyBestRatePatch } from '../services/shipping-workflow/apply-best-rate';
 import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
 import { redactRateMoneyFields, redactOrderFinancials } from '../services/orders-financial-redaction';
 // PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
@@ -3727,6 +3728,64 @@ app.post(
     const guard = await assertOrderEditable(c, id);
     if (!guard.ok) return guard.response;
     const row = await applyOverridesPatch(id, { selectedPid: c.req.valid('json').selectedPid });
+    if (!row) return c.json({ error: 'Order not found' }, 404);
+    return c.json({ data: row });
+  }
+);
+
+// PS-302: the canonical backend-owned Apply Best Rate COMMAND. Replaces the frontend's
+// 3-call orchestration (save-dims + selected-pid + save-best-rate) with ONE atomic
+// persist behind assertOrderEditable. The pure buildApplyBestRatePatch owns the rules
+// (complete dims + chosen package + optional selected-rate proof); the route normalizes
+// the rate, runs the same eligibility gate as PATCH, then a single applyOverridesPatch.
+app.post(
+  '/:id{[0-9]+}/apply-best-rate',
+  zValidator(
+    'json',
+    z.object({
+      bestRateJson: z.unknown(),
+      bestRateDims: z.string().nullable().optional(),
+      selectedPid: z.number().int().nullable().optional(),
+      weightOz: z.number().nullable().optional(),
+      currentRequestFingerprint: z.string().nullable().optional(),
+    })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
+    const body = c.req.valid('json');
+    const built = buildApplyBestRatePatch({
+      bestRateJson: body.bestRateJson,
+      dimsLabel: body.bestRateDims ?? null,
+      selectedPid: body.selectedPid ?? null,
+      weightOz: body.weightOz ?? null,
+      currentRequestFingerprint: body.currentRequestFingerprint ?? null,
+    });
+    if (!built.ok) return c.json({ error: built.error, code: built.code }, 400);
+
+    const [existing] = await db
+      .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1);
+    if (!existing) return c.json({ error: 'Order not found' }, 404);
+
+    let normalizedBestRate: unknown;
+    try {
+      normalizedBestRate = normalizeOrderBestRateDto(built.patch.bestRateJson, 'bestRateJson');
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    const eligibilityReason = shippingRateEligibilityReason(
+      orderShippingEligibilityContext(existing),
+      normalizedBestRate,
+    );
+    if (eligibilityReason) {
+      return c.json({ error: eligibilityReason, code: 'RATE_NOT_ELIGIBLE' }, 400);
+    }
+
+    const row = await applyOverridesPatch(id, { ...built.patch, bestRateJson: normalizedBestRate });
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });
   }
