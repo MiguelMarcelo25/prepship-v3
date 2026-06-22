@@ -420,6 +420,7 @@
     "test:ps-300-backend-authority-lane-closeout": "tsx scripts/ps-300-backend-authority-lane-closeout-guard.ts",
     "test:ps-301-row-workflow-authority": "tsx scripts/ps-301-row-workflow-authority-guard.ts",
     "test:ps-301-orders-row-workflow-dto": "tsx scripts/ps-301-orders-row-workflow-dto-guard.ts",
+    "test:ps-301-state-axes-behavior": "tsx scripts/ps-301-state-axes-behavior-test.ts",
     "test:ps-302-apply-best-rate-authority": "tsx scripts/ps-302-apply-best-rate-authority-guard.ts",
     "test:ps-302-apply-best-rate-owner": "tsx scripts/ps-302-apply-best-rate-owner-guard.ts",
     "test:ps-302-apply-best-rate-behavior": "tsx scripts/ps-302-apply-best-rate-behavior-test.ts",
