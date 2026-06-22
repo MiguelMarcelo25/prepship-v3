@@ -33,6 +33,12 @@ export type CombinableRate = Record<string, any> & {
   customer_charge_amount?: number | string | null;
   customerRateAmount?: number | string | null;
   customer_rate_amount?: number | string | null;
+  rateCostAmount?: number | string | null;
+  rate_cost_amount?: number | string | null;
+  rawShippingAmount?: number | string | null;
+  raw_shipping_amount?: number | string | null;
+  internalShippingAmount?: number | string | null;
+  internal_shipping_amount?: number | string | null;
   markedShippingAmount?: number | string | null;
   marked_shipping_amount?: number | string | null;
   billableShippingAmount?: number | string | null;
@@ -121,9 +127,31 @@ function customerShippingAmount(rate: CombinableRate): number | null {
   );
 }
 
+function internalShippingCost(rate: CombinableRate): number | null {
+  return firstFiniteAmount(
+    rate.rateCostAmount,
+    rate.rate_cost_amount,
+    rate.rawShippingAmount,
+    rate.raw_shipping_amount,
+    rate.internalShippingAmount,
+    rate.internal_shipping_amount,
+    rate.cost,
+  );
+}
+
 export function rateTotal(rate: CombinableRate): number {
   return (
     Number(customerShippingAmount(rate) ?? rate.shipping_amount?.amount ?? 0) +
+    Number(rate.other_amount?.amount ?? 0) +
+    Number(rate.confirmation_amount?.amount ?? 0) +
+    Number(rate.insurance_amount?.amount ?? 0)
+  );
+}
+
+/** Internal/provider cost total for PS-308 Rate Cost display. Never use this for cheapest ranking. */
+export function rateCostTotal(rate: CombinableRate): number {
+  return (
+    Number(internalShippingCost(rate) ?? rate.shipping_amount?.amount ?? 0) +
     Number(rate.other_amount?.amount ?? 0) +
     Number(rate.confirmation_amount?.amount ?? 0) +
     Number(rate.insurance_amount?.amount ?? 0)

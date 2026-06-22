@@ -11,7 +11,7 @@
 // so for every non-opted-in client this returns the best rate UNCHANGED — byte-identical to today.
 // Best-effort: any failure logs and returns the input unchanged (never breaks rating).
 
-import { rateTotal, type CombinableRate } from '../rates-combined.js';
+import { rateCostTotal, rateTotal, type CombinableRate } from '../rates-combined.js';
 import { isHouseShippRate, resolveNextBestNonHouseRate } from '../../lib/next-best-non-house-rate.js';
 import { clientHouseAccountEnabled } from '../house-account-opt-in.js';
 import { loadShippingAutomationRules } from '../shipping-automation.js';
@@ -46,7 +46,12 @@ export async function stampHouseTuple(
       automationRules: houseAutomationRules,
       client: { houseAccountOptIn: true },
     });
-    const drpCost = rateTotal(input.cheapest);
+    const round2 = (value: number): number => Math.round(value * 100) / 100;
+    const drpCost = round2(rateCostTotal(input.cheapest));
+    const customerRate = round2(nextBest ? nextBest.total : drpCost);
+    const houseMargin = round2(nextBest ? Math.max(0, customerRate - drpCost) : 0);
+    const shippingMarginPct =
+      houseMargin >= 0.005 && customerRate > 0 ? Math.round((houseMargin / customerRate) * 1000) / 10 : null;
     const providerMatch = nextBest ? /^se-(\d+)$/i.exec(String(nextBest.rate.carrier_id ?? '')) : null;
     return {
       ...bestRate,
@@ -60,9 +65,23 @@ export async function stampHouseTuple(
             providerAccountId: providerMatch ? Number.parseInt(providerMatch[1]!, 10) : null,
             // PS-220-D: the REAL eligible-priced-non-SHIPP competitor count.
             competitorCount: nextBest.competitorCount,
-          }
+        }
         : null,
-      houseMargin: nextBest ? Math.max(0, nextBest.total - drpCost) : 0,
+      houseMargin,
+      // PS-308: explicit separated house money model. Legacy nextBestNonHouseRate/houseMargin stay
+      // above for compatibility; new consumers use these fields instead of rebuilding a tuple.
+      customerRateAmount: customerRate,
+      customer_rate_amount: customerRate,
+      rateCostAmount: drpCost,
+      rate_cost_amount: drpCost,
+      shippingMarginAmount: houseMargin,
+      shipping_margin_amount: houseMargin,
+      shippingMarginPct,
+      shipping_margin_pct: shippingMarginPct,
+      houseApplied: true,
+      houseBadgeVisible: true,
+      customerRateSource: 'projected_house_customer_rate',
+      rateCostSource: 'shipp_house_internal_cost',
     };
   } catch (err) {
     console.warn('[house-tuple-stamp] projection skipped:', err instanceof Error ? err.message : err);

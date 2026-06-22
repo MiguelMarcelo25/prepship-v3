@@ -142,6 +142,25 @@ export type OrderRowMoneyDisplay = {
   // margin so display + guards never double-apply. 'house_account' => marked is the customer_rate
   // (next-best non-SHIPP), base is the SHIPP drp_cost, and NO carrier markupRule was applied.
   markupSource: 'carrier_markup' | 'house_account';
+  // PS-308: explicit separated money model. Keep base/marked/markup above as compatibility aliases
+  // while API/UI callers move to these names: Best/Selected Rate = customerRateAmount, Rate Cost =
+  // rateCostAmount, Shipping Margin = shippingMarginAmount. Ranking still lives in rates-combined.
+  customerRateAmount: number | null;
+  rateCostAmount: number | null;
+  shippingMarginAmount: number | null;
+  shippingMarginPct: number | null;
+  houseApplied: boolean;
+  houseBadgeVisible: boolean;
+  customerRateSource:
+    | 'best_rate_marked_amount'
+    | 'selected_rate_marked_amount'
+    | 'projected_house_customer_rate'
+    | 'realized_house_customer_rate';
+  rateCostSource:
+    | 'best_rate_internal_cost'
+    | 'selected_rate_internal_cost'
+    | 'label_final_cost'
+    | 'shipp_house_internal_cost';
 };
 
 export type OrderRowMoneyFacts = {
@@ -172,6 +191,43 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
   const positive = (value: number | null | undefined): number | null =>
     value != null && Number.isFinite(value) && value > 0 ? value : null;
   const insuranceAddOn = positive(facts.insuranceAddOn);
+  const separatedFields = (input: {
+    customerRateAmount: number | null;
+    rateCostAmount: number | null;
+    houseApplied: boolean;
+    customerRateSource: OrderRowMoneyDisplay['customerRateSource'];
+    rateCostSource: OrderRowMoneyDisplay['rateCostSource'];
+  }): Pick<
+    OrderRowMoneyDisplay,
+    | 'customerRateAmount'
+    | 'rateCostAmount'
+    | 'shippingMarginAmount'
+    | 'shippingMarginPct'
+    | 'houseApplied'
+    | 'houseBadgeVisible'
+    | 'customerRateSource'
+    | 'rateCostSource'
+  > => {
+    const customerRateAmount = positive(input.customerRateAmount);
+    const rateCostAmount = positive(input.rateCostAmount);
+    const shippingMarginAmount =
+      customerRateAmount != null && rateCostAmount != null
+        ? Math.max(0, round2(customerRateAmount - rateCostAmount))
+        : null;
+    return {
+      customerRateAmount: customerRateAmount != null ? round2(customerRateAmount) : null,
+      rateCostAmount: rateCostAmount != null ? round2(rateCostAmount) : null,
+      shippingMarginAmount,
+      shippingMarginPct:
+        shippingMarginAmount != null && shippingMarginAmount >= 0.005 && customerRateAmount != null && customerRateAmount > 0
+          ? Math.round((shippingMarginAmount / customerRateAmount) * 1000) / 10
+          : null,
+      houseApplied: input.houseApplied,
+      houseBadgeVisible: input.houseApplied,
+      customerRateSource: input.customerRateSource,
+      rateCostSource: input.rateCostSource,
+    };
+  };
   // PS-220 house order: marked = customer_rate (cheapest eligible non-SHIPP), base = drp_cost (the
   // SHIPP cost), markup = the spread. The carrier markupRule is SUPPRESSED (the margin IS the markup);
   // markupSource='house_account' so display + the guard never double-apply a carrier markup.
@@ -190,6 +246,13 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       marginPercent: markupAmount >= 0.005 && base > 0 ? Math.round((markupAmount / base) * 100) : null,
       source: facts.isAwaiting ? 'best_rate' : 'selected_rate',
       markupSource: 'house_account',
+      ...separatedFields({
+        customerRateAmount: houseMarked,
+        rateCostAmount: base,
+        houseApplied: true,
+        customerRateSource: facts.isAwaiting ? 'projected_house_customer_rate' : 'realized_house_customer_rate',
+        rateCostSource: 'shipp_house_internal_cost',
+      }),
     };
   }
   if (facts.isAwaiting) {
@@ -209,6 +272,13 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       marginPercent: markupAmount >= 0.005 && base > 0 ? Math.round((markupAmount / base) * 100) : null,
       source: 'best_rate',
       markupSource: 'carrier_markup',
+      ...separatedFields({
+        customerRateAmount: marked,
+        rateCostAmount: base,
+        houseApplied: false,
+        customerRateSource: 'best_rate_marked_amount',
+        rateCostSource: 'best_rate_internal_cost',
+      }),
     };
   }
   const base = positive(facts.selectedRateBaseAmount);
@@ -230,6 +300,13 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
         : null,
     source: 'selected_rate',
     markupSource: 'carrier_markup',
+    ...separatedFields({
+      customerRateAmount: marked,
+      rateCostAmount: markupBasis,
+      houseApplied: false,
+      customerRateSource: 'selected_rate_marked_amount',
+      rateCostSource: base != null ? 'selected_rate_internal_cost' : 'label_final_cost',
+    }),
   };
 }
 

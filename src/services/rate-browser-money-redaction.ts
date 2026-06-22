@@ -20,6 +20,14 @@ export const RATE_BROWSER_MONEY_FIELD_KEYS: ReadonlySet<string> = new Set([
   'labelCost',
   'rawCost',
   'amount',
+  'customerRateAmount',
+  'rateCostAmount',
+  'shippingMarginAmount',
+  'shippingMarginPct',
+  'houseApplied',
+  'houseBadgeVisible',
+  'customerRateSource',
+  'rateCostSource',
   'shipmentCost', // PS-220 stamp: nextBestNonHouseRate competitor cost — INTERNAL
   'otherCost',    // PS-220 stamp: competitor surcharge cost — INTERNAL
   'totalCost',    // PS-220 stamp: competitor total + the SHIPP bestRate total — INTERNAL

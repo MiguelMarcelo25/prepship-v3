@@ -81,6 +81,16 @@ export interface OrderBestRateDto {
   // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
+  // PS-308: separated rate money model. Best/Selected Rate uses customerRateAmount; Rate Cost and
+  // margin are internal/admin-only and redacted for non-financial viewers.
+  customerRateAmount: number | null;
+  rateCostAmount: number | null;
+  shippingMarginAmount: number | null;
+  shippingMarginPct: number | null;
+  houseApplied: boolean | null;
+  houseBadgeVisible: boolean | null;
+  customerRateSource: string | null;
+  rateCostSource: string | null;
   // PS-292 (item 2): backend-owned house-tuple freshness verdict, stamped at SAVE + persisted here.
   // 'needs_refresh' = a SHIPP/house winner for an opted-in client whose competitor tuple is ABSENT
   // (re-rate required); 'present' = tuple resolved (incl. the genuine $0-margin pass-through);
@@ -204,6 +214,14 @@ function readNullableNumber(value: unknown, path: string): number | null {
 function readMoneyAmount(value: unknown): number | null {
   if (isRecord(value)) return readNullableNumber(value.amount ?? null, 'money.amount');
   return readNullableNumber(value ?? null, 'money');
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function roundPercent(value: number): number {
+  return Math.round(value * 1000) / 10;
 }
 
 function readNullableProviderAccountId(value: unknown, path: string): number | null {
@@ -526,6 +544,47 @@ export function normalizeOrderBestRateDto(
   );
   const otherCost =
     readNumber(record.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`) + insurancePremium;
+  const totalCost =
+    readNullableNumber(record.totalCost ?? record.total_cost ?? null, `${path}.totalCost`) ?? shipmentCost + otherCost;
+  const nextBestNonHouseRate = normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`);
+  const houseMargin = readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`);
+  const explicitCustomerRateAmount = readNullableNumber(
+    record.customerRateAmount ?? record.customer_rate_amount ?? null,
+    `${path}.customerRateAmount`,
+  );
+  const explicitRateCostAmount = readNullableNumber(
+    record.rateCostAmount ??
+      record.rate_cost_amount ??
+      record.rawShippingAmount ??
+      record.raw_shipping_amount ??
+      record.internalShippingAmount ??
+      record.internal_shipping_amount ??
+      null,
+    `${path}.rateCostAmount`,
+  );
+  const customerRateAmount = explicitCustomerRateAmount ?? nextBestNonHouseRate?.totalCost ?? totalCost;
+  const rateCostAmount = explicitRateCostAmount ?? totalCost;
+  const explicitShippingMarginAmount = readNullableNumber(
+    record.shippingMarginAmount ?? record.shipping_margin_amount ?? houseMargin ?? null,
+    `${path}.shippingMarginAmount`,
+  );
+  const shippingMarginAmount =
+    explicitShippingMarginAmount ??
+    (customerRateAmount != null && rateCostAmount != null ? Math.max(0, roundMoney(customerRateAmount - rateCostAmount)) : null);
+  const explicitShippingMarginPct = readNullableNumber(
+    record.shippingMarginPct ?? record.shipping_margin_pct ?? null,
+    `${path}.shippingMarginPct`,
+  );
+  const shippingMarginPct =
+    explicitShippingMarginPct ??
+    (shippingMarginAmount != null && shippingMarginAmount >= 0.005 && customerRateAmount != null && customerRateAmount > 0
+      ? roundPercent(shippingMarginAmount / customerRateAmount)
+      : null);
+  const rawHouseApplied = record.houseApplied ?? record.house_applied ?? null;
+  const houseApplied = rawHouseApplied == null ? (houseMargin != null ? true : null) : readBoolean(rawHouseApplied, `${path}.houseApplied`);
+  const rawHouseBadgeVisible = record.houseBadgeVisible ?? record.house_badge_visible ?? null;
+  const houseBadgeVisible =
+    rawHouseBadgeVisible == null ? (houseApplied === true ? true : null) : readBoolean(rawHouseBadgeVisible, `${path}.houseBadgeVisible`);
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(
@@ -537,7 +596,7 @@ export function normalizeOrderBestRateDto(
     otherCost,
     insuranceCost,
     insuranceProvenance,
-    totalCost: readNullableNumber(record.totalCost ?? record.total_cost ?? null, `${path}.totalCost`) ?? shipmentCost + otherCost,
+    totalCost,
     rateDetails: readArray(record.rateDetails ?? record.rate_details ?? [], `${path}.rateDetails`),
     carrierCode: readNullableString(
       record.carrierCode ?? record.carrier_code ?? record.carrier ?? null,
@@ -572,8 +631,22 @@ export function normalizeOrderBestRateDto(
     rateQuoteId: readNullableString(record.rateQuoteId ?? null, `${path}.rateQuoteId`),
     selectedRateKey: readNullableString(record.selectedRateKey ?? null, `${path}.selectedRateKey`),
     secondBestRate: normalizeSecondBestRate(record.secondBestRate ?? record.second_best_rate, `${path}.secondBestRate`),
-    nextBestNonHouseRate: normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`),
-    houseMargin: readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`),
+    nextBestNonHouseRate,
+    houseMargin,
+    customerRateAmount: customerRateAmount != null ? roundMoney(customerRateAmount) : null,
+    rateCostAmount: rateCostAmount != null ? roundMoney(rateCostAmount) : null,
+    shippingMarginAmount: shippingMarginAmount != null ? roundMoney(shippingMarginAmount) : null,
+    shippingMarginPct,
+    houseApplied,
+    houseBadgeVisible,
+    customerRateSource: readNullableString(
+      record.customerRateSource ?? record.customer_rate_source ?? (houseApplied === true ? 'projected_house_customer_rate' : 'best_rate_marked_amount'),
+      `${path}.customerRateSource`,
+    ),
+    rateCostSource: readNullableString(
+      record.rateCostSource ?? record.rate_cost_source ?? (houseApplied === true ? 'shipp_house_internal_cost' : 'best_rate_internal_cost'),
+      `${path}.rateCostSource`,
+    ),
     // PS-292 (item 2): round-trip the persisted house-tuple verdict (stamped at SAVE). Unknown/absent
     // (legacy rows) => null, byte-identical for non-house rows.
     houseTupleStatus:

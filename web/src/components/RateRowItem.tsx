@@ -300,10 +300,18 @@ export default function RateRowItem({
               the parent's pass-through of the canonical bestRate); the row never computes the margin.
               Falls back to the normal single price for every other row / non-house / redacted view. */}
           {houseTuple && !blocked ? (
-            <>
-              {priceDisplay(houseTuple.drpCost, houseTuple.customerRate, { mainColor: 'var(--green)' })}
-              <div style={{ marginTop: 2 }}>{renderHouseBadge()}</div>
-            </>
+            <div style={{ lineHeight: 1.25 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--green)', whiteSpace: 'nowrap' }}>
+                ${houseTuple.customerRate.toFixed(2)}
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}>
+                Rate Cost ${houseTuple.drpCost.toFixed(2)}
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}>
+                Margin ${Math.max(0, houseTuple.customerRate - houseTuple.drpCost).toFixed(2)}
+              </div>
+              <div style={{ marginTop: 3 }}>{renderHouseBadge()}</div>
+            </div>
           ) : (
             priceDisplay(base, marked, {
               mainColor: blocked ? 'var(--text3)' : 'var(--green)',

@@ -8,6 +8,14 @@
 // SHIPP house-account margin (PS-220) — INTERNAL, must never reach a client.
 export const RATE_MONEY_FIELD_KEYS = new Set([
   'amount',
+  'customerRateAmount',
+  'rateCostAmount',
+  'shippingMarginAmount',
+  'shippingMarginPct',
+  'houseApplied',
+  'houseBadgeVisible',
+  'customerRateSource',
+  'rateCostSource',
   'cost',
   'shipmentCost',
   'otherCost',

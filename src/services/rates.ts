@@ -1629,6 +1629,8 @@ function directCustomerShippingAmount(rate: Record<string, unknown>): number {
 
 function directRawShippingCost(rate: Record<string, unknown>, fallback: number): number {
   return directFiniteAmount(
+    rate.rateCostAmount,
+    rate.rate_cost_amount,
     rate.rawShippingAmount,
     rate.raw_shipping_amount,
     rate.internalShippingAmount,
@@ -1667,6 +1669,10 @@ function toDirectRate(
     cost: rawShippingCost,
     rawShippingAmount: rawShippingCost,
     raw_shipping_amount: rawShippingCost,
+    rateCostAmount: rawShippingCost,
+    rate_cost_amount: rawShippingCost,
+    customerRateAmount: amount,
+    customer_rate_amount: amount,
     customerShippingAmount: amount,
     customer_shipping_amount: amount,
     shipping_amount: { amount, currency: String(rate.currency ?? 'USD') },
