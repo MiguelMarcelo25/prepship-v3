@@ -52,6 +52,10 @@ const realPrintQueueContract = readFileSync(
   'src/services/shipping-workflow/multi-package-real-print-queue-contract.ts',
   'utf8',
 );
+const printQueueRuntimeCompat = readFileSync(
+  'src/services/shipping-workflow/multi-package-print-queue-runtime-compat.ts',
+  'utf8',
+);
 const marketplaceConfirmationSidecar = readFileSync(
   'src/services/shipping-workflow/multi-package-marketplace-confirmation-sidecar.ts',
   'utf8',
@@ -86,6 +90,8 @@ check('package wires PS-289 marketplace confirmation sidecar guard',
   packageJson.includes('"test:ps-289-multi-package-marketplace-confirmation-sidecar"'));
 check('package wires PS-289 real print queue contract guard',
   packageJson.includes('"test:ps-289-multi-package-real-print-queue-contract"'));
+check('package wires PS-289 print queue runtime compatibility guard',
+  packageJson.includes('"test:ps-289-multi-package-print-queue-runtime-compat"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -116,6 +122,8 @@ check('status doc lists marketplace confirmation sidecar guard',
   doc.includes('`test:ps-289-multi-package-marketplace-confirmation-sidecar`'));
 check('status doc lists real print queue contract guard',
   doc.includes('`test:ps-289-multi-package-real-print-queue-contract`'));
+check('status doc lists print queue runtime compatibility guard',
+  doc.includes('`test:ps-289-multi-package-print-queue-runtime-compat`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
 check('status doc keeps PS-289 conservative at 88%',
@@ -148,6 +156,8 @@ check('status doc says marketplace confirmation sidecar persistence exists',
   /marketplace confirmation sidecar persistence now\s+exists/i.test(doc));
 check('status doc says dry-run real print queue contract exists',
   /dry-run real print queue contract now\s+exists/i.test(doc));
+check('status doc says print queue runtime compatibility proof exists',
+  /Runtime compatibility proof maps package-scoped queue ids back to numeric source order ids/i.test(doc));
 check('status doc lists real production label creator wiring as missing',
   /Real production label creator wiring/.test(doc));
 check('status doc lists real print queue insertion as missing',
@@ -231,6 +241,14 @@ check('real print queue dry-run contract stays pure and offline',
   /without writing that table/.test(realPrintQueueContract) &&
     !/from ['"].*(db\/client|routes|connectors|marketplace|shipstation|shipp|easypost|walmart)/i.test(realPrintQueueContract) &&
     !/\.insert\(|\.update\(|\.delete\(|fetch\(/.test(realPrintQueueContract));
+check('print queue runtime compat exports source-order resolver',
+  /export function parseMultiPackagePrintQueueOrderId/.test(printQueueRuntimeCompat) &&
+    /export function resolvePrintQueueSourceOrderId/.test(printQueueRuntimeCompat) &&
+    /export function buildPrintQueueRuntimeCompatPlan/.test(printQueueRuntimeCompat));
+check('print queue runtime compat stays pure and offline',
+  /Pure only/.test(printQueueRuntimeCompat) &&
+    !/from ['"].*(db|schema|routes|connectors|marketplace|shipstation|shipp|easypost|walmart|print-queue)/i.test(printQueueRuntimeCompat) &&
+    !/\.insert\(|\.update\(|\.delete\(|fetch\(/.test(printQueueRuntimeCompat));
 check('marketplace confirmation sidecar exports orchestrateMultiPackageMarketplaceConfirmationSidecar',
   /export async function orchestrateMultiPackageMarketplaceConfirmationSidecar/.test(marketplaceConfirmationSidecar));
 check('marketplace confirmation sidecar writes only shipment group sidecars',

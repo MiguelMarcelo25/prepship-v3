@@ -13,9 +13,10 @@ end-to-end mocked workflow proof now exists, and a test-gated per-package label 
 exists. An injected carrier adapter boundary now exists, and ShipStation-shaped adapter proof now exists.
 Purchased-label sidecar orchestration now exists, print queue sidecar persistence now exists,
 marketplace confirmation sidecar persistence now exists, and a dry-run real print queue contract now
-exists. The real product still needs real production label creator wiring, real print queue
-insertion/printer integration, real marketplace notification connector/integration, and UI work
-before any operator should use it.
+exists. Runtime compatibility proof maps package-scoped queue ids back to numeric source order ids
+before real print queue insertion is allowed. The real product still needs real production label
+creator wiring, real print queue insertion/printer integration, real marketplace notification
+connector/integration, and UI work before any operator should use it.
 
 ## Evidence now wired
 
@@ -33,6 +34,7 @@ before any operator should use it.
 - `test:ps-289-multi-package-print-queue-sidecar`
 - `test:ps-289-multi-package-marketplace-confirmation-sidecar`
 - `test:ps-289-multi-package-real-print-queue-contract`
+- `test:ps-289-multi-package-print-queue-runtime-compat`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -82,6 +84,10 @@ before any operator should use it.
   collapse multiple package labels.
 - The contract keeps `sourceOrderId` visible for the future runtime integration while avoiding writes
   to the real print queue table.
+- Runtime compatibility proof maps package-scoped queue IDs back to the numeric source order ID that
+  existing hold, recipient, dimensions, and order-detail lookup paths need.
+- The compatibility guard also pins the current numeric `Number(orderId)` assumptions so real queue
+  insertion cannot be enabled without replacing them.
 - The marketplace confirmation sidecar owner derives one package-aware confirmation candidate per
   purchased label/tracking number, stores package rows as `marketplace_confirmation_sidecar_planned`,
   and marks the group with all tracking numbers.
@@ -94,7 +100,8 @@ before any operator should use it.
 - Real production label creator wiring from the multi-package workflow into ShipStation plus
   DJ-approved live canary proof.
 - Real print queue insertion/printer integration with the existing printer path. The dry-run contract
-  now proves the package-scoped key shape, but no real queue insert is enabled yet.
+  now proves the package-scoped key shape and runtime source-order compatibility, but no real queue
+  insert is enabled yet.
 - Real marketplace notification connector/integration plus DJ-approved live canary proof for the
   correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.
