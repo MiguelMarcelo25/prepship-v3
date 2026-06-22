@@ -79,8 +79,8 @@ Execution order is PS-300 -> PS-301 -> PS-302 -> PS-303 -> PS-304 -> PS-305 -> P
   label-purchase orchestration. Guard: `test:ps-303-print-queue-authority`.
 - PS-304: backend owns package, carrier, account, and display facts. Guard:
   `test:ps-304-shipping-display-facts-authority`. Current closeout note:
-  carrier/service display prefer the backend tuple; account display still has an
-  explicit live-carrier-cache fallback until the PS-306 OrdersView cutover.
+  carrier/service/account display prefer the backend tuple, but older frontend
+  compatibility candidates still need PS-306 cutover review before Final Review.
 - PS-305: docs/CI/static guards prove rates, labels, billing, package, and
   display authority cannot drift back into frontend. Guard:
   `test:ps-305-authority-drift`.

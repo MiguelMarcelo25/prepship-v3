@@ -3,10 +3,10 @@
  *
  * Offline only: no DB, no network, no providers, no labels, no postage, no
  * marketplace notifications, and no production data mutation. This pins the
- * backend-owned package facts and row display tuple while recording the remaining
- * frontend account-cache fallback as explicit PS-304/PS-306 debt.
+ * backend-owned package facts and row display tuple, including account display
+ * tuple preference before older frontend compatibility fallbacks.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolvePackageFactsFromInputs } from '../src/services/package-facts-policy';
 import {
   buildBestRateWorkflowDto,
@@ -31,12 +31,10 @@ function check(name: string, condition: boolean, detail?: unknown): void {
 }
 
 function read(path: string): string {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return '';
-  }
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
 }
+
+const statusDoc = read('docs/ps-tickets/ps-304-shipping-display-facts-authority-status.md');
 
 const comboFacts = { weightOz: 31, length: 12, width: 10, height: 3, selectedPackageId: '121' };
 const importedFacts = { weightOz: 35, length: 14, width: 11, height: 9, selectedPackageId: null };
@@ -164,6 +162,7 @@ check('frontend service resolver prefers backend display tuple when present',
 check('frontend account resolver still keeps live-cache candidate precedence explicit',
   resolveDisplayShipAccount({
     isTest: false,
+    backendDisplayAccountNickname: null,
     awaitingBestRateNickname: null,
     canonicalNickname: 'Backend Account',
     selectedNickname: 'Selected Account',
@@ -173,6 +172,19 @@ check('frontend account resolver still keeps live-cache candidate precedence exp
     bestRateNickname: 'Best Account',
     carrierCodeFallback: 'UPS',
   }) === 'Backend Account');
+check('frontend account resolver prefers backend display tuple when present',
+  resolveDisplayShipAccount({
+    isTest: false,
+    backendDisplayAccountNickname: 'Backend Tuple Account',
+    awaitingBestRateNickname: 'Awaiting Rate Account',
+    canonicalNickname: 'Canonical Account',
+    selectedNickname: 'Selected Account',
+    v2AccountNickname: 'Static Account',
+    hasSelectedRate: true,
+    labelAccountLabel: 'Live Label Account',
+    bestRateNickname: 'Best Account',
+    carrierCodeFallback: 'UPS',
+  }) === 'Backend Tuple Account');
 
 const packagePolicy = read('src/services/package-facts-policy.ts');
 check('package facts policy is a pure backend owner',
@@ -237,10 +249,10 @@ const shippingDisplay = read('web/src/components/Views/order-shipping-display.ts
 check('frontend carrier/service readers pass backend display tuple first',
   displayState.includes('backendDisplayCarrierCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.carrierCode)') &&
   rowDisplay.includes('backendDisplayServiceCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.serviceCode)'));
-check('frontend account display fallback debt is explicit and not hidden',
-  shippingDisplay.includes('NOT moved here (intentionally): the shipping-ACCOUNT / provider-nickname display') &&
-  displayState.includes('candidate RESOLUTION stays here') &&
-  displayState.includes('live `accounts` array, which the backend'));
+check('frontend account display now consumes backend tuple before compatibility fallbacks',
+  shippingDisplay.includes('backendDisplayAccountNickname') &&
+  displayState.includes('backendDisplayAccountNickname: normalizeShippingAccountName') &&
+  displayState.includes('bestRateWorkflow?.display'));
 
 const packageJson = read('package.json');
 check('package wires PS-304 shipping display facts authority guard',
@@ -253,6 +265,21 @@ check('package still wires predecessor package/display guards',
 const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workflow.md');
 check('workflow doc records PS-304 shipping display facts authority guard',
   workflowDoc.includes('test:ps-304-shipping-display-facts-authority'));
+
+check('PS-304 status doc keeps the card conservative until fallback debt is closed',
+  /Current completion estimate: PS-304 86%/.test(statusDoc) &&
+    /not Final Review-ready yet/.test(statusDoc));
+check('PS-304 status doc separates this card from PS-166 and PS-258',
+  /does not complete PS-166 or PS-258/.test(statusDoc) &&
+    /DOM\/byte-equality certification/.test(statusDoc));
+check('PS-304 status doc lists backend display tuple and remaining compatibility fallback debt',
+  /bestRateWorkflow\.display\.accountNickname/.test(statusDoc) &&
+    /compatibility[\s\S]*fallbacks/.test(statusDoc) &&
+    /need final cutover review/.test(statusDoc));
+check('PS-304 status doc documents offline-only safety',
+  /offline-only/.test(statusDoc) &&
+    /does not run labels/.test(statusDoc) &&
+    /mutate shipped\/cancelled data/.test(statusDoc));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-304 shipping display facts authority guard (${failures} failing)`);

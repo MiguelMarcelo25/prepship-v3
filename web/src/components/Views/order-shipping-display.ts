@@ -103,6 +103,8 @@ export const DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL = 'PrepShip Test'
 export type DisplayShipAccountInput = {
   /** isTestOrder(order). */
   isTest: boolean
+  /** PS-304: backend display tuple (bestRateWorkflow.display.accountNickname), preferred when present. */
+  backendDisplayAccountNickname?: string | null
   /** awaiting + bestRate: the best-rate nickname (carrier/provider/account, or account-by-providerId). null otherwise. */
   awaitingBestRateNickname: string | null
   /** getShippingString(order,'accountNickname'), normalized. */
@@ -156,6 +158,7 @@ export function isShippBrokeredServiceCode(serviceCode: string | null | undefine
  */
 export function resolveDisplayShipAccount(input: DisplayShipAccountInput): string | null {
   if (input.isTest) return DISPLAY_TEST_SHIPPING_ACCOUNT_LABEL
+  if (input.backendDisplayAccountNickname) return input.backendDisplayAccountNickname
   if (input.awaitingBestRateNickname) return input.awaitingBestRateNickname
   if (input.canonicalNickname) return input.canonicalNickname
   if (input.selectedNickname) return input.selectedNickname

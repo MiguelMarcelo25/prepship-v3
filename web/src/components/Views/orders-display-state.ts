@@ -110,6 +110,7 @@ export function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierA
 
   return resolveDisplayShipAccount({
     isTest: isTestOrder(order),
+    backendDisplayAccountNickname: normalizeShippingAccountName(toStringValue(toRecord(order.bestRateWorkflow?.display)?.accountNickname)),
     awaitingBestRateNickname,
     canonicalNickname: normalizeShippingAccountName(getShippingString(order, 'accountNickname')),
     selectedNickname: normalizeShippingAccountName(order.selectedRate?.providerAccountNickname),

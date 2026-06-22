@@ -64,6 +64,9 @@ checkIncludesAll('PS-306 doc preserves lockdown and safety language', doc, [
   'isReadOnly',
   'shipped/cancelled',
   'AGENTS.md',
+  'currently has the shipped/cancelled UI',
+  'const isReadOnly = false',
+  'not be called fully',
   'does not run live labels',
   'production order mutations',
   'shipped/cancelled data mutations',
@@ -119,17 +122,22 @@ check('PS-305 doc carries PS-306 frontend debt forward',
   ps305Doc.includes('PS-306 follow-up') &&
   ps305Doc.includes('Keep remaining compatibility fallbacks explicit'));
 
-check('OrdersView keeps shipped/cancelled lockdown source and comments',
-  /const isReadOnly = /.test(ordersView) &&
+check('OrdersView lockdown caveat is explicit: UI gate currently disabled, backend guards required',
+  /const isReadOnly = false/.test(ordersView) &&
   /SHIPPED \/ CANCELLED LOCKDOWN/.test(ordersView) &&
-  /search isReadOnly/.test(ordersView));
-check('OrdersView still gates row select, Select All, and batch panel',
+  /DISABLED/.test(ordersView) &&
+  /Defense-in-depth still applies at the BACKEND/.test(ordersView));
+check('OrdersView still contains row select, Select All, and batch panel read-only gate sites',
   /if \(isReadOnly\) return null/.test(ordersView) &&
   (ordersView.match(/isReadOnly \? null :/g) ?? []).length >= 2 &&
   /<OrdersBatchPanel[\s\S]{0,400}?isReadOnly=\{isReadOnly\}/.test(ordersView));
-check('OrdersBatchPanel still suppresses itself under read-only lockdown',
+check('OrdersBatchPanel still accepts and honors the read-only suppression prop',
   /isReadOnly: boolean/.test(batchPanel) &&
   /if \(isReadOnly\) return null/.test(batchPanel));
+
+check('PS-306 doc does not overstate Final Review readiness while UI lock is disabled',
+  /not Final Review-ready while `OrdersView\.tsx` has/.test(doc) &&
+  /remains a cutover gate and dependency map/.test(doc));
 
 checkIncludesAll('component-boundary guard pins the canonical lockdown consumers', componentBoundaryGuard, [
   'row select cell early-returns null',
