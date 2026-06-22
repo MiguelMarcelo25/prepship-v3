@@ -36,6 +36,11 @@ export type ShippingMarginInputRow = {
   projectedBillableAmount: string | number | null;
   projectedBillableSource: ShippingMarginBillableSource | null;
   houseCustomerRate: string | number | null;
+  // PS-296: carrier/service/account identity for the breakdown + provider filter.
+  carrierCode: string | null;
+  serviceCode: string | null;
+  providerAccountId: number | string | null;
+  providerAccountNickname: string | null;
 };
 
 export type ShippingMarginRow = {
@@ -55,6 +60,11 @@ export type ShippingMarginRow = {
   billingLineItemId: number | null;
   houseCustomerRate: number | null;
   missingProofReasons: ShippingMarginMissingProofReason[];
+  // PS-296: carrier/service/account identity (display-safe; no technical secrets).
+  carrierCode: string | null;
+  serviceCode: string | null;
+  providerAccountId: number | null;
+  providerAccountNickname: string | null;
 };
 
 export type ShippingMarginSummary = {
@@ -69,6 +79,11 @@ export type ShippingMarginSummary = {
   billableShippingTotal: number;
   marginTotal: number;
   marginPct: number | null;
+  // PS-296: operator-value metrics — negative-margin exceptions + averages.
+  negativeMarginCount: number;
+  negativeMarginTotal: number;
+  averageActualShippingCost: number | null;
+  averageBillableShipping: number | null;
 };
 
 export type ShippingMarginClientSummary = ShippingMarginSummary & {
@@ -76,17 +91,29 @@ export type ShippingMarginClientSummary = ShippingMarginSummary & {
   clientName: string;
 };
 
+// PS-296: per carrier/service/account rollup (parallel to the clients rollup) so the
+// dashboard/billing can break margin down by provider and filter on it.
+export type ShippingMarginCarrierSummary = ShippingMarginSummary & {
+  carrierCode: string | null;
+  serviceCode: string | null;
+  providerAccountId: number | null;
+  providerAccountNickname: string | null;
+};
+
 export type ShippingMarginAnalytics = {
   dateFrom: string;
   dateTo: string;
   summary: ShippingMarginSummary;
   clients: ShippingMarginClientSummary[];
+  carriers: ShippingMarginCarrierSummary[];
   rows: ShippingMarginRow[];
 };
 
 export type ShippingMarginAnalyticsInput = {
   clientId?: number;
   storeId?: number;
+  // PS-296: optional provider/account filter (DJ: "filterable by client/provider").
+  providerAccountId?: number;
   dateFrom: string;
   dateTo: string;
   scopeClientIds?: number[];
@@ -203,6 +230,10 @@ export function buildShippingMarginRow(row: ShippingMarginInputRow): ShippingMar
     billingLineItemId: intOrNull(row.billingLineItemId),
     houseCustomerRate: numberOrNull(row.houseCustomerRate),
     missingProofReasons,
+    carrierCode: row.carrierCode?.trim() || null,
+    serviceCode: row.serviceCode?.trim() || null,
+    providerAccountId: intOrNull(row.providerAccountId),
+    providerAccountNickname: row.providerAccountNickname?.trim() || null,
   };
 }
 
@@ -219,6 +250,10 @@ function emptySummary(): ShippingMarginSummary {
     billableShippingTotal: 0,
     marginTotal: 0,
     marginPct: null,
+    negativeMarginCount: 0,
+    negativeMarginTotal: 0,
+    averageActualShippingCost: null,
+    averageBillableShipping: null,
   };
 }
 
@@ -236,10 +271,24 @@ function addRow(summary: ShippingMarginSummary, row: ShippingMarginRow): void {
   summary.billableShippingTotal = money(summary.billableShippingTotal + row.billableShippingAmount);
   summary.marginTotal = money(summary.marginTotal + row.marginAmount);
   summary.marginPct = percent(summary.marginTotal, summary.actualShippingTotal);
+  // PS-296: negative-margin exception tracking (a shipment billed BELOW its label cost).
+  if (row.marginAmount < 0) {
+    summary.negativeMarginCount += 1;
+    summary.negativeMarginTotal = money(summary.negativeMarginTotal + row.marginAmount);
+  }
+}
+
+// PS-296: averages over the rows that actually produced a margin (marginRowCount).
+function finalizeSummaryAverages(summary: ShippingMarginSummary): void {
+  summary.marginPct = percent(summary.marginTotal, summary.actualShippingTotal);
+  summary.averageActualShippingCost =
+    summary.marginRowCount > 0 ? money(summary.actualShippingTotal / summary.marginRowCount) : null;
+  summary.averageBillableShipping =
+    summary.marginRowCount > 0 ? money(summary.billableShippingTotal / summary.marginRowCount) : null;
 }
 
 function finalizeClientSummary(summary: ShippingMarginClientSummary): ShippingMarginClientSummary {
-  summary.marginPct = percent(summary.marginTotal, summary.actualShippingTotal);
+  finalizeSummaryAverages(summary);
   return summary;
 }
 
@@ -249,6 +298,7 @@ export function buildShippingMarginAnalytics(
 ): ShippingMarginAnalytics {
   const summary = emptySummary();
   const clientsById = new Map<string, ShippingMarginClientSummary>();
+  const carriersByKey = new Map<string, ShippingMarginCarrierSummary>();
 
   for (const row of rows) {
     addRow(summary, row);
@@ -263,18 +313,44 @@ export function buildShippingMarginAnalytics(
       clientsById.set(key, clientSummary);
     }
     addRow(clientSummary, row);
+
+    // PS-296: carrier/service/account rollup, keyed most-granular (carrier|service|account).
+    const carrierKey = `${row.carrierCode ?? ''}|${row.serviceCode ?? ''}|${row.providerAccountId ?? ''}`;
+    let carrierSummary = carriersByKey.get(carrierKey);
+    if (!carrierSummary) {
+      carrierSummary = {
+        carrierCode: row.carrierCode,
+        serviceCode: row.serviceCode,
+        providerAccountId: row.providerAccountId,
+        providerAccountNickname: row.providerAccountNickname,
+        ...emptySummary(),
+      };
+      carriersByKey.set(carrierKey, carrierSummary);
+    }
+    addRow(carrierSummary, row);
   }
 
-  summary.marginPct = percent(summary.marginTotal, summary.actualShippingTotal);
+  finalizeSummaryAverages(summary);
   const clientsSummary = [...clientsById.values()]
     .map(finalizeClientSummary)
     .sort((a, b) => b.marginTotal - a.marginTotal || a.clientName.localeCompare(b.clientName));
+  const carriersSummary = [...carriersByKey.values()]
+    .map((carrier) => {
+      finalizeSummaryAverages(carrier);
+      return carrier;
+    })
+    .sort(
+      (a, b) =>
+        b.marginTotal - a.marginTotal ||
+        (a.carrierCode ?? '').localeCompare(b.carrierCode ?? ''),
+    );
 
   return {
     dateFrom: range.dateFrom,
     dateTo: range.dateTo,
     summary,
     clients: clientsSummary,
+    carriers: carriersSummary,
     rows,
   };
 }
@@ -330,7 +406,11 @@ export async function shippingMarginAnalytics(
       bli.billing_total_cost as "billingTotalCost",
       null::numeric as "projectedBillableAmount",
       null::text as "projectedBillableSource",
-      ${orderCompetitiveRate.customerRate}::text as "houseCustomerRate"
+      ${orderCompetitiveRate.customerRate}::text as "houseCustomerRate",
+      ${shipments.carrierCode} as "carrierCode",
+      ${shipments.serviceCode} as "serviceCode",
+      ${shipments.providerAccountId} as "providerAccountId",
+      ${shipments.providerAccountNickname} as "providerAccountNickname"
     from ${shipments}
     left join (
       select
@@ -352,6 +432,7 @@ export async function shippingMarginAnalytics(
       and ${shippedAt} < ${input.dateTo}::timestamptz
       ${input.clientId !== undefined ? sql`and coalesce(bli.client_id, ${shipments.clientId}) = ${input.clientId}` : sql``}
       ${input.storeId !== undefined ? sql`and ${clients.storeIds} && ${intArraySql([input.storeId])}` : sql``}
+      ${input.providerAccountId !== undefined ? sql`and ${shipments.providerAccountId} = ${input.providerAccountId}` : sql``}
       and ${scopePredicate}
     order by ${shippedAt} desc, ${shipments.id} desc
   `);
