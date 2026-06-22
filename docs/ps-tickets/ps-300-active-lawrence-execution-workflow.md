@@ -158,6 +158,8 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   PS-308 guards as they are added
 - PS-307: `test:ps-307-marked-rate-comparison`,
   `test:ps-307-marked-rate-comparison-closeout`
+- PS-308: `test:ps-308-rate-cost-columns`,
+  `test:ps-308-rate-cost-columns-closeout`
 - PS-166 and PS-258: `test:ps-166-orders-rate-proof`,
   `test:ps-258-orders-filtered-sort`, `test:ps-258-component-boundary`,
   `test:ps-258-empty-state-props-contract`, `test:ps-258-empty-panel-contract`,
@@ -181,7 +183,9 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-305-authority-drift`,
   `test:ps-306-ordersview-parity-cutover`,
   `test:ps-307-marked-rate-comparison`,
-  `test:ps-307-marked-rate-comparison-closeout`
+  `test:ps-307-marked-rate-comparison-closeout`,
+  `test:ps-308-rate-cost-columns`,
+  `test:ps-308-rate-cost-columns-closeout`
 
 ## Safety
 
