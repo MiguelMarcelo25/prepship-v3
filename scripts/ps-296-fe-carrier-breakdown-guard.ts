@@ -39,6 +39,18 @@ check('the table reads backend margin fields (no FE recompute)',
   /carrier\.negativeMarginCount/.test(billing) &&
   /carrier\.marginPct/.test(billing));
 
+// PS-296 req6: per-order reconciliation drilldown (analytics.rows[], also discarded before).
+check('BillingView stores the backend analytics.rows[] (per-shipment reconciliation)',
+  /type ShippingMarginRowDto = \{/.test(billing) &&
+  /setShippingMarginRows\(\(marginAnalytics\?\.rows \?\? \[\]\)/.test(billing));
+check('BillingView renders the per-order drilldown table from backend fields',
+  /Per-order reconciliation/.test(billing) &&
+  /shippingMarginRows\.slice\(0, SHIPPING_MARGIN_DRILLDOWN_LIMIT\)\.map\(/.test(billing) &&
+  /row\.marginAmount/.test(billing) &&
+  /row\.missingProofReasons/.test(billing));
+check('drilldown caps with a VISIBLE "showing X of N" note (no silent truncation)',
+  /Showing first \{SHIPPING_MARGIN_DRILLDOWN_LIMIT\} of \{shippingMarginRows\.length\}/.test(billing));
+
 // Dashboard consumes the same backend carrier rollup (was also discarded — only .summary kept).
 const dashboard = read('web/src/components/Views/DashboardView.tsx');
 check('DashboardView normalizes + stores the backend analytics.carriers[]',

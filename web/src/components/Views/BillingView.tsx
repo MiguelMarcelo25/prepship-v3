@@ -115,6 +115,25 @@ type ShippingMarginCarrierDto = {
   negativeMarginCount: number
 }
 
+// PS-296 (FE, req6): per-shipment margin reconciliation rows (backend analytics.rows[]).
+type ShippingMarginRowDto = {
+  orderNumber: string | null
+  orderId: number | null
+  shipmentId: number | null
+  shipDate: string | null
+  carrierCode: string | null
+  serviceCode: string | null
+  providerAccountNickname: string | null
+  actualShippingCost: number | null
+  billableShippingAmount: number | null
+  marginAmount: number | null
+  marginPct: number | null
+  state: string
+  missingProofReasons: string[]
+}
+
+const SHIPPING_MARGIN_DRILLDOWN_LIMIT = 250
+
 const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummaryDto = {
   rowCount: 0,
   marginRowCount: 0,
@@ -325,6 +344,9 @@ export default function BillingView() {
   const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
   // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]).
   const [shippingMarginCarriers, setShippingMarginCarriers] = useState<ShippingMarginCarrierDto[]>([])
+  // PS-296 (FE, req6): per-shipment reconciliation rows (backend analytics.rows[]), collapsed by default.
+  const [shippingMarginRows, setShippingMarginRows] = useState<ShippingMarginRowDto[]>([])
+  const [shippingMarginDrilldownOpen, setShippingMarginDrilldownOpen] = useState(false)
   const [generateLoading, setGenerateLoading] = useState(false)
   const [generateStatus, setGenerateStatus] = useState('')
   const [fetchRefRunning, setFetchRefRunning] = useState(false)
@@ -778,11 +800,13 @@ export default function BillingView() {
         setSummaryRows(rows)
         setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
         setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
+        setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
       } catch (error) {
         if (!active) return
         setSummaryRows([])
         setShippingMarginSummary(EMPTY_SHIPPING_MARGIN_SUMMARY)
         setShippingMarginCarriers([])
+        setShippingMarginRows([])
         setSummaryError(error instanceof Error ? error.message : 'Error loading summary')
         setShippingMarginError(error instanceof Error ? error.message : 'Error loading shipping margin')
       } finally {
@@ -938,6 +962,7 @@ export default function BillingView() {
       setSummaryRows(rows)
       setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
       setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
+      setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
       setShippingMarginError(null)
       setSummaryError(null)
       const detailTarget =
@@ -1072,6 +1097,7 @@ export default function BillingView() {
         apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
           setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
           setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
+          setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
           setShippingMarginError(null)
         }),
       ])
@@ -1118,6 +1144,7 @@ export default function BillingView() {
         apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
           setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
           setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
+          setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
           setShippingMarginError(null)
         }),
       ])
@@ -1464,6 +1491,59 @@ export default function BillingView() {
                 </tbody>
               </table>
             </div>
+          </div>
+        ) : null}
+        {/* PS-296 (FE, req6): per-shipment reconciliation drilldown — consumes the backend
+            analytics.rows[] (previously discarded). Collapsed by default; capped with a
+            visible "showing X of N" note (no silent truncation). Display-only. */}
+        {shippingMarginRows.length > 0 ? (
+          <div style={{ margin: '0 0 14px' }}>
+            <button
+              type="button"
+              onClick={() => setShippingMarginDrilldownOpen((open) => !open)}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}
+            >
+              {shippingMarginDrilldownOpen ? '▾' : '▸'} Per-order reconciliation ({shippingMarginRows.length})
+            </button>
+            {shippingMarginDrilldownOpen ? (
+              <div style={{ overflowX: 'auto', marginTop: 6 }}>
+                <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
+                  <thead>
+                    <tr style={{ color: 'var(--text3)', textAlign: 'right', borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ textAlign: 'left', padding: '3px 8px 3px 0' }}>Order #</th>
+                      <th style={{ textAlign: 'left', padding: '3px 8px' }}>Shipment</th>
+                      <th style={{ textAlign: 'left', padding: '3px 8px' }}>Ship date</th>
+                      <th style={{ textAlign: 'left', padding: '3px 8px' }}>Carrier / account</th>
+                      <th style={{ padding: '3px 8px' }}>Cost</th>
+                      <th style={{ padding: '3px 8px' }}>Billable</th>
+                      <th style={{ padding: '3px 8px' }}>Margin</th>
+                      <th style={{ padding: '3px 8px' }}>%</th>
+                      <th style={{ textAlign: 'left', padding: '3px 0 3px 8px' }}>Issues</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shippingMarginRows.slice(0, SHIPPING_MARGIN_DRILLDOWN_LIMIT).map((row, index) => (
+                      <tr key={`${row.shipmentId ?? ''}|${row.orderId ?? ''}|${index}`} style={{ textAlign: 'right', borderBottom: '1px solid var(--border-subtle, rgba(0,0,0,0.05))' }}>
+                        <td style={{ textAlign: 'left', padding: '3px 8px 3px 0', fontWeight: 600 }}>{row.orderNumber ?? '—'}</td>
+                        <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text3)' }}>{row.shipmentId ?? '—'}</td>
+                        <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text2)' }}>{row.shipDate ? row.shipDate.slice(0, 10) : '—'}</td>
+                        <td style={{ textAlign: 'left', padding: '3px 8px' }}>{row.carrierCode ?? '—'}{row.serviceCode ? ` · ${row.serviceCode}` : ''}{row.providerAccountNickname ? ` (${row.providerAccountNickname})` : ''}</td>
+                        <td style={{ padding: '3px 8px' }}>{row.actualShippingCost == null ? '—' : formatBillingMoney(row.actualShippingCost)}</td>
+                        <td style={{ padding: '3px 8px' }}>{row.billableShippingAmount == null ? '—' : formatBillingMoney(row.billableShippingAmount)}</td>
+                        <td style={{ padding: '3px 8px', fontWeight: 700, color: row.marginAmount == null ? 'var(--text3)' : marginColor(row.marginAmount) }}>{row.marginAmount == null ? '—' : formatBillingMoney(row.marginAmount)}</td>
+                        <td style={{ padding: '3px 8px' }}>{row.marginPct == null ? '—' : `${row.marginPct.toFixed(1)}%`}</td>
+                        <td style={{ textAlign: 'left', padding: '3px 0 3px 8px', color: row.missingProofReasons.length > 0 ? 'var(--red)' : 'var(--text3)' }}>{row.missingProofReasons.length > 0 ? row.missingProofReasons.join(', ') : (row.state ?? '')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {shippingMarginRows.length > SHIPPING_MARGIN_DRILLDOWN_LIMIT ? (
+                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>
+                    Showing first {SHIPPING_MARGIN_DRILLDOWN_LIMIT} of {shippingMarginRows.length} shipments — narrow the date range to see the rest.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
