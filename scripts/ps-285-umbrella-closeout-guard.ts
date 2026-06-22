@@ -27,9 +27,11 @@ const runbook = readFileSync('docs/ps-tickets/ps-285-runbook-evidence.md', 'utf8
 const protectedFileProof = readFileSync('docs/ps-tickets/ps-285-protected-file-diff-proof.md', 'utf8');
 const labelPurchaseEvidence = readFileSync('docs/ps-tickets/ps-285-label-purchase-evidence.md', 'utf8');
 const printQueueEvidence = readFileSync('docs/ps-tickets/ps-285-print-queue-evidence.md', 'utf8');
+const voidRetractEvidence = readFileSync('docs/ps-tickets/ps-285-void-retract-evidence.md', 'utf8');
 const normalizedRunbook = runbook.replace(/\s+/g, ' ');
 const normalizedLabelPurchaseEvidence = labelPurchaseEvidence.replace(/\s+/g, ' ');
 const normalizedPrintQueueEvidence = printQueueEvidence.replace(/\s+/g, ' ');
+const normalizedVoidRetractEvidence = voidRetractEvidence.replace(/\s+/g, ' ');
 const phaseRows = checklist
   .split(/\r?\n/)
   .filter((line) => /^\|\s*\d+\s*\|/.test(line));
@@ -48,23 +50,26 @@ check('phase 4 label purchase boundary safety is explicitly complete',
   /\|\s*4\s*\|\s*Label purchase boundary safety\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 5 print queue durability is explicitly complete',
   /\|\s*5\s*\|\s*Print queue durability and idempotency\s*\|\s*Complete\s*\|/.test(checklist));
+check('phase 7 void/retract safety is explicitly complete',
+  /\|\s*7\s*\|\s*Void\/retract and cancellation safety\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 8 marketplace-confirm boundary is explicitly complete',
   /\|\s*8\s*\|\s*Marketplace confirmation boundary\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 10 runbook evidence is explicitly complete',
   /\|\s*10\s*\|\s*Observability and runbook coverage\s*\|\s*Complete\s*\|/.test(checklist));
-check('only phases 1, 4, 5, 8, and 10 are marked complete in this evidence slice',
-  completeRows.length === 5 &&
+check('only phases 1, 4, 5, 7, 8, and 10 are marked complete in this evidence slice',
+  completeRows.length === 6 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*7\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
 check('remaining phases are still tracked as in progress or not started',
   completeRows.length + inProgressRows.length + notStartedRows.length === 12);
-check('checklist records the current conservative 55% estimate',
-  /Current completion estimate: PS-285 55%/.test(checklist));
-check('matrix records the current conservative 55% estimate',
-  /Current completion estimate: PS-285 55%/.test(matrix));
+check('checklist records the current conservative 60% estimate',
+  /Current completion estimate: PS-285 60%/.test(checklist));
+check('matrix records the current conservative 60% estimate',
+  /Current completion estimate: PS-285 60%/.test(matrix));
 check('checklist says PS-285 is not Final Review-ready yet',
   /PS-285 is not Final Review-ready/i.test(checklist));
 check('matrix says PS-285 is not Final Review-ready yet',
@@ -77,6 +82,8 @@ check('checklist names the phase-4 label purchase evidence guard as evidence',
   /test:ps-285-label-purchase-evidence/.test(checklist));
 check('checklist names the phase-5 print queue evidence guard as evidence',
   /test:ps-285-print-queue-evidence/.test(checklist));
+check('checklist names the phase-7 void/retract evidence guard as evidence',
+  /test:ps-285-void-retract-evidence/.test(checklist));
 check('checklist names the phase-10 runbook guard as evidence',
   /test:ps-285-runbook-evidence/.test(checklist));
 check('protected-file proof says phase 1 completion does not close PS-285',
@@ -85,6 +92,8 @@ check('label-purchase evidence says phase 4 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(normalizedLabelPurchaseEvidence));
 check('print queue evidence says phase 5 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(normalizedPrintQueueEvidence));
+check('void/retract evidence says phase 7 completion does not close PS-285',
+  /does not make PS-285 Final Review-ready/i.test(normalizedVoidRetractEvidence));
 check('runbook says phase 10 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(normalizedRunbook) &&
     /not a substitute for the remaining/i.test(normalizedRunbook));
@@ -101,6 +110,8 @@ check('matrix forbids live labels, queue/order mutation, Trello mutation, and sh
     /shipped\/cancelled data/.test(matrix));
 
 const pkg = readFileSync('package.json', 'utf8');
+check('package.json wires test:ps-285-void-retract-evidence',
+  /"test:ps-285-void-retract-evidence"\s*:\s*"tsx scripts\/ps-285-void-retract-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-print-queue-evidence',
   /"test:ps-285-print-queue-evidence"\s*:\s*"tsx scripts\/ps-285-print-queue-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-label-purchase-evidence',

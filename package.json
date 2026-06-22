@@ -400,6 +400,7 @@
     "test:ps-285-phase-evidence-matrix": "tsx scripts/ps-285-phase-evidence-matrix-guard.ts",
     "test:ps-285-runbook-evidence": "tsx scripts/ps-285-runbook-evidence-guard.ts",
     "test:ps-285-umbrella-closeout": "tsx scripts/ps-285-umbrella-closeout-guard.ts",
+    "test:ps-285-void-retract-evidence": "tsx scripts/ps-285-void-retract-evidence-guard.ts",
     "test:ps-278-thin-client-shipping-fallbacks": "tsx scripts/ps-278-thin-client-shipping-fallbacks-guard.ts",
     "test:ps-279-web-boundary-guards": "tsx scripts/ps-279-web-boundary-guards.ts",
     "test:ps-279-rate-browser-no-fallback-best": "tsx scripts/ps-279-rate-browser-no-fallback-best-guard.ts",

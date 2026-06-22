@@ -4,7 +4,7 @@ Date: 2026-06-22
 
 ## Status
 
-Current completion estimate: PS-285 55%.
+Current completion estimate: PS-285 60%.
 
 PS-285 is not Final Review-ready. The current repo has meaningful child-ticket
 guard coverage across PS-245 through PS-259, but PS-285 remains an umbrella:
@@ -42,7 +42,7 @@ whole umbrella.
 | 4 | Label purchase boundary safety | Complete | `test:ps-248-label-purchase-lock`, `test:ps-248-persist-mark-shipped-atomic`, `docs/ps-tickets/ps-285-label-purchase-evidence.md`, `test:ps-285-label-purchase-evidence` | None for this phase |
 | 5 | Print queue durability and idempotency | Complete | `test:ps-253-outbox-stale-reclaim`, `test:ps-256-durable-print-queue-pdf`, `test:ps-053-print-queue-atomic`, `test:ps-303-print-queue-authority`, `docs/ps-tickets/ps-285-print-queue-evidence.md`, `test:ps-285-print-queue-evidence` | None for this phase |
 | 6 | Shipped/cancelled lockdown preservation | In progress | `test:ps-245-lockdown-fence`, `test:ps-258-component-boundary` | Cannot touch locked runtime behavior without the required override |
-| 7 | Void/retract and cancellation safety | In progress | `test:ps-253-combo-confirm-atomicity`, `test:ps-263-void-confirmation-retract` | Attach focused void/retract run in the PS-285 packet |
+| 7 | Void/retract and cancellation safety | Complete | `test:ps-253-combo-confirm-atomicity`, `test:ps-263-void-confirmation-retract`, `test:ps-211-universal-void`, `test:ps-129-upstream-cancellation-hold`, `docs/ps-tickets/ps-285-void-retract-evidence.md`, `test:ps-285-void-retract-evidence` | None for this phase |
 | 8 | Marketplace confirmation boundary | Complete | `test:ps-285-marketplace-confirm-boundary` | None for this phase |
 | 9 | Recovery/retry tooling safety | In progress | `test:ps-255-ops-confirm-gate`, `test:ps-256-durable-worker-status` | Split remaining live retry/canary tails or keep explicitly out of PS-285 closeout |
 | 10 | Observability and runbook coverage | Complete | `docs/security-readiness-checklist.md`, `docs/shipping-certification-harness.md`, `docs/ps-tickets/ps-285-runbook-evidence.md`, `test:ps-285-runbook-evidence` | None for this phase |

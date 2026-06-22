@@ -131,9 +131,9 @@ check('durable PDF side-store is additive and flag-gated',
 check('phase 5 is complete in checklist and matrix',
   /\|\s*5\s*\|\s*Print queue durability and idempotency\s*\|\s*Complete\s*\|/i.test(checklist) &&
     /\|\s*5\s*\|\s*Print queue durability and idempotency\s*\|\s*Complete\s*\|/i.test(matrix));
-check('checklist and matrix keep PS-285 at 55% and not Final Review-ready',
-  /Current completion estimate: PS-285 55%/.test(checklist) &&
-    /Current completion estimate: PS-285 55%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 60% and not Final Review-ready',
+  /Current completion estimate: PS-285 60%/.test(checklist) &&
+    /Current completion estimate: PS-285 60%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 
