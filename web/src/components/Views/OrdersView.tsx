@@ -101,6 +101,8 @@ import {
   renderShipmentSyncErrorBadge,
   renderHouseBadge,
 } from './orders-row-display'
+// PS-166/PS-306 (decomposition): pure money/rate cell renderers extracted to OrdersRateCells.
+import { renderOrderTotalCell, renderRateCostCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
 // PS-166: backend best-rate completeness reader, extracted to its own small file
 // (pure backend-DTO read; PS-111 backend-owned completeness). Not coupled to
 // buildRateRequestDraftKey (PS-143 — the FE draft key stays independent).
@@ -7644,39 +7646,17 @@ export default function OrdersView({
       case 'custcarrier':
         return renderShippingAccountCell(order)
       case 'total':
-        return <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{formatMoney(order.orderTotal ?? 0)}</span>
+        return renderOrderTotalCell(order)
       case 'bestrate':
         return renderBestRatePrice(order)
-      case 'ratecost': {
-        // PS-308: the raw provider Rate Cost from the backend money tuple, SEPARATED from
-        // the customer-facing Best/Selected Rate. Financial-only — a null money tuple
-        // (non-financial viewer / no rate) renders a dash; the FE never recomputes the cost.
-        const rateCost = getBackendRowMoney(order)?.rateCostAmount
-        return rateCost != null
-          ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(rateCost)}</span>
-          : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
-      }
+      case 'ratecost':
+        return renderRateCostCell(order)
       case 'margin':
         return renderMargin(order)
-      case 'marketplacefee': {
-        // PS-239: backend-computed fee (canViewFinancials-redacted). Shows even
-        // pre-rating; — when no rule matches.
-        const mp = getBackendRowMarketplace(order)
-        return mp?.marketplaceFee != null
-          ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(mp.marketplaceFee)}</span>
-          : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
-      }
-      case 'profit': {
-        // PS-239: profit = subtotal − fee − best-rate-incl-markup. — until a rate
-        // exists; negative profit rendered in red, never clamped.
-        const mp = getBackendRowMarketplace(order)
-        if (mp?.profit == null) return <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
-        return (
-          <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', color: mp.profit < 0 ? 'var(--danger, #dc2626)' : 'var(--text1)' }}>
-            {formatMoney(mp.profit)}
-          </span>
-        )
-      }
+      case 'marketplacefee':
+        return renderMarketplaceFeeCell(order)
+      case 'profit':
+        return renderProfitCell(order)
       case 'tracking':
         {
           const trackingNumber = toStringValue(order.label?.trackingNumber)
