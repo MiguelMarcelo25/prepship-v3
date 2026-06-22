@@ -342,6 +342,7 @@
     "test:ps-258-empty-state-props-contract": "tsx scripts/ps-258-orders-empty-state-props-contract-guard.ts",
     "test:ps-258-empty-panel-contract": "tsx scripts/ps-258-orders-empty-panel-contract-guard.ts",
     "test:ps-258-search-bar-contract": "tsx scripts/ps-258-orders-search-bar-contract-guard.ts",
+    "test:ps-166-ps-258-orders-leaf-render-parity": "tsx scripts/ps-166-ps-258-orders-leaf-render-parity-guard.ts",
     "test:ps-166-ps-258-decomposition-certification": "tsx scripts/ps-166-ps-258-decomposition-certification-guard.ts",
     "test:ps-166-ps-258-decomposition-closeout": "tsx scripts/ps-166-ps-258-decomposition-closeout-guard.ts",
     "test:ps-265-sync-staleness-watchdog": "tsx scripts/ps-265-sync-staleness-watchdog-guard.ts",

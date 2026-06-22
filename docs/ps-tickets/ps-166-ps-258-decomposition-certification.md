@@ -4,13 +4,13 @@ Date: 2026-06-22
 
 ## Status
 
-Current completion estimate: PS-166 70%, PS-258 76%.
+Current completion estimate: PS-166 74%, PS-258 80%.
 
 These cards are still not Final Review-ready. The current state is stronger
-than the prior 66% / 72% checkpoint because the known extraction slices now have
-an explicit certification guard and safety packet, but the broad decomposition
-objective still needs the next guarded extraction or a real DOM/byte-equivalent
-parity proof before review.
+than the prior 70% / 76% checkpoint because the known extraction slices now have
+an explicit certification guard, leaf-level server-render parity proof, and safety
+packet. The broad decomposition objective still needs the next guarded extraction
+or larger OrdersView shell/row parity proof before review.
 
 ## Certified evidence
 
@@ -25,6 +25,7 @@ parity proof before review.
 - `test:ps-258-empty-state-props-contract`
 - `test:ps-258-empty-panel-contract`
 - `test:ps-258-search-bar-contract`
+- `test:ps-166-ps-258-orders-leaf-render-parity`
 - `test:ps-166-ps-258-decomposition-certification`
 - `test:ps-166-ps-258-decomposition-closeout`
 
@@ -36,6 +37,9 @@ parity proof before review.
 - Search bar, empty-results state, empty side-panel, column preferences,
   density preferences, queue parsers, daily stats rollover, and non-critical
   scheduler behavior each have focused offline guards.
+- The already-extracted search bar, empty-results state, and empty side-panel
+  also have server-rendered parity proof for their public DOM anchors and
+  conditional branches.
 - Shipped/cancelled selection lockdown consumers are still pinned by a static
   guard, and the PS-306 caveat remains visible because `OrdersView.tsx`
   currently has `const isReadOnly = false`.
@@ -46,7 +50,8 @@ parity proof before review.
 ## Still missing
 
 - A real DOM-render or byte-equivalent parity certification for the next larger
-  OrdersView extraction slice.
+  OrdersView shell or row-rendering extraction slice. Current render proof covers
+  only already-extracted leaves.
 - One additional guarded extraction slice, chosen and frozen before coding:
   passive auto-rating, panel state, filtered order row rendering, memoized row
   rendering, or backend-account-display fallback removal after DTO proof.

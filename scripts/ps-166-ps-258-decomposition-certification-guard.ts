@@ -40,6 +40,7 @@ const componentBoundaryGuard = read('scripts/ps-258-component-boundary-lockdown-
 const emptyStateGuard = read('scripts/ps-258-orders-empty-state-props-contract-guard.ts');
 const emptyPanelGuard = read('scripts/ps-258-orders-empty-panel-contract-guard.ts');
 const searchBarGuard = read('scripts/ps-258-orders-search-bar-contract-guard.ts');
+const leafRenderGuard = read('scripts/ps-166-ps-258-orders-leaf-render-parity-guard.ts');
 
 check('certification document exists', existsSync(certificationDocPath));
 
@@ -55,6 +56,7 @@ const requiredScripts: ReadonlyArray<[string, string]> = [
   ['test:ps-258-empty-state-props-contract', 'scripts/ps-258-orders-empty-state-props-contract-guard.ts'],
   ['test:ps-258-empty-panel-contract', 'scripts/ps-258-orders-empty-panel-contract-guard.ts'],
   ['test:ps-258-search-bar-contract', 'scripts/ps-258-orders-search-bar-contract-guard.ts'],
+  ['test:ps-166-ps-258-orders-leaf-render-parity', 'scripts/ps-166-ps-258-orders-leaf-render-parity-guard.ts'],
   ['test:ps-166-ps-258-decomposition-certification', 'scripts/ps-166-ps-258-decomposition-certification-guard.ts'],
   ['test:ps-166-ps-258-decomposition-closeout', 'scripts/ps-166-ps-258-decomposition-closeout-guard.ts'],
 ];
@@ -67,14 +69,16 @@ for (const [scriptName, path] of requiredScripts) {
 }
 
 check('status doc records the updated conservative percentages',
-  /PS-166 70%/.test(statusDoc) && /PS-258 76%/.test(statusDoc));
+  /PS-166 74%/.test(statusDoc) && /PS-258 80%/.test(statusDoc));
 check('certification doc records the updated conservative percentages',
-  /PS-166 70%/.test(certificationDoc) && /PS-258 76%/.test(certificationDoc));
+  /PS-166 74%/.test(certificationDoc) && /PS-258 80%/.test(certificationDoc));
 check('status and certification docs keep the cards out of Final Review',
   /not Final Review-ready/.test(statusDoc) && /not Final Review-ready/.test(certificationDoc));
-check('docs require a real DOM or byte-equivalent parity proof before review',
-  /real DOM-render or byte-equivalent parity certification/i.test(statusDoc) &&
-    /real DOM-render or byte-equivalent parity certification/.test(certificationDoc));
+check('docs record leaf render parity and still require larger shell/row parity before review',
+  /leaf-level server-render parity proof/.test(statusDoc) &&
+    /Current render proof covers only already-extracted leaves/.test(statusDoc) &&
+    /leaf-level server-render parity proof/.test(certificationDoc) &&
+    /Current render proof covers\s+only already-extracted leaves/.test(certificationDoc));
 
 check('filtered sort owner is pure and exported',
   filteredSort.includes('export function computeOrderedFilteredOrders') &&
@@ -107,6 +111,12 @@ checkIncludesAll('search-bar guard pins prop and DOM contract', searchBarGuard, 
   'id="searchInput"',
   'id="searchClear"',
   'PS-210 global-search hint pill',
+]);
+checkIncludesAll('leaf render parity guard pins server-rendered DOM branches', leafRenderGuard, [
+  'renderToStaticMarkup',
+  'OrdersSearchBar active render shows clear button',
+  'OrdersResultsEmptyState searching branch renders only the searching region',
+  'buildEmptyPanel with onHide renders exactly one close affordance button',
 ]);
 
 check('OrdersView lockdown caveat remains explicitly visible',

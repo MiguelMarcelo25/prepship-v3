@@ -112,11 +112,12 @@ check('AGENTS.md requires exact unlock phrase for shipped/cancelled code paths',
   agents.includes('unless the user explicitly types the exact phrase'));
 
 check('PS-166/PS-258 status remains conservative, not Final Review-ready',
-  /PS-166 70%/.test(decompositionStatus) &&
-  /PS-258 76%/.test(decompositionStatus) &&
+  /PS-166 74%/.test(decompositionStatus) &&
+  /PS-258 80%/.test(decompositionStatus) &&
   /not Final Review-ready/.test(decompositionStatus));
-check('PS-166/PS-258 status requires DOM or byte-equivalent cert',
-  decompositionStatus.includes('DOM-render or byte-equivalent parity certification') &&
+check('PS-166/PS-258 status records leaf parity but requires larger DOM or byte-equivalent cert',
+  decompositionStatus.includes('leaf-level server-render parity proof') &&
+  decompositionStatus.includes('Current render proof covers only already-extracted leaves') &&
   decompositionStatus.includes('Do not change shipped/cancelled lockdown behavior'));
 
 check('PS-305 doc carries PS-306 frontend debt forward',
