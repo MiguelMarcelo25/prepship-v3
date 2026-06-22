@@ -2509,7 +2509,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           rowDimsL != null && rowDimsW != null && rowDimsH != null
             ? { length: rowDimsL, width: rowDimsW, height: rowDimsH }
             : null,
-        selectedPackageId: safeOverrides?.selectedPid != null ? String(safeOverrides.selectedPid) : null,
+        // selectedPackageId is the PACKAGE id (text column), distinct from selectedPid
+        // (the integer shipping-provider id). Read the package column, not the provider one.
+        selectedPackageId: safeOverrides?.selectedPackageId != null ? String(safeOverrides.selectedPackageId) : null,
       }),
       shipping,
       canonicalOrder,
