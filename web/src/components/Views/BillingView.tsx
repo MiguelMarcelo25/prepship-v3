@@ -101,6 +101,20 @@ type ShippingMarginSummaryDto = {
   marginPct: number | null
 }
 
+// PS-296 (FE): the backend carrier/account margin rollup (analytics.carriers[]) — was
+// fetched but discarded; surfaced as the Billing "Margin by carrier / account" breakdown.
+type ShippingMarginCarrierDto = {
+  carrierCode: string | null
+  serviceCode: string | null
+  providerAccountNickname: string | null
+  actualShippingTotal: number
+  billableShippingTotal: number
+  marginTotal: number
+  marginPct: number | null
+  marginRowCount: number
+  negativeMarginCount: number
+}
+
 const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummaryDto = {
   rowCount: 0,
   marginRowCount: 0,
@@ -309,6 +323,8 @@ export default function BillingView() {
   const [shippingMarginSummary, setShippingMarginSummary] = useState<ShippingMarginSummaryDto>(EMPTY_SHIPPING_MARGIN_SUMMARY)
   const [shippingMarginLoading, setShippingMarginLoading] = useState(false)
   const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
+  // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]).
+  const [shippingMarginCarriers, setShippingMarginCarriers] = useState<ShippingMarginCarrierDto[]>([])
   const [generateLoading, setGenerateLoading] = useState(false)
   const [generateStatus, setGenerateStatus] = useState('')
   const [fetchRefRunning, setFetchRefRunning] = useState(false)
@@ -761,10 +777,12 @@ export default function BillingView() {
         if (!active) return
         setSummaryRows(rows)
         setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+        setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
       } catch (error) {
         if (!active) return
         setSummaryRows([])
         setShippingMarginSummary(EMPTY_SHIPPING_MARGIN_SUMMARY)
+        setShippingMarginCarriers([])
         setSummaryError(error instanceof Error ? error.message : 'Error loading summary')
         setShippingMarginError(error instanceof Error ? error.message : 'Error loading shipping margin')
       } finally {
@@ -919,6 +937,7 @@ export default function BillingView() {
       setGenerateStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`)
       setSummaryRows(rows)
       setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+      setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
       setShippingMarginError(null)
       setSummaryError(null)
       const detailTarget =
@@ -1052,6 +1071,7 @@ export default function BillingView() {
         }),
         apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
           setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+          setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
           setShippingMarginError(null)
         }),
       ])
@@ -1097,6 +1117,7 @@ export default function BillingView() {
         }),
         apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
           setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+          setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
           setShippingMarginError(null)
         }),
       ])
@@ -1403,6 +1424,48 @@ export default function BillingView() {
             </div>
           ) : null}
         </div>
+        {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
+            analytics.carriers[] rollup (previously fetched and discarded). Display-only;
+            renders nothing when there are no carrier rows. */}
+        {shippingMarginCarriers.length > 0 ? (
+          <div style={{ margin: '0 0 14px' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
+              Margin by carrier / account
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
+                <thead>
+                  <tr style={{ color: 'var(--text3)', textAlign: 'right', borderBottom: '1px solid var(--border)' }}>
+                    <th style={{ textAlign: 'left', padding: '3px 8px 3px 0' }}>Carrier / service</th>
+                    <th style={{ textAlign: 'left', padding: '3px 8px' }}>Account</th>
+                    <th style={{ padding: '3px 8px' }}>Cost</th>
+                    <th style={{ padding: '3px 8px' }}>Billable</th>
+                    <th style={{ padding: '3px 8px' }}>Margin</th>
+                    <th style={{ padding: '3px 8px' }}>Margin %</th>
+                    <th style={{ padding: '3px 8px' }}>Rows</th>
+                    <th style={{ padding: '3px 0 3px 8px' }}>Neg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shippingMarginCarriers.map((carrier, index) => (
+                    <tr key={`${carrier.carrierCode ?? ''}|${carrier.providerAccountNickname ?? ''}|${index}`} style={{ textAlign: 'right', borderBottom: '1px solid var(--border-subtle, rgba(0,0,0,0.05))' }}>
+                      <td style={{ textAlign: 'left', padding: '3px 8px 3px 0', fontWeight: 600 }}>
+                        {carrier.carrierCode ?? '—'}{carrier.serviceCode ? ` · ${carrier.serviceCode}` : ''}
+                      </td>
+                      <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text2)' }}>{carrier.providerAccountNickname ?? '—'}</td>
+                      <td style={{ padding: '3px 8px' }}>{formatBillingMoney(carrier.actualShippingTotal, { dashIfZero: true })}</td>
+                      <td style={{ padding: '3px 8px' }}>{formatBillingMoney(carrier.billableShippingTotal, { dashIfZero: true })}</td>
+                      <td style={{ padding: '3px 8px', fontWeight: 700, color: marginColor(carrier.marginTotal) }}>{formatBillingMoney(carrier.marginTotal, { dashIfZero: true })}</td>
+                      <td style={{ padding: '3px 8px' }}>{carrier.marginPct == null ? '—' : `${carrier.marginPct.toFixed(1)}%`}</td>
+                      <td style={{ padding: '3px 8px' }}>{carrier.marginRowCount}</td>
+                      <td style={{ padding: '3px 0 3px 8px', color: carrier.negativeMarginCount > 0 ? 'var(--red)' : 'var(--text3)', fontWeight: carrier.negativeMarginCount > 0 ? 700 : 400 }}>{carrier.negativeMarginCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
 
         {/* Summary table — migrated 2026-05-12 to the reusable <Table>
             primitive (components/ui/Table.tsx). Operator-controlled

@@ -442,6 +442,7 @@
     "test:ps-296-shipping-margin": "tsx scripts/ps-296-shipping-margin-guard.ts",
     "test:ps-296-shipping-margin-closeout": "tsx scripts/ps-296-shipping-margin-closeout-guard.ts",
     "test:ps-296-margin-breakdown": "tsx scripts/ps-296-margin-breakdown-guard.ts",
+    "test:ps-296-fe-carrier-breakdown": "tsx scripts/ps-296-fe-carrier-breakdown-guard.ts",
     "test:ps-289-multi-package-plan": "tsx scripts/ps-289-multi-package-shipment-plan-guard.ts",
     "test:ps-289-multi-package-schema": "tsx scripts/ps-289-multi-package-schema-guard.ts",
     "test:ps-289-multi-package-mock-label-flow": "tsx scripts/ps-289-multi-package-mock-label-flow-guard.ts",
