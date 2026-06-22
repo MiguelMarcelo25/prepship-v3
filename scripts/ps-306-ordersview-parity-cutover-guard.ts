@@ -86,6 +86,7 @@ const requiredScripts = [
   'test:ps-258-empty-state-props-contract',
   'test:ps-258-empty-panel-contract',
   'test:ps-258-search-bar-contract',
+  'test:ps-166-ps-258-decomposition-certification',
   'test:ps-166-ps-258-decomposition-closeout',
   'test:ps-306-ordersview-parity-cutover',
 ];
@@ -111,11 +112,11 @@ check('AGENTS.md requires exact unlock phrase for shipped/cancelled code paths',
   agents.includes('unless the user explicitly types the exact phrase'));
 
 check('PS-166/PS-258 status remains conservative, not Final Review-ready',
-  /PS-166 66%/.test(decompositionStatus) &&
-  /PS-258 72%/.test(decompositionStatus) &&
+  /PS-166 70%/.test(decompositionStatus) &&
+  /PS-258 76%/.test(decompositionStatus) &&
   /not Final Review-ready/.test(decompositionStatus));
-check('PS-166/PS-258 status requires DOM or byte-equality cert',
-  decompositionStatus.includes('DOM or byte-equality certification') &&
+check('PS-166/PS-258 status requires DOM or byte-equivalent cert',
+  decompositionStatus.includes('DOM-render or byte-equivalent parity certification') &&
   decompositionStatus.includes('Do not change shipped/cancelled lockdown behavior'));
 
 check('PS-305 doc carries PS-306 frontend debt forward',

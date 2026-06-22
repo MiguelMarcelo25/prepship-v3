@@ -159,6 +159,9 @@ check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('package wires PS-166/258 decomposition closeout guard',
   packageJson.includes('"test:ps-166-ps-258-decomposition-closeout"'));
+check('package wires PS-166/258 decomposition certification guard',
+  packageJson.includes('"test:ps-166-ps-258-decomposition-certification"') &&
+  doc.includes('test:ps-166-ps-258-decomposition-certification'));
 check('package wires PS-285 umbrella closeout guard',
   packageJson.includes('"test:ps-285-umbrella-closeout"'));
 

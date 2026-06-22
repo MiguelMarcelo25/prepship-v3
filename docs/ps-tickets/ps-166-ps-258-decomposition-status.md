@@ -1,13 +1,14 @@
 # PS-166 / PS-258 OrdersView decomposition status
 
-Date: 2026-06-20
+Date: 2026-06-22
 
 ## Current status
 
-Current completion estimate: PS-166 66%, PS-258 72%.
+Current completion estimate: PS-166 70%, PS-258 76%.
 
 These cards are not Final Review-ready. The current code has multiple proven extraction slices and
-component-boundary guards, but the umbrella goal is broader than the slices currently pinned.
+component-boundary guards, and the current slice set now has an explicit certification guard. The
+umbrella goal is still broader than the slices currently pinned.
 
 ## Evidence now wired
 
@@ -22,6 +23,8 @@ component-boundary guards, but the umbrella goal is broader than the slices curr
 - `test:ps-258-empty-state-props-contract`
 - `test:ps-258-empty-panel-contract`
 - `test:ps-258-search-bar-contract`
+- `test:ps-166-ps-258-decomposition-certification`
+- `test:ps-166-ps-258-decomposition-closeout`
 
 ## What is proven
 
@@ -32,10 +35,13 @@ component-boundary guards, but the umbrella goal is broader than the slices curr
 - Search bar, empty panel, empty-results region, and batch-panel/read-only boundaries have static
   contract guards.
 - Shipped/cancelled selection lockdown is still pinned by `test:ps-258-component-boundary`.
+- The current extraction slice set is documented in
+  `docs/ps-tickets/ps-166-ps-258-decomposition-certification.md`.
 
 ## Missing before Final Review
 
-- Real DOM or byte-equality certification for the next larger OrdersView extraction slice.
+- Real DOM-render or byte-equivalent parity certification for the next larger OrdersView
+  extraction slice.
 - Continue one small extraction at a time: passive auto-rating, panel state, filtered order rows,
   memoized row rendering, or another low-risk leaf.
 - Keep each extraction backed by a focused guard before moving to the next slice.
@@ -44,4 +50,4 @@ component-boundary guards, but the umbrella goal is broader than the slices curr
 ## Recommendation
 
 Keep PS-166 and PS-258 in progress. They are healthier than the older audit percentages, but still
-too broad to move to Final Review based only on the current slice guards.
+too broad to move to Final Review based only on the current slice guards and static certification.

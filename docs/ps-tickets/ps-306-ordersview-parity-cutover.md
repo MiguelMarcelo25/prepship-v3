@@ -45,6 +45,7 @@ It does not move code out of `OrdersView.tsx` yet.
 - `test:ps-258-empty-state-props-contract`
 - `test:ps-258-empty-panel-contract`
 - `test:ps-258-search-bar-contract`
+- `test:ps-166-ps-258-decomposition-certification`
 - `test:ps-166-ps-258-decomposition-closeout`
 - `test:ps-306-ordersview-parity-cutover`
 

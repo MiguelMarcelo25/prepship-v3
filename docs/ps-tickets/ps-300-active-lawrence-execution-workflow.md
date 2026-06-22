@@ -157,6 +157,12 @@ checklist is evidence-backed and no known blocker remains for review. A card is
 - PS-279/PS-300 authority regression: `test:ps-279-*` plus PS-300 through
   PS-308 guards as they are added
 - PS-307: `test:ps-307-marked-rate-comparison`
+- PS-166 and PS-258: `test:ps-166-orders-rate-proof`,
+  `test:ps-258-orders-filtered-sort`, `test:ps-258-component-boundary`,
+  `test:ps-258-empty-state-props-contract`, `test:ps-258-empty-panel-contract`,
+  `test:ps-258-search-bar-contract`,
+  `test:ps-166-ps-258-decomposition-certification`,
+  `test:ps-166-ps-258-decomposition-closeout`
 - PS-290/PS-300 first authority gates:
   `test:ps-290-hugrab-insurance-coverage-badge`,
   `test:ps-290-hugrab-insurance-coverage-badge-closeout`,
