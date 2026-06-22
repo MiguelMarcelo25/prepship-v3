@@ -394,6 +394,7 @@
     "test:ps-277-panel-reads-sot": "tsx scripts/ps-277-panel-reads-sot-guard.ts",
     "test:ps-280-rate-browser-residential-verdict": "tsx scripts/ps-280-rate-browser-residential-verdict-guard.ts",
     "test:ps-285-marketplace-confirm-boundary": "tsx scripts/ps-285-marketplace-confirm-boundary-guard.ts",
+    "test:ps-285-protected-file-diff-proof": "tsx scripts/ps-285-protected-file-diff-proof-guard.ts",
     "test:ps-285-phase-evidence-matrix": "tsx scripts/ps-285-phase-evidence-matrix-guard.ts",
     "test:ps-285-runbook-evidence": "tsx scripts/ps-285-runbook-evidence-guard.ts",
     "test:ps-285-umbrella-closeout": "tsx scripts/ps-285-umbrella-closeout-guard.ts",

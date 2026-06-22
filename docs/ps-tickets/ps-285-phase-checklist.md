@@ -5,16 +5,17 @@ single slice of evidence. This checklist is the status owner for the card until
 the umbrella is split into smaller cards or each phase has its own source-of-
 truth guard.
 
-Current completion estimate: PS-285 40%.
+Current completion estimate: PS-285 45%.
 
-Current recommendation: PS-285 is not Final Review-ready. Phase 8 is the only
-runtime-boundary phase complete, and phase 10 runbook coverage is now complete.
-A current evidence matrix maps guard coverage across PS-245 through PS-259 so
-the remaining phases can be finished or split without duplicating tickets.
+Current recommendation: PS-285 is not Final Review-ready. Phases 1, 8, and 10
+are complete, but the remaining phases still include label, queue, recovery,
+certification, and final closeout work. A current evidence matrix maps guard
+coverage across PS-245 through PS-259 so the remaining phases can be finished or
+split without duplicating tickets.
 
 | # | Phase | Status | Evidence | Missing |
 |---|---|---|---|---|
-| 1 | Lockdown fence and protected-file audit | In progress | `test:ps-245-lockdown-fence`, `verify:lockdown-fence` | Attach current protected-file diff proof |
+| 1 | Lockdown fence and protected-file audit | Complete | `test:ps-245-lockdown-fence`, `verify:lockdown-fence`, `docs/ps-tickets/ps-285-protected-file-diff-proof.md`, `test:ps-285-protected-file-diff-proof` | None for this phase |
 | 2 | Verification harness and baseline resolver | In progress | `test:ps-245-verification-harness`, `src/verification/verify-card.ts` | Golden/baseline operational capture remains separate |
 | 3 | Auth and scope behavioral ratchets | In progress | `test:ps-246-*`, `test:ps-250-rates-scope-enforcement`, `test:ps-252-catalog-mutation-authz`, `test:authz-guard-behavioral-ratchet` | Remaining auth/scope guard conversions still tracked |
 | 4 | Label purchase boundary safety | In progress | `test:ps-248-label-purchase-lock`, `test:ps-248-persist-mark-shipped-atomic` | Produce one consolidated PS-285 evidence packet |

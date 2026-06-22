@@ -4,7 +4,7 @@ Date: 2026-06-22
 
 ## Status
 
-Current completion estimate: PS-285 40%.
+Current completion estimate: PS-285 45%.
 
 PS-285 is not Final Review-ready. The current repo has meaningful child-ticket
 guard coverage across PS-245 through PS-259, but PS-285 remains an umbrella:
@@ -36,7 +36,7 @@ whole umbrella.
 
 | # | Phase | Status | Evidence | Missing |
 |---|---|---|---|---|
-| 1 | Lockdown fence and protected-file audit | In progress | `test:ps-245-lockdown-fence`, `verify:lockdown-fence` | Attach current protected-file diff proof before review |
+| 1 | Lockdown fence and protected-file audit | Complete | `test:ps-245-lockdown-fence`, `verify:lockdown-fence`, `docs/ps-tickets/ps-285-protected-file-diff-proof.md`, `test:ps-285-protected-file-diff-proof` | None for this phase |
 | 2 | Verification harness and baseline resolver | In progress | `test:ps-245-verification-harness`, `src/verification/verify-card.ts` | Golden/baseline operational capture remains separate |
 | 3 | Auth and scope behavioral ratchets | In progress | `test:ps-246-*`, `test:ps-250-rates-scope-enforcement`, `test:ps-252-catalog-mutation-authz`, `test:authz-guard-behavioral-ratchet` | Remaining auth/scope guards need full behavioral conversion where still ratcheted |
 | 4 | Label purchase boundary safety | In progress | `test:ps-248-label-purchase-lock`, `test:ps-248-persist-mark-shipped-atomic` | Consolidated label-purchase evidence packet still needed |
