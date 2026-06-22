@@ -7647,6 +7647,15 @@ export default function OrdersView({
         return <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{formatMoney(order.orderTotal ?? 0)}</span>
       case 'bestrate':
         return renderBestRatePrice(order)
+      case 'ratecost': {
+        // PS-308: the raw provider Rate Cost from the backend money tuple, SEPARATED from
+        // the customer-facing Best/Selected Rate. Financial-only — a null money tuple
+        // (non-financial viewer / no rate) renders a dash; the FE never recomputes the cost.
+        const rateCost = getBackendRowMoney(order)?.rateCostAmount
+        return rateCost != null
+          ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(rateCost)}</span>
+          : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
+      }
       case 'margin':
         return renderMargin(order)
       case 'marketplacefee': {

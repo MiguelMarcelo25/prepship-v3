@@ -432,6 +432,13 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     markupAmount: toNumberValue(money.markupAmount),
     insuranceAddOn: toNumberValue(money.insuranceAddOn),
     marginPercent: toNumberValue(money.marginPercent),
+    // PS-308: the backend SEPARATED money fields — customer-facing Best/Selected Rate
+    // (customerRateAmount), the raw provider Rate Cost (rateCostAmount, financial-only —
+    // null for non-financial viewers since the whole money tuple is backend-redacted), and
+    // the shipping margin. Read-only pass-through; the FE never recomputes these.
+    customerRateAmount: toNumberValue(money.customerRateAmount),
+    rateCostAmount: toNumberValue(money.rateCostAmount),
+    shippingMarginAmount: toNumberValue(money.shippingMarginAmount),
     // PS-220 (slice 4b): 'house_account' => SHIPP house order (marked = the customer_rate DRP bills,
     // base = DRP's SHIPP cost, markup = the house margin). Defaults to 'carrier_markup' on deploy-skew
     // (older backends omit the field), so the badge only ever shows on a confirmed house tuple.

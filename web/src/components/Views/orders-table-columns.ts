@@ -30,8 +30,8 @@ export type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 // now sortable across Awaiting / Shipped / Cancelled. This only adds DISPLAY
 // sorting (client-side, same path as the existing keys) — it does not modify,
 // edit, or weaken any shipped/cancelled order data or protection.
-export type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'marketplacefee' | 'profit' | 'tracking' | 'labelcreated' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_shippingAccount' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal'
-export type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'marketplacefee' | 'profit' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
+export type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'ratecost' | 'margin' | 'marketplacefee' | 'profit' | 'tracking' | 'labelcreated' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_shippingAccount' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal'
+export type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'ratecost' | 'margin' | 'marketplacefee' | 'profit' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
 
 export interface TableColumn {
   key: TableColumnKey
@@ -55,6 +55,11 @@ export const TABLE_COLUMNS: TableColumn[] = [
   { key: 'custcarrier', label: 'Shipping Account', width: 140, sort: 'custcarrier' },
   { key: 'total', label: 'Order Total', width: 85, sort: 'total' },
   { key: 'bestrate', label: 'Best Rate', width: 175, sort: 'bestrate' },
+  // PS-308: the raw provider Rate Cost, SEPARATED from the customer-facing Best/Selected
+  // Rate. Financial-only by construction (the backend money tuple is null for non-financial
+  // viewers, so the cell renders blank for them). Placed next to Best Rate for at-a-glance
+  // best-vs-cost comparison.
+  { key: 'ratecost', label: 'Rate Cost', width: 90, sort: 'ratecost' },
   { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: 'test_carrierCode' },
   { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: 'test_shippingProviderID' },
   { key: 'test_clientID', label: 'Client ID', width: 90, sort: 'test_clientID' },
@@ -75,7 +80,8 @@ export function getVisibleColumns(currentStatus: OrderStatus) {
   const hidden = new Set<TableColumnKey>()
   if (currentStatus !== 'awaiting_shipment') hidden.add('age')
   // PS-239: marketplace fee + profit show on Awaiting + Shipped only, not Cancelled.
-  if (currentStatus === 'cancelled') { hidden.add('marketplacefee'); hidden.add('profit') }
+  // PS-308: Rate Cost is a rate/financial column — same Cancelled hide.
+  if (currentStatus === 'cancelled') { hidden.add('marketplacefee'); hidden.add('profit'); hidden.add('ratecost') }
 
   return TABLE_COLUMNS.filter((column) => !hidden.has(column.key)).map((column) => (
     column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
@@ -128,6 +134,9 @@ export function getSortValue(
     case 'bestrate':
     case 'test_bestRate':
       return getBestRateBaseCost(order) ?? -1
+    // PS-308: sort by the backend raw Rate Cost (blanks/non-financial → -1, grouped together).
+    case 'ratecost':
+      return getBackendRowMoney(order)?.rateCostAmount ?? -1
     case 'margin': {
       // PS-178 final part: the margin sort value is the BACKEND money tuple's
       // markupAmount (PS-177) — the FE markup-math fallback is deleted. Rows
