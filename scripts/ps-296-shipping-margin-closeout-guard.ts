@@ -31,14 +31,14 @@ check('status doc lists source guard',
   doc.includes('`test:ps-296-shipping-margin`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-296-shipping-margin-closeout`'));
-check('status doc keeps PS-296 conservative at 86%',
-  /PS-296 86%/.test(doc));
+check('status doc marks PS-296 Final Review-ready at 89%',
+  /PS-296 89%/.test(doc) && /Final Review-ready/.test(doc));
 check('status doc says backend read model owns margin math',
   /backend read model/.test(doc) && /margin arithmetic/.test(doc));
 check('status doc keeps final close blocked on production evidence',
   /production evidence/.test(doc) || /production canary/.test(doc));
-check('status doc calls out missing-row cleanup',
-  /missing-row cleanup/.test(doc));
+check('status doc calls out missing-row cleanup diagnostics',
+  /missing-row cleanup/.test(doc) && /missingProofReasons/.test(doc));
 check('status doc preserves no live label/postage safety',
   /no labels, postage, queue mutation/.test(doc));
 
@@ -46,6 +46,8 @@ check('source guard pins dashboard fallback for deploy route skew',
   guard.includes('dashboard shipping margin falls back to billing endpoint during deploy route skew'));
 check('source guard pins missing actual-cost proof counts',
   guard.includes('missingActualCostCount') && guard.includes('missingAnyProofCount'));
+check('source guard pins row-level missing proof reasons',
+  guard.includes('missingProofReasons') && service.includes('ShippingMarginMissingProofReason'));
 check('service exports the shippingMarginAnalytics backend owner',
   /export async function shippingMarginAnalytics/.test(service));
 check('service reads shipments but does not mutate them',

@@ -4,12 +4,12 @@ Date: 2026-06-20
 
 ## Current status
 
-Current completion estimate: PS-296 86%.
+Current completion estimate: PS-296 89%.
 
-PS-296 is code-complete enough for operator review, but not fully closed. The backend read model,
+PS-296 is Final Review-ready for code/test review, but not fully closed. The backend read model,
 Billing API, Dashboard API, API client, and dashboard/billing UI consumers exist and are pinned by
-the guard. The remaining work is production confidence and missing-row cleanup, not moving margin
-math into the UI.
+the guard. The remaining work is read-only production confidence and missing-row cleanup, not moving
+margin math into the UI or adding frontend calculations.
 
 ## Evidence now wired
 
@@ -24,6 +24,8 @@ math into the UI.
   billable sources such as house customer rate.
 - Summary evidence now separates missing billable proof, missing actual-cost proof, and any missing
   proof so the canary packet can identify exactly why a row is excluded from margin totals.
+- Every row now carries backend-owned `missingProofReasons`, so cleanup can distinguish
+  `missing_actual_cost`, `missing_billable_shipping`, or both without UI inference.
 - Billing and Dashboard routes expose thin scoped readers.
 - The web API client consumes both routes and has a dashboard-to-billing fallback for deploy route
   skew.
@@ -36,11 +38,10 @@ math into the UI.
 - Read-only production canary confirming dashboard and billing views agree for the same date/client
   scope after deploy.
 - A short evidence packet with totals, missing-row count, and representative frozen/projected rows.
-- Follow-up cleanup for rows reported as missing billable proof or missing actual-cost proof if DJ
-  wants those included in the margin proof.
+- Follow-up cleanup for rows reported by `missingProofReasons` if DJ wants those rows included in the
+  margin proof.
 
 ## Recommendation
 
-Keep PS-296 in review/canary, not fully done. It is much farther than the original 5% estimate, but
-should not be called 100% until production evidence confirms the backend read model against real
-data.
+Move PS-296 to Final Review - Lawrence once `task update` is approved. It should not be called 100%
+until production evidence confirms the backend read model against real data.

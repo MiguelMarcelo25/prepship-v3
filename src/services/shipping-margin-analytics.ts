@@ -17,6 +17,9 @@ export type ShippingMarginBillableSource =
   | 'order_competitive_rate.customer_rate'
   | 'projected.billing_policy'
   | 'missing';
+export type ShippingMarginMissingProofReason =
+  | 'missing_actual_cost'
+  | 'missing_billable_shipping';
 
 export type ShippingMarginInputRow = {
   clientId: number | string | null;
@@ -51,6 +54,7 @@ export type ShippingMarginRow = {
   marginPct: number | null;
   billingLineItemId: number | null;
   houseCustomerRate: number | null;
+  missingProofReasons: ShippingMarginMissingProofReason[];
 };
 
 export type ShippingMarginSummary = {
@@ -179,6 +183,9 @@ export function buildShippingMarginRow(row: ShippingMarginInputRow): ShippingMar
     actual.amount != null && billable.amount != null
       ? money(billable.amount - actual.amount)
       : null;
+  const missingProofReasons: ShippingMarginMissingProofReason[] = [];
+  if (actual.amount == null) missingProofReasons.push('missing_actual_cost');
+  if (billable.amount == null) missingProofReasons.push('missing_billable_shipping');
   return {
     clientId: intOrNull(row.clientId),
     clientName: row.clientName?.trim() || 'Unknown',
@@ -195,6 +202,7 @@ export function buildShippingMarginRow(row: ShippingMarginInputRow): ShippingMar
     marginPct: margin != null && actual.amount != null ? percent(margin, actual.amount) : null,
     billingLineItemId: intOrNull(row.billingLineItemId),
     houseCustomerRate: numberOrNull(row.houseCustomerRate),
+    missingProofReasons,
   };
 }
 
