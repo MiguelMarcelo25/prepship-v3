@@ -56,6 +56,10 @@ const printQueueRuntimeCompat = readFileSync(
   'src/services/shipping-workflow/multi-package-print-queue-runtime-compat.ts',
   'utf8',
 );
+const reviewDto = readFileSync(
+  'src/services/shipping-workflow/multi-package-review-dto.ts',
+  'utf8',
+);
 const marketplaceConfirmationSidecar = readFileSync(
   'src/services/shipping-workflow/multi-package-marketplace-confirmation-sidecar.ts',
   'utf8',
@@ -92,6 +96,8 @@ check('package wires PS-289 real print queue contract guard',
   packageJson.includes('"test:ps-289-multi-package-real-print-queue-contract"'));
 check('package wires PS-289 print queue runtime compatibility guard',
   packageJson.includes('"test:ps-289-multi-package-print-queue-runtime-compat"'));
+check('package wires PS-289 review DTO guard',
+  packageJson.includes('"test:ps-289-multi-package-review-dto"'));
 check('package wires PS-289 closeout guard',
   packageJson.includes('"test:ps-289-multi-package-closeout"'));
 check('status doc lists planner guard',
@@ -124,6 +130,8 @@ check('status doc lists real print queue contract guard',
   doc.includes('`test:ps-289-multi-package-real-print-queue-contract`'));
 check('status doc lists print queue runtime compatibility guard',
   doc.includes('`test:ps-289-multi-package-print-queue-runtime-compat`'));
+check('status doc lists review DTO guard',
+  doc.includes('`test:ps-289-multi-package-review-dto`'));
 check('status doc lists closeout guard',
   doc.includes('`test:ps-289-multi-package-closeout`'));
 check('status doc keeps PS-289 conservative at 88%',
@@ -158,6 +166,8 @@ check('status doc says dry-run real print queue contract exists',
   /dry-run real print queue contract now\s+exists/i.test(doc));
 check('status doc says print queue runtime compatibility proof exists',
   /Runtime compatibility proof maps package-scoped queue ids back to numeric source order ids/i.test(doc));
+check('status doc says backend-owned package review DTO exists',
+  /backend-owned package review DTO now exists/i.test(doc));
 check('status doc lists real production label creator wiring as missing',
   /Real production label creator wiring/.test(doc));
 check('status doc lists real print queue insertion as missing',
@@ -249,6 +259,19 @@ check('print queue runtime compat stays pure and offline',
   /Pure only/.test(printQueueRuntimeCompat) &&
     !/from ['"].*(db|schema|routes|connectors|marketplace|shipstation|shipp|easypost|walmart|print-queue)/i.test(printQueueRuntimeCompat) &&
     !/\.insert\(|\.update\(|\.delete\(|fetch\(/.test(printQueueRuntimeCompat));
+check('review DTO exports buildMultiPackageReviewDto',
+  /export function buildMultiPackageReviewDto/.test(reviewDto));
+check('review DTO keeps package review rows backend-owned',
+  /Backend-owned read model/.test(reviewDto) &&
+    /MultiPackageReviewPackageRow/.test(reviewDto));
+check('review DTO merges planned packages with backend sidecar facts',
+  /labelFlow/.test(reviewDto) &&
+    /printQueueSidecarPlan/.test(reviewDto) &&
+    /marketplaceConfirmationSidecarPlan/.test(reviewDto));
+check('review DTO stays pure and offline',
+  /No DB reads\/writes, provider calls, postage, print queue writes, marketplace/.test(reviewDto) &&
+    !/from ['"].*(db|schema|routes|connector|shipstation|shipp|easypost|walmart|orders|shipments)/i.test(reviewDto) &&
+    !/\.insert\(|\.update\(|\.delete\(|fetch\(/.test(reviewDto));
 check('marketplace confirmation sidecar exports orchestrateMultiPackageMarketplaceConfirmationSidecar',
   /export async function orchestrateMultiPackageMarketplaceConfirmationSidecar/.test(marketplaceConfirmationSidecar));
 check('marketplace confirmation sidecar writes only shipment group sidecars',

@@ -444,6 +444,7 @@
     "test:ps-289-multi-package-marketplace-confirmation-sidecar": "tsx scripts/ps-289-multi-package-marketplace-confirmation-sidecar-guard.ts",
     "test:ps-289-multi-package-real-print-queue-contract": "tsx scripts/ps-289-multi-package-real-print-queue-contract-guard.ts",
     "test:ps-289-multi-package-print-queue-runtime-compat": "tsx scripts/ps-289-multi-package-print-queue-runtime-compat-guard.ts",
+    "test:ps-289-multi-package-review-dto": "tsx scripts/ps-289-multi-package-review-dto-guard.ts",
     "test:ps-289-multi-package-closeout": "tsx scripts/ps-289-multi-package-closeout-guard.ts",
     "test:ps-222-package-pricing": "tsx scripts/ps-222-package-pricing-guard.ts",
     "test:ps-222b-no-charge-box": "tsx scripts/ps-222b-no-charge-box-guard.ts",

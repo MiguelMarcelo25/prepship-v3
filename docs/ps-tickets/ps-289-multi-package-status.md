@@ -14,9 +14,11 @@ exists. An injected carrier adapter boundary now exists, and ShipStation-shaped 
 Purchased-label sidecar orchestration now exists, print queue sidecar persistence now exists,
 marketplace confirmation sidecar persistence now exists, and a dry-run real print queue contract now
 exists. Runtime compatibility proof maps package-scoped queue ids back to numeric source order ids
-before real print queue insertion is allowed. The real product still needs real production label
-creator wiring, real print queue insertion/printer integration, real marketplace notification
-connector/integration, and UI work before any operator should use it.
+before real print queue insertion is allowed. A backend-owned package review DTO now exists so future
+UI/API consumers can fetch package rows without rebuilding label, print queue, or marketplace state
+in the browser. The real product still needs real production label creator wiring, real print queue
+insertion/printer integration, real marketplace notification connector/integration, and UI work
+before any operator should use it.
 
 ## Evidence now wired
 
@@ -35,6 +37,7 @@ connector/integration, and UI work before any operator should use it.
 - `test:ps-289-multi-package-marketplace-confirmation-sidecar`
 - `test:ps-289-multi-package-real-print-queue-contract`
 - `test:ps-289-multi-package-print-queue-runtime-compat`
+- `test:ps-289-multi-package-review-dto`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -88,6 +91,11 @@ connector/integration, and UI work before any operator should use it.
   existing hold, recipient, dimensions, and order-detail lookup paths need.
 - The compatibility guard also pins the current numeric `Number(orderId)` assumptions so real queue
   insertion cannot be enabled without replacing them.
+- The backend-owned package review DTO merges planned packages, purchased label facts, print queue
+  sidecar candidates, and marketplace confirmation sidecar candidates into package rows for future
+  UI/API consumption.
+- The review DTO rejects sidecar facts that do not belong to the current plan and keeps internal
+  postage cost out of the review payload.
 - The marketplace confirmation sidecar owner derives one package-aware confirmation candidate per
   purchased label/tracking number, stores package rows as `marketplace_confirmation_sidecar_planned`,
   and marks the group with all tracking numbers.
@@ -104,7 +112,8 @@ connector/integration, and UI work before any operator should use it.
   insert is enabled yet.
 - Real marketplace notification connector/integration plus DJ-approved live canary proof for the
   correct N tracking numbers.
-- UI for defining package groups and reviewing per-package labels.
+- UI for defining package groups and reviewing per-package labels. The backend review DTO exists,
+  but no operator UI is wired yet.
 - No live postage, marketplace notification, or operator canary until the real integrations are
   mocked, guarded, and explicitly approved.
 
