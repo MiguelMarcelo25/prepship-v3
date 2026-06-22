@@ -163,6 +163,9 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-258-search-bar-contract`,
   `test:ps-166-ps-258-decomposition-certification`,
   `test:ps-166-ps-258-decomposition-closeout`
+- PS-285: `test:ps-285-phase-evidence-matrix`,
+  `test:ps-285-marketplace-confirm-boundary`,
+  `test:ps-285-umbrella-closeout`
 - PS-290/PS-300 first authority gates:
   `test:ps-290-hugrab-insurance-coverage-badge`,
   `test:ps-290-hugrab-insurance-coverage-badge-closeout`,

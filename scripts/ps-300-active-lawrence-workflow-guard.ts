@@ -164,6 +164,9 @@ check('package wires PS-166/258 decomposition certification guard',
   doc.includes('test:ps-166-ps-258-decomposition-certification'));
 check('package wires PS-285 umbrella closeout guard',
   packageJson.includes('"test:ps-285-umbrella-closeout"'));
+check('package wires PS-285 phase evidence matrix guard',
+  packageJson.includes('"test:ps-285-phase-evidence-matrix"') &&
+  doc.includes('test:ps-285-phase-evidence-matrix'));
 
 check('print queue backend orchestration flag defaults off',
   envText.includes('PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)'));
