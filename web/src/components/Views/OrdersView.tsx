@@ -95,6 +95,7 @@ import {
   getBackendRowMoney,
   getBackendRowMarketplace,
   renderRateAmountWithMarkup,
+  getBestRateInsuranceCoverage,
   renderExtLabelBadge,
   renderShipmentSyncErrorBadge,
   renderHouseBadge,
@@ -7204,9 +7205,11 @@ export default function OrdersView({
     return (
       <div data-rate-state="ready" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* PS-290: pass the backend-owned HUGRAB $100 coverage verdict as the 4th arg so the
+            Awaiting Best Rate cell renders the coverage badge (display-only; backend decides). */}
         {backendMoney
-          ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn)
-          : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate))}
+          ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
+          : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
         {/* PS-220 (slice 4b): SHIPP house order — the shown amount is the customer_rate billed. */}
         {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
         {recalculatingSpinner}

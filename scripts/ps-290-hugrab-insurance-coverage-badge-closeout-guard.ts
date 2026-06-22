@@ -37,6 +37,7 @@ const coverageOwner = read('src/services/shipping-workflow/insurance-coverage-st
 const dtoOwner = read('src/services/order-rate-dto.ts');
 const rowDisplay = read('web/src/components/Views/orders-row-display.tsx');
 const rateRowItem = read('web/src/components/RateRowItem.tsx');
+const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const ps290Guard = read('scripts/ps-290-hugrab-insurance-coverage-badge-guard.ts');
 const ps261Guard = read('scripts/ps-261-hugrab-label-purchase-gate-guard.ts');
 const ps274Guard = read('scripts/ps-274-shipp-insurance-certainty-guard.ts');
@@ -127,6 +128,12 @@ check('Awaiting row display reads and renders backend coverage only',
     /renderInsuranceCoverageBadge/.test(rowDisplay) &&
     !/resolveInsuranceCoverageStatus\s*\(/.test(rowDisplay) &&
     !/insuredValue\s*[<>=]/.test(rowDisplay));
+// PS-290 PRIMARY DoD: OrdersView must actually PASS the backend coverage into the Awaiting
+// Best Rate cell renderer — not just have the reader defined. Fails if the wiring regresses
+// (the cell would silently render no badge, which is exactly the gap this card fixed).
+check('OrdersView Awaiting Best Rate cell wires the backend coverage into the renderer',
+  /\bgetBestRateInsuranceCoverage\b/.test(ordersView) &&
+    /renderRateAmountWithMarkup\([\s\S]*?getBestRateInsuranceCoverage\(displayOrder\)\)/.test(ordersView));
 check('Rate Browser row reuses the same coverage reader and renderer',
   /getRowInsuranceCoverage/.test(rateRowItem) &&
     /renderInsuranceCoverageBadge/.test(rateRowItem) &&
