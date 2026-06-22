@@ -90,10 +90,8 @@ check('matrix references runbook evidence guard',
 const completeRows = checklist
   .split(/\r?\n/)
   .filter((line) => /^\|\s*\d+\s*\|/.test(line) && /\|\s*Complete\s*\|/i.test(line));
-check('only phases 8 and 10 are complete after this runbook slice',
-  completeRows.length === 2 &&
-    completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
-    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)),
+check('phase 10 remains complete after later PS-285 evidence slices',
+  completeRows.some((line) => /^\|\s*10\s*\|/.test(line)),
   completeRows);
 
 const safetyPhrases = [

@@ -98,15 +98,12 @@ const completeRows = checklist
 check('phase 1 is complete in checklist and matrix',
   /\|\s*1\s*\|\s*Lockdown fence and protected-file audit\s*\|\s*Complete\s*\|/i.test(checklist) &&
     /\|\s*1\s*\|\s*Lockdown fence and protected-file audit\s*\|\s*Complete\s*\|/i.test(matrix));
-check('only phases 1, 8, and 10 are complete after this proof slice',
-  completeRows.length === 3 &&
-    completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
-    completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
-    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)),
+check('phase 1 remains complete after later PS-285 evidence slices',
+  completeRows.some((line) => /^\|\s*1\s*\|/.test(line)),
   completeRows);
-check('checklist and matrix keep PS-285 at 45% and not Final Review-ready',
-  /Current completion estimate: PS-285 45%/.test(checklist) &&
-    /Current completion estimate: PS-285 45%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 50% and not Final Review-ready',
+  /Current completion estimate: PS-285 50%/.test(checklist) &&
+    /Current completion estimate: PS-285 50%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 check('package wires PS-285 protected-file proof guard',

@@ -25,7 +25,9 @@ const checklist = readFileSync('docs/ps-tickets/ps-285-phase-checklist.md', 'utf
 const matrix = readFileSync('docs/ps-tickets/ps-285-phase-evidence-matrix.md', 'utf8');
 const runbook = readFileSync('docs/ps-tickets/ps-285-runbook-evidence.md', 'utf8');
 const protectedFileProof = readFileSync('docs/ps-tickets/ps-285-protected-file-diff-proof.md', 'utf8');
+const labelPurchaseEvidence = readFileSync('docs/ps-tickets/ps-285-label-purchase-evidence.md', 'utf8');
 const normalizedRunbook = runbook.replace(/\s+/g, ' ');
+const normalizedLabelPurchaseEvidence = labelPurchaseEvidence.replace(/\s+/g, ' ');
 const phaseRows = checklist
   .split(/\r?\n/)
   .filter((line) => /^\|\s*\d+\s*\|/.test(line));
@@ -40,21 +42,24 @@ check('phase checklist has exactly 12 phases', phaseRows.length === 12);
 check('phase evidence matrix has exactly 12 phases', matrixPhaseRows.length === 12);
 check('phase 1 protected-file audit is explicitly complete',
   /\|\s*1\s*\|\s*Lockdown fence and protected-file audit\s*\|\s*Complete\s*\|/.test(checklist));
+check('phase 4 label purchase boundary safety is explicitly complete',
+  /\|\s*4\s*\|\s*Label purchase boundary safety\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 8 marketplace-confirm boundary is explicitly complete',
   /\|\s*8\s*\|\s*Marketplace confirmation boundary\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 10 runbook evidence is explicitly complete',
   /\|\s*10\s*\|\s*Observability and runbook coverage\s*\|\s*Complete\s*\|/.test(checklist));
-check('only phases 1, 8, and 10 are marked complete in this evidence slice',
-  completeRows.length === 3 &&
+check('only phases 1, 4, 8, and 10 are marked complete in this evidence slice',
+  completeRows.length === 4 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
 check('remaining phases are still tracked as in progress or not started',
   completeRows.length + inProgressRows.length + notStartedRows.length === 12);
-check('checklist records the current conservative 45% estimate',
-  /Current completion estimate: PS-285 45%/.test(checklist));
-check('matrix records the current conservative 45% estimate',
-  /Current completion estimate: PS-285 45%/.test(matrix));
+check('checklist records the current conservative 50% estimate',
+  /Current completion estimate: PS-285 50%/.test(checklist));
+check('matrix records the current conservative 50% estimate',
+  /Current completion estimate: PS-285 50%/.test(matrix));
 check('checklist says PS-285 is not Final Review-ready yet',
   /PS-285 is not Final Review-ready/i.test(checklist));
 check('matrix says PS-285 is not Final Review-ready yet',
@@ -63,10 +68,14 @@ check('checklist names the existing phase-8 guard as evidence',
   /test:ps-285-marketplace-confirm-boundary/.test(checklist));
 check('checklist names the phase-1 protected-file proof guard as evidence',
   /test:ps-285-protected-file-diff-proof/.test(checklist));
+check('checklist names the phase-4 label purchase evidence guard as evidence',
+  /test:ps-285-label-purchase-evidence/.test(checklist));
 check('checklist names the phase-10 runbook guard as evidence',
   /test:ps-285-runbook-evidence/.test(checklist));
 check('protected-file proof says phase 1 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(protectedFileProof));
+check('label-purchase evidence says phase 4 completion does not close PS-285',
+  /does not make PS-285 Final Review-ready/i.test(normalizedLabelPurchaseEvidence));
 check('runbook says phase 10 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(normalizedRunbook) &&
     /not a substitute for the remaining/i.test(normalizedRunbook));
@@ -83,6 +92,8 @@ check('matrix forbids live labels, queue/order mutation, Trello mutation, and sh
     /shipped\/cancelled data/.test(matrix));
 
 const pkg = readFileSync('package.json', 'utf8');
+check('package.json wires test:ps-285-label-purchase-evidence',
+  /"test:ps-285-label-purchase-evidence"\s*:\s*"tsx scripts\/ps-285-label-purchase-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-protected-file-diff-proof',
   /"test:ps-285-protected-file-diff-proof"\s*:\s*"tsx scripts\/ps-285-protected-file-diff-proof-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-phase-evidence-matrix',
