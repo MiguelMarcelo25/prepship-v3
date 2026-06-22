@@ -39,6 +39,17 @@ check('the table reads backend margin fields (no FE recompute)',
   /carrier\.negativeMarginCount/.test(billing) &&
   /carrier\.marginPct/.test(billing));
 
+// Dashboard consumes the same backend carrier rollup (was also discarded — only .summary kept).
+const dashboard = read('web/src/components/Views/DashboardView.tsx');
+check('DashboardView normalizes + stores the backend analytics.carriers[]',
+  /function normalizeShippingMarginCarriers/.test(dashboard) &&
+  /setShippingMarginCarriers\(normalizeShippingMarginCarriers\(shippingMarginRes\?\.carriers\)\)/.test(dashboard));
+check('DashboardView renders the carrier breakdown from backend fields',
+  /By carrier \/ account/.test(dashboard) &&
+  /shippingMarginCarriers\.map\(/.test(dashboard) &&
+  /carrier\.marginTotal/.test(dashboard) &&
+  /carrier\.negativeMarginCount/.test(dashboard));
+
 if (failures > 0) {
   console.error(`\nPS-296 FE carrier breakdown guard FAILED with ${failures} failure(s).`);
   process.exit(1);

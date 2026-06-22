@@ -496,6 +496,38 @@ function normalizeShippingMarginSummary(value: unknown): ShippingMarginSummary {
   }
 }
 
+// PS-296 (FE): the backend carrier/account margin rollup (analytics.carriers[]) — fetched
+// then discarded; surfaced as the dashboard "By carrier / account" breakdown.
+type ShippingMarginCarrierDto = {
+  carrierCode: string | null
+  serviceCode: string | null
+  providerAccountNickname: string | null
+  actualShippingTotal: number
+  billableShippingTotal: number
+  marginTotal: number
+  marginPct: number | null
+  marginRowCount: number
+  negativeMarginCount: number
+}
+
+function normalizeShippingMarginCarriers(value: unknown): ShippingMarginCarrierDto[] {
+  if (!Array.isArray(value)) return []
+  return value.map((raw) => {
+    const row = (raw ?? {}) as Record<string, unknown>
+    return {
+      carrierCode: typeof row.carrierCode === 'string' ? row.carrierCode : null,
+      serviceCode: typeof row.serviceCode === 'string' ? row.serviceCode : null,
+      providerAccountNickname: typeof row.providerAccountNickname === 'string' ? row.providerAccountNickname : null,
+      actualShippingTotal: num(row.actualShippingTotal),
+      billableShippingTotal: num(row.billableShippingTotal),
+      marginTotal: num(row.marginTotal),
+      marginPct: row.marginPct == null ? null : num(row.marginPct),
+      marginRowCount: num(row.marginRowCount),
+      negativeMarginCount: num(row.negativeMarginCount),
+    }
+  })
+}
+
 function dateOffsetFrom(day: string, daysBack: number) {
   const d = new Date(`${day}T00:00:00.000Z`)
   d.setUTCDate(d.getUTCDate() - daysBack)
@@ -1056,6 +1088,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [shippingMarginLoading, setShippingMarginLoading] = useState(true)
   const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
   const [shippingMarginAvailable, setShippingMarginAvailable] = useState(true)
+  // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]).
+  const [shippingMarginCarriers, setShippingMarginCarriers] = useState<ShippingMarginCarrierDto[]>([])
   const [sortState, setSortState] = useState<SortState<DashboardSortKey>>({ key: 'units30', direction: 'desc' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE)
@@ -1789,6 +1823,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           const canViewFinancials = shippingMarginRes?.canViewFinancials !== false
           setShippingMarginAvailable(canViewFinancials)
           setShippingMarginSummary(normalizeShippingMarginSummary(shippingMarginRes?.summary))
+          setShippingMarginCarriers(normalizeShippingMarginCarriers(shippingMarginRes?.carriers))
           setShippingMarginError(null)
           setShippingMarginLoading(false)
         })
@@ -1796,6 +1831,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setShippingMarginAvailable(true)
           setShippingMarginSummary(emptyShippingMarginSummary())
+          setShippingMarginCarriers([])
           setShippingMarginError(loadError instanceof Error ? loadError.message : 'Failed to load shipping margin')
           setShippingMarginLoading(false)
         })
@@ -2662,6 +2698,39 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     : ''}
                 </div>
               </div>
+            </div>
+          ) : null}
+          {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
+              analytics.carriers[] rollup (previously fetched and discarded). */}
+          {!shippingMarginLoading && !shippingMarginError && shippingMarginCarriers.length > 0 ? (
+            <div className="mt-3 overflow-x-auto">
+              <div className="mb-1 text-tiny font-semibold uppercase text-ink-3">By carrier / account</div>
+              <table className="w-full text-tiny tabular-nums">
+                <thead>
+                  <tr className="text-ink-3">
+                    <th className="py-1 pr-2 text-left font-semibold">Carrier</th>
+                    <th className="px-2 text-left font-semibold">Account</th>
+                    <th className="px-2 text-right font-semibold">Cost</th>
+                    <th className="px-2 text-right font-semibold">Billable</th>
+                    <th className="px-2 text-right font-semibold">Margin</th>
+                    <th className="px-2 text-right font-semibold">%</th>
+                    <th className="pl-2 text-right font-semibold">Neg</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shippingMarginCarriers.map((carrier, index) => (
+                    <tr key={`${carrier.carrierCode ?? ''}|${carrier.providerAccountNickname ?? ''}|${index}`} className="border-t border-line/60">
+                      <td className="py-1 pr-2 font-semibold text-ink">{carrier.carrierCode ?? '-'}{carrier.serviceCode ? ` · ${carrier.serviceCode}` : ''}</td>
+                      <td className="px-2 text-ink-2">{carrier.providerAccountNickname ?? '-'}</td>
+                      <td className="px-2 text-right font-mono">{formatMoneySmall(carrier.actualShippingTotal)}</td>
+                      <td className="px-2 text-right font-mono">{formatMoneySmall(carrier.billableShippingTotal)}</td>
+                      <td className={`px-2 text-right font-mono font-bold ${carrier.marginTotal < 0 ? 'text-danger' : 'text-ok'}`}>{formatMoneySmall(carrier.marginTotal)}</td>
+                      <td className="px-2 text-right font-mono text-ink-2">{carrier.marginPct == null ? '-' : formatPct(carrier.marginPct)}</td>
+                      <td className={`pl-2 text-right font-mono ${carrier.negativeMarginCount > 0 ? 'font-bold text-danger' : 'text-ink-3'}`}>{formatInt(carrier.negativeMarginCount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : null}
         </section>
