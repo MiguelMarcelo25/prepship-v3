@@ -11,10 +11,11 @@ foundation, mocked per-package label identity workflow, and DB-backed mocked sta
 exist. Group-aware print queue planning also exists. Marketplace confirmation planning now exists,
 end-to-end mocked workflow proof now exists, and a test-gated per-package label purchase boundary now
 exists. An injected carrier adapter boundary now exists, and ShipStation-shaped adapter proof now exists.
-Purchased-label sidecar orchestration now exists, print queue sidecar persistence now exists, and
-marketplace confirmation sidecar persistence now exists. The real product still needs real production
-label creator wiring, real print queue insertion/printer integration, real marketplace notification
-connector/integration, and UI work before any operator should use it.
+Purchased-label sidecar orchestration now exists, print queue sidecar persistence now exists,
+marketplace confirmation sidecar persistence now exists, and a dry-run real print queue contract now
+exists. The real product still needs real production label creator wiring, real print queue
+insertion/printer integration, real marketplace notification connector/integration, and UI work
+before any operator should use it.
 
 ## Evidence now wired
 
@@ -31,6 +32,7 @@ connector/integration, and UI work before any operator should use it.
 - `test:ps-289-multi-package-purchased-label-orchestration`
 - `test:ps-289-multi-package-print-queue-sidecar`
 - `test:ps-289-multi-package-marketplace-confirmation-sidecar`
+- `test:ps-289-multi-package-real-print-queue-contract`
 - `test:ps-289-multi-package-closeout`
 
 ## What is proven
@@ -75,6 +77,11 @@ connector/integration, and UI work before any operator should use it.
 - The print queue sidecar owner derives one package-aware queue candidate per purchased label, stores
   package rows as `print_queue_sidecar_planned`, and marks the group with deterministic queue IDs.
 - Duplicate queued label idempotency keys are checked before any sidecar print queue updates.
+- The dry-run real print queue contract maps sidecar labels into package-scoped
+  `print_queue_orders` insert shapes and proves the old source-order `(orderId, clientId)` key would
+  collapse multiple package labels.
+- The contract keeps `sourceOrderId` visible for the future runtime integration while avoiding writes
+  to the real print queue table.
 - The marketplace confirmation sidecar owner derives one package-aware confirmation candidate per
   purchased label/tracking number, stores package rows as `marketplace_confirmation_sidecar_planned`,
   and marks the group with all tracking numbers.
@@ -86,7 +93,8 @@ connector/integration, and UI work before any operator should use it.
 
 - Real production label creator wiring from the multi-package workflow into ShipStation plus
   DJ-approved live canary proof.
-- Real print queue insertion/printer integration with the existing printer path.
+- Real print queue insertion/printer integration with the existing printer path. The dry-run contract
+  now proves the package-scoped key shape, but no real queue insert is enabled yet.
 - Real marketplace notification connector/integration plus DJ-approved live canary proof for the
   correct N tracking numbers.
 - UI for defining package groups and reviewing per-package labels.
