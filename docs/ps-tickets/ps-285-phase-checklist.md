@@ -5,12 +5,12 @@ single slice of evidence. This checklist is the status owner for the card until
 the umbrella is split into smaller cards or each phase has its own source-of-
 truth guard.
 
-Current completion estimate: PS-285 65%.
+Current completion estimate: PS-285 70%.
 
 Current recommendation: PS-285 is not Final Review-ready. Phases 1, 4, 5, 7,
-8, 9, and 10 are complete, but the remaining phases still include lockdown
-preservation, certification, and final closeout work. A current evidence
-matrix maps guard coverage across PS-245 through PS-259 so the
+8, 9, 10, and 11 are complete, but the remaining phases still include
+lockdown preservation and final closeout work. A current evidence matrix maps
+guard coverage across PS-245 through PS-259 so the
 remaining phases can be finished or split without duplicating tickets.
 
 | # | Phase | Status | Evidence | Missing |
@@ -25,7 +25,7 @@ remaining phases can be finished or split without duplicating tickets.
 | 8 | Marketplace confirmation boundary | Complete | test:ps-285-marketplace-confirm-boundary | None for this phase |
 | 9 | Recovery/retry tooling safety | Complete | `test:ps-255-ops-confirm-gate`, `test:ps-256-durable-worker-status`, `test:ps-256-durable-rate-limiter`, `test:ps-288-label-recovery`, `docs/ps-tickets/ps-285-recovery-retry-evidence.md`, `test:ps-285-recovery-retry-evidence` | None for this offline/static phase |
 | 10 | Observability and runbook coverage | Complete | `docs/security-readiness-checklist.md`, `docs/shipping-certification-harness.md`, `docs/ps-tickets/ps-285-runbook-evidence.md`, `test:ps-285-runbook-evidence` | None for this phase |
-| 11 | End-to-end certification matrix | In progress | `docs/full-workflow-certification-matrix.md`, `scripts/run-workflow-certification.mjs` | Run the mapped safe suite and summarize failures |
+| 11 | End-to-end certification matrix | Complete | `docs/full-workflow-certification-matrix.md`, `scripts/run-workflow-certification.mjs`, `docs/ps-tickets/ps-285-workflow-certification-evidence.md`, `test:workflow-suites`, `test:ps-285-workflow-certification-evidence` | None for this offline/static phase |
 | 12 | Final umbrella closeout packet | In progress | This checklist, `docs/ps-tickets/ps-285-phase-evidence-matrix.md`, `test:ps-285-umbrella-closeout` | Complete every phase or split unfinished phases into separate cards |
 
 Safety: No live marketplace notifications, no postage, no real label purchase,

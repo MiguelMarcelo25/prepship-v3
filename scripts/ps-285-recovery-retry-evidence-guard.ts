@@ -164,9 +164,9 @@ check('print queue recovery reads existing labels and does not buy postage',
 check('phase 9 is complete in checklist and matrix',
   /\|\s*9\s*\|\s*Recovery\/retry tooling safety\s*\|\s*Complete\s*\|/i.test(checklist) &&
     /\|\s*9\s*\|\s*Recovery\/retry tooling safety\s*\|\s*Complete\s*\|/i.test(matrix));
-check('checklist and matrix keep PS-285 at 65% and not Final Review-ready',
-  /Current completion estimate: PS-285 65%/.test(checklist) &&
-    /Current completion estimate: PS-285 65%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 70% and not Final Review-ready',
+  /Current completion estimate: PS-285 70%/.test(checklist) &&
+    /Current completion estimate: PS-285 70%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 

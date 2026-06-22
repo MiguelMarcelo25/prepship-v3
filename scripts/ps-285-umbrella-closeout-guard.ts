@@ -29,11 +29,13 @@ const labelPurchaseEvidence = readFileSync('docs/ps-tickets/ps-285-label-purchas
 const printQueueEvidence = readFileSync('docs/ps-tickets/ps-285-print-queue-evidence.md', 'utf8');
 const voidRetractEvidence = readFileSync('docs/ps-tickets/ps-285-void-retract-evidence.md', 'utf8');
 const recoveryRetryEvidence = readFileSync('docs/ps-tickets/ps-285-recovery-retry-evidence.md', 'utf8');
+const workflowCertificationEvidence = readFileSync('docs/ps-tickets/ps-285-workflow-certification-evidence.md', 'utf8');
 const normalizedRunbook = runbook.replace(/\s+/g, ' ');
 const normalizedLabelPurchaseEvidence = labelPurchaseEvidence.replace(/\s+/g, ' ');
 const normalizedPrintQueueEvidence = printQueueEvidence.replace(/\s+/g, ' ');
 const normalizedVoidRetractEvidence = voidRetractEvidence.replace(/\s+/g, ' ');
 const normalizedRecoveryRetryEvidence = recoveryRetryEvidence.replace(/\s+/g, ' ');
+const normalizedWorkflowCertificationEvidence = workflowCertificationEvidence.replace(/\s+/g, ' ');
 const phaseRows = checklist
   .split(/\r?\n/)
   .filter((line) => /^\|\s*\d+\s*\|/.test(line));
@@ -60,21 +62,24 @@ check('phase 9 recovery/retry tooling safety is explicitly complete',
   /\|\s*9\s*\|\s*Recovery\/retry tooling safety\s*\|\s*Complete\s*\|/.test(checklist));
 check('phase 10 runbook evidence is explicitly complete',
   /\|\s*10\s*\|\s*Observability and runbook coverage\s*\|\s*Complete\s*\|/.test(checklist));
-check('only phases 1, 4, 5, 7, 8, 9, and 10 are marked complete in this evidence slice',
-  completeRows.length === 7 &&
+check('phase 11 workflow certification is explicitly complete',
+  /\|\s*11\s*\|\s*End-to-end certification matrix\s*\|\s*Complete\s*\|/.test(checklist));
+check('only phases 1, 4, 5, 7, 8, 9, 10, and 11 are marked complete in this evidence slice',
+  completeRows.length === 8 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*7\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*9\s*\|/.test(line)) &&
-    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
+    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*11\s*\|/.test(line)));
 check('remaining phases are still tracked as in progress or not started',
   completeRows.length + inProgressRows.length + notStartedRows.length === 12);
-check('checklist records the current conservative 65% estimate',
-  /Current completion estimate: PS-285 65%/.test(checklist));
-check('matrix records the current conservative 65% estimate',
-  /Current completion estimate: PS-285 65%/.test(matrix));
+check('checklist records the current conservative 70% estimate',
+  /Current completion estimate: PS-285 70%/.test(checklist));
+check('matrix records the current conservative 70% estimate',
+  /Current completion estimate: PS-285 70%/.test(matrix));
 check('checklist says PS-285 is not Final Review-ready yet',
   /PS-285 is not Final Review-ready/i.test(checklist));
 check('matrix says PS-285 is not Final Review-ready yet',
@@ -93,6 +98,8 @@ check('checklist names the phase-9 recovery/retry evidence guard as evidence',
   /test:ps-285-recovery-retry-evidence/.test(checklist));
 check('checklist names the phase-10 runbook guard as evidence',
   /test:ps-285-runbook-evidence/.test(checklist));
+check('checklist names the phase-11 workflow certification guard as evidence',
+  /test:ps-285-workflow-certification-evidence/.test(checklist));
 check('protected-file proof says phase 1 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(protectedFileProof));
 check('label-purchase evidence says phase 4 completion does not close PS-285',
@@ -106,6 +113,8 @@ check('recovery/retry evidence says phase 9 completion does not close PS-285',
 check('runbook says phase 10 completion does not close PS-285',
   /does not make PS-285 Final Review-ready/i.test(normalizedRunbook) &&
     /not a substitute for the remaining/i.test(normalizedRunbook));
+check('workflow certification evidence says phase 11 completion does not close PS-285',
+  /does not make PS-285 Final Review-ready/i.test(normalizedWorkflowCertificationEvidence));
 check('matrix maps every child PS-245 through PS-259',
   Array.from({ length: 15 }, (_, index) => `PS-${245 + index}`).every((ticket) => matrix.includes(ticket)));
 check('checklist forbids live marketplace or shipped\/cancelled mutation during audit',
@@ -119,6 +128,8 @@ check('matrix forbids live labels, queue/order mutation, Trello mutation, and sh
     /shipped\/cancelled data/.test(matrix));
 
 const pkg = readFileSync('package.json', 'utf8');
+check('package.json wires test:ps-285-workflow-certification-evidence',
+  /"test:ps-285-workflow-certification-evidence"\s*:\s*"tsx scripts\/ps-285-workflow-certification-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-recovery-retry-evidence',
   /"test:ps-285-recovery-retry-evidence"\s*:\s*"tsx scripts\/ps-285-recovery-retry-evidence-guard\.ts"/.test(pkg));
 check('package.json wires test:ps-285-void-retract-evidence',

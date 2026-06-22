@@ -22,7 +22,7 @@ Created 2026-05-29 from a full audit of every `test:*` / `guard:*` script and
 
 `test:workflow-suites` runs [scripts/run-workflow-certification.mjs](../scripts/run-workflow-certification.mjs)
 (checkpoint-grouped, continue-on-failure, prints a per-checkpoint summary, exits
-non-zero if any suite fails). **69/69 offline suites pass** as of 2026-05-29.
+non-zero if any suite fails). **81/81 offline suites pass** as of 2026-06-22.
 
 > The offline core is not "just static guards": it includes genuinely
 > **executable behavioral** guards — inventory ledger-balance math, billing

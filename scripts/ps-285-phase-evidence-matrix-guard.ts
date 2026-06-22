@@ -41,6 +41,8 @@ check('package wires void/retract evidence guard',
   /"test:ps-285-void-retract-evidence"\s*:\s*"tsx scripts\/ps-285-void-retract-evidence-guard\.ts"/.test(packageJson));
 check('package wires recovery/retry evidence guard',
   /"test:ps-285-recovery-retry-evidence"\s*:\s*"tsx scripts\/ps-285-recovery-retry-evidence-guard\.ts"/.test(packageJson));
+check('package wires workflow certification evidence guard',
+  /"test:ps-285-workflow-certification-evidence"\s*:\s*"tsx scripts\/ps-285-workflow-certification-evidence-guard\.ts"/.test(packageJson));
 check('package wires print queue evidence guard',
   /"test:ps-285-print-queue-evidence"\s*:\s*"tsx scripts\/ps-285-print-queue-evidence-guard\.ts"/.test(packageJson));
 check('package wires label purchase evidence guard',
@@ -132,20 +134,28 @@ check('phase 10 runbook evidence is complete in the umbrella matrix',
   completeRows.some((line) => /^\|\s*10\s*\|/.test(line)) &&
     matrix.includes('`test:ps-285-runbook-evidence`') &&
     matrix.includes('`docs/ps-tickets/ps-285-runbook-evidence.md`'));
-check('only phases 1, 4, 5, 7, 8, 9, and 10 are complete in the umbrella matrix',
-  completeRows.length === 7 &&
+check('phase 11 workflow certification evidence is complete in the umbrella matrix',
+  completeRows.some((line) => /^\|\s*11\s*\|/.test(line)) &&
+    matrix.includes('`docs/full-workflow-certification-matrix.md`') &&
+    matrix.includes('`scripts/run-workflow-certification.mjs`') &&
+    matrix.includes('`docs/ps-tickets/ps-285-workflow-certification-evidence.md`') &&
+    matrix.includes('`test:workflow-suites`') &&
+    matrix.includes('`test:ps-285-workflow-certification-evidence`'));
+check('only phases 1, 4, 5, 7, 8, 9, 10, and 11 are complete in the umbrella matrix',
+  completeRows.length === 8 &&
     completeRows.some((line) => /^\|\s*1\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*4\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*5\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*7\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*8\s*\|/.test(line)) &&
     completeRows.some((line) => /^\|\s*9\s*\|/.test(line)) &&
-    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)));
+    completeRows.some((line) => /^\|\s*10\s*\|/.test(line)) &&
+    completeRows.some((line) => /^\|\s*11\s*\|/.test(line)));
 check('remaining phases stay tracked as in progress, not complete',
-  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 4);
+  completeRows.length + inProgressRows.length + notStartedRows.length === 12 && inProgressRows.length >= 3);
 
-check('matrix keeps PS-285 conservative at 65%',
-  /Current completion estimate: PS-285 65%/.test(matrix));
+check('matrix keeps PS-285 conservative at 70%',
+  /Current completion estimate: PS-285 70%/.test(matrix));
 check('matrix and checklist do not claim Final Review readiness',
   /not Final Review-ready/.test(matrix) && /not Final Review-ready/.test(checklist));
 check('board audit still documents the old one-slice overclaim risk',

@@ -95,9 +95,9 @@ check('PS-248 atomic guard pins transaction mechanism',
 check('phase 4 is complete in checklist and matrix',
   /\|\s*4\s*\|\s*Label purchase boundary safety\s*\|\s*Complete\s*\|/i.test(checklist) &&
     /\|\s*4\s*\|\s*Label purchase boundary safety\s*\|\s*Complete\s*\|/i.test(matrix));
-check('checklist and matrix keep PS-285 at 65% and not Final Review-ready',
-  /Current completion estimate: PS-285 65%/.test(checklist) &&
-    /Current completion estimate: PS-285 65%/.test(matrix) &&
+check('checklist and matrix keep PS-285 at 70% and not Final Review-ready',
+  /Current completion estimate: PS-285 70%/.test(checklist) &&
+    /Current completion estimate: PS-285 70%/.test(matrix) &&
     /not Final Review-ready/i.test(checklist) &&
     /not Final Review-ready/i.test(matrix));
 
