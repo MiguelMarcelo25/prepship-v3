@@ -152,7 +152,8 @@ checklist is evidence-backed and no known blocker remains for review. A card is
   `test:ps-289-multi-package-closeout`
 - PS-292, PS-295, PS-296: `test:ps-292-house-tuple-display`,
   `test:ps-292-final-review-closeout`, `test:ps-295-house-customer-rate-proof`,
-  `test:ps-296-shipping-margin`, `test:ps-296-shipping-margin-closeout`
+  `test:ps-295-house-customer-rate-closeout`, `test:ps-296-shipping-margin`,
+  `test:ps-296-shipping-margin-closeout`
 - PS-279/PS-300 authority regression: `test:ps-279-*` plus PS-300 through
   PS-308 guards as they are added
 - PS-307: `test:ps-307-marked-rate-comparison`

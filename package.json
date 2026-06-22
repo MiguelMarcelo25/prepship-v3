@@ -203,6 +203,7 @@
     "test:ps-293-passive-cap-parity": "tsx scripts/ps-293-passive-cap-parity-guard.ts",
     "test:ps-295-rate-browser-speed-diagnostics": "tsx scripts/ps-295-rate-browser-speed-diagnostics-guard.ts",
     "test:ps-295-house-customer-rate-proof": "tsx scripts/ps-295-house-customer-rate-proof-guard.ts",
+    "test:ps-295-house-customer-rate-closeout": "tsx scripts/ps-295-house-customer-rate-closeout-guard.ts",
     "test:ps-299-finalized-best-rate": "tsx scripts/ps-299-finalized-best-rate-guard.ts",
     "test:ps-299-awaiting-final-only-ui": "tsx scripts/ps-299-awaiting-final-only-ui-guard.ts",
     "test:ps-199-walmart-po-resolution": "tsx scripts/ps-199-walmart-po-resolution-guard.ts",

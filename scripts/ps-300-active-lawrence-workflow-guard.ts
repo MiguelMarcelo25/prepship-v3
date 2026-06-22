@@ -146,6 +146,7 @@ check('package wires PS-292/295/296 money guards',
   packageJson.includes('"test:ps-292-house-tuple-display"') &&
   packageJson.includes('"test:ps-292-final-review-closeout"') &&
   packageJson.includes('"test:ps-295-house-customer-rate-proof"') &&
+  packageJson.includes('"test:ps-295-house-customer-rate-closeout"') &&
   packageJson.includes('"test:ps-296-shipping-margin"') &&
   packageJson.includes('"test:ps-296-shipping-margin-closeout"'));
 check('package wires PS-289 closeout guard',
