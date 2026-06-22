@@ -39,13 +39,20 @@ const packageJson = readText('package.json');
 const ordersSrc = readText('src/routes/orders.ts');
 const modalSrc = readText('web/src/components/NewOrderModal.tsx');
 const existingGuardSrc = readText('scripts/ps-291-manual-order-real-optional-items-guard.ts');
+const statusDoc = readText('docs/ps-tickets/ps-291-manual-order-preview-status.md');
 
 check('package wires the focused PS-291 manual order preview guard',
   packageJson.includes('"test:ps-291-manual-order-preview"'));
 check('package wires the PS-291 closeout guard',
   packageJson.includes('"test:ps-291-manual-order-preview-closeout"'));
+check('package wires the PS-291 status guard',
+  packageJson.includes('"test:ps-291-manual-order-preview-status"'));
 check('focused PS-291 guard file exists',
   existingGuardSrc.includes('PASS PS-291 manual-order real + optional-items guard'));
+check('PS-291 status doc keeps current percentage and canary blocker honest',
+  statusDoc.includes('Current completion estimate: PS-291 86%') &&
+    statusDoc.includes('not Final Review-ready') &&
+    statusDoc.includes('DJ-approved runtime manual-order canary'));
 
 const selected = buildManualSelectedBestRate({
   carrierCode: 'ups',
