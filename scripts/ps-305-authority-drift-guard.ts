@@ -7,7 +7,8 @@
  * static source-of-truth boundaries that prevent rates/labels/billing/package
  * authority from drifting back into frontend-only logic.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { join, sep } from 'node:path';
 
 let failures = 0;
 
@@ -229,6 +230,92 @@ check('frontend display helpers keep remaining fallback debt explicit',
   shippingDisplay.includes('NOT moved here (intentionally): the shipping-ACCOUNT / provider-nickname display') &&
   displayState.includes('candidate RESOLUTION stays here') &&
   rowDisplay.includes('backend-owned row money tuple'));
+
+// ── PS-305 ENFORCEMENT: real frontend-authority drift SCANNER ──────────────────
+// The checks above pin docs + backend owners but never scan the frontend. This is the
+// enforcement the card's "Done when" requires: recursively read web/src and FAIL when a
+// backend-critical authority pattern appears in a NON-allowlisted frontend file. The
+// allowlist captures TODAY's known PS-302/303/306 debt (so the guard passes now) and
+// RATCHETS — a forbidden pattern may not spread to a new file. Empty-allowlist classes
+// (hard-coded HUGRAB insurance, FE fingerprint/proof minting) fail on ANY occurrence.
+type ForbiddenClass = { id: string; description: string; pattern: RegExp; allowlist: string[] };
+
+const FORBIDDEN_FRONTEND_AUTHORITY: ForbiddenClass[] = [
+  {
+    id: 'fe_direct_label_buy',
+    description: 'FE orchestrates a direct-carrier label PURCHASE then queue (postage buy belongs to the backend Print Queue owner — PS-303).',
+    pattern: /createDirectCarrierLabelThenQueue/,
+    allowlist: ['web/src/components/Views/OrdersView.tsx'],
+  },
+  {
+    id: 'fe_queue_route_authority',
+    description: "FE classifies the queue/label money-path route ('direct-create' vs backend) — backend owns routing (PS-303).",
+    pattern: /classifyQueueOrderRoute\s*\(/,
+    allowlist: ['web/src/components/Views/OrdersView.tsx', 'web/src/lib/shipping-routes.ts'],
+  },
+  {
+    id: 'hugrab_hardcoded_insurance',
+    description: 'FE hard-codes the HUGRAB $100 insured value/default — effective insurance is backend-owned (PS-290/PS-261).',
+    pattern: /HUGRAB_DEFAULT_INSURED_VALUE/,
+    allowlist: [],
+  },
+  {
+    id: 'fe_fingerprint_or_proof_minting',
+    description: 'FE mints a rate-request fingerprint / selected-rate proof authority — proof is backend-issued (PS-244).',
+    pattern: /buildShippingRateRequestFingerprint\s*\(|selectedRateAuthorityKey\s*\(|createHash\s*\(/,
+    allowlist: [],
+  },
+];
+
+function listFrontendSourceFiles(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    let entries: string[] = [];
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      if (entry === 'node_modules' || entry === 'dist' || entry === '.vite') continue;
+      const full = join(dir, entry);
+      let st: ReturnType<typeof statSync>;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) walk(full);
+      else if (/\.(ts|tsx)$/.test(entry) && !/\.d\.ts$/.test(entry)) out.push(full);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+type FrontendAuthorityViolation = { class: string; file: string };
+function scanForbiddenFrontendAuthority(
+  files: { path: string; content: string }[],
+  classes: ForbiddenClass[],
+): FrontendAuthorityViolation[] {
+  const violations: FrontendAuthorityViolation[] = [];
+  for (const file of files) {
+    const norm = file.path.split(sep).join('/');
+    for (const cls of classes) {
+      if (cls.pattern.test(file.content) && !cls.allowlist.includes(norm)) {
+        violations.push({ class: cls.id, file: norm });
+      }
+    }
+  }
+  return violations;
+}
+
+// Negative control — the scanner MUST flag a synthetic violation in a non-allowlisted
+// file (proves the guard can actually fail; a guard that can never fail is not enforcement).
+const negControl = scanForbiddenFrontendAuthority(
+  [{ path: 'web/src/__ps305_neg_control__.ts', content: 'const v = HUGRAB_DEFAULT_INSURED_VALUE; await createDirectCarrierLabelThenQueue();' }],
+  FORBIDDEN_FRONTEND_AUTHORITY,
+);
+check('PS-305 scanner negative control flags synthetic frontend-authority violations', negControl.length >= 2, negControl);
+
+// Real scan of the frontend tree — FAIL on any non-allowlisted drift.
+const feFiles = listFrontendSourceFiles('web/src').map((p) => ({ path: p, content: read(p) }));
+check('PS-305 scanner read the frontend tree', feFiles.length > 50, feFiles.length);
+const driftViolations = scanForbiddenFrontendAuthority(feFiles, FORBIDDEN_FRONTEND_AUTHORITY);
+check('PS-305 no NEW frontend backend-critical authority drift (allowlisted PS-302/303/306 debt excepted)',
+  driftViolations.length === 0, driftViolations);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-305 authority drift guard (${failures} failing)`);
