@@ -240,7 +240,9 @@ const PROVIDER_DEFS: ProviderDef[] = [
     fields: [
       { name: 'appId', label: 'App ID (Client ID)', hint: 'Same App ID used for the eBay store integration.' },
       { name: 'certId', label: 'Cert ID (Client Secret)', type: 'password' },
-      { name: 'devId', label: 'Dev ID' },
+      // Dev ID is NOT used by the eBay OAuth flow — rates + the post-label tracking-push
+      // only need appId + certId + the refresh token — so it's optional; don't block Connect on it.
+      { name: 'devId', label: 'Dev ID (optional)', required: false },
       { name: 'ruName', label: 'RuName / Redirect URL Name', placeholder: 'DrprepperUSA-Drpreppe-Prepsh-qoumohks', hint: 'From eBay Developer Portal -> User Tokens -> RuName. eBay requires this value, not the callback URL, when exchanging the OAuth code.' },
       { name: 'refreshToken', label: 'User OAuth Refresh Token', type: 'password', hint: 'Long-lived token from the eBay sign-in flow. For rates, it must include https://api.ebay.com/oauth/api_scope/sell.logistics.' },
       { name: 'environment', label: 'Environment (optional)', required: false, placeholder: 'production | sandbox' },
