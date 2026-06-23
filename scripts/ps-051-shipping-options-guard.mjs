@@ -15,6 +15,7 @@ function assert(condition, message) {
 const [
   shippingOptions,
   ratesService,
+  ratesCombined,
   labelsService,
   shipstationLabels,
   rateFingerprint,
@@ -38,6 +39,7 @@ const [
 ] = await Promise.all([
   read('src/lib/shipping-options.ts').catch(() => ''),
   read('src/services/rates.ts'),
+  read('src/services/rates-combined.ts'),
   read('src/services/labels.ts'),
   read('src/lib/shipstation/labels.ts'),
   read('src/services/shipping-workflow/rate-fingerprint.ts'),
@@ -76,7 +78,10 @@ assert(
     rateFingerprint.includes('iv=') &&
     ratesService.includes('body.insurance_provider') &&
     ratesService.includes('body.insured_value') &&
-    ratesService.includes('Number(rate.insurance_amount?.amount ?? 0)'),
+    // PS-307 (0cf5bbd4) extracted the insurance-in-total math into the canonical shared helper
+    // rates-combined.ts (rateTotal/rateCostTotal); rates.ts now delegates via combinedRateTotal.
+    // Assert the literal at its new authoritative owner. (QA root-cause 2026-06-23.)
+    ratesCombined.includes('Number(rate.insurance_amount?.amount ?? 0)'),
   'ShipStation rates include normalized insurance in request body, totals, and cache fingerprint',
 )
 

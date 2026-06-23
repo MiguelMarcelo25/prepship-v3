@@ -149,7 +149,10 @@ function baseRow(id, status, clientId, overrides = {}) {
 // owner saying the saved rate is displayable. savedBestRateCanDisplayForCurrentRequest
 // honours that without re-deriving the orderId-prefixed request key on the client.
 const awaitingValid = baseRow(970001, 'awaiting_shipment', 1, {
-  bestRateWorkflow: { savedRateDisplay: 'fresh' },
+  // QA root-cause 2026-06-23: the canonical display gate (orders-parity savedBestRateCanDisplay…)
+  // needs the full fresh-row verdict the real backend emits (best-rate-workflow-dto.ts), not just
+  // savedRateDisplay. The bare stub made the saved rate non-displayable → "Rate unavailable".
+  bestRateWorkflow: { bestRateState: 'fresh', savedRateDisplay: 'fresh', canDisplayFinalRate: true, canUseDisplayedRateForPurchase: true, allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false } },
 })
 
 // 2) Awaiting, missing dims + no rate -> carrier/account/best-rate must say "— add dims".
@@ -189,7 +192,10 @@ const bestRateDivergent = {
 }
 const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
   orderNumber: 'ORD-970005',
-  bestRateWorkflow: { savedRateDisplay: 'fresh' },
+  // QA root-cause 2026-06-23: the canonical display gate (orders-parity savedBestRateCanDisplay…)
+  // needs the full fresh-row verdict the real backend emits (best-rate-workflow-dto.ts), not just
+  // savedRateDisplay. The bare stub made the saved rate non-displayable → "Rate unavailable".
+  bestRateWorkflow: { bestRateState: 'fresh', savedRateDisplay: 'fresh', canDisplayFinalRate: true, canUseDisplayedRateForPurchase: true, allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false } },
   overrides: { rateWeightOz: 60, rateDimsL: 11, rateDimsW: 8, rateDimsH: 6, bestRateDims: '11x8x6', bestRateJson: bestRateDivergent },
   bestRate: bestRateDivergent,
   selectedRate: {
