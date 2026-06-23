@@ -35,6 +35,7 @@ import { backfillReferenceRates } from '../services/billing-ref-rates';
 // PS-275: durable, reversible prep-fee waiver state ($0-shipping review).
 import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
+import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
@@ -717,6 +718,9 @@ type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | '
   billed_package_id: number | null;
   box_cost_desc: string | null;
   box_review_reason: string | null;
+  // PS-310: raw per-SKU rows ({ sku, name, quantity }) fed to the canonical export
+  // summarizer. `unknown` because summarizeBillingItemsForDetail validates shape itself.
+  item_rows: unknown;
 };
 
 type InvoicePackageRecord = { name: string; length: number; width: number; height: number };
@@ -805,7 +809,23 @@ async function billingInvoiceData(
         from order_items oi
         where oi.order_id = b.order_id
           and oi.quantity > 0
-      ) as skus
+      ) as skus,
+      -- PS-310: per-SKU rows so the EXPORT reuses the SAME canonical summarizer the
+      -- Billing detail SCREEN uses (summarizeBillingItemsForDetail) → ×N quantity +
+      -- duplicate-SKU aggregation, and screen vs export can never drift. The bare
+      -- skus column above stays as the fallback for orders with no order_items rows.
+      (
+        select coalesce(
+          json_agg(
+            json_build_object('sku', oi.sku, 'name', oi.name, 'quantity', oi.quantity)
+            order by oi.line_index
+          ),
+          '[]'::json
+        )
+        from order_items oi
+        where oi.order_id = b.order_id
+          and oi.quantity > 0
+      ) as item_rows
     from billing_line_items b
     where b.client_id = ${clientId}
       -- PS-208: identical date-only bounds as every billing endpoint — UTC
@@ -856,7 +876,10 @@ async function billingInvoiceData(
       shipping_amt: r.shipping_amt,
       storage_amt: r.storage_amt,
       row_total: r.row_total,
-      skus: r.skus,
+      // PS-310: build the export SKU string from the SAME summarizer the detail screen
+      // uses (×N per SKU, duplicate aggregation); fall back to the bare string_agg when
+      // the order has no order_items rows so legacy/imported orders still show their SKUs.
+      skus: summarizeBillingItemsForDetail(r.item_rows).itemSkus ?? r.skus,
       package_cost_amt: r.package_cost_amt,
       box_label,
       box_review,
