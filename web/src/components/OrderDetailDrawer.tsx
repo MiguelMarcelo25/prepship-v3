@@ -942,8 +942,20 @@ export default function OrderDetailDrawer({
                       {isShipped ? (
                         <>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                            <span style={{ color: 'var(--text2)' }}>Label Cost</span>
-                            <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
+                            {/* PS-309 (Per user override unlock shipped data on 2026-06-23): when the
+                                label is VOIDED, this Cost Summary line must NOT present the historical
+                                cost as an active (green) charge — relabel it "Voided Label Cost" and
+                                strike/mute it so it reads as historical, per the card DoD. */}
+                            <span style={{ color: 'var(--text2)' }}>{isVoidedLabel ? 'Voided Label Cost' : 'Label Cost'}</span>
+                            <span
+                              data-shipped-label-state={isVoidedLabel ? 'voided' : undefined}
+                              title={isVoidedLabel ? 'This label was voided — historical cost, not an active charge.' : undefined}
+                              style={{
+                                fontWeight: 700,
+                                color: isVoidedLabel ? 'var(--text3, #9ca3af)' : 'var(--green, #15803d)',
+                                textDecoration: isVoidedLabel ? 'line-through' : undefined,
+                              }}
+                            >
                               {fmtOptionalMoney(labelBreakdown.labelCost)}
                             </span>
                           </div>
@@ -1116,9 +1128,21 @@ export default function OrderDetailDrawer({
                 <Field label="Status" value={<StatusBadge status={effectiveStatus} />} />
                 {isShipped ? (
                   <Field
-                    label="Label Cost"
+                    label={isVoidedLabel ? 'Voided Label Cost' : 'Label Cost'}
                     value={
-                      <LabelCostStack breakdown={labelBreakdown} />
+                      // PS-309 (Per user override unlock shipped data on 2026-06-23): a voided
+                      // label's cost is historical, never an active charge — mute + strike it.
+                      isVoidedLabel ? (
+                        <span
+                          data-shipped-label-state="voided"
+                          title="This label was voided — historical cost, not an active charge."
+                          style={{ color: 'var(--text3, #9ca3af)', textDecoration: 'line-through' }}
+                        >
+                          <LabelCostStack breakdown={labelBreakdown} />
+                        </span>
+                      ) : (
+                        <LabelCostStack breakdown={labelBreakdown} />
+                      )
                     }
                   />
                 ) : null}

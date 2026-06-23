@@ -58,8 +58,17 @@ check('voided is checked before ext in all 3 shipped columns',
 
 // ── Drawer flags voided + does not present the voided cost as active ──
 const drawer = readFileSync('web/src/components/OrderDetailDrawer.tsx', 'utf8');
-check('drawer flags voided label (does not present the voided cost as active)',
+check('drawer flags voided label with a ⚠ banner',
   /isVoidedLabel/.test(drawer) && /data-shipped-label-state="voided"/.test(drawer));
+// PS-309 Hermes re-audit fix: the ⚠ banner alone is not enough — every visible voided-label
+// COST must be marked historical at the point it appears. Both the Cost Summary line AND the
+// Configure-Shipment "Label Cost" Field must relabel to "Voided Label Cost" and strike/mute the
+// value when voided, so the historical $ never reads as an active (green) charge.
+check('drawer marks BOTH voided-cost lines historical (relabel + strike), not active green',
+  (drawer.match(/'Voided Label Cost'/g) ?? []).length >= 2 &&
+  /line-through/.test(drawer) &&
+  // the green "active cost" colour is now conditional on NOT-voided
+  /isVoidedLabel \? 'var\(--text3[^)]*\)' : 'var\(--green/.test(drawer));
 
 if (failures > 0) {
   console.error(`\nPS-309 voided-label display guard FAILED with ${failures} failure(s).`);
