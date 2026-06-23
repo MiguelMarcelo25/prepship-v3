@@ -213,6 +213,16 @@ const SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE = Math.max(
   )
 );
 export type RateFetchPriority = 'interactive' | 'background';
+// PS-perf (QA audit 2026-06-23): a STALLED ShipStation carrier used to hold the whole Browse Rates
+// fan-out for the full 30s fetch timeout (some accounts intermittently take 25-30s — see the live
+// "timed out after 30000ms" reports). Bound the per-carrier rate-estimate call to a tighter budget
+// so a stuck carrier fails GRACEFULLY (a per-carrier 'failed' diagnostic) and the rates that DID
+// resolve render ~2x sooner instead of waiting on the slowest. The LABEL purchase path keeps the
+// longer fetch timeout (a label call must never be cut off). Env-tunable.
+const SHIPSTATION_RATE_ESTIMATE_TIMEOUT_MS = Math.max(
+  3_000,
+  Number.parseInt(process.env.SHIPSTATION_RATE_ESTIMATE_TIMEOUT_MS ?? '15000', 10) || 15_000
+);
 const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
   60_000,
   Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
@@ -1047,12 +1057,16 @@ async function fetchEstimateForCarrier(
     body.insured_value = options.insuredValue;
   }
   try {
-    const payload = await quoteCarrierRates('shipstation', {
-      body,
-      shippingOptions: options,
-      apiKeyV2: input.apiKeyV2 ?? undefined,
-      dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
-    });
+    const payload = await withCarrierQuoteTimeout(
+      quoteCarrierRates('shipstation', {
+        body,
+        shippingOptions: options,
+        apiKeyV2: input.apiKeyV2 ?? undefined,
+        dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
+      }),
+      `shipstation:${carrier.carrier_code}`,
+      SHIPSTATION_RATE_ESTIMATE_TIMEOUT_MS,
+    );
     const rates = payload.rates as EstimateRate[];
     // Ensure carrier metadata is on every row (ShipStation sometimes omits)
     const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
