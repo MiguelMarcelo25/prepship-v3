@@ -189,6 +189,7 @@ import { groupOrdersBySku } from './orders-grouping'
 import { computeOrderedFilteredOrders } from './orders-filtered-sort'
 // PS-166/PS-306/PS-258: pure filter/sort derivation memos extracted VERBATIM.
 import { useOrdersFilterSort } from './hooks/useOrdersFilterSort'
+import { useOrdersSelection } from './hooks/useOrdersSelection'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
 import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
@@ -1272,7 +1273,6 @@ export default function OrdersView({
       : new Map<number, OrderFullDto>()
   ), [activeOrderId, activeOrderDetail])
 
-  const selectedIdSet = useMemo(() => new Set(selectedOrderIds), [selectedOrderIds])
   const resolvedColumnPrefs = useMemo(
     () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })) as TableColumnConfig[], currentStatus, columnPrefs),
     [currentStatus, columnPrefs],
@@ -1399,12 +1399,28 @@ export default function OrdersView({
     sortState,
     shippingAccounts,
   })
-  const visibleSelectedCount = useMemo(
-    () => visibleOrderIds.filter((orderId) => selectedIdSet.has(orderId)).length,
-    [visibleOrderIds, selectedIdSet],
-  )
-  const allVisibleSelected = visibleOrderIds.length > 0 && visibleSelectedCount === visibleOrderIds.length
-  const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected
+  // PS-166/PS-306/PS-258 (Hook wave): the selection STATE container (derived
+  // selection memos + `updateSelection` + the two selection-only helpers
+  // `toggleOrderSelection`/`selectOrderRange`) moved VERBATIM into
+  // useOrdersSelection. `selectedOrderIds` is a controlled PROP (no useState to
+  // move). The sibling helpers that touch allMatchingSelection/snapshots
+  // (clearSelection, toggleSkuGroupSelection, toggleVisibleSelection,
+  // selectAllMatchingOrders, hydrateSelectedOrdersForActions) and the isReadOnly
+  // gates intentionally STAY in this shell.
+  const {
+    selectedIdSet,
+    visibleSelectedCount,
+    allVisibleSelected,
+    someVisibleSelected,
+    updateSelection,
+    toggleOrderSelection,
+    selectOrderRange,
+  } = useOrdersSelection({
+    selectedOrderIds,
+    visibleOrderIds,
+    onSelectedOrderIdsChange,
+    onActiveOrderIdChange,
+  })
 
   const panelOrderId = activeOrderId ?? (selectedOrderIds.length === 1 ? selectedOrderIds[0] : null)
   const panelOrder = orderedFilteredOrders.find((order) => order.orderId === panelOrderId)
@@ -2231,12 +2247,8 @@ export default function OrdersView({
   }, [rateBrowserOpen, kbRowId, orderedFilteredOrders])
 
 
-  const updateSelection = (ids: number[]) => {
-    const nextIds = [...new Set(ids)]
-    onSelectedOrderIdsChange?.(nextIds)
-    onActiveOrderIdChange?.((nextIds.length === 1 ? nextIds[0] : null) as number | null)
-  }
-
+  // PS-166/PS-306/PS-258 (Hook wave): updateSelection now comes from
+  // useOrdersSelection (destructured above).
   const openOrderDetails = (orderId: number) => {
     onActiveOrderIdChange?.(orderId)
   }
@@ -2326,30 +2338,8 @@ export default function OrdersView({
     setDetailDrawerFromQueue(false)
   }
 
-  const toggleOrderSelection = (orderId: number, checked?: boolean) => {
-    const isChecked = selectedIdSet.has(orderId)
-    const shouldSelect = checked ?? !isChecked
-    if (shouldSelect) {
-      updateSelection([...selectedOrderIds, orderId])
-      return
-    }
-
-    updateSelection(selectedOrderIds.filter((id) => id !== orderId))
-  }
-
-  const selectOrderRange = (anchorOrderId: number, targetOrderId: number) => {
-    const anchorIndex = visibleOrderIds.indexOf(anchorOrderId)
-    const targetIndex = visibleOrderIds.indexOf(targetOrderId)
-    if (anchorIndex < 0 || targetIndex < 0) {
-      toggleOrderSelection(targetOrderId, true)
-      return
-    }
-    const start = Math.min(anchorIndex, targetIndex)
-    const end = Math.max(anchorIndex, targetIndex)
-    const rangeIds = visibleOrderIds.slice(start, end + 1)
-    updateSelection([...selectedOrderIds, ...rangeIds])
-  }
-
+  // PS-166/PS-306/PS-258 (Hook wave): toggleOrderSelection + selectOrderRange now
+  // come from useOrdersSelection (destructured above) — they touch ONLY selection.
   const toggleSkuGroupSelection = (orderIds: number[], checked?: boolean) => {
     setAllMatchingSelection(null)
     const orderIdSet = new Set(orderIds)
