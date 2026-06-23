@@ -11,6 +11,7 @@
 // passed in as a prop callback so this file never owns that decision. The stateless
 // label/code/service formatters below are byte-identical copies of the parent's pure
 // module-level helpers (no state, same input → same output).
+import { useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   Loader2,
@@ -18,6 +19,7 @@ import {
   Truck,
   Lock,
   Search,
+  ChevronDown,
 } from 'lucide-react'
 import { AutomationSwitch, ButtonSpinner, SkeletonStack, StatusLine } from './settings-ui'
 import { formatCaDateTimeLabeled } from '../../lib/ca-time'
@@ -220,6 +222,32 @@ export function AutomationAvailabilityPanel({
   // PS-057 protection predicate — decision logic stays in SettingsView, passed in here.
   isHugrabCarrierDisableProtected,
 }: AutomationAvailabilityPanelProps) {
+  // Local UI-only state (cosmetic; all business state stays in the parent per the PS-155
+  // pure-presentation contract). expandedServiceCarriers = carriers showing their FULL service
+  // list (the "+N more" toggle); collapsedGroups = client groups folded shut for fast scanning.
+  const [expandedServiceCarriers, setExpandedServiceCarriers] = useState<Set<string>>(() => new Set())
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
+  const toggleServiceCarrier = (key: string) =>
+    setExpandedServiceCarriers((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const collapseAllGroups = () =>
+    setCollapsedGroups(new Set(automationFilteredGroups.map((g) => String(g.clientId))))
+  const expandAllGroups = () => setCollapsedGroups(() => new Set())
+  const allGroupsCollapsed =
+    automationFilteredGroups.length > 0 &&
+    automationFilteredGroups.every((g) => collapsedGroups.has(String(g.clientId)))
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -315,9 +343,31 @@ export function AutomationAvailabilityPanel({
         </div>
       ) : null}
 
+      {automationFilteredGroups.length > 1 ? (
+        <div className="flex items-center justify-between gap-2 px-1">
+          <span className="text-[11.5px] font-semibold text-ink-3 tabular-nums">
+            {automationFilteredGroups.length} clients
+          </span>
+          <button
+            type="button"
+            onClick={() => (allGroupsCollapsed ? expandAllGroups() : collapseAllGroups())}
+            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11.5px] font-semibold text-ink-3 hover:text-ink bg-surface hover:bg-surface-2 ring-1 ring-line transition-colors"
+          >
+            <ChevronDown
+              size={13}
+              strokeWidth={2.5}
+              className={`transition-transform ${allGroupsCollapsed ? '-rotate-90' : ''}`}
+            />
+            {allGroupsCollapsed ? 'Expand all' : 'Collapse all'}
+          </button>
+        </div>
+      ) : null}
+
       <div className="space-y-3">
         {automationFilteredGroups.map((group, groupIndex) => {
           const hasHugrabRule = isHugrabClient(group.clientName)
+          const groupKey = String(group.clientId)
+          const isGroupCollapsed = collapsedGroups.has(groupKey)
           return (
             <motion.div
               key={group.clientId}
@@ -326,18 +376,31 @@ export function AutomationAvailabilityPanel({
               transition={{ duration: 0.18, delay: Math.min(groupIndex * 0.03, 0.18) }}
               className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-surface-2 border-b border-line">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] font-extrabold text-ink truncate">{group.clientName}</span>
-                    {hasHugrabRule ? (
-                      <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
-                        Ground Saver/SurePost blocked
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="text-[11.5px] text-ink-3 mt-0.5">
-                    {group.stores.length} store{group.stores.length === 1 ? '' : 's'} - {group.carrierCount} carrier account{group.carrierCount === 1 ? '' : 's'}
+              <button
+                type="button"
+                onClick={() => toggleGroup(groupKey)}
+                aria-expanded={!isGroupCollapsed}
+                aria-controls={`automation-group-${groupKey}`}
+                className={`flex w-full flex-wrap items-center justify-between gap-2 px-4 py-3 bg-surface-2 text-left transition-colors hover:bg-surface ${isGroupCollapsed ? '' : 'border-b border-line'}`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <ChevronDown
+                    size={15}
+                    strokeWidth={2.5}
+                    className={`flex-shrink-0 text-ink-3 transition-transform ${isGroupCollapsed ? '-rotate-90' : ''}`}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-extrabold text-ink truncate">{group.clientName}</span>
+                      {hasHugrabRule ? (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
+                          Ground Saver/SurePost blocked
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="text-[11.5px] text-ink-3 mt-0.5">
+                      {group.stores.length} store{group.stores.length === 1 ? '' : 's'} - {group.carrierCount} carrier account{group.carrierCount === 1 ? '' : 's'}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 text-[11px] text-ink-3">
@@ -353,9 +416,10 @@ export function AutomationAvailabilityPanel({
                     </span>
                   ) : null}
                 </div>
-              </div>
+              </button>
 
-              <div className="divide-y divide-line">
+              {!isGroupCollapsed ? (
+              <div id={`automation-group-${groupKey}`} className="divide-y divide-line">
                 {group.stores.map((row) => {
                   // Master-toggle state: a store counts as "on" when every
                   // toggleable (non-protected) carrier is enabled. Protected
@@ -436,6 +500,14 @@ export function AutomationAvailabilityPanel({
                               const serviceEligibility = services
                               const allowedServices = serviceEligibility.filter((service) => service.allowed)
                               const disabledServices = serviceEligibility.filter((service) => !service.allowed)
+                              // index tiebreaker: a carrier with neither carrierId nor code would
+                              // otherwise share the key "${storeId}:" with its siblings and expand together.
+                              const carrierServiceKey = `${row.store.storeId}:${carrierId || code || index}`
+                              const showAllServices = expandedServiceCarriers.has(carrierServiceKey)
+                              const SERVICE_PREVIEW_COUNT = 8
+                              const visibleAllowedServices = showAllServices
+                                ? allowedServices
+                                : allowedServices.slice(0, SERVICE_PREVIEW_COUNT)
                               const carrierEnabled = !carrier.disabled
                               const carrierSavingKey = `carrier:${row.store.storeId}:${carrierId || code}`
                               const isCarrierSaving = automationSavingKey === carrierSavingKey
@@ -505,7 +577,7 @@ export function AutomationAvailabilityPanel({
                                           Available services
                                         </div>
                                         <div className="flex flex-wrap gap-1">
-                                            {allowedServices.slice(0, 8).map((service) => {
+                                            {visibleAllowedServices.map((service) => {
                                               const serviceCode = automationServiceCode(service)
                                               const serviceSavingKey = `service:${row.store.storeId}:${carrierId || code}:${serviceCode || service.name}`
                                               const isSaving = automationSavingKey === serviceSavingKey
@@ -526,10 +598,22 @@ export function AutomationAvailabilityPanel({
                                                 </span>
                                               )
                                             })}
-                                          {allowedServices.length > 8 ? (
-                                            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200">
-                                              +{allowedServices.length - 8} more
-                                            </span>
+                                          {allowedServices.length > SERVICE_PREVIEW_COUNT ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => toggleServiceCarrier(carrierServiceKey)}
+                                              aria-expanded={showAllServices}
+                                              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-800 ring-1 ring-emerald-200 hover:bg-emerald-100 transition-colors"
+                                            >
+                                              {showAllServices
+                                                ? 'Show less'
+                                                : `+${allowedServices.length - SERVICE_PREVIEW_COUNT} more`}
+                                              <ChevronDown
+                                                size={11}
+                                                strokeWidth={2.5}
+                                                className={`transition-transform ${showAllServices ? 'rotate-180' : ''}`}
+                                              />
+                                            </button>
                                           ) : null}
                                         </div>
                                       </div>
@@ -586,6 +670,7 @@ export function AutomationAvailabilityPanel({
                   )
                 })}
               </div>
+              ) : null}
             </motion.div>
           )
         })}
