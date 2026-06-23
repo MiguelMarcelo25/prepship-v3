@@ -162,10 +162,18 @@ check('redaction owners scrub separated Rate Cost and margin fields',
     /shippingMarginAmount/.test(orderRedaction) &&
     /rateCostAmount/.test(rateBrowserRedaction) &&
     /shippingMarginAmount/.test(rateBrowserRedaction));
-check('RateRowItem renders separated Rate Cost and Margin instead of stacked tuple',
-  /Rate Cost/.test(rateRowItem) &&
-    /Margin/.test(rateRowItem) &&
+// PS-308 (2026-06-23): the Rate Browser row was corrected to the SEPARATED form — the customer
+// comparison rate is the primary price and the internal Rate Cost is a delineated admin block;
+// Margin is NOT rendered in the row (it lives in the Awaiting/Shipped columns, per the card's Rate
+// Browser spec). The prior assertion required a rendered "Margin" line, which pinned the very
+// stacked tuple this card removes; it is replaced with positive separation + tuple-absence checks.
+check('RateRowItem renders the customer rate as primary + a SEPARATED admin Rate Cost (no stacked tuple)',
+  /houseTuple\.customerRate\.toFixed\(2\)/.test(rateRowItem) &&
+    /data-ps308-internal-cost/.test(rateRowItem) &&
+    /Rate Cost/.test(rateRowItem) &&
     /renderHouseBadge/.test(rateRowItem) &&
+    !/houseTuple\.customerRate\s*-\s*houseTuple\.drpCost/.test(rateRowItem) &&
+    !/Margin \$\{/.test(rateRowItem) &&
     !/priceDisplay\(houseTuple\.drpCost,\s*houseTuple\.customerRate/.test(rateRowItem));
 
 if (failures > 0) {

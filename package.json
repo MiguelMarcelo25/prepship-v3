@@ -440,6 +440,7 @@
     "test:ps-307-direct-rate-markup-behavior": "tsx scripts/ps-307-direct-rate-markup-behavior-test.ts",
     "test:ps-308-rate-cost-columns": "tsx scripts/ps-308-rate-cost-columns-guard.ts",
     "test:ps-308-fe-rate-cost-column": "tsx scripts/ps-308-fe-rate-cost-column-guard.ts",
+    "test:ps-308-rate-browser-no-tuple": "tsx scripts/ps-308-rate-browser-no-tuple-guard.ts",
     "test:ps-308-rate-cost-columns-closeout": "tsx scripts/ps-308-rate-cost-columns-closeout-guard.ts",
     "test:ps-291-manual-order-preview": "tsx scripts/ps-291-manual-order-real-optional-items-guard.ts",
     "test:ps-291-rate-origin-schema": "tsx scripts/ps-291-rate-origin-schema-guard.ts",

@@ -295,22 +295,40 @@ export default function RateRowItem({
         )}
         {carrierBadgeLarge(r.carrierCode)}
         <div style={{ textAlign: 'right', minWidth: 145 }}>
-          {/* PS-292: SHIPP house-account recommended row — bold customer_rate (cheapest eligible
-              non-SHIPP) over the SHIPP drp_cost, plus the HOUSE badge. Backend-owned (houseTuple is
-              the parent's pass-through of the canonical bestRate); the row never computes the margin.
-              Falls back to the normal single price for every other row / non-house / redacted view. */}
+          {/* PS-308: the SHIPP house-account row no longer renders a STACKED TUPLE (customer_rate /
+              Rate Cost / Margin in one price cell — the exact thing this card removes, DoD: "no
+              stacked tuple display in Rate Browser"). Instead the customer comparison rate is the
+              row's PRIMARY price (same headline grammar as every other rate) and the internal DJR
+              Rate Cost is a delineated, admin-only annotation beneath it. houseTuple is the parent's
+              pass-through of the canonical bestRate and is null for non-financial viewers (redacted)
+              and on every non-house row, so its presence already gates the internal figure. The
+              FE-computed Margin line is dropped — margin is backend-owned and shown in the
+              Awaiting/Shipped Rate Cost columns — so the row performs no money math. HOUSE badge
+              retained. Supersedes PS-292's tuple direction; non-house / blocked rows fall back to
+              the normal single price. */}
           {houseTuple && !blocked ? (
             <div style={{ lineHeight: 1.25 }}>
               <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--green)', whiteSpace: 'nowrap' }}>
                 ${houseTuple.customerRate.toFixed(2)}
               </div>
-              <div style={{ fontSize: 10.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}>
-                Rate Cost ${houseTuple.drpCost.toFixed(2)}
-              </div>
-              <div style={{ fontSize: 10.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}>
-                Margin ${Math.max(0, houseTuple.customerRate - houseTuple.drpCost).toFixed(2)}
-              </div>
               <div style={{ marginTop: 3 }}>{renderHouseBadge()}</div>
+              <div
+                data-ps308-internal-cost=""
+                style={{
+                  marginTop: 4,
+                  paddingTop: 4,
+                  borderTop: '1px dashed var(--border)',
+                  fontSize: 10,
+                  color: 'var(--text3)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span style={{ fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase' }}>
+                  Internal
+                </span>
+                {' · Rate Cost $'}
+                {houseTuple.drpCost.toFixed(2)}
+              </div>
             </div>
           ) : (
             priceDisplay(base, marked, {
