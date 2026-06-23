@@ -48,13 +48,19 @@ assert.ok(!dashboardView.includes('const [trendClientId'),
   'the chart-local trendClientId override must stay deleted');
 assert.ok(!dashboardView.includes('setTrendClientId('),
   'nothing may write a chart-local client filter');
-// The trend-chart dropdown is bound to the canonical filter.
-const trendSelectStart = dashboardView.indexOf('aria-label="Filter Daily Orders Trend by client"');
-assert.ok(trendSelectStart > 0, 'the trend-chart client dropdown must exist');
-const trendSelectBlock = dashboardView.slice(Math.max(0, trendSelectStart - 600), trendSelectStart);
-assert.ok(trendSelectBlock.includes('value={selectedClientId ?? \'\'}') &&
-  trendSelectBlock.includes('setSelectedClientId(event.target.value'),
-  'the chart dropdown must read/write the canonical selectedClientId');
+// 2026-06-23: the duplicate on-chart client dropdown was removed; the ONE canonical
+// client dropdown now lives in the dashboard header (next to the title). It still binds
+// the same selectedClientId, so the unification this guard protects is unchanged — only
+// the dropdown's location moved.
+const clientSelectStart = dashboardView.indexOf('aria-label="Filter dashboard by client"');
+assert.ok(clientSelectStart > 0, 'the canonical dashboard client dropdown must exist');
+const clientSelectBlock = dashboardView.slice(Math.max(0, clientSelectStart - 600), clientSelectStart);
+assert.ok(clientSelectBlock.includes('value={selectedClientId ?? \'\'}') &&
+  clientSelectBlock.includes('setSelectedClientId(event.target.value'),
+  'the canonical client dropdown must read/write the canonical selectedClientId');
+// And the removed duplicate must stay removed.
+assert.ok(!dashboardView.includes('aria-label="Filter Daily Orders Trend by client"'),
+  'the duplicate on-chart trend client dropdown must stay deleted (one canonical filter)');
 
 // The dashboard load passes the canonical filter to EVERY client-scoped
 // panel fetch (KPIs/daily counts, summary, SKU trends, Top SKUs table).

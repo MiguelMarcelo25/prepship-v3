@@ -2368,12 +2368,43 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           heading → Client → controls. Explicit grid placement on desktop
           (xl:col-* / xl:row-*) overrides the mobile order utilities. */}
       <div className="mb-4 grid grid-cols-1 items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
-        {/* TITLE — top-left */}
+        {/* TITLE + Client scope + Date range on ONE top row (operator request
+            2026-06-23): the client dropdown was moved up beside the title with the
+            date filter next to it, and the old full-width client row beneath the
+            header was removed so the whole dashboard sits higher. */}
         <div className="min-w-0 xl:col-start-1 xl:row-start-1">
-          <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
-            Inventory & Stockout Prevention
-          </h1>
-          <p className="mt-0.5 hidden text-xs text-ink-3 sm:block">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
+              Inventory & Stockout Prevention
+            </h1>
+            {/* The ONE canonical dashboard client filter (selectedClientId). */}
+            <div className="flex items-center gap-2">
+              <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
+              <div className="relative">
+                <select
+                  value={selectedClientId ?? ''}
+                  onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
+                  className="h-10 w-full max-w-[16rem] appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer sm:w-auto sm:min-w-[11rem]"
+                  aria-label="Filter dashboard by client"
+                >
+                  <option value="">All Clients</option>
+                  {clients.map((client) => (
+                    <option key={client.clientId} value={client.clientId}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={14}
+                  strokeWidth={2.5}
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-3"
+                />
+              </div>
+            </div>
+            {/* Date range — drives every dashboard API call. */}
+            <DateRangePicker value={dateRange} onChange={setDateRange} className="w-full sm:w-auto" />
+          </div>
+          <p className="mt-1 hidden text-xs text-ink-3 sm:block">
             Monitor inventory health, days of supply, and take action to prevent stockouts
           </p>
           <p className="mt-1 hidden flex-wrap items-center gap-1.5 text-2xs font-semibold text-ink-3 sm:inline-flex">
@@ -2381,33 +2412,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
           </p>
         </div>
-
-        {/* CLIENT scope filter — desktop: centered in its own full-width row
-            beneath the title/toolbar (xl:col-span-2 xl:row-start-2 + mx-auto).
-            Mobile: 2nd item in the stack (order-2), centered. */}
-        <div className="order-2 mx-auto flex w-full items-center justify-center gap-2 sm:w-auto xl:order-none xl:col-span-2 xl:row-start-2">
-            <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
-            <div className="relative">
-              <select
-                value={selectedClientId ?? ''}
-                onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
-                className="h-10 w-full max-w-[18rem] appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer sm:w-auto sm:min-w-[13rem]"
-                aria-label="Filter dashboard by client"
-              >
-                <option value="">All Clients</option>
-                {clients.map((client) => (
-                  <option key={client.clientId} value={client.clientId}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                size={14}
-                strokeWidth={2.5}
-                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-3"
-              />
-            </div>
-          </div>
 
           {/* Header action bar — freshness chip, date range, Filters,
               (desktop-only) Edit, and Refresh. order-3 (below Client) on
@@ -2428,9 +2432,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               row, then Filters + Refresh sit together on one compact row
               (Edit Dashboard is hidden below xl since it's mouse-only). */}
           <div className="relative flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
-            {/* Group 2 — operator-controlled date range. Drives every
-                API call on the dashboard. */}
-            <DateRangePicker value={dateRange} onChange={setDateRange} className="w-full sm:w-auto" />
+            {/* Group 2 — the operator date range moved UP beside the title
+                (with the client dropdown) per operator request 2026-06-23. */}
 
             {/* Group 3 — Filters popover (category + brand secondary cuts). */}
             <div ref={filtersPopoverRef} className="relative inline-flex min-w-0 flex-1 sm:w-auto sm:flex-none">
@@ -2803,33 +2806,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <div className="flex flex-wrap items-center gap-2.5">
                 <h3 className="text-sm font-extrabold text-ink">Daily Orders Trend</h3>
               </div>
-              {/* PS-212: this dropdown drives the ONE canonical dashboard
-                  client filter (`selectedClientId`). The old chart-local
-                  `trendClientId` override re-scoped only the trend lines —
-                  DJ would pick HUGRAB here and Top SKUs / heatmap / KPIs
-                  silently stayed global. Selecting a client now re-runs the
-                  dashboard load, which passes clientId to every endpoint, so
-                  all client-scoped panels correlate. */}
-              <div className="relative mt-2 inline-block">
-                <select
-                  value={selectedClientId ?? ''}
-                  onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
-                  className="h-7 max-w-[12rem] appearance-none rounded-card border border-line bg-surface pl-2.5 pr-7 text-2xs font-bold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
-                  aria-label="Filter Daily Orders Trend by client"
-                >
-                  <option value="">All Clients</option>
-                  {clients.map((client) => (
-                    <option key={client.clientId} value={client.clientId}>
-                      {client.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  size={13}
-                  strokeWidth={2.5}
-                  className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-3"
-                />
-              </div>
+              {/* 2026-06-23: the duplicate on-chart client dropdown was removed.
+                  Client scope now lives ONCE in the dashboard header (beside the
+                  title); it still drives the same canonical selectedClientId, so
+                  the trend / Top SKUs / heatmap / KPIs all stay correlated. */}
               {/* 2026-05-13: removed the "Same day, last month"
                   legend entry per operator request. The prior-period
                   data is still fetched (priorSales, priorAgg) because
