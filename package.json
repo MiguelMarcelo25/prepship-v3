@@ -121,6 +121,8 @@
     "test:ps-286-applied-rate-sync": "tsx scripts/ps-286-applied-rate-sync-guard.ts",
     "test:ps-287-print-queue-label-normalization": "tsx scripts/ps-287-print-queue-label-normalization-guard.ts",
     "test:ps-287-print-queue-label-normalization-closeout": "tsx scripts/ps-287-print-queue-label-normalization-closeout-guard.ts",
+    "test:print-queue-label-normalization": "npm run test:ps-287-print-queue-label-normalization",
+    "test:print-queue-pdf-merge": "npm run test:ps-287-print-queue-label-normalization && npm run test:ps-287-print-queue-label-normalization-closeout",
     "test:ps-288-label-recovery": "tsx scripts/ps-288-label-recovery-guard.ts",
     "test:ps-106-carrier-family-eligibility": "tsx scripts/ps-106-carrier-family-eligibility-guard.ts",
     "test:carrier-test-mode-seam": "tsx scripts/carrier-test-mode-seam-guard.ts",

@@ -119,3 +119,55 @@ export function placeArtworkOnCanvas(input: PlaceArtworkInput): PlacedArtwork {
     drawHeight,
   };
 }
+
+export type RotatedPlacement = {
+  // The UNROTATED draw size handed to pdf-lib's page.drawPage().
+  drawWidth: number;
+  drawHeight: number;
+  // Bottom-left anchor the rotation is applied around.
+  x: number;
+  y: number;
+  // pdf-lib drawPage `rotate` in degrees (CCW). Bakes the page's clockwise /Rotate.
+  rotateDegrees: number;
+};
+
+// PS-287 (Per user override unlock shipped data on 2026-06-23): place a ROTATED label
+// page's artwork scaled-to-fit + CENTERED on the 4×6 canvas, BAKING its PDF /Rotate
+// (clockwise) into the drawn output so it prints UPRIGHT at 288×432 instead of being copied
+// byte-for-byte at its original (often sideways / oversized) size. pdf-lib's embedPage
+// IGNORES /Rotate (verified empirically) — embedded dims are the UNROTATED content — so we
+// rotate it ourselves via drawPage's `rotate`. PURE geometry: the axis-aligned bounding box
+// of the rotated draw box equals the centered target box (proven by the ps-287 guard for
+// every angle). 90/270 swap the visible W↔H; the page's /Rotate is clockwise, so we apply
+// the corresponding counter-clockwise pdf-lib rotation and offset the anchor accordingly.
+export function placeRotatedArtworkOnCanvas(input: {
+  artworkW: number; // embedded (unrotated) width
+  artworkH: number; // embedded (unrotated) height
+  rotation: number; // page /Rotate, clockwise degrees: 90 | 180 | 270 (others snap to nearest)
+  canvasW: number;
+  canvasH: number;
+  margin?: number;
+}): RotatedPlacement {
+  const r = (((Math.round(input.rotation / 90) * 90) % 360) + 360) % 360;
+  const ew = Math.max(1, input.artworkW);
+  const eh = Math.max(1, input.artworkH);
+  const swap = r === 90 || r === 270;
+  const visibleW = swap ? eh : ew;
+  const visibleH = swap ? ew : eh;
+  const base = placeArtworkOnCanvas({
+    artworkW: visibleW,
+    artworkH: visibleH,
+    canvasW: input.canvasW,
+    canvasH: input.canvasH,
+    margin: input.margin,
+  });
+  const scale = base.drawWidth / visibleW;
+  const drawWidth = ew * scale;
+  const drawHeight = eh * scale;
+  const tx = base.x;
+  const ty = base.y;
+  if (r === 90) return { drawWidth, drawHeight, x: tx, y: ty + drawWidth, rotateDegrees: -90 };
+  if (r === 180) return { drawWidth, drawHeight, x: tx + drawWidth, y: ty + drawHeight, rotateDegrees: 180 };
+  if (r === 270) return { drawWidth, drawHeight, x: tx + drawHeight, y: ty, rotateDegrees: 90 };
+  return { drawWidth, drawHeight, x: tx, y: ty, rotateDegrees: 0 };
+}

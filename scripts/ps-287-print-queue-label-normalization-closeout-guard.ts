@@ -48,9 +48,13 @@ check('normalization owner writes every unrotated label onto a clean 288x432 pag
   /const TARGET_W = 288/.test(pdfOwner) &&
     /const TARGET_H = 432/.test(pdfOwner) &&
     /merged\.addPage\(\[TARGET_W, TARGET_H\]\)/.test(pdfOwner));
-check('normalization owner preserves rotated labels as-is',
+// PS-287 (Per user override unlock shipped data on 2026-06-23): the owner no longer copies
+// rotated labels byte-for-byte — it BAKES the /Rotate onto the clean 288x432 canvas via
+// placeRotatedArtworkOnCanvas so they print upright at 4x6 (the DoD #3 fix).
+check('normalization owner bakes rotated labels onto the 4x6 canvas (no byte-for-byte copy)',
   /rotation !== 0/.test(pdfOwner) &&
-    /copyPages\(labelDoc, \[indices\[i\]!\]\)/.test(pdfOwner));
+    /placeRotatedArtworkOnCanvas\(/.test(pdfOwner) &&
+    !/copyPages\(/.test(pdfOwner));
 
 const appendOwner = pdfOwner.slice(
   pdfOwner.indexOf('export async function appendNormalizedLabelPages'),
@@ -92,7 +96,7 @@ check('normalization guard proves oversized 4x6 and asymmetric-band cases',
 check('normalization guard proves end-to-end PDF page output and header preservation',
   /content-aware output page is a clean 288.+432/.test(normalizationGuard) &&
     /oversized letter still normalizes to 288.+432/.test(normalizationGuard) &&
-    /rotated label preserved as-is/.test(normalizationGuard) &&
+    /rotated .+ label normalizes to a clean 288.+432/.test(normalizationGuard) &&
     /batch header page is preserved/.test(normalizationGuard));
 
 const closeoutStatus = {

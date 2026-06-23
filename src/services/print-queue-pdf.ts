@@ -14,7 +14,8 @@ import {
   NO_SKU_PICK_NOTE,
   type CollapsedQueueLine,
 } from './print-queue-identity.js';
-import { deriveArtworkBounds, placeArtworkOnCanvas } from './print-queue-artwork-fit.js';
+import { degrees } from 'pdf-lib';
+import { deriveArtworkBounds, placeArtworkOnCanvas, placeRotatedArtworkOnCanvas } from './print-queue-artwork-fit.js';
 
 // Per user override unlock shipped data on 2026-06-02: display-only print
 // layout. Append a label PDF's pages to the merged print document, normalizing
@@ -31,9 +32,11 @@ import { deriveArtworkBounds, placeArtworkOnCanvas } from './print-queue-artwork
 // canvas (aspect preserved, small safe margin). The geometry lives in the pure
 // print-queue-artwork-fit.ts helper.
 //
-//  - A rotated page is still copied as-is so its orientation is never altered.
-//  - An oversized, un-rotated page is content-aware fitted to the 4x6 canvas.
-//  - A near-4x6, un-rotated page is also content-aware fitted (its artwork
+//  - A ROTATED page is now ALSO normalized (PS-287, 2026-06-23): its PDF /Rotate is
+//    BAKED onto the clean 288x432 canvas (placeRotatedArtworkOnCanvas) so it prints
+//    upright at 4x6, instead of being copied byte-for-byte at its original
+//    sideways/oversized size.
+//  - An oversized or near-4x6 un-rotated page is content-aware fitted (its artwork
 //    re-centered/scaled) rather than copied byte-for-byte.
 //
 // Mutates nothing but the in-memory merged print PDF — no label bytes, postage,
@@ -46,23 +49,39 @@ export async function appendNormalizedLabelPages(
   const TARGET_H = 432;
   const ARTWORK_MARGIN = 6;
   const labelPages = labelDoc.getPages();
-  const indices = labelDoc.getPageIndices();
-  for (const [i, src] of labelPages.entries()) {
+  for (const src of labelPages) {
     const rotation = (((src.getRotation().angle ?? 0) % 360) + 360) % 360;
-    // A rotated page is copied as-is so its orientation is never altered.
-    if (rotation !== 0) {
-      const [copied] = await merged.copyPages(labelDoc, [indices[i]!]);
-      if (copied) merged.addPage(copied);
-      continue;
-    }
-    // Content-aware: clip to the visible-artwork bounds (box hints) and place it
-    // scaled-to-fit + centered on a clean 4x6 canvas.
+    // Content-aware: clip to the visible-artwork bounds (box hints) and place that
+    // artwork scaled-to-fit + centered on a clean 4x6 canvas. embedPage IGNORES the
+    // page's /Rotate (verified), so embedded dims are the UNROTATED content.
     const bounds = deriveArtworkBounds(src);
     const [embedded] = await merged.embedPages(
       [src],
       [{ left: bounds.x, bottom: bounds.y, right: bounds.x + bounds.width, top: bounds.y + bounds.height }],
     );
     if (!embedded) continue;
+    const page = merged.addPage([TARGET_W, TARGET_H]);
+    if (rotation !== 0) {
+      // PS-287 (Per user override unlock shipped data on 2026-06-23): a ROTATED label is no
+      // longer copied byte-for-byte (which preserved its sideways/oversized size). Bake its
+      // /Rotate onto the clean 288x432 canvas so it prints UPRIGHT at 4x6 like the rest.
+      const rp = placeRotatedArtworkOnCanvas({
+        artworkW: embedded.width,
+        artworkH: embedded.height,
+        rotation,
+        canvasW: TARGET_W,
+        canvasH: TARGET_H,
+        margin: ARTWORK_MARGIN,
+      });
+      page.drawPage(embedded, {
+        x: rp.x,
+        y: rp.y,
+        width: rp.drawWidth,
+        height: rp.drawHeight,
+        rotate: degrees(rp.rotateDegrees),
+      });
+      continue;
+    }
     const placed = placeArtworkOnCanvas({
       artworkW: embedded.width,
       artworkH: embedded.height,
@@ -70,7 +89,6 @@ export async function appendNormalizedLabelPages(
       canvasH: TARGET_H,
       margin: ARTWORK_MARGIN,
     });
-    const page = merged.addPage([TARGET_W, TARGET_H]);
     page.drawPage(embedded, {
       x: placed.x,
       y: placed.y,

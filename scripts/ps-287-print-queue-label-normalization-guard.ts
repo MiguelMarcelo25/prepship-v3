@@ -27,6 +27,7 @@ import { appendNormalizedLabelPages } from '../src/services/print-queue-pdf.js';
 import {
   deriveArtworkBounds,
   placeArtworkOnCanvas,
+  placeRotatedArtworkOnCanvas,
 } from '../src/services/print-queue-artwork-fit.js';
 import { deriveLabelContentRegion } from '../src/services/print-queue-artwork-region.js';
 import {
@@ -248,15 +249,45 @@ const TARGET_H = 432;
     check('oversized letter still normalizes to 288×432', near(width, TARGET_W) && near(height, TARGET_H));
   }
 
-  // A rotated page is still copied as-is (orientation never altered).
+  // PS-287 (Per user override unlock shipped data on 2026-06-23): a ROTATED label is NO
+  // LONGER copied byte-for-byte at 612×792 — its /Rotate is baked onto a clean 288×432
+  // canvas so it prints UPRIGHT at 4×6 like every other label (the DoD #3 fix).
   {
-    const merged = await PDFDocument.create();
-    const label = await PDFDocument.create();
-    const page = label.addPage([612, 792]);
-    page.setRotation(degrees(90));
-    await appendNormalizedLabelPages(merged, label);
-    const { width, height } = merged.getPages()[0]!.getSize();
-    check('rotated label preserved as-is (not force-normalized)', near(width, 612) && near(height, 792));
+    for (const angle of [90, 180, 270]) {
+      const merged = await PDFDocument.create();
+      const label = await PDFDocument.create();
+      const page = label.addPage([612, 792]);
+      page.setRotation(degrees(angle));
+      await appendNormalizedLabelPages(merged, label);
+      const { width, height } = merged.getPages()[0]!.getSize();
+      check(`rotated ${angle}° label normalizes to a clean 288×432 page (not preserved at 612×792)`,
+        near(width, TARGET_W) && near(height, TARGET_H));
+    }
+  }
+
+  // PS-287: PROVE the rotated-placement geometry — the axis-aligned bounding box of the
+  // rotated draw box equals the centered target box on the 4×6 canvas, for every angle and
+  // aspect, and never bleeds past the canvas edge. Pure math (de-risks the live print path).
+  {
+    const rad = (deg: number) => (deg * Math.PI) / 180;
+    for (const [ew, eh] of [[200, 400], [400, 200], [300, 300]] as Array<[number, number]>) {
+      for (const rotation of [90, 180, 270]) {
+        const p = placeRotatedArtworkOnCanvas({ artworkW: ew, artworkH: eh, rotation, canvasW: TARGET_W, canvasH: TARGET_H, margin: 6 });
+        const c = Math.cos(rad(p.rotateDegrees));
+        const s = Math.sin(rad(p.rotateDegrees));
+        const corners = ([[0, 0], [p.drawWidth, 0], [p.drawWidth, p.drawHeight], [0, p.drawHeight]] as Array<[number, number]>)
+          .map(([dx, dy]) => [p.x + dx * c - dy * s, p.y + dx * s + dy * c] as [number, number]);
+        const xs = corners.map((q) => q[0]);
+        const ys = corners.map((q) => q[1]);
+        const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const swap = rotation === 90 || rotation === 270;
+        const base = placeArtworkOnCanvas({ artworkW: swap ? eh : ew, artworkH: swap ? ew : eh, canvasW: TARGET_W, canvasH: TARGET_H, margin: 6 });
+        check(`rotated placement AABB is centered on the canvas (ew=${ew} eh=${eh} r=${rotation})`,
+          near(minX, base.x) && near(minY, base.y) &&
+          near(maxX - minX, base.drawWidth) && near(maxY - minY, base.drawHeight) &&
+          minX >= -0.02 && minY >= -0.02 && maxX <= TARGET_W + 0.02 && maxY <= TARGET_H + 0.02);
+      }
+    }
   }
 
   // Header pages already in the merged doc are untouched by appending.
