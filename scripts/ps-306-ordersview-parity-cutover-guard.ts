@@ -179,9 +179,15 @@ check('filtered-order sort owner stays pure display ordering logic',
 check('filtered-order sort guard pins OrdersView delegation and no inline sort',
   filteredSortGuard.includes('the orderedFilteredOrders useMemo delegates to computeOrderedFilteredOrders') &&
   filteredSortGuard.includes('no inline .sort() remains in the orderedFilteredOrders useMemo'));
+// PS-166/PS-306/PS-258 decomposition: the skuOrderGroups/visibleOrderIds derivations were moved
+// VERBATIM into useOrdersFilterSort. OrdersView CONSUMES the hook and still RENDERS from its
+// outputs (the downstream JSX reads below stay in OrdersView). Re-pointed to follow the moved
+// declarations; the DOM byte-equality cert (test:orders-dom-parity:browser) proves no drift.
+const filterSortHook = read('web/src/components/Views/hooks/useOrdersFilterSort.ts');
 check('OrdersView table state still flows from orderedFilteredOrders',
-  /const skuOrderGroups = useMemo\([\s\S]{0,500}?orderedFilteredOrders/.test(ordersView) &&
-  /const visibleOrderIds = useMemo\(\s*\(\) => orderedFilteredOrders\.map/.test(ordersView) &&
+  /const skuOrderGroups = useMemo\([\s\S]{0,500}?orderedFilteredOrders/.test(filterSortHook) &&
+  /const visibleOrderIds = useMemo\(\s*\(\) => orderedFilteredOrders\.map/.test(filterSortHook) &&
+  /useOrdersFilterSort\(/.test(ordersView) &&
   ordersView.includes('orderedFilteredOrders.length > 0') &&
   ordersView.includes('skuSortActive ? skuOrderGroups.flatMap') &&
   ordersView.includes(': orderedFilteredOrders.map') &&

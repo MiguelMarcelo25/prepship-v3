@@ -68,13 +68,20 @@ const stubDeps = {
   check('sku-sort branch returns an array of the same length (real grouping leaf)', Array.isArray(out) && out.length === 2);
 }
 
-// ── structural: OrdersView delegates to the pure owner, no inline sort body ──
+// ── structural: the filter/sort memos were extracted VERBATIM into the useOrdersFilterSort
+// hook (PS-166/PS-306/PS-258 decomposition). The delegation invariant moved WITH the code;
+// OrdersView now CONSUMES the hook. Re-pointed to follow the moved declarations (the pure
+// computeOrderedFilteredOrders owner in orders-filtered-sort.ts is unchanged). The DOM
+// byte-equality cert (test:orders-dom-parity:browser) proves the render is identical. ──
 const ov = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('OrdersView imports computeOrderedFilteredOrders from the pure owner',
-  /computeOrderedFilteredOrders/.test(ov) && /orders-filtered-sort/.test(ov));
+const filterSortHook = readFileSync('web/src/components/Views/hooks/useOrdersFilterSort.ts', 'utf8');
+check('OrdersView consumes the extracted useOrdersFilterSort hook',
+  /useOrdersFilterSort\(/.test(ov) && /orderedFilteredOrders/.test(ov));
+check('the filter/sort hook imports computeOrderedFilteredOrders from the pure owner',
+  /computeOrderedFilteredOrders/.test(filterSortHook) && /orders-filtered-sort/.test(filterSortHook));
 check('the orderedFilteredOrders useMemo delegates to computeOrderedFilteredOrders',
-  /orderedFilteredOrders = useMemo\(\s*\(\) => computeOrderedFilteredOrders\(/.test(ov));
-const memo = /const orderedFilteredOrders = useMemo\([\s\S]{0,500}?\)\s*\n/.exec(ov)?.[0] ?? '';
+  /orderedFilteredOrders = useMemo\(\s*\(\) => computeOrderedFilteredOrders\(/.test(filterSortHook));
+const memo = /const orderedFilteredOrders = useMemo\([\s\S]{0,500}?\)\s*\n/.exec(filterSortHook)?.[0] ?? '';
 check('no inline .sort() remains in the orderedFilteredOrders useMemo (delegated, not inlined)',
   memo.length > 0 && !/\.sort\(/.test(memo));
 
