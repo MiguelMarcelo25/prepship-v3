@@ -560,6 +560,15 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
 import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelPackageFactsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
+// PS-166/PS-306/PS-258 (Wave 5): the order-detail SIDE PANEL (former
+// renderSinglePanel) moved VERBATIM to a strict presentational
+// <OrdersDetailSidePanel>. PRESENTATIONAL — every backend-truth handler (Ship
+// Acct PS-189/PS-204 + setOrderSelectedPid, Package precedence +
+// setOrderSelectedPackageId, Confirmation/Insurance refreshPanelBestRate,
+// createOrQueueLabel / recalculateBestRate / saveShipmentDetails / reprintLabel)
+// stays PARENT-OWNED here and is threaded down as an on* callback; the leaf
+// holds no apiClient / selected-pid/package persistence / label-purchase logic.
+import { OrdersDetailSidePanel } from './OrdersDetailSidePanel'
 // PS-219: shared danger-tone confirm dialog for the operator Void Label action.
 import { ConfirmModal } from '../ui/ConfirmModal'
 // PS-276 (slice 4-UI): compact resi/comm tag on the Orders table customer cell (display-only).
@@ -7430,959 +7439,184 @@ export default function OrdersView({
     }
   }
 
+  // PS-306 (Wave 5): the side-panel backend-truth handlers stay PARENT-OWNED.
+  // The extracted <OrdersDetailSidePanel> leaf is presentational and only FIRES
+  // these via on* props — it owns no apiClient call, no selected-pid/package
+  // persistence, no rate re-fetch, and no label purchase. Each handler keeps the
+  // exact body that previously lived inline in renderSinglePanel.
+  const handlePanelShipAccountChange = (nextValue: string) => {
+    if (!panelOrder) return
+    setPanelForm((current) => {
+      // PS-189: NEVER auto-default a service the operator didn't
+      // choose (the old `[0]?.code` silently stamped
+      // usps_media_mail — a restricted, books-only service — on
+      // stamps_com switches). Keep the current service if the new
+      // account offers it; otherwise force an explicit pick.
+      const nextOptions = getServiceOptionsForAccount(nextValue)
+      const keepService = nextOptions.some((option) => option.code === current.serviceCode)
+      return {
+        ...current,
+        shipAccountId: nextValue,
+        serviceCode: keepService ? current.serviceCode : '',
+      }
+    })
+    // PS-204: a preview rate quoted for the PREVIOUS account is
+    // stale for the new selection — drop it instead of letting
+    // it dress the new account with another account's amount.
+    // Re-rating (Browse Rates / preview fetch) repopulates it
+    // for the chosen account.
+    setPanelRatePreview((current) => {
+      const belongs = rateBelongsToProviderAccount(current[0], nextValue)
+      return belongs === false ? [] : current
+    })
+    void apiClient.setOrderSelectedPid(panelOrder.orderId, nextValue ? Number.parseInt(nextValue, 10) : null)
+  }
+
+  const handlePanelPackageChange = (packageId: string) => {
+    if (!panelOrder) return
+    const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === packageId)
+    const selectedDims = getPackageDims(selectedPackage)
+    // User-driven package change should trigger an
+    // auto-rate-refresh — flag it as a real edit.
+    dimsUserEditedRef.current = true
+    setPanelForm((current) => ({
+      ...current,
+      packageId,
+      ...(selectedDims
+        ? {
+          length: String(selectedDims.length),
+          width: String(selectedDims.width),
+          height: String(selectedDims.height),
+        }
+        : {}),
+    }))
+    void apiClient.setOrderSelectedPackageId(panelOrder.orderId, packageId ? Number.parseInt(packageId, 10) : null)
+  }
+
+  const handlePanelConfirmationChange = (confirmation: string) => {
+    if (!panelOrder) return
+    const nextForm = { ...panelForm, confirmation }
+    setPanelForm(nextForm)
+    if (panelOrder?.orderStatus === 'awaiting_shipment') {
+      const dims = getPanelDims()
+      const weightOz = getPanelWeightOz()
+      if (hasCompleteDims(dims) && weightOz > 0) {
+        void refreshPanelBestRate({
+          order: panelOrder,
+          dims,
+          weightOz,
+          confirmation,
+          panelForm: nextForm,
+          silent: true,
+        })
+      }
+    }
+  }
+
+  const handlePanelInsuranceChange = (insurance: string) => {
+    if (!panelOrder) return
+    const nextForm = { ...panelForm, insurance }
+    setPanelForm(nextForm)
+    if (panelOrder?.orderStatus === 'awaiting_shipment') {
+      const dims = getPanelDims()
+      const weightOz = getPanelWeightOz()
+      if (hasCompleteDims(dims) && weightOz > 0) {
+        void refreshPanelBestRate({ order: panelOrder, dims, weightOz, panelForm: nextForm, silent: true })
+      }
+    }
+  }
+
+  const handlePanelInsuranceValueChange = (insuranceValue: string) => {
+    if (!panelOrder) return
+    const nextForm = { ...panelForm, insuranceValue }
+    setPanelForm(nextForm)
+    if (panelOrder?.orderStatus === 'awaiting_shipment') {
+      const dims = getPanelDims()
+      const weightOz = getPanelWeightOz()
+      if (hasCompleteDims(dims) && weightOz > 0) {
+        void refreshPanelBestRate({ order: panelOrder, dims, weightOz, panelForm: nextForm, silent: true })
+      }
+    }
+  }
+
+  // PS-166/PS-306 (Wave 5): thin wrapper. The closure-dependent derivations
+  // (auto-best-rate order, service-option catalog, resolved dims, shipping-hold
+  // verdict) are computed HERE from component state and passed as already-computed
+  // props; the leaf stays presentational and recomputes only pure values.
   const renderSinglePanel = () => {
     if (!panelOrder) return buildEmptyPanel(onHideEmptyPanelChange ? () => onHideEmptyPanelChange(true) : undefined)
 
     const panelDisplayOrder = getOrderWithAutoBestRate(panelOrder)
-    const items = getActiveItems(panelOrder, panelDetail)
-    const mergedItems = getMergedItems(panelOrder, panelDetail)
-    const shipTo = getShipTo(panelOrder, panelDetail)
     const panelFormDims = getPanelDims()
     const selectedPanelPackage = packages.find((candidate) => getPackageIdentifier(candidate) === panelForm.packageId)
     const dims = hasCompleteDims(panelFormDims)
       ? panelFormDims
       : getPackageDims(selectedPanelPackage) ?? getDimensions(panelOrder, panelDetail)
-    const requestedService = getRequestedService(panelOrder, panelDetail)
-    const panelIndex = orderedFilteredOrders.findIndex((order) => order.orderId === panelOrder.orderId)
-    const prevOrderId = panelIndex > 0 ? orderedFilteredOrders[panelIndex - 1]?.orderId ?? null : null
-    const nextOrderId = panelIndex >= 0 && panelIndex < orderedFilteredOrders.length - 1 ? orderedFilteredOrders[panelIndex + 1]?.orderId ?? null : null
-    const currentWeight = panelOrder.weight?.value ?? 0
-    const panelIsTestOrder = isTestOrder(panelOrder, panelDetail)
     const serviceOptions = getServiceOptionsForAccount(panelForm.shipAccountId)
-    const serviceCodeMissingFromOptions = Boolean(
-      panelForm.serviceCode &&
-      !panelIsTestOrder &&
-      !serviceOptions.some((option) => option.code === panelForm.serviceCode)
-    )
-    const selectedPanelAccountLabel = panelIsTestOrder
-      ? TEST_SHIPPING_ACCOUNT_LABEL
-      : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelDisplayOrder, shippingAccounts)
-    const panelBestRateAccountLabel = panelIsTestOrder
-      ? TEST_SHIPPING_ACCOUNT_LABEL
-      : getShipAccountDisplay(panelDisplayOrder, shippingAccounts)
-    const panelPreviewRate = panelRatePreview[0] ?? null
-    const panelPreviewProviderId = panelPreviewRate ? toProviderAccountId(panelPreviewRate.shippingProviderId) : null
-    const panelPreviewAccountLabel = panelPreviewRate
-      ? normalizeShippingAccountName(panelPreviewRate.carrierNickname) ??
-      (panelPreviewProviderId != null
-        ? getShipAccountLabelById(shippingAccounts, String(panelPreviewProviderId))
-        : null) ??
-      formatCarrierCode(toStringValue(panelPreviewRate.carrierCode))
-      : null
-    const panelTestRate = panelIsTestOrder ? (panelRatePreview[0] ?? panelOrder.bestRate ?? buildTestMockRate()) : null
-    const panelTestRateAmount = panelTestRate
-      ? (toNumberValue(panelTestRate.shipmentCost) ?? 0) + (toNumberValue(panelTestRate.otherCost) ?? 0)
-      : 0
-    const panelTestRateDetail = panelTestRate
-      ? `${toStringValue(panelTestRate.carrierNickname) ?? formatCarrierCode(toStringValue(panelTestRate.carrierCode))} · ${toStringValue(panelTestRate.serviceName) ?? formatServiceCode(toStringValue(panelTestRate.serviceCode))}`
-      : `${TEST_SHIPPING_ACCOUNT_LABEL} · PrepShip Test Standard`
-    const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
     // PS-128/PS-129: shipping hold (cancelled upstream / externally shipped). Backend
     // hard-blocks; this gates the panel actions + shows the reason.
     const panelHold = orderShippingHold(panelDetail ?? panelOrder)
-    const trackingNumber = toStringValue(panelOrder.label?.trackingNumber)
-    const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder) && !getIsMissingShipmentSync(panelOrder)
-    // Per user override unlock shipped data on 2026-05-23: keep shipped queue recovery non-destructive, but disable corrupt saved label URLs.
-    const shippedQueueableLabelUrl = getQueueableLabelUrl(panelOrder.label?.labelUrl)
-    const canQueueShippedLabel = Boolean(shippedQueueableLabelUrl && panelOrder.clientId != null)
-    const shippedLabelUnavailableCopy = getIsExternallyFulfilled(panelOrder)
-      ? 'External label - reprint in marketplace or carrier'
-      : getIsMissingShipmentSync(panelOrder)
-        ? 'Shipment sync error — re-run ShipStation sync to backfill label data'
-        : shippedQueueableLabelUrl
-          ? 'No client selected for print queue'
-          : 'No saved queueable PrepShip label URL yet'
-    const deliveryLine = panelOrder.label?.shipDate
-      ? `Shipped: ${formatDateOnly(panelOrder.label.shipDate, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`
-      : 'Delivery: —'
-    const addressBlock = getAddressBlock(panelOrder, panelDetail)
 
     return (
-      <>
-        {/* ─────────────────────────────────────────────────────────
-            REFINED OPERATOR CONSOLE — Side panel header (sticky)
-
-            Three-row architecture:
-              1. Order # + nav arrows + utility icons (compact, sticky)
-              2. Status strip (status pill + source + test marker)
-              3. (sections begin)
-
-            Design moves:
-              • Order # in monospaced, prominent, ellipsis-truncated
-              • Nav arrows are square ghost-icon buttons (ChevronLeft/Right)
-              • Secondary actions (Batch, Print, External Ship) collapse
-                into a single MoreHorizontal kebab dropdown to reduce
-                visual noise — keeps power-user shortcuts available
-                without crowding the header
-              • Open-in-ShipStation = minimal ExternalLink icon button
-              • Close X = standard ghost icon button on far right
-            ───────────────────────────────────────────────────────── */}
-        <div className="sticky top-0 z-10 bg-surface/95 backdrop-blur-sm border-b border-line">
-          {/* Row 1 — Identity + navigation + actions */}
-          <div className="flex items-center gap-1 px-3 py-2">
-            {/* Nav arrow group */}
-            <div className="flex items-center gap-0.5 mr-1">
-              <button
-                type="button"
-                onClick={() => prevOrderId != null && openOrderDetails(prevOrderId)}
-                disabled={prevOrderId == null}
-                title="Previous order"
-                aria-label="Previous order"
-                className="inline-flex items-center justify-center w-6 h-6 rounded text-ink-3 hover:text-ink hover:bg-surface-2 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-3 transition"
-              >
-                <ChevronLeft size={14} strokeWidth={2.5} />
-              </button>
-              <button
-                type="button"
-                onClick={() => nextOrderId != null && openOrderDetails(nextOrderId)}
-                disabled={nextOrderId == null}
-                title="Next order"
-                aria-label="Next order"
-                className="inline-flex items-center justify-center w-6 h-6 rounded text-ink-3 hover:text-ink hover:bg-surface-2 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-3 transition"
-              >
-                <ChevronRight size={14} strokeWidth={2.5} />
-              </button>
-            </div>
-
-            {/* Order number — primary identity, monospaced, truncated */}
-            <div className="flex-1 min-w-0 flex items-baseline gap-2">
-              <span
-                className="font-mono text-[13px] font-semibold text-ink truncate tracking-tight"
-                title={panelOrder.orderNumber ?? `#${panelOrder.orderId}`}
-              >
-                {panelOrder.orderNumber ?? `#${panelOrder.orderId}`}
-              </span>
-              {panelIndex >= 0 ? (
-                <span className="text-[10px] font-medium text-ink-4 tabular-nums shrink-0">
-                  {panelIndex + 1}/{orderedFilteredOrders.length}
-                </span>
-              ) : null}
-            </div>
-
-            {/* Utility icon buttons — Batch menu */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setBatchMenuOpen((open) => !open)}
-                title="Batch actions"
-                aria-label="Batch actions"
-                className="inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium text-ink-2 hover:text-ink hover:bg-surface-2 ring-1 ring-line hover:ring-line-2 transition"
-              >
-                <ClipboardList size={11} strokeWidth={2.25} />
-                <span>Batch</span>
-                <ChevronDown size={9} strokeWidth={2.5} className="text-ink-3" />
-              </button>
-              {batchMenuOpen ? (
-                <div className="absolute top-[calc(100%+4px)] left-0 z-30 min-w-[200px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px]">
-                  <button
-                    type="button"
-                    className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
-                    onClick={() => { setBatchMenuOpen(false); updateSelection([panelOrder.orderId, ...selectedOrderIds.filter((id) => id !== panelOrder.orderId)]) }}
-                  >
-                    <Inbox size={12} strokeWidth={2.25} className="text-ink-3" />
-                    Add to Batch Queue
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
-                    onClick={() => { setBatchMenuOpen(false); void queueExistingLabels([panelOrder.orderId]) }}
-                  >
-                    <RefreshCcw size={12} strokeWidth={2.25} className="text-ink-3" />
-                    Quick Reprint (Batch)
-                  </button>
-                </div>
-              ) : null}
-            </div>
-
-            {/* Print menu */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setPrintMenuOpen((open) => !open)}
-                title="Print options"
-                aria-label="Print options"
-                className="inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium text-ink-2 hover:text-ink hover:bg-surface-2 ring-1 ring-line hover:ring-line-2 transition"
-              >
-                <PrinterIcon size={11} strokeWidth={2.25} />
-                <ChevronDown size={9} strokeWidth={2.5} className="text-ink-3" />
-              </button>
-              {printMenuOpen ? (
-                <div className="absolute top-[calc(100%+4px)] right-0 z-30 min-w-[180px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px]">
-                  {shipped ? (
-                    shippedHasPrepShipLabel ? (
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
-                        onClick={() => { setPrintMenuOpen(false); void reprintLabel() }}
-                      >
-                        <PrinterIcon size={12} strokeWidth={2.25} className="text-ink-3" />
-                        Reprint Label
-                      </button>
-                    ) : (
-                      <div className="px-3 py-2 text-[11.5px] leading-snug text-ink-4">
-                        {shippedLabelUnavailableCopy}
-                      </div>
-                    )
-                  ) : (
-                    <button
-                      type="button"
-                      className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
-                      onClick={() => { setPrintMenuOpen(false); void createOrQueueLabel('test') }}
-                    >
-                      <Tag size={12} strokeWidth={2.25} className="text-ink-3" />
-                      Create Test Label
-                    </button>
-                  )}
-                </div>
-              ) : null}
-            </div>
-
-            {/* Open in ShipStation */}
-            <a
-              href={`https://ship.shipstation.com/orders/${panelOrder.orderId}`}
-              target="_blank"
-              rel="noreferrer"
-              title="Open in ShipStation"
-              aria-label="Open in ShipStation"
-              className="inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 transition"
-            >
-              <ExternalLink size={12} strokeWidth={2.25} />
-            </a>
-
-            {/* Close panel */}
-            <button
-              type="button"
-              onClick={closeSinglePanel}
-              title="Close panel"
-              aria-label="Close panel"
-              className="inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 transition"
-            >
-              <XIcon size={13} strokeWidth={2.5} />
-            </button>
-          </div>
-
-          {/* Row 2 — Status strip (only when meaningful) */}
-          {!shipped || panelIsTestOrder ? (
-            <div className="flex items-center gap-1.5 px-3 pb-2 -mt-0.5">
-              {/* Order status pill */}
-              {shipped ? (
-                <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-ok-bg text-ok-dark ring-1 ring-ok-border">
-                  <PackageCheck size={9} strokeWidth={2.5} />
-                  Shipped
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-amber-50 text-amber-700 ring-1 ring-amber-200">
-                  <Send size={9} strokeWidth={2.5} />
-                  Awaiting
-                </span>
-              )}
-
-              {/* Test order indicator */}
-              {panelIsTestOrder ? (
-                <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-brand-bg text-brand ring-1 ring-brand-border">
-                  <Zap size={9} strokeWidth={2.5} />
-                  Test
-                </span>
-              ) : null}
-
-              {/* External-shipped action — quiet outline button on the right */}
-              {!shipped ? (
-                <div className="ml-auto relative">
-                  <button
-                    type="button"
-                    onClick={() => setExtShipMenuOpen((open) => !open)}
-                    title="Mark this order as shipped externally (no label purchase)"
-                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-[10.5px] font-semibold text-amber-800 bg-amber-50/80 ring-1 ring-amber-200 hover:bg-amber-100 hover:ring-amber-300 transition"
-                  >
-                    <BadgeCheck size={10} strokeWidth={2.5} />
-                    Mark as Shipped
-                    <ChevronDown size={8} strokeWidth={2.5} className="opacity-60" />
-                  </button>
-                  {extShipMenuOpen ? (
-                    <div className="absolute top-[calc(100%+4px)] right-0 z-30 w-[260px] rounded-lg bg-surface ring-1 ring-line shadow-lg overflow-hidden text-[12px]">
-                      {/* Header */}
-                      <div className="px-3 py-2 bg-surface-2 border-b border-line">
-                        <div className="font-semibold text-ink text-[12px]">Mark as Shipped</div>
-                        <div className="text-ink-3 text-[10.5px] mt-0.5">
-                          Closes the order locally. Optional notify:
-                        </div>
-                      </div>
-
-                      {/* Notify Customer toggle */}
-                      <label className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-surface-2 cursor-pointer">
-                        <div className="flex flex-col">
-                          <span className="font-medium text-ink-2 text-[11.5px]">Notify customer</span>
-                          <span className="text-ink-3 text-[10px]">Email shipping confirmation via ShipStation</span>
-                        </div>
-                        {/* Compact iOS-style toggle — visible on/off state without a checkbox icon */}
-                        <span
-                          className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-150 flex-shrink-0 ${extShipNotifyCustomer ? 'bg-emerald-500' : 'bg-line'}`}
-                          aria-hidden
-                        >
-                          <span
-                            className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${extShipNotifyCustomer ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
-                            aria-hidden
-                          />
-                        </span>
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={extShipNotifyCustomer}
-                          onChange={(e) => setExtShipNotifyCustomer(e.target.checked)}
-                        />
-                      </label>
-
-                      {/* Notify Marketplace toggle */}
-                      <label className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-surface-2 cursor-pointer border-b border-line">
-                        <div className="flex flex-col">
-                          <span className="font-medium text-ink-2 text-[11.5px]">Notify marketplace</span>
-                          <span className="text-ink-3 text-[10px]">Push shipped status to Amazon/eBay/etc.</span>
-                        </div>
-                        <span
-                          className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-150 flex-shrink-0 ${extShipNotifyMarketplace ? 'bg-emerald-500' : 'bg-line'}`}
-                          aria-hidden
-                        >
-                          <span
-                            className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${extShipNotifyMarketplace ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
-                            aria-hidden
-                          />
-                        </span>
-                        <input
-                          type="checkbox"
-                          className="sr-only"
-                          checked={extShipNotifyMarketplace}
-                          onChange={(e) => setExtShipNotifyMarketplace(e.target.checked)}
-                        />
-                      </label>
-
-                      {/* Tracking number input — only really useful when
-                          a notify toggle is on (the notification email
-                          embeds the tracking link). We render it always
-                          so power-users can record tracking even without
-                          notification, but show a hint below it. */}
-                      <div className="px-3 py-2 border-b border-line">
-                        <label className="text-[10.5px] font-semibold uppercase tracking-wide text-ink-3 block mb-1">
-                          Tracking # <span className="font-normal lowercase tracking-normal text-ink-4">(optional)</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={extShipTracking}
-                          onChange={(e) => setExtShipTracking(e.target.value)}
-                          placeholder="e.g. 1Z999AA10123456784"
-                          className="w-full h-7 px-2 rounded ring-1 ring-line bg-surface text-[11.5px] text-ink-2 placeholder:text-ink-4 focus:ring-brand outline-none transition"
-                        />
-                        {(extShipNotifyCustomer || extShipNotifyMarketplace) && !extShipTracking.trim() ? (
-                          <div className="text-[10px] text-amber-700 mt-1 flex items-center gap-1">
-                            <span aria-hidden>⚠</span>
-                            <span>Notify will send empty tracking — recipient sees "tracking pending"</span>
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {/* Marketplace picker — clicking submits the action.
-                          The picked marketplace is stored as the
-                          externallyShippedSource override (existing
-                          behavior). Disabled while a request is in flight
-                          so a double-click doesn't double-fire. */}
-                      <div className="px-2 py-1.5">
-                        <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-3 px-1 pb-1">
-                          Source marketplace
-                        </div>
-                        {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
-                          <button
-                            key={source}
-                            type="button"
-                            disabled={extShipBusy}
-                            className="w-full text-left px-2 py-1.5 rounded text-ink-2 hover:text-ink hover:bg-surface-2 transition disabled:opacity-50 disabled:cursor-wait text-[11.5px]"
-                            onClick={() => {
-                              setExtShipMenuOpen(false)
-                              void markOrderShippedExternal(source)
-                            }}
-                          >
-                            {extShipBusy ? `Working… (${source})` : source}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="panel-body">
-          {/* ─────────────────────────────────────────────────────────
-              SHIPPING SECTION
-              Header: Truck icon + title + chevron toggle
-              Sub-strip: "Requested service" — quiet info chip with
-              a clickable link styling the carrier-suggested service
-              ───────────────────────────────────────────────────────── */}
-          <div className={`panel-section${collapsedSections.shipping ? ' collapsed' : ''}`} id="sec-shipping">
-            <button
-              type="button"
-              onClick={() => toggleSection('shipping')}
-              className="w-full flex items-center gap-2 px-3 py-2.5 bg-surface hover:bg-surface-2 transition group"
-            >
-              <Truck size={13} strokeWidth={2.25} className="text-ink-3 group-hover:text-ink-2 transition" />
-              <span className="flex-1 text-left text-[12px] font-semibold text-ink-2 tracking-tight uppercase letter-spacing-wider">
-                Shipping
-              </span>
-              <ChevronDown
-                size={13}
-                strokeWidth={2.5}
-                className={`text-ink-3 transition-transform ${collapsedSections.shipping ? '-rotate-90' : ''}`}
-              />
-            </button>
-
-            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2/60 border-y border-line text-[11px]">
-              <span className="text-ink-3 font-medium">Requested</span>
-              <span className="text-ink-2">·</span>
-              <span className="text-brand font-semibold cursor-pointer hover:underline">
-                {(requestedService ?? 'Standard').replace(/_/g, ' ')}
-              </span>
-              {!panelOrder.carrierCode ? (
-                <span className="text-ink-4 font-medium">(unmapped)</span>
-              ) : null}
-            </div>
-
-            <div className="panel-section-body">
-              {/* PS-166 W4c: Ship From row extracted to OrdersPanelShipFromRow (byte-identical). */}
-              <OrdersPanelShipFromRow
-                panelForm={panelForm}
-                setPanelForm={setPanelForm}
-                shipped={shipped}
-                locations={locations}
-                onNavigateView={onNavigateView}
-              />
-
-              <div className="ship-field-row">
-                <span className="ship-field-label">Ship Acct</span>
-                <div className="ship-field-value">
-                  <select
-                    className="ship-select"
-                    style={{ flex: 1 }}
-                    value={panelForm.shipAccountId}
-                    disabled={shipped || panelIsTestOrder}
-                    onChange={(event) => {
-                      const nextValue = event.target.value
-                      setPanelForm((current) => {
-                        // PS-189: NEVER auto-default a service the operator didn't
-                        // choose (the old `[0]?.code` silently stamped
-                        // usps_media_mail — a restricted, books-only service — on
-                        // stamps_com switches). Keep the current service if the new
-                        // account offers it; otherwise force an explicit pick.
-                        const nextOptions = getServiceOptionsForAccount(nextValue)
-                        const keepService = nextOptions.some((option) => option.code === current.serviceCode)
-                        return {
-                          ...current,
-                          shipAccountId: nextValue,
-                          serviceCode: keepService ? current.serviceCode : '',
-                        }
-                      })
-                      // PS-204: a preview rate quoted for the PREVIOUS account is
-                      // stale for the new selection — drop it instead of letting
-                      // it dress the new account with another account's amount.
-                      // Re-rating (Browse Rates / preview fetch) repopulates it
-                      // for the chosen account.
-                      setPanelRatePreview((current) => {
-                        const belongs = rateBelongsToProviderAccount(current[0], nextValue)
-                        return belongs === false ? [] : current
-                      })
-                      void apiClient.setOrderSelectedPid(panelOrder.orderId, nextValue ? Number.parseInt(nextValue, 10) : null)
-                    }}
-                  >
-                    <option value="">— Select Account —</option>
-                    {panelIsTestOrder ? <option value={TEST_CARRIER_CODE}>{TEST_SHIPPING_ACCOUNT_LABEL}</option> : null}
-                    {shippingAccounts.map((account, i) => {
-                      const key = account.shippingProviderId || account.carrierId || account.code || i
-                      return (
-                        <option key={key} value={account.shippingProviderId || key}>
-                          {getCarrierAccountDisplay(account) ?? account.code}
-                        </option>
-                      )
-                    })}
-                  </select>
-                </div>
-              </div>
-
-              <div className="ship-field-row">
-                <span className="ship-field-label">Service</span>
-                <div className="ship-field-value">
-                  <select className="ship-select" style={{ flex: 1 }} value={panelForm.serviceCode} disabled={shipped || panelIsTestOrder} onChange={(event) => setPanelForm((current) => ({ ...current, serviceCode: event.target.value }))}>
-                    {panelIsTestOrder && panelForm.serviceCode && panelForm.serviceCode !== TEST_SERVICE_CODE ? (
-                      <option value={panelForm.serviceCode}>{formatServiceCode(panelForm.serviceCode)}</option>
-                    ) : null}
-                    {panelIsTestOrder ? <option value={TEST_SERVICE_CODE}>PrepShip Test Standard</option> : null}
-                    {serviceCodeMissingFromOptions ? (
-                      <option value={panelForm.serviceCode}>{formatServiceCode(panelForm.serviceCode)}</option>
-                    ) : null}
-                    <option value="">{panelForm.serviceCode ? formatServiceCode(panelForm.serviceCode) : 'Select Service'}</option>
-                    {serviceOptions.map((option) => (
-                      <option key={option.code} value={option.code}>{option.label}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* PS-166 W4e: Weight row extracted to OrdersPanelWeightRow (byte-identical; threads the mutable dimsUserEditedRef). */}
-              <OrdersPanelWeightRow
-                panelForm={panelForm}
-                setPanelForm={setPanelForm}
-                shipped={shipped}
-                dimsUserEditedRef={dimsUserEditedRef}
-              />
-
-              {/* PS-166 W4f: Size row extracted to OrdersPanelSizeRow (byte-identical; threads dimsUserEditedRef + lockstepPanelDims). */}
-              <OrdersPanelSizeRow
-                panelForm={panelForm}
-                setPanelForm={setPanelForm}
-                shipped={shipped}
-                dimsUserEditedRef={dimsUserEditedRef}
-                lockstepPanelDims={lockstepPanelDims}
-              />
-
-              <div className="ship-field-row" style={{ borderBottom: 'none', paddingBottom: 2 }}>
-                <span className="ship-field-label">Package</span>
-                <div className="ship-field-value">
-                  <select
-                    className="ship-select"
-                    style={{ flex: 1 }}
-                    value={panelForm.packageId}
-                    disabled={shipped}
-                    onChange={(event) => {
-                      const packageId = event.target.value
-                      const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === packageId)
-                      const selectedDims = getPackageDims(selectedPackage)
-                      // User-driven package change should trigger an
-                      // auto-rate-refresh — flag it as a real edit.
-                      dimsUserEditedRef.current = true
-                      setPanelForm((current) => ({
-                        ...current,
-                        packageId,
-                        ...(selectedDims
-                          ? {
-                            length: String(selectedDims.length),
-                            width: String(selectedDims.width),
-                            height: String(selectedDims.height),
-                          }
-                          : {}),
-                      }))
-                      void apiClient.setOrderSelectedPackageId(panelOrder.orderId, packageId ? Number.parseInt(packageId, 10) : null)
-                    }}
-                  >
-                    <option value="">— Select Package —</option>
-                    {packages.map((pkg) => (
-                      <option key={pkg.packageId ?? (pkg as any).id ?? pkg.name} value={pkg.packageId ?? (pkg as any).id ?? ''}>{pkg.name}</option>
-                    ))}
-                  </select>
-                  <button className="ship-icon-btn" type="button" title="Manage packages" onClick={() => onNavigateView?.('packages')}>📐</button>
-                </div>
-              </div>
-
-              {/* PS-166 W4b: package-dims line extracted to OrdersPanelPackageDimsLine (byte-identical). */}
-              <OrdersPanelPackageDimsLine dims={dims} />
-              {/* PS-304 (FE consumption): the backend-owned row package-facts verdict — first
-                  consumer of order.packageFacts. Display-only; renders nothing unless locked/stale. */}
-              <OrdersPanelPackageFactsLine packageFacts={panelOrder?.packageFacts ?? null} />
-
-              {/* User override "unlock shipped data" on 2026-05-15: expose shipped PrepShip label reprint/queue actions while keeping external labels disabled.
-                  PS-166 W4d — Per user override unlock shipped data on 2026-06-13: the shipped-label-actions surface moved VERBATIM to
-                  OrdersPanelShippedLabelActions (handlers stay in this shell; external-label gating preserved; no protection weakened). */}
-              {shipped ? (
-                <OrdersPanelShippedLabelActions
-                  panelOrder={panelOrder}
-                  reprintLabel={reprintLabel}
-                  queueExistingLabels={queueExistingLabels}
-                  shippedHasPrepShipLabel={shippedHasPrepShipLabel}
-                  canQueueShippedLabel={canQueueShippedLabel}
-                  shippedLabelUnavailableCopy={shippedLabelUnavailableCopy}
-                  labelVoidability={panelDetail?.labelVoidability ?? null}
-                  onVoidLabel={() => openVoidConfirm()}
-                />
-              ) : (
-                <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <button className="btn btn-primary btn-sm" type="button" style={{ fontSize: 11.5, gap: 4 }} onClick={() => void openRateBrowser()}>🔍 Browse Rates</button>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    type="button"
-                    style={{
-                      fontSize: 11.5,
-                      gap: 4,
-                      borderColor: 'var(--green-border)',
-                      color: 'var(--green-dark)',
-                    }}
-                    onClick={() => void saveShipmentDetails()}
-                    disabled={shipmentDetailsSaving}
-                  >
-                    {shipmentDetailsSaving ? 'Saving...' : 'Save'}
-                  </button>
-                </div>
-              )}
-
-              <div className="ship-field-row">
-                <span className="ship-field-label">Confirmation</span>
-                <div className="ship-field-value">
-                  <select
-                    className="ship-select"
-                    value={normalizeConfirmationForRates(panelForm.confirmation)}
-                    disabled={shipped}
-                    onChange={(event) => {
-                      const confirmation = event.target.value
-                      const nextForm = { ...panelForm, confirmation }
-                      setPanelForm(nextForm)
-                      if (panelOrder?.orderStatus === 'awaiting_shipment') {
-                        const dims = getPanelDims()
-                        const weightOz = getPanelWeightOz()
-                        if (hasCompleteDims(dims) && weightOz > 0) {
-                          void refreshPanelBestRate({
-                            order: panelOrder,
-                            dims,
-                            weightOz,
-                            confirmation,
-                            panelForm: nextForm,
-                            silent: true,
-                          })
-                        }
-                      }
-                    }}
-                  >
-                    {CONFIRMATION_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="ship-field-row">
-                <span className="ship-field-label">Insurance</span>
-                <div className="ship-field-value" style={{ gap: 5, flexWrap: 'wrap' }}>
-                  <select className="ship-select" value={panelForm.insurance} style={{ flex: 1 }} disabled={shipped} onChange={(event) => {
-                    const insurance = event.target.value
-                    const nextForm = { ...panelForm, insurance }
-                    setPanelForm(nextForm)
-                    if (panelOrder?.orderStatus === 'awaiting_shipment') {
-                      const dims = getPanelDims()
-                      const weightOz = getPanelWeightOz()
-                      if (hasCompleteDims(dims) && weightOz > 0) {
-                        void refreshPanelBestRate({ order: panelOrder, dims, weightOz, panelForm: nextForm, silent: true })
-                      }
-                    }
-                  }}>
-                    <option value="none">None</option>
-                    <option value="carrier">Carrier (up to $100)</option>
-                    <option value="parcelguard">Parcel Guard</option>
-                    <option value="shipsurance">Shipsurance</option>
-                  </select>
-                  <input
-                    type="number"
-                    className="ship-input ship-input-sm"
-                    value={panelForm.insuranceValue}
-                    placeholder="$0.00"
-                    style={{ width: 68, display: panelForm.insurance !== 'none' ? 'block' : 'none' }}
-                    readOnly={shipped}
-                    onChange={(event) => {
-                      const insuranceValue = event.target.value
-                      const nextForm = { ...panelForm, insuranceValue }
-                      setPanelForm(nextForm)
-                      if (panelOrder?.orderStatus === 'awaiting_shipment') {
-                        const dims = getPanelDims()
-                        const weightOz = getPanelWeightOz()
-                        if (hasCompleteDims(dims) && weightOz > 0) {
-                          void refreshPanelBestRate({ order: panelOrder, dims, weightOz, panelForm: nextForm, silent: true })
-                        }
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Save weights/dims link — quiet text-link inside the
-                  shipping form. Demoted from a green pill to a subtle
-                  inline action so the visual weight goes to the
-                  Decision Card below. PS-166 W4a: extracted to
-                  OrdersPanelSaveSkuDefaultsLink (byte-identical markup;
-                  the saveSkuDefaults handler stays in this shell). */}
-              <OrdersPanelSaveSkuDefaultsLink shipped={shipped} saveSkuDefaults={saveSkuDefaults} />
-            </div>
-          </div>
-
-          {/* ─────────────────────────────────────────────────────────
-              DECISION CARD — Rate display + action buttons grouped
-              together into a single visually-bounded surface. The
-              operator's eyes land here to make the shipping call:
-
-                ┌───────────────────────────────┐
-                │ RATE       $6.62              │
-                │ Carrier · Service             │
-                ├───────────────────────────────┤
-                │ [Create + Print] [Queue] Test │
-                └───────────────────────────────┘
-
-              For shipped orders, just shows the locked rate.
-              For test orders, shows the mock rate.
-              For awaiting orders, shows live rate calc + refresh link.
-              ───────────────────────────────────────────────────────── */}
-          <div className="px-3 py-3">
-            <div className="rounded-xl bg-surface ring-1 ring-line shadow-[0_1px_2px_rgba(15,23,42,0.04)] overflow-hidden">
-              {/* Rate row */}
-              <div className="flex items-center gap-3 px-3.5 py-3 border-b border-line">
-                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                  <span className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-ink-4">Rate</span>
-                  {panelIsTestOrder ? (
-                    <>
-                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney(panelTestRateAmount)}
-                      </span>
-                      <span className="text-[11px] text-ink-3 leading-snug truncate">{panelTestRateDetail}</span>
-                    </>
-                  ) : shipped ? (
-                    getIsExternallyFulfilled(panelOrder) ? (
-                      <span className="text-[12.5px] text-ink-3 italic leading-snug">External label — purchased externally</span>
-                    ) : getIsMissingShipmentSync(panelOrder) ? (
-                      <span className="text-[12.5px] text-amber-700 italic leading-snug">Shipment sync error — re-run ShipStation sync</span>
-                    ) : (
-                      <>
-                        <span className="text-[18px] font-bold tabular-nums leading-none text-ink font-display">
-                          {formatMoney(panelOrder.label?.cost ?? panelOrder.selectedRate?.cost ?? getSelectedRateBaseCost(panelOrder))}
-                        </span>
-                        <span className="text-[11px] text-ink-3 leading-snug truncate">
-                          {selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode)}
-                        </span>
-                      </>
-                    )
-                  ) : panelRateLoading ? (
-                    <div
-                      className="flex items-center py-1"
-                      title="Loading best rate"
-                      role="status"
-                      aria-label="Loading best rate"
-                    >
-                      <Loader2 size={15} strokeWidth={2.5} className="animate-spin text-brand" />
-                    </div>
-                  ) : panelDisplayOrder.bestRate ? (
-                    <>
-                      {/* PS-277 (slice 2): the side panel reads the PERSISTED SOT FIRST — the SAME
-                          getBackendRowMoney(...).markedAmount the BEST RATE column reads — so panel == column
-                          (incl. markup). refreshPanelBestRate persists every live result to the SOT
-                          (persistAppliedRateForOrder), so this is always fresh; the ephemeral preview below
-                          is only a transient fallback for the brief window before the SOT row refetches.
-                          PS-178: BACKEND money tuple only — no FE markup math. */}
-                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney(getBackendRowMoney(panelDisplayOrder)?.markedAmount ?? getBestRateBaseCost(panelDisplayOrder))}
-                      </span>
-                      <span className="text-[11px] text-ink-3 leading-snug truncate">
-                        {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}
-                      </span>
-                    </>
-                  ) : panelPreviewRate ? (
-                    <>
-                      {/* PS-278: the preview rate carries only the RAW carrier cost (shipmentCost/otherCost),
-                          NOT the backend MARKED money tuple the column/SOT shows — adding them here would
-                          invent FE money that diverges from the billed amount whenever a markup applies.
-                          refreshPanelBestRate persists every live result to the SOT, so the authoritative
-                          marked amount appears via the SOT branch above within a tick; until then show a
-                          pending placeholder rather than an un-marked number. */}
-                      <span className="text-[13px] font-semibold leading-none text-ink-3 inline-flex items-center gap-1">
-                        <Loader2 size={11} strokeWidth={2.5} className="animate-spin" /> finalizing rate…
-                      </span>
-                      <span className="text-[11px] text-ink-3 leading-snug truncate">
-                        {panelPreviewAccountLabel} · {formatServiceCode(toStringValue(panelPreviewRate.serviceCode))}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-[14px] text-ink-4">—</span>
-                  )}
-                </div>
-
-                {/* Recalculate button - strict live best-rate update for the selected order. */}
-                {!panelIsTestOrder && !shipped ? (
-                  <button
-                    type="button"
-                    onClick={() => void recalculateBestRate()}
-                    disabled={panelRateLoading}
-                    title="Recalculate the live cheapest rate"
-                    className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-md text-[10.5px] font-semibold text-ink-3 hover:text-brand hover:bg-brand/5 transition disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {panelRateLoading ? (
-                      <Loader2 size={11} strokeWidth={2.5} className="animate-spin" />
-                    ) : (
-                      <RefreshCcw size={11} strokeWidth={2.5} />
-                    )}
-                    <span className="hidden sm:inline">Recalculate</span>
-                  </button>
-                ) : null}
-              </div>
-
-              {/* Action buttons row — only when awaiting a label */}
-              {shipped ? null : (
-                <div className="flex flex-col gap-1 p-1.5 bg-surface-2/40">
-                  {/* PS-128/PS-129: shipping-hold banner. Backend hard-blocks; this explains why. */}
-                  {panelHold?.blocked ? (
-                    <div
-                      role="alert"
-                      className="px-2 py-1.5 rounded-md bg-danger-bg text-danger ring-1 ring-danger-border/40 text-[11.5px] font-semibold"
-                    >
-                      ⛔ {panelHold.status}. Buying a label is blocked — {panelHold.reason}.
-                    </div>
-                  ) : null}
-                  <div className="flex items-stretch gap-1">
-                  <button
-                    type="button"
-                    onClick={() => void createOrQueueLabel('print')}
-                    disabled={singleActionBusy || Boolean(panelHold?.blocked)}
-                    aria-busy={singleActionBusy}
-                    title={panelHold?.blocked ? `Blocked: ${panelHold.reason}` : 'Buy postage and open the shipping label now'}
-                    className={[
-                      'flex-[5] inline-flex items-center justify-center gap-2',
-                      'h-9 rounded-lg',
-                      'text-[12.5px] font-semibold tracking-tight text-white',
-                      'bg-brand hover:bg-brand-dark',
-                      'shadow-[0_1px_2px_rgba(42,91,215,0.20),inset_0_1px_0_rgba(255,255,255,0.12)]',
-                      'active:scale-[0.985]',
-                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    {singleActionBusy ? (
-                      <Loader2 size={13} strokeWidth={2.5} className="animate-spin" aria-hidden />
-                    ) : (
-                      <PrinterIcon size={13} strokeWidth={2.5} aria-hidden />
-                    )}
-                    <span>{singleActionBusy ? 'Working…' : 'Create + Print Label'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void createOrQueueLabel('queue')}
-                    disabled={singleActionBusy || Boolean(panelHold?.blocked)}
-                    aria-busy={singleActionBusy}
-                    title={panelHold?.blocked ? `Blocked: ${panelHold.reason}` : "Buy postage but don't open the label — adds it to the print queue for batch printing"}
-                    className={[
-                      'flex-[3] inline-flex items-center justify-center gap-1.5',
-                      'h-9 px-2 rounded-lg',
-                      'text-[12.5px] font-semibold text-ink-2',
-                      'bg-surface ring-1 ring-line',
-                      'hover:text-ink hover:ring-line-2 hover:bg-surface',
-                      'active:scale-[0.98]',
-                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    <Inbox size={12.5} strokeWidth={2.25} aria-hidden />
-                    <span>Print to Queue</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void createOrQueueLabel('test')}
-                    disabled={singleActionBusy || Boolean(panelHold?.blocked)}
-                    aria-busy={singleActionBusy}
-                    title={panelHold?.blocked ? `Blocked: ${panelHold.reason}` : "Create a VOID mock label for testing — no postage charged, label is watermarked 'VOID — DO NOT SHIP'"}
-                    className={[
-                      'inline-flex items-center justify-center',
-                      'h-9 px-3 rounded-lg',
-                      'text-[11.5px] font-semibold text-ink-3',
-                      'bg-transparent',
-                      'hover:text-ink hover:bg-surface',
-                      'active:scale-95',
-                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    Test
-                  </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ─────────────────────────────────────────────────────────
-              TRACKING + DELIVERY STRIP
-              When shipped: tracking number (mono, copyable) + Reprint
-              Always: delivery line (compact info row)
-              ───────────────────────────────────────────────────────── */}
-          {shipped && trackingNumber ? (
-            <div className="flex items-center gap-2 px-3 py-2 bg-ok-bg/40 border-y border-ok-border/40">
-              <PackageCheck size={12} strokeWidth={2.25} className="text-ok-dark shrink-0" />
-              <span className="text-[10.5px] font-semibold uppercase tracking-wide text-ok-dark">Tracking</span>
-              <button
-                type="button"
-                onClick={() => copyText(trackingNumber)}
-                title="Click to copy tracking number"
-                className="font-mono text-[11px] font-semibold text-ink hover:text-brand transition truncate"
-              >
-                {trackingNumber}
-              </button>
-              {/* Backend-owned carrier tracking status (shipment-tracking poller).
-                  Display-only: delivered/in-transit/exception; quiet otherwise. */}
-              {(() => {
-                const tracking = toRecord((panelDetail as Record<string, unknown> | null)?.tracking)
-                const trackingStatus = toStringValue(tracking?.status)
-                if (!trackingStatus) return null
-                if (trackingStatus === 'delivered') {
-                  const deliveredAtRaw = toStringValue(tracking?.deliveredAt)
-                  const deliveredLabel = deliveredAtRaw
-                    ? new Date(deliveredAtRaw).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: CALIFORNIA_TZ })
-                    : null
-                  return (
-                    <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-emerald-200 shrink-0">
-                      Delivered{deliveredLabel ? ` ${deliveredLabel}` : ''}
-                    </span>
-                  )
-                }
-                if (trackingStatus === 'in_transit') {
-                  return <span className="ml-auto text-[10.5px] font-semibold text-ink-3 shrink-0">In transit</span>
-                }
-                if (trackingStatus === 'exception' || trackingStatus === 'return_to_sender') {
-                  return (
-                    <span className="ml-auto inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200 shrink-0">
-                      Tracking exception
-                    </span>
-                  )
-                }
-                return null
-              })()}
-            </div>
-          ) : null}
-
-          {/* Delivery line — quiet info row */}
-          <div className="px-3 py-1.5 text-[10.5px] text-ink-3 border-b border-line">
-            {deliveryLine}
-          </div>
-
-          {/* ─────────────────────────────────────────────────────────
-              ITEMS SECTION
-              Header: Box icon + title + chevron
-              Body: stacked rows with thumbnail · name/sku/price · qty
-              ───────────────────────────────────────────────────────── */}
-          <OrdersPanelItemsSection
-            collapsedSections={collapsedSections}
-            toggleSection={toggleSection}
-            items={items}
-            mergedItems={mergedItems}
-          />
-
-          {/* ─────────────────────────────────────────────────────────
-              RECIPIENT SECTION
-              Header: MapPin icon + title + chevron
-              Body: ship-to address card + sold-to + validation status
-              ───────────────────────────────────────────────────────── */}
-          <OrdersPanelRecipientSection
-            collapsedSections={collapsedSections}
-            toggleSection={toggleSection}
-            shipTo={shipTo}
-            addressBlock={addressBlock}
-            panelOrder={panelOrder}
-            panelDetail={panelDetail}
-            toggleResidential={toggleResidential}
-            onEditRecipient={openRecipientEditor}
-            activeOrderLoading={activeOrderLoading}
-            activeOrderError={activeOrderError}
-          />
-        </div>
-      </>
+      <OrdersDetailSidePanel
+        panelOrder={panelOrder}
+        panelDetail={panelDetail}
+        panelDisplayOrder={panelDisplayOrder}
+        orderedFilteredOrders={orderedFilteredOrders}
+        panelForm={panelForm}
+        setPanelForm={setPanelForm}
+        panelRatePreview={panelRatePreview}
+        packages={packages}
+        shippingAccounts={shippingAccounts}
+        locations={locations}
+        serviceOptions={serviceOptions}
+        dims={dims}
+        panelHold={panelHold}
+        collapsedSections={collapsedSections}
+        selectedOrderIds={selectedOrderIds}
+        panelRateLoading={panelRateLoading}
+        singleActionBusy={singleActionBusy}
+        shipmentDetailsSaving={shipmentDetailsSaving}
+        activeOrderLoading={activeOrderLoading}
+        activeOrderError={activeOrderError}
+        batchMenuOpen={batchMenuOpen}
+        printMenuOpen={printMenuOpen}
+        extShipMenuOpen={extShipMenuOpen}
+        extShipNotifyCustomer={extShipNotifyCustomer}
+        extShipNotifyMarketplace={extShipNotifyMarketplace}
+        extShipTracking={extShipTracking}
+        extShipBusy={extShipBusy}
+        dimsUserEditedRef={dimsUserEditedRef}
+        setBatchMenuOpen={setBatchMenuOpen}
+        setPrintMenuOpen={setPrintMenuOpen}
+        setExtShipMenuOpen={setExtShipMenuOpen}
+        setExtShipNotifyCustomer={setExtShipNotifyCustomer}
+        setExtShipNotifyMarketplace={setExtShipNotifyMarketplace}
+        setExtShipTracking={setExtShipTracking}
+        lockstepPanelDims={lockstepPanelDims}
+        onNavigateView={onNavigateView}
+        onHideEmptyPanelChange={onHideEmptyPanelChange}
+        onShipAccountChange={handlePanelShipAccountChange}
+        onPackageChange={handlePanelPackageChange}
+        onConfirmationChange={handlePanelConfirmationChange}
+        onInsuranceChange={handlePanelInsuranceChange}
+        onInsuranceValueChange={handlePanelInsuranceValueChange}
+        onCreateOrQueueLabel={createOrQueueLabel}
+        onRecalculateBestRate={recalculateBestRate}
+        onSaveShipmentDetails={saveShipmentDetails}
+        onReprintLabel={reprintLabel}
+        onQueueExistingLabels={queueExistingLabels}
+        onOpenRateBrowser={openRateBrowser}
+        onOpenVoidConfirm={openVoidConfirm}
+        onOpenOrderDetails={openOrderDetails}
+        onCloseSinglePanel={closeSinglePanel}
+        onToggleSection={toggleSection}
+        onToggleResidential={toggleResidential}
+        onEditRecipient={openRecipientEditor}
+        onSaveSkuDefaults={saveSkuDefaults}
+        onMarkOrderShippedExternal={markOrderShippedExternal}
+        onUpdateSelection={updateSelection}
+      />
     )
   }
 

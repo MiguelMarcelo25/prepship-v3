@@ -65,8 +65,13 @@ check('browse RECONCILES the SOT (plain browse, gated) via the awaiting-only per
 
 // ── 4. The column reads the persisted SOT; the FE key reads the backend verdict (PS-276 #3) ──
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 2): the BEST RATE column leaf cell was extracted
+// VERBATIM from OrdersView into ./orders/cells/order-cells. The persisted-SOT
+// read (getBestRateBaseCost / getBackendRowMoney) still owns the column money —
+// just at the new leaf owner — so re-anchor the column check there.
+const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 check('the BEST RATE column reads the persisted SOT (getBestRateBaseCost / getBackendRowMoney)',
-  /getBestRateBaseCost\(/.test(ordersView) && /getBackendRowMoney\(/.test(ordersView));
+  /getBestRateBaseCost\(/.test(orderCells) && /getBackendRowMoney\(/.test(orderCells));
 // PS-280: the residential-verdict read moved to the shared FE rule (web/src/lib/residential-for-rate),
 // which OrdersView AND RateBrowserModal now both DELEGATE to — so NO surface re-derives r= (stronger
 // than before: the Rate Browser used to re-derive from legacy fields, now it forwards the verdict too).

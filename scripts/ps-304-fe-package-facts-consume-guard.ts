@@ -26,6 +26,11 @@ function read(path: string): string {
 
 const panelFields = read('web/src/components/Views/OrdersPanelShippingFields.tsx');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
+// PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel (which renders
+// <OrdersPanelPackageFactsLine> wired to the selected order's packageFacts) was
+// extracted VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. The
+// consumption invariant holds — just at the new leaf owner.
+const detailSidePanel = read('web/src/components/Views/OrdersDetailSidePanel.tsx');
 
 check('panel exposes OrdersPanelPackageFactsLine (pure display of the backend verdict)',
   /export function OrdersPanelPackageFactsLine/.test(panelFields));
@@ -43,10 +48,10 @@ check('panel line does NOT recompute the verdict (no dims math / insured-value h
   !/insuredValue/.test(panelFields) &&
   !/length\s*\*\s*width/.test(panelFields));
 
-check('OrdersView imports the package-facts consumer',
-  /OrdersPanelPackageFactsLine/.test(ordersView));
-check('OrdersView renders it wired to the selected order packageFacts (the consumption)',
-  /<OrdersPanelPackageFactsLine\s+packageFacts=\{panelOrder\?\.packageFacts/.test(ordersView));
+check('the order-detail side panel imports the package-facts consumer',
+  /OrdersPanelPackageFactsLine/.test(detailSidePanel));
+check('the side panel renders it wired to the selected order packageFacts (the consumption)',
+  /<OrdersPanelPackageFactsLine\s+packageFacts=\{panelOrder\?\.packageFacts/.test(detailSidePanel));
 
 if (failures > 0) {
   console.error(`\nPS-304 FE package-facts consume guard FAILED with ${failures} failure(s).`);

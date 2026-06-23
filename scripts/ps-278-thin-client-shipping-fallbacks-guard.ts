@@ -44,9 +44,13 @@ check('verdict absent -> money-safe residential default (return true)',
 // The SOT branch (getBackendRowMoney markedAmount, pinned by ps-277-panel-reads-sot) is the
 // authoritative marked amount and refetches within a tick; the transient preview branch must show a
 // pending placeholder, NEVER an ad-hoc shipmentCost + otherCost sum (the raw un-marked carrier cost).
-const previewStart = ov.indexOf(') : panelPreviewRate ? (');
-const previewEnd = ov.indexOf(') : (', previewStart);
-const preview = previewStart >= 0 ? ov.slice(previewStart, previewEnd) : '';
+// PS-166/PS-306/PS-258 (Wave 5): the side-panel rate box (incl. this preview
+// branch) was extracted VERBATIM from OrdersView into OrdersDetailSidePanel.tsx.
+// Re-anchor the preview-branch checks at the new leaf owner.
+const panel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
+const previewStart = panel.indexOf(') : panelPreviewRate ? (');
+const previewEnd = panel.indexOf(') : (', previewStart);
+const preview = previewStart >= 0 ? panel.slice(previewStart, previewEnd) : '';
 check('panel preview branch exists', previewStart >= 0 && previewEnd > previewStart);
 check('panel preview no longer reads the raw carrier shipmentCost for operator-facing money',
   !/panelPreviewRate\.shipmentCost/.test(preview));

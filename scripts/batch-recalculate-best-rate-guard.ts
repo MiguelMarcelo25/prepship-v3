@@ -209,15 +209,21 @@ check('auto-rate overlay resolves account label by provider id',
   /getCarrierAccountLabelByProviderId\(shippingAccounts,\s*shippingProviderId\)/.test(overlayBlock) &&
   /accountNickname:\s*rateAccountNickname/.test(overlayBlock));
 
+// PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel was extracted
+// VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. The OrdersView shell's
+// thin renderSinglePanel wrapper still derives the auto-best-rate overlay
+// (panelDisplayOrder = getOrderWithAutoBestRate(panelOrder)) and threads it down;
+// the DISPLAY consumption (account label + bestRate read) moved to the leaf.
 const panelStart = ordersView.indexOf('const renderSinglePanel = () => {');
 const panelEnd = ordersView.length;
 const panelBlock = panelStart >= 0 && panelEnd > panelStart
   ? ordersView.slice(panelStart, panelEnd)
   : '';
+const detailSidePanel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
 check('side panel rate display consumes auto best-rate overlay',
   /const panelDisplayOrder = getOrderWithAutoBestRate\(panelOrder\)/.test(panelBlock) &&
-  /getShipAccountDisplay\(panelDisplayOrder,\s*shippingAccounts\)/.test(panelBlock) &&
-  /panelDisplayOrder\.bestRate/.test(panelBlock));
+  /getShipAccountDisplay\(panelDisplayOrder,\s*shippingAccounts\)/.test(detailSidePanel) &&
+  /panelDisplayOrder\.bestRate/.test(detailSidePanel));
 
 const fallbackStart = ordersView.indexOf('function renderRateCellFallback(');
 const fallbackEnd = ordersView.indexOf('\n  // PS-071', fallbackStart + 1);

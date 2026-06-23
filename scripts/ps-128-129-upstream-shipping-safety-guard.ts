@@ -175,7 +175,14 @@ function check(name: string, got: unknown, want: unknown) {
 
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
   check('OrdersView defines orderShippingHold helper', /function orderShippingHold\(/.test(ordersView), true);
-  check('OrdersView gates label actions on the hold', /panelHold\?\.blocked/.test(ordersView), true);
+  // PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel (which gates the
+  // label-action buttons on the hold via `panelHold?.blocked`) was extracted
+  // VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. The OrdersView shell
+  // still computes the verdict (orderShippingHold(...)) and threads it down as the
+  // `panelHold` prop; the gating invariant holds — just at the new leaf owner.
+  const detailSidePanel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
+  check('OrdersView computes the panel shipping-hold verdict', /const panelHold = orderShippingHold\(/.test(ordersView), true);
+  check('side panel gates label actions on the hold', /panelHold\?\.blocked/.test(detailSidePanel), true);
   check('OrdersView skips rating a held order (rate-flow gating)', /orderShippingHold\(order\)\?\.blocked\)\s*return null/.test(ordersView), true);
   // PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (which renders the
   // ⛔ list-row hold pill) was extracted VERBATIM from OrdersView into

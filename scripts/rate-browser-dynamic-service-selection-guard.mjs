@@ -8,7 +8,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const file = resolve('web/src/components/Views/OrdersView.tsx');
+// PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel (which owns the
+// Service <select> + the serviceCodeMissingFromOptions dynamic-option markup) was
+// extracted VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. Re-anchor the
+// panel service-selection checks at the new leaf owner.
+const file = resolve('web/src/components/Views/OrdersDetailSidePanel.tsx');
 const source = readFileSync(file, 'utf8');
 
 const checks = [

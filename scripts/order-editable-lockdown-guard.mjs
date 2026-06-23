@@ -72,13 +72,18 @@ for (const route of [
 //    strictly stronger than the prior single OrdersView string check.
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const shippingFields = readFileSync('web/src/components/Views/OrdersPanelShippingFields.tsx', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel (which renders the
+// read-only shipped reprint/queue surface ONLY under `shipped ? (`) was extracted
+// VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. The shipped-only gating
+// is preserved at the new leaf owner; no shipped/cancelled protection is weakened.
+const detailSidePanel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
 assert(
   shippingFields.includes('data-testid="shipped-label-actions"'),
   'OrdersPanelShippingFields must own the read-only shipped-label-actions surface (reprint/queue), not new-label creation',
 );
 assert(
-  /\{shipped \? \(\s*<OrdersPanelShippedLabelActions/.test(ordersView),
-  'OrdersView must render <OrdersPanelShippedLabelActions> only for shipped orders (the read-only reprint/queue surface)',
+  /\{shipped \? \(\s*<OrdersPanelShippedLabelActions/.test(detailSidePanel),
+  'OrdersDetailSidePanel must render <OrdersPanelShippedLabelActions> only for shipped orders (the read-only reprint/queue surface)',
 );
 
 // 7. Self-wiring.

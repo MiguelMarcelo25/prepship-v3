@@ -153,8 +153,17 @@ check('Batch Create + Print recalculates missing selected-rate proof before labe
     /runStrictBestRateRecalculation\(order, proofRequest/.test(batchActionBlock) &&
     /selectedRateProof = buildSelectedRateProofPayload\(order, proofRate\)/.test(batchActionBlock) &&
     /selectedRateProof,/.test(batchActionBlock));
-check('Rate card button is labeled Recalculate', />Recalculate</.test(ordersView));
-check('Rate card Recalculate button calls recalculateBestRate, not openRateBrowser', /onClick=\{\(\) => void recalculateBestRate\(\)\}/.test(ordersView));
+// PS-166/PS-306/PS-258 (Wave 5): the side-panel Rate card (incl. the Recalculate
+// button) was extracted VERBATIM from OrdersView into OrdersDetailSidePanel.tsx.
+// The button now FIRES an on* prop (onRecalculateBestRate); the OrdersView shell
+// wires that prop to the strict recalculateBestRate handler (NOT openRateBrowser),
+// so the "fires recalc, not the rate browser" invariant holds across the boundary.
+const detailSidePanel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
+check('Rate card button is labeled Recalculate', />Recalculate</.test(detailSidePanel));
+check('Rate card Recalculate button fires the recalc handler (not the rate browser)',
+  /onClick=\{\(\) => void onRecalculateBestRate\(\)\}/.test(detailSidePanel));
+check('OrdersView wires the panel Recalculate prop to the strict recalculateBestRate handler',
+  /onRecalculateBestRate=\{recalculateBestRate\}/.test(ordersView));
 
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 // PS-179: the FE strict persisters (updateOrderBestRateSelectionStrict /
