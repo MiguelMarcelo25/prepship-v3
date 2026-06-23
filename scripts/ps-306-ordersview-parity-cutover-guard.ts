@@ -41,6 +41,14 @@ const batchPanel = read('web/src/components/Views/OrdersBatchPanel.tsx');
 // SKU-group select-all gate, and the <OrdersBatchPanel> suppression stay in
 // OrdersView. The lockdown is UNCHANGED — the gate count below spans both files.
 const filterToolbar = read('web/src/components/Views/OrdersFilterToolbar.tsx');
+// PS-166 (Wave 6): the orders <table> (thead + tbody, incl. the SKU-group
+// select-all `isReadOnly ? null :` gate and the dual flat/sku-grouped row-map)
+// moved VERBATIM into OrdersTable.tsx. The isReadOnly source of truth and the
+// orderedFilteredOrders/skuOrderGroups consumption stay in OrdersView, which
+// threads them into <OrdersTable> as props. The lockdown + table-state-flow
+// checks below now span OrdersTable so the floors are enforced wherever the
+// gate / row-map physically lives.
+const ordersTable = read('web/src/components/Views/OrdersTable.tsx');
 const filteredSort = read('web/src/components/Views/orders-filtered-sort.ts');
 const componentBoundaryGuard = read('scripts/ps-258-component-boundary-lockdown-guard.ts');
 const filteredSortGuard = read('scripts/ps-258-orders-filtered-sort-guard.ts');
@@ -137,10 +145,13 @@ check('OrdersView lockdown caveat is explicit: UI gate currently disabled, backe
   /Defense-in-depth still applies at the BACKEND/.test(ordersView));
 check('OrdersView still contains row select, Select All, and batch panel read-only gate sites',
   /if \(isReadOnly\) return null/.test(ordersView) &&
-  // PS-166 Wave 4: the Select-All gate moved to OrdersFilterToolbar; count gates
-  // across both files so the lockdown floor (>= 2) is enforced wherever they live.
+  // PS-166 Wave 4: the Select-All gate moved to OrdersFilterToolbar.
+  // PS-166 Wave 6: the SKU-group select-all gate moved to OrdersTable.tsx.
+  // Count gates across all three files so the lockdown floor (>= 2) is enforced
+  // wherever they physically live.
   ((ordersView.match(/isReadOnly \? null :/g) ?? []).length +
-    (filterToolbar.match(/isReadOnly \? null :/g) ?? []).length) >= 2 &&
+    (filterToolbar.match(/isReadOnly \? null :/g) ?? []).length +
+    (ordersTable.match(/isReadOnly \? null :/g) ?? []).length) >= 2 &&
   /<OrdersBatchPanel[\s\S]{0,400}?isReadOnly=\{isReadOnly\}/.test(ordersView));
 check('OrdersBatchPanel still accepts and honors the read-only suppression prop',
   /isReadOnly: boolean/.test(batchPanel) &&
@@ -189,16 +200,25 @@ check('filtered-order sort guard pins OrdersView delegation and no inline sort',
   filteredSortGuard.includes('no inline .sort() remains in the orderedFilteredOrders useMemo'));
 // PS-166/PS-306/PS-258 decomposition: the skuOrderGroups/visibleOrderIds derivations were moved
 // VERBATIM into useOrdersFilterSort. OrdersView CONSUMES the hook and still RENDERS from its
-// outputs (the downstream JSX reads below stay in OrdersView). Re-pointed to follow the moved
-// declarations; the DOM byte-equality cert (test:orders-dom-parity:browser) proves no drift.
+// outputs. PS-166 (Wave 6): the dual flat/sku-grouped row-map JSX (the
+// `skuSortActive ? skuOrderGroups.flatMap` / `: orderedFilteredOrders.map`
+// branches) moved VERBATIM into OrdersTable.tsx — OrdersView still gates on
+// orderedFilteredOrders.length and threads orderedFilteredOrders/skuOrderGroups/
+// skuSortActive into <OrdersTable> as props. The row-map substring checks below
+// re-point to OrdersTable; the DOM byte-equality cert
+// (test:orders-dom-parity:browser) proves no drift.
 const filterSortHook = read('web/src/components/Views/hooks/useOrdersFilterSort.ts');
 check('OrdersView table state still flows from orderedFilteredOrders',
   /const skuOrderGroups = useMemo\([\s\S]{0,500}?orderedFilteredOrders/.test(filterSortHook) &&
   /const visibleOrderIds = useMemo\(\s*\(\) => orderedFilteredOrders\.map/.test(filterSortHook) &&
   /useOrdersFilterSort\(/.test(ordersView) &&
   ordersView.includes('orderedFilteredOrders.length > 0') &&
-  ordersView.includes('skuSortActive ? skuOrderGroups.flatMap') &&
-  ordersView.includes(': orderedFilteredOrders.map') &&
+  // PS-166 Wave 6: the row-map render branches now live in OrdersTable.tsx; OrdersView
+  // feeds them via <OrdersTable orderedFilteredOrders={…} skuOrderGroups={…} skuSortActive={…}/>.
+  ordersTable.includes('skuSortActive ? skuOrderGroups.flatMap') &&
+  ordersTable.includes(': orderedFilteredOrders.map') &&
+  ordersView.includes('orderedFilteredOrders={orderedFilteredOrders}') &&
+  ordersView.includes('skuOrderGroups={skuOrderGroups}') &&
   ordersView.includes('hasNoFilteredOrders={orderedFilteredOrders.length === 0}'));
 
 if (failures > 0) {

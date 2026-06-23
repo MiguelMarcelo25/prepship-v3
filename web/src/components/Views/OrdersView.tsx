@@ -548,9 +548,17 @@ import { OrdersBatchPanel } from './OrdersBatchPanel'
 // around the orders table moved VERBATIM to a strict presentational
 // <OrdersResultsShell> (no state; gating booleans + display values + onRetry
 // are passed in; it embeds <OrdersResultsEmptyState>). The <table id="ordersTable">
-// stays HERE and is passed in as children (the table slot). Byte-identical
-// markup; control flow unchanged.
+// is passed in as children (the table slot) — in Wave 6 that child became the
+// extracted <OrdersTable>. Byte-identical markup; control flow unchanged.
 import { OrdersResultsShell } from './OrdersResultsShell'
+// PS-166/PS-306/PS-258 (Wave 6): the orders TABLE (thead + tbody, incl. the
+// <colgroup>, sortable/draggable/resizable column headers, and the dual
+// flat/sku-grouped row-map) moved VERBATIM to a strict presentational
+// <OrdersTable>. The per-cell dispatcher renderTableCell stays HERE and is
+// threaded in as renderCell; every header/row/group handler stays HERE and
+// flows down as props. Byte-identical #ordersTable/#tableHead/#ordersBody
+// markup (test:orders-dom-parity:browser proves no drift).
+import { OrdersTable } from './OrdersTable'
 // PS-166 (Wave 3, JSX-safe): the daily-stats strip JSX moved VERBATIM to a
 // strict <OrdersDailyStrip> (state/effects/rollover stay in OrdersView).
 import { OrdersDailyStrip } from './OrdersDailyStrip'
@@ -7718,11 +7726,13 @@ export default function OrdersView({
                 <OrdersResultsShell>. It owns the .orders-wrap wrapper, the
                 #loadingState skeleton, the AlertTriangle + Retry error block,
                 and the embedded <OrdersResultsEmptyState> — all PRESENTATIONAL.
-                The <table id="ordersTable"> itself stays HERE and is passed in
-                as children (the table slot), at the exact position it sat
-                before, so #ordersTable/#ordersBody/#tableHead are byte-identical
-                (test:orders-dom-parity:browser proves no drift). All data state
-                stays in OrdersView; onRetry delegates to refetchOrders. */}
+                PS-166 (Wave 6): the <table id="ordersTable"> itself was then
+                extracted VERBATIM into <OrdersTable> and is passed in here as
+                the shell's children (the table slot), at the exact position it
+                sat before, so #ordersTable/#ordersBody/#tableHead stay
+                byte-identical (test:orders-dom-parity:browser proves no drift).
+                All data state stays in OrdersView; onRetry delegates to
+                refetchOrders. */}
             <OrdersResultsShell
               loading={loading}
               error={error}
@@ -7733,228 +7743,36 @@ export default function OrdersView({
               isGlobalSearchActive={isGlobalSearchActive}
             >
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
-                <table
-                  className={`orders-table density-${tableDensity}`}
-                  id="ordersTable"
-                  style={{ minWidth: tableWidth, width: tableWidth, tableLayout: 'fixed' }}
-                >
-                  <colgroup>
-                    {visibleColumns.map((column) => (
-                      <col key={column.key} style={{ width: column.width }} />
-                    ))}
-                  </colgroup>
-                  <thead id="tableHead">
-                    <tr>
-                      {visibleColumns.map((column) => {
-                        const sortable = column.sort != null
-                        const sorted = sortable && sortState.key === column.sort
-                        const headerClasses = [
-                          sortable ? (sorted ? `sortable sort-${sortState.dir}` : 'sortable') : '',
-                          dragColumnKey === column.key ? 'col-dragging' : '',
-                          dragOverColumnKey === column.key ? 'col-drag-over' : '',
-                          resizingColumnKey === column.key ? 'col-resizing' : '',
-                        ].filter(Boolean).join(' ')
-                        return (
-                          <th
-                            key={column.key}
-                            data-col={column.key}
-                            style={{
-                              width: column.width,
-                              position: 'relative',
-                              ...(column.key === 'qty' ? { textAlign: 'center' } : null),
-                            }}
-                            className={headerClasses || undefined}
-                            draggable={column.key !== 'select'}
-                            tabIndex={column.key !== 'select' ? 0 : undefined}
-                            aria-sort={sortable ? (sorted ? (sortState.dir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined}
-                            aria-label={column.key !== 'select' ? `${column.label}. Drag to reorder. Use Alt+Arrow to move and Shift+Arrow to resize.` : undefined}
-                            title={column.key !== 'select' ? 'Drag to reorder. Drag the right edge to resize. Alt+Arrow moves; Shift+Arrow resizes.' : undefined}
-                            onClick={sortable ? () => handleHeaderClick(column) : undefined}
-                            onKeyDown={(event) => handleHeaderKeyDown(event, column)}
-                            onDragStart={(event) => handleHeaderDragStart(event, column.key)}
-                            onDragOver={(event) => handleHeaderDragOver(event, column.key)}
-                            onDrop={(event) => handleHeaderDrop(event, column.key)}
-                            onDragEnd={finishHeaderDrag}
-                          >
-                            {column.label}
-                            {sortable ? <span className="sort-arrow" /> : null}
-                            {column.key !== 'select' ? (
-                              <div
-                                className={`col-resizer${resizingColumnKey === column.key ? ' active' : ''}`}
-                                role="separator"
-                                aria-orientation="vertical"
-                                aria-label={`Resize ${column.label} column`}
-                                onMouseDown={(event) => startColumnResize(event, column)}
-                                onClick={(event) => event.stopPropagation()}
-                                onDragStart={(event) => event.stopPropagation()}
-                              />
-                            ) : null}
-                          </th>
-                        )
-                      })}
-                    </tr>
-                  </thead>
-                  <tbody id="ordersBody">
-                    {(skuSortActive ? skuOrderGroups.flatMap((group) => {
-                      const groupOrderIds = group.orders.map((order) => order.orderId)
-                      const allGroupSelected = groupOrderIds.length > 0 && groupOrderIds.every((orderId) => selectedIdSet.has(orderId))
-                      const someGroupSelected = !allGroupSelected && groupOrderIds.some((orderId) => selectedIdSet.has(orderId))
-                      const header = (
-                        <tr key={`sku-group-${group.key}`} className="sku-group-header">
-                          <td
-                            colSpan={visibleColumns.length}
-                            style={{
-                              padding: '6px 12px',
-                              background: 'var(--ss-blue-bg)',
-                              borderTop: '2px solid var(--ss-blue)',
-                              borderBottom: '1px solid var(--border)',
-                              fontSize: 11.5,
-                              fontWeight: 700,
-                              color: 'var(--ss-blue)',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                              {/* Lockdown — SKU group select-all also hidden
-                                  on Shipped/Cancelled. Same reason as the
-                                  per-row checkbox: no bulk-modify pathway. */}
-                              {isReadOnly ? null : (
-                                <input
-                                  type="checkbox"
-                                  checked={allGroupSelected}
-                                  aria-label={`Select current page SKU group ${group.label}`}
-                                  ref={(node) => {
-                                    if (node) node.indeterminate = someGroupSelected
-                                  }}
-                                  style={{ width: 16, height: 16, accentColor: 'var(--ss-blue)', cursor: 'pointer', flexShrink: 0 }}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onChange={(event) => {
-                                    event.stopPropagation()
-                                    toggleSkuGroupSelection(groupOrderIds, event.target.checked)
-                                  }}
-                                />
-                              )}
-                              <span style={{ fontSize: 13 }}>📦</span>
-                              <span className="sku-link" style={{ fontSize: 11.5 }} title={group.label}>{group.label}</span>
-                              {group.quantity != null ? (
-                                <span style={{ fontWeight: 700, color: 'var(--text)' }}>
-                                  Qty {group.quantity}
-                                </span>
-                              ) : null}
-                              <span style={{ fontWeight: 400, color: 'var(--text2)' }}>
-                                SKU group current page · {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-
-                      const rows = group.orders.map((order) => {
-                        const detail = orderDetailsById.get(order.orderId) ?? null
-                        const items = getActiveItems(order, detail)
-                        const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
-                        const multiSku = uniqueSkus.size > 1
-                        const isTransitioningShipped = transitionalShippedIds.has(order.orderId)
-                        const rowClasses = [
-                          'order-row',
-                          selectedIdSet.has(order.orderId) ? 'row-selected' : '',
-                          panelOrderId === order.orderId ? 'row-panel-open' : '',
-                          kbRowId === order.orderId ? 'row-kb-focus' : '',
-                          multiSku ? 'multi-sku-row' : '',
-                          getIsException(order) ? 'row-exception' : '',
-                          // 30-second continuous fade animation triggered
-                          // by Print Label success. CSS keyframe is
-                          // `ps-shipping-fade` in app-shell.css (visible
-                          // throughout the 30s — opacity goes 1 → 0 with
-                          // a 4-stop curve so the change is perceivable
-                          // every few seconds, plus a slight rightward
-                          // slide so the row looks like it's "leaving"
-                          // toward the Shipped tab).
-                          isTransitioningShipped ? 'ps-shipping-row' : '',
-                        ].filter(Boolean).join(' ')
-                        const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
-                        const expedited = getExpeditedBadge(order, detail)
-
-                        return (
-                          <tr
-                            key={order.orderId}
-                            id={`row-${order.orderId}`}
-                            className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
-                            data-expedited={expedited ? expedited.tier : undefined}
-                            style={{ borderLeft: `3px solid ${clientColor}` }}
-                            onClick={() => openOrderDetails(order.orderId)}
-                            onDoubleClick={() => openShipStationOrder(order.orderId)}
-                            onMouseEnter={() => setKbRowId(order.orderId)}
-                          >
-                            {visibleColumns.map((column) => (
-                              <td
-                                key={column.key}
-                                data-col={column.key}
-                                // See twin <td> below — explicit width
-                                // mirrors colgroup + thead so browsers can't
-                                // drift body content out of column alignment.
-                                style={{ width: column.width, maxWidth: column.width }}
-                                title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
-                              >
-                                {renderTableCell(order, column)}
-                              </td>
-                            ))}
-                          </tr>
-                        )
-                      })
-
-                      return [header, ...rows]
-                    }) : orderedFilteredOrders.map((order) => {
-                      const detail = orderDetailsById.get(order.orderId) ?? null
-                      const items = getActiveItems(order, detail)
-                      const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
-                      const multiSku = uniqueSkus.size > 1
-                      const rowClasses = [
-                        'order-row',
-                        selectedIdSet.has(order.orderId) ? 'row-selected' : '',
-                        panelOrderId === order.orderId ? 'row-panel-open' : '',
-                        kbRowId === order.orderId ? 'row-kb-focus' : '',
-                        multiSku ? 'multi-sku-row' : '',
-                        getIsException(order) ? 'row-exception' : '',
-                      ].filter(Boolean).join(' ')
-                      const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
-                      const expedited = getExpeditedBadge(order, detail)
-
-                      return (
-                        <tr
-                          key={order.orderId}
-                          id={`row-${order.orderId}`}
-                          className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
-                          data-expedited={expedited ? expedited.tier : undefined}
-                          style={{ borderLeft: `3px solid ${clientColor}` }}
-                          onClick={() => openOrderDetails(order.orderId)}
-                          onDoubleClick={() => openShipStationOrder(order.orderId)}
-                          onMouseEnter={() => setKbRowId(order.orderId)}
-                        >
-                          {visibleColumns.map((column) => (
-                            <td
-                              key={column.key}
-                              data-col={column.key}
-                              // Explicit width on the body cell mirrors the
-                              // colgroup + thead width so browsers never
-                              // misalign header vs body — even when an inner
-                              // cell renderer (e.g. cell-itemname's
-                              // maxWidth: column.width + 90 hover-preview
-                              // trick) tries to grow content past the
-                              // declared cell width. With table-layout:
-                              // fixed the colgroup wins anyway, but the
-                              // explicit td width is a belt-and-braces
-                              // guard for subpixel rendering edge cases.
-                              style={{ width: column.width, maxWidth: column.width }}
-                              title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
-                            >
-                              {renderTableCell(order, column)}
-                            </td>
-                          ))}
-                        </tr>
-                      )
-                    }))}
-                  </tbody>
-                </table>
+                <OrdersTable
+                  visibleColumns={visibleColumns}
+                  tableWidth={tableWidth}
+                  tableDensity={tableDensity}
+                  sortState={sortState}
+                  dragColumnKey={dragColumnKey}
+                  dragOverColumnKey={dragOverColumnKey}
+                  resizingColumnKey={resizingColumnKey}
+                  handleHeaderClick={handleHeaderClick}
+                  handleHeaderKeyDown={handleHeaderKeyDown}
+                  handleHeaderDragStart={handleHeaderDragStart}
+                  handleHeaderDragOver={handleHeaderDragOver}
+                  handleHeaderDrop={handleHeaderDrop}
+                  finishHeaderDrag={finishHeaderDrag}
+                  startColumnResize={startColumnResize}
+                  orderedFilteredOrders={orderedFilteredOrders}
+                  skuSortActive={skuSortActive}
+                  skuOrderGroups={skuOrderGroups}
+                  orderDetailsById={orderDetailsById}
+                  selectedIdSet={selectedIdSet}
+                  panelOrderId={panelOrderId}
+                  kbRowId={kbRowId}
+                  transitionalShippedIds={transitionalShippedIds}
+                  isReadOnly={isReadOnly}
+                  toggleSkuGroupSelection={toggleSkuGroupSelection}
+                  openOrderDetails={openOrderDetails}
+                  openShipStationOrder={openShipStationOrder}
+                  setKbRowId={setKbRowId}
+                  renderCell={renderTableCell}
+                />
               ) : null}
             </OrdersResultsShell>
           </div>

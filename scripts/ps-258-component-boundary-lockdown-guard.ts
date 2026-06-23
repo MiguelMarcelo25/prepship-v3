@@ -38,10 +38,19 @@ const BATCH_PANEL_PATH = 'web/src/components/Views/OrdersBatchPanel.tsx';
 // UNCHANGED — the gate count below now spans both files so the Select-All gate
 // is still pinned wherever it physically lives.
 const TOOLBAR_PATH = 'web/src/components/Views/OrdersFilterToolbar.tsx';
+// PS-166 (Wave 6): the orders <table> — including the SKU-group header row whose
+// page-local select-all checkbox carries the `{isReadOnly ? null : (` lockdown
+// gate — moved VERBATIM into OrdersTable.tsx. The isReadOnly flag is still the
+// single source of truth in OrdersView and is threaded into <OrdersTable> as a
+// prop; the gate is byte-identical, only relocated. The SKU-group-gate check +
+// the cross-file ternary-gate count below now span OrdersTable too, so the
+// lockdown is still pinned wherever the gate physically lives.
+const ORDERS_TABLE_PATH = 'web/src/components/Views/OrdersTable.tsx';
 
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
 const batchPanel = readFileSync(BATCH_PANEL_PATH, 'utf8');
 const filterToolbar = readFileSync(TOOLBAR_PATH, 'utf8');
+const ordersTable = readFileSync(ORDERS_TABLE_PATH, 'utf8');
 
 // Count helper — how many gating uses of isReadOnly survive in OrdersView.
 const isReadOnlyUses = (ordersView.match(/isReadOnly/g) ?? []).length;
@@ -63,8 +72,10 @@ check('OrdersView row select cell early-returns null under isReadOnly',
 //     `{isReadOnly ? null : (` gate satisfies the "Select-All is hidden" intent.
 check('Select-All is gated (isReadOnly ? null : …) in the toolbar',
   /\{isReadOnly \? null : \(/.test(filterToolbar));
-check('OrdersView keeps its SKU-group select-all isReadOnly gate',
-  /\{isReadOnly \? null : \(/.test(ordersView));
+// PS-166 Wave 6: the SKU-group select-all gate now lives in OrdersTable.tsx
+// (the extracted orders <table>); the gate is verbatim, only relocated.
+check('OrdersTable keeps its SKU-group select-all isReadOnly gate',
+  /\{isReadOnly \? null : \(/.test(ordersTable));
 
 // ── 4. there are at least two `isReadOnly ? null :` ternary gates total ──
 //     (the toolbar Select-All + the OrdersView SKU-group select-all). Counting
@@ -72,7 +83,9 @@ check('OrdersView keeps its SKU-group select-all isReadOnly gate',
 //     without re-gating, regardless of which file it lands in.
 const ternaryGateUses =
   (ordersView.match(/isReadOnly \? null :/g) ?? []).length +
-  (filterToolbar.match(/isReadOnly \? null :/g) ?? []).length;
+  (filterToolbar.match(/isReadOnly \? null :/g) ?? []).length +
+  // PS-166 Wave 6: the SKU-group select-all gate now lives in OrdersTable.tsx.
+  (ordersTable.match(/isReadOnly \? null :/g) ?? []).length;
 check('>= 2 `isReadOnly ? null :` selection gates survive (Select-All + SKU-group)',
   ternaryGateUses >= 2);
 

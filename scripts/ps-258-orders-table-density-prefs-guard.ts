@@ -26,10 +26,17 @@ const ORDERS_VIEW_PATH = 'web/src/components/Views/OrdersView.tsx';
 // and wires `setTableDensity` into the toolbar as `onTableDensityChange`. State
 // ownership is unchanged — only the toggle markup moved.
 const TOOLBAR_PATH = 'web/src/components/Views/OrdersFilterToolbar.tsx';
+// PS-166 (Wave 6): the orders <table> moved VERBATIM into OrdersTable.tsx, so the
+// `density-${tableDensity}` table className now lives there. OrdersView STILL owns
+// the hook and still consumes `tableDensity` — it threads it into <OrdersTable>
+// as the `tableDensity` prop. State ownership is unchanged; only the className
+// markup followed the table to its new home.
+const ORDERS_TABLE_PATH = 'web/src/components/Views/OrdersTable.tsx';
 
 const moduleSrc = readFileSync(MODULE_PATH, 'utf8');
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
 const toolbar = readFileSync(TOOLBAR_PATH, 'utf8');
+const ordersTable = readFileSync(ORDERS_TABLE_PATH, 'utf8');
 
 // ── the new module owns the hook + type, byte-identical behavior ──
 check('module exports the useTableDensityPreference hook',
@@ -59,8 +66,10 @@ check('OrdersView no longer declares the inline useState<TableDensity>',
   !/useState<TableDensity>/.test(ordersView));
 check('OrdersView no longer inlines the orders_table_density localStorage access',
   !/localStorage\.(getItem|setItem)\('orders_table_density'/.test(ordersView));
-check('OrdersView still consumes tableDensity (the density-${tableDensity} table class)',
-  /tableDensity/.test(ordersView) && /density-\$\{tableDensity\}/.test(ordersView));
+check('OrdersView still consumes tableDensity (threads it into <OrdersTable> as the tableDensity prop); the density-${tableDensity} table class lives in OrdersTable',
+  /tableDensity/.test(ordersView) &&
+  /tableDensity=\{tableDensity\}/.test(ordersView) &&
+  /density-\$\{tableDensity\}/.test(ordersTable));
 check('OrdersView wires setTableDensity into <OrdersFilterToolbar> (onTableDensityChange)',
   /onTableDensityChange:\s*setTableDensity/.test(ordersView));
 check('OrdersFilterToolbar keeps the density toggle setter call site (onTableDensityChange(opt.key))',

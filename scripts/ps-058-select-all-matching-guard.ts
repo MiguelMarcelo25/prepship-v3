@@ -18,6 +18,12 @@ const ordersView = read('web/src/components/Views/OrdersView.tsx');
 // scope wiring + hydration still live in OrdersView; only the toolbar LABELS
 // re-point to the extracted presentational component.
 const ordersFilterToolbar = read('web/src/components/Views/OrdersFilterToolbar.tsx');
+// PS-166 (Wave 6): the orders <table> (incl. the SKU-group header row with its
+// page-local select-all checkbox + "current page" labels) moved VERBATIM to
+// OrdersTable.tsx. The SKU-group current-page-labeling assertion below re-points
+// to that new home; the toggleSkuGroupSelection handler + selection state stay
+// in OrdersView (passed in as a prop), so the page-local scope is unchanged.
+const ordersTable = read('web/src/components/Views/OrdersTable.tsx');
 const packageJson = read('package.json');
 
 assert(
@@ -66,7 +72,8 @@ assert(
   'OrdersView must hydrate off-page selected orders before print/queue/mark-shipped actions.',
 );
 assert(
-  /current page/.test(ordersView) && /SKU group/.test(ordersView),
+  // PS-166 (Wave 6): the SKU-group header markup now lives in OrdersTable.tsx.
+  /current page/.test(ordersTable) && /SKU group/.test(ordersTable),
   'SKU group selection must be explicitly labeled as current-page/page-local.',
 );
 assert(

@@ -23,8 +23,13 @@ const shellCssPath = path.join(root, 'web/src/app-shell.css')
 // as props) — batch-panel string pins read there; the handler DEFINITIONS
 // (handleBatchAction etc.) stay in OrdersView and are pinned against it.
 const batchPanelPath = path.join(root, 'web/src/components/Views/OrdersBatchPanel.tsx')
+// PS-166 (Wave 6): the orders <table> (thead + tbody, incl. the per-row
+// onClick={() => openOrderDetails(order.orderId)}) moved VERBATIM to its own
+// strict <OrdersTable> component (OrdersView threads state/handlers in as
+// props) — the row-click pin reads there; openOrderDetails stays in OrdersView.
+const ordersTablePath = path.join(root, 'web/src/components/Views/OrdersTable.tsx')
 
-const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, batchPanel] = await Promise.all([
+const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, batchPanel, ordersTable] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(queueDrawerPath, 'utf8'),
   readFile(selectionToolbarPath, 'utf8'),
@@ -34,6 +39,7 @@ const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, or
   readFile(homePath, 'utf8'),
   readFile(shellCssPath, 'utf8'),
   readFile(batchPanelPath, 'utf8'),
+  readFile(ordersTablePath, 'utf8'),
 ])
 
 const normalizedOrdersView = ordersView.replace(/\r\n/g, '\n')
@@ -42,7 +48,10 @@ const checks = [
   {
     name: 'row click opens the detail drawer instead of entering bulk selection',
     pass:
-      ordersView.includes('onClick={() => openOrderDetails(order.orderId)}') &&
+      // PS-166 Wave 6: the per-row onClick lives in the extracted <OrdersTable>;
+      // openOrderDetails stays in OrdersView and is passed in as a prop.
+      ordersTable.includes('onClick={() => openOrderDetails(order.orderId)}') &&
+      !ordersTable.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersView.includes('onClick={() => updateSelection([order.orderId])}'),
   },
   {
