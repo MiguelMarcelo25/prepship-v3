@@ -620,7 +620,9 @@ async function runBackfill(
         // order that was stuck waiting for a limiter permit now gets its rate. Non-timeout errors throw
         // immediately (a real rate error is recorded honestly). Passive sweeps get no retry.
         const result = await runWithTimeoutAndRetry(
-          () => getRates(rateInput, liveRecalculate ? { forceRefresh: true } : undefined),
+          // PS-perf: the best-rate backfill is bulk BACKGROUND work — it yields ShipStation
+          // budget + fan-out permits to interactive Browse Rates clicks (the limiter priority lane).
+          () => getRates(rateInput, liveRecalculate ? { forceRefresh: true, priority: 'background' } : { priority: 'background' }),
           {
             timeoutMs: perOrderTimeoutMs,
             maxRetries: liveRecalculate ? LIVE_MAX_RETRIES : 0,

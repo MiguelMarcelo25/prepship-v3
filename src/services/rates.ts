@@ -193,6 +193,26 @@ export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
   )
 );
 const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
+// PS-perf (QA audit 2026-06-23): interactive-priority lane. BACKGROUND rate fetches (the
+// server-side best-rate backfill / Recalculate-All drain) self-throttle to a LOWER budget so
+// they leave burst + per-minute headroom for INTERACTIVE fetches (a user's Browse Rates click).
+// The interactive lane still counts ALL timestamps against the FULL ShipStation limit, so the
+// TOTAL never exceeds the real ShipStation rate ceiling (no 429 risk) — background just yields.
+const SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE = Math.max(
+  0,
+  Math.min(
+    SHIPSTATION_RATE_LIMIT_BURST - 1,
+    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE ?? '8', 10) || 8
+  )
+);
+const SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE = Math.max(
+  0,
+  Math.min(
+    SHIPSTATION_RATE_LIMIT_PER_MINUTE - 1,
+    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE ?? '40', 10) || 40
+  )
+);
+export type RateFetchPriority = 'interactive' | 'background';
 const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
   60_000,
   Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
@@ -222,7 +242,11 @@ const RATEABLE_CARRIER_CODES = new Set([
 ]);
 
 let globalRateFetchActive = 0;
-const globalRateFetchWaiters: Array<() => void> = [];
+// PS-perf (QA audit 2026-06-23): two waiter queues so an INTERACTIVE fetch (a user's Browse
+// Rates click) jumps ahead of BACKGROUND fetches (the best-rate backfill) instead of waiting
+// FIFO behind them. The active-permit COUNTING is unchanged — only the wake order differs.
+const interactiveRateFetchWaiters: Array<() => void> = [];
+const backgroundRateFetchWaiters: Array<() => void> = [];
 const shipStationRateLimitTimestamps: number[] = [];
 
 function trimShipStationRateLimitTimestamps(now = Date.now()) {
@@ -234,23 +258,34 @@ function trimShipStationRateLimitTimestamps(now = Date.now()) {
   }
 }
 
-function nextShipStationRateBudgetDelayMs(now = Date.now()) {
+function nextShipStationRateBudgetDelayMs(now = Date.now(), priority: RateFetchPriority = 'interactive') {
   trimShipStationRateLimitTimestamps(now);
+  // Background self-throttles to a LOWER budget, leaving burst + per-minute headroom for
+  // interactive. Interactive uses the FULL ShipStation limit, and it counts ALL timestamps
+  // (interactive + background), so the TOTAL never exceeds the real ceiling — no 429 risk.
+  const burstLimit =
+    priority === 'background'
+      ? Math.max(1, SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE)
+      : SHIPSTATION_RATE_LIMIT_BURST;
+  const perMinuteLimit =
+    priority === 'background'
+      ? Math.max(1, SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE)
+      : SHIPSTATION_RATE_LIMIT_PER_MINUTE;
   const burstWindowMs = Math.ceil(
     (SHIPSTATION_RATE_LIMIT_WINDOW_MS * SHIPSTATION_RATE_LIMIT_BURST) /
       SHIPSTATION_RATE_LIMIT_PER_MINUTE
   );
   const recentBurst = shipStationRateLimitTimestamps.filter((timestamp) => now - timestamp < burstWindowMs);
-  if (recentBurst.length >= SHIPSTATION_RATE_LIMIT_BURST) {
+  if (recentBurst.length >= burstLimit) {
     return Math.max(0, burstWindowMs - (now - recentBurst[0]!));
   }
-  if (shipStationRateLimitTimestamps.length < SHIPSTATION_RATE_LIMIT_PER_MINUTE) return 0;
+  if (shipStationRateLimitTimestamps.length < perMinuteLimit) return 0;
   return Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - shipStationRateLimitTimestamps[0]!));
 }
 
-async function acquireShipStationRateBudget(): Promise<void> {
+async function acquireShipStationRateBudget(priority: RateFetchPriority = 'interactive'): Promise<void> {
   for (;;) {
-    const delayMs = nextShipStationRateBudgetDelayMs();
+    const delayMs = nextShipStationRateBudgetDelayMs(Date.now(), priority);
     if (delayMs <= 0) {
       shipStationRateLimitTimestamps.push(Date.now());
       return;
@@ -261,24 +296,33 @@ async function acquireShipStationRateBudget(): Promise<void> {
   }
 }
 
-async function acquireGlobalRateFetchPermit(): Promise<void> {
+async function acquireGlobalRateFetchPermit(priority: RateFetchPriority = 'interactive'): Promise<void> {
   if (globalRateFetchActive < RATE_FETCH_CONCURRENCY) {
     globalRateFetchActive += 1;
     return;
   }
-  await new Promise<void>((resolve) => globalRateFetchWaiters.push(resolve));
+  await new Promise<void>((resolve) => {
+    if (priority === 'background') backgroundRateFetchWaiters.push(resolve);
+    else interactiveRateFetchWaiters.push(resolve);
+  });
   globalRateFetchActive += 1;
 }
 
 function releaseGlobalRateFetchPermit() {
   globalRateFetchActive = Math.max(0, globalRateFetchActive - 1);
-  const next = globalRateFetchWaiters.shift();
+  // Drain interactive waiters before background ones (the priority lane); identical counting to
+  // the prior single-queue release, so no permit is lost and active never exceeds the cap.
+  const next = interactiveRateFetchWaiters.shift() ?? backgroundRateFetchWaiters.shift();
   if (next) next();
 }
 
-async function runWithGlobalRateLimiter<T>(operation: () => Promise<T>): Promise<T> {
-  await acquireShipStationRateBudget();
-  await acquireGlobalRateFetchPermit();
+// Exported for ps-rate-limiter-priority-behavior-test (proves no-deadlock + interactive-first).
+export async function runWithGlobalRateLimiter<T>(
+  operation: () => Promise<T>,
+  priority: RateFetchPriority = 'interactive',
+): Promise<T> {
+  await acquireShipStationRateBudget(priority);
+  await acquireGlobalRateFetchPermit(priority);
   try {
     return await operation();
   } finally {
@@ -1094,6 +1138,7 @@ export type FetchLiveRatesResult = {
 export async function fetchLiveRatesWithDiagnostics(
   input: RateInput,
   automationRules: ShippingAutomationRule[] = [],
+  priority: RateFetchPriority = 'interactive',
 ): Promise<FetchLiveRatesResult> {
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
 
@@ -1113,7 +1158,7 @@ export async function fetchLiveRatesWithDiagnostics(
   const batches = await mapWithConcurrency(
     carriers,
     RATE_FETCH_CONCURRENCY,
-    (c) => runWithGlobalRateLimiter(() => fetchEstimateForCarrier(c, input, shipFrom)),
+    (c) => runWithGlobalRateLimiter(() => fetchEstimateForCarrier(c, input, shipFrom), priority),
   );
   const lifted: Rate[] = batches.flatMap((batch) => batch.rates).map(toRate);
 
@@ -1237,6 +1282,9 @@ type GetRatesOptions = {
   cachedOnly?: boolean;
   // PS-197b: quote the uninsured manual baseline (see resolveRateInput) — reference only.
   rawManualEstimate?: boolean;
+  // PS-perf: 'background' lets the server-side best-rate backfill yield ShipStation budget +
+  // fan-out permits to an interactive Browse Rates click. Defaults to interactive.
+  priority?: RateFetchPriority;
 };
 
 function cachedDiagnosticsFromRates(rates: Rate[]): CarrierRateDiagnostic[] {
@@ -1558,7 +1606,7 @@ export async function getRates(
     };
   }
 
-  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput, automationRules);
+  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput, automationRules, opts.priority ?? 'interactive');
   const rawRates = liveResult.rates;
   const now = new Date();
 

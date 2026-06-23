@@ -72,7 +72,7 @@ assert(
     ratesService.includes('SHIPSTATION_RATE_LIMIT_BURST') &&
     ratesService.includes('SHIPSTATION_RATE_LIMIT_WINDOW_MS') &&
     ratesService.includes('shipStationRateLimitTimestamps') &&
-    ratesService.includes('await acquireShipStationRateBudget()') &&
+    ratesService.includes('await acquireShipStationRateBudget(') &&
     !ratesService.includes('40 / 1500'),
   'ShipStation live rate calls enforce env-driven 160/minute budget with burst control, not the old too-fast limiter',
 )

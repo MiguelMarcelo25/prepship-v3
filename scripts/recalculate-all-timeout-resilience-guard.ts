@@ -91,7 +91,9 @@ async function main() {
     /liveRecalculate\s*\?\s*LIVE_BACKFILL_CONCURRENCY/.test(backfill));
   // Preserve the PS-12x forceRefresh contract (the existing recalculate-all-live guard pins it too).
   check('live recalc still forces the full live carrier fan-out (no cache regression)',
-    /liveRecalculate \? \{ forceRefresh: true \} : undefined/.test(backfill));
+    // PS-perf 2026-06-23: the call now also tags priority:'background' (limiter lane); the pinned
+    // invariant is unchanged — liveRecalculate still forces forceRefresh:true.
+    /liveRecalculate \? \{ forceRefresh: true[^}]*\} :/.test(backfill));
 
   if (failures > 0) {
     console.error(`\nFAIL recalculate-all timeout-resilience guard (${failures} failing)`);

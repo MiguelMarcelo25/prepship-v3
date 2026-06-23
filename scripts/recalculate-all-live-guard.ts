@@ -53,7 +53,8 @@ check('override still carries the age for the FE watchdog',
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 check('Recalculate All (maxAgeHours 0) forces the LIVE carrier fan-out',
   /const liveRecalculate = opts\.maxAgeHours === 0/.test(backfill) &&
-  /liveRecalculate \? \{ forceRefresh: true \} : undefined/.test(backfill));
+  // PS-perf 2026-06-23: the call now also tags priority:'background'; invariant unchanged.
+  /liveRecalculate \? \{ forceRefresh: true[^}]*\} :/.test(backfill));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-178 final part merged the cell's two render branches (DTO money + degraded
 // base) into ONE wrapper — the spinner renders once, covering both paths.
