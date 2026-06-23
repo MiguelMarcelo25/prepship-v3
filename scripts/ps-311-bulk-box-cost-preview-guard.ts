@@ -8,7 +8,7 @@
  * Offline/pure: no DB, no network, no shipped/cancelled mutation.
  */
 import { readFileSync } from 'node:fs';
-import { computeBulkBoxCostPreview } from '../src/services/billing-box-cost-bulk';
+import { computeBulkBoxCostPreview, splitBulkBoxCostApplyTargets } from '../src/services/billing-box-cost-bulk';
 
 let failures = 0;
 function check(name: string, condition: boolean): void {
@@ -62,10 +62,28 @@ check('preview route exists + delegates to previewBulkBoxCost with the server-de
 check('preview route is permission-gated (financials:write)',
   /box-cost\/bulk\/preview[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute));
 
-// The slice-1 service is a pure dry-run: it must perform NO writes + NOT regenerate.
 const svc = readFileSync('src/services/billing-box-cost-bulk.ts', 'utf8');
-check('preview service (slice 1) performs NO writes / regenerate — it is a dry-run',
-  !/\.insert\(|\.update\(|\.delete\(|generateLineItems\(/.test(svc));
+
+// ── Slice 2: APPLY safety ──
+const split = splitBulkBoxCostApplyTargets(rows);
+check('apply: finalized (invoiced) orders are NEVER in the editable set (skipped, never re-billed)',
+  split.editable.length === 3 &&
+  split.skippedFinalized.length === 2 &&
+  split.editable.every((r) => !r.invoiced) &&
+  split.skippedFinalized.every((r) => r.invoiced));
+check('apply service writes ONLY billing_box_resolutions, by upsert (the PS-207 directive)',
+  /\.insert\(billingBoxResolutions\)/.test(svc) && /onConflictDoUpdate/.test(svc));
+check('apply service NEVER writes client_package_prices (timeless table — card forbids re-pricing it)',
+  !/clientPackagePrices/.test(svc));
+check('apply runs in ONE transaction (all editable orders re-price, or none)',
+  /db\.transaction\(/.test(svc));
+check('apply route exists, regenerates the scope, and AUDITS the bulk money action',
+  /\/box-cost\/bulk\/apply/.test(billingRoute) &&
+  /applyBulkBoxCostResolutions\(/.test(billingRoute) &&
+  /generateLineItems\(/.test(billingRoute) &&
+  /action: 'bulk_box_cost_apply'/.test(billingRoute));
+check('apply route is permission-gated (financials:write)',
+  /box-cost\/bulk\/apply[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute));
 
 if (failures > 0) {
   console.error(`\nPS-311 bulk box-cost preview guard FAILED with ${failures} failure(s).`);

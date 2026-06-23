@@ -7,11 +7,13 @@
 // overwrites client_package_prices (that table is TIMELESS / global; the card forbids changing
 // it for a date range). Finalized (invoiced) rows are excluded from the change.
 //
-// Slice 1 (this commit): the read-only PREVIEW (dry-run) — no writes. The apply is slice 2.
+// Slice 1: the read-only PREVIEW (dry-run). Slice 2: the APPLY — writes billing_box_resolutions
+// for every EDITABLE order + (the caller) regenerates; finalized (invoiced) orders are SKIPPED.
 
 import { sql, and, eq, gte, lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { billingLineItems } from '../db/schema/billing.js';
+import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
+import { ensureBillingBoxResolutionsSchema } from './billing.js';
 
 export type BulkBoxCostScope = {
   clientId: number;
@@ -119,4 +121,77 @@ export async function previewBulkBoxCost(
 ): Promise<BulkBoxCostPreview> {
   const rows = await fetchBulkBoxCostOrderRows(scope, clientScopePredicate);
   return computeBulkBoxCostPreview(rows, scope.newCost);
+}
+
+// ── Slice 2: APPLY ──────────────────────────────────────────────────────────────────────────
+
+export type BulkBoxCostApplyResult = {
+  matchedOrderCount: number; //   every order in scope billed for the box
+  appliedOrderCount: number; //   editable orders we wrote a resolution for
+  skippedFinalizedCount: number; //invoiced orders we REFUSED to touch (never silently re-billed)
+  newCost: number;
+};
+
+/**
+ * PURE: split the matched orders into the ones we WILL re-price (editable) and the finalized
+ * (invoiced) ones we must skip. Keeps the finalized-protection logic guard-testable.
+ */
+export function splitBulkBoxCostApplyTargets(rows: BulkBoxCostOrderRow[]): {
+  editable: BulkBoxCostOrderRow[];
+  skippedFinalized: BulkBoxCostOrderRow[];
+} {
+  return {
+    editable: rows.filter((r) => !r.invoiced),
+    skippedFinalized: rows.filter((r) => r.invoiced),
+  };
+}
+
+/**
+ * Apply the reviewed box cost to every EDITABLE order in scope by upserting a per-order box-cost
+ * resolution (PS-207: packageId pinned + overridePrice = the reviewed cost). Range regeneration
+ * reads these FIRST and never deletes them. Finalized (invoiced) orders are SKIPPED — an already
+ * invoiced order is never silently re-billed. The CALLER regenerates billing_line_items afterward
+ * (the resolutions survive regeneration). This NEVER writes client_package_prices (timeless table;
+ * the card forbids changing it for a date range). Billing data only — no shipped/cancelled write.
+ */
+export async function applyBulkBoxCostResolutions(
+  scope: BulkBoxCostScope,
+  clientScopePredicate: ReturnType<typeof sql> | undefined,
+  resolvedBy: string | null,
+  note: string | null,
+): Promise<BulkBoxCostApplyResult> {
+  await ensureBillingBoxResolutionsSchema();
+  const rows = await fetchBulkBoxCostOrderRows(scope, clientScopePredicate);
+  const { editable, skippedFinalized } = splitBulkBoxCostApplyTargets(rows);
+  const overridePrice = round2(scope.newCost).toFixed(2);
+
+  if (editable.length > 0) {
+    // ONE transaction for the whole batch — all editable orders get the resolution or none do, so
+    // a mid-apply failure can never leave the range half-re-priced.
+    await db.transaction(async (tx) => {
+      for (const r of editable) {
+        await tx
+          .insert(billingBoxResolutions)
+          .values({ orderId: r.orderId, packageId: scope.packageId, overridePrice, note, resolvedBy })
+          .onConflictDoUpdate({
+            target: billingBoxResolutions.orderId,
+            set: {
+              packageId: scope.packageId,
+              overridePrice,
+              ...(note != null ? { note } : {}),
+              resolvedBy,
+              resolvedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          });
+      }
+    });
+  }
+
+  return {
+    matchedOrderCount: rows.length,
+    appliedOrderCount: editable.length,
+    skippedFinalizedCount: skippedFinalized.length,
+    newCost: round2(scope.newCost),
+  };
 }

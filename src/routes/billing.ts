@@ -36,7 +36,7 @@ import { backfillReferenceRates } from '../services/billing-ref-rates';
 import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
-import { previewBulkBoxCost } from '../services/billing-box-cost-bulk';
+import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
@@ -620,6 +620,60 @@ app.post(
       billingClientScopePredicate(scope),
     );
     return c.json({ data: preview });
+  },
+);
+
+// PS-311 (slice 2): APPLY the reviewed box cost to every editable order in scope. Writes
+// billing_box_resolutions (PS-207 directive) + regenerates the scoped line items; SKIPS finalized
+// (invoiced) orders; audits the bulk money action. NEVER writes client_package_prices. The backend
+// re-derives the scope — it never trusts an FE-supplied order list.
+const bulkBoxCostApplySchema = bulkBoxCostScopeSchema.extend({
+  note: z.string().max(500).optional(),
+});
+
+app.post(
+  '/box-cost/bulk/apply',
+  requirePermission('financials:write'),
+  zValidator('json', bulkBoxCostApplySchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    const resolvedBy = (c.get('email' as never) as string | undefined) ?? null;
+    const result = await applyBulkBoxCostResolutions(
+      {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        packageId: body.packageId,
+        newCost: body.newCost,
+      },
+      billingClientScopePredicate(scope),
+      resolvedBy,
+      body.note ?? null,
+    );
+    // Regenerate the scoped line items so the package_cost lines reflect the new resolutions.
+    // The resolutions survive regeneration (PS-207). Only when something actually changed.
+    if (result.appliedOrderCount > 0) {
+      await generateLineItems(
+        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom, dateTo: body.dateTo }),
+      );
+    }
+    // Append-only audit of the bulk money action (actor + scope + result; secrets auto-redacted).
+    await recordAuditEvent({
+      eventType: 'billing',
+      ...auditActorFromContext(c),
+      resourceType: 'billing_box_cost_bulk',
+      resourceId: `client:${body.clientId}:pkg:${body.packageId}`,
+      action: 'bulk_box_cost_apply',
+      details: {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        packageId: body.packageId,
+        ...result,
+      },
+    });
+    return c.json({ data: result });
   },
 );
 
