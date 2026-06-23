@@ -300,6 +300,17 @@ function responseFor(url, request) {
       bestRate: scopedRates[0] ?? null,
       cached: false,
       source: requested.cachedOnly ? 'cache' : 'live',
+      // QA root-cause 2026-06-23: PS-200 removed the FE direct /carriers/rates fan-out; the modern
+      // Rate Browser reads partial direct-carrier failures from this /rates/browse field instead.
+      // The 3 failed direct accounts use the synthetic provider id = 10_000_000 + account.id
+      // (directProviderIdFromAccount): shipp(id 1)->10000001, easypost(id 2)->10000002, ups(id 3)->10000003.
+      directCarrierErrors: rateBrowserPartialFailureMode
+        ? [
+            { shippingProviderId: 10000001, carrierCode: 'shipp', message: 'Shipp reached the quote API but did not return rates. Confirm the package dimensions, ship-from address, and destination address are valid for your Shipp account.' },
+            { shippingProviderId: 10000002, carrierCode: 'easypost', message: 'EasyPost did not return eligible rates for this package and destination.' },
+            { shippingProviderId: 10000003, carrierCode: 'ups', message: 'UPS Carrier did not return eligible services for this package and destination.' },
+          ]
+        : [],
       carrierStatuses: shipStationRateAccounts.map((account) => ({
         carrierId: account.carrier_id,
         carrierName: account.nickname,
@@ -630,11 +641,10 @@ test('Rate Browser partial carrier failures remain readable and keep successful 
   await expect(page.getByText(/10 of 10 carriers checked[\s\S]*7 with rates/)).toBeVisible({ timeout: 20000 })
 
   expectRequest(/rates\/(browse|multi)/, { method: 'POST', payloadIncludes: ['se-4101', 'se-4107'] })
-  await waitForRequest('/carriers/rates', { method: 'POST', payloadIncludes: ['shipp'] })
-  expect(
-    requestLedger.filter((entry) => entry.method === 'POST' && entry.path === '/carriers/rates').length,
-    'expected direct carrier rate calls for failed Shipp/EasyPost/UPS accounts',
-  ).toBeGreaterThanOrEqual(3)
+  // QA root-cause 2026-06-23: PS-200 (8c243859) removed the FE direct /carriers/rates fan-out — the
+  // Rate Browser now reads the failed direct carriers from /rates/browse directCarrierErrors (above),
+  // so there are no longer any /carriers/rates POSTs to assert. The partial-failure UX (failure
+  // tooltips + "10 of 10 carriers checked · 7 with rates") is verified by the assertions above.
   assertNoObjectObjectPayloads()
   expectNoForbiddenExternalRequests()
 })
