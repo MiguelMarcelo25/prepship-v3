@@ -127,11 +127,16 @@ check('recipient edit button opens real editor, not Phase 3 placeholder toast',
   panelSectionsSrc.includes('onEditRecipient') &&
   ordersViewSrc.includes('recipientEditorOpen') &&
   ordersViewSrc.includes('saveOrderRecipientOverride'));
+// PS-166/PS-306/PS-258 (Wave 1): the recipient-editor modal JSX was extracted VERBATIM into
+// OrdersRecipientEditorModal.tsx; OrdersView consumes it. Re-pointed to follow the moved markers
+// (intent unchanged: the dark/blurred backdrop that suppresses table highlights still exists).
+const recipientModalSrc = readText('web/src/components/Views/OrdersRecipientEditorModal.tsx');
 check('recipient editor backdrop suppresses table row highlights behind the modal',
-  ordersViewSrc.includes('data-recipient-editor-backdrop') &&
-  ordersViewSrc.includes('bg-slate-950/70') &&
-  ordersViewSrc.includes('backdrop-blur-sm') &&
-  ordersViewSrc.includes('data-recipient-editor-modal'));
+  ordersViewSrc.includes('<OrdersRecipientEditorModal') &&
+  recipientModalSrc.includes('data-recipient-editor-backdrop') &&
+  recipientModalSrc.includes('bg-slate-950/70') &&
+  recipientModalSrc.includes('backdrop-blur-sm') &&
+  recipientModalSrc.includes('data-recipient-editor-modal'));
 check('package wires PS-297 guard',
   packageJson.includes('"test:ps-297-recipient-override"'));
 

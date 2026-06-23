@@ -158,6 +158,7 @@ import type {
 // PS-178 (Phase 6, part 3): the Print Queue drawer JSX lives in its own
 // render-only component; OrdersView keeps all queue state + handlers.
 import { OrdersPrintQueueDrawer } from './OrdersPrintQueueDrawer'
+import { OrdersRecipientEditorModal } from './OrdersRecipientEditorModal'
 // PS-178 (Phase 6, part 4): same pattern for the selected-rows toolbar.
 import { OrdersSelectionToolbar } from './OrdersSelectionToolbar'
 // PS-166 (Wave 1a): the persistent queue-job localStorage machinery moved
@@ -9558,64 +9559,17 @@ export default function OrdersView({
       {/* PS-178 (Phase 6, part 3): the drawer JSX moved VERBATIM to
           ./OrdersPrintQueueDrawer — render-only; all queue state, derived
           lists, and handlers stay here and flow down as props. */}
-      {recipientEditorOpen && panelOrder ? (
-        <div
-          data-recipient-editor-backdrop
-          className="fixed inset-0 z-[80] isolate flex items-center justify-center bg-slate-950/70 px-4 backdrop-blur-sm"
-        >
-          <div
-            data-recipient-editor-modal
-            className="relative z-[81] w-full max-w-[560px] rounded-lg bg-surface shadow-xl ring-1 ring-line"
-          >
-            <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-              <MapPin size={15} strokeWidth={2.25} className="text-brand" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-bold text-ink truncate">Edit recipient</div>
-                <div className="text-[11px] text-ink-3 font-mono truncate">{panelOrder.orderNumber ?? panelOrder.orderId}</div>
-              </div>
-              <button
-                type="button"
-                title="Close"
-                disabled={recipientEditorSaving}
-                onClick={() => setRecipientEditorOpen(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-3 hover:bg-surface-2 hover:text-ink disabled:opacity-60"
-              >
-                <XIcon size={15} strokeWidth={2.25} />
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4">
-              {recipientInput('name', 'Name', 'shipping name')}
-              {recipientInput('company', 'Company', 'shipping organization')}
-              <div className="sm:col-span-2">{recipientInput('street1', 'Address 1', 'shipping address-line1')}</div>
-              <div className="sm:col-span-2">{recipientInput('street2', 'Address 2', 'shipping address-line2')}</div>
-              {recipientInput('city', 'City', 'shipping address-level2')}
-              {recipientInput('state', 'State', 'shipping address-level1')}
-              {recipientInput('postalCode', 'Postal code', 'shipping postal-code')}
-              {recipientInput('country', 'Country', 'shipping country')}
-              <div className="sm:col-span-2">{recipientInput('phone', 'Phone', 'shipping tel')}</div>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
-              <button
-                type="button"
-                disabled={recipientEditorSaving}
-                onClick={() => setRecipientEditorOpen(false)}
-                className="inline-flex h-8 items-center justify-center rounded-md border border-line px-3 text-[12px] font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={recipientEditorSaving}
-                onClick={() => void saveRecipientOverride()}
-                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-brand px-3 text-[12px] font-bold text-white hover:bg-brand-dark disabled:opacity-60"
-              >
-                {recipientEditorSaving ? <Loader2 size={13} className="animate-spin" /> : <CheckIcon size={13} />}
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {/* PS-166/PS-306/PS-258 (Wave 1): the recipient-editor modal JSX moved VERBATIM to
+          ./OrdersRecipientEditorModal — render-only; recipientDraft/saving state + the
+          recipientInput closure stay here and flow down as props (renderRecipientInput). */}
+      <OrdersRecipientEditorModal
+        isOpen={recipientEditorOpen}
+        panelOrder={panelOrder}
+        isSaving={recipientEditorSaving}
+        onClose={() => setRecipientEditorOpen(false)}
+        onSave={() => void saveRecipientOverride()}
+        renderRecipientInput={recipientInput}
+      />
 
       {queueOpen ? (
         <OrdersPrintQueueDrawer
