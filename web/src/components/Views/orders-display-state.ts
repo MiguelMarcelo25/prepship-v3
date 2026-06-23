@@ -166,7 +166,7 @@ export function hasLocalShipmentData(order: OrderSummaryDto): boolean {
   )
 }
 
-export type ShippedDataState = 'external' | 'local' | 'missing'
+export type ShippedDataState = 'external' | 'local' | 'missing' | 'voided'
 
 // PS-036: classify a shipped row into one of three honest states instead of
 // conflating "no local data" with "externally fulfilled".
@@ -175,10 +175,41 @@ export type ShippedDataState = 'external' | 'local' | 'missing'
 // show Ext. Label only after persisted external classification, while
 // recoverable ShipStation shipment/fulfillment gaps stay on the actionable
 // sync-error badge (PS-215 renamed the old raw resting text).
+// PS-309 (Per user override unlock shipped data on 2026-06-23): the canonical shipped-label
+// display state is OWNED by the backend (orders.ts resolveShippedLabelDisplayState) — the FE
+// reads it verbatim and must NOT re-derive the voided-vs-external decision (only the backend
+// can see the voided-only shipment the list query now surfaces). Returns null on older
+// payloads that predate the field, so the legacy FE derivation still applies as a fallback.
+function getBackendShippedLabelDisplayState(order: OrderSummaryDto): ShippedDataState | null {
+  switch ((order as { shippedLabelDisplayState?: unknown }).shippedLabelDisplayState) {
+    case 'voided_label':
+      return 'voided'
+    case 'external_label':
+      return 'external'
+    case 'active_label':
+      return 'local'
+    case 'missing_shipment_sync':
+      return 'missing'
+    default:
+      return null
+  }
+}
+
 export function getShippedDataState(order: OrderSummaryDto): ShippedDataState {
+  // PS-309: prefer the backend-owned verdict; fall back to the legacy FE derivation only on
+  // older payloads that predate the shippedLabelDisplayState field.
+  const backend = getBackendShippedLabelDisplayState(order)
+  if (backend) return backend
   if (hasExplicitExternalFlag(order)) return 'external'
   if (hasLocalShipmentData(order)) return 'local'
   return 'missing'
+}
+
+// PS-309: a shipped order whose only/chosen label is voided — render "Voided label", never
+// "Ext. Label" or an active label cost.
+export function getIsVoidedLabel(order: OrderSummaryDto): boolean {
+  if (order.orderStatus !== 'shipped') return false
+  return getShippedDataState(order) === 'voided'
 }
 
 export function getIsExternallyFulfilled(order: OrderSummaryDto) {

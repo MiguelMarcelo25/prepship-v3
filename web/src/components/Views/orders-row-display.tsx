@@ -610,6 +610,31 @@ export function renderExtLabelBadge() {
   )
 }
 
+// PS-309 (Per user override unlock shipped data on 2026-06-23): a shipped order whose
+// only/chosen label is VOIDED reads as "Voided label" — never "Ext. Label" and never an
+// active label cost. The backend (resolveShippedLabelDisplayState) owns the classification
+// (shippedLabelDisplayState === 'voided_label'); this renderer is display-only.
+export function renderVoidedLabelBadge() {
+  return (
+    <span
+      data-shipped-label-state="voided"
+      style={{
+        display: 'inline-block',
+        background: '#fdecec',
+        color: '#b42318',
+        padding: '2px 6px',
+        borderRadius: 3,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: 'help',
+      }}
+      title="The label for this order was voided — no active label exists. Any cost shown is the historical voided label, not an active charge."
+    >
+      Voided label
+    </span>
+  )
+}
+
 // PS-220 (slice 4b): SHIPP house-account order. The displayed Best/Selected Rate is the
 // customer_rate DRP bills (cheapest eligible non-SHIPP); the green Margin is DRP's spread
 // over its actual SHIPP cost. Shows ONLY when the backend money tuple is markupSource

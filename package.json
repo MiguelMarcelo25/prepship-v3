@@ -287,6 +287,7 @@
     "test:billing-formula": "tsx scripts/billing-formula-guard.ts",
     "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",
     "test:ps-310-billing-export-sku-qty": "tsx scripts/ps-310-billing-export-sku-qty-guard.ts",
+    "test:ps-309-voided-label-display": "tsx scripts/ps-309-voided-label-display-guard.ts",
     "test:billing-html-invoice-layout": "tsx scripts/billing-html-invoice-layout-guard.ts",
     "test:billing-best-rate-ui:guard": "node scripts/billing-best-rate-ui-guard.mjs",
     "test:billing-best-rate-ui": "playwright test web/e2e/billing-best-rate-ui.spec.js --reporter=line",

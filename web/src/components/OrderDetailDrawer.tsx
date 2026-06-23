@@ -445,7 +445,16 @@ export default function OrderDetailDrawer({
     ? `Insured — ${fmtMoney(raw.insuranceOptions.insuredValue)}`
     : 'None';
 
-  const liveShipment = shipments.find((s) => !s.voided) ?? shipments[0];
+  const activeShipment = shipments.find((s) => !s.voided);
+  const liveShipment = activeShipment ?? shipments[0];
+  // PS-309 (Per user override unlock shipped data on 2026-06-23): the backend owns the
+  // voided-vs-active verdict (shippedLabelDisplayState). When it is 'voided_label' the drawer
+  // is showing the HISTORICAL voided label — its cost is NOT an active charge. Falls back to a
+  // local derivation (no active shipment + the chosen row is voided) on payloads that predate
+  // the field. Read-only; no void/reprint/mutation here.
+  const isVoidedLabel =
+    (raw as { shippedLabelDisplayState?: unknown }).shippedLabelDisplayState === 'voided_label' ||
+    (!activeShipment && Boolean(liveShipment?.voided));
   const labelCost =
     getShipmentLabelCost(liveShipment) ??
     toNumber(raw.canonicalOrder?.shipping?.labelCost);
@@ -1115,8 +1124,26 @@ export default function OrderDetailDrawer({
                 ) : null}
                 {liveShipment ? (
                   <>
+                    {isVoidedLabel ? (
+                      <div
+                        data-shipped-label-state="voided"
+                        style={{
+                          background: '#fdecec',
+                          color: '#b42318',
+                          fontWeight: 700,
+                          fontSize: 12,
+                          padding: '6px 8px',
+                          borderRadius: 4,
+                          marginBottom: 8,
+                        }}
+                      >
+                        ⚠ Voided label — this label was voided and is not active. Any cost,
+                        carrier, or tracking shown below is the historical voided label, not an
+                        active charge.
+                      </div>
+                    ) : null}
                     <Field
-                      label="Shipped Carrier"
+                      label={isVoidedLabel ? 'Voided Carrier' : 'Shipped Carrier'}
                       value={
                         CARRIER_NAMES[liveShipment.carrierCode ?? ''] ??
                         (liveShipment.carrierCode ?? '').toUpperCase() ??

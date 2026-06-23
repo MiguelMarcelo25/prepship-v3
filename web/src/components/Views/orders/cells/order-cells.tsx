@@ -38,6 +38,7 @@ import {
   getBestRateInsuranceCoverage,
   getRowInsuranceCoverage,
   renderExtLabelBadge,
+  renderVoidedLabelBadge,
   renderShipmentSyncErrorBadge,
   renderHouseBadge,
 } from '../../orders-row-display'
@@ -48,6 +49,7 @@ import {
   getCarrierCodeForDisplay,
   getIsExternallyFulfilled,
   getIsMissingShipmentSync,
+  getIsVoidedLabel,
   getShipAccountDisplay,
   getShippedDisplayCarrierCode,
   getShippedDisplayServiceCode,
@@ -119,6 +121,12 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
 
   const bestRateBaseCost = getBestRateBaseCost(displayOrder)
   if (displayOrder.orderStatus !== 'awaiting_shipment') {
+    // PS-309 (Per user override unlock shipped data on 2026-06-23): a voided-only shipped
+    // label reads as "Voided label" (backend verdict) — never "Ext. Label" and never the
+    // row's normal cost. Branch it before every other shipped state.
+    if (getIsVoidedLabel(displayOrder)) {
+      return renderVoidedLabelBadge()
+    }
     if (getIsExternallyFulfilled(displayOrder)) {
       return renderExtLabelBadge()
     }
@@ -300,6 +308,10 @@ export function renderCarrierCell(order: OrderSummaryDto, deps: OrderCellsDeps):
 
   const shipped = displayOrder.orderStatus !== 'awaiting_shipment'
   if (shipped) {
+    // PS-309: voided label wins over ext / missing / carrier (backend verdict).
+    if (getIsVoidedLabel(displayOrder)) {
+      return renderVoidedLabelBadge()
+    }
     if (shouldShowCarrierExtLabel(displayOrder)) {
       return renderExtLabelBadge()
     }
@@ -353,6 +365,10 @@ export function renderShippingAccountCell(order: OrderSummaryDto, deps: OrderCel
 
   const shipped = displayOrder.orderStatus !== 'awaiting_shipment'
   if (shipped) {
+    // PS-309: voided label wins over ext / missing / account (backend verdict).
+    if (getIsVoidedLabel(displayOrder)) {
+      return renderVoidedLabelBadge()
+    }
     if (getIsExternallyFulfilled(displayOrder)) {
       return renderExtLabelBadge()
     }

@@ -112,6 +112,7 @@ import {
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
+import { resolveShippedLabelDisplayState } from '../services/shipping-workflow/shipped-label-display-state';
 import { buildApplyBestRatePatch } from '../services/shipping-workflow/apply-best-rate';
 import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
 import { redactRateMoneyFields, redactOrderFinancials } from '../services/orders-financial-redaction';
@@ -1637,11 +1638,19 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           provider_account_id,
           provider_account_nickname,
           source,
-          selected_rate_json
+          selected_rate_json,
+          -- PS-309 (Per user override unlock shipped data on 2026-06-23): surface the voided
+          -- flag so the shipped-label display state can show a voided-only order as
+          -- "Voided label" instead of falling back to "Ext. Label". READ-ONLY projection.
+          coalesce(voided, false) as voided
         from shipments
         where order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})
-          ${q.status === 'cancelled' ? sql`` : sql`and coalesce(voided, false) = false`}
-        order by order_id, id desc
+          -- PS-309: SHIPPED also surfaces voided shipments (as a fallback) so a voided-only
+          -- order is classified honestly; awaiting still excludes voided (unchanged).
+          ${q.status === 'cancelled' || q.status === 'shipped' ? sql`` : sql`and coalesce(voided, false) = false`}
+        -- PS-309: prefer the active (non-voided) shipment for shipped; fall back to the
+        -- latest voided one only when no active exists. Awaiting/cancelled ordering unchanged.
+        order by order_id, ${q.status === 'shipped' ? sql`coalesce(voided, false) asc, ` : sql``}id desc
       `)
     );
     for (const s of shipRowsById) {
@@ -1670,12 +1679,15 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           provider_account_id,
           provider_account_nickname,
           source,
-          selected_rate_json
+          selected_rate_json,
+          -- PS-309 (Per user override unlock shipped data on 2026-06-23): see the by-order_id
+          -- query above — surface voided + prefer active for shipped, READ-ONLY.
+          coalesce(voided, false) as voided
         from shipments
         where order_id is null
           and order_number in (${sql.join(pageOrderNumbers.map((n) => sql`${n}`), sql`, `)})
-          ${q.status === 'cancelled' ? sql`` : sql`and coalesce(voided, false) = false`}
-        order by order_number, id desc
+          ${q.status === 'cancelled' || q.status === 'shipped' ? sql`` : sql`and coalesce(voided, false) = false`}
+        order by order_number, ${q.status === 'shipped' ? sql`coalesce(voided, false) asc, ` : sql``}id desc
       `)
     );
     for (const s of shipRowsByOrderNumber) {
@@ -2474,6 +2486,21 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       stringOrNull(r.order.serviceCode),
       stringOrNull(r.order.carrierCode),
     );
+    // PS-309 (Per user override unlock shipped data on 2026-06-23): the canonical
+    // shipped-label display state, owned HERE so the Shipped list + the detail drawer agree
+    // (the FE must not re-derive it). Only meaningful on shipped rows; null otherwise. The
+    // active-preferred shipment query above means `ship` is the voided row ONLY when no
+    // active label exists — so a voided-only order classifies as 'voided_label' and that
+    // beats the externally_shipped flag (the #1298 fix). Read-only; no mutation.
+    const shippedLabelDisplayState =
+      effectiveOrderStatus === 'shipped'
+        ? resolveShippedLabelDisplayState({
+            externallyShipped: r.order.externallyShipped === true,
+            externallyFulfilled: booleanOrNull(rawForExpedited?.externallyFulfilled),
+            hasActiveShipment: Boolean(ship) && ship?.voided !== true,
+            hasVoidedShipment: Boolean(ship) && ship?.voided === true,
+          })
+        : null;
     return {
       ...r.order,
       orderStatus: effectiveOrderStatus,
@@ -2483,6 +2510,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       // never classify test-ness itself for money paths.
       isTest: r.order.clientId != null && testClientIds.has(r.order.clientId),
       overrides: safeOverrides,
+      // PS-309: backend-owned shipped-label display state (active_label / voided_label /
+      // external_label / missing_shipment_sync). The shipped table + drawer read THIS.
+      shippedLabelDisplayState,
       label: label
         ? {
             ...label,
@@ -2580,6 +2610,9 @@ type LatestShipmentRow = {
   // account as "Shipp" instead of fabricating a direct carrier account. Additive projection.
   source: string | null;
   selected_rate_json: Record<string, unknown> | null;
+  // PS-309 (Per user override unlock shipped data on 2026-06-23): the chosen shipment's
+  // voided flag (coalesce(voided,false)) — drives the shipped-label display state.
+  voided: boolean | null;
 };
 
 type ExportShipmentRow = LatestShipmentRow;
@@ -2608,12 +2641,27 @@ function buildOrderDetailPayload(
     {},
   );
 
+  // PS-309 (Per user override unlock shipped data on 2026-06-23): stamp the SAME canonical
+  // shipped-label display state onto the detail payload so the drawer reads the backend
+  // verdict instead of guessing from shipments[0]. Only for shipped orders; read-only.
+  const detailShipments = shipmentRows as Array<Record<string, unknown> | null>;
+  const shippedLabelDisplayState =
+    stringOrNull(order.orderStatus) === 'shipped'
+      ? resolveShippedLabelDisplayState({
+          externallyShipped: order.externallyShipped === true,
+          externallyFulfilled: booleanOrNull(recordOrNull(order.raw)?.externallyFulfilled),
+          hasActiveShipment: detailShipments.some((s) => s != null && s.voided !== true),
+          hasVoidedShipment: detailShipments.some((s) => s != null && s.voided === true),
+        })
+      : null;
+
   return {
     ...order,
     legacyClientId,
     client: canonicalOrder.client,
     canonicalOrder,
     overrides: safeOverrides,
+    shippedLabelDisplayState,
     shipments: shipmentRows,
   };
 }
