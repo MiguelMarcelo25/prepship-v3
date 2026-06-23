@@ -190,6 +190,8 @@ import { computeOrderedFilteredOrders } from './orders-filtered-sort'
 // PS-166/PS-306/PS-258: pure filter/sort derivation memos extracted VERBATIM.
 import { useOrdersFilterSort } from './hooks/useOrdersFilterSort'
 import { useOrdersSelection } from './hooks/useOrdersSelection'
+// PS-166/PS-258 (Hook wave 3): pure panel section-collapse UI state extracted VERBATIM.
+import { usePanelState } from './hooks/usePanelState'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
 import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
@@ -262,7 +264,6 @@ import {
 } from './orders-table-columns'
 
 type SortDirection = 'asc' | 'desc'
-type PanelSectionKey = 'shipping' | 'items' | 'recipient'
 type DailyStatsStatus = 'idle' | 'loading' | 'success' | 'error'
 
 interface QueueActionProgress {
@@ -766,11 +767,10 @@ export default function OrdersView({
   const [skuSortActive, setSkuSortActive] = useState(false)
   const [preSkuSortSnapshot, setPreSkuSortSnapshot] = useState<number[] | null>(null)
   const [kbRowId, setKbRowId] = useState<number | null>(null)
-  const [collapsedSections, setCollapsedSections] = useState<Record<PanelSectionKey, boolean>>({
-    shipping: false,
-    items: false,
-    recipient: false,
-  })
+  // PS-166/PS-258 (Hook wave 3): collapsedSections + toggleSection now live in
+  // usePanelState (pure panel-UI state). Destructured here at the same location;
+  // the panel pass-through (collapsedSections / onToggleSection) is unchanged.
+  const { collapsedSections, toggleSection } = usePanelState()
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [packagesLoaded, setPackagesLoaded] = useState(false)
   const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
@@ -6531,10 +6531,6 @@ export default function OrdersView({
     }
 
     setSkuSortActive(false)
-  }
-
-  const toggleSection = (key: PanelSectionKey) => {
-    setCollapsedSections((current) => ({ ...current, [key]: !current[key] }))
   }
 
   const openShipStationOrder = (orderId: number) => {
