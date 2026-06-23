@@ -102,6 +102,17 @@ import {
 } from './orders-row-display'
 // PS-166/PS-306 (decomposition): pure money/rate cell renderers extracted to OrdersRateCells.
 import { renderOrderTotalCell, renderRateCostCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
+// PS-166/PS-306/PS-258 (Wave 2): the four leaf cell renderers (Best Rate / Ship
+// Margin / Carrier / Shipping Account) extracted VERBATIM to ./orders/cells/order-cells.
+// renderTableCell stays here as a thin dispatcher; the component-scoped closures
+// the leaves read are injected via the typed OrderCellsDeps DI object (orderCellsDeps).
+import {
+  renderBestRatePrice as renderBestRatePriceCell,
+  renderMargin as renderMarginCell,
+  renderCarrierCell as renderCarrierCellLeaf,
+  renderShippingAccountCell as renderShippingAccountCellLeaf,
+  type OrderCellsDeps,
+} from './orders/cells/order-cells'
 // PS-166: backend best-rate completeness reader, extracted to its own small file
 // (pure backend-DTO read; PS-111 backend-owned completeness). Not coupled to
 // buildRateRequestDraftKey (PS-143 — the FE draft key stays independent).
@@ -7040,310 +7051,24 @@ export default function OrdersView({
     return renderRateCellFallback(state, order, variant)
   }
 
-  const renderBestRatePrice = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithAutoBestRate(order)
-
-
-    if (isTestOrder(displayOrder)) {
-      const testAmount = displayOrder.bestRate
-        ? (toNumberValue((displayOrder.bestRate as any).shipmentCost) ?? 0) + (toNumberValue((displayOrder.bestRate as any).otherCost) ?? 0)
-        : 0
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className="carrier-badge" style={{ fontSize: 9.5, padding: '1px 5px', background: '#f59e0b', color: '#fff' }}>
-            TEST
-          </span>
-          <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(testAmount)}</strong>
-        </div>
-      )
-    }
-
-    // PS-128/PS-129: held awaiting order (cancelled upstream / externally shipped). Show a
-    // hold pill instead of a rate — the order is not normal awaiting work and the
-    // label/queue/print paths are hard-blocked by the backend.
-    const rowHold = orderShippingHold(displayOrder)
-    if (displayOrder.orderStatus === 'awaiting_shipment' && rowHold?.blocked) {
-      return (
-        <span
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-danger-bg text-danger ring-1 ring-danger-border/40"
-          title={`${rowHold.status} — ${rowHold.reason}`}
-        >
-          ⛔ {rowHold.status}
-        </span>
-      )
-    }
-
-    const bestRateBaseCost = getBestRateBaseCost(displayOrder)
-    if (displayOrder.orderStatus !== 'awaiting_shipment') {
-      if (getIsExternallyFulfilled(displayOrder)) {
-        return renderExtLabelBadge()
-      }
-      if (getIsMissingShipmentSync(displayOrder)) {
-        return renderShipmentSyncErrorBadge()
-      }
-
-      const selectedRateBase = getSelectedRateBaseCost(displayOrder)
-      const labelCost = getSelectedRateFinalCost(displayOrder)
-      if (selectedRateBase == null && labelCost == null) {
-        return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
-      }
-
-      // Shipped-row DTO phase: shipped rows now carry the backend money tuple
-      // (priced from the SELECTED rate by the same canonical markup rules) —
-      // the FE's LAST markup-math call is deleted. A row without the tuple
-      // degrades to the plain final label cost / carrier base, never
-      // FE-computed markup.
-      // PS — Selected Rate shows only the amount. The carrier badge lives
-      // solely in the dedicated Carrier column; duplicating it here was noisy.
-      const shippedBackendMoney = getBackendRowMoney(displayOrder)
-      if (shippedBackendMoney) {
-        // PS-220 (slice 4b-2): a realized SHIPP house order shows the customer_rate billed + a HOUSE badge.
-        if (shippedBackendMoney.markupSource === 'house_account') {
-          return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {/* PS-290 parity: same backend coverage verdict on the Selected Rate cell. */}
-              {renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn, getRowInsuranceCoverage(displayOrder.selectedRate))}
-              {renderHouseBadge()}
-            </div>
-          )
-        }
-        return renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn, getRowInsuranceCoverage(displayOrder.selectedRate))
-      }
-      return renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase, getBackendInsuranceAddOn(displayOrder.selectedRate), getRowInsuranceCoverage(displayOrder.selectedRate))
-    }
-
-    const awaitingFallback = renderAwaitingRateFallback(order, displayOrder, 'full')
-    if (awaitingFallback) return awaitingFallback
-
-    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    if (!hasDisplayableBestRate || bestRateBaseCost == null) {
-      // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; Best Rate uses the same bounded/actionable awaiting-rate fallback as Carrier/Margin so it cannot stay visually stuck until Browse Rates is clicked.
-      // PS-286: when the row HAS a saved best rate that no longer satisfies the
-      // backend display contract, render the SPECIFIC actionable reason (Rate
-      // expired / Carrier coverage incomplete / Recalculate required) instead of a
-      // bare dash that reads like a missing rate. The dollar figure is suppressed
-      // because the saved rate is stale — the operator must re-rate.
-      const sotState = getAwaitingBestRateDisplayState(displayOrder)
-      const sotLabel = AWAITING_BEST_RATE_STATE_LABELS[sotState]
-      if (sotLabel) {
-        return (
-          <span
-            data-rate-state={`sot-${sotState}`}
-            title={`${sotLabel} — the saved best rate is no longer valid for the current request; re-rate this order.`}
-            style={{ color: 'var(--text3)', fontSize: 10.5, whiteSpace: 'nowrap' }}
-          >
-            {sotLabel}
-          </span>
-        )
-      }
-      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
-    }
-    // Recalculate-in-flight indicator: the backfill stamps pending/rating on the
-    // row's rate job (PS-120) while Recalculate All re-rates it. Keep showing the
-    // saved amount (PS-196 — never wipe a displayable value) but spin beside it so
-    // the operator SEES the recalculation; the fresh best rate replaces it on the
-    // next mid-job row refresh. Bounded by the same watchdog the rate-state
-    // classifier uses, so a stuck job can never spin forever.
-    const rowWorkflowRecord = toRecord((displayOrder as any).bestRateWorkflow)
-    const rowRateJobState =
-      toStringValue(rowWorkflowRecord?.activeRateCheckState) ??
-      toStringValue(rowWorkflowRecord?.bestRateState)
-    const rowRateJobAgeMs =
-      toNumberValue(rowWorkflowRecord?.activeRateCheckAgeMs) ??
-      toNumberValue(rowWorkflowRecord?.bestRateStateAgeMs)
-    const isRowRecalculating =
-      (rowRateJobState === 'pending' || rowRateJobState === 'rating') &&
-      (rowRateJobAgeMs == null || rowRateJobAgeMs <= PENDING_RATING_WATCHDOG_MS)
-    const recalculatingSpinner = isRowRecalculating ? (
-      <span title="Recalculating — fetching live rates from all carriers" className="inline-flex shrink-0">
-        <Loader2 size={12} className="animate-spin text-brand" aria-hidden />
-      </span>
-    ) : null
-
-    // PS-178 final part: the BACKEND money tuple (PS-177) is the only markup
-    // source — the FE markup-math fallback is deleted. A row without the tuple
-    // (pre-deploy cache edge) degrades to the plain carrier base amount, never
-    // FE-computed markup.
-    // Operator request (2026-05-12, under `unlock shipped data` override): no
-    // per-carrier SVG badge in this cell — the Carrier column already shows it.
-    const backendMoney = getBackendRowMoney(displayOrder)
-    const secondBestRate = toRecord(toRecord(displayOrder.bestRate)?.secondBestRate)
-    const secondBestAmount = secondBestRate ? getRateBaseAmount(secondBestRate) : null
-    return (
-      <div data-rate-state="ready" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        {/* PS-290: pass the backend-owned HUGRAB $100 coverage verdict as the 4th arg so the
-            Awaiting Best Rate cell renders the coverage badge (display-only; backend decides). */}
-        {backendMoney
-          ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
-          : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
-        {/* PS-220 (slice 4b): SHIPP house order — the shown amount is the customer_rate billed. */}
-        {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
-        {recalculatingSpinner}
-        </div>
-        {secondBestAmount != null && secondBestAmount > 0 ? (
-          <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.15 }}>
-            2nd {formatMoney(secondBestAmount)}
-          </div>
-        ) : null}
-      </div>
-    )
+  // PS-166/PS-306/PS-258 (Wave 2): the four leaf cell renderers moved VERBATIM to
+  // ./orders/cells/order-cells. They are pure display-only readers of the backend
+  // money DTO + injected backend rate/coverage verdicts (no recompute, no apiClient).
+  // Assemble the typed DI object once so renderTableCell's call sites stay clean; the
+  // shell keeps owning the component-scoped closures these leaves read.
+  const orderCellsDeps: OrderCellsDeps = {
+    getOrderWithAutoBestRate,
+    orderShippingHold,
+    renderAwaitingRateFallback,
+    hasDisplayableBestRateForCurrentRequest,
+    getAwaitingBestRateDisplayState,
+    getRateBaseAmount,
+    shippingAccounts,
   }
-
-  const renderMargin = (order: OrderSummaryDto) => {
-    if (isTestOrder(order)) {
-      return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
-    }
-
-    // PS-220 (slice 4b-2): shipped SHIPP house orders show their realized Ship Margin (the spread DRP
-    // earned: customer_rate \u2212 SHIPP cost). Non-house shipped rows keep the existing dash (byte-identical).
-    if (order.orderStatus !== 'awaiting_shipment') {
-      const shippedMoney = getBackendRowMoney(order)
-      if (shippedMoney?.markupSource === 'house_account') {
-        const houseDiff = shippedMoney.markupAmount
-        if (houseDiff == null || houseDiff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
-        return (
-          <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(houseDiff)}</div>
-            <div style={{ fontSize: 10, color: 'var(--text3)' }}>{shippedMoney.marginPercent ?? 0}%</div>
-          </div>
-        )
-      }
-      return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
-    }
-
-    // PS-071 — consume the SAME auto-best-rate source as the Carrier / Shipping
-    // Account / Best Rate cells, so a rate found by passive auto-rating updates
-    // Margin too instead of leaving it spinning until a manual refetch.
-    const displayOrder = getOrderWithAutoBestRate(order)
-    const bestRateBaseCost = getBestRateBaseCost(displayOrder)
-    if (!displayOrder.bestRate || bestRateBaseCost == null) {
-      // Bounded/terminal fallback (compact) instead of an indefinite spinner.
-      return renderAwaitingRateFallback(order, displayOrder, 'compact')
-        ?? <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-    }
-
-    // PS-178 final part: the BACKEND money tuple (PS-177) is the only margin
-    // source — the FE markup-math fallback is deleted. A row without the tuple
-    // shows a dash; the FE never computes money policy.
-    const backendMoney = getBackendRowMoney(displayOrder)
-    const diff = backendMoney?.markupAmount
-    if (diff == null || diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-    return (
-      <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)' }}>{backendMoney!.marginPercent ?? 0}%</div>
-      </div>
-    )
-  }
-
-  const renderCarrierCell = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithAutoBestRate(order)
-
-    if (isTestOrder(displayOrder)) {
-      return (
-        <span
-          className="carrier-badge"
-          style={{ background: '#f59e0b', color: '#fff' }}
-          title="Test order: mock carrier only, no real postage"
-        >
-          TEST
-        </span>
-      )
-    }
-
-    const shipped = displayOrder.orderStatus !== 'awaiting_shipment'
-    if (shipped) {
-      if (shouldShowCarrierExtLabel(displayOrder)) {
-        return renderExtLabelBadge()
-      }
-      if (getIsMissingShipmentSync(displayOrder)) {
-        return renderShipmentSyncErrorBadge()
-      }
-
-      const carrierCode = getShippedDisplayCarrierCode(displayOrder)
-      if (!carrierCode) {
-        return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
-      }
-
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
-          <CarrierBadge code={carrierCode} size="sm" />
-        </div>
-      )
-    }
-
-    // PS-071 — bounded/actionable state instead of an indefinite spinner.
-    const fallback = renderAwaitingRateFallback(order, displayOrder, 'full')
-    if (fallback) return fallback
-
-    // Keep carrier logos readable in the Orders table. Awaiting, shipped,
-    // and cancelled rows all share this renderer.
-    return (
-      <div
-        data-rate-state="ready"
-        style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}
-      >
-        <CarrierBadge code={getCarrierCodeForDisplay(displayOrder) ?? ''} size="sm" />
-      </div>
-    )
-  }
-
-  const renderShippingAccountCell = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithAutoBestRate(order)
-
-    if (isTestOrder(displayOrder)) {
-      const testAccount = normalizeShippingAccountName((displayOrder.bestRate as any)?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
-      return (
-        <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{testAccount}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            test mock - no real postage
-          </div>
-        </div>
-      )
-    }
-
-    const shipped = displayOrder.orderStatus !== 'awaiting_shipment'
-    if (shipped) {
-      if (getIsExternallyFulfilled(displayOrder)) {
-        return renderExtLabelBadge()
-      }
-      if (getIsMissingShipmentSync(displayOrder)) {
-        return renderShipmentSyncErrorBadge()
-      }
-
-      const accountDisplay = getShipAccountDisplay(displayOrder, shippingAccounts)
-      if (!accountDisplay) {
-        return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
-      }
-
-      return (
-        <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{accountDisplay}</div>
-          <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            {truncate(formatServiceCode(getShippedDisplayServiceCode(displayOrder)), 22)}
-          </div>
-        </div>
-      )
-    }
-
-    // PS-071 — bounded/actionable state instead of an indefinite spinner.
-    const fallback = renderAwaitingRateFallback(order, displayOrder, 'full')
-    if (fallback) return fallback
-
-    return (
-      <div
-        data-rate-state="ready"
-        style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}
-      >
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-          {truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22)}
-        </div>
-      </div>
-    )
-  }
+  const renderBestRatePrice = (order: OrderSummaryDto) => renderBestRatePriceCell(order, orderCellsDeps)
+  const renderMargin = (order: OrderSummaryDto) => renderMarginCell(order, orderCellsDeps)
+  const renderCarrierCell = (order: OrderSummaryDto) => renderCarrierCellLeaf(order, orderCellsDeps)
+  const renderShippingAccountCell = (order: OrderSummaryDto) => renderShippingAccountCellLeaf(order, orderCellsDeps)
 
   const renderTableCell = (order: OrderSummaryDto, column: TableColumn) => {
     const detail = orderDetailsById.get(order.orderId) ?? null

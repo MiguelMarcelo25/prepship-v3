@@ -173,19 +173,25 @@ check('orders route resolves the row rule via the pure module and passes money f
   /markupRule: rowMarkupRule/.test(ordersRoute) &&
   /insuranceAddOn: extractInsuranceAddOn\(rowIsAwaiting \? bestRateRecord : selectedRateRecord\)/.test(ordersRoute));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 2): the Best Rate / Margin leaf cell bodies moved
+// VERBATIM out of OrdersView into ./orders/cells/order-cells; the FE "prefers the
+// backend tuple, never recomputes" assertions follow the code to its new home.
+const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 check('FE Best Rate cell prefers the backend tuple',
-  /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(ordersView) &&
+  /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCells) &&
   // PS-290 appended an optional 4th `coverage` arg (getBestRateInsuranceCoverage) — still the
   // backend tuple's base/marked/insurance, just with the coverage badge. Tolerate `,` or `)`.
-  /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn[,)]/.test(ordersView));
+  /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn[,)]/.test(orderCells));
 check('FE Margin cell prefers the backend tuple',
-  /backendMoney\?\.markupAmount/.test(ordersView) && /backendMoney!?\.marginPercent/.test(ordersView));
+  /backendMoney\?\.markupAmount/.test(orderCells) && /backendMoney!?\.marginPercent/.test(orderCells));
 // Shipped-row DTO phase: shipped rows now carry the workflow DTO (money priced
 // from the SELECTED rate by the same canonical rules), so the LAST FE markup
-// call is deleted — zero applyCarrierMarkup anywhere in OrdersView.
+// call is deleted — zero applyCarrierMarkup anywhere in the OrdersView shell OR
+// the extracted leaf cells.
 check('zero FE markup math (every row reads the backend DTO money tuple)',
   (ordersView.match(/applyCarrierMarkup\(/g)?.length ?? 0) === 0 &&
-  /const shippedBackendMoney = getBackendRowMoney\(displayOrder\)/.test(ordersView));
+  (orderCells.match(/applyCarrierMarkup\(/g)?.length ?? 0) === 0 &&
+  /const shippedBackendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCells));
 const ordersRouteSrc = readFileSync('src/routes/orders.ts', 'utf8');
 check('shipped rows carry the workflow DTO (built without best-rate data)',
   /: buildBestRateWorkflowDto\(\{ savedBestRate: null, source: 'none' \}\)/.test(ordersRouteSrc));

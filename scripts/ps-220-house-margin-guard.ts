@@ -336,8 +336,13 @@ check('FE: getBackendRowMoney exposes markupSource (defaults carrier_markup on d
   /export function renderHouseBadge\(\)/.test(rowDisplaySrc));
 
 const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 2): the Best Rate / Margin / Selected-Rate leaf cell
+// bodies (which render the HOUSE badge + house display) moved VERBATIM from
+// OrdersView into ./orders/cells/order-cells; the house-display FE assertions
+// follow the code to its new home.
+const orderCellsSrc = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 check('FE: the Best Rate cell renders the HOUSE badge only when markupSource === house_account',
-  /markupSource === 'house_account' \? renderHouseBadge\(\)/.test(ordersViewSrc));
+  /markupSource === 'house_account' \? renderHouseBadge\(\)/.test(orderCellsSrc));
 
 // ── slice 4b-2 (shipped realized Ship Margin) ────────────────────────────────
 check('producer (orders.ts): shipped rows bulk-load the REALIZED customer_rate and build a scoped house tuple',
@@ -348,8 +353,8 @@ check('producer (orders.ts): the shipped house bulk-load is best-effort + gated 
   /canViewFinancials && joined\.some\(\(r\) => r\.order\.orderStatus === 'shipped'\)/.test(ordersSrc) &&
   /bulk-load skipped/.test(ordersSrc));
 check('FE: shipped Selected Rate cell + Margin cell render the house display ONLY on markupSource house_account',
-  /shippedBackendMoney\.markupSource === 'house_account'/.test(ordersViewSrc) &&
-  /shippedMoney\?\.markupSource === 'house_account'/.test(ordersViewSrc));
+  /shippedBackendMoney\.markupSource === 'house_account'/.test(orderCellsSrc) &&
+  /shippedMoney\?\.markupSource === 'house_account'/.test(orderCellsSrc));
 
 // ── slice 4b-3 (P4: per-client opt-in write + toggle UI) ─────────────────────
 const optInSrc = readFileSync('src/services/house-account-opt-in.ts', 'utf8');

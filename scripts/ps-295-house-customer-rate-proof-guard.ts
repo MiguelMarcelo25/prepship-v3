@@ -189,11 +189,15 @@ check(
     /markupRule: null, \/\/ house: the margin IS the markup; no carrier markup applied/.test(ordersSrc),
 );
 
-const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 2): the shipped Best Rate / Margin leaf cell bodies
+// (House badge + selected-rate tuple, all read from the backend money DTO) moved
+// VERBATIM from OrdersView into ./orders/cells/order-cells; the FE assertion
+// follows the code to its new home.
+const orderCellsSrc = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 check(
   'shipped Orders UI renders House badge and selected-rate tuple only from backend money',
-  /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderHouseBadge\(\)/.test(ordersViewSrc) &&
-    /shippedMoney\?\.markupSource === 'house_account'/.test(ordersViewSrc),
+  /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderHouseBadge\(\)/.test(orderCellsSrc) &&
+    /shippedMoney\?\.markupSource === 'house_account'/.test(orderCellsSrc),
 );
 
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');

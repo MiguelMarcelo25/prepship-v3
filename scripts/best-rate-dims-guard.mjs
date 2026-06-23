@@ -12,8 +12,11 @@ function assert(condition, message) {
   if (!condition) process.exitCode = 1
 }
 
-const [ordersView, ordersRoute, ratesBackfill, cleanupScript, packageJson] = await Promise.all([
+const [ordersView, orderCells, ordersRoute, ratesBackfill, cleanupScript, packageJson] = await Promise.all([
   read('web/src/components/Views/OrdersView.tsx'),
+  // PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (which gates display on
+  // hasDisplayableBestRate) moved VERBATIM from OrdersView into ./orders/cells/order-cells.
+  read('web/src/components/Views/orders/cells/order-cells.tsx'),
   read('src/routes/orders.ts'),
   read('src/services/rates-backfill.ts'),
   read('scripts/clear-invalid-best-rates.ts'),
@@ -35,7 +38,11 @@ assert(
 // `isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay`
 // stale-rate gate — same behavior, less brittle pin.
 assert(
-  /\bif \(!hasDisplayableBestRate\b/.test(ordersView) &&
+  // The `if (!hasDisplayableBestRate ...)` display gate now lives in the extracted
+  // Best Rate leaf cell; the isCalculatingBestRate stale gate + the bounded
+  // 'add-dims' fallback (classifyAwaitingRateCellState / renderRateCellFallback)
+  // stay in the OrdersView shell.
+  /\bif \(!hasDisplayableBestRate\b/.test(orderCells) &&
     ordersView.includes('!hasDisplayableBestRate && hasAnySavedBestRateForDisplay') &&
     (ordersView.includes('return <span style={{ fontSize: 10.5, color:') ||
       ordersView.includes("data-rate-state=\"add-dims\"")) &&

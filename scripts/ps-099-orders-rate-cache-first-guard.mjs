@@ -9,11 +9,18 @@ const ratesRoute = fs.readFileSync(path.join(root, 'src/routes/rates.ts'), 'utf8
 // combined-selection owner; the route delegates via combineCarrierUniverses.
 const ratesCombined = fs.readFileSync(path.join(root, 'src/services/rates-combined.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const renderBestRatePriceStart = ordersView.indexOf('const renderBestRatePrice = (order: OrderSummaryDto) => {');
-const renderMarginStart = ordersView.indexOf('const renderMargin = (order: OrderSummaryDto) => {');
+// PS-166/PS-306/PS-258 (Wave 2): the four leaf cell renderers (Best Rate / Ship
+// Margin / Carrier / Shipping Account) moved VERBATIM out of OrdersView into
+// ./orders/cells/order-cells. renderTableCell stays in the shell as a thin
+// dispatcher. The bounded/actionable-fallback assertions below follow the code to
+// its new home (intent unchanged: stale rate -> bounded non-final state, never a
+// stale rate presented as final).
+const orderCells = fs.readFileSync(path.join(root, 'web/src/components/Views/orders/cells/order-cells.tsx'), 'utf8');
+const renderBestRatePriceStart = orderCells.indexOf('export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps): ReactNode {');
+const renderMarginStart = orderCells.indexOf('export function renderMargin(order: OrderSummaryDto, deps: OrderCellsDeps): ReactNode {');
 const renderBestRatePriceBlock =
   renderBestRatePriceStart >= 0 && renderMarginStart > renderBestRatePriceStart
-    ? ordersView.slice(renderBestRatePriceStart, renderMarginStart)
+    ? orderCells.slice(renderBestRatePriceStart, renderMarginStart)
     : '';
 
 function assert(condition, message) {
@@ -49,7 +56,12 @@ assert(
 // than an indefinite spinner. The intent (stale rate -> loading, never final)
 // is unchanged; the assertion tracks the new bounded implementation.
 assert(
-  (ordersView.match(/renderAwaitingRateFallback\(order, displayOrder/g) ?? []).length >= 3 &&
+  // PS-166 Wave 2: the >=3 awaiting-cell fallback call sites (Best Rate / Carrier /
+  // Shipping Account) now live in the extracted order-cells leaf module; the
+  // classifier + bounded-spinner machinery (classifyAwaitingRateCellState /
+  // isCalculatingBestRate / spin-center / spin-sm) stays in renderAwaitingRateFallback
+  // inside OrdersView.
+  (orderCells.match(/renderAwaitingRateFallback\(order, displayOrder/g) ?? []).length >= 3 &&
     ordersView.includes('classifyAwaitingRateCellState') &&
     ordersView.includes('const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)') &&
     ordersView.includes('className="spin-center"') &&

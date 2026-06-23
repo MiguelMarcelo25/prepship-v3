@@ -108,6 +108,10 @@ check('PS-135: panel-live best rate derives completeness from the backend (not h
 // owner (awaiting prefers bestRate over canonical/selected; shipped prefers
 // canonical) + that the wrapper delegates to it + that OrdersView uses the wrapper.
 const displayState = readFileSync('web/src/components/Views/orders-display-state.ts', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 2): the Carrier leaf cell (which consumes the
+// getCarrierCodeForDisplay wrapper) moved VERBATIM from OrdersView into
+// ./orders/cells/order-cells; assert the cell module now uses the wrapper.
+const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 const ps165CarrierBase = { isTest: false, bestRateCarrierCode: 'ups', canonicalCarrierCode: 'fedex', selectedRateCarrierCode: 'usps', bestRateNickname: null, bestRateNicknameIsKnownCarrier: false };
 check('Awaiting carrier column prefers the bestRate carrier over canonical/selected',
   resolveDisplayCarrierCode({ ...ps165CarrierBase, isAwaiting: true }) === 'ups' &&
@@ -116,7 +120,7 @@ check('Awaiting carrier column prefers the bestRate carrier over canonical/selec
   /export function getCarrierCodeForDisplay/.test(displayState) &&
   /return resolveDisplayCarrierCode\(/.test(displayState) &&
   /bestRateCarrierCode: toStringValue\(\(order\.bestRate as LooseBestRate \| undefined\)\?\.carrierCode\)/.test(displayState) &&
-  /getCarrierCodeForDisplay\(/.test(ordersView));
+  /getCarrierCodeForDisplay\(/.test(orderCells));
 check('Awaiting shipping-account column prefers the bestRate account nickname',
   // getShipAccountDisplay (orders-display-state.ts) — awaiting prefers the bestRate nickname.
   /order\.orderStatus === 'awaiting_shipment' && order\.bestRate\)\s*\{[\s\S]{0,260}?\(order\.bestRate as LooseBestRate\)\.carrierNickname/.test(displayState));

@@ -177,7 +177,11 @@ function check(name: string, got: unknown, want: unknown) {
   check('OrdersView defines orderShippingHold helper', /function orderShippingHold\(/.test(ordersView), true);
   check('OrdersView gates label actions on the hold', /panelHold\?\.blocked/.test(ordersView), true);
   check('OrdersView skips rating a held order (rate-flow gating)', /orderShippingHold\(order\)\?\.blocked\)\s*return null/.test(ordersView), true);
-  check('OrdersView shows a list-row hold pill', /rowHold\?\.blocked/.test(ordersView), true);
+  // PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (which renders the
+  // ⛔ list-row hold pill) was extracted VERBATIM from OrdersView into
+  // ./orders/cells/order-cells. The hold-pill invariant still holds — at the new owner.
+  const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
+  check('OrdersView shows a list-row hold pill', /rowHold\?\.blocked/.test(orderCells), true);
   // PS-257: the Print Queue drawer (with the per-entry shipping-hold badge) was
   // extracted VERBATIM from OrdersView into OrdersPrintQueueDrawer.tsx. The badge
   // invariant still holds — just at the new owner.

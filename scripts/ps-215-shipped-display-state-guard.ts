@@ -49,18 +49,23 @@ assert.ok(/title="Shipment sync error:[^"]*Re-run ShipStation sync[^"]*runbook/.
 
 // ── PS-036 safety rule unchanged: external is a persisted flag, never an
 // inference from absence ─────────────────────────────────────────────────────
-assert.ok(/getIsExternallyFulfilled\(displayOrder\)/.test(ordersView),
+// PS-166/PS-306/PS-258 (Wave 2): the three shipped display cells (Best Rate /
+// Carrier / Shipping Account) moved VERBATIM from OrdersView into
+// ./orders/cells/order-cells; the external-before-sync precedence invariant
+// follows the code to its new home (renderTableCell stays a thin dispatcher).
+const orderCells = read('web/src/components/Views/orders/cells/order-cells.tsx');
+assert.ok(/getIsExternallyFulfilled\(displayOrder\)/.test(orderCells),
   'external rendering must come from the canonical persisted-flag predicate');
-assert.ok(/getIsMissingShipmentSync\(displayOrder\)/.test(ordersView),
+assert.ok(/getIsMissingShipmentSync\(displayOrder\)/.test(orderCells),
   'sync-gap rendering must come from the canonical predicate');
-const badgeDecisions = ordersView.split('renderShipmentSyncErrorBadge()').length - 1;
+const badgeDecisions = orderCells.split('renderShipmentSyncErrorBadge()').length - 1;
 assert.equal(badgeDecisions, 3,
   `all three shipped columns route through the shared renderer (found ${badgeDecisions})`);
 // External always checked BEFORE the sync-error fallback at every site (the
 // carrier column uses its column-specific shouldShowCarrierExtLabel wrapper
 // around the same persisted-flag truth).
 const decisionPattern = /(?:getIsExternallyFulfilled|shouldShowCarrierExtLabel)\(displayOrder\)\) \{\s*return renderExtLabelBadge\(\)\s*\}\s*if \(getIsMissingShipmentSync\(displayOrder\)\) \{\s*return renderShipmentSyncErrorBadge\(\)/g;
-assert.equal((ordersView.match(decisionPattern) ?? []).length, 3,
+assert.equal((orderCells.match(decisionPattern) ?? []).length, 3,
   'external-flag check must precede the sync-error fallback in all three columns');
 
 // ── E2E coverage renders each state distinctly ──────────────────────────────

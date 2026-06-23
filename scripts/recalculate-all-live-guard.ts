@@ -56,12 +56,15 @@ check('Recalculate All (maxAgeHours 0) forces the LIVE carrier fan-out',
   // PS-perf 2026-06-23: the call now also tags priority:'background'; invariant unchanged.
   /liveRecalculate \? \{ forceRefresh: true[^}]*\} :/.test(backfill));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (with the watchdog-bounded
+// recalculating spinner) moved VERBATIM from OrdersView into ./orders/cells/order-cells.
+const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cells.tsx', 'utf8');
 // PS-178 final part merged the cell's two render branches (DTO money + degraded
 // base) into ONE wrapper — the spinner renders once, covering both paths.
 check('Best Rate cell spins while the row is being re-rated (watchdog-bounded)',
-  /isRowRecalculating/.test(ordersView) &&
-  /rowRateJobAgeMs == null \|\| rowRateJobAgeMs <= PENDING_RATING_WATCHDOG_MS/.test(ordersView) &&
-  (ordersView.match(/\{recalculatingSpinner\}/g)?.length ?? 0) === 1);
+  /isRowRecalculating/.test(orderCells) &&
+  /rowRateJobAgeMs == null \|\| rowRateJobAgeMs <= PENDING_RATING_WATCHDOG_MS/.test(orderCells) &&
+  (orderCells.match(/\{recalculatingSpinner\}/g)?.length ?? 0) === 1);
 check('poll effect refetches rows DURING the job (results land as orders resolve)',
   /Mid-job row refresh/.test(ordersView) &&
   /void refetchOrders\(\)\.finally\(\(\) => \{ refreshInflight = false \}\)/.test(ordersView));
