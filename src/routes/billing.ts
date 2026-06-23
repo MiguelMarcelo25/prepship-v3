@@ -36,6 +36,7 @@ import { backfillReferenceRates } from '../services/billing-ref-rates';
 import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
+import { previewBulkBoxCost } from '../services/billing-box-cost-bulk';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
@@ -587,6 +588,40 @@ const zeroShippingReviewSchema = z.object({
 });
 
 const PREP_FEE_LINE_TYPE_LIST = [...PREP_FEE_LINE_TYPES];
+
+// PS-311: bulk-apply a reviewed box cost to every order in a (client + date range + box) scope.
+// Slice 1 — the read-only PREVIEW (dry-run). The backend re-derives the affected orders from the
+// body + the caller's billing scope; it NEVER trusts an FE-supplied order list. No writes; edits
+// only billing_box_resolutions + billing_line_items on apply (awaiting/billing data — NOT shipped
+// orders/shipments) so no lockdown override is needed.
+const bulkBoxCostScopeSchema = z.object({
+  clientId: z.coerce.number().int().positive(),
+  dateFrom: z.string().min(1),
+  dateTo: z.string().min(1),
+  packageId: z.coerce.number().int().positive(),
+  newCost: z.coerce.number().min(0),
+});
+
+app.post(
+  '/box-cost/bulk/preview',
+  requirePermission('financials:write'),
+  zValidator('json', bulkBoxCostScopeSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    const preview = await previewBulkBoxCost(
+      {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        packageId: body.packageId,
+        newCost: body.newCost,
+      },
+      billingClientScopePredicate(scope),
+    );
+    return c.json({ data: preview });
+  },
+);
 
 app.post(
   '/zero-shipping-review/:orderId{[0-9]+}',
