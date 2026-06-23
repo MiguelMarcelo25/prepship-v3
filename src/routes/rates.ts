@@ -524,6 +524,11 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     ...rest,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: orderedIds,
+    // Order-backed marketplace context: gates eBay Logistics to eBay orders and feeds the eBay
+    // connector the order JSON it needs (ship-to + order id). Null/undefined off an order (e.g.
+    // the Rate Shop calculator), which correctly excludes eBay there.
+    sourceProvider: orderForBrowse?.sourceProvider ?? null,
+    rawOrder: orderForBrowse?.raw ?? undefined,
     // Evidence decides — the collapsed FE boolean is dropped (residential: undefined) so the
     // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
     ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),

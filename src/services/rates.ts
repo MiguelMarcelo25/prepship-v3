@@ -433,6 +433,12 @@ export type RateInput = {
   effectiveInsuredValue?: number | null;
   effectiveInsuranceSource?: string | null;
   automationRulesVersion?: string | null;
+  // Order-backed marketplace context, populated by /rates/browse from the orders row.
+  // `sourceProvider` (the marketplace the order came from) gates marketplace-specific carriers —
+  // eBay Logistics only prices eBay orders — and `rawOrder` carries the order's stored JSON for
+  // connectors that need the marketplace order itself (the eBay ship-to + order id).
+  sourceProvider?: string | null;
+  rawOrder?: unknown;
 };
 
 function normalizeZip(zip: string): string {
@@ -2009,7 +2015,15 @@ export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
   options: { cachedOnly?: boolean } = {},
 ): Promise<DirectCarrierRatesResult> {
-  const accounts = await loadVisibleDirectCarrierAccounts(input);
+  const accounts = (await loadVisibleDirectCarrierAccounts(input)).filter((account) => {
+    // eBay Logistics ONLY prices a specific eBay order (its shipping_quote API takes an eBay
+    // orderId), so it can NEVER quote a non-eBay order. Exclude it entirely off eBay orders so it
+    // stops cluttering the carrier list with "no rates available" (operator request 2026-06-24).
+    if (normalizeProviderKey(account.provider) === 'ebay_shipping' && (input.sourceProvider ?? null) !== 'ebay') {
+      return false;
+    }
+    return true;
+  });
   if (!accounts.length) return { rates: [], errors: [], metas: [], diagnostics: [] };
   // PS-206: cachedOnly means cached-only across the WHOLE combined universe.
   // Direct carriers have no rate cache today, so a cached-only lookup must NOT
@@ -2128,7 +2142,12 @@ export async function getDirectCarrierRatesForRateInput(
         externalOrderId: input.externalOrderId ?? input.orderNumber,
         orderNumber: input.orderNumber,
         purchaseOrderId: walmartPo?.purchaseOrderId ?? input.purchaseOrderId,
-        ...(walmartPo?.rawOrder != null ? { rawOrder: walmartPo.rawOrder } : {}),
+        // Marketplace order JSON. Walmart uses its resolved PO order (UNCHANGED); eBay (gated to
+        // eBay orders above) uses the order's stored raw JSON so the connector can read the ship-to
+        // + order id. Every other carrier keeps the prior behavior (no rawOrder key at all).
+        ...(walmartPo?.rawOrder != null ? { rawOrder: walmartPo.rawOrder }
+          : normalizeProviderKey(account.provider) === 'ebay_shipping' && input.rawOrder != null ? { rawOrder: input.rawOrder }
+          : {}),
         shipFrom: resolvedShipFrom,
         // PS-127/PS-135(a): direct carriers rate under the SAME backend-resolved residential
         // classification as ShipStation (classifyRateInputResidential above), NOT the raw FE
