@@ -28,8 +28,14 @@
  *      versa, which would resurrect the PS-218 false "No orders match" flash).
  *   4. The DOM-contract anchors survive: the spinner's data-testid, the
  *      `searchingState` id, and the `emptyState` id.
- *   5. OrdersView wires the child with exactly those six prop names at the call
- *      site (the call-site contract matches the declared props).
+ *   5. The caller wires the child with exactly those six prop names at the call
+ *      site (the call-site contract matches the declared props). PS-166/PS-306
+ *      Wave-3 re-point: the loading/error/empty framing (incl. the
+ *      <OrdersResultsEmptyState> render) moved VERBATIM out of OrdersView into
+ *      the presentational <OrdersResultsShell>, so the call site now lives in
+ *      OrdersResultsShell.tsx. OrdersView renders <OrdersResultsShell> and
+ *      forwards the same gating props, so the leaf's public contract is still
+ *      pinned at its (now one-hop-removed) caller — intent preserved.
  *
  * Run:
  *   npx tsx scripts/ps-258-orders-empty-state-props-contract-guard.ts
@@ -43,9 +49,16 @@ function check(name: string, cond: boolean): void {
 }
 
 const CHILD_PATH = 'web/src/components/Views/OrdersResultsEmptyState.tsx';
+// PS-166/PS-306 (Wave 3): the <OrdersResultsEmptyState> render moved out of
+// OrdersView into the presentational <OrdersResultsShell>, so the call-site
+// contract (section 5) is now pinned in OrdersResultsShell.tsx. OrdersView
+// still delegates by rendering <OrdersResultsShell> and forwarding the props.
+const CALLER_PATH = 'web/src/components/Views/OrdersResultsShell.tsx';
+
 const ORDERS_VIEW_PATH = 'web/src/components/Views/OrdersView.tsx';
 
 const child = readFileSync(CHILD_PATH, 'utf8');
+const caller = readFileSync(CALLER_PATH, 'utf8');
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
 
 // The six canonical props that form the public contract of this leaf.
@@ -100,15 +113,15 @@ check('Searching… region keeps id="searchingState"',
 check('empty-state region keeps id="emptyState"',
   /id="emptyState"/.test(child));
 
-// ── 5. OrdersView wires the child with EXACTLY those six prop names ──
+// ── 5. the caller (OrdersResultsShell) wires the child with EXACTLY those six prop names ──
 //    Anchor on the JSX element specifically: the tag name followed by
 //    whitespace + a prop char (so the `<OrdersResultsEmptyState>` mention in
 //    the file's header comment, which closes immediately with `>`, is skipped),
 //    then capture up to the first self-closing `/>`.
-const callSite = ordersView.match(
+const callSite = caller.match(
   /<OrdersResultsEmptyState\s+(\w[\s\S]*?)\/>/,
 )?.[1] ?? '';
-check('OrdersView renders <OrdersResultsEmptyState …/>', callSite.length > 0);
+check('OrdersResultsShell renders <OrdersResultsEmptyState …/>', callSite.length > 0);
 for (const { name } of EXPECTED_PROPS) {
   check(`call site passes the \`${name}\` prop`,
     new RegExp(`\\b${name}=\\{`).test(callSite));
@@ -116,6 +129,21 @@ for (const { name } of EXPECTED_PROPS) {
 const callSitePropCount = (callSite.match(/\w+=\{/g) ?? []).length;
 check(`call site passes EXACTLY ${EXPECTED_PROPS.length} props (found ${callSitePropCount})`,
   callSitePropCount === EXPECTED_PROPS.length);
+
+// ── 6. OrdersView still delegates: it renders <OrdersResultsShell> and forwards
+//    the gating props the shell threads down into <OrdersResultsEmptyState>, so
+//    the empty-state contract is reachable from the OrdersView shell (one hop). ──
+const shellCallSite = ordersView.match(
+  /<OrdersResultsShell\s+(\w[\s\S]*?)>/,
+)?.[1] ?? '';
+check('OrdersView renders <OrdersResultsShell …> (delegates the results framing)',
+  shellCallSite.length > 0);
+check('OrdersView forwards hasNoFilteredOrders={orderedFilteredOrders.length === 0} to the shell',
+  /hasNoFilteredOrders=\{orderedFilteredOrders\.length === 0\}/.test(shellCallSite));
+for (const name of ['ordersSearching', 'searchQuery', 'isGlobalSearchActive'] as const) {
+  check(`OrdersView forwards the \`${name}\` empty-state gating prop to the shell`,
+    new RegExp(`\\b${name}=\\{`).test(shellCallSite));
+}
 
 if (failures > 0) {
   console.error(`\nFAIL PS-258 OrdersResultsEmptyState props-contract guard (${failures} failing)`);

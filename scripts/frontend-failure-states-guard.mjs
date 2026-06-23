@@ -11,6 +11,11 @@ const ordersViewSource = fs.readFileSync(path.join(root, 'web/src/components/Vie
 // PS-258 re-anchor: the queueable-label-URL validator (getQueueableLabelUrl) moved out of OrdersView
 // into the strict module orders-queue-parsers.ts; OrdersView imports + still uses it. Same protection.
 const queueParsersSource = fs.readFileSync(path.join(root, 'web/src/components/Views/orders-queue-parsers.ts'), 'utf8');
+// PS-166/PS-306/PS-258 (Wave 3) re-anchor: the loading/error/Retry framing around the orders
+// table moved VERBATIM out of OrdersView into the strict presentational <OrdersResultsShell>.
+// The "Failed to load orders" + Retry markup now lives in OrdersResultsShell (delegating to
+// onRetry), and OrdersView passes onRetry={refetchOrders}. Same recovery protection, one move.
+const ordersResultsShellSource = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersResultsShell.tsx'), 'utf8');
 
 function fail(message) {
   console.error(`FAIL ${message}`);
@@ -115,10 +120,11 @@ assert(
 );
 
 assert(
-  /Failed to load orders/.test(ordersViewSource) &&
-    /onClick=\{\(\)\s*=>\s*void refetchOrders\(\)\}/.test(ordersViewSource) &&
-    />\s*Retry\s*</.test(ordersViewSource),
-  'OrdersView shows a recoverable Retry action when the Orders API fails',
+  /Failed to load orders/.test(ordersResultsShellSource) &&
+    /onClick=\{\(\)\s*=>\s*void onRetry\(\)\}/.test(ordersResultsShellSource) &&
+    />\s*Retry\s*</.test(ordersResultsShellSource) &&
+    /onRetry=\{refetchOrders\}/.test(ordersViewSource),
+  'OrdersResultsShell shows a recoverable Retry action when the Orders API fails; OrdersView delegates via onRetry={refetchOrders}',
 );
 
 if (process.exitCode) {

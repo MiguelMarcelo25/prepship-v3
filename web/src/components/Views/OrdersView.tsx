@@ -546,11 +546,13 @@ import { OrdersSearchBar } from './OrdersSearchBar'
 // a strict <OrdersBatchPanel> component; OrdersView passes its ~28 state +
 // handler props. The isReadOnly lockdown guard rides inside (R5).
 import { OrdersBatchPanel } from './OrdersBatchPanel'
-// PS-258 (slice): the orders-table "no results" region (Searching… spinner +
-// "No orders match" empty state) moved VERBATIM to a strict presentational
-// <OrdersResultsEmptyState> (no state; gating booleans + display values are
-// passed in). Byte-identical markup; control flow unchanged.
-import { OrdersResultsEmptyState } from './OrdersResultsEmptyState'
+// PS-166/PS-306/PS-258 (Wave 3): the loading / error / results-gating framing
+// around the orders table moved VERBATIM to a strict presentational
+// <OrdersResultsShell> (no state; gating booleans + display values + onRetry
+// are passed in; it embeds <OrdersResultsEmptyState>). The <table id="ordersTable">
+// stays HERE and is passed in as children (the table slot). Byte-identical
+// markup; control flow unchanged.
+import { OrdersResultsShell } from './OrdersResultsShell'
 // PS-166 (Wave 3, JSX-safe): the daily-stats strip JSX moved VERBATIM to a
 // strict <OrdersDailyStrip> (state/effects/rollover stay in OrdersView).
 import { OrdersDailyStrip } from './OrdersDailyStrip'
@@ -8834,78 +8836,25 @@ export default function OrdersView({
         <div className="content-split relative">
           <div className="orders-section" id="ordersSection">
             {renderSelectionToolbar()}
-            <div className="orders-wrap">
-              {loading ? (
-                <motion.div
-                  id="loadingState"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-4"
-                >
-                  <motion.div
-                    className="space-y-2"
-                    variants={{
-                      hidden: {},
-                      show: { transition: { staggerChildren: 0.04 } },
-                    }}
-                    initial="hidden"
-                    animate="show"
-                  >
-                    {Array.from({ length: 8 }).map((_, idx) => (
-                      <motion.div
-                        key={idx}
-                        variants={{
-                          hidden: { opacity: 0, y: 6 },
-                          show: { opacity: 1, y: 0 },
-                        }}
-                        className="flex items-center gap-3 px-3 py-2 rounded-md bg-white border border-line"
-                      >
-                        <div className="w-4 h-4 rounded bg-line/60 animate-pulse" />
-                        <div className="w-20 h-3 rounded bg-line/60 animate-pulse" />
-                        <div className="w-32 h-3 rounded bg-line/60 animate-pulse" />
-                        <div className="flex-1 h-3 rounded bg-line/60 animate-pulse" />
-                        <div className="w-16 h-3 rounded bg-line/60 animate-pulse" />
-                        <div className="w-12 h-3 rounded bg-line/60 animate-pulse" />
-                      </motion.div>
-                    ))}
-                  </motion.div>
-                  <div className="flex items-center justify-center gap-2 text-tiny text-ink-3 mt-4 font-sans tracking-wide uppercase">
-                    <Loader2 size={12} strokeWidth={2.5} className="animate-spinSlow" />
-                    Loading orders
-                  </div>
-                </motion.div>
-              ) : null}
-
-              {!loading && error ? (
-                <motion.div
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="p-8 flex flex-col items-center justify-center gap-3"
-                >
-                  <motion.div
-                    initial={{ scale: 0.6, rotate: -8 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 320, damping: 18 }}
-                    className="w-14 h-14 rounded-full bg-danger-bg ring-2 ring-danger/15 flex items-center justify-center"
-                  >
-                    <AlertTriangle size={26} strokeWidth={2.25} className="text-danger" />
-                  </motion.div>
-                  <div className="text-sm2 font-semibold text-danger font-display tracking-tight">Failed to load orders</div>
-                  <div className="text-xs2 text-ink-3 max-w-md text-center leading-relaxed">{error.message}</div>
-                  {/* Per user override unlock shipped data on 2026-05-23: add a non-mutating Orders recovery action for PS-020 API failure states. */}
-                  <button
-                    type="button"
-                    onClick={() => void refetchOrders()}
-                    className="inline-flex items-center gap-2 h-8 px-3 rounded-md bg-surface text-ink text-xs2 font-semibold ring-1 ring-line hover:bg-surface-2 hover:ring-brand/30 active:scale-95 transition"
-                  >
-                    <RefreshCcw size={13} strokeWidth={2.4} />
-                    Retry
-                  </button>
-                </motion.div>
-              ) : null}
-
+            {/* PS-166/PS-306/PS-258 (Wave 3): the loading / error / empty-state
+                framing around the orders table was extracted VERBATIM into
+                <OrdersResultsShell>. It owns the .orders-wrap wrapper, the
+                #loadingState skeleton, the AlertTriangle + Retry error block,
+                and the embedded <OrdersResultsEmptyState> — all PRESENTATIONAL.
+                The <table id="ordersTable"> itself stays HERE and is passed in
+                as children (the table slot), at the exact position it sat
+                before, so #ordersTable/#ordersBody/#tableHead are byte-identical
+                (test:orders-dom-parity:browser proves no drift). All data state
+                stays in OrdersView; onRetry delegates to refetchOrders. */}
+            <OrdersResultsShell
+              loading={loading}
+              error={error}
+              onRetry={refetchOrders}
+              ordersSearching={ordersSearching}
+              hasNoFilteredOrders={orderedFilteredOrders.length === 0}
+              searchQuery={searchQuery}
+              isGlobalSearchActive={isGlobalSearchActive}
+            >
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
                 <table
                   className={`orders-table density-${tableDensity}`}
@@ -9130,20 +9079,7 @@ export default function OrdersView({
                   </tbody>
                 </table>
               ) : null}
-
-              {/* PS-258 (slice): the Searching… spinner + "No orders match"
-                  empty state extracted VERBATIM to <OrdersResultsEmptyState/>.
-                  The gating booleans and display values are passed in; the two
-                  mutually exclusive blocks render byte-identically. */}
-              <OrdersResultsEmptyState
-                loading={loading}
-                error={error}
-                ordersSearching={ordersSearching}
-                hasNoFilteredOrders={orderedFilteredOrders.length === 0}
-                searchQuery={searchQuery}
-                isGlobalSearchActive={isGlobalSearchActive}
-              />
-            </div>
+            </OrdersResultsShell>
           </div>
 
           {/* Right-side detail panel — drawer-style hide/show.
