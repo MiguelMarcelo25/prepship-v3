@@ -112,8 +112,11 @@ check('rates service: cached-only lookups return uncached coverage WITHOUT quoti
 check('rates service: direct quoting is wrapped in the bounded per-carrier timeout',
   /withCarrierQuoteTimeout\(quoteCarrierRates\(/.test(ratesService));
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+// PS-perf 2026-06-23: the direct call body grew (forwards the resolved insurance from
+// resolvedForBrowse and now lives in a Promise.all IIFE) — widen the span; the invariant (the
+// SAME cachedOnly is threaded through to the direct universe) is unchanged.
 check('/rates/browse passes cachedOnly through to the direct universe',
-  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,500}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(ratesRoute));
+  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,1200}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(ratesRoute));
 check('the misleading source ternary is gone (cache+live-direct reports mixed)',
   !/source: result\.cached \? 'cache' : filtered\.length \? 'live' : 'live'/.test(ratesRoute) &&
   /'mixed' : 'cache'/.test(ratesRoute));

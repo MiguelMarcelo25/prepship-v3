@@ -528,22 +528,55 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
     ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),
   };
-  const shipStationStartedAt = Date.now();
-  const result = await getRates(
-    browseRateInput,
-    {
-      forceRefresh: forceRefresh || forceLive,
-      cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
-    }
-  );
-  const shipStationDurationMs = Date.now() - shipStationStartedAt;
-  // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family
-  // eligibility. ShipStation candidates are filtered separately from PS-124
-  // backend-owned direct-carrier candidates. In
-  // `enforce` we drop them (the operator then sees only their direct carriers); in
-  // `audit_only` we keep them and log a would-block. Best-effort: any failure (no
-  // order, settings outage) simply allows the rates. The label purchase boundary is
-  // the authoritative block regardless.
+  // PS-perf (QA audit 2026-06-23): the ShipStation N-carrier fan-out (getRates) and the
+  // direct-carrier fan-out (getDirectCarrierRatesForRateInput) are INDEPENDENT but were awaited
+  // back-to-back, so their latencies ADDED (a primary cause of the 10-20s Browse Rates wait).
+  // Overlap them. The direct path needs the REQUEST-LEVEL effective insurance the ShipStation
+  // resolver computes, so resolve it ONCE up front via the SAME shared resolver getRates uses
+  // internally (resolveRateInput). That resolver is config/cache-only and DETERMINISTIC on the
+  // input (its own contract — it must stay deterministic so the cache key matches the cached-bulk
+  // lookup), so resolvedForBrowse.effectiveInsurance* is byte-identical to result.effectiveInsurance*
+  // — only the wall-clock changes (max instead of sum), never a quoted amount.
+  const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
+  const resolvedForBrowse = await resolveRateInput(browseRateInput);
+  let shipStationDurationMs = 0;
+  let directCarrierDurationMs = 0;
+  const [result, directRates] = await Promise.all([
+    (async () => {
+      const startedAt = Date.now();
+      const r = await getRates(browseRateInput, {
+        forceRefresh: forceRefresh || forceLive,
+        cachedOnly: isCachedOnlyLookup,
+      });
+      shipStationDurationMs = Date.now() - startedAt;
+      return r;
+    })(),
+    // PS-206: cachedOnly is honored across the WHOLE combined universe — a cached-only probe must
+    // not live-quote direct carriers; the service returns terminal 'uncached' coverage diagnostics
+    // for every visible direct account instead, and the Rate Browser decides its live follow-up
+    // from that coverage identity (never from a carrier count).
+    (async () => {
+      const startedAt = Date.now();
+      const r = await getDirectCarrierRatesForRateInput({
+        ...rest,
+        confirmation: confirmation ?? signature ?? null,
+        carrierIds: requestedCarrierIds,
+        insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
+        insuredValue: resolvedForBrowse.effectiveInsuredValue ?? rest.insuredValue ?? null,
+        effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
+        effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
+        effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
+      }, { cachedOnly: isCachedOnlyLookup });
+      directCarrierDurationMs = Date.now() - startedAt;
+      return r;
+    })(),
+  ]);
+  // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family eligibility.
+  // ShipStation candidates are filtered separately from PS-124 backend-owned direct-carrier
+  // candidates. In `enforce` we drop them (the operator then sees only their direct carriers); in
+  // `audit_only` we keep them and log a would-block. Best-effort: any failure (no order, settings
+  // outage) simply allows the rates. The label purchase boundary is the authoritative block. This
+  // only filters result.rates and is independent of the direct fan-out, so it runs after both.
   let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
   let shipStationBlocked = false;
   if (body.orderId) {
@@ -569,24 +602,6 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     : requestedSet
       ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
       : result.rates;
-  const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
-  // PS-206: cachedOnly is honored across the WHOLE combined universe — a
-  // cached-only probe must not live-quote direct carriers. The rates service
-  // returns terminal 'uncached' coverage diagnostics for every visible direct
-  // account instead, and the Rate Browser decides its live follow-up from
-  // that coverage identity (never from a carrier count).
-  const directStartedAt = Date.now();
-  const directRates = await getDirectCarrierRatesForRateInput({
-    ...rest,
-    confirmation: confirmation ?? signature ?? null,
-    carrierIds: requestedCarrierIds,
-    insuranceProvider: result.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
-    insuredValue: result.effectiveInsuredValue ?? rest.insuredValue ?? null,
-    effectiveInsuranceProvider: result.effectiveInsuranceProvider ?? null,
-    effectiveInsuredValue: result.effectiveInsuredValue ?? null,
-    effectiveInsuranceSource: result.effectiveInsuranceSource ?? null,
-  }, { cachedOnly: isCachedOnlyLookup });
-  const directCarrierDurationMs = Date.now() - directStartedAt;
   const accounts = await getCarrierAccountsForRateContext({
     storeId: rest.storeId ?? null,
     clientId: rest.clientId ?? null,

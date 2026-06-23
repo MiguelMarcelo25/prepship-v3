@@ -245,27 +245,31 @@ expectNoThrow('non-insured order still passes the gate', () =>
 
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 {
-  const callStart = ratesRoute.indexOf('const directRates = await getDirectCarrierRatesForRateInput({');
+  // PS-perf 2026-06-23: the direct fan-out now runs concurrently with getRates inside a Promise.all
+  // IIFE (was a sequential `const directRates = await …`); the resolved insurance is forwarded from
+  // resolvedForBrowse (resolveRateInput, the SAME deterministic resolver getRates uses internally),
+  // byte-identical to the prior result.effectiveInsurance*. Match the call itself.
+  const callStart = ratesRoute.indexOf('getDirectCarrierRatesForRateInput({');
   const callEnd = ratesRoute.indexOf('}, { cachedOnly: isCachedOnlyLookup });', callStart);
   const directFanoutCall = callStart >= 0 && callEnd > callStart ? ratesRoute.slice(callStart, callEnd) : '';
   check(
     '/rates/browse direct fanout forwards resolved insurance provider',
-    /insuranceProvider:\s*result\.effectiveInsuranceProvider/.test(directFanoutCall),
+    /insuranceProvider:\s*resolvedForBrowse\.effectiveInsuranceProvider/.test(directFanoutCall),
     true,
   );
   check(
     '/rates/browse direct fanout forwards resolved insured value',
-    /insuredValue:\s*result\.effectiveInsuredValue/.test(directFanoutCall),
+    /insuredValue:\s*resolvedForBrowse\.effectiveInsuredValue/.test(directFanoutCall),
     true,
   );
   check(
     '/rates/browse direct fanout carries effective insurance provider metadata',
-    /effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(directFanoutCall),
+    /effectiveInsuranceProvider:\s*resolvedForBrowse\.effectiveInsuranceProvider/.test(directFanoutCall),
     true,
   );
   check(
     '/rates/browse direct fanout carries effective insured value metadata',
-    /effectiveInsuredValue:\s*result\.effectiveInsuredValue/.test(directFanoutCall),
+    /effectiveInsuredValue:\s*resolvedForBrowse\.effectiveInsuredValue/.test(directFanoutCall),
     true,
   );
 }
