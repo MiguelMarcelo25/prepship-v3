@@ -1,4 +1,13 @@
 import { test, expect } from 'playwright/test'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// PS-258 (2026-06-23): committed snapshots live as PLATFORM-AGNOSTIC files (no -win32/-darwin
+// suffix) compared directly, so the cert passes from any review OS (Hermes runs it on macOS).
+// Regenerate with UPDATE_DOM_PARITY=1.
+const DOM_PARITY_SNAP_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'orders-dom-parity-snapshots')
+const UPDATE_DOM_PARITY = process.env.UPDATE_DOM_PARITY === '1'
 
 // PS-258 — OrdersView DOM byte-equality certification (the safety net for the
 // PS-166 / PS-306 hook-extraction track).
@@ -359,7 +368,33 @@ for (const tab of [
     await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
     // Let any in-flight per-row hydration settle so the captured DOM is final.
     await page.waitForLoadState('networkidle')
-    const html = await page.locator('#ordersTable').innerHTML()
-    expect(normalize(html)).toMatchSnapshot(tab.snap)
+    // PS-258 (2026-06-23): the per-row passive auto-rating renders a TRANSIENT
+    // "calculating"/loading rate state before it resolves to a terminal state
+    // (ready / unavailable). Wait for every rate cell to leave that transient state so the
+    // captured DOM is deterministic across machines — Hermes caught the awaiting snapshot
+    // alternating calculating<->unavailable on the macOS review box. Best-effort (.catch):
+    // a tab with no rate cells (or already-terminal) resolves immediately.
+    await page
+      .waitForFunction(
+        () => {
+          const cells = document.querySelectorAll('#ordersTable [data-rate-state]')
+          return (
+            cells.length === 0 ||
+            [...cells].every(
+              (c) => !/calculating|loading|pending|rating/i.test(c.getAttribute('data-rate-state') || ''),
+            )
+          )
+        },
+        { timeout: 12000 },
+      )
+      .catch(() => {})
+    const normalized = normalize(await page.locator('#ordersTable').innerHTML())
+    const snapPath = path.join(DOM_PARITY_SNAP_DIR, tab.snap)
+    if (UPDATE_DOM_PARITY) {
+      fs.mkdirSync(DOM_PARITY_SNAP_DIR, { recursive: true })
+      fs.writeFileSync(snapPath, normalized, 'utf8')
+    }
+    const expected = fs.readFileSync(snapPath, 'utf8')
+    expect(normalized).toBe(expected)
   })
 }
