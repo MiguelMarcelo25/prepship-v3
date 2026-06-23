@@ -44,8 +44,14 @@ assert(
     printQueue.includes('repairMissingConfirmationForQueuedLabel') &&
     printQueue.includes('await repairMissingConfirmationForQueuedLabel(input.orderId)') &&
     printQueue.includes('dryRun: false') &&
-    printQueue.includes('processNow: true'),
-  'print queue existing-label path must repair and immediately process missing confirmation lifecycle without buying postage',
+    // PS-perf (per user override unlock shipped data on 2026-06-23): the repair now ENQUEUES the durable
+    // outbox row (processNow:false) and drains it OFF the hot path via a fire-and-forget
+    // processFulfillmentOutboxOnce, instead of dispatching synchronously on every queue-add. The
+    // confirmation is STILL recovered (durable row written before the processNow check + the background
+    // drain + the scheduler/enqueueMissing backstops) — it just no longer blocks the Send-to-Queue batch.
+    printQueue.includes('processNow: false') &&
+    printQueue.includes('processFulfillmentOutboxOnce({ orderId: parsedOrderId, limit: 5 })'),
+  'print queue existing-label path must repair + enqueue the missing confirmation lifecycle and drain it off the hot path (durable row + background drain, no synchronous per-order dispatch), without buying postage',
 );
 assert(
   outbox.includes('never creates/voids labels or rewrites shipment history'),

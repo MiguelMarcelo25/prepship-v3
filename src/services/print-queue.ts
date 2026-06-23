@@ -11,7 +11,7 @@ import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
 import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
-import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
+import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 // PS-191: structural retry-eligibility classification for purchase failures.
@@ -693,25 +693,25 @@ async function repairMissingConfirmationForQueuedLabel(orderId: number | string)
   const parsedOrderId = Number(orderId);
   if (!Number.isInteger(parsedOrderId) || parsedOrderId <= 0) return;
   try {
-    // Per user override unlock shipped data on 2026-06-01: queueing an
-    // existing shipped label may repair only the missing confirmation lifecycle;
-    // it never creates labels, buys postage, or marks printed. Any marketplace
-    // confirmation is performed by the normal fulfillment outbox connector.
-    const result = await ensureShipmentConfirmationLifecycle({
+    // Per user override unlock shipped data on 2026-06-23: queueing an existing shipped label
+    // repairs only the missing confirmation lifecycle — it never creates labels, buys postage, or
+    // marks printed. (Continues the 2026-06-01 override that introduced this repair.)
+    //
+    // PS-perf: the lifecycle now ENQUEUES the durable outbox row but no longer DISPATCHES it
+    // synchronously (processNow:false), so a batch Send-to-Queue no longer pays a per-order marketplace
+    // round-trip on the hot path. Safety: the durable row is written regardless — outbox.ts enqueues
+    // BEFORE the processNow check, so no confirmation is ever dropped. We then kick a fire-and-forget
+    // drain so the common case still confirms sub-second; the 60s outbox scheduler and
+    // enqueueMissingShipmentConfirmations re-enqueue are the backstops if this process exits first.
+    // (Mirrors the labels.ts marketplace-confirmation background drain.)
+    await ensureShipmentConfirmationLifecycle({
       orderId: parsedOrderId,
       dryRun: false,
-      processNow: true,
+      processNow: false,
     });
-    if (
-      result.plan.plannedAction === 'create_outbox_pending' &&
-      result.processed &&
-      result.processed.failed > 0
-    ) {
-      console.warn(
-        `[print-queue] repaired confirmation processing failed orderId=${parsedOrderId}:`,
-        result.processed,
-      );
-    }
+    void Promise.resolve()
+      .then(() => processFulfillmentOutboxOnce({ orderId: parsedOrderId, limit: 5 }))
+      .catch(() => {});
   } catch (err) {
     console.warn(
       `[print-queue] missing confirmation repair failed orderId=${parsedOrderId}:`,
