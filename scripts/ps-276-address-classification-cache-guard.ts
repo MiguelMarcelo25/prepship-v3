@@ -64,7 +64,10 @@ check('NOT re-exported from schema/index.ts (service imports it directly)',
 check('getCachedAddressClassification swallows errors (returns null on outage)',
   /export async function getCachedAddressClassification[\s\S]{0,900}?catch \{\s*return null;/.test(svc));
 check('setCachedAddressClassification swallows errors (best-effort upsert)',
-  /export async function setCachedAddressClassification[\s\S]{0,1400}?catch \{/.test(svc));
+  // Window widened 1400 -> 2200: the function body (the duplicated onConflictDoUpdate set block)
+  // grew past 1400 chars so the non-greedy match could no longer reach the catch — a guard-rot
+  // FALSE red (the try/catch still swallows errors; behavior unchanged). 2026-06-23 baseline fix.
+  /export async function setCachedAddressClassification[\s\S]{0,2200}?catch \{/.test(svc));
 check('set upserts (onConflictDoUpdate) — refresh updates in place', /onConflictDoUpdate\(/.test(svc));
 
 // ── 4. package.json wiring ────────────────────────────────────────────────────

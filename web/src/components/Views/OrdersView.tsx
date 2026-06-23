@@ -419,6 +419,11 @@ type RecipientDraft = {
 // buildTestMockRate also moved VERBATIM to ./orders/test-mock-rate-normalizer; re-imported below.
 // PS-135: BACKEND_RATE_PROOF_SOURCE now imported from ../../lib/rate-proof (single source).
 const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order before creating the label.'
+// PS-perf (DJ 2026-06-23): clearer message for the COMMON stale-saved-rate case (a saved rate
+// aged past its validity window at queue/print time). The generic RATE_PROOF_RETRY_MESSAGE stays
+// on the genuine "couldn't re-rate" failure branches inside refreshStaleRateForOrder; this one is
+// used only where we immediately kick off the one-click re-rate (never auto-repurchases — PS-191).
+const RATE_EXPIRED_RERATE_MESSAGE = 'Rate expired — re-rate this order before printing.'
 // Passive auto-rating live-rates a small visible slice in the browser; overflow
 // rows show a spinner and are handed to the backend backfill/checker.
 // Lowered 4 -> 2 (Phase 1 rate-browser speedup): the background drain shares one
@@ -435,7 +440,10 @@ const PASSIVE_LIVE_BEST_RATE_MAX_ROWS = 5
 // it on page load doesn't force-live-re-rate the whole table or re-create the #750 rate-limiter burst.
 const PASSIVE_BACKFILL_MAX_AGE_HOURS = 24
 const BATCH_QUEUE_CONCURRENCY = 2
-const BACKEND_QUEUE_SEND_CONCURRENCY = 5
+// PS-perf (DJ 2026-06-23): the MAX queue-send concurrency. Auto-sized DOWN to the batch size at the
+// call site so a typical small send runs in ONE wave instead of ceil(N/5); the backend clamps to
+// [1,8] (print-queue.ts) regardless, so this is just the FE-side ceiling.
+const BACKEND_QUEUE_SEND_CONCURRENCY = 8
 const BACKEND_TEST_QUEUE_SEND_CONCURRENCY = 8
 const BACKEND_QUEUE_SEND_POLL_MS = 750
 
@@ -3506,7 +3514,12 @@ export default function OrdersView({
       if (queueOrders.length > 0) {
         const started = await apiClient.startQueueSendJob({
           orders: queueOrders,
-          concurrency: options.batchTestMode ? BACKEND_TEST_QUEUE_SEND_CONCURRENCY : BACKEND_QUEUE_SEND_CONCURRENCY,
+          // PS-perf (DJ 2026-06-23): auto-size to the batch so a typical small send runs in ONE wave
+          // instead of ceil(N/5). The backend clamps to [1,8] (print-queue.ts), which stays the hard
+          // ceiling; distinct orders + the per-order purchase lock keep this safe from double-buys.
+          concurrency: options.batchTestMode
+            ? BACKEND_TEST_QUEUE_SEND_CONCURRENCY
+            : Math.min(BACKEND_QUEUE_SEND_CONCURRENCY, Math.max(1, queueOrders.length)),
         })
         attachPersistentQueueBackendJob(queueJobId, started.job_id)
         finalStatus = await pollBackendQueueSendJob(started.job_id, Math.max(jobOrders.length, 1), {
@@ -3886,7 +3899,7 @@ export default function OrdersView({
       usingSavedDisplayedRateProof &&
       workflowRecord?.canUseDisplayedRateForPurchase === false
     ) {
-      showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
+      showToast(RATE_EXPIRED_RERATE_MESSAGE, 'error')
       void refreshStaleRateForOrder(order, mode === 'queue' ? 'Print to Queue' : 'Create + Print')
       return null
     }
@@ -3957,7 +3970,7 @@ export default function OrdersView({
           // (same UX as Create + Print); the operator reviews and clicks
           // Print to Queue again to confirm the buy.
           if (result.retryEligibleOrderIds.has(order.orderId)) {
-            showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
+            showToast(RATE_EXPIRED_RERATE_MESSAGE, 'error')
             void refreshStaleRateForOrder(order, 'Print to Queue')
           } else {
             showToast(queueErrorMessage ?? 'Label was not added to the print queue', 'error')
@@ -4004,7 +4017,7 @@ export default function OrdersView({
           'Rate is out of date',
           'This order’s saved rate is out of date, so no label was purchased. Refreshing the rate now — review it and click Create + Print Label again.',
         )
-        showToast(RATE_PROOF_RETRY_MESSAGE, 'error')
+        showToast(RATE_EXPIRED_RERATE_MESSAGE, 'error')
         void refreshStaleRateForOrder(order)
         return null
       }

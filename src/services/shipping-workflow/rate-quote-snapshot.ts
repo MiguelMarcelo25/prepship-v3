@@ -29,9 +29,15 @@ import {
   type SelectedRateProofInput,
   type SelectedRateValidationResult,
 } from './rate-fingerprint.js';
+import { CACHE_TTL_MS } from '../rates.js';
 
-/** Short-lived snapshot freshness window (matches the saved best-rate cache TTL). */
-export const RATE_QUOTE_SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
+/**
+ * Short-lived snapshot freshness window. SLAVED to the saved best-rate cache TTL
+ * (CACHE_TTL_MS) so the two freshness clocks — and the analytics_cache row lifetime
+ * this drives via rate-quote-snapshot-store — can never desync. (PS-perf DJ 2026-06-23:
+ * both now follow RATE_SAVED_TTL_HOURS, default 24h.)
+ */
+export const RATE_QUOTE_SNAPSHOT_TTL_MS = CACHE_TTL_MS;
 
 /** Operator-facing message for any missing/expired/mismatched quote at purchase. */
 export const RATE_QUOTE_STALE_MESSAGE =

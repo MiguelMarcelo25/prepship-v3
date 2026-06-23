@@ -16,6 +16,7 @@ import {
   buildSelectedRateProofFromSnapshot,
   selectedRateOpaqueKey,
   RATE_QUOTE_STALE_MESSAGE,
+  RATE_QUOTE_SNAPSHOT_TTL_MS,
 } from '../src/services/shipping-workflow/rate-quote-snapshot';
 import {
   assertSelectedRateProofForLabelPurchase,
@@ -35,7 +36,10 @@ const rateB = { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage',
 const keyA = selectedRateOpaqueKey(rateA);
 const keyB = selectedRateOpaqueKey(rateB);
 const freshSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now(), bestRateKey: keyA, bestRateComplete: true };
-const expiredSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() - 7 * 60 * 60 * 1000, bestRateKey: keyA, bestRateComplete: true };
+// Expired-by-construction relative to the ACTUAL snapshot TTL (+1h buffer), so this fixture stays
+// genuinely expired regardless of the configured RATE_SAVED_TTL_HOURS (was a hardcoded 7h, which
+// silently became "fresh" when the default TTL rose 6h -> 24h on 2026-06-23).
+const expiredSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now() - (RATE_QUOTE_SNAPSHOT_TTL_MS + 60 * 60 * 1000), bestRateKey: keyA, bestRateComplete: true };
 const incompleteSnapshot = { cacheKey, rates: [rateA, rateB], fetchedAt: Date.now(), bestRateKey: keyA, bestRateComplete: false };
 
 // ── 1. Opaque ID: no PII recoverable, deterministic, distinct from cacheKey. ──

@@ -175,7 +175,20 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
   });
 }
 
-export const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+// PS-perf (DJ 2026-06-23): the saved-rate validity / cache-reuse window. Was a hardcoded 6h,
+// which made a saved best rate flip to "not purchasable" purely on elapsed time — a batch built
+// over a workday (quote AM, queue PM) then hit a FALSE "Rate changed or expired" at queue/print
+// time even though nothing about the shipment changed. Default raised to 24h so a rate quoted any
+// time today stays usable all day; env-tunable + instantly reversible (unset env = old 6h). The
+// request fingerprint still gates every REAL shipment change, so a genuinely changed order re-rates.
+export const CACHE_TTL_MS = Math.max(
+  60 * 60 * 1000,
+  Number.parseInt(
+    process.env.RATE_SAVED_TTL_MS
+      ?? String((Number.parseInt(process.env.RATE_SAVED_TTL_HOURS ?? '24', 10) || 24) * 3_600_000),
+    10,
+  ) || 24 * 3_600_000,
+); // default 24 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
 export const RATE_FETCH_CONCURRENCY = Math.max(
   1,
