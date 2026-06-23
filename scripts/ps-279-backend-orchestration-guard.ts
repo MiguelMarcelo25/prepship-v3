@@ -149,8 +149,13 @@ check('hasQueueableLabel OUTRANKS an explicit direct payload (never re-buy)',
     orders.includes('printQueueFeDelegation'));
   check('FE delegates ONLY behind printQueueFeDelegation (default OFF => no call)',
     /if \(printQueueFeDelegation\)[\s\S]{0,500}resolveBackendRoutePlan\(/.test(orders));
-  check('FE route uses the backend plan with a per-order fallback to the local classifier',
-    /backendRoutePlan\?\.get\(order\.orderId\) \?\? classifyQueueOrderRoute\(/.test(orders));
+  // PS-303 (Per user override unlock shipped data on 2026-06-23): route DECISION cutover —
+  // the backend plan is now BINDING when delegation is on (bindOrFallbackQueueRoute); the
+  // local classifier is the fallback ONLY on the OFF default / no plan. An omitted order
+  // defers to 'backend', never a silent FE direct-buy. Supersedes the non-binding-override pin.
+  check('FE route binds to the backend plan when delegation on (cutover); local classifier is the OFF/no-plan fallback',
+    /bindOrFallbackQueueRoute\(\s*printQueueFeDelegation,/.test(orders) &&
+    orders.includes('classifyQueueOrderRoute('));
   check('FE posts to /print-queue/route-plan via the isolated helper',
     orders.includes("api.post('/print-queue/route-plan'") && orders.includes('resolveBackendRoutePlan'));
 

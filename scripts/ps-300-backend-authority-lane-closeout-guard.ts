@@ -63,11 +63,16 @@ check('package wires this PS-300 lane closeout guard',
 check('workflow doc records this PS-300 lane closeout guard',
   workflowDoc.includes('test:ps-300-backend-authority-lane-closeout'));
 
+// PS-303 (Per user override unlock shipped data on 2026-06-23): PS-303 is NO LONGER asserted
+// Final-Review-ready here. The route-DECISION cutover landed (OrdersView binds to the backend
+// plan when FE delegation is on), but the FE createLabel direct-create buy-path REMAINS (the
+// backend cannot create direct-carrier labels yet) and both flags are default-OFF pending a DJ
+// canary — so the honest status is In progress (~50%). Its real state is pinned by the cutover
+// checks above + test:ps-303-fe-route-binding, not by a Final-Review-ready claim.
 const finalReviewReady = [
   ['PS-300', '90%', 'Final Review-ready'],
   ['PS-301', '90%', 'Final Review-ready'],
   ['PS-302', '90%', 'Final Review-ready'],
-  ['PS-303', '89%', 'Final Review-ready, scoped'],
   ['PS-304', '89%', 'Final Review-ready, scoped'],
   ['PS-305', '90%', 'Final Review-ready'],
 ] as const;
@@ -89,9 +94,12 @@ check('PS-306 remains conservative because UI read-only lockdown is disabled',
     /not Final Review-ready while `OrdersView\.tsx` has/.test(ps306Doc) &&
     /const isReadOnly = false/.test(ordersView));
 
-check('PS-303 scoped final-review note keeps frontend fallback honest',
-  doc.includes('frontend local fallback remains until cutover') &&
-    ps303Guard.includes('frontend local route fallback remains until final cutover'));
+// PS-303 (Per user override unlock shipped data on 2026-06-23): the route-decision cutover
+// landed (OrdersView binds to the backend plan when FE delegation is on). The status note +
+// the PS-303 guard now record the cutover instead of "fallback remains until cutover".
+check('PS-303 scoped note records the route-decision cutover honestly',
+  doc.includes('route DECISION cutover done') &&
+    ps303Guard.includes('frontend route DECISION binds to the backend plan when FE delegation is on (cutover done)'));
 check('PS-304 guard pins backend account tuple preference despite fallback debt',
   ps304Guard.includes('frontend account resolver prefers backend display tuple when present') &&
     ps304Guard.includes('frontend account display now consumes backend tuple before compatibility fallbacks'));

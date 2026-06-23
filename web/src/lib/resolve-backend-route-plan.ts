@@ -54,3 +54,26 @@ export async function resolveBackendRoutePlan(
     return null
   }
 }
+
+// PS-303 (Per user override unlock shipped data on 2026-06-23): the buy-vs-defer queue
+// route becomes BINDING when FE delegation is ON. This is the cutover that moves the
+// money-path route DECISION off the frontend:
+//   - flag ON + a backend plan present  -> the plan is authoritative. The frontend no
+//     longer decides; an order the plan OMITS routes to 'backend' (the backend
+//     create/recover job), NEVER a silent FE direct-buy, so the backend stays the
+//     source of truth even on a partial plan.
+//   - flag OFF, OR no plan (resolveBackendRoutePlan returned null) -> the caller's local
+//     classifier fallback is used, byte-identical to the pre-cutover behavior.
+// resolveBackendRoutePlan is only invoked when the flag is on, so the OFF default never
+// reaches the bound branch. Pure + offline-testable (drives the actual decision).
+export function bindOrFallbackQueueRoute(
+  feDelegation: boolean,
+  backendRoutePlan: Map<number, QueueOrderRoute> | null,
+  orderId: number,
+  fallback: () => QueueOrderRoute,
+): QueueOrderRoute {
+  if (feDelegation && backendRoutePlan) {
+    return backendRoutePlan.get(orderId) ?? 'backend'
+  }
+  return fallback()
+}

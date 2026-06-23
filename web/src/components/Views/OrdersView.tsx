@@ -194,7 +194,7 @@ import { useOrdersSelection } from './hooks/useOrdersSelection'
 import { usePanelState } from './hooks/usePanelState'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
-import { resolveBackendRoutePlan } from '../../lib/resolve-backend-route-plan'
+import { resolveBackendRoutePlan, bindOrFallbackQueueRoute } from '../../lib/resolve-backend-route-plan'
 // PS-286: close the Rate-Browser-apply -> persist+refetch -> close race by awaiting
 // the in-flight persist before the modal actually closes (exposes the row to Send).
 import { trackAppliedRatePersist, awaitAppliedRatePersists } from './orders-applied-rate-sync'
@@ -3445,20 +3445,30 @@ export default function OrdersView({
       // it, not the stale saved DTO. (Batch flows have no override → null.)
       const overridePayload = options.labelPayloadOverrides?.get(order.orderId) ?? null
       const overrideProviderId = toNumberValue(toRecord(overridePayload)?.shippingProviderId) ?? null
-      // PS-279: backend plan wins when present (flag ON); otherwise fall back to
-      // the local classifier (flag OFF / plan unavailable) — same decision as before.
-      const route = backendRoutePlan?.get(order.orderId) ?? classifyQueueOrderRoute(
-        {
-          hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
-          // PS-186: queue ROUTING is a money-path decision — backend fact only.
-          isTest: isBackendTestOrder(order),
-          isDirectCarrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
-          // PS-176: the backend's routing policy — consulted only after the live
-          // never-buy ladder inside the classifier.
-          backendQueueRoute: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
-          explicitPayloadProviderId: overrideProviderId,
-        },
-        options,
+      // PS-303 (Per user override unlock shipped data on 2026-06-23): when FE delegation
+      // is ON and the backend returned a route plan, that plan is now BINDING — the
+      // frontend no longer owns the buy-vs-defer money-path decision. An order the plan
+      // omits routes to 'backend' (the create/recover job), NEVER a silent FE direct-buy.
+      // Flag OFF (default) or no plan -> the local classifier, byte-identical to before
+      // (resolveBackendRoutePlan above is only called when the flag is on, so the OFF
+      // path never reaches the bound branch). bindOrFallbackQueueRoute is the pure owner.
+      const route = bindOrFallbackQueueRoute(
+        printQueueFeDelegation,
+        backendRoutePlan,
+        order.orderId,
+        () => classifyQueueOrderRoute(
+          {
+            hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
+            // PS-186: queue ROUTING is a money-path decision — backend fact only.
+            isTest: isBackendTestOrder(order),
+            isDirectCarrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
+            // PS-176: the backend's routing policy — consulted only after the live
+            // never-buy ladder inside the classifier.
+            backendQueueRoute: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
+            explicitPayloadProviderId: overrideProviderId,
+          },
+          options,
+        ),
       )
       if (route !== 'direct-create') {
         backendJobOrders.push(order)

@@ -122,8 +122,13 @@ check('frontend reads dedicated printQueueFeDelegation flag',
   ordersView.includes('printQueueFeDelegation'));
 check('frontend calls backend route-plan only inside printQueueFeDelegation gate',
   /if \(printQueueFeDelegation\)[\s\S]{0,700}resolveBackendRoutePlan\(/.test(ordersView));
-check('frontend preserves local classifier fallback per order',
-  /backendRoutePlan\?\.get\(order\.orderId\) \?\? classifyQueueOrderRoute\(/.test(ordersView));
+// PS-303 (Per user override unlock shipped data on 2026-06-23): the route is BINDING when
+// FE delegation is ON (bindOrFallbackQueueRoute); the per-order local classifier is the
+// fallback ONLY when the flag is OFF or no plan exists (byte-identical OFF default).
+// Supersedes PS-279's "fallback always preserved" pin.
+check('frontend route binds to the backend plan when delegation on; local classifier is the OFF/no-plan fallback',
+  /bindOrFallbackQueueRoute\(\s*printQueueFeDelegation,/.test(ordersView) &&
+  ordersView.includes('classifyQueueOrderRoute('));
 check('route-plan helper fails safe to null',
   routePlanHelper.includes('export async function resolveBackendRoutePlan') &&
   /catch\s*\{[\s\S]{0,200}return null/.test(routePlanHelper));

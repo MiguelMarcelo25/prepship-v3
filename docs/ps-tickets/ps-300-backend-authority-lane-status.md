@@ -12,7 +12,7 @@ PS-300 through PS-306.
 | PS-300 | 90% | Final Review-ready | None for backend authority gate |
 | PS-301 | 90% | Final Review-ready | None found |
 | PS-302 | 90% | Final Review-ready | None found |
-| PS-303 | 89% | Final Review-ready, scoped | Backend queue authority exists; frontend local fallback remains until cutover |
+| PS-303 | 50% | In progress, scoped | Backend queue authority exists; route DECISION cutover done — OrdersView binds to the backend plan when FE delegation is on (Per user override unlock shipped data on 2026-06-23; test:ps-303-fe-route-binding); FE createLabel direct-create buy-path REMAINS (backend cannot create direct-carrier labels yet) + both flags default-OFF pending DJ canary |
 | PS-304 | 89% | Final Review-ready, scoped | Backend tuple wins; remaining frontend account fallbacks are accepted as PS-306 cutover debt |
 | PS-305 | 90% | Final Review-ready | None for guardrail scope |
 | PS-306 | 86% | Keep in progress | `OrdersView.tsx` currently has `const isReadOnly = false`; UI lockdown is not final-ready |

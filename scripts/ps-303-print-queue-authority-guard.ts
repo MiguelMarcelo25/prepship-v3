@@ -190,10 +190,17 @@ const ordersView = read('web/src/components/Views/OrdersView.tsx');
 check('frontend Print Queue delegation is still flag-gated',
   ordersView.includes('printQueueFeDelegation') &&
   /if \(printQueueFeDelegation\)[\s\S]{0,500}resolveBackendRoutePlan\(/.test(ordersView));
-check('frontend local route fallback remains until final cutover',
+// PS-303 (Per user override unlock shipped data on 2026-06-23): the buy-vs-defer route
+// DECISION cutover is done — OrdersView consumes the backend plan as BINDING via
+// bindOrFallbackQueueRoute when FE delegation is ON (an omitted order defers to 'backend',
+// never a silent FE direct-buy). The FE createLabel direct-create path + the local
+// classifier remain ONLY for the OFF default and 'direct-create' routes (the backend
+// cannot create direct-carrier labels yet). Supersedes the prior "fallback remains until
+// cutover" pin; the binding semantics are proven by test:ps-303-fe-route-binding.
+check('frontend route DECISION binds to the backend plan when FE delegation is on (cutover done)',
   ordersView.includes('apiClient.createLabel') &&
   ordersView.includes('classifyQueueOrderRoute(') &&
-  /backendRoutePlan\?\.get\(order\.orderId\) \?\? classifyQueueOrderRoute\(/.test(ordersView));
+  /bindOrFallbackQueueRoute\(\s*printQueueFeDelegation,/.test(ordersView));
 
 const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workflow.md');
 check('workflow doc records PS-303 print queue authority guard',

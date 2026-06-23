@@ -427,6 +427,7 @@
     "test:ps-302-apply-best-rate-behavior": "tsx scripts/ps-302-apply-best-rate-behavior-test.ts",
     "test:ps-302-thin-client-apply-delegation": "tsx scripts/ps-302-thin-client-apply-delegation-guard.ts",
     "test:ps-303-print-queue-authority": "tsx scripts/ps-303-print-queue-authority-guard.ts",
+    "test:ps-303-fe-route-binding": "tsx scripts/ps-303-fe-route-binding-guard.ts",
     "test:ps-304-shipping-display-facts-authority": "tsx scripts/ps-304-shipping-display-facts-authority-guard.ts",
     "test:ps-304-package-facts-row-owner": "tsx scripts/ps-304-package-facts-row-owner-guard.ts",
     "test:ps-304-package-facts-behavior": "tsx scripts/ps-304-package-facts-behavior-test.ts",
