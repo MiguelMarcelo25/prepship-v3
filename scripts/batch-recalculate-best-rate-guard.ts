@@ -133,6 +133,11 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 // extracted VERBATIM to orders-row-display.tsx — the definition slices below
 // re-anchor there; the OrdersView call-site pins are unchanged.
 const rowDisplay = readFileSync('web/src/components/Views/orders-row-display.tsx', 'utf8');
+// PS-166 (Wave 4): the filter-bar Recalculate Selected / Recalculate All buttons
+// + the strict-live progress bar moved VERBATIM into OrdersFilterToolbar.tsx
+// (OrdersFilterToolbarBatchControls). The batch RUNNER + state still live in
+// OrdersView; only the toolbar BUTTON markup re-points to the extracted file.
+const filterToolbar = readFileSync('web/src/components/Views/OrdersFilterToolbar.tsx', 'utf8');
 const batchStart = ordersView.indexOf('async function runBatchRecalculateOrder(');
 const batchEnd = ordersView.indexOf('\n  // PS-071', batchStart);
 const batchBlock = batchStart >= 0 && batchEnd > batchStart
@@ -147,10 +152,10 @@ check('batch Recalculate tracks progress rows', /setBatchRecalculateRows/.test(b
 check('batch Recalculate skips missing-dims rows before pending state',
   /prepareBatchRecalculateRows/.test(batchBlock) &&
   /getAutoBestRateRequest\(order\)[\s\S]*status:\s*'skipped'[\s\S]*Missing weight, dimensions, or ship-to postal code/.test(batchBlock));
-check('batch Recalculate removed page-only button', !/Recalculate Page/.test(ordersView));
-check('batch Recalculate has filtered all button', /Recalculate All/.test(ordersView));
-check('batch Recalculate has selected button', /Recalculate Selected/.test(ordersView));
-check('batch Recalculate shows percentage progress', /batchRecalculateProgress\.percent/.test(ordersView));
+check('batch Recalculate removed page-only button', !/Recalculate Page/.test(ordersView) && !/Recalculate Page/.test(filterToolbar));
+check('batch Recalculate has filtered all button', /Recalculate All/.test(filterToolbar));
+check('batch Recalculate has selected button', /Recalculate Selected/.test(filterToolbar));
+check('batch Recalculate shows percentage progress', /batchRecalculateProgress\.percent/.test(filterToolbar));
 check('batch Recalculate has per-order retry action', /retryBatchRecalculateOrder/.test(ordersView) && /data-batch-recalculate-retry/.test(ordersView));
 check('batch Recalculate has timeout guard', /BATCH_RECALCULATE_TIMEOUT_MS/.test(ordersView));
 check('batch Recalculate keeps strict live flags', /forceLive:\s*true/.test(ordersView) && /forceRefresh:\s*true/.test(ordersView));

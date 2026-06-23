@@ -20,9 +20,16 @@ function check(name: string, cond: boolean): void {
 
 const MODULE_PATH = 'web/src/components/Views/orders-table-density-prefs.ts';
 const ORDERS_VIEW_PATH = 'web/src/components/Views/OrdersView.tsx';
+// PS-166 (Wave 4): the density segmented-control (the only `setTableDensity(...)`
+// CALL site) moved VERBATIM into OrdersFilterToolbar.tsx. OrdersView still owns
+// the hook + consumes `tableDensity` (the `density-${tableDensity}` table class)
+// and wires `setTableDensity` into the toolbar as `onTableDensityChange`. State
+// ownership is unchanged — only the toggle markup moved.
+const TOOLBAR_PATH = 'web/src/components/Views/OrdersFilterToolbar.tsx';
 
 const moduleSrc = readFileSync(MODULE_PATH, 'utf8');
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
+const toolbar = readFileSync(TOOLBAR_PATH, 'utf8');
 
 // ── the new module owns the hook + type, byte-identical behavior ──
 check('module exports the useTableDensityPreference hook',
@@ -52,8 +59,12 @@ check('OrdersView no longer declares the inline useState<TableDensity>',
   !/useState<TableDensity>/.test(ordersView));
 check('OrdersView no longer inlines the orders_table_density localStorage access',
   !/localStorage\.(getItem|setItem)\('orders_table_density'/.test(ordersView));
-check('OrdersView still consumes tableDensity + setTableDensity (call sites preserved)',
-  /tableDensity/.test(ordersView) && /setTableDensity\(/.test(ordersView));
+check('OrdersView still consumes tableDensity (the density-${tableDensity} table class)',
+  /tableDensity/.test(ordersView) && /density-\$\{tableDensity\}/.test(ordersView));
+check('OrdersView wires setTableDensity into <OrdersFilterToolbar> (onTableDensityChange)',
+  /onTableDensityChange:\s*setTableDensity/.test(ordersView));
+check('OrdersFilterToolbar keeps the density toggle setter call site (onTableDensityChange(opt.key))',
+  /onTableDensityChange\(opt\.key\)/.test(toolbar));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-258 orders-table-density-prefs guard (${failures} failing)`);

@@ -31,9 +31,17 @@ function check(name: string, cond: boolean): void {
 
 const ORDERS_VIEW_PATH = 'web/src/components/Views/OrdersView.tsx';
 const BATCH_PANEL_PATH = 'web/src/components/Views/OrdersBatchPanel.tsx';
+// PS-166 (Wave 4): the filter-bar Select-All `isReadOnly ? null :` lockdown gate
+// moved VERBATIM into OrdersFilterToolbar.tsx (OrdersFilterToolbarBatchControls).
+// The SKU-group select-all gate + the isReadOnly source-of-truth + the
+// <OrdersBatchPanel> suppression all still live in OrdersView. The lockdown is
+// UNCHANGED — the gate count below now spans both files so the Select-All gate
+// is still pinned wherever it physically lives.
+const TOOLBAR_PATH = 'web/src/components/Views/OrdersFilterToolbar.tsx';
 
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
 const batchPanel = readFileSync(BATCH_PANEL_PATH, 'utf8');
+const filterToolbar = readFileSync(TOOLBAR_PATH, 'utf8');
 
 // Count helper — how many gating uses of isReadOnly survive in OrdersView.
 const isReadOnlyUses = (ordersView.match(/isReadOnly/g) ?? []).length;
@@ -50,14 +58,23 @@ check('OrdersView row select cell early-returns null under isReadOnly',
   /if \(isReadOnly\) return null/.test(ordersView));
 
 // ── 3. Select-All is hidden under the lockdown ──
-check('OrdersView Select-All is gated (isReadOnly ? null : …)',
+//     PS-166 Wave 4: the toolbar Select-All gate moved to OrdersFilterToolbar;
+//     the SKU-group select-all gate stays in OrdersView. Either file carrying a
+//     `{isReadOnly ? null : (` gate satisfies the "Select-All is hidden" intent.
+check('Select-All is gated (isReadOnly ? null : …) in the toolbar',
+  /\{isReadOnly \? null : \(/.test(filterToolbar));
+check('OrdersView keeps its SKU-group select-all isReadOnly gate',
   /\{isReadOnly \? null : \(/.test(ordersView));
 
-// ── 4. there are at least two `isReadOnly ? null :` ternary gates ──
-//     (Select-All + the SKU-group select-all). This catches a future
-//     extraction that pulls one of them out without re-gating.
-check('OrdersView keeps >= 2 `isReadOnly ? null :` selection gates (Select-All + SKU-group)',
-  (ordersView.match(/isReadOnly \? null :/g) ?? []).length >= 2);
+// ── 4. there are at least two `isReadOnly ? null :` ternary gates total ──
+//     (the toolbar Select-All + the OrdersView SKU-group select-all). Counting
+//     across both files catches a future extraction that pulls one of them out
+//     without re-gating, regardless of which file it lands in.
+const ternaryGateUses =
+  (ordersView.match(/isReadOnly \? null :/g) ?? []).length +
+  (filterToolbar.match(/isReadOnly \? null :/g) ?? []).length;
+check('>= 2 `isReadOnly ? null :` selection gates survive (Select-All + SKU-group)',
+  ternaryGateUses >= 2);
 
 // ── 5. batch panel suppression: prop threaded + child honors it ──
 check('OrdersView passes isReadOnly into <OrdersBatchPanel>',

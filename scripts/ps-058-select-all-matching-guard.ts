@@ -13,6 +13,11 @@ function assert(condition: unknown, message: string): void {
 const ordersRoute = read('src/routes/orders.ts');
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
+// PS-166 (Wave 4): the filter-bar Select-All / All-Matches labels moved VERBATIM
+// to OrdersFilterToolbar.tsx (OrdersFilterToolbarBatchControls). The select-all
+// scope wiring + hydration still live in OrdersView; only the toolbar LABELS
+// re-point to the extracted presentational component.
+const ordersFilterToolbar = read('web/src/components/Views/OrdersFilterToolbar.tsx');
 const packageJson = read('package.json');
 
 assert(
@@ -44,9 +49,9 @@ assert(
   'OrdersView must provide an explicit Select all matching orders action.',
 );
 assert(
-  /Select current page orders/.test(ordersView) &&
-    /Select all .* matching orders across pages/.test(ordersView),
-  'OrdersView toolbar must label current-page selection separately from all matching orders across pages.',
+  /Select current page orders/.test(ordersFilterToolbar) &&
+    /Select all .* matching orders across pages/.test(ordersFilterToolbar),
+  'OrdersFilterToolbar must label current-page selection separately from all matching orders across pages.',
 );
 assert(
   !/const batchOrders = orders\.filter\(\(order\) => selectedIdSet\.has\(order\.orderId\)\)/.test(ordersView),

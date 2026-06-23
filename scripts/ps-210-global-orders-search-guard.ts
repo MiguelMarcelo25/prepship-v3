@@ -134,9 +134,16 @@ assert.ok(searchBar.includes('Searching all statuses &amp; stores'),
 assert.ok(!searchBar.includes('<span>Searching all orders</span>') &&
   !ordersView.includes('<span>Searching all orders</span>'),
   'the old overclaiming pill text must be gone');
-assert.ok(/OrdersSearchBar\s+searchQuery=\{searchQuery\}/.test(ordersView.replace(/\n\s*/g, ' ')) ||
-  ordersView.includes('<OrdersSearchBar'),
-  'OrdersView must render the extracted search bar');
+// PS-166 Wave 4 re-anchor: the <OrdersSearchBar> call site moved into
+// OrdersFilterToolbar.tsx; OrdersView now renders <OrdersFilterToolbar> and
+// forwards searchQuery down to it. Accept the search bar rendered in the toolbar
+// AND OrdersView forwarding searchQuery into the toolbar (contract unbroken).
+const filterToolbar = readFileSync('web/src/components/Views/OrdersFilterToolbar.tsx', 'utf8');
+assert.ok(/OrdersSearchBar\s+searchQuery=\{searchQuery\}/.test(filterToolbar.replace(/\n\s*/g, ' ')) ||
+  filterToolbar.includes('<OrdersSearchBar'),
+  'OrdersFilterToolbar must render the extracted search bar');
+assert.ok(/<OrdersFilterToolbar[\s\S]*?searchQuery=\{searchQuery\}/.test(ordersView),
+  'OrdersView must forward searchQuery into <OrdersFilterToolbar>');
 // Off-tab rows are labeled with their REAL status, gated on the row (not the
 // tab). PS-166 Wave 2c1 re-anchor: the Order # cell (and its off-tab pill)
 // moved VERBATIM to OrdersTableCells.tsx; OrdersView threads currentStatus +

@@ -46,9 +46,16 @@ function check(name: string, cond: boolean): void {
 
 const CHILD_PATH = 'web/src/components/Views/OrdersSearchBar.tsx';
 const ORDERS_VIEW_PATH = 'web/src/components/Views/OrdersView.tsx';
+// PS-166 (Wave 4): the filter-bar (including the <OrdersSearchBar> call site)
+// moved VERBATIM into OrdersFilterToolbar.tsx. <OrdersSearchBar> is now rendered
+// inside the toolbar, and OrdersView forwards the same three search props down
+// to <OrdersFilterToolbar>. Section 5 re-points to follow the moved call site
+// while still proving the props flow unbroken from OrdersView → toolbar → child.
+const TOOLBAR_PATH = 'web/src/components/Views/OrdersFilterToolbar.tsx';
 
 const child = readFileSync(CHILD_PATH, 'utf8');
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
+const toolbar = readFileSync(TOOLBAR_PATH, 'utf8');
 
 // The three canonical props that form the public contract of this leaf.
 const EXPECTED_PROPS: ReadonlyArray<{ name: string; type: RegExp }> = [
@@ -96,13 +103,14 @@ check('clear button keeps id="searchClear"', /id="searchClear"/.test(child));
 check('search input keeps its placeholder text',
   /placeholder="Search orders, SKUs, names…"/.test(child));
 
-// ── 5. OrdersView wires the child with EXACTLY those three prop names ──
+// ── 5. The toolbar wires the child with EXACTLY those three prop names ──
 //    Anchor on the JSX element: tag name + whitespace + a prop char, up to the
 //    first self-closing `/>` (the header-comment mention closes with `>`).
-const callSite = ordersView.match(
+//    PS-166 Wave 4: the <OrdersSearchBar> call site now lives in the toolbar.
+const callSite = toolbar.match(
   /<OrdersSearchBar\s+(\w[\s\S]*?)\/>/,
 )?.[1] ?? '';
-check('OrdersView renders <OrdersSearchBar …/>', callSite.length > 0);
+check('OrdersFilterToolbar renders <OrdersSearchBar …/>', callSite.length > 0);
 for (const { name } of EXPECTED_PROPS) {
   check(`call site passes the \`${name}\` prop`,
     new RegExp(`\\b${name}=\\{`).test(callSite));
@@ -110,6 +118,17 @@ for (const { name } of EXPECTED_PROPS) {
 const callSitePropCount = (callSite.match(/\w+=\{/g) ?? []).length;
 check(`call site passes EXACTLY ${EXPECTED_PROPS.length} props (found ${callSitePropCount})`,
   callSitePropCount === EXPECTED_PROPS.length);
+
+// ── 5b. OrdersView still forwards the same three search props into the toolbar,
+//    so the contract flows unbroken OrdersView → OrdersFilterToolbar → child.
+const toolbarCallSite = ordersView.match(
+  /<OrdersFilterToolbar\s+([\s\S]*?)\/>/,
+)?.[1] ?? '';
+check('OrdersView renders <OrdersFilterToolbar …/>', toolbarCallSite.length > 0);
+for (const { name } of EXPECTED_PROPS) {
+  check(`OrdersView forwards the \`${name}\` prop into <OrdersFilterToolbar>`,
+    new RegExp(`\\b${name}=\\{`).test(toolbarCallSite));
+}
 
 if (failures > 0) {
   console.error(`\nFAIL PS-258 OrdersSearchBar props-contract guard (${failures} failing)`);

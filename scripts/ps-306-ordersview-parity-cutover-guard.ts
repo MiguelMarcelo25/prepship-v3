@@ -36,6 +36,11 @@ const decompositionStatus = read('docs/ps-tickets/ps-166-ps-258-decomposition-st
 const agents = read('AGENTS.md');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const batchPanel = read('web/src/components/Views/OrdersBatchPanel.tsx');
+// PS-166 (Wave 4): the filter-bar Select-All `isReadOnly ? null :` lockdown gate
+// moved VERBATIM into OrdersFilterToolbar.tsx. The row-select cell guard, the
+// SKU-group select-all gate, and the <OrdersBatchPanel> suppression stay in
+// OrdersView. The lockdown is UNCHANGED — the gate count below spans both files.
+const filterToolbar = read('web/src/components/Views/OrdersFilterToolbar.tsx');
 const filteredSort = read('web/src/components/Views/orders-filtered-sort.ts');
 const componentBoundaryGuard = read('scripts/ps-258-component-boundary-lockdown-guard.ts');
 const filteredSortGuard = read('scripts/ps-258-orders-filtered-sort-guard.ts');
@@ -132,7 +137,10 @@ check('OrdersView lockdown caveat is explicit: UI gate currently disabled, backe
   /Defense-in-depth still applies at the BACKEND/.test(ordersView));
 check('OrdersView still contains row select, Select All, and batch panel read-only gate sites',
   /if \(isReadOnly\) return null/.test(ordersView) &&
-  (ordersView.match(/isReadOnly \? null :/g) ?? []).length >= 2 &&
+  // PS-166 Wave 4: the Select-All gate moved to OrdersFilterToolbar; count gates
+  // across both files so the lockdown floor (>= 2) is enforced wherever they live.
+  ((ordersView.match(/isReadOnly \? null :/g) ?? []).length +
+    (filterToolbar.match(/isReadOnly \? null :/g) ?? []).length) >= 2 &&
   /<OrdersBatchPanel[\s\S]{0,400}?isReadOnly=\{isReadOnly\}/.test(ordersView));
 check('OrdersBatchPanel still accepts and honors the read-only suppression prop',
   /isReadOnly: boolean/.test(batchPanel) &&

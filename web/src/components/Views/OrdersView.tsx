@@ -1,20 +1,15 @@
 import './OrdersView.css'
 import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Package,
   Truck,
   Bell,
-  Calendar,
   Inbox,
   AlertTriangle,
   Loader2,
   X as XIcon,
-  CheckSquare,
-  ListOrdered,
-  Download,
   Printer as PrinterIcon,
   Columns3,
   Copy as CopyIcon,
@@ -37,7 +32,6 @@ import {
   ClipboardList,
   PackageCheck,
   Tag,
-  Plus,
 } from 'lucide-react'
 import { FcPrint } from 'react-icons/fc'
 import HoverImage from '../HoverImage'
@@ -542,6 +536,10 @@ import {
 // yieldToBrowser, which paces it); useDebouncedValue → ../../hooks (generic).
 import { buildEmptyPanel } from './orders-empty-panel'
 import { OrdersSearchBar } from './OrdersSearchBar'
+// PS-166/PS-306/PS-258 (Wave 4): the filter/batch/export toolbar (the
+// `<div id="filterbar">` block) moved VERBATIM to <OrdersFilterToolbar>.
+// PRESENTATIONAL — every async handler stays a parent closure threaded down.
+import { OrdersFilterToolbar } from './OrdersFilterToolbar'
 // PS-166 (Wave 2d): the batch-actions panel (2+ selected) moved VERBATIM to
 // a strict <OrdersBatchPanel> component; OrdersView passes its ~28 state +
 // handler props. The isReadOnly lockdown guard rides inside (R5).
@@ -6676,6 +6674,37 @@ export default function OrdersView({
       }
       : null
 
+  // PS-166/PS-306 (Wave 4): the #exportBtn onClick body stays PARENT-OWNED. The
+  // CSV export is real async work (apiClient.downloadOrdersExport) and must not
+  // live in the presentational OrdersFilterToolbar — OrdersFilterToolbarExport
+  // only FIRES this callback. Body lifted VERBATIM from the former inline arrow.
+  async function handleExportCsv() {
+    if (csvExporting) return
+    setCsvExporting(true)
+    try {
+      const { blob, filename } = await apiClient.downloadOrdersExport({
+        orderStatus: currentStatus,
+        pageSize: 5000,
+        dateFrom: dateRange.start || undefined,
+        dateTo: dateRange.end || undefined,
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename || `orders-${currentStatus}-${californiaDateInputValue()}.csv`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      showToast('CSV export downloaded', 'success')
+    } catch (err) {
+      console.error('[Export CSV] failed', err)
+      showToast('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'), 'error')
+    } finally {
+      setCsvExporting(false)
+    }
+  }
+
   // PS-071 — re-run passive auto-rating for one order whose rate came back
   // unavailable (or got stuck) WITHOUT requiring the operator to open Browse
   // Rates. Clears the request fingerprint + entry and bumps the effect nonce so
@@ -8360,461 +8389,75 @@ export default function OrdersView({
   return (
     <>
       <div id="view-orders">
-        {/* ─────────────── FILTER BAR (reworked) ─────────────── */}
-        <div
-          id="filterbar"
-          className="
-            flex items-center gap-2 flex-wrap
-            px-4 sm:px-5 py-2.5
-            bg-surface border-b border-line
-            text-ink
-          "
-        >
-          {/* PS-166 (Wave 2b): search input + clear + PS-210 global-search
-              pill render from OrdersSearchBar with byte-identical markup;
-              search state stays in Home, threaded through the same props. */}
-          <OrdersSearchBar
-            searchQuery={searchQuery}
-            onSearchQueryChange={onSearchQueryChange}
-            dateRange={dateRange}
-          />
-
-          {/* SKU filter dropdown removed per UX request — SKU filtering is
-              still reachable via global search (which sets skuFilter when a
-              SKU token is matched), so the underlying filter state is kept
-              and simply defaults to '' (= all SKUs) with no visible control. */}
-
-          {/* + New Order — primary action, relocated right after Search
-              per UX request. Brand-blue gradient fill telegraphs primary. */}
-          <button
-            id="newOrderBtn"
-            type="button"
-            title="Create a new manual order"
-            onClick={() => setNewOrderOpen(true)}
-            className="
-              inline-flex items-center gap-1.5
-              h-8 px-3 rounded-lg
-              text-[12px] font-bold text-white
-              bg-gradient-to-br from-brand to-indigo-600
-              shadow-md hover:shadow-lg active:scale-95
-              ring-1 ring-brand/30
-              transition-all duration-150
-            "
-          >
-            <Plus size={12.5} strokeWidth={2.75} />
-            <span className="hidden sm:inline">New Order</span>
-          </button>
-
-          {/* Date filter dropdown */}
-          <div className="relative inline-flex items-center">
-            <Calendar size={11} strokeWidth={2.25} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" aria-hidden />
-            <select
-              id="dateFilter"
-              value={dateFilter}
-              onChange={(event) => onDateFilterChange?.(event.target.value as OrdersDateFilter)}
-              aria-label="Filter by date"
-              className="
-                appearance-none cursor-pointer
-                h-8 pl-7 pr-7
-                rounded-lg
-                bg-surface ring-1 ring-line
-                text-[12px] font-medium text-ink-2
-                hover:text-ink hover:ring-line-2
-                focus:bg-surface focus:ring-2 focus:ring-brand/40
-                focus:outline-none
-                transition-all duration-150
-              "
-            >
-              <option value="">All Dates</option>
-              <option value="this-month">This Month</option>
-              <option value="last-month">Last Month</option>
-              <option value="last-30">Last 30 Days</option>
-              <option value="last-90">Last 90 Days</option>
-              <option value="custom">Custom…</option>
-            </select>
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 text-[8px] pointer-events-none" aria-hidden>▼</span>
-          </div>
-
-          {/* Custom date range — only shown when dateFilter is 'custom' */}
-          {dateFilter === 'custom' ? (
-            <div id="customDateWrap" className="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg bg-surface-2 ring-1 ring-line">
-              <input
-                type="date"
-                id="dateFrom"
-                value={customDateFrom}
-                onChange={(event) => setCustomDateFrom(event.target.value)}
-                className="bg-transparent border-0 text-[11.5px] text-ink-2 font-mono tabular-nums focus:outline-none focus:text-ink"
-              />
-              <span className="text-ink-3 text-[11px]">→</span>
-              <input
-                type="date"
-                id="dateTo"
-                value={customDateTo}
-                onChange={(event) => setCustomDateTo(event.target.value)}
-                className="bg-transparent border-0 text-[11.5px] text-ink-2 font-mono tabular-nums focus:outline-none focus:text-ink"
-              />
-            </div>
-          ) : null}
-
-          <div className="col-toggle-wrap">
-            <button className="btn btn-outline btn-sm" type="button" id="colBtnFilter" style={{ display: 'none' }} onClick={() => setColumnMenuOpen((open) => !open)}>⊞ Columns</button>
-            {columnMenuOpen && columnMenuPos ? (
-              <div ref={columnMenuRef} className="react-column-menu" style={{ position: 'fixed', top: columnMenuPos.top, right: columnMenuPos.right, background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: '8px 0', zIndex: 1000, minWidth: 220 }}>
-                <div style={{ padding: '0 12px 6px', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>Toggle &amp; Reorder Columns</div>
-                {resolvedColumnPrefs.orderedColumns.filter((column) => column.key !== 'select' && column.key !== 'orderNum').map((column) => {
-                  const checked = !resolvedColumnPrefs.hiddenColumns.has(column.key)
-                  return (
-                    <div
-                      key={column.key}
-                      className={[
-                        'col-dd-item',
-                        dropdownDragColumnKey === column.key ? 'dragging' : '',
-                        dropdownDragOverColumnKey === column.key ? 'drag-over' : '',
-                      ].filter(Boolean).join(' ')}
-                      draggable
-                      onDragStart={(event) => handleDropdownDragStart(event, column.key)}
-                      onDragOver={(event) => handleDropdownDragOver(event, column.key)}
-                      onDrop={(event) => handleDropdownDrop(event, column.key)}
-                      onDragEnd={finishDropdownDrag}
-                    >
-                      <span className="col-dd-handle" aria-hidden="true">::</span>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(event) => {
-                            const nextHidden = new Set(resolvedColumnPrefs.hiddenColumns)
-                            if (event.target.checked) nextHidden.delete(column.key)
-                            else nextHidden.add(column.key)
-                            void saveColumnPrefsToServer(buildSavedColumnPrefs(resolvedColumnPrefs.orderedColumns, nextHidden, resolvedColumnPrefs.widths as any))
-                          }}
-                        />
-                        {column.label}
-                      </label>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : null}
-          </div>
-          {/* Lockdown — Select All hidden in Shipped/Cancelled views.
-              Without this, the user could check Select All which would
-              ignore the row-level checkbox lockdown (rows hide their
-              checkboxes, but Select All operates on visibleOrderIds
-              regardless of cell visibility). */}
-          {isReadOnly ? null : (
-            <div className="inline-flex items-center gap-1.5" aria-label="Order selection scope">
-              <label
-                id="btnSelectAll"
-                title={
-                  visibleOrderIds.length === 0
-                    ? 'No visible orders to select'
-                    : allVisibleSelected
-                      ? 'Clear current page selected orders'
-                      : 'Select current page orders'
-                }
-                className={`
-                inline-flex items-center gap-1.5
-                h-8 px-2.5 rounded-lg ring-1 select-none
-                text-[12px] font-medium
-                transition-all duration-150
-                ${visibleOrderIds.length > 0 ? 'cursor-pointer' : 'cursor-default opacity-50'}
-                ${allVisibleSelected || someVisibleSelected
-                    ? 'bg-brand-bg ring-brand text-brand'
-                    : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
-              `}
-              >
-                <input
-                  ref={selectAllCheckboxRef}
-                  type="checkbox"
-                  checked={allVisibleSelected}
-                  disabled={visibleOrderIds.length === 0}
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={(event) => {
-                    event.stopPropagation()
-                    toggleVisibleSelection(event.target.checked)
-                  }}
-                  style={{ accentColor: 'var(--ss-blue)' }}
-                  className="w-3.5 h-3.5 cursor-pointer"
-                  aria-label="Select current page orders"
-                />
-                <span className="font-mono tabular-nums">
-                  {visibleSelectedCount > 0
-                    ? `${visibleSelectedCount}/${visibleOrderIds.length}`
-                    : 'This Page'}
-                </span>
-              </label>
-              <button
-                id="btnSelectAllMatching"
-                type="button"
-                title={total > 0 ? `Select all ${total.toLocaleString()} matching orders across pages` : 'No matching orders to select'}
-                disabled={total === 0 || selectingAllMatching}
-                onClick={() => void selectAllMatchingOrders()}
-                className={`
-                inline-flex items-center gap-1.5
-                h-8 px-2.5 rounded-lg ring-1
-                text-[12px] font-medium
-                transition-all duration-150
-                ${allMatchingSelection?.active && allMatchingSelection.scopeKey === selectionScopeKey
-                    ? 'bg-brand-bg ring-brand text-brand'
-                    : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
-                ${total === 0 || selectingAllMatching ? 'opacity-60 cursor-not-allowed' : ''}
-              `}
-                aria-label={`Select all ${total.toLocaleString()} matching orders across pages`}
-              >
-                {selectingAllMatching ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <CheckSquare size={12.5} strokeWidth={2.25} aria-hidden />}
-                <span className="font-mono tabular-nums">All Matches</span>
-              </button>
-            </div>
-          )}
-
-          {currentStatus === 'awaiting_shipment' ? (
-            <div className="inline-flex items-center gap-1.5" aria-label="Strict live best-rate recalculation">
-              <button
-                type="button"
-                onClick={() => void startBatchRecalculateBestRates('selected')}
-                disabled={batchRecalculateBusy || selectedOrderIds.length === 0}
-                title="Recalculate strict live best rates for selected awaiting orders"
-                className={`
-                  inline-flex items-center gap-1.5
-                  h-8 px-2.5 rounded-lg ring-1
-                  text-[12px] font-medium
-                  transition-all duration-150
-                  ${batchRecalculateBusy || selectedOrderIds.length === 0
-                    ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
-                    : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
-                `}
-              >
-                {batchRecalculateBusy ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <RefreshCcw size={12.5} strokeWidth={2.25} />}
-                Recalculate Selected
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleRecalculateAll()}
-                disabled={recalcAllJobId != null || total === 0}
-                title="Refetch best rates for ALL awaiting orders (one backend job — rows show rating progress as they resolve)"
-                className={`
-                  inline-flex items-center gap-1.5
-                  h-8 px-2.5 rounded-lg ring-1
-                  text-[12px] font-medium
-                  transition-all duration-150
-                  ${recalcAllJobId != null || total === 0
-                    ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
-                    : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
-                `}
-              >
-                {recalcAllJobId != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
-                Recalculate All
-              </button>
-              {recalcAllSummary ? (
-                <span
-                  data-recalculate-all-progress
-                  className="inline-flex items-center h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] font-mono tabular-nums text-ink-2"
-                  title="Backend best-rate backfill over all awaiting orders"
-                >
-                  {recalcAllSummary}
-                </span>
-              ) : null}
-              {batchRecalculateProgress.total > 0 ? (
-                <div
-                  data-batch-recalculate-progress
-                  className="inline-flex items-center gap-2 h-8 px-2.5 rounded-lg bg-surface-2 ring-1 ring-line text-[11px] text-ink-2"
-                  title="Strict live only: no cached or stale fallback rates are accepted"
-                >
-                  <span className="font-mono font-semibold tabular-nums">{batchRecalculateProgress.percent}%</span>
-                  <span className="relative w-20 h-1.5 rounded-full bg-line overflow-hidden" aria-hidden>
-                    <span
-                      className="absolute inset-y-0 left-0 rounded-full bg-brand transition-all duration-200"
-                      style={{ width: `${batchRecalculateProgress.percent}%` }}
-                    />
-                  </span>
-                  <span className="font-mono tabular-nums">
-                    {batchRecalculateProgress.completed}/{batchRecalculateProgress.total}
-                  </span>
-                  <span className="text-ink-3">
-                    Updated {batchRecalculateProgress.updated} · Retry {batchRecalculateProgress.blocked + batchRecalculateProgress.timedOut}
-                  </span>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          <button
-            id="btnSkuSort"
-            type="button"
-            onClick={toggleSkuSort}
-            aria-pressed={skuSortActive}
-            title="Sort orders by SKU groups"
-            className={`
-              inline-flex items-center gap-1.5
-              h-8 px-2.5 rounded-lg ring-1
-              text-[12px] font-medium
-              transition-all duration-150
-              ${skuSortActive
-                ? 'bg-brand-bg ring-brand text-brand'
-                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
-            `}
-          >
-            <ListOrdered size={12.5} strokeWidth={2.25} />
-            SKU Sort
-            {skuSortActive ? <span className="text-brand">✓</span> : null}
-          </button>
-
-          {/* Picklist — relocated next to SKU Sort per UX request
-              (was pinned far-right with ml-auto, now flows inline). */}
-          {currentStatus === 'awaiting_shipment' ? (
-            <button
-              id="picklistBtn"
-              type="button"
-              onClick={() => void printPicklist()}
-              title="Print picklist for visible orders"
-              className="
-                inline-flex items-center gap-1.5
-                h-8 px-3 rounded-lg
-                ring-1 ring-line bg-surface
-                text-[12px] font-semibold text-ink-2
-                hover:text-ink hover:ring-line-2 hover:bg-surface-2
-                active:scale-95
-                transition-all duration-150
-              "
-            >
-              <PrinterIcon size={12.5} strokeWidth={2.25} />
-              Picklist
-            </button>
-          ) : null}
-
-          {/* Density toggle — segmented control */}
-          <div
-            role="group"
-            aria-label="Row density"
-            title="Row density"
-            className="inline-flex h-8 overflow-hidden rounded-lg ring-1 ring-line bg-surface"
-          >
-            {([
-              { key: 'narrow', label: '≡', tip: 'Narrow rows' },
-              { key: 'cozy', label: '☰', tip: 'Cozy rows (default)' },
-              { key: 'wide', label: '⫿', tip: 'Wide rows' },
-            ] as const).map((opt, idx, arr) => {
-              const isActive = tableDensity === opt.key
-              const isLast = idx === arr.length - 1
-              return (
-                <button
-                  key={opt.key}
-                  type="button"
-                  title={opt.tip}
-                  aria-pressed={isActive}
-                  onClick={() => setTableDensity(opt.key)}
-                  className={`px-2.5 text-[13px] font-bold cursor-pointer transition-colors ${isLast ? '' : 'border-r border-line'} ${isActive ? 'bg-brand text-white' : 'text-ink-3 hover:bg-surface-2 hover:text-ink'}`}
-                >
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-          {(() => {
-            if (currentStatus !== 'awaiting_shipment' || !queueToolbarProgress) return null
-            const widget = (
-              <div
-                id="queue-progress-indicator"
-                role="status"
-                aria-live="polite"
-                style={{
-                  marginLeft: 8,
-                  width: 240,
-                  maxWidth: '34vw',
-                  minWidth: 170,
-                  padding: '5px 8px',
-                  border: '1px solid var(--border2)',
-                  borderRadius: 6,
-                  background: 'var(--surface)',
-                  boxShadow: '0 1px 2px rgba(15,23,42,.06)',
-                  flexShrink: 1,
-                  // Print Queue panel overlays at z-index 1200; lift this above
-                  // it so the in-progress label stays visible while a Print All
-                  // job is running with the panel still open.
-                  position: 'relative',
-                  zIndex: 1300,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
-                  <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{queueToolbarProgress.label}</span>
-                  <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-                  <div
-                    role="progressbar"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={queueToolbarProgress.pct}
-                    style={{ height: 5, flex: 1, minWidth: 0, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}
-                  >
-                    <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`, background: queueToolbarProgress.tone, borderRadius: 999, transition: 'width .25s ease' }} />
-                  </div>
-                  <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 112 }}>
-                    {queueToolbarProgress.detail}
-                  </span>
-                </div>
-              </div>
-            )
-            // DJ request (2026-06-11): show the progress immediately LEFT of the header Queue
-            // button. Home.tsx renders the #queue-progress-slot anchor there; portal into it
-            // when present (desktop), else keep the original toolbar position as the fallback.
-            const slot = typeof document !== 'undefined' ? document.getElementById('queue-progress-slot') : null
-            return slot ? createPortal(widget, slot) : widget
-          })()}
-          {/* Export CSV — stays on the toolbar row, pushed to the far
-              right end via ml-auto, per UX request. */}
-          <button
-            id="exportBtn"
-            type="button"
-            title={csvExporting ? 'Preparing CSV export...' : 'Export visible orders as CSV'}
-            disabled={csvExporting}
-            aria-busy={csvExporting}
-            className={`
-              ml-auto
-              inline-flex items-center gap-1.5
-              h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface
-              text-[12px] font-medium text-ink-2
-              ${csvExporting
-                ? 'cursor-wait opacity-75'
-                : 'hover:text-ink hover:ring-line-2 active:scale-95'}
-              transition-all duration-150
-            `}
-            onClick={async () => {
-              if (csvExporting) return
-              setCsvExporting(true)
-              try {
-                const { blob, filename } = await apiClient.downloadOrdersExport({
-                  orderStatus: currentStatus,
-                  pageSize: 5000,
-                  dateFrom: dateRange.start || undefined,
-                  dateTo: dateRange.end || undefined,
-                })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = filename || `orders-${currentStatus}-${californiaDateInputValue()}.csv`
-                document.body.appendChild(a)
-                a.click()
-                document.body.removeChild(a)
-                setTimeout(() => URL.revokeObjectURL(url), 1000)
-                showToast('CSV export downloaded', 'success')
-              } catch (err) {
-                console.error('[Export CSV] failed', err)
-                showToast('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'), 'error')
-              } finally {
-                setCsvExporting(false)
-              }
-            }}
-          >
-            {csvExporting ? (
-              <Loader2 size={12.5} strokeWidth={2.25} className="animate-spin" />
-            ) : (
-              <Download size={12.5} strokeWidth={2.25} />
-            )}
-            <span className="hidden sm:inline">{csvExporting ? 'Exporting...' : 'Export CSV'}</span>
-          </button>
-        </div>
+        {/* PS-166/PS-306/PS-258 (Wave 4): the filter/batch/export toolbar
+            (the `<div id="filterbar">` block) renders from OrdersFilterToolbar
+            with byte-identical markup. PRESENTATIONAL — all async handlers
+            (CSV export, recalculate, picklist, select-all-matching, column-pref
+            persistence) stay PARENT-OWNED here and are threaded down as on-prefixed
+            callbacks; the new file holds no apiClient/batch/persistence (PS-306).
+            The table net is test:master:all-safe (toolbar is outside #ordersTable). */}
+        <OrdersFilterToolbar
+          searchQuery={searchQuery}
+          onSearchQueryChange={onSearchQueryChange}
+          dateRange={dateRange}
+          onOpenNewOrder={() => setNewOrderOpen(true)}
+          dateControls={{
+            dateFilter,
+            onDateFilterChange,
+            customDateFrom,
+            onCustomDateFromChange: setCustomDateFrom,
+            customDateTo,
+            onCustomDateToChange: setCustomDateTo,
+          }}
+          columnMenu={{
+            columnMenuOpen,
+            onToggleColumnMenu: () => setColumnMenuOpen((open) => !open),
+            columnMenuPos,
+            columnMenuRef,
+            resolvedColumnPrefs,
+            dropdownDragColumnKey,
+            dropdownDragOverColumnKey,
+            onDropdownDragStart: handleDropdownDragStart,
+            onDropdownDragOver: handleDropdownDragOver,
+            onDropdownDrop: handleDropdownDrop,
+            onDropdownDragEnd: finishDropdownDrag,
+            saveColumnPrefsToServer,
+            buildSavedColumnPrefs,
+          }}
+          batchControls={{
+            isReadOnly,
+            visibleOrderIds,
+            allVisibleSelected,
+            someVisibleSelected,
+            selectAllCheckboxRef,
+            onToggleVisibleSelection: toggleVisibleSelection,
+            visibleSelectedCount,
+            total,
+            selectingAllMatching,
+            onSelectAllMatchingOrders: selectAllMatchingOrders,
+            allMatchingSelection,
+            selectionScopeKey,
+            currentStatus,
+            onStartBatchRecalculateBestRates: startBatchRecalculateBestRates,
+            batchRecalculateBusy,
+            selectedOrderIds,
+            onRecalculateAll: handleRecalculateAll,
+            recalcAllJobId,
+            recalcAllSummary,
+            batchRecalculateProgress,
+            onToggleSkuSort: toggleSkuSort,
+            skuSortActive,
+            onPrintPicklist: printPicklist,
+          }}
+          exportControls={{
+            tableDensity,
+            onTableDensityChange: setTableDensity,
+            currentStatus,
+            queueToolbarProgress,
+            csvExporting,
+            onExportCsv: handleExportCsv,
+          }}
+        />
 
         {/* PS-166 (Wave 3, JSX-safe): the daily-stats strip renders from
             OrdersDailyStrip with byte-identical markup (the whole
