@@ -639,7 +639,9 @@ function dedupeRates(rates: Rate[], source: string): Rate[] {
   return unique;
 }
 
-function pickBestRate(rates: Rate[]): Rate | null {
+// Exported for ps-best-rate-charge-basis-behavior-test (proves the persisted best ranks on the
+// marked customer charge, not raw cost).
+export function pickBestRate(rates: Rate[]): Rate | null {
   // PS-108: never auto-select an insured rate whose ParcelGuard premium could not be
   // proven. Such rates are flagged `insuranceCostUnresolved` by the enricher; excluding
   // them here guarantees the saved bestRate is never a postage-only insured rate.
@@ -1421,8 +1423,27 @@ async function writeRateCache(
   rawRates: Rate[],
   carrierDiagnostics: CarrierRateDiagnostic[],
   fetchedAt: Date,
+  markups: Map<string, Markup>,
 ): Promise<void> {
-  const bestRate = pickBestRate(rawRates);
+  // QA audit 2026-06-23: pick the PERSISTED best on the MARKED CUSTOMER CHARGE (the same basis the
+  // live /rates/browse route and the Recalculate-All backfill use), NOT raw provider cost. The old
+  // pickBestRate(rawRates) ranked by cost, so a +15%-markup UPS account cheapest by COST ($11.50)
+  // was saved as best over a cheaper-to-the-CUSTOMER rate (USPS $12.87 → $13.22 after markup). Store
+  // the winner with its RAW amount restored (original_amount) so read-time display markup applies
+  // exactly once and never double-marks — mirrors the PS-203 backfill (rates-backfill.ts:686-690).
+  const markedBest = pickBestRate(applyMarkups(rawRates, markups));
+  let bestRate: Rate | null = markedBest;
+  if (markedBest) {
+    const rawAmountBest: Record<string, unknown> = {
+      ...markedBest,
+      ...((markedBest as { original_amount?: unknown }).original_amount
+        ? { shipping_amount: (markedBest as { original_amount?: unknown }).original_amount }
+        : {}),
+    };
+    delete rawAmountBest.original_amount;
+    delete rawAmountBest.markup;
+    bestRate = rawAmountBest as unknown as Rate;
+  }
   try {
     await db
       .insert(rateCache)
@@ -1627,7 +1648,7 @@ export async function getRates(
   // Cache the RAW rates so markup updates always show fresh prices. Empty
   // results are cached briefly to prevent repeated live calls for carrier
   // accounts that already returned no service for this shipment.
-  await writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now);
+  await writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now, markups);
 
   const rates = applyMarkups(rawRates, markups);
   return {

@@ -54,7 +54,10 @@ assert(
 
 assert(
   service.includes('cachedDiagnosticsFromCache') &&
-    service.includes('writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now)'),
+    // QA audit 2026-06-23: writeRateCache now also receives the markups map (it picks the persisted
+    // best on the MARKED customer charge, not raw cost). Same call site + diagnostics; match the
+    // prefix so the added arg doesn't trip the pin.
+    service.includes('writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now'),
   'getRates persists live diagnostics and reuses cached diagnostics',
 );
 
