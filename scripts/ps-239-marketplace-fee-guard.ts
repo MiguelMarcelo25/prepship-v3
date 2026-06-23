@@ -106,9 +106,17 @@ check('marketplacefee + profit in TABLE_COLUMNS',
 check('marketplacefee + profit sortable via getBackendRowMarketplace',
   /case 'marketplacefee':[\s\S]*?getBackendRowMarketplace/.test(cols) && /case 'profit':[\s\S]*?getBackendRowMarketplace/.test(cols));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('OrdersView imports + renders the two cells',
-  ordersView.includes('getBackendRowMarketplace') && /case 'marketplacefee':/.test(ordersView) && /case 'profit':/.test(ordersView));
-check('profit cell renders negative in red, never clamped', /mp\.profit < 0 \? 'var\(--danger/.test(ordersView));
+// PS-166/PS-306: the marketplacefee/profit cells were extracted out of OrdersView into
+// orders-rate-cells.tsx; OrdersView now DELEGATES and the backend read lives in the module.
+const rateCells = readFileSync('web/src/components/Views/orders-rate-cells.tsx', 'utf8');
+check('OrdersView delegates the marketplace fee + profit cells (PS-166 extraction)',
+  /case 'marketplacefee':\s*\n\s*return renderMarketplaceFeeCell\(order\)/.test(ordersView) &&
+  /case 'profit':\s*\n\s*return renderProfitCell\(order\)/.test(ordersView));
+check('the extracted cells read the backend marketplace field (no recompute)',
+  /export function renderMarketplaceFeeCell/.test(rateCells) &&
+  /export function renderProfitCell/.test(rateCells) &&
+  rateCells.includes('getBackendRowMarketplace'));
+check('profit cell renders negative in red, never clamped', /mp\.profit < 0 \? 'var\(--danger/.test(rateCells));
 const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
 check('columns hidden on Cancelled (Awaiting + Shipped only)',
   /cancelled[\s\S]*?marketplacefee[\s\S]*?profit/.test(parity));

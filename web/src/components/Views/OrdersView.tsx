@@ -93,7 +93,6 @@ import {
   getSelectedRateShippingProviderId,
   getBackendInsuranceAddOn,
   getBackendRowMoney,
-  getBackendRowMarketplace,
   renderRateAmountWithMarkup,
   getBestRateInsuranceCoverage,
   getRowInsuranceCoverage,

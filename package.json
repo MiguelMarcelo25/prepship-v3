@@ -437,6 +437,7 @@
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",
     "test:ps-307-marked-rate-comparison-closeout": "tsx scripts/ps-307-marked-rate-comparison-closeout-guard.ts",
     "test:ps-307-customer-charge-ranking": "tsx scripts/ps-307-customer-charge-ranking-guard.ts",
+    "test:ps-307-direct-rate-markup-behavior": "tsx scripts/ps-307-direct-rate-markup-behavior-test.ts",
     "test:ps-308-rate-cost-columns": "tsx scripts/ps-308-rate-cost-columns-guard.ts",
     "test:ps-308-fe-rate-cost-column": "tsx scripts/ps-308-fe-rate-cost-column-guard.ts",
     "test:ps-308-rate-cost-columns-closeout": "tsx scripts/ps-308-rate-cost-columns-closeout-guard.ts",

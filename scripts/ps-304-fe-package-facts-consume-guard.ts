@@ -31,8 +31,14 @@ check('panel exposes OrdersPanelPackageFactsLine (pure display of the backend ve
   /export function OrdersPanelPackageFactsLine/.test(panelFields));
 check('panel line READS the backend package-facts fields',
   /packageFacts\.immutableReason/.test(panelFields) &&
-  /packageFacts\.staleRateImpact/.test(panelFields) &&
-  /packageFacts\.requiresRerate/.test(panelFields));
+  /packageFacts\.staleRateImpact/.test(panelFields));
+// QA audit 2026-06-23: the "⚠ package changed — re-rate" warning must key on staleRateImpact
+// ONLY (a SAVED rate that went stale/expired → the package really changed under it). The broader
+// requiresRerate is also true for a never-rated row that simply has no rate yet, so gating the
+// message on it showed a FALSE "package changed" warning on brand-new orders. Pin the fix.
+check('"package changed" warning keys on staleRateImpact, not the broader requiresRerate',
+  /if \(packageFacts\.staleRateImpact\) \{/.test(panelFields) &&
+  !/packageFacts\.staleRateImpact \|\| packageFacts\.requiresRerate/.test(panelFields));
 check('panel line does NOT recompute the verdict (no dims math / insured-value heuristics)',
   !/insuredValue/.test(panelFields) &&
   !/length\s*\*\s*width/.test(panelFields));

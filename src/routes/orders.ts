@@ -3775,7 +3775,12 @@ app.post(
 
     let normalizedBestRate: unknown;
     try {
-      normalizedBestRate = normalizeOrderBestRateDto(built.patch.bestRateJson, 'bestRateJson');
+      // QA audit 2026-06-23: enforce the SAME carrier/serviceCode invariant the /best-rate and
+      // PATCH persist paths require — assertPersistedOrderBestRateDto rejects a rate missing
+      // carrier/service ("Downstream label creation and invoicing depend on these fields"),
+      // instead of silently persisting a half-formed best_rate_json. The existing catch maps the
+      // thrown InputValidationError to a 400. Per user override unlock shipped data on 2026-06-22.
+      normalizedBestRate = assertPersistedOrderBestRateDto(built.patch.bestRateJson, 'bestRateJson');
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }

@@ -4,6 +4,14 @@
 // heuristics beyond mapping the authoritative facts the route already provides;
 // missing optional facts degrade to the safest value. Read-model only — these never
 // authorize a purchase, mutate, or weaken the shipped/cancelled lock.
+//
+// RESERVED (QA audit 2026-06-23): the OPTIONAL granular facts — labelQueued, labelPrinted,
+// labelDuplicateRisk, hasLabelUrl, packageSource, packageStaleRateImpact — are NOT yet supplied
+// by the production caller (withOrderRowWorkflow in src/routes/orders.ts). Until a later phase
+// wires them, the branches that read them (labelState 'queued'/'printed'/'duplicate_risk' and
+// packageState 'source'/'stale_rate_impact') are exercised only by the unit tests
+// (scripts/ps-301-state-axes-behavior-test.ts) and degrade safely at runtime to
+// none/active_label/needs_dims/resolved. This is intentional, not a missing wire-up bug.
 
 import type {
   OrderRowWorkflowFacts,

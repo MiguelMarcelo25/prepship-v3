@@ -1532,7 +1532,7 @@ export default function BillingView() {
                         <td style={{ padding: '3px 8px' }}>{row.billableShippingAmount == null ? '—' : formatBillingMoney(row.billableShippingAmount)}</td>
                         <td style={{ padding: '3px 8px', fontWeight: 700, color: row.marginAmount == null ? 'var(--text3)' : marginColor(row.marginAmount) }}>{row.marginAmount == null ? '—' : formatBillingMoney(row.marginAmount)}</td>
                         <td style={{ padding: '3px 8px' }}>{row.marginPct == null ? '—' : `${row.marginPct.toFixed(1)}%`}</td>
-                        <td style={{ textAlign: 'left', padding: '3px 0 3px 8px', color: row.missingProofReasons.length > 0 ? 'var(--red)' : 'var(--text3)' }}>{row.missingProofReasons.length > 0 ? row.missingProofReasons.join(', ') : (row.state ?? '')}</td>
+                        <td style={{ textAlign: 'left', padding: '3px 0 3px 8px', color: (row.missingProofReasons ?? []).length > 0 ? 'var(--red)' : 'var(--text3)' }}>{(row.missingProofReasons ?? []).length > 0 ? (row.missingProofReasons ?? []).join(', ') : (row.state ?? '')}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -137,7 +137,9 @@ export function isBlockedRate(
   return isServiceOrPackageBlocked(rate.service_code, rate.package_type, rate.service_type);
 }
 
-function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
+// Exported for ps-307-direct-rate-markup-behavior-test (drives the real lift+markup ranking
+// path). Pure — no behavior change from exporting.
+export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
   if (!markups.size) return rates;
   return rates.map((r) => {
     const providerId = String(r.carrier_id ?? '').match(/^se-(\d+)$/i)?.[1];
@@ -157,10 +159,16 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
       // PS-307: stamp the explicit marked CUSTOMER charge so the comparison owner
       // (rates-combined.rateTotal, which pickBestRate/priced.sort delegate to) and
       // downstream consumers read an authoritative customer amount instead of inferring
-      // it from shipping_amount. Ranking-neutral: every reader already fell back to
-      // shipping_amount.amount, which now equals this marked value — so normal/HUGRAB
-      // rate selection is byte-identical; only rows that carry a DIFFERENT customer
-      // charge (e.g. SHIPP house customer_rate) can change which rate wins.
+      // it from shipping_amount.
+      //   • ShipStation rates: ranking-neutral — they carry no explicit customerShippingAmount,
+      //     so rateTotal already fell back to shipping_amount.amount (= this marked value).
+      //   • Direct-carrier rates (toDirectRate): NOT a no-op. toDirectRate stamps the UN-marked
+      //     provider amount into customer_shipping_amount BEFORE markup runs, and rateTotal
+      //     prefers customerShippingAmount over shipping_amount.amount — so a marked-up direct
+      //     rate was previously ranked at its RAW cost. Overwriting it here puts direct rates on
+      //     the same marked-CHARGE basis as ShipStation (PS-203's uniform-charge intent). This is
+      //     a CORRECT ranking fix, not byte-identical. (QA audit 2026-06-23;
+      //     ps-307-direct-rate-markup-behavior-test covers the toDirectRate+applyMarkups path.)
       customerShippingAmount: marked,
       markedShippingAmount: marked,
     } as Rate;

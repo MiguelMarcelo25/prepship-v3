@@ -77,7 +77,12 @@ export function OrdersPanelPackageFactsLine({ packageFacts }: { packageFacts: Pa
       </div>
     )
   }
-  if (packageFacts.staleRateImpact || packageFacts.requiresRerate) {
+  // "Package changed" must key on staleRateImpact ONLY. staleRateImpact is the backend
+  // signal that a SAVED rate went stale/expired (a prior rate existed → the package really
+  // changed under it). requiresRerate is broader ("can't purchase the saved rate as-is") and
+  // is also true for a never-rated row that simply has no rate yet — using it here would show
+  // a false "package changed" warning on brand-new orders. See QA audit 2026-06-23.
+  if (packageFacts.staleRateImpact) {
     return (
       <div id="p-package-facts" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 700, color: 'var(--amber,#b7791f)', whiteSpace: 'nowrap' }} title="Backend package-facts verdict (PS-304): the saved best rate no longer matches the current package — re-rate before purchasing.">
         ⚠ Re-rate needed — package changed
