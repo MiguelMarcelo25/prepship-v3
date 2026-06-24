@@ -228,6 +228,21 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
       let fStatus = '';
       try { fStatus = String((JSON.parse(oBody) as { orderFulfillmentStatus?: unknown })?.orderFulfillmentStatus ?? ''); } catch { /* not json */ }
       console.warn(`[ebay-shipping] getOrder ${oRes.status} orderId=${orderId} fulfillmentStatus=${fStatus || '(none)'}${oRes.ok ? '' : ' body=' + oBody.slice(0, 300)}`);
+      // TEMP DIAG: list the orders that ACTUALLY exist in the connected eBay account → distinguishes
+      // account-mismatch (total=0 / different ids) from id-format (same ids in a different shape). Logs only
+      // order ids + count (no buyer PII). Remove once eBay quotes succeed.
+      const lRes = await timedFetch('ebay-shipping.getorders', `${apiBase}/sell/fulfillment/v1/order?limit=5`, {
+        headers: { Authorization: `Bearer ${fToken}`, Accept: 'application/json' },
+      });
+      const lBody = await lRes.text().catch(() => '');
+      let total = '?';
+      let sampleIds = '';
+      try {
+        const j = JSON.parse(lBody) as { total?: unknown; orders?: Array<{ orderId?: unknown }> };
+        total = String(j?.total ?? '?');
+        sampleIds = Array.isArray(j?.orders) ? j.orders.map((o) => String(o?.orderId ?? '')).filter(Boolean).join(', ') : '';
+      } catch { /* not json */ }
+      console.warn(`[ebay-shipping] account-orders ${lRes.status} total=${total} sampleIds=[${sampleIds}]${lRes.ok ? '' : ' body=' + lBody.slice(0, 300)}`);
     } catch (diagErr) {
       console.warn('[ebay-shipping] getOrder diag failed:', diagErr instanceof Error ? diagErr.message : diagErr);
     }
