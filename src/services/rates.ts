@@ -2018,7 +2018,23 @@ export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
   options: { cachedOnly?: boolean } = {},
 ): Promise<DirectCarrierRatesResult> {
-  const accounts = (await loadVisibleDirectCarrierAccounts(input)).filter((account) => {
+  const allDirectAccounts = await loadVisibleDirectCarrierAccounts(input);
+  // TEMP DIAG (eBay no-rates investigation 2026-06-24): one line per real-order browse so the Render
+  // logs reveal WHY eBay is excluded — is an ebay_shipping account even in the visible/requested set,
+  // and what did the detector see? Remove once root-caused.
+  if (input.orderId != null) {
+    console.warn('[rates] ebay-diag ' + JSON.stringify({
+      orderId: input.orderId,
+      ebayInSet: allDirectAccounts.filter((a) => normalizeProviderKey(a.provider) === 'ebay_shipping').map((a) => a.id),
+      directProviders: allDirectAccounts.map((a) => normalizeProviderKey(a.provider)),
+      isEbayMarketplaceOrder: input.isEbayMarketplaceOrder ?? null,
+      externalOrderId: input.externalOrderId ?? null,
+      orderNumber: input.orderNumber ?? null,
+      sourceProvider: input.sourceProvider ?? null,
+      cachedOnly: options.cachedOnly ?? false,
+    }));
+  }
+  const accounts = allDirectAccounts.filter((account) => {
     // eBay Logistics ONLY prices a specific eBay order (its shipping_quote API takes an eBay orderId),
     // so it can NEVER quote a non-eBay order. Gate on whether this is an eBay MARKETPLACE order
     // (sync-path-agnostic) — DR Prepper's eBay orders arrive via ShipStation (sourceProvider =

@@ -590,7 +590,12 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     (async () => {
       const startedAt = Date.now();
       const r = await getDirectCarrierRatesForRateInput({
-        ...rest,
+        // FIX 2026-06-24: was `...rest` (the RAW request body), which dropped every order-derived field
+        // browseRateInput adds — sourceProvider, rawOrder, isEbayMarketplaceOrder, the resolved order
+        // number/external id. That's the real reason the eBay direct carrier never quoted: the gate
+        // never saw isEbayMarketplaceOrder and the connector never got rawOrder. Spread browseRateInput
+        // so the direct-carrier fan-out gets the SAME order context getRates(browseRateInput) does.
+        ...browseRateInput,
         confirmation: confirmation ?? signature ?? null,
         carrierIds: requestedCarrierIds,
         insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
