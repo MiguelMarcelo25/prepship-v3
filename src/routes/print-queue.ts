@@ -600,6 +600,23 @@ app.post('/route-plan', zValidator('json', routePlanBody), async (c) => {
       directViaBackend: env.PRINT_QUEUE_DIRECT_VIA_BACKEND,
     },
   );
+  // PS-317 canary diagnostic (observability only — no behavior change): log the computed route per
+  // order + the flag, so a queue test shows exactly which route each order got and whether the
+  // directViaBackend cutover engaged (a 'direct-create' here ⇒ the FE buys via POST /labels).
+  console.log('[ps317:route-plan]', JSON.stringify({
+    directViaBackend: env.PRINT_QUEUE_DIRECT_VIA_BACKEND,
+    backendOrchestration: env.PRINT_QUEUE_BACKEND_ORCHESTRATION,
+    inputs: b.orders.map((o) => ({
+      orderId: o.order_id,
+      isDirectCarrier: o.is_direct_carrier,
+      hasQueueableLabel: o.has_queueable_label,
+      isTest: o.is_test,
+      explicitProviderId: o.explicit_payload_provider_id ?? null,
+    })),
+    plans: plan.plans.map((p) => ({ orderId: p.orderId, route: p.route })),
+    backendOrderIds: plan.backendOrderIds,
+    directCreateOrderIds: plan.directCreateOrderIds,
+  }));
   return c.json({
     plans: plan.plans.map((p) => ({ order_id: p.orderId, route: p.route })),
     backend_order_ids: plan.backendOrderIds,
