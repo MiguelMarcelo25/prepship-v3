@@ -90,7 +90,7 @@ import { isResourceInScope } from '../lib/scope-predicates';
 // PS-234: durable audit trail for shipped/cancelled ?force=1 overrides + manual orders.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { type BundleRowDto } from '../services/shipment-bundles/bundle-read-model';
-import { resolveScopedBundles } from '../services/shipment-bundles/resolve-scoped-bundles';
+import { resolveScopedBundles, createScopedBundle, BundleScopeError } from '../services/shipment-bundles/resolve-scoped-bundles';
 // PS-231: per-admin rate limit on the ?force=1 lockdown override.
 import { checkForceOverrideRateLimit } from '../lib/force-override-rate-limit';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
@@ -4539,6 +4539,36 @@ app.post(
     const bundles: Record<string, BundleRowDto> = {};
     for (const [orderId, dto] of map) bundles[String(orderId)] = dto;
     return c.json({ bundles });
+  },
+);
+
+// PS-312/PS-317 (S4): create a combined-shipment bundle from the caller's IN-SCOPE orders. A WRITE,
+// but additive — it only inserts the bundle sidecar rows (no postage, no shipped/cancelled mutation;
+// the ONE label is bought later by the existing queue/print flow). The scope check (reject any order
+// outside the caller's scope) + the createBundle delegation live in createScopedBundle (pglite-
+// tested); the route stays thin and just maps the outcomes to status codes.
+app.post(
+  '/bundles',
+  zValidator(
+    'json',
+    z.object({
+      order_ids: z.array(z.number().int().positive()).min(2).max(100),
+      primary_order_id: z.number().int().positive().optional(),
+    }),
+  ),
+  async (c) => {
+    const { order_ids, primary_order_id } = c.req.valid('json');
+    const scope = ordersScopeFromContext(c);
+    const resolvedBy = (c.get('email' as never) as string | undefined) ?? null;
+    try {
+      const bundle = await createScopedBundle(order_ids, primary_order_id ?? null, scope, resolvedBy);
+      return c.json({ bundle }, 201);
+    } catch (err) {
+      if (err instanceof BundleScopeError) {
+        return c.json({ error: 'Some orders are not in your scope', order_ids: err.outOfScopeOrderIds }, 403);
+      }
+      return c.json({ error: err instanceof Error ? err.message : 'Could not create bundle' }, 400);
+    }
   },
 );
 

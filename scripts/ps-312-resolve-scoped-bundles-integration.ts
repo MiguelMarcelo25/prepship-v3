@@ -10,7 +10,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { sql } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
 import { createBundle } from '../src/services/shipment-bundles/create-bundle.js';
-import { resolveScopedBundles } from '../src/services/shipment-bundles/resolve-scoped-bundles.js';
+import { resolveScopedBundles, createScopedBundle, BundleScopeError } from '../src/services/shipment-bundles/resolve-scoped-bundles.js';
 import type { ClientStoreScope } from '../src/lib/client-store-scope.js';
 
 type Conn = Parameters<typeof resolveScopedBundles>[2];
@@ -62,7 +62,9 @@ async function main(): Promise<void> {
     (101, 'C101', 7, 1, 'Ada Lovelace', 'Austin', 'TX', '78701', 'awaiting_shipment'),
     (300, 'C300', 7, 1, 'Solo Shipper', 'Dallas', 'TX', '75001', 'awaiting_shipment'),
     (200, 'C200', 9, 2, 'Bob Other', 'Reno', 'NV', '89501', 'awaiting_shipment'),
-    (201, 'C201', 9, 2, 'Bob Other', 'Reno', 'NV', '89501', 'awaiting_shipment')`);
+    (201, 'C201', 9, 2, 'Bob Other', 'Reno', 'NV', '89501', 'awaiting_shipment'),
+    (400, 'C400', 7, 1, 'Carol Combine', 'Plano', 'TX', '75024', 'awaiting_shipment'),
+    (401, 'C401', 7, 1, 'Carol Combine', 'Plano', 'TX', '75024', 'awaiting_shipment')`);
 
   await createBundle([100, 101], 'tester', null, conn); // client 7 bundle
   await createBundle([200, 201], 'tester', null, conn); // client 9 bundle
@@ -95,6 +97,31 @@ async function main(): Promise<void> {
   check('resolved DTO carries the bundle members + a role',
     !!dto && Array.isArray(dto.memberOrderIds) && dto.memberOrderIds.includes(101) &&
     (dto.role === 'primary' || dto.role === 'child'));
+
+  // ── createScopedBundle: CREATE requires FULL scope access — out-of-scope orders are REJECTED ──
+  let rejectedIds: number[] | null = null;
+  try {
+    await createScopedBundle([400, 200], null, restricted([7]), 'tester', conn); // 200 is client 9
+  } catch (err) {
+    rejectedIds = err instanceof BundleScopeError ? err.outOfScopeOrderIds : null;
+  }
+  check('create REJECTS an out-of-scope order (client-7 caller incl. client-9 order 200)',
+    rejectedIds !== null && rejectedIds.includes(200));
+
+  let wholeSetRejected = false;
+  try {
+    await createScopedBundle([400, 401], null, restricted([9]), 'tester', conn); // both are client 7
+  } catch (err) {
+    wholeSetRejected = err instanceof BundleScopeError;
+  }
+  check('create REJECTS when the whole set is outside scope (client-9 caller, client-7 orders)', wholeSetRejected);
+
+  // ── In-scope create succeeds, and the new bundle is then resolvable in scope (end-to-end) ──
+  const created = await createScopedBundle([400, 401], null, restricted([7]), 'tester', conn);
+  check('in-scope create succeeds (2 members: 400 + 401)',
+    created.memberOrderIds.length === 2 && created.memberOrderIds.includes(400) && created.memberOrderIds.includes(401));
+  check('the just-created bundle is resolvable by the scoped caller',
+    (await resolveScopedBundles([400], restricted([7]), conn)).has(400));
 
   await client.close();
   if (failures > 0) {
