@@ -1702,6 +1702,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // producer only writes awaiting orders, so a single store/lookup gated to awaiting keeps
   // this additive and cheap. When a page has no rows, the map stays empty and the per-row
   // override below is a no-op — the orders payload is byte-identical to before.
+  // PS-120 (reader watchdog): a rate-job stamp older than this is a leaked/orphan row — a worker that
+  // crashed before finalize, a row stamped by a DIFFERENT process/instance, or one re-stamped then
+  // abandoned. Drop it HERE so a stamp can never outlive the FE watchdog window or re-inject a spinner
+  // across instances (the per-job finally-sweep in rates-backfill only clears its OWN job's rows). Mirror
+  // of the FE PENDING_RATING_WATCHDOG_MS, kept as a backend literal (no FE import).
+  const RATE_JOB_STALE_MS = 6 * 60 * 1000;
   const rateJobByOrderId = new Map<number, { state: string; requestFingerprint: string; updatedAtMs: number }>();
   if (q.status === 'awaiting_shipment' && pageOrderIds.length) {
     try {
@@ -1712,13 +1718,16 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           where order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})
         `),
       );
+      const rateJobNowMs = Date.now();
       for (const job of rateJobRows) {
         if (job.order_id == null) continue;
         const updatedAtMs = Date.parse(String(job.updated_at));
+        // Skip stale/orphan stamps (older than the watchdog) so a leaked row never surfaces as a spinner.
+        if (Number.isFinite(updatedAtMs) && rateJobNowMs - updatedAtMs > RATE_JOB_STALE_MS) continue;
         rateJobByOrderId.set(job.order_id, {
           state: job.state,
           requestFingerprint: job.request_fingerprint,
-          updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now(),
+          updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : rateJobNowMs,
         });
       }
     } catch (err) {
