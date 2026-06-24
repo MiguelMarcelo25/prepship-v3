@@ -1097,7 +1097,13 @@ export default function RateBrowserModal({
   const canonicalBestRef = useRef<unknown>(null);
 
   const rateShippingAccounts = useMemo(
-    () => (testMode ? shippingAccounts : scopedShippingAccounts),
+    // eBay Shipping (ebay_shipping) can't quote in the Rate Browser: eBay's createShippingQuote is
+    // order-bound and only quotes orders eBay manages shipping for, so it 400s ("Invalid field" on the
+    // linked order) for ShipStation-synced orders fulfilled via our own carriers. Hide it here so it stops
+    // showing a perpetual error/empty row. (Drop this filter if eBay managed shipping is ever adopted.)
+    () => (testMode ? shippingAccounts : scopedShippingAccounts).filter(
+      (acct) => normalizeProviderKey(acct?.code || acct?.carrierCode) !== 'ebay_shipping'
+    ),
     [testMode, shippingAccounts, scopedShippingAccounts]
   );
 

@@ -192,14 +192,6 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     shipTo: pruneEmpty(shipTo),
   };
 
-  // TEMP DIAG (eBay 400 investigation 2026-06-24): log the request with PII values masked (name / street /
-  // phone → a type:length marker) so the exact rejected field is visible in Render logs. Remove once eBay
-  // quotes succeed.
-  {
-    const PII = new Set(['fullName', 'addressLine1', 'addressLine2', 'phoneNumber']);
-    console.warn('[ebay-shipping] req ' + JSON.stringify(body, (key, val) => (PII.has(key) && typeof val === 'string' && val ? `[str:${val.length}]` : val)));
-  }
-
   const res = await timedFetch('ebay-shipping.rates', `${apiBase}/sell/logistics/v1_beta/shipping_quote`, {
     method: 'POST',
     headers: {
