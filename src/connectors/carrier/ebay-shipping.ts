@@ -171,11 +171,9 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
   };
 
   const body = {
-    // 'orders' is OPTIONAL for createShippingQuote (per eBay docs). Linking a specific eBay order makes
-    // eBay validate it against the token's account + eBay-managed-shipping eligibility, which 400s
-    // ("Invalid field", errorId 90020) for a ShipStation-synced order that eBay doesn't manage. We send
-    // the full shipFrom + shipTo + package, so quote ADDRESS-BASED instead — that's all eBay needs for a
-    // rate. (orderId is still resolved above to gate to eBay orders; we just don't link the quote to it.)
+    // eBay REQUIRES orders[] — confirmed live: omitting it returns 400 errorId 90010 "Missing field:
+    // orders". createShippingQuote is order-bound: it quotes a SPECIFIC eBay order in the seller's account.
+    orders: [{ channel: 'EBAY', orderId }],
     packageSpecification: {
       dimensions: {
         length: String(dimsL),
