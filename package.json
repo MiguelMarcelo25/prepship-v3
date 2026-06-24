@@ -300,6 +300,7 @@
     "test:ps-312-bundle-create-integration": "tsx scripts/ps-312-bundle-create-integration.ts",
     "test:ps-312-bundle-read-model-integration": "tsx scripts/ps-312-bundle-read-model-integration.ts",
     "test:ps-312-bundle-billing-policy": "tsx scripts/ps-312-bundle-billing-policy-guard.ts",
+    "test:ps-312-bundle-inventory-policy": "tsx scripts/ps-312-bundle-inventory-policy-guard.ts",
     "test:billing-html-invoice-layout": "tsx scripts/billing-html-invoice-layout-guard.ts",
     "test:billing-best-rate-ui:guard": "node scripts/billing-best-rate-ui-guard.mjs",
     "test:billing-best-rate-ui": "playwright test web/e2e/billing-best-rate-ui.spec.js --reporter=line",
