@@ -476,6 +476,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     storeId: number | null;
     orderNumber: string | null;
     clientName: string | null;
+    externalOrderId: string | null;
   } | null = null;
   let residentialEvidence: ResidentialEvidence | null = null;
   if (body.orderId) {
@@ -489,6 +490,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
           storeId: orders.storeId,
           orderNumber: orders.orderNumber,
           clientName: clients.name,
+          externalOrderId: orders.externalOrderId,
         })
         .from(orders)
         .leftJoin(clients, eq(clients.id, orders.clientId))
@@ -543,11 +545,16 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     isEbayMarketplaceOrder: isEbayMarketplaceOrder({
       clientName: orderForBrowse?.clientName ?? null,
       sourceProvider: orderForBrowse?.sourceProvider ?? null,
-      externalOrderId: (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
+      // The order's STORED external_order_id (synced as `ebay-<id>`) is the canonical eBay signal the
+      // /orders list itself uses (external_order_id ilike 'ebay-%'). The request body rarely carries it,
+      // so read the order's value (the earlier bug: feeding the empty request-body field → eBay stayed
+      // gated out even for real eBay orders).
+      externalOrderId: orderForBrowse?.externalOrderId ?? (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
       raw: orderForBrowse?.raw ?? null,
     }),
-    // Carry the authoritative eBay order number so the eBay connector (externalOrderId ?? orderNumber)
-    // always has the eBay orderId, even when the FE didn't pass one.
+    // Feed the eBay connector the order's canonical id: the stored `ebay-<id>` external_order_id (the
+    // connector strips the `ebay-` prefix) or the eBay order number. externalOrderId ?? orderNumber.
+    externalOrderId: orderForBrowse?.externalOrderId ?? (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
     orderNumber: orderForBrowse?.orderNumber ?? (rest as { orderNumber?: string | null }).orderNumber ?? null,
     // Evidence decides — the collapsed FE boolean is dropped (residential: undefined) so the
     // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
