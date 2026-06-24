@@ -73,6 +73,25 @@ check('explicit payload provider controls only the residual route question',
     baseRoute({ isDirectCarrier: false, explicitPayloadProviderId: 10_000_001 }),
   ) === 'direct-create');
 
+// PS-306/PS-317 (A1) — directViaBackend post-filter. OFF/absent is byte-identical; ON turns a
+// would-be FE 'direct-create' buy into a BACKEND create (createLabelV2 owns the direct buy). The
+// red-team invariant: it can ONLY reduce FE buys — never add one, never override a never-buy rung.
+check('directViaBackend OFF/absent → byte-identical (direct order still direct-create)',
+  classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true })) === 'direct-create' &&
+  classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true }), {}) === 'direct-create');
+check('directViaBackend ON → a direct-carrier order needing a label routes to BACKEND (not a FE buy)',
+  classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true }), { directViaBackend: true }) === 'backend' &&
+  classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true, explicitPayloadProviderId: 10_000_001 }), { directViaBackend: true }) === 'backend');
+check('directViaBackend ON NEVER creates a buy: test / existing-label / ShipStation stay backend',
+  classifyQueueOrderRouteServer(baseRoute({ isTest: true, isDirectCarrier: true }), { directViaBackend: true }) === 'backend' &&
+  classifyQueueOrderRouteServer(baseRoute({ hasQueueableLabel: true, isDirectCarrier: true }), { directViaBackend: true }) === 'backend' &&
+  classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: false }), { directViaBackend: true }) === 'backend');
+check('directViaBackend ON → route planner yields ZERO direct-create (all buys move to the backend)',
+  planQueueRouteForOrders([
+    { orderId: 401, route: baseRoute({ isDirectCarrier: true }) },
+    { orderId: 402, route: baseRoute({ isDirectCarrier: true, explicitPayloadProviderId: 10_000_001 }) },
+  ], { directViaBackend: true }).directCreateOrderIds.length === 0);
+
 const printQueueService = read('src/services/print-queue.ts');
 const processBlock = blockBetween(
   printQueueService,

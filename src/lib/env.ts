@@ -160,6 +160,12 @@ const schema = z.object({
   // endpoint live) so enabling the endpoint never auto-activates the money-path
   // FE delegation. Flip this ON only AFTER canarying a test label.
   PRINT_QUEUE_FE_DELEGATION: booleanFlag(false),
+  // PS-306 (A1, money path): default-OFF. When ON — together with the two flags above — a
+  // direct-carrier order that still needs a label routes to the BACKEND create job instead of
+  // the FE 'direct-create' buy, because createLabelV2 already buys direct-carrier labels
+  // server-side. This only ever turns a 'direct-create' into a 'backend' route (it can never
+  // create a new buy), so OFF is byte-identical and the buy still happens exactly once.
+  PRINT_QUEUE_DIRECT_VIA_BACKEND: booleanFlag(false),
   // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
   // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
   // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'

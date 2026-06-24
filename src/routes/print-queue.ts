@@ -592,7 +592,13 @@ app.post('/route-plan', zValidator('json', routePlanBody), async (c) => {
         explicitPayloadProviderId: order.explicit_payload_provider_id ?? null,
       },
     })),
-    { existingLabelOnly: b.existingLabelOnly, batchTestMode: b.batchTestMode },
+    {
+      existingLabelOnly: b.existingLabelOnly,
+      batchTestMode: b.batchTestMode,
+      // PS-306/PS-317: when ON, a direct-carrier order needing a label routes to the backend
+      // create job (createLabelV2) instead of the FE 'direct-create' buy. Default OFF → identical.
+      directViaBackend: env.PRINT_QUEUE_DIRECT_VIA_BACKEND,
+    },
   );
   return c.json({
     plans: plan.plans.map((p) => ({ order_id: p.orderId, route: p.route })),

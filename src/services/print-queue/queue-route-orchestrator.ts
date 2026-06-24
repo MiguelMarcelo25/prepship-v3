@@ -41,15 +41,23 @@ export type QueueOrderRouteOptions = {
   existingLabelOnly?: boolean;
   /** Test run → backend mock, no real postage. */
   batchTestMode?: boolean;
+  /**
+   * PS-306/PS-317 (money path): route a direct-carrier order that still needs a label to the
+   * BACKEND create job instead of the FE 'direct-create' buy — createLabelV2 already buys
+   * direct-carrier labels server-side. Default OFF/absent → byte-identical; it can only ever turn
+   * a would-be 'direct-create' into 'backend' (it never creates a new buy, never overrides a
+   * never-buy rung). The buy still happens exactly once; only its LOCATION moves to the backend.
+   */
+  directViaBackend?: boolean;
 };
 
 /**
- * The pure Send-to-Queue route decision, server-side. Same rungs, same order as
- * the FE classifyQueueOrderRoute. Returns 'backend' (defer to the create/recover
- * job — never buy) for every never-buy rung; only the residual question can yield
- * 'direct-create' (the buy-then-queue client flow).
+ * The pure rung ladder for the Send-to-Queue route decision. Same rungs, same order as the FE
+ * classifyQueueOrderRoute. Returns 'backend' (defer to the create/recover job — never buy) for
+ * every never-buy rung; only the residual question can yield 'direct-create'. The exported
+ * classifyQueueOrderRouteServer wraps this with the PS-317 direct-via-backend post-filter.
  */
-export function classifyQueueOrderRouteServer(
+function classifyQueueOrderRouteRungs(
   input: QueueOrderRouteInput,
   options: QueueOrderRouteOptions = {},
 ): QueueOrderRoute {
@@ -74,6 +82,22 @@ export function classifyQueueOrderRouteServer(
   // A direct-carrier order that still needs a label: buy via the direct client flow, then queue.
   if (input.isDirectCarrier) return 'direct-create';
   return 'backend'; // ShipStation provider → backend createLabelV2
+}
+
+/**
+ * The pure Send-to-Queue route decision, server-side (the public owner). Runs the never-buy rung
+ * ladder, then applies the PS-306/PS-317 direct-via-backend post-filter: when ON, a would-be FE
+ * 'direct-create' buy becomes a 'backend' create (createLabelV2 buys direct-carrier labels
+ * server-side). The filter can ONLY turn 'direct-create' into 'backend' — it never creates a new
+ * buy and never overrides a never-buy rung (those already returned 'backend'). OFF → byte-identical.
+ */
+export function classifyQueueOrderRouteServer(
+  input: QueueOrderRouteInput,
+  options: QueueOrderRouteOptions = {},
+): QueueOrderRoute {
+  const route = classifyQueueOrderRouteRungs(input, options);
+  if (options.directViaBackend === true && route === 'direct-create') return 'backend';
+  return route;
 }
 
 /** One order's identity + the facts the route ladder needs to classify it. */
