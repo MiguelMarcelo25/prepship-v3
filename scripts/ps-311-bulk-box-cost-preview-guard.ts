@@ -64,6 +64,16 @@ check('preview route is permission-gated (financials:write)',
 
 const svc = readFileSync('src/services/billing-box-cost-bulk.ts', 'utf8');
 
+// Scope is enforced SERVER-SIDE (the card's DoD: "rows outside the range/client do not change",
+// "backend must enforce the same scope; do not trust only frontend filters"). The fetch WHERE
+// clause pins client + package + ship-date >= dateFrom + ship-date < dateTo, so an order outside
+// any of those can never be matched, previewed, or re-priced.
+check('scope enforced server-side: fetch filters by client + package + [dateFrom, dateTo) ship-date',
+  /eq\(billingLineItems\.clientId, scope\.clientId\)/.test(svc) &&
+  /eq\(billingLineItems\.packageId, scope\.packageId\)/.test(svc) &&
+  /gte\(billingLineItems\.shipDate, new Date\(scope\.dateFrom\)\)/.test(svc) &&
+  /lt\(billingLineItems\.shipDate, new Date\(scope\.dateTo\)\)/.test(svc));
+
 // ── Slice 2: APPLY safety ──
 const split = splitBulkBoxCostApplyTargets(rows);
 check('apply: finalized (invoiced) orders are NEVER in the editable set (skipped, never re-billed)',
