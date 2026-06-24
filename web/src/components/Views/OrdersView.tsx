@@ -875,6 +875,7 @@ export default function OrdersView({
   const [extShipTracking, setExtShipTracking] = useState('')
   const [extShipBusy, setExtShipBusy] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
+  const [combineBusy, setCombineBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   // Set of orderIds that just successfully shipped — they render with
   // Per-order print-label transition (boss directive 2026-05-07):
@@ -5888,6 +5889,26 @@ export default function OrdersView({
     }
   }
 
+  // PS-312/PS-317 (S4): combine the selected orders into ONE combined-shipment bundle. The FE owns NO
+  // eligibility logic — it POSTs the selected ids; the backend (createScopedBundle → createBundle)
+  // validates scope + eligibility (same client/store/recipient, awaiting, not already bundled) and
+  // returns the verdict, surfaced here as a toast. On success the new bundle shows on each member row.
+  async function handleCombineShipments() {
+    if (selectedOrderIds.length < 2) return
+    setCombineBusy(true)
+    try {
+      await api.post('/orders/bundles', { order_ids: selectedOrderIds })
+      showToast(`Combined ${selectedOrderIds.length} orders into one shipment`, 'success')
+      clearSelection()
+      await refetchOrders()
+      void queryClient.invalidateQueries({ queryKey: ['order-bundles'] })
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Could not combine shipments', 'error')
+    } finally {
+      setCombineBusy(false)
+    }
+  }
+
   async function handleBatchAction(mode: 'print' | 'queue') {
     let batchOrders: OrderSummaryDto[] = []
     try {
@@ -7705,6 +7726,8 @@ export default function OrdersView({
                     setCopiedOrderNum={setCopiedOrderNum}
                     handleBatchAction={handleBatchAction}
                     batchBusy={batchBusy}
+                    handleCombineShipments={handleCombineShipments}
+                    combineBusy={combineBusy}
                     batchTestMode={batchTestMode}
                     setBatchTestMode={setBatchTestMode}
                     callerIsAdmin={callerIsAdmin}

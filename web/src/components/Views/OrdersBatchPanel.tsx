@@ -38,6 +38,10 @@ export type OrdersBatchPanelProps = {
   setCopiedOrderNum: Dispatch<SetStateAction<string | null>>
   handleBatchAction: (mode: 'print' | 'queue') => void | Promise<void>
   batchBusy: boolean
+  // PS-312/PS-317 (S4): combine the selected orders into ONE combined-shipment bundle (the backend
+  // validates eligibility — same client/store/recipient, awaiting, not already bundled).
+  handleCombineShipments: () => void | Promise<void>
+  combineBusy: boolean
   batchTestMode: boolean
   setBatchTestMode: Dispatch<SetStateAction<boolean>>
   callerIsAdmin: boolean
@@ -69,6 +73,8 @@ export function OrdersBatchPanel({
   setCopiedOrderNum,
   handleBatchAction,
   batchBusy,
+  handleCombineShipments,
+  combineBusy,
   batchTestMode,
   setBatchTestMode,
   callerIsAdmin,
@@ -377,6 +383,19 @@ export function OrdersBatchPanel({
                     📥 Send to Queue
                   </button>
                 </div>
+
+                {/* PS-312/PS-317 (S4): combine the selected same-recipient orders into ONE shipment.
+                    The backend validates eligibility + creates the bundle; on failure the toast says why. */}
+                <button
+                  className="create-label-btn"
+                  type="button"
+                  style={{ width: '100%', marginTop: 8 }}
+                  onClick={() => void handleCombineShipments()}
+                  disabled={combineBusy || batchBusy}
+                  title="Combine the selected orders (same recipient) into one combined shipment — they ship together under one label. The backend validates eligibility."
+                >
+                  🔗 {combineBusy ? 'Combining…' : 'Combine shipments'}
+                </button>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, fontWeight: 600 }}>
                   <input type="checkbox" checked={batchTestMode} onChange={(event) => setBatchTestMode(event.target.checked)} />
