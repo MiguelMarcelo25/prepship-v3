@@ -25,3 +25,4 @@ export * from './fulfillment-outbox.js';
 export * from './analytics-cache.js';
 export * from './order-competitive-rate.js';
 export * from './shipment-groups.js';
+export * from './shipment-bundles.js';

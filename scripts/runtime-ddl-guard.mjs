@@ -92,6 +92,10 @@ const expectedRuntimeDdlFiles = [
   'src/services/order-recipient-override.ts',
   'src/services/packaging-rules.ts',
   'src/services/print-queue-pdf-store.ts',
+  // PS-312: combined-shipment-bundle sidecars (shipment_bundles + shipment_bundle_members).
+  // Additive; covered by drizzle migration 0052_shipment_bundles.sql + the runtime ensure is the
+  // belt-and-suspenders fallback. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
+  'src/services/shipment-bundles/ensure-shipment-bundles-schema.ts',
   'src/services/shipment-tracking.ts',
   'src/services/shipping-workflow/address-classification-cache.ts',
   'src/services/shipping-workflow/order-rate-job-status.ts',
