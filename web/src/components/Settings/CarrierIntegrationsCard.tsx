@@ -843,6 +843,13 @@ async function verifyConnection(rowId: number, provider: string): Promise<Verify
   )
 }
 
+// eBay "Connect" — asks the backend to build the eBay sign-in/consent URL (with the
+// sell.logistics scope) for this carrier account. eBay's callback then exchanges the code and
+// saves the refresh token back to the carrier automatically, so the operator never copies a token.
+async function requestEbayConnectUrl(carrierAccountId: number): Promise<{ url?: string; error?: string }> {
+  return api.get<{ url?: string; error?: string }>(`/carriers/ebay/connect?carrierAccountId=${carrierAccountId}`)
+}
+
 async function deleteIntegration(rowId: number, provider: string): Promise<void> {
   const endpoint = endpointForProvider(provider)
   await api.delete<unknown>(`${endpoint}?id=${rowId}`)
@@ -1044,6 +1051,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [submitState, setSubmitState] = useState<{ kind: 'idle' | 'saving' | 'success' | 'error'; message?: string }>({ kind: 'idle' })
   const [listError, setListError] = useState<string | null>(null)
   const [testing, setTesting] = useState<Record<number, boolean>>({})
+  const [connectingEbay, setConnectingEbay] = useState<Record<number, boolean>>({})
   const [testResults, setTestResults] = useState<Record<number, VerifyResult>>({})
   // Reconnect (re-enter credentials after a password change). `reconnectingId`
   // holds the SavedRow.id of the open form (or null = closed).
@@ -1399,6 +1407,32 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       }))
     } finally {
       setTesting((prev) => ({ ...prev, [d.id]: false }))
+    }
+  }
+
+  // "Connect with eBay": open eBay's sign-in/consent (with the sell.logistics scope) in a new tab.
+  // eBay's OAuth callback exchanges the code and saves the refresh token straight back to THIS
+  // carrier — no token copy/paste. After the operator finishes in the new tab they click Test
+  // Connection here and it goes green.
+  const runConnectEbay = async (d: SavedRow) => {
+    setConnectingEbay((prev) => ({ ...prev, [d.id]: true }))
+    try {
+      const res = await requestEbayConnectUrl(d.accountId)
+      if (res?.url) {
+        window.open(res.url, '_blank', 'noopener,noreferrer')
+      } else {
+        setTestResults((prev) => ({
+          ...prev,
+          [d.id]: { ok: false, error: res?.error ?? 'Could not build the eBay sign-in URL.' },
+        }))
+      }
+    } catch (err) {
+      setTestResults((prev) => ({
+        ...prev,
+        [d.id]: { ok: false, error: err instanceof Error ? err.message : String(err) },
+      }))
+    } finally {
+      setConnectingEbay((prev) => ({ ...prev, [d.id]: false }))
     }
   }
 
@@ -1998,6 +2032,19 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             onClick={() => runTest(d)}
             title={isShipStation ? SHIPSTATION_MANAGE_HINT : 'Verify credentials with the carrier API'}
           />
+          {/* Connect with eBay — one-click OAuth (with the sell.logistics scope) for the eBay
+              Shipping carrier. Opens eBay sign-in; the callback saves the refresh token here
+              automatically, so you never copy/paste a token. */}
+          {d.provider === 'ebay_shipping' ? (
+            <ActionButton
+              icon={<KeyRound size={11} strokeWidth={2.5} />}
+              label="Connect with eBay"
+              loadingLabel="Opening…"
+              loading={!!connectingEbay[d.id]}
+              onClick={() => runConnectEbay(d)}
+              title="Sign in to eBay and grant the sell.logistics scope — saves the refresh token automatically (no copy/paste)"
+            />
+          ) : null}
           {isStore && STORE_PULLERS[d.provider] ? (
             <ActionButton
               icon={<PackageSearch size={11} strokeWidth={2.5} />}

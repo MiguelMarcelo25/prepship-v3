@@ -113,6 +113,35 @@ export async function exchangeEbayAuthorizationCode(input: {
   };
 }
 
+// Build the eBay OAuth user-consent (authorize) URL for the "Connect with eBay" flow. Provider
+// URLs (auth.ebay.com + the api_scope identifiers) live here in the connector so callers/routes
+// never embed eBay endpoints directly (PS-032 boundary). `state` lets the callback route the
+// resulting refresh token back to the right account.
+export function buildEbayAuthorizeUrl(input: {
+  appId: string;
+  ruName: string;
+  state: string;
+  environment?: string | null;
+}): string {
+  const sandbox = String(input.environment ?? '').toLowerCase() === 'sandbox';
+  const authBase = sandbox
+    ? 'https://auth.sandbox.ebay.com/oauth2/authorize'
+    : 'https://auth.ebay.com/oauth2/authorize';
+  // sell.logistics is what the carrier connector needs; sell.fulfillment keeps the token usable
+  // for the eBay store integration too (both are already approved on the app).
+  const scope = [
+    'https://api.ebay.com/oauth/api_scope/sell.logistics',
+    'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+  ].join(' ');
+  return `${authBase}?${new URLSearchParams({
+    client_id: input.appId,
+    redirect_uri: input.ruName,
+    response_type: 'code',
+    scope,
+    state: input.state,
+  }).toString()}`;
+}
+
 function ebayOrderIdFrom(input: ShipmentConfirmationInput): string {
   const payload = input.payload ?? {};
   const explicit = firstString(payload.ebayOrderId, payload.orderIdForMarketplace, payload.sourceOrderId);

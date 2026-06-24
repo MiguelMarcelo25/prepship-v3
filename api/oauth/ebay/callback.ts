@@ -87,23 +87,33 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  // The carrier "Connect with eBay" button puts state=carrier-<id> on the authorize URL so this
+  // callback exchanges + saves the refresh token back to THAT eBay Shipping carrier account (using
+  // its own App ID/Cert ID). Without that state we keep the legacy store-account behavior.
+  const state = url.searchParams.get('state') ?? '';
+  const carrierMatch = /^carrier-(\d+)$/.exec(state);
+  const targetCarrierId = carrierMatch ? Number(carrierMatch[1]) : null;
+
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
   try {
-    // The most-recent eBay row supplies App ID + Cert ID. We trust this
-    // because there's no other way for an attacker to pre-populate
-    // valid eBay credentials in the seller's PrepShip database.
-    const rows = await sql<Array<{ id: number; credentials: any }>>`
-      SELECT id, credentials FROM store_accounts
-      WHERE provider = 'ebay' AND active = true
-      ORDER BY id DESC
-      LIMIT 1
-    `;
+    // The matching eBay row supplies App ID + Cert ID. We trust it because there's no other way
+    // for an attacker to pre-populate valid eBay credentials in the seller's PrepShip database.
+    const rows = targetCarrierId
+      ? await sql<Array<{ id: number; credentials: any }>>`
+          SELECT id, credentials FROM carrier_accounts
+          WHERE id = ${targetCarrierId} AND provider = 'ebay_shipping'
+          LIMIT 1`
+      : await sql<Array<{ id: number; credentials: any }>>`
+          SELECT id, credentials FROM store_accounts
+          WHERE provider = 'ebay' AND active = true
+          ORDER BY id DESC
+          LIMIT 1`;
     if (rows.length === 0) {
       res.status(404).end(htmlPage(
-        'No eBay store yet',
+        'No eBay credentials',
         `<h1 class="error">No eBay credentials found in PrepShip</h1>
-         <p>You need to add the App ID, Cert ID, and Dev ID to PrepShip first
-            so the callback knows which seller is signing in.</p>
+         <p>Add the App ID, Cert ID, and RuName to the eBay ${targetCarrierId ? 'Shipping carrier' : 'store'} in
+            PrepShip first, then start the connect again.</p>
          <p><a class="cta" href="/">Open PrepShip Settings</a></p>`,
       ));
       return;
@@ -184,19 +194,28 @@ export default async function handler(req: any, res: any): Promise<void> {
     // Update the saved row with the new refresh token. JSONB merge so
     // we don't overwrite App ID / Cert ID / Dev ID / partner ID etc.
     const newCreds = { ...creds, refreshToken };
-    await sql`
-      UPDATE store_accounts
-      SET credentials = ${newCreds},
-          updated_at = NOW()
-      WHERE id = ${row.id}
-    `;
+    if (targetCarrierId) {
+      await sql`
+        UPDATE carrier_accounts
+        SET credentials = ${newCreds},
+            updated_at = NOW()
+        WHERE id = ${row.id}
+      `;
+    } else {
+      await sql`
+        UPDATE store_accounts
+        SET credentials = ${newCreds},
+            updated_at = NOW()
+        WHERE id = ${row.id}
+      `;
+    }
 
     const expiresIn = Number(tokenData?.expiresIn ?? 0);
     res.status(200).end(htmlPage(
       'eBay connected',
       `<h1 class="success">✅ eBay connected to PrepShip</h1>
        <p>Authorization code exchanged. The User Refresh Token has been saved
-          to your eBay store row in PrepShip — you don't need to copy it manually.</p>
+          to your eBay ${targetCarrierId ? 'Shipping carrier' : 'store'} in PrepShip — you don't need to copy it manually.</p>
        <div class="box">
          <strong>Saved automatically:</strong><br>
          <code>refresh_token (${refreshToken.length} chars, valid ~18 months)</code><br>
