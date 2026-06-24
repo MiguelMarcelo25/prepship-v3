@@ -197,6 +197,34 @@ business logic must live. The lockdown still governs *what* may be touched.
 
 ---
 
+## 🚫 No Source-of-Truth Bypass Wrappers (PS-314)
+
+Wrappers, helpers, and adapters are **not forbidden when they stay thin** — they are
+forbidden when they become a **second source of truth**.
+
+A wrapper / helper / adapter **MAY**:
+- translate external/provider shapes into internal DTOs;
+- normalize names, units, dates, or display formatting;
+- preserve backward compatibility while forwarding to the source-of-truth service;
+- reduce duplication by routing callers through the canonical owner.
+
+A wrapper / helper / adapter **MUST NOT**:
+- own business rules;
+- choose authoritative values;
+- calculate money, rates, totals, eligibility, inventory, billing, auth/scope, or
+  reporting truth;
+- rank or select "best" options;
+- persist authoritative state;
+- silently fall back to stale / cached / alternate truth;
+- bypass the canonical service because it is easier from the current file.
+
+**If a wrapper needs business logic, STOP** — trace the workflow to the canonical source
+of truth, move the rule there, make the wrapper delegate, and add boundary tests at the
+owner. A "thin" wrapper that quietly decides a business-critical value is a
+source-of-truth bypass and is rejected in review.
+
+---
+
 ## Sync step (run if AGENTS.md changes)
 
 After editing this file, mirror to the other agent surfaces so all

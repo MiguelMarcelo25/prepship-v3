@@ -245,6 +245,28 @@ pure UI/display helpers in the frontend:
 - ✗ Showing a provisional value (e.g. "best so far") as if it were final/complete.
 - ✗ "Fixing" a failing boundary test by moving the assertion to the UI.
 
+## No Source-of-Truth Bypass Wrappers
+
+Wrappers, helpers, and adapters are **not forbidden when they stay thin** — they are
+forbidden when they become a **second source of truth**.
+
+A wrapper / helper / adapter **may**: translate external/provider shapes into internal
+DTOs; normalize names, units, dates, or display formatting; preserve backward
+compatibility while forwarding to the source-of-truth service; reduce duplication by
+routing callers through the canonical owner.
+
+A wrapper / helper / adapter **must not**: own business rules; choose authoritative
+values; calculate money, rates, totals, eligibility, inventory, billing, auth/scope, or
+reporting truth; rank or select "best" options; persist authoritative state; silently
+fall back to stale / cached / alternate truth; or bypass the canonical service because it
+is easier from the current file.
+
+If a wrapper needs business logic, **stop and trace the workflow to the canonical source
+of truth** — move the rule there, make the wrapper delegate, and add boundary tests at the
+owner. A "thin" wrapper that quietly decides a business-critical value is a source-of-truth
+bypass and is rejected in review (see also the wrapper-bypass law in
+[AGENTS.md](AGENTS.md)).
+
 ## Required architecture placement note (non-trivial PRs)
 
 Every non-trivial PR states:
