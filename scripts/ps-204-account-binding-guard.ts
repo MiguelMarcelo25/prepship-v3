@@ -13,6 +13,14 @@
  * Offline + pure: behavioral checks call the pure owners directly; source pins
  * verify the wiring. No network, no DB, no postage.
  *
+ * PS-317 A4 update: the FE direct-carrier label BUY (createDirectCarrierLabelThenQueue)
+ * was DELETED — the frontend buys nothing and every queue order routes to the backend
+ * create/recover job. The direct-buy account-binding that function carried is now
+ * proven (a) ABSENT from the FE (anti-regression, no second money path) and (b) RELOCATED
+ * to the intent payload (buildQueueSendOrderPayload) + the backend owner (createLabelV2's
+ * directLabelAccountRefFromProviderId branch, gated by the same purchaseShippingProviderId
+ * binding) + the print-queue route (processQueueSendOrder → createLabelV2).
+ *
  *   npx tsx scripts/ps-204-account-binding-guard.ts
  */
 import { readFileSync } from 'node:fs';
@@ -181,10 +189,33 @@ check('panel payload proof + quote-ref are account-bound (isTest skips)',
   /buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView));
 check('batch queue payload proof is account-bound',
   /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
-check('direct queue payload honors override purchase account and account-binds fallback proof',
-  /toNumberValue\(overrideRecord\?\.shippingProviderId\)[\s\S]{0,160}\?\?\s*resolveOrderShippingProviderId\(order\)/.test(ordersView) &&
-  /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
-  /buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
+// PS-317 A4: the FE direct-carrier label BUY (createDirectCarrierLabelThenQueue,
+// which resolved a purchase account from overrideRecord ?? resolveOrderShippingProviderId
+// and fired apiClient.createLabel with a direct-carrier shipTo body) is DELETED. The
+// frontend now buys NOTHING — every queue order routes to the backend create/recover
+// job. The account-binding the deleted buy carried did NOT vanish; it relocated to
+//   (a) the INTENT payload buildQueueSendOrderPayload (pid + account-bound proof + ref), and
+//   (b) the BACKEND owner createLabelV2, which detects the direct carrier and runs the
+//       SAME purchaseShippingProviderId account-binding ahead of either provider call.
+// (1) Anti-regression: the FE direct-carrier buy must be GONE (no second money path).
+check('FE direct-carrier buy is GONE — createDirectCarrierLabelThenQueue cannot exist (no FE postage)',
+  !/createDirectCarrierLabelThenQueue/.test(ordersView) &&
+  !/toNumberValue\(overrideRecord\?\.shippingProviderId\)[\s\S]{0,160}\?\?\s*resolveOrderShippingProviderId\(order\)/.test(ordersView));
+// (2) Relocated to the INTENT payload: the queue-send payload still names the purchase
+//     account and account-binds BOTH the fallback proof and the rate-quote ref to it.
+check('queue-send INTENT payload (buildQueueSendOrderPayload) names the purchase account + account-binds fallback proof & ref',
+  /function buildQueueSendOrderPayload\([\s\S]*?shippingProviderId: shippingProviderId \?\? undefined,[\s\S]*?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),[\s\S]*?buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
+// (3) Relocated to the BACKEND owner: createLabelV2 detects the direct carrier and binds
+//     the purchase account on the SAME boundary that already gated ShipStation (the
+//     purchaseShippingProviderId pin at line ~174 proves the binding runs ahead of BOTH).
+check('backend createLabelV2 owns the direct-carrier branch via directLabelAccountRefFromProviderId(body.shippingProviderId)',
+  /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsService));
+// (4) The queue route the FE now hands off to: print-queue processQueueSendOrder buys via
+//     createLabelV2 (so the relocated binding above governs the queue path the deleted FE buy used to own).
+const printQueueService = readFileSync('src/services/print-queue.ts', 'utf8');
+check('print-queue processQueueSendOrder routes the queue order through the backend createLabelV2 owner',
+  /async function processQueueSendOrder\(/.test(printQueueService) &&
+  /createLabelV2\(\{/.test(printQueueService));
 check('Ship Acct change drops a preview rate from another account (no mixed-source card)',
   /setPanelRatePreview\(\(current\) => \{\s*\n\s*const belongs = rateBelongsToProviderAccount\(current\[0\], nextValue\)/.test(ordersView));
 check('mixed-source purchase shows the re-rate action instead of a generic failure',

@@ -11,6 +11,11 @@ const ordersView = fs.readFileSync('web/src/components/Views/OrdersView.tsx', 'u
 const rateProof = fs.readFileSync('web/src/lib/rate-proof.ts', 'utf8');
 const rateSyncGuard = fs.readFileSync('scripts/ps-081-rate-sync-guard.ts', 'utf8');
 const proofBoundaryGuard = fs.readFileSync('scripts/selected-rate-proof-purchase-boundary-guard.ts', 'utf8');
+// PS-317 A4: the deleted FE direct-carrier buy's queue/override proof path now lives
+// in the backend create/recover job. Pin its new owners so the relocated proof +
+// account binding is verified where it actually runs (not just as FE text).
+const labelsService = fs.readFileSync('src/services/labels.ts', 'utf8');
+const printQueueService = fs.readFileSync('src/services/print-queue.ts', 'utf8');
 
 let failures = 0;
 
@@ -50,23 +55,57 @@ check(
 );
 
 check(
-  'frontend passes selectedRateProof through all single, batch, backend-queue, and direct-carrier payload paths',
-  // The proof flows on all 4 paths, in 2 distinct shapes after the PS-178/PS-204
-  // decomposition:
+  'frontend passes selectedRateProof through the single, batch, and backend-queue-intent payload paths; the deleted FE direct-carrier buy is GONE and its proof/binding is now backend-owned',
+  // PS-317 A4 (2026-06-24) re-anchor. The FRONTEND direct-carrier label BUY —
+  // createDirectCarrierLabelThenQueue, which assembled its OWN
+  //   `const selectedRateProof = toRecord(overrideRecord?.selectedRateProof) ??
+  //    buildSelectedRateProofPayload(order, ...)`
+  // override-wrapper and then called apiClient.createLabel (POST /labels) for direct
+  // carriers — was DELETED from OrdersView. The frontend now buys NOTHING for the
+  // queue path; every queue order routes to the backend create/recover job. So the
+  // old "queue/override" FE-buy path is converted to an ABSENCE assertion, and the
+  // proof + account binding it used to carry is RE-POINTED to its real owners:
+  //   - the INTENT payload buildQueueSendOrderPayload (which print-queue.ts /
+  //     createLabelV2 consume), and
+  //   - the backend purchase gate assertLabelPurchaseRateSelection in
+  //     src/services/labels.ts (reached for the queue path via
+  //     src/services/print-queue.ts processQueueSendOrder → createLabelV2).
+  //
+  // The proof still flows on the THREE surviving payload shapes:
   //   (a) 2 INLINE property sites `selectedRateProof: buildSelectedRateProofPayload(order, ...)`
-  //       — the single-create and the panel-live paths.
-  //   (b) the OVERRIDE-WRAPPER `const selectedRateProof = toRecord(overrideRecord?.selectedRateProof) ??
-  //       buildSelectedRateProofPayload(order, ...)` — the queue/override path.
-  //   (c) the BATCH-CREATE `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
-  //       — with PS-204 account binding (3rd arg).
-  // Count both inline sites AND pin the override-wrapper + batch-create shapes so
-  // the proof is verified on every path (stricter than the old single >= 3 regex
-  // that never matched the wrapper/let shapes).
+  //       — the panel-live single-create payload AND the queue-send INTENT payload.
+  //   (b) the BATCH-CREATE `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
+  //       — ShipStation batch, with PS-204 account binding (3rd arg).
+  //
+  // (a) census of the two inline account-bound proof property sites (panel + queue intent).
   (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    /const selectedRateProof =\s*\n\s*toRecord\(overrideRecord\?\.selectedRateProof\) \?\?\s*\n\s*buildSelectedRateProofPayload\(order/.test(ordersView) &&
+    // (a-1) the queue-send INTENT payload still emits the account-bound proof AND the
+    // rate-quote ref — the SAME proof/binding the deleted FE direct-buy used to carry
+    // straight into apiClient.createLabel, now sent to the backend owner instead.
+    ordersView.includes('function buildQueueSendOrderPayload') &&
+    /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\n\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+    // (b) the ShipStation batch-create path keeps its proof variable + account filter.
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,') &&
-    proofBoundaryGuard.includes('Orders single/batch/queue label payloads pass selectedRateProof'),
+    // ANTI-REGRESSION: the deleted FE direct-carrier buy must NOT come back. Neither
+    // the function nor its override-wrapper proof variable (the one it assembled before
+    // its own apiClient.createLabel) may exist in OrdersView again.
+    !ordersView.includes('createDirectCarrierLabelThenQueue') &&
+    !/const selectedRateProof =\s*\n\s*toRecord\(overrideRecord\?\.selectedRateProof\) \?\?\s*\n\s*buildSelectedRateProofPayload\(order/.test(ordersView) &&
+    // RELOCATED OWNER 1 — the queue path now buys server-side: print-queue.ts's
+    // processQueueSendOrder feeds the FE-built order.label intent into createLabelV2.
+    printQueueService.includes('async function processQueueSendOrder') &&
+    /createLabelV2\(\{\s*\n\s*\.\.\.order\.label,/.test(printQueueService) &&
+    // RELOCATED OWNER 2 — createLabelV2 enforces the SAME selected-rate proof + PS-204
+    // account binding before BOTH the direct-carrier and ShipStation provider calls,
+    // and detects direct carriers via directLabelAccountRefFromProviderId. This is the
+    // protection the deleted FE override-wrapper used to carry, now backend-owned.
+    labelsService.includes('await assertLabelPurchaseRateSelection(') &&
+    labelsService.includes('selectedRateProof: body.selectedRateProof') &&
+    labelsService.includes('purchaseShippingProviderId: body.shippingProviderId') &&
+    labelsService.includes('directLabelAccountRefFromProviderId(body.shippingProviderId)') &&
+    labelsService.includes('createDirectCarrierLabelForOrder(') &&
+    proofBoundaryGuard.includes('FE direct-carrier label BUY is gone; queue intent still carries the account-bound selected-rate proof'),
 );
 
 check(

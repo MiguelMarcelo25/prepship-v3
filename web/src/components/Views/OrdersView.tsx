@@ -3316,100 +3316,6 @@ export default function OrdersView({
     )
   }
 
-  // Per user override unlock shipped data on 2026-05-23: direct-carrier queue
-  // support. The Render queue job's createLabelV2 is ShipStation-only, so a
-  // direct carrier (Shipp/EasyPost/Walmart Shipping/UPS) order that still needs
-  // a label is bought here via the Vercel /carriers/labels path (apiClient
-  // .createLabel — fixed for cold start) and the created label is added to the
-  // queue with the SAME addToQueue primitive the per-order Create+Print flow
-  // uses. Test/test-mode orders never reach this (they stay on the backend mock
-  // path), so no real postage is spent on test rows.
-  async function createDirectCarrierLabelThenQueue(
-    order: OrderSummaryDto,
-    overridePayload?: Record<string, unknown> | null,
-  ): Promise<{ queued: boolean; items: ReturnType<typeof getActiveItems>; error?: string }> {
-    if (order.clientId == null) return { queued: false, items: [], error: 'Missing client id' }
-    // PS-279/PS-186: the FE must NEVER spend real postage on a test order. Test rows
-    // route to the backend mock path upstream (classifyQueueOrderRoute), but enforce
-    // it HERE at the spend boundary too (defense in depth) so no future FE change can
-    // silently buy a real direct-carrier label for a test row.
-    if (isBackendTestOrder(order)) {
-      return { queued: false, items: [], error: 'Test order - no FE postage purchased (backend mock path owns test labels)' }
-    }
-    const orderDetail = orderDetailsById.get(order.orderId) ?? null
-    const bestRate = order.bestRate
-    const selectedRate = order.selectedRate
-    const overrideRecord = toRecord(overridePayload)
-    const shippingProviderId =
-      toNumberValue(overrideRecord?.shippingProviderId) ?? resolveOrderShippingProviderId(order)
-    const serviceCode = toStringValue(overrideRecord?.serviceCode) ?? getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
-    const serviceName = toStringValue(overrideRecord?.serviceName) ?? toStringValue((bestRate as any)?.serviceName) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
-    const carrierCode = toStringValue(overrideRecord?.carrierCode) ?? getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
-    const carrierName = toStringValue(overrideRecord?.carrierName) ?? toStringValue((bestRate as any)?.carrierName) ?? selectedRate?.carrierName
-    const dims = getDimensions(order, orderDetail)
-    const weightOz = getOrderWeightOz(order, orderDetail)
-    const shippingOptions = buildOrderShippingOptionsPayload(order)
-    const shipTo = getShipTo(order, orderDetail)
-    if (!shipTo.street1 || !shipTo.city || !shipTo.state || !shipTo.postalCode) {
-      return { queued: false, items: [], error: 'Missing ship-to address - no postage was purchased' }
-    }
-    const selectedRateProof =
-      toRecord(overrideRecord?.selectedRateProof) ??
-      buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId)
-    const overrideRateQuoteId = toStringValue(overrideRecord?.rateQuoteId)
-    const overrideSelectedRateKey = toStringValue(overrideRecord?.selectedRateKey)
-    const rateQuoteRef = overrideRateQuoteId && overrideSelectedRateKey
-      ? { rateQuoteId: overrideRateQuoteId, selectedRateKey: overrideSelectedRateKey }
-      : buildRateQuoteRefForOrder(order, bestRate ?? selectedRate, shippingProviderId)
-    const payload: Record<string, unknown> = {
-      orderId: order.orderId,
-      orderNumber: order.orderNumber ?? undefined,
-      serviceCode,
-      serviceName: serviceName ?? undefined,
-      carrierCode,
-      carrierName: carrierName ?? undefined,
-      packageCode: toStringValue(overrideRecord?.packageCode) ?? 'package',
-      weightOz: toNumberValue(overrideRecord?.weightOz) ?? (weightOz > 0 ? weightOz : undefined),
-      length: toNumberValue(overrideRecord?.length) ?? dims?.length,
-      width: toNumberValue(overrideRecord?.width) ?? dims?.width,
-      height: toNumberValue(overrideRecord?.height) ?? dims?.height,
-      confirmation: toStringValue(overrideRecord?.confirmation) ?? shippingOptions.confirmation,
-      insuranceProvider: toStringValue(overrideRecord?.insuranceProvider) ?? shippingOptions.insuranceProvider,
-      insuredValue: toNumberValue(overrideRecord?.insuredValue) ?? shippingOptions.insuredValue,
-      // Print-to-Queue loop fix: when the caller supplies a payload override
-      // (the side-panel Print to Queue retry hands us the freshly re-rated
-      // proof/account here), honor those values instead of rebuilding from the
-      // captured order's stale bestRate. Fallback proof/quote refs stay bound
-      // to the same purchase account, matching the backend purchase boundary.
-      selectedRateProof,
-      ...rateQuoteRef,
-      shipTo: {
-        name: shipTo.name ?? '',
-        company: shipTo.company ?? '',
-        street1: shipTo.street1 ?? '',
-        street2: shipTo.street2 ?? '',
-        city: shipTo.city ?? '',
-        state: shipTo.state ?? '',
-        postalCode: shipTo.postalCode ?? '',
-        country: shipTo.country ?? 'US',
-        phone: shipTo.phone ?? '',
-      },
-    }
-    if (shippingProviderId != null) payload.shippingProviderId = shippingProviderId
-    // createLabel throws on failure; the caller wraps this in try/catch.
-    const response = await apiClient.createLabel(payload)
-    const queueableLabelUrl = getQueueableLabelUrl(response?.labelUrl)
-    if (!queueableLabelUrl) {
-      return {
-        queued: false,
-        items: [],
-        error: response?.labelUrl ? 'Label URL is not queueable' : 'Label created but no PDF URL returned',
-      }
-    }
-    await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
-    return { queued: true, items: getActiveItems(order, orderDetail) }
-  }
-
   async function sendOrdersToQueueBackend(
     jobOrders: OrderSummaryDto[],
     options: {
@@ -3454,9 +3360,12 @@ export default function OrdersView({
     // Split direct-carrier orders that still need a label (the Render queue job
     // can't create those) from everything else. Direct ones buy + queue via the
     // Vercel path; the rest flow through the backend create/recover job below.
+    // PS-317 A4: the FE never buys direct labels anymore (backend owns every purchase), so these
+    // stay inert (the backend job reports its own queued/failed counts). Kept as zero/empty so the
+    // result-assembly tail below is unchanged.
     const directQueuedItems: ReturnType<typeof getActiveItems> = []
     const directErrors: string[] = []
-    let directQueued = 0
+    const directQueued = 0
     const backendJobOrders: OrderSummaryDto[] = []
     for (const order of jobOrders) {
       // PS-204: when the caller carries the LIVE single-order panel payload,
@@ -3493,26 +3402,13 @@ export default function OrdersView({
         backendJobOrders.push(order)
         continue
       }
-      try {
-        const outcome = await createDirectCarrierLabelThenQueue(
-          order,
-          options.labelPayloadOverrides?.get(order.orderId) ?? null,
-        )
-        if (outcome.queued) {
-          directQueued += 1
-          directQueuedItems.push(...outcome.items)
-          markPersistentQueueJobOrder(queueJobId, order.orderId, false)
-          advanceQueueActionProgress()
-        } else {
-          directErrors.push(`Order ${order.orderNumber ?? order.orderId}: ${outcome.error ?? 'label not queued'}`)
-          markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-          advanceQueueActionProgress(1)
-        }
-      } catch (err) {
-        directErrors.push(`Order ${order.orderNumber ?? order.orderId}: ${err instanceof Error ? err.message : 'Direct label failed'}`)
-        markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-        advanceQueueActionProgress(1)
-      }
+      // PS-317 A4: the frontend no longer buys ANY label. A 'direct-create' route — now only the
+      // flag-OFF local fallback produces it (the backend plan returns 'backend' for direct orders) —
+      // routes to the SAME backend create/recover job as everything else. createLabelV2 buys
+      // direct-carrier labels server-side (labels.ts directRef → createDirectCarrierLabelForOrder,
+      // with the same selected-rate-proof gate, inventory deduction, and marketplace-confirmation
+      // tail), so the backend owns every purchase and the FE is a pure intent-sender.
+      backendJobOrders.push(order)
     }
 
     const prepared = backendJobOrders.map((order) => buildQueueSendOrderPayload(order, options))

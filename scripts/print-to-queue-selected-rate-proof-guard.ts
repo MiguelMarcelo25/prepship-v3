@@ -16,6 +16,17 @@
  * buy by clicking Print to Queue again. test:ps-191-retry-eligibility owns
  * the no-auto-repurchase pins; this guard keeps the recognize/refresh/no-raw-
  * toast protections at their new anchors.
+ *
+ * PS-317 A4 re-anchor (2026-06-24): the FE direct-carrier label BUY
+ * (createDirectCarrierLabelThenQueue -> apiClient.createLabel) was DELETED. The
+ * frontend now buys nothing; every queue order routes to the backend
+ * create/recover job. The direct-carrier override / selected-rate proof /
+ * account-binding this guard used to pin on that FE function were RELOCATED to
+ * the intent payload (buildQueueSendOrderPayload) and the backend owners
+ * (src/services/labels.ts assertLabelPurchaseRateSelection + the direct-carrier
+ * purchase; src/services/print-queue.ts createLabelV2). The block below now
+ * asserts the FE buy is gone AND that each protection is present at its new
+ * owner — so no money-path coverage was lost.
  */
 import { readFileSync } from 'node:fs';
 
@@ -61,29 +72,89 @@ check(
   /showToast\(queueErrorMessage \?\? 'Label was not added to the print queue', 'error'\)/.test(createOrQueue),
 );
 
-// Direct-carrier queue path must honor the caller's payload override so the
-// refreshed selected-rate proof from the retry actually reaches the label
-// purchase. Without this, direct-carrier (Walmart Shipping/SHIPP) Print to
-// Queue rebuilds the proof from the stale captured order and loops forever on
-// "Rate changed or expired" even after a successful re-rate.
-const directFnStart = source.indexOf('async function createDirectCarrierLabelThenQueue(');
-const directFnEnd = source.indexOf('\n  async function queueExistingLabels', directFnStart);
-const directFn = directFnStart >= 0 && directFnEnd > directFnStart
-  ? source.slice(directFnStart, directFnEnd)
-  : '';
+// ── PS-317 A4 re-anchor (2026-06-24) ─────────────────────────────────────────
+// The FRONTEND direct-carrier label BUY (createDirectCarrierLabelThenQueue,
+// which called apiClient.createLabel = POST /labels) was DELETED. The frontend
+// now buys NOTHING: every queue order routes to the backend create/recover job,
+// which owns the purchase for BOTH ShipStation and direct carriers (Walmart
+// Shipping / SHIPP / direct UPS / EasyPost).
+//
+// The three protections the deleted FE buy used to carry did NOT disappear —
+// they moved to where label truth lives:
+//   (a) the caller payload OVERRIDE  -> the intent payload builder
+//       buildQueueSendOrderPayload (payload.label = labelPayloadOverrides ?? {…}).
+//   (b) the selectedRateProof + ACCOUNT BINDING (shippingProviderId) -> carried
+//       in that same intent payload AND re-enforced server-side by
+//       assertLabelPurchaseRateSelection in src/services/labels.ts, which runs
+//       BEFORE both the direct and ShipStation provider calls.
+//   (c) the actual direct-carrier purchase -> src/services/labels.ts
+//       directLabelAccountRefFromProviderId -> createDirectCarrierLabelForOrder,
+//       reached by src/services/print-queue.ts processQueueSendOrder via
+//       createLabelV2({ ...order.label }).
+// The checks below assert (1) the FE buy is GONE (anti-regression) and (2) each
+// relocated protection is present at its new owner — so no money-path coverage
+// is lost.
 
-check('found createDirectCarrierLabelThenQueue block', directFn.length > 0);
+// ── (1) Anti-regression: the FE direct-carrier buy must NOT come back. ────────
 check(
-  'direct-carrier label path accepts a caller payload override',
-  /async function createDirectCarrierLabelThenQueue\(\s*order: OrderSummaryDto,\s*overridePayload\?: Record<string, unknown> \| null,/.test(directFn),
+  'FE direct-carrier buy is GONE — createDirectCarrierLabelThenQueue does not exist',
+  !source.includes('createDirectCarrierLabelThenQueue'),
+);
+// The only surviving apiClient.createLabel callsites are the Create+Print path
+// (mode !== 'queue'); the queue/Print-to-Queue path must never buy from the FE.
+// sendOrdersToQueueBackend is the single queue entry point and must contain no
+// FE purchase — it only assembles intent payloads and calls the backend job.
+const sendToQueueStart = source.indexOf('async function sendOrdersToQueueBackend(');
+const sendToQueueEnd = source.indexOf('\n  async function ', sendToQueueStart + 1);
+const sendToQueue = sendToQueueStart >= 0 && sendToQueueEnd > sendToQueueStart
+  ? source.slice(sendToQueueStart, sendToQueueEnd)
+  : '';
+check('found sendOrdersToQueueBackend block', sendToQueue.length > 0);
+check(
+  'the queue path buys NOTHING from the FE (no apiClient.createLabel inside sendOrdersToQueueBackend)',
+  !/apiClient\.createLabel\(/.test(sendToQueue),
+);
+
+// ── (2a) Relocated OVERRIDE: the per-order caller payload override now lives in
+// the intent payload builder (was createDirectCarrierLabelThenQueue's
+// overridePayload param). buildQueueSendOrderPayload merges it into payload.label.
+const buildPayloadStart = source.indexOf('function buildQueueSendOrderPayload(');
+const buildPayloadEnd = source.indexOf('\n  async function sendOrdersToQueueBackend(', buildPayloadStart);
+const buildPayload = buildPayloadStart >= 0 && buildPayloadEnd > buildPayloadStart
+  ? source.slice(buildPayloadStart, buildPayloadEnd)
+  : '';
+check('found buildQueueSendOrderPayload block', buildPayload.length > 0);
+check(
+  'intent payload honors the per-order caller override (relocated from the deleted FE buy)',
+  /buildQueueSendOrderPayload\(order: OrderSummaryDto, options: \{[^}]*labelPayloadOverrides\?: Map<number, Record<string, unknown>>/.test(buildPayload) &&
+    /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?/.test(buildPayload),
 );
 check(
-  'direct-carrier label path prefers the override selectedRateProof and account-binds the fallback proof',
-  /const selectedRateProof =\s*toRecord\(overrideRecord\?\.selectedRateProof\)\s*\?\?\s*buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(directFn),
+  'intent payload carries the account-bound selectedRateProof + rate-quote ref (relocated proof/binding)',
+  /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildPayload) &&
+    /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(buildPayload) &&
+    /shippingProviderId: shippingProviderId \?\? undefined/.test(buildPayload),
+);
+
+// ── (2b) Relocated BACKEND ownership: the proof gate + account binding and the
+// direct-carrier purchase are now enforced server-side. Pin them so deleting the
+// FE buy can never leave the queue path buying without the proof/binding gate.
+const printQueueSource = readFileSync('src/services/print-queue.ts', 'utf8');
+check(
+  'backend queue worker buys via createLabelV2 from the intent payload (order.label)',
+  /createLabelV2\(\{\s*\.\.\.order\.label,/.test(printQueueSource),
+);
+const labelsSource = readFileSync('src/services/labels.ts', 'utf8');
+check(
+  'backend enforces the selected-rate proof + account binding before ANY purchase',
+  /assertLabelPurchaseRateSelection\(\{/.test(labelsSource) &&
+    /selectedRateProof: body\.selectedRateProof,/.test(labelsSource) &&
+    /purchaseShippingProviderId: body\.shippingProviderId,/.test(labelsSource),
 );
 check(
-  'sendOrdersToQueueBackend forwards the per-order override into the direct-carrier label path',
-  /createDirectCarrierLabelThenQueue\(\s*order,\s*options\.labelPayloadOverrides\?\.get\(order\.orderId\)/.test(source),
+  'backend owns the direct-carrier purchase (relocated from the deleted FE buy)',
+  /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsSource) &&
+    /createDirectCarrierLabelForOrder\(\{/.test(labelsSource),
 );
 
 if (failures > 0) {

@@ -59,27 +59,45 @@ check(
     proofResolver.includes('assertSelectedRateProofForLabelPurchase'),
 );
 
+// PS-317 A4 re-anchor (2026-06-24): the FRONTEND direct-carrier label BUY
+// (createDirectCarrierLabelThenQueue, which called apiClient.createLabel = POST
+// /labels for direct carriers) was DELETED from OrdersView. The frontend now buys
+// NOTHING for the queue path — every queue order routes to the backend
+// create/recover job (src/services/print-queue.ts processQueueSendOrder →
+// src/services/labels.ts createLabelV2, which itself detects direct carriers via
+// directLabelAccountRefFromProviderId and buys through createDirectCarrierLabelForOrder
+// under the SAME assertLabelPurchaseRateSelection proof gate — already pinned by the
+// two checks above). The FE only sends INTENT via buildQueueSendOrderPayload.
+//
+// So this check no longer asserts a FE *buy* exists. It asserts (1) the FE
+// direct-buy is GONE (anti-regression), and (2) the selected-rate proof + account
+// binding + rate-quote ref the deleted buy used to carry are STILL sent, relocated
+// into the buildQueueSendOrderPayload INTENT payload that feeds the backend owner.
 check(
-  'Orders single/batch/queue label payloads pass selectedRateProof',
+  'FE direct-carrier label BUY is gone; queue intent still carries the account-bound selected-rate proof',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    // Each label payload sources its selectedRateProof from buildSelectedRateProofPayload.
-    // The direct-carrier queue path additionally prefers a caller override
-    // (overridePayload?.selectedRateProof ?? buildSelectedRateProofPayload(order, ...)),
-    // so allow that wrapper form when counting the payload sites.
-    //
-    // PS-204 re-anchor (2026-06-12): the honest census of `selectedRateProof:`
-    // property sites is THREE (panel single, direct-carrier override wrapper,
-    // batch queue payload) — the fourth proof path is the batch-create flow's
-    // `let selectedRateProof = buildSelectedRateProofPayload(...)` (pinned
-    // below), which this property regex never matched. The old >= 4 was stale
-    // since the PS-178 decomposition and failing silently outside the cert.
-    // STRENGTHENED: the panel + batch property sites must now be ACCOUNT-BOUND
-    // (third arg = the payload's shippingProviderId) per PS-204.
+    // (1) ANTI-REGRESSION: the deleted frontend direct-carrier buy must NOT come
+    // back. createDirectCarrierLabelThenQueue is gone, and there must be no
+    // `const selectedRateProof = ...(order, bestRate ?? selectedRate, shippingProviderId)`
+    // local-buy wrapper (the proof variable that buy used to assemble before its
+    // own apiClient.createLabel). Backend now owns the direct-carrier purchase.
+    !ordersView.includes('createDirectCarrierLabelThenQueue') &&
+    !/const selectedRateProof =[\s\S]{0,120}?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+    // (2) RELOCATED: the queue-send INTENT payload (buildQueueSendOrderPayload, the
+    // payload print-queue.ts/createLabelV2 consume) still emits the account-bound
+    // selectedRateProof AND the rate-quote ref — the same proof/binding the deleted
+    // FE buy used to carry directly into apiClient.createLabel. shippingProviderId is
+    // both the payload's charged account and the proof's account filter (third arg).
+    ordersView.includes('function buildQueueSendOrderPayload') &&
+    /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\n\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+    // The honest census of `selectedRateProof:` property sites sourced from
+    // buildSelectedRateProofPayload is TWO: the panel single payload + this queue
+    // INTENT payload. Both must be ACCOUNT-BOUND (third arg = shippingProviderId).
     (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    /const selectedRateProof =[\s\S]{0,120}?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+    // The batch-create flow (ShipStation, still a real FE createLabel call — NOT the
+    // deleted direct-carrier buy) keeps its proof variable and account filter.
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
-    /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
-    /buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView),
+    /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView),
 );
 
 check(

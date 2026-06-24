@@ -37,6 +37,7 @@ const directRates = read('api/carriers/rates.ts');
 const directLabels = read('api/carriers/labels.ts');
 const labelsRoute = read('src/routes/labels.ts');
 const labelsService = read('src/services/labels.ts');
+const printQueueService = read('src/services/print-queue.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const proofWorkflow = read('src/services/shipping-workflow/rate-fingerprint.ts');
 const ps084ReportExists = fs.existsSync('docs/ps-084-direct-carrier-print-queue-completion-report.md');
@@ -98,21 +99,72 @@ check(
     labelsRoute.includes("e.code === 'SELECTED_RATE_PROOF_INVALID'"),
 );
 
+// PS-317 A4 re-anchor (2026-06-24): the FRONTEND direct-carrier label BUY was DELETED.
+// `createDirectCarrierLabelThenQueue` (which called apiClient.createLabel via the Vercel
+// /carriers/labels path and carried its own `toRecord(overrideRecord?.selectedRateProof)
+// ?? buildSelectedRateProofPayload(order, ...)` proof + account binding) no longer exists —
+// every queue order now routes to the backend create/recover job and the backend owns ALL
+// purchases. The proof/account-binding that the deleted FE buy used to carry was NOT lost:
+// it is now sent as INTENT to the backend via buildQueueSendOrderPayload and ENFORCED at the
+// backend purchase boundary (src/services/labels.ts createLabelV2). This check therefore (1)
+// keeps the still-live FE intent-payload proof shapes, (2) asserts the FE direct-buy is GONE
+// (anti-regression), and (3) RE-POINTS the deleted property to its new owners.
 check(
-  'frontend passes backend-issued selectedRateProof through label and queue payloads',
+  'frontend passes backend-issued selectedRateProof through label and queue intent payloads',
   ordersView.includes('function buildSelectedRateProofPayload') &&
-    // After the PS-178/PS-204 decomposition the proof flows on all 4 paths in 2
-    // shapes: 2 INLINE property sites `selectedRateProof: buildSelectedRateProofPayload(order, ...)`
-    // (panel single + panel-live), the OVERRIDE-WRAPPER `const selectedRateProof =
-    // toRecord(overrideRecord?.selectedRateProof) ?? buildSelectedRateProofPayload(order, ...)`
-    // (direct-carrier/queue override), and the BATCH-CREATE `let selectedRateProof =
-    // buildSelectedRateProofPayload(order, proofRate, ...)` with the PS-204 account-binding
-    // 3rd arg. Pin each shape so all 4 paths are verified (the old single >= 3 regex
-    // only matched the inline property sites). Aligns with the proof-boundary guard.
+    // The remaining FE proof flows: 2 INLINE property sites `selectedRateProof:
+    // buildSelectedRateProofPayload(order, ...)` (the queue INTENT payload in
+    // buildQueueSendOrderPayload + the panel single), and the BATCH-CREATE
+    // `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
+    // with the PS-204 account-binding 3rd arg. (The deleted direct-buy override-wrapper
+    // shape is asserted GONE below, not here.)
     (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    /const selectedRateProof =\s*\n\s*toRecord\(overrideRecord\?\.selectedRateProof\) \?\?\s*\n\s*buildSelectedRateProofPayload\(order/.test(ordersView) &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,'),
+);
+
+// PS-317 A4 anti-regression: the frontend must BUY NOTHING for direct carriers. The deleted
+// FE direct-buy function and its direct-carrier apiClient.createLabel override-wrapper (the
+// `toRecord(overrideRecord?.selectedRateProof) ?? buildSelectedRateProofPayload(order, ...)`
+// shape) must NOT reappear in OrdersView. If a future change reintroduces a FE direct-label
+// purchase, this fails — re-routing the money path off the backend owner.
+check(
+  'frontend direct-carrier label BUY is removed (createDirectCarrierLabelThenQueue + its override-proof wrapper must not exist)',
+  !ordersView.includes('createDirectCarrierLabelThenQueue') &&
+    !/const selectedRateProof =\s*\n\s*toRecord\(overrideRecord\?\.selectedRateProof\) \?\?\s*\n\s*buildSelectedRateProofPayload\(order/.test(ordersView),
+);
+
+// PS-317 A4 relocation: the selected-rate proof + PS-204 account binding (shippingProviderId)
+// + rate-quote ref that the deleted FE direct-buy carried is now sent to the backend as INTENT
+// on the queue-send payload (buildQueueSendOrderPayload, ~line 3107), so the backend purchase
+// owner receives exactly what the FE buy used to enforce locally.
+check(
+  'queue-send INTENT payload carries the proof + account binding + rate-quote ref the deleted FE buy used to carry',
+  ordersView.includes('function buildQueueSendOrderPayload') &&
+    ordersView.includes('selectedRateProof: buildSelectedRateProofPayload(order, bestRate ?? selectedRate, shippingProviderId)') &&
+    ordersView.includes('shippingProviderId: shippingProviderId ?? undefined') &&
+    /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView),
+);
+
+// PS-317 A4 relocation (backend owner): the queue worker hands the FE intent label to the
+// unified purchase owner createLabelV2, which (a) enforces the SAME selected-rate proof gate
+// bound to the charged account BEFORE any provider call, and (b) detects + buys direct-carrier
+// labels server-side (directLabelAccountRefFromProviderId → createDirectCarrierLabelForOrder).
+// This is where the protection the deleted FE buy used to own now lives.
+check(
+  'backend owns the direct-carrier purchase: print-queue worker → createLabelV2 proof-gated direct buy',
+  printQueueService.includes('createLabelV2(') &&
+    labelsService.includes('purchaseShippingProviderId: body.shippingProviderId') &&
+    indexAfter(
+      labelsService,
+      'const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);',
+      indexAfter(labelsService, 'await assertLabelPurchaseRateSelection('),
+    ) > 0 &&
+    indexAfter(
+      labelsService,
+      'createDirectCarrierLabelForOrder({',
+      indexAfter(labelsService, 'const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);'),
+    ) > 0,
 );
 
 // PS-209 re-anchor (2026-06-16): direct-carrier print-to-queue local ship-to recovery is owned by its

@@ -7,6 +7,15 @@
  * defines it, and OrdersView imports it from the lib path. The full routing BEHAVIOR matrix is pinned
  * by ps-176 / ps-204 / direct-carrier-queue-route; this guard owns the BOUNDARY (where authority lives).
  *
+ * PS-317 A4 update: the FE no longer BUYS anything for queue. createDirectCarrierLabelThenQueue (the
+ * only FE direct-carrier apiClient.createLabel buy) was DELETED — every queue order now routes to the
+ * backend create/recover job. This guard now asserts that FE buy is GONE (anti-regression) and that the
+ * proof / account-binding / no-silent-postage protections it used to carry were RELOCATED, not lost:
+ *  - to the INTENT payload buildQueueSendOrderPayload (testLabel + selectedRateProof + shippingProviderId
+ *    + rate-quote ref), and
+ *  - to the backend rate owner (labels.ts createLabelV2: direct-carrier detection +
+ *    assertLabelPurchaseRateSelection proof/binding gate; print-queue.ts feeds the FE intent to it).
+ *
  *   npx tsx scripts/ps-279-web-boundary-guards.ts
  */
 import { readFileSync } from 'node:fs';
@@ -41,23 +50,57 @@ check('moved classifier: direct carrier needing a label -> direct-create',
 check('moved classifier: existing label never re-buys -> backend',
   classifyQueueOrderRoute({ hasQueueableLabel: true, isTest: false, isDirectCarrier: true }) === 'backend');
 
-// ── the FE direct-create SPEND boundary refuses test orders (no silent postage) ──
-// createDirectCarrierLabelThenQueue is the ONLY FE path that buys a direct-carrier
-// label (apiClient.createLabel — the Render queue job's createLabelV2 is
-// ShipStation-only). PS-279/PS-186: a test order must NEVER spend real postage from
-// the FE. Test rows already route to the backend mock path upstream; this pins the
-// enforcement at the SPEND boundary too, so no future FE change can silently buy a
-// real direct-carrier label for a test row.
+// ── the FE no longer OWNS the direct-carrier label BUY — it moved to the backend ──
+// PS-317 A4 DELETED createDirectCarrierLabelThenQueue (the only FE path that bought a
+// direct-carrier label via apiClient.createLabel for a queue-send). The frontend now
+// buys NOTHING for queue: every queue order routes to the backend create/recover job.
+// These checks are ANTI-REGRESSION — the FE direct-buy and its synthetic-id detection
+// must NOT reappear in OrdersView, so a future change can't silently re-home a money
+// decision in React (CLAUDE.md "Backend owns business truth").
+check('OrdersView: createDirectCarrierLabelThenQueue is GONE (no FE direct-carrier buy)',
+  !/createDirectCarrierLabelThenQueue/.test(ov));
+check('OrdersView: no FE synthetic direct-carrier provider-id detection (directLabelAccountRefFromProviderId)',
+  !/directLabelAccountRefFromProviderId/.test(ov));
+
+// ── the test-order NO-SILENT-POSTAGE protection now travels in the INTENT payload ──
+// The deleted FE buy used to gate a test row before apiClient.createLabel. That intent
+// is now carried into buildQueueSendOrderPayload: a backend-fact `isBackendTestOrder`
+// stamps `testLabel` on the queue payload (orderIsTest), and the proof/account-binding
+// the buy used to enforce locally now travel as selectedRateProof + shippingProviderId
+// + the rate-quote ref. The Render job (createLabelV2) re-applies the SAME proof gate.
 {
-  const directFnMatch = /async function createDirectCarrierLabelThenQueue\([\s\S]*?\r?\n  }\r?\n/.exec(ov);
-  const directFn = directFnMatch ? directFnMatch[0] : '';
-  check('OrdersView: createDirectCarrierLabelThenQueue body located', directFn.length > 0);
-  const blockIdx = directFn.search(/isBackendTestOrder\s*\(\s*order\s*\)/);
-  const spendIdx = directFn.indexOf('apiClient.createLabel');
-  check('OrdersView: the FE direct-create fn hard-blocks a test order', blockIdx >= 0);
-  check('OrdersView: the test-order block precedes the apiClient.createLabel spend (no silent postage)',
-    blockIdx >= 0 && spendIdx >= 0 && blockIdx < spendIdx);
+  const builderMatch = /function buildQueueSendOrderPayload\([\s\S]*?\r?\n  }\r?\n/.exec(ov);
+  const builder = builderMatch ? builderMatch[0] : '';
+  check('OrdersView: buildQueueSendOrderPayload body located', builder.length > 0);
+  // backend-fact test detection (heuristics must never shape a label payload)
+  check('OrdersView: queue payload derives test-row status from the backend fact (isBackendTestOrder)',
+    /isBackendTestOrder\s*\(\s*order\s*\)/.test(builder));
+  check('OrdersView: queue payload stamps testLabel so the backend forces the $0 mock path for a test row',
+    /testLabel:\s*(?:Boolean\(options\.batchTestMode\)\s*\|\|\s*)?orderIsTest/.test(builder));
+  // proof + account binding the deleted buy carried now ride INTENT to the backend gate
+  check('OrdersView: queue payload carries the account-bound selectedRateProof (PS-204 binding)',
+    /selectedRateProof:\s*buildSelectedRateProofPayload\(order,[^)]*shippingProviderId\)/.test(builder));
+  check('OrdersView: queue payload carries the rate-quote ref + shippingProviderId binding',
+    /buildRateQuoteRefForOrder\(order,[^)]*shippingProviderId\)/.test(builder) &&
+      /shippingProviderId:\s*shippingProviderId\s*\?\?\s*undefined/.test(builder));
 }
+
+// ── the backend rate owner is where the BUY + proof gate + direct detection now live ──
+// labels.ts createLabelV2 detects direct carriers via directLabelAccountRefFromProviderId
+// and runs the SAME selected-rate-proof + PS-204 account-binding gate
+// (assertLabelPurchaseRateSelection w/ purchaseShippingProviderId) ahead of BOTH the
+// direct and ShipStation provider calls. print-queue.ts processQueueSendOrder feeds the
+// FE intent (order.label) into createLabelV2 — so the queue buy is fully backend-owned.
+const labelsSvc = readFileSync('src/services/labels.ts', 'utf8');
+check('labels.ts: backend createLabelV2 owns the label BUY',
+  /function createLabelV2/.test(labelsSvc));
+check('labels.ts: backend detects direct carriers (directLabelAccountRefFromProviderId)',
+  /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsSvc));
+check('labels.ts: backend enforces the selected-rate proof + PS-204 account binding before purchase',
+  /assertLabelPurchaseRateSelection\(\{[\s\S]*?selectedRateProof:\s*body\.selectedRateProof[\s\S]*?purchaseShippingProviderId:\s*body\.shippingProviderId[\s\S]*?\}\)/.test(labelsSvc));
+const printQueueSvc = readFileSync('src/services/print-queue.ts', 'utf8');
+check('print-queue.ts: the queue worker buys via the backend createLabelV2 (not the FE)',
+  /createLabelV2\(\{[\s\S]*?\.\.\.order\.label/.test(printQueueSvc));
 
 check('package.json wires test:ps-279-web-boundary-guards',
   /test:ps-279-web-boundary-guards/.test(readFileSync('package.json', 'utf8')));

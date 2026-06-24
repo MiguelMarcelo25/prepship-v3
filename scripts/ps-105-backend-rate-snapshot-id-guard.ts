@@ -167,13 +167,47 @@ check('frontend emits the rate quote ref on the primary create/queue/batch paylo
   (ordersView.match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 2 &&
   /\.\.\.buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
   /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
-check('frontend does NOT pass a stale ref on the direct-carrier retry/override path',
-  // site 2 keeps the override-wrapper proof only; no buildRateQuoteRefForOrder next to it.
+// PS-317 A4 (Per user override unlock shipped data on 2026-06-23): the FE
+// direct-carrier label BUY was DELETED. `createDirectCarrierLabelThenQueue`
+// (which built its own selectedRateProof + account-bound rateQuoteRef and called
+// apiClient.createLabel with a direct-carrier shipTo payload) is gone; every
+// queue order now routes to the backend create/recover job. The backend
+// (createLabelV2 -> directLabelAccountRefFromProviderId/createDirectCarrierLabelForOrder)
+// owns the buy and runs the SAME assertLabelPurchaseRateSelection proof gate +
+// account binding. So this guard no longer expects a stale ref on a FE
+// direct-buy override path — that path no longer exists.
+check('frontend NO LONGER owns a direct-carrier label buy (createDirectCarrierLabelThenQueue deleted)',
+  !/createDirectCarrierLabelThenQueue/.test(ordersView) &&
+  // anti-regression: no createLabel call may carry a direct-carrier shipTo buy payload.
+  !/shipTo:\s*\{[\s\S]{0,400}?\},[\s\S]{0,200}?apiClient\.createLabel/.test(ordersView));
+check('frontend does NOT pass a stale ref on any direct-carrier retry/override path',
+  // The deleted FE direct-buy's override-wrapper proof path is gone; anti-regression
+  // ensures no future FE override-buy reintroduces a buildRateQuoteRefForOrder beside it.
   !/overridePayload\?\.selectedRateProof[\s\S]{0,200}?buildRateQuoteRefForOrder/.test(ordersView));
+// The proof + account binding the deleted FE buy used to carry now ride on the
+// backend INTENT payload (buildQueueSendOrderPayload -> order.label), which
+// print-queue.ts processQueueSendOrder spreads into createLabelV2. Re-point the
+// former direct-buy proof line (`const selectedRateProof = ...bestRate ??
+// selectedRate, shippingProviderId`) to that intent payload: the SAME
+// selectedRateProof + account-bound rate-quote ref + shippingProviderId, all
+// keyed to the account this queue order charges.
 check('frontend ref is additive (proof still passed at every site)',
   (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-  /const selectedRateProof =[\s\S]{0,120}?buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
+  // RELOCATED: the proof+binding the FE direct-buy carried now lives on the
+  // queue INTENT payload (order.label), bound to the same shippingProviderId.
+  /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,900}?selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\),/.test(ordersView) &&
+  /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,600}?shippingProviderId: shippingProviderId \?\? undefined,/.test(ordersView) &&
   ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)'));
+// Backend now owns the (former-FE) direct-carrier buy: createLabelV2 detects the
+// direct carrier and runs the SAME strict purchase proof gate before spending.
+const labelsServiceForRelocation = readFileSync('src/services/labels.ts', 'utf8');
+const printQueueService = readFileSync('src/services/print-queue.ts', 'utf8');
+check('backend createLabelV2 owns the direct-carrier buy behind the strict proof gate',
+  /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsServiceForRelocation) &&
+  /createDirectCarrierLabelForOrder\(/.test(labelsServiceForRelocation) &&
+  /await assertLabelPurchaseRateSelection\(\{[\s\S]{0,200}?selectedRateProof: body\.selectedRateProof,/.test(labelsServiceForRelocation));
+check('print-queue routes the FE intent (order.label proof/binding) into createLabelV2',
+  /createLabelV2\(\{\s*\.\.\.order\.label,/.test(printQueueService));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-105 backend rate snapshot id guard (${failures} failing)`);
