@@ -55,6 +55,22 @@ function resolveEbayOrderId(...values: unknown[]): string | null {
   return normed.find((value) => /^\d{2}-\d{5}-\d{5}$/.test(value)) ?? normed[0] ?? null;
 }
 
+// eBay rejects optional fields sent as explicit null / '' with a 400 "Invalid field". Deep-remove every
+// null / undefined / empty-string value so only populated fields (companyName, addressLine2, county, …)
+// reach the API.
+function pruneEmpty<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => pruneEmpty(item)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (val === null || val === undefined || val === '') continue;
+      out[key] = val && typeof val === 'object' ? pruneEmpty(val) : val;
+    }
+    return out as T;
+  }
+  return value;
+}
+
 function ebayShipToContact(rawOrder: any) {
   const ship = Array.isArray(rawOrder?.fulfillmentStartInstructions)
     ? rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
@@ -168,9 +184,19 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
         unit: 'OUNCE',
       },
     },
-    shipFrom,
-    shipTo,
+    // eBay rejects explicit null / empty-string optional fields (companyName, addressLine2, county) with
+    // a 400 "Invalid field" — prune so only populated fields are sent.
+    shipFrom: pruneEmpty(shipFrom),
+    shipTo: pruneEmpty(shipTo),
   };
+
+  // TEMP DIAG (eBay 400 investigation 2026-06-24): log the request with PII values masked (name / street /
+  // phone → a type:length marker) so the exact rejected field is visible in Render logs. Remove once eBay
+  // quotes succeed.
+  {
+    const PII = new Set(['fullName', 'addressLine1', 'addressLine2', 'phoneNumber']);
+    console.warn('[ebay-shipping] req ' + JSON.stringify(body, (key, val) => (PII.has(key) && typeof val === 'string' && val ? `[str:${val.length}]` : val)));
+  }
 
   const res = await timedFetch('ebay-shipping.rates', `${apiBase}/sell/logistics/v1_beta/shipping_quote`, {
     method: 'POST',
