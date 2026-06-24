@@ -479,7 +479,12 @@ async function runBackfill(
           notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
           sql`${orders.weightOz} is not null and ${orders.weightOz} > 0`,
           sql`${orders.shipToPostalCode} is not null and ${orders.shipToPostalCode} <> ''`,
-          or(needsRatePredicate, ineligibleSavedRatePredicate),
+          // A TARGETED re-rate (selected-package-id / save-dims / SKU defaults) explicitly demands
+          // "re-rate these orders now": a dims/package change leaves a RECENT bestRateAt, so the
+          // staleness predicate would wrongly skip it and the FE sits on a mismatched_request spinner
+          // forever. Bypass staleness for targeted ids; the bulk/passive sweep (targetedIds null) keeps
+          // it. The awaiting_shipment + inArray(orders.id, targetedIds) filters above are unchanged.
+          targetedIds ? undefined : or(needsRatePredicate, ineligibleSavedRatePredicate),
           // Skip test-client orders — no real ShipStation rate calls for sandbox data.
           sql`not exists (select 1 from clients c where c.id = ${orders.clientId} and c.is_test = true)`
         )

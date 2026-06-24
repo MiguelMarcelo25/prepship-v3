@@ -3926,12 +3926,15 @@ app.post(
       },
       { recalcGroup: body.recalcGroup === true },
     );
-    // PS-121: kick a bounded targeted recalc for exactly the invalidated sibling ids (awaiting
-    // only — the primitive keeps the awaiting_shipment lockdown filter). Fire-and-forget; the
-    // siblings already show "refreshing" via the pending stamp the service wrote.
-    if (body.recalcGroup === true && result.affectedOrderIds && result.affectedOrderIds.length) {
-      startBackfillBestRatesForOrderIds(result.affectedOrderIds);
-    }
+    // PS-121: kick a bounded targeted recalc for the invalidated ids (awaiting only — the primitive
+    // keeps the awaiting_shipment lockdown filter). Fire-and-forget; the order already shows
+    // "refreshing" via the pending stamp the service wrote.
+    // Per user override unlock shipped data on 2026-06-24: re-rate the changed order even for a SINGLE
+    // package change (not just recalcGroup) — a package change invalidates the saved rate, so without a
+    // re-rate the row sits on a mismatched_request spinner forever. Fall back to [id] when the service
+    // reported no sibling ids. No shipped/cancelled mutation (assertOrderEditable + the awaiting filter).
+    const rerateIds = result.affectedOrderIds && result.affectedOrderIds.length ? result.affectedOrderIds : [id];
+    startBackfillBestRatesForOrderIds(rerateIds);
     return c.json({ data: result });
   }
 );
@@ -4135,6 +4138,15 @@ app.post(
         set: { ...coherent.patch, updatedAt: new Date() },
       })
       .returning();
+
+    // Per user override unlock shipped data on 2026-06-24: a dims/package change invalidates the saved
+    // rate (the FE otherwise sits on a perpetual "package changed" / mismatched_request spinner with no
+    // watchdog). Fire a bounded TARGETED re-rate so the row re-rates to the new dims. awaiting-only —
+    // assertOrderEditable blocked shipped/cancelled above AND the backfill itself filters
+    // order_status = 'awaiting_shipment'. Fire-and-forget; the targeted backfill stamps `pending` (bounded
+    // by the reader watchdog + finalize-sweep) and resolves to the fresh rate. No shipped/cancelled
+    // mutation, no labels/postage.
+    startBackfillBestRatesForOrderIds([id]);
 
     return c.json({ data: row });
   }
