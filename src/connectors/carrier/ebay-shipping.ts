@@ -44,6 +44,17 @@ function ebayOrderIdFrom(value: unknown): string | null {
   return trimmed.startsWith('ebay-') ? trimmed.slice('ebay-'.length) : trimmed;
 }
 
+// eBay's createShippingQuote orders[].orderId must be the eBay Sell order id (shape NN-NNNNN-NNNNN). A
+// ShipStation-synced eBay order carries that eBay id in its order NUMBER, while externalOrderId is
+// ShipStation's own numeric id — sending the latter yields a 400 "Invalid field" (errorId 90020). Prefer
+// the value matching the eBay order-id shape across the order number, external id, and the raw order.
+function resolveEbayOrderId(...values: unknown[]): string | null {
+  const normed = values
+    .map((value) => ebayOrderIdFrom(value))
+    .filter((value): value is string => value != null);
+  return normed.find((value) => /^\d{2}-\d{5}-\d{5}$/.test(value)) ?? normed[0] ?? null;
+}
+
 function ebayShipToContact(rawOrder: any) {
   const ship = Array.isArray(rawOrder?.fulfillmentStartInstructions)
     ? rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
@@ -99,7 +110,10 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     ? input.rawOrder as Record<string, any>
     : null;
   const externalOrderId = typeof input.externalOrderId === 'string' ? input.externalOrderId : null;
-  const orderId = ebayOrderIdFrom(externalOrderId ?? rawOrder?.orderId);
+  const orderNumber = typeof input.orderNumber === 'string' ? input.orderNumber : null;
+  // Prefer the eBay-formatted id (the order NUMBER for ShipStation-synced eBay orders) over the
+  // ShipStation external_order_id, which eBay rejects as an invalid orderId.
+  const orderId = resolveEbayOrderId(orderNumber, externalOrderId, rawOrder?.orderId);
   if (!orderId) {
     throw new Error('eBay Shipping rates require an eBay order id. Open Browse Rates from an eBay-pulled order.');
   }
