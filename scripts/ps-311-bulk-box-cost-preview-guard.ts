@@ -85,6 +85,18 @@ check('apply route exists, regenerates the scope, and AUDITS the bulk money acti
 check('apply route is permission-gated (financials:write)',
   /box-cost\/bulk\/apply[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute));
 
+// ── Slice 3: operator UI (BillingView box-review action → preview-first bulk modal) ──
+const modal = readFileSync('web/src/components/Views/BulkBoxCostModal.tsx', 'utf8');
+check('UI modal previews THEN applies via the two backend routes',
+  /\/billing\/box-cost\/bulk\/preview/.test(modal) && /\/billing\/box-cost\/bulk\/apply/.test(modal));
+check('UI Apply is GATED (needs a fetched preview + a confirm tick + a non-empty editable set)',
+  /applyDisabled\s*=/.test(modal) && /!confirmed/.test(modal) && /editableOrderCount === 0/.test(modal));
+const billingView = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
+check('BillingView wires the bulk modal from the box-review action',
+  /import BulkBoxCostModal/.test(billingView) &&
+  /<BulkBoxCostModal/.test(billingView) &&
+  /data-bulk-box-cost-trigger/.test(billingView));
+
 if (failures > 0) {
   console.error(`\nPS-311 bulk box-cost preview guard FAILED with ${failures} failure(s).`);
   process.exit(1);

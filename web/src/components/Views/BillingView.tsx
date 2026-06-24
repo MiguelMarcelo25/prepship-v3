@@ -6,6 +6,7 @@ import { apiClient } from '../../api/client'
 // (that adapter is out of this ticket's scope); call the shared low-level
 // client directly. Additive, behind the backend shippingZeroNeedsReview flag.
 import { api } from '../../lib/api'
+import BulkBoxCostModal from './BulkBoxCostModal'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -330,6 +331,9 @@ export default function BillingView() {
   const [activePreset, setActivePreset] = useState<BillingPresetId | null>('last_30')
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
+  // PS-311: bulk box-cost modal — open when the operator chooses to apply a reviewed box cost to
+  // EVERY order with that box in the current (client + date range).
+  const [bulkBoxCostOpen, setBulkBoxCostOpen] = useState(false)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
@@ -1693,6 +1697,20 @@ export default function BillingView() {
                 <strong style={{ color: '#b45309' }}>Box needs review:</strong>{' '}
                 {billingEditModal.row.packageCostReviewReason || 'the shipped box could not be matched to a known package.'}
                 {' '}Pick the correct Box Size (or set a Box Cost) and Save — the decision persists across billing regeneration.
+                {/* PS-311: once a box is chosen, bulk-apply its reviewed cost to EVERY order billed
+                    for that box in the current client + date range (preview-first, gated). */}
+                {billingEditModal.draft.packageId && detailState.clientId != null ? (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      data-bulk-box-cost-trigger
+                      className="btn btn-secondary btn-xs"
+                      type="button"
+                      onClick={() => setBulkBoxCostOpen(true)}
+                    >
+                      Set this box cost across {from} → {to}…
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -1845,6 +1863,27 @@ export default function BillingView() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* PS-311: bulk box-cost modal — opened from the per-order edit modal's box-review action.
+          Previews + applies the reviewed box cost across the whole client + date-range scope. */}
+      {bulkBoxCostOpen && billingEditModal && billingEditModal.draft.packageId && detailState.clientId != null ? (
+        <BulkBoxCostModal
+          clientId={detailState.clientId}
+          clientName={detailState.clientName || `Client ${detailState.clientId}`}
+          dateFrom={from}
+          dateTo={to}
+          packageId={Number(billingEditModal.draft.packageId)}
+          packageLabel={
+            packages.find((pkg) => pkg.packageId === Number(billingEditModal.draft.packageId))?.name ??
+            `Box #${billingEditModal.draft.packageId}`
+          }
+          onClose={() => setBulkBoxCostOpen(false)}
+          onApplied={() => {
+            // Re-fetch the summary so the bulk-re-priced box costs show immediately.
+            void apiClient.fetchBillingSummary(from, to).then((rows) => setSummaryRows(rows)).catch(() => {})
+          }}
+        />
       ) : null}
 
       {orderDetailModalId != null ? (
