@@ -25,13 +25,16 @@ AI coding agents must also follow [AGENTS.md](AGENTS.md) (mirrored to `CLAUDE.md
 3. **Evidence:** the exact commands you ran with pass/fail results
    (`npm run typecheck`, the relevant guards, `npm run build:web`, browser/workflow
    checks where applicable). State plainly if something was skipped or failed.
-4. **No source-of-truth bypass wrappers.** A wrapper/helper/adapter may translate provider
-   shapes, normalize formatting, or forward to the canonical owner — but it must never own a
-   business rule, choose an authoritative value, compute money/rate/eligibility/inventory/
-   billing truth, rank "best" options, persist authoritative state, or silently fall back to
-   stale/alternate truth. If a wrapper needs business logic, move the rule to the
-   source-of-truth owner and make the wrapper delegate (see
-   [ARCHITECTURE.md](ARCHITECTURE.md) → *No Source-of-Truth Bypass Wrappers*).
+4. **Backend truth / no source-of-truth bypass.** Backend owns business truth — never put
+   money/rates/pricing/eligibility/inventory/billing/auth/status-transition/label/carrier/
+   marketplace/persistence logic in the frontend as the source of truth. Prefer calling the
+   canonical owner directly over adding a wrapper. A wrapper/helper/adapter may translate
+   provider shapes, normalize formatting, or forward to the canonical owner — but it must never
+   own a business rule, choose an authoritative value, compute authoritative totals, rank or
+   select "best" options, persist authoritative state, or silently fall back to stale/alternate
+   truth. If a wrapper needs business logic, move the rule to the source-of-truth owner and make
+   the wrapper delegate (see [ARCHITECTURE.md](ARCHITECTURE.md) →
+   *Backend Truth & No Source-of-Truth Bypass Law*).
 
 ## Safety rules (do not weaken)
 

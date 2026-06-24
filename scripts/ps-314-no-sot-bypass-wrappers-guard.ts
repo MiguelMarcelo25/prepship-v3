@@ -16,7 +16,9 @@ function check(name: string, condition: boolean): void {
   console.log(`ok   ${name}`);
 }
 
-const RULE = /No Source-of-Truth Bypass Wrappers|source-of-truth bypass wrapper/i;
+// PS-316 strengthened the PS-314 heading to "Backend Truth & No Source-of-Truth Bypass Law" —
+// match the shared "No Source-of-Truth Bypass" stem so both wordings satisfy this ratchet.
+const RULE = /No Source-of-Truth Bypass/i;
 
 // 1) The rule is present in every required governance surface.
 const surfaces = [

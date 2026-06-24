@@ -38,10 +38,10 @@ AGENTS.md (shipped/cancelled lockdown) before opening. Fill every section; delet
       touched).
 - [ ] Auth/RBAC, client/store scope, selected-rate proof, secret redaction, and
       billing/inventory correctness are preserved (not weakened).
-- [ ] No source-of-truth bypass wrapper introduced — every wrapper/helper/adapter stays thin
-      (translate/normalize/forward only) and delegates business rules, authoritative values,
-      money/rate/eligibility/inventory/billing truth, and "best"-selection to the canonical
-      owner (see [ARCHITECTURE.md](../ARCHITECTURE.md) → *No Source-of-Truth Bypass Wrappers*).
+- [ ] Backend truth / no-wrapper law checked: no backend-owned business logic was added to
+      frontend/UI, and no wrapper/helper/adapter became a second source of truth. New wrappers
+      are thin, necessary, traceable, and delegate to the canonical owner (see
+      [ARCHITECTURE.md](../ARCHITECTURE.md) → *Backend Truth & No Source-of-Truth Bypass Law*).
 
 ## Testing
 

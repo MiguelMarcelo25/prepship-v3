@@ -197,31 +197,43 @@ business logic must live. The lockdown still governs *what* may be touched.
 
 ---
 
-## 🚫 No Source-of-Truth Bypass Wrappers (PS-314)
+## 🚫 Backend Truth & No Source-of-Truth Bypass Law (PS-316, supersedes PS-314)
 
-Wrappers, helpers, and adapters are **not forbidden when they stay thin** — they are
-forbidden when they become a **second source of truth**.
+These rules apply to every new code change, refactor, bug fix, and AI-generated patch.
+(PS-316 strengthens the earlier No-Source-of-Truth-Bypass-Wrappers rule with explicit
+frontend/backend placement and a direct-source preference.)
 
-A wrapper / helper / adapter **MAY**:
-- translate external/provider shapes into internal DTOs;
-- normalize names, units, dates, or display formatting;
-- preserve backward compatibility while forwarding to the source-of-truth service;
-- reduce duplication by routing callers through the canonical owner.
+1. **Backend owns business truth.** The frontend may display backend state, collect user
+   intent, format dates/numbers, and show non-authoritative previews. It must NOT own
+   authoritative business logic that belongs in backend services, policies, read models, or
+   workflow owners.
+2. **Do not put backend logic in the frontend.** Never place money, totals, pricing, rates,
+   discounts, eligibility, inventory movement, cost layers, COGS, billing, auth/scope, reporting
+   windows, customer visibility, status transitions, shipped/cancelled locks, labels/postage,
+   carrier selection, marketplace confirmations, external side effects, or persistence decisions
+   in React/UI code as the source of truth.
+3. **Prefer direct source-of-truth calls over wrappers.** When code can call the canonical
+   source-of-truth service / read model / policy directly, do that. Do not add a wrapper / helper
+   / adapter just to make the current file easier while hiding where truth actually lives.
+4. **Wrappers are allowed only when thin and necessary.** A wrapper / helper / adapter may
+   translate external/provider shapes, normalize units/names/dates, preserve compatibility, or
+   delegate to a canonical owner. It must remain boring, thin, and traceable.
+5. **Wrappers must not become a second source of truth.** They must not own business rules,
+   choose authoritative values, calculate authoritative totals / prices / rates / inventory /
+   billing / reporting / auth decisions, rank or select "best" options, persist authoritative
+   state, silently fall back to stale / cached / alternate truth, or bypass the canonical owner.
+6. **If a wrapper needs business logic, STOP.** Move the rule to the backend / domain source of
+   truth, make the wrapper delegate to it, and add boundary tests at the canonical owner. Do not
+   bury the rule in UI / helpers.
+7. **Every PR must prove placement.** Name the canonical owner touched, the callers that delegate
+   to it, and the tests that prove the source-of-truth boundary. If the change is purely visual,
+   say so explicitly.
 
-A wrapper / helper / adapter **MUST NOT**:
-- own business rules;
-- choose authoritative values;
-- calculate money, rates, totals, eligibility, inventory, billing, auth/scope, or
-  reporting truth;
-- rank or select "best" options;
-- persist authoritative state;
-- silently fall back to stale / cached / alternate truth;
-- bypass the canonical service because it is easier from the current file.
-
-**If a wrapper needs business logic, STOP** — trace the workflow to the canonical source
-of truth, move the rule there, make the wrapper delegate, and add boundary tests at the
-owner. A "thin" wrapper that quietly decides a business-critical value is a
-source-of-truth bypass and is rejected in review.
+**PrepShip examples.** Best Rate / Rate Browser ranking + selected-rate proof live in the backend
+rate owner (not React); Print Queue create/recover/route is backend-owned (the FE only sends
+intent); label purchase + carrier selection are backend money-path decisions; billing export
+totals come from the billing source of truth (the FE never recomputes them); shipment sync +
+package / inventory read models are backend-owned and the FE renders their DTOs verbatim.
 
 ---
 
