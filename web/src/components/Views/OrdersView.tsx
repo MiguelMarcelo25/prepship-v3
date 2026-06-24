@@ -228,6 +228,7 @@ import {
   type TableColumnConfig,
 } from './orders-parity'
 import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
+import { computeReorderedColumns } from './orders/column-reorder'
 import {
   buildFilteredAwaitingRecalculateQuery,
   formatBatchRecalculateFinishedMessage,
@@ -2940,16 +2941,11 @@ export default function OrdersView({
   }
 
   function buildMovedColumnPrefs(sourceKey: TableColumnKey, targetKey: TableColumnKey) {
-    if (!sourceKey || !targetKey || sourceKey === targetKey || sourceKey === 'select' || targetKey === 'select') return null
-
     const prefs = getLatestColumnPrefs()
-    const nextOrdered = [...prefs.orderedColumns]
-    const sourceIndex = nextOrdered.findIndex((column) => column.key === sourceKey)
-    const targetIndex = nextOrdered.findIndex((column) => column.key === targetKey)
-    if (sourceIndex < 0 || targetIndex < 0) return null
-
-    const [column] = nextOrdered.splice(sourceIndex, 1)
-    nextOrdered.splice(targetIndex, 0, column!)
+    // PS-317: the pure splice (source removed, reinserted at the target's slot; null when invalid /
+    // the immovable 'select' column) lives in orders/column-reorder.ts under a focused unit guard.
+    const nextOrdered = computeReorderedColumns(prefs.orderedColumns, sourceKey, targetKey)
+    if (!nextOrdered) return null
     return buildSavedColumnPrefs(nextOrdered, prefs.hiddenColumns, prefs.widths as any)
   }
 
