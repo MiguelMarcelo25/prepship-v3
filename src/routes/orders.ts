@@ -89,6 +89,8 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { isResourceInScope } from '../lib/scope-predicates';
 // PS-234: durable audit trail for shipped/cancelled ?force=1 overrides + manual orders.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
+import { type BundleRowDto } from '../services/shipment-bundles/bundle-read-model';
+import { resolveScopedBundles } from '../services/shipment-bundles/resolve-scoped-bundles';
 // PS-231: per-admin rate limit on the ?force=1 lockdown override.
 import { checkForceOverrideRateLimit } from '../lib/force-override-rate-limit';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
@@ -4519,6 +4521,25 @@ app.post(
       assignedTo: userId ? { userId, email } : null,
     });
   }
+);
+
+// PS-312/PS-317 (S4 slice 1): expose the combined-shipment-bundle read-model (S3) to the FE.
+// READ-ONLY. Returns which of the caller's IN-SCOPE orders belong to a bundle + each bundle's shared
+// label/tracking/status/members (BundleRowDto). The FE renders the DTO verbatim — no logic in the
+// frontend. Scope-filtered through the SAME orderScopePredicate the list endpoint uses: a bundle's
+// members all share one client/store by construction, so an in-scope member implies the whole bundle
+// is visible. An order outside the caller's scope is dropped before the read-model ever sees it.
+app.post(
+  '/bundles/resolve',
+  zValidator('json', z.object({ order_ids: z.array(z.number().int().positive()).min(1).max(1000) })),
+  async (c) => {
+    const { order_ids } = c.req.valid('json');
+    const scope = ordersScopeFromContext(c);
+    const map = await resolveScopedBundles(order_ids, scope);
+    const bundles: Record<string, BundleRowDto> = {};
+    for (const [orderId, dto] of map) bundles[String(orderId)] = dto;
+    return c.json({ bundles });
+  },
 );
 
 export default app;
