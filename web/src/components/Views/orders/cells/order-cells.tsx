@@ -343,6 +343,14 @@ export function renderCarrierCell(order: OrderSummaryDto, deps: OrderCellsDeps):
     )
   }
 
+  // PS-312/PS-317 (S4): an AWAITING combined-shipment CHILD ships under the bundle PRIMARY's single
+  // label, so it has no own rate to buy — surface its bundle membership (shared shipment) instead of a
+  // rate, so a freshly-combined order shows it's bundled immediately, not just once shipped.
+  const childBundle = deps.bundleByOrderId?.get(order.orderId)
+  if (childBundle && childBundle.role === 'child') {
+    return renderBundleChildBadge(childBundle)
+  }
+
   // PS-071 — bounded/actionable state instead of an indefinite spinner.
   const fallback = renderAwaitingRateFallback(order, displayOrder, 'full')
   if (fallback) return fallback
