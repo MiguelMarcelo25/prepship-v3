@@ -82,8 +82,11 @@ export function computeBulkBoxCostPreview(
 export async function fetchBulkBoxCostOrderRows(
   scope: BulkBoxCostScope,
   clientScopePredicate: ReturnType<typeof sql> | undefined,
+  // Optional connection seam: production passes nothing (the singleton db); the PS-311 pglite
+  // integration test passes an in-memory Postgres so the REAL scope SQL is exercised offline.
+  conn: typeof db = db,
 ): Promise<BulkBoxCostOrderRow[]> {
-  const rows = await db
+  const rows = await conn
     .select({
       orderId: billingLineItems.orderId,
       orderNumber: billingLineItems.orderNumber,
@@ -159,16 +162,20 @@ export async function applyBulkBoxCostResolutions(
   clientScopePredicate: ReturnType<typeof sql> | undefined,
   resolvedBy: string | null,
   note: string | null,
+  conn: typeof db = db,
 ): Promise<BulkBoxCostApplyResult> {
-  await ensureBillingBoxResolutionsSchema();
-  const rows = await fetchBulkBoxCostOrderRows(scope, clientScopePredicate);
+  // Only the production singleton path ensures the real schema (which FK-references orders/
+  // shipments/packages). An injected test conn (pglite) creates its own table and must NEVER be
+  // allowed to reach the production singleton — the `conn === db` guard enforces that.
+  if (conn === db) await ensureBillingBoxResolutionsSchema();
+  const rows = await fetchBulkBoxCostOrderRows(scope, clientScopePredicate, conn);
   const { editable, skippedFinalized } = splitBulkBoxCostApplyTargets(rows);
   const overridePrice = round2(scope.newCost).toFixed(2);
 
   if (editable.length > 0) {
     // ONE transaction for the whole batch — all editable orders get the resolution or none do, so
     // a mid-apply failure can never leave the range half-re-priced.
-    await db.transaction(async (tx) => {
+    await conn.transaction(async (tx) => {
       for (const r of editable) {
         await tx
           .insert(billingBoxResolutions)

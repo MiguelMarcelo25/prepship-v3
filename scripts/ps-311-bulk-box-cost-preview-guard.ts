@@ -86,7 +86,9 @@ check('apply service writes ONLY billing_box_resolutions, by upsert (the PS-207 
 check('apply service NEVER writes client_package_prices (timeless table — card forbids re-pricing it)',
   !/clientPackagePrices/.test(svc));
 check('apply runs in ONE transaction (all editable orders re-price, or none)',
-  /db\.transaction\(/.test(svc));
+  /conn\.transaction\(/.test(svc));
+check('apply ensures the real schema ONLY on the production singleton (a test conn never touches it)',
+  /if \(conn === db\) await ensureBillingBoxResolutionsSchema\(\)/.test(svc));
 check('apply route exists, regenerates the scope, and AUDITS the bulk money action',
   /\/box-cost\/bulk\/apply/.test(billingRoute) &&
   /applyBulkBoxCostResolutions\(/.test(billingRoute) &&
