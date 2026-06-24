@@ -230,7 +230,7 @@ import {
 import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
 import { computeReorderedColumns } from './orders/column-reorder'
 import { useColumnDrag } from './orders/useColumnDrag'
-import { useOrderBundles } from './orders/use-order-bundles'
+import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
   formatBatchRecalculateFinishedMessage,
@@ -875,7 +875,6 @@ export default function OrdersView({
   const [extShipTracking, setExtShipTracking] = useState('')
   const [extShipBusy, setExtShipBusy] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
-  const [combineBusy, setCombineBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   // Set of orderIds that just successfully shipped — they render with
   // Per-order print-label transition (boss directive 2026-05-07):
@@ -2484,6 +2483,17 @@ export default function OrdersView({
     onSelectedOrderIdsChange?.([])
     onActiveOrderIdChange?.(null)
   }
+
+  // PS-312/PS-317 (S4): the "Combine shipments" action (POST /orders/bundles + the backend's toast
+  // verdict + the post-combine refresh) lives in the bundle hook; OrdersView just wires its toast +
+  // selection/refetch. handleCombineShipments below is the thin no-arg adapter the batch panel calls.
+  const { combineBusy, combineShipments } = useCombineShipments({
+    showToast,
+    onCombined: async () => {
+      clearSelection()
+      await refetchOrders()
+    },
+  })
 
   const closeSinglePanel = () => {
     const activeIsOnlySelection =
@@ -5889,24 +5899,10 @@ export default function OrdersView({
     }
   }
 
-  // PS-312/PS-317 (S4): combine the selected orders into ONE combined-shipment bundle. The FE owns NO
-  // eligibility logic — it POSTs the selected ids; the backend (createScopedBundle → createBundle)
-  // validates scope + eligibility (same client/store/recipient, awaiting, not already bundled) and
-  // returns the verdict, surfaced here as a toast. On success the new bundle shows on each member row.
-  async function handleCombineShipments() {
-    if (selectedOrderIds.length < 2) return
-    setCombineBusy(true)
-    try {
-      await api.post('/orders/bundles', { order_ids: selectedOrderIds })
-      showToast(`Combined ${selectedOrderIds.length} orders into one shipment`, 'success')
-      clearSelection()
-      await refetchOrders()
-      void queryClient.invalidateQueries({ queryKey: ['order-bundles'] })
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Could not combine shipments', 'error')
-    } finally {
-      setCombineBusy(false)
-    }
+  // PS-312/PS-317 (S4): thin no-arg adapter the batch panel calls; the action logic + busy state live
+  // in useCombineShipments (wired above with the toast + post-combine refresh).
+  function handleCombineShipments() {
+    void combineShipments(selectedOrderIds)
   }
 
   async function handleBatchAction(mode: 'print' | 'queue') {

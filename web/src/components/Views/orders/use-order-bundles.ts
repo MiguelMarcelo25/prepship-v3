@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../../lib/api'
 
 // PS-312/PS-317 (S4) — FE shape of the backend combined-shipment read-model DTO. The frontend renders
@@ -44,4 +45,33 @@ export function useOrderBundles(orderIds: number[]): Map<number, OrderBundleDto>
     },
   })
   return data ?? EMPTY_BUNDLES
+}
+
+/**
+ * The "Combine shipments" action. POSTs the selected order ids to the create route and surfaces the
+ * backend's verdict (success or the eligibility/scope error) via the caller's toast — the FE owns NO
+ * eligibility logic. On success it runs onCombined (clear selection + refetch) and invalidates the
+ * bundle query so the members immediately show their shared-shipment badge.
+ */
+export function useCombineShipments(opts: {
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void
+  onCombined: () => void | Promise<void>
+}): { combineBusy: boolean; combineShipments: (orderIds: number[]) => Promise<void> } {
+  const queryClient = useQueryClient()
+  const [combineBusy, setCombineBusy] = useState(false)
+  const combineShipments = async (orderIds: number[]): Promise<void> => {
+    if (orderIds.length < 2) return
+    setCombineBusy(true)
+    try {
+      await api.post('/orders/bundles', { order_ids: orderIds })
+      opts.showToast(`Combined ${orderIds.length} orders into one shipment`, 'success')
+      await opts.onCombined()
+      void queryClient.invalidateQueries({ queryKey: ['order-bundles'] })
+    } catch (err) {
+      opts.showToast(err instanceof Error ? err.message : 'Could not combine shipments', 'error')
+    } finally {
+      setCombineBusy(false)
+    }
+  }
+  return { combineBusy, combineShipments }
 }
