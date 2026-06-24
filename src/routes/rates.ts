@@ -72,6 +72,8 @@ import {
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
 } from '../lib/shipping-service-eligibility';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { clients } from '../db/schema/clients';
+import { isEbayMarketplaceOrder } from '../services/ebay-order-detection';
 
 const app = new Hono();
 
@@ -472,6 +474,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     raw: unknown;
     clientId: number | null;
     storeId: number | null;
+    orderNumber: string | null;
+    clientName: string | null;
   } | null = null;
   let residentialEvidence: ResidentialEvidence | null = null;
   if (body.orderId) {
@@ -483,8 +487,11 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
           shipToName: orders.shipToName,
           clientId: orders.clientId,
           storeId: orders.storeId,
+          orderNumber: orders.orderNumber,
+          clientName: clients.name,
         })
         .from(orders)
+        .leftJoin(clients, eq(clients.id, orders.clientId))
         .where(eq(orders.id, body.orderId))
         .limit(1);
       if (ord) {
@@ -529,6 +536,19 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     // the Rate Shop calculator), which correctly excludes eBay there.
     sourceProvider: orderForBrowse?.sourceProvider ?? null,
     rawOrder: orderForBrowse?.raw ?? undefined,
+    // eBay's direct carrier prices a specific eBay order; gate it on whether this IS an eBay
+    // marketplace order (sync-path-agnostic — an eBay order synced via ShipStation still qualifies,
+    // where the old sourceProvider==='ebay' gate wrongly excluded it). Falsy off any order so eBay
+    // never clutters non-eBay orders.
+    isEbayMarketplaceOrder: isEbayMarketplaceOrder({
+      clientName: orderForBrowse?.clientName ?? null,
+      sourceProvider: orderForBrowse?.sourceProvider ?? null,
+      externalOrderId: (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
+      raw: orderForBrowse?.raw ?? null,
+    }),
+    // Carry the authoritative eBay order number so the eBay connector (externalOrderId ?? orderNumber)
+    // always has the eBay orderId, even when the FE didn't pass one.
+    orderNumber: orderForBrowse?.orderNumber ?? (rest as { orderNumber?: string | null }).orderNumber ?? null,
     // Evidence decides — the collapsed FE boolean is dropped (residential: undefined) so the
     // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
     ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),

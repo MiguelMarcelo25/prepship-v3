@@ -439,6 +439,9 @@ export type RateInput = {
   // connectors that need the marketplace order itself (the eBay ship-to + order id).
   sourceProvider?: string | null;
   rawOrder?: unknown;
+  // Whether this is an eBay-marketplace order (sync-path-agnostic; see ebay-order-detection.ts).
+  // Gates the eBay Logistics carrier so an eBay order synced via ShipStation still gets eBay rates.
+  isEbayMarketplaceOrder?: boolean | null;
 };
 
 function normalizeZip(zip: string): string {
@@ -2016,10 +2019,13 @@ export async function getDirectCarrierRatesForRateInput(
   options: { cachedOnly?: boolean } = {},
 ): Promise<DirectCarrierRatesResult> {
   const accounts = (await loadVisibleDirectCarrierAccounts(input)).filter((account) => {
-    // eBay Logistics ONLY prices a specific eBay order (its shipping_quote API takes an eBay
-    // orderId), so it can NEVER quote a non-eBay order. Exclude it entirely off eBay orders so it
-    // stops cluttering the carrier list with "no rates available" (operator request 2026-06-24).
-    if (normalizeProviderKey(account.provider) === 'ebay_shipping' && (input.sourceProvider ?? null) !== 'ebay') {
+    // eBay Logistics ONLY prices a specific eBay order (its shipping_quote API takes an eBay orderId),
+    // so it can NEVER quote a non-eBay order. Gate on whether this is an eBay MARKETPLACE order
+    // (sync-path-agnostic) — DR Prepper's eBay orders arrive via ShipStation (sourceProvider =
+    // 'shipstation'), so the old sourceProvider==='ebay' check wrongly excluded EVERY one of them
+    // (no rates, no error, no API call). Off any order (e.g. the Rate Shop calculator)
+    // isEbayMarketplaceOrder is falsy → eBay stays excluded, so it never clutters non-eBay orders.
+    if (normalizeProviderKey(account.provider) === 'ebay_shipping' && !input.isEbayMarketplaceOrder) {
       return false;
     }
     return true;
