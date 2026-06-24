@@ -229,6 +229,7 @@ import {
 } from './orders-parity'
 import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
 import { computeReorderedColumns } from './orders/column-reorder'
+import { useColumnDrag } from './orders/useColumnDrag'
 import {
   buildFilteredAwaitingRecalculateQuery,
   formatBatchRecalculateFinishedMessage,
@@ -816,10 +817,8 @@ export default function OrdersView({
       : false
   ))
   const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
-  const [dragColumnKey, setDragColumnKey] = useState<TableColumnKey | null>(null)
-  const [dragOverColumnKey, setDragOverColumnKey] = useState<TableColumnKey | null>(null)
-  const [dropdownDragColumnKey, setDropdownDragColumnKey] = useState<TableColumnKey | null>(null)
-  const [dropdownDragOverColumnKey, setDropdownDragOverColumnKey] = useState<TableColumnKey | null>(null)
+  // PS-317: column drag state + the 8 drag handlers live in useColumnDrag (called below, after the
+  // shared suppressHeaderClickRef/resizeStateRef it needs are declared).
   const [resizingColumnKey, setResizingColumnKey] = useState<TableColumnKey | null>(null)
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueHistoryVisible, setQueueHistoryVisible] = useState(false)
@@ -976,6 +975,23 @@ export default function OrdersView({
   const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
   const suppressHeaderClickRef = useRef(false)
+  // PS-317: column drag-to-reorder interaction (4 state vars + 8 header/dropdown drag handlers),
+  // extracted to useColumnDrag. moveColumn is a hoisted fn below; reorder math is unit-guarded
+  // (ps-317-column-reorder). Resize/sort stay in OrdersView (they share these refs + sort state).
+  const {
+    dragColumnKey,
+    dragOverColumnKey,
+    dropdownDragColumnKey,
+    dropdownDragOverColumnKey,
+    handleHeaderDragStart,
+    handleHeaderDragOver,
+    handleHeaderDrop,
+    finishHeaderDrag,
+    handleDropdownDragStart,
+    handleDropdownDragOver,
+    handleDropdownDrop,
+    finishDropdownDrag,
+  } = useColumnDrag({ moveColumn, suppressHeaderClickRef, resizeStateRef })
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
   const autoPackageDimsKeyRef = useRef<string | null>(null)
   const panelFormInitKeyRef = useRef<string | null>(null)
@@ -2955,43 +2971,6 @@ export default function OrdersView({
     void saveColumnPrefsToServer(nextPrefs)
   }
 
-  function finishHeaderDrag() {
-    setDragColumnKey(null)
-    setDragOverColumnKey(null)
-    suppressHeaderClickRef.current = true
-    window.setTimeout(() => {
-      suppressHeaderClickRef.current = false
-    }, 150)
-  }
-
-  function handleHeaderDragStart(event: React.DragEvent<HTMLTableCellElement>, key: TableColumnKey) {
-    if (resizeStateRef.current || key === 'select') {
-      event.preventDefault()
-      return
-    }
-
-    suppressHeaderClickRef.current = true
-    setDragColumnKey(key)
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', key)
-  }
-
-  function handleHeaderDragOver(event: React.DragEvent<HTMLTableCellElement>, key: TableColumnKey) {
-    if (!dragColumnKey || key === dragColumnKey || key === 'select') return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    setDragOverColumnKey(key)
-  }
-
-  function handleHeaderDrop(event: React.DragEvent<HTMLTableCellElement>, key: TableColumnKey) {
-    const sourceKey = (event.dataTransfer.getData('text/plain') || dragColumnKey) as TableColumnKey
-    if (!sourceKey || sourceKey === key || key === 'select') return
-
-    event.preventDefault()
-    moveColumn(sourceKey, key)
-    finishHeaderDrag()
-  }
-
   function handleHeaderClick(column: TableColumn) {
     if (suppressHeaderClickRef.current) {
       suppressHeaderClickRef.current = false
@@ -3035,34 +3014,6 @@ export default function OrdersView({
       event.preventDefault()
       handleHeaderClick(column)
     }
-  }
-
-  function handleDropdownDragStart(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
-    setDropdownDragColumnKey(key)
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', key)
-  }
-
-  function handleDropdownDragOver(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
-    if (!dropdownDragColumnKey || key === dropdownDragColumnKey) return
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    setDropdownDragOverColumnKey(key)
-  }
-
-  function handleDropdownDrop(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
-    const sourceKey = (event.dataTransfer.getData('text/plain') || dropdownDragColumnKey) as TableColumnKey
-    if (!sourceKey || sourceKey === key) return
-
-    event.preventDefault()
-    moveColumn(sourceKey, key)
-    setDropdownDragColumnKey(null)
-    setDropdownDragOverColumnKey(null)
-  }
-
-  function finishDropdownDrag() {
-    setDropdownDragColumnKey(null)
-    setDropdownDragOverColumnKey(null)
   }
 
   function startColumnResize(event: React.MouseEvent<HTMLDivElement>, column: TableColumn) {
