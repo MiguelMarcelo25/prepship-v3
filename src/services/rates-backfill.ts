@@ -407,6 +407,13 @@ async function runBackfill(
   job.message = 'Querying orders...';
   await persistBackfillJobSnapshot(job, opts);
 
+  // PS-120 finalize: every selected row is stamped 'pending' up front, but processOne only clears the
+  // rows the workers actually REACH. Rows past the cursor when the job stops/breaks/errors would stay
+  // 'rating'/'pending' forever (the awaiting "infinite spinner"). Track the stamped set + the rows
+  // processOne finalized, then clear the leftovers in the finally below.
+  const finalizedIds = new Set<number>();
+  let stampedIds: number[] = [];
+
   try {
     const effectiveMaxAgeHours = opts.maxAgeHours ?? CACHE_TTL_MS / (60 * 60 * 1000);
     const staleCutoff = new Date(Date.now() - effectiveMaxAgeHours * 60 * 60 * 1000);
@@ -513,6 +520,7 @@ async function runBackfill(
         }
       }),
     );
+    stampedIds = rows.map((row) => row.id);
 
     // #750: throttle the LIVE burst so 40+ forceRefresh orders don't starve each other for the global
     // rate-limiter's permits (the cause of the 30s queue-wait timeouts); passive sweeps keep 4.
@@ -547,6 +555,7 @@ async function runBackfill(
       // PS-120: clear the in-progress row once this order's rate RESOLVES (saved, empty,
       // skipped, or errored) so a resolved order never lingers as pending/rating.
       const resolveRateJob = async () => {
+        finalizedIds.add(row.id);
         try {
           await clearOrderRateJob(row.id);
         } catch (err) {
@@ -835,6 +844,15 @@ async function runBackfill(
     await persistBackfillJobSnapshot(job, opts);
   } finally {
     if (activeJobId === jobId) activeJobId = null;
+    // PS-120 finalize: clear every stamped row the workers didn't reach (timeout / error / early-stop)
+    // so no order is left 'rating'/'pending' forever after the job ends. Best-effort + idempotent
+    // (clearOrderRateJob is DELETE WHERE order_id); never throw out of runBackfill.
+    try {
+      const leftover = stampedIds.filter((id) => !finalizedIds.has(id));
+      if (leftover.length) await Promise.allSettled(leftover.map((id) => clearOrderRateJob(id)));
+    } catch (err) {
+      console.warn('[rates-backfill] finalize sweep failed:', err instanceof Error ? err.message : err);
+    }
     startQueuedBackfillIfIdle();
   }
 }

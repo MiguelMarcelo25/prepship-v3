@@ -648,6 +648,7 @@ export default function OrdersView({
     let cancelled = false
     let refreshInflight = false
     let recalcAllPollFailures = 0
+    const settleTimers: ReturnType<typeof setTimeout>[] = []
     const timer = setInterval(async () => {
       try {
         const job = await fetchRecalculateAllJob(recalcAllJobId)
@@ -667,6 +668,13 @@ export default function OrdersView({
           }
           setRecalcAllSummary(null)
           await refetchOrders()
+          // Settle-poll: the backend finalizes the last rows a few ms AFTER the job reports done (each
+          // clearOrderRateJob is async/best-effort), so refetch a few more times over ~24s to clear any
+          // lingering rating spinners without a manual refresh. Bounded + cancellable — NOT a backfill
+          // re-kick (no startRecalculateAllBestRates / passiveBackfillStartedRef), so no infinite loop.
+          for (const delay of [3000, 8000, 16000, 24000]) {
+            settleTimers.push(setTimeout(() => { if (!cancelled) void refetchOrdersRef.current?.() }, delay))
+          }
           return
         }
         // Mid-job row refresh: the backfill stamps each order pending → rating →
@@ -689,7 +697,7 @@ export default function OrdersView({
         }
       }
     }, 2500)
-    return () => { cancelled = true; clearInterval(timer) }
+    return () => { cancelled = true; clearInterval(timer); settleTimers.forEach(clearTimeout) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recalcAllJobId])
 
