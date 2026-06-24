@@ -192,6 +192,14 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     shipTo: pruneEmpty(shipTo),
   };
 
+  // TEMP DIAG (eBay rate enablement 2026-06-24, white-list now granted): log the request with PII masked
+  // (name/street/phone → type:length marker) + the eBay orderId so we can confirm exactly what is sent.
+  // Remove once eBay quotes succeed.
+  {
+    const PII = new Set(['fullName', 'addressLine1', 'addressLine2', 'phoneNumber']);
+    console.warn('[ebay-shipping] req orderId=' + orderId + ' ' + JSON.stringify(body, (key, val) => (PII.has(key) && typeof val === 'string' && val ? `[str:${val.length}]` : val)));
+  }
+
   const res = await timedFetch('ebay-shipping.rates', `${apiBase}/sell/logistics/v1_beta/shipping_quote`, {
     method: 'POST',
     headers: {
@@ -203,7 +211,11 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 800)).catch(() => '');
+    const full = await res.text().catch(() => '');
+    // TEMP DIAG (2026-06-24): log eBay's FULL error (untruncated) — the 400 90020 truncated at 800 chars
+    // hid any parameters/inputRefIds naming the bad field. Remove once eBay quotes succeed.
+    console.warn(`[ebay-shipping] quote-error ${res.status} orderId=${orderId}: ${full.slice(0, 4000)}`);
+    const t = full.slice(0, 800);
     throw new Error(`eBay Shipping Quote ${res.status}: ${t || res.statusText}`);
   }
   const data = (await res.json()) as any;
