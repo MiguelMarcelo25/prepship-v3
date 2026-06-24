@@ -64,9 +64,21 @@ assert.equal(badgeDecisions, 3,
 // External always checked BEFORE the sync-error fallback at every site (the
 // carrier column uses its column-specific shouldShowCarrierExtLabel wrapper
 // around the same persisted-flag truth).
-const decisionPattern = /(?:getIsExternallyFulfilled|shouldShowCarrierExtLabel)\(displayOrder\)\) \{\s*return renderExtLabelBadge\(\)\s*\}\s*if \(getIsMissingShipmentSync\(displayOrder\)\) \{\s*return renderShipmentSyncErrorBadge\(\)/g;
+// PS-312/PS-317 (S4): the carrier column now resolves a combined-shipment bundle CHILD to the shared
+// shipment INSIDE the missing-sync block (before the sync-error fallback). That adds content between
+// the `{` and the sync-error return, so this pattern allows it lazily — the PS-215 INVARIANT it
+// protects (the external-flag check precedes the missing-sync handling at every site) is unchanged.
+const decisionPattern = /(?:getIsExternallyFulfilled|shouldShowCarrierExtLabel)\(displayOrder\)\) \{\s*return renderExtLabelBadge\(\)\s*\}\s*if \(getIsMissingShipmentSync\(displayOrder\)\) \{[\s\S]*?return renderShipmentSyncErrorBadge\(\)/g;
 assert.equal((orderCells.match(decisionPattern) ?? []).length, 3,
   'external-flag check must precede the sync-error fallback in all three columns');
+
+// PS-312/PS-317 (S4): a bundle CHILD resolves to the shared shipment (renderBundleChildBadge) within
+// the missing-sync block, BEFORE the sync-error fallback — so a bundled order shows its combined
+// shipment, not a sync-error dead-end. (Backend-owned DTO via deps.bundleByOrderId; rendered verbatim.)
+assert.ok(
+  /getIsMissingShipmentSync\(displayOrder\)\) \{[\s\S]*?bundleByOrderId[\s\S]*?renderBundleChildBadge\(bundle\)[\s\S]*?return renderShipmentSyncErrorBadge\(\)/.test(orderCells),
+  'a bundle child must resolve to the shared shipment before the sync-error fallback',
+);
 
 // ── E2E coverage renders each state distinctly ──────────────────────────────
 assert.ok(e2eSpec.includes('Shipment sync error') && !e2eSpec.includes('Missing shipment sync'),

@@ -230,6 +230,7 @@ import {
 import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
 import { computeReorderedColumns } from './orders/column-reorder'
 import { useColumnDrag } from './orders/useColumnDrag'
+import { useOrderBundles } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
   formatBatchRecalculateFinishedMessage,
@@ -6975,6 +6976,9 @@ export default function OrdersView({
   // money DTO + injected backend rate/coverage verdicts (no recompute, no apiClient).
   // Assemble the typed DI object once so renderTableCell's call sites stay clean; the
   // shell keeps owning the component-scoped closures these leaves read.
+  // PS-312/PS-317 (S4): combined-shipment bundle state for the visible rows, from the scope-safe
+  // backend read-model. The carrier cell renders a child's shared shipment instead of a sync-error.
+  const bundleByOrderId = useOrderBundles((orders ?? []).map((order) => order.orderId))
   const orderCellsDeps: OrderCellsDeps = {
     getOrderWithAutoBestRate,
     orderShippingHold,
@@ -6983,6 +6987,7 @@ export default function OrdersView({
     getAwaitingBestRateDisplayState,
     getRateBaseAmount,
     shippingAccounts,
+    bundleByOrderId,
   }
   const renderBestRatePrice = (order: OrderSummaryDto) => renderBestRatePriceCell(order, orderCellsDeps)
   const renderMargin = (order: OrderSummaryDto) => renderMarginCell(order, orderCellsDeps)

@@ -20,6 +20,7 @@ import type { CarrierAccountDto, OrderSummaryDto } from '../../types/api'
 // PS-257: order.bestRate is `unknown` in types/api.ts; cast its property reads
 // through this shared loose-record type (type-only — erased at emit).
 import type { LooseBestRate } from './orders-display-state'
+import type { OrderBundleDto } from './orders/use-order-bundles'
 // PS-165: service display precedence owned by ./order-shipping-display (verbatim cascade).
 import {
   resolveDisplayServiceCode,
@@ -689,6 +690,34 @@ export function renderShipmentSyncErrorBadge() {
       title="Shipment sync error: shipped, but no local label/shipment data. Re-run ShipStation sync to backfill; if it persists, this is either a marketplace-fulfilled order awaiting the external-shipped classifier or a sync gap — see the PS-215 remediation runbook."
     >
       Shipment sync error
+    </span>
+  )
+}
+
+// PS-312/PS-317 (S4): a combined-shipment bundle CHILD has no own label — it ships under the bundle
+// PRIMARY's single label. So instead of the "Shipment sync error" dead-end, show that it resolves to
+// the bundle's shared shipment (primary order # + shared tracking once the one label is bought).
+// Pure renderer of the backend read-model DTO — no bundle logic in the frontend.
+export function renderBundleChildBadge(bundle: OrderBundleDto) {
+  const tracking = bundle.trackingNumber
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        background: '#e0e7ff',
+        color: '#3730a3',
+        padding: '2px 6px',
+        borderRadius: 3,
+        fontSize: 11,
+        fontWeight: 600,
+        cursor: 'help',
+      }}
+      title={`Combined shipment: ships with order #${bundle.primaryOrderId}${
+        tracking ? ` under shared tracking ${tracking}` : ' (label pending)'
+      }. ${bundle.memberCount} orders in this bundle.`}
+    >
+      🔗 Bundled · #{bundle.primaryOrderId}
+      {tracking ? ` · ${tracking}` : ''}
     </span>
   )
 }

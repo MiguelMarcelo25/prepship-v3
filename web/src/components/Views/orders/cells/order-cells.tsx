@@ -40,8 +40,10 @@ import {
   renderExtLabelBadge,
   renderVoidedLabelBadge,
   renderShipmentSyncErrorBadge,
+  renderBundleChildBadge,
   renderHouseBadge,
 } from '../../orders-row-display'
+import type { OrderBundleDto } from '../use-order-bundles'
 import { AWAITING_BEST_RATE_STATE_LABELS, type AwaitingBestRateDisplayState } from '../../awaiting-best-rate-display-state'
 import { PENDING_RATING_WATCHDOG_MS } from '../../orders-parity'
 import { isTestOrder } from '../../orders-items'
@@ -76,6 +78,9 @@ export interface OrderCellsDeps {
   getAwaitingBestRateDisplayState: (order: OrderSummaryDto) => AwaitingBestRateDisplayState
   getRateBaseAmount: (rate: Record<string, unknown>) => number
   shippingAccounts: CarrierAccountDto[]
+  // PS-312/PS-317 (S4): combined-shipment bundle state per order id (from the backend read-model).
+  // Optional so callers/tests that don't pass it keep the prior behavior exactly.
+  bundleByOrderId?: Map<number, OrderBundleDto>
 }
 
 export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps): ReactNode {
@@ -316,6 +321,13 @@ export function renderCarrierCell(order: OrderSummaryDto, deps: OrderCellsDeps):
       return renderExtLabelBadge()
     }
     if (getIsMissingShipmentSync(displayOrder)) {
+      // PS-312/PS-317 (S4): a combined-shipment bundle CHILD has no own label (the bundle PRIMARY
+      // carries the ONE label), so it falls into this "no local shipment" branch. Resolve it to the
+      // bundle's shared shipment instead of the sync-error dead-end. Backend-owned DTO, rendered verbatim.
+      const bundle = deps.bundleByOrderId?.get(order.orderId)
+      if (bundle && bundle.role === 'child') {
+        return renderBundleChildBadge(bundle)
+      }
       return renderShipmentSyncErrorBadge()
     }
 
