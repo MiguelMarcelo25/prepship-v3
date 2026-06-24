@@ -3,7 +3,7 @@ import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 import { readShipFrom } from './ship-from-address.js';
 
-async function getEbayLogisticsAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getEbayLogisticsAccessToken(creds: Record<string, unknown>, scope = 'https://api.ebay.com/oauth/api_scope/sell.logistics'): Promise<string> {
   const appId = String(creds?.appId ?? '').trim();
   const certId = String(creds?.certId ?? '').trim();
   const refreshToken = String(creds?.refreshToken ?? '').trim();
@@ -18,7 +18,7 @@ async function getEbayLogisticsAccessToken(creds: Record<string, unknown>): Prom
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    scope: 'https://api.ebay.com/oauth/api_scope/sell.logistics',
+    scope,
   });
   const res = await timedFetch('ebay-shipping.token', tokenUrl, {
     method: 'POST',
@@ -215,6 +215,22 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     // TEMP DIAG (2026-06-24): log eBay's FULL error (untruncated) — the 400 90020 truncated at 800 chars
     // hid any parameters/inputRefIds naming the bad field. Remove once eBay quotes succeed.
     console.warn(`[ebay-shipping] quote-error ${res.status} orderId=${orderId}: ${full.slice(0, 4000)}`);
+    // TEMP DIAG: the 90020 names no field, so determine whether eBay even RECOGNIZES this order in the
+    // token's account (the most likely cause). Call eBay Fulfillment getOrder with a sell.fulfillment
+    // token: 200 = order IS in this account (then it's eligibility/state); 404 = NOT in this account
+    // (account mismatch). Logs status + orderFulfillmentStatus only (no PII). Remove once eBay quotes work.
+    try {
+      const fToken = await getEbayLogisticsAccessToken(creds, 'https://api.ebay.com/oauth/api_scope/sell.fulfillment');
+      const oRes = await timedFetch('ebay-shipping.getorder', `${apiBase}/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}`, {
+        headers: { Authorization: `Bearer ${fToken}`, Accept: 'application/json' },
+      });
+      const oBody = await oRes.text().catch(() => '');
+      let fStatus = '';
+      try { fStatus = String((JSON.parse(oBody) as { orderFulfillmentStatus?: unknown })?.orderFulfillmentStatus ?? ''); } catch { /* not json */ }
+      console.warn(`[ebay-shipping] getOrder ${oRes.status} orderId=${orderId} fulfillmentStatus=${fStatus || '(none)'}${oRes.ok ? '' : ' body=' + oBody.slice(0, 300)}`);
+    } catch (diagErr) {
+      console.warn('[ebay-shipping] getOrder diag failed:', diagErr instanceof Error ? diagErr.message : diagErr);
+    }
     const t = full.slice(0, 800);
     throw new Error(`eBay Shipping Quote ${res.status}: ${t || res.statusText}`);
   }
