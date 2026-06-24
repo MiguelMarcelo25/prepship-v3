@@ -352,6 +352,17 @@ function normalize(html) {
     .replace(/ id="[^"]*"/g, '')
     .replace(/ (?:aria-controls|aria-describedby|aria-labelledby|aria-activedescendant|for|list|headers)="[^"]*"/g, '')
     .replace(ISO_DATETIME, '<ISO_DATETIME>')
+    // PS-258 hardening: the awaiting passive-rating cell settles non-deterministically between
+    // "Add dims" (data-rate-state="add-dims") and "Rate unavailable · Retry"
+    // (data-rate-state="unavailable") — same <button> shape, differing only by state attr/title/
+    // text, depending on whether passive rating wins the race before capture. Pure timing, not
+    // decomposition behaviour. Collapse the volatile NON-PRICED rate states to one placeholder so
+    // the byte-snapshot is invariant to it. The priced "ready" state is deliberately NOT matched,
+    // so real rate amounts stay asserted byte-for-byte.
+    .replace(
+      /<button type="button" data-rate-state="(?:add-dims|unavailable|calculating|loading|pending|rating)" title="[^"]*">[^<]*<\/button>/g,
+      '<button type="button" data-rate-state="<RATE_PENDING>"></button>',
+    )
     .replace(/\s{2,}/g, ' ')
     .replace(/>\s+</g, '><')
     .trim()
