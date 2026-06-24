@@ -634,11 +634,12 @@ export default function OrdersView({
   const [recalcAllSummary, setRecalcAllSummary] = useState<string | null>(null)
   async function handleRecalculateAll() {
     try {
+      recalcAllUserInitiatedRef.current = true
       const { jobId } = await startRecalculateAllBestRates()
       setRecalcAllJobId(jobId)
       setRecalcAllSummary('starting…')
-      showToast('Recalculating best rates for ALL awaiting orders…')
     } catch (error) {
+      recalcAllUserInitiatedRef.current = false
       showToast(error instanceof Error ? error.message : 'Failed to start Recalculate All', 'error')
     }
   }
@@ -652,13 +653,19 @@ export default function OrdersView({
         const job = await fetchRecalculateAllJob(recalcAllJobId)
         if (cancelled) return
         recalcAllPollFailures = 0
-        setRecalcAllSummary(summarizeRecalculateAllJob(job))
+        // Only a MANUAL Recalculate All shows the progress chip + the button spinner; the automatic
+        // passive overflow backfill runs SILENTLY (it sets neither the ref nor the summary).
+        if (recalcAllUserInitiatedRef.current) setRecalcAllSummary(summarizeRecalculateAllJob(job))
         if (isRecalculateAllJobDone(job)) {
           setRecalcAllJobId(null)
-          // PS-293: allow a future passive overflow to re-trigger the backfill once this job is done.
-          passiveBackfillStartedRef.current = false
-          showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, job.failed ? 'error' : 'success')
-          setTimeout(() => setRecalcAllSummary(null), 8000)
+          // Do NOT reset passiveBackfillStartedRef here. The passive overflow backfill fires at most
+          // ONCE per mount; resetting it let a never-ratable overflow row (needs dims / no live rate)
+          // re-kick the job on every completion → the "infinite Recalculate All" loop.
+          recalcAllUserInitiatedRef.current = false
+          if (job.failed) {
+            showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, 'error')
+          }
+          setRecalcAllSummary(null)
           await refetchOrders()
           return
         }
@@ -675,7 +682,7 @@ export default function OrdersView({
         recalcAllPollFailures += 1
         if (recalcAllPollFailures >= 3) {
           setRecalcAllJobId(null)
-          passiveBackfillStartedRef.current = false
+          recalcAllUserInitiatedRef.current = false
           setRecalcAllSummary('status unavailable')
           showToast('Recalculate All status unavailable — refresh and retry if needed', 'error')
           setTimeout(() => setRecalcAllSummary(null), 8000)
@@ -983,6 +990,10 @@ export default function OrdersView({
   // refetch (which re-runs the passive effect) can't kick a second backend job.
   const passiveLiveBestRateCountRef = useRef(0)
   const passiveBackfillStartedRef = useRef(false)
+  // Distinguishes a MANUAL Recalculate All click (operator wants a visible spinner + progress chip)
+  // from the automatic passive overflow backfill (must run silently). Set true ONLY in
+  // handleRecalculateAll; gates the chip/spinner so the background backfill stays invisible.
+  const recalcAllUserInitiatedRef = useRef(false)
   // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
   // auto-rating effect for an order whose rate came back unavailable.
   const [rateRetryNonce, setRateRetryNonce] = useState(0)
@@ -5130,7 +5141,7 @@ export default function OrdersView({
       // backend backfill — the same job the manual Recalculate All uses, but cache-friendly (only
       // stale/missing rows). The existing recalc poll refetches as each order resolves, so the rows
       // populate without per-row Browse Rates clicks. De-duped so a mid-job refetch can't double-kick.
-      if (!cancelled && overflow.length > 0 && !passiveBackfillStartedRef.current) {
+      if (!cancelled && overflow.length > 0 && !passiveBackfillStartedRef.current && recalcAllJobId == null) {
         passiveBackfillStartedRef.current = true
         try {
           const { jobId } = await startRecalculateAllBestRates(PASSIVE_BACKFILL_MAX_AGE_HOURS)
@@ -5147,7 +5158,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, shippingAccounts, rateRetryNonce])
+  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, shippingAccounts, rateRetryNonce, recalcAllJobId])
 
   async function refreshPanelBestRate(options: {
     order: OrderSummaryDto

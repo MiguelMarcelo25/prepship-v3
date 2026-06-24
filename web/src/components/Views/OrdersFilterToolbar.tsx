@@ -358,19 +358,22 @@ export function OrdersFilterToolbarBatchControls({
           <button
             type="button"
             onClick={() => void onRecalculateAll()}
-            disabled={recalcAllJobId != null || total === 0}
-            title="Refetch best rates for ALL awaiting orders (one backend job — rows show rating progress as they resolve)"
+            // Busy state keys off recalcAllSummary (set ONLY for a manual click), not recalcAllJobId
+            // (also set for the silent passive overflow backfill) — so the background backfill leaves
+            // the button idle/clickable and only a deliberate click shows the spinner + disables.
+            disabled={recalcAllSummary != null || total === 0}
+            title="Re-rate ALL awaiting orders in the background — rows update as they resolve (no popup)"
             className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1
               text-[12px] font-medium
               transition-all duration-150
-              ${recalcAllJobId != null || total === 0
+              ${recalcAllSummary != null || total === 0
                 ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
                 : 'bg-brand-bg ring-brand/40 text-brand hover:ring-brand'}
             `}
           >
-            {recalcAllJobId != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
+            {recalcAllSummary != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
             Recalculate All
           </button>
           {recalcAllSummary ? (
