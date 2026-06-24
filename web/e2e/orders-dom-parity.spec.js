@@ -363,6 +363,15 @@ function normalize(html) {
       /<button type="button" data-rate-state="(?:add-dims|unavailable|calculating|loading|pending|rating)" title="[^"]*">[^<]*<\/button>/g,
       '<button type="button" data-rate-state="<RATE_PENDING>"></button>',
     )
+    // PS-317 hardening: the "age" cell renders the order's age in relative units (e.g. "40d"), which
+    // ticks up over time — the byte-snapshot would go stale a day after capture (40d -> 41d) and fail
+    // for everyone, regardless of code. Mask the volatile age VALUE (the cell structure is still
+    // asserted byte-for-byte). Pure time-dependence, not decomposition behaviour. Same approach as the
+    // rate-state mask above.
+    .replace(
+      /(<div class="age-wrap"><span class="age-dot"><\/span><span>)[^<]*(<\/span><\/div>)/g,
+      '$1<AGE>$2',
+    )
     .replace(/\s{2,}/g, ' ')
     .replace(/>\s+</g, '><')
     .trim()
