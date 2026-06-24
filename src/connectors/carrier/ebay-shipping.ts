@@ -171,7 +171,11 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
   };
 
   const body = {
-    orders: [{ channel: 'EBAY', orderId }],
+    // 'orders' is OPTIONAL for createShippingQuote (per eBay docs). Linking a specific eBay order makes
+    // eBay validate it against the token's account + eBay-managed-shipping eligibility, which 400s
+    // ("Invalid field", errorId 90020) for a ShipStation-synced order that eBay doesn't manage. We send
+    // the full shipFrom + shipTo + package, so quote ADDRESS-BASED instead — that's all eBay needs for a
+    // rate. (orderId is still resolved above to gate to eBay orders; we just don't link the quote to it.)
     packageSpecification: {
       dimensions: {
         length: String(dimsL),
