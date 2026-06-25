@@ -334,6 +334,10 @@ export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, st
     baseUnitQty: parseFiniteNumber(row.baseUnitQty) ?? 1,
     baseUnits: displayStock * (parseFiniteNumber(row.baseUnitQty) ?? 1),
     cuFtOverride: parseFiniteNumber(row.cuFtOverride),
+    // PS-324: backend-owned per-unit cubic feet (storage-fee input). undefined when an older
+    // deploy's /inventory route doesn't stamp it yet — the FE getInventoryCuFt then falls back
+    // to the legacy override/dims math.
+    cuFt: parseFiniteNumber(row.cuFt),
     packageId: parseFiniteNumber(row.packageId),
     packageName: row.packageName ?? null,
     parentName: row.parentName ?? null,

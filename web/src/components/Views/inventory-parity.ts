@@ -19,6 +19,9 @@ type InventoryItemDto = Record<string, any> & {
   status?: string | null
   active?: boolean | null
   cuFtOverride?: number | null
+  // PS-324: backend-owned per-unit cubic feet (storage-fee input). Optional so older
+  // deploys that don't stamp it fall back to the legacy override/dims math below.
+  cuFt?: number | null
   productLength: number
   productWidth: number
   productHeight: number
@@ -144,6 +147,13 @@ export function groupInventoryRowsByClient(rows: InventoryItemDto[]) {
 }
 
 export function getInventoryCuFt(item: InventoryItemDto) {
+  // PS-324: cuFt (a storage-fee input) is now backend-owned — src/lib/inventory-cuft.ts
+  // `cuFtPerUnit`, which mirrors the storage-billing formula in src/services/billing.ts so the
+  // operator-facing cuFt can never drift from the billed cuFt. Render the backend field; the
+  // override/dims math below stays ONLY as a deploy-skew fallback for an older API response
+  // that doesn't stamp `cuFt` yet (behavior identical to the old inline computation).
+  const backendCuFt = Number(item.cuFt)
+  if (Number.isFinite(backendCuFt)) return backendCuFt
   if (item.cuFtOverride && item.cuFtOverride > 0) return item.cuFtOverride
   if (item.productLength > 0 && item.productWidth > 0 && item.productHeight > 0) {
     return (item.productLength * item.productWidth * item.productHeight) / 1728

@@ -6,6 +6,7 @@ import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizz
 import { db } from '../db/client';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
+import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
@@ -312,6 +313,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           totalReceived: liveEff?.totalReceived ?? metric.totalReceived,
           totalSoldAllTime: liveEff?.totalSold ?? metric.totalSoldAllTime,
           effectiveStock: liveEff?.effectiveStock ?? metric.effectiveStock,
+          // PS-324: per-unit cubic feet is a billing input (storage fee). The backend owns
+          // the formula (cuFtPerUnit, mirroring src/services/billing.ts) so the displayed
+          // cuFt can't drift from the billed cuFt; the FE renders this instead of computing it.
+          cuFt: cuFtPerUnit(row.cuFtOverride, row.length, row.width, row.height),
         };
       }
       const stockQty = Number(row.stockQty ?? 0) || 0;
@@ -332,6 +337,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         totalReceived: eff.totalReceived,
         totalSoldAllTime: eff.totalSold,
         effectiveStock: eff.effectiveStock,
+        // PS-324: backend-owned per-unit cubic feet (billing storage input); see above branch.
+        cuFt: cuFtPerUnit(row.cuFtOverride, row.length, row.width, row.height),
       };
     }),
     countRows[0]?.count ?? 0,
