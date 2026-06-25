@@ -39,7 +39,6 @@ import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
 // fallback pills for FedEx/DHL/etc. Replaces the previous text-only
 // carrier-badge spans throughout the orders table + side panel.
-import CarrierBadge from '../CarrierBadge'
 // PS-165: carrier/service/account display precedence owned by ./order-shipping-display (verbatim cascade).
 // PS-166 (Wave 2a): the order-shipping-display resolvers are consumed by
 // ./orders-display-state now (resolveDisplayServiceCode was already
@@ -51,48 +50,14 @@ import {
   toRecord,
   toStringValue,
   toNumberValue,
-  toNumericValue,
   toProviderAccountId,
-  formatMoney,
   normalizeShippingAccountName,
-  getCanonicalOrderModel,
-  getCanonicalRecord,
   getShippingModel,
   getBestRateWorkflowModel,
   getShippingString,
-  getShippingNumber,
-  getShippingProviderAccountId,
-  getCanonicalSource,
-  getCanonicalSourceVersion,
-  getCanonicalSourceName,
-  getLegacyClientIdForDisplay,
-  getCarrierAccountDisplay,
-  getCarrierAccountByProviderId,
   getCarrierAccountLabelByProviderId,
-  getShipAccountLabelById,
-  V2_CARRIER_ACCOUNT_REFS,
-  resolveV2CarrierAccount,
-  getV2CarrierAccountForOrder,
-  getRateProviderAccountId,
-  getBestRateBaseCost,
   getBestRateShippingProviderId,
   getBestRateServiceCode,
-  getBestRateCarrierNickname,
-  getSelectedRateBaseCost,
-  getSelectedRateFinalCost,
-  getSelectedRateCarrierCode,
-  getSelectedRateServiceCode,
-  getSelectedRateCarrierNickname,
-  getAwaitingDisplayAccountNickname,
-  getSelectedRateShippingProviderId,
-  getBackendInsuranceAddOn,
-  getBackendRowMoney,
-  renderRateAmountWithMarkup,
-  getBestRateInsuranceCoverage,
-  getRowInsuranceCoverage,
-  renderExtLabelBadge,
-  renderShipmentSyncErrorBadge,
-  renderHouseBadge,
 } from './orders-row-display'
 // PS-166/PS-306 (decomposition): pure money/rate cell renderers extracted to OrdersRateCells.
 import { renderOrderTotalCell, renderRateCostCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
@@ -150,9 +115,7 @@ import {
   rateQuoteRefFromCandidates,
 } from '../../lib/rate-proof'
 import type {
-  CarrierAccountDto,
   CreateLabelRequestDto,
-  LocationDto,
   OrderFullDto,
   OrderPicklistResponseDto,
   OrderSummaryDto,
@@ -207,10 +170,7 @@ import {
   buildQueueAddPayload,
   cachedNegativeNeedsLiveRetry,
   canRetryBatchRecalculateRow,
-  classifyAwaitingRateCellState,
   classifyAwaitingRateCellStateWithWorkflow,
-  PENDING_RATING_WATCHDOG_MS,
-  getColumnMinWidth,
   groupPrintQueueEntries,
   planSettledAutoRate,
   resolveColumnPrefs,
@@ -259,8 +219,6 @@ import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, resolveEffectiveInsurance } from 
 // citation) / TableColumnKey / TableColumn / TABLE_COLUMNS /
 // getVisibleColumns / getSortValue moved VERBATIM to ./orders-table-columns.
 import {
-  getSortValue,
-  getVisibleColumns,
   TABLE_COLUMNS,
   type OrderStatus,
   type SortKey,
@@ -466,17 +424,12 @@ import {
 // TEST_SHIPPING_ACCOUNT_LABEL moved VERBATIM to their own small file.
 import {
   TEST_SERVICE_CODE,
-  TEST_SHIPPING_ACCOUNT_LABEL,
   buildTestMockRate,
 } from './orders/test-mock-rate-normalizer'
 import {
-  ageHours,
   ageLabel,
-  formatCarrierCode,
-  formatDateOnly,
   formatDateTime,
   formatLabelCreated,
-  formatServiceCode,
   formatWeight,
   getAgeColor,
   getClientPalette,
@@ -488,15 +441,10 @@ import {
 // money-path pin (isBackendTestOrder definition) now reads that module; its
 // call-shape pins still read this file.
 import {
-  buildSearchText,
   getActiveItems,
-  getAddressBlock,
   getDimensions,
   getMergedItems,
-  getOrderSortTimeMs,
   getOrderWeightOz,
-  getPrimaryItem,
-  getPrimarySkuLabel,
   getShipTo,
   getShipToLine,
   getTotalQuantity,
@@ -512,23 +460,7 @@ import {
 // every call site below is unchanged.
 import {
   copyText,
-  getCancelledDisplayAccountNickname,
-  getCancelledDisplayCarrierCode,
-  getCancelledDisplayProviderId,
-  getCancelledDisplayServiceCode,
-  getCarrierCodeForDisplay,
   getExpeditedBadge,
-  getIsException,
-  getIsExternallyFulfilled,
-  getIsMissingShipmentSync,
-  getRequestedService,
-  getShipAccountDisplay,
-  getShippedDisplayAccountNickname,
-  getShippedDisplayCarrierCode,
-  getShippedDisplayProviderId,
-  getShippedDisplayServiceCode,
-  isStrictShippedOrder,
-  shouldShowCarrierExtLabel,
 } from './orders-display-state'
 
 // PS-166 (Wave 2a3): buildEmptyPanel → ./orders-empty-panel (verbatim JSX);
