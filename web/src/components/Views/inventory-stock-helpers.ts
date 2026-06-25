@@ -8,6 +8,11 @@ type InventoryItemDto = any // TODO PS-257: restore real type
 // getInventoryCuFt already lives in the parity module (imported from the
 // same source the view uses) so the 'cuFt' sort branch stays canonical.
 import { getInventoryCuFt } from './inventory-parity'
+// PS-324: the out/low/in stock-status THRESHOLD is owned in exactly one place
+// (src/lib/inventory-stock-status.ts classifyStockStatus), shared with the Dashboard
+// (PS-325) and the storage-billing definition. This view delegates the decision to that
+// owner and only translates its 'in' label to this table's long-standing 'ok' vocabulary.
+import { classifyStockStatus } from '../../../../src/lib/inventory-stock-status'
 
 export type InventorySortDirection = 'asc' | 'desc'
 export type InventorySortKey =
@@ -55,10 +60,10 @@ export function getInventoryDisplayStock(row: InventoryItemDto) {
 }
 
 export function getInventoryDisplayStatus(row: InventoryItemDto): 'ok' | 'low' | 'out' {
-  const stock = getInventoryDisplayStock(row)
-  if (stock <= 0) return 'out'
-  if (stock <= toSortNumber(row.minStock)) return 'low'
-  return 'ok'
+  // Delegate the threshold to the single backend owner; translate its 'in' → this view's 'ok'.
+  // Same inputs as before (display/effective stock + minStock), so behavior is identical.
+  const status = classifyStockStatus(getInventoryDisplayStock(row), toSortNumber(row.minStock))
+  return status === 'in' ? 'ok' : status
 }
 
 export function getInventoryStockTooltip(row: InventoryItemDto) {

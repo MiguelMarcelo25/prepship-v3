@@ -4408,7 +4408,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             </select>
             <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
               {(() => {
-                const out = filteredAlerts.filter((a: any) => getInventoryDisplayStock(a as InventoryItemDto) <= 0).length
+                const out = filteredAlerts.filter((a: any) => getInventoryDisplayStatus(a as InventoryItemDto) === 'out').length
                 const low = filteredAlerts.length - out
                 return `${out} out of stock • ${low} low`
               })()}
@@ -4461,8 +4461,13 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   {sortedAlerts.map((alert: any) => {
                     const stock = getInventoryDisplayStock(alert as InventoryItemDto)
                     const minStock = alert?.minStock ?? 0
-                    const isOut = stock <= 0
-                    const isLow = !isOut && minStock > 0 && stock <= minStock
+                    // PS-324: derive the badge from the single status owner
+                    // (getInventoryDisplayStatus → classifyStockStatus) instead of a third
+                    // inline threshold copy. Behavior-identical: alerts are backend-filtered to
+                    // low/out, so every non-out row is low.
+                    const status = getInventoryDisplayStatus(alert as InventoryItemDto)
+                    const isOut = status === 'out'
+                    const isLow = status === 'low'
                     const clientName = alert?.clientName
                       ?? clients.find((c) => c.clientId === alert?.clientId)?.name
                       ?? '—'

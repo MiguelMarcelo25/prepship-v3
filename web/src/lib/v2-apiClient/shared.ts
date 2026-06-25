@@ -24,6 +24,11 @@ import { houseTuplePassThrough } from '../rate-browser-house-tuple';
 // the SAME module the backend `/carriers/rates` + `/carriers/labels` gates use,
 // so Rate Browser hiding and server-side rejection can never drift apart.
 import { directCarrierVisibleForScope } from '../../../../src/lib/direct-carrier-scope';
+// PS-324: the out/low/in stock-status THRESHOLD is owned in one place
+// (src/lib/inventory-stock-status.ts classifyStockStatus) — the same definition the
+// Dashboard (PS-325) and storage billing use. The normalizer's status fallback delegates
+// to it so the inventory DTO can never carry a different threshold than the rest of the app.
+import { classifyStockStatus } from '../../../../src/lib/inventory-stock-status';
 
 export async function authHeaders(): Promise<Record<string, string>> {
   const accessToken = await getCachedAuthToken();
@@ -285,9 +290,10 @@ export function normalizeProductDefaultsPayload(data: Record<string, unknown>): 
 }
 
 export function inventoryStatus(stockQty: number, reorderLevel: number): 'ok' | 'low' | 'out' {
-  if (stockQty <= 0) return 'out';
-  if (stockQty <= reorderLevel) return 'low';
-  return 'ok';
+  // Delegate the threshold to the single backend owner; translate 'in' → this DTO's 'ok'.
+  // Identical thresholds to the previous inline rule, so the normalized status is unchanged.
+  const status = classifyStockStatus(stockQty, reorderLevel);
+  return status === 'in' ? 'ok' : status;
 }
 
 export function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>): any {
