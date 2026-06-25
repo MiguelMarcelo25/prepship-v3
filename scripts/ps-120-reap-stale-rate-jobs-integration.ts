@@ -11,6 +11,7 @@ import { sql } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
 import { orderRateJobs } from '../src/db/schema/order-rate-jobs.js';
 import { reapStaleOrderRateJobs } from '../src/services/shipping-workflow/reap-stale-rate-jobs.js';
+import { touchPendingOrderRateJobs } from '../src/services/shipping-workflow/order-rate-job-status.js';
 
 type Conn = Parameters<typeof reapStaleOrderRateJobs>[1];
 
@@ -61,9 +62,23 @@ async function main(): Promise<void> {
   check('the fresh row still survives after the second reap',
     (await pg.select().from(orderRateJobs)).length === 1);
 
-  // ── A tiny maxAge reaps even the fresh row (clock-driven, not state-driven) ──
+  // ── touchPendingOrderRateJobs (RC4 heartbeat) refreshes ONLY 'pending' rows ──
+  await pg.execute(sql`INSERT INTO order_rate_jobs (order_id, state, request_fingerprint, updated_at) VALUES
+    (10, 'pending', 'fp10', now() - interval '5 minutes'),
+    (11, 'rating',  'fp11', now() - interval '5 minutes')`);
+  const ageMs = (v: unknown) => Date.now() - new Date(v as string).getTime();
+  const touched = await touchPendingOrderRateJobs([10, 11], conn);
+  check('touch refreshes ONLY the pending row (count 1)', touched === 1);
+  const afterTouch = await pg.select().from(orderRateJobs);
+  const r10 = afterTouch.find((r) => r.orderId === 10);
+  const r11 = afterTouch.find((r) => r.orderId === 11);
+  check('pending row 10 updated_at is now fresh (< 1 min old)', !!r10 && ageMs(r10.updatedAt) < 60_000);
+  check('rating row 11 updated_at is UNCHANGED (still ~5 min old)', !!r11 && ageMs(r11.updatedAt) > 60_000);
+  check('touch of an empty id list is a no-op (0)', (await touchPendingOrderRateJobs([], conn)) === 0);
+
+  // ── A tiny maxAge reaps even the fresh rows (clock-driven, not state-driven) ──
   const reapedAll = await reapStaleOrderRateJobs(0, conn);
-  check('maxAge=0 reaps the remaining row (clock boundary)', reapedAll === 1);
+  check('maxAge=0 reaps all remaining rows', reapedAll >= 1);
   check('table is empty after reaping everything', (await pg.select().from(orderRateJobs)).length === 0);
 
   await client.close();

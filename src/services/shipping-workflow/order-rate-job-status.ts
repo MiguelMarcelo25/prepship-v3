@@ -21,7 +21,7 @@
  * The DB writers below are the only impure functions; the fingerprint + override decision are
  * pure so the offline guard (scripts/ps-120-producer-guard.ts) can test them without a DB.
  */
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, sql as pg } from '../../db/client';
 import { orderRateJobs } from '../../db/schema/order-rate-jobs';
 
@@ -230,4 +230,25 @@ export async function setOrderRateRating(
 export async function clearOrderRateJob(orderId: number): Promise<void> {
   await ensureOrderRateJobsSchema();
   await db.delete(orderRateJobs).where(eq(orderRateJobs.orderId, orderId));
+}
+
+/**
+ * RC4: refresh updated_at for the still-QUEUED ('pending') stamps among `orderIds`, so a large backfill
+ * burst can't age its own waiting tail past the reader's stale-display window (RATE_JOB_STALE_MS) and flip
+ * a legitimately-queued row to "Rate unavailable" before a worker even reaches it. ONLY touches 'pending'
+ * rows — a 'rating' or already-cleared row is never resurrected. Best-effort; returns the count refreshed.
+ * `conn` defaults to the real db; an injected conn (pglite) is used as-is for tests.
+ */
+export async function touchPendingOrderRateJobs(
+  orderIds: number[],
+  conn: typeof db = db,
+): Promise<number> {
+  if (!orderIds.length) return 0;
+  if (conn === db) await ensureOrderRateJobsSchema();
+  const touched = await conn
+    .update(orderRateJobs)
+    .set({ updatedAt: new Date() })
+    .where(and(eq(orderRateJobs.state, 'pending'), inArray(orderRateJobs.orderId, orderIds)))
+    .returning({ orderId: orderRateJobs.orderId });
+  return touched.length;
 }

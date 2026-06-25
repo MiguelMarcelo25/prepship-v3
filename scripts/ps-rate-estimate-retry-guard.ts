@@ -34,6 +34,9 @@ async function main(): Promise<void> {
   check('HTTP 404 status is terminal', !isTransientCarrierRateError({ status: 404 }));
   check('a no-service message is terminal', !isTransientCarrierRateError(new Error('no rates available for this route')));
   check('null/undefined is not transient', !isTransientCarrierRateError(null) && !isTransientCarrierRateError(undefined));
+  // Precedence: an explicit 4xx STATUS wins over a transient-looking MESSAGE (don't retry a real 400).
+  check('a 4xx Error whose message says "timed out" is TERMINAL (status wins over message)',
+    !isTransientCarrierRateError(Object.assign(new Error('rate request timed out after 25s'), { status: 400 })));
 
   // ── Retry loop (inject no-op sleep + zero jitter for determinism) ──
   const opts = { maxRetries: 1, baseDelayMs: 1, sleep: async () => {}, jitter: () => 0 };

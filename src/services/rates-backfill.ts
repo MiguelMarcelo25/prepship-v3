@@ -29,6 +29,7 @@ import {
   computeOrderRateJobFingerprint,
   setOrderRatePending,
   setOrderRateRating,
+  touchPendingOrderRateJobs,
 } from './shipping-workflow/order-rate-job-status';
 // #750 resilience: shared timeout + retry-on-timeout owner. The live Recalculate All re-rates every
 // order with forceRefresh, so each fan-out queues behind the global rate limiter and the per-order
@@ -177,6 +178,9 @@ const PER_ORDER_TIMEOUT_MS = 30_000;
 const LIVE_PER_ORDER_TIMEOUT_MS = 90_000;
 const LIVE_MAX_RETRIES = 1;
 const LIVE_BACKFILL_CONCURRENCY = 2;
+// RC4: refresh queued 'pending' stamps this often so a large burst's waiting tail never ages past the
+// /orders reader's stale-display window (RATE_JOB_STALE_MS = 6min) and flips to "Rate unavailable".
+const PENDING_STAMP_HEARTBEAT_MS = 2 * 60 * 1000; // 2 minutes (< 6min reader window)
 
 const jobs = new Map<string, BackfillJob>();
 let activeJobId: string | null = null;
@@ -413,6 +417,8 @@ async function runBackfill(
   // processOne finalized, then clear the leftovers in the finally below.
   const finalizedIds = new Set<number>();
   let stampedIds: number[] = [];
+  // RC4: keeps the queued 'pending' tail's updated_at fresh while the workers drain a large burst.
+  let pendingHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   try {
     const effectiveMaxAgeHours = opts.maxAgeHours ?? CACHE_TTL_MS / (60 * 60 * 1000);
@@ -526,6 +532,16 @@ async function runBackfill(
       }),
     );
     stampedIds = rows.map((row) => row.id);
+
+    // RC4: while the workers drain the burst, keep the still-QUEUED 'pending' rows' updated_at fresh so a
+    // large Recalculate All can't age its own waiting tail past the reader's 6-min window and flip those
+    // rows to "Rate unavailable" before a worker reaches them. Only 'pending' rows are touched (never a
+    // 'rating'/cleared row), and it's cleared in the finally. Harmless for small jobs (they finish first).
+    pendingHeartbeat = setInterval(() => {
+      void touchPendingOrderRateJobs(stampedIds).catch((err) =>
+        console.warn('[rates-backfill] pending heartbeat failed:', err instanceof Error ? err.message : err),
+      );
+    }, PENDING_STAMP_HEARTBEAT_MS);
 
     // #750: throttle the LIVE burst so 40+ forceRefresh orders don't starve each other for the global
     // rate-limiter's permits (the cause of the 30s queue-wait timeouts); passive sweeps keep 4.
@@ -848,6 +864,10 @@ async function runBackfill(
     job.finishedAt = Date.now();
     await persistBackfillJobSnapshot(job, opts);
   } finally {
+    if (pendingHeartbeat) {
+      clearInterval(pendingHeartbeat);
+      pendingHeartbeat = null;
+    }
     if (activeJobId === jobId) activeJobId = null;
     // PS-120 finalize: clear every stamped row the workers didn't reach (timeout / error / early-stop)
     // so no order is left 'rating'/'pending' forever after the job ends. Best-effort + idempotent
