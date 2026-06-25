@@ -138,16 +138,45 @@ check('by-dims: ONE transaction, finalized orders skipped, schema ensured only o
   /conn\.transaction\(/.test(byDimsSvc) &&
   /splitBulkBoxCostApplyTargets\(/.test(byDimsSvc) &&
   /if \(conn === db\) await ensureBillingBoxResolutionsSchema\(\)/.test(byDimsSvc));
-check('by-dims routes exist, are financials:write gated, regenerate, and audit the money action',
+check('by-dims routes (preview/apply/revert) exist, are financials:write gated, regenerate, and audit the money action',
   /\/box-cost\/by-dims\/preview/.test(billingRoute) &&
   /\/box-cost\/by-dims\/apply/.test(billingRoute) &&
+  /\/box-cost\/by-dims\/revert/.test(billingRoute) &&
   /previewBulkBoxCostByDims\(/.test(billingRoute) &&
   /applyBulkBoxCostByDimsResolutions\(/.test(billingRoute) &&
   /action: 'bulk_box_cost_by_dims_apply'/.test(billingRoute) &&
   /box-cost\/by-dims\/apply[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute));
 check('by-dims routes normalize the date range via billingDayRange (last selected day included)',
   /byDimsScopeSchema[\s\S]{0,160}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute) &&
-  /byDimsApplySchema[\s\S]{0,200}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute));
+  /byDimsRevertSchema[\s\S]{0,200}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute));
+
+// ── PS-311b UNDO: apply stamps a deterministic [box-sweep] marker note; revert re-derives it
+// server-side from the source order and deletes ONLY marker-stamped resolutions (manual edits safe).
+check('by-dims apply stamps the [box-sweep] marker note (so the sweep is always reversible)',
+  /SWEEP_NOTE_PREFIX/.test(byDimsSvc) && /const note = sweepNote\(signature\)/.test(byDimsSvc));
+check('by-dims revert re-derives the marker from the source order and deletes ONLY marker-noted resolutions',
+  /revertBulkBoxCostByDimsResolutions/.test(byDimsSvc) &&
+  /fetchSweepNoteForOrder\(/.test(byDimsSvc) &&
+  /\.delete\(billingBoxResolutions\)/.test(byDimsSvc) &&
+  /eq\(billingBoxResolutions\.note, note\)/.test(byDimsSvc));
+check('by-dims revert route exists, is financials:write gated, regenerates, and audits the undo',
+  /box-cost\/by-dims\/revert[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute) &&
+  /revertBulkBoxCostByDimsResolutions\(/.test(billingRoute) &&
+  /action: 'bulk_box_cost_by_dims_revert'/.test(billingRoute));
+// PS-311b review fix #1 (HIGH): UNDO must SKIP orders invoiced after the sweep — never strip a box
+// cost off a finalized invoice (mirrors the apply-side finalized skip).
+check('by-dims revert has an invoiced/finalized guard (never reverts an invoiced order)',
+  /bool_or\(coalesce\(\$\{billingLineItems\.invoiced\}/.test(byDimsSvc) &&
+  /\.filter\(\(r\) => r\.invoiced !== true\)/.test(byDimsSvc) &&
+  /skippedFinalizedCount/.test(byDimsSvc));
+// PS-311b review fix #2 (MEDIUM): the box-cost bulk/by-dims queries select FROM billing_line_items
+// WITHOUT joining `clients`, so they must use the billing_line_items-keyed scope predicate — the
+// clients-rooted one 500s ("missing FROM-clause entry for clients") for any restricted caller.
+const lineItemScopeFn = /function billingLineItemClientScopePredicate\(scope: ClientStoreScope\): SQL \{[\s\S]*?\n\}/.exec(billingRoute)?.[0] ?? '';
+check('box-cost bulk + by-dims routes use the clients-less billingLineItemClientScopePredicate (no 500 for scoped callers)',
+  lineItemScopeFn.includes('billingLineItems.clientId') &&
+  lineItemScopeFn.includes('exists (') &&
+  !/\bbillingClientScopePredicate\(scope\),/.test(billingRoute));
 
 // ── PS-311b: the operator UI — a date-range picker ON the modal, reachable from the needs-review row.
 const sweepModal = readFileSync('web/src/components/Views/BoxReviewSweepModal.tsx', 'utf8');
@@ -158,6 +187,8 @@ check('sweep modal has a START + END date picker and previews THEN applies via t
   /\/billing\/box-cost\/by-dims\/apply/.test(sweepModal));
 check('sweep modal Apply is GATED (preview fetched + confirm tick + non-empty editable set + valid range)',
   /applyDisabled\s*=/.test(sweepModal) && /!confirmed/.test(sweepModal) && /editableOrderCount === 0/.test(sweepModal) && /!rangeValid/.test(sweepModal));
+check('sweep modal offers UNDO after apply (one-click revert via the by-dims/revert route)',
+  /data-box-review-sweep-undo/.test(sweepModal) && /\/billing\/box-cost\/by-dims\/revert/.test(sweepModal));
 check('BillingView wires the sweep modal from the needs-review row (no package pick required)',
   /import BoxReviewSweepModal/.test(billingView) &&
   /<BoxReviewSweepModal/.test(billingView) &&

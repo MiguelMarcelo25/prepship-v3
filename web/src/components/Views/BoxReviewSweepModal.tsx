@@ -52,6 +52,7 @@ export default function BoxReviewSweepModal(props: BoxReviewSweepModalProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [doneMsg, setDoneMsg] = useState<string | null>(null)
+  const [undoneMsg, setUndoneMsg] = useState<string | null>(null)
 
   const costNum = Number(cost)
   const costValid = cost.trim() !== '' && Number.isFinite(costNum) && costNum >= 0
@@ -70,6 +71,7 @@ export default function BoxReviewSweepModal(props: BoxReviewSweepModalProps) {
     setPreview(null)
     setConfirmed(false)
     setDoneMsg(null)
+    setUndoneMsg(null)
   }
 
   async function runPreview() {
@@ -94,19 +96,46 @@ export default function BoxReviewSweepModal(props: BoxReviewSweepModalProps) {
     setBusy(true)
     setError(null)
     try {
-      const res = await api.post('/billing/box-cost/by-dims/apply', {
-        ...scopeBody(),
-        note: `Needs-review box sweep: ${props.boxLabel}`,
-      })
+      const res = await api.post('/billing/box-cost/by-dims/apply', scopeBody())
       const r = (res as { data?: ByDimsApplyResult } | null)?.data
       setDoneMsg(
         `Applied to ${r?.appliedOrderCount ?? 0} bill(s)` +
           (r && r.skippedFinalizedCount > 0 ? `, skipped ${r.skippedFinalizedCount} finalized invoice(s)` : '') +
           '.',
       )
+      setUndoneMsg(null)
       props.onApplied()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Apply failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Undo the sweep just applied: the backend re-derives the marker from this order and removes only
+  // the resolutions the sweep created, sending those bills back to needs-review.
+  async function runUndo() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.post('/billing/box-cost/by-dims/revert', {
+        clientId: props.clientId,
+        dateFrom: from,
+        dateTo: to,
+        sourceOrderId: props.sourceOrderId,
+      })
+      const r = (res as { data?: { revertedOrderCount: number; skippedFinalizedCount?: number } } | null)?.data
+      setDoneMsg(null)
+      setUndoneMsg(
+        `Reverted ${r?.revertedOrderCount ?? 0} bill(s) back to needs review` +
+          (r && r.skippedFinalizedCount && r.skippedFinalizedCount > 0
+            ? `, kept ${r.skippedFinalizedCount} finalized invoice(s) unchanged`
+            : '') +
+          '.',
+      )
+      props.onApplied()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Undo failed')
     } finally {
       setBusy(false)
     }
@@ -269,8 +298,24 @@ export default function BoxReviewSweepModal(props: BoxReviewSweepModalProps) {
         ) : null}
 
         {doneMsg ? (
-          <div role="status" style={{ marginTop: 12, color: '#15803d', fontSize: 12, fontWeight: 600 }}>
-            ✓ {doneMsg}
+          <div role="status" style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ color: '#15803d', fontSize: 12, fontWeight: 600 }}>✓ {doneMsg}</span>
+            <button
+              data-box-review-sweep-undo
+              className="btn btn-ghost btn-xs"
+              type="button"
+              disabled={busy}
+              onClick={() => void runUndo()}
+              title="Remove the cost this sweep just applied and send those bills back to needs review"
+            >
+              {busy ? 'Undoing…' : '↩ Undo this sweep'}
+            </button>
+          </div>
+        ) : null}
+
+        {undoneMsg ? (
+          <div role="status" style={{ marginTop: 12, color: '#6b7280', fontSize: 12, fontWeight: 600 }}>
+            ↩ {undoneMsg}
           </div>
         ) : null}
 

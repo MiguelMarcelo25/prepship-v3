@@ -38,7 +38,7 @@ import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 // PS-311b: the dims-based companion — sweep the SAME unmatched box size across a date range.
-import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
+import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
@@ -76,6 +76,37 @@ function billingClientScopePredicate(scope: ClientStoreScope): SQL {
   }
   if (storeIds.length) {
     predicates.push(sql`${clients.storeIds} && ${intArraySql(storeIds)}`);
+  }
+  if (!predicates.length) {
+    return scope.isRestricted ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+// Like billingClientScopePredicate, but keyed on billing_line_items.client_id — for queries that
+// SELECT FROM billing_line_items WITHOUT joining `clients`. The storeIds branch wraps `clients` in an
+// EXISTS subquery so that table is referenced only INSIDE the subquery (valid regardless of the outer
+// FROM). The box-cost bulk/by-dims queries never join `clients`, so they MUST use this variant — the
+// clients-rooted billingClientScopePredicate would raise "missing FROM-clause entry for table clients"
+// for any restricted (non-global) caller. (PS-311b review fix; mirrors billingLineItemScopePredicate
+// in services/billing.ts.)
+function billingLineItemClientScopePredicate(scope: ClientStoreScope): SQL {
+  if (scope.isGlobal) return sql`true`;
+
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(scope.clientIds);
+  const storeIds = normalizeScopeIds(scope.storeIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`${billingLineItems.clientId} = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`exists (
+      select 1 from clients scoped_client
+      where scoped_client.id = ${billingLineItems.clientId}
+        and scoped_client.store_ids && ${intArraySql(storeIds)}
+    )`);
   }
   if (!predicates.length) {
     return scope.isRestricted ? sql`false` : sql`true`;
@@ -640,7 +671,7 @@ app.post(
         packageId: body.packageId,
         newCost: body.newCost,
       },
-      billingClientScopePredicate(scope),
+      billingLineItemClientScopePredicate(scope),
     );
     return c.json({ data: preview });
   },
@@ -671,7 +702,7 @@ app.post(
         packageId: body.packageId,
         newCost: body.newCost,
       },
-      billingClientScopePredicate(scope),
+      billingLineItemClientScopePredicate(scope),
       resolvedBy,
       body.note ?? null,
     );
@@ -720,8 +751,9 @@ const byDimsScopeRawSchema = z.object({
 const byDimsScopeSchema = byDimsScopeRawSchema
   .transform(normalizeBulkBoxCostRange)
   .refine(hasNormalizedBulkRange, bulkBoxCostRangeRequired);
-const byDimsApplySchema = byDimsScopeRawSchema
-  .extend({ note: z.string().max(500).optional() })
+// UNDO takes the same scope minus the cost — it removes the sweep, it does not set a value.
+const byDimsRevertSchema = byDimsScopeRawSchema
+  .omit({ newCost: true })
   .transform(normalizeBulkBoxCostRange)
   .refine(hasNormalizedBulkRange, bulkBoxCostRangeRequired);
 
@@ -740,7 +772,7 @@ app.post(
         sourceOrderId: body.sourceOrderId,
         newCost: body.newCost,
       },
-      billingClientScopePredicate(scope),
+      billingLineItemClientScopePredicate(scope),
     );
     return c.json({ data: preview });
   },
@@ -749,7 +781,7 @@ app.post(
 app.post(
   '/box-cost/by-dims/apply',
   requirePermission('financials:write'),
-  zValidator('json', byDimsApplySchema),
+  zValidator('json', byDimsScopeSchema),
   async (c) => {
     const body = c.req.valid('json');
     const scope = billingScopeFromContext(c);
@@ -762,9 +794,8 @@ app.post(
         sourceOrderId: body.sourceOrderId,
         newCost: body.newCost,
       },
-      billingClientScopePredicate(scope),
+      billingLineItemClientScopePredicate(scope),
       resolvedBy,
-      body.note ?? null,
     );
     // Regenerate so the swept orders' package_cost lines reflect the new resolutions (which survive
     // regeneration — PS-207). Same normalized [fromUtc, toUtcExclusive) bounds as the fetch.
@@ -779,6 +810,49 @@ app.post(
       resourceType: 'billing_box_cost_bulk',
       resourceId: `client:${body.clientId}:order:${body.sourceOrderId}`,
       action: 'bulk_box_cost_by_dims_apply',
+      details: {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        sourceOrderId: body.sourceOrderId,
+        ...result,
+      },
+    });
+    return c.json({ data: result });
+  },
+);
+
+// PS-311b UNDO: reverse a dims sweep — remove the cost the sweep added and send those bills back to
+// needs-review. The backend re-derives the sweep marker from sourceOrderId's own resolution and
+// deletes ONLY resolutions carrying it (manual box-cost edits are never touched), scoped to client +
+// range + auth. Then regenerates so the needs-review lines reappear. Billing/awaiting data only.
+app.post(
+  '/box-cost/by-dims/revert',
+  requirePermission('financials:write'),
+  zValidator('json', byDimsRevertSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    const result = await revertBulkBoxCostByDimsResolutions(
+      {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom!,
+        dateTo: body.dateTo!,
+        sourceOrderId: body.sourceOrderId,
+      },
+      billingLineItemClientScopePredicate(scope),
+    );
+    if (result.revertedOrderCount > 0) {
+      await generateLineItems(
+        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+      );
+    }
+    await recordAuditEvent({
+      eventType: 'billing',
+      ...auditActorFromContext(c),
+      resourceType: 'billing_box_cost_bulk',
+      resourceId: `client:${body.clientId}:order:${body.sourceOrderId}`,
+      action: 'bulk_box_cost_by_dims_revert',
       details: {
         clientId: body.clientId,
         dateFrom: body.dateFrom,

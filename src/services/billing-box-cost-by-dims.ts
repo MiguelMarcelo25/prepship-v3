@@ -14,7 +14,7 @@
 // This is the dims-based companion to billing-box-cost-bulk.ts (which matches an already-resolved
 // packageId). The pure preview/split math + result types are reused from that module verbatim.
 
-import { sql, and, eq, gte, lt } from 'drizzle-orm';
+import { sql, and, eq, gte, lt, inArray } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
@@ -27,6 +27,18 @@ import {
 } from './billing-box-cost-bulk.js';
 
 const REVIEW_LINE_TYPE = 'package_cost_missing';
+
+// Every resolution this dims-sweep writes is stamped with a deterministic marker note = the prefix
+// + the box signature. This is what makes UNDO reliable AND safe: revert re-derives the exact marker
+// from the source order's own resolution and deletes ONLY resolutions carrying it — so a box cost the
+// operator set MANUALLY (a different note) is never wiped, and other boxes/ranges keep their notes.
+const SWEEP_NOTE_PREFIX = '[box-sweep] ';
+function sweepNote(signature: string): string {
+  return `${SWEEP_NOTE_PREFIX}${signature}`;
+}
+function isSweepNote(note: string | null | undefined): boolean {
+  return typeof note === 'string' && note.startsWith(SWEEP_NOTE_PREFIX);
+}
 
 export type ByDimsScope = {
   clientId: number;
@@ -136,7 +148,6 @@ export async function applyBulkBoxCostByDimsResolutions(
   scope: ByDimsScope,
   clientScopePredicate: ReturnType<typeof sql> | undefined,
   resolvedBy: string | null,
-  note: string | null,
   conn: typeof db = db,
 ): Promise<BulkBoxCostApplyResult & { signature: string | null }> {
   // Only the production singleton path ensures the real schema (the injected pglite test conn
@@ -149,6 +160,9 @@ export async function applyBulkBoxCostByDimsResolutions(
   const rows = await fetchUnmatchedBoxOrdersByDims(scope, signature, clientScopePredicate, conn);
   const { editable, skippedFinalized } = splitBulkBoxCostApplyTargets(rows);
   const overridePrice = round2(scope.newCost).toFixed(2);
+  // The deterministic marker note — what UNDO finds. Always stamped (overrides any prior note) so a
+  // swept resolution is always reversible by re-deriving this exact marker from the source order.
+  const note = sweepNote(signature);
 
   if (editable.length > 0) {
     await conn.transaction(async (tx) => {
@@ -161,7 +175,7 @@ export async function applyBulkBoxCostByDimsResolutions(
             set: {
               packageId: null,
               overridePrice,
-              ...(note != null ? { note } : {}),
+              note,
               resolvedBy,
               resolvedAt: new Date(),
               updatedAt: new Date(),
@@ -177,5 +191,100 @@ export async function applyBulkBoxCostByDimsResolutions(
     skippedFinalizedCount: skippedFinalized.length,
     newCost: round2(scope.newCost),
     signature,
+  };
+}
+
+// ── UNDO ──────────────────────────────────────────────────────────────────────────────────────
+
+export type ByDimsRevertScope = {
+  clientId: number;
+  dateFrom: string; // inclusive ISO lower bound
+  dateTo: string; //   EXCLUSIVE ISO upper bound
+  sourceOrderId: number; // an order that was swept — its resolution note carries the marker
+};
+
+export type ByDimsRevertResult = {
+  revertedOrderCount: number; //   resolutions removed (orders sent back to needs-review on regen)
+  skippedFinalizedCount: number; //invoiced swept orders left intact (never strip a finalized invoice)
+  signature: string | null; //     the box signature the marker encoded (null if nothing to undo)
+};
+
+/**
+ * The marker note on the source order's resolution, if (and only if) it was written by a dims sweep.
+ * Returns null when the order has no resolution or a non-sweep (e.g. manual) note — so UNDO is a safe
+ * no-op for anything the sweep did not create. Re-derived SERVER-SIDE; the FE supplies only the
+ * orderId, never the note/signature.
+ */
+export async function fetchSweepNoteForOrder(
+  clientId: number,
+  sourceOrderId: number,
+  conn: typeof db = db,
+): Promise<string | null> {
+  const [row] = await conn
+    .select({ note: billingBoxResolutions.note })
+    .from(billingBoxResolutions)
+    .innerJoin(billingLineItems, eq(billingBoxResolutions.orderId, billingLineItems.orderId))
+    .where(and(eq(billingBoxResolutions.orderId, sourceOrderId), eq(billingLineItems.clientId, clientId)))
+    .limit(1);
+  return isSweepNote(row?.note) ? (row!.note as string) : null;
+}
+
+/**
+ * UNDO a dims sweep: delete every resolution in the (client + range) scope that carries the SAME
+ * sweep marker as the source order, sending those orders back to needs-review on the next regenerate.
+ * Only sweep-stamped resolutions are removed (manual box-cost edits, which carry a different note, are
+ * never touched); other boxes/ranges keep their resolutions. ONE transaction. The CALLER regenerates.
+ */
+export async function revertBulkBoxCostByDimsResolutions(
+  scope: ByDimsRevertScope,
+  clientScopePredicate: ReturnType<typeof sql> | undefined,
+  conn: typeof db = db,
+): Promise<ByDimsRevertResult> {
+  if (conn === db) await ensureBillingBoxResolutionsSchema();
+  const note = await fetchSweepNoteForOrder(scope.clientId, scope.sourceOrderId, conn);
+  if (!note) return { revertedOrderCount: 0, skippedFinalizedCount: 0, signature: null };
+
+  // Orders in scope whose resolution carries this exact sweep marker (join to line items for the
+  // client + ship-date window + auth scope; resolutions have no client/date of their own). The
+  // invoiced flag is read back so a sweep that was INVOICED after the fact is NEVER reverted —
+  // undo must not strip a box cost off an already-finalized invoice (mirrors the apply-side skip).
+  const rows = await conn
+    .select({
+      orderId: billingBoxResolutions.orderId,
+      invoiced: sql<boolean>`bool_or(coalesce(${billingLineItems.invoiced}, false))`,
+    })
+    .from(billingBoxResolutions)
+    .innerJoin(billingLineItems, eq(billingBoxResolutions.orderId, billingLineItems.orderId))
+    .where(
+      and(
+        eq(billingBoxResolutions.note, note),
+        eq(billingLineItems.clientId, scope.clientId),
+        gte(billingLineItems.shipDate, new Date(scope.dateFrom)),
+        lt(billingLineItems.shipDate, new Date(scope.dateTo)),
+        clientScopePredicate,
+      ),
+    )
+    .groupBy(billingBoxResolutions.orderId);
+
+  // Only EDITABLE (non-invoiced) swept orders are reverted; invoiced ones are reported + left intact.
+  const editableOrderIds = rows
+    .filter((r) => r.invoiced !== true)
+    .map((r) => r.orderId)
+    .filter((id): id is number => id != null);
+  const skippedFinalizedCount = rows.filter((r) => r.invoiced === true).length;
+
+  if (editableOrderIds.length > 0) {
+    await conn.transaction(async (tx) => {
+      // Double-guard on the marker note so we can only ever delete the sweep's own resolutions.
+      await tx
+        .delete(billingBoxResolutions)
+        .where(and(eq(billingBoxResolutions.note, note), inArray(billingBoxResolutions.orderId, editableOrderIds)));
+    });
+  }
+
+  return {
+    revertedOrderCount: editableOrderIds.length,
+    skippedFinalizedCount,
+    signature: note.slice(SWEEP_NOTE_PREFIX.length),
   };
 }
