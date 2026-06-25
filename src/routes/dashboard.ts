@@ -438,7 +438,11 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   type DashboardDailyRevenueByClientPayload = {
     data: Array<{ day: string; clientId: number | null; revenue: number; count: number }>;
+    // PS-325 (slice 4b): additive provenance envelope — sibling to `data`, cache key unchanged so the
+    // daily-orders-trend-count guard (which pins the `data:` type literal + the v2 key) stays green.
+    meta?: DashboardProvenance;
   };
+  const computedAt = new Date().toISOString();
   const cacheKey = analyticsCacheKey('dashboard.daily-revenue-by-client.v2', {
     from: q.from,
     to: q.to,
@@ -450,7 +454,7 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
   });
 
   const cached = await getAnalyticsCache<DashboardDailyRevenueByClientPayload>(cacheKey);
-  if (cached) return c.json(cached);
+  if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
   const rows = await db.execute<{ day: string; clientId: number | null; revenue: number; count: number }>(sql`
     select
@@ -464,7 +468,7 @@ app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), as
     order by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles') asc
   `);
 
-  const payload = { data: rows };
+  const payload = { data: rows, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
   void setAnalyticsCache(cacheKey, payload, 60);
   return c.json(payload);
 });
@@ -537,6 +541,7 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
   const q = c.req.valid('query');
   const scope = dashboardScopeFromContext(c);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  const computedAt = new Date().toISOString();
   const cacheKey = analyticsCacheKey('dashboard.sku-trends.v1', {
     from: q.from,
     to: q.to,
@@ -549,10 +554,10 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
     hideTestOrders: q.hideTestOrders === true,
     caller: dashboardCallerCacheScope(c, scope),
   });
-  const cached = await getAnalyticsCache<Awaited<ReturnType<typeof getSkuDailyFromOrderItems>>>(cacheKey);
-  if (cached) return c.json(cached);
+  const cached = await getAnalyticsCache<Awaited<ReturnType<typeof getSkuDailyFromOrderItems>> & { meta?: DashboardProvenance }>(cacheKey);
+  if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
-  const payload = await getSkuDailyFromOrderItems({
+  const result = await getSkuDailyFromOrderItems({
     dateFrom: isoDayStart(q.from),
     dateTo: isoDayEnd(q.to),
     clientId: q.clientId,
@@ -565,6 +570,7 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
   });
+  const payload = { ...result, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
   void setAnalyticsCache(cacheKey, payload, 120);
   return c.json(payload);
 });
@@ -579,7 +585,10 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     dateBuckets: string[];
     totalSkus: number;
     totalOrders: number;
+    // PS-325 (slice 4b): additive provenance envelope.
+    meta?: DashboardProvenance;
   };
+  const computedAt = new Date().toISOString();
   const cacheKey = analyticsCacheKey('dashboard.top-skus.v1', {
     from: q.from,
     to: q.to,
@@ -593,7 +602,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     financials: canViewFinancials,
   });
   const cached = await getAnalyticsCache<DashboardTopSkusPayload>(cacheKey);
-  if (cached) return c.json(cached);
+  if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
   const result = await getSkuBreakdownFromOrderItems({
     dateFrom: isoDayStart(q.from),
@@ -613,6 +622,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
+    meta: buildProvenance({ from: q.from, to: q.to, computedAt }),
   };
   void setAnalyticsCache(cacheKey, payload, 120);
   return c.json(payload);
@@ -627,7 +637,8 @@ app.get('/top-combos', zValidator('query', dashboardTopCombosQuery), async (c) =
   const scope = dashboardScopeFromContext(c);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const canViewFinancials = canViewDashboardFinancials(c);
-  type DashboardTopCombosPayload = Awaited<ReturnType<typeof getComboBreakdownFromOrderItems>>;
+  type DashboardTopCombosPayload = Awaited<ReturnType<typeof getComboBreakdownFromOrderItems>> & { meta?: DashboardProvenance };
+  const computedAt = new Date().toISOString();
   const cacheKey = analyticsCacheKey('dashboard.top-combos.v1', {
     from: q.from,
     to: q.to,
@@ -641,9 +652,9 @@ app.get('/top-combos', zValidator('query', dashboardTopCombosQuery), async (c) =
     financials: canViewFinancials,
   });
   const cached = await getAnalyticsCache<DashboardTopCombosPayload>(cacheKey);
-  if (cached) return c.json(cached);
+  if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
-  const payload = await getComboBreakdownFromOrderItems({
+  const result = await getComboBreakdownFromOrderItems({
     dateFrom: isoDayStart(q.from),
     dateTo: isoDayEnd(q.to),
     clientId: q.clientId,
@@ -656,6 +667,7 @@ app.get('/top-combos', zValidator('query', dashboardTopCombosQuery), async (c) =
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
   });
+  const payload = { ...result, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
   void setAnalyticsCache(cacheKey, payload, 120);
   return c.json(payload);
 });

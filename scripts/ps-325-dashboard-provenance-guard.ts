@@ -54,10 +54,12 @@ const route = read('src/routes/dashboard.ts');
 check('dashboard route imports the provenance owner',
   /import \{ buildProvenance, markCached.*\} from '\.\.\/lib\/analytics-provenance'/.test(route));
 check('the compute instant is stamped (new Date().toISOString())', /const computedAt = new Date\(\)\.toISOString\(\)/.test(route));
+// All 6 bare DTO routes stamp meta (slice 4a: summary + daily-counts; slice 4b: sku-trends, top-skus,
+// daily-revenue-by-client, top-combos). /shipping-margin + /inventory-risk already had provenance.
 const stampCount = (route.match(/meta: buildProvenance\(/g) ?? []).length;
-check('summary + daily-counts stamp meta via buildProvenance (>= 2 routes)', stampCount >= 2, { stampCount });
+check('all 6 bare dashboard routes stamp meta via buildProvenance (>= 6)', stampCount >= 6, { stampCount });
 const markCount = (route.match(/markCached\(cached\.meta\)/g) ?? []).length;
-check('summary + daily-counts relabel the cache hit via markCached (>= 2)', markCount >= 2, { markCount });
+check('all 6 bare dashboard routes relabel the cache hit via markCached (>= 6)', markCount >= 6, { markCount });
 
 // 3. FE mappers pass provenance through + restore the dropped snapshot ---------------------------
 const api = read('web/src/lib/v2-apiClient.ts');
