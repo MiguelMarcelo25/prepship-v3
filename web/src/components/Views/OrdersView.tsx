@@ -157,6 +157,7 @@ import { useColumnDrag } from './orders/useColumnDrag'
 import { useColumnResize } from './orders/useColumnResize'
 import { useRecipientEditor, type RecipientDraft } from './orders/useRecipientEditor'
 import { useDailyStats } from './orders/useDailyStats'
+import { useColumnMenu } from './orders/useColumnMenu'
 import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -674,7 +675,8 @@ export default function OrdersView({
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [packagesLoaded, setPackagesLoaded] = useState(false)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
-  const [columnMenuOpen, setColumnMenuOpen] = useState(false)
+  // PS-317: column-visibility dropdown UI state lives in useColumnMenu.
+  const { columnMenuOpen, setColumnMenuOpen, columnMenuPos, columnMenuRef } = useColumnMenu(columnMenuRequestId)
   // New manual-order modal — opens via the +New Order button beside
   // Export CSV. Backend route /orders/manual is pending; the save
   // handler currently shows a stub success toast so the UI flow is
@@ -686,7 +688,6 @@ export default function OrdersView({
       ? window.matchMedia('(max-width: 768px)').matches
       : false
   ))
-  const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
   // PS-317: column drag state + handlers live in useColumnDrag; the resize state + handlers live in
   // useColumnResize (both called below, after the shared suppressHeaderClickRef/resizeStateRef they
   // need are declared).
@@ -802,7 +803,6 @@ export default function OrdersView({
   })
   const [panelRatePreview, setPanelRatePreview] = useState<Array<Record<string, unknown>>>([])
   const [panelRateLoading, setPanelRateLoading] = useState(false)
-  const columnMenuRef = useRef<HTMLDivElement | null>(null)
   const resolvedColumnPrefsRef = useRef<ResolvedColumnPrefs | null>(null)
   const columnPrefsRef = useRef<ColumnPrefs | null>(null)
   const currentStatusRef = useRef(currentStatus)
@@ -1530,11 +1530,6 @@ export default function OrdersView({
   }, [filterResetVersion])
 
   useEffect(() => {
-    if (columnMenuRequestId === 0) return
-    setColumnMenuOpen((open) => !open)
-  }, [columnMenuRequestId])
-
-  useEffect(() => {
     if (queueToggleRequestId === 0) return
     setQueueOpen((open) => !open)
   }, [queueToggleRequestId])
@@ -1543,46 +1538,6 @@ export default function OrdersView({
     if (labelsActionRequestId === 0) return
     void handleTopbarLabels()
   }, [labelsActionRequestId])
-
-  useEffect(() => {
-    if (!columnMenuOpen) return
-
-    const onClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null
-      if (target?.closest('.react-column-menu')) return
-      // The topbar anchor toggles the menu via columnMenuRequestId — let that
-      // handler run instead of double-firing a close here.
-      if (target?.closest('[data-columns-anchor]')) return
-      setColumnMenuOpen(false)
-    }
-
-    document.addEventListener('click', onClick)
-    return () => document.removeEventListener('click', onClick)
-  }, [columnMenuOpen])
-
-  // Anchor the column menu to the actual topbar button via fixed positioning.
-  useEffect(() => {
-    if (!columnMenuOpen) {
-      setColumnMenuPos(null)
-      return
-    }
-    const measure = () => {
-      const anchor = document.querySelector<HTMLElement>('[data-columns-anchor]')
-      if (!anchor) return
-      const rect = anchor.getBoundingClientRect()
-      setColumnMenuPos({
-        top: rect.bottom + 6,
-        right: Math.max(8, window.innerWidth - rect.right),
-      })
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    window.addEventListener('scroll', measure, true)
-    return () => {
-      window.removeEventListener('resize', measure)
-      window.removeEventListener('scroll', measure, true)
-    }
-  }, [columnMenuOpen])
 
   // PS-317 (Phase 3): the column-resize mousemove/mouseup drag-resize effect now lives in useColumnResize.
 
