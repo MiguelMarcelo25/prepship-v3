@@ -79,6 +79,21 @@ check('Alerts tab derives the badge from the single status owner (getInventoryDi
 check('anti-vacuous: the Alerts tab no longer carries the third inline threshold copy',
   !view.includes('!isOut && minStock > 0 && stock <= minStock'));
 
+// ── C. receive pack→unit expansion is backend-owned ──────────────────────────────────────
+check('FE buildReceiveItems sends pack-count INTENT (packs), not a pre-multiplied unit qty',
+  /packs: packQty/.test(parity));
+check('anti-vacuous: buildReceiveItems no longer pre-multiplies qty = packQty * unitsPerPack',
+  !/qty: packQty \* unitsPerPack/.test(parity));
+
+const apiClientFile = read('web/src/lib/v2-apiClient.ts');
+check('apiClient bulk receive forwards the packs intent to the backend',
+  /packs: item\?\.packs/.test(apiClientFile));
+
+check('/inventory bulk receive accepts a packs intent and expands it via canonical units_per_pack',
+  /packs: z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\)/.test(invRoute) &&
+  /item\.packs != null \? item\.packs \* unitsPerPack/.test(invRoute) &&
+  /Number\(inv\.unitsPerPack\)/.test(invRoute));
+
 if (failures > 0) {
   console.error(`\nPS-324 inventory read-model guard FAILED with ${failures} failure(s).`);
   process.exit(1);

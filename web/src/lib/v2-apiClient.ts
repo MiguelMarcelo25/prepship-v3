@@ -2069,7 +2069,10 @@ export const apiClient = {
           invSkuId: item?.invSkuId ?? item?.inventoryId,
           sku: item?.sku,
           name: item?.name,
-          qty: Number(item?.qty ?? 0),
+          // PS-324: forward the pack-count intent; the backend expands it via the canonical
+          // units_per_pack. `qty` (pre-multiplied units) is still forwarded for back-compat.
+          packs: item?.packs != null ? Number(item.packs) : undefined,
+          qty: item?.qty != null ? Number(item.qty) : undefined,
           note: item?.note,
         })),
       });

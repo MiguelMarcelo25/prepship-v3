@@ -212,12 +212,15 @@ export function buildReceiveItems(rows: ReceiveDraftRow[], lookups: Record<strin
     const packQty = Number.parseInt(row.qty, 10) || 0
     if (!sku || packQty <= 0) return []
     const lookup = getReceiveSkuLookup(lookups, sku)
-    const unitsPerPack = Math.max(1, Number.parseInt(String(lookup?.unitsPerPack ?? 1), 10) || 1)
     const name = row.name.trim()
+    // PS-324: send the pack-count INTENT, not a pre-multiplied unit qty. The backend expands
+    // packs → units with the canonical units_per_pack, so a stale FE lookup can no longer
+    // persist a wrong movement quantity. The ×unitsPerPack expansion remains only as a
+    // non-authoritative preview in receiveSummary / getReceiveRowHints.
     return [{
       invSkuId: lookup?.invSkuId,
       sku,
-      qty: packQty * unitsPerPack,
+      packs: packQty,
       name: name || undefined,
     }]
   })

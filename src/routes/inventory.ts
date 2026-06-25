@@ -1368,11 +1368,18 @@ const bulkReceiveBody = z.object({
         inventoryId: z.number().int().positive().optional(),
         sku: z.string().trim().optional(),
         name: z.string().trim().optional(),
-        qty: z.number().int().positive(),
+        // PS-324: `packs` is the operator's pack-count INTENT — the backend expands it to a
+        // unit movement qty using the canonical units_per_pack. `qty` (pre-multiplied units)
+        // stays accepted for back-compat. Exactly one of packs/qty is required.
+        packs: z.number().int().positive().optional(),
+        qty: z.number().int().positive().optional(),
         note: z.string().optional(),
       }).refine(
         (item) => item.invSkuId != null || item.inventoryId != null || Boolean(item.sku?.trim()),
         'Each receive item needs an inventory id or SKU'
+      ).refine(
+        (item) => item.packs != null || item.qty != null,
+        'Each receive item needs packs or qty'
       )
     )
     .min(1),
@@ -1452,10 +1459,26 @@ app.post(
     for (const item of body.items) {
       try {
         const inv = await findOrCreateInventoryForReceive(item, body.clientId, scope);
+        // PS-324: the pack→unit expansion is a persisted MOVEMENT quantity, so the backend
+        // owns it from the canonical units_per_pack (the FE sends pack-count intent). A
+        // pre-multiplied `qty` is still honored for back-compat.
+        const unitsPerPack = Number(inv.unitsPerPack) > 0 ? Number(inv.unitsPerPack) : 1;
+        const qty = item.packs != null ? item.packs * unitsPerPack : (item.qty ?? 0);
+        if (qty <= 0) {
+          results.push({
+            invSkuId: inv.id,
+            sku: inv.sku,
+            name: inv.name,
+            qty,
+            ok: false,
+            error: 'Receive qty must be greater than 0',
+          });
+          continue;
+        }
         const res = await applyMovement({
           inventoryId: inv.id,
           type: 'receive',
-          qty: item.qty,
+          qty,
           note: item.note?.trim() || body.note?.trim() || undefined,
           createdBy: email ?? 'manual',
           createdAt: receivedAt,
@@ -1464,7 +1487,7 @@ app.post(
           invSkuId: inv.id,
           sku: res.inventory?.sku ?? inv.sku,
           name: res.inventory?.name ?? inv.name,
-          qty: item.qty,
+          qty,
           ok: true,
           newStock: res.inventory?.stockQty ?? 0,
           ledgerId: res.ledger?.id,
