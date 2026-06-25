@@ -482,6 +482,7 @@
     "test:ps-296-margin-breakdown": "tsx scripts/ps-296-margin-breakdown-guard.ts",
     "test:ps-296-fe-carrier-breakdown": "tsx scripts/ps-296-fe-carrier-breakdown-guard.ts",
     "test:ps-324-inventory-readmodel": "tsx scripts/ps-324-inventory-readmodel-guard.ts",
+    "test:ps-324-inventory-writepath": "tsx scripts/ps-324-inventory-writepath-test.ts",
     "test:ps-325-dashboard-inventory-snapshot": "tsx scripts/ps-325-dashboard-inventory-snapshot-guard.ts",
     "test:ps-325-dashboard-kpi-delta": "tsx scripts/ps-325-dashboard-kpi-delta-guard.ts",
     "test:ps-325-dashboard-heatmap-deviation": "tsx scripts/ps-325-dashboard-heatmap-deviation-guard.ts",

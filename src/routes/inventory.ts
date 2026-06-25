@@ -8,6 +8,7 @@ import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { movementDirectionError } from '../lib/inventory-movement-direction';
+import { resolveReceiveUnits } from '../lib/inventory-receive-units';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
@@ -1465,11 +1466,10 @@ app.post(
     for (const item of body.items) {
       try {
         const inv = await findOrCreateInventoryForReceive(item, body.clientId, scope);
-        // PS-324: the pack→unit expansion is a persisted MOVEMENT quantity, so the backend
-        // owns it from the canonical units_per_pack (the FE sends pack-count intent). A
-        // pre-multiplied `qty` is still honored for back-compat.
-        const unitsPerPack = Number(inv.unitsPerPack) > 0 ? Number(inv.unitsPerPack) : 1;
-        const qty = item.packs != null ? item.packs * unitsPerPack : (item.qty ?? 0);
+        // PS-324: the pack→unit expansion is a persisted MOVEMENT quantity, so the backend owns
+        // it from the CANONICAL units_per_pack (the FE sends pack-count intent). Delegated to the
+        // resolveReceiveUnits owner; a pre-multiplied `qty` is still honored for back-compat.
+        const qty = resolveReceiveUnits(item, inv.unitsPerPack);
         if (qty <= 0) {
           results.push({
             invSkuId: inv.id,

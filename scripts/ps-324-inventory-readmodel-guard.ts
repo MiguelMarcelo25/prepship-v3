@@ -89,10 +89,15 @@ const apiClientFile = read('web/src/lib/v2-apiClient.ts');
 check('apiClient bulk receive forwards the packs intent to the backend',
   /packs: item\?\.packs/.test(apiClientFile));
 
-check('/inventory bulk receive accepts a packs intent and expands it via canonical units_per_pack',
+const receiveOwner = read('src/lib/inventory-receive-units.ts');
+check('receive-units owner expands packs via canonical units_per_pack (packs wins, qty back-compat)',
+  /export function resolveReceiveUnits/.test(receiveOwner) &&
+  /line\.packs \* unitsPerPack/.test(receiveOwner) &&
+  /Number\(canonicalUnitsPerPack\) > 0/.test(receiveOwner));
+check('/inventory bulk receive accepts a packs intent and DELEGATES expansion to the owner',
   /packs: z\.number\(\)\.int\(\)\.positive\(\)\.optional\(\)/.test(invRoute) &&
-  /item\.packs != null \? item\.packs \* unitsPerPack/.test(invRoute) &&
-  /Number\(inv\.unitsPerPack\)/.test(invRoute));
+  /import \{ resolveReceiveUnits \} from '\.\.\/lib\/inventory-receive-units'/.test(invRoute) &&
+  /resolveReceiveUnits\(item, inv\.unitsPerPack\)/.test(invRoute));
 
 // ── D. manual-adjust movement direction is backend-enforced ──────────────────────────────
 const dirOwner = read('src/lib/inventory-movement-direction.ts');
