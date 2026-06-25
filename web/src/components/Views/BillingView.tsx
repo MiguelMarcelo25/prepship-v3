@@ -59,6 +59,7 @@ import { BillingDetailTable } from './BillingDetailTable'
 // config/price DRAFT state + setters and the Save handlers stay here and are passed as props).
 import { BillingConfigTable } from './BillingConfigTable'
 import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
+import { ConfirmModal } from '../ui/ConfirmModal'
 import { BillingPackagePricingTable } from './BillingPackagePricingTable'
 import './BillingView.css'
 
@@ -338,6 +339,8 @@ export default function BillingView() {
   const [bulkBoxCostOpen, setBulkBoxCostOpen] = useState(false)
   // PS-311b: the needs-review box-cost sweep (date range picker + same-box-size apply).
   const [boxReviewSweepOpen, setBoxReviewSweepOpen] = useState(false)
+  // Regenerate Range confirmation — a styled modal instead of the native browser confirm().
+  const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
@@ -871,13 +874,8 @@ export default function BillingView() {
       return
     }
 
-    if (
-      forceRegenerate &&
-      typeof window !== 'undefined' &&
-      !window.confirm(`Regenerate billing for ${selectedBillingRangeDays} day(s)? This rebuild is slower than Update Billing.`)
-    ) {
-      return
-    }
+    // The Regenerate confirmation is now handled by the styled ConfirmModal (regenerateConfirmOpen),
+    // which only calls this with forceRegenerate=true AFTER the operator confirms.
 
     setGenerateLoading(true)
     setGenerateStatus('')
@@ -1407,7 +1405,7 @@ export default function BillingView() {
             setTo(value)
           }}
           onGenerate={() => void handleGenerateBilling()}
-          onRegenerate={() => void handleGenerateBilling(true)}
+          onRegenerate={() => setRegenerateConfirmOpen(true)}
           onBackfillRefRates={() => void handleBackfillRefRates()}
           onFetchRefRates={() => void handleFetchRefRates()}
         />
@@ -1892,6 +1890,26 @@ export default function BillingView() {
           }}
         />
       ) : null}
+
+      {/* Regenerate Range confirmation — styled modal replacing the native browser confirm(). */}
+      <ConfirmModal
+        open={regenerateConfirmOpen}
+        title="Regenerate billing range?"
+        description={
+          <>
+            Rebuild billing for <strong>{selectedBillingRangeDays} day(s)</strong> ({from} → {to}). This recreates the
+            line items for the selected range and is slower than Update Billing.
+          </>
+        }
+        confirmLabel="Regenerate"
+        cancelLabel="Cancel"
+        tone="info"
+        onConfirm={() => {
+          setRegenerateConfirmOpen(false)
+          void handleGenerateBilling(true)
+        }}
+        onCancel={() => setRegenerateConfirmOpen(false)}
+      />
 
       {orderDetailModalId != null ? (
         <Suspense fallback={null}>
