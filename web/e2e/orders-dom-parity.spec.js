@@ -372,6 +372,13 @@ function normalize(html) {
       /(<div class="age-wrap"><span class="age-dot"><\/span><span>)[^<]*(<\/span><\/div>)/g,
       '$1<AGE>$2',
     )
+    // PS-317 hardening: the rate-request fingerprint embeds a date-only key `|d=YYYY-MM-DD` (built
+    // from new Date() at fixture time, ps050Fingerprint above), which rolls over daily — the
+    // byte-snapshot would go stale the day after capture (d=2026-06-24 -> d=2026-06-25) and fail for
+    // everyone, regardless of code. Mask the volatile date (the rest of the fingerprint is still
+    // asserted byte-for-byte). ISO_DATETIME above only masks full T..Z timestamps, not this date-only
+    // key. Same pure-time-dependence rationale as the age + rate-state masks.
+    .replace(/(\|d=)\d{4}-\d{2}-\d{2}/g, '$1<DATE>')
     .replace(/\s{2,}/g, ' ')
     .replace(/>\s+</g, '><')
     .trim()

@@ -47,14 +47,17 @@ const awaitingBelowFloor = resolveColumnPrefs(columns, 'awaiting_shipment', { vi
 check('Awaiting: a width below the 88 floor is clamped UP to 88 (not 175)', awaitingBelowFloor.widths.bestrate === 88);
 
 // ── (4) wiring: resize callers pass current status (no hard clamp) ───────────
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: the resize interaction (drag + keyboard) was extracted out of OrdersView into the
+// useColumnResize hook; the status-aware-floor invariant is preserved there, so the resize-caller
+// checks now read the hook (not OrdersView). Same assertions — only the owning file moved.
+const columnResize = readFileSync('web/src/components/Views/orders/useColumnResize.ts', 'utf8');
 // PS-257: the column key carries a type-only `as any` cast (TableColumnKey divergence between
 // orders-parity and orders-table-columns); behavior is unchanged. The guard's intent is that the
 // resize callers pass currentStatusRef.current (the status) — tolerate the erased cast.
 check('drag resize passes current status to getColumnMinWidth',
-  /getColumnMinWidth\(resizeState\.key(?: as any)?,\s*currentStatusRef\.current\)/.test(ordersView));
+  /getColumnMinWidth\(resizeState\.key(?: as any)?,\s*currentStatusRef\.current\)/.test(columnResize));
 check('keyboard resize passes current status to getColumnMinWidth',
-  /getColumnMinWidth\(column\.key(?: as any)?,\s*currentStatusRef\.current\)/.test(ordersView));
+  /getColumnMinWidth\(column\.key(?: as any)?,\s*currentStatusRef\.current\)/.test(columnResize));
 const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
 check('bestrate/test_bestRate use the compact floor in getColumnMinWidth',
   /if \(key === 'bestrate' \|\| key === 'test_bestRate'\) return BESTRATE_COMPACT_MIN_WIDTH/.test(parity) &&

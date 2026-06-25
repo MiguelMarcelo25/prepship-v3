@@ -230,6 +230,7 @@ import {
 import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-prefs-local'
 import { computeReorderedColumns } from './orders/column-reorder'
 import { useColumnDrag } from './orders/useColumnDrag'
+import { useColumnResize } from './orders/useColumnResize'
 import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -818,9 +819,9 @@ export default function OrdersView({
       : false
   ))
   const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
-  // PS-317: column drag state + the 8 drag handlers live in useColumnDrag (called below, after the
-  // shared suppressHeaderClickRef/resizeStateRef it needs are declared).
-  const [resizingColumnKey, setResizingColumnKey] = useState<TableColumnKey | null>(null)
+  // PS-317: column drag state + handlers live in useColumnDrag; the resize state + handlers live in
+  // useColumnResize (both called below, after the shared suppressHeaderClickRef/resizeStateRef they
+  // need are declared).
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueHistoryVisible, setQueueHistoryVisible] = useState(false)
   // Print Queue panel: free-text filter for both active queue + history list,
@@ -973,8 +974,6 @@ export default function OrdersView({
   // and the five consumer sites (search isReadOnly) will gate again.
   const isReadOnly = false
   const resizeStateRef = useRef<{ key: TableColumnKey; startX: number; startWidth: number } | null>(null)
-  const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
-  const resizeFrameRef = useRef<number | null>(null)
   const suppressHeaderClickRef = useRef(false)
   // PS-317: column drag-to-reorder interaction (4 state vars + 8 header/dropdown drag handlers),
   // extracted to useColumnDrag. moveColumn is a hoisted fn below; reorder math is unit-guarded
@@ -993,6 +992,21 @@ export default function OrdersView({
     handleDropdownDrop,
     finishDropdownDrag,
   } = useColumnDrag({ moveColumn, suppressHeaderClickRef, resizeStateRef })
+  // PS-317 (Phase 3): column RESIZE interaction (resizing state + the document mousemove/mouseup
+  // drag-resize effect + keyboard resize + the mouse-down starter), extracted to useColumnResize.
+  // Shares resizeStateRef + suppressHeaderClickRef with useColumnDrag; the prefs helpers below stay
+  // the canonical owner. handleHeaderKeyDown stays here (it also does reorder + sort) and delegates
+  // the resize case to this resizeColumnByKeyboard.
+  const { resizingColumnKey, startColumnResize, resizeColumnByKeyboard } = useColumnResize({
+    getLatestColumnPrefs,
+    buildSavedColumnPrefs,
+    saveColumnPrefsToServer,
+    setColumnPrefs,
+    columnPrefsRef,
+    currentStatusRef,
+    suppressHeaderClickRef,
+    resizeStateRef,
+  })
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
   const autoPackageDimsKeyRef = useRef<string | null>(null)
   const panelFormInitKeyRef = useRef<string | null>(null)
@@ -1781,69 +1795,7 @@ export default function OrdersView({
     }
   }, [columnMenuOpen])
 
-  useEffect(() => {
-    const onMouseMove = (event: MouseEvent) => {
-      const resizeState = resizeStateRef.current
-      if (!resizeState) return
-
-      const prefs = getLatestColumnPrefs()
-      // PS-077: status-aware floor — Shipped/Cancelled "Selected Rate" (key
-      // 'bestrate') can shrink below the Awaiting "Best Rate" 175 floor. Read the
-      // status from the always-fresh ref (this listener lives in a [] effect).
-      const nextWidth = Math.max(getColumnMinWidth(resizeState.key as any, currentStatusRef.current), resizeState.startWidth + (event.clientX - resizeState.startX))
-      const nextWidths = {
-        ...prefs.widths,
-        [resizeState.key]: nextWidth,
-      } as Record<string, number>
-      pendingResizeWidthsRef.current = nextWidths
-      if (resizeFrameRef.current == null) {
-        resizeFrameRef.current = window.requestAnimationFrame(() => {
-          resizeFrameRef.current = null
-          const activeResizeState = resizeStateRef.current
-          const pendingWidths = pendingResizeWidthsRef.current
-          if (!activeResizeState || !pendingWidths) return
-
-          const latestPrefs = getLatestColumnPrefs()
-          const nextPrefs = buildSavedColumnPrefs(latestPrefs.orderedColumns, latestPrefs.hiddenColumns, pendingWidths)
-          columnPrefsRef.current = nextPrefs
-          setColumnPrefs(nextPrefs)
-        })
-      }
-    }
-
-    const onMouseUp = () => {
-      const resizeState = resizeStateRef.current
-      if (!resizeState) return
-
-      const prefs = getLatestColumnPrefs()
-      const nextWidths = pendingResizeWidthsRef.current ?? prefs.widths
-      if (resizeFrameRef.current != null) {
-        window.cancelAnimationFrame(resizeFrameRef.current)
-        resizeFrameRef.current = null
-      }
-      resizeStateRef.current = null
-      pendingResizeWidthsRef.current = null
-      setResizingColumnKey(null)
-      document.body.classList.remove('resizing-active')
-
-      void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths as any))
-      window.setTimeout(() => {
-        suppressHeaderClickRef.current = false
-      }, 150)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-    return () => {
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-      if (resizeFrameRef.current != null) {
-        window.cancelAnimationFrame(resizeFrameRef.current)
-        resizeFrameRef.current = null
-      }
-      document.body.classList.remove('resizing-active')
-    }
-  }, [])
+  // PS-317 (Phase 3): the column-resize mousemove/mouseup drag-resize effect now lives in useColumnResize.
 
   useEffect(() => {
     onQueueStateChange?.({
@@ -2992,18 +2944,6 @@ export default function OrdersView({
     toggleSort(column.sort as SortKey)
   }
 
-  function resizeColumnByKeyboard(column: TableColumn, delta: number) {
-    if (column.key === 'select') return
-
-    const prefs = getLatestColumnPrefs()
-    const currentWidth = (prefs.widths as Record<string, number>)[column.key] ?? column.width
-    const nextWidths = {
-      ...prefs.widths,
-      [column.key]: Math.max(getColumnMinWidth(column.key as any, currentStatusRef.current), currentWidth + delta),
-    }
-    void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths as any))
-  }
-
   function handleHeaderKeyDown(event: React.KeyboardEvent<HTMLTableCellElement>, column: TableColumn) {
     if (column.key === 'select') return
 
@@ -3026,22 +2966,6 @@ export default function OrdersView({
       event.preventDefault()
       handleHeaderClick(column)
     }
-  }
-
-  function startColumnResize(event: React.MouseEvent<HTMLDivElement>, column: TableColumn) {
-    event.preventDefault()
-    event.stopPropagation()
-
-    const prefs = getLatestColumnPrefs()
-    resizeStateRef.current = {
-      key: column.key,
-      startX: event.clientX,
-      startWidth: (prefs.widths as Record<string, number>)[column.key] ?? column.width,
-    }
-    pendingResizeWidthsRef.current = null
-    suppressHeaderClickRef.current = true
-    setResizingColumnKey(column.key)
-    document.body.classList.add('resizing-active')
   }
 
   async function hydrateQueue(forceOpen = false) {
@@ -4078,13 +4002,13 @@ export default function OrdersView({
     const createdAt = toStringValue(metadata.cacheCreatedAt) ?? new Date().toISOString()
     // PS-183: the freshness window is BACKEND-owned (CACHE_TTL_MS over fetchedAt,
     // stamped on the browse response + rates). Prefer the explicit metadata value,
-    // then the rate's backend-stamped expiry. The local mint is a last-resort
-    // DISPLAY fallback only (warned — a minted window can make a stale rate look
-    // fresh, and never extends the server-side cache TTL or the purchase proof).
+    // then the rate's backend-stamped expiry. If the backend carries NEITHER, the FE
+    // shows no expiry (null) — it does NOT mint a local window (that authority was
+    // removed); a missing expiry never extends the server cache TTL or the purchase proof.
     const backendExpiresAt =
       toStringValue(metadata.cacheExpiresAt) ?? toStringValue(rate.cacheExpiresAt)
     if (!backendExpiresAt) {
-      console.warn('[orders] backend rate carried no cacheExpiresAt — minting a display-only 6h fallback (PS-183)')
+      console.warn('[orders] backend rate carried no cacheExpiresAt — showing no display expiry (PS-183: the FE no longer mints a local fallback window)')
     }
     const expiresAt = backendExpiresAt ?? null
     const metadataComplete =
