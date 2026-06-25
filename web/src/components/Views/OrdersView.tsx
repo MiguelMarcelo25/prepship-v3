@@ -231,6 +231,7 @@ import { readLocalColumnPrefs, writeLocalColumnPrefs } from './orders-column-pre
 import { computeReorderedColumns } from './orders/column-reorder'
 import { useColumnDrag } from './orders/useColumnDrag'
 import { useColumnResize } from './orders/useColumnResize'
+import { useRecipientEditor, type RecipientDraft } from './orders/useRecipientEditor'
 import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -382,18 +383,6 @@ interface OrdersViewProps {
   // ("Show panel"). Updates the same localStorage-backed pref in Home.tsx.
   onHideEmptyPanelChange?: (hide: boolean) => void
   stores?: Array<{ storeId?: number | null; clientId?: number | null; storeName?: string | null; name?: string | null }>
-}
-
-type RecipientDraft = {
-  name: string
-  company: string
-  street1: string
-  street2: string
-  city: string
-  state: string
-  postalCode: string
-  country: string
-  phone: string
 }
 
 // PS-258 (slice B): scheduleNonCriticalOrdersWork (the pure, closure-free
@@ -934,19 +923,6 @@ export default function OrdersView({
     confirmation: 'none',
     insurance: 'none',
     insuranceValue: '',
-  })
-  const [recipientEditorOpen, setRecipientEditorOpen] = useState(false)
-  const [recipientEditorSaving, setRecipientEditorSaving] = useState(false)
-  const [recipientDraft, setRecipientDraft] = useState<RecipientDraft>({
-    name: '',
-    company: '',
-    street1: '',
-    street2: '',
-    city: '',
-    state: '',
-    postalCode: '',
-    country: 'US',
-    phone: '',
   })
   const [panelRatePreview, setPanelRatePreview] = useState<Array<Record<string, unknown>>>([])
   const [panelRateLoading, setPanelRateLoading] = useState(false)
@@ -1505,6 +1481,22 @@ export default function OrdersView({
     dailyStatsForStrip?.window?.toLabel || dailyStatsForStrip?.window?.to || ''
   )
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
+
+  // PS-317: recipient-editor state + save live in useRecipientEditor.
+  const {
+    recipientEditorOpen,
+    setRecipientEditorOpen,
+    recipientEditorSaving,
+    recipientDraft,
+    openRecipientEditor,
+    updateRecipientDraft,
+    saveRecipientOverride,
+  } = useRecipientEditor({
+    orderId: panelOrder?.orderId ?? null,
+    initialShipTo: panelOrder ? getShipTo(panelOrder, panelDetail) : null,
+    showToast,
+    refetchOrders,
+  })
   const activeStoreClientId = useMemo(() => {
     if (activeStore == null) return null
     if (activeStore < 0) return Math.abs(activeStore)
@@ -2250,67 +2242,6 @@ export default function OrdersView({
   // useOrdersSelection (destructured above).
   const openOrderDetails = (orderId: number) => {
     onActiveOrderIdChange?.(orderId)
-  }
-
-  const openRecipientEditor = () => {
-    if (!panelOrder) return
-    const shipTo = getShipTo(panelOrder, panelDetail)
-    setRecipientDraft({
-      name: shipTo.name ?? '',
-      company: shipTo.company ?? '',
-      street1: shipTo.street1 ?? '',
-      street2: shipTo.street2 ?? '',
-      city: shipTo.city ?? '',
-      state: shipTo.state ?? '',
-      postalCode: shipTo.postalCode ?? '',
-      country: shipTo.country ?? 'US',
-      phone: shipTo.phone ?? '',
-    })
-    setRecipientEditorOpen(true)
-  }
-
-  const updateRecipientDraft = (key: keyof RecipientDraft, value: string) => {
-    setRecipientDraft((current) => ({ ...current, [key]: value }))
-  }
-
-  async function saveRecipientOverride() {
-    if (!panelOrder || recipientEditorSaving) return
-    const missing = [
-      ['name', recipientDraft.name],
-      ['street', recipientDraft.street1],
-      ['city', recipientDraft.city],
-      ['state', recipientDraft.state],
-      ['postal code', recipientDraft.postalCode],
-    ].filter(([, value]) => !String(value ?? '').trim())
-    if (missing.length > 0) {
-      showToast(`Recipient missing ${missing.map(([label]) => label).join(', ')}`, 'error')
-      return
-    }
-
-    setRecipientEditorSaving(true)
-    try {
-      await apiClient.saveOrderRecipientOverride(panelOrder.orderId, {
-        name: recipientDraft.name,
-        company: recipientDraft.company,
-        street1: recipientDraft.street1,
-        street2: recipientDraft.street2,
-        city: recipientDraft.city,
-        state: recipientDraft.state,
-        postalCode: recipientDraft.postalCode,
-        country: recipientDraft.country || 'US',
-        phone: recipientDraft.phone,
-      })
-      setRecipientEditorOpen(false)
-      showToast('Recipient saved', 'success')
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', panelOrder.orderId] }),
-        refetchOrders(),
-      ])
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to save recipient', 'error')
-    } finally {
-      setRecipientEditorSaving(false)
-    }
   }
 
   const recipientInput = (key: keyof RecipientDraft, label: string, autoComplete?: string) => (

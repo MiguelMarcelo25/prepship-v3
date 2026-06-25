@@ -93,6 +93,8 @@ const labelsSrc = readText('src/services/labels.ts');
 const apiClientSrc = readText('web/src/lib/v2-apiClient.ts');
 const ordersViewSrc = readText('web/src/components/Views/OrdersView.tsx');
 const panelSectionsSrc = readText('web/src/components/Views/OrdersPanelSections.tsx');
+// PS-317: the recipient-editor state + save moved from OrdersView into the useRecipientEditor hook.
+const recipientEditorHookSrc = readText('web/src/components/Views/orders/useRecipientEditor.ts');
 const packageJson = readText('package.json');
 
 check('schema maps order_overrides.recipient_override',
@@ -126,7 +128,8 @@ check('recipient edit button opens real editor, not Phase 3 placeholder toast',
   !panelSectionsSrc.includes('Edit recipient — Phase 3') &&
   panelSectionsSrc.includes('onEditRecipient') &&
   ordersViewSrc.includes('recipientEditorOpen') &&
-  ordersViewSrc.includes('saveOrderRecipientOverride'));
+  ordersViewSrc.includes('useRecipientEditor') &&
+  recipientEditorHookSrc.includes('saveOrderRecipientOverride'));
 // PS-166/PS-306/PS-258 (Wave 1): the recipient-editor modal JSX was extracted VERBATIM into
 // OrdersRecipientEditorModal.tsx; OrdersView consumes it. Re-pointed to follow the moved markers
 // (intent unchanged: the dark/blurred backdrop that suppresses table highlights still exists).
