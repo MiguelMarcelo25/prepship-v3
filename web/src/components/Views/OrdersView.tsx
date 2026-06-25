@@ -672,11 +672,13 @@ export default function OrdersView({
           }
           setRecalcAllSummary(null)
           await refetchOrders()
-          // Settle-poll: the backend finalizes the last rows a few ms AFTER the job reports done (each
-          // clearOrderRateJob is async/best-effort), so refetch a few more times over ~24s to clear any
-          // lingering rating spinners without a manual refresh. Bounded + cancellable — NOT a backfill
-          // re-kick (no startRecalculateAllBestRates / passiveBackfillStartedRef), so no infinite loop.
-          for (const delay of [3000, 8000, 16000, 24000]) {
+          // RC5 settle-poll: the backend finalizes the last rows from a few ms up to a couple MINUTES after
+          // the job reports done — a slow/retried ShipStation carrier (RC1) can land a rate well after the
+          // job's last worker. So keep refetching on a BOUNDED schedule out to ~2.7min so EVERY row fills in
+          // on its own and the user never has to reload the page. Bounded + cancellable — NOT a backfill
+          // re-kick (no startRecalculateAllBestRates / passiveBackfillStartedRef), so it can't loop. The
+          // 6-min FE watchdog stays the final backstop for a genuinely-stuck row.
+          for (const delay of [3000, 8000, 16000, 24000, 36000, 50000, 70000, 95000, 125000, 160000]) {
             settleTimers.push(setTimeout(() => { if (!cancelled) void refetchOrdersRef.current?.() }, delay))
           }
           return
