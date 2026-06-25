@@ -3,6 +3,11 @@ import { motion } from 'framer-motion'
 // PS-150: reorder policy (velocity model) is owned by the backend layer (src/lib); the Dashboard
 // delegates so the restock/days-supply math can't drift from the dashboard /inventory-risk route.
 import { computeReorderPolicy } from '../../../../src/lib/inventory-reorder-policy'
+// PS-325: In/Low/Out-of-Stock thresholds + the inventory snapshot are backend-owned. The Dashboard
+// renders the snapshot from /dashboard/inventory-risk; these shared imports give the per-row badge
+// and the deploy-skew fallback the SAME canonical definition (no FE-owned thresholds), exactly like
+// computeReorderPolicy above (PS-150).
+import { classifyStockStatus, summarizeInventorySnapshot, type InventorySnapshot } from '../../../../src/lib/inventory-stock-status'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -626,10 +631,10 @@ function normalizeDashboardOrderAgg(value: unknown): DashboardOrderAgg {
   }
 }
 
+// PS-325: per-row status delegates to the canonical backend-owned classifier (src/lib/
+// inventory-stock-status) so the threshold definition lives in exactly one place.
 function stockStatus(stock: number, minStock: number): DashboardSkuRow['status'] {
-  if (stock <= 0) return 'out'
-  if (stock <= minStock) return 'low'
-  return 'in'
+  return classifyStockStatus(stock, minStock)
 }
 
 // PS-154: statusLabel moved into web/src/components/StatusBadge.tsx
@@ -1074,6 +1079,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     Array<{ day: string; clientId: number | null; revenue: number; count: number }>
   >([])
   const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
+  // PS-325: the backend-owned In/Low/Out-of-Stock snapshot from /dashboard/inventory-risk. Null until
+  // loaded (or during backend deploy skew); the kpis memo falls back to the shared owner so the
+  // counts are never re-defined here.
+  const [inventorySnapshot, setInventorySnapshot] = useState<InventorySnapshot | null>(null)
   const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
   const [currentOrderAgg, setCurrentOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
   const [priorOrderAgg, setPriorOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
@@ -1721,6 +1730,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       setLoading(true)
       setPanelLoading(createDashboardPanelLoading(true))
       setInventoryRows([])
+      setInventorySnapshot(null)
       setAnalysisRows([])
     } else {
       setRefreshing(true)
@@ -1865,11 +1875,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           .then((inventoryRes: any) => {
             if (loadSeq !== dashboardLoadSeqRef.current) return
             setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
+            setInventorySnapshot((inventoryRes?.snapshot as InventorySnapshot | undefined) ?? null)
             finishPanels(['inventory'])
           })
           .catch((loadError) => {
             if (loadSeq !== dashboardLoadSeqRef.current) return
             setInventoryRows([])
+            setInventorySnapshot(null)
             failPanels(['inventory'], loadError, 'Failed to load inventory snapshot')
           })
 
@@ -2290,18 +2302,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const priorOrdersRange = sumDailyOrders(priorDailyCounts)
     const currentOrders7 = sumDailyOrders(currentDailyCounts, sevenFrom)
     const priorOrders7 = sumDailyOrders(priorDailyCounts, priorSevenFrom)
-    const inStock = inventoryRows.filter((item) => {
-      const stock = num(item.currentStock ?? item.stockQty)
-      const min = num(item.minStock ?? item.reorderLevel)
-      return stock > min
-    }).length
-    const lowStock = inventoryRows.filter((item) => {
-      const stock = num(item.currentStock ?? item.stockQty)
-      const min = num(item.minStock ?? item.reorderLevel)
-      return stock > 0 && stock <= min
-    }).length
-    const outStock = inventoryRows.filter((item) => num(item.currentStock ?? item.stockQty) <= 0).length
-    const totalStockSkus = Math.max(1, inventoryRows.length)
+    // PS-325: In/Low/Out-of-Stock counts are a backend-owned read model. Prefer the snapshot the
+    // /dashboard/inventory-risk endpoint returns; during backend deploy skew (snapshot absent) fall
+    // back to the SAME canonical owner over the fetched rows, so the thresholds are never re-defined
+    // here. The component holds no stock-status rules.
+    const snapshot = inventorySnapshot ?? summarizeInventorySnapshot(inventoryRows)
+    const inStock = snapshot.inStock
+    const lowStock = snapshot.lowStock
+    const outStock = snapshot.outOfStock
+    const totalStockSkus = Math.max(1, snapshot.totalSkus)
 
     return {
       currentUnitsRange,
@@ -2319,7 +2328,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       outStock,
       totalStockSkus,
     }
-  }, [currentAgg, currentDailyCounts, dateRange, inventoryRows, priorAgg, priorDailyCounts, rangeDays])
+  }, [currentAgg, currentDailyCounts, dateRange, inventorySnapshot, inventoryRows, priorAgg, priorDailyCounts, rangeDays])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
   const metricsLoading = panelLoading.metrics

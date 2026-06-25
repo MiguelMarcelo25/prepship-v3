@@ -14,6 +14,7 @@ import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
+import { summarizeInventorySnapshot, type InventorySnapshot } from '../lib/inventory-stock-status';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
@@ -649,9 +650,14 @@ app.get('/top-combos', zValidator('query', dashboardTopCombosQuery), async (c) =
 app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), async (c) => {
   const q = c.req.valid('query');
   const scope = dashboardScopeFromContext(c);
+  // PS-325: stamp the snapshot provenance instant once per request; cached responses keep this
+  // value so `computedAt` honestly reflects when the metric was computed (i.e. cache age).
+  const computedAt = new Date().toISOString();
   type DashboardInventoryRiskPayload = {
     items: unknown[];
     total: number;
+    // PS-325: backend-owned In/Low/Out-of-Stock read model (was FE .filter() threshold math).
+    snapshot?: InventorySnapshot;
   };
   const cacheKey = analyticsCacheKey('dashboard.inventory-risk.v1', {
     clientId: q.clientId ?? null,
@@ -679,8 +685,14 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
       return null;
     });
     if (metricsPayload) {
-      void setAnalyticsCache(cacheKey, metricsPayload, 60);
-      return c.json(metricsPayload);
+      // PS-325: attach the backend-owned inventory snapshot computed from the same rows the FE
+      // would otherwise have bucketed itself, using the canonical stock-status owner.
+      const withSnapshot = {
+        ...metricsPayload,
+        snapshot: summarizeInventorySnapshot(metricsPayload.items, computedAt),
+      };
+      void setAnalyticsCache(cacheKey, withSnapshot, 60);
+      return c.json(withSnapshot);
     }
   }
 
@@ -732,33 +744,38 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     ? await computeEffectiveStockForIds(ids)
     : new Map<number, EffectiveStockEntry>();
 
+  const items = rows.map((row) => {
+    const stockQty = Number(row.stockQty ?? 0) || 0;
+    const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
+    const soldLast30Days = soldByInventoryId.get(row.id) ?? 0;
+    const eff = effectiveByInventoryId.get(row.id) ?? {
+      totalReceived: 0,
+      totalSold: 0,
+      effectiveStock: stockQty,
+    };
+    // PS-150: reorder policy (velocity model) is owned by src/lib/inventory-reorder-policy — the same
+    // owner the Dashboard SKU table delegates to, so the two layers can't drift. minStock falls back to
+    // reorderLevel (the inventory schema has no minStock column; mirrors the FE's minStock ?? reorderLevel).
+    const reorder = computeReorderPolicy({ units30: soldLast30Days, stock: stockQty, minStock: reorderLevel });
+    return {
+      ...row,
+      soldLast30Days,
+      soldLast7Days: 0,
+      velocityPerDay: reorder.velocityPerDay,
+      daysSupply: reorder.daysSupply,
+      restockQty: reorder.restockQty,
+      totalReceived: eff.totalReceived,
+      totalSoldAllTime: eff.totalSold,
+      effectiveStock: eff.effectiveStock,
+    };
+  });
   const payload = {
-    items: rows.map((row) => {
-      const stockQty = Number(row.stockQty ?? 0) || 0;
-      const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
-      const soldLast30Days = soldByInventoryId.get(row.id) ?? 0;
-      const eff = effectiveByInventoryId.get(row.id) ?? {
-        totalReceived: 0,
-        totalSold: 0,
-        effectiveStock: stockQty,
-      };
-      // PS-150: reorder policy (velocity model) is owned by src/lib/inventory-reorder-policy — the same
-      // owner the Dashboard SKU table delegates to, so the two layers can't drift. minStock falls back to
-      // reorderLevel (the inventory schema has no minStock column; mirrors the FE's minStock ?? reorderLevel).
-      const reorder = computeReorderPolicy({ units30: soldLast30Days, stock: stockQty, minStock: reorderLevel });
-      return {
-        ...row,
-        soldLast30Days,
-        soldLast7Days: 0,
-        velocityPerDay: reorder.velocityPerDay,
-        daysSupply: reorder.daysSupply,
-        restockQty: reorder.restockQty,
-        totalReceived: eff.totalReceived,
-        totalSoldAllTime: eff.totalSold,
-        effectiveStock: eff.effectiveStock,
-      };
-    }),
+    items,
     total: rows.length,
+    // PS-325: In/Low/Out-of-Stock snapshot derived from these same rows via the canonical owner.
+    // NOTE: bounded by `pageSize` like the rows above (the dashboard requests the active-SKU set);
+    // this preserves the prior FE-computed numbers exactly — an unbounded COUNT(*) is a follow-up.
+    snapshot: summarizeInventorySnapshot(items, computedAt),
   };
   void setAnalyticsCache(cacheKey, payload, 60);
   return c.json(payload);
