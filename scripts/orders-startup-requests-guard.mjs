@@ -16,6 +16,8 @@ const homePath = path.join(root, 'web/src/Home.tsx');
 const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
 const markupsContextPath = path.join(root, 'web/src/contexts/MarkupsContext.tsx');
 const packagePath = path.join(root, 'package.json');
+// PS-317: the daily-stats fetch + rollover scheduling moved into the useDailyStats hook.
+const useDailyStatsPath = path.join(root, 'web/src/components/Views/orders/useDailyStats.ts');
 
 const [
   ordersView,
@@ -27,6 +29,7 @@ const [
   sidebarOrders,
   markupsContext,
   packageJsonRaw,
+  dailyStatsHook,
 ] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(useOrdersPath, 'utf8'),
@@ -37,6 +40,7 @@ const [
   readFile(sidebarOrdersPath, 'utf8'),
   readFile(markupsContextPath, 'utf8'),
   readFile(packagePath, 'utf8'),
+  readFile(useDailyStatsPath, 'utf8'),
 ]);
 
 // Concatenation of the now-split v2 hook modules so the literal substring
@@ -84,9 +88,9 @@ const checks = [
   },
   {
     name: 'Daily stats initial load remains scheduled as noncritical work',
-    pass: ordersView.includes('scheduleNonCriticalOrdersWork(() =>') &&
-      ordersView.includes('void loadDailyStats()') &&
-      ordersView.includes('}, 3000)'),
+    pass: dailyStatsHook.includes('scheduleNonCriticalOrdersWork(() =>') &&
+      dailyStatsHook.includes('void loadDailyStats()') &&
+      dailyStatsHook.includes('}, 3000)'),
   },
   {
     name: 'Orders exact total count is delayed until after first paint',

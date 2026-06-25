@@ -76,6 +76,8 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 // normalizer. Markup pins read the component; logic pins read OrdersView.
 const dailyStrip = readFileSync('web/src/components/Views/OrdersDailyStrip.tsx', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+// PS-317: the daily-stats fetch + rollover moved into the useDailyStats hook.
+const dailyStatsHook = readFileSync('web/src/components/Views/orders/useDailyStats.ts', 'utf8');
 const dailyStatsClientBlock = apiClient.slice(
   apiClient.indexOf('fetchDailyStats('),
   apiClient.indexOf('fetchPicklist('),
@@ -87,9 +89,9 @@ assert.match(
   'apiClient.fetchDailyStats must call GET /orders/daily-stats',
 );
 assert.match(
-  ordersView,
+  dailyStatsHook,
   /apiClient\.fetchDailyStats\(\)/,
-  'OrdersView must load the strip via apiClient.fetchDailyStats()',
+  'useDailyStats must load the strip via apiClient.fetchDailyStats()',
 );
 assert.match(
   ordersView,
@@ -112,9 +114,9 @@ assert.match(
   'daily strip must render a retryable daily-stats failure state instead of disappearing',
 );
 assert.match(
-  ordersView,
+  dailyStatsHook,
   /visibilitychange/,
-  'OrdersView must retry daily stats immediately when a hidden tab becomes visible',
+  'useDailyStats must retry daily stats immediately when a hidden tab becomes visible',
 );
 assert.match(
   dailyStrip,

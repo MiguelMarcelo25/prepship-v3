@@ -156,7 +156,6 @@ import type {
   OrderFullDto,
   OrderPicklistResponseDto,
   OrderSummaryDto,
-  OrdersDailyStatsDto,
   PackageDto,
   PrintQueueEntryDto,
 } from '../../types/api'
@@ -232,6 +231,7 @@ import { computeReorderedColumns } from './orders/column-reorder'
 import { useColumnDrag } from './orders/useColumnDrag'
 import { useColumnResize } from './orders/useColumnResize'
 import { useRecipientEditor, type RecipientDraft } from './orders/useRecipientEditor'
+import { useDailyStats } from './orders/useDailyStats'
 import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -269,7 +269,6 @@ import {
 } from './orders-table-columns'
 
 type SortDirection = 'asc' | 'desc'
-type DailyStatsStatus = 'idle' | 'loading' | 'success' | 'error'
 
 interface QueueActionProgress {
   label: string
@@ -451,8 +450,6 @@ const BACKEND_QUEUE_SEND_POLL_MS = 750
 // the component body's direct uses (CSV filename, picklist timestamp,
 // delivered-date render).
 import { californiaDateInputValue, CALIFORNIA_TZ } from '../../lib/ca-time'
-// PS-258 (slice): pure daily-stats rollover scheduling math (strict module).
-import { getMsUntilNextDailyStatsRollover } from './daily-stats-rollover'
 // PS-258 (slice): pure print-queue payload parsers (strict module).
 import { getQueueableLabelUrl, getQueuePayloadEntries } from './orders-queue-parsers'
 // PS-258 (slice B): pure idle-time non-critical scheduler (strict module).
@@ -791,11 +788,6 @@ export default function OrdersView({
   const { collapsedSections, toggleSection } = usePanelState()
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [packagesLoaded, setPackagesLoaded] = useState(false)
-  const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
-  // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; keep the read-only Shipped daily strip mounted through daily-stats loading/failure without changing shipped/cancelled edit protections.
-  const [dailyStatsStatus, setDailyStatsStatus] = useState<DailyStatsStatus>('idle')
-  const [dailyStatsError, setDailyStatsError] = useState<string | null>(null)
-  const dailyStatsEnabledRef = useRef(false)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
   const [columnMenuOpen, setColumnMenuOpen] = useState(false)
   // New manual-order modal — opens via the +New Order button beside
@@ -1464,6 +1456,8 @@ export default function OrdersView({
     ?? orders.find((order) => order.orderId === panelOrderId)
     ?? null
   const shouldShowDailyStrip = currentStatus === 'awaiting_shipment' || currentStatus === 'shipped'
+  // PS-317: daily-stats fetch/refresh/rollover live in useDailyStats; the strip display is built here.
+  const { dailyStats, dailyStatsStatus, dailyStatsError, loadDailyStats } = useDailyStats(currentStatus)
   const dailyStatsForStrip = dailyStats
   const dailyStripProgress = dailyStatsForStrip ? buildDailyStripProgress(dailyStatsForStrip) : null
   const dailyStatsLoadingWithoutData = dailyStatsStatus !== 'error' && !dailyStatsForStrip
@@ -1642,72 +1636,6 @@ export default function OrdersView({
     }
   }, [])
 
-  const loadDailyStats = useCallback(async (options: { skipHidden?: boolean } = {}) => {
-    if (!dailyStatsEnabledRef.current) return
-    if (options.skipHidden && document.visibilityState !== 'visible') {
-      setDailyStatsStatus((status) => (status === 'idle' ? 'loading' : status))
-      return
-    }
-
-    setDailyStatsStatus('loading')
-    setDailyStatsError(null)
-    try {
-      const payload = await apiClient.fetchDailyStats()
-      if (!dailyStatsEnabledRef.current) return
-      setDailyStats(payload)
-      setDailyStatsStatus('success')
-      setDailyStatsError(null)
-    } catch (err) {
-      if (!dailyStatsEnabledRef.current) return
-      setDailyStatsStatus('error')
-      setDailyStatsError(err instanceof Error ? err.message : 'Daily stats failed')
-    }
-  }, [])
-
-  useEffect(() => {
-    dailyStatsEnabledRef.current = currentStatus === 'awaiting_shipment' || currentStatus === 'shipped'
-    if (!dailyStatsEnabledRef.current) {
-      setDailyStats(null)
-      setDailyStatsStatus('idle')
-      setDailyStatsError(null)
-      return
-    }
-
-    setDailyStatsStatus((status) => (status === 'idle' ? 'loading' : status))
-
-    let rolloverTimer: number | null = null
-
-    const scheduleRolloverRefresh = () => {
-      if (rolloverTimer !== null) window.clearTimeout(rolloverTimer)
-      rolloverTimer = window.setTimeout(() => {
-        void loadDailyStats({ skipHidden: true })
-        scheduleRolloverRefresh()
-      }, getMsUntilNextDailyStatsRollover())
-    }
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void loadDailyStats()
-      }
-    }
-
-    const cancelInitialLoad = scheduleNonCriticalOrdersWork(() => {
-      void loadDailyStats()
-    }, 3000)
-    scheduleRolloverRefresh()
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    const timer = window.setInterval(() => {
-      void loadDailyStats({ skipHidden: true })
-    }, 10 * 60 * 1000)
-
-    return () => {
-      dailyStatsEnabledRef.current = false
-      cancelInitialLoad()
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.clearInterval(timer)
-      if (rolloverTimer !== null) window.clearTimeout(rolloverTimer)
-    }
-  }, [currentStatus, loadDailyStats])
 
   useEffect(() => {
     if (refreshVersion === 0) return

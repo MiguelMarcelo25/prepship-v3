@@ -115,8 +115,10 @@ check('module is NOT @ts-nocheck (genuinely type-checked)',
 
 // ── STATIC: OrdersView imports the public fn and no longer defines the locals ──
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
-check('OrdersView imports getMsUntilNextDailyStatsRollover from ./daily-stats-rollover',
-  /import \{ getMsUntilNextDailyStatsRollover \} from '\.\/daily-stats-rollover'/.test(ordersView));
+// PS-317: the daily-stats fetch + rollover scheduling moved into the useDailyStats hook.
+const dailyStatsHook = readFileSync('web/src/components/Views/orders/useDailyStats.ts', 'utf8');
+check('useDailyStats imports getMsUntilNextDailyStatsRollover from the rollover module',
+  /import \{ getMsUntilNextDailyStatsRollover \} from '\.\.\/daily-stats-rollover'/.test(dailyStatsHook));
 check('OrdersView no longer defines function getMsUntilNextDailyStatsRollover',
   !/function getMsUntilNextDailyStatsRollover\b/.test(ordersView));
 check('OrdersView no longer defines function getDailyStatsRolloverParts',
@@ -130,8 +132,8 @@ check('OrdersView no longer defines function zonedDateToUtcDate',
 check('OrdersView no longer declares the DAILY_STATS_ROLLOVER_* constants',
   !/const DAILY_STATS_ROLLOVER_TIME_ZONE\b/.test(ordersView) &&
   !/const DAILY_STATS_ROLLOVER_HOUR\b/.test(ordersView));
-check('OrdersView still calls getMsUntilNextDailyStatsRollover() (the rollover effect)',
-  /getMsUntilNextDailyStatsRollover\(\)/.test(ordersView));
+check('useDailyStats calls getMsUntilNextDailyStatsRollover() (the rollover effect)',
+  /getMsUntilNextDailyStatsRollover\(\)/.test(dailyStatsHook));
 
 check('package.json wires test:ps-258-daily-stats-rollover',
   /test:ps-258-daily-stats-rollover/.test(readFileSync('package.json', 'utf8')));
