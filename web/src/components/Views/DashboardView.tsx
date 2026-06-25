@@ -8,6 +8,9 @@ import { computeReorderPolicy } from '../../../../src/lib/inventory-reorder-poli
 // and the deploy-skew fallback the SAME canonical definition (no FE-owned thresholds), exactly like
 // computeReorderPolicy above (PS-150).
 import { classifyStockStatus, summarizeInventorySnapshot, type InventorySnapshot } from '../../../../src/lib/inventory-stock-status'
+// PS-325 (slice 2): the "vs prior period" relative-change rule is backend-owned too — the Dashboard
+// imports the one definition instead of defining it locally.
+import { relativePct } from '../../../../src/lib/kpi-delta'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -564,11 +567,8 @@ function formatDataTimestamp() {
   return `${formatCaDateTime(new Date())} CA`
 }
 
-function relativePct(current: number, prior: number) {
-  if (prior <= 0 && current <= 0) return 0
-  if (prior <= 0) return 100
-  return ((current - prior) / prior) * 100
-}
+// PS-325 (slice 2): the "vs prior period" relative-change rule moved to the canonical owner
+// src/lib/kpi-delta (imported at the top). The Dashboard no longer defines it.
 
 function sumValues(values: number[]) {
   return values.reduce((sum, value) => sum + num(value), 0)

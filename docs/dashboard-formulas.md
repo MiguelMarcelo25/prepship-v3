@@ -42,6 +42,12 @@ compute "vs prior" comparisons:
 
 `dateOnly(N)` = midnight (00:00 local) of `N` days before today.
 
+> **`relativePct` now lives in [src/lib/kpi-delta.ts](../src/lib/kpi-delta.ts)** (PS-325 slice 2) — the
+> single backend-owned definition of the "vs prior" relative-change rule, imported by DashboardView
+> (it is no longer defined in the component). Formula unchanged: `((current - prior) / prior) × 100`,
+> with `prior ≤ 0 && current ≤ 0 → 0%` and `prior ≤ 0 && current > 0 → +100%`. NaN/Infinity safety,
+> rounding and the `+` sign stay in `formatPct`/`ChangeText` (presentation, not the definition).
+
 ---
 
 # 1. KPI Cards (six cards across the top)
