@@ -3,6 +3,7 @@ import { sql as pg } from '../db/client';
 import { syncOrders } from './order-sync';
 import { syncShipments } from './shipment-sync';
 import { startBackfillBestRates, getActiveBackfillJob } from './rates-backfill';
+import { reapStaleOrderRateJobs } from './shipping-workflow/reap-stale-rate-jobs';
 import {
   importSkusFromOrders,
   syncShipStationProducts,
@@ -54,6 +55,7 @@ const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking; // 15 minutes
 const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees; // daily (legacy Vercel cron parity)
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
+const REAP_RATE_JOBS_INTERVAL_MS = 5 * 60 * 1000; // 5 min — durable cleanup of orphaned rate-job stamps
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
 let orderSyncRunning = false;
@@ -77,6 +79,7 @@ let externalShippedClassifierTimer: NodeJS.Timeout | null = null;
 let shipmentTrackingTimer: NodeJS.Timeout | null = null;
 let walmartFeesTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let reapRateJobsTimer: NodeJS.Timeout | null = null;
 
 async function withSchedulerAdvisoryLock<T>(
   name: string,
@@ -179,6 +182,23 @@ export function runBackfillTick(): void {
   console.log(
     `[scheduler] rate backfill kicked off (job ${job.jobId}) — only orders with stale/no rates will be fetched`
   );
+}
+
+// PS-120 leak fix: durable, age-based cleanup of orphaned order_rate_jobs stamps. A worker crash /
+// Render redeploy mid-rating leaves pending/rating rows the in-memory clearOrderRateJob never reaches;
+// this reaps them by the clock so they can't pile up. Cheap single DELETE, idempotent, never throws.
+export async function runReapStaleRateJobsTick(): Promise<void> {
+  try {
+    const reaped = await reapStaleOrderRateJobs();
+    if (reaped > 0) {
+      console.log(`[scheduler] reaped ${reaped} stale order_rate_jobs (orphaned pending/rating stamps)`);
+    }
+  } catch (err) {
+    console.warn(
+      '[scheduler] reap stale rate jobs failed:',
+      err instanceof Error ? err.message : err
+    );
+  }
 }
 
 export async function runShipmentSync(): Promise<void> {
@@ -623,6 +643,17 @@ export function startSyncScheduler(
       INVENTORY_SYNC_PRODUCTS_INTERVAL_MS
     );
   }, STARTUP_DELAY_MS + 5 * 60 * 1000); // 5 min after boot — let the from-orders seed run first
+
+  // PS-120 leak fix: reap orphaned rate-job stamps on a steady cadence — and once ~1 min after boot,
+  // which also collects any stamps orphaned by THIS process's previous crash/redeploy. Runs
+  // unconditionally; it's a cheap DB cleanup independent of whether the rate backfill is enabled.
+  setTimeout(() => {
+    void runReapStaleRateJobsTick();
+    reapRateJobsTimer = setInterval(
+      () => void runReapStaleRateJobsTick(),
+      REAP_RATE_JOBS_INTERVAL_MS
+    );
+  }, STARTUP_DELAY_MS + 60 * 1000); // 1 min after boot
 }
 
 export function stopSyncScheduler(): void {
@@ -637,6 +668,10 @@ export function stopSyncScheduler(): void {
   if (backfillTimer) {
     clearInterval(backfillTimer);
     backfillTimer = null;
+  }
+  if (reapRateJobsTimer) {
+    clearInterval(reapRateJobsTimer);
+    reapRateJobsTimer = null;
   }
   if (inventoryImportTimer) {
     clearInterval(inventoryImportTimer);
