@@ -159,6 +159,7 @@ import { useRecipientEditor, type RecipientDraft } from './orders/useRecipientEd
 import { useDailyStats } from './orders/useDailyStats'
 import { useColumnMenu } from './orders/useColumnMenu'
 import { useCsvExport } from './orders/useCsvExport'
+import { useIsMobileViewport } from './orders/useIsMobileViewport'
 import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -683,11 +684,7 @@ export default function OrdersView({
   // handler currently shows a stub success toast so the UI flow is
   // reviewable in isolation.
   const [newOrderOpen, setNewOrderOpen] = useState(false)
-  const [isMobileViewport, setIsMobileViewport] = useState(() => (
-    typeof window !== 'undefined'
-      ? window.matchMedia('(max-width: 768px)').matches
-      : false
-  ))
+  const isMobileViewport = useIsMobileViewport()
   // PS-317: column drag state + handlers live in useColumnDrag; the resize state + handlers live in
   // useColumnResize (both called below, after the shared suppressHeaderClickRef/resizeStateRef they
   // need are declared).
@@ -1249,15 +1246,6 @@ export default function OrdersView({
   // because it's hidden until the user clicks it.
   const [globalSkus, setGlobalSkus] = useState<string[]>([])
   const [skuOptionsRequested, setSkuOptionsRequested] = useState(false)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const query = window.matchMedia('(max-width: 768px)')
-    const updateMobileViewport = () => setIsMobileViewport(query.matches)
-    updateMobileViewport()
-    query.addEventListener?.('change', updateMobileViewport)
-    return () => query.removeEventListener?.('change', updateMobileViewport)
-  }, [])
-
   useEffect(() => {
     if (!skuOptionsRequested) return
     let cancelled = false
