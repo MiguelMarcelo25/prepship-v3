@@ -1,7 +1,9 @@
 // PS-296 (FE) restyle: the "Margin by carrier / account" rollup, moved onto the shared <Table> so it
 // gets pagination (10/25/50, page state persisted) + the consistent Tailwind table styling. The long
 // flat list that used to render every carrier inline is now paged. Display-only — it consumes the
-// backend analytics.carriers[] rows passed in from BillingView; no money logic lives here.
+// backend analytics.carriers[] rows passed in from BillingView (and DashboardView); no money logic
+// lives here. `storageKey` defaults to the Billing key; the Dashboard passes its own so the two views
+// keep independent page/sort/column state instead of silently moving each other.
 import { Table } from '../ui/Table'
 import { formatBillingMoney } from './billing-parity'
 
@@ -24,7 +26,13 @@ function marginColor(value: number) {
   return 'var(--text3)'
 }
 
-export function BillingCarrierMarginTable({ carriers }: { carriers: CarrierMarginRow[] }) {
+export function BillingCarrierMarginTable({
+  carriers,
+  storageKey = 'billing-carrier-margin',
+}: {
+  carriers: CarrierMarginRow[]
+  storageKey?: string
+}) {
   if (carriers.length === 0) return null
 
   // The carrier rollup has no natural id and carrier+service+account can repeat across accounts, so
@@ -39,7 +47,7 @@ export function BillingCarrierMarginTable({ carriers }: { carriers: CarrierMargi
       <Table<(typeof rows)[number]>
         data={rows}
         rowKey={(row) => row._key}
-        storageKey="billing-carrier-margin"
+        storageKey={storageKey}
         density="compact"
         stickyHeader={false}
         showColumnControls={false}

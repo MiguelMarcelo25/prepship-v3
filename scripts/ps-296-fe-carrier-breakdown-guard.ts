@@ -62,11 +62,16 @@ const dashboard = read('web/src/components/Views/DashboardView.tsx');
 check('DashboardView normalizes + stores the backend analytics.carriers[]',
   /function normalizeShippingMarginCarriers/.test(dashboard) &&
   /setShippingMarginCarriers\(normalizeShippingMarginCarriers\(shippingMarginRes\?\.carriers\)\)/.test(dashboard));
-check('DashboardView renders the carrier breakdown from backend fields',
-  /By carrier \/ account/.test(dashboard) &&
-  /shippingMarginCarriers\.map\(/.test(dashboard) &&
-  /carrier\.marginTotal/.test(dashboard) &&
-  /carrier\.negativeMarginCount/.test(dashboard));
+// PS-296 restyle (dashboard): the dashboard carrier breakdown moved onto the SAME shared
+// <Table>-based component as Billing (BillingCarrierMarginTable) so it pages instead of rendering
+// every carrier inline. DashboardView still owns the normalize+store above and now WIRES the
+// component from the stored carriers. The "reads backend fields, no FE recompute" invariant is
+// pinned by the carrierTable checks above (row.marginTotal / row.negativeMarginCount / row.marginPct),
+// which now govern BOTH views since they share one component. The distinct storageKey keeps the
+// dashboard's page/sort state independent of the Billing table (non-vacuous: a copy-paste of the
+// Billing wiring would not match it).
+check('DashboardView wires the carrier breakdown via the shared paginated BillingCarrierMarginTable (distinct storageKey)',
+  /<BillingCarrierMarginTable\s+carriers=\{shippingMarginCarriers\}\s+storageKey="dashboard-carrier-margin"/.test(dashboard));
 
 if (failures > 0) {
   console.error(`\nPS-296 FE carrier breakdown guard FAILED with ${failures} failure(s).`);

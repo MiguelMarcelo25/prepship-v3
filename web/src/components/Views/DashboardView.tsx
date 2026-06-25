@@ -48,6 +48,10 @@ import { RangeToggle } from '../RangeToggle'
 // PS-154: per-row presentational render extracted so the table body map
 // collapses to a thin <DashboardSkuTableRow .../>.
 import { DashboardSkuTableRow } from '../DashboardSkuTableRow'
+// PS-296 (FE) restyle: the carrier/account margin breakdown shares the same paginated <Table>-based
+// component as Billing, so the dashboard's long flat carrier list now pages (10/25/50) instead of
+// sprawling. Distinct storageKey below keeps its page/sort state independent of the Billing table.
+import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
 
 const DashboardCharts = lazy(() => import('./DashboardCharts'))
 
@@ -2704,36 +2708,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </div>
           ) : null}
           {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
-              analytics.carriers[] rollup (previously fetched and discarded). */}
+              analytics.carriers[] rollup (previously fetched and discarded). Wired through the
+              shared BillingCarrierMarginTable so the rollup pages (10/25/50) + sorts instead of
+              rendering every carrier inline. The component reads the backend margin fields verbatim
+              (no FE recompute) and renders nothing when there are no carrier rows; a distinct
+              storageKey keeps the dashboard's page/sort state independent of the Billing table. */}
           {!shippingMarginLoading && !shippingMarginError && shippingMarginCarriers.length > 0 ? (
-            <div className="mt-3 overflow-x-auto">
-              <div className="mb-1 text-tiny font-semibold uppercase text-ink-3">By carrier / account</div>
-              <table className="w-full text-tiny tabular-nums">
-                <thead>
-                  <tr className="text-ink-3">
-                    <th className="py-1 pr-2 text-left font-semibold">Carrier</th>
-                    <th className="px-2 text-left font-semibold">Account</th>
-                    <th className="px-2 text-right font-semibold">Cost</th>
-                    <th className="px-2 text-right font-semibold">Billable</th>
-                    <th className="px-2 text-right font-semibold">Margin</th>
-                    <th className="px-2 text-right font-semibold">%</th>
-                    <th className="pl-2 text-right font-semibold">Neg</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shippingMarginCarriers.map((carrier, index) => (
-                    <tr key={`${carrier.carrierCode ?? ''}|${carrier.providerAccountNickname ?? ''}|${index}`} className="border-t border-line/60">
-                      <td className="py-1 pr-2 font-semibold text-ink">{carrier.carrierCode ?? '-'}{carrier.serviceCode ? ` · ${carrier.serviceCode}` : ''}</td>
-                      <td className="px-2 text-ink-2">{carrier.providerAccountNickname ?? '-'}</td>
-                      <td className="px-2 text-right font-mono">{formatMoneySmall(carrier.actualShippingTotal)}</td>
-                      <td className="px-2 text-right font-mono">{formatMoneySmall(carrier.billableShippingTotal)}</td>
-                      <td className={`px-2 text-right font-mono font-bold ${carrier.marginTotal < 0 ? 'text-danger' : 'text-ok'}`}>{formatMoneySmall(carrier.marginTotal)}</td>
-                      <td className="px-2 text-right font-mono text-ink-2">{carrier.marginPct == null ? '-' : formatPct(carrier.marginPct)}</td>
-                      <td className={`pl-2 text-right font-mono ${carrier.negativeMarginCount > 0 ? 'font-bold text-danger' : 'text-ink-3'}`}>{formatInt(carrier.negativeMarginCount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mt-3">
+              <BillingCarrierMarginTable carriers={shippingMarginCarriers} storageKey="dashboard-carrier-margin" />
             </div>
           ) : null}
         </section>
