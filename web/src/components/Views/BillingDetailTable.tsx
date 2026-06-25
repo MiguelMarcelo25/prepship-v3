@@ -397,6 +397,7 @@ export function BillingDetailTable({
       storageKey="billing-detail-table-v2"
       defaultSort={{ key: 'shipDate', direction: 'desc' }}
       paginated
+      stickyPagination
       defaultPageSize={50}
       pageSizeOptions={BILLING_DETAIL_PAGE_SIZE_OPTIONS}
       loading={detailState.loading}
