@@ -93,6 +93,18 @@ async function main(): Promise<void> {
   check('read: getBundleForOrder returns the DTO for a child', (await getBundleForOrder(102, conn))?.bundleId === created.bundleId);
   check('read: getBundleForOrder returns null for a non-bundled order', (await getBundleForOrder(200, conn)) === null);
 
+  // ── A DEACTIVATED member ('removed') must NOT resolve as a bundle member ──
+  // The lookup query must apply the same status='active' filter the member-list build uses, so a
+  // child whose membership was later removed stops resolving (and drops out of the member list).
+  await pg.execute(sql`UPDATE shipment_bundle_members SET status = 'removed' WHERE order_id = 102`);
+  check('read: a removed member (102) no longer resolves to its bundle', (await getBundleForOrder(102, conn)) === null);
+  const afterRemoval = await getBundlesForOrders([100, 101, 102], conn);
+  check('read: removed member (102) is absent; the remaining members still resolve',
+    afterRemoval.has(100) && afterRemoval.has(101) && !afterRemoval.has(102));
+  check('read: the bundle member list drops the removed order (now [100, 101])',
+    JSON.stringify(afterRemoval.get(100)?.memberOrderIds) === JSON.stringify([100, 101]) &&
+    afterRemoval.get(100)?.memberCount === 2);
+
   await client.close();
   if (failures > 0) {
     console.error(`\nPS-312 bundle read-model integration test FAILED with ${failures} failure(s).`);

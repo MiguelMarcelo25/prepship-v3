@@ -3,7 +3,7 @@
 // and members. This is what the Shipped-tab UI (S4) renders so a CHILD order shows the primary's
 // shared shipment instead of "Shipment sync error". Pure read — no writes, no postage, no provider
 // calls. The FE consumes this DTO; it never re-derives membership from names/addresses.
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client.js';
 import { shipmentBundles, shipmentBundleMembers } from '../../db/schema/shipment-bundles.js';
 import { ensureShipmentBundlesSchema } from './ensure-shipment-bundles-schema.js';
@@ -48,7 +48,14 @@ export async function getBundlesForOrders(
       role: shipmentBundleMembers.role,
     })
     .from(shipmentBundleMembers)
-    .where(inArray(shipmentBundleMembers.orderId, orderIds));
+    .where(
+      and(
+        inArray(shipmentBundleMembers.orderId, orderIds),
+        // Only ACTIVE memberships resolve — matches the member-list build below so a removed
+        // member can never still resolve as a bundle member (PS-312 adversarial-review fix).
+        eq(shipmentBundleMembers.status, 'active'),
+      ),
+    );
   const active = memberRows.filter((m) => m.bundleId != null);
   if (active.length === 0) return result;
 
