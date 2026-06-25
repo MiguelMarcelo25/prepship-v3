@@ -4,6 +4,7 @@
 // them. All money totals are parent-computed and read-only here; detailState + handleLoadDetails
 // stay in BillingView.
 import { formatBillingMoney, type BillingSummaryDto } from './billing-parity'
+import { getClientPalette } from './orders-formatting'
 
 export function BillingDetailClientStrip({
   sortedSummaryRows,
@@ -26,6 +27,8 @@ export function BillingDetailClientStrip({
         const active = Number(row.clientId) === Number(detailState.clientId)
         const orderCount = Number(row.orderCount ?? 0)
         const rowTotal = Number(row.fulfillmentFeeTotal ?? row.grandTotal ?? row.total ?? 0)
+        // Designated per-store color dot (same hash-based palette as the Awaiting/Orders view).
+        const palette = getClientPalette(row.clientName ?? 'Untagged')
         return (
           <button
             key={row.clientId}
@@ -34,7 +37,10 @@ export function BillingDetailClientStrip({
             aria-pressed={active}
             onClick={() => void onLoadDetails(row.clientId, row.clientName)}
           >
-            <span>{row.clientName}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: palette.color, flexShrink: 0 }} />
+              {row.clientName}
+            </span>
             <span className="billing-detail-toggle-meta">{orderCount} orders</span>
             <span className="billing-detail-toggle-total">{formatBillingMoney(rowTotal)}</span>
           </button>

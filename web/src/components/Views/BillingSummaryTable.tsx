@@ -6,6 +6,7 @@
 import type { CSSProperties } from 'react'
 type BillingSummaryDto = any // TODO PS-257: restore real type
 import { formatBillingMoney, type BillingSummaryTotals } from './billing-parity'
+import { getClientPalette } from './orders-formatting'
 import { Table } from '../ui/Table'
 
 const BILLING_SUMMARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
@@ -48,9 +49,17 @@ export function BillingSummaryTable({
           // 2026-05-13: every column toggleable + draggable
           // per operator request (Awaiting-Shipment parity).
           sortValue: (row) => row.clientName ?? '',
-          render: (row) => (
-            <span className="billing-summary-client-cell" style={{ fontWeight: 600, color: 'var(--ss-blue)' }}>
-              {row.clientName}
+          render: (row) => {
+            // Designated per-store color (same hash-based palette as the Awaiting/Orders view).
+            const palette = getClientPalette(row.clientName ?? 'Untagged')
+            return (
+            <span className="billing-summary-client-cell" style={{ fontWeight: 600 }}>
+              <span
+                className="billing-summary-client-chip"
+                style={{ background: palette.bg, color: palette.color, border: `1px solid ${palette.border}`, padding: '2px 8px', borderRadius: 6, fontSize: 12, fontWeight: 600 }}
+              >
+                {row.clientName}
+              </span>
               <button
                 className="btn btn-ghost btn-xs"
                 type="button"
@@ -79,7 +88,8 @@ export function BillingSummaryTable({
                 📑 CSV
               </button>
             </span>
-          ),
+            )
+          },
         },
         { key: 'orders', label: 'Orders', width: 90, minWidth: 70, align: 'right', sortable: true, sortValue: (row) => Number(row.orderCount ?? 0), render: (row) => row.orderCount || 0 },
         { key: 'pickPack', label: 'Pick & Pack', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.pickPackTotal ?? 0), render: (row) => formatBillingMoney(row.pickPackTotal ?? 0) },
