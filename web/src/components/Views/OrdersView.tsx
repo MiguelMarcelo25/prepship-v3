@@ -158,6 +158,7 @@ import { useColumnResize } from './orders/useColumnResize'
 import { useRecipientEditor, type RecipientDraft } from './orders/useRecipientEditor'
 import { useDailyStats } from './orders/useDailyStats'
 import { useColumnMenu } from './orders/useColumnMenu'
+import { useCsvExport } from './orders/useCsvExport'
 import { useOrderBundles, useCombineShipments } from './orders/use-order-bundles'
 import {
   buildFilteredAwaitingRecalculateQuery,
@@ -682,7 +683,6 @@ export default function OrdersView({
   // handler currently shows a stub success toast so the UI flow is
   // reviewable in isolation.
   const [newOrderOpen, setNewOrderOpen] = useState(false)
-  const [csvExporting, setCsvExporting] = useState(false)
   const [isMobileViewport, setIsMobileViewport] = useState(() => (
     typeof window !== 'undefined'
       ? window.matchMedia('(max-width: 768px)').matches
@@ -1046,6 +1046,9 @@ export default function OrdersView({
         end: range.end.toISOString().split('T')[0],
       }
     })()
+
+  // PS-317: the Export CSV action lives in useCsvExport.
+  const { csvExporting, handleExportCsv } = useCsvExport({ currentStatus, dateRange, showToast })
 
   // Hide Test Orders client across every status tab (Awaiting / Shipped /
   // Cancelled), not just Awaiting. Toggle in the sidebar still controls the
@@ -6181,32 +6184,6 @@ export default function OrdersView({
   // CSV export is real async work (apiClient.downloadOrdersExport) and must not
   // live in the presentational OrdersFilterToolbar — OrdersFilterToolbarExport
   // only FIRES this callback. Body lifted VERBATIM from the former inline arrow.
-  async function handleExportCsv() {
-    if (csvExporting) return
-    setCsvExporting(true)
-    try {
-      const { blob, filename } = await apiClient.downloadOrdersExport({
-        orderStatus: currentStatus,
-        pageSize: 5000,
-        dateFrom: dateRange.start || undefined,
-        dateTo: dateRange.end || undefined,
-      })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename || `orders-${currentStatus}-${californiaDateInputValue()}.csv`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-      showToast('CSV export downloaded', 'success')
-    } catch (err) {
-      console.error('[Export CSV] failed', err)
-      showToast('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'), 'error')
-    } finally {
-      setCsvExporting(false)
-    }
-  }
 
   // PS-071 — re-run passive auto-rating for one order whose rate came back
   // unavailable (or got stuck) WITHOUT requiring the operator to open Browse
