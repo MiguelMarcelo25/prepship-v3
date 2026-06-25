@@ -15,6 +15,7 @@ import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
 import { summarizeInventorySnapshot, type InventorySnapshot } from '../lib/inventory-stock-status';
+import { buildProvenance, markCached, type DashboardProvenance } from '../lib/analytics-provenance';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
@@ -228,8 +229,13 @@ async function loadDashboardSummary(
     units: number;
     bySku: Array<{ sku: string; revenue: number | string; units30: number | string; units7: number | string }>;
     dailyRevenue: Array<{ day: string; revenue: number | string }>;
+    // PS-325 (slice 4): additive provenance envelope (computedAt / window / live-vs-cache).
+    meta?: DashboardProvenance;
   };
 
+  // PS-325 (slice 4): stamp the compute instant ABOVE the cache read so a cache HIT replays it
+  // (the cache round-trips the payload verbatim) — computedAt reports true cache age, never serve time.
+  const computedAt = new Date().toISOString();
   const cacheKey = analyticsCacheKey('dashboard.summary.v1', {
     from: q.from,
     to: q.to,
@@ -242,7 +248,8 @@ async function loadDashboardSummary(
   });
 
   const cached = await getAnalyticsCache<DashboardSummaryPayload>(cacheKey);
-  if (cached) return cached;
+  // PS-325 (slice 4): relabel a cache hit as source:'cache' (preserving computedAt/window).
+  if (cached) return cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached;
 
   const [row] = await db.execute<{
     revenue: number | string | null;
@@ -346,6 +353,7 @@ async function loadDashboardSummary(
     units: Number(row?.units ?? 0) || 0,
     bySku: Array.isArray(row?.bySku) ? row.bySku : [],
     dailyRevenue: Array.isArray(row?.dailyRevenue) ? row.dailyRevenue : [],
+    meta: buildProvenance({ from: q.from, to: q.to, computedAt }),
   };
 
   const totalMs = msSince(startedAt);
@@ -374,7 +382,11 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   type DashboardDailyCountsPayload = {
     data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
+    // PS-325 (slice 4): additive provenance envelope.
+    meta?: DashboardProvenance;
   };
+  // PS-325 (slice 4): compute instant stamped above the cache read (survives a cache hit verbatim).
+  const computedAt = new Date().toISOString();
   const cacheKey = analyticsCacheKey('dashboard.daily-counts.v1', {
     from: q.from,
     to: q.to,
@@ -386,7 +398,8 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
   });
 
   const cached = await getAnalyticsCache<DashboardDailyCountsPayload>(cacheKey);
-  if (cached) return c.json(cached);
+  // PS-325 (slice 4): relabel a cache hit as source:'cache' (preserving computedAt/window).
+  if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
   const rows = await db.execute<{
     day: string;
@@ -407,7 +420,7 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
     order by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles') asc
   `);
 
-  const payload = { data: rows };
+  const payload = { data: rows, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
   void setAnalyticsCache(cacheKey, payload, 60);
   return c.json(payload);
 });

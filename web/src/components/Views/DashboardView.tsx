@@ -14,6 +14,8 @@ import { relativePct } from '../../../../src/lib/kpi-delta'
 // PS-325 (slice 3): the Sales-Performance heatmap deviation/tone policy is backend-owned too. The
 // HEATMAP_TONE_HEX color palette below stays local (presentation); only the rule moves.
 import { buildHeatmap, type HeatmapCell } from '../../../../src/lib/sales-heatmap-deviation'
+// PS-325 (slice 4): the additive provenance envelope the analytics DTOs now carry (shared BE+FE type).
+import type { DashboardProvenance } from '../../../../src/lib/analytics-provenance'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -554,8 +556,12 @@ function formatDayLabel(day: string) {
   })
 }
 
-function formatDataTimestamp() {
-  return `${formatCaDateTime(new Date())} CA`
+// PS-325 (slice 4): the "Data as of" header reports the BACKEND compute instant from the
+// /dashboard/summary provenance (+ live/cached), not the browser wall-clock — which fabricated
+// freshness (always "now"), exactly what PS-325 forbids. Missing provenance is labeled, not invented.
+function formatDataFreshness(meta: DashboardProvenance | null): string {
+  if (!meta || !meta.computedAt) return 'Data freshness unknown'
+  return `Data as of ${formatCaDateTime(new Date(meta.computedAt))} CA · ${meta.source === 'cache' ? 'cached' : 'live'}`
 }
 
 // PS-325 (slice 2): the "vs prior period" relative-change rule moved to the canonical owner
@@ -995,6 +1001,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [inventorySnapshot, setInventorySnapshot] = useState<InventorySnapshot | null>(null)
   const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
   const [currentOrderAgg, setCurrentOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
+  // PS-325 (slice 4): provenance of the /dashboard/summary payload (computedAt / live-vs-cache) for the
+  // honest "Data as of" header. Null until loaded or during backend deploy skew -> "freshness unknown".
+  const [summaryMeta, setSummaryMeta] = useState<DashboardProvenance | null>(null)
   const [priorOrderAgg, setPriorOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
   const [, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -1641,6 +1650,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       setPanelLoading(createDashboardPanelLoading(true))
       setInventoryRows([])
       setInventorySnapshot(null)
+      setSummaryMeta(null)
       setAnalysisRows([])
     } else {
       setRefreshing(true)
@@ -1728,6 +1738,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
           setCurrentOrderAgg(normalizeDashboardOrderAgg(currentOrderAggRes))
           setPriorOrderAgg(normalizeDashboardOrderAgg(priorOrderAggRes))
+          setSummaryMeta((currentOrderAggRes as { meta?: DashboardProvenance | null })?.meta ?? null)
           setPage(1)
           finishPanels(['metrics'])
         })
@@ -1737,6 +1748,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           setPriorDailyCounts([])
           setCurrentOrderAgg(emptyDashboardOrderAgg())
           setPriorOrderAgg(emptyDashboardOrderAgg())
+          setSummaryMeta(null)
           failPanels(['metrics'], loadError, 'Failed to load dashboard metrics')
         })
 
@@ -2346,7 +2358,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 redundant with the SyncStatusChip (which already shows the
                 last-synced time + cadence) and eats a whole row on a phone
                 — hide it below sm and let the chip carry freshness. */}
-            <div className="hidden text-xs font-medium text-ink-3 sm:block">Data as of {formatDataTimestamp()}</div>
+            <div className="hidden text-xs font-medium text-ink-3 sm:block">{formatDataFreshness(summaryMeta)}</div>
             <SyncStatusChip data={syncChipData} />
           </div>
 

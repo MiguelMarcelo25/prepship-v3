@@ -10,6 +10,8 @@
 
 import { ApiRequestError, api, qs } from './api';
 import { API_BASE } from './api-base';
+// PS-325 (slice 4): the additive analytics provenance envelope, shared backend+frontend.
+import type { DashboardProvenance } from '../../../src/lib/analytics-provenance';
 import { getCachedAuthToken } from './auth-session-cache';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
 import { directCarrierVisibleForScope } from '../../../src/lib/direct-carrier-scope';
@@ -2958,6 +2960,7 @@ export const apiClient = {
 
   fetchDashboardDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
     data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
+    meta?: DashboardProvenance | null;
   }> {
     return safe(
       'fetchDashboardDailyCounts',
@@ -2968,9 +2971,10 @@ export const apiClient = {
         if (query.hideTestOrders) q.hideTestOrders = true;
         const res: any = await api.get<any>(`/dashboard/daily-counts${qs(q)}`);
         const data = Array.isArray(res?.data) ? res.data : [];
-        return { data };
+        // PS-325 (slice 4): pass the backend provenance envelope through verbatim (additive).
+        return { data, meta: (res?.meta as DashboardProvenance | undefined) ?? null };
       },
-      { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }> }
+      { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>, meta: null }
     );
   },
 
@@ -3000,6 +3004,7 @@ export const apiClient = {
     units: number;
     bySku: Array<{ sku: string; revenue: number; units30: number; units7: number }>;
     dailyRevenue: Array<{ day: string; revenue: number }>;
+    meta?: DashboardProvenance | null;
   }> {
     return safe(
       'fetchDashboardSummary',
@@ -3018,6 +3023,8 @@ export const apiClient = {
           units: Number(res?.units) || 0,
           bySku: Array.isArray(res?.bySku) ? res.bySku : [],
           dailyRevenue: Array.isArray(res?.dailyRevenue) ? res.dailyRevenue : [],
+          // PS-325 (slice 4): pass the backend provenance envelope through verbatim (additive).
+          meta: (res?.meta as DashboardProvenance | undefined) ?? null,
         };
       },
       {
@@ -3025,6 +3032,7 @@ export const apiClient = {
         units: 0,
         bySku: [] as Array<{ sku: string; revenue: number; units30: number; units7: number }>,
         dailyRevenue: [] as Array<{ day: string; revenue: number }>,
+        meta: null,
       }
     );
   },
@@ -3276,6 +3284,9 @@ export const apiClient = {
   fetchDashboardInventoryRisk(query?: { clientId?: number; active?: boolean; pageSize?: number }): Promise<{
     items: any[];
     total: number;
+    // PS-325 (slice 4): the backend In/Low/Out snapshot (slice 1) was being DROPPED here — restore it
+    // so DashboardView prefers the authoritative backend snapshot (+ its computedAt) over the fallback.
+    snapshot?: unknown;
   }> {
     const q: Record<string, string | number | boolean> = {};
     if (query?.clientId !== undefined) q.clientId = query.clientId;
@@ -3291,9 +3302,10 @@ export const apiClient = {
         return {
           items: Array.isArray(res?.items) ? res.items : [],
           total: Number(res?.total) || 0,
+          snapshot: res?.snapshot ?? null,
         };
       },
-      { items: [], total: 0 },
+      { items: [], total: 0, snapshot: null },
       { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
     );
   },
