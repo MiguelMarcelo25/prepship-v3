@@ -31,13 +31,19 @@ check('BillingView holds carrier breakdown state', /shippingMarginCarriers.*useS
 check('BillingView stores the backend analytics.carriers[] (was discarded)',
   /setShippingMarginCarriers\(marginAnalytics\?\.carriers \?\? \[\]\)/.test(billing));
 check('BillingView resets carriers on error', /setShippingMarginCarriers\(\[\]\)/.test(billing));
-check('BillingView renders the carrier breakdown table',
-  /Margin by carrier \/ account/.test(billing) &&
-  /shippingMarginCarriers\.map\(/.test(billing));
+// PS-296 restyle: the carrier breakdown table moved onto the shared <Table> (with pagination) in
+// BillingCarrierMarginTable.tsx. BillingView still owns the state/storage above and now WIRES the
+// component from the stored carriers; the rendering + backend-field reads live in the new component.
+check('BillingView wires the carrier breakdown table (BillingCarrierMarginTable) from the stored carriers',
+  /<BillingCarrierMarginTable carriers=\{shippingMarginCarriers\}/.test(billing));
+const carrierTable = read('web/src/components/Views/BillingCarrierMarginTable.tsx');
+check('the carrier breakdown table renders "Margin by carrier / account" and iterates the carriers',
+  /Margin by carrier \/ account/.test(carrierTable) &&
+  /carriers\.map\(/.test(carrierTable));
 check('the table reads backend margin fields (no FE recompute)',
-  /carrier\.marginTotal/.test(billing) &&
-  /carrier\.negativeMarginCount/.test(billing) &&
-  /carrier\.marginPct/.test(billing));
+  /row\.marginTotal/.test(carrierTable) &&
+  /row\.negativeMarginCount/.test(carrierTable) &&
+  /row\.marginPct/.test(carrierTable));
 
 // PS-296 req6: per-order reconciliation drilldown (analytics.rows[], also discarded before).
 check('BillingView stores the backend analytics.rows[] (per-shipment reconciliation)',

@@ -58,6 +58,7 @@ import { BillingDetailTable } from './BillingDetailTable'
 // PS-155: Client Billing Config + Package Pricing tables extracted (behavior-preserving; the
 // config/price DRAFT state + setters and the Save handlers stay here and are passed as props).
 import { BillingConfigTable } from './BillingConfigTable'
+import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
 import { BillingPackagePricingTable } from './BillingPackagePricingTable'
 import './BillingView.css'
 
@@ -1375,8 +1376,11 @@ export default function BillingView() {
         />
       </div>
 
-      <div className="markup-card">
-        <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 12 }}>Generate &amp; Summary</h3>
+      <div className="rounded-xl bg-surface ring-1 ring-line p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <SlidersHorizontal size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
+          <h3 className="text-[13px] font-semibold text-ink">Generate &amp; summary</h3>
+        </div>
 
         <BillingFilters
           activePreset={activePreset}
@@ -1425,15 +1429,8 @@ export default function BillingView() {
 
         <div
           aria-label="Shipping margin analytics"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-            gap: 10,
-            margin: '14px 0',
-            padding: '10px 0',
-            borderTop: '1px solid var(--border)',
-            borderBottom: '1px solid var(--border)',
-          }}
+          className="grid gap-2.5 my-3.5"
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}
         >
           {[
             ['Actual shipping', formatBillingMoney(shippingMarginSummary.actualShippingTotal, { dashIfZero: true })],
@@ -1443,63 +1440,30 @@ export default function BillingView() {
             ['Rows', `${shippingMarginSummary.marginRowCount}/${shippingMarginSummary.rowCount}`],
             ['State', `${shippingMarginSummary.frozenCount} frozen · ${shippingMarginSummary.projectedCount} projected`],
           ].map(([label, value]) => (
-            <div key={label} style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}>{label}</div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: label === 'Margin' ? marginColor(shippingMarginSummary.marginTotal) : 'var(--text)' }}>{value}</div>
+            <div key={label} className="rounded-lg bg-surface-2 px-3 py-2.5 min-w-0">
+              <div className="text-[10.5px] text-ink-3 truncate">{label}</div>
+              <div
+                className="text-[15px] font-bold tabular-nums truncate"
+                style={label === 'Margin' ? { color: marginColor(shippingMarginSummary.marginTotal) } : undefined}
+              >
+                {value}
+              </div>
             </div>
           ))}
-          {(shippingMarginLoading || shippingMarginError || shippingMarginSummary.missingAnyProofCount > 0) ? (
-            <div style={{ gridColumn: '1 / -1', fontSize: 11, color: shippingMarginError ? 'var(--red)' : 'var(--text3)' }}>
-              {shippingMarginLoading
-                ? 'Loading shipping margin...'
-                : shippingMarginError
-                  ? shippingMarginError
-                  : `${shippingMarginSummary.missingAnyProofCount} shipment(s) missing proof (${shippingMarginSummary.missingBillableCount} billable, ${shippingMarginSummary.missingActualCostCount} actual)`}
-            </div>
-          ) : null}
         </div>
-        {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
-            analytics.carriers[] rollup (previously fetched and discarded). Display-only;
-            renders nothing when there are no carrier rows. */}
-        {shippingMarginCarriers.length > 0 ? (
-          <div style={{ margin: '0 0 14px' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 6 }}>
-              Margin by carrier / account
-            </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
-                <thead>
-                  <tr style={{ color: 'var(--text3)', textAlign: 'right', borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '3px 8px 3px 0' }}>Carrier / service</th>
-                    <th style={{ textAlign: 'left', padding: '3px 8px' }}>Account</th>
-                    <th style={{ padding: '3px 8px' }}>Cost</th>
-                    <th style={{ padding: '3px 8px' }}>Billable</th>
-                    <th style={{ padding: '3px 8px' }}>Margin</th>
-                    <th style={{ padding: '3px 8px' }}>Margin %</th>
-                    <th style={{ padding: '3px 8px' }}>Rows</th>
-                    <th style={{ padding: '3px 0 3px 8px' }}>Neg</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shippingMarginCarriers.map((carrier, index) => (
-                    <tr key={`${carrier.carrierCode ?? ''}|${carrier.providerAccountNickname ?? ''}|${index}`} style={{ textAlign: 'right', borderBottom: '1px solid var(--border-subtle, rgba(0,0,0,0.05))' }}>
-                      <td style={{ textAlign: 'left', padding: '3px 8px 3px 0', fontWeight: 600 }}>
-                        {carrier.carrierCode ?? '—'}{carrier.serviceCode ? ` · ${carrier.serviceCode}` : ''}
-                      </td>
-                      <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text2)' }}>{carrier.providerAccountNickname ?? '—'}</td>
-                      <td style={{ padding: '3px 8px' }}>{formatBillingMoney(carrier.actualShippingTotal, { dashIfZero: true })}</td>
-                      <td style={{ padding: '3px 8px' }}>{formatBillingMoney(carrier.billableShippingTotal, { dashIfZero: true })}</td>
-                      <td style={{ padding: '3px 8px', fontWeight: 700, color: marginColor(carrier.marginTotal) }}>{formatBillingMoney(carrier.marginTotal, { dashIfZero: true })}</td>
-                      <td style={{ padding: '3px 8px' }}>{carrier.marginPct == null ? '—' : `${carrier.marginPct.toFixed(1)}%`}</td>
-                      <td style={{ padding: '3px 8px' }}>{carrier.marginRowCount}</td>
-                      <td style={{ padding: '3px 0 3px 8px', color: carrier.negativeMarginCount > 0 ? 'var(--red)' : 'var(--text3)', fontWeight: carrier.negativeMarginCount > 0 ? 700 : 400 }}>{carrier.negativeMarginCount}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+        {(shippingMarginLoading || shippingMarginError || shippingMarginSummary.missingAnyProofCount > 0) ? (
+          <div className="text-[11px] mb-3" style={{ color: shippingMarginError ? 'var(--red)' : 'var(--text3)' }}>
+            {shippingMarginLoading
+              ? 'Loading shipping margin…'
+              : shippingMarginError
+                ? shippingMarginError
+                : `${shippingMarginSummary.missingAnyProofCount} shipment(s) missing proof (${shippingMarginSummary.missingBillableCount} billable, ${shippingMarginSummary.missingActualCostCount} actual)`}
           </div>
         ) : null}
+        {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
+            analytics.carriers[] rollup. Now on the shared <Table> with pagination
+            (BillingCarrierMarginTable); renders nothing when there are no carrier rows. */}
+        <BillingCarrierMarginTable carriers={shippingMarginCarriers} />
         {/* PS-296 (FE, req6): per-shipment reconciliation drilldown — consumes the backend
             analytics.rows[] (previously discarded). Collapsed by default; capped with a
             visible "showing X of N" note (no silent truncation). Display-only. */}

@@ -11,6 +11,7 @@
 //   • getPackageMarginMarkup is the parent's byte-identical PURE render helper (reads only row.marginPct
 //     / row.marginColor), relocated here because it's used only by this table.
 type BillingConfigDto = any // TODO PS-257: restore real type
+import { Package } from 'lucide-react'
 import type { buildBillingPackagePriceRows } from './billing-parity'
 import { Table } from '../ui/Table'
 
@@ -44,9 +45,12 @@ export function BillingPackagePricingTable({
   onSavePackagePrices: () => void
 }) {
   return (
-    <div className="markup-card">
-      <div className="billing-package-card-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
-        <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', margin: 0 }}>Package Pricing by Client</h3>
+    <div className="rounded-xl bg-surface ring-1 ring-line p-4">
+      <div className="billing-package-card-head flex items-center justify-between gap-2 mb-2.5 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Package size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
+          <h3 className="text-[13px] font-semibold text-ink">Package pricing by client</h3>
+        </div>
         <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
           <select className="filter-sel" style={{ fontSize: 12 }} value={selectedPkgClientId} onChange={(event) => setSelectedPkgClientId(event.target.value)}>
             <option value="">Select client…</option>

@@ -49,8 +49,8 @@ export function BillingFilters({
   onFetchRefRates: () => void
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+    <div className="flex items-center gap-2 flex-wrap mb-3">
+      <div className="flex gap-1.5 flex-wrap">
         {BILLING_PRESETS.map(([preset, label]) => (
           <button
             key={preset}
@@ -62,12 +62,13 @@ export function BillingFilters({
           </button>
         ))}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text2)' }}>
-        <span>From</span>
+      <div className="flex items-center gap-1.5 text-[12.5px] text-ink-2">
+        <span className="text-ink-3">From</span>
         <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={from} onChange={(event) => onFromChange(event.target.value)} />
-        <span>To</span>
+        <span className="text-ink-3">To</span>
         <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => onToChange(event.target.value)} />
       </div>
+      <div className="flex items-center gap-1.5 flex-wrap ml-auto">
       <button className="btn btn-primary btn-sm" type="button" onClick={onGenerate} disabled={generateLoading}>
         {generateLoading ? (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -99,8 +100,9 @@ export function BillingFilters({
       >
         ⚡ Fetch Ref Rates
       </button>
-      <span style={{ fontSize: 10.5, color: 'var(--text3)', marginLeft: 4 }}>{fetchRefStatus}</span>
-      <span style={{ fontSize: 12, color: 'var(--text3)' }}>{generateStatus}</span>
+      <span className="text-[10.5px] text-ink-3 ml-1">{fetchRefStatus}</span>
+      <span className="text-[12px] text-ink-3">{generateStatus}</span>
+      </div>
     </div>
   )
 }

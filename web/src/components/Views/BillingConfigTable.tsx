@@ -10,6 +10,7 @@
 //     — stays in BillingView. This component only renders the cells and forwards onChange/onSave.
 //   • renderConfigNumberCell is the parent's byte-identical inline cell helper, relocated here because
 //     it only closes over the draft map + setter, both of which arrive as props.
+import { Settings2 } from 'lucide-react'
 import type { BillingConfigDto, BillingConfigDraft } from './billing-parity'
 import { Table } from '../ui/Table'
 
@@ -60,8 +61,11 @@ export function BillingConfigTable({
   }
 
   return (
-    <div className="markup-card">
-      <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 10 }}>Client Billing Config</h3>
+    <div className="rounded-xl bg-surface ring-1 ring-line p-4">
+      <div className="flex items-center gap-2 mb-2.5">
+        <Settings2 size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
+        <h3 className="text-[13px] font-semibold text-ink">Client billing config</h3>
+      </div>
       <div className="billing-config-table-wrap">
         <Table<BillingConfigDto>
           data={configs}
