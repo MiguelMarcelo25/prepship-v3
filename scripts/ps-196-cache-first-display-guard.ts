@@ -174,14 +174,18 @@ check(
 );
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: the display-order overlay (getOrderWithAutoBestRate, which clears a saved rate that fails
+// the same hasSavedBestRateForRequest contract) moved into ./orders/best-rate/rate-helpers.ts. The
+// passive-enqueue skip + the backend-verdict FE pass-throughs below stayed as OrdersView call sites.
+const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
 check(
   'passive enqueue still skips rows with a valid saved display',
   /hasValidSavedBestRateForRequest\(order, request\)\) return null/.test(ordersView),
   true,
 );
 check(
-  'display order clears saved rates that fail the same contract',
-  /!hasSavedBestRateForRequest\(order, autoRequest\)/.test(ordersView),
+  'display order clears saved rates that fail the same contract (rate-helpers.ts)',
+  /!hasSavedBestRateForRequest\(order, autoRequest\)/.test(rateHelpers),
   true,
 );
 check(

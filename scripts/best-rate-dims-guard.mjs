@@ -12,7 +12,19 @@ function assert(condition, message) {
   if (!condition) process.exitCode = 1
 }
 
-const [ordersView, orderCells, ordersRoute, ratesBackfill, cleanupScript, packageJson] = await Promise.all([
+const [
+  ordersView,
+  orderCells,
+  ordersRoute,
+  ratesBackfill,
+  cleanupScript,
+  packageJson,
+  // PS-317: hasDisplayableBestRateForCurrentRequest moved to ./orders/best-rate/rate-helpers.ts;
+  // hasValidSavedBestRateForRequest + the saved-rate freshness/completeness contract moved to
+  // ./orders/best-rate/rate-display-predicates.ts.
+  rateHelpers,
+  rateDisplayPredicates,
+] = await Promise.all([
   read('web/src/components/Views/OrdersView.tsx'),
   // PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (which gates display on
   // hasDisplayableBestRate) moved VERBATIM from OrdersView into ./orders/cells/order-cells.
@@ -21,12 +33,23 @@ const [ordersView, orderCells, ordersRoute, ratesBackfill, cleanupScript, packag
   read('src/services/rates-backfill.ts'),
   read('scripts/clear-invalid-best-rates.ts'),
   read('package.json'),
+  read('web/src/components/Views/orders/best-rate/rate-helpers.ts'),
+  read('web/src/components/Views/orders/best-rate/rate-display-predicates.ts'),
 ])
 
 assert(
-  ordersView.includes('function hasDisplayableBestRateForCurrentRequest') &&
-    ordersView.includes('hasValidSavedBestRateForRequest') &&
-    ordersView.includes('savedRateIsFreshAndComplete'),
+  // PS-317: the displayable gate (validates the saved rate against the CURRENT request
+  // fingerprint — the freshness check) now lives in rate-helpers.ts as an indented inner
+  // function; hasValidSavedBestRateForRequest + the freshness (cacheExpiresAt) +
+  // completeness (isComplete) inputs to the savedBestRateCanDisplayForCurrentRequest
+  // contract now live in rate-display-predicates.ts. Teeth preserved: same three checks,
+  // re-anchored to the real tokens at the new owners (savedRateIsFreshAndComplete was
+  // folded into the isComplete + cacheExpiresAt request-contract inputs).
+  /function hasDisplayableBestRateForCurrentRequest/.test(rateHelpers) &&
+    rateDisplayPredicates.includes('hasValidSavedBestRateForRequest') &&
+    /requestKey:\s*request\.key/.test(rateDisplayPredicates) &&
+    /isComplete:\s*savedRate\.isComplete === true/.test(rateDisplayPredicates) &&
+    /cacheExpiresAt:\s*toStringValue\(savedRate\.cacheExpiresAt\)/.test(rateDisplayPredicates),
   'Orders UI validates saved rates against current complete request fingerprint/freshness/completeness',
 )
 

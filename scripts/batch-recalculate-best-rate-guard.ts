@@ -200,11 +200,17 @@ const shippingDisplayBlock = shippingDisplayStart >= 0 && shippingDisplayEnd > s
 check('awaiting account display resolves best-rate provider id through loaded accounts',
   /getCarrierAccountLabelByProviderId\(accounts,\s*getBestRateShippingProviderId\(order\)\)/.test(shippingDisplayBlock));
 
-const overlayStart = ordersView.indexOf('function withBestRateOverride(');
-const overlayEnd = ordersView.indexOf('\n  function withoutStaleBestRate', overlayStart);
+// PS-317: withBestRateOverride + withoutStaleBestRate moved to ./orders/best-rate/rate-helpers.ts
+// as indented inner functions in the createBestRateHelpers factory. The slice (start anchor →
+// the next inner function withoutStaleBestRate) re-points there.
+const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
+const overlayStart = rateHelpers.indexOf('function withBestRateOverride(');
+const overlayEnd = rateHelpers.indexOf('\n  function withoutStaleBestRate', overlayStart);
 const overlayBlock = overlayStart >= 0 && overlayEnd > overlayStart
-  ? ordersView.slice(overlayStart, overlayEnd)
+  ? rateHelpers.slice(overlayStart, overlayEnd)
   : '';
+// TEETH (PS-317): an empty/absent slice must FAIL LOUD, never pass vacuously on this money path.
+check('auto-rate overlay slice is present (non-vacuous)', overlayStart >= 0 && overlayBlock.length > 0);
 check('auto-rate overlay resolves account label by provider id',
   /getCarrierAccountLabelByProviderId\(shippingAccounts,\s*shippingProviderId\)/.test(overlayBlock) &&
   /accountNickname:\s*rateAccountNickname/.test(overlayBlock));

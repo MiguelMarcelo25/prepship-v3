@@ -272,9 +272,12 @@ check('static: stampHouseTuple still gates on isHouseShippRate + clientHouseAcco
 //        hasDisplayableBestRateForCurrentRequest) is bypassed for legacy rows and a confident plain SHIPP
 //        amount renders. Static pin on the gate (the function is a closure in OrdersView).
 {
-  const ordersViewSrc = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  // PS-317: hasDisplayableBestRateForCurrentRequest (which holds this needs_refresh non-displayable
+  // gate) moved into ./orders/best-rate/rate-helpers.ts as an indented inner function. The gate
+  // invariant is unchanged — re-anchored to the new owner.
+  const rateHelpersSrc = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
   check('FE follow-up: the displayable gate treats a persisted needs_refresh half-house rate as NON-displayable',
-    /getSavedBestRateRecord\(order\)[\s\S]{0,90}houseTupleStatus === 'needs_refresh'\)[\s\S]{0,40}return false/.test(ordersViewSrc));
+    /getSavedBestRateRecord\(order\)[\s\S]{0,90}houseTupleStatus === 'needs_refresh'\)[\s\S]{0,40}return false/.test(rateHelpersSrc));
 }
 
 if (failures > 0) {

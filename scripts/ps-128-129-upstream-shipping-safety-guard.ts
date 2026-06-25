@@ -174,7 +174,14 @@ function check(name: string, got: unknown, want: unknown) {
   check('orders schema maps canonicalStatus (read mapping)', /canonicalStatus:\s*text\(\)/.test(ordersSchema), true);
 
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-  check('OrdersView defines orderShippingHold helper', /function orderShippingHold\(/.test(ordersView), true);
+  // PS-317: orderShippingHold moved to ./orders/best-rate/rate-request.ts (the DISPLAY mirror of
+  // the backend shipping-safety guard, incl. the 'Already shipped in store' / 'Cancelled — label
+  // blocked' hold status strings). The OrdersView panelHold call site below stayed.
+  const rateRequest = readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
+  const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
+  check('orderShippingHold helper defined (rate-request.ts)', /function orderShippingHold\(/.test(rateRequest), true);
+  check('orderShippingHold mirrors the backend hold statuses (already-shipped / cancelled)',
+    /Already shipped in store/.test(rateRequest) && /Cancelled — label blocked/.test(rateRequest), true);
   // PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel (which gates the
   // label-action buttons on the hold via `panelHold?.blocked`) was extracted
   // VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. The OrdersView shell
@@ -183,7 +190,10 @@ function check(name: string, got: unknown, want: unknown) {
   const detailSidePanel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
   check('OrdersView computes the panel shipping-hold verdict', /const panelHold = orderShippingHold\(/.test(ordersView), true);
   check('side panel gates label actions on the hold', /panelHold\?\.blocked/.test(detailSidePanel), true);
-  check('OrdersView skips rating a held order (rate-flow gating)', /orderShippingHold\(order\)\?\.blocked\)\s*return null/.test(ordersView), true);
+  // PS-317: the rate-flow gating (skip rating a held order) moved into buildStrictBestRateRequest
+  // in ./orders/best-rate/rate-helpers.ts. The OrdersView shell still threads the verdict via the
+  // factory; the gate itself now lives at the request-builder owner.
+  check('rate builder skips rating a held order (rate-flow gating)', /orderShippingHold\(order\)\?\.blocked\)\s*return null/.test(rateHelpers), true);
   // PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (which renders the
   // ⛔ list-row hold pill) was extracted VERBATIM from OrdersView into
   // ./orders/cells/order-cells. The hold-pill invariant still holds — at the new owner.

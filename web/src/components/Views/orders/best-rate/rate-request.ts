@@ -30,6 +30,22 @@ export function residentialForRate(order: any): boolean {
   return residentialForRateRule(order);
 }
 
+// PS-128/129: DISPLAY mirror of the backend shipping-safety guard. The backend hard-blocks these
+// before postage; this only drives the UI (disable + show why) and gates rating. Pure read of order
+// status — no shipped/cancelled mutation.
+export function orderShippingHold(order: any): { blocked: boolean; reason: string; status: string } | null {
+  if (!order) return null;
+  const orderStatus = order.orderStatus ?? order.status;
+  const canonical = order.canonicalStatus ?? order.canonical_status;
+  const extShipped =
+    order.externallyShipped ?? order.flags?.externallyShipped ?? order.externally_shipped;
+  if (orderStatus === 'cancelled') return { blocked: true, reason: 'order is cancelled', status: 'Cancelled — label blocked' };
+  if (orderStatus === 'shipped') return { blocked: true, reason: 'order is already shipped', status: 'Already shipped — label blocked' };
+  if (canonical === 'cancelled') return { blocked: true, reason: 'cancelled upstream (sync/reconciliation required)', status: 'Cancelled upstream — label blocked' };
+  if (extShipped === true) return { blocked: true, reason: 'already shipped in the source store', status: 'Already shipped in store — sync required' };
+  return null;
+}
+
 // PS-143: the FE-local cache/identity key, built from request inputs only — never from the
 // backend response fingerprint, so it can't "agree" with a stale rate and reuse a wrong one.
 export function buildRateRequestDraftKey(input: {

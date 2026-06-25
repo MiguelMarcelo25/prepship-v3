@@ -55,12 +55,20 @@ const offenders = walk('web/src').filter((f) => /CARRIER_SERVICES\s*[:=]/.test(r
 check('no local CARRIER_SERVICES table anywhere in web/src', offenders.length === 0, offenders.join(', '));
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: getServiceOptionsForAccount moved to ./orders/best-rate/rate-helpers.ts (an indented inner
+// function in the createBestRateHelpers factory). The OrdersView catalog FETCH and the account-switch
+// keep-or-clear call sites stayed.
+const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
 check('OrdersView fetches the backend catalog',
   /'\/carriers\/service-catalog'/.test(ordersView));
-check('getServiceOptionsForAccount reads the fetched catalog',
-  /return carrierServiceCatalog\[account\.code\] \?\? \[\]/.test(ordersView));
-check('no first-entry service auto-default remains',
-  !/getServiceOptionsForAccount\([^)]*\)\[0\]\?\.code/.test(ordersView));
+check('getServiceOptionsForAccount reads the fetched catalog (rate-helpers.ts)',
+  /return carrierServiceCatalog\[account\.code\] \?\? \[\]/.test(rateHelpers));
+// TEETH: assert the function still exists at its new owner so the no-auto-default negation below
+// cannot pass vacuously (a deleted/renamed getServiceOptionsForAccount would otherwise silently pass).
+check('getServiceOptionsForAccount still defined at its new owner (rate-helpers.ts)',
+  /function getServiceOptionsForAccount\(/.test(rateHelpers));
+check('no first-entry service auto-default remains (rate-helpers.ts)',
+  !/getServiceOptionsForAccount\([^)]*\)\[0\]\?\.code/.test(rateHelpers));
 check('account switch keeps a still-offered service, else forces an explicit pick',
   /keepService \? current\.serviceCode : ''/.test(ordersView));
 

@@ -18,11 +18,9 @@ import {
   toStringValue,
   toNumberValue,
   toProviderAccountId,
-  normalizeShippingAccountName,
   getShippingModel,
   getBestRateWorkflowModel,
   getShippingString,
-  getCarrierAccountLabelByProviderId,
   getBestRateShippingProviderId,
   getBestRateServiceCode,
 } from './orders-row-display'
@@ -48,7 +46,6 @@ import { deriveBackendBestRateComplete } from './orders-rate-proof'
 // into an explicit Best-Rate-column state so a stale/incomplete/expired saved rate
 // renders an actionable label instead of a confident dollar figure.
 import {
-  classifyAwaitingBestRateDisplay,
   AWAITING_BEST_RATE_STATE_LABELS,
 } from './awaiting-best-rate-display-state'
 // PS-286 (slice): the Send-to-Queue preflight consumes the SAME explicit Awaiting
@@ -256,9 +253,10 @@ import {
 } from './orders/rate-request-normalizers'
 // PS-317: pure Best-Rate helpers extracted to ./orders/best-rate/*.
 import { getAppliedRateDims, getAppliedRateWeightOz, sanitizeRecalculateError } from './orders/best-rate/rate-values'
-import { residentialForRate, buildRateRequestDraftKey } from './orders/best-rate/rate-request'
+import { residentialForRate, buildRateRequestDraftKey, orderShippingHold } from './orders/best-rate/rate-request'
 import { getBackendRateResponseFingerprint, withRateRequestMetadata, getSavedBestRateRecord, buildSelectedRateProofPayload, buildRateQuoteRefForOrder, getRateBaseAmount } from './orders/best-rate/rate-proof'
 import { hasSavedBestRateForRequest, hasValidSavedBestRateForRequest, hasAnySavedBestRateForDisplay } from './orders/best-rate/rate-display-predicates'
+import { createBestRateHelpers } from './orders/best-rate/rate-helpers'
 
 interface OrdersViewProps {
   currentStatus: OrderStatus
@@ -1187,6 +1185,21 @@ export default function OrdersView({
       ? new Map<number, OrderFullDto>([[activeOrderId, activeOrderDetail]])
       : new Map<number, OrderFullDto>()
   ), [activeOrderId, activeOrderDetail])
+
+  // PS-317: the state-bound Best-Rate helpers live in createBestRateHelpers — a factory called each
+  // render with the current state, identical to the old inline closures (no behaviour change).
+  const {
+    getRateCarrierIdsForAccounts,
+    getServiceOptionsForAccount,
+    buildStrictBestRateRequest,
+    getAutoBestRateRequest,
+    getCurrentBestRateDimsLabel,
+    hasDisplayableBestRateForCurrentRequest,
+    getAwaitingBestRateDisplayState,
+    withBestRateOverride,
+    withoutStaleBestRate,
+    getOrderWithAutoBestRate,
+  } = createBestRateHelpers({ autoBestRateEntries, orderDetailsById, shippingAccounts, carrierServiceCatalog })
 
   const resolvedColumnPrefs = useMemo(
     () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })) as TableColumnConfig[], currentStatus, columnPrefs),
@@ -2555,12 +2568,6 @@ export default function OrdersView({
     return packageId
   }
 
-  function getServiceOptionsForAccount(accountId: string) {
-    const account = shippingAccounts.find((candidate) => String(candidate.shippingProviderId) === accountId)
-    if (!account) return []
-    return carrierServiceCatalog[account.code] ?? []
-  }
-
   async function saveColumnPrefsToServer(nextPrefs: ColumnPrefs) {
     columnPrefsRef.current = nextPrefs
     setColumnPrefs(nextPrefs)
@@ -3555,268 +3562,9 @@ export default function OrdersView({
     }
   }
 
-  function getRateCarrierIdsForAccounts() {
-    return [...new Set(
-      shippingAccounts
-        .map((account) => toStringValue(account.carrierId))
-        .filter((carrierId): carrierId is string => Boolean(carrierId))
-    )]
-  }
-
-  // PS-317: residentialForRate + buildRateRequestDraftKey moved to ./orders/best-rate/rate-request.
-
-  // PS-128 + PS-129: DISPLAY mirror of the backend shipping-safety guard. The backend
-  // (createLabelV2 + the direct-carrier path) is authoritative and HARD-BLOCKS these before
-  // postage; this only drives the UI (disable buttons + show why) so the operator sees it
-  // before clicking. Mirrors decideShippingSafety's definite column branches; tolerant of
-  // list-row vs detail/flags shapes.
-  function orderShippingHold(order: any): { blocked: boolean; reason: string; status: string } | null {
-    if (!order) return null
-    const orderStatus = order.orderStatus ?? order.status
-    const canonical = order.canonicalStatus ?? order.canonical_status
-    const extShipped =
-      order.externallyShipped ?? order.flags?.externallyShipped ?? order.externally_shipped
-    if (orderStatus === 'cancelled') return { blocked: true, reason: 'order is cancelled', status: 'Cancelled — label blocked' }
-    if (orderStatus === 'shipped') return { blocked: true, reason: 'order is already shipped', status: 'Already shipped — label blocked' }
-    if (canonical === 'cancelled') return { blocked: true, reason: 'cancelled upstream (sync/reconciliation required)', status: 'Cancelled upstream — label blocked' }
-    if (extShipped === true) return { blocked: true, reason: 'already shipped in the source store', status: 'Already shipped in store — sync required' }
-    return null
-  }
-
-  // PS-166: deriveBackendBestRateComplete moved to ./orders-rate-proof (its own small
-  // file; pure backend-DTO reader). Imported at the top of this module and called below.
-
-  // PS-317: withRateRequestMetadata + getBackendRateResponseFingerprint moved to ./orders/best-rate/rate-proof.
-
-  function buildStrictBestRateRequest(
-    order: OrderSummaryDto,
-    input: {
-      detail?: OrderFullDto | null
-      dims: { length: number; width: number; height: number } | null
-      weightOz: number
-      shipTo: ReturnType<typeof getShipTo>
-      confirmation: string
-      insuranceProvider?: string | null
-      insuredValue?: number | null
-    },
-  ) {
-    if (order.orderStatus !== 'awaiting_shipment') return null
-    // PS-129: do not rate a held order (cancelled upstream / externally shipped) as normal
-    // awaiting work. Skipping here gates BOTH the passive table best-rate and the panel
-    // recalc (both funnel through this builder). The label/queue/print paths are already
-    // hard-blocked by the backend guard.
-    if (orderShippingHold(order)?.blocked) return null
-    const dims = input.dims
-    const weightOz = input.weightOz
-    if (!dims || !hasCompleteDims(dims) || weightOz <= 0) return null
-    if (!input.shipTo.postalCode) return null
-
-    const carrierIds = getRateCarrierIdsForAccounts()
-    const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
-    const confirmation = normalizeConfirmationForRates(input.confirmation)
-    const insuranceProvider = input.insuranceProvider ?? 'none'
-    const insuredValue = input.insuredValue ?? null
-    const draftKey = buildRateRequestDraftKey({
-      weightOz,
-      dims,
-      shipTo: input.shipTo,
-      residential: residentialForRate(order),
-      carrierIds,
-      storeId: order.storeId,
-      clientId: order.clientId,
-      confirmation,
-      insuranceProvider,
-      insuredValue,
-    })
-    const key = `${order.orderId}|${draftKey}`
-
-    return {
-      detail: input.detail ?? null,
-      dims,
-      dimsLabel,
-      weightOz,
-      shipTo: input.shipTo,
-      confirmation,
-      carrierIds,
-      insuranceProvider,
-      insuredValue,
-      draftKey,
-      key,
-    }
-  }
-
-  function getAutoBestRateRequest(order: OrderSummaryDto) {
-    const detail = orderDetailsById.get(order.orderId) ?? null
-    const dims = getDimensions(order, detail)
-    const weightOz = getOrderWeightOz(order, detail)
-    const shipTo = getShipTo(order, detail)
-    const confirmation = normalizeConfirmationForRates(
-      toStringValue(order.selectedRate?.confirmation) ??
-      toStringValue(getShippingModel(order)?.confirmation) ??
-      'none'
-    )
-    // PS-123: auto/table Best Rate sends only operator intent. HUGRAB effective
-    // insurance is resolved by the backend rate service and returned as proof
-    // metadata so table, panel, batch recalc, and label paths share one owner.
-    return buildStrictBestRateRequest(order, {
-      detail,
-      dims,
-      weightOz,
-      shipTo,
-      confirmation,
-      insuranceProvider: 'none',
-      insuredValue: null,
-    })
-  }
-
-  function normalizeDimsLabel(value: unknown) {
-    return typeof value === 'string'
-      ? value.replace(/\s+/g, '').toLowerCase()
-      : null
-  }
-
-  // PS-317: hasSavedBestRateForRequest moved to ./orders/best-rate/rate-display-predicates.
-
-  // PS-317: getSavedBestRateRecord + buildSelectedRateProofPayload + buildRateQuoteRefForOrder moved to ./orders/best-rate/rate-proof.
-
-  // PS-317: hasAnySavedBestRateForDisplay + hasValidSavedBestRateForRequest moved to ./orders/best-rate/rate-display-predicates.
-
-  function getCurrentBestRateDimsLabel(order: OrderSummaryDto) {
-    const detail = orderDetailsById.get(order.orderId) ?? null
-    const dims = getDimensions(order, detail)
-    if (!hasCompleteDims(dims)) return null
-    return normalizeDimsLabel(`${dims.length}x${dims.width}x${dims.height}`)
-  }
-
-  function hasDisplayableBestRateForCurrentRequest(order: OrderSummaryDto) {
-    const request = getAutoBestRateRequest(order)
-    if (!request) return false
-    const entry = autoBestRateEntries[order.orderId]
-    if (entry?.key === request.key && entry.rate) return true
-    if (entry?.key === request.key && (entry.error || entry.rate === null)) return false
-    // PS-292 (A's follow-up): a PERSISTED half-house SHIPP rate (backend verdict houseTupleStatus
-    // 'needs_refresh') is NOT displayable — the saved SHIPP amount looks valid but its competitor tuple
-    // is missing. Returning false here lets the cell fall through to getAwaitingBestRateDisplayState's
-    // 'House rate needs refresh' diagnostic instead of a confident plain SHIPP figure. This covers LEGACY
-    // persisted rows; new saves are caught by the backend item-4 reject when the canary is on. Placed
-    // AFTER the live-entry checks so a fresh current re-rate still wins.
-    if ((getSavedBestRateRecord(order) as { houseTupleStatus?: unknown } | null)?.houseTupleStatus === 'needs_refresh') {
-      return false
-    }
-    return hasSavedBestRateForRequest(order, request)
-  }
-
-  // PS-286: derive the EXPLICIT Best-Rate-column state for an awaiting row from the
-  // backend rate source-of-truth verdict. The Best Rate column is a thin consumer:
-  // it shows the $ amount only when savedBestRateCanDisplayForCurrentRequest agrees,
-  // otherwise it surfaces the specific actionable reason (eligibility mismatch /
-  // coverage incomplete / expired / add dims / recalculate required) that the
-  // backend verdict implies — it never invents its own money or eligibility rule.
-  function getAwaitingBestRateDisplayState(order: OrderSummaryDto) {
-    const savedRate = getSavedBestRateRecord(order)
-    const dims = getDimensions(order, orderDetailsById.get(order.orderId) ?? null)
-    const hasDimsAndWeight =
-      hasCompleteDims(dims) && Boolean(order.weight?.value && order.weight.value > 0)
-    return classifyAwaitingBestRateDisplay({
-      hasSavedBestRate: hasAnySavedBestRateForDisplay(order),
-      canDisplaySavedRate: hasDisplayableBestRateForCurrentRequest(order),
-      isComplete: savedRate ? savedRate.isComplete === true : null,
-      cacheExpiresAt: savedRate ? toStringValue(savedRate.cacheExpiresAt) : null,
-      eligibilityVersion: savedRate ? toStringValue(savedRate.eligibilityVersion) : null,
-      requiredEligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-      hasDimsAndWeight,
-      // PS-292 (item 2): render the backend half-house verdict verbatim — a SHIPP/house row whose
-      // tuple is missing shows 'House rate needs refresh' instead of a confident plain SHIPP amount.
-      houseTupleNeedsRefresh:
-        (savedRate as { houseTupleStatus?: unknown } | null)?.houseTupleStatus === 'needs_refresh',
-    })
-  }
-
-  function withBestRateOverride(order: OrderSummaryDto, rate: Record<string, unknown>) {
-    const baseAmount = getRateBaseAmount(rate)
-    const shippingProviderId = toProviderAccountId(rate.shippingProviderId)
-    const serviceCode = toStringValue(rate.serviceCode)
-    const carrierCode = toStringValue(rate.carrierCode)
-    const carrierNickname = toStringValue(rate.carrierNickname)
-    const rateRecord = toRecord(rate)
-    const rateAccountNickname =
-      normalizeShippingAccountName(carrierNickname) ??
-      normalizeShippingAccountName(toStringValue(rateRecord?.providerAccountNickname)) ??
-      normalizeShippingAccountName(toStringValue(rateRecord?.accountNickname)) ??
-      getCarrierAccountLabelByProviderId(shippingAccounts, shippingProviderId)
-    const bestRateDims = getCurrentBestRateDimsLabel(order)
-    const shippingModel = toRecord(getShippingModel(order)) ?? {}
-    const canonicalOrder = toRecord(order.canonicalOrder)
-    const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {}
-    const shipping = {
-      ...shippingModel,
-      ...canonicalShipping,
-      bestRate: rate,
-      bestRateAmount: baseAmount,
-      providerAccountId: shippingProviderId ?? toProviderAccountId(shippingModel.providerAccountId) ?? toProviderAccountId(canonicalShipping.providerAccountId),
-      serviceCode: serviceCode ?? toStringValue(shippingModel.serviceCode) ?? toStringValue(canonicalShipping.serviceCode),
-      carrierCode: carrierCode ?? toStringValue(shippingModel.carrierCode) ?? toStringValue(canonicalShipping.carrierCode),
-      accountNickname: rateAccountNickname ?? toStringValue(shippingModel.accountNickname) ?? toStringValue(canonicalShipping.accountNickname),
-      bestRateDims,
-    }
-
-    return {
-      ...order,
-      bestRate: rate,
-      bestRateDims,
-      shipping,
-      canonicalOrder: canonicalOrder
-        ? {
-          ...canonicalOrder,
-          shipping,
-        }
-        : order.canonicalOrder,
-    }
-  }
-
-  function withoutStaleBestRate(order: OrderSummaryDto) {
-    const shippingModel = toRecord(getShippingModel(order)) ?? {}
-    const canonicalOrder = toRecord(order.canonicalOrder)
-    const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {}
-    const shipping = {
-      ...shippingModel,
-      ...canonicalShipping,
-      bestRate: null,
-      bestRateAmount: null,
-      accountNickname: null,
-      providerAccountId: null,
-      serviceCode: null,
-      carrierCode: null,
-    }
-
-    return {
-      ...order,
-      bestRate: null,
-      shipping,
-      canonicalOrder: canonicalOrder
-        ? {
-          ...canonicalOrder,
-          shipping,
-        }
-        : order.canonicalOrder,
-    }
-  }
-
-  function getOrderWithAutoBestRate(order: OrderSummaryDto) {
-    const autoRequest = getAutoBestRateRequest(order)
-    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
-    if (autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate) {
-      return withBestRateOverride(order, autoEntry.rate)
-    }
-    if (
-      autoRequest &&
-      order.orderStatus === 'awaiting_shipment' &&
-      !hasSavedBestRateForRequest(order, autoRequest)
-    ) {
-      return withoutStaleBestRate(order)
-    }
-    return order
-  }
+  // PS-317: the 10 state-bound Best-Rate helpers (carrier-ids, service-options, the request builder,
+  // display projections) moved to ./orders/best-rate/rate-helpers (createBestRateHelpers factory,
+  // destructured above). orderShippingHold + normalizeDimsLabel moved with them (rate-request / the factory).
 
   function setAutoBestRateEntry(orderId: number, entry: AutoBestRateEntry) {
     setAutoBestRateEntries((current) => {

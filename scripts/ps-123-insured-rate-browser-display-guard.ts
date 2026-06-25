@@ -68,10 +68,16 @@ const openBlock = openStart >= 0 && openEnd > openStart
   ? ordersView.slice(openStart, openEnd)
   : '';
 
-const autoRequestStart = ordersView.indexOf('function getAutoBestRateRequest(');
-const autoRequestEnd = ordersView.indexOf('\n  function normalizeDimsLabel', autoRequestStart);
+// PS-317: getAutoBestRateRequest moved to ./orders/best-rate/rate-helpers.ts as an indented inner
+// function in the createBestRateHelpers factory. It STILL passes insuranceProvider:'none' /
+// insuredValue:null (no FE HUGRAB inference). Re-anchored to the new owner; the END anchor is the
+// next indented inner function (getCurrentBestRateDimsLabel) since normalizeDimsLabel now precedes it.
+// (openRateBrowser, referenced elsewhere in this guard, STAYED in OrdersView and is NOT repointed.)
+const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
+const autoRequestStart = rateHelpers.indexOf('function getAutoBestRateRequest(');
+const autoRequestEnd = rateHelpers.indexOf('\n  function getCurrentBestRateDimsLabel', autoRequestStart);
 const autoRequestBlock = autoRequestStart >= 0 && autoRequestEnd > autoRequestStart
-  ? ordersView.slice(autoRequestStart, autoRequestEnd)
+  ? rateHelpers.slice(autoRequestStart, autoRequestEnd)
   : '';
 
 // PS-317: withRateRequestMetadata moved to ./orders/best-rate/rate-proof.ts (getAutoBestRateRequest
