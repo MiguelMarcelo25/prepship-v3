@@ -37,6 +37,8 @@ import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billi
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
+// PS-311b: the dims-based companion — sweep the SAME unmatched box size across a date range.
+import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
@@ -694,6 +696,94 @@ app.post(
         dateFrom: body.dateFrom,
         dateTo: body.dateTo,
         packageId: body.packageId,
+        ...result,
+      },
+    });
+    return c.json({ data: result });
+  },
+);
+
+// PS-311b: the NEEDS-REVIEW sweep. Operators start from one unmatched/custom-dims box (e.g. Custom
+// 6.5x4x2) in the Edit Billing Detail modal, pick a date range, and apply a reviewed cost to EVERY
+// other still-unmatched order that shares the SAME box signature in that (client + range). The
+// backend re-derives the box signature from sourceOrderId (it never trusts an FE-supplied dims
+// string) and re-derives the scope from the auth context. Same calendar-day normalization as the
+// other billing routes (the last selected day is included). Billing/awaiting data only — writes only
+// billing_box_resolutions; finalized orders are skipped.
+const byDimsScopeRawSchema = z.object({
+  clientId: z.coerce.number().int().positive(),
+  dateFrom: z.string().min(1),
+  dateTo: z.string().min(1),
+  sourceOrderId: z.coerce.number().int().positive(),
+  newCost: z.coerce.number().min(0),
+});
+const byDimsScopeSchema = byDimsScopeRawSchema
+  .transform(normalizeBulkBoxCostRange)
+  .refine(hasNormalizedBulkRange, bulkBoxCostRangeRequired);
+const byDimsApplySchema = byDimsScopeRawSchema
+  .extend({ note: z.string().max(500).optional() })
+  .transform(normalizeBulkBoxCostRange)
+  .refine(hasNormalizedBulkRange, bulkBoxCostRangeRequired);
+
+app.post(
+  '/box-cost/by-dims/preview',
+  requirePermission('financials:write'),
+  zValidator('json', byDimsScopeSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    const preview = await previewBulkBoxCostByDims(
+      {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom!,
+        dateTo: body.dateTo!,
+        sourceOrderId: body.sourceOrderId,
+        newCost: body.newCost,
+      },
+      billingClientScopePredicate(scope),
+    );
+    return c.json({ data: preview });
+  },
+);
+
+app.post(
+  '/box-cost/by-dims/apply',
+  requirePermission('financials:write'),
+  zValidator('json', byDimsApplySchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    const resolvedBy = (c.get('email' as never) as string | undefined) ?? null;
+    const result = await applyBulkBoxCostByDimsResolutions(
+      {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom!,
+        dateTo: body.dateTo!,
+        sourceOrderId: body.sourceOrderId,
+        newCost: body.newCost,
+      },
+      billingClientScopePredicate(scope),
+      resolvedBy,
+      body.note ?? null,
+    );
+    // Regenerate so the swept orders' package_cost lines reflect the new resolutions (which survive
+    // regeneration — PS-207). Same normalized [fromUtc, toUtcExclusive) bounds as the fetch.
+    if (result.appliedOrderCount > 0) {
+      await generateLineItems(
+        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
+      );
+    }
+    await recordAuditEvent({
+      eventType: 'billing',
+      ...auditActorFromContext(c),
+      resourceType: 'billing_box_cost_bulk',
+      resourceId: `client:${body.clientId}:order:${body.sourceOrderId}`,
+      action: 'bulk_box_cost_by_dims_apply',
+      details: {
+        clientId: body.clientId,
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        sourceOrderId: body.sourceOrderId,
         ...result,
       },
     });

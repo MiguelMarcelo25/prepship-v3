@@ -119,6 +119,50 @@ check('BillingView wires the bulk modal from the box-review action',
   /<BulkBoxCostModal/.test(billingView) &&
   /data-bulk-box-cost-trigger/.test(billingView));
 
+// ── PS-311b: the NEEDS-REVIEW dims-based sweep (companion to the packageId-based bulk). It matches
+// unmatched orders by their package_cost_missing review-line description (the dims signature) — the
+// only way to reach the still-unmatched siblings the packageId path cannot see — and writes the same
+// PS-207 override resolution. Same server-side scope + money-safety posture as the bulk path.
+const byDimsSvc = readFileSync('src/services/billing-box-cost-by-dims.ts', 'utf8');
+check('by-dims: matches needs-review orders by client + review-line description (the dims signature) + [dateFrom, dateTo) ship-date',
+  /eq\(billingLineItems\.clientId, scope\.clientId\)/.test(byDimsSvc) &&
+  /eq\(billingLineItems\.lineType, REVIEW_LINE_TYPE\)/.test(byDimsSvc) &&
+  /eq\(billingLineItems\.description, signature\)/.test(byDimsSvc) &&
+  /gte\(billingLineItems\.shipDate, new Date\(scope\.dateFrom\)\)/.test(byDimsSvc) &&
+  /lt\(billingLineItems\.shipDate, new Date\(scope\.dateTo\)\)/.test(byDimsSvc));
+check('by-dims: re-derives the box signature SERVER-SIDE from the source order (never trusts an FE dims string)',
+  /fetchBoxReviewSignature\(/.test(byDimsSvc) && /sourceOrderId/.test(byDimsSvc));
+check('by-dims: writes ONLY billing_box_resolutions by upsert; NEVER client_package_prices',
+  /\.insert\(billingBoxResolutions\)/.test(byDimsSvc) && /onConflictDoUpdate/.test(byDimsSvc) && !/clientPackagePrices/.test(byDimsSvc));
+check('by-dims: ONE transaction, finalized orders skipped, schema ensured only on the prod singleton',
+  /conn\.transaction\(/.test(byDimsSvc) &&
+  /splitBulkBoxCostApplyTargets\(/.test(byDimsSvc) &&
+  /if \(conn === db\) await ensureBillingBoxResolutionsSchema\(\)/.test(byDimsSvc));
+check('by-dims routes exist, are financials:write gated, regenerate, and audit the money action',
+  /\/box-cost\/by-dims\/preview/.test(billingRoute) &&
+  /\/box-cost\/by-dims\/apply/.test(billingRoute) &&
+  /previewBulkBoxCostByDims\(/.test(billingRoute) &&
+  /applyBulkBoxCostByDimsResolutions\(/.test(billingRoute) &&
+  /action: 'bulk_box_cost_by_dims_apply'/.test(billingRoute) &&
+  /box-cost\/by-dims\/apply[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute));
+check('by-dims routes normalize the date range via billingDayRange (last selected day included)',
+  /byDimsScopeSchema[\s\S]{0,160}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute) &&
+  /byDimsApplySchema[\s\S]{0,200}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute));
+
+// ── PS-311b: the operator UI — a date-range picker ON the modal, reachable from the needs-review row.
+const sweepModal = readFileSync('web/src/components/Views/BoxReviewSweepModal.tsx', 'utf8');
+check('sweep modal has a START + END date picker and previews THEN applies via the by-dims routes',
+  /data-box-review-sweep-from/.test(sweepModal) &&
+  /data-box-review-sweep-to/.test(sweepModal) &&
+  /\/billing\/box-cost\/by-dims\/preview/.test(sweepModal) &&
+  /\/billing\/box-cost\/by-dims\/apply/.test(sweepModal));
+check('sweep modal Apply is GATED (preview fetched + confirm tick + non-empty editable set + valid range)',
+  /applyDisabled\s*=/.test(sweepModal) && /!confirmed/.test(sweepModal) && /editableOrderCount === 0/.test(sweepModal) && /!rangeValid/.test(sweepModal));
+check('BillingView wires the sweep modal from the needs-review row (no package pick required)',
+  /import BoxReviewSweepModal/.test(billingView) &&
+  /<BoxReviewSweepModal/.test(billingView) &&
+  /data-box-review-sweep-trigger/.test(billingView));
+
 if (failures > 0) {
   console.error(`\nPS-311 bulk box-cost preview guard FAILED with ${failures} failure(s).`);
   process.exit(1);

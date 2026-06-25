@@ -7,6 +7,7 @@ import { apiClient } from '../../api/client'
 // client directly. Additive, behind the backend shippingZeroNeedsReview flag.
 import { api } from '../../lib/api'
 import BulkBoxCostModal from './BulkBoxCostModal'
+import BoxReviewSweepModal from './BoxReviewSweepModal'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -334,6 +335,8 @@ export default function BillingView() {
   // PS-311: bulk box-cost modal — open when the operator chooses to apply a reviewed box cost to
   // EVERY order with that box in the current (client + date range).
   const [bulkBoxCostOpen, setBulkBoxCostOpen] = useState(false)
+  // PS-311b: the needs-review box-cost sweep (date range picker + same-box-size apply).
+  const [boxReviewSweepOpen, setBoxReviewSweepOpen] = useState(false)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
@@ -1697,8 +1700,24 @@ export default function BillingView() {
                 <strong style={{ color: '#b45309' }}>Box needs review:</strong>{' '}
                 {billingEditModal.row.packageCostReviewReason || 'the shipped box could not be matched to a known package.'}
                 {' '}Pick the correct Box Size (or set a Box Cost) and Save — the decision persists across billing regeneration.
-                {/* PS-311: once a box is chosen, bulk-apply its reviewed cost to EVERY order billed
-                    for that box in the current client + date range (preview-first, gated). */}
+                {/* PS-311b: sweep this SAME unmatched box size across a date range you pick — set the
+                    cost once and apply it to every needs-review bill of this box for THIS client
+                    (preview-first, gated). Available for any needs-review box (no package pick needed,
+                    since unmatched custom boxes have no package to choose). */}
+                {detailState.clientId != null ? (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      data-box-review-sweep-trigger
+                      className="btn btn-secondary btn-xs"
+                      type="button"
+                      onClick={() => setBoxReviewSweepOpen(true)}
+                    >
+                      Set this box cost across a date range…
+                    </button>
+                  </div>
+                ) : null}
+                {/* PS-311: once a real box is chosen from the dropdown, re-price every order ALREADY
+                    billed for that resolved box in the current client + date range. */}
                 {billingEditModal.draft.packageId && detailState.clientId != null ? (
                   <div style={{ marginTop: 8 }}>
                     <button
@@ -1707,7 +1726,7 @@ export default function BillingView() {
                       type="button"
                       onClick={() => setBulkBoxCostOpen(true)}
                     >
-                      Set this box cost across {from} → {to}…
+                      Re-price the chosen box across {from} → {to}…
                     </button>
                   </div>
                 ) : null}
@@ -1882,6 +1901,30 @@ export default function BillingView() {
           onApplied={() => {
             // Re-fetch the summary so the bulk-re-priced box costs show immediately.
             void apiClient.fetchBillingSummary(from, to).then((rows) => setSummaryRows(rows)).catch(() => {})
+          }}
+        />
+      ) : null}
+
+      {/* PS-311b: the needs-review box-cost sweep — a date range picker + same-box-size apply across
+          the current client. Available for any needs-review row (no package pick needed). */}
+      {boxReviewSweepOpen && billingEditModal && billingEditModal.row.orderId != null && detailState.clientId != null ? (
+        <BoxReviewSweepModal
+          clientId={detailState.clientId}
+          clientName={detailState.clientName || `Client ${detailState.clientId}`}
+          sourceOrderId={Number(billingEditModal.row.orderId)}
+          boxLabel={(() => {
+            const reason = billingEditModal.row.packageCostReviewReason || ''
+            const m = reason.match(/\(([^)]+)\)/)
+            return m?.[1] ?? (reason || 'this box')
+          })()}
+          initialFrom={from}
+          initialTo={to}
+          onClose={() => setBoxReviewSweepOpen(false)}
+          onApplied={() => {
+            // Refresh the summary and reload the open detail grid so the swept (now resolved) box
+            // costs show immediately.
+            void apiClient.fetchBillingSummary(from, to).then((rows) => setSummaryRows(rows)).catch(() => {})
+            if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
           }}
         />
       ) : null}
