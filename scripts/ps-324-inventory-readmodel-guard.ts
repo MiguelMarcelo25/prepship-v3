@@ -94,6 +94,17 @@ check('/inventory bulk receive accepts a packs intent and expands it via canonic
   /item\.packs != null \? item\.packs \* unitsPerPack/.test(invRoute) &&
   /Number\(inv\.unitsPerPack\)/.test(invRoute));
 
+// ── D. manual-adjust movement direction is backend-enforced ──────────────────────────────
+const dirOwner = read('src/lib/inventory-movement-direction.ts');
+check('movement-direction owner enforces damage/ship/pick as decrements',
+  /export function movementDirectionError/.test(dirOwner) &&
+  /DECREMENT_ONLY = new Set<InventoryMovementType>\(\['ship', 'pick', 'damage'\]\)/.test(dirOwner) &&
+  /qty >= 0/.test(dirOwner));
+check('/inventory route imports the movement-direction owner',
+  /import \{ movementDirectionError \} from '\.\.\/lib\/inventory-movement-direction'/.test(invRoute));
+const dirAsserts = (invRoute.match(/movementDirectionError\(moveType, body\.qty\)/g) ?? []).length;
+check('both adjust routes assert movement direction before applyMovement', dirAsserts >= 2, { dirAsserts });
+
 if (failures > 0) {
   console.error(`\nPS-324 inventory read-model guard FAILED with ${failures} failure(s).`);
   process.exit(1);

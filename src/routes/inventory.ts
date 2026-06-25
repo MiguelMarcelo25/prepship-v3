@@ -7,6 +7,7 @@ import { db } from '../db/client';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../services/inventory-stock-math';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
+import { movementDirectionError } from '../lib/inventory-movement-direction';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
 import { orderItems } from '../db/schema/order-items';
@@ -1345,9 +1346,14 @@ app.post(
       return c.json({ error: 'Inventory item not found' }, 404);
     }
     const email = c.get('email' as never) as string | undefined;
+    const moveType = body.type ?? 'adjust';
+    // PS-324: a movement's direction is a business invariant, not a frontend default —
+    // damage/ship/pick can only remove stock. Reject a sign that contradicts the type.
+    const dirError = movementDirectionError(moveType, body.qty);
+    if (dirError) return c.json({ error: dirError }, 400);
     const result = await applyMovement({
       inventoryId: id,
-      type: body.type ?? 'adjust',
+      type: moveType,
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
@@ -1537,9 +1543,13 @@ app.post(
       return c.json({ error: 'Inventory item not found' }, 404);
     }
     const email = c.get('email' as never) as string | undefined;
+    const moveType = body.type ?? 'adjust';
+    // PS-324: enforce the movement-direction invariant (damage/ship/pick must remove stock).
+    const dirError = movementDirectionError(moveType, body.qty);
+    if (dirError) return c.json({ error: dirError }, 400);
     const result = await applyMovement({
       inventoryId: body.invSkuId,
-      type: body.type ?? 'adjust',
+      type: moveType,
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
