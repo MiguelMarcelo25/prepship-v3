@@ -210,8 +210,10 @@ fills 100% and everyone else is a fraction of the leader.
 
 # 4. Sales Performance Heatmap by SKU Family
 
-**File:** [DashboardView.tsx:1448-1500](web/src/components/Views/DashboardView.tsx#L1448-L1500)
-**Build function:** [`buildHeatmap`](web/src/components/Views/DashboardView.tsx#L530) at line 530
+**File:** [DashboardView.tsx](web/src/components/Views/DashboardView.tsx) (render + click-to-explain)
+**Build function:** [`buildHeatmap` / `heatmapTone`](../src/lib/sales-heatmap-deviation.ts) — PS-325 slice 3:
+the deviation/tone policy now lives in the backend-owned `src/lib/sales-heatmap-deviation.ts` (the
+color palette `HEATMAP_TONE_HEX` stays in DashboardView as presentation). Formula below is unchanged.
 
 Each row is a **product family** (Ramen Noodles, Drinks, Books, etc.),
 auto-classified by [`productFamily`](web/src/components/Views/DashboardView.tsx#L433) using regex keywords against SKU + name.
