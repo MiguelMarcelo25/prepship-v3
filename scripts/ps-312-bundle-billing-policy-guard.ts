@@ -55,6 +55,13 @@ check('a child references the primary order # in the note',
   childTreatment.note === 'Included — bundled with #100');
 check('a child has its shipping/box suppressed', shouldSuppressShippingAndBox(101, dto({ role: 'child' })) === true);
 
+// A still-'draft' bundle (created but never consolidated/labeled) bills every member NORMALLY — the
+// children may have shipped on their own individual labels, so suppressing them would UNDER-bill.
+// Parity with the inventory + confirmation policies (both gate on draft).
+check('a child of a DRAFT bundle bills normally (no under-bill before the consolidated label)',
+  decideBundleBillingTreatment(101, dto({ role: 'child', status: 'draft' })).kind === 'bill-normally' &&
+  shouldSuppressShippingAndBox(101, dto({ role: 'child', status: 'draft' })) === false);
+
 // Defensive: a self-referential DTO (role child but primaryOrderId === orderId) must NOT suppress
 // the order that is actually the primary — bill-normally wins.
 check('a self-referential DTO never suppresses the primary order',

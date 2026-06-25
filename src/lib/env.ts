@@ -187,6 +187,15 @@ const schema = z.object({
   // BUNDLE_LINK_ON_LABEL OFF) is byte-identical: no extra deduction. Buys no postage; never marks orders
   // shipped. DJ canaries on Render with BOTH flags on. Per user override unlock shipped data on 2026-06-24.
   BUNDLE_DEDUCT_ONCE: booleanFlag(false),
+  // PS-312 (combined-shipment bill-once, billing path): default-OFF canary. A bundle ships under ONE
+  // label, so shipping + box are billed ONCE on the PRIMARY; each CHILD is suppressed and shown as a
+  // $0 "Included — bundled with #<primary>" line (auditable, never inflates the invoice total). When
+  // ON, generateLineItems loads the additive bundle read-model and delegates the per-order treatment to
+  // the pure decideBundleBillingTreatment policy. OFF is byte-identical: the map is never loaded, every
+  // order bills normally. Reads the bundle read-model + shipped rows only; NEVER UPDATEs shipped
+  // orders/shipments (it only emits derived $0 billing_line_items). Keyed per ORDER (no shared-shipment
+  // coupling). DJ canaries on Render. Per user override unlock shipped data on 2026-06-24.
+  BUNDLE_BILL_ONCE: booleanFlag(false),
   // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
   // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
   // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'

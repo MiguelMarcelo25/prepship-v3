@@ -55,6 +55,9 @@ import {
   ensureBillingFeeWaiverSchema,
   readBillingFeeWaivers,
 } from './billing-fee-waiver-store';
+import { getBundlesForOrders } from './shipment-bundles/bundle-read-model';
+import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-policy';
+import { env } from '../lib/env';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -938,6 +941,12 @@ export async function generateLineItems(input: GenerateInput) {
     ...new Set(billableRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
   ];
   const feeWaiverByOrderId = await readBillingFeeWaivers(orderIdsInScope);
+  // PS-312 S5 bill-once (Per user override unlock shipped data on 2026-06-24): load the bundle
+  // membership for the in-scope orders (mirrors feeWaiverByOrderId). OFF -> the map is never loaded ->
+  // every order bills normally -> byte-identical. Reads the additive bundle read-model only.
+  const bundleByOrderId: Awaited<ReturnType<typeof getBundlesForOrders>> = env.BUNDLE_BILL_ONCE
+    ? await getBundlesForOrders(orderIdsInScope)
+    : new Map();
 
   for (const s of billableRows) {
     if (s.clientId === null) {
@@ -952,6 +961,14 @@ export async function generateLineItems(input: GenerateInput) {
     }
 
     const rows: LineRow[] = [];
+
+    // PS-312 S5 bill-once: this order's bundle treatment (bill-normally vs included-in-bundle). Drives
+    // the shipping + box suppression below. OFF / non-bundled / primary -> bill-normally (the map is
+    // empty when the flag is OFF), so the shipping + box blocks run unchanged (byte-identical).
+    const bundleTreatment = decideBundleBillingTreatment(
+      s.orderId ?? -1,
+      s.orderId != null ? bundleByOrderId.get(s.orderId) ?? null : null,
+    );
 
     // ─── PS-207: shipped-box resolution (canonical: billing-box-policy.ts) ──
     // Operator directive → selected pid/code (dims-coherent) → exact dims.
@@ -1020,7 +1037,24 @@ export async function generateLineItems(input: GenerateInput) {
     // that source column is `cost`; `labelCost` is only a fallback for rows
     // created before the synced cost was available.
     const labelCost = (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
-    if (labelCost > 0) {
+    if (bundleTreatment.kind === 'included-in-bundle') {
+      // PS-312 S5: bundle child — shipping is billed ONCE on the primary. Emit a $0 "Included" line in
+      // the shipping slot (mirrors the shipping_missing/$0 pattern; the unique (order_id, line_type,
+      // description) key holds; $0 never inflates the total). The box block below is suppressed too.
+      rows.push({
+        clientId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber,
+        shipmentId: s.id,
+        shipDate: s.shipDate,
+        lineType: 'shipping',
+        description: bundleTreatment.note,
+        qty: '1',
+        unitCost: '0.00',
+        totalCost: '0.00',
+        packageId: billedPackageId,
+      });
+    } else if (labelCost > 0) {
       const houseCustomerRate = s.id != null ? houseCustomerRateByShipmentId.get(Number(s.id)) : undefined;
       // PS-220: single source of truth for the billed shipping amount. A captured house
       // customer_rate is billed verbatim (carrier markup + reference-rate suppressed); otherwise
@@ -1116,7 +1150,9 @@ export async function generateLineItems(input: GenerateInput) {
           : undefined,
       markupPct: toNum(cfg.packageCostMarkup),
     });
-    if (packageCostDecision.kind === 'line') {
+    if (bundleTreatment.kind === 'included-in-bundle') {
+      // PS-312 S5: bundle child — the box is billed ONCE on the primary; suppress the child's box line.
+    } else if (packageCostDecision.kind === 'line') {
       rows.push({
         clientId,
         orderId: s.orderId,
@@ -1837,12 +1873,18 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const lineType = row.lineType ?? '';
       const isShippingLine = lineType === 'shipping';
       const isMissingShippingLine = lineType === 'shipping_missing';
+      // PS-312 S5: a bundle CHILD's "Included — bundled with #N" line is intentionally $0 (shipping is
+      // billed ONCE on the primary) — it is NOT a real recorded $0 label, so it must NOT raise the
+      // $0-shipping review chip (which would pollute the operator's review queue with a false entry).
+      const isBundleIncludedShippingLine =
+        isShippingLine && (row.description ?? '').startsWith('Included — bundled');
       // PS-275: a billed shipping line of EXACTLY $0.00 needs operator review
       // (a real recorded $0 label — distinct from the missing-cost review,
       // which fires when the cost is unknown). The decision is owned by the
       // pure policy module; this just reads its boolean off the billed line.
       const isZeroShippingReviewLine =
         isShippingLine &&
+        !isBundleIncludedShippingLine &&
         decideZeroShippingReview({
           shippingAmount: toFiniteNumber(row.totalCost),
           hasShipmentRow: row.shipmentId != null,

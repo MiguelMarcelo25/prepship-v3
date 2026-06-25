@@ -23,6 +23,11 @@ export function decideBundleBillingTreatment(
   bundle: BundleRowDto | null,
 ): BundleBillingTreatment {
   if (!bundle) return { kind: 'bill-normally' };
+  // Parity with the inventory + confirmation policies (both gate on draft): a bundle only bills-once
+  // ONCE it is LABELED — i.e. a single consolidated label was actually bought (linkBundleShipment moved
+  // it past 'draft'). While still 'draft' (created but never consolidated/labeled), the children may
+  // have shipped on their OWN individual labels, so suppressing them would UNDER-bill. Bill normally.
+  if (bundle.status === 'draft') return { kind: 'bill-normally' };
   if (bundle.role === 'primary' || bundle.primaryOrderId === orderId) return { kind: 'bill-normally' };
   return {
     kind: 'included-in-bundle',
