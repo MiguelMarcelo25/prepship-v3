@@ -178,9 +178,14 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 // the same hasSavedBestRateForRequest contract) moved into ./orders/best-rate/rate-helpers.ts. The
 // passive-enqueue skip + the backend-verdict FE pass-throughs below stayed as OrdersView call sites.
 const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
+// The passive enqueue still cache-first SKIPS a row with a valid saved display — EXCEPT a row the
+// backend flagged needsDisplayRefresh (forceLive), which is re-quoted LIVE to detect carrier drift.
+// Pin the exact `!forceLive &&` carve-out so removing it (re-freezing display-stale rows) is caught,
+// and pin that forceLive is the backend verdict (the FE never recomputes the freshness threshold).
 check(
-  'passive enqueue still skips rows with a valid saved display',
-  /hasValidSavedBestRateForRequest\(order, request\)\) return null/.test(ordersView),
+  'passive enqueue skips a valid saved display, except a backend-flagged display-refresh (forceLive)',
+  /if \(!forceLive && hasValidSavedBestRateForRequest\(order, request\)\) return null/.test(ordersView) &&
+    /const forceLive = getBestRateWorkflowModel\(order\)\?\.needsDisplayRefresh === true/.test(ordersView),
   true,
 );
 check(

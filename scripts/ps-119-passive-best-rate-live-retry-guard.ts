@@ -70,8 +70,13 @@ check('displayable best rate wins even if dims missing (order IS rateable)',
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 check('passive auto-rating imports the retry decision helper',
   /cachedNegativeNeedsLiveRetry/.test(ordersView), true);
-check('passive does a cache-allowed first pass (forceRefresh:false)',
-  /\.\.\.baseRateRequest,\s*forceRefresh: false/.test(ordersView), true);
+// The first pass is cache-allowed for a NORMAL row and force-live ONLY for a backend-flagged
+// display-refresh row (needsDisplayRefresh → forceLive). `forceLive` must DEFAULT false on
+// refreshVisibleBestRate so a normal row never force-lives (the anti-storm invariant); the
+// display-refresh force-live is bounded by the same PASSIVE_LIVE_BEST_RATE_MAX_ROWS budget.
+check('passive first pass is cache-allowed for a normal row, force-live only for a display-refresh row',
+  /\.\.\.baseRateRequest,\s*forceRefresh: forceLive,/.test(ordersView)
+    && /function refreshVisibleBestRate\([^)]*forceLive = false\)/.test(ordersView), true);
 check('passive does a guarded live retry (cachedNegativeNeedsLiveRetry -> forceLive+forceRefresh)',
   /if \(cachedNegativeNeedsLiveRetry\(response\)\)/.test(ordersView)
     && /\.\.\.baseRateRequest,\s*forceLive: true,\s*forceRefresh: true/.test(ordersView), true);

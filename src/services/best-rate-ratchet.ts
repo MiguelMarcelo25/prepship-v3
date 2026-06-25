@@ -8,15 +8,23 @@
 // fresher, CHEAPER committed best for the SAME shipment inputs with a more-expensive one.
 //
 // Block ONLY when ALL hold: a prior best exists, it shares the incoming requestFingerprint (same
-// inputs = same lane = directly comparable), and the incoming total is STRICTLY higher. Everything
-// else is allowed: no prior (cold/first), a missing fingerprint on either side, a DIFFERENT
-// fingerprint (weight/dims/residential/zip changed -> the prior is stale and MUST be replaced), or an
-// incoming that is cheaper-or-equal. Pure (no DB/IO) so the persist owners + the offline guard exercise
-// the identical rule. The operator's deliberate FE save is EXEMPT (it is not an automated re-persist).
+// inputs = same lane = directly comparable), the incoming total is STRICTLY higher, AND the incoming
+// re-quote is NOT a proven-COMPLETE pass. Everything else is allowed: no prior (cold/first), a missing
+// fingerprint on either side, a DIFFERENT fingerprint (weight/dims/residential/zip changed -> the prior
+// is stale and MUST be replaced), an incoming that is cheaper-or-equal, or an incoming that is a
+// COMPLETE re-quote. Pure (no DB/IO) so the persist owners + the offline guard exercise the identical
+// rule. The operator's deliberate FE save is EXEMPT (it is not an automated re-persist).
+//
+// Display-drift carve-out: the original rule blocked EVERY same-inputs increase, which also suppressed
+// a GENUINE carrier price rise (the carrier raised Ground within the cache window) — leaving the
+// Awaiting Best Rate showing a stale-cheap value the operator could not act on truthfully. A COMPLETE
+// re-quote (every required carrier reached a terminal result; not the thin Shipp set PS-271 guards
+// against) IS the true current price and must overwrite. Only a thin/partial higher re-quote
+// (isComplete !== true) is still blocked — exactly the FedEx-only-dropped-UPS flicker case.
 import type { OrderBestRateDto } from './order-rate-dto';
 
 type RatchetRate =
-  | Pick<OrderBestRateDto, 'shipmentCost' | 'otherCost' | 'totalCost' | 'requestFingerprint'>
+  | Pick<OrderBestRateDto, 'shipmentCost' | 'otherCost' | 'totalCost' | 'requestFingerprint' | 'isComplete'>
   | null
   | undefined;
 
@@ -34,8 +42,10 @@ export function comparableRateTotal(rate: RatchetRate): number | null {
 }
 
 /**
- * True when persisting `incoming` over `prior` would be a same-inputs price DOWNGRADE — the caller
- * should KEEP the prior best instead of overwriting it with the more-expensive thin re-quote.
+ * True when persisting `incoming` over `prior` would be a same-inputs price DOWNGRADE that should be
+ * BLOCKED — the caller keeps the prior best. Blocked only for a THIN/partial more-expensive re-quote;
+ * a COMPLETE more-expensive re-quote (a genuine carrier increase) is ALLOWED so the displayed best
+ * rate stays the true current price.
  */
 export function isNoDowngradeBlocked(prior: RatchetRate, incoming: RatchetRate): boolean {
   if (!prior || !incoming) return false;
@@ -46,5 +56,10 @@ export function isNoDowngradeBlocked(prior: RatchetRate, incoming: RatchetRate):
   const priorTotal = comparableRateTotal(prior);
   const incomingTotal = comparableRateTotal(incoming);
   if (priorTotal == null || incomingTotal == null) return false; // never block on missing data
-  return incomingTotal > priorTotal + EPSILON; // strictly more expensive for the SAME inputs => block
+  const incomingIsMoreExpensive = incomingTotal > priorTotal + EPSILON;
+  if (!incomingIsMoreExpensive) return false; // cheaper-or-equal for the SAME inputs => always overwrite
+  // More-expensive for the same inputs: block ONLY a thin/partial re-quote (the PS-271 Shipp flicker).
+  // A proven-COMPLETE higher re-quote is the genuine current price and MUST overwrite. `null`/absent
+  // completeness on the INCOMING (legacy/unknown) is treated as not-proven => still blocked, as before.
+  return incoming.isComplete !== true;
 }

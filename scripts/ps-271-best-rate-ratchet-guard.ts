@@ -46,6 +46,19 @@ check('sub-cent more-expensive (EPSILON) -> allow',
 check('a clear cent more-expensive -> block',
   isNoDowngradeBlocked(upsCheap, { ...upsCheap, shipmentCost: 10.15, totalCost: 10.15 }) === true);
 
+// ── display-drift carve-out: a COMPLETE higher re-quote is the GENUINE current price and MUST
+//    overwrite (the carrier raised it within the cache window); only a THIN/partial higher re-quote
+//    (the #1502 Shipp flicker) stays blocked. isComplete is the proven-completeness signal. ──
+const upsCheapComplete = { ...upsCheap, isComplete: true as const };
+check('allows a COMPLETE more-expensive re-quote (genuine carrier increase overwrites)',
+  isNoDowngradeBlocked(upsCheapComplete, { ...fedexDear, isComplete: true }) === false);
+check('still blocks a THIN (isComplete:false) more-expensive re-quote (#1502 flicker)',
+  isNoDowngradeBlocked(upsCheapComplete, { ...fedexDear, isComplete: false }) === true);
+check('treats ABSENT incoming completeness as not-proven (blocks the higher re-quote, as before)',
+  isNoDowngradeBlocked(upsCheapComplete, fedexDear) === true);
+check('a COMPLETE cheaper re-quote still overwrites',
+  isNoDowngradeBlocked({ ...fedexDear, isComplete: false }, upsCheapComplete) === false);
+
 // ── comparableRateTotal: totalCost wins; falls back to shipment+other; null when uncomputable ──
 check('comparableRateTotal prefers totalCost',
   comparableRateTotal({ shipmentCost: 5, otherCost: 5, totalCost: 9.99, requestFingerprint: FP }) === 9.99);

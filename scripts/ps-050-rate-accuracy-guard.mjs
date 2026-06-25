@@ -42,9 +42,13 @@ assert(
 )
 
 assert(
-  ordersView.includes('forceRefresh: false') &&
+  // The passive first pass is cache-allowed for a NORMAL row (forceRefresh: forceLive, and
+  // refreshVisibleBestRate's forceLive param DEFAULTS false) — only a backend-flagged display-refresh
+  // row (needsDisplayRefresh) force-lives, and that is bounded by PASSIVE_LIVE_BEST_RATE_MAX_ROWS.
+  ordersView.includes('forceRefresh: forceLive') &&
+    /function refreshVisibleBestRate\([^)]*forceLive = false\)/.test(ordersView) &&
     !ordersView.includes('forceRefresh: true,\n        }) as Array<Record<string, unknown>>\n\n        const bestRate = pickBestPanelRate(rates)'),
-  'Passive auto-rating does not force live rates for every order',
+  'Passive auto-rating does not force live rates for every order (only display-refresh rows, budget-capped)',
 )
 
 assert(

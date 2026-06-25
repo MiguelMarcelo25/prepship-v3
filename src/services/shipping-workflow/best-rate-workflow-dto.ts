@@ -134,6 +134,9 @@ import {
   deriveOrderRowPackageState,
 } from './order-row-state-axes';
 import { deriveOrderRowNamedActions, deriveOrderRowBlockedReasons } from './order-row-allowed-actions';
+// Awaiting best-rate DISPLAY-freshness window (separate from the 24h purchase TTL). A saved rate older
+// than this is still purchasable but "due for a re-check" so the table can detect carrier price drift.
+import { RATE_DISPLAY_FRESH_MS } from '../rate-display-freshness';
 
 export type {
   OrderRowLifecycleState,
@@ -181,6 +184,12 @@ export type BestRateWorkflowDto = {
   // exact saved rate may remain visible while a checker runs, but purchase stays
   // blocked until the saved proof is fresh/current/complete.
   canUseDisplayedRateForPurchase: boolean;
+  // Awaiting best-rate DISPLAY-freshness: TRUE when a displayable saved rate for the CURRENT request
+  // is older than the display window (RATE_DISPLAY_FRESH_MS) — i.e. still purchasable but "due for a
+  // re-check" so the table can detect carrier price drift. The FE consumes this to re-quote the row
+  // LIVE instead of silently rendering a stale cache; it never recomputes the threshold itself.
+  // Independent of the 24h purchase TTL (fresh/stale): a 'fresh' row can still need a display refresh.
+  needsDisplayRefresh: boolean;
   activeRateCheckState: 'none' | 'pending' | 'rating';
   activeRateCheckAgeMs?: number;
   // PS-173 (Phase 1): backend-owned row state + display tuple — present ONLY when the
@@ -283,6 +292,15 @@ function savedRateExpiresAt(rate: Record<string, unknown> | null): string | null
   if (!rate) return null;
   const metadata = isRecord(rate.metadata) ? rate.metadata : null;
   return stringOrNull(rate.cacheExpiresAt) ?? stringOrNull(metadata?.cacheExpiresAt);
+}
+
+// The saved rate's FETCH time (when the carrier price was actually quoted), used for the display-
+// freshness verdict. cacheCreatedAt is stamped == fetchedAt by both rates.ts and the backfill, so it
+// is the true age of the PRICE (unlike order_overrides.bestRateAt, which a cache-hit re-stamps to now).
+function savedRateCreatedAt(rate: Record<string, unknown> | null): string | null {
+  if (!rate) return null;
+  const metadata = isRecord(rate.metadata) ? rate.metadata : null;
+  return stringOrNull(rate.cacheCreatedAt) ?? stringOrNull(metadata?.cacheCreatedAt);
 }
 
 function savedRateHasBackendIssuedProof(rate: Record<string, unknown> | null): boolean {
@@ -683,6 +701,17 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     Boolean(savedFingerprint && !input.currentRequestFingerprint);
   const complete = savedRateIsComplete(savedRate);
   const fresh = isFreshAt(savedRateExpiresAt(savedRate), now);
+  // DISPLAY-freshness: a saved rate for the SAME request that has aged past the display window is
+  // "due for a re-check" (carrier price may have drifted within the 24h purchase TTL). Scoped to
+  // matchesRequest so a mismatched/missing row — already a re-rate by the states below — is untouched.
+  const savedCreatedAt = savedRateCreatedAt(savedRate);
+  const savedAgeMs = savedCreatedAt ? now.getTime() - Date.parse(savedCreatedAt) : null;
+  const needsDisplayRefresh =
+    hasSavedRate &&
+    matchesRequest &&
+    savedAgeMs != null &&
+    Number.isFinite(savedAgeMs) &&
+    savedAgeMs > RATE_DISPLAY_FRESH_MS;
   const hasDisplayIdentity = savedRateHasDisplayIdentity(savedRate);
   const hasBackendIssuedProof = savedRateHasBackendIssuedProof(savedRate);
 
@@ -731,6 +760,7 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     savedRateDisplay: savedRateDisplayFor(bestRateState, savedRate, hasSavedRate),
     canDisplayFinalRate,
     canUseDisplayedRateForPurchase,
+    needsDisplayRefresh,
     activeRateCheckState: 'none',
   };
 }

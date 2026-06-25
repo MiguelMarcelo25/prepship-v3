@@ -3844,19 +3844,26 @@ export default function OrdersView({
         const request = getAutoBestRateRequest(order)
         if (!request) return null
         if (!isTestOrder(order, request.detail) && carrierIds.length === 0) return null
-        if (hasValidSavedBestRateForRequest(order, request)) return null
+        // Display-drift: the backend flags `needsDisplayRefresh` when a still-displayable saved rate has
+        // aged past the display-freshness window (carrier price may have drifted within the 24h cache).
+        // Such a row is NOT skipped — it is re-quoted LIVE so the table self-corrects to the true best
+        // rate. The backend owns the freshness threshold; the FE only honors the verdict + carries
+        // forceLive through so the re-rate bypasses the 24h rate-fetch cache. Non-display-stale rows keep
+        // the cache-first skip exactly as before.
+        const forceLive = getBestRateWorkflowModel(order)?.needsDisplayRefresh === true
+        if (!forceLive && hasValidSavedBestRateForRequest(order, request)) return null
         const entry = autoBestRateEntries[order.orderId]
         if (entry?.key === request.key) return null
         if (autoBestRateRequestedRef.current.has(request.key)) return null
-        return { order, request }
+        return { order, request, forceLive }
       })
-      .filter((value): value is { order: OrderSummaryDto; request: NonNullable<ReturnType<typeof getAutoBestRateRequest>> } => value != null)
+      .filter((value): value is { order: OrderSummaryDto; request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>; forceLive: boolean } => value != null)
 
     if (candidates.length === 0) return
 
     const queue = [...candidates]
 
-    async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
+    async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>, forceLive = false) {
       autoBestRateRequestedRef.current.add(request.key)
       startAutoBestRateWatchdog(order, request)
 
@@ -3921,10 +3928,14 @@ export default function OrdersView({
           includeVisibleDirectCarriers: true,
         } as const
 
-        // First pass: cache-allowed (fast). If it yields a best rate, use it.
+        // First pass: cache-allowed (fast) for a normal row. A display-refresh row (forceLive) re-quotes
+        // LIVE here so it bypasses the 24h rate-fetch cache and actually detects carrier price drift —
+        // the same forceLive+forceRefresh the manual Browse Rates uses. The backend no-downgrade ratchet
+        // (now completeness-aware) records a genuine COMPLETE increase and still rejects a thin re-quote.
         let response = await apiClient.browseRates({
           ...baseRateRequest,
-          forceRefresh: false,
+          forceRefresh: forceLive,
+          ...(forceLive ? { forceLive: true } : {}),
         }) as Record<string, unknown>
 
         // PS-119: a cached/unproven NEGATIVE is NOT authoritative for the passive table.
@@ -3948,6 +3959,17 @@ export default function OrdersView({
         // PS-111: backend owns completeness — do not assert isComplete:true just
         // because a rate exists. A rate found while a carrier failed/loaded is partial.
         const backendComplete = deriveBackendBestRateComplete(response, bestRate)
+        // Display-refresh safety: a forceLive re-rate exists ONLY to refresh an already-good, proven
+        // saved rate. It may replace that rate ONLY with a COMPLETE live re-quote — an incomplete/thin
+        // pass (a transient carrier blip) or an empty result must NOT overwrite or null the proven saved
+        // rate. Leave the row on its existing rate; it stays needsDisplayRefresh and retries on a later
+        // mount until a COMPLETE pass lands. (Normal new-row rating still persists partial results.) This
+        // keeps T3 off the no-downgrade-ratchet-exempt FE persist for the only case that could degrade a
+        // good rate, so a thin re-quote can never destroy a good cheap COMPLETE saved best.
+        if (forceLive && !(bestRate && backendComplete)) {
+          clearAutoBestRateWatchdog(request.key)
+          return
+        }
         if (bestRate) {
           const bestRateWithMetadata = withRateRequestMetadata(bestRate, request, {
             isComplete: backendComplete,
@@ -3984,8 +4006,11 @@ export default function OrdersView({
           setAutoBestRateEntry(order.orderId, settled.entry)
           if (settled.applyPanelPreview) {
             setPanelRatePreview(bestRate ? [bestRate] : [])
-            const shippingProviderId = bestRate ? toProviderAccountId(bestRate.shippingProviderId) : null
-            const serviceCode = bestRate ? toStringValue(bestRate.serviceCode) : null
+            // A background display-refresh (forceLive) only refreshes the TABLE value; it must NOT
+            // silently switch the carrier/service the operator currently has selected in the open panel.
+            // New-row rating still seeds the panel selection as before.
+            const shippingProviderId = !forceLive && bestRate ? toProviderAccountId(bestRate.shippingProviderId) : null
+            const serviceCode = !forceLive && bestRate ? toStringValue(bestRate.serviceCode) : null
             if (shippingProviderId != null && serviceCode) {
               setPanelForm((current) => ({
                 ...current,
@@ -4051,6 +4076,9 @@ export default function OrdersView({
       )
       for (let index = queue.length - 1; index >= 0; index -= 1) {
         const item = queue[index]!
+        // Display-refresh rows must re-quote LIVE to detect drift — never satisfy them from the bulk
+        // rate cache (the cache would hand back the very stale price we are trying to refresh).
+        if (item.forceLive) continue
         const exact = exactByOrderId.get(item.order.orderId)
         if (!exact) continue
         const cachedRate = withRateRequestMetadata(exact.hit.bestRate, item.request, exact)
@@ -4089,7 +4117,7 @@ export default function OrdersView({
         while (!cancelled && liveQueue.length > 0) {
           const next = liveQueue.shift()
           if (!next) continue
-          await refreshVisibleBestRate(next.order, next.request)
+          await refreshVisibleBestRate(next.order, next.request, next.forceLive)
         }
       })
       await Promise.all(workers)
