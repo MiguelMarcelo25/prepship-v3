@@ -166,6 +166,17 @@ const schema = z.object({
   // server-side. This only ever turns a 'direct-create' into a 'backend' route (it can never
   // create a new buy), so OFF is byte-identical and the buy still happens exactly once.
   PRINT_QUEUE_DIRECT_VIA_BACKEND: booleanFlag(false),
+  // PS-312 (combined-shipment keystone, shipped-data path): default-OFF canary. When ON, after the
+  // operator's existing flow buys the ONE label for a bundle PRIMARY, createLabelV2 stamps the shared
+  // label facts (tracking/carrier/service/url/shipment ids/package) onto the bundle's additive
+  // shipment_bundles row so its child orders resolve to the primary's real tracking instead of
+  // "Shipment sync error" — the keystone the bill-once / deduct-once / confirm-per-child policies all
+  // gate on (they no-op while the bundle is still 'draft'). OFF is byte-identical: no bundle is ever
+  // stamped, no extra query/write happens. Buys no postage; never UPDATEs shipments or shipped order
+  // rows (linkBundleShipment writes ONLY the additive bundle sidecar, with its own no-regression
+  // guard). DJ canaries on Render after a live combined-shipment buy. Per user override unlock shipped
+  // data on 2026-06-24.
+  BUNDLE_LINK_ON_LABEL: booleanFlag(false),
   // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
   // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
   // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'

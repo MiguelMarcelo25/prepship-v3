@@ -302,6 +302,7 @@
     "test:ps-312-bundle-billing-policy": "tsx scripts/ps-312-bundle-billing-policy-guard.ts",
     "test:ps-312-bundle-inventory-policy": "tsx scripts/ps-312-bundle-inventory-policy-guard.ts",
     "test:ps-312-bundle-confirmation-policy": "tsx scripts/ps-312-bundle-confirmation-policy-guard.ts",
+    "test:ps-312-bundle-link-on-label": "tsx scripts/ps-312-bundle-link-on-label-guard.ts",
     "test:ps-317-column-reorder": "tsx scripts/ps-317-column-reorder-guard.ts",
     "test:ps-317-fe-buy-anti-regression": "tsx scripts/ps-317-fe-buy-anti-regression-guard.ts",
     "test:ps-312-resolve-scoped-bundles-integration": "tsx scripts/ps-312-resolve-scoped-bundles-integration.ts",

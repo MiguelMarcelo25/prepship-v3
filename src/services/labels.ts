@@ -12,6 +12,9 @@ import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '..
 // PS-248: per-order advisory lock so concurrent buys can't double-purchase postage for one order.
 import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
+import { linkBundleShipment } from './shipment-bundles/create-bundle';
+import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
+import { env } from '../lib/env';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
 import { resolveOrderLabelPackageId } from './package-resolution';
 // PS-262a: single canonical owner of the per-marketplace confirmation identity.
@@ -1675,6 +1678,31 @@ async function createLabelV2Impl(
       clientId: clientId ?? null,
       drpCost: Number(created.cost ?? 0),
     }).catch((err) => console.warn('[labels] house-margin capture skipped:', err instanceof Error ? err.message : err)));
+  }
+  // PS-312 combined-shipment KEYSTONE (Per user override unlock shipped data on 2026-06-24): when the
+  // bought order is a bundle PRIMARY, stamp the shared label facts onto the bundle so its child orders
+  // resolve to the primary's real tracking (not "Shipment sync error") and the downstream bundle
+  // policies (bill/deduct/confirm) can fire. Behind BUNDLE_LINK_ON_LABEL (default OFF -> byte-identical:
+  // no query, no write). Best-effort + a SEPARATE write OUTSIDE the locked ship txn — reads order.id +
+  // the already-bought label facts, advances only draft/labeled (linkBundleShipment's no-regression
+  // guard), writes ONLY the additive shipment_bundles sidecar (never shipments / shipped order rows).
+  // Buys no postage. Mirrors the house-margin capture above.
+  if (env.BUNDLE_LINK_ON_LABEL) {
+    timer.background('bundle link-on-label', () =>
+      getBundleForOrder(order.id)
+        .then((bundle) => {
+          if (!bundle || bundle.role !== 'primary') return;
+          return linkBundleShipment(bundle.bundleId, {
+            primaryShipmentId: localShipmentId,
+            trackingNumber: created.trackingNumber,
+            carrierCode: created.carrierCode ?? null,
+            serviceCode: created.serviceCode ?? null,
+            labelUrl: created.labelUrl,
+            labelShipmentId: created.shipmentId != null ? String(created.shipmentId) : null,
+            packageId: resolvedPackageId,
+          });
+        })
+        .catch((err) => console.warn('[labels] bundle link-on-label skipped:', err instanceof Error ? err.message : err)));
   }
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.
