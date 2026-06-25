@@ -81,3 +81,17 @@ export async function runWithTransientRetry<T>(
   }
   return result;
 }
+
+/**
+ * RC2: a live rate result is NOT cacheable as authoritative when any carrier TRANSIENT-failed (a
+ * timeout/429/5xx that exhausted its retries) — caching it would freeze a transient ShipStation blip
+ * into a sticky "Rate unavailable" (an all-transient-empty would be served as a negative for the cache
+ * TTL without re-calling; a partial would be cached for the full positive TTL). A clean empty (all
+ * carriers TERMINALLY returned no service) and a terminal-failed carrier ARE cacheable — those are real,
+ * definitive negatives. Returns true when the result may be written to the authoritative rate cache.
+ */
+export function rateResultIsCacheable(
+  diagnostics: ReadonlyArray<{ status: string; transient?: boolean }>,
+): boolean {
+  return !diagnostics.some((d) => d.status === 'failed' && d.transient === true);
+}

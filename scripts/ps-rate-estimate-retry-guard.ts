@@ -7,6 +7,7 @@
 import {
   isTransientCarrierRateError,
   runWithTransientRetry,
+  rateResultIsCacheable,
 } from '../src/services/carrier-estimate-retry.js';
 
 let failures = 0;
@@ -73,11 +74,24 @@ async function main(): Promise<void> {
   );
   check('maxRetries=0 disables retry (exactly 1 attempt)', calls4 === 1);
 
+  // ── RC2: cache-gate on completeness (a transient-failed set must NOT be cached as authoritative) ──
+  check('transient-failed + ok set is NOT cacheable',
+    !rateResultIsCacheable([{ status: 'ok' }, { status: 'failed', transient: true }]));
+  check('an all-transient-empty set is NOT cacheable',
+    !rateResultIsCacheable([{ status: 'failed', transient: true }]));
+  check('all-ok set IS cacheable', rateResultIsCacheable([{ status: 'ok' }, { status: 'ok' }]));
+  check('clean empty (terminal no-service) set IS cacheable',
+    rateResultIsCacheable([{ status: 'empty' }, { status: 'empty' }]));
+  check('TERMINAL-failed (transient:false) set IS cacheable',
+    rateResultIsCacheable([{ status: 'failed', transient: false }]));
+  check('failed without a transient flag IS cacheable (treated terminal)',
+    rateResultIsCacheable([{ status: 'failed' }]));
+
   if (failures > 0) {
-    console.error(`\nRC1 rate-estimate-retry guard FAILED with ${failures} failure(s).`);
+    console.error(`\nRC1/RC2 rate-estimate-retry guard FAILED with ${failures} failure(s).`);
     process.exit(1);
   }
-  console.log('\nRC1 rate-estimate-retry guard passed.');
+  console.log('\nRC1/RC2 rate-estimate-retry guard passed.');
 }
 
 void main().catch((err) => {

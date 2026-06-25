@@ -55,6 +55,7 @@ import { withCarrierQuoteTimeout, isPricedRate, rateTotal as combinedRateTotal }
 import {
   isTransientCarrierRateError,
   runWithTransientRetry,
+  rateResultIsCacheable,
   RATE_ESTIMATE_MAX_RETRIES,
   RATE_ESTIMATE_RETRY_BASE_MS,
 } from './carrier-estimate-retry';
@@ -1698,10 +1699,18 @@ export async function getRates(
   const rawRates = liveResult.rates;
   const now = new Date();
 
-  // Cache the RAW rates so markup updates always show fresh prices. Empty
-  // results are cached briefly to prevent repeated live calls for carrier
-  // accounts that already returned no service for this shipment.
-  await writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now, markups);
+  // RC2: a TRANSIENT carrier failure (timeout/429/5xx that exhausted its retries) makes this result
+  // INCOMPLETE — caching it would freeze a transient ShipStation blip into a sticky "Rate unavailable"
+  // (an all-transient-empty is served as a negative for the cache TTL; a partial would be cached for the
+  // full positive TTL — both without re-calling ShipStation). So skip the authoritative write when
+  // incomplete; the next request re-rates live instead of serving poison. A clean empty / terminal-failed
+  // (real no-service) IS still cached briefly. RAW rates are cached so markup updates show fresh prices.
+  if (rateResultIsCacheable(liveResult.carrierDiagnostics)) {
+    await writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now, markups);
+  } else {
+    const failed = liveResult.carrierDiagnostics.filter((d) => d.status === 'failed' && d.transient).length;
+    console.warn(`[rates] skip cache write — ${failed} carrier(s) transient-failed; next request re-rates`);
+  }
 
   const rates = applyMarkups(rawRates, markups);
   return {
