@@ -19,6 +19,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { sql } from 'drizzle-orm';
 import * as schema from '../src/db/schema/index.js';
 import { billingBoxResolutions } from '../src/db/schema/billing.js';
+import { billingDayRange } from '../src/lib/time/billing-day.js';
 import {
   fetchBulkBoxCostOrderRows,
   computeBulkBoxCostPreview,
@@ -79,6 +80,8 @@ async function main(): Promise<void> {
   //   order 7: client 100 / box 7 but MAY (before range) → isolates the dateFrom lower bound
   //   order 3: box 7 but client 200 → other client
   //   order 6: client 100 but box 9 → other box
+  //   order 8: client 100 / box 7, shipped ON the LAST selected day (June 30, UTC midnight) →
+  //            the boundary the off-by-one fix is about (PS-311 date fix)
   await pg.execute(sql`INSERT INTO billing_line_items
     (order_id, order_number, client_id, package_id, line_type, description, unit_cost, total_cost, ship_date, invoiced) VALUES
     (1, 'A1', 100, 7, 'package_cost', 'box', '1.00', '1.00', '2026-06-10', false),
@@ -87,7 +90,8 @@ async function main(): Promise<void> {
     (4, 'A4', 100, 7, 'package_cost', 'box', '9.00', '9.00', '2026-07-15', false),
     (7, 'A7', 100, 7, 'package_cost', 'box', '7.00', '7.00', '2026-05-15', false),
     (3, 'B3', 200, 7, 'package_cost', 'box', '3.00', '3.00', '2026-06-12', false),
-    (6, 'A6', 100, 9, 'package_cost', 'box', '4.00', '4.00', '2026-06-14', false)`);
+    (6, 'A6', 100, 9, 'package_cost', 'box', '4.00', '4.00', '2026-06-14', false),
+    (8, 'A8', 100, 7, 'package_cost', 'box', '8.00', '8.00', '2026-06-30T00:00:00.000Z', false)`);
 
   const scope = {
     clientId: 100,
@@ -138,6 +142,27 @@ async function main(): Promise<void> {
   check('re-apply UPDATED orders 1 + 5 to 3.00 (upsert, not insert)',
     reByOrder.get(1) === 3.0 && reByOrder.get(5) === 3.0);
   check('still exactly 2 resolution rows after re-apply (idempotent, no duplicates)', afterReapply.length === 2);
+
+  // ── 5) PS-311 DATE FIX: operators pick whole calendar DAYS (e.g. June 1 → June 30). The route
+  // MUST normalize those through billingDayRange so the LAST selected day is INCLUDED. Order 8
+  // shipped ON June 30 (UTC midnight) — exactly the boundary the old raw-string path dropped,
+  // because a raw inclusive "2026-06-30" dateTo became `< 2026-06-30T00:00:00Z`. ──
+  const rawLastDay = await fetchBulkBoxCostOrderRows({ ...scope, dateTo: '2026-06-30' }, undefined, conn);
+  check('CONTROL: a raw inclusive last-day string (2026-06-30) EXCLUDES the June-30 order — the exact off-by-one the fix removes',
+    !rawLastDay.map((r) => r.orderId).includes(8));
+
+  const range = billingDayRange('2026-06-01', '2026-06-30');
+  check('billingDayRange upper bound is EXCLUSIVE = first instant of the day AFTER the last selected day (so the last day is included)',
+    range?.fromUtc === '2026-06-01T00:00:00.000Z' && range?.toUtcExclusive === '2026-07-01T00:00:00.000Z');
+
+  const normalizedRows = await fetchBulkBoxCostOrderRows(
+    { ...scope, dateFrom: range!.fromUtc, dateTo: range!.toUtcExclusive },
+    undefined,
+    conn,
+  );
+  const normalizedIds = normalizedRows.map((r) => r.orderId).sort((a, b) => a - b);
+  check('FIX: with billingDayRange bounds the June-30 boundary order (8) IS included — the FULL selected range is re-priced [1,2,5,8]',
+    JSON.stringify(normalizedIds) === JSON.stringify([1, 2, 5, 8]));
 
   await client.close();
 

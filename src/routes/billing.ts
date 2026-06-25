@@ -594,13 +594,34 @@ const PREP_FEE_LINE_TYPE_LIST = [...PREP_FEE_LINE_TYPES];
 // body + the caller's billing scope; it NEVER trusts an FE-supplied order list. No writes; edits
 // only billing_box_resolutions + billing_line_items on apply (awaiting/billing data — NOT shipped
 // orders/shipments) so no lockdown override is needed.
-const bulkBoxCostScopeSchema = z.object({
+const bulkBoxCostScopeRawSchema = z.object({
   clientId: z.coerce.number().int().positive(),
   dateFrom: z.string().min(1),
   dateTo: z.string().min(1),
   packageId: z.coerce.number().int().positive(),
   newCost: z.coerce.number().min(0),
 });
+
+// PS-311 date fix: normalize the operator-selected day range to the CANONICAL billing calendar-day
+// bounds (PS-208 / billingDayRange) BEFORE the scope reaches the service — fromUtc (inclusive lower)
+// and toUtcExclusive (UTC midnight of the day AFTER the last selected day). Pre-fix the routes
+// passed the raw inclusive "YYYY-MM-DD" dateTo straight through, and the service's
+// lt(shipDate, dateTo) then compared against e.g. 2026-01-05T00:00:00Z — silently EXCLUDING every
+// order shipped on the last selected day, so a "Jan 1 → Jan 5" bulk apply only re-priced Jan 1–4.
+// Every other billing endpoint (/generate, /invoice) already normalizes through billingDayRange;
+// the bulk preview/apply were the lone exception. The same normalized bounds flow into the
+// post-apply generateLineItems() call, so fetch + regenerate + invoice all agree on the range.
+function normalizeBulkBoxCostRange<T extends { dateFrom: string; dateTo: string }>(v: T) {
+  const range = billingDayRange(v.dateFrom, v.dateTo);
+  return { ...v, dateFrom: range?.fromUtc, dateTo: range?.toUtcExclusive };
+}
+const bulkBoxCostRangeRequired = { message: 'dateFrom and dateTo are required (YYYY-MM-DD)' } as const;
+const hasNormalizedBulkRange = (v: { dateFrom?: string; dateTo?: string }) =>
+  v.dateFrom !== undefined && v.dateTo !== undefined;
+
+const bulkBoxCostScopeSchema = bulkBoxCostScopeRawSchema
+  .transform(normalizeBulkBoxCostRange)
+  .refine(hasNormalizedBulkRange, bulkBoxCostRangeRequired);
 
 app.post(
   '/box-cost/bulk/preview',
@@ -612,8 +633,8 @@ app.post(
     const preview = await previewBulkBoxCost(
       {
         clientId: body.clientId,
-        dateFrom: body.dateFrom,
-        dateTo: body.dateTo,
+        dateFrom: body.dateFrom!,
+        dateTo: body.dateTo!,
         packageId: body.packageId,
         newCost: body.newCost,
       },
@@ -627,9 +648,10 @@ app.post(
 // billing_box_resolutions (PS-207 directive) + regenerates the scoped line items; SKIPS finalized
 // (invoiced) orders; audits the bulk money action. NEVER writes client_package_prices. The backend
 // re-derives the scope — it never trusts an FE-supplied order list.
-const bulkBoxCostApplySchema = bulkBoxCostScopeSchema.extend({
-  note: z.string().max(500).optional(),
-});
+const bulkBoxCostApplySchema = bulkBoxCostScopeRawSchema
+  .extend({ note: z.string().max(500).optional() })
+  .transform(normalizeBulkBoxCostRange)
+  .refine(hasNormalizedBulkRange, bulkBoxCostRangeRequired);
 
 app.post(
   '/box-cost/bulk/apply',
@@ -642,8 +664,8 @@ app.post(
     const result = await applyBulkBoxCostResolutions(
       {
         clientId: body.clientId,
-        dateFrom: body.dateFrom,
-        dateTo: body.dateTo,
+        dateFrom: body.dateFrom!,
+        dateTo: body.dateTo!,
         packageId: body.packageId,
         newCost: body.newCost,
       },
@@ -653,9 +675,11 @@ app.post(
     );
     // Regenerate the scoped line items so the package_cost lines reflect the new resolutions.
     // The resolutions survive regeneration (PS-207). Only when something actually changed.
+    // Uses the SAME normalized [fromUtc, toUtcExclusive) bounds as the fetch above, so the
+    // regenerated range matches exactly what was re-priced (and what the invoice shows).
     if (result.appliedOrderCount > 0) {
       await generateLineItems(
-        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom, dateTo: body.dateTo }),
+        withBillingScope(c, { clientId: body.clientId, dateFrom: body.dateFrom!, dateTo: body.dateTo! }),
       );
     }
     // Append-only audit of the bulk money action (actor + scope + result; secrets auto-redacted).

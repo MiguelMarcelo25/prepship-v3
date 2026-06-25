@@ -97,6 +97,16 @@ check('apply route exists, regenerates the scope, and AUDITS the bulk money acti
 check('apply route is permission-gated (financials:write)',
   /box-cost\/bulk\/apply[\s\S]{0,90}requirePermission\('financials:write'\)/.test(billingRoute));
 
+// ── PS-311 DATE FIX: the bulk preview + apply must normalize the operator's selected day range
+// through the canonical billing calendar-day owner (billingDayRange / PS-208) so the LAST selected
+// day is INCLUDED — like /generate and /invoice. Pre-fix the routes passed the raw inclusive
+// "YYYY-MM-DD" dateTo straight to the service, whose lt(shipDate, dateTo) then silently dropped
+// every order shipped on that last day (a "Jan 1 → Jan 5" apply only re-priced Jan 1–4).
+check('PS-311: bulk preview + apply normalize the date range via billingDayRange (last selected day included, no off-by-one)',
+  /function normalizeBulkBoxCostRange[\s\S]{0,160}billingDayRange\(/.test(billingRoute) &&
+  /bulkBoxCostScopeSchema[\s\S]{0,160}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute) &&
+  /bulkBoxCostApplySchema[\s\S]{0,200}\.transform\(normalizeBulkBoxCostRange\)/.test(billingRoute));
+
 // ── Slice 3: operator UI (BillingView box-review action → preview-first bulk modal) ──
 const modal = readFileSync('web/src/components/Views/BulkBoxCostModal.tsx', 'utf8');
 check('UI modal previews THEN applies via the two backend routes',
