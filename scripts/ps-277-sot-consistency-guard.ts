@@ -64,7 +64,8 @@ check('browse RECONCILES the SOT (plain browse, gated) via the awaiting-only per
     /browseSotWritebackEnabled\(\)/.test(browse));
 
 // ── 4. The column reads the persisted SOT; the FE key reads the backend verdict (PS-276 #3) ──
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: residentialForRate moved to ./orders/best-rate/rate-request — include it so the delegation pin resolves.
+const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8') + readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
 // PS-166/PS-306/PS-258 (Wave 2): the BEST RATE column leaf cell was extracted
 // VERBATIM from OrdersView into ./orders/cells/order-cells. The persisted-SOT
 // read (getBestRateBaseCost / getBackendRowMoney) still owns the column money —

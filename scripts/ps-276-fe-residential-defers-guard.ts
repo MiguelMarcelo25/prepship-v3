@@ -21,7 +21,8 @@ function check(name: string, cond: boolean): void {
 // PS-280: the FE residentialForRate rule moved to the shared owner web/src/lib/residential-for-rate;
 // OrdersView + RateBrowserModal both DELEGATE to it (one FE owner, no drift). Pin the
 // prefer-with-fallback shape at the shared owner + verify OrdersView delegates.
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: residentialForRate moved to ./orders/best-rate/rate-request — include it so the delegation pins resolve.
+const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8') + readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
 const rule = readFileSync('web/src/lib/residential-for-rate.ts', 'utf8');
 const start = rule.indexOf('export function residentialForRate(');
 const end = rule.indexOf('\n}', start);

@@ -16,6 +16,10 @@ const labelsRoute = read('src/routes/labels.ts');
 const labelsService = read('src/services/labels.ts');
 const directLabels = read('api/carriers/labels.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
+// PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts. The DEFINE
+// check reads the new owner; the call-site census still scans OrdersView (call sites stayed) and
+// is summed across both files so the count never undershoots.
+const bestRateProof = read('web/src/components/Views/orders/best-rate/rate-proof.ts');
 const packageJson = read('package.json');
 
 check(
@@ -75,7 +79,10 @@ check(
 // into the buildQueueSendOrderPayload INTENT payload that feeds the backend owner.
 check(
   'FE direct-carrier label BUY is gone; queue intent still carries the account-bound selected-rate proof',
-  ordersView.includes('function buildSelectedRateProofPayload') &&
+  // PS-317: DEFINE check re-pointed to the new owner best-rate/rate-proof.ts (positive test →
+  // fails loud if absent). The call-site census stays on OrdersView but is summed with the new
+  // file so the count can never undershoot if a call site relocates too.
+  bestRateProof.includes('function buildSelectedRateProofPayload') &&
     // (1) ANTI-REGRESSION: the deleted frontend direct-carrier buy must NOT come
     // back. createDirectCarrierLabelThenQueue is gone, and there must be no
     // `const selectedRateProof = ...(order, bestRate ?? selectedRate, shippingProviderId)`
@@ -93,7 +100,9 @@ check(
     // The honest census of `selectedRateProof:` property sites sourced from
     // buildSelectedRateProofPayload is TWO: the panel single payload + this queue
     // INTENT payload. Both must be ACCOUNT-BOUND (third arg = shippingProviderId).
-    (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+    // PS-317: census summed across OrdersView + best-rate/rate-proof.ts so the count
+    // never undershoots if a call site relocates.
+    ((ordersView + bestRateProof).match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
     // The batch-create flow (ShipStation, still a real FE createLabel call — NOT the
     // deleted direct-carrier buy) keeps its proof variable and account filter.
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&

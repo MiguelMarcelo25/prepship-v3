@@ -39,6 +39,10 @@ const labelsRoute = read('src/routes/labels.ts');
 const labelsService = read('src/services/labels.ts');
 const printQueueService = read('src/services/print-queue.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
+// PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts.
+// The DEFINE check reads the new owner; the call-site census still scans OrdersView
+// (call sites stayed) and is summed across both files so the count never undershoots.
+const bestRateProof = read('web/src/components/Views/orders/best-rate/rate-proof.ts');
 const proofWorkflow = read('src/services/shipping-workflow/rate-fingerprint.ts');
 const ps084ReportExists = fs.existsSync('docs/ps-084-direct-carrier-print-queue-completion-report.md');
 
@@ -111,14 +115,18 @@ check(
 // (anti-regression), and (3) RE-POINTS the deleted property to its new owners.
 check(
   'frontend passes backend-issued selectedRateProof through label and queue intent payloads',
-  ordersView.includes('function buildSelectedRateProofPayload') &&
+  // PS-317: DEFINE check re-pointed to the new owner best-rate/rate-proof.ts (positive test →
+  // fails loud if the function is absent). The call-site census stays on OrdersView, but is
+  // SUMMED across OrdersView + the new file so the count can never undershoot if a call site
+  // ever moves too.
+  bestRateProof.includes('function buildSelectedRateProofPayload') &&
     // The remaining FE proof flows: 2 INLINE property sites `selectedRateProof:
     // buildSelectedRateProofPayload(order, ...)` (the queue INTENT payload in
     // buildQueueSendOrderPayload + the panel single), and the BATCH-CREATE
     // `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
     // with the PS-204 account-binding 3rd arg. (The deleted direct-buy override-wrapper
     // shape is asserted GONE below, not here.)
-    (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+    ((ordersView + bestRateProof).match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
     ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
     ordersView.includes('selectedRateProof,'),
 );

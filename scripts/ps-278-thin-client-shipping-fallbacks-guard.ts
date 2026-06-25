@@ -20,7 +20,8 @@ function check(name: string, cond: boolean): void {
 
 // PS-280: residentialForRate moved to the shared owner web/src/lib/residential-for-rate; OrdersView +
 // RateBrowserModal both DELEGATE to it. Pin the forward-only shape at the shared owner + verify delegation.
-const ov = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: residentialForRate moved to ./orders/best-rate/rate-request — include it so the delegation pin resolves.
+const ov = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8') + readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
 const rule = readFileSync('web/src/lib/residential-for-rate.ts', 'utf8');
 const start = rule.indexOf('export function residentialForRate(');
 const end = rule.indexOf('\n}', start);

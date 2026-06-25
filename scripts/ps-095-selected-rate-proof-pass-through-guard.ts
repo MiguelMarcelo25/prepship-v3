@@ -9,6 +9,10 @@ import fs from 'node:fs';
 const ordersView = fs.readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-135: the proof helpers moved to the canonical lib; OrdersView delegates to it.
 const rateProof = fs.readFileSync('web/src/lib/rate-proof.ts', 'utf8');
+// PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts
+// (its call sites stay in OrdersView). Re-slice its body from the new owner; the END
+// anchor is the next top-level function buildRateQuoteRefForOrder.
+const bestRateProof = fs.readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 const rateSyncGuard = fs.readFileSync('scripts/ps-081-rate-sync-guard.ts', 'utf8');
 const proofBoundaryGuard = fs.readFileSync('scripts/selected-rate-proof-purchase-boundary-guard.ts', 'utf8');
 // PS-317 A4: the deleted FE direct-carrier buy's queue/override proof path now lives
@@ -28,10 +32,13 @@ function check(name: string, condition: boolean): void {
   }
 }
 
-const proofBuilderStart = ordersView.indexOf('function buildSelectedRateProofPayload');
-const proofBuilderEnd = ordersView.indexOf('function hasAnySavedBestRateForDisplay', proofBuilderStart);
+// PS-317: buildSelectedRateProofPayload now lives in best-rate/rate-proof.ts; its body runs
+// to the next top-level function buildRateQuoteRefForOrder. (hasAnySavedBestRateForDisplay
+// moved to a DIFFERENT file — rate-display-predicates.ts — so it is no longer the END anchor.)
+const proofBuilderStart = bestRateProof.indexOf('function buildSelectedRateProofPayload');
+const proofBuilderEnd = bestRateProof.indexOf('function buildRateQuoteRefForOrder', proofBuilderStart);
 const proofBuilder = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
-  ? ordersView.slice(proofBuilderStart, proofBuilderEnd)
+  ? bestRateProof.slice(proofBuilderStart, proofBuilderEnd)
   : '';
 
 check(
@@ -49,7 +56,10 @@ check(
   // PS-135: the "omit proof when no backend fingerprint" logic now lives in
   // selectProofFromCandidates (rate-proof.ts); OrdersView's builder delegates to it.
   'frontend clears proof by omitting selectedRateProof when no backend fingerprint exists',
-  rateProof.includes('const requestFingerprint = rateProofFingerprint(selectedRate)') &&
+  // TEETH: require the re-sliced buildSelectedRateProofPayload body (from best-rate/rate-proof.ts)
+  // to be non-empty so a missing/renamed definition fails LOUD instead of silently passing.
+  proofBuilderStart >= 0 && proofBuilder.length > 0 &&
+    rateProof.includes('const requestFingerprint = rateProofFingerprint(selectedRate)') &&
     rateProof.includes('if (!selectedRate || !requestFingerprint) return undefined') &&
     proofBuilder.includes('selectProofFromCandidates('),
 );

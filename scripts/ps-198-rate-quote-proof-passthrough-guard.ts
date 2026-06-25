@@ -176,11 +176,19 @@ console.log('ok   translateRateToV2Shape carries the backend snapshot ref top-le
 }
 
 // ── 13. withRateRequestMetadata must not strip the snapshot ref ───────────────
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: withRateRequestMetadata moved to ./orders/best-rate/rate-proof.ts (call sites stay in
+// OrdersView). Read the new owner; the body's closing anchor is un-indented (`\n}`) because the
+// moved function is top-level, not nested inside the component.
+const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 {
-  const metaStart = ordersView.indexOf('function withRateRequestMetadata(');
-  assert.ok(metaStart >= 0, 'OrdersView must define withRateRequestMetadata');
-  const metaBlock = ordersView.slice(metaStart, ordersView.indexOf('\n  }', metaStart));
+  const metaStart = bestRateProof.indexOf('function withRateRequestMetadata(');
+  assert.ok(metaStart >= 0, 'best-rate/rate-proof.ts must define withRateRequestMetadata');
+  const metaEnd = bestRateProof.indexOf('\n}', metaStart);
+  // TEETH: a non-empty slice with both end markers found, so the negations below cannot pass
+  // vacuously on an empty string if the function is ever removed/renamed.
+  assert.ok(metaEnd > metaStart, 'withRateRequestMetadata body must be sliceable (non-empty)');
+  const metaBlock = bestRateProof.slice(metaStart, metaEnd);
+  assert.ok(metaBlock.length > 0, 'withRateRequestMetadata body must be non-empty');
   assert.ok(
     !/rateQuoteId\s*:\s*_/.test(metaBlock) && !/selectedRateKey\s*:\s*_/.test(metaBlock),
     'withRateRequestMetadata must not destructure-discard rateQuoteId/selectedRateKey',

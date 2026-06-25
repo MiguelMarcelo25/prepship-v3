@@ -47,6 +47,8 @@ const TEST_RATE_MOCK_PATH = 'web/src/components/Views/orders/test-rate-mock.ts';
 const moduleSrc = readFileSync(MODULE_PATH, 'utf8');
 const ordersView = readFileSync(ORDERS_VIEW_PATH, 'utf8');
 const testRateMockSrc = readFileSync(TEST_RATE_MOCK_PATH, 'utf8');
+// PS-317: buildRateRequestDraftKey moved to ./orders/best-rate/rate-request (still PS-143-independent).
+const rateRequestSrc = readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
 
 // ── 1. backend-stamped isComplete wins verbatim (both polarities) ──
 check('stamped isComplete:true is forwarded verbatim',
@@ -102,17 +104,16 @@ check('OrdersView still consumes deriveBackendBestRateComplete (call sites prese
   /deriveBackendBestRateComplete\(/.test(ordersView));
 
 // ── 7. PS-143 rule preserved: the FE draft key is NOT coupled to the backend fingerprint ──
-check('buildRateRequestDraftKey still lives in OrdersView (not moved)',
-  /function buildRateRequestDraftKey\b/.test(ordersView));
+check('buildRateRequestDraftKey lives in ./orders/best-rate/rate-request (moved out of OrdersView)',
+  /function buildRateRequestDraftKey\b/.test(rateRequestSrc));
 check('PS-143: buildRateRequestDraftKey does not derive from the backend requestFingerprint',
   (() => {
-    const start = ordersView.indexOf('function buildRateRequestDraftKey');
+    const start = rateRequestSrc.indexOf('function buildRateRequestDraftKey');
     if (start < 0) return false;
-    // bound the scan to the function body (up to the next top-level `function `)
-    const rest = ordersView.slice(start + 'function buildRateRequestDraftKey'.length);
-    const nextFn = rest.indexOf('\n  function ');
-    const body = nextFn >= 0 ? rest.slice(0, nextFn) : rest;
-    return !/requestFingerprint/.test(body) &&
+    // buildRateRequestDraftKey is the last fn in rate-request.ts; scan to EOF.
+    const body = rateRequestSrc.slice(start + 'function buildRateRequestDraftKey'.length);
+    return body.length > 0 &&
+      !/requestFingerprint/.test(body) &&
       !/getBackendRateResponseFingerprint/.test(body) &&
       !/deriveBackendBestRateComplete/.test(body);
   })());

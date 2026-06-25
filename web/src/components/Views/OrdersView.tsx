@@ -78,8 +78,6 @@ import {
   hasBackendIssuedRateProof,
   rateProofFingerprint,
   rateBelongsToProviderAccount,
-  selectProofFromCandidates,
-  rateQuoteRefFromCandidates,
 } from '../../lib/rate-proof'
 import type {
   CreateLabelRequestDto,
@@ -126,7 +124,6 @@ import { resolveBackendRoutePlan, bindOrFallbackQueueRoute } from '../../lib/res
 // the in-flight persist before the modal actually closes (exposes the row to Send).
 import { trackAppliedRatePersist, awaitAppliedRatePersists } from './orders-applied-rate-sync'
 import { useTableDensityPreference } from './orders-table-density-prefs'
-import { residentialForRate as residentialForRateRule } from '../../lib/residential-for-rate'
 import {
   buildDailyStripProgress,
   buildBatchRecalculateProgress,
@@ -257,6 +254,11 @@ import {
   normalizeRateZip,
   rateShipDateBucket,
 } from './orders/rate-request-normalizers'
+// PS-317: pure Best-Rate helpers extracted to ./orders/best-rate/*.
+import { getAppliedRateDims, getAppliedRateWeightOz, sanitizeRecalculateError } from './orders/best-rate/rate-values'
+import { residentialForRate, buildRateRequestDraftKey } from './orders/best-rate/rate-request'
+import { getBackendRateResponseFingerprint, withRateRequestMetadata, getSavedBestRateRecord, buildSelectedRateProofPayload, buildRateQuoteRefForOrder, getRateBaseAmount } from './orders/best-rate/rate-proof'
+import { hasSavedBestRateForRequest, hasValidSavedBestRateForRequest, hasAnySavedBestRateForDisplay } from './orders/best-rate/rate-display-predicates'
 
 interface OrdersViewProps {
   currentStatus: OrderStatus
@@ -3561,31 +3563,7 @@ export default function OrdersView({
     )]
   }
 
-  // PS-166 (this slice): normalizeRateZip (PS-126 exact-postal) + rateShipDateBucket
-  // moved VERBATIM to ./orders/rate-request-normalizers (pure FE input normalizers
-  // for the draft cache key). buildRateRequestDraftKey stays here and delegates to the
-  // imports — PS-143: the FE draft key remains independent of the backend fingerprint.
-
-  // PS-127: mirror the BACKEND shipping consumption policy so the rate the operator sees
-  // (and the local r=1/r=0 cache key) matches what the backend resolveRateInput will quote
-  // and what the label will be billed under. Commercial ONLY on a trusted signal: an
-  // operator override (order.residential set, which the API already merges with the
-  // ShipStation source flag) or an explicit source-commercial flag. Everything else —
-  // including a company-name-only heuristic — stays residential-safe so we never under-quote
-  // the residential surcharge. The backend stays authoritative (resolveRateInput + the
-  // label parity guard); this is display/cache alignment, NOT the frontend owning the rule.
-  // Critically: today every site hardcodes `true`, so residential orders keep r=1 (no
-  // re-rate churn) and only genuinely-commercial orders correctly flip to r=0.
-  function residentialForRate(order: any): boolean {
-    // PS-280: delegate to the shared FE-forward rule (web/src/lib/residential-for-rate) so the Orders
-    // table (Best Rate / Recalculate) and the Rate Browser forward the IDENTICAL backend verdict — one
-    // FE owner, no drift (the drift that let the Rate Browser keep showing "Residential (always)").
-    // The BACKEND (PS-276 resolver) OWNS the classification; the FE only forwards it; missing verdict ->
-    // residential-safe so the residential surcharge is never under-quoted. residentialForRate feeds
-    // buildRateRequestDraftKey's r= bit, so forwarding the verdict keeps the FE draft key == the backend
-    // requestFingerprint by construction.
-    return residentialForRateRule(order)
-  }
+  // PS-317: residentialForRate + buildRateRequestDraftKey moved to ./orders/best-rate/rate-request.
 
   // PS-128 + PS-129: DISPLAY mirror of the backend shipping-safety guard. The backend
   // (createLabelV2 + the direct-carrier path) is authoritative and HARD-BLOCKS these before
@@ -3605,127 +3583,10 @@ export default function OrdersView({
     return null
   }
 
-  function buildRateRequestDraftKey(input: {
-    weightOz: number
-    dims: { length: number; width: number; height: number }
-    shipTo: ReturnType<typeof getShipTo>
-    residential: boolean
-    carrierIds: string[]
-    storeId?: number | null
-    clientId?: number | null
-    confirmation?: string | null
-    insuranceProvider?: string | null
-    insuredValue?: number | null
-  }) {
-    const parts = [
-      `v=ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}`,
-      `d=${rateShipDateBucket()}`,
-      `w=${Math.round(input.weightOz * 10)}`,
-      `z=${normalizeRateZip(input.shipTo.postalCode)}`,
-      `co=${(input.shipTo.country ?? 'US').toUpperCase()}`,
-    ]
-    if (input.shipTo.state) parts.push(`st=${input.shipTo.state.trim().toUpperCase()}`)
-    if (input.shipTo.city) parts.push(`ci=${input.shipTo.city.trim().toLowerCase().replace(/\s+/g, '-')}`)
-    parts.push(input.residential ? 'r=1' : 'r=0')
-    if (input.clientId != null) parts.push(`cl=${input.clientId}`)
-    else if (input.storeId != null) parts.push(`st=${input.storeId}`)
-    parts.push(`l=${Math.round(input.dims.length * 10)}`)
-    parts.push(`dw=${Math.round(input.dims.width * 10)}`)
-    parts.push(`h=${Math.round(input.dims.height * 10)}`)
-    if (input.confirmation) parts.push(`cf=${input.confirmation}`)
-    if (input.insuranceProvider && input.insuranceProvider !== 'none' && input.insuredValue) {
-      parts.push(`ip=${input.insuranceProvider}`)
-      parts.push(`iv=${Math.round(input.insuredValue * 100)}`)
-    }
-    if (input.carrierIds.length) parts.push(`c=${[...input.carrierIds].sort().join(',')}`)
-    return parts.join('|')
-  }
-
-  function getBackendRateResponseFingerprint(
-    response: Record<string, unknown> | null | undefined,
-    rate?: Record<string, unknown> | null,
-  ) {
-    const workflow = toRecord(response?.bestRateWorkflow)
-    const rateFingerprint = hasBackendIssuedRateProof(rate ?? null) ? rateProofFingerprint(rate ?? null) : null
-    return (
-      toStringValue(response?.requestFingerprint) ??
-      toStringValue(response?.cacheKey) ??
-      toStringValue(response?.requestKey) ??
-      toStringValue(workflow?.requestFingerprint) ??
-      toStringValue(workflow?.backendRequestKey) ??
-      rateFingerprint
-    )
-  }
-
   // PS-166: deriveBackendBestRateComplete moved to ./orders-rate-proof (its own small
   // file; pure backend-DTO reader). Imported at the top of this module and called below.
 
-  function withRateRequestMetadata(
-    rate: Record<string, unknown>,
-    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
-    metadata: Record<string, unknown> = {},
-  ) {
-    const backendRequestFingerprint = getBackendRateResponseFingerprint(metadata, rate)
-    const {
-      requestFingerprint: _requestFingerprint,
-      rateRequestFingerprint: _rateRequestFingerprint,
-      cacheKey: _cacheKey,
-      proofSource: _proofSource,
-      ...rateWithoutProof
-    } = rate
-    const createdAt = toStringValue(metadata.cacheCreatedAt) ?? new Date().toISOString()
-    // PS-183: the freshness window is BACKEND-owned (CACHE_TTL_MS over fetchedAt,
-    // stamped on the browse response + rates). Prefer the explicit metadata value,
-    // then the rate's backend-stamped expiry. If the backend carries NEITHER, the FE
-    // shows no expiry (null) — it does NOT mint a local window (that authority was
-    // removed); a missing expiry never extends the server cache TTL or the purchase proof.
-    const backendExpiresAt =
-      toStringValue(metadata.cacheExpiresAt) ?? toStringValue(rate.cacheExpiresAt)
-    if (!backendExpiresAt) {
-      console.warn('[orders] backend rate carried no cacheExpiresAt — showing no display expiry (PS-183: the FE no longer mints a local fallback window)')
-    }
-    const expiresAt = backendExpiresAt ?? null
-    const metadataComplete =
-      typeof metadata.isComplete === 'boolean'
-        ? metadata.isComplete
-        : typeof rate.isComplete === 'boolean'
-          ? rate.isComplete
-          : false
-    return {
-      ...rateWithoutProof,
-      ...(backendRequestFingerprint
-        ? {
-          requestFingerprint: backendRequestFingerprint,
-          cacheKey: backendRequestFingerprint,
-          proofSource: BACKEND_RATE_PROOF_SOURCE,
-        }
-        : {}),
-      clientRequestKey: request.key,
-      cacheCreatedAt: createdAt,
-      cacheExpiresAt: expiresAt,
-      confirmation: request.confirmation,
-      // PS-123: backend effective insurance is authoritative. The request fallback
-      // is only for old/test responses that do not stamp backend workflow metadata.
-      insuranceProvider:
-        toStringValue(metadata.effectiveInsuranceProvider) ??
-        toStringValue(metadata.insuranceProvider) ??
-        toStringValue(rateWithoutProof.effectiveInsuranceProvider) ??
-        toStringValue(rateWithoutProof.insuranceProvider) ??
-        request.insuranceProvider ??
-        'none',
-      insuredValue:
-        toNumberValue(metadata.effectiveInsuredValue) ??
-        toNumberValue(metadata.insuredValue) ??
-        toNumberValue(rateWithoutProof.effectiveInsuredValue) ??
-        toNumberValue(rateWithoutProof.insuredValue) ??
-        request.insuredValue ??
-        null,
-      eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-      isComplete: metadataComplete,
-      rateCount: toNumberValue(metadata.rateCount) ?? 1,
-      matchType: toStringValue(metadata.matchType) ?? 'live',
-    }
-  }
+  // PS-317: withRateRequestMetadata + getBackendRateResponseFingerprint moved to ./orders/best-rate/rate-proof.
 
   function buildStrictBestRateRequest(
     order: OrderSummaryDto,
@@ -3814,85 +3675,11 @@ export default function OrdersView({
       : null
   }
 
-  function hasSavedBestRateForRequest(
-    order: OrderSummaryDto,
-    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
-    options: { requireEligibilityVersion?: boolean } = {},
-  ) {
-    const savedRate = getSavedBestRateRecord(order)
-    if (!savedRate) return false
-    const workflow = getBestRateWorkflowModel(order)
-    const workflowRecord = toRecord(workflow)
-    return savedBestRateCanDisplayForCurrentRequest({
-      clientRequestKey: toStringValue(savedRate.clientRequestKey),
-      requestKey: request.key,
-      hasBackendIssuedRateProof: hasBackendIssuedRateProof(savedRate),
-      isComplete: savedRate.isComplete === true,
-      cacheExpiresAt: toStringValue(savedRate.cacheExpiresAt),
-      eligibilityVersion: toStringValue(savedRate.eligibilityVersion),
-      requiredEligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-      requireEligibilityVersion: options.requireEligibilityVersion,
-      matchType: toStringValue(savedRate.matchType),
-      baseAmount: getRateBaseAmount(savedRate),
-      backendWorkflowCanUseSavedRate: toRecord(workflowRecord?.allowedActions)?.canUseSavedRate === true,
-      backendWorkflowCanDisplayFinalRate:
-        typeof workflowRecord?.canDisplayFinalRate === 'boolean' ? workflowRecord.canDisplayFinalRate : null,
-      backendWorkflowCanUseDisplayedRateForPurchase:
-        typeof workflowRecord?.canUseDisplayedRateForPurchase === 'boolean'
-          ? workflowRecord.canUseDisplayedRateForPurchase
-          : null,
-      // PS-196: the backend's display-only verdict — legacy saved rates (no newer proof
-      // metadata) render immediately as saved/stale instead of a spinner. Display only; the
-      // purchase paths still require current backend proof.
-      backendSavedRateDisplay: toStringValue(workflowRecord?.savedRateDisplay),
-    })
-  }
+  // PS-317: hasSavedBestRateForRequest moved to ./orders/best-rate/rate-display-predicates.
 
-  function getSavedBestRateRecord(order: OrderSummaryDto) {
-    return (
-      toRecord(order.bestRate) ??
-      toRecord(getShippingModel(order)?.bestRate) ??
-      toRecord(toRecord(order.overrides)?.bestRateJson)
-    )
-  }
+  // PS-317: getSavedBestRateRecord + buildSelectedRateProofPayload + buildRateQuoteRefForOrder moved to ./orders/best-rate/rate-proof.
 
-  // PS-135: proof logic lives in ../../lib/rate-proof (hasBackendIssuedRateProof /
-  // rateProofFingerprint / selectProofFromCandidates / rateQuoteRefFromCandidates). These two
-  // wrappers keep every existing call site unchanged while delegating to the canonical lib.
-  // PS-204: optional forShippingProviderId filters the candidates to the
-  // account the payload charges — cross-account proofs are excluded at the
-  // source (rate-proof.ts owns the rule; the backend binding re-checks it).
-  function buildSelectedRateProofPayload(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown) {
-    return selectProofFromCandidates([
-      toRecord(candidate),
-      toRecord(order.bestRate),
-      toRecord(order.selectedRate),
-      getSavedBestRateRecord(order),
-    ], { forShippingProviderId })
-  }
-
-  // PS-105/PS-135: backend-owned rate-quote ref for label/queue payloads — mirrors the proof
-  // candidate selection so id/key match the proof's rate. Additive (omits absent fields).
-  function buildRateQuoteRefForOrder(order: OrderSummaryDto, candidate?: unknown, forShippingProviderId?: unknown): { rateQuoteId?: string; selectedRateKey?: string } {
-    return rateQuoteRefFromCandidates([
-      toRecord(candidate),
-      toRecord(order.bestRate),
-      toRecord(order.selectedRate),
-      getSavedBestRateRecord(order),
-    ], { forShippingProviderId })
-  }
-
-  function hasAnySavedBestRateForDisplay(order: OrderSummaryDto) {
-    const savedRate = getSavedBestRateRecord(order)
-    return Boolean(savedRate && getRateBaseAmount(savedRate) > 0)
-  }
-
-  function hasValidSavedBestRateForRequest(
-    order: OrderSummaryDto,
-    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
-  ) {
-    return hasSavedBestRateForRequest(order, request)
-  }
+  // PS-317: hasAnySavedBestRateForDisplay + hasValidSavedBestRateForRequest moved to ./orders/best-rate/rate-display-predicates.
 
   function getCurrentBestRateDimsLabel(order: OrderSummaryDto) {
     const detail = orderDetailsById.get(order.orderId) ?? null
@@ -3943,13 +3730,6 @@ export default function OrdersView({
       houseTupleNeedsRefresh:
         (savedRate as { houseTupleStatus?: unknown } | null)?.houseTupleStatus === 'needs_refresh',
     })
-  }
-
-  function getRateBaseAmount(rate: Record<string, unknown>) {
-    const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
-    const otherCost = toNumberValue(rate.otherCost) ?? 0
-    const total = shipmentCost + otherCost
-    return total > 0 ? total : shipmentCost
   }
 
   function withBestRateOverride(order: OrderSummaryDto, rate: Record<string, unknown>) {
@@ -4057,12 +3837,6 @@ export default function OrdersView({
       ...current,
       [orderId]: row,
     }))
-  }
-
-  function sanitizeRecalculateError(error: unknown, fallback = 'Failed to recalculate best rate') {
-    return error instanceof Error
-      ? error.message.replace(/\s+/g, ' ').trim().slice(0, 160) || fallback
-      : fallback
   }
 
   function withRecalculateTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -4249,22 +4023,6 @@ export default function OrdersView({
     }
 
     return applyStrictBestRateResponse(order, request, response, options)
-  }
-
-  function getAppliedRateDims(rate: Record<string, unknown>) {
-    const dims = toRecord(rate.dims)
-    const length = toNumberValue(dims?.length) ?? toNumberValue(rate.length) ?? toNumberValue(rate.dimsL)
-    const width = toNumberValue(dims?.width) ?? toNumberValue(rate.width) ?? toNumberValue(rate.dimsW)
-    const height = toNumberValue(dims?.height) ?? toNumberValue(rate.height) ?? toNumberValue(rate.dimsH)
-    return length && width && height ? { length, width, height } : null
-  }
-
-  function getAppliedRateWeightOz(rate: Record<string, unknown>) {
-    const weight = toRecord(rate.weight)
-    const lb = toNumberValue(weight?.lb)
-    const oz = toNumberValue(weight?.oz)
-    if (lb != null || oz != null) return Math.max(0, (lb ?? 0) * 16 + (oz ?? 0))
-    return toNumberValue(rate.weightOz) ?? toNumberValue(rate.weight_oz) ?? null
   }
 
   // PS-286: in-flight applied-rate persists keyed by orderId. The Rate Browser close

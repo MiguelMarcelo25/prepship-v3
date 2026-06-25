@@ -49,7 +49,8 @@ check('deploy-skew shows a safe fallback label, never "always"',
   /Residential[^<]{0,12}fallback/.test(modal));
 
 // ── single FE owner: OrdersView delegates residentialForRate to the SAME shared rule ──
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// PS-317: residentialForRate moved to ./orders/best-rate/rate-request — include it so the delegation pin resolves.
+const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8') + readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
 check('OrdersView delegates residentialForRate to the shared rule (one owner, no drift)',
   /residentialForRate as residentialForRateRule/.test(ordersView) &&
     /return residentialForRateRule\(order\)/.test(ordersView));

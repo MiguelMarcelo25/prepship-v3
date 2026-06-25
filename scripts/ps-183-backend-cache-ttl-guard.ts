@@ -46,18 +46,33 @@ check('fetchRates metadata passes cacheExpiresAt through',
 check('apiClient metadata blocks never mint an expiry',
   !/cacheExpiresAt: new Date\(/.test(apiClient));
 
-// ── OrdersView prefers the backend value; mint is a warned last resort ───────
+// ── withRateRequestMetadata prefers the backend value; mint is a warned last resort ───────
+// PS-317: withRateRequestMetadata moved to ./orders/best-rate/rate-proof.ts (call sites
+// stay in OrdersView). The body checks now read the new owner; the no-6h-mint census still
+// scans OrdersView so a re-introduced FE mint at any call site cannot slip past.
+const rateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+// TEETH: slice the moved function body and require it be non-empty so a missing/renamed
+// definition fails LOUD instead of a negation passing vacuously on '' .
+const metadataStart = rateProof.indexOf('export function withRateRequestMetadata(');
+const metadataEnd = rateProof.indexOf('\nexport function getSavedBestRateRecord', metadataStart);
+const metadataBody = metadataStart >= 0 && metadataEnd > metadataStart
+  ? rateProof.slice(metadataStart, metadataEnd)
+  : '';
+check('withRateRequestMetadata block found in rate-proof.ts', metadataStart >= 0 && metadataBody.length > 0);
 check('withRateRequestMetadata prefers metadata then the rate-stamped backend expiry',
-  /toStringValue\(metadata\.cacheExpiresAt\) \?\? toStringValue\(rate\.cacheExpiresAt\)/.test(ordersView));
+  metadataStart >= 0 && metadataBody.length > 0 &&
+    /toStringValue\(metadata\.cacheExpiresAt\) \?\? toStringValue\(rate\.cacheExpiresAt\)/.test(metadataBody));
 check('the local mint is reached only when the backend sent nothing, and warns',
-  /if \(!backendExpiresAt\) \{\s*\n\s*console\.warn\('\[orders\] backend rate carried no cacheExpiresAt/.test(ordersView));
-// The 6h display-fallback mint was REMOVED entirely: OrdersView now does
+  metadataStart >= 0 && metadataBody.length > 0 &&
+    /if \(!backendExpiresAt\) \{\s*\n\s*console\.warn\('\[orders\] backend rate carried no cacheExpiresAt/.test(metadataBody));
+// The 6h display-fallback mint was REMOVED entirely: the helper now does
 // `expiresAt = backendExpiresAt ?? null` (it only warns). Zero FE mint sites is
 // strictly more conservative — a stale rate can never be made to look fresh by a
-// client-minted window. This still fails if any 6h mint is re-introduced.
-check('no display-fallback 6h mint site remains in OrdersView (FE never mints an expiry)',
-  (ordersView.match(/new Date\(Date\.now\(\) \+ 6 \* 60 \* 60 \* 1000\)/g) ?? []).length === 0);
+// client-minted window. This still fails if any 6h mint is re-introduced in EITHER
+// the moved helper or any OrdersView call site.
+check('no display-fallback 6h mint site remains in OrdersView or rate-proof.ts (FE never mints an expiry)',
+  ((ordersView + rateProof).match(/new Date\(Date\.now\(\) \+ 6 \* 60 \* 60 \* 1000\)/g) ?? []).length === 0);
 
 if (failures > 0) {
   console.error(`\nFAIL PS-183 backend cache TTL guard (${failures} failing)`);

@@ -74,10 +74,14 @@ const autoRequestBlock = autoRequestStart >= 0 && autoRequestEnd > autoRequestSt
   ? ordersView.slice(autoRequestStart, autoRequestEnd)
   : '';
 
-const metadataStart = ordersView.indexOf('function withRateRequestMetadata(');
-const metadataEnd = ordersView.indexOf('\n  function buildStrictBestRateRequest', metadataStart);
+// PS-317: withRateRequestMetadata moved to ./orders/best-rate/rate-proof.ts (getAutoBestRateRequest
+// and openRateBrowser referenced in this guard STAYED in OrdersView — they are NOT repointed). Its
+// body runs to the next top-level function getSavedBestRateRecord in the new file.
+const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
+const metadataStart = bestRateProof.indexOf('function withRateRequestMetadata(');
+const metadataEnd = bestRateProof.indexOf('\nexport function getSavedBestRateRecord', metadataStart);
 const metadataBlock = metadataStart >= 0 && metadataEnd > metadataStart
-  ? ordersView.slice(metadataStart, metadataEnd)
+  ? bestRateProof.slice(metadataStart, metadataEnd)
   : '';
 
 const getRatesResultStart = ratesService.indexOf('export type GetRatesResult = {');
@@ -166,7 +170,10 @@ check(
 
 check(
   'saved best-rate metadata prefers backend effective insurance over frontend request defaults',
-  /effectiveInsuranceProvider/.test(metadataBlock) &&
+  // TEETH: require the moved withRateRequestMetadata body (best-rate/rate-proof.ts) to be
+  // non-empty so a missing/renamed definition fails LOUD instead of passing vacuously.
+  metadataStart >= 0 && metadataBlock.length > 0 &&
+    /effectiveInsuranceProvider/.test(metadataBlock) &&
     /effectiveInsuredValue/.test(metadataBlock) &&
     /toStringValue\(metadata\.effectiveInsuranceProvider\)[\s\S]{0,220}toStringValue\(metadata\.insuranceProvider\)/.test(metadataBlock) &&
     /toNumberValue\(metadata\.effectiveInsuredValue\)[\s\S]{0,220}toNumberValue\(metadata\.insuredValue\)/.test(metadataBlock),

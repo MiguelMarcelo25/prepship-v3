@@ -100,13 +100,21 @@ check('missing service blocks update',
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-135: proof candidate-selection logic moved to the canonical lib; OrdersView delegates.
 const rateProof = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
+// PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts (its call sites
+// stay in OrdersView). The recalculateBestRate / runStrictBestRateRecalculation /
+// applyStrictBestRateResponse / refreshPanelBestRate / handleBatchAction slices below STAY in
+// OrdersView and are NOT repointed — only the buildSelectedRateProofPayload slice moves.
+const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 const recalcStart = ordersView.indexOf('async function recalculateBestRate(');
 const recalcEnd = ordersView.indexOf('\n  function applyRateSelection', recalcStart);
 const recalcBlock = recalcStart >= 0 && recalcEnd > recalcStart
   ? ordersView.slice(recalcStart, recalcEnd)
   : '';
 const runnerStart = ordersView.indexOf('async function runStrictBestRateRecalculation(');
-const runnerEnd = ordersView.indexOf('\n  function getAppliedRateDims', runnerStart);
+// PS-317: the previous END anchor `function getAppliedRateDims` was extracted to
+// ./orders/best-rate/rate-values.ts, so the runner's next-function anchor is now
+// closeRateBrowserAfterPersist. The runner itself STAYS in OrdersView (only the anchor moved).
+const runnerEnd = ordersView.indexOf('\n  async function closeRateBrowserAfterPersist', runnerStart);
 const runnerBlock = runnerStart >= 0 && runnerEnd > runnerStart
   ? ordersView.slice(runnerStart, runnerEnd)
   : '';
@@ -115,10 +123,13 @@ const applierEnd = ordersView.indexOf('\n  async function runStrictBestRateRecal
 const applierBlock = applierStart >= 0 && applierEnd > applierStart
   ? ordersView.slice(applierStart, applierEnd)
   : '';
-const proofBuilderStart = ordersView.indexOf('function buildSelectedRateProofPayload(');
-const proofBuilderEnd = ordersView.indexOf('\n  function hasAnySavedBestRateForDisplay', proofBuilderStart);
+// PS-317: buildSelectedRateProofPayload moved to best-rate/rate-proof.ts; its body runs to the
+// next top-level function buildRateQuoteRefForOrder (hasAnySavedBestRateForDisplay moved to a
+// DIFFERENT file — rate-display-predicates.ts — so it is no longer the END anchor).
+const proofBuilderStart = bestRateProof.indexOf('function buildSelectedRateProofPayload(');
+const proofBuilderEnd = bestRateProof.indexOf('\nexport function buildRateQuoteRefForOrder', proofBuilderStart);
 const proofBuilderBlock = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
-  ? ordersView.slice(proofBuilderStart, proofBuilderEnd)
+  ? bestRateProof.slice(proofBuilderStart, proofBuilderEnd)
   : '';
 const panelRefreshStart = ordersView.indexOf('async function refreshPanelBestRate(');
 const panelRefreshEnd = ordersView.indexOf('\n  async function persistShipmentDetails', panelRefreshStart);
@@ -140,8 +151,10 @@ check('Recalculate does not pick a client-side fallback best rate', !/pickBestPa
 check('Recalculate records exact-key blocked/clear table entries', /setAutoBestRateEntries/.test(applierBlock) && /decision\.entry/.test(applierBlock));
 check('Selected-rate proof only accepts backend-issued proof metadata',
   // PS-135: candidate selection lives in selectProofFromCandidates (rate-proof.ts); the
-  // OrdersView builder delegates to it.
+  // builder delegates to it. PS-317: the builder moved to best-rate/rate-proof.ts.
+  // TEETH: require the re-sliced builder body to be non-empty so a missing builder fails LOUD.
   /hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)/.test(rateProof) &&
+    proofBuilderStart >= 0 && proofBuilderBlock.length > 0 &&
     /selectProofFromCandidates\(/.test(proofBuilderBlock));
 check('Panel refreshed best rate is stamped with request fingerprint metadata before label proof',
   /const bestRateWithMetadata = autoRequest\s*\?\s*withRateRequestMetadata\(bestRate, autoRequest/.test(panelRefreshBlock) &&

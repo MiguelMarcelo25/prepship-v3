@@ -150,11 +150,16 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 // candidate carrying BOTH backend-minted opaque ids win BEFORE the legacy-proof
 // selection (behavior pinned by ps-198-rate-quote-proof-passthrough-guard.ts).
 const rateProofLib = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
+// PS-317: buildRateQuoteRefForOrder (+ getSavedBestRateRecord it calls) moved to
+// ./orders/best-rate/rate-proof.ts. The DEFINE/body regex now reads the new owner; its
+// EMIT call sites (...buildRateQuoteRefForOrder(order, ...)) stayed in OrdersView and are
+// asserted below, summed across both files so the census never undershoots.
+const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 // PS-204 re-anchor: the wrapper's delegation gained an account-binding option
 // ({ forShippingProviderId }) so cross-account candidates are filtered out —
 // same ordered candidate list, STRICTER selection, never weaker.
 check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection',
-  /function buildRateQuoteRefForOrder[\s\S]{0,260}?return rateQuoteRefFromCandidates\(\[\s*toRecord\(candidate\),\s*toRecord\(order\.bestRate\),\s*toRecord\(order\.selectedRate\),\s*getSavedBestRateRecord\(order\),\s*\], \{ forShippingProviderId \}\)/.test(ordersView) &&
+  /function buildRateQuoteRefForOrder[\s\S]{0,300}?return rateQuoteRefFromCandidates\(\[\s*toRecord\(candidate\),\s*toRecord\(order\.bestRate\),\s*toRecord\(order\.selectedRate\),\s*getSavedBestRateRecord\(order\),\s*\], \{ forShippingProviderId \}\)/.test(bestRateProof) &&
     /export function rateQuoteRefFromCandidates[\s\S]*?toStr\(r\.rateQuoteId\) && toStr\(r\.selectedRateKey\)[\s\S]*?hasBackendIssuedRateProof\(r\) && rateProofFingerprint\(r\)/.test(rateProofLib));
 // PS-204 re-anchor (2026-06-12): both counts below were STALE at base (failing
 // silently outside the cert since the PS-178 decomposition consolidated payload
@@ -164,7 +169,9 @@ check('frontend has buildRateQuoteRefForOrder mirroring the proof rate selection
 // guards). Both panel/batch forms are now ACCOUNT-BOUND per PS-204 — pinned
 // here so the binding can't silently disappear.
 check('frontend emits the rate quote ref on the primary create/queue/batch payloads (>= 2)',
-  (ordersView.match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 2 &&
+  // PS-317: emit call sites stayed in OrdersView; census summed across OrdersView + the moved
+  // best-rate/rate-proof.ts so the count never undershoots if a call site later relocates.
+  ((ordersView + bestRateProof).match(/\.\.\.buildRateQuoteRefForOrder\(order/g)?.length ?? 0) >= 2 &&
   /\.\.\.buildRateQuoteRefForOrder\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView) &&
   /\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView));
 // PS-317 A4 (Per user override unlock shipped data on 2026-06-23): the FE
@@ -192,7 +199,9 @@ check('frontend does NOT pass a stale ref on any direct-carrier retry/override p
 // selectedRateProof + account-bound rate-quote ref + shippingProviderId, all
 // keyed to the account this queue order charges.
 check('frontend ref is additive (proof still passed at every site)',
-  (ordersView.match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
+  // PS-317: selectedRateProof: buildSelectedRateProofPayload(order, ...) call sites stayed in
+  // OrdersView; census summed across both files so the count never undershoots.
+  ((ordersView + bestRateProof).match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
   // RELOCATED: the proof+binding the FE direct-buy carried now lives on the
   // queue INTENT payload (order.label), bound to the same shippingProviderId.
   /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,900}?selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\),/.test(ordersView) &&

@@ -135,7 +135,8 @@ const cls = (i: Parameters<typeof classifyShippingAddress>[0]) => classifyShippi
   const shipp = readFileSync('src/connectors/carrier/shipp.ts', 'utf8');
   check('shipp ship-to honors residential (not hardcoded yes)', /residential === false \? 'no' : 'yes'/.test(shipp), true);
 
-  const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  // PS-317: residentialForRate moved to ./orders/best-rate/rate-request — include it so the delegation pins resolve.
+  const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8') + readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
   check('OrdersView defines residentialForRate helper', /function residentialForRate\(/.test(ordersView), true);
   check('OrdersView no longer hardcodes residential: true', /residential:\s*true,/.test(ordersView), false);
   // PS-280: residentialForRate moved to the shared FE owner web/src/lib/residential-for-rate;

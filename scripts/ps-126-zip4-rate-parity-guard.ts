@@ -70,14 +70,18 @@ function check(name: string, got: unknown, want: unknown) {
   check('Rate Browser browseRates sends exact toPostalCode', /toPostalCode:\s*zip/.test(modal), true);
 
   // PS-166: normalizeRateZip (PS-126 exact-postal preservation) moved VERBATIM to
-  // ./orders/rate-request-normalizers; OrdersView imports it and feeds it into the
-  // rate-request draft key (`z=${normalizeRateZip(...)}`). Assert at the new owner
-  // + that OrdersView delegates.
+  // ./orders/rate-request-normalizers; the rate-request draft key feeds it via
+  // (`z=${normalizeRateZip(...)}`). Assert at the normalizer owner + at the draft-key owner.
   const normalizers = readFileSync('web/src/components/Views/orders/rate-request-normalizers.ts', 'utf8');
   check('rate-request normalizer draft-key preserves +4', /digits\.slice\(5,\s*9\)/.test(normalizers), true);
-  const orders = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-  check('OrdersView draft-key delegates to normalizeRateZip (preserves +4)',
-    /normalizeRateZip/.test(orders) && /z=\$\{normalizeRateZip\(/.test(orders), true);
+  // PS-317: buildRateRequestDraftKey (which builds the `z=${normalizeRateZip(...)}` key part)
+  // moved to ./orders/best-rate/rate-request.ts. Read the new owner and assert the delegation
+  // there. TEETH: require the moved file's draft-key body to be present (non-empty + the define)
+  // so a missing/renamed function fails LOUD instead of a vacuous pass.
+  const rateRequest = readFileSync('web/src/components/Views/orders/best-rate/rate-request.ts', 'utf8');
+  check('rate-request draft-key delegates to normalizeRateZip (preserves +4)',
+    /function buildRateRequestDraftKey\(/.test(rateRequest) &&
+      /normalizeRateZip/.test(rateRequest) && /z=\$\{normalizeRateZip\(/.test(rateRequest), true);
 }
 
 if (failures > 0) {

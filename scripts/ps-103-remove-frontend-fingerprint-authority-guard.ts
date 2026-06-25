@@ -13,6 +13,10 @@ const directRates = readFileSync('api/carriers/rates.ts', 'utf8');
 // buildSelectedRateProofPayload into web/src/lib/rate-proof.ts (selectProofFromCandidates),
 // which OrdersView now delegates to. Read it so the proof-marker check pins the live owner.
 const rateProof = readFileSync('web/src/lib/rate-proof.ts', 'utf8');
+// PS-317: withRateRequestMetadata + buildSelectedRateProofPayload + getBackendRateResponseFingerprint
+// moved to ./orders/best-rate/rate-proof.ts (call sites stay in OrdersView). The body slices for
+// those two functions now read the new owner. applyStrictBestRateResponse STAYS in OrdersView.
+const bestRateProof = readFileSync('web/src/components/Views/orders/best-rate/rate-proof.ts', 'utf8');
 
 let failures = 0;
 function check(name: string, condition: boolean) {
@@ -24,15 +28,19 @@ function check(name: string, condition: boolean) {
   }
 }
 
-const metadataStart = ordersView.indexOf('function withRateRequestMetadata(');
-const metadataEnd = ordersView.indexOf('\n  function buildStrictBestRateRequest', metadataStart);
+// PS-317: withRateRequestMetadata moved to best-rate/rate-proof.ts; its body runs to the
+// next top-level function getSavedBestRateRecord.
+const metadataStart = bestRateProof.indexOf('function withRateRequestMetadata(');
+const metadataEnd = bestRateProof.indexOf('\nexport function getSavedBestRateRecord', metadataStart);
 const metadataBlock = metadataStart >= 0 && metadataEnd > metadataStart
-  ? ordersView.slice(metadataStart, metadataEnd)
+  ? bestRateProof.slice(metadataStart, metadataEnd)
   : '';
-const proofBuilderStart = ordersView.indexOf('function buildSelectedRateProofPayload(');
-const proofBuilderEnd = ordersView.indexOf('\n  function hasAnySavedBestRateForDisplay', proofBuilderStart);
+// PS-317: buildSelectedRateProofPayload moved to best-rate/rate-proof.ts; its body runs to the
+// next top-level function buildRateQuoteRefForOrder.
+const proofBuilderStart = bestRateProof.indexOf('function buildSelectedRateProofPayload(');
+const proofBuilderEnd = bestRateProof.indexOf('\nexport function buildRateQuoteRefForOrder', proofBuilderStart);
 const proofBuilderBlock = proofBuilderStart >= 0 && proofBuilderEnd > proofBuilderStart
-  ? ordersView.slice(proofBuilderStart, proofBuilderEnd)
+  ? bestRateProof.slice(proofBuilderStart, proofBuilderEnd)
   : '';
 const strictApplyStart = ordersView.indexOf('async function applyStrictBestRateResponse(');
 const strictApplyEnd = ordersView.indexOf('\n  async function runStrictBestRateRecalculation', strictApplyStart);
@@ -40,10 +48,14 @@ const strictApplyBlock = strictApplyStart >= 0 && strictApplyEnd > strictApplySt
   ? ordersView.slice(strictApplyStart, strictApplyEnd)
   : '';
 
-check('withRateRequestMetadata block found', metadataBlock.length > 0);
+check('withRateRequestMetadata block found in rate-proof.ts', metadataStart >= 0 && metadataBlock.length > 0);
 check(
   'frontend does not fallback proof fields to locally-built request fingerprint',
-  !/requestFingerprint:\s*[^,\n]*request\.fingerprint/.test(metadataBlock) &&
+  // TEETH: the metadata-half negations would pass vacuously on an empty slice, so gate them on a
+  // non-empty body. strictApplyBlock stays in OrdersView and is independently non-empty here.
+  metadataStart >= 0 && metadataBlock.length > 0 &&
+    strictApplyBlock.length > 0 &&
+    !/requestFingerprint:\s*[^,\n]*request\.fingerprint/.test(metadataBlock) &&
     !/cacheKey:\s*[^,\n]*request\.fingerprint/.test(metadataBlock) &&
     !/requestFingerprint:\s*request\.fingerprint/.test(strictApplyBlock) &&
     !/cacheKey:\s*request\.fingerprint/.test(strictApplyBlock),
@@ -53,9 +65,13 @@ check(
   // PS-135 re-anchor: buildSelectedRateProofPayload delegates to selectProofFromCandidates
   // (web/src/lib/rate-proof.ts), which ONLY selects a rate carrying a backend-issued proof
   // marker + fingerprint — so the FE still cannot fabricate proof authority. Property unchanged.
+  // PS-317: the builder's delegating call moved with it to best-rate/rate-proof.ts; assert the
+  // delegation inside the re-sliced body (TEETH: require a non-empty slice so a missing builder
+  // fails LOUD instead of a vacuous pass).
   /export function hasBackendIssuedRateProof/.test(rateProof) &&
     /list\.find\(\(rate\) => hasBackendIssuedRateProof\(rate\) && rateProofFingerprint\(rate\)\)/.test(rateProof) &&
-    ordersView.includes('return selectProofFromCandidates('),
+    proofBuilderStart >= 0 && proofBuilderBlock.length > 0 &&
+    proofBuilderBlock.includes('return selectProofFromCandidates('),
 );
 check(
   'strict recalculation stamps proof from backend response request key only',

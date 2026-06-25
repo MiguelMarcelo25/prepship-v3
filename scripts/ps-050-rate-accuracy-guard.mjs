@@ -12,7 +12,7 @@ function assert(condition, message) {
   if (!condition) process.exitCode = 1
 }
 
-const [ordersView, ratesRoute, ratesService, ratesBackfill, orderRateDto, apiClient, packageJson] = await Promise.all([
+const [ordersView, ratesRoute, ratesService, ratesBackfill, orderRateDto, apiClient, packageJson, rateRequestSrc] = await Promise.all([
   read('web/src/components/Views/OrdersView.tsx'),
   read('src/routes/rates.ts'),
   read('src/services/rates.ts'),
@@ -20,10 +20,12 @@ const [ordersView, ratesRoute, ratesService, ratesBackfill, orderRateDto, apiCli
   read('src/services/order-rate-dto.ts'),
   read('web/src/lib/v2-apiClient.ts'),
   read('package.json'),
+  // PS-317: buildRateRequestDraftKey moved to ./orders/best-rate/rate-request.
+  read('web/src/components/Views/orders/best-rate/rate-request.ts'),
 ])
 
 assert(
-  ordersView.includes('buildRateRequestDraftKey') &&
+  (ordersView + rateRequestSrc).includes('buildRateRequestDraftKey') &&
     ordersView.includes('hasValidSavedBestRateForRequest') &&
     ordersView.includes('savedBestRateCanDisplayForCurrentRequest') &&
     ordersView.includes('cacheExpiresAt') &&
