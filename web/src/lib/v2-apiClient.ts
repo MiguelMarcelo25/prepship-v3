@@ -3097,9 +3097,15 @@ export const apiClient = {
             totalQty: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
           }))
           .sort((left: any, right: any) => right.totalQty - left.totalQty);
-        return { dates, topSkus, series };
+        // PS-325 (slice 3b): surface the backend-emitted per-SKU units (additive; series/dates/topSkus
+        // above are byte-identical). DashboardView prefers this over re-summing the series.
+        const unitsBySku: Record<string, { units30: number; units7: number }> = {};
+        for (const u of Array.isArray(res?.unitsBySku) ? res.unitsBySku : []) {
+          if (u?.sku) unitsBySku[u.sku] = { units30: Number(u.units30) || 0, units7: Number(u.units7) || 0 };
+        }
+        return { dates, topSkus, series, unitsBySku };
       },
-      { dates: [], topSkus: [], series: {} }
+      { dates: [], topSkus: [], series: {}, unitsBySku: {} }
     );
   },
 

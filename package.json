@@ -486,6 +486,7 @@
     "test:ps-325-dashboard-kpi-delta": "tsx scripts/ps-325-dashboard-kpi-delta-guard.ts",
     "test:ps-325-dashboard-heatmap-deviation": "tsx scripts/ps-325-dashboard-heatmap-deviation-guard.ts",
     "test:ps-325-dashboard-provenance": "tsx scripts/ps-325-dashboard-provenance-guard.ts",
+    "test:ps-325-sku-units": "tsx scripts/ps-325-sku-units-guard.ts",
     "test:ps-289-multi-package-plan": "tsx scripts/ps-289-multi-package-shipment-plan-guard.ts",
     "test:ps-289-multi-package-schema": "tsx scripts/ps-289-multi-package-schema-guard.ts",
     "test:ps-289-multi-package-mock-label-flow": "tsx scripts/ps-289-multi-package-mock-label-flow-guard.ts",

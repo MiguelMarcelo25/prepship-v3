@@ -16,6 +16,7 @@ import { computeEffectiveStockForIds, type EffectiveStockEntry } from '../servic
 import { computeReorderPolicy } from '../lib/inventory-reorder-policy';
 import { summarizeInventorySnapshot, type InventorySnapshot } from '../lib/inventory-stock-status';
 import { buildProvenance, markCached, type DashboardProvenance } from '../lib/analytics-provenance';
+import { sumSkuUnits, sumLastNSkuUnits } from '../lib/sku-units';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
@@ -570,7 +571,15 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
   });
-  const payload = { ...result, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
+  // PS-325 (slice 3b): emit per-SKU units30/units7 computed from the SAME days matrix the FE was
+  // re-summing (via the canonical src/lib/sku-units owner), so the backend owns the unit totals and
+  // the FE renders them byte-identically. Additive: result.topSkus/days are left untouched, so the
+  // shared getSkuDailyFromOrderItems service + /analysis/sku-daily are unaffected.
+  const unitsBySku = result.topSkus.map((t) => {
+    const series = result.days.map((d) => (d as Record<string, unknown>)[t.sku]);
+    return { sku: t.sku, units30: sumSkuUnits(series), units7: sumLastNSkuUnits(series, 7) };
+  });
+  const payload = { ...result, unitsBySku, meta: buildProvenance({ from: q.from, to: q.to, computedAt }) };
   void setAnalyticsCache(cacheKey, payload, 120);
   return c.json(payload);
 });

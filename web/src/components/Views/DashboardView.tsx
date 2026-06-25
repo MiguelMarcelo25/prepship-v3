@@ -16,6 +16,8 @@ import { relativePct } from '../../../../src/lib/kpi-delta'
 import { buildHeatmap, type HeatmapCell } from '../../../../src/lib/sales-heatmap-deviation'
 // PS-325 (slice 4): the additive provenance envelope the analytics DTOs now carry (shared BE+FE type).
 import type { DashboardProvenance } from '../../../../src/lib/analytics-provenance'
+// PS-325 (slice 3b): canonical per-SKU unit summing (the FE delegates source-1 to the backend-owned fn).
+import { sumSkuUnits, sumLastNSkuUnits } from '../../../../src/lib/sku-units'
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -74,6 +76,8 @@ type SalesPayload = {
   dates: string[]
   topSkus: Array<{ sku: string; name?: string; total_qty?: number; totalQty?: number; total?: number }>
   series: Record<string, number[]>
+  // PS-325 (slice 3b): backend-emitted per-SKU unit totals; the FE prefers these over re-summing series.
+  unitsBySku?: Record<string, { units30: number; units7: number }>
 }
 
 type DailyOrderCount = {
@@ -1991,11 +1995,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     return map
   }, [inventoryRows])
 
+  // PS-325 (slice 3b): source-1 of the per-SKU units merge now PREFERS the backend-emitted units
+  // (currentSales/priorSales.unitsBySku) and falls back to the canonical shared owner over the series
+  // only during deploy skew. Same Object.keys(series) key-set; sumSkuUnits/sumLastNSkuUnits are
+  // byte-identical to the prior sumValues/last over these finite-number series.
   const unitsBySku7 = useMemo(() => {
     const map = new Map<string, number>()
     const series = currentSales.series ?? {}
     for (const sku of Object.keys(series)) {
-      map.set(sku, sumValues(last(series[sku] ?? [], 7)))
+      map.set(sku, currentSales.unitsBySku?.[sku]?.units7 ?? sumLastNSkuUnits(series[sku] ?? [], 7))
     }
     return map
   }, [currentSales])
@@ -2004,7 +2012,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const map = new Map<string, number>()
     const series = currentSales.series ?? {}
     for (const sku of Object.keys(series)) {
-      map.set(sku, sumValues(series[sku] ?? []))
+      map.set(sku, currentSales.unitsBySku?.[sku]?.units30 ?? sumSkuUnits(series[sku] ?? []))
     }
     return map
   }, [currentSales])
@@ -2013,7 +2021,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const map = new Map<string, number>()
     const series = priorSales.series ?? {}
     for (const sku of Object.keys(series)) {
-      map.set(sku, sumValues(series[sku] ?? []))
+      map.set(sku, priorSales.unitsBySku?.[sku]?.units30 ?? sumSkuUnits(series[sku] ?? []))
     }
     return map
   }, [priorSales])
