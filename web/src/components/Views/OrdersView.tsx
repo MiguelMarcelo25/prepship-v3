@@ -1,39 +1,6 @@
 import './OrdersView.css'
 import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AnimatePresence, motion } from 'framer-motion'
-import {
-  Package,
-  Truck,
-  Bell,
-  Inbox,
-  AlertTriangle,
-  Loader2,
-  X as XIcon,
-  Printer as PrinterIcon,
-  Columns3,
-  Copy as CopyIcon,
-  Check as CheckIcon,
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  ChevronUp,
-  MoreHorizontal,
-  ExternalLink,
-  MapPin,
-  Box,
-  Scale,
-  Ruler,
-  Shield,
-  BadgeCheck,
-  RefreshCcw,
-  Zap,
-  Send,
-  ClipboardList,
-  PackageCheck,
-  Tag,
-} from 'lucide-react'
-import { FcPrint } from 'react-icons/fc'
 import HoverImage from '../HoverImage'
 import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
@@ -97,7 +64,7 @@ import {
   summarizeRecalculateAllJob,
 } from './orders-recalculate-all'
 import { apiClient } from '../../api/client'
-import { TEST_CLIENT_IDS, isDirectCarrierId } from '../../lib/v2-apiClient'
+import { isDirectCarrierId } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 const NewOrderModal = lazy(() => import('../NewOrderModal'))
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
@@ -145,10 +112,8 @@ import {
   type PersistentQueueOrderRef,
 } from './orders-persistent-queue-job'
 import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters'
-import { groupOrdersBySku } from './orders-grouping'
 // PS-258/PS-166: the Awaiting orders ORDER/sort computation lifted to a pure, testable owner.
 // (buildSkuCompositionKey now lives only in orders-filtered-sort, where the sku-sort moved.)
-import { computeOrderedFilteredOrders } from './orders-filtered-sort'
 // PS-166/PS-306/PS-258: pure filter/sort derivation memos extracted VERBATIM.
 import { useOrdersFilterSort } from './hooks/useOrdersFilterSort'
 import { useOrdersSelection } from './hooks/useOrdersSelection'
@@ -252,14 +217,6 @@ const BATCH_RECALCULATE_CONCURRENCY = 3
 
 // PS-166 W4c: PanelFormState moved to ./orders-panel-state (imported above as a
 // type) so the extracted strict shipping-field components can share the shape.
-
-const CONFIRMATION_OPTIONS = [
-  { value: 'none', label: 'None' },
-  { value: 'delivery', label: 'Delivery' },
-  { value: 'signature', label: 'Signature' },
-  { value: 'adult_signature', label: 'Adult Signature' },
-  { value: 'direct_signature', label: 'Direct Signature' },
-] as const
 
 // PS-166 (Wave 1d): the rate-input normalizers (confirmation/insurance
 // delegation + PS-072 carrier inference) moved VERBATIM to
@@ -451,7 +408,6 @@ import {
   isBackendTestOrder,
   isEbayOrder,
   isTestOrder,
-  normalizeItems,
 } from './orders-items'
 // PS-166 (Wave 2a): the shipped/cancelled/awaiting display-state + badge
 // resolvers (PS-036/056 three-state classification, PS-165 display
@@ -467,7 +423,6 @@ import {
 // runWithConcurrency → ./orders-persistent-queue-job (lives with
 // yieldToBrowser, which paces it); useDebouncedValue → ../../hooks (generic).
 import { buildEmptyPanel } from './orders-empty-panel'
-import { OrdersSearchBar } from './OrdersSearchBar'
 // PS-166/PS-306/PS-258 (Wave 4): the filter/batch/export toolbar (the
 // `<div id="filterbar">` block) moved VERBATIM to <OrdersFilterToolbar>.
 // PRESENTATIONAL — every async handler stays a parent closure threaded down.
@@ -497,9 +452,7 @@ import { OrdersDailyStrip } from './OrdersDailyStrip'
 // PS-166 (Wave 3b, JSX-safe): the side-panel Items + Recipient display
 // sections moved VERBATIM to strict presentational components (collapse,
 // residential toggle, copy, toasts stay as OrdersView callbacks/state).
-import { OrdersPanelItemsSection, OrdersPanelRecipientSection } from './OrdersPanelSections'
 // PS-166 W4: leaf presentational rows of the side-panel Shipping section.
-import { OrdersPanelSaveSkuDefaultsLink, OrdersPanelPackageDimsLine, OrdersPanelPackageFactsLine, OrdersPanelShipFromRow, OrdersPanelWeightRow, OrdersPanelSizeRow, OrdersPanelShippedLabelActions } from './OrdersPanelShippingFields'
 // PS-166/PS-306/PS-258 (Wave 5): the order-detail SIDE PANEL (former
 // renderSinglePanel) moved VERBATIM to a strict presentational
 // <OrdersDetailSidePanel>. PRESENTATIONAL — every backend-truth handler (Ship
@@ -767,7 +720,6 @@ export default function OrdersView({
   } | null>(null)
   const [rateBrowserLoading, setRateBrowserLoading] = useState(false)
   const [rateBrowserRates, setRateBrowserRates] = useState<Array<Record<string, unknown>>>([])
-  const [rateBrowserCarrierFilter, setRateBrowserCarrierFilter] = useState<number | null>(null)
   const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const [batchMenuOpen, setBatchMenuOpen] = useState(false)
   const [extShipMenuOpen, setExtShipMenuOpen] = useState(false)
@@ -1330,26 +1282,9 @@ export default function OrdersView({
   // Fall back to the in-memory derivation if the global fetch is empty
   // or hasn't returned yet — keeps the dropdown populated on first
   // render instead of going blank for the network round-trip.
-  const skuOptions = useMemo(() => {
-    if (globalSkus.length > 0) {
-      // Trust the backend list (already sorted ASC, already filtered
-      // for adjustments + excluded stores).
-      return globalSkus
-    }
-    const skus = new Set<string>()
-    for (const order of orders) {
-      for (const item of normalizeItems(order.items)) {
-        if (item.adjustment || !item.sku) continue
-        skus.add(item.sku)
-      }
-    }
-    if (skuFilter) skus.add(skuFilter)
-    return [...skus].sort((left, right) => left.localeCompare(right))
-  }, [globalSkus, orders, skuFilter])
-
   // PS-166/PS-306/PS-258: the four pure filter/sort derivation memos were moved
   // VERBATIM into useOrdersFilterSort (no behavior change; same dep arrays).
-  const { searchedOrders, orderedFilteredOrders, skuOrderGroups, visibleOrderIds } = useOrdersFilterSort({
+  const { orderedFilteredOrders, skuOrderGroups, visibleOrderIds } = useOrdersFilterSort({
     orders,
     orderDetailsById,
     hideTestOrdersInAllAwaiting,
@@ -4013,14 +3948,6 @@ export default function OrdersView({
     return hasSavedBestRateForRequest(order, request)
   }
 
-  function getSavedBestRateDimsLabel(order: OrderSummaryDto) {
-    return normalizeDimsLabel(
-      toRecord(order.overrides)?.bestRateDims ??
-      order.bestRateDims ??
-      getShippingModel(order)?.bestRateDims,
-    )
-  }
-
   function getCurrentBestRateDimsLabel(order: OrderSummaryDto) {
     const detail = orderDetailsById.get(order.orderId) ?? null
     const dims = getDimensions(order, detail)
@@ -4226,10 +4153,8 @@ export default function OrdersView({
     } = {},
   ): Promise<{ status: 'updated' | 'cleared' | 'blocked'; message: string; rate?: Record<string, unknown> | null }> {
     const liveBest = toRecord(response?.bestRate)
-    const liveBestAmount = liveBest ? getRateBaseAmount(liveBest) : null
     const providerAccountId = liveBest ? toProviderAccountId(liveBest.shippingProviderId) : null
     const serviceCode = liveBest ? toStringValue(liveBest.serviceCode) : null
-    const carrierStatuses = Array.isArray(response?.carrierStatuses) ? response.carrierStatuses : []
     // PS-175 / PS-178 final part: the strict apply/blocked/clear decision is
     // BACKEND-owned (response.strictRecalculation) and the backend PERSISTS the
     // outcome inside /browse. The FE's local decision plan and its strict
