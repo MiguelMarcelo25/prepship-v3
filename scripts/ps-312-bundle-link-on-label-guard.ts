@@ -42,11 +42,12 @@ check('createLabelV2 gates the bundle stamp on env.BUNDLE_LINK_ON_LABEL', gateId
 const txnIdx = labels.indexOf('const localShipmentId = await db.transaction');
 check('the bundle stamp runs AFTER the committed ship txn (outside the locked txn)', txnIdx !== -1 && gateIdx > txnIdx);
 
-// (4) best-effort: a timer.background with a .catch — a stamp miss never undoes the buy
+// (4) best-effort: the link+deduct task runs in a timer.background with a .catch handler — a stamp or
+//     deduct miss is swallowed to a console.warn and never undoes the committed buy.
 check(
-  'the stamp is a best-effort timer.background with a .catch',
+  'the stamp + chained deduct run in a best-effort timer.background with a .catch',
   /timer\.background\(\s*['"]bundle link-on-label['"]/.test(labels) &&
-    /bundle link-on-label[\s\S]{0,1000}\.catch\(/.test(labels),
+    /\.catch\(\(err\) => console\.warn\(\s*['"]\[labels\] bundle link-on-label/.test(labels),
 );
 
 // (5) it only stamps a PRIMARY, via getBundleForOrder + linkBundleShipment
@@ -68,6 +69,25 @@ check(
 check(
   'linkBundleShipment never regresses a later lifecycle state (only draft/labeled advances)',
   /current === ['"]draft['"] \|\| current === ['"]labeled['"]/.test(createBundle),
+);
+
+// (7) the deduct-once fan-out is CHAINED after the link stamp — never in the racy
+//     recordFulfillmentDeductions background task. deductBundleMembersOnce must appear AFTER the
+//     linkBundleShipment call (so the bundle is already 'labeled' when it runs), gated on
+//     BUNDLE_DEDUCT_ONCE; and recordFulfillmentDeductions must NOT call it (that task races the stamp).
+const linkCallIdx = labels.indexOf('linkBundleShipment(');
+const deductCallIdx = labels.indexOf('deductBundleMembersOnce(');
+check(
+  'the bundle deduct-once is CHAINED after the link stamp (no race), gated on BUNDLE_DEDUCT_ONCE',
+  deductCallIdx !== -1 && linkCallIdx !== -1 && deductCallIdx > linkCallIdx && /env\.BUNDLE_DEDUCT_ONCE/.test(labels),
+);
+const recordFn = labels.slice(
+  labels.indexOf('async function recordFulfillmentDeductions'),
+  labels.indexOf('export async function createLabelV2'),
+);
+check(
+  'recordFulfillmentDeductions does NOT run the bundle member fan-out (it would race the stamp)',
+  recordFn.length > 0 && !recordFn.includes('deductBundleMembersOnce('),
 );
 
 if (failures > 0) {

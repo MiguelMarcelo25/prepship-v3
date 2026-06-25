@@ -14,6 +14,7 @@ import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
 import { linkBundleShipment } from './shipment-bundles/create-bundle';
 import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
+import { deductBundleMembersOnce } from './shipment-bundles/deduct-bundle-members';
 import { env } from '../lib/env';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
 import { resolveOrderLabelPackageId } from './package-resolution';
@@ -1092,6 +1093,9 @@ async function recordFulfillmentDeductions(args: {
       await deductPackage();
       await deductInventory();
     }
+    // NOTE: the bundle MEMBER deduct-once fan-out (PS-312 S6) is NOT here — it is chained AFTER the
+    // link keystone in createLabelV2Impl, so it can never race the bundle stamp into a silent
+    // under-deduct. This trigger only deducts the primary's own inventory.
   } catch (err) {
     console.warn('[labels] fulfillment deduction failed:', err);
   }
@@ -1690,9 +1694,9 @@ async function createLabelV2Impl(
   if (env.BUNDLE_LINK_ON_LABEL) {
     timer.background('bundle link-on-label', () =>
       getBundleForOrder(order.id)
-        .then((bundle) => {
+        .then(async (bundle) => {
           if (!bundle || bundle.role !== 'primary') return;
-          return linkBundleShipment(bundle.bundleId, {
+          await linkBundleShipment(bundle.bundleId, {
             primaryShipmentId: localShipmentId,
             trackingNumber: created.trackingNumber,
             carrierCode: created.carrierCode ?? null,
@@ -1701,8 +1705,22 @@ async function createLabelV2Impl(
             labelShipmentId: created.shipmentId != null ? String(created.shipmentId) : null,
             packageId: resolvedPackageId,
           });
+          // PS-312 S6 deduct-once: now that the bundle is stamped 'labeled' (the await above committed
+          // it), deduct every OTHER member exactly once — CHAINED after the stamp in this SAME task so
+          // it can never race the link into a silent under-deduct. Co-dependent on this keystone (it
+          // requires BUNDLE_DEDUCT_ONCE too). Reuses the locked deductInventoryForOrder owner unchanged
+          // (still INVENTORY_AUTO_DEDUCT-gated + ship-ledger idempotent). Buys no postage; never marks
+          // orders shipped.
+          if (env.BUNDLE_DEDUCT_ONCE) {
+            await deductBundleMembersOnce(
+              order.id,
+              localShipmentId,
+              (ids) => db.select().from(orders).where(inArray(orders.id, ids)),
+              deductInventoryForOrder,
+            );
+          }
         })
-        .catch((err) => console.warn('[labels] bundle link-on-label skipped:', err instanceof Error ? err.message : err)));
+        .catch((err) => console.warn('[labels] bundle link-on-label/deduct skipped:', err instanceof Error ? err.message : err)));
   }
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.

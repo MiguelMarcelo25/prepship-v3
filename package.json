@@ -299,6 +299,7 @@
     "test:ps-312-bundle-candidates": "tsx scripts/ps-312-bundle-candidates-guard.ts",
     "test:ps-312-bundle-create-integration": "tsx scripts/ps-312-bundle-create-integration.ts",
     "test:ps-312-bundle-read-model-integration": "tsx scripts/ps-312-bundle-read-model-integration.ts",
+    "test:ps-312-deduct-bundle-members-integration": "tsx scripts/ps-312-deduct-bundle-members-integration.ts",
     "test:ps-312-bundle-billing-policy": "tsx scripts/ps-312-bundle-billing-policy-guard.ts",
     "test:ps-312-bundle-inventory-policy": "tsx scripts/ps-312-bundle-inventory-policy-guard.ts",
     "test:ps-312-bundle-confirmation-policy": "tsx scripts/ps-312-bundle-confirmation-policy-guard.ts",

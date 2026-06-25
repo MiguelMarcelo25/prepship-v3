@@ -177,6 +177,16 @@ const schema = z.object({
   // guard). DJ canaries on Render after a live combined-shipment buy. Per user override unlock shipped
   // data on 2026-06-24.
   BUNDLE_LINK_ON_LABEL: booleanFlag(false),
+  // PS-312 (combined-shipment deduct-once, shipped-data/inventory path): default-OFF canary. A bundle
+  // has ONE label (on the primary), so the per-label inventory trigger deducts only the primary and
+  // UNDER-deducts the children. REQUIRES BUNDLE_LINK_ON_LABEL: when both are ON, deductBundleMembersOnce
+  // is CHAINED right after the link stamp in the SAME background task (so it always sees the bundle as
+  // 'labeled' and can never race the stamp into a silent under-deduct), and deducts every OTHER member
+  // exactly once — reusing the SAME locked deductInventoryForOrder owner UNCHANGED (still gated by
+  // INVENTORY_AUTO_DEDUCT, still idempotent via the per-(orderId,inventoryId) ship-ledger). OFF (or with
+  // BUNDLE_LINK_ON_LABEL OFF) is byte-identical: no extra deduction. Buys no postage; never marks orders
+  // shipped. DJ canaries on Render with BOTH flags on. Per user override unlock shipped data on 2026-06-24.
+  BUNDLE_DEDUCT_ONCE: booleanFlag(false),
   // PS-262 (money/liability path): default-OFF canary that generalizes the PS-262b
   // Walmart-Shipping safety fix — a DIRECT (non-ShipStation) carrier must resolve to
   // 'carrier' (it insures, audited) or 'blocked' (it can't), NEVER 'parcelguard'
