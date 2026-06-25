@@ -53,6 +53,12 @@ import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orch
 import { expectedCarrierAbsentFromThin } from '../connectors/carrier/observed-missing-carrier-names';
 import { withCarrierQuoteTimeout, isPricedRate, rateTotal as combinedRateTotal } from './rates-combined';
 import {
+  isTransientCarrierRateError,
+  runWithTransientRetry,
+  RATE_ESTIMATE_MAX_RETRIES,
+  RATE_ESTIMATE_RETRY_BASE_MS,
+} from './carrier-estimate-retry';
+import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
 } from './shipping-automation';
@@ -836,6 +842,10 @@ export type CarrierRateDiagnostic = {
   // (the connector's observedMissing[]) — the out-of-band diagnostic that says WHICH carriers we never
   // saw, not just a thin boolean. Additive + display-only; omitted on every non-thin pass (never empty).
   expectedCarrierAbsent?: string[];
+  // RC1: true when this carrier's 'failed' status came from a TRANSIENT error (timeout / 429 / 5xx /
+  // network) that EXHAUSTED its retries — as opposed to a TERMINAL 4xx / no-service. RC2 reads it to
+  // refuse caching an incomplete (transient-failed) set as authoritative. Additive; absent otherwise.
+  transient?: boolean;
 };
 
 // Cheap mini-carrier lookup so we can tell stamps_com apart (needs city/state
@@ -1128,9 +1138,28 @@ async function fetchEstimateForCarrier(
         rateCount: 0,
         durationMs: Date.now() - startedAt,
         error: message,
+        transient: isTransientCarrierRateError(err),
       },
     };
   }
+}
+
+// RC1: retry a TRANSIENT per-carrier estimate failure (timeout / 429 / 5xx / network) a bounded number
+// of times, re-acquiring the global limiter slot each attempt (so the retry respects the ShipStation
+// rate budget and never holds a slot during backoff). A TERMINAL failure (4xx / no-service) returns on
+// the first attempt — never retried. By the retry the initial concurrency burst has usually drained, so
+// a merely-slow carrier resolves instead of being permanently dropped to "Rate unavailable".
+async function fetchEstimateForCarrierWithRetry(
+  carrier: CarrierInfo,
+  input: RateInput,
+  shipFrom: Address,
+  priority: RateFetchPriority,
+): Promise<CarrierEstimateResult> {
+  return runWithTransientRetry(
+    () => runWithGlobalRateLimiter(() => fetchEstimateForCarrier(carrier, input, shipFrom), priority),
+    (result) => result.diagnostic.status === 'failed' && result.diagnostic.transient === true,
+    { maxRetries: RATE_ESTIMATE_MAX_RETRIES, baseDelayMs: RATE_ESTIMATE_RETRY_BASE_MS },
+  );
 }
 
 // Lift the EstimateRate shape (flat from ShipStation) into v4's Rate shape
@@ -1196,7 +1225,9 @@ export async function fetchLiveRatesWithDiagnostics(
   const batches = await mapWithConcurrency(
     carriers,
     RATE_FETCH_CONCURRENCY,
-    (c) => runWithGlobalRateLimiter(() => fetchEstimateForCarrier(c, input, shipFrom), priority),
+    // RC1: each carrier's estimate retries a transient timeout/429/5xx (re-acquiring its limiter slot)
+    // before being dropped — a merely-slow ShipStation response no longer becomes "Rate unavailable".
+    (c) => fetchEstimateForCarrierWithRetry(c, input, shipFrom, priority),
   );
   const lifted: Rate[] = batches.flatMap((batch) => batch.rates).map(toRate);
 
