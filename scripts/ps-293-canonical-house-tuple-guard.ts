@@ -44,7 +44,7 @@ async function main() {
     /export async function stampHouseTuple\(/.test(owner) &&
     /resolveNextBestNonHouseRate\(/.test(owner) &&
     /shippingMarginPolicyForClient\(/.test(owner) &&
-    /isInternalHouseRate\(/.test(owner));
+    !/isInternalHouseRate\(/.test(owner));
 
   const rates = readFileSync('src/routes/rates.ts', 'utf8');
   check('rates.ts (/rates/browse) delegates to the shared stampHouseTuple owner',

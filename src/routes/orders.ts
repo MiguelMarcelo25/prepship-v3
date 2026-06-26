@@ -2053,12 +2053,33 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const bestRateRecord = recordOrNull(bestRate);
     const v2BestRateRecord = overrideBestRate ? bestRateRecord : null;
     const selectedRateRecord = recordOrNull(selectedRate);
+    const rowRaw = recordOrNull(r.order.raw) ?? {};
+    const rowRawDims = recordOrNull(rowRaw.dimensions) ?? {};
+    const rowRawShipTo = recordOrNull(rowRaw.shipTo) ?? {};
+    const rowDimsL = finiteNumberOrNull(safeOverrides?.rateDimsL) ?? finiteNumberOrNull(rowRawDims.length);
+    const rowDimsW = finiteNumberOrNull(safeOverrides?.rateDimsW) ?? finiteNumberOrNull(rowRawDims.width);
+    const rowDimsH = finiteNumberOrNull(safeOverrides?.rateDimsH) ?? finiteNumberOrNull(rowRawDims.height);
+    const rowWeightOz = finiteNumberOrNull(safeOverrides?.rateWeightOz) ?? finiteNumberOrNull(r.order.weightOz);
+    const rowToZip = stringOrNull(r.order.shipToPostalCode) ?? stringOrNull(rowRawShipTo.postalCode);
+    const rowToCountry = stringOrNull(rowRawShipTo.country) ?? 'US';
+    const rowResidential = booleanOrNull(safeOverrides?.residential) ?? booleanOrNull(rowRawShipTo.residential);
     const bestRateRequestFingerprint =
       stringOrNull(bestRateRecord?.requestFingerprint) ??
       stringOrNull(bestRateRecord?.cacheKey);
     const bestRateWorkflow = !isShippedBucket
       ? buildBestRateWorkflowDto({
           currentRequestFingerprint: bestRateRequestFingerprint,
+          currentShipmentFacts: {
+            weightOz: rowWeightOz,
+            dimsL: rowDimsL,
+            dimsW: rowDimsW,
+            dimsH: rowDimsH,
+            toZip: rowToZip,
+            toCountry: rowToCountry,
+            toState: stringOrNull(r.order.shipToState) ?? stringOrNull(rowRawShipTo.state),
+            toCity: stringOrNull(r.order.shipToCity) ?? stringOrNull(rowRawShipTo.city),
+            residential: rowResidential,
+          },
           backendRequestKey: bestRateRequestFingerprint,
           savedBestRate: bestRateRecord,
           source: inferBestRateWorkflowSource(bestRateRecord),
@@ -2083,7 +2104,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       if (rateJob) {
         const currentJobFingerprint = computeOrderRateJobFingerprint({
           orderId: r.order.id,
-          weightOz: r.order.weightOz ?? null,
+          weightOz: rowWeightOz,
           shipToPostalCode: r.order.shipToPostalCode ?? null,
           shipToState: r.order.shipToState ?? null,
           shipToCity: r.order.shipToCity ?? null,
@@ -2295,11 +2316,6 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     // bestRateWorkflow=null (their intentional payload design — shipped-row states
     // wire in when later phases revisit that); /rates/browse never enriches, so its
     // output is byte-identical to before PS-173.
-    const rowRawDims = recordOrNull(recordOrNull(r.order.raw)?.dimensions) ?? {};
-    const rowDimsL = finiteNumberOrNull(safeOverrides?.rateDimsL) ?? finiteNumberOrNull(rowRawDims.length);
-    const rowDimsW = finiteNumberOrNull(safeOverrides?.rateDimsW) ?? finiteNumberOrNull(rowRawDims.width);
-    const rowDimsH = finiteNumberOrNull(safeOverrides?.rateDimsH) ?? finiteNumberOrNull(rowRawDims.height);
-    const rowWeightOz = finiteNumberOrNull(safeOverrides?.rateWeightOz) ?? finiteNumberOrNull(r.order.weightOz);
     // PS-176: queue-routing facts. A queueable label = a real http(s) URL (the
     // FE's getQueueableLabelUrl semantics — '[object Object]' corruption and
     // non-strings don't count); a direct-carrier selection = the synthetic

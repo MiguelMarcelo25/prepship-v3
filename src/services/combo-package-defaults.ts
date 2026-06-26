@@ -182,15 +182,14 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
 
     if (invalidate) {
       affectedOrderIds.push(candidate.id);
-      // Stamp `pending` immediately (matching rates-backfill's fingerprint inputs: base
-      // orders.weightOz + the now-current override dims = the new propagated dims + ship-to + raw)
-      // so the Orders table shows "refreshing" instead of a momentary "missing". Best-effort.
+      // Stamp `pending` immediately with the same current package facts rates-backfill will use
+      // (override weight/dims before imported facts), so the Orders table shows "refreshing".
       try {
         await setOrderRatePending(
           candidate.id,
           computeOrderRateJobFingerprint({
             orderId: candidate.id,
-            weightOz: candidate.weightOz,
+            weightOz: rateWeightOz ?? candidate.weightOz,
             shipToPostalCode: candidate.shipToPostalCode,
             shipToState: candidate.shipToState,
             shipToCity: candidate.shipToCity,
@@ -461,7 +460,10 @@ export async function materializePackageFactsForImportedOrders(
           candidate.id,
           computeOrderRateJobFingerprint({
             orderId: candidate.id,
-            weightOz: candidate.weightOz,
+            weightOz:
+              typeof def.weightOz === 'number' && Number.isFinite(def.weightOz) && def.weightOz > 0
+                ? def.weightOz
+                : candidate.weightOz,
             shipToPostalCode: candidate.shipToPostalCode,
             shipToState: candidate.shipToState,
             shipToCity: candidate.shipToCity,

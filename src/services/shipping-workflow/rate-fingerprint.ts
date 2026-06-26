@@ -28,6 +28,18 @@ export type ShippingRateRequestFingerprintInput = {
   insuranceCertainty?: string | null;
 };
 
+export type ShippingRateCurrentFacts = {
+  weightOz?: number | string | null;
+  toZip?: string | null;
+  toCountry?: string | null;
+  toState?: string | null;
+  toCity?: string | null;
+  residential?: boolean | null;
+  dimsL?: number | string | null;
+  dimsW?: number | string | null;
+  dimsH?: number | string | null;
+};
+
 export type SelectedRateValidationReason =
   | 'ok'
   | 'missing_selected_rate'
@@ -106,6 +118,31 @@ function moneyKey(value: unknown): string {
   return n.toFixed(4);
 }
 
+function fingerprintPartValue(fingerprint: string, key: string): string | null {
+  const prefix = `${key}=`;
+  const part = fingerprint.split('|').find((candidate) => candidate.startsWith(prefix));
+  return part ? part.slice(prefix.length) : null;
+}
+
+function fingerprintHasPart(fingerprint: string, key: string, value: string): boolean {
+  return fingerprint.split('|').includes(`${key}=${value}`);
+}
+
+function scaledPositiveKey(value: unknown): string | null {
+  const n = finiteNumber(value);
+  return n != null && n > 0 ? String(Math.round(n * 10)) : null;
+}
+
+function normalizedCityKey(value: string | null | undefined): string | null {
+  const trimmed = String(value ?? '').trim();
+  return trimmed ? trimmed.toLowerCase().replace(/\s+/g, '-') : null;
+}
+
+function normalizedCountryKey(value: string | null | undefined): string | null {
+  const trimmed = String(value ?? '').trim();
+  return trimmed ? trimmed.toUpperCase() : null;
+}
+
 function providerAccountKey(value: unknown): string {
   const text = String(value ?? '').trim();
   const match = text.match(/^se-(\d+)$/i);
@@ -161,6 +198,49 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
   const certaintyState = textKey(input.insuranceCertainty);
   if (certaintyState) parts.push(`ic=${certaintyState}`);
   return parts.join('|');
+}
+
+/**
+ * PS-333: saved rate snapshots may display as final only when their request
+ * fingerprint still matches the current backend package/address facts. This
+ * helper compares only facts the caller can supply from its current source of
+ * truth; absent fact fields are ignored, but a supplied fact must be present in
+ * the fingerprint and equal.
+ */
+export function shippingRateFingerprintMatchesCurrentFacts(
+  fingerprint: string | null | undefined,
+  facts: ShippingRateCurrentFacts | null | undefined,
+): boolean {
+  const fp = typeof fingerprint === 'string' ? fingerprint.trim() : '';
+  if (!fp || !facts) return true;
+
+  const comparisons: Array<[string, string | null]> = [
+    ['w', scaledPositiveKey(facts.weightOz)],
+    ['l', scaledPositiveKey(facts.dimsL)],
+    ['dw', scaledPositiveKey(facts.dimsW)],
+    ['h', scaledPositiveKey(facts.dimsH)],
+  ];
+  for (const [key, expected] of comparisons) {
+    if (expected != null && fingerprintPartValue(fp, key) !== expected) return false;
+  }
+
+  const country = normalizedCountryKey(facts.toCountry) ?? 'US';
+  if (facts.toZip != null && String(facts.toZip).trim()) {
+    const expectedZip = normalizeZip(String(facts.toZip), country);
+    if (fingerprintPartValue(fp, 'z') !== expectedZip) return false;
+  }
+  if (facts.toCountry != null && String(facts.toCountry).trim()) {
+    if (fingerprintPartValue(fp, 'co') !== country) return false;
+  }
+  if (facts.toState != null && String(facts.toState).trim()) {
+    if (!fingerprintHasPart(fp, 'st', String(facts.toState).trim().toUpperCase())) return false;
+  }
+  const city = normalizedCityKey(facts.toCity);
+  if (city != null && fingerprintPartValue(fp, 'ci') !== city) return false;
+  if (facts.residential === true && fingerprintPartValue(fp, 'r') !== '1') return false;
+  if (facts.residential === false && fingerprintPartValue(fp, 'r') !== '0') return false;
+
+  return true;
 }
 
 // PS-127: extract the residential bit a rate was quoted under from its request

@@ -97,6 +97,13 @@ function getBackfillOrderDims(row: {
   return { length, width, height };
 }
 
+function getBackfillOrderWeightOz(row: {
+  rateWeightOz?: number | null;
+  weightOz: number | null;
+}): number | null {
+  return toPositiveNumber(row.rateWeightOz) ?? toPositiveNumber(row.weightOz);
+}
+
 function savedBestRateNeedsEligibilityRefresh(row: {
   clientId: number | null;
   storeId: number | null;
@@ -456,6 +463,7 @@ async function runBackfill(
         clientId: orders.clientId,
         storeId: orders.storeId,
         weightOz: orders.weightOz,
+        rateWeightOz: orderOverrides.rateWeightOz,
         shipToPostalCode: orders.shipToPostalCode,
         shipToState: orders.shipToState,
         shipToCity: orders.shipToCity,
@@ -483,7 +491,7 @@ async function runBackfill(
             ? eq(orders.clientId, opts.clientId)
             : undefined,
           notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
-          sql`${orders.weightOz} is not null and ${orders.weightOz} > 0`,
+          sql`coalesce(${orderOverrides.rateWeightOz}, ${orders.weightOz}) is not null and coalesce(${orderOverrides.rateWeightOz}, ${orders.weightOz}) > 0`,
           sql`${orders.shipToPostalCode} is not null and ${orders.shipToPostalCode} <> ''`,
           // A TARGETED re-rate (selected-package-id / save-dims / SKU defaults) explicitly demands
           // "re-rate these orders now": a dims/package change leaves a RECENT bestRateAt, so the
@@ -510,7 +518,7 @@ async function runBackfill(
     const fingerprintForRow = (row: (typeof rows)[number]): string =>
       computeOrderRateJobFingerprint({
         orderId: row.id,
-        weightOz: row.weightOz,
+        weightOz: getBackfillOrderWeightOz(row),
         shipToPostalCode: row.shipToPostalCode,
         shipToState: row.shipToState,
         shipToCity: row.shipToCity,
@@ -550,13 +558,15 @@ async function runBackfill(
     const perOrderTimeoutMs = liveRecalculate ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
+      const effectiveWeightOz = getBackfillOrderWeightOz(row);
+      const weightLabel = effectiveWeightOz ?? row.weightOz;
 
       // PS-120 (producer): the job has PICKED this order up to rate it -> mark `rating`. The
       // FE classifier shows "actively rating" (calculating) for this row, bounded by the
       // bestRateStateAgeMs watchdog. Best-effort; never let a status write break rating.
       const jobFingerprint = computeOrderRateJobFingerprint({
         orderId: row.id,
-        weightOz: row.weightOz,
+        weightOz: effectiveWeightOz,
         shipToPostalCode: row.shipToPostalCode,
         shipToState: row.shipToState,
         shipToCity: row.shipToCity,
@@ -599,7 +609,7 @@ async function runBackfill(
         job.skipped++;
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
-            `order ${row.id} (${row.orderNumber}, w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
+            `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
           );
         }
         job.processed++;
@@ -634,7 +644,7 @@ async function runBackfill(
           resolved: backfillResolved,
         });
         const rateInput = {
-          weightOz: Number(row.weightOz),
+          weightOz: Number(effectiveWeightOz),
           toZip: row.shipToPostalCode!,
           toState: row.shipToState ?? undefined,
           toCity: row.shipToCity ?? undefined,
@@ -705,7 +715,7 @@ async function runBackfill(
           job.skipped++;
           if (job.failureSamples.length < 5) {
             job.failureSamples.push(
-              `order ${row.id} (${row.orderNumber}, w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`
+              `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`
             );
           }
         } else {
@@ -823,7 +833,7 @@ async function runBackfill(
         const msg = (err as Error).message ?? 'unknown';
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
-            `order ${row.id} (w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): ${msg.slice(0, 1500)}`
+            `order ${row.id} (w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): ${msg.slice(0, 1500)}`
           );
         }
       } finally {

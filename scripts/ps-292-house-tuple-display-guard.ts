@@ -213,8 +213,8 @@ check('RateRowItem: recommended SHIPP row renders the house tuple (houseTuple pr
 
   // A non-SHIPP winner is never a house row (carrier_code trap is moot — identity is provider-only).
   const nonShipp = houseTupleStatus({ rawProvider: 'ups', nextBestNonHouseRate: null, houseMargin: null, optedIn: true });
-  check('item4: non-SHIPP winner => not_house (no reject)',
-    nonShipp === 'not_house' && shouldRejectHalfHouseSave(nonShipp) === false);
+  check('item4: non-SHIPP + opted-in + missing tuple => needs_refresh',
+    nonShipp === 'needs_refresh' && shouldRejectHalfHouseSave(nonShipp) === true);
 }
 
 // ── 9. SAFETY LINCHPIN: a GENUINE no-competitor SHIPP win (houseMargin 0, nextBest null) is NOT half ─
@@ -263,8 +263,8 @@ check('static: orders SAVE stamps the houseTupleStatus verdict onto the persiste
 check('static: item3 shipped realized read present + financially gated (orderCompetitiveRate + canViewFinancials)',
   /orderCompetitiveRate/.test(ordersSrc) && /canViewFinancials/.test(ordersSrc));
 const stampSrc = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');
-check('static: stampHouseTuple still gates on internal rate identity + backend shipping margin policy (default-OFF inert)',
-  /isInternalHouseRate/.test(stampSrc) && /shippingMarginPolicyForClient/.test(stampSrc));
+check('static: stampHouseTuple gates on backend shipping margin policy, not provider identity (default-OFF inert)',
+  !/isInternalHouseRate/.test(stampSrc) && /shippingMarginPolicyForClient/.test(stampSrc));
 
 // ── 14. A's FE follow-up: a PERSISTED half-house rate (houseTupleStatus 'needs_refresh') must be
 //        NON-displayable so the awaiting cell falls through to the 'House rate needs refresh' diagnostic.

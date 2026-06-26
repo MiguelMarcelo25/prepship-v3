@@ -137,6 +137,10 @@ import { deriveOrderRowNamedActions, deriveOrderRowBlockedReasons } from './orde
 // Awaiting best-rate DISPLAY-freshness window (separate from the 24h purchase TTL). A saved rate older
 // than this is still purchasable but "due for a re-check" so the table can detect carrier price drift.
 import { RATE_DISPLAY_FRESH_MS } from '../rate-display-freshness';
+import {
+  shippingRateFingerprintMatchesCurrentFacts,
+  type ShippingRateCurrentFacts,
+} from './rate-fingerprint';
 
 export type {
   OrderRowLifecycleState,
@@ -224,6 +228,7 @@ export type BestRateWorkflowDto = {
 
 export type BuildBestRateWorkflowInput = {
   currentRequestFingerprint?: string | null;
+  currentShipmentFacts?: ShippingRateCurrentFacts | null;
   backendRequestKey?: string | null;
   savedBestRate?: unknown | null;
   selectedRateState?: BestRateSelectedRateState;
@@ -674,7 +679,10 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
   const now = input.now ?? new Date();
   const savedRate = isRecord(input.savedBestRate) ? input.savedBestRate : null;
   const savedFingerprint = savedRateFingerprint(savedRate);
-  const currentFingerprint = stringOrNull(input.currentRequestFingerprint) ?? savedFingerprint;
+  const savedMatchesCurrentFacts = savedFingerprint
+    ? shippingRateFingerprintMatchesCurrentFacts(savedFingerprint, input.currentShipmentFacts)
+    : true;
+  const currentFingerprint = stringOrNull(input.currentRequestFingerprint) ?? (savedMatchesCurrentFacts ? savedFingerprint : null);
   const backendRequestKey = stringOrNull(input.backendRequestKey) ?? currentFingerprint;
   const carrierStatuses = (input.carrierStatuses ?? [])
     .map(sanitizeCarrierStatus)
@@ -697,8 +705,11 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
     carrierStatuses.length > 0 && !isBestRateComplete(carrierStatuses);
   const hasSavedRate = amountIsPositive(savedRate);
   const matchesRequest =
-    Boolean(currentFingerprint && savedFingerprint && currentFingerprint === savedFingerprint) ||
-    Boolean(savedFingerprint && !input.currentRequestFingerprint);
+    savedMatchesCurrentFacts &&
+    (
+      Boolean(currentFingerprint && savedFingerprint && currentFingerprint === savedFingerprint) ||
+      Boolean(savedFingerprint && !input.currentRequestFingerprint)
+    );
   const complete = savedRateIsComplete(savedRate);
   const fresh = isFreshAt(savedRateExpiresAt(savedRate), now);
   // DISPLAY-freshness: a saved rate for the SAME request that has aged past the display window is
@@ -721,6 +732,8 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
   let bestRateState: BestRateWorkflowState;
   if (!hasSavedRate) {
     bestRateState = hasCarrierFailure ? 'blocked' : 'missing';
+  } else if (!savedMatchesCurrentFacts) {
+    bestRateState = 'mismatched_request';
   } else if (currentFingerprint && savedFingerprint && currentFingerprint !== savedFingerprint) {
     bestRateState = 'mismatched_request';
   } else if (hasCarrierFailure || hasThinCarrier || hasIncompleteCarrierCoverage) {

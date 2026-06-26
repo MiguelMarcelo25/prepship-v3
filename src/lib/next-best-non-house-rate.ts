@@ -1,15 +1,10 @@
-// PS-220 — the pure "next-best non-house rate" resolver for the SHIPP house-account margin.
+// PS-220 -> PS-333: pure customer-rate ladder for HUGRAB/house margin policy.
 //
-// When SHIPP (DRP's house carrier) wins an order AND the client is opted in, DRP pays the SHIPP
-// rate (drp_cost) but bills the cheapest ELIGIBLE non-SHIPP rate (customer_rate). This module is
-// the single, pure decision: from an in-hand rate list, drop SHIPP, keep only client-eligible +
-// priced rates, and pick the cheapest on the SAME charge basis the winner was chosen on. No IO,
-// no new rate fetch — the caller supplies the list (the merged combinedRates at best-rate save).
-//
-// CARRIER_CODE TRAP: the Shipp connector rewrites carrier_code to fedex/ups/stamps_com/dhl_express
-// (shipp.ts), so SHIPP identity is carried ONLY by `provider === 'shipp'` (stamped by toDirectRate).
-// Keying the drop on carrier_code would BOTH fail to drop the house rate AND wrongly drop real
-// FedEx/UPS competitors — so we key strictly on the normalized provider.
+// The backend-finalized rock-bottom cost is the cheapest eligible priced rate in
+// the current combined universe. The customer rate is the next cheapest eligible
+// priced rate above that rock-bottom cost. Provider name is not authoritative:
+// SHIPP, ShipStation, EasyPost, direct carriers, and carrier accounts are rate
+// sources/accounts, not automatic house/non-house identities.
 import { normalizeProviderKey } from './direct-carrier-scope.js';
 import {
   describeShippingService,
@@ -21,30 +16,30 @@ import {
 import { isPricedRate, rateTotal, type CombinableRate } from '../services/rates-combined.js';
 import type { ShippingMarginPolicy } from '../services/house-account-opt-in.js';
 
-/** True only for DRP's house carrier (SHIPP), identified by provider — never carrier_code. */
+/** Legacy SHIPP detector retained for older guards/reporting; PS-333 no longer uses it for ladder ranking. */
 export function isHouseShippRate(rate: CombinableRate): boolean {
   return normalizeProviderKey((rate as { provider?: unknown }).provider) === 'shipp';
 }
 
-/** Conservative first-slice internal-rate identity; broader accounts must be added by backend policy. */
+/** Legacy internal-rate detector retained for compatibility; do not use as the PS-333 house divider. */
 export function isInternalHouseRate(rate: CombinableRate): boolean {
   return isHouseShippRate(rate);
 }
 
 export type NextBestNonHouseResult = {
-  /** The cheapest eligible, priced, non-SHIPP rate — the basis for customer_rate. */
+  /** The next eligible priced rate above the rock-bottom cheapest rate. */
   rate: CombinableRate;
-  /** Its charge total (rateTotal) — the customer_rate amount. */
+  /** Its charge total (rateTotal) - the customer_rate amount. */
   total: number;
-  /** How many eligible priced non-SHIPP competitors were seen (0 ⇒ this returns null). */
+  /** How many eligible priced rates were above the rock-bottom rate. */
   competitorCount: number;
 };
 
 /**
- * Resolve the cheapest eligible non-SHIPP rate from an in-hand list, or null when the client is
- * not opted in OR there is no eligible non-SHIPP competitor (the caller then sets
- * customer_rate = drp_cost, margin 0 — the pass-through case). Margin arithmetic and the >= 0
- * clamp stay with the caller; this resolver only finds the basis.
+ * Resolve the next eligible priced customer rate from an in-hand list, or null
+ * when the client is not in next-best mode OR there is no eligible rate above
+ * the rock-bottom cheapest rate. Margin arithmetic and the >= 0 clamp stay with
+ * the caller; this resolver only finds the basis.
  */
 export function resolveNextBestNonHouseRate(input: {
   eligibleRates: CombinableRate[];
@@ -60,7 +55,7 @@ export function resolveNextBestNonHouseRate(input: {
     input.client?.shippingMarginPolicy?.mode ??
     (input.client?.houseAccountOptIn ? 'next_best_customer_rate' : 'pass_through');
   if (marginMode !== 'next_best_customer_rate') return null;
-  // Same eligibility verdict the browse/selection path uses — no new policy.
+
   const eligible = filterEligibleShippingServices(
     input.eligibleRates,
     input.context ?? null,
@@ -68,10 +63,9 @@ export function resolveNextBestNonHouseRate(input: {
     input.shippingOptions ?? null,
     input.automationRules ?? null,
   );
-  // Drop the house carrier (by provider) and any unpriced rate (same basis as the winner pick).
-  const competitors = eligible.filter((rate) => !isInternalHouseRate(rate) && isPricedRate(rate));
-  const cheapest = [...competitors].sort((a, b) => rateTotal(a) - rateTotal(b))[0] ?? null;
-  return cheapest
-    ? { rate: cheapest, total: rateTotal(cheapest), competitorCount: competitors.length }
+  const ranked = eligible.filter(isPricedRate).sort((a, b) => rateTotal(a) - rateTotal(b));
+  const customerRate = ranked[1] ?? null;
+  return customerRate
+    ? { rate: customerRate, total: rateTotal(customerRate), competitorCount: Math.max(0, ranked.length - 1) }
     : null;
 }

@@ -1,28 +1,23 @@
-import { isInternalHouseRate } from '../../lib/next-best-non-house-rate';
 import type { ShippingMarginPolicy } from '../house-account-opt-in';
 
 /**
- * PS-292 (items 2 + 4) — backend-owned verdict + reject for a persisted best rate's SHIPP house tuple.
+ * PS-292 (items 2 + 4) / PS-333: backend-owned verdict + reject for a persisted
+ * best rate's house margin tuple.
  *
- * A persisted best_rate_json is a "half-house" rate when its winning rate is the SHIPP/house carrier for
- * an OPTED-IN client but its competitor tuple (nextBestNonHouseRate + houseMargin) is ABSENT — so PS-220
- * can never compute a margin. The tuple is only ever written by the shared stampHouseTuple owner
- * (house-tuple-stamp.ts), which runs in /rates/browse + rates-backfill; a save that bypassed it (a manual
- * FE apply that dropped the fields) lands here with both fields null.
+ * A persisted best_rate_json is "half-house" when a margin-enabled client saves
+ * a rate but its backend customer-rate tuple (nextBestNonHouseRate + houseMargin)
+ * is absent. Provider name is not authoritative: PS-333 defines house cost as
+ * the backend-finalized rock-bottom cheapest eligible rate, with customer_rate as
+ * the next eligible rate above it.
  *
- * SHIPP identity is PROVIDER-ONLY (the connector rewrites carrier_code to fedex/ups/...), and the FE's
- * translateRateToV2Shape drops the top-level provider — so callers MUST pass the RAW provider
- * (body.bestRateJson.raw?.provider), never carrier_code.
- *
- * Safety linchpin: a GENUINE no-competitor SHIPP win is NOT half-house — stampHouseTuple writes
- * nextBestNonHouseRate=null but houseMargin=0 (not null). So 'both null' only happens when the save
- * NEVER went through the stamp owner. Legitimate house wins (with a competitor, or a real $0-margin
- * pass-through) are 'present' and save normally.
+ * Safety linchpin: a genuine no-competitor margin row is not half-house because
+ * stampHouseTuple writes nextBestNonHouseRate=null but houseMargin=0. So "both
+ * null" only happens when the save never went through the stamp owner.
  */
 export type HouseTupleStatus = 'not_house' | 'present' | 'needs_refresh';
 
 export const HOUSE_TUPLE_REQUIRED_MESSAGE =
-  'House Account SHIPP rate is missing its competitor tuple — re-rate via Rate Browser before saving';
+  'House margin rate is missing its customer-rate tuple - re-rate via Rate Browser before saving';
 
 export function houseTupleStatus(input: {
   rawProvider: unknown;
@@ -31,14 +26,10 @@ export function houseTupleStatus(input: {
   optedIn: boolean;
   shippingMarginPolicy?: Pick<ShippingMarginPolicy, 'mode'> | null;
 }): HouseTupleStatus {
-  // Default-OFF inert: non-opted-in clients + non-SHIPP winners are never house rows.
   const marginEnabled = input.shippingMarginPolicy
     ? input.shippingMarginPolicy.mode === 'next_best_customer_rate'
     : input.optedIn;
   if (!marginEnabled) return 'not_house';
-  if (!isInternalHouseRate({ provider: input.rawProvider } as Parameters<typeof isInternalHouseRate>[0])) {
-    return 'not_house';
-  }
   const tupleMissing = input.nextBestNonHouseRate == null && input.houseMargin == null;
   return tupleMissing ? 'needs_refresh' : 'present';
 }

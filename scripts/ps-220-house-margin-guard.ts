@@ -60,22 +60,21 @@ check('isHouseShippRate: real usps is NOT house', isHouseShippRate(USPS_GA) === 
     context: CONTEXT,
     client: OPTED_IN,
   });
-  check('next-best is the cheapest priced non-SHIPP ($9.64 USPS)',
-    r != null && r.total === 9.64 && (r.rate as { provider?: string }).provider === 'shipstation',
+  check('next-best is the next eligible priced rate above rock-bottom ($8.50 SHIPP)',
+    r != null && r.total === 8.5 && (r.rate as { provider?: string }).provider === 'shipp',
     `got ${r ? r.total + ' / ' + (r.rate as { provider?: string }).provider : 'null'}`);
-  check('competitorCount counts only priced non-SHIPP (fedex + usps = 2)',
-    r != null && r.competitorCount === 2, `got ${r?.competitorCount}`);
-  check('next-best is never a SHIPP rate', r != null && !isHouseShippRate(r.rate));
+  check('competitorCount counts eligible priced rates above rock-bottom (3)',
+    r != null && r.competitorCount === 3, `got ${r?.competitorCount}`);
 }
 
 {
   // No eligible non-SHIPP competitor => null (caller sets customer_rate = drp_cost, margin 0).
   const r = resolveNextBestNonHouseRate({
-    eligibleRates: [SHIPP_SUREPOST, SHIPP_AS_FEDEX, UPS_UNPRICED],
+    eligibleRates: [SHIPP_SUREPOST, UPS_UNPRICED],
     context: CONTEXT,
     client: OPTED_IN,
   });
-  check('no priced non-SHIPP competitor => null (pass-through)', r === null);
+  check('no priced rate above rock-bottom => null (pass-through)', r === null);
 }
 
 {
@@ -149,8 +148,7 @@ check('rates.ts delegates browse money redaction to the pure rate-browser-money-
     RATE_BROWSER_MONEY_FIELD_KEYS.has('shipmentCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('otherCost') &&
     RATE_BROWSER_MONEY_FIELD_KEYS.has('totalCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('houseMargin'));
 }
-check('projected stamp fires only for a SHIPP winner + opted-in client, over combinedRates (shared owner)',
-  houseStamp.includes('isInternalHouseRate(input.cheapest)') &&
+check('projected stamp is backend policy-gated and resolves over combinedRates (shared owner)',
   houseStamp.includes('shippingMarginPolicyForClient') &&
   houseStamp.includes("shippingMarginPolicy.mode !== 'next_best_customer_rate'") &&
   /resolveNextBestNonHouseRate\(\{[\s\S]*?eligibleRates: input\.combinedRates/.test(houseStamp));
@@ -167,7 +165,7 @@ check('rates.ts (/rates/browse) DELEGATES the house stamp to the shared stampHou
     USPS_GA, // 9.64
   ];
   const noRules = resolveNextBestNonHouseRate({ eligibleRates: pool as never, context: { clientId: 99, storeId: null }, client: { houseAccountOptIn: true } });
-  check('objective: with no automation rules the competitor is the cheapest non-SHIPP (fedex 9.0)',
+  check('objective: with no automation rules the customer rate is the next eligible rate (fedex 9.0)',
     noRules != null && noRules.total === 9.0);
   const disableFedex = [{ type: 'service', clientId: 99, carrierCode: 'fedex', serviceCode: 'fedex_ground', disabled: true }];
   const withRules = resolveNextBestNonHouseRate({ eligibleRates: pool as never, context: { clientId: 99, storeId: null }, automationRules: disableFedex as never, client: { houseAccountOptIn: true } });
