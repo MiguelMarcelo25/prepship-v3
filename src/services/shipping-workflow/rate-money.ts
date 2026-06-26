@@ -142,11 +142,13 @@ export type OrderRowMoneyDisplay = {
   // margin so display + guards never double-apply. 'house_account' => marked is the customer_rate
   // (next-best non-SHIPP), base is the SHIPP drp_cost, and NO carrier markupRule was applied.
   markupSource: 'carrier_markup' | 'house_account';
-  // PS-308: explicit separated money model. Keep base/marked/markup above as compatibility aliases
-  // while API/UI callers move to these names: Best/Selected Rate = customerRateAmount, Rate Cost =
-  // rateCostAmount, Shipping Margin = shippingMarginAmount. Ranking still lives in rates-combined.
+  // PS-308/PS-334: explicit separated money model. Keep base/marked/markup above as compatibility
+  // aliases while API/UI callers move to these names: Best/Selected Rate = customerRateAmount,
+  // internal provider cost = rateCostAmount, house-feature internal cost = houseRateAmount, Shipping
+  // Margin = shippingMarginAmount. Ranking still lives in rates-combined.
   customerRateAmount: number | null;
   rateCostAmount: number | null;
+  houseRateAmount: number | null;
   shippingMarginAmount: number | null;
   shippingMarginPct: number | null;
   houseApplied: boolean;
@@ -201,6 +203,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     OrderRowMoneyDisplay,
     | 'customerRateAmount'
     | 'rateCostAmount'
+    | 'houseRateAmount'
     | 'shippingMarginAmount'
     | 'shippingMarginPct'
     | 'houseApplied'
@@ -217,6 +220,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     return {
       customerRateAmount: customerRateAmount != null ? round2(customerRateAmount) : null,
       rateCostAmount: rateCostAmount != null ? round2(rateCostAmount) : null,
+      houseRateAmount: input.houseApplied && rateCostAmount != null ? round2(rateCostAmount) : null,
       shippingMarginAmount,
       shippingMarginPct:
         shippingMarginAmount != null && shippingMarginAmount >= 0.005 && customerRateAmount != null && customerRateAmount > 0

@@ -439,6 +439,7 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     // the shipping margin. Read-only pass-through; the FE never recomputes these.
     customerRateAmount: toNumberValue(money.customerRateAmount),
     rateCostAmount: toNumberValue(money.rateCostAmount),
+    houseRateAmount: toNumberValue(money.houseRateAmount),
     shippingMarginAmount: toNumberValue(money.shippingMarginAmount),
     // PS-220 (slice 4b): 'house_account' => SHIPP house order (marked = the customer_rate DRP bills,
     // base = DRP's SHIPP cost, markup = the house margin). Defaults to 'carrier_markup' on deploy-skew

@@ -63,6 +63,8 @@ export async function stampHouseTuple(
       customer_rate_amount: customerRate,
       rateCostAmount: drpCost,
       rate_cost_amount: drpCost,
+      houseRateAmount: drpCost,
+      house_rate_amount: drpCost,
       shippingMarginAmount: houseMargin,
       shipping_margin_amount: houseMargin,
       shippingMarginPct,

@@ -22,6 +22,7 @@ export const RATE_BROWSER_MONEY_FIELD_KEYS: ReadonlySet<string> = new Set([
   'amount',
   'customerRateAmount',
   'rateCostAmount',
+  'houseRateAmount',
   'shippingMarginAmount',
   'shippingMarginPct',
   'houseApplied',

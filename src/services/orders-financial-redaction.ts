@@ -10,6 +10,7 @@ export const RATE_MONEY_FIELD_KEYS = new Set([
   'amount',
   'customerRateAmount',
   'rateCostAmount',
+  'houseRateAmount',
   'shippingMarginAmount',
   'shippingMarginPct',
   'houseApplied',

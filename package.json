@@ -471,6 +471,7 @@
     "test:ps-328-rerate-warning-reason": "tsx scripts/ps-328-rerate-warning-reason-guard.ts",
     "test:ps-327-hugrab-margin-policy": "tsx scripts/ps-327-hugrab-margin-policy-guard.ts",
     "test:ps-333-hugrab-current-rate-sot": "tsx scripts/ps-333-hugrab-current-rate-sot-guard.ts",
+    "test:ps-334-house-rate-column": "tsx scripts/ps-334-house-rate-column-guard.ts",
     "test:ps-335-rate-browser-singleflight": "tsx scripts/ps-335-rate-browser-singleflight-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",

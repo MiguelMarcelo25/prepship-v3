@@ -81,10 +81,13 @@ export interface OrderBestRateDto {
   // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
-  // PS-308: separated rate money model. Best/Selected Rate uses customerRateAmount; Rate Cost and
-  // margin are internal/admin-only and redacted for non-financial viewers.
+  // PS-308/PS-334: separated rate money model. Best/Selected Rate uses customerRateAmount; internal
+  // provider cost uses rateCostAmount; house-feature rows expose houseRateAmount as the named House
+  // Rate column. Internal cost/house/margin fields are admin-only and redacted for non-financial
+  // viewers.
   customerRateAmount: number | null;
   rateCostAmount: number | null;
+  houseRateAmount: number | null;
   shippingMarginAmount: number | null;
   shippingMarginPct: number | null;
   houseApplied: boolean | null;
@@ -564,6 +567,10 @@ export function normalizeOrderBestRateDto(
   );
   const customerRateAmount = explicitCustomerRateAmount ?? nextBestNonHouseRate?.totalCost ?? totalCost;
   const rateCostAmount = explicitRateCostAmount ?? totalCost;
+  const explicitHouseRateAmount = readNullableNumber(
+    record.houseRateAmount ?? record.house_rate_amount ?? null,
+    `${path}.houseRateAmount`,
+  );
   const explicitShippingMarginAmount = readNullableNumber(
     record.shippingMarginAmount ?? record.shipping_margin_amount ?? houseMargin ?? null,
     `${path}.shippingMarginAmount`,
@@ -585,6 +592,7 @@ export function normalizeOrderBestRateDto(
   const rawHouseBadgeVisible = record.houseBadgeVisible ?? record.house_badge_visible ?? null;
   const houseBadgeVisible =
     rawHouseBadgeVisible == null ? (houseApplied === true ? true : null) : readBoolean(rawHouseBadgeVisible, `${path}.houseBadgeVisible`);
+  const houseRateAmount = explicitHouseRateAmount ?? (houseApplied === true ? rateCostAmount : null);
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(
@@ -635,6 +643,7 @@ export function normalizeOrderBestRateDto(
     houseMargin,
     customerRateAmount: customerRateAmount != null ? roundMoney(customerRateAmount) : null,
     rateCostAmount: rateCostAmount != null ? roundMoney(rateCostAmount) : null,
+    houseRateAmount: houseRateAmount != null ? roundMoney(houseRateAmount) : null,
     shippingMarginAmount: shippingMarginAmount != null ? roundMoney(shippingMarginAmount) : null,
     shippingMarginPct,
     houseApplied,

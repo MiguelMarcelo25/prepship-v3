@@ -13,7 +13,7 @@ import {
   type ShippingServiceEligibilityContext,
   type ShippingServiceOptionEligibilityContext,
 } from './shipping-service-eligibility.js';
-import { isPricedRate, rateTotal, type CombinableRate } from '../services/rates-combined.js';
+import { isPricedRate, rateCostTotal, rateTotal, type CombinableRate } from '../services/rates-combined.js';
 import type { ShippingMarginPolicy } from '../services/house-account-opt-in.js';
 
 /** Legacy SHIPP detector retained for older guards/reporting; PS-333 no longer uses it for ladder ranking. */
@@ -63,9 +63,17 @@ export function resolveNextBestNonHouseRate(input: {
     input.shippingOptions ?? null,
     input.automationRules ?? null,
   );
-  const ranked = eligible.filter(isPricedRate).sort((a, b) => rateTotal(a) - rateTotal(b));
-  const customerRate = ranked[1] ?? null;
+  const priced = eligible.filter(isPricedRate);
+  const rankedByInternalCost = [...priced].sort((a, b) => rateCostTotal(a) - rateCostTotal(b));
+  const houseRate = rankedByInternalCost[0] ?? null;
+  if (!houseRate) return null;
+  const houseCost = rateCostTotal(houseRate);
+  if (!Number.isFinite(houseCost) || houseCost <= 0) return null;
+  const competitors = priced
+    .filter((rate) => rate !== houseRate && rateCostTotal(rate) > houseCost)
+    .sort((a, b) => rateTotal(a) - rateTotal(b));
+  const customerRate = competitors[0] ?? null;
   return customerRate
-    ? { rate: customerRate, total: rateTotal(customerRate), competitorCount: Math.max(0, ranked.length - 1) }
+    ? { rate: customerRate, total: rateTotal(customerRate), competitorCount: competitors.length }
     : null;
 }
