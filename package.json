@@ -296,6 +296,7 @@
     "test:ps-311b-box-cost-by-dims-integration": "tsx scripts/ps-311b-box-cost-by-dims-integration.ts",
     "test:ps-323-billing-sot-parity": "tsx scripts/ps-323-billing-sot-parity-guard.ts",
     "test:rate-source-of-truth": "tsx scripts/ps-313-rate-source-of-truth-guard.ts",
+    "test:ps-318-shipping-workflow-certification": "tsx scripts/ps-318-shipping-workflow-certification-guard.ts",
     "test:ps-319-rate-convergence-certification": "tsx scripts/ps-319-rate-convergence-certification-guard.ts",
     "test:ps-326-carrier-account-identity-certification": "tsx scripts/ps-326-carrier-account-identity-certification-guard.ts",
     "test:ps-320-v2-api-client-transport": "tsx scripts/ps-320-v2-api-client-transport-guard.ts",
