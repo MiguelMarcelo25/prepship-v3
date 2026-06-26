@@ -259,6 +259,52 @@ export function getRateProviderAccountId(rate: Record<string, unknown> | null | 
   )
 }
 
+function readMoneyAmount(value: unknown) {
+  const record = toRecord(value)
+  return toNumberValue(record?.amount) ?? toNumberValue(value)
+}
+
+function readRateTotalAmount(rate: Record<string, unknown> | null | undefined) {
+  if (!rate) return null
+  const totalCost = toNumberValue(rate.totalCost) ?? toNumberValue(rate.total_cost)
+  if (totalCost != null) return totalCost
+
+  const shipmentCost =
+    toNumberValue(rate.shipmentCost) ??
+    toNumberValue(rate.shipment_cost) ??
+    readMoneyAmount(rate.shippingAmount) ??
+    readMoneyAmount(rate.shipping_amount) ??
+    toNumberValue(rate.cost) ??
+    toNumberValue(rate.amount)
+  if (shipmentCost == null) return null
+
+  const directOtherCost = toNumberValue(rate.otherCost) ?? toNumberValue(rate.other_cost)
+  const otherCost =
+    directOtherCost ??
+    ((readMoneyAmount(rate.otherAmount) ?? readMoneyAmount(rate.other_amount) ?? 0) +
+      (readMoneyAmount(rate.confirmationAmount) ?? readMoneyAmount(rate.confirmation_amount) ?? 0) +
+      (readMoneyAmount(rate.insuranceAmount) ?? readMoneyAmount(rate.insurance_amount) ?? 0))
+
+  return shipmentCost + otherCost
+}
+
+function getCachedSecondBestRate(order: OrderSummaryDto) {
+  const bestRate = toRecord(order.bestRate)
+  const bestRateRaw = toRecord(bestRate?.raw)
+  const shippingBestRate = toRecord(getShippingModel(order)?.bestRate)
+  const shippingBestRateRaw = toRecord(shippingBestRate?.raw)
+  return (
+    toRecord(bestRate?.secondBestRate) ??
+    toRecord(bestRate?.second_best_rate) ??
+    toRecord(bestRateRaw?.secondBestRate) ??
+    toRecord(bestRateRaw?.second_best_rate) ??
+    toRecord(shippingBestRate?.secondBestRate) ??
+    toRecord(shippingBestRate?.second_best_rate) ??
+    toRecord(shippingBestRateRaw?.secondBestRate) ??
+    toRecord(shippingBestRateRaw?.second_best_rate)
+  )
+}
+
 export function getBestRateBaseCost(order: OrderSummaryDto) {
   if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
     const hasShipmentCost = typeof (order.bestRate as LooseBestRate).shipmentCost === 'number'
@@ -289,10 +335,7 @@ export function getBestRateBaseCost(order: OrderSummaryDto) {
 }
 
 export function getBestRateFinalBaseCost(order: OrderSummaryDto) {
-  const money = getBackendRowMoney(order)
-  const cachedFinalAmount = money?.houseRateAmount ?? money?.rateCostAmount
-  if (cachedFinalAmount != null) return cachedFinalAmount
-  return getBestRateBaseCost(order)
+  return readRateTotalAmount(getCachedSecondBestRate(order))
 }
 
 export function getBestRateShippingProviderId(order: OrderSummaryDto) {

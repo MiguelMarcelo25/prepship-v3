@@ -16,7 +16,7 @@ export function renderBestRateFinalCell(order: OrderSummaryDto) {
     ? (
       <span
         data-best-rate-final="cached"
-        title="Backend cached cheapest rate from the saved all-carrier best-rate result"
+        title="Backend cached second-best rate from the saved all-carrier best-rate result"
         style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap', fontWeight: 700 }}
       >
         {formatMoney(finalAmount)}

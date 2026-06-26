@@ -4,9 +4,9 @@
  * Offline/static only: no DB, providers, labels, postage, marketplace
  * notifications, shipped/cancelled mutations, or production data edits.
  *
- * The column is display-only. The cheapest/final rate remains backend-owned:
+ * The column is display-only. The second-best/final rate remains backend-owned:
  * rates-backfill and /rates/browse delegate to combineCarrierUniverses(),
- * then persist the backend-selected all-carrier cheapest into the saved
+ * then persist the backend-selected all-carrier second-best rate into the saved
  * best-rate cache. The frontend may only render that cached DTO; it must not
  * rank, choose, or mutate rate truth.
  */
@@ -57,17 +57,17 @@ check(
 );
 
 check(
-  "'bestRateFinal' sorts by backend cached cheapest/final amount",
+  "'bestRateFinal' sorts by backend cached second-best/final amount",
   /case 'bestRateFinal':[\s\S]*getBestRateFinalBaseCost\(order\)/.test(columns),
 );
 
 check(
-  'row display helper exposes backend cached final amount without live overlay state',
+  'row display helper exposes backend cached second-best amount without live overlay state',
   /export function getBestRateFinalBaseCost/.test(rowDisplay) &&
-    /const money = getBackendRowMoney\(order\)/.test(rowDisplay) &&
-    /money\?\.houseRateAmount/.test(rowDisplay) &&
-    /money\?\.rateCostAmount/.test(rowDisplay) &&
-    /return getBestRateBaseCost\(order\)/.test(rowDisplay),
+    /secondBestRate/.test(rowDisplay) &&
+    /second_best_rate/.test(rowDisplay) &&
+    /readRateTotalAmount/.test(rowDisplay) &&
+    !/getBestRateFinalBaseCost[\s\S]*getBackendRowMoney\(order\)/.test(rowDisplay),
 );
 
 check(
@@ -89,29 +89,29 @@ check(
 );
 
 check(
-  'backend all-carrier cheapest owner still lives in rates-combined',
+  'backend all-carrier second-best owner still lives in rates-combined',
   /const rankedEligibleRates = \[\.\.\.combinedRates\]\.filter\(isPricedRate\)\.sort\(\(a, b\) => rateTotal\(a\) - rateTotal\(b\)\)/.test(ratesCombined) &&
-    /const cheapest = rankedEligibleRates\[0\] \?\? null/.test(ratesCombined),
+    /const secondCheapest = rankedEligibleRates\[1\] \?\? null/.test(ratesCombined),
 );
 
 check(
-  'Best Rate Final amount prefers backend cached cheapest money fields, then saved rate fallback',
+  'Best Rate Final amount prefers backend cached secondBestRate and does not fall back to cheapest',
   getBestRateFinalBaseCost({
     orderId: 1,
     orderNumber: 'A',
     clientId: 1,
     orderStatus: 'awaiting_shipment',
-    bestRate: { shipmentCost: 9, otherCost: 1 },
+    bestRate: { shipmentCost: 6, otherCost: 0, secondBestRate: { shipmentCost: 9, otherCost: 1 } },
     bestRateWorkflow: { money: { markedAmount: 12, rateCostAmount: 7.25, houseRateAmount: 6.9 } },
-  } as any) === 6.9 &&
+  } as any) === 10 &&
     getBestRateFinalBaseCost({
       orderId: 2,
       orderNumber: 'B',
       clientId: 1,
       orderStatus: 'awaiting_shipment',
-      bestRate: { shipmentCost: 9, otherCost: 1 },
+      bestRate: { shipmentCost: 6, otherCost: 0, raw: { second_best_rate: { totalCost: 11.25 } } },
       bestRateWorkflow: { money: { markedAmount: 12, rateCostAmount: 7.25, houseRateAmount: null } },
-    } as any) === 7.25 &&
+    } as any) === 11.25 &&
     getBestRateFinalBaseCost({
       orderId: 3,
       orderNumber: 'C',
@@ -119,7 +119,7 @@ check(
       orderStatus: 'awaiting_shipment',
       bestRate: { shipmentCost: 9, otherCost: 1 },
       bestRateWorkflow: null,
-    } as any) === 10,
+    } as any) == null,
 );
 
 check(
