@@ -189,57 +189,6 @@ function transformOrderRowV4toV2(
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
   const shippingModel = toRecordValue(canonicalOrder?.shipping) ?? toRecordValue(row.shipping);
   const orderStatus = (canonicalOrder?.orderStatus as string | undefined) ?? (row.orderStatus as string | undefined) ?? null;
-  const bestRateJson = overrides?.bestRateJson as
-    | Record<string, unknown>
-    | null
-    | undefined;
-
-  // Remap ShipStation v2 rate shape → v2-legacy bestRate shape that OrdersView expects.
-  // v2 shape: { amount, shipmentCost, otherCost, carrierCode, serviceCode, serviceName, carrierNickname, shippingProviderId }
-  // SS v2 shape: { shipping_amount: {amount}, other_amount: {amount}, carrier_code, service_code, service_type, carrier_nickname, carrier_id }
-  const bestRateLegacy = (() => {
-    if (!bestRateJson) return null;
-    const num = (v: unknown) => (typeof v === 'number' ? v : null);
-    const ship = bestRateJson.shipping_amount as Record<string, unknown> | undefined;
-    const other = bestRateJson.other_amount as Record<string, unknown> | undefined;
-    const confirmationAmount = bestRateJson.confirmation_amount as Record<string, unknown> | undefined;
-    const insuranceAmount = bestRateJson.insurance_amount as Record<string, unknown> | undefined;
-    const shipmentCost =
-      num(ship?.amount) ?? num(bestRateJson.shipmentCost) ?? num(bestRateJson.cost) ?? 0;
-    const otherAmountCost = num(other?.amount) ?? 0;
-    const confirmationAmountCost = num(confirmationAmount?.amount) ?? 0;
-    const insuranceAmountCost = num(insuranceAmount?.amount) ?? 0;
-    const componentOtherCost = otherAmountCost + confirmationAmountCost + insuranceAmountCost;
-    const storedOtherCost = num(bestRateJson.otherCost);
-    const otherCost =
-      storedOtherCost != null
-        ? Math.max(storedOtherCost, componentOtherCost)
-        : componentOtherCost;
-    return {
-      carrierCode: (bestRateJson.carrier_code as string) ?? (bestRateJson.carrierCode as string) ?? null,
-      serviceCode: (bestRateJson.service_code as string) ?? (bestRateJson.serviceCode as string) ?? null,
-      serviceName:
-        (bestRateJson.service_type as string) ??
-        (bestRateJson.serviceName as string) ??
-        (bestRateJson.serviceCode as string) ??
-        null,
-      carrierNickname:
-        (bestRateJson.carrier_nickname as string) ??
-        (bestRateJson.carrierNickname as string) ??
-        null,
-      shippingProviderId: toProviderAccountId(
-        bestRateJson.shippingProviderId ?? bestRateJson.carrier_id ?? null,
-      ),
-      amount: shipmentCost + otherCost,
-      shipmentCost,
-      otherCost,
-      insuranceCost: bestRateJson.insuranceCost ?? (insuranceAmountCost > 0 ? insuranceAmountCost : undefined),
-      insuranceProvenance: bestRateJson.insuranceProvenance,
-      // Keep the raw object under `raw` so anything that peeks at SS v2 fields still works.
-      raw: bestRateJson,
-    };
-  })();
-
   const weightOz =
     toFiniteNumber(overrides?.rateWeightOz) ??
     toFiniteNumber(canonicalOrder?.weightOz) ??
@@ -306,11 +255,7 @@ function transformOrderRowV4toV2(
     shippingProviderId: shippingModel?.providerAccountId ?? rowLabel?.shippingProviderId,
     cost: shippingModel?.labelCost ?? rowLabel?.cost,
   });
-  const selectedRateBestFallback = hasPositiveRateAmount(selectedRate) ? selectedRate : null;
-  const displayBestRate =
-    (hasPositiveRateAmount(apiBestRate) ? apiBestRate : null) ??
-    (hasPositiveRateAmount(bestRateLegacy) ? bestRateLegacy : null) ??
-    (orderStatus === 'cancelled' ? null : selectedRateBestFallback);
+  const displayBestRate = hasPositiveRateAmount(apiBestRate) ? apiBestRate : null;
   const resolvedServiceCode =
     (shippingModel?.serviceCode as string | null | undefined) ??
     (selectedRate?.serviceCode as string | null | undefined) ??
@@ -343,7 +288,7 @@ function transformOrderRowV4toV2(
           (isBrokeredRow ? null : displayBestRate?.carrierNickname) ??
           null,
         selectedRateAmount: toFiniteNumber(shippingModel.selectedRateAmount) ?? toFiniteNumber(selectedRate?.cost),
-        bestRateAmount: toFiniteNumber(shippingModel.bestRateAmount) ?? toFiniteNumber(displayBestRate?.amount),
+        bestRateAmount: toFiniteNumber(shippingModel.bestRateAmount),
         selectedRate,
         bestRate: displayBestRate,
       }

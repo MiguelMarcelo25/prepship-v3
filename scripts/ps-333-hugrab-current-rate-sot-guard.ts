@@ -165,6 +165,46 @@ check(
   /currentShipmentFacts:/.test(ordersRouteSrc) && /rowWeightOz/.test(ordersRouteSrc),
 );
 
+const useOrdersSrc = read('web/src/hooks/useOrders.ts');
+check(
+  'useOrders does not rebuild Awaiting visible Best Rate from overrides/selected fallbacks',
+  !/bestRateLegacy/.test(useOrdersSrc) &&
+    !/selectedRateBestFallback/.test(useOrdersSrc) &&
+    !/displayBestRate\s*=[\s\S]*?\?\?[\s\S]*?bestRateJson/.test(useOrdersSrc) &&
+    !/bestRateAmount:\s*toFiniteNumber\(shippingModel\.bestRateAmount\)\s*\?\?\s*toFiniteNumber\(displayBestRate\?\.amount\)/.test(useOrdersSrc),
+);
+
+const rateHelpersSrc = read('web/src/components/Views/orders/best-rate/rate-helpers.ts');
+check(
+  'Best Rate helpers no longer rewrite order/shipping objects as alternate visible-rate truth',
+  !/function withBestRateOverride/.test(rateHelpersSrc) &&
+    !/function withoutStaleBestRate/.test(rateHelpersSrc) &&
+    /function getOrderWithAutoBestRate\(order: OrderSummaryDto\) \{[\s\S]*?return order[\s\S]*?\}/.test(rateHelpersSrc),
+);
+
+const rowDisplaySrc = read('web/src/components/Views/orders-row-display.tsx');
+const bestRateBaseCostBlock = rowDisplaySrc.slice(
+  rowDisplaySrc.indexOf('export function getBestRateBaseCost('),
+  rowDisplaySrc.indexOf('export function getBestRateFinalBaseCost('),
+);
+check(
+  'Awaiting Best Rate amount reads backend money customerRateAmount, not order.bestRate fallback math',
+    /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
+    /customerRateAmount/.test(bestRateBaseCostBlock) &&
+    /markedAmount/.test(bestRateBaseCostBlock) &&
+    /\?\? null/.test(bestRateBaseCostBlock) &&
+    !/order\.bestRate|shipmentCost|otherCost/.test(bestRateBaseCostBlock),
+);
+
+const v2SharedSrc = read('web/src/lib/v2-apiClient/shared.ts');
+check(
+  'rate transport translation preserves backend-named money fields instead of minting a second money truth',
+  /customerRateAmount: obj\.customerRateAmount \?\? null/.test(v2SharedSrc) &&
+    /rateCostAmount: obj\.rateCostAmount \?\? null/.test(v2SharedSrc) &&
+    /houseRateAmount: obj\.houseRateAmount \?\? null/.test(v2SharedSrc) &&
+    /shippingMarginAmount: obj\.shippingMarginAmount \?\? null/.test(v2SharedSrc),
+);
+
 if (failures > 0) {
   console.error(`\nPS-333 HUGRAB current-rate SOT guard FAILED with ${failures} failure(s).`);
   process.exit(1);

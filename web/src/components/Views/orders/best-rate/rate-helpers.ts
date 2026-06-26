@@ -5,11 +5,7 @@
 // rate decision is the backend's; these build requests, project display state, and read DTOs.
 import {
   toStringValue,
-  toRecord,
-  toProviderAccountId,
-  normalizeShippingAccountName,
   getShippingModel,
-  getCarrierAccountLabelByProviderId,
 } from '../../orders-row-display';
 import { getDimensions, getOrderWeightOz, getShipTo } from '../../orders-items';
 import { normalizeConfirmationForRates } from '../../orders-rate-input';
@@ -17,7 +13,7 @@ import { hasCompleteDims } from '../panel-shipment-dims';
 import { classifyAwaitingBestRateDisplay } from '../../awaiting-best-rate-display-state';
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION } from '../../../../../../src/lib/shipping-service-eligibility';
 import { residentialForRate, buildRateRequestDraftKey, orderShippingHold, type StrictBestRateRequest } from './rate-request';
-import { getSavedBestRateRecord, getRateBaseAmount } from './rate-proof';
+import { getSavedBestRateRecord } from './rate-proof';
 import { hasSavedBestRateForRequest, hasAnySavedBestRateForDisplay } from './rate-display-predicates';
 import type { AutoBestRateEntry } from '../../orders-parity';
 import type { OrderFullDto, OrderSummaryDto, CarrierAccountDto } from '../../../../types/api';
@@ -169,89 +165,7 @@ export function createBestRateHelpers(deps: {
     });
   }
 
-  function withBestRateOverride(order: OrderSummaryDto, rate: Record<string, unknown>) {
-    const baseAmount = getRateBaseAmount(rate);
-    const shippingProviderId = toProviderAccountId(rate.shippingProviderId);
-    const serviceCode = toStringValue(rate.serviceCode);
-    const carrierCode = toStringValue(rate.carrierCode);
-    const carrierNickname = toStringValue(rate.carrierNickname);
-    const rateRecord = toRecord(rate);
-    const rateAccountNickname =
-      normalizeShippingAccountName(carrierNickname) ??
-      normalizeShippingAccountName(toStringValue(rateRecord?.providerAccountNickname)) ??
-      normalizeShippingAccountName(toStringValue(rateRecord?.accountNickname)) ??
-      getCarrierAccountLabelByProviderId(shippingAccounts, shippingProviderId);
-    const bestRateDims = getCurrentBestRateDimsLabel(order);
-    const shippingModel = toRecord(getShippingModel(order)) ?? {};
-    const canonicalOrder = toRecord(order.canonicalOrder);
-    const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {};
-    const shipping = {
-      ...shippingModel,
-      ...canonicalShipping,
-      bestRate: rate,
-      bestRateAmount: baseAmount,
-      providerAccountId: shippingProviderId ?? toProviderAccountId(shippingModel.providerAccountId) ?? toProviderAccountId(canonicalShipping.providerAccountId),
-      serviceCode: serviceCode ?? toStringValue(shippingModel.serviceCode) ?? toStringValue(canonicalShipping.serviceCode),
-      carrierCode: carrierCode ?? toStringValue(shippingModel.carrierCode) ?? toStringValue(canonicalShipping.carrierCode),
-      accountNickname: rateAccountNickname ?? toStringValue(shippingModel.accountNickname) ?? toStringValue(canonicalShipping.accountNickname),
-      bestRateDims,
-    };
-
-    return {
-      ...order,
-      bestRate: rate,
-      bestRateDims,
-      shipping,
-      canonicalOrder: canonicalOrder
-        ? {
-          ...canonicalOrder,
-          shipping,
-        }
-        : order.canonicalOrder,
-    };
-  }
-
-  function withoutStaleBestRate(order: OrderSummaryDto) {
-    const shippingModel = toRecord(getShippingModel(order)) ?? {};
-    const canonicalOrder = toRecord(order.canonicalOrder);
-    const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {};
-    const shipping = {
-      ...shippingModel,
-      ...canonicalShipping,
-      bestRate: null,
-      bestRateAmount: null,
-      accountNickname: null,
-      providerAccountId: null,
-      serviceCode: null,
-      carrierCode: null,
-    };
-
-    return {
-      ...order,
-      bestRate: null,
-      shipping,
-      canonicalOrder: canonicalOrder
-        ? {
-          ...canonicalOrder,
-          shipping,
-        }
-        : order.canonicalOrder,
-    };
-  }
-
   function getOrderWithAutoBestRate(order: OrderSummaryDto) {
-    const autoRequest = getAutoBestRateRequest(order);
-    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null;
-    if (autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate) {
-      return withBestRateOverride(order, autoEntry.rate);
-    }
-    if (
-      autoRequest &&
-      order.orderStatus === 'awaiting_shipment' &&
-      !hasSavedBestRateForRequest(order, autoRequest)
-    ) {
-      return withoutStaleBestRate(order);
-    }
     return order;
   }
 
@@ -263,8 +177,6 @@ export function createBestRateHelpers(deps: {
     getCurrentBestRateDimsLabel,
     hasDisplayableBestRateForCurrentRequest,
     getAwaitingBestRateDisplayState,
-    withBestRateOverride,
-    withoutStaleBestRate,
     getOrderWithAutoBestRate,
   };
 }

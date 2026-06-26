@@ -200,20 +200,11 @@ const shippingDisplayBlock = shippingDisplayStart >= 0 && shippingDisplayEnd > s
 check('awaiting account display resolves best-rate provider id through loaded accounts',
   /getCarrierAccountLabelByProviderId\(accounts,\s*getBestRateShippingProviderId\(order\)\)/.test(shippingDisplayBlock));
 
-// PS-317: withBestRateOverride + withoutStaleBestRate moved to ./orders/best-rate/rate-helpers.ts
-// as indented inner functions in the createBestRateHelpers factory. The slice (start anchor →
-// the next inner function withoutStaleBestRate) re-points there.
 const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
-const overlayStart = rateHelpers.indexOf('function withBestRateOverride(');
-const overlayEnd = rateHelpers.indexOf('\n  function withoutStaleBestRate', overlayStart);
-const overlayBlock = overlayStart >= 0 && overlayEnd > overlayStart
-  ? rateHelpers.slice(overlayStart, overlayEnd)
-  : '';
-// TEETH (PS-317): an empty/absent slice must FAIL LOUD, never pass vacuously on this money path.
-check('auto-rate overlay slice is present (non-vacuous)', overlayStart >= 0 && overlayBlock.length > 0);
-check('auto-rate overlay resolves account label by provider id',
-  /getCarrierAccountLabelByProviderId\(shippingAccounts,\s*shippingProviderId\)/.test(overlayBlock) &&
-  /accountNickname:\s*rateAccountNickname/.test(overlayBlock));
+check('auto-rate no longer rewrites row/shipping best-rate truth',
+  !/function withBestRateOverride/.test(rateHelpers) &&
+  !/function withoutStaleBestRate/.test(rateHelpers) &&
+  /function getOrderWithAutoBestRate\(order: OrderSummaryDto\) \{[\s\S]*?return order[\s\S]*?\}/.test(rateHelpers));
 
 // PS-166/PS-306/PS-258 (Wave 5): the order-detail side panel was extracted
 // VERBATIM from OrdersView into OrdersDetailSidePanel.tsx. The OrdersView shell's
@@ -226,7 +217,7 @@ const panelBlock = panelStart >= 0 && panelEnd > panelStart
   ? ordersView.slice(panelStart, panelEnd)
   : '';
 const detailSidePanel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
-check('side panel rate display consumes auto best-rate overlay',
+check('side panel rate display consumes backend row display order',
   /const panelDisplayOrder = getOrderWithAutoBestRate\(panelOrder\)/.test(panelBlock) &&
   /getShipAccountDisplay\(panelDisplayOrder,\s*shippingAccounts\)/.test(detailSidePanel) &&
   /panelDisplayOrder\.bestRate/.test(detailSidePanel));
@@ -275,8 +266,9 @@ const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateShippin
 const bestRateBaseBlock = bestRateBaseStart >= 0 && bestRateBaseEnd > bestRateBaseStart
   ? rowDisplay.slice(bestRateBaseStart, bestRateBaseEnd)
   : '';
-check('awaiting best-rate amount reads saved bestRate before stale canonical amount',
+check('awaiting best-rate amount reads backend money before stale canonical amount',
   /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateBaseBlock) &&
+  /customerRateAmount/.test(bestRateBaseBlock) &&
   bestRateBaseBlock.indexOf("order.orderStatus === 'awaiting_shipment'") < bestRateBaseBlock.indexOf("getShippingNumber(order, 'bestRateAmount')"));
 
 const bestRateServiceStart = rowDisplay.indexOf('export function getBestRateServiceCode(');

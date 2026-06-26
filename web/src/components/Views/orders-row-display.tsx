@@ -306,32 +306,12 @@ function getCachedSecondBestRate(order: OrderSummaryDto) {
 }
 
 export function getBestRateBaseCost(order: OrderSummaryDto) {
-  if (order.orderStatus === 'awaiting_shipment' && order.bestRate) {
-    const hasShipmentCost = typeof (order.bestRate as LooseBestRate).shipmentCost === 'number'
-    const hasOtherCost = typeof (order.bestRate as LooseBestRate).otherCost === 'number'
-    const hasAmount = typeof (order.bestRate as LooseBestRate).amount === 'number'
-    const shipmentCost = hasShipmentCost ? (order.bestRate as LooseBestRate).shipmentCost as number : 0
-    const otherCost = hasOtherCost ? (order.bestRate as LooseBestRate).otherCost as number : 0
-    const amount = hasAmount ? (order.bestRate as LooseBestRate).amount as number : 0
-    const total = shipmentCost + otherCost
-    if (total > 0) return total
-    if (hasAmount) return amount
+  const money = getBackendRowMoney(order)
+  if (order.orderStatus === 'awaiting_shipment') {
+    return money?.customerRateAmount ?? money?.markedAmount ?? null
   }
 
-  const canonicalAmount = getShippingNumber(order, 'bestRateAmount')
-  if (canonicalAmount && canonicalAmount > 0) return canonicalAmount
-
-  const hasShipmentCost = typeof (order.bestRate as LooseBestRate | undefined)?.shipmentCost === 'number'
-  const hasOtherCost = typeof (order.bestRate as LooseBestRate | undefined)?.otherCost === 'number'
-  const hasAmount = typeof (order.bestRate as LooseBestRate | undefined)?.amount === 'number'
-  const shipmentCost = hasShipmentCost ? (order.bestRate as LooseBestRate | undefined)!.shipmentCost as number : 0
-  const otherCost = hasOtherCost ? (order.bestRate as LooseBestRate | undefined)!.otherCost as number : 0
-  const amount = hasAmount ? (order.bestRate as LooseBestRate | undefined)!.amount as number : 0
-  const total = shipmentCost + otherCost
-  if (total > 0) return total
-  if (hasAmount) return amount
-  if (hasShipmentCost || hasOtherCost) return total
-  return null
+  return money?.customerRateAmount ?? money?.markedAmount ?? getShippingNumber(order, 'bestRateAmount') ?? null
 }
 
 export function getBestRateFinalBaseCost(order: OrderSummaryDto) {

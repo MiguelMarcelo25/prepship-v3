@@ -1196,8 +1196,6 @@ export default function OrdersView({
     getCurrentBestRateDimsLabel,
     hasDisplayableBestRateForCurrentRequest,
     getAwaitingBestRateDisplayState,
-    withBestRateOverride,
-    withoutStaleBestRate,
     getOrderWithAutoBestRate,
   } = createBestRateHelpers({ autoBestRateEntries, orderDetailsById, shippingAccounts, carrierServiceCatalog })
 

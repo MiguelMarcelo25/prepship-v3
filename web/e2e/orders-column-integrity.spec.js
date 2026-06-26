@@ -99,6 +99,40 @@ const rate = {
   eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
 }
 
+function freshBestRateWorkflow(rateLike = rate) {
+  const customerRateAmount = rateLike.customerRateAmount ?? rateLike.amount ?? rateLike.cost ?? rateLike.shipmentCost ?? null
+  const rateCostAmount = rateLike.rateCostAmount ?? rateLike.cost ?? rateLike.shipmentCost ?? customerRateAmount
+  const shippingMarginAmount =
+    rateLike.shippingMarginAmount ??
+    (customerRateAmount != null && rateCostAmount != null ? Math.max(0, Number((customerRateAmount - rateCostAmount).toFixed(2))) : null)
+
+  return {
+    bestRateState: 'fresh',
+    savedRateDisplay: 'fresh',
+    canDisplayFinalRate: true,
+    canUseDisplayedRateForPurchase: true,
+    allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false },
+    display: {
+      carrierCode: rateLike.carrierCode ?? null,
+      serviceCode: rateLike.serviceCode ?? null,
+      accountNickname: rateLike.providerAccountNickname ?? rateLike.carrierNickname ?? null,
+      providerAccountId: rateLike.shippingProviderId ?? rateLike.providerAccountId ?? null,
+    },
+    money: {
+      baseAmount: rateCostAmount,
+      markedAmount: customerRateAmount,
+      markupAmount: shippingMarginAmount,
+      insuranceAddOn: rateLike.insuranceCost ?? 0,
+      marginPercent: null,
+      customerRateAmount,
+      rateCostAmount,
+      houseRateAmount: rateLike.houseRateAmount ?? null,
+      shippingMarginAmount,
+      markupSource: 'carrier_markup',
+    },
+  }
+}
+
 const storeIdByClientId = { 1: 101, 2: 102 }
 
 // Build a raw `/orders` list row (the shape the API actually returns). The
@@ -152,7 +186,7 @@ const awaitingValid = baseRow(970001, 'awaiting_shipment', 1, {
   // QA root-cause 2026-06-23: the canonical display gate (orders-parity savedBestRateCanDisplay…)
   // needs the full fresh-row verdict the real backend emits (best-rate-workflow-dto.ts), not just
   // savedRateDisplay. The bare stub made the saved rate non-displayable → "Rate unavailable".
-  bestRateWorkflow: { bestRateState: 'fresh', savedRateDisplay: 'fresh', canDisplayFinalRate: true, canUseDisplayedRateForPurchase: true, allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false } },
+  bestRateWorkflow: freshBestRateWorkflow(rate),
 })
 
 // 2) Awaiting, missing dims + no rate -> carrier/account/best-rate must say "— add dims".
@@ -195,7 +229,7 @@ const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
   // QA root-cause 2026-06-23: the canonical display gate (orders-parity savedBestRateCanDisplay…)
   // needs the full fresh-row verdict the real backend emits (best-rate-workflow-dto.ts), not just
   // savedRateDisplay. The bare stub made the saved rate non-displayable → "Rate unavailable".
-  bestRateWorkflow: { bestRateState: 'fresh', savedRateDisplay: 'fresh', canDisplayFinalRate: true, canUseDisplayedRateForPurchase: true, allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false } },
+  bestRateWorkflow: freshBestRateWorkflow(bestRateDivergent),
   overrides: { rateWeightOz: 60, rateDimsL: 11, rateDimsW: 8, rateDimsH: 6, bestRateDims: '11x8x6', bestRateJson: bestRateDivergent },
   bestRate: bestRateDivergent,
   selectedRate: {

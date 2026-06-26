@@ -17,9 +17,9 @@ function check(name: string, ok: boolean) {
   }
 }
 
-// PS-157: useOrders (and its rate/label transform helpers normalizeRateForV2,
-// normalizeLabelForV2, and the bestRateLegacy block) split out of v2Hooks.ts
-// into web/src/hooks/useOrders.ts. The slice anchors below are unchanged.
+// PS-157: useOrders (and its rate/label transform helpers normalizeRateForV2
+// and normalizeLabelForV2) split out of v2Hooks.ts into web/src/hooks/useOrders.ts.
+// PS-333 addendum: the old bestRateLegacy override remapper is intentionally gone.
 const hooks = readFileSync('web/src/hooks/useOrders.ts', 'utf8');
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
@@ -111,11 +111,10 @@ check(
 );
 
 check(
-  'legacy saved bestRateJson folds raw insurance_amount into otherCost',
-  /insuranceAmount/.test(legacyBlock) &&
-    /insurance_amount/.test(legacyBlock) &&
-    /componentOtherCost\s*=\s*otherAmountCost\s*\+\s*confirmationAmountCost\s*\+\s*insuranceAmountCost/.test(legacyBlock) &&
-    /Math\.max\(storedOtherCost,\s*componentOtherCost\)/.test(legacyBlock),
+  'useOrders does not remap override bestRateJson as a second insured saved-rate money path',
+  legacyBlock.length === 0 &&
+    !/const bestRateLegacy/.test(hooks) &&
+    !/bestRateJson\.insurance_amount/.test(hooks),
 );
 
 check(

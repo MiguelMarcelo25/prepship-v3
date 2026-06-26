@@ -174,9 +174,9 @@ check(
 );
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-// PS-317: the display-order overlay (getOrderWithAutoBestRate, which clears a saved rate that fails
-// the same hasSavedBestRateForRequest contract) moved into ./orders/best-rate/rate-helpers.ts. The
-// passive-enqueue skip + the backend-verdict FE pass-throughs below stayed as OrdersView call sites.
+// PS-333 addendum: getOrderWithAutoBestRate no longer clears/rebuilds order.bestRate locally.
+// Stale/non-displayable saved rates are suppressed by the backend workflow verdict and the
+// awaiting-rate classifier, not by a frontend row rewrite.
 const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
 // The passive enqueue still cache-first SKIPS a row with a valid saved display — EXCEPT a row the
 // backend flagged needsDisplayRefresh (forceLive), which is re-quoted LIVE to detect carrier drift.
@@ -189,8 +189,9 @@ check(
   true,
 );
 check(
-  'display order clears saved rates that fail the same contract (rate-helpers.ts)',
-  /!hasSavedBestRateForRequest\(order, autoRequest\)/.test(rateHelpers),
+  'display order does not clear/rebuild saved rates locally (rate-helpers.ts)',
+  !/!hasSavedBestRateForRequest\(order, autoRequest\)/.test(rateHelpers) &&
+    /function getOrderWithAutoBestRate\(order: OrderSummaryDto\) \{[\s\S]*?return order[\s\S]*?\}/.test(rateHelpers),
   true,
 );
 check(
