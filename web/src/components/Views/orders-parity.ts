@@ -15,6 +15,7 @@ export type TableColumnKey =
   | 'custcarrier'
   | 'total'
   | 'bestrate'
+  | 'bestRateFinal'
   | 'houserate'
   | 'ratecost'
   | 'margin'
@@ -78,6 +79,7 @@ const COLUMN_MIN_WIDTHS: Partial<Record<TableColumnKey, number>> = {
   houserate: 88,
   ratecost: 88,
   bestrate: 175,
+  bestRateFinal: 100,
   test_bestRate: 175,
 }
 
@@ -375,7 +377,10 @@ export function resolveColumnPrefs(
     }
   }
 
-  if (currentStatus !== 'awaiting_shipment') hiddenColumns.add('age')
+  if (currentStatus !== 'awaiting_shipment') {
+    hiddenColumns.add('age')
+    hiddenColumns.add('bestRateFinal')
+  }
   // PS-239: marketplace fee + profit are Awaiting + Shipped only (never Cancelled).
   if (currentStatus === 'cancelled') {
     hiddenColumns.add('houserate' as TableColumnKey)

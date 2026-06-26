@@ -288,6 +288,13 @@ export function getBestRateBaseCost(order: OrderSummaryDto) {
   return null
 }
 
+export function getBestRateFinalBaseCost(order: OrderSummaryDto) {
+  const money = getBackendRowMoney(order)
+  const cachedFinalAmount = money?.houseRateAmount ?? money?.rateCostAmount
+  if (cachedFinalAmount != null) return cachedFinalAmount
+  return getBestRateBaseCost(order)
+}
+
 export function getBestRateShippingProviderId(order: OrderSummaryDto) {
   const rateProviderId = getRateProviderAccountId(toRecord(order.bestRate))
   if (order.orderStatus === 'awaiting_shipment') {

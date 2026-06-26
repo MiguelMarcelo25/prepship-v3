@@ -3,11 +3,26 @@
 // (getBackendRowMoney / getBackendRowMarketplace) through the canonical formatters, with NO
 // component-state closure and NO recompute (PS-305 boundary) — so this is a thin, display-only
 // presentation module the shell delegates to. Behavior-identical to the prior inline cells.
-import { formatMoney, getBackendRowMoney, getBackendRowMarketplace } from './orders-row-display'
+import { formatMoney, getBackendRowMoney, getBackendRowMarketplace, getBestRateFinalBaseCost } from './orders-row-display'
 import type { OrderSummaryDto } from '../../types/api'
 
 export function renderOrderTotalCell(order: OrderSummaryDto) {
   return <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{formatMoney(order.orderTotal ?? 0)}</span>
+}
+
+export function renderBestRateFinalCell(order: OrderSummaryDto) {
+  const finalAmount = getBestRateFinalBaseCost(order)
+  return finalAmount != null
+    ? (
+      <span
+        data-best-rate-final="cached"
+        title="Backend cached cheapest rate from the saved all-carrier best-rate result"
+        style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap', fontWeight: 700 }}
+      >
+        {formatMoney(finalAmount)}
+      </span>
+    )
+    : <span data-best-rate-final="missing" style={{ color: 'var(--text3)', fontSize: 12 }}>-</span>
 }
 
 // PS-308: the raw provider Rate Cost from the backend money tuple, SEPARATED from the
