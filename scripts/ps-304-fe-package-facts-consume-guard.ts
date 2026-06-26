@@ -3,7 +3,7 @@
  *
  * The PS-304 audit's #1 gap was "packageFacts has 0 web/src consumers". This guard pins
  * the first consumer: OrdersPanelPackageFactsLine reads order.packageFacts (immutableReason
- * / staleRateImpact / requiresRerate) as a pure display, and OrdersView renders it in the
+ * / staleRateImpact / rerateCopy) as a pure display, and OrdersView renders it in the
  * panel wired to panelOrder.packageFacts. Fails if the consumption is removed or if the FE
  * recomputes the verdict instead of reading the backend field (PS-305 boundary).
  *
@@ -36,12 +36,13 @@ check('panel exposes OrdersPanelPackageFactsLine (pure display of the backend ve
   /export function OrdersPanelPackageFactsLine/.test(panelFields));
 check('panel line READS the backend package-facts fields',
   /packageFacts\.immutableReason/.test(panelFields) &&
-  /packageFacts\.staleRateImpact/.test(panelFields));
-// QA audit 2026-06-23: the "⚠ package changed — re-rate" warning must key on staleRateImpact
-// ONLY (a SAVED rate that went stale/expired → the package really changed under it). The broader
-// requiresRerate is also true for a never-rated row that simply has no rate yet, so gating the
-// message on it showed a FALSE "package changed" warning on brand-new orders. Pin the fix.
-check('"package changed" warning keys on staleRateImpact, not the broader requiresRerate',
+  /packageFacts\.staleRateImpact/.test(panelFields) &&
+  /packageFacts\.rerateCopy/.test(panelFields));
+// QA audit 2026-06-23 + PS-328: the re-rate warning must key on staleRateImpact
+// ONLY and render the backend-owned warning copy. The broader requiresRerate is also
+// true for a never-rated row that simply has no rate yet, so gating the message on it
+// would show a false warning on brand-new orders.
+check('re-rate warning keys on staleRateImpact, not the broader requiresRerate',
   /if \(packageFacts\.staleRateImpact\) \{/.test(panelFields) &&
   !/packageFacts\.staleRateImpact \|\| packageFacts\.requiresRerate/.test(panelFields));
 check('panel line does NOT recompute the verdict (no dims math / insured-value heuristics)',

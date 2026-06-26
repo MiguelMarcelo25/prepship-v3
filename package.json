@@ -464,6 +464,7 @@
     "test:ps-304-fe-package-facts-consume": "tsx scripts/ps-304-fe-package-facts-consume-guard.ts",
     "test:ps-304-account-fallback-debt": "tsx scripts/ps-304-account-fallback-debt-guard.ts",
     "test:ps-305-authority-drift": "tsx scripts/ps-305-authority-drift-guard.ts",
+    "test:ps-328-rerate-warning-reason": "tsx scripts/ps-328-rerate-warning-reason-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",
     "test:ps-307-marked-rate-comparison-closeout": "tsx scripts/ps-307-marked-rate-comparison-closeout-guard.ts",

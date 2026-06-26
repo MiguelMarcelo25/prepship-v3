@@ -54,12 +54,14 @@ export function OrdersPanelPackageDimsLine({ dims }: { dims: ShipmentDims | null
 // PS-304 (FE consumption): surface the BACKEND-owned row package-facts verdict
 // (order.packageFacts) in the panel — the first consumer of that deployed read model.
 // Pure/display-only: renders the immutable lock reason (shipped/cancelled/has-label) or a
-// "re-rate needed" warning when the saved rate no longer matches the package. Renders
+// "re-rate needed" warning when the saved rate cannot be purchased as-is. Renders
 // NOTHING when there is no warning (resolved + editable), so the panel is unchanged for the
 // common case and never re-derives the verdict (PS-305 boundary).
 export type PanelPackageFacts = {
   staleRateImpact?: boolean | null
   requiresRerate?: boolean | null
+  rerateReason?: 'rate_expired' | 'rate_changed' | string | null
+  rerateCopy?: string | null
   immutableReason?: 'shipped' | 'cancelled' | 'has_label' | string | null
 } | null | undefined
 
@@ -77,15 +79,15 @@ export function OrdersPanelPackageFactsLine({ packageFacts }: { packageFacts: Pa
       </div>
     )
   }
-  // "Package changed" must key on staleRateImpact ONLY. staleRateImpact is the backend
-  // signal that a SAVED rate went stale/expired (a prior rate existed → the package really
-  // changed under it). requiresRerate is broader ("can't purchase the saved rate as-is") and
-  // is also true for a never-rated row that simply has no rate yet — using it here would show
-  // a false "package changed" warning on brand-new orders. See QA audit 2026-06-23.
+  // This warning must key on staleRateImpact ONLY. staleRateImpact is the backend
+  // signal that a SAVED rate went stale/expired. requiresRerate is broader ("can't
+  // purchase the saved rate as-is") and is also true for a never-rated row that simply
+  // has no rate yet, so using it here would show a false re-rate warning on new orders.
   if (packageFacts.staleRateImpact) {
+    const rerateCopy = packageFacts.rerateCopy ?? 'Re-rate needed - saved rate out of date'
     return (
-      <div id="p-package-facts" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 700, color: 'var(--amber,#b7791f)', whiteSpace: 'nowrap' }} title="Backend package-facts verdict (PS-304): the saved best rate no longer matches the current package — re-rate before purchasing.">
-        ⚠ Re-rate needed — package changed
+      <div id="p-package-facts" style={{ padding: '0 0 6px 98px', fontSize: 10, fontWeight: 700, color: 'var(--amber,#b7791f)', whiteSpace: 'normal', lineHeight: 1.2 }} title="Backend package-facts verdict (PS-304): the saved best rate cannot be purchased as-is; re-rate before purchasing.">
+        {rerateCopy}
       </div>
     )
   }

@@ -41,6 +41,7 @@ const baseline = facts({});
 check('baseline: immutableReason null', baseline.immutableReason === null);
 check('baseline: complete package → state resolved', baseline.state === 'resolved', baseline.state);
 check('baseline: not stale, no re-rate', baseline.staleRateImpact === false && baseline.requiresRerate === false);
+check('baseline: no re-rate warning reason/copy', baseline.rerateReason === null && baseline.rerateCopy === null, baseline);
 
 // 2. immutableReason precedence: cancelled > shipped > has_label > null.
 check('cancelled via orderStatus', facts({ orderStatus: 'cancelled' }).immutableReason === 'cancelled');
@@ -60,12 +61,23 @@ check('no axis + complete → resolved', facts({}).state === 'resolved');
 // 4. Stale-rate impact + re-rate — closed rows are realized and never re-rate.
 check('stale rate on open row → staleRateImpact + requiresRerate', (() => {
   const f = facts({ rateState: 'stale' });
-  return f.staleRateImpact === true && f.requiresRerate === true;
+  return f.staleRateImpact === true &&
+    f.requiresRerate === true &&
+    f.rerateReason === 'rate_changed' &&
+    f.rerateCopy === 'Re-rate needed - saved rate out of date';
 })());
-check('expired rate on open row → staleRateImpact', facts({ rateState: 'expired' }).staleRateImpact === true);
+check('expired rate on open row → staleRateImpact + expired copy', (() => {
+  const f = facts({ rateState: 'expired' });
+  return f.staleRateImpact === true &&
+    f.rerateReason === 'rate_expired' &&
+    f.rerateCopy === 'Re-rate needed - saved rate expired';
+})());
 check('stale rate on a SHIPPED row → no impact, no re-rate (closed)', (() => {
   const f = facts({ rateState: 'stale', orderStatus: 'shipped' });
-  return f.staleRateImpact === false && f.requiresRerate === false;
+  return f.staleRateImpact === false &&
+    f.requiresRerate === false &&
+    f.rerateReason === null &&
+    f.rerateCopy === null;
 })());
 check('final rate → no stale impact', facts({ rateState: 'final' }).staleRateImpact === false);
 

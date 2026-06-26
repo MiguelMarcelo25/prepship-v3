@@ -2,7 +2,7 @@
  * PS-304 guard — backend package-facts read-model on the OrdersView ROW.
  *
  * Proves (a) the pure row owner buildOrderRowPackageFacts derives the named package
- * fields (state / requiresRerate / staleRateImpact / immutableReason) across
+ * fields (state / requiresRerate / staleRateImpact / rerateCopy / immutableReason) across
  * resolved / needs-dims / stale / shipped / cancelled / has-label rows and converges
  * on the PS-301 packageState; (b) the pure precedence policy now carries
  * canSaveComboDefault / canPropagateDefault; (c) the order-list route emits
@@ -39,6 +39,7 @@ const resolved = buildOrderRowPackageFacts({
 check('resolved: state=resolved', resolved.state === 'resolved', resolved.state);
 check('resolved: not requiresRerate', resolved.requiresRerate === false, resolved);
 check('resolved: no staleRateImpact', resolved.staleRateImpact === false, resolved);
+check('resolved: no rerate warning reason/copy', resolved.rerateReason === null && resolved.rerateCopy === null, resolved);
 check('resolved: no immutableReason', resolved.immutableReason === null, resolved);
 check('resolved: passes through weight/dims/packageId',
   resolved.weightOz === 16 && resolved.dims?.length === 8 && resolved.selectedPackageId === '42', resolved);
@@ -65,6 +66,9 @@ const stale = buildOrderRowPackageFacts({
 });
 check('stale: staleRateImpact=true', stale.staleRateImpact === true, stale);
 check('stale: requiresRerate=true', stale.requiresRerate === true, stale);
+check('stale: backend-owned expired warning copy',
+  stale.rerateReason === 'rate_expired' &&
+  stale.rerateCopy === 'Re-rate needed - saved rate expired', stale);
 
 // 4. SHIPPED → immutableReason=shipped; locked (no rerate / no stale impact).
 const shipped = buildOrderRowPackageFacts({
@@ -83,7 +87,10 @@ const cancelled = buildOrderRowPackageFacts({
 });
 check('cancelled: immutableReason=cancelled', cancelled.immutableReason === 'cancelled', cancelled);
 check('cancelled: locked (no rerate/stale despite stale rate)',
-  cancelled.requiresRerate === false && cancelled.staleRateImpact === false, cancelled);
+  cancelled.requiresRerate === false &&
+  cancelled.staleRateImpact === false &&
+  cancelled.rerateReason === null &&
+  cancelled.rerateCopy === null, cancelled);
 
 // 6. HAS LABEL (awaiting with an active label) → immutableReason=has_label.
 const hasLabel = buildOrderRowPackageFacts({

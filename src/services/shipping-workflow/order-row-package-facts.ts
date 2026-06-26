@@ -12,6 +12,8 @@ export type OrderRowPackageImmutableReason = 'shipped' | 'cancelled' | 'has_labe
 
 export type OrderRowPackageDims = { length: number; width: number; height: number };
 
+export type OrderRowPackageRerateReason = 'rate_expired' | 'rate_changed' | null;
+
 export type OrderRowPackageFacts = {
   state: OrderRowPackageState;
   weightOz: number | null;
@@ -19,6 +21,8 @@ export type OrderRowPackageFacts = {
   selectedPackageId: string | null;
   requiresRerate: boolean;
   staleRateImpact: boolean;
+  rerateReason: OrderRowPackageRerateReason;
+  rerateCopy: string | null;
   immutableReason: OrderRowPackageImmutableReason;
 };
 
@@ -44,15 +48,30 @@ function immutableReasonFor(input: BuildOrderRowPackageFactsInput): OrderRowPack
   return null;
 }
 
+function rerateWarningFor(
+  rateState: OrderRowRateState | null | undefined,
+  locked: boolean,
+): { rerateReason: OrderRowPackageRerateReason; rerateCopy: string | null } {
+  if (locked) return { rerateReason: null, rerateCopy: null };
+  if (rateState === 'expired') {
+    return { rerateReason: 'rate_expired', rerateCopy: 'Re-rate needed - saved rate expired' };
+  }
+  if (rateState === 'stale') {
+    return { rerateReason: 'rate_changed', rerateCopy: 'Re-rate needed - saved rate out of date' };
+  }
+  return { rerateReason: null, rerateCopy: null };
+}
+
 export function buildOrderRowPackageFacts(input: BuildOrderRowPackageFactsInput): OrderRowPackageFacts {
   const immutableReason = immutableReasonFor(input);
   const locked = immutableReason === 'shipped' || immutableReason === 'cancelled';
   const hasCompletePackage = input.weightOz != null && input.weightOz > 0 && input.dims != null;
   const state: OrderRowPackageState = input.packageState ?? (hasCompletePackage ? 'resolved' : 'needs_dims');
-  // A saved rate that is stale/expired no longer reflects the current package → re-rate
-  // before purchase. Closed rows (shipped/cancelled) are realized, never re-rate-able.
+  // A saved rate that is stale/expired still blocks purchase, but the backend
+  // owns the specific operator-facing reason so the FE does not invent it.
   const staleRateImpact = !locked && (input.rateState === 'stale' || input.rateState === 'expired');
   const requiresRerate = !locked && (input.requiresRerate === true || staleRateImpact);
+  const { rerateReason, rerateCopy } = rerateWarningFor(input.rateState, locked);
   return {
     state,
     weightOz: input.weightOz,
@@ -60,6 +79,8 @@ export function buildOrderRowPackageFacts(input: BuildOrderRowPackageFactsInput)
     selectedPackageId: input.selectedPackageId,
     requiresRerate,
     staleRateImpact,
+    rerateReason,
+    rerateCopy,
     immutableReason,
   };
 }
