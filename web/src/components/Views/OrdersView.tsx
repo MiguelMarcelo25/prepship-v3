@@ -4742,11 +4742,11 @@ export default function OrdersView({
       trackAppliedRatePersist(
         appliedRatePersistsRef.current,
         panelOrder.orderId,
-        apiClient
-          .saveOrderDims(panelOrder.orderId, {
+        Promise.resolve()
+          .then(() => apiClient.saveOrderDims(panelOrder.orderId, {
             ...(dims ? { length: Number(dims.length) || 0, width: Number(dims.width) || 0, height: Number(dims.height) || 0 } : {}),
             weightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-          })
+          }))
           .then(() => apiClient.saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel))
           .then(() => refetchOrders())
           .catch((error) => {
@@ -4788,17 +4788,19 @@ export default function OrdersView({
     trackAppliedRatePersist(
       appliedRatePersistsRef.current,
       panelOrderId ?? 0,
-      persistAppliedRateForOrder(panelOrderId ?? 0, rate, {
-        fallbackDims: getPanelDims(),
-        fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-        ...(autoRequest
-          ? {
-            request: autoRequest,
-            metadata: { isComplete: appliedRateComplete, rateCount: appliedRateCount, matchType: 'manual' },
-          }
-          : {}),
-        refetch: true,
-      }).catch((error) => {
+      Promise.resolve()
+        .then(() => persistAppliedRateForOrder(panelOrderId ?? 0, rate, {
+          fallbackDims: getPanelDims(),
+          fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+          ...(autoRequest
+            ? {
+              request: autoRequest,
+              metadata: { isComplete: appliedRateComplete, rateCount: appliedRateCount, matchType: 'manual' },
+            }
+            : {}),
+          refetch: true,
+        }))
+        .catch((error) => {
         showToast(error instanceof Error ? error.message : 'Failed to save selected rate', 'error')
       }),
     )
@@ -7066,11 +7068,12 @@ export default function OrdersView({
                 trackAppliedRatePersist(
                   appliedRatePersistsRef.current,
                   panelOrderId,
-                  persistAppliedRateForOrder(panelOrderId, testRate, {
-                    fallbackDims: dims ?? getPanelDims(),
-                    fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
-                    refetch: true,
-                  })
+                  Promise.resolve()
+                    .then(() => persistAppliedRateForOrder(panelOrderId, testRate, {
+                      fallbackDims: dims ?? getPanelDims(),
+                      fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+                      refetch: true,
+                    }))
                     .catch((error) => {
                       showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
                     }),
@@ -7107,7 +7110,8 @@ export default function OrdersView({
               trackAppliedRatePersist(
                 appliedRatePersistsRef.current,
                 panelOrderId,
-                persistAppliedRateForOrder(panelOrderId, best, {
+                Promise.resolve()
+                  .then(() => persistAppliedRateForOrder(panelOrderId, best, {
                   fallbackDims: dims ?? getPanelDims(),
                   fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
                   // PS-083 follow-up: stamp the browse-resolved best rate with the
@@ -7126,7 +7130,7 @@ export default function OrdersView({
                       }
                     : {}),
                   refetch: true,
-                })
+                }))
                   .catch((error) => {
                     showToast(error instanceof Error ? error.message : 'Failed to save best rate', 'error')
                   }),

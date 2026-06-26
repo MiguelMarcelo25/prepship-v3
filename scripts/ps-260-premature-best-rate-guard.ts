@@ -39,8 +39,9 @@ check('onBestRateResolved emission is gated behind !awaitingLiveFanout',
 //    fan-out ever follows it — uncoveredPids stays empty in that branch) and the gated
 //    real-path emission. No third, ungated bypass in the live path.
 check('only the testMode immediate emit + the gated real-path emit exist (no ungated bypass)',
-  (modal.match(/onBestRateResolved\(applied\)/g) ?? []).length === 2
-  && /if \(applied && onBestRateResolved\) onBestRateResolved\(applied\);/.test(modal));
+  (modal.match(/emitBestRateResolved\(applied\)/g) ?? []).length === 2
+  && /if \(applied\) emitBestRateResolved\(applied\);/.test(modal)
+  && !/onBestRateResolved\(applied\)/.test(modal));
 
 // 4. PS-241 preserved — the coverage-driven live fan-out still runs after the probe.
 check('PS-241 coverage-driven live fan-out still runs on uncovered probe',

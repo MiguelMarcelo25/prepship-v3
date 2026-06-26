@@ -1075,6 +1075,24 @@ export default function RateBrowserModal({
   // here because the rows array never carries the stamp — only bestRate does.
   const canonicalBestRef = useRef<unknown>(null);
 
+  function finishBrowseRequest(requestSeq: number): void {
+    if (browseSequenceRef.current !== requestSeq) return;
+    setPendingPids(new Set());
+    setBrowsing(false);
+  }
+
+  function emitBestRateResolved(applied: RbAppliedRate): void {
+    try {
+      onBestRateResolved?.(applied);
+    } catch (error) {
+      setBestRateUnresolved(true);
+      console.warn(
+        '[RateBrowserModal] resolved best-rate callback failed:',
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
   const rateShippingAccounts = useMemo(
     () => (testMode ? shippingAccounts : scopedShippingAccounts),
     [testMode, shippingAccounts, scopedShippingAccounts]
@@ -1420,10 +1438,9 @@ export default function RateBrowserModal({
         setRatesByPid(groupRatesByProviderId(seededTestRates));
         setSelectedPid(seededPid);
         const applied = toAppliedRate(seededBestRate);
-        if (applied && onBestRateResolved) onBestRateResolved(applied);
+        if (applied) emitBestRateResolved(applied);
       }
-      setPendingPids(new Set());
-      setBrowsing(false);
+      finishBrowseRequest(requestSeq);
       return { carriersWithRates, uncoveredPids };
     }
 
@@ -1693,7 +1710,7 @@ export default function RateBrowserModal({
           : {}
       );
     } finally {
-      setPendingPids(new Set());
+      if (browseSequenceRef.current === requestSeq) setPendingPids(new Set());
     }
 
     // PS-260: never resolve/persist a "best rate" from a cached-only PROBE while a live
@@ -1727,7 +1744,7 @@ export default function RateBrowserModal({
         if (applied) {
           setBestRateUnresolved(false);
           setSelectedPid(applied.shippingProviderId);
-          onBestRateResolved(applied);
+          emitBestRateResolved(applied);
         } else {
           setBestRateUnresolved(true);
         }
@@ -1738,7 +1755,7 @@ export default function RateBrowserModal({
       }
     }
 
-    setBrowsing(false);
+    finishBrowseRequest(requestSeq);
     return { carriersWithRates, uncoveredPids };
   }
 
