@@ -222,7 +222,7 @@ check('partial workflow maps to error', classifyAwaitingRateCellStateWithWorkflo
   hasCarrierContext: true,
   accountsLoading: false,
 }), 'error');
-check('stale workflow maps to calculating', classifyAwaitingRateCellStateWithWorkflow(stale, {
+check('stale workflow maps to actionable stale', classifyAwaitingRateCellStateWithWorkflow(stale, {
   hasDims: true,
   hasWeight: true,
   hasDisplayableBestRate: false,
@@ -231,7 +231,7 @@ check('stale workflow maps to calculating', classifyAwaitingRateCellStateWithWor
   resolvedError: false,
   hasCarrierContext: true,
   accountsLoading: false,
-}), 'calculating');
+}), 'stale');
 check('missing workflow maps to unavailable', classifyAwaitingRateCellStateWithWorkflow(missing, {
   hasDims: true,
   hasWeight: true,

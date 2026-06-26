@@ -6043,6 +6043,20 @@ export default function OrdersView({
             Rate unavailable · Retry
           </button>
         )
+      case 'stale':
+        return variant === 'compact' ? (
+          <span data-rate-state="stale" title="Saved rate out of date - re-rate required" style={muted}>-</span>
+        ) : (
+          <button
+            type="button"
+            data-rate-state="stale"
+            title="Saved rate out of date - click to refresh rates"
+            style={linkBtn}
+            onClick={() => retryOrderRate(order)}
+          >
+            Re-rate needed
+          </button>
+        )
       // PS-293: 'deferred' = rateable but BEYOND the browser's live-rate cap
       // (PASSIVE_LIVE_BEST_RATE_MAX_ROWS=5). The backend backfill rates these rows
       // server-side (slices 1-2), so show a loading spinner (not a parked "—")

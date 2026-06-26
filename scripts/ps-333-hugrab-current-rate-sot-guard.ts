@@ -10,6 +10,10 @@ import { readFileSync } from 'node:fs';
 import { resolveNextBestNonHouseRate } from '../src/lib/next-best-non-house-rate';
 import { buildBestRateWorkflowDto } from '../src/services/shipping-workflow/best-rate-workflow-dto';
 import { buildShippingRateRequestFingerprint } from '../src/services/shipping-workflow/rate-fingerprint';
+import {
+  awaitingRateCellIsSpinner,
+  classifyAwaitingRateCellStateWithWorkflow,
+} from '../web/src/components/Views/orders-parity';
 
 let failures = 0;
 
@@ -72,6 +76,30 @@ check(
     workflow.canDisplayFinalRate === false &&
     workflow.allowedActions.canCreateLabel === false,
   workflow,
+);
+
+const mismatchedCellState = classifyAwaitingRateCellStateWithWorkflow(workflow, {
+  hasDims: true,
+  hasWeight: true,
+  hasDisplayableBestRate: false,
+  isCalculatingBestRate: false,
+  resolvedNoRate: false,
+  resolvedError: false,
+  hasCarrierContext: true,
+  accountsLoading: false,
+  isAutoRatingActive: false,
+});
+check(
+  'mismatched current-rate row is actionable stale, not a loading spinner',
+  mismatchedCellState === 'stale' && !awaitingRateCellIsSpinner(mismatchedCellState),
+  mismatchedCellState,
+);
+
+const ordersViewSource = read('web/src/components/Views/OrdersView.tsx');
+check(
+  'awaiting stale fallback renders a re-rate action before the spinner branch',
+  /case 'stale':[\s\S]*data-rate-state="stale"[\s\S]*Re-rate needed[\s\S]*case 'deferred':/.test(ordersViewSource),
+  false,
 );
 
 const HUGRAB_CONTEXT = { clientId: 4, clientName: 'HUGRAB', storeId: 378060 };

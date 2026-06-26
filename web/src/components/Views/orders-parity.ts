@@ -728,6 +728,7 @@ export type AwaitingRateCellState =
   | 'add-dims' // not rateable yet: missing dims/weight
   | 'error' // PS-075: passive rating finished with an ERROR for this request key
   | 'unavailable' // auto-rating resolved for this request with no rate -> Retry/Browse
+  | 'stale' // backend says the saved rate is out of date/mismatched -> Re-rate
   | 'loading-carriers' // carrier accounts still loading (bounded)
   | 'no-carrier-account' // accounts loaded but none available -> actionable
   | 'deferred' // rateable, but not currently in the visible live auto-rating slice
@@ -879,11 +880,10 @@ export function classifyAwaitingRateCellStateWithWorkflow(
       if (workflow.canDisplayFinalRate === true && fallbackInput.hasDisplayableBestRate) {
         return 'ready'
       }
-      return fallbackInput.hasDims && fallbackInput.hasWeight
-        ? fallbackInput.isAutoRatingActive === false
-          ? 'deferred'
-          : 'calculating'
-        : 'add-dims'
+      // PS-333: once the backend rate authority has classified the saved quote as stale or
+      // mismatched for the current package facts, that is no longer an in-flight lookup.
+      // Show an actionable re-rate state instead of a fake loading spinner.
+      return fallbackInput.hasDims && fallbackInput.hasWeight ? 'stale' : 'add-dims'
     case 'unknown':
     default:
       return classifyAwaitingRateCellState(fallbackInput)

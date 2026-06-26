@@ -141,28 +141,28 @@ check(
   'pending',
 );
 check(
-  'stale + displayable saved -> calculating',
+  'stale backend-nondisplayable saved -> actionable stale',
   classifyAwaitingRateCellStateWithWorkflow(
     { bestRateState: 'stale', savedRateDisplay: 'none', canDisplayFinalRate: false },
     FALLBACK_DISPLAYABLE,
   ),
-  'calculating',
+  'stale',
 );
 check(
-  'mismatched_request + displayable saved -> calculating',
+  'mismatched_request backend-nondisplayable saved -> actionable stale',
   classifyAwaitingRateCellStateWithWorkflow(
     { bestRateState: 'mismatched_request', savedRateDisplay: 'none', canDisplayFinalRate: false },
     FALLBACK_DISPLAYABLE,
   ),
-  'calculating',
+  'stale',
 );
 check(
-  'stale without a displayable rate still refreshes',
+  'stale without a displayable rate is actionable stale',
   classifyAwaitingRateCellStateWithWorkflow(
     { bestRateState: 'stale', savedRateDisplay: 'none', canDisplayFinalRate: false },
     FALLBACK_BLANK,
   ),
-  'calculating',
+  'stale',
 );
 check(
   'missing is still terminal unavailable',
