@@ -5,8 +5,9 @@
  * evaluateShippingServiceEligibility) is a money/eligibility VERDICT and must live at the rate
  * source of truth. This slice stamps that verdict onto the order-rate DTO (order-rate-dto.ts)
  * via a single pure resolver (shipping-workflow/rate-eligibility-stamp), so the Rate Browser
- * READS the backend verdict instead of re-deriving it. The FE keeps its own
- * evaluateShippingServiceEligibility call ONLY as a deploy-skew fallback for older payloads.
+ * READS the backend verdict instead of re-deriving it. PS-321 removes the old
+ * deploy-skew fallback from RateBrowserModal so the UI cannot become a second
+ * eligibility owner.
  *
  *   npx tsx scripts/ps-279-backend-eligibility-stamp.ts
  */
@@ -71,13 +72,14 @@ check('order-rate-dto declares the eligibilityBlockReason field on OrderBestRate
 check('order-rate-dto imports resolveRateEligibilityStamp from the workflow resolver',
   /import\s*\{[^}]*\bresolveRateEligibilityStamp\b[^}]*\}\s*from\s*'\.\/shipping-workflow\/rate-eligibility-stamp'/.test(dtoSrc));
 
-// ── 4. the FE PREFERS the backend stamp and keeps its own evaluator only as a deploy-skew fallback ──
+// ── 4. the FE reads backend stamps and does not keep a local eligibility evaluator ──
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 check('modal reads a backend-stamped eligibilityBlockReason/eligibilityBlocked from the rate',
   /eligibilityBlockReason|eligibilityBlocked/.test(modal));
-// The deploy-skew fallback must remain: the FE still calls evaluateShippingServiceEligibility.
-check('modal RETAINS evaluateShippingServiceEligibility as the deploy-skew fallback',
-  /evaluateShippingServiceEligibility\(/.test(modal));
+check('modal delegates unavailable rows to the PS-321 availability helper',
+  /rateBrowserUnavailableReason\(/.test(modal));
+check('modal does NOT call evaluateShippingServiceEligibility as a local fallback',
+  !/evaluateShippingServiceEligibility\(/.test(modal));
 
 // ── 5. package.json wires the new test script ──
 check('package.json wires test:ps-279-backend-eligibility-stamp',

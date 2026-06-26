@@ -7,7 +7,7 @@
  * - /print-queue/route-plan is inert while PRINT_QUEUE_BACKEND_ORCHESTRATION is off
  * - FE delegation is separately gated by PRINT_QUEUE_FE_DELEGATION and has fallback
  * - Rate Browser emits only backend canonical best-rate decisions
- * - backend eligibility stamps are preferred by the UI
+ * - backend eligibility stamps are rendered by the UI without local recompute
  *
  * Offline only: no DB, no network, no provider calls, no labels, no queue mutation.
  */
@@ -158,10 +158,11 @@ check('backend eligibility resolver blocks HUGRAB UPS Ground Saver with canonica
   })());
 check('order-rate DTO imports backend eligibility resolver',
   orderRateDto.includes("from './shipping-workflow/rate-eligibility-stamp'"));
-check('RateBrowserModal reads backend eligibility stamps before deploy-skew fallback',
+check('RateBrowserModal reads backend eligibility stamps without deploy-skew fallback',
   rateBrowserModal.includes('eligibilityBlocked') &&
   rateBrowserModal.includes('eligibilityBlockReason') &&
-  rateBrowserModal.includes('evaluateShippingServiceEligibility('));
+  rateBrowserModal.includes('rateBrowserUnavailableReason(') &&
+  !rateBrowserModal.includes('evaluateShippingServiceEligibility('));
 
 const closeoutStatus = {
   card: 'PS-279',

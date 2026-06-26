@@ -5,8 +5,8 @@
  *
  *   Policy A — HUGRAB UPS Ground Saver block (client-conditional).
  *     Owner: src/lib/shipping-service-eligibility.ts (evaluateShippingServiceEligibility).
- *     Consumed by BOTH the backend (src/services/rates.ts) AND the FE (RateBrowserModal imports it
- *     directly via ../../../src/lib/...). Single-sourced + shared. ✅
+ *     Consumed by backend DTO/stamp owners; RateBrowserModal renders the stamped verdict and no
+ *     longer imports the evaluator after PS-321.
  *
  *   Policy B — USPS-economy / flat-rate block (global).
  *     Owner: src/lib/rate-block-list.ts (PS-135(b)). The constants + the shared service/package/name
@@ -83,10 +83,11 @@ check('markups.ts does NOT re-declare any Policy-B Set locally',
 check('markups.ts isBlockedRate keeps the FE carrier-id check AND delegates the rest',
   /BLOCKED_CARRIER_IDS\.has\(rate\.shippingProviderId \?\? -1\)\s*\|\|\s*\n?\s*isServiceOrPackageBlocked\(rate\.serviceCode, rate\.packageType, rate\.serviceName\)/.test(markupsSrc));
 
-// ── (4) Policy A stays shared — FE imports the canonical lib, never re-hardcodes the HUGRAB set ──
-check('FE RateBrowserModal imports evaluateShippingServiceEligibility from the canonical shared lib',
-  /from '\.\.\/\.\.\/\.\.\/src\/lib\/shipping-service-eligibility'/.test(rateBrowserSrc) &&
-  /evaluateShippingServiceEligibility/.test(rateBrowserSrc));
+// ── (4) Policy A stays backend-owned — FE reads the DTO stamp, never re-hardcodes the HUGRAB set ──
+check('FE RateBrowserModal reads eligibility DTO stamps instead of importing the evaluator',
+  /eligibilityBlocked/.test(rateBrowserSrc) &&
+  /eligibilityBlockReason/.test(rateBrowserSrc) &&
+  !/evaluateShippingServiceEligibility\(/.test(rateBrowserSrc));
 check('HUGRAB_BLOCKED_SERVICE_CODES lives ONLY in shipping-service-eligibility.ts (not re-hardcoded)',
   /HUGRAB_BLOCKED_SERVICE_CODES\s*=\s*new Set/.test(eligibilitySrc) &&
   !/HUGRAB_BLOCKED_SERVICE_CODES\s*=\s*new Set/.test(markupsSrc) &&

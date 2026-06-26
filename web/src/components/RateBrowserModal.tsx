@@ -23,7 +23,6 @@ import { CALIFORNIA_TZ } from '../lib/ca-time';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
 import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
-  evaluateShippingServiceEligibility,
   isHugrabShippingContext,
 } from '../../../src/lib/shipping-service-eligibility';
 // PS-164: confirmation/insurance alias normalization is owned by src/lib/shipping-options (single
@@ -57,6 +56,10 @@ import { houseTupleForRow, houseDisplayForRow } from '../lib/rate-browser-house-
 // PS-279: the emission boundary — the modal may ONLY emit the backend canonical best; absent
 // it, emit NOTHING (no FE-ranked local cheapest) and show an unresolved/retry diagnostic state.
 import { decideBestRateEmission } from '../lib/rate-browser-best-emission';
+import {
+  rateBrowserBackendProofIsComplete,
+  rateBrowserUnavailableReason,
+} from '../lib/rate-browser-availability';
 // PS-157: presentation-only subcomponents extracted from this file. They own no state
 // and no rate/blocked/money policy — the modal passes values + callbacks down.
 import RateRowItem from './RateRowItem';
@@ -235,8 +238,8 @@ export type RateRow = {
   insurance_amount?: unknown;
   // PS-274: backend-owned insurance-certainty fact carried onto each rate row (display-only).
   insuranceCertainty?: unknown;
-  // PS-279: backend-owned rate BLOCK/eligibility verdict stamped by order-rate-dto. The modal
-  // PREFERS these over its local evaluateShippingServiceEligibility fallback (rateBlockedReason).
+  // PS-279/PS-321: backend-owned rate BLOCK/eligibility verdict stamped by order-rate-dto. The
+  // modal renders these fields and never recomputes service eligibility locally.
   eligibilityBlocked?: boolean;
   eligibilityBlockReason?: string | null;
   // PS-198: backend-issued quote proof (stamped by /rates/browse + the apiClient
@@ -974,43 +977,14 @@ export function formatInsuranceCertaintyTag(raw: unknown): RbInsuranceCertaintyT
   return { certainty, label, tone };
 }
 
-// v2's isBlockedRate uses a per-store service-unblock list the server
-// maintains. Stubbed to never-blocked per task spec — safe default until the
-// per-client block list ports.
+// PS-321: unavailable rows are read from backend DTO facts only. The modal does
+// not recompute service eligibility or rate-proof freshness.
 function rateBlockedReason(
   rate: RateRow,
-  order: RbOrderSummaryDto | null,
-  shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
+  _order: RbOrderSummaryDto | null,
+  _shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
 ): string | null {
-  const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
-  // PS-279 (backend-ownership pillar): PREFER the backend-stamped eligibility verdict carried on the
-  // rate (order-rate-dto stamps eligibilityBlocked/eligibilityBlockReason). The backend owns the
-  // block-list rule; the FE renders its reason verbatim. The local evaluateShippingServiceEligibility
-  // call below is kept ONLY as a deploy-skew fallback for older payloads that predate the stamp.
-  const stampedBlocked = (rate as { eligibilityBlocked?: unknown }).eligibilityBlocked ?? raw.eligibilityBlocked;
-  if (stampedBlocked === true || stampedBlocked === false) {
-    if (stampedBlocked === false) return null;
-    const stampedReason =
-      (rate as { eligibilityBlockReason?: unknown }).eligibilityBlockReason ?? raw.eligibilityBlockReason;
-    return typeof stampedReason === 'string' && stampedReason ? stampedReason : HUGRAB_GROUND_SAVER_BLOCK_REASON;
-  }
-  const eligibility = evaluateShippingServiceEligibility(
-    {
-      clientId: order?.clientId ?? null,
-      clientName: order?.clientName ?? null,
-      storeId: order?.storeId ?? null,
-    },
-    {
-      provider: typeof raw.provider === 'string' ? raw.provider : null,
-      carrierCode: rate.carrierCode ?? (typeof raw.carrier_code === 'string' ? raw.carrier_code : null),
-      carrierName: typeof raw.carrier_name === 'string' ? raw.carrier_name : null,
-      serviceCode: rate.serviceCode ?? (typeof raw.service_code === 'string' ? raw.service_code : null),
-      serviceName: rate.serviceName ?? (typeof raw.service_type === 'string' ? raw.service_type : null),
-      serviceType: typeof raw.service_type === 'string' ? raw.service_type : null,
-    },
-    shippingOptions,
-  );
-  return eligibility.allowed ? null : eligibility.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON;
+  return rateBrowserUnavailableReason(rate);
 }
 
 function isBlockedRate(
@@ -1974,14 +1948,13 @@ export default function RateBrowserModal({
 
   function rateIsBackendComplete(r: RateRow | null | undefined): boolean {
     if (!r) return false;
-    const raw = (r.raw && typeof r.raw === 'object' ? r.raw : null) as Record<string, unknown> | null;
     const canonical =
       findCanonicalBestRate(canonicalBestRef.current, [r]) === r &&
       canonicalBestRef.current &&
       typeof canonicalBestRef.current === 'object'
         ? (canonicalBestRef.current as Record<string, unknown>)
         : null;
-    return (r as Record<string, unknown>).isComplete === true || raw?.isComplete === true || canonical?.isComplete === true;
+    return rateBrowserBackendProofIsComplete(r) || canonical?.isComplete === true;
   }
 
   function isRecommendedRate(r: RateRow): boolean {
@@ -1995,6 +1968,7 @@ export default function RateBrowserModal({
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
     if (!Number.isFinite(pid) || !r.serviceCode) return;
+    if (isBlockedRate(r, order, currentRateShippingOptions)) return;
     if (!testMode && order?.orderId) {
       void apiClient.setOrderSelectedPid(order.orderId, pid);
     }
@@ -2026,6 +2000,7 @@ export default function RateBrowserModal({
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
     if (!Number.isFinite(pid) || !r.serviceCode) return null;
+    if (isBlockedRate(r, order, currentRateShippingOptions)) return null;
     return {
       carrierCode: r.carrierCode,
       serviceCode: r.serviceCode,

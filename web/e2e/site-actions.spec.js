@@ -68,14 +68,46 @@ const directRateAccounts = [
   { id: 3, clientId: 1, provider: 'ups', label: 'UPS Carrier', accountIdentifier: 'ups-test', active: true, assignedClientIds: [1] },
 ]
 
+function withBackendRateProof(rate, key, overrides = {}) {
+  const proof = {
+    isComplete: true,
+    eligibilityBlocked: false,
+    eligibilityBlockReason: null,
+    rateQuoteId: `ps321-rq-${key}`,
+    selectedRateKey: `ps321-sr-${key}`,
+    requestFingerprint: `ps321-fp-${key}`,
+    proofSource: 'backend_rate_response',
+  }
+  const rawOverrides = overrides.raw ?? {}
+  return {
+    ...rate,
+    ...proof,
+    ...overrides,
+    raw: {
+      ...(rate.raw ?? {}),
+      ...proof,
+      ...rawOverrides,
+    },
+  }
+}
+
 const shipStationRateRows = [
-  { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', serviceName: 'USPS Ground Advantage', shippingProviderId: 4101, amount: 5.25, cost: 5.25, shipmentCost: 5.25, otherCost: 0, raw: { carrier_id: 'se-4101' } },
-  { carrierCode: 'ups', serviceCode: 'ups_ground_saver', serviceName: 'UPS Ground Saver', shippingProviderId: 4102, amount: 6.1, cost: 6.1, shipmentCost: 6.1, otherCost: 0, raw: { carrier_id: 'se-4102' } },
-  { carrierCode: 'ups', serviceCode: 'ups_ground', serviceName: 'UPS Ground', shippingProviderId: 4103, amount: 7.4, cost: 7.4, shipmentCost: 7.4, otherCost: 0, raw: { carrier_id: 'se-4103' } },
-  { carrierCode: 'fedex', serviceCode: 'fedex_ground', serviceName: 'FedEx Ground', shippingProviderId: 4105, amount: 8.15, cost: 8.15, shipmentCost: 8.15, otherCost: 0, raw: { carrier_id: 'se-4105' } },
-  { carrierCode: 'ups', serviceCode: 'ups_3_day_select', serviceName: 'UPS 3 Day Select', shippingProviderId: 4104, amount: 9.7, cost: 9.7, shipmentCost: 9.7, otherCost: 0, raw: { carrier_id: 'se-4104' } },
-  { carrierCode: 'ups', serviceCode: 'ups_2nd_day_air', serviceName: 'UPS 2nd Day Air', shippingProviderId: 4106, amount: 13.85, cost: 13.85, shipmentCost: 13.85, otherCost: 0, raw: { carrier_id: 'se-4106' } },
-  { carrierCode: 'fedex', serviceCode: 'fedex_2_day', serviceName: 'FedEx 2Day', shippingProviderId: 4107, amount: 15.45, cost: 15.45, shipmentCost: 15.45, otherCost: 0, raw: { carrier_id: 'se-4107' } },
+  withBackendRateProof({ carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', serviceName: 'USPS Ground Advantage', shippingProviderId: 4101, amount: 5.25, cost: 5.25, shipmentCost: 5.25, otherCost: 0, raw: { carrier_id: 'se-4101' } }, '1'),
+  withBackendRateProof({ carrierCode: 'ups', serviceCode: 'ups_ground_saver', serviceName: 'UPS Ground Saver', shippingProviderId: 4102, amount: 6.1, cost: 6.1, shipmentCost: 6.1, otherCost: 0, raw: { carrier_id: 'se-4102' } }, '2'),
+  withBackendRateProof({ carrierCode: 'ups', serviceCode: 'ups_ground', serviceName: 'UPS Ground', shippingProviderId: 4103, amount: 7.4, cost: 7.4, shipmentCost: 7.4, otherCost: 0, raw: { carrier_id: 'se-4103' } }, '3'),
+  withBackendRateProof({ carrierCode: 'fedex', serviceCode: 'fedex_ground', serviceName: 'FedEx Ground', shippingProviderId: 4105, amount: 8.15, cost: 8.15, shipmentCost: 8.15, otherCost: 0, raw: { carrier_id: 'se-4105' } }, '4'),
+  withBackendRateProof({ carrierCode: 'ups', serviceCode: 'ups_3_day_select', serviceName: 'UPS 3 Day Select', shippingProviderId: 4104, amount: 9.7, cost: 9.7, shipmentCost: 9.7, otherCost: 0, raw: { carrier_id: 'se-4104' } }, '5'),
+  withBackendRateProof({ carrierCode: 'ups', serviceCode: 'ups_2nd_day_air', serviceName: 'UPS 2nd Day Air', shippingProviderId: 4106, amount: 13.85, cost: 13.85, shipmentCost: 13.85, otherCost: 0, raw: { carrier_id: 'se-4106' } }, '6'),
+  withBackendRateProof({ carrierCode: 'fedex', serviceCode: 'fedex_2_day', serviceName: 'FedEx 2Day', shippingProviderId: 4107, amount: 15.45, cost: 15.45, shipmentCost: 15.45, otherCost: 0, raw: { carrier_id: 'se-4107' } }, '7'),
+  withBackendRateProof({ carrierCode: 'ups', serviceCode: 'ups_ground_saver_blocked', serviceName: 'PS-321 Blocked Saver', shippingProviderId: 4102, amount: 16.1, cost: 16.1, shipmentCost: 16.1, otherCost: 0, raw: { carrier_id: 'se-4102' } }, 'blocked', {
+    eligibilityBlocked: true,
+    eligibilityBlockReason: 'Backend blocked by PS-321 fixture',
+    raw: { eligibilityBlocked: true, eligibilityBlockReason: 'Backend blocked by PS-321 fixture' },
+  }),
+  withBackendRateProof({ carrierCode: 'fedex', serviceCode: 'fedex_stale_proof', serviceName: 'PS-321 Stale Proof', shippingProviderId: 4107, amount: 17.45, cost: 17.45, shipmentCost: 17.45, otherCost: 0, raw: { carrier_id: 'se-4107' } }, 'stale', {
+    isComplete: false,
+    raw: { isComplete: false },
+  }),
 ]
 
 const orders = [
@@ -633,12 +665,24 @@ test('Rate Browser partial carrier failures remain readable and keep successful 
   const nextCheapest = await page.locator('strong').filter({ hasText: '$6.10' }).first().boundingBox()
   expect(cheapest?.y ?? 0, 'cheapest rate should render before the next-cheapest rate').toBeLessThan(nextCheapest?.y ?? Number.POSITIVE_INFINITY)
 
+  await expect(page.getByText('Backend blocked by PS-321 fixture')).toHaveCount(0)
+  await page.getByLabel('Hide Unavailable').uncheck()
+  await expect(page.getByText('Backend blocked by PS-321 fixture')).toBeVisible()
+  await expect(page.getByText('Backend rate proof unavailable - browse rates again before selecting.').first()).toBeVisible()
+  await page.getByLabel('Hide Unavailable').check()
+
   await rateDialog.getByText('Shipp Carrier').click()
   await expect(page.getByText(/No rates available for/i)).toBeVisible()
   await expect(page.getByText(/Shipp reached the quote API but did not return rates/i)).toBeVisible()
 
   await page.getByRole('button', { name: /Refresh Live Rates/i }).click()
   await expect(page.getByText(/10 of 10 carriers checked[\s\S]*7 with rates/)).toBeVisible({ timeout: 20000 })
+
+  await rateDialog.locator('strong').filter({ hasText: '$5.25' }).first().click()
+  await waitForRequest('/orders/101/apply-best-rate', {
+    method: 'POST',
+    payloadIncludes: ['ps321-rq-1', 'ps321-sr-1', 'ps321-fp-1', 'backend_rate_response'],
+  })
 
   expectRequest(/rates\/(browse|multi)/, { method: 'POST', payloadIncludes: ['se-4101', 'se-4107'] })
   // QA root-cause 2026-06-23: PS-200 (8c243859) removed the FE direct /carriers/rates fan-out — the

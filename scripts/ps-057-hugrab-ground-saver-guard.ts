@@ -231,7 +231,9 @@ const sourceChecks: Array<[string, string[]]> = [
   [
     'web/src/components/RateBrowserModal.tsx',
     [
-      'evaluateShippingServiceEligibility',
+      'rateBrowserUnavailableReason',
+      'eligibilityBlocked',
+      'eligibilityBlockReason',
       'HUGRAB_GROUND_SAVER_BLOCK_REASON',
       'rateBlockedReason',
     ],
