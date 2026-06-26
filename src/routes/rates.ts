@@ -63,6 +63,10 @@ import {
   evaluateOrderCarrierEligibility,
 } from '../services/shipping-workflow/carrier-eligibility-policy';
 import {
+  buildRateBrowseSingleFlightKey,
+  runRateBrowseSingleFlight,
+} from '../services/rate-browse-singleflight';
+import {
   resolveHugrabLabelPurchasePreflight,
   resolveShippCustomsValueProofSource,
 } from '../services/shipping-workflow/hugrab-label-purchase-preflight';
@@ -571,43 +575,76 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   // — only the wall-clock changes (max instead of sum), never a quoted amount.
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const resolvedForBrowse = await resolveRateInput(browseRateInput);
-  let shipStationDurationMs = 0;
-  let directCarrierDurationMs = 0;
-  const [result, directRates] = await Promise.all([
-    (async () => {
-      const startedAt = Date.now();
-      const r = await getRates(browseRateInput, {
-        forceRefresh: forceRefresh || forceLive,
-        cachedOnly: isCachedOnlyLookup,
-      });
-      shipStationDurationMs = Date.now() - startedAt;
-      return r;
-    })(),
-    // PS-206: cachedOnly is honored across the WHOLE combined universe — a cached-only probe must
-    // not live-quote direct carriers; the service returns terminal 'uncached' coverage diagnostics
-    // for every visible direct account instead, and the Rate Browser decides its live follow-up
-    // from that coverage identity (never from a carrier count).
-    (async () => {
-      const startedAt = Date.now();
-      const r = await getDirectCarrierRatesForRateInput({
-        // FIX 2026-06-24: was `...rest` (the RAW request body), which dropped every order-derived field
-        // browseRateInput adds — sourceProvider, rawOrder, isEbayMarketplaceOrder, the resolved order
-        // number/external id. That's the real reason the eBay direct carrier never quoted: the gate
-        // never saw isEbayMarketplaceOrder and the connector never got rawOrder. Spread browseRateInput
-        // so the direct-carrier fan-out gets the SAME order context getRates(browseRateInput) does.
-        ...browseRateInput,
-        confirmation: confirmation ?? signature ?? null,
-        carrierIds: requestedCarrierIds,
-        insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
-        insuredValue: resolvedForBrowse.effectiveInsuredValue ?? rest.insuredValue ?? null,
-        effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
-        effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
-        effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
-      }, { cachedOnly: isCachedOnlyLookup });
-      directCarrierDurationMs = Date.now() - startedAt;
-      return r;
-    })(),
-  ]);
+  // PS-335: request-level single-flight for the expensive provider quote fan-out.
+  // ShipStation already dedupes identical per-carrier HTTP calls, but /rates/browse could still
+  // launch duplicate whole fan-outs (ShipStation + direct carriers + cache writes) while a slow
+  // provider was unresolved. Collapse equivalent in-flight requests here; ranking, proof stamping,
+  // SOT reconcile, and redaction still run below per caller from the shared provider result.
+  const browseSingleFlightKey = buildRateBrowseSingleFlightKey({
+    rateCacheKey: rateCacheKey(resolvedForBrowse),
+    forceRefresh: Boolean(forceRefresh || forceLive),
+    forceLive: Boolean(forceLive),
+    cachedOnly: isCachedOnlyLookup,
+    requestedCarrierIds,
+    directContext: {
+      orderId: body.orderId ?? null,
+      externalOrderId: browseRateInput.externalOrderId ?? null,
+      orderNumber: browseRateInput.orderNumber ?? null,
+      purchaseOrderId: browseRateInput.purchaseOrderId ?? null,
+      sourceProvider: browseRateInput.sourceProvider ?? null,
+      isEbayMarketplaceOrder: browseRateInput.isEbayMarketplaceOrder ?? null,
+      includeVisibleDirectCarriers: browseRateInput.includeVisibleDirectCarriers ?? null,
+      includeAllDirectCarriers: browseRateInput.includeAllDirectCarriers ?? null,
+      clientId: browseRateInput.clientId ?? null,
+      storeId: browseRateInput.storeId ?? null,
+      insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
+      insuredValue: resolvedForBrowse.effectiveInsuredValue ?? rest.insuredValue ?? null,
+      effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
+    },
+  });
+  const { result, directRates, shipStationDurationMs, directCarrierDurationMs } = await runRateBrowseSingleFlight(
+    browseSingleFlightKey,
+    async () => {
+      let shipStationDurationMs = 0;
+      let directCarrierDurationMs = 0;
+      const [result, directRates] = await Promise.all([
+        (async () => {
+          const startedAt = Date.now();
+          const r = await getRates(browseRateInput, {
+            forceRefresh: forceRefresh || forceLive,
+            cachedOnly: isCachedOnlyLookup,
+          });
+          shipStationDurationMs = Date.now() - startedAt;
+          return r;
+        })(),
+        // PS-206: cachedOnly is honored across the WHOLE combined universe — a cached-only probe must
+        // not live-quote direct carriers; the service returns terminal 'uncached' coverage diagnostics
+        // for every visible direct account instead, and the Rate Browser decides its live follow-up
+        // from that coverage identity (never from a carrier count).
+        (async () => {
+          const startedAt = Date.now();
+          const r = await getDirectCarrierRatesForRateInput({
+            // FIX 2026-06-24: was `...rest` (the RAW request body), which dropped every order-derived field
+            // browseRateInput adds — sourceProvider, rawOrder, isEbayMarketplaceOrder, the resolved order
+            // number/external id. That's the real reason the eBay direct carrier never quoted: the gate
+            // never saw isEbayMarketplaceOrder and the connector never got rawOrder. Spread browseRateInput
+            // so the direct-carrier fan-out gets the SAME order context getRates(browseRateInput) does.
+            ...browseRateInput,
+            confirmation: confirmation ?? signature ?? null,
+            carrierIds: requestedCarrierIds,
+            insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
+            insuredValue: resolvedForBrowse.effectiveInsuredValue ?? rest.insuredValue ?? null,
+            effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
+            effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
+            effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
+          }, { cachedOnly: isCachedOnlyLookup });
+          directCarrierDurationMs = Date.now() - startedAt;
+          return r;
+        })(),
+      ]);
+      return { result, directRates, shipStationDurationMs, directCarrierDurationMs };
+    },
+  );
   // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family eligibility.
   // ShipStation candidates are filtered separately from PS-124 backend-owned direct-carrier
   // candidates. In `enforce` we drop them (the operator then sees only their direct carriers); in

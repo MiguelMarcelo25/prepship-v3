@@ -215,7 +215,10 @@ function statusesComplete(statuses: ReadonlyArray<{ status: string; thin?: boole
  * whole combined response open. Pure (caller supplies the promise), so the
  * timeout rule is offline-testable without any provider call.
  */
-export const DIRECT_CARRIER_QUOTE_TIMEOUT_MS = 25_000;
+export const DIRECT_CARRIER_QUOTE_TIMEOUT_MS = Math.max(
+  5_000,
+  Number.parseInt(process.env.DIRECT_CARRIER_QUOTE_TIMEOUT_MS ?? '15000', 10) || 15_000,
+);
 
 export function withCarrierQuoteTimeout<T>(
   promise: Promise<T>,
