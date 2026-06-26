@@ -2146,7 +2146,11 @@ export async function getDirectCarrierRatesForRateInput(
         },
       };
     }
-    const requestFingerprint = `${rateCacheKey({ ...input, carrierIds: [`se-${shippingProviderId}`] })}:direct:${account.sourceTable}:${account.id}`;
+    const requestFingerprint = `${rateCacheKey({
+      ...input,
+      residential: resolvedResidential,
+      carrierIds: [`se-${shippingProviderId}`],
+    })}:direct:${account.sourceTable}:${account.id}`;
     try {
       // PS-199: Walmart Shipping quotes need a Walmart purchaseOrderId + the raw
       // marketplace order. The canonical resolver (body → walmart- prefix →

@@ -231,6 +231,17 @@ check(
     /toCity:\s*rest\.toCity\s*\?\?\s*orderForBrowse\?\.shipToCity/.test(ratesRouteSrc),
 );
 
+const ratesServiceSrc = read('src/services/rates.ts');
+const directFingerprintStart = ratesServiceSrc.indexOf('const requestFingerprint = `${rateCacheKey({');
+const directFingerprintBlock = directFingerprintStart >= 0
+  ? ratesServiceSrc.slice(directFingerprintStart, directFingerprintStart + 360)
+  : '';
+check(
+  'direct-carrier saved fingerprints use the backend-resolved commercial/residential verdict',
+  /\.\.\.input,[\s\S]*residential:\s*resolvedResidential,[\s\S]*carrierIds:/.test(directFingerprintBlock),
+  directFingerprintBlock,
+);
+
 const useOrdersSrc = read('web/src/hooks/useOrders.ts');
 check(
   'useOrders does not rebuild Awaiting visible Best Rate from overrides/selected fallbacks',
