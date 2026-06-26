@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import {
   RATE_BROWSER_BACKEND_PROOF_UNAVAILABLE_REASON,
   rateBrowserCanApplyRate,
+  rateBrowserShouldHideUnavailableRate,
   rateBrowserUnavailableReason,
 } from '../web/src/lib/rate-browser-availability';
 
@@ -24,6 +25,8 @@ function check(name: string, condition: boolean): void {
 }
 
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+const rowsView = readFileSync('web/src/components/RateRowsView.tsx', 'utf8');
+const carrierSidebar = readFileSync('web/src/components/RateBrowserCarrierSidebar.tsx', 'utf8');
 const availability = readFileSync('web/src/lib/rate-browser-availability.ts', 'utf8');
 const siteActionsSpec = readFileSync('web/e2e/site-actions.spec.js', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
@@ -50,6 +53,12 @@ check('availability helper rejects proofless rows before apply',
 check('availability helper rejects stale/incomplete backend proof rows',
   !rateBrowserCanApplyRate({ eligibilityBlocked: false, isComplete: false }));
 
+check('availability helper keeps incomplete-proof quoted rows visible under Hide Unavailable',
+  rateBrowserShouldHideUnavailableRate({ eligibilityBlocked: false, isComplete: false }) === false);
+
+check('availability helper hides only backend-stamped unavailable rows under Hide Unavailable',
+  rateBrowserShouldHideUnavailableRate({ eligibilityBlocked: true, eligibilityBlockReason: 'Backend says no', isComplete: true }) === true);
+
 check('availability helper allows complete unblocked backend rows',
   rateBrowserCanApplyRate({ eligibilityBlocked: false, isComplete: true }));
 
@@ -67,6 +76,7 @@ check('availability helper does not recompute HUGRAB/service eligibility from cl
 check('RateBrowserModal imports the PS-321 availability helper',
   modal.includes("from '../lib/rate-browser-availability'") &&
   modal.includes('rateBrowserUnavailableReason(') &&
+  modal.includes('rateBrowserShouldHideUnavailableRate(') &&
   modal.includes('rateBrowserBackendProofIsComplete('));
 
 check('RateBrowserModal no longer calls evaluateShippingServiceEligibility',
@@ -77,6 +87,13 @@ check('RateBrowserModal gates manual row apply through isBlockedRate before onAp
 
 check('RateBrowserModal gates auto-applied best through isBlockedRate before returning DTO',
   /function toAppliedRate\(r: RateRow\): RbAppliedRate \| null \{[\s\S]{0,500}if \(isBlockedRate\(r, order, currentRateShippingOptions\)\) return null;[\s\S]{0,400}return \{/.test(modal));
+
+check('Hide Unavailable uses display-only hide helper, not purchase proof blocking',
+  modal.includes('shouldHideRate={shouldHideUnavailableRate}') &&
+  rowsView.includes('shouldHideRate: (rate: RateRow) => boolean') &&
+  carrierSidebar.includes('shouldHideRate: (rate: RateRow) => boolean') &&
+  !/filter\(\(r\) => !isBlockedRate/.test(rowsView) &&
+  !/filter\(\(r\) => !isBlockedRate/.test(carrierSidebar));
 
 check('RateBrowserModal still passes backend proof via rateBackendProof only',
   modal.includes('...rateBackendProof(r)') &&

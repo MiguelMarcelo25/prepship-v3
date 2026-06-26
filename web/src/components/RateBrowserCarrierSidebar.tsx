@@ -8,15 +8,9 @@ import { Loader2 } from 'lucide-react';
 import CarrierBadge from './CarrierBadge';
 import {
   type RateRow,
-  type RbOrderSummaryDto,
   type RbCarrierAccountDto,
   type CarrierRateStatus,
 } from './RateBrowserModal';
-
-type RateShippingOptions = {
-  insuranceProvider?: string | null;
-  insuredValue?: number | string | null;
-};
 
 type RateBrowserCarrierSidebarProps = {
   rateShippingAccounts: RbCarrierAccountDto[];
@@ -30,13 +24,7 @@ type RateBrowserCarrierSidebarProps = {
   carrierTimingByPid: Record<string, number>;
   hideUnavail: boolean;
   pendingPids: Set<number>;
-  order: RbOrderSummaryDto | null;
-  currentRateShippingOptions: RateShippingOptions;
-  isBlockedRate: (
-    rate: RateRow,
-    order: RbOrderSummaryDto | null,
-    shippingOptions?: RateShippingOptions,
-  ) => boolean;
+  shouldHideRate: (rate: RateRow) => boolean;
   formatSidebarAccountDisplay: (account: RbCarrierAccountDto) => string;
   onSelectCarrier: (shippingProviderId: number) => void;
 };
@@ -53,9 +41,7 @@ export default function RateBrowserCarrierSidebar({
   carrierTimingByPid,
   hideUnavail,
   pendingPids,
-  order,
-  currentRateShippingOptions,
-  isBlockedRate,
+  shouldHideRate,
   formatSidebarAccountDisplay,
   onSelectCarrier,
 }: RateBrowserCarrierSidebarProps): ReactNode {
@@ -105,7 +91,7 @@ export default function RateBrowserCarrierSidebar({
         const count =
           rates != null
             ? hideUnavail
-              ? rates.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions)).length
+              ? rates.filter((r) => !shouldHideRate(r)).length
               : rates.length
             : null;
         const pending = pendingPids.has(c.shippingProviderId);

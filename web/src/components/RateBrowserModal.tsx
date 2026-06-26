@@ -58,6 +58,7 @@ import { houseTupleForRow, houseDisplayForRow } from '../lib/rate-browser-house-
 import { decideBestRateEmission } from '../lib/rate-browser-best-emission';
 import {
   rateBrowserBackendProofIsComplete,
+  rateBrowserShouldHideUnavailableRate,
   rateBrowserUnavailableReason,
 } from '../lib/rate-browser-availability';
 // PS-157: presentation-only subcomponents extracted from this file. They own no state
@@ -993,6 +994,10 @@ function isBlockedRate(
   shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
 ): boolean {
   return rateBlockedReason(rate, order, shippingOptions) != null;
+}
+
+function shouldHideUnavailableRate(rate: RateRow): boolean {
+  return rateBrowserShouldHideUnavailableRate(rate);
 }
 
 export default function RateBrowserModal({
@@ -2663,9 +2668,7 @@ export default function RateBrowserModal({
             carrierTimingByPid={carrierTimingByPid}
             hideUnavail={hideUnavail}
             pendingPids={pendingPids}
-            order={order}
-            currentRateShippingOptions={currentRateShippingOptions}
-            isBlockedRate={isBlockedRate}
+            shouldHideRate={shouldHideUnavailableRate}
             formatSidebarAccountDisplay={formatSidebarAccountDisplay}
             onSelectCarrier={(pid) => {
               setSelectedPid(pid);
@@ -2772,14 +2775,12 @@ export default function RateBrowserModal({
                 hideUnavail={hideUnavail}
                 selectedPid={selectedPid}
                 combinedAll={combinedAll}
-                order={order}
-                currentRateShippingOptions={currentRateShippingOptions}
                 rateShippingAccounts={rateShippingAccounts}
                 ratesByPid={ratesByPid}
                 rateErrorsByPid={rateErrorsByPid}
                 rateMetaByPid={rateMetaByPid}
                 filterBySvcClass={filterBySvcClass}
-                isBlockedRate={isBlockedRate}
+                shouldHideRate={shouldHideUnavailableRate}
                 renderRateRow={renderRateRow}
                 isRecommendedRate={isRecommendedRate}
               />

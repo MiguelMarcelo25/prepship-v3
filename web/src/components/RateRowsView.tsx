@@ -7,16 +7,10 @@
 import type { ReactNode } from 'react';
 import {
   type RateRow,
-  type RbOrderSummaryDto,
   type RbCarrierAccountDto,
   RateLoadingSpinner,
   formatAccountDisplay,
 } from './RateBrowserModal';
-
-type RateShippingOptions = {
-  insuranceProvider?: string | null;
-  insuredValue?: number | string | null;
-};
 
 type RateRowsViewProps = {
   // Display flags / values (computed in parent)
@@ -30,19 +24,13 @@ type RateRowsViewProps = {
   hideUnavail: boolean;
   selectedPid: number | null;
   combinedAll: RateRow[];
-  order: RbOrderSummaryDto | null;
-  currentRateShippingOptions: RateShippingOptions;
   rateShippingAccounts: RbCarrierAccountDto[];
   ratesByPid: Record<string, RateRow[]>;
   rateErrorsByPid: Record<string, string>;
   rateMetaByPid: Record<string, Record<string, unknown>>;
   // Callbacks / functions kept in the parent (single source of truth)
   filterBySvcClass: (rates: RateRow[]) => RateRow[];
-  isBlockedRate: (
-    rate: RateRow,
-    order: RbOrderSummaryDto | null,
-    shippingOptions?: RateShippingOptions,
-  ) => boolean;
+  shouldHideRate: (rate: RateRow) => boolean;
   renderRateRow: (
     r: RateRow,
     index: number,
@@ -63,20 +51,18 @@ export default function RateRowsView({
   hideUnavail,
   selectedPid,
   combinedAll,
-  order,
-  currentRateShippingOptions,
   rateShippingAccounts,
   ratesByPid,
   rateErrorsByPid,
   rateMetaByPid,
   filterBySvcClass,
-  isBlockedRate,
+  shouldHideRate,
   renderRateRow,
   isRecommendedRate,
 }: RateRowsViewProps): ReactNode {
   function renderAllRatesView(): ReactNode {
     const displayed = hideUnavail
-      ? combinedAll.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions))
+      ? combinedAll.filter((r) => !shouldHideRate(r))
       : combinedAll;
     const allCount = combinedAll.length;
     const hiddenCount = allCount - displayed.length;
@@ -86,6 +72,7 @@ export default function RateRowsView({
         : `${allCount} total, sorted cheapest first`;
 
     if (!displayed.length) {
+      const hiddenByFilter = hideUnavail && allCount > 0;
       return (
         <div
           style={{
@@ -95,7 +82,15 @@ export default function RateRowsView({
             marginTop: 80,
           }}
         >
-          No rates available — click Browse Rates
+          {hiddenByFilter ? (
+            <>
+              All {allCount} rate{allCount !== 1 ? 's are' : ' is'} hidden by Hide Unavailable.
+              <br />
+              Uncheck it to see backend block reasons.
+            </>
+          ) : (
+            <>No rates available — click Browse Rates</>
+          )}
         </div>
       );
     }
@@ -174,7 +169,7 @@ export default function RateRowsView({
     const all = ratesByPid[String(selectedPid)] ?? [];
     const filtered = filterBySvcClass(all);
     const displayed = hideUnavail
-      ? filtered.filter((r) => !isBlockedRate(r, order, currentRateShippingOptions))
+      ? filtered.filter((r) => !shouldHideRate(r))
       : filtered;
     const hiddenCount = filtered.length - displayed.length;
     const countLabel =
@@ -264,7 +259,15 @@ export default function RateRowsView({
           ) : null}
         </div>
         <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 16 }}>
-          {displayed.map((r, i) => renderRateRow(r, i, false, isRecommendedRate(r)))}
+          {displayed.length > 0 ? (
+            displayed.map((r, i) => renderRateRow(r, i, false, isRecommendedRate(r)))
+          ) : (
+            <div style={{ color: 'var(--text3)', fontSize: 12.5, textAlign: 'center', marginTop: 48 }}>
+              All {filtered.length} rate{filtered.length !== 1 ? 's are' : ' is'} hidden by Hide Unavailable.
+              <br />
+              Uncheck it to see backend block reasons.
+            </div>
+          )}
         </div>
       </>
     );

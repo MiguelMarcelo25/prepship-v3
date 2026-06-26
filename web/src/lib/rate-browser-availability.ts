@@ -41,6 +41,10 @@ export function rateBrowserUnavailableReason(rate: unknown): string | null {
   );
 }
 
+export function rateBrowserShouldHideUnavailableRate(rate: unknown): boolean {
+  return readBackendEligibilityBlockReason(rate) != null;
+}
+
 export function rateBrowserCanApplyRate(rate: unknown): boolean {
   return rateBrowserUnavailableReason(rate) == null;
 }
