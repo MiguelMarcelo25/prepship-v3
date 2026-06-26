@@ -159,7 +159,7 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {/* PS-290 parity: same backend coverage verdict on the Selected Rate cell. */}
-            {renderRateAmountWithMarkup(shippedBackendMoney.baseAmount, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn, getRowInsuranceCoverage(displayOrder.selectedRate))}
+            {renderRateAmountWithMarkup(null, shippedBackendMoney.markedAmount, shippedBackendMoney.insuranceAddOn, getRowInsuranceCoverage(displayOrder.selectedRate))}
             {renderHouseBadge()}
           </div>
         )
@@ -232,7 +232,7 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       {/* PS-290: pass the backend-owned HUGRAB $100 coverage verdict as the 4th arg so the
           Awaiting Best Rate cell renders the coverage badge (display-only; backend decides). */}
       {backendMoney
-        ? renderRateAmountWithMarkup(backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
+        ? renderRateAmountWithMarkup(backendMoney.markupSource === 'house_account' ? null : backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
         : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
       {/* PS-220 (slice 4b): SHIPP house order — the shown amount is the customer_rate billed. */}
       {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}

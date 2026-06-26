@@ -332,6 +332,13 @@ check(
   /case 'houserate':\s*\n\s*return renderHouseRateCell\(order\)/.test(ordersViewSrc),
 );
 
+const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
+check(
+  'Best/Selected Rate house rows do not render House Rate as a sub-line',
+  /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderRateAmountWithMarkup\(null,\s*shippedBackendMoney\.markedAmount/.test(orderCellsSrc) &&
+    /renderRateAmountWithMarkup\(backendMoney\.markupSource === 'house_account' \? null : backendMoney\.baseAmount,\s*backendMoney\.markedAmount/.test(orderCellsSrc),
+);
+
 const packageJson = read('package.json');
 check(
   'package exposes PS-334 guard',

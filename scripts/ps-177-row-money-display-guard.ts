@@ -180,8 +180,8 @@ const orderCells = readFileSync('web/src/components/Views/orders/cells/order-cel
 check('FE Best Rate cell prefers the backend tuple',
   /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCells) &&
   // PS-290 appended an optional 4th `coverage` arg (getBestRateInsuranceCoverage) — still the
-  // backend tuple's base/marked/insurance, just with the coverage badge. Tolerate `,` or `)`.
-  /renderRateAmountWithMarkup\(backendMoney\.baseAmount, backendMoney\.markedAmount, backendMoney\.insuranceAddOn[,)]/.test(orderCells));
+  // backend tuple's marked/insurance, with the house-account base shown only in House Rate.
+  /renderRateAmountWithMarkup\(backendMoney\.markupSource === 'house_account' \? null : backendMoney\.baseAmount,\s*backendMoney\.markedAmount,\s*backendMoney\.insuranceAddOn[,)]/.test(orderCells));
 check('FE Margin cell prefers the backend tuple',
   /backendMoney\?\.markupAmount/.test(orderCells) && /backendMoney!?\.marginPercent/.test(orderCells));
 // Shipped-row DTO phase: shipped rows now carry the workflow DTO (money priced
