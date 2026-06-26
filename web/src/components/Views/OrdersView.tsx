@@ -4129,7 +4129,17 @@ export default function OrdersView({
       if (!cancelled && overflow.length > 0 && !passiveBackfillStartedRef.current && recalcAllJobId == null) {
         passiveBackfillStartedRef.current = true
         try {
-          const { jobId } = await startRecalculateAllBestRates(PASSIVE_BACKFILL_MAX_AGE_HOURS)
+          // Display-stale overflow rows (forceLive, beyond the browser budget) must be re-quoted LIVE: the
+          // cache-friendly sweep serves their STALE price and its 24h gate even SKIPS a <24h-old row, so a
+          // display-stale row past the budget would otherwise never self-correct (it just keeps showing the
+          // cached value — the order-1869 case). When ANY overflow row is display-stale, force-live the
+          // backend sweep (maxAgeHours:0) so the WHOLE table self-corrects, not just the first
+          // PASSIVE_LIVE_BEST_RATE_MAX_ROWS. The completeness-aware no-downgrade ratchet still gates every
+          // persist (a genuine increase overwrites; a thin re-quote is rejected). Cache-friendly otherwise.
+          const overflowMaxAgeHours = overflow.some((candidate) => candidate.forceLive)
+            ? 0
+            : PASSIVE_BACKFILL_MAX_AGE_HOURS
+          const { jobId } = await startRecalculateAllBestRates(overflowMaxAgeHours)
           if (!cancelled) setRecalcAllJobId(jobId)
           else passiveBackfillStartedRef.current = false
         } catch {

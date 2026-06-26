@@ -706,12 +706,15 @@ export function buildBestRateWorkflowDto(input: BuildBestRateWorkflowInput): Bes
   // matchesRequest so a mismatched/missing row — already a re-rate by the states below — is untouched.
   const savedCreatedAt = savedRateCreatedAt(savedRate);
   const savedAgeMs = savedCreatedAt ? now.getTime() - Date.parse(savedCreatedAt) : null;
+  // A saved rate whose age cannot be determined (no/garbled cacheCreatedAt — a legacy rate persisted
+  // before the freshness fields, the rows MOST likely to be price-stale) is treated as due-for-refresh
+  // so it also self-corrects; a row with a determinable age refreshes once past the window. Either way
+  // it settles after one live re-rate (which stamps a fresh cacheCreatedAt). Scoped to matchesRequest so
+  // a mismatched/missing row — already a re-rate by the states below — is untouched.
   const needsDisplayRefresh =
     hasSavedRate &&
     matchesRequest &&
-    savedAgeMs != null &&
-    Number.isFinite(savedAgeMs) &&
-    savedAgeMs > RATE_DISPLAY_FRESH_MS;
+    (savedAgeMs == null || !Number.isFinite(savedAgeMs) || savedAgeMs > RATE_DISPLAY_FRESH_MS);
   const hasDisplayIdentity = savedRateHasDisplayIdentity(savedRate);
   const hasBackendIssuedProof = savedRateHasBackendIssuedProof(savedRate);
 

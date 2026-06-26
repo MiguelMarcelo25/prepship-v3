@@ -37,14 +37,19 @@ check('passive drain uses a mount-scoped live budget (count ref vs the cap)',
 check('the old uncapped full-table drain (queue.splice(0) as liveQueue) is gone',
   !/const liveQueue = queue\.splice\(0\)\s*$/m.test(ordersView));
 
-// 3. The overflow is handed to the backend backfill, de-duped, and CACHE-FRIENDLY (not force-live 0).
+// 3. The overflow is handed to the backend backfill, de-duped. It is CACHE-FRIENDLY for a normal
+//    overflow, but FORCE-LIVE (maxAgeHours:0) when ANY overflow row is DISPLAY-STALE (forceLive) — else
+//    a display-stale row past the 5-row browser budget would never self-correct (the cache sweep serves
+//    its stale price and its 24h gate even skips a <24h row). The browser 5-cap (checks 1–2 above) still
+//    bounds the LIVE-from-browser fan-out unchanged; this only changes the BACKEND sweep's freshness.
 check('overflow is handed to the backend backfill (startRecalculateAllBestRates) when it exists',
   /const overflow = queue\.splice\(0\)/.test(ordersView) &&
   /overflow\.length > 0 && !passiveBackfillStartedRef\.current/.test(ordersView) &&
-  /startRecalculateAllBestRates\(PASSIVE_BACKFILL_MAX_AGE_HOURS\)/.test(ordersView));
-check('passive backfill is cache-friendly (positive maxAgeHours, NOT the force-live 0)',
+  /startRecalculateAllBestRates\(overflowMaxAgeHours\)/.test(ordersView));
+check('passive backfill is cache-friendly by default, force-live ONLY for a display-stale overflow',
   /const PASSIVE_BACKFILL_MAX_AGE_HOURS = \d+/.test(ordersView) &&
-  !/PASSIVE_BACKFILL_MAX_AGE_HOURS = 0\b/.test(ordersView));
+  !/PASSIVE_BACKFILL_MAX_AGE_HOURS = 0\b/.test(ordersView) &&
+  /overflow\.some\(\(candidate\) => candidate\.forceLive\)[\s\S]{0,24}\?\s*0[\s\S]{0,24}:\s*PASSIVE_BACKFILL_MAX_AGE_HOURS/.test(ordersView));
 check('overflow handoff is de-duped so a mid-job refetch cannot double-kick the backend job',
   /passiveBackfillStartedRef\.current = true/.test(ordersView) &&
   /passiveBackfillStartedRef\.current = false/.test(ordersView));

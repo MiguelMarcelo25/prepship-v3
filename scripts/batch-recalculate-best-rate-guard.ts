@@ -264,7 +264,11 @@ check('passive auto-rating caps browser live work and hands overflow to backend 
   /const workerCount = Math\.min\(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue\.length\)/.test(passiveRunnerBlock) &&
   /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock) &&
   /const overflow = queue\.splice\(0\)/.test(passiveRunnerBlock) &&
-  /startRecalculateAllBestRates\(PASSIVE_BACKFILL_MAX_AGE_HOURS\)/.test(passiveRunnerBlock));
+  // The overflow handoff is cache-friendly by default, force-live (maxAgeHours:0) ONLY when an overflow
+  // row is display-stale (forceLive) so a row past the browser budget still self-corrects. The 5-row
+  // browser cap above is unchanged — this only widens the BACKEND sweep's freshness for display-stale.
+  /startRecalculateAllBestRates\(overflowMaxAgeHours\)/.test(passiveRunnerBlock) &&
+  /overflow\.some\(\(candidate\) => candidate\.forceLive\)[\s\S]{0,24}\?\s*0[\s\S]{0,24}:\s*PASSIVE_BACKFILL_MAX_AGE_HOURS/.test(passiveRunnerBlock));
 
 const bestRateBaseStart = rowDisplay.indexOf('export function getBestRateBaseCost(');
 const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateShippingProviderId', bestRateBaseStart);
