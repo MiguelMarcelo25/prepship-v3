@@ -4194,6 +4194,9 @@ export default function OrdersView({
       await persistAppliedRateForOrder(order.orderId, testRate, {
         fallbackDims: dims,
         fallbackWeightOz: weightOz,
+        // Per user override unlock shipped data on 2026-06-26: PS-328 keeps
+        // panel Recalculate as a thin refresher of backend packageFacts only.
+        refetch: true,
       })
       return testRate
     }
@@ -4299,6 +4302,9 @@ export default function OrdersView({
           fallbackWeightOz: weightOz,
           request: autoRequest ?? undefined,
           metadata: autoRequest ? bestRateWithMetadata : undefined,
+          // Per user override unlock shipped data on 2026-06-26: PS-328 keeps
+          // panel Recalculate as a thin refresher of backend packageFacts only.
+          refetch: true,
         })
         return bestRateWithMetadata
       }

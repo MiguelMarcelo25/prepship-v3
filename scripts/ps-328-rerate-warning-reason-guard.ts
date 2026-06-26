@@ -100,6 +100,16 @@ const persistBlock = persistStart >= 0 && persistEnd > persistStart
 check('Apply/Recalculate refetch invalidates selected order detail packageFacts',
   /if \(options\.refetch\) \{[\s\S]{0,600}await refetchOrders\(\)[\s\S]{0,600}queryClient\.invalidateQueries\(\{ queryKey: \['v2-hooks:order-detail', orderId\] \}\)/.test(persistBlock));
 
+const refreshPanelStart = ordersView.indexOf('async function refreshPanelBestRate(');
+const refreshPanelEnd = ordersView.indexOf('\n  function applyRateSelection(', refreshPanelStart);
+const refreshPanelBlock = refreshPanelStart >= 0 && refreshPanelEnd > refreshPanelStart
+  ? ordersView.slice(refreshPanelStart, refreshPanelEnd)
+  : '';
+check('panel Recalculate test-rate persist refreshes selected order detail packageFacts',
+  /persistAppliedRateForOrder\(order\.orderId, testRate,[\s\S]{0,500}refetch: true/.test(refreshPanelBlock));
+check('panel Recalculate live-rate persist refreshes selected order detail packageFacts',
+  /persistAppliedRateForOrder\(order\.orderId, bestRateWithMetadata,[\s\S]{0,700}refetch: true/.test(refreshPanelBlock));
+
 if (failures > 0) {
   console.error(`\nPS-328 rerate warning reason guard FAILED with ${failures} failure(s).`);
   process.exit(1);
