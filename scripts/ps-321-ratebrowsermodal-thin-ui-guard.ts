@@ -28,6 +28,7 @@ const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const rowsView = readFileSync('web/src/components/RateRowsView.tsx', 'utf8');
 const carrierSidebar = readFileSync('web/src/components/RateBrowserCarrierSidebar.tsx', 'utf8');
 const availability = readFileSync('web/src/lib/rate-browser-availability.ts', 'utf8');
+const quoteSnapshotStore = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
 const siteActionsSpec = readFileSync('web/e2e/site-actions.spec.js', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
 
@@ -109,6 +110,10 @@ check('availability helper owns no backend/service policy imports',
 
 check('availability helper does not mint selected-rate proof fields',
   !/rateQuoteId|selectedRateKey|requestFingerprint|proofSource/.test(availability));
+
+check('backend quote finalizer stamps row-level proof/completeness for Rate Browser rows',
+  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(quoteSnapshotStore) &&
+  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(quoteSnapshotStore));
 
 check('site-actions browser proof covers valid, blocked, stale, partial-failure, and selected-proof paths',
   siteActionsSpec.includes('Backend blocked by PS-321 fixture') &&

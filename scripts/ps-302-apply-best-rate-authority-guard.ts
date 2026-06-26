@@ -65,14 +65,14 @@ check('frontend account filter prevents applying proof from a different account'
 const rateStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
 check('single backend finalizer returns bestRate, rates, and rateQuoteId',
   /export async function finalizeBestRateWithQuote/.test(rateStore) &&
-  /bestRate: T & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string \}/.test(rateStore) &&
-  /rates: Array<Record<string, unknown> & \{ selectedRateKey: string; rateQuoteId\?: string \}>/.test(rateStore) &&
+  /bestRate: T & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}/.test(rateStore) &&
+  /rates: Array<Record<string, unknown> & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}>/.test(rateStore) &&
   /rateQuoteId\?: string/.test(rateStore));
 check('single backend finalizer stamps backend proof source',
   /proofSource: BACKEND_RATE_PROOF_SOURCE/.test(rateStore) &&
   /BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'/.test(rateStore));
-check('single backend finalizer stamps rateQuoteId onto each emitted rate',
-  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId \}\)\)/.test(rateStore));
+check('single backend finalizer stamps rateQuoteId and backend completeness onto each emitted rate',
+  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(rateStore));
 
 const ratesRoute = read('src/routes/rates.ts');
 check('/rates/browse delegates best-rate proof minting to finalizeBestRateWithQuote',

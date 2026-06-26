@@ -27,12 +27,12 @@ function check(name: string, cond: boolean) {
 
 // ── The single owner returns the full producer output ────────────────────────
 check('finalizeBestRateWithQuote returns { bestRate, rates, rateQuoteId } (single owner shape)',
-  /bestRate: T & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string \}/.test(store)
-  && /rates: Array<Record<string, unknown> & \{ selectedRateKey: string; rateQuoteId\?: string \}>/.test(store));
+  /bestRate: T & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}/.test(store)
+  && /rates: Array<Record<string, unknown> & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}>/.test(store));
 check('the owner stamps proofSource = the backend constant (backend owns it)',
   /proofSource: BACKEND_RATE_PROOF_SOURCE/.test(store) && /BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'/.test(store));
-check('the owner stamps rateQuoteId onto each rate (the shape browse returned inline)',
-  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId \}\)\)/.test(store));
+check('the owner stamps rateQuoteId and backend completeness onto each rate (the shape browse returns)',
+  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(store));
 
 // ── /rates/browse PRODUCER delegates (no inline re-stamping) ──────────────────
 check('browse calls the finalizer', /const finalized = await finalizeBestRateWithQuote\(\{/.test(browse));

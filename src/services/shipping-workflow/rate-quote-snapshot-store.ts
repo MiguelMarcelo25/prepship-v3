@@ -101,11 +101,12 @@ export async function finalizeBestRateWithQuote<T extends Record<string, unknown
   bestRateComplete?: boolean | null;
   fetchedAt?: string | number;
 }): Promise<{
-  bestRate: T & { selectedRateKey: string; rateQuoteId?: string; proofSource: string };
-  rates: Array<Record<string, unknown> & { selectedRateKey: string; rateQuoteId?: string }>;
+  bestRate: T & { selectedRateKey: string; rateQuoteId?: string; proofSource: string; isComplete: boolean };
+  rates: Array<Record<string, unknown> & { selectedRateKey: string; rateQuoteId?: string; proofSource: string; isComplete: boolean }>;
   rateQuoteId?: string;
 }> {
   const ratesWithKeys = withSelectedRateKeys(input.rates);
+  const isComplete = input.bestRateComplete === true;
   const rateQuoteId = await storeRateQuoteSnapshot({
     cacheKey: input.cacheKey,
     rates: ratesWithKeys,
@@ -116,14 +117,15 @@ export async function finalizeBestRateWithQuote<T extends Record<string, unknown
   // Stamp the opaque rateQuoteId onto each rate too (the FE passes back { rateQuoteId,
   // selectedRateKey } at label/queue time) — the same shape /rates/browse returned inline.
   const rates = rateQuoteId
-    ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId }))
-    : ratesWithKeys;
+    ? ratesWithKeys.map((rate) => ({ ...rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input.bestRateComplete === true }))
+    : ratesWithKeys.map((rate) => ({ ...rate, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input.bestRateComplete === true }));
   return {
     bestRate: {
       ...input.bestRate,
       selectedRateKey: selectedRateOpaqueKey(input.bestRate),
       ...(rateQuoteId ? { rateQuoteId } : {}),
       proofSource: BACKEND_RATE_PROOF_SOURCE,
+      isComplete,
     },
     rates,
     ...(rateQuoteId ? { rateQuoteId } : {}),
