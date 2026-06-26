@@ -16,6 +16,7 @@ const [
   ordersView,
   orderCells,
   ordersRoute,
+  applyBestRate,
   ratesBackfill,
   cleanupScript,
   packageJson,
@@ -30,6 +31,7 @@ const [
   // hasDisplayableBestRate) moved VERBATIM from OrdersView into ./orders/cells/order-cells.
   read('web/src/components/Views/orders/cells/order-cells.tsx'),
   read('src/routes/orders.ts'),
+  read('src/services/shipping-workflow/apply-best-rate.ts'),
   read('src/services/rates-backfill.ts'),
   read('scripts/clear-invalid-best-rates.ts'),
   read('package.json'),
@@ -80,8 +82,9 @@ assert(
 )
 
 assert(
-  ordersRoute.includes('const bestRateDimsSchema') &&
-    ordersRoute.includes('parseBestRateDimsLabel') &&
+  applyBestRate.includes('export function validateBestRateDimsForPersistedRate') &&
+    applyBestRate.includes('function parseBestRateDimsLabel') &&
+    ordersRoute.includes('validateBestRateDimsForPersistedRate') &&
     ordersRoute.includes('Complete dimensions are required before saving a best rate'),
   'Orders API rejects non-null best rates without complete LxWxH dimensions',
 )
