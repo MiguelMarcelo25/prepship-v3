@@ -194,6 +194,12 @@ check(
   true,
 );
 check(
+  'pending same-request refresh keeps a displayable saved rate visible (rate-helpers.ts)',
+  /entry\.rate === null && entry\.pending !== true/.test(rateHelpers) &&
+    !/\(entry\.error \|\| entry\.rate === null\)/.test(rateHelpers),
+  true,
+);
+check(
   'the FE passes the backend savedRateDisplay verdict into the contract',
   /backendSavedRateDisplay: toStringValue\(workflowRecord\?\.savedRateDisplay\)/.test(ordersView),
   true,

@@ -139,7 +139,9 @@ export function createBestRateHelpers(deps: {
     if (!request) return false;
     const entry = autoBestRateEntries[order.orderId];
     if (entry?.key === request.key && entry.rate) return true;
-    if (entry?.key === request.key && (entry.error || entry.rate === null)) return false;
+    if (entry?.key === request.key && entry.error) return false;
+    // A same-request refresh in progress must not wipe a still-valid backend saved rate.
+    if (entry?.key === request.key && entry.rate === null && entry.pending !== true) return false;
     // PS-292: a persisted half-house SHIPP rate (backend verdict 'needs_refresh') is NOT displayable —
     // fall through to the 'House rate needs refresh' diagnostic instead of a confident SHIPP figure.
     if ((getSavedBestRateRecord(order) as { houseTupleStatus?: unknown } | null)?.houseTupleStatus === 'needs_refresh') {
