@@ -66,7 +66,7 @@ check('fingerprint absent on rate is tolerated', noFpOnRate.ok === true, noFpOnR
 // 6. ROUTE wiring — backend owns the command; one atomic persist behind the lock.
 const ordersRoute = read('src/routes/orders.ts');
 check('orders route imports the apply-best-rate owner',
-  /import \{ buildApplyBestRatePatch \} from '\.\.\/services\/shipping-workflow\/apply-best-rate'/.test(ordersRoute));
+  /import \{[^}]*buildApplyBestRatePatch[^}]*\} from '\.\.\/services\/shipping-workflow\/apply-best-rate'/.test(ordersRoute));
 check('POST /:id/apply-best-rate route exists',
   /'\/:id\{\[0-9\]\+\}\/apply-best-rate'/.test(ordersRoute));
 

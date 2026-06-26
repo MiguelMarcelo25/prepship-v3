@@ -91,6 +91,15 @@ check('frontend still keys warning on staleRateImpact only',
   /if \(packageFacts\.staleRateImpact\) \{/.test(panelFields) &&
   !/packageFacts\.staleRateImpact \|\| packageFacts\.requiresRerate/.test(panelFields));
 
+const ordersView = read('web/src/components/Views/OrdersView.tsx');
+const persistStart = ordersView.indexOf('async function persistAppliedRateForOrder(');
+const persistEnd = ordersView.indexOf('\n  useEffect(() => {', persistStart);
+const persistBlock = persistStart >= 0 && persistEnd > persistStart
+  ? ordersView.slice(persistStart, persistEnd)
+  : '';
+check('Apply/Recalculate refetch invalidates selected order detail packageFacts',
+  /if \(options\.refetch\) \{[\s\S]{0,600}await refetchOrders\(\)[\s\S]{0,600}queryClient\.invalidateQueries\(\{ queryKey: \['v2-hooks:order-detail', orderId\] \}\)/.test(persistBlock));
+
 if (failures > 0) {
   console.error(`\nPS-328 rerate warning reason guard FAILED with ${failures} failure(s).`);
   process.exit(1);

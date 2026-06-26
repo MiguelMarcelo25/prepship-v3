@@ -115,7 +115,7 @@ import {
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
 import { resolveShippedLabelDisplayState } from '../services/shipping-workflow/shipped-label-display-state';
-import { buildApplyBestRatePatch } from '../services/shipping-workflow/apply-best-rate';
+import { buildApplyBestRatePatch, validateBestRateDimsForPersistedRate } from '../services/shipping-workflow/apply-best-rate';
 import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
 import { redactRateMoneyFields, redactOrderFinancials } from '../services/orders-financial-redaction';
 // PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
@@ -3483,37 +3483,6 @@ const patchBody = z.object({
   externallyShipped: z.boolean().optional(),
   externallyShippedSource: z.string().nullable().optional(),
 });
-
-function parseBestRateDimsLabel(value: unknown): { length: number; width: number; height: number } | null {
-  if (typeof value !== 'string') return null;
-  const parts = value
-    .trim()
-    .toLowerCase()
-    .split('x')
-    .map((part) => Number(part.trim()));
-  if (parts.length !== 3) return null;
-  const length = parts[0];
-  const width = parts[1];
-  const height = parts[2];
-  if (length == null || width == null || height == null) return null;
-  if (![length, width, height].every((part) => Number.isFinite(part) && part > 0)) return null;
-  return { length, width, height };
-}
-
-const bestRateDimsSchema = z.string().trim().refine(
-  (value) => parseBestRateDimsLabel(value) != null,
-  'Complete dimensions are required before saving a best rate',
-);
-
-function validateBestRateDimsForPersistedRate(
-  bestRateJson: unknown,
-  bestRateDims: unknown,
-): string | null {
-  if (bestRateJson === undefined || bestRateJson === null) return null;
-  const parsed = bestRateDimsSchema.safeParse(bestRateDims);
-  if (!parsed.success) return 'Complete dimensions are required before saving a best rate';
-  return parsed.data;
-}
 
 app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   const id = Number(c.req.param('id'));

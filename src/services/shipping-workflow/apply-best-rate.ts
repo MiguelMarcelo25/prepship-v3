@@ -49,13 +49,27 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function parseDimsLabel(value: string | null): { l: number; w: number; h: number } | null {
+export function parseBestRateDimsLabel(value: unknown): { length: number; width: number; height: number } | null {
   if (typeof value !== 'string') return null;
   const parts = value.trim().toLowerCase().split('x').map((p) => Number(p.trim()));
   if (parts.length !== 3) return null;
-  const [l, w, h] = parts;
-  if (![l, w, h].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)) return null;
-  return { l: l!, w: w!, h: h! };
+  const [length, width, height] = parts;
+  if (![length, width, height].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)) return null;
+  return { length: length!, width: width!, height: height! };
+}
+
+function parseDimsLabel(value: string | null): { l: number; w: number; h: number } | null {
+  const dims = parseBestRateDimsLabel(value);
+  return dims ? { l: dims.length, w: dims.width, h: dims.height } : null;
+}
+
+export function validateBestRateDimsForPersistedRate(
+  bestRateJson: unknown,
+  bestRateDims: unknown,
+): string | null {
+  if (bestRateJson === undefined || bestRateJson === null) return null;
+  if (parseBestRateDimsLabel(bestRateDims) == null) return null;
+  return typeof bestRateDims === 'string' ? bestRateDims.trim() : null;
 }
 
 // Same proof fields the BestRateWorkflow DTO reads, so the apply command enforces the

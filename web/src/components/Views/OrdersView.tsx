@@ -3831,7 +3831,13 @@ export default function OrdersView({
       tasks.push(apiClient.saveOrderBestRate(orderId, rateToPersist, dimsLabel))
       await Promise.all(tasks)
     }
-    if (options.refetch) await refetchOrders()
+    if (options.refetch) {
+      await refetchOrders()
+      // Per user override unlock shipped data on 2026-06-26: PS-328 only
+      // refreshes the active order-detail packageFacts after backend rate
+      // persistence; shipped/cancelled locks and read-only gates stay unchanged.
+      await queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', orderId] })
+    }
   }
 
   useEffect(() => {
