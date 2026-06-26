@@ -27,6 +27,20 @@ AGENTS.md (shipped/cancelled lockdown) before opening. Fill every section; delet
 - **Frontend/adapters stay thin consumers** (no money/label/inventory/fulfillment/auth/
   rate/marketplace decision moved into UI or adapter): yes / N/A — explain
 
+### Rate Source-of-Truth proof
+
+For any Best Rate, Rate Browser, selected-rate proof, label-purchase rate, Billing rate,
+or Shipped-rate display change:
+
+- **Backend canonical rate authority used:** <!-- file + symbol -->
+- **Proof `npm run test:rate-source-of-truth` passed:** yes / N/A — explain
+- **Frontend only displays or sends intent:** yes / N/A — explain
+- **No frontend/router wrapper ranks, selects, mints, or persists official bestRate:** yes / N/A — explain
+- **Billing/Shipped use selected/purchased shipment rate truth:** yes / N/A — explain
+
+Rate Source-of-Truth proof must name the backend canonical rate authority and explain how
+selected/purchased shipment rate truth is preserved when those paths are touched.
+
 ## Safety checklist
 
 - [ ] No secrets, tokens, customer PII, raw provider payloads, full tracking numbers,

@@ -237,6 +237,26 @@ package / inventory read models are backend-owned and the FE renders their DTOs 
 
 ---
 
+## Rate Source-of-Truth Lockdown (PS-313)
+
+These rules apply to every rate, label-purchase, Rate Browser, Awaiting Best Rate,
+selected-rate proof, Billing, and Shipped-rate display change:
+
+- Best Rate ranking happens only in the backend canonical rate authority.
+- Rate Browser and Awaiting Shipment Best Rate must consume the same backend-selected best rate.
+- Markups, confirmation, insurance, and other carrier amounts are applied before ranking.
+- Frontend sorting is display-only and cannot declare or persist official bestRate.
+- Frontend cannot mint selected-rate proof.
+- Billing and Shipped views display selected/purchased shipment rate truth, not current Best Rate.
+- Run `npm run test:rate-source-of-truth` for any change touching rates, rate proof,
+  Rate Browser, selected/purchased rate display, Billing rate display, or Best Rate persistence.
+
+Routes, frontend adapters, and UI components may validate shape, request a refresh, render
+diagnostics, or pass through backend-issued proof fields. They must not rank, choose, mint, or
+persist official Best Rate / selected-rate truth outside the backend source-of-truth owner.
+
+---
+
 ## Sync step (run if AGENTS.md changes)
 
 After editing this file, mirror to the other agent surfaces so all

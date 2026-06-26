@@ -97,6 +97,28 @@ treat it as misplaced until proven the backend owner is already correct (Fast re
 > PS-302/303/306 cutover, and the guard RATCHETS — these patterns may not spread to new
 > files. A frontend-only diff that introduces one of them is rejected by CI, not review.
 
+> **Rate Source-of-Truth Lockdown (PS-313).** Rate authority is a backend owner cluster,
+> not a UI, route, or wrapper convenience:
+>
+> - `src/services/rates-combined.ts#combineCarrierUniverses` owns the combined ShipStation
+>   plus direct-carrier universe, completeness diagnostics, and the cross-universe winner.
+> - `src/services/rates.ts#pickBestRate` is the provider-level selector inside the backend
+>   rate service, after eligibility, insurance, confirmation, other carrier amounts, and
+>   markup normalization are applied.
+> - `src/services/shipping-workflow/rate-quote-snapshot-store.ts` owns backend-issued
+>   quote references for selected-rate purchase boundaries.
+> - `src/services/shipping-workflow/rate-fingerprint.ts` owns selected-rate proof validation.
+>
+> - Best Rate ranking happens only in the backend canonical rate authority.
+> - Rate Browser and Awaiting Shipment Best Rate must consume the same backend-selected best rate.
+> - Markups, confirmation, insurance, and other carrier amounts are applied before ranking.
+> - Frontend sorting is display-only and cannot declare or persist official bestRate.
+> - Frontend cannot mint selected-rate proof.
+> - Billing and Shipped views display selected/purchased shipment rate truth, not current Best Rate.
+> - `npm run test:rate-source-of-truth` enforces this contract and must be run for rate
+>   authority, rate proof, Rate Browser, selected/purchased rate display, Billing rate
+>   display, and Best Rate persistence changes.
+
 ## Backend-Owned Truth Without Backend Monoliths
 
 **Backend owns decisions. Frontend owns interaction. Workers own slow provider work.

@@ -26,6 +26,9 @@ jobs:
       - name: Authority drift guard (PS-305)
         run: npm run test:ps-305-authority-drift
 
+      - name: Rate source-of-truth guard (PS-313)
+        run: npm run test:rate-source-of-truth
+
       - name: Typecheck (backend + frontend)
         run: npm run typecheck
 
