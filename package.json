@@ -296,6 +296,7 @@
     "test:ps-311b-box-cost-by-dims-integration": "tsx scripts/ps-311b-box-cost-by-dims-integration.ts",
     "test:ps-323-billing-sot-parity": "tsx scripts/ps-323-billing-sot-parity-guard.ts",
     "test:rate-source-of-truth": "tsx scripts/ps-313-rate-source-of-truth-guard.ts",
+    "test:ps-326-carrier-account-identity-certification": "tsx scripts/ps-326-carrier-account-identity-certification-guard.ts",
     "test:ps-314-no-sot-bypass-wrappers": "tsx scripts/ps-314-no-sot-bypass-wrappers-guard.ts",
     "test:ps-316-backend-truth-law": "tsx scripts/ps-316-backend-truth-law-guard.ts",
     "test:ps-301-fe-row-actions-consumption": "tsx scripts/ps-301-fe-row-actions-consumption-guard.ts",
