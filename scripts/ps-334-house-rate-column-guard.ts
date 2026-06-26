@@ -338,6 +338,11 @@ check(
   /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderRateAmountWithMarkup\(null,\s*shippedBackendMoney\.markedAmount/.test(orderCellsSrc) &&
     /renderRateAmountWithMarkup\(backendMoney\.markupSource === 'house_account' \? null : backendMoney\.baseAmount,\s*backendMoney\.markedAmount/.test(orderCellsSrc),
 );
+check(
+  'Awaiting Best Rate cell does not render the second-best sub-line',
+  !/2nd\s*\{formatMoney\(secondBestAmount\)\}/.test(orderCellsSrc) &&
+    !/const secondBestAmount\b/.test(orderCellsSrc),
+);
 
 const packageJson = read('package.json');
 check(

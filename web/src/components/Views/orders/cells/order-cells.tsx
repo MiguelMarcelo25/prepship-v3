@@ -90,7 +90,6 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
     renderAwaitingRateFallback,
     hasDisplayableBestRateForCurrentRequest,
     getAwaitingBestRateDisplayState,
-    getRateBaseAmount,
   } = deps
   const displayOrder = getOrderWithAutoBestRate(order)
 
@@ -224,8 +223,6 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
   // Operator request (2026-05-12, under `unlock shipped data` override): no
   // per-carrier SVG badge in this cell — the Carrier column already shows it.
   const backendMoney = getBackendRowMoney(displayOrder)
-  const secondBestRate = toRecord(toRecord(displayOrder.bestRate)?.secondBestRate)
-  const secondBestAmount = secondBestRate ? getRateBaseAmount(secondBestRate) : null
   return (
     <div data-rate-state="ready" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -238,11 +235,6 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
       {recalculatingSpinner}
       </div>
-      {secondBestAmount != null && secondBestAmount > 0 ? (
-        <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.15 }}>
-          2nd {formatMoney(secondBestAmount)}
-        </div>
-      ) : null}
     </div>
   )
 }
