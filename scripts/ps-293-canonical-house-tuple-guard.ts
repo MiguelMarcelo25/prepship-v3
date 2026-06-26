@@ -40,11 +40,11 @@ async function main() {
 
   // ── static: ONE owner, BOTH call sites ──────────────────────────────────────
   const owner = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');
-  check('the shared owner exists and resolves the tuple via the canonical resolver + opt-in gate',
+  check('the shared owner exists and resolves the tuple via the canonical resolver + policy gate',
     /export async function stampHouseTuple\(/.test(owner) &&
     /resolveNextBestNonHouseRate\(/.test(owner) &&
-    /clientHouseAccountEnabled\(/.test(owner) &&
-    /isHouseShippRate\(/.test(owner));
+    /shippingMarginPolicyForClient\(/.test(owner) &&
+    /isInternalHouseRate\(/.test(owner));
 
   const rates = readFileSync('src/routes/rates.ts', 'utf8');
   check('rates.ts (/rates/browse) delegates to the shared stampHouseTuple owner',

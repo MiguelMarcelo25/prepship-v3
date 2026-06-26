@@ -12,8 +12,8 @@
 // Best-effort: any failure logs and returns the input unchanged (never breaks rating).
 
 import { rateCostTotal, rateTotal, type CombinableRate } from '../rates-combined.js';
-import { isHouseShippRate, resolveNextBestNonHouseRate } from '../../lib/next-best-non-house-rate.js';
-import { clientHouseAccountEnabled } from '../house-account-opt-in.js';
+import { isInternalHouseRate, resolveNextBestNonHouseRate } from '../../lib/next-best-non-house-rate.js';
+import { shippingMarginPolicyForClient } from '../house-account-opt-in.js';
 import { loadShippingAutomationRules } from '../shipping-automation.js';
 
 export async function stampHouseTuple(
@@ -28,10 +28,11 @@ export async function stampHouseTuple(
   },
 ): Promise<Record<string, unknown>> {
   // SHIPP identity is provider-only (the carrier_code trap) — handled by isHouseShippRate.
-  if (!isHouseShippRate(input.cheapest)) return bestRate;
+  if (!isInternalHouseRate(input.cheapest)) return bestRate;
   try {
     const houseClientId = typeof input.clientId === 'number' ? input.clientId : null;
-    if (!(await clientHouseAccountEnabled(houseClientId))) return bestRate;
+    const shippingMarginPolicy = await shippingMarginPolicyForClient(houseClientId);
+    if (shippingMarginPolicy.mode !== 'next_best_customer_rate') return bestRate;
     const houseStoreId = typeof input.storeId === 'number' ? input.storeId : null;
     // Same eligibility basis the customer faces (admin-disabled services + insurance-incapable carriers
     // excluded) so customer_rate is a rate the client could actually use. Best-effort automation load.
@@ -44,7 +45,7 @@ export async function stampHouseTuple(
         insuredValue: input.insuredValue ?? null,
       },
       automationRules: houseAutomationRules,
-      client: { houseAccountOptIn: true },
+      client: { houseAccountOptIn: shippingMarginPolicy.legacyHouseAccountEnabled, shippingMarginPolicy },
     });
     const round2 = (value: number): number => Math.round(value * 100) / 100;
     const drpCost = round2(rateCostTotal(input.cheapest));

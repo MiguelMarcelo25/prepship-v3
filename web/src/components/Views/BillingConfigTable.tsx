@@ -27,7 +27,7 @@ export function BillingConfigTable({
   configDrafts: Record<number, BillingConfigDraft>
   setConfigDrafts: (updater: (current: Record<number, BillingConfigDraft>) => Record<number, BillingConfigDraft>) => void
   onSaveConfig: (clientId: number) => void
-  // PS-220 (P4): immediate per-client opt-in into the SHIPP house-account margin model.
+  // PS-220/PS-327: immediate per-client opt-in into the backend shipping margin policy.
   onToggleHouseAccount: (clientId: number, enabled: boolean) => void
 }) {
   // Editable numeric cell for the Client Billing Config <Table>. The input
@@ -211,21 +211,21 @@ export function BillingConfigTable({
               },
             },
             {
-              // PS-220 (P4): SHIPP house-account opt-in. Immediate toggle (its own admin endpoint),
-              // NOT part of the draft Save above. ON => this client's SHIPP-winning orders bill the
-              // captured customer_rate (cheapest eligible non-SHIPP) and DRP keeps the spread.
+              // PS-220/PS-327: margin policy opt-in. Immediate toggle (its own admin endpoint),
+              // NOT part of the draft Save above. ON => internal-rate wins bill the captured
+              // customer_rate (cheapest eligible non-internal rate) and DRP keeps the spread.
               key: 'houseAccount',
-              label: 'House Acct',
-              width: 78,
-              minWidth: 64,
+              label: 'Margin Mode',
+              width: 92,
+              minWidth: 82,
               align: 'center',
               sortable: true,
-              sortValue: (row) => ((row as { houseAccountEnabled?: boolean }).houseAccountEnabled ? 1 : 0),
+              sortValue: (row) => ((row as { shippingMarginPolicyMode?: string }).shippingMarginPolicyMode === 'next_best_customer_rate' ? 1 : 0),
               render: (row) => (
                 <input
                   type="checkbox"
                   checked={(row as { houseAccountEnabled?: boolean }).houseAccountEnabled === true}
-                  title="SHIPP house account: when SHIPP wins for this client, bill the cheapest eligible non-SHIPP rate (customer_rate) and keep the spread as DRP margin. Default off."
+                  title="Margin mode: when an internal-rate account wins for this client, bill the cheapest eligible non-internal rate and keep the spread as DRP margin. Default off."
                   onChange={(event) => onToggleHouseAccount(row.clientId, event.target.checked)}
                 />
               ),

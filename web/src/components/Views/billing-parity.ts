@@ -13,6 +13,8 @@ type BillingAnyRecord = Record<string, any>
 export type BillingConfigDto = BillingAnyRecord & {
   clientId: number
   clientName?: string | null
+  houseAccountEnabled?: boolean | null
+  shippingMarginPolicyMode?: 'pass_through' | 'next_best_customer_rate' | string | null
 }
 export type BillingSummaryDto = BillingAnyRecord & {
   clientId: number

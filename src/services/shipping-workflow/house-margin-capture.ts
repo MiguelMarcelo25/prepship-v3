@@ -1,6 +1,6 @@
 import { sql as pg } from '../../db/client.js';
 import { ensureOrderCompetitiveRateSchema } from '../../db/ensure-order-competitive-rate.js';
-import { clientHouseAccountEnabled } from '../house-account-opt-in.js';
+import { shippingMarginPolicyForClient, type ShippingMarginPolicy } from '../house-account-opt-in.js';
 import { normalizeOrderBestRateDto, type OrderBestRateDto } from '../order-rate-dto.js';
 
 // PS-220 — REALIZED house-margin capture (slice 3). At SHIPP label purchase, freeze the captured
@@ -52,10 +52,14 @@ export function houseMarginFromProjection(best: OrderBestRateDto | null, drpCost
 export function planRealizedHouseCapture(input: {
   drpCost: number;
   optedIn: boolean;
+  shippingMarginPolicy?: Pick<ShippingMarginPolicy, 'mode'> | null;
   best: OrderBestRateDto | null;
 }): RealizedHouseMargin | null {
   if (!Number.isFinite(input.drpCost) || input.drpCost <= 0) return null;
-  if (!input.optedIn) return null;
+  const marginEnabled = input.shippingMarginPolicy
+    ? input.shippingMarginPolicy.mode === 'next_best_customer_rate'
+    : input.optedIn;
+  if (!marginEnabled) return null;
   return houseMarginFromProjection(input.best, input.drpCost);
 }
 
@@ -70,13 +74,18 @@ export async function captureRealizedHouseMargin(input: {
   // invalid cost (free) then the opt-in check (one query). The pure planner re-validates them so
   // the full gate is provable offline; live behavior + ordering stay byte-identical.
   if (!Number.isFinite(input.drpCost) || input.drpCost <= 0) return;
-  const optedIn = await clientHouseAccountEnabled(input.clientId);
-  if (!optedIn) return;
+  const shippingMarginPolicy = await shippingMarginPolicyForClient(input.clientId);
+  if (shippingMarginPolicy.mode !== 'next_best_customer_rate') return;
   const rows = (await pg`
     SELECT best_rate_json FROM order_overrides WHERE order_id = ${input.orderId} LIMIT 1
   `) as Array<{ best_rate_json?: unknown }>;
   const best = normalizeOrderBestRateDto(rows[0]?.best_rate_json ?? null);
-  const realized = planRealizedHouseCapture({ drpCost: input.drpCost, optedIn, best });
+  const realized = planRealizedHouseCapture({
+    drpCost: input.drpCost,
+    optedIn: shippingMarginPolicy.legacyHouseAccountEnabled,
+    shippingMarginPolicy,
+    best,
+  });
   if (!realized) return; // gate said skip -> not a captured house order
   await ensureOrderCompetitiveRateSchema();
   await pg`

@@ -22,7 +22,7 @@ import {
   upsertBillingConfig,
 } from '../services/billing';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
-import { houseAccountEnabledClientIds } from '../services/house-account-opt-in';
+import { houseAccountEnabledClientIds, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { billingDayRange, formatBillingDay } from '../lib/time/billing-day';
 import { requirePermission } from '../middleware/auth';
@@ -170,22 +170,26 @@ app.get('/config', async (c) => {
   // the grid here. Best-effort — an empty set just shows every toggle OFF.
   const houseAccountIds = await houseAccountEnabledClientIds();
 
-  const data = rows.map((r) => ({
-    clientId: r.clientId,
-    clientName: r.clientName,
-    houseAccountEnabled: houseAccountIds.has(r.clientId),
-    pickPackFee: r.pickPackFee ?? '0.00',
-    pickPackMaxUnits: r.pickPackMaxUnits ?? 1,
-    additionalUnitFee: r.additionalUnitFee ?? '0.00',
-    packageCostMarkup: r.packageCostMarkup ?? '0.00',
-    shippingMarkupPct: r.shippingMarkupPct ?? '0.00',
-    shippingMarkupFlat: r.shippingMarkupFlat ?? '0.00',
-    storageFeePerCuFt: r.storageFeePerCuFt ?? '0.0000',
-    billingMode: r.billingMode ?? 'per_shipment',
-    active: r.active ?? true,
-    createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
-  }));
+  const data = rows.map((r) => {
+    const houseAccountEnabled = houseAccountIds.has(r.clientId);
+    return {
+      clientId: r.clientId,
+      clientName: r.clientName,
+      houseAccountEnabled,
+      shippingMarginPolicyMode: shippingMarginPolicyModeFromEnabled(houseAccountEnabled),
+      pickPackFee: r.pickPackFee ?? '0.00',
+      pickPackMaxUnits: r.pickPackMaxUnits ?? 1,
+      additionalUnitFee: r.additionalUnitFee ?? '0.00',
+      packageCostMarkup: r.packageCostMarkup ?? '0.00',
+      shippingMarkupPct: r.shippingMarkupPct ?? '0.00',
+      shippingMarkupFlat: r.shippingMarkupFlat ?? '0.00',
+      storageFeePerCuFt: r.storageFeePerCuFt ?? '0.0000',
+      billingMode: r.billingMode ?? 'per_shipment',
+      active: r.active ?? true,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    };
+  });
   return c.json({ data });
 });
 

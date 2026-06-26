@@ -19,10 +19,16 @@ import {
   type ShippingServiceOptionEligibilityContext,
 } from './shipping-service-eligibility.js';
 import { isPricedRate, rateTotal, type CombinableRate } from '../services/rates-combined.js';
+import type { ShippingMarginPolicy } from '../services/house-account-opt-in.js';
 
 /** True only for DRP's house carrier (SHIPP), identified by provider — never carrier_code. */
 export function isHouseShippRate(rate: CombinableRate): boolean {
   return normalizeProviderKey((rate as { provider?: unknown }).provider) === 'shipp';
+}
+
+/** Conservative first-slice internal-rate identity; broader accounts must be added by backend policy. */
+export function isInternalHouseRate(rate: CombinableRate): boolean {
+  return isHouseShippRate(rate);
 }
 
 export type NextBestNonHouseResult = {
@@ -45,9 +51,15 @@ export function resolveNextBestNonHouseRate(input: {
   context: ShippingServiceEligibilityContext | null;
   shippingOptions?: ShippingServiceOptionEligibilityContext | null;
   automationRules?: ShippingAutomationRule[] | null;
-  client: { houseAccountOptIn?: boolean | null };
+  client?: {
+    houseAccountOptIn?: boolean | null;
+    shippingMarginPolicy?: Pick<ShippingMarginPolicy, 'mode'> | null;
+  } | null;
 }): NextBestNonHouseResult | null {
-  if (!input.client?.houseAccountOptIn) return null;
+  const marginMode =
+    input.client?.shippingMarginPolicy?.mode ??
+    (input.client?.houseAccountOptIn ? 'next_best_customer_rate' : 'pass_through');
+  if (marginMode !== 'next_best_customer_rate') return null;
   // Same eligibility verdict the browse/selection path uses — no new policy.
   const eligible = filterEligibleShippingServices(
     input.eligibleRates,
@@ -57,7 +69,7 @@ export function resolveNextBestNonHouseRate(input: {
     input.automationRules ?? null,
   );
   // Drop the house carrier (by provider) and any unpriced rate (same basis as the winner pick).
-  const competitors = eligible.filter((rate) => !isHouseShippRate(rate) && isPricedRate(rate));
+  const competitors = eligible.filter((rate) => !isInternalHouseRate(rate) && isPricedRate(rate));
   const cheapest = [...competitors].sort((a, b) => rateTotal(a) - rateTotal(b))[0] ?? null;
   return cheapest
     ? { rate: cheapest, total: rateTotal(cheapest), competitorCount: competitors.length }

@@ -1,4 +1,5 @@
-import { isHouseShippRate } from '../../lib/next-best-non-house-rate';
+import { isInternalHouseRate } from '../../lib/next-best-non-house-rate';
+import type { ShippingMarginPolicy } from '../house-account-opt-in';
 
 /**
  * PS-292 (items 2 + 4) — backend-owned verdict + reject for a persisted best rate's SHIPP house tuple.
@@ -28,10 +29,14 @@ export function houseTupleStatus(input: {
   nextBestNonHouseRate: unknown;
   houseMargin: number | null | undefined;
   optedIn: boolean;
+  shippingMarginPolicy?: Pick<ShippingMarginPolicy, 'mode'> | null;
 }): HouseTupleStatus {
   // Default-OFF inert: non-opted-in clients + non-SHIPP winners are never house rows.
-  if (!input.optedIn) return 'not_house';
-  if (!isHouseShippRate({ provider: input.rawProvider } as Parameters<typeof isHouseShippRate>[0])) {
+  const marginEnabled = input.shippingMarginPolicy
+    ? input.shippingMarginPolicy.mode === 'next_best_customer_rate'
+    : input.optedIn;
+  if (!marginEnabled) return 'not_house';
+  if (!isInternalHouseRate({ provider: input.rawProvider } as Parameters<typeof isInternalHouseRate>[0])) {
     return 'not_house';
   }
   const tupleMissing = input.nextBestNonHouseRate == null && input.houseMargin == null;

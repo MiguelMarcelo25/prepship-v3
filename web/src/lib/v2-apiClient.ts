@@ -2544,7 +2544,7 @@ export const apiClient = {
     );
   },
 
-  // PS-220 (P4): opt a client in/out of the SHIPP house-account margin model. Admin-only
+  // PS-220/PS-327: opt a client in/out of the backend shipping margin policy. Admin-only
   // endpoint (the flag is off the drizzle schema; written via raw SQL server-side).
   setClientHouseAccount(clientId: number, enabled: boolean): Promise<any> {
     return safe(

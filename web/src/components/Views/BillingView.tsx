@@ -855,11 +855,17 @@ export default function BillingView() {
   // based) — the flag is written via a dedicated admin endpoint, not the drizzle billing-config save.
   async function handleToggleHouseAccount(clientId: number, enabled: boolean) {
     try {
-      await apiClient.setClientHouseAccount(clientId, enabled)
-      setConfigs((current) => current.map((config) => config.clientId === clientId ? { ...config, houseAccountEnabled: enabled } : config))
-      toastContext?.addToast(enabled ? '✅ House account enabled' : 'House account disabled', 'success')
+      const result = await apiClient.setClientHouseAccount(clientId, enabled)
+      const shippingMarginPolicyMode =
+        result?.shippingMarginPolicyMode ?? (enabled ? 'next_best_customer_rate' : 'pass_through')
+      setConfigs((current) => current.map((config) => config.clientId === clientId ? {
+        ...config,
+        houseAccountEnabled: enabled,
+        shippingMarginPolicyMode,
+      } : config))
+      toastContext?.addToast(enabled ? '✅ Margin mode enabled' : 'Margin mode disabled', 'success')
     } catch (error) {
-      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update house account', 'error')
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update margin mode', 'error')
     }
   }
 

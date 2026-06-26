@@ -8,6 +8,27 @@ import { sql as pg } from '../db/client.js';
 
 let columnEnsured: Promise<void> | null = null;
 
+export type ShippingMarginPolicyMode = 'pass_through' | 'next_best_customer_rate';
+
+export type ShippingMarginPolicy = {
+  mode: ShippingMarginPolicyMode;
+  legacyHouseAccountEnabled: boolean;
+};
+
+export function shippingMarginPolicyModeFromEnabled(enabled: boolean): ShippingMarginPolicyMode {
+  return enabled ? 'next_best_customer_rate' : 'pass_through';
+}
+
+export function shippingMarginPolicyFromRow(
+  row: { house_account_enabled?: boolean | null } | null | undefined,
+): ShippingMarginPolicy {
+  const enabled = row?.house_account_enabled === true;
+  return {
+    mode: shippingMarginPolicyModeFromEnabled(enabled),
+    legacyHouseAccountEnabled: enabled,
+  };
+}
+
 /** Idempotent ADD COLUMN so the API/worker both work pre-migration (mirrors the migration). */
 async function ensureHouseAccountColumn(): Promise<void> {
   columnEnsured ??= (async () => {
@@ -24,17 +45,23 @@ async function ensureHouseAccountColumn(): Promise<void> {
  * false on any error or missing client, so a config glitch can never turn a normal order into a
  * house order (fail-safe — the order just bills as today).
  */
-export async function clientHouseAccountEnabled(clientId: number | null | undefined): Promise<boolean> {
-  if (clientId == null) return false;
+export async function shippingMarginPolicyForClient(
+  clientId: number | null | undefined,
+): Promise<ShippingMarginPolicy> {
+  if (clientId == null) return shippingMarginPolicyFromRow(null);
   try {
     await ensureHouseAccountColumn();
     const rows = (await pg`
       SELECT house_account_enabled FROM billing_config WHERE client_id = ${clientId} LIMIT 1
-    `) as Array<{ house_account_enabled?: boolean }>;
-    return rows[0]?.house_account_enabled === true;
+    `) as Array<{ house_account_enabled?: boolean | null }>;
+    return shippingMarginPolicyFromRow(rows[0]);
   } catch {
-    return false;
+    return shippingMarginPolicyFromRow(null);
   }
+}
+
+export async function clientHouseAccountEnabled(clientId: number | null | undefined): Promise<boolean> {
+  return (await shippingMarginPolicyForClient(clientId)).mode === 'next_best_customer_rate';
 }
 
 /**

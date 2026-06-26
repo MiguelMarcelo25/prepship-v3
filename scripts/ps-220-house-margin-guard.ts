@@ -150,8 +150,9 @@ check('rates.ts delegates browse money redaction to the pure rate-browser-money-
     RATE_BROWSER_MONEY_FIELD_KEYS.has('totalCost') && RATE_BROWSER_MONEY_FIELD_KEYS.has('houseMargin'));
 }
 check('projected stamp fires only for a SHIPP winner + opted-in client, over combinedRates (shared owner)',
-  houseStamp.includes('isHouseShippRate(input.cheapest)') &&
-  houseStamp.includes('clientHouseAccountEnabled') &&
+  houseStamp.includes('isInternalHouseRate(input.cheapest)') &&
+  houseStamp.includes('shippingMarginPolicyForClient') &&
+  houseStamp.includes("shippingMarginPolicy.mode !== 'next_best_customer_rate'") &&
   /resolveNextBestNonHouseRate\(\{[\s\S]*?eligibleRates: input\.combinedRates/.test(houseStamp));
 check('rates.ts (/rates/browse) DELEGATES the house stamp to the shared stampHouseTuple owner',
   /await stampHouseTuple\(/.test(ratesRoute) && /import \{ stampHouseTuple \}/.test(ratesRoute));
@@ -272,8 +273,8 @@ check('PS-220-D: capture uses the threaded competitorCount (falls back to compet
     JSON.stringify(planRealizedHouseCapture({ drpCost: 8.5, optedIn: true, best: stamp })) === JSON.stringify(houseMarginFromProjection(stamp, 8.5)));
 }
 // Structural pin: the IO shell DELEGATES its write decision to the pure gate (still sidecar-INSERT only).
-check('writer-gate: captureRealizedHouseMargin delegates to planRealizedHouseCapture (thin IO shell)',
-  /const realized = planRealizedHouseCapture\(\{ drpCost: input\.drpCost, optedIn, best \}\)/.test(captureSrc));
+check('writer-gate: captureRealizedHouseMargin delegates to planRealizedHouseCapture with the backend policy (thin IO shell)',
+  /const realized = planRealizedHouseCapture\(\{[\s\S]*?drpCost: input\.drpCost[\s\S]*?shippingMarginPolicy[\s\S]*?best/.test(captureSrc));
 check('realized capture INSERTs the sidecar and NEVER updates the locked shipments table',
   /INSERT INTO order_competitive_rate/.test(captureSrc) && !/UPDATE\s+shipments/i.test(captureSrc));
 const labelsSrc = readFileSync('src/services/labels.ts', 'utf8');
@@ -372,9 +373,10 @@ check('admin endpoint: PATCH /clients/:id/house-account (admin-gated) calls setC
   /setClientHouseAccountEnabled\(id, enabled\)/.test(adminSrc));
 
 const billingRouteSrc = readFileSync('src/routes/billing.ts', 'utf8');
-check('billing /config read enriches each row with houseAccountEnabled from the opt-in set',
+check('billing /config read enriches each row with houseAccountEnabled + shippingMarginPolicyMode from the backend policy',
   /houseAccountEnabledClientIds\(\)/.test(billingRouteSrc) &&
-  /houseAccountEnabled: houseAccountIds\.has\(r\.clientId\)/.test(billingRouteSrc));
+  /const houseAccountEnabled = houseAccountIds\.has\(r\.clientId\)/.test(billingRouteSrc) &&
+  /shippingMarginPolicyMode: shippingMarginPolicyModeFromEnabled\(houseAccountEnabled\)/.test(billingRouteSrc));
 
 const apiClientSrc = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 check('apiClient.setClientHouseAccount PATCHes the admin opt-in endpoint',
@@ -382,8 +384,9 @@ check('apiClient.setClientHouseAccount PATCHes the admin opt-in endpoint',
   /\/admin\/clients\/\$\{clientId\}\/house-account/.test(apiClientSrc));
 
 const configTableSrc = readFileSync('web/src/components/Views/BillingConfigTable.tsx', 'utf8');
-check('FE: Billing Config grid has a House Acct toggle wired to onToggleHouseAccount',
+check('FE: Billing Config grid has a Margin Mode toggle wired to onToggleHouseAccount',
   /onToggleHouseAccount/.test(configTableSrc) &&
+  /Margin Mode/.test(configTableSrc) &&
   /houseAccountEnabled/.test(configTableSrc));
 
 // ── slice 4b-4 (PORTAL serializer proof: internal sees it, client never does) ──

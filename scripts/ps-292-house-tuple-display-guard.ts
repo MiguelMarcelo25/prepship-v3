@@ -263,8 +263,8 @@ check('static: orders SAVE stamps the houseTupleStatus verdict onto the persiste
 check('static: item3 shipped realized read present + financially gated (orderCompetitiveRate + canViewFinancials)',
   /orderCompetitiveRate/.test(ordersSrc) && /canViewFinancials/.test(ordersSrc));
 const stampSrc = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');
-check('static: stampHouseTuple still gates on isHouseShippRate + clientHouseAccountEnabled (default-OFF inert)',
-  /isHouseShippRate/.test(stampSrc) && /clientHouseAccountEnabled/.test(stampSrc));
+check('static: stampHouseTuple still gates on internal rate identity + backend shipping margin policy (default-OFF inert)',
+  /isInternalHouseRate/.test(stampSrc) && /shippingMarginPolicyForClient/.test(stampSrc));
 
 // ── 14. A's FE follow-up: a PERSISTED half-house rate (houseTupleStatus 'needs_refresh') must be
 //        NON-displayable so the awaiting cell falls through to the 'House rate needs refresh' diagnostic.
