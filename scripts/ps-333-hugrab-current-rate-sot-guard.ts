@@ -127,6 +127,33 @@ check(
   directCarrierCombinedFingerprint,
 );
 
+const zipOnlyAddressFingerprint = buildShippingRateRequestFingerprint({
+  version: 'ps-333',
+  shipDateBucket: '2026-06-26',
+  weightOz: 31,
+  dimsL: 12,
+  dimsW: 10,
+  dimsH: 3,
+  toZip: '11753-1451',
+  toCountry: 'US',
+  residential: true,
+});
+check(
+  'saved Browse Rates key without optional state/city does not false-stale matching package facts',
+  shippingRateFingerprintMatchesCurrentFacts(zipOnlyAddressFingerprint, {
+    weightOz: 31,
+    dimsL: 12,
+    dimsW: 10,
+    dimsH: 3,
+    toZip: '11753-1451',
+    toCountry: 'US',
+    toState: 'NY',
+    toCity: 'JERICHO',
+    residential: true,
+  }),
+  zipOnlyAddressFingerprint,
+);
+
 const ordersViewSource = read('web/src/components/Views/OrdersView.tsx');
 check(
   'awaiting stale fallback renders a re-rate action before the spinner branch',
@@ -195,6 +222,13 @@ const ordersRouteSrc = read('src/routes/orders.ts');
 check(
   'orders list passes current shipment facts into the best-rate workflow owner',
   /currentShipmentFacts:/.test(ordersRouteSrc) && /rowWeightOz/.test(ordersRouteSrc),
+);
+
+const ratesRouteSrc = read('src/routes/rates.ts');
+check(
+  'Browse Rates enriches state/city from the backend order row before building the rate key',
+  /toState:\s*rest\.toState\s*\?\?\s*orderForBrowse\?\.shipToState/.test(ratesRouteSrc) &&
+    /toCity:\s*rest\.toCity\s*\?\?\s*orderForBrowse\?\.shipToCity/.test(ratesRouteSrc),
 );
 
 const useOrdersSrc = read('web/src/hooks/useOrders.ts');

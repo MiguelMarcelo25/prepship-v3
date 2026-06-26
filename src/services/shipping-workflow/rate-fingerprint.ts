@@ -124,10 +124,6 @@ function fingerprintPartValue(fingerprint: string, key: string): string | null {
   return part ? part.slice(prefix.length) : null;
 }
 
-function fingerprintHasPart(fingerprint: string, key: string, value: string): boolean {
-  return fingerprint.split('|').includes(`${key}=${value}`);
-}
-
 function scaledPositiveKey(value: unknown): string | null {
   const n = finiteNumber(value);
   return n != null && n > 0 ? String(Math.round(n * 10)) : null;
@@ -240,10 +236,13 @@ export function shippingRateFingerprintMatchesCurrentFacts(
     if (fingerprintPartValue(fp, 'co') !== country) return false;
   }
   if (facts.toState != null && String(facts.toState).trim()) {
-    if (!fingerprintHasPart(fp, 'st', String(facts.toState).trim().toUpperCase())) return false;
+    const statePart = fingerprintPartValue(fp, 'st');
+    const expectedState = String(facts.toState).trim().toUpperCase();
+    if (statePart != null && /^[A-Z]{2,3}$/.test(statePart) && statePart !== expectedState) return false;
   }
   const city = normalizedCityKey(facts.toCity);
-  if (city != null && fingerprintPartValue(fp, 'ci') !== city) return false;
+  const cityPart = fingerprintPartValue(fp, 'ci');
+  if (city != null && cityPart != null && cityPart !== city) return false;
   if (facts.residential === true && fingerprintPartValue(fp, 'r') !== '1') return false;
   if (facts.residential === false && fingerprintPartValue(fp, 'r') !== '0') return false;
 

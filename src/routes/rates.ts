@@ -476,6 +476,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   let orderForBrowse: {
     sourceProvider: string | null;
     raw: unknown;
+    shipToPostalCode: string | null;
+    shipToState: string | null;
+    shipToCity: string | null;
     clientId: number | null;
     storeId: number | null;
     orderNumber: string | null;
@@ -489,6 +492,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         .select({
           sourceProvider: orders.sourceProvider,
           raw: orders.raw,
+          shipToPostalCode: orders.shipToPostalCode,
+          shipToState: orders.shipToState,
+          shipToCity: orders.shipToCity,
           shipToName: orders.shipToName,
           clientId: orders.clientId,
           storeId: orders.storeId,
@@ -533,8 +539,13 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       console.warn('[rates/browse] order residential-evidence load skipped:', err instanceof Error ? err.message : err);
     }
   }
+  const orderRawShipTo = ((orderForBrowse?.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
   const browseRateInput = {
     ...rest,
+    toZip: rest.toZip ?? orderForBrowse?.shipToPostalCode ?? readText(orderRawShipTo.postalCode) ?? rest.toZip,
+    toCountry: rest.toCountry ?? readText(orderRawShipTo.country) ?? rest.toCountry,
+    toState: rest.toState ?? orderForBrowse?.shipToState ?? readText(orderRawShipTo.state) ?? rest.toState,
+    toCity: rest.toCity ?? orderForBrowse?.shipToCity ?? readText(orderRawShipTo.city) ?? rest.toCity,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: orderedIds,
     // Order-backed marketplace context: gates eBay Logistics to eBay orders and feeds the eBay
