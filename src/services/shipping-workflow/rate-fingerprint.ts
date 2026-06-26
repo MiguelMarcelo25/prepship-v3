@@ -165,6 +165,13 @@ function firstPresent(...values: unknown[]): unknown {
   return null;
 }
 
+function comparableRateFactsFingerprint(fingerprint: string): string {
+  // Legacy combined Browse Rates keys used ":direct:" after the base fingerprint.
+  // Strip that suffix before comparing package/address facts.
+  const legacyDirectSuffix = fingerprint.indexOf(':direct:');
+  return legacyDirectSuffix >= 0 ? fingerprint.slice(0, legacyDirectSuffix) : fingerprint;
+}
+
 export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFingerprintInput): string {
   const parts: string[] = [
     `v=${input.version}`,
@@ -211,7 +218,7 @@ export function shippingRateFingerprintMatchesCurrentFacts(
   fingerprint: string | null | undefined,
   facts: ShippingRateCurrentFacts | null | undefined,
 ): boolean {
-  const fp = typeof fingerprint === 'string' ? fingerprint.trim() : '';
+  const fp = comparableRateFactsFingerprint(typeof fingerprint === 'string' ? fingerprint.trim() : '');
   if (!fp || !facts) return true;
 
   const comparisons: Array<[string, string | null]> = [
@@ -248,7 +255,7 @@ export function shippingRateFingerprintMatchesCurrentFacts(
 // unknown residential). Used at the label-purchase boundary to detect a rate↔label
 // residential mismatch before spending postage.
 export function residentialFromRequestFingerprint(fingerprint: string | null | undefined): boolean | null {
-  const fp = typeof fingerprint === 'string' ? fingerprint : '';
+  const fp = comparableRateFactsFingerprint(typeof fingerprint === 'string' ? fingerprint : '');
   if (!fp) return null;
   for (const part of fp.split('|')) {
     if (part === 'r=1') return true;

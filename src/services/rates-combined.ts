@@ -244,8 +244,10 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
   const directCarrierIds = [
     ...new Set(input.directDiagnostics.map((diagnostic) => diagnostic.carrierId).filter(Boolean)),
   ];
+  // Keep direct metadata in its own fingerprint part; appending with ":direct:"
+  // mutated the final package fact (for example h=30:direct:...) and false-staled rows.
   const combinedRequestKey = directCarrierIds.length
-    ? `${input.ssCacheKey}:direct:${directCarrierIds.sort().join(',')}`
+    ? `${input.ssCacheKey}|dc=${directCarrierIds.sort().join(',')}`
     : input.ssCacheKey;
   // The SINGLE pick, on the uniform charge basis (both families carry the same
   // markup rules by the time they reach this module). Only PRICED rates are

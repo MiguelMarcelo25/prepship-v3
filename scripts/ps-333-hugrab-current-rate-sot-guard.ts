@@ -9,7 +9,10 @@
 import { readFileSync } from 'node:fs';
 import { resolveNextBestNonHouseRate } from '../src/lib/next-best-non-house-rate';
 import { buildBestRateWorkflowDto } from '../src/services/shipping-workflow/best-rate-workflow-dto';
-import { buildShippingRateRequestFingerprint } from '../src/services/shipping-workflow/rate-fingerprint';
+import {
+  buildShippingRateRequestFingerprint,
+  shippingRateFingerprintMatchesCurrentFacts,
+} from '../src/services/shipping-workflow/rate-fingerprint';
 import {
   awaitingRateCellIsSpinner,
   classifyAwaitingRateCellStateWithWorkflow,
@@ -93,6 +96,35 @@ check(
   'mismatched current-rate row is actionable stale, not a loading spinner',
   mismatchedCellState === 'stale' && !awaitingRateCellIsSpinner(mismatchedCellState),
   mismatchedCellState,
+);
+
+const directCarrierCombinedFingerprint = `${buildShippingRateRequestFingerprint({
+  version: 'ps-333',
+  shipDateBucket: '2026-06-26',
+  weightOz: 24,
+  dimsL: 12,
+  dimsW: 10,
+  dimsH: 3,
+  toZip: '20854',
+  toCountry: 'US',
+  toState: 'CA',
+  toCity: 'Potomac',
+  residential: true,
+})}:direct:shipp:17`;
+check(
+  'direct-carrier Browse Rates combined key still matches current package facts',
+  shippingRateFingerprintMatchesCurrentFacts(directCarrierCombinedFingerprint, {
+    weightOz: 24,
+    dimsL: 12,
+    dimsW: 10,
+    dimsH: 3,
+    toZip: '20854',
+    toCountry: 'US',
+    toState: 'CA',
+    toCity: 'Potomac',
+    residential: true,
+  }),
+  directCarrierCombinedFingerprint,
 );
 
 const ordersViewSource = read('web/src/components/Views/OrdersView.tsx');

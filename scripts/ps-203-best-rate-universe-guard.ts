@@ -65,7 +65,7 @@ const BASE_COMBINE = {
   check('combined pick beats the SS-only winner ($9.27 < $10.44)',
     combined.cheapest?.carrier_id === 'se-10000031' && rateTotal(combined.cheapest!) === 9.27);
   check('combined request key carries the direct carrier ids',
-    combined.combinedRequestKey === 'ss-key:direct:se-10000031');
+    combined.combinedRequestKey === 'ss-key|dc=se-10000031');
   check('clean combined universe is COMPLETE',
     combined.bestRateComplete === true);
 }
