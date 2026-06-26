@@ -133,6 +133,34 @@ function freshBestRateWorkflow(rateLike = rate) {
   }
 }
 
+function houseBestRateWorkflow({ carrierCode = 'ups', serviceCode = 'ups_ground', accountNickname = 'HOUSE ACCOUNT' } = {}) {
+  return {
+    bestRateState: 'fresh',
+    savedRateDisplay: 'fresh',
+    canDisplayFinalRate: true,
+    canUseDisplayedRateForPurchase: true,
+    allowedActions: { canUseSavedRate: true, canCreateLabel: true, requiresRerate: false },
+    display: {
+      carrierCode,
+      serviceCode,
+      accountNickname,
+      providerAccountId: 10000025,
+    },
+    money: {
+      baseAmount: 10.55,
+      markedAmount: 14.25,
+      markupAmount: 3.7,
+      insuranceAddOn: 1.25,
+      marginPercent: 26,
+      customerRateAmount: 14.25,
+      rateCostAmount: 10.55,
+      houseRateAmount: 10.55,
+      shippingMarginAmount: 3.7,
+      markupSource: 'house_account',
+    },
+  }
+}
+
 const storeIdByClientId = { 1: 101, 2: 102 }
 
 // Build a raw `/orders` list row (the shape the API actually returns). The
@@ -246,6 +274,35 @@ const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
   },
 })
 
+// PS-334: house-feature awaiting row. Backend money owns the split:
+// Best Rate is customerRateAmount; House Rate is houseRateAmount.
+const houseBestRate = {
+  ...rate,
+  carrierCode: 'ups',
+  serviceCode: 'ups_ground',
+  serviceName: 'UPS Ground',
+  carrierNickname: 'HOUSE ACCOUNT',
+  providerAccountNickname: 'HOUSE ACCOUNT',
+  shippingProviderId: 10000025,
+  amount: 10.55,
+  cost: 10.55,
+  shipmentCost: 10.55,
+  otherCost: 0,
+  totalCost: 10.55,
+  customerRateAmount: 14.25,
+  rateCostAmount: 10.55,
+  houseRateAmount: 10.55,
+  shippingMarginAmount: 3.7,
+  houseApplied: true,
+  houseBadgeVisible: true,
+}
+const awaitingHouseFeature = baseRow(970006, 'awaiting_shipment', 1, {
+  orderNumber: 'ORD-970006-HOUSE',
+  bestRateWorkflow: houseBestRateWorkflow(),
+  overrides: { rateWeightOz: 60, rateDimsL: 11, rateDimsW: 8, rateDimsH: 6, bestRateDims: '11x8x6', bestRateJson: houseBestRate },
+  bestRate: houseBestRate,
+})
+
 // 3) Shipped, real local shipment data persisted.
 const shippedPersisted = baseRow(980001, 'shipped', 1, {
   orderNumber: 'SHIPPED-980001',
@@ -327,9 +384,34 @@ const shippedShippBrokered = baseRow(980005, 'shipped', 1, {
   shipping: { carrierCode: 'ups', serviceCode: 'shipp_ups_ground', trackingNumber: '1Z999AA1010980005', providerAccountId: 10000025, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
 })
 
+// PS-334: house-feature shipped row. Selected Rate is the realized
+// customer/billing rate; House Rate is separate and internal.
+const shippedHouseFeature = baseRow(980006, 'shipped', 1, {
+  orderNumber: 'SHIPPED-980006-HOUSE',
+  bestRate: null,
+  selectedRate: {
+    carrierCode: 'ups',
+    serviceCode: 'ups_ground',
+    serviceName: 'UPS Ground',
+    carrierNickname: 'HOUSE ACCOUNT',
+    providerAccountNickname: 'HOUSE ACCOUNT',
+    amount: 10.55,
+    cost: 10.55,
+    shipmentCost: 10.55,
+    otherCost: 0,
+    customerRateAmount: 14.25,
+    rateCostAmount: 10.55,
+    houseRateAmount: 10.55,
+    shippingMarginAmount: 3.7,
+  },
+  label: { trackingNumber: '1Z999AA1010980006', carrierCode: 'ups', serviceCode: 'ups_ground', shippingProviderId: 10000025, cost: 10.55, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
+  shipping: { carrierCode: 'ups', serviceCode: 'ups_ground', trackingNumber: '1Z999AA1010980006', providerAccountId: 10000025, accountNickname: 'HOUSE ACCOUNT', labelCost: 10.55, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
+  bestRateWorkflow: houseBestRateWorkflow(),
+})
+
 const ordersByStatus = {
-  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem, awaitingSingleQuantity, awaitingBestRateDivergent],
-  shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname, shippedShippBrokered],
+  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem, awaitingSingleQuantity, awaitingBestRateDivergent, awaitingHouseFeature],
+  shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname, shippedShippBrokered, shippedHouseFeature],
   cancelled: [],
 }
 
@@ -458,6 +540,13 @@ async function scrollOrdersTableRight(page) {
   })
 }
 
+async function scrollOrdersTableToColumn(page, columnKey) {
+  await page.locator('.orders-wrap').evaluate((el, key) => {
+    const target = el.querySelector(`th[data-col="${key}"]`)
+    if (target) el.scrollLeft = Math.max(0, target.offsetLeft - 360)
+  }, columnKey)
+}
+
 test('Awaiting grid columns render every required field from source of truth', async ({ page }) => {
   await page.setViewportSize({ width: 1680, height: 950 })
   await setup(page)
@@ -492,6 +581,17 @@ test('Awaiting grid columns render every required field from source of truth', a
   await assertColumns(page, awaitingBestRateDivergent.orderId, {
     custcarrier: { contains: 'BEST ACCT 111', notContains: 'STALE ACCT 999' },
   })
+
+  // PS-334 - Best Rate is the customer amount, while House Rate is the
+  // backend-owned internal amount in its own column.
+  await assertColumns(page, awaitingHouseFeature.orderId, {
+    orderNum: { contains: 'ORD-970006-HOUSE' },
+    bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
+    houserate: { contains: '10.55', notContains: '14.25' },
+    ratecost: { contains: '10.55' },
+  })
+  await scrollOrdersTableToColumn(page, 'houserate')
+  await page.screenshot({ path: path.join(screenshotDir, 'awaiting-ps334-house-rate.png'), fullPage: true })
 
   // Missing-dims awaiting row — rate-dependent columns MUST surface the
   // actionable "— add dims" prompt, not a blank/spinner masquerading as data.
@@ -594,6 +694,17 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     custcarrier: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
     test_shippingAccount: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
   })
+
+  // PS-334 - Selected Rate is the realized customer/billing amount, while
+  // House Rate remains separate and internal.
+  await assertColumns(page, shippedHouseFeature.orderId, {
+    orderNum: { contains: 'SHIPPED-980006-HOUSE' },
+    bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
+    houserate: { contains: '10.55', notContains: '14.25' },
+    ratecost: { contains: '10.55' },
+  })
+  await scrollOrdersTableToColumn(page, 'houserate')
+  await page.screenshot({ path: path.join(screenshotDir, 'shipped-ps334-house-rate.png'), fullPage: true })
 })
 
 // PS-077 — Shipped "Selected Rate" (internal `bestrate`) must resize compactly
