@@ -137,6 +137,7 @@ const claude = read('CLAUDE.md');
 const cursorRules = read('.cursorrules');
 const prTemplate = read('.github/pull_request_template.md');
 const ciWorkflow = read('.github/workflows/ci.yml');
+const sotGuardPack = read('scripts/sot-guard-pack.mjs');
 
 const rateLockdownRules = [
   'Rate Source-of-Truth Lockdown',
@@ -170,12 +171,17 @@ checkIncludesAll('PR template requires rate source-of-truth proof for rate work'
 
 check('package wires test:rate-source-of-truth to the PS-313 guard',
   /"test:rate-source-of-truth"\s*:\s*"tsx scripts\/ps-313-rate-source-of-truth-guard\.ts"/.test(packageJson));
-check('CI runs test:rate-source-of-truth before typecheck/build',
+check('CI runs test:rate-source-of-truth before typecheck/build, directly or through PS-335 guard pack',
   (() => {
-    const guardIndex = ciWorkflow.indexOf('npm run test:rate-source-of-truth');
+    const directGuardIndex = ciWorkflow.indexOf('npm run test:rate-source-of-truth');
+    const packIndex = ciWorkflow.indexOf('npm run test:sot-guard-pack');
+    const guardIndex = directGuardIndex >= 0 ? directGuardIndex : packIndex;
     const typecheckIndex = ciWorkflow.indexOf('npm run typecheck');
     const buildIndex = ciWorkflow.indexOf('npm run build:web');
-    return guardIndex >= 0 && typecheckIndex > guardIndex && buildIndex > typecheckIndex;
+    return guardIndex >= 0 &&
+      typecheckIndex > guardIndex &&
+      buildIndex > typecheckIndex &&
+      (directGuardIndex >= 0 || sotGuardPack.includes('test:rate-source-of-truth'));
   })());
 
 const ratesCombined = read('src/services/rates-combined.ts');

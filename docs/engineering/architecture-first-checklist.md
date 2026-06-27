@@ -22,6 +22,8 @@ If you cannot name the canonical owner, stop and find it before coding.
 
 ## PR review checklist
 
+- [ ] The **SOT/no-wrapper guard pack** passed for any source-of-truth-sensitive
+      change: `npm run test:sot-guard-pack`.
 - [ ] The PR names the **bad-data injection point** — where imperfect data first entered.
 - [ ] The fix is at the **canonical owner**, not the visible symptom.
 - [ ] UI / routes / adapters are **thin consumers** after the change.

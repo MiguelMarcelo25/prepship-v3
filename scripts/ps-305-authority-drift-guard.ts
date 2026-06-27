@@ -41,6 +41,7 @@ const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workf
 const architecture = read('ARCHITECTURE.md');
 const packageJson = read('package.json');
 const ciWorkflow = read('.github/workflows/ci.yml');
+const sotGuardPack = read('scripts/sot-guard-pack.mjs');
 
 check('PS-305 authority drift guardrails doc exists', existsSync(docPath));
 
@@ -111,12 +112,17 @@ for (const command of requiredCommands) {
 
 check('package wires PS-305 authority drift guard to this script',
   /"test:ps-305-authority-drift"\s*:\s*"tsx scripts\/ps-305-authority-drift-guard\.ts"/.test(packageJson));
-check('GitHub CI runs PS-305 authority drift guard before typecheck/build',
+check('GitHub CI runs PS-305 authority drift guard before typecheck/build, directly or through PS-335 guard pack',
   (() => {
-    const guardIndex = ciWorkflow.indexOf('npm run test:ps-305-authority-drift');
+    const directGuardIndex = ciWorkflow.indexOf('npm run test:ps-305-authority-drift');
+    const packIndex = ciWorkflow.indexOf('npm run test:sot-guard-pack');
+    const guardIndex = directGuardIndex >= 0 ? directGuardIndex : packIndex;
     const typecheckIndex = ciWorkflow.indexOf('npm run typecheck');
     const buildIndex = ciWorkflow.indexOf('npm run build:web');
-    return guardIndex >= 0 && typecheckIndex > guardIndex && buildIndex > typecheckIndex;
+    return guardIndex >= 0 &&
+      typecheckIndex > guardIndex &&
+      buildIndex > typecheckIndex &&
+      (directGuardIndex >= 0 || sotGuardPack.includes('test:ps-305-authority-drift'));
   })());
 check('PS-300 workflow records PS-305 guard command',
   workflowDoc.includes('test:ps-305-authority-drift'));

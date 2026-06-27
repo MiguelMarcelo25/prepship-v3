@@ -41,6 +41,12 @@ or Shipped-rate display change:
 Rate Source-of-Truth proof must name the backend canonical rate authority and explain how
 selected/purchased shipment rate truth is preserved when those paths are touched.
 
+For any source-of-truth, backend-truth, no-wrapper, rate, Rate Browser, Orders shell,
+label, queue, marketplace, billing, inventory, auth/scope, or shipped/cancelled-adjacent
+change, run the mandatory Hermes/CI guard pack:
+
+- **SOT/no-wrapper guard pack passed:** `npm run test:sot-guard-pack` yes / N/A — explain
+
 ## Safety checklist
 
 - [ ] No secrets, tokens, customer PII, raw provider payloads, full tracking numbers,
@@ -62,6 +68,7 @@ selected/purchased shipment rate truth is preserved when those paths are touched
 <!-- Exact commands run with pass/fail. State plainly if anything was skipped or failed. -->
 
 ```
+npm run test:sot-guard-pack
 npm run typecheck
 # guards / build:web / browser / workflow checks relevant to this change
 ```

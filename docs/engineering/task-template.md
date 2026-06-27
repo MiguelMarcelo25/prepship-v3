@@ -51,6 +51,7 @@ existing guards/tests. -->
 ## Verification commands
 
 ```
+npm run test:sot-guard-pack
 npm run typecheck
 # focused guards for the canonical owner
 # build:web / browser / workflow checks if UI or workflow is touched
@@ -59,6 +60,9 @@ npm run typecheck
 ## Definition of done
 
 - Change lives at the canonical owner; callers delegate; routes/UI/adapters stay thin.
+- The source-of-truth / backend-truth / no-wrapper guard pack passes when the task touches
+  governance, rates, labels, queue, marketplace, billing, inventory, auth/scope, or shipped
+  safety: `npm run test:sot-guard-pack`.
 - Boundary test at the owner passes; operator-symptom test passes.
 - Duplicate logic removed or recorded as follow-up debt.
 - Verification commands run with pass/fail evidence; no safety boundary weakened.

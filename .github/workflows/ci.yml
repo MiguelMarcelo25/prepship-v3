@@ -23,11 +23,8 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Authority drift guard (PS-305)
-        run: npm run test:ps-305-authority-drift
-
-      - name: Rate source-of-truth guard (PS-313)
-        run: npm run test:rate-source-of-truth
+      - name: SOT / backend-truth / no-wrapper guard pack (PS-335)
+        run: npm run test:sot-guard-pack
 
       - name: Typecheck (backend + frontend)
         run: npm run typecheck
