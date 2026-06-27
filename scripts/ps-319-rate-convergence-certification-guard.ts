@@ -277,13 +277,15 @@ checkPatterns('Rate Browser lifts backend proof refs through Apply as pass-throu
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 const fetchRatesBlock = sliceBetween(apiClient, 'fetchRates(data: Record<string, unknown>)', '\n  fetchCachedRatesBulk');
 const browseRatesBlock = sliceBetween(apiClient, 'browseRates(data: Record<string, unknown>)', '\n  // ');
-checkPatterns('v2 api client consumes backend /rates/browse best/proof metadata without local ranking', fetchRatesBlock + browseRatesBlock, [
+const rateBrowseTransportBlock = sliceBetween(apiClient, 'async function postRateBrowseTransport(', '\nexport const apiClient');
+checkPatterns('v2 api client has one backend /rates/browse transport and pass-through browser DTO', rateBrowseTransportBlock + browseRatesBlock, [
   /api\.post<any>\('\/rates\/browse'/,
-  /backendResult\?\.bestRate/,
-  /res\?\.bestRate/,
-  /requestFingerprint/,
-  /rate\.requestFingerprint \?\?/,
+  /translateRatePayloadToV4\(data\)/,
+  /rateBrowseInflight/,
+  /return postRateBrowseTransport\(data\)/,
 ]);
+check('v2 api client does not rebuild browse best/proof/freshness metadata',
+  !/bestRate\s*:|secondBestRate\s*:|requestFingerprint|cacheExpiresAt|proofSource|translateRateToLegacyDisplayShape/.test(browseRatesBlock));
 check('v2 api client rate methods do not locally select combined[0] or sort cheapest as authority',
   fetchRatesBlock.length > 0 &&
   browseRatesBlock.length > 0 &&

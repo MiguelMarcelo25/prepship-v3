@@ -77,13 +77,23 @@ checkIncludesAll('PS-320 doc records transport-only responsibility map and backe
 checkIncludesAll('PS-320 doc inventories the allowed legacy shims and why they are not SOT', ps320Doc, [
   'apiClient.fetchRates',
   'apiClient.browseRates',
+  'postRateBrowseTransport',
   'apiClient.createLabel',
   'apiClient.addToQueue',
   'apiClient.applyBestRate',
   'apiClient.fetchCarriersForStore',
   'translateRatePayloadToV4',
-  'translateRateToV2Shape',
+  'translateRateToLegacyDisplayShape',
   'normalizeInventoryDto',
+]);
+checkIncludesAll('PS-320 doc records the rate-transport matrix from the Trello addendum', ps320Doc, [
+  'Rate Transport Matrix',
+  'Verbatim backend DTO pass-through',
+  'Fields no longer synthesized in v2-apiClient',
+  'amount',
+  'shipmentCost',
+  'otherCost',
+  'proofSource',
 ]);
 checkIncludesAll('PS-320 doc records offline safety limits', ps320Doc, [
   'No real label purchases',
@@ -113,19 +123,48 @@ for (const command of [
 
 const fetchRatesBlock = sliceBetween(apiClient, 'fetchRates(data: Record<string, unknown>)', '\n  fetchCachedRatesBulk');
 const browseRatesBlock = sliceBetween(apiClient, 'browseRates(data: Record<string, unknown>)', '\n  fetchDashboardDailyCounts');
+const rateBrowseTransportBlock = sliceBetween(apiClient, 'async function postRateBrowseTransport(', '\nexport const apiClient');
 const createLabelBlock = sliceBetween(apiClient, 'createLabel(payload: unknown)', '\n  // PS-139: removed dead FE method createLabelBatch');
 const addToQueueBlock = sliceBetween(apiClient, 'addToQueue(payload: Record<string, unknown>)', '\n  startQueueSendJob');
 const applyBestRateBlock = sliceBetween(apiClient, 'applyBestRate(', '\n  // PS-179: updateOrderBestRateSelectionStrict removed');
 const fetchCarriersForStoreBlock = sliceBetween(apiClient, 'fetchCarriersForStore(', '\n  // ');
 
-checkPatterns('rate methods are transport to backend /rates/browse and pass through backend best/proof data', fetchRatesBlock + browseRatesBlock, [
+check('v2-apiClient has a single /rates/browse transport owner',
+  rateBrowseTransportBlock.length > 0 &&
+  (apiClient.match(/api\.post<any>\('\/rates\/browse'/g) ?? []).length === 1,
+  { postCount: (apiClient.match(/api\.post<any>\('\/rates\/browse'/g) ?? []).length });
+
+checkPatterns('rate browse transport posts normalized intent to backend /rates/browse', rateBrowseTransportBlock, [
   /api\.post<any>\('\/rates\/browse'/,
   /translateRatePayloadToV4\(data\)/,
-  /backendResult\?\.bestRate/,
-  /res\?\.bestRate/,
-  /requestFingerprint/,
-  /rate\.requestFingerprint \?\?/,
+  /stableRateBrowseKey\(/,
+  /rateBrowseInflight/,
 ]);
+check('browseRates is backend DTO pass-through and does not translate or rebuild rate fields',
+  browseRatesBlock.length > 0 &&
+  /return postRateBrowseTransport\(data\)/.test(browseRatesBlock) &&
+  !/translateRate|bestRate\s*:|secondBestRate\s*:|rates\s*:|requestFingerprint|cacheExpiresAt|proofSource/.test(browseRatesBlock),
+  browseRatesBlock);
+
+check('fetchRates delegates to the same browse transport and only uses the legacy display adapter',
+  fetchRatesBlock.length > 0 &&
+  /postRateBrowseTransport\(data\)/.test(fetchRatesBlock) &&
+  /toLegacyRateArray\(backendResult\)/.test(fetchRatesBlock) &&
+  !/api\.post<any>\('\/rates\/browse'|Object\.defineProperty|requestFingerprint|cacheExpiresAt|proofSource/.test(fetchRatesBlock),
+  fetchRatesBlock);
+
+check('legacy rate mapper is explicitly display-only and not the official browse DTO path',
+  /function translateRateToLegacyDisplayShape\(/.test(shared) &&
+  !/translateRateToV2Shape/.test(apiClient + shared) &&
+  !/translateRateToLegacyDisplayShape/.test(browseRatesBlock),
+  browseRatesBlock);
+
+check('backend /rates/browse stamps legacy display aliases before the client receives rates',
+  /function stampRateBrowserDisplayAliases(?:<[^>]+>)?\(/.test(read('src/routes/rates.ts')) &&
+  /responseRates = stampRateBrowserDisplayAliases\(responseRates\)/.test(read('src/routes/rates.ts')) &&
+  /bestRateOut = stampRateBrowserDisplayAliases\(bestRateOut\)/.test(read('src/routes/rates.ts')),
+);
+
 check('fetchRates/browseRates do not fetch direct carrier rates or locally pick combined[0]',
   fetchRatesBlock.length > 0 &&
   browseRatesBlock.length > 0 &&

@@ -206,6 +206,75 @@ function readMoneyObjectAmount(value: unknown): number {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+function readFiniteRateNumber(value: unknown): number | null {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function roundRateMoney(value: number): number {
+  return Math.round(Math.max(0, value) * 100) / 100;
+}
+
+function toRateProviderAccountId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^se-(\d+)$/i);
+  const parsed = Number.parseInt(match?.[1] ?? value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<string, unknown> {
+  const otherCost = roundRateMoney(
+    readMoneyObjectAmount(rate.other_amount) +
+    readMoneyObjectAmount(rate.confirmation_amount) +
+    readMoneyObjectAmount(rate.insurance_amount)
+  );
+  const total = roundRateMoney(rateTotal(rate));
+  const shipmentCost = roundRateMoney(total - otherCost);
+  const carrierCode = readText(rate.carrierCode ?? rate.carrier_code ?? rate.provider ?? null);
+  const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? rate.service ?? null);
+  const serviceName = readText(rate.serviceName ?? rate.service_type ?? rate.serviceCode ?? rate.service_code ?? null);
+  const carrierNickname = readText(
+    rate.carrierNickname ??
+    rate.carrier_nickname ??
+    rate.providerAccountNickname ??
+    rate.accountNickname ??
+    rate.accountIdentity ??
+    rate._carrierName ??
+    null
+  );
+  const shippingProviderId = toRateProviderAccountId(
+    rate.shippingProviderId ?? rate.providerAccountId ?? rate.carrier_id ?? null
+  );
+
+  return {
+    ...rate,
+    ...(carrierCode ? { carrierCode } : {}),
+    ...(serviceCode ? { serviceCode } : {}),
+    ...(serviceName ? { serviceName } : {}),
+    ...(carrierNickname ? { carrierNickname } : {}),
+    ...(shippingProviderId != null ? { shippingProviderId } : {}),
+    amount: readFiniteRateNumber(rate.amount) ?? total,
+    shipmentCost: readFiniteRateNumber(rate.shipmentCost) ?? shipmentCost,
+    otherCost: readFiniteRateNumber(rate.otherCost) ?? otherCost,
+    secondBestRate: isPlainRecord(rate.secondBestRate)
+      ? stampRateBrowserDisplayAlias(rate.secondBestRate)
+      : rate.secondBestRate,
+  };
+}
+
+function stampRateBrowserDisplayAliases<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry) => (
+      isPlainRecord(entry) ? stampRateBrowserDisplayAlias(entry) : entry
+    )) as T;
+  }
+  if (isPlainRecord(value)) {
+    return stampRateBrowserDisplayAlias(value) as T;
+  }
+  return value;
+}
+
 function readRateInsuranceCost(rate: Record<string, unknown>): number {
   const meta = isPlainRecord(rate.insuranceCost) ? rate.insuranceCost : null;
   const metaAmount = Number(meta?.amount ?? NaN);
@@ -304,7 +373,13 @@ function publicRateCacheRow<T extends { rates?: unknown; bestRate?: unknown; sec
   canViewFinancials: boolean
 ): T | null {
   if (!row) return null;
-  return publicRatesResult(row, canViewFinancials);
+  const displayRow = {
+    ...row,
+    rates: stampRateBrowserDisplayAliases(row.rates),
+    bestRate: stampRateBrowserDisplayAliases(row.bestRate),
+    secondBestRate: stampRateBrowserDisplayAliases(row.secondBestRate),
+  } as T;
+  return publicRatesResult(displayRow, canViewFinancials);
 }
 
 const rateBody = z.object({
@@ -851,6 +926,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   responseRates = responseRates.map((rate) =>
     stampHugrabCoverageDisplayFields(rate as Record<string, unknown>, hugrabCoverageDisplayContext),
   );
+  responseRates = stampRateBrowserDisplayAliases(responseRates);
   if (bestRateOut) {
     bestRateOut = stampHugrabCoverageDisplayFields(
       bestRateOut as Record<string, unknown>,
@@ -862,12 +938,16 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       secondBestRateOut,
       hugrabCoverageDisplayContext,
     );
+    secondBestRateOut = stampRateBrowserDisplayAliases(secondBestRateOut);
     if (bestRateOut) {
       bestRateOut = {
         ...(bestRateOut as Record<string, unknown>),
         secondBestRate: secondBestRateOut,
       } as typeof cheapest;
     }
+  }
+  if (bestRateOut) {
+    bestRateOut = stampRateBrowserDisplayAliases(bestRateOut) as typeof cheapest;
   }
   // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
   // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no
@@ -891,7 +971,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         ? manual.rates.filter((r) => requestedSet.has(r.carrier_id))
         : manual.rates;
       manualEstimate = {
-        rates: canViewFinancials ? manualFiltered : (redactRateBrowserMoney(manualFiltered) as unknown[]),
+        rates: canViewFinancials
+          ? stampRateBrowserDisplayAliases(manualFiltered)
+          : (redactRateBrowserMoney(stampRateBrowserDisplayAliases(manualFiltered)) as unknown[]),
         fetchedAt: manual.fetchedAt,
         cached: manual.cached,
       };

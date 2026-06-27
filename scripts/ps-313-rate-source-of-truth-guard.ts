@@ -216,8 +216,10 @@ check('rates backfill also delegates combined selection to rates-combined',
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 check('v2 api client no longer creates a local combined[0] bestRate',
   !stripComments(apiClient).includes('combinedBestRate') && !/combined\s*\[\s*0\s*\]/.test(stripComments(apiClient)));
-check('v2 api client passes through backend bestRate when defining legacy non-enumerable bestRate',
-  /if \(res\?\.bestRate\) \{[\s\S]{0,220}?Object\.defineProperty\(translatedRates, 'bestRate'[\s\S]{0,220}?translateRateToV2Shape\(res\.bestRate\)/.test(apiClient));
+check('v2 api client does not define a legacy client-side bestRate wrapper',
+  /return postRateBrowseTransport\(data\)/.test(apiClient) &&
+  !/Object\.defineProperty\([\s\S]{0,180}?['"]bestRate['"]/.test(apiClient) &&
+  !/bestRate\s*:.*translateRate/.test(apiClient));
 
 const rateBrowser = read('web/src/components/RateBrowserModal.tsx');
 checkIncludesAll('RateBrowserModal consumes backend canonical best and does not fabricate local cheapest', rateBrowser, [

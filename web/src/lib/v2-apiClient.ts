@@ -53,7 +53,6 @@ import {
   safe,
   WARN_THROTTLE_MS,
   warnLastSeen,
-  BACKEND_RATE_PROOF_SOURCE,
   warnThrottled,
   CachedRead,
   cachedReads,
@@ -82,7 +81,7 @@ import {
   normalizeDirectCarrierAccountDto,
   fetchDirectCarrierAccountRows,
   rateBrowseInflight,
-  translateRateToV2Shape,
+  translateRateToLegacyDisplayShape,
   fetchBlob,
   DailyStatsSummary,
   SettingsRow,
@@ -176,6 +175,50 @@ function parseDailyStatsSummary(value: unknown): DailyStatsSummary {
     needToShip,
     upcomingOrders,
   };
+}
+
+async function postRateBrowseTransport(data: Record<string, unknown>): Promise<any> {
+  const body = translateRatePayloadToV4(data);
+  const requestedCarrierIds = Array.isArray(body.carrierIds)
+    ? body.carrierIds.map((value) => String(value)).filter(Boolean)
+    : [];
+  const preferredCarrierId =
+    typeof body.preferredCarrierId === 'string'
+      ? body.preferredCarrierId
+      : requestedCarrierIds[0];
+  const requestKey = stableRateBrowseKey({
+    ...body,
+    carrierIds: requestedCarrierIds,
+    preferredCarrierId,
+  });
+  const existing = rateBrowseInflight.get(requestKey);
+  if (existing) return existing;
+
+  const inFlight = api.post<any>('/rates/browse', {
+    ...body,
+    ...(requestedCarrierIds.length ? { carrierIds: requestedCarrierIds } : {}),
+    ...(preferredCarrierId ? { preferredCarrierId } : {}),
+  });
+  rateBrowseInflight.set(requestKey, inFlight);
+  try {
+    return await inFlight;
+  } finally {
+    rateBrowseInflight.delete(requestKey);
+  }
+}
+
+function toLegacyRateArray(backendResult: any): any[] {
+  const rows = (Array.isArray(backendResult?.rates) ? backendResult.rates : [])
+    .map((rate: unknown) => translateRateToLegacyDisplayShape(rate));
+  Object.defineProperty(rows, 'directCarrierErrors', {
+    value: Array.isArray(backendResult?.directCarrierErrors) ? backendResult.directCarrierErrors : [],
+    enumerable: false,
+  });
+  Object.defineProperty(rows, 'directCarrierMetas', {
+    value: Array.isArray(backendResult?.directCarrierMetas) ? backendResult.directCarrierMetas : [],
+    enumerable: false,
+  });
+  return rows;
 }
 
 export const apiClient = {
@@ -2776,62 +2819,12 @@ export const apiClient = {
   },
 
   // ─── Rates ─────────────────────────────────────────────────────────────────
-  // fetchRates is the ONE place in the app that translates between v2's rate
-  // shape (shared by the bulk-ported RatesView / OrdersView side-panel / any
-  // future caller) and v4's ShipStation-v2-passthrough shape. Callers may
-  // pass either v4 shape (weightOz / toZip / dimsL/W/H) or legacy v2 shape
-  // (toPostalCode / weight.value / dimensions.length / …); we normalize to v4
-  // on input and remap to v2-legacy on output so every reader of the result
-  // can use the same field names the bulk-ported v2 code expects.
+  // Legacy calculator adapter. Transport still goes through the single
+  // /rates/browse owner; this method only returns the old array shape consumed
+  // by RatesView/NewOrder preview.
   fetchRates(data: Record<string, unknown>): Promise<any[]> {
-    return (async () => {
-        const body = translateRatePayloadToV4(data);
-        const res = await api.post<any>('/rates/browse', body);
-        const responseFingerprint = res?.requestFingerprint ?? res?.cacheKey ?? res?.requestKey;
-        const responseMetadata = responseFingerprint
-          ? {
-            requestFingerprint: responseFingerprint,
-            cacheKey: responseFingerprint,
-            cacheCreatedAt: res?.fetchedAt ?? null,
-            // PS-183: expiry is backend-owned — pass through, never minted here.
-            cacheExpiresAt: res?.cacheExpiresAt ?? null,
-            proofSource: BACKEND_RATE_PROOF_SOURCE,
-          }
-          : {};
-        const translatedRates = (Array.isArray(res?.rates) ? res.rates : []).map((rate: any) => ({
-          ...translateRateToV2Shape(rate),
-          ...responseMetadata,
-          // PS-103: a direct-carrier rate carries its OWN backend-issued proof
-          // (requestFingerprint/proofSource stamped by withDirectCarrierProof). Prefer the
-          // per-rate proof; the uniform response-level metadata is only the ShipStation
-          // fallback — never let it clobber a direct carrier's individual proof authority.
-          requestFingerprint: rate.requestFingerprint ?? (responseMetadata as any).requestFingerprint,
-          proofSource: rate.proofSource ?? (responseMetadata as any).proofSource,
-        }));
-        if (res?.bestRate) {
-          Object.defineProperty(translatedRates, 'bestRate', {
-            value: { ...translateRateToV2Shape(res.bestRate), ...responseMetadata },
-            enumerable: false,
-          });
-        }
-        if (res?.secondBestRate) {
-          Object.defineProperty(translatedRates, 'secondBestRate', {
-            value: { ...translateRateToV2Shape(res.secondBestRate), ...responseMetadata },
-            enumerable: false,
-          });
-        }
-        Object.defineProperty(translatedRates, 'directCarrierErrors', {
-          value: Array.isArray(res?.directCarrierErrors) ? res.directCarrierErrors : [],
-          enumerable: false,
-        });
-        Object.defineProperty(translatedRates, 'directCarrierMetas', {
-          value: Array.isArray(res?.directCarrierMetas) ? res.directCarrierMetas : [],
-          enumerable: false,
-        });
-        return translatedRates;
-      })();
+    return postRateBrowseTransport(data).then((backendResult) => toLegacyRateArray(backendResult));
   },
-
   fetchCachedRatesBulk(items: Record<string, unknown>[]): Promise<any[]> {
     return safe(
       'fetchCachedRatesBulk',
@@ -2846,9 +2839,9 @@ export const apiClient = {
                 ? {
                     ...item.hit,
                     rates: Array.isArray(item.hit.rates)
-                      ? item.hit.rates.map(translateRateToV2Shape)
+                      ? item.hit.rates.map(translateRateToLegacyDisplayShape)
                       : [],
-                    bestRate: item.hit.bestRate ? translateRateToV2Shape(item.hit.bestRate) : null,
+                    bestRate: item.hit.bestRate ?? null,
                   }
                 : null,
             }))
@@ -2858,97 +2851,12 @@ export const apiClient = {
     );
   },
 
-  // v2 parity: thin wrapper around POST /rates/browse. Backend already
-  // returns `{rates, bestRate, ...}` — we passthrough verbatim (no
-  // translation) since the rate-browser UI consumes the v4 shape directly.
+  // Thin wrapper around POST /rates/browse. Backend owns rate ranking, proof,
+  // money aliases, freshness, bestRate, and secondBestRate; pass through its
+  // DTO without rebuilding fields in the client.
   browseRates(data: Record<string, unknown>): Promise<any> {
-    const run = async () => {
-        const body = translateRatePayloadToV4(data);
-        const requestedCarrierIds = Array.isArray(body.carrierIds)
-          ? body.carrierIds.map((value) => String(value)).filter(Boolean)
-          : [];
-        const preferredCarrierId =
-          typeof body.preferredCarrierId === 'string'
-            ? body.preferredCarrierId
-            : requestedCarrierIds[0];
-        const requestKey = stableRateBrowseKey({
-          ...body,
-          carrierIds: requestedCarrierIds,
-          preferredCarrierId,
-        });
-        const existing = rateBrowseInflight.get(requestKey);
-        if (existing) return existing;
-
-        const inFlight = (async () => {
-          const backendResult = await api.post<any>('/rates/browse', {
-            ...body,
-            ...(requestedCarrierIds.length ? { carrierIds: requestedCarrierIds } : {}),
-            ...(preferredCarrierId ? { preferredCarrierId } : {}),
-          });
-          const backendFingerprint =
-            backendResult?.requestFingerprint ??
-            backendResult?.cacheKey ??
-            backendResult?.requestKey;
-          const backendProofMetadata = backendFingerprint
-            ? {
-              requestFingerprint: backendFingerprint,
-              cacheKey: backendFingerprint,
-              cacheCreatedAt: backendResult?.fetchedAt ?? null,
-              // PS-183: expiry is backend-owned (CACHE_TTL_MS over fetchedAt) —
-              // pass it through so the FE never mints its own freshness window.
-              cacheExpiresAt: backendResult?.cacheExpiresAt ?? null,
-              proofSource: BACKEND_RATE_PROOF_SOURCE,
-            }
-            : {};
-          const translatedRates = Array.isArray(backendResult?.rates)
-            ? backendResult.rates.map((rate: any) => ({
-                ...translateRateToV2Shape(rate),
-                ...backendProofMetadata,
-                // PS-103: preserve a direct carrier's own backend-issued proof; the
-                // response-level metadata is only the ShipStation fallback.
-                requestFingerprint: rate.requestFingerprint ?? (backendProofMetadata as any).requestFingerprint,
-                proofSource: rate.proofSource ?? (backendProofMetadata as any).proofSource,
-              }))
-            : [];
-          const bestRate = backendResult?.bestRate
-            ? { ...translateRateToV2Shape(backendResult.bestRate), ...backendProofMetadata }
-            : null;
-          const secondBestRate = backendResult?.secondBestRate
-            ? { ...translateRateToV2Shape(backendResult.secondBestRate), ...backendProofMetadata }
-            : null;
-          return {
-            ...backendResult,
-            requestKey: backendResult?.requestKey ?? requestKey,
-            rates: translatedRates,
-            bestRate,
-            secondBestRate,
-            carrierStatuses: Array.isArray(backendResult?.carrierStatuses) ? backendResult.carrierStatuses : [],
-            carrierDiagnostics: Array.isArray(backendResult?.carrierDiagnostics) ? backendResult.carrierDiagnostics : [],
-            directCarrierErrors: Array.isArray(backendResult?.directCarrierErrors) ? backendResult.directCarrierErrors : [],
-            directCarrierMetas: Array.isArray(backendResult?.directCarrierMetas) ? backendResult.directCarrierMetas : [],
-            // PS-197b: uninsured manual baseline — translated for DISPLAY but deliberately
-            // NOT stamped with backendProofMetadata, so a reference rate can never carry the
-            // proof a label purchase requires (structurally non-purchasable).
-            manualEstimate:
-              backendResult?.manualEstimate && Array.isArray(backendResult.manualEstimate.rates)
-                ? {
-                    ...backendResult.manualEstimate,
-                    rates: backendResult.manualEstimate.rates.map((rate: unknown) => translateRateToV2Shape(rate)),
-                  }
-                : null,
-          };
-        })();
-
-        rateBrowseInflight.set(requestKey, inFlight);
-        try {
-          return await inFlight;
-        } finally {
-          rateBrowseInflight.delete(requestKey);
-        }
-    };
-    return run();
+    return postRateBrowseTransport(data);
   },
-
   // ─── Analysis ──────────────────────────────────────────────────────────────
 
   // Server-aggregated daily order counts split by status. Replaces the

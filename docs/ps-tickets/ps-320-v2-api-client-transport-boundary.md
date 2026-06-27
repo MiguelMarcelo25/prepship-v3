@@ -23,7 +23,7 @@ backend routes and return backend DTOs:
 
 | Area | v2-apiClient surface | Backend owner |
 | --- | --- | --- |
-| Rate browse / quote reads | `apiClient.fetchRates`, `apiClient.browseRates` | `src/routes/rates.ts#/browse`, `src/services/rates-combined.ts`, `src/services/shipping-workflow/rate-quote-snapshot-store.ts` |
+| Rate browse / quote reads | single internal `postRateBrowseTransport`, public `apiClient.browseRates`, legacy `apiClient.fetchRates` array adapter | `src/routes/rates.ts#/browse`, `src/services/rates-combined.ts`, `src/services/shipping-workflow/rate-quote-snapshot-store.ts` |
 | Label purchase intent | `apiClient.createLabel` | `src/services/labels.ts#createLabelV2` |
 | Print Queue intent / status | `apiClient.addToQueue`, batch-send/print/confirm methods | `src/services/print-queue.ts` |
 | Atomic best-rate apply command | `apiClient.applyBestRate` | orders backend apply-best-rate command plus rate proof owners |
@@ -37,12 +37,18 @@ backend routes and return backend DTOs:
 The current v2 facade still keeps these compatibility shims so the bulk-ported
 views do not need a wide rewrite:
 
-- `apiClient.fetchRates` translates legacy v2 rate request shape into the
-  backend `/rates/browse` body, then lifts backend-issued proof fields and
-  backend `bestRate`/`secondBestRate` into the legacy array shape.
-- `apiClient.browseRates` wraps the same backend `/rates/browse` endpoint and
-  passes through backend table fields, diagnostics, direct-carrier metadata,
-  proof refs, and selected best-rate data.
+- `postRateBrowseTransport` is the only frontend POST path to backend
+  `/rates/browse`. It normalizes legacy request aliases and applies in-flight
+  de-duplication only; it does not alter returned rate money, freshness, proof,
+  `bestRate`, or `secondBestRate` fields.
+- `apiClient.browseRates` returns the backend `/rates/browse` DTO verbatim.
+  Backend `src/routes/rates.ts#/browse` stamps the legacy display aliases
+  (`amount`, `shipmentCost`, `otherCost`, carrier/service/account display
+  fields) before the response leaves the rate owner.
+- `apiClient.fetchRates` is a legacy calculator adapter over the same transport.
+  It returns an array for RatesView/NewOrder preview and carries direct-carrier
+  warnings for display, but it does not stamp proof/freshness metadata or expose
+  a separate best-rate result.
 - `apiClient.createLabel` is only `POST /labels`; `src/services/labels.ts#createLabelV2`
   owns proof validation, carrier branch selection, purchase, persistence,
   deductions, and marketplace confirmation.
@@ -56,10 +62,19 @@ views do not need a wide rewrite:
   picker compatibility. Carrier-account scope delegates to
   `src/lib/direct-carrier-scope.ts`; label/rate purchase paths still re-check
   backend gates.
-- `translateRatePayloadToV4`, `translateRateToV2Shape`,
+- `translateRatePayloadToV4`, `translateRateToLegacyDisplayShape`,
   `normalizeInventoryDto`, and package/client normalizers translate field names
   and backend DTO aliases only. They must not rank, select, persist, or silently
   substitute business truth.
+
+## Rate Transport Matrix
+
+| Caller | Frontend method | Endpoint | DTO handling | Fields no longer synthesized in v2-apiClient |
+| --- | --- | --- | --- | --- |
+| Rate Browser / Orders browse flows | `apiClient.browseRates` | `POST /rates/browse` | Verbatim backend DTO pass-through from `postRateBrowseTransport` | `rates`, `bestRate`, `secondBestRate`, `requestFingerprint`, `cacheExpiresAt`, `proofSource`, `amount`, `shipmentCost`, `otherCost` |
+| RatesView calculator | `apiClient.fetchRates` | `POST /rates/browse` through `postRateBrowseTransport` | Legacy display array adapter only | backend proof/freshness fields and best-rate object |
+| NewOrder preview | `apiClient.fetchRates` | `POST /rates/browse` through `postRateBrowseTransport` | Same legacy display array adapter | backend proof/freshness fields and best-rate object |
+| Cached-rate bulk lookup | `apiClient.fetchCachedRatesBulk` | `POST /rates/cached/bulk` | Cached-hit legacy display adapter | live browse `bestRate`/proof/freshness authority |
 
 ### Forbidden in v2-apiClient
 

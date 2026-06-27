@@ -952,7 +952,7 @@ export const rateBrowseInflight = new Map<string, Promise<any>>();
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
 // the bulk-ported components read. Defensive: if a caller already hands us
 // v2-shape data (has `amount` + `carrierCode`), return it unchanged.
-export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
+export function translateRateToLegacyDisplayShape(r: unknown): Record<string, unknown> {
   if (r && typeof r === 'object') {
     const obj = r as Record<string, unknown>;
     if ('amount' in obj && 'carrierCode' in obj) {
@@ -1000,7 +1000,7 @@ export function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       // legacy cache), which keeps those rates structurally non-purchasable.
       rateQuoteId: obj.rateQuoteId ?? null,
       selectedRateKey: obj.selectedRateKey ?? null,
-      secondBestRate: obj.secondBestRate ? translateRateToV2Shape(obj.secondBestRate) : null,
+      secondBestRate: obj.secondBestRate ? translateRateToLegacyDisplayShape(obj.secondBestRate) : null,
       isComplete: obj.isComplete ?? null,
       rateCount: obj.rateCount ?? null,
       matchType: obj.matchType ?? null,
