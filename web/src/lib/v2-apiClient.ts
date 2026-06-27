@@ -210,6 +210,14 @@ async function postRateBrowseTransport(data: Record<string, unknown>): Promise<a
 function toLegacyRateArray(backendResult: any): any[] {
   const rows = (Array.isArray(backendResult?.rates) ? backendResult.rates : [])
     .map((rate: unknown) => translateRateToLegacyDisplayShape(rate));
+  Object.defineProperty(rows, 'carrierDiagnostics', {
+    value: Array.isArray(backendResult?.carrierDiagnostics) ? backendResult.carrierDiagnostics : [],
+    enumerable: false,
+  });
+  Object.defineProperty(rows, 'directCarrierDiagnostics', {
+    value: Array.isArray(backendResult?.directCarrierDiagnostics) ? backendResult.directCarrierDiagnostics : [],
+    enumerable: false,
+  });
   Object.defineProperty(rows, 'directCarrierErrors', {
     value: Array.isArray(backendResult?.directCarrierErrors) ? backendResult.directCarrierErrors : [],
     enumerable: false,
