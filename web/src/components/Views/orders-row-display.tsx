@@ -341,6 +341,9 @@ export function getBestRateServiceCode(order: OrderSummaryDto) {
 
 export function getBestRateCarrierNickname(order: OrderSummaryDto) {
   const bestRateRecord = toRecord(order.bestRate)
+  const backendDisplayAccountNickname = normalizeShippingAccountName(
+    toStringValue(toRecord(order.bestRateWorkflow?.display)?.accountNickname),
+  )
   // PS-273: a Shipp-brokered best rate (shipp_* service code) must render "Shipp",
   // never the fabricated underlying-carrier nickname carried on the raw rate (the
   // "980006 / GG6381" vector). Delegate the brokered test to the canonical owner.
@@ -352,8 +355,8 @@ export function getBestRateCarrierNickname(order: OrderSummaryDto) {
     (order.bestRate ? toStringValue((order.bestRate as LooseBestRate).carrierNickname) : null) ??
     toStringValue(bestRateRecord?.providerAccountNickname) ??
     toStringValue(bestRateRecord?.accountNickname)
-  if (order.orderStatus === 'awaiting_shipment') return rateNickname
-  return getShippingString(order, 'accountNickname') ?? rateNickname
+  if (order.orderStatus === 'awaiting_shipment') return backendDisplayAccountNickname ?? rateNickname
+  return getShippingString(order, 'accountNickname') ?? backendDisplayAccountNickname ?? rateNickname
 }
 
 export function getSelectedRateBaseCost(order: OrderSummaryDto) {

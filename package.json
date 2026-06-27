@@ -469,6 +469,7 @@
     "test:ps-305-authority-drift": "tsx scripts/ps-305-authority-drift-guard.ts",
     "test:ps-322-orders-route-boundary": "tsx scripts/ps-322-orders-route-boundary-guard.ts",
     "test:ps-328-rerate-warning-reason": "tsx scripts/ps-328-rerate-warning-reason-guard.ts",
+    "test:ps-329-orders-wrapper-sot-cleanup": "tsx scripts/ps-329-orders-wrapper-sot-cleanup-guard.ts",
     "test:ps-327-hugrab-margin-policy": "tsx scripts/ps-327-hugrab-margin-policy-guard.ts",
     "test:ps-333-hugrab-current-rate-sot": "tsx scripts/ps-333-hugrab-current-rate-sot-guard.ts",
     "test:ps-334-house-rate-column": "tsx scripts/ps-334-house-rate-column-guard.ts",

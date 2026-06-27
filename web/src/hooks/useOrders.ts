@@ -9,10 +9,6 @@ import {
   type OrderSummaryDto,
   toProviderAccountId,
 } from './v2Hooks-shared';
-// PS-273: detect a Shipp-brokered shipment by its shipp_-prefixed service code so
-// the normalizer never leaks a direct-account best-rate nickname into the
-// canonical shipping.accountNickname. Pure leaf module (no hook deps).
-import { isShippBrokeredServiceCode } from '../components/Views/order-shipping-display';
 
 // ──────────────────────────────────────────────────────────────────
 // useOrders
@@ -134,15 +130,6 @@ function normalizeLabelForV2(value: unknown): Record<string, unknown> | null {
   };
 }
 
-function hasPositiveRateAmount(rate: Record<string, unknown> | null): boolean {
-  if (!rate) return false;
-  const total =
-    toFiniteNumber(rate.amount) ??
-    toFiniteNumber(rate.cost) ??
-    ((toFiniteNumber(rate.shipmentCost) ?? 0) + (toFiniteNumber(rate.otherCost) ?? 0));
-  return total > 0;
-}
-
 function getItemsTotalForDisplay(source: unknown): number | null {
   if (!Array.isArray(source)) return null;
   let total = 0;
@@ -244,7 +231,7 @@ function transformOrderRowV4toV2(
     }
     return null;
   })();
-  const apiBestRate = normalizeRateForV2(shippingModel?.bestRate ?? row.bestRate);
+  const bestRate = toRecordValue(shippingModel?.bestRate ?? row.bestRate);
   const selectedRate = normalizeRateForV2(shippingModel?.selectedRate ?? row.selectedRate);
   const rowLabel = toRecordValue(row.label);
   const label = normalizeLabelForV2({
@@ -255,42 +242,19 @@ function transformOrderRowV4toV2(
     shippingProviderId: shippingModel?.providerAccountId ?? rowLabel?.shippingProviderId,
     cost: shippingModel?.labelCost ?? rowLabel?.cost,
   });
-  const displayBestRate = hasPositiveRateAmount(apiBestRate) ? apiBestRate : null;
-  const resolvedServiceCode =
-    (shippingModel?.serviceCode as string | null | undefined) ??
-    (selectedRate?.serviceCode as string | null | undefined) ??
-    (displayBestRate?.serviceCode as string | null | undefined) ??
-    (label?.serviceCode as string | null | undefined) ??
-    null;
-  // Per user override unlock shipped data on 2026-06-17 (PS-273): a Shipp-brokered
-  // label (shipp_* service code) was bought on Shipp's broker account, NOT on the
-  // direct carrier whose nickname the pre-purchase best rate happened to carry.
-  // Falling back to displayBestRate.carrierNickname here leaked that direct account
-  // (e.g. "ROCEL C81F70" / order #1587's GG6381 class) into the canonical
-  // shipping.accountNickname, masquerading as persisted truth. Suppress the best-
-  // rate carrier-nickname leak for brokered rows so the honest "Shipp" fallback
-  // (resolveDisplayShipAccount / getShippedDisplayAccountNickname) owns the display.
-  // Display-only: this is the FE useOrders DTO normalizer, not a shipped-row write.
-  const isBrokeredRow = isShippBrokeredServiceCode(resolvedServiceCode);
   const shipping = shippingModel
     ? {
         ...shippingModel,
-        carrierCode: shippingModel.carrierCode ?? selectedRate?.carrierCode ?? displayBestRate?.carrierCode ?? null,
-        serviceCode: shippingModel.serviceCode ?? selectedRate?.serviceCode ?? displayBestRate?.serviceCode ?? null,
+        carrierCode: shippingModel.carrierCode ?? selectedRate?.carrierCode ?? null,
+        serviceCode: shippingModel.serviceCode ?? selectedRate?.serviceCode ?? null,
         trackingNumber: shippingModel.trackingNumber ?? label?.trackingNumber ?? null,
         providerAccountId:
           toProviderAccountId(shippingModel.providerAccountId) ??
           toProviderAccountId(selectedRate?.shippingProviderId) ??
           toProviderAccountId(label?.shippingProviderId),
-        accountNickname:
-          shippingModel.accountNickname ??
-          selectedRate?.providerAccountNickname ??
-          (isBrokeredRow ? null : displayBestRate?.carrierNickname) ??
-          null,
+        accountNickname: shippingModel.accountNickname ?? selectedRate?.providerAccountNickname ?? null,
         selectedRateAmount: toFiniteNumber(shippingModel.selectedRateAmount) ?? toFiniteNumber(selectedRate?.cost),
-        bestRateAmount: toFiniteNumber(shippingModel.bestRateAmount),
         selectedRate,
-        bestRate: displayBestRate,
       }
     : null;
 
@@ -345,7 +309,7 @@ function transformOrderRowV4toV2(
       dimsL != null && dimsW != null && dimsH != null
         ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
         : null,
-    bestRate: displayBestRate,
+    bestRate,
     selectedRate,
     label,
     shipping,
