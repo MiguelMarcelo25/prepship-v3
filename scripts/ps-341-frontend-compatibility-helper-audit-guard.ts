@@ -14,14 +14,13 @@ assert(proof.includes('rateQuoteRefFromCandidates'), 'rate quote refs must deleg
 assert(!proof.includes('createHash'), 'frontend proof helper must not hash/mint proof');
 assert(!proof.includes('buildShippingRateRequestFingerprint'), 'frontend proof helper must not build backend rate fingerprints');
 
-assert(proof.includes('getSavedBestRateRecord'), 'multi-shape saved best-rate reader must remain visible until removed');
-assert(proof.includes('temporary compatibility bridge'), 'multi-shape saved best-rate reader must be marked as compatibility debt');
+assert(proof.includes('getSavedBestRateRecord'), 'saved best-rate reader must remain visible and tiny');
 assert(
-  proof.includes('order.bestRate') &&
-    proof.includes('getShippingModel(order)?.bestRate') &&
-    proof.includes('bestRateJson'),
-  'multi-shape bridge must be tracked explicitly',
+  /export function getSavedBestRateRecord\(order: OrderSummaryDto\) \{[\s\S]{0,260}return toRecord\(order\.bestRate\);[\s\S]{0,80}\}/.test(proof),
+  'saved best-rate reader must consume only the normalized order.bestRate shape',
 );
+assert(!proof.includes('getShippingModel'), 'proof helper must not re-search shipping.bestRate');
+assert(!proof.includes('bestRateJson'), 'proof helper must not re-search overrides.bestRateJson');
 
 assert(cells.includes('getBackendRowMoney'), 'Best Rate cell must consume backend money tuple');
 assert(

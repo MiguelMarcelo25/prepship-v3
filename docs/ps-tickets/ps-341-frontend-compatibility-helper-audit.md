@@ -14,6 +14,7 @@ Not acceptable:
 - A helper may not calculate authoritative margin/markup/rate money for real orders.
 
 Target cleanup:
-- `getSavedBestRateRecord()` must be tracked as compatibility debt until the backend DTO is single-shape.
+- `getSavedBestRateRecord()` reads only the normalized `order.bestRate` row shape.
+- The old `shipping.bestRate` / `overrides.bestRateJson` fallback path is removed from this proof/display helper.
 - `buildSelectedRateProofPayload()` must keep delegating to `selectProofFromCandidates()` and never mint proof.
 - `renderBestRatePrice()` may use backend money tuples and display fallback only.

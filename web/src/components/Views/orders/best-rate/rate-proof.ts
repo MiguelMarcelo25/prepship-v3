@@ -1,7 +1,7 @@
 // PS-317: pure Best-Rate proof/fingerprint helpers, moved verbatim out of OrdersView.
 // PS-135: the proof logic lives in lib/rate-proof; these read the backend-issued proof and
 // assemble the proof/quote-ref payloads for label/queue. The FE never mints a fingerprint.
-import { toRecord, toStringValue, toNumberValue, getShippingModel } from '../../orders-row-display';
+import { toRecord, toStringValue, toNumberValue } from '../../orders-row-display';
 import {
   BACKEND_RATE_PROOF_SOURCE,
   hasBackendIssuedRateProof,
@@ -94,15 +94,10 @@ export function withRateRequestMetadata(
 }
 
 export function getSavedBestRateRecord(order: OrderSummaryDto) {
-  // PS-341: temporary compatibility bridge while backend order rows may arrive
-  // with saved best-rate truth in legacy shapes. This may only expose
-  // backend-issued records to proof selectors; it must not choose Best Rate or
-  // mint proof. Remove when the order DTO has one active best-rate shape.
-  return (
-    toRecord(order.bestRate) ??
-    toRecord(getShippingModel(order)?.bestRate) ??
-    toRecord(toRecord(order.overrides)?.bestRateJson)
-  );
+  // PS-341: `useOrders` normalizes the backend row DTO onto this single
+  // display shape. Do not re-search shipping/overrides here; that was a
+  // second frontend resolver for saved Best Rate truth.
+  return toRecord(order.bestRate);
 }
 
 // PS-204: optional forShippingProviderId filters the candidates to the account the payload
