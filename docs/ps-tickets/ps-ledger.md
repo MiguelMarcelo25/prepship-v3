@@ -11,3 +11,6 @@ This file prevents custom owner tasks and branch-only work from reusing PS numbe
 | PS-337 | Best Rate remove second line | branch-only | `origin/codex/ps-337-best-rate-remove-second-line` | Landed/local only | Number already used; eBay must move off this number. |
 | PS-338 | Keep rates visible during browse refresh | branch-only | `origin/codex/ps-338-keep-rates-during-browse-refresh` | Landed/local only | Number already used unless read-only inventory says otherwise. |
 | PS-339 | eBay API testing certification | https://trello.com/c/gRogisQ0 | planned renumber from `7c73663a` | Planned/local only | Proposed clean number for the custom eBay owner task; stop if read-only inventory proves PS-339 is already reserved. |
+| PS-340 | Rate Browser frontend bridge audit | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Guards Rate Browser display sorting/emission boundaries. |
+| PS-341 | Frontend compatibility helper audit | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removed saved Best Rate multi-shape proof helper fallback. |
+| PS-342 | Legacy rate display adapter cleanup | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removes frontend provider-money reconstruction from the legacy rate array adapter. |
