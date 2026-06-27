@@ -227,6 +227,7 @@
     "test:ps-209-label-owner-slice": "tsx scripts/ps-209-label-owner-slice-guard.ts",
     "test:ps-200-stale-exclusion-slice": "tsx scripts/ps-200-stale-exclusion-slice-guard.ts",
     "test:ps-200-v4-account-carrier-ops-cutover": "tsx scripts/ps-200-v4-account-carrier-ops-cutover-guard.ts",
+    "test:ps-200-walmart-fees-worker-cron-cutover": "tsx scripts/ps-200-walmart-fees-worker-cron-cutover-guard.ts",
     "test:ps-217-billing-export-box-fields": "tsx scripts/ps-217-billing-export-box-fields.ts",
     "test:ps-219-void-label-ui": "tsx scripts/ps-219-void-label-ui-guard.ts",
     "test:ps-214-hugrab-universal-insurance": "tsx scripts/ps-214-hugrab-universal-insurance-guard.ts",

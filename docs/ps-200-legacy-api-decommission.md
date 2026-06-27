@@ -1,14 +1,15 @@
 # PS-200 — Legacy Vercel `api/` decommission: inventory + surface plan
 
-Date: 2026-06-12 · Updated: 2026-06-27 · Status: S1/S2 v4 cutover guarded locally; S3-S8 remain gated · Owner ticket: PS-200
+Date: 2026-06-12 · Updated: 2026-06-27 · Status: S1/S2/S3 guarded locally; S4-S8 remain gated · Owner ticket: PS-200
 
 ## Current routing (verified from `vercel.json` + code)
 
 - `vercel.json` rewrites proxy `/api/:path` → Render (`prepshipv4-api-l5xc.onrender.com`)
   **except** the exclusion list: `carrier-accounts | carriers/ | store-accounts | oauth/ |
-  admin/ | cron/` — those still execute the legacy serverless
+  admin/` — those still execute the legacy serverless
   functions under `api/`.
-- One Vercel cron remains: `/api/cron/sync-walmart-fees` daily 09:00 UTC.
+- No Vercel `crons` block remains, and `/api/cron/*` now proxies to the Render `/cron/*`
+  route. The removed `/api/cron/sync-walmart-fees` job is owned by the v4 worker.
 - S1/S2 v4 cutover guarded locally: FE account CRUD, carrier verify, Settings rate probe,
   marketplace order pulls, and Walmart fees pulls use the shared `api` client against v4
   routes (`/carrier-accounts`, `/store-accounts`, `/carriers/verify`, `/carriers/rates`,
@@ -16,6 +17,7 @@ Date: 2026-06-12 · Updated: 2026-06-27 · Status: S1/S2 v4 cutover guarded loca
 - `web/src/lib/vercelFunction.ts` is deleted and `web/src` has no live
   `callVercelFunction(...)` or same-origin `fetch("/api/...")` transport calls.
 - Guard: `test:ps-200-v4-account-carrier-ops-cutover`.
+- Guard: `test:ps-200-walmart-fees-worker-cron-cutover`.
 
 ## Load-bearing discoveries
 
@@ -54,7 +56,7 @@ Date: 2026-06-12 · Updated: 2026-06-27 · Status: S1/S2 v4 cutover guarded loca
 | `api/carriers/walmart/probe-carriers.ts` | none | connector probe still exists where needed | **Deleted in S2** |
 | `api/carriers/ups/probe.ts` | none | connector probe still exists where needed | **Deleted in S2** |
 | `api/carriers/validate-address.ts` | none | USPS validator still exists where needed | **Deleted in S2** |
-| `api/cron/sync-walmart-fees.ts` + crons block | Vercel cron 09:00 UTC | logic shared (walmart-fees.ts) but **no v4 schedule** | v4 worker job (BOTH schedulers) + drop crons block → **S3** |
+| `api/cron/sync-walmart-fees.ts` + crons block | none; `api/cron` is deleted and `vercel.json` has no crons block | v4 worker `runWalmartFeesTick` in both `sync-scheduler.ts` and `sync-job-queue.ts` | **S3 locally guarded** |
 | `api/oauth/ebay/callback.ts` | **external**: eBay redirect URI registered to the Vercel domain | none | Port + keep `/oauth` reachable (thin proxy or DJ re-registers URI on eBay dev portal) → **S4, DJ gate** |
 | `api/debug-env.ts` | none ("remove once migration verified") | — | **Deleted in part 2** |
 | `api/migrate-from.ts` | none ("remove after migration") | — | **Deleted in part 2** |
@@ -67,7 +69,7 @@ Date: 2026-06-12 · Updated: 2026-06-27 · Status: S1/S2 v4 cutover guarded loca
 |---|---|---|
 | S1 | ~~Account CRUD cutover: re-sync carrier-accounts handler drift, add v4 `/store-accounts` route, flip FE call sites to the `api` client~~ | **Done locally; pinned by `test:ps-200-v4-account-carrier-ops-cutover`** |
 | S2 | ~~Carrier ops cutover: walmart/ebay pulls + walmart fees + Settings rates probe → v4 routes; delete dead `fetchDirectCarrierRates` + probe/validate-address endpoints~~ | **Done locally; pinned by `test:ps-200-v4-account-carrier-ops-cutover`** |
-| S3 | `sync-walmart-fees` → v4 worker job in **both** sync-scheduler and sync-job-queue (the register-in-one-scheduler miss is the classic bug); remove `crons` block | none |
+| S3 | ~~`sync-walmart-fees` → v4 worker job in **both** sync-scheduler and sync-job-queue; remove Vercel `crons` ownership and `cron/` rewrite exclusion~~ | **Done locally; pinned by `test:ps-200-walmart-fees-worker-cron-cutover`** |
 | S4 | eBay OAuth callback port | **DJ**: confirm redirect URI registered with eBay (re-register vs keep Vercel thin-proxy) |
 | S5 | Delete `api/carriers/labels.ts` + `api/carriers/rates.ts` | **DJ**: PS-202 test-mode + canary verification |
 | S6 | `api/_lib` relocation + `store_orders` Drizzle adoption (read/type only) | after S2/S3 (last importers gone) |

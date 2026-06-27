@@ -60,7 +60,10 @@ Integration functions under `api/*` include:
 - `/api/carriers/walmart/fees`
 - `/api/carriers/ebay/orders`
 - `/api/oauth/ebay/callback`
-- `/api/cron/sync-walmart-fees`
+
+Retired by PS-200 S3:
+
+- `/api/cron/sync-walmart-fees` now runs from the v4 worker scheduler; `/api/cron/*` proxies to Render `/cron/*`.
 
 ## Connector Status
 

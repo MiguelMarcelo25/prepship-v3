@@ -119,7 +119,8 @@ Phase 3 Walmart fees slice added on 2026-05-28:
 
 - `src/connectors/store/walmart-fees.ts` now owns Walmart Payments token minting, payment transaction paging, fee aggregation, and fee sync persistence.
 - `api/_lib/walmart-fees-sync.ts` is now a compatibility re-export for scripts/backfills that already imported that path.
-- `api/carriers/walmart/fees.ts` and `api/cron/sync-walmart-fees.ts` are now thin auth/date wrappers over connector-owned fee sync helpers.
+- `api/carriers/walmart/fees.ts` is a thin auth/date wrapper over connector-owned fee sync helpers.
+- PS-200 S3 retired `api/cron/sync-walmart-fees.ts`; the daily fee sync now runs from the v4 worker scheduler.
 
 Phase 4: Move rates, labels, carrier diagnostics, and direct-carrier handlers.
 
