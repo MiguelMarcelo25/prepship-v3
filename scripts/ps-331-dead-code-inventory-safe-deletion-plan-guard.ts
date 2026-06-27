@@ -50,6 +50,47 @@ check('PS-331 doc records Trello connector as unavailable, not silently verified
 check('PS-331 doc anchors cleanup sequence PS-340 through PS-344',
   ['PS-340', 'PS-341', 'PS-342', 'PS-343', 'PS-344'].every((ticket) => doc.includes(ticket)));
 
+check('PS-331 doc separates completed plan slice from incomplete full ticket',
+  /Plan slice: complete/.test(doc) &&
+  /Full ticket: blocked/.test(doc) &&
+  /No `DELETE NOW` code deletion is authorized/.test(doc));
+
+check('PS-331 doc records repo-side hard start gate evidence',
+  [
+    'PS-266', 'PS-267', 'PS-268', 'PS-269',
+    'PS-322', 'PS-328', 'PS-329', 'PS-330',
+    'PS-340', 'PS-341', 'PS-342', 'PS-343', 'PS-344',
+  ].every((ticket) => doc.includes(`| ${ticket} |`)) &&
+  /Repo guard green/.test(doc));
+
+check('PS-331 doc keeps external acceptance blockers explicit',
+  /Trello\/Hermes\/DJ acceptance is not verified from Codex/.test(doc) &&
+  /PS-281/.test(doc) &&
+  /PS-282/.test(doc) &&
+  /PS-284/.test(doc));
+
+check('PS-331 doc records candidate counts by every required classification',
+  [
+    '| DELETE NOW | 0 |',
+    '| KEEP ACTIVE | 4 |',
+    '| MIGRATE FIRST | 2 |',
+    '| BLOCKED BY CANARY | 1 |',
+    '| BLOCKED BY CONDITIONAL CARD | 2 |',
+    '| DOCUMENT ONLY | 3 |',
+  ].every((row) => doc.includes(row)));
+
+check('PS-331 inventory covers the requested code categories without approving deletion',
+  [
+    'Rate Browser display helpers',
+    'v2-apiClient transport shims',
+    'Legacy Vercel `api/` stack',
+    'Legacy direct carrier endpoints',
+    'Label helper',
+    'Print Queue and label safety guards',
+    'PS-340 to PS-344 docs and guards',
+  ].every((text) => doc.includes(text)) &&
+  !/\| DELETE NOW \| [1-9]/.test(doc));
+
 check('PS-331 doc carries forward PS-200 legacy api deletion gate',
   /PS-200/.test(doc) &&
   /api\//.test(doc) &&

@@ -152,7 +152,7 @@ checkPatterns('combined rate owner still owns priced ranking and complete/second
 
 const ratesRoute = read('src/routes/rates.ts');
 checkPatterns('Rate Browser route delegates combined selection and quote proof to backend owners', ratesRoute, [
-  /import \{ combineCarrierUniverses, rateTotal \} from '\.\.\/services\/rates-combined'/,
+  /import \{[^}]*combineCarrierUniverses[^}]*rateTotal[^}]*\} from '\.\.\/services\/rates-combined'/,
   /const combined = combineCarrierUniverses\(\{/,
   /finalizeBestRateWithQuote\(\{/,
   /bestRateComplete/,
