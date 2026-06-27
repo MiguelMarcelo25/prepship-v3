@@ -13,12 +13,22 @@ RateBrowserModal now reads backend-owned availability and proof facts instead of
 - Removed the modal's `evaluateShippingServiceEligibility` fallback.
 - Added `web/src/lib/rate-browser-availability.ts` as a display-safe reader only.
 - `handleRateClick` and `toAppliedRate` now refuse unavailable rows before apply.
+- Removed the modal-owned `rateDisplayTotal(markups)` visible amount/rank path.
+- Added `web/src/lib/rate-browser-money.ts` as a pure reader of backend-issued
+  `customerRateAmount`, `rateCostAmount`, `houseRateAmount`, and optional backend
+  display rank fields.
+- Rate Browser rows render backend customer/rate-cost amounts, and All Rates /
+  carrier-row ordering uses `sortRateRowsByBackendDisplayRank`.
 
 ## Wrapper/Mapper Safety
 
 `rate-browser-availability.ts` does not import backend policy, API clients, markups, or block lists. It only reads backend DTO fields already returned by the rate owner.
 
 Explicit `testRate`/`mocked` rows remain selectable for test-order flows, but the helper does not mint `rateQuoteId`, `selectedRateKey`, `requestFingerprint`, or `proofSource`.
+
+`rate-browser-money.ts` does not import markup policy, API clients, or backend
+business logic. It reads backend DTO money/rank fields first, with legacy display
+fallbacks only for older cached row shapes.
 
 ## Browser Proof
 

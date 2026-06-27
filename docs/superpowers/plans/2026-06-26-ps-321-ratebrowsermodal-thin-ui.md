@@ -26,6 +26,9 @@
 - [x] Add `scripts/ps-321-ratebrowsermodal-thin-ui-guard.ts`.
 - [x] Update predecessor guards that still required the older deploy-skew fallback.
 - [x] Extend existing mocked browser proof for valid rows, backend-blocked rows, stale/proofless rows, partial carrier diagnostics, and selected proof payload pass-through.
+- [x] Addendum 2026-06-27: remove the RateBrowserModal `rateDisplayTotal(markups)` visible amount/rank path.
+- [x] Addendum 2026-06-27: add `rate-browser-money.ts` as a pure backend DTO money/rank reader.
+- [x] Addendum 2026-06-27: make Rate Browser rows render backend customer/rate-cost amounts and sort through `sortRateRowsByBackendDisplayRank`.
 
 ## Verification
 

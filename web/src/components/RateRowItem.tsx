@@ -1,10 +1,8 @@
-// PS-157: pure-presentation rate row extracted verbatim from RateBrowserModal's
-// renderRateRow. All money/blocked/total decision logic STAYS in the parent and is
-// passed in as functions (rateBlockedReason / rateBaseTotal / rateDisplayTotal) so
-// behavior is byte-for-byte identical. This component owns NO state and NO policy —
-// it receives values + a single onRateClick callback and renders the row.
+// PS-157/PS-321: pure-presentation rate row extracted from RateBrowserModal's
+// renderRateRow. Blocked decisions stay in the parent; visible customer/rate-cost
+// amounts are read from backend-issued DTO fields. This component owns no state
+// and no business policy.
 import type { ReactNode } from 'react';
-import type { Markup } from '../contexts/MarkupsContext';
 import {
   type RateRow,
   type RbOrderSummaryDto,
@@ -19,6 +17,10 @@ import {
   formatInsuranceCertaintyTag,
   rbInsuranceCertaintyTone,
 } from './RateBrowserModal';
+import {
+  rateBrowserCustomerAmount,
+  rateBrowserRateCostAmount,
+} from '../lib/rate-browser-money';
 // PS-290 (slice 2): render the HUGRAB $100-insurance coverage badge with the SAME backend-owned
 // reader + renderer the Awaiting column uses — TRUE parity by construction, not a forked copy.
 // getRowInsuranceCoverage is a PURE pass-through of the backend verdict (insuranceCoverageStatus /
@@ -51,19 +53,15 @@ type RateRowItemProps = {
   showCarrier: boolean;
   isRecommended: boolean;
   order: RbOrderSummaryDto | null;
-  markups: Record<string, Markup>;
   rateShippingAccounts: RbCarrierAccountDto[];
   currentRateShippingOptions: RateShippingOptions;
   onRateClick: (r: RateRow) => void;
-  // Decision logic stays in the parent (single source of truth). Passed as
-  // functions so the row never re-derives blocked/total math.
+  // Decision logic stays in the parent (single source of truth).
   rateBlockedReason: (
     rate: RateRow,
     order: RbOrderSummaryDto | null,
     shippingOptions?: RateShippingOptions,
   ) => string | null;
-  rateBaseTotal: (rate: RateRow) => number;
-  rateDisplayTotal: (rate: RateRow, markups: Record<string, Markup>) => number;
   // PS-292: backend-owned SHIPP house tuple for the recommended row — { drpCost, customerRate }
   // (computed by the parent from the canonical bestRate). null on every other row / non-house /
   // redacted-for-non-financial. When present the row shows customer_rate over drp_cost + HOUSE badge.
@@ -76,23 +74,20 @@ export default function RateRowItem({
   showCarrier,
   isRecommended,
   order,
-  markups,
   rateShippingAccounts,
   currentRateShippingOptions,
   onRateClick,
   rateBlockedReason,
-  rateBaseTotal,
-  rateDisplayTotal,
   houseTuple,
 }: RateRowItemProps): ReactNode {
   const blockedReason = rateBlockedReason(r, order, currentRateShippingOptions);
   const blocked = blockedReason != null;
-  const base = rateBaseTotal(r);
+  const base = rateBrowserRateCostAmount(r);
   const pid =
     typeof r.shippingProviderId === 'number'
       ? r.shippingProviderId
       : Number(r.shippingProviderId);
-  const marked = rateDisplayTotal(r, markups);
+  const marked = rateBrowserCustomerAmount(r);
   const svcName =
     r.serviceName ||
     SERVICE_NAMES[r.serviceCode] ||

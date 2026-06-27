@@ -20,7 +20,6 @@ import { ResidentialTag, residentialTagFacts } from './ui/ResidentialTag';
 import { residentialForRate } from '../lib/residential-for-rate';
 import { apiClient } from '../lib/v2-apiClient';
 import { CALIFORNIA_TZ } from '../lib/ca-time';
-import { useMarkups, type Markup } from '../contexts/MarkupsContext';
 import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
   isHugrabShippingContext,
@@ -61,6 +60,10 @@ import {
   rateBrowserShouldHideUnavailableRate,
   rateBrowserUnavailableReason,
 } from '../lib/rate-browser-availability';
+import {
+  rateBrowserRateCostAmount,
+  sortRateRowsByBackendDisplayRank,
+} from '../lib/rate-browser-money';
 // PS-157: presentation-only subcomponents extracted from this file. They own no state
 // and no rate/blocked/money policy — the modal passes values + callbacks down.
 import RateRowItem from './RateRowItem';
@@ -833,60 +836,16 @@ function groupRatesByProviderId(rates: RateRow[]): Record<string, RateRow[]> {
   }, {});
 }
 
-function rbMarkupKeyFromCarrierId(value: unknown): string | null {
-  const text = String(value ?? '').trim();
-  if (!text) return null;
-  const match = text.match(/^se-(\d+)$/i);
-  return match?.[1] ?? (/^\d+$/.test(text) ? text : null);
-}
-
-function rbMarkupForRate(markups: Record<string, Markup>, rate: RateRow): Markup | null {
-  const raw = rate.raw ?? {};
-  const candidateKeys = [
-    rate.shippingProviderId,
-    raw?.shippingProviderId,
-    rbMarkupKeyFromCarrierId(raw?.carrier_id),
-    raw?.carrier_id,
-    rate.carrierCode,
-    raw?.carrier_code,
-  ];
-
-  for (const candidate of candidateKeys) {
-    const key = String(candidate ?? '').trim();
-    if (!key) continue;
-    const markup = markups[key];
-    if (markup) return markup;
-  }
-  return null;
-}
-
-function rateBaseTotal(rate: RateRow): number {
-  const rawOriginalShipping = Number(rate.raw?.original_amount?.amount);
-  const shipmentCost = Number.isFinite(rawOriginalShipping)
-    ? rawOriginalShipping
-    : Number(rate.shipmentCost) || 0;
-  return shipmentCost + (Number(rate.otherCost) || 0);
-}
-
-function rateDisplayTotal(rate: RateRow, markups: Record<string, Markup>): number {
-  const base = rateBaseTotal(rate);
-  const markup = rbMarkupForRate(markups, rate);
-  if (!markup?.value) return base;
-  return markup.type === 'pct' || markup.type === 'percent'
-    ? base * (1 + markup.value / 100)
-    : base + markup.value;
-}
-
 export function priceDisplay(
-  rawCost: number,
-  markedCost: number,
+  rateCost: number,
+  customerCost: number,
   opts: { mainColor?: string; mainSize?: string } = {}
 ): ReactNode {
   const mainSize = opts.mainSize ?? '13px';
   const mainColor = opts.mainColor ?? 'var(--green)';
-  const markupCost = Math.max(0, markedCost - rawCost);
-  const hasMarkup = markupCost >= 0.005;
-  const show = markedCost > 0.005 || rawCost > 0.005;
+  const spread = Math.max(0, customerCost - rateCost);
+  const hasSeparateCost = spread >= 0.005;
+  const show = customerCost > 0.005 || rateCost > 0.005;
   if (!show) {
     return <span style={{ color: 'var(--text3)', fontSize: mainSize }}>N/A</span>;
   }
@@ -894,17 +853,17 @@ export function priceDisplay(
     <div
       style={{ lineHeight: 1.3 }}
       title={
-        hasMarkup
-          ? `Label Cost $${markedCost.toFixed(2)} | Base $${rawCost.toFixed(2)} + Markup $${markupCost.toFixed(2)}`
+        hasSeparateCost
+          ? `Customer Rate $${customerCost.toFixed(2)} | Rate Cost $${rateCost.toFixed(2)} | Spread $${spread.toFixed(2)}`
           : undefined
       }
     >
       <strong style={{ color: mainColor, fontSize: mainSize }}>
-        ${markedCost.toFixed(2)}
+        ${customerCost.toFixed(2)}
       </strong>
-      {hasMarkup ? (
+      {hasSeparateCost ? (
         <div style={{ fontSize: 10, color: '#111827', whiteSpace: 'nowrap', fontWeight: 600 }}>
-          ${rawCost.toFixed(2)}
+          ${rateCost.toFixed(2)}
         </div>
       ) : null}
     </div>
@@ -1016,8 +975,6 @@ export default function RateBrowserModal({
   onApplyRate,
   onBestRateResolved,
 }: RateBrowserModalProps) {
-  const { markups } = useMarkups();
-
   // ── Form state ─────────────────────────────────────────────────────────────
   const [zip, setZip] = useState('');
   const [locationId, setLocationId] = useState('');
@@ -1628,7 +1585,7 @@ export default function RateBrowserModal({
       }
       setCarrierTimingByPid(nextTimingByPid);
 
-      liveFetchedRates = dedupeRateRows(
+      liveFetchedRates = sortRateRowsByBackendDisplayRank(dedupeRateRows(
         (raw ?? [])
           .map((r) => {
             const pid =
@@ -1652,7 +1609,7 @@ export default function RateBrowserModal({
                 : Number(r.shippingProviderId);
             return Number.isFinite(pid) && accountByPid.has(pid);
           })
-      ).sort((a, b) => (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost));
+      ));
 
       const grouped = groupRatesByProviderId(liveFetchedRates);
       const nextRatesByPid: Record<string, RateRow[]> = {};
@@ -1804,10 +1761,9 @@ export default function RateBrowserModal({
       if (seenPids.has(pid)) continue;
       out.push(...rates);
     }
-    return dedupeRateRows(filterBySvcClass(out))
-      .sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups));
+    return sortRateRowsByBackendDisplayRank(dedupeRateRows(filterBySvcClass(out)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ratesByPid, rateShippingAccounts, svcClass, markups]);
+  }, [ratesByPid, rateShippingAccounts, svcClass]);
 
   const totalCarriersAvailable = useMemo(
     () =>
@@ -2063,7 +2019,7 @@ export default function RateBrowserModal({
     // drp_cost (the row's own base) + a HOUSE badge. null for every other row / non-house / redacted
     // (non-financial viewers get a nulled totalCost from the backend, so this stays hidden).
     const houseTuple = isRecommended
-      ? houseDisplayForRow(r, canonicalBestRef.current, rateBaseTotal(r))
+      ? houseDisplayForRow(r, canonicalBestRef.current, rateBrowserRateCostAmount(r))
       : null;
     return (
       <RateRowItem
@@ -2073,13 +2029,10 @@ export default function RateBrowserModal({
         showCarrier={showCarrier}
         isRecommended={isRecommended}
         order={order}
-        markups={markups}
         rateShippingAccounts={rateShippingAccounts}
         currentRateShippingOptions={currentRateShippingOptions}
         onRateClick={handleRateClick}
         rateBlockedReason={rateBlockedReason}
-        rateBaseTotal={rateBaseTotal}
-        rateDisplayTotal={rateDisplayTotal}
         houseTuple={houseTuple}
       />
     );

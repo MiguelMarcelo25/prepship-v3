@@ -5,7 +5,7 @@
  * Pins the post-PS-313 boundary: backend DTO facts decide rate availability and
  * proof completeness; the modal only renders rows and passes backend proof through.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   RATE_BROWSER_BACKEND_PROOF_UNAVAILABLE_REASON,
   rateBrowserCanApplyRate,
@@ -25,9 +25,13 @@ function check(name: string, condition: boolean): void {
 }
 
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+const rowItem = readFileSync('web/src/components/RateRowItem.tsx', 'utf8');
 const rowsView = readFileSync('web/src/components/RateRowsView.tsx', 'utf8');
 const carrierSidebar = readFileSync('web/src/components/RateBrowserCarrierSidebar.tsx', 'utf8');
 const availability = readFileSync('web/src/lib/rate-browser-availability.ts', 'utf8');
+const money = existsSync('web/src/lib/rate-browser-money.ts')
+  ? readFileSync('web/src/lib/rate-browser-money.ts', 'utf8')
+  : '';
 const quoteSnapshotStore = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
 const siteActionsSpec = readFileSync('web/e2e/site-actions.spec.js', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
@@ -82,6 +86,26 @@ check('RateBrowserModal imports the PS-321 availability helper',
 
 check('RateBrowserModal no longer calls evaluateShippingServiceEligibility',
   !/evaluateShippingServiceEligibility\(/.test(modal));
+
+check('RateBrowserModal no longer computes visible rate totals from frontend markups',
+  !/function\s+rateDisplayTotal\s*\(/.test(modal) &&
+  !/function\s+rbMarkupForRate\s*\(/.test(modal) &&
+  !/rateDisplayTotal\([^)]*markups/.test(modal));
+
+check('RateBrowserModal All Rates sort delegates to backend display rank reader',
+  modal.includes('sortRateRowsByBackendDisplayRank(') &&
+  !/sort\(\(a,\s*b\)\s*=>\s*rateDisplayTotal\(a,\s*markups\)\s*-\s*rateDisplayTotal\(b,\s*markups\)\)/.test(modal));
+
+check('RateRowItem renders backend-issued display/rate-cost amounts instead of markup totals',
+  rowItem.includes('rateBrowserCustomerAmount(r)') &&
+  rowItem.includes('rateBrowserRateCostAmount(r)') &&
+  !/rateDisplayTotal|rateBaseTotal|markups:/.test(rowItem));
+
+check('rate-browser money helper reads backend customer/rate-cost fields without markup policy',
+  money.includes('customerRateAmount') &&
+  money.includes('rateCostAmount') &&
+  money.includes('sortRateRowsByBackendDisplayRank') &&
+  !/Markup|markups|rbMarkup|applyMarkup|rateDisplayTotal/.test(money));
 
 check('RateBrowserModal gates manual row apply through isBlockedRate before onApplyRate',
   /function handleRateClick\(r: RateRow\): void \{[\s\S]{0,500}if \(isBlockedRate\(r, order, currentRateShippingOptions\)\) return;[\s\S]{0,900}onApplyRate\(/.test(modal));
