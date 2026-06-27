@@ -299,6 +299,7 @@
     "test:rate-source-of-truth": "tsx scripts/ps-313-rate-source-of-truth-guard.ts",
     "test:ps-318-shipping-workflow-certification": "tsx scripts/ps-318-shipping-workflow-certification-guard.ts",
     "test:ps-319-rate-convergence-certification": "tsx scripts/ps-319-rate-convergence-certification-guard.ts",
+    "test:ps-269-print-queue-residual-audit": "tsx scripts/ps-269-print-queue-residual-audit-guard.ts",
     "test:ps-268-marketplace-confirmation-residual-audit": "tsx scripts/ps-268-marketplace-confirmation-residual-audit-guard.ts",
     "test:ps-267-label-purchase-residual-audit": "tsx scripts/ps-267-label-purchase-residual-audit-guard.ts",
     "test:ps-266-best-rate-residual-audit": "tsx scripts/ps-266-best-rate-residual-audit-guard.ts",
