@@ -159,8 +159,8 @@ export function useShippingAccounts(options: SharedDataHookOptions = {}): UseShi
   );
 
   // Only treat the hook as errored when BOTH sources failed. ShipStation
-  // (via Render /rates/multi) and direct carriers (via Vercel
-  // /api/carrier-accounts) are independent — losing one shouldn't make
+  // (via Render /rates/multi) and direct carriers (via v4
+  // /carrier-accounts) are independent — losing one shouldn't make
   // the Settings UI look broken when the other is healthy. Common case
   // for this: Render's JWT or ShipStation config drifts and /rates/multi
   // returns 401, while direct UPS / FedEx / USPS continue working.

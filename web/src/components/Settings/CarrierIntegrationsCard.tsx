@@ -788,8 +788,8 @@ interface SavedRow {
   assignedClientIds: number[]
 }
 
-// Stores live in /api/store-accounts, carriers in /api/carrier-accounts.
-// Picking the right endpoint is the only thing the FE needs to know.
+// Stores live in /store-accounts, carriers in /carrier-accounts on the v4 API.
+// Picking the right endpoint is the only transport choice the FE needs to know.
 function endpointForCategory(category: ProviderCategory): string {
   return category === 'store' ? '/store-accounts' : '/carrier-accounts'
 }
@@ -1027,7 +1027,7 @@ function carrierRateErrorMessage(provider: string, error?: string): string {
 export type CarrierIntegrationsView = 'all' | 'stores' | 'carriers'
 
 export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegrationsView } = {}) {
-  // useShippingAccounts (in v2Hooks.ts) caches /api/carrier-accounts results
+  // useShippingAccounts (in v2Hooks.ts) caches /carrier-accounts results
   // under ['v2-hooks:carrier-accounts']. The Rate Browser sidebar reads from
   // that cache. Adding/deleting a carrier here only updates this component's
   // local `saved` state — without invalidating the React Query cache, the

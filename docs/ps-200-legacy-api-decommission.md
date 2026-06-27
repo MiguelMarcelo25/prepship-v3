@@ -1,20 +1,21 @@
 # PS-200 — Legacy Vercel `api/` decommission: inventory + surface plan
 
-Date: 2026-06-12 · Status: Part 1 (inventory) complete · Owner ticket: PS-200
+Date: 2026-06-12 · Updated: 2026-06-27 · Status: S1/S2 v4 cutover guarded locally; S3-S8 remain gated · Owner ticket: PS-200
 
 ## Current routing (verified from `vercel.json` + code)
 
 - `vercel.json` rewrites proxy `/api/:path` → Render (`prepshipv4-api-l5xc.onrender.com`)
   **except** the exclusion list: `carrier-accounts | carriers/ | store-accounts | oauth/ |
-  debug-env | migrate-from | admin/ | cron/` — those still execute the legacy serverless
+  admin/ | cron/` — those still execute the legacy serverless
   functions under `api/`.
 - One Vercel cron remains: `/api/cron/sync-walmart-fees` daily 09:00 UTC.
-- The FE reaches the legacy stack two ways: `callVercelFunction()`
-  ([vercelFunction.ts](../web/src/lib/vercelFunction.ts) — same-origin `/api/*` + Supabase JWT)
-  and one raw `fetch('/api/carrier-accounts?source=admin')` in
-  [useShippingAccounts.ts:88](../web/src/hooks/useShippingAccounts.ts).
-- The FE reaches v4 directly via the `api` client (`API_BASE` = Render URL, no proxy), so a
-  v4 route is consumable the moment it exists — no Vercel deploy needed for FE flips.
+- S1/S2 v4 cutover guarded locally: FE account CRUD, carrier verify, Settings rate probe,
+  marketplace order pulls, and Walmart fees pulls use the shared `api` client against v4
+  routes (`/carrier-accounts`, `/store-accounts`, `/carriers/verify`, `/carriers/rates`,
+  `/carriers/walmart/orders`, `/carriers/ebay/orders`, `/carriers/walmart/fees`).
+- `web/src/lib/vercelFunction.ts` is deleted and `web/src` has no live
+  `callVercelFunction(...)` or same-origin `fetch("/api/...")` transport calls.
+- Guard: `test:ps-200-v4-account-carrier-ops-cutover`.
 
 ## Load-bearing discoveries
 
@@ -23,19 +24,18 @@ Date: 2026-06-12 · Status: Part 1 (inventory) complete · Owner ticket: PS-200
    `api/carriers/verify.ts` and `src/lib/imported-handlers/carriers-verify.ts` are 1-line re-export
    shims of the SAME `src/connectors/carrier/credential-verification`. The split-brain is a
    *deployment* split, not a logic fork — cutover risk is far lower than the card feared.
-2. **v4 already mounts three legacy mirrors** (`src/lib/imported-handlers/`): `/carrier-accounts`
-   (main.ts:178), `/carriers/verify` (carriers.ts:9), and `rates-multi` inside `/rates`.
-   Drift vs legacy: verify = zero (same module); carrier-accounts = diagnostics/log-shape only
-   (both delegate to the same services; legacy adds masked POST logging, v4 adds
-   `backfillAwaitingSnapshotNickname`); rates-multi = intentionally thinner (PS-203 backend owns
-   direct rates).
+2. **v4 mounts the S1/S2 account and carrier-op surfaces**: `/carrier-accounts`,
+   `/store-accounts`, `/carriers/verify`, `/carriers/rates`, `/carriers/walmart/orders`,
+   `/carriers/ebay/orders`, and `/carriers/walmart/fees`. These routes either delegate to the
+   same imported handler/service layer as the legacy function or to the backend-owned v4
+   probe/sync service.
 3. **Reverse dependency:** `src/lib/imported-handlers/carrier-accounts.ts` imports
    `sendInternalServerError` **from `api/_lib/safe-error`** — v4 build depends on `api/_lib`.
    The `_lib` relocation (surface 6) MUST land before the `api/` directory deletion (surface 8).
 4. **The FE's biggest legacy money call is already dead.** `fetchDirectCarrierRates`
-   (shared.ts:1083 → `POST /api/carriers/rates`) has zero callers since PS-203 moved the
-   combined rate universe to the backend. Only the Settings "test rates" probe
-   (CarrierIntegrationsCard.tsx:1018) still POSTs `/carriers/rates`.
+   (formerly `POST /api/carriers/rates`) has zero callers since PS-203 moved the combined rate
+   universe to the backend. The Settings "test rates" probe now posts to the v4
+   `/carriers/rates` route.
 5. **`api/admin/fix-marketplace-timestamps.ts` can UPDATE `orders.order_date`** (including
    shipped rows) and double-shifts if re-run — deleting it strengthens the shipped-data lockdown.
 
@@ -43,17 +43,17 @@ Date: 2026-06-12 · Status: Part 1 (inventory) complete · Owner ticket: PS-200
 
 | Legacy function | Callers today (evidence) | v4 equivalent | Action → surface |
 |---|---|---|---|
-| `api/carrier-accounts.ts` | shared.ts:925 (admin list), useShippingAccounts.ts:88 (raw fetch), CarrierIntegrationsCard 820/848/861/892/915/928/1269/1515, PendingClientIntegrationsCard 76/89 (`?source=portal&pending=1`) | `/carrier-accounts` route (imported handler, same services) | Re-sync drift, FE flip → **S1** |
-| `api/store-accounts.ts` | shared.ts:926, CarrierIntegrationsCard 820/848/861 (via `endpoint` var), 1519 | **none** | Add v4 route (imported-handler pattern), FE flip → **S1** |
-| `api/carriers/verify.ts` | CarrierIntegrationsCard:840 | `/carriers/verify` (same module) | FE flip only → **S1** |
-| `api/carriers/rates.ts` | CarrierIntegrationsCard:1018 (Settings test probe) — `fetchDirectCarrierRates` fan-out is dead code | v4 owns direct rates (rates.ts + rates-combined.ts, PS-203) | Delete dead FE fan-out; flip probe to v4 → **S2**; legacy file deletion w/ labels → **S8** |
+| `api/carrier-accounts.ts` | No FE legacy transport caller; FE uses v4 `/carrier-accounts` through `api` client | `/carrier-accounts` route (imported handler, same services) | **S1 locally guarded**; legacy twin retained until S8 |
+| `api/store-accounts.ts` | No FE legacy transport caller; FE uses v4 `/store-accounts` through `api` client | `/store-accounts` route (imported handler, same services) | **S1 locally guarded**; legacy twin retained until S8 |
+| `api/carriers/verify.ts` | No FE legacy transport caller; FE uses v4 `/carriers/verify` through `api` client | `/carriers/verify` (same module) | **S1 locally guarded**; legacy twin retained until S8 |
+| `api/carriers/rates.ts` | No FE legacy transport caller; Settings test probe uses v4 `/carriers/rates`; `fetchDirectCarrierRates` fan-out is deleted | v4 owns Settings probe (`src/services/carrier-rates-probe.ts`) and order-bound rates (`rates.ts` + `rates-combined.ts`, PS-203) | **S2 locally guarded**; legacy file deletion w/ labels → **S8** |
 | `api/carriers/labels.ts` | none (PS-202 deleted the FE branch) | `createLabelV2` + `labels-direct.ts` | Delete after PS-202 verification (DJ gate) → **S5** |
-| `api/carriers/walmart/orders.ts` | CarrierIntegrationsCard:950 (Pull Orders) | none as route; PS-199: live lookup owns, `store_orders` = cache | Port as v4 cache-refresh route → **S2** |
-| `api/carriers/ebay/orders.ts` | CarrierIntegrationsCard:959 | none | Same → **S2** |
-| `api/carriers/walmart/fees.ts` | CarrierIntegrationsCard:991 (Pull fees) | logic already shared: `src/connectors/store/walmart-fees.ts` | Thin v4 route → **S2** |
-| `api/carriers/walmart/probe-carriers.ts` | none | — | Delete → **S2** (with the walmart surface) |
-| `api/carriers/ups/probe.ts` | none | — | Delete → **S2** |
-| `api/carriers/validate-address.ts` | none | — | Delete → **S2** |
+| `api/carriers/walmart/orders.ts` | No FE legacy transport caller; Settings uses v4 `/carriers/walmart/orders` | v4 route delegates to imported Walmart handler; PS-199 live lookup owns, `store_orders` = cache | **S2 locally guarded**; legacy twin retained until S8 |
+| `api/carriers/ebay/orders.ts` | No FE legacy transport caller; Settings uses v4 `/carriers/ebay/orders` | v4 route delegates to imported eBay handler | **S2 locally guarded**; legacy twin retained until S8 |
+| `api/carriers/walmart/fees.ts` | No FE legacy transport caller; Settings uses v4 `/carriers/walmart/fees` | v4 route delegates to `src/connectors/store/walmart-fees.ts` | **S2 locally guarded**; legacy twin retained until S8 |
+| `api/carriers/walmart/probe-carriers.ts` | none | connector probe still exists where needed | **Deleted in S2** |
+| `api/carriers/ups/probe.ts` | none | connector probe still exists where needed | **Deleted in S2** |
+| `api/carriers/validate-address.ts` | none | USPS validator still exists where needed | **Deleted in S2** |
 | `api/cron/sync-walmart-fees.ts` + crons block | Vercel cron 09:00 UTC | logic shared (walmart-fees.ts) but **no v4 schedule** | v4 worker job (BOTH schedulers) + drop crons block → **S3** |
 | `api/oauth/ebay/callback.ts` | **external**: eBay redirect URI registered to the Vercel domain | none | Port + keep `/oauth` reachable (thin proxy or DJ re-registers URI on eBay dev portal) → **S4, DJ gate** |
 | `api/debug-env.ts` | none ("remove once migration verified") | — | **Deleted in part 2** |
@@ -65,8 +65,8 @@ Date: 2026-06-12 · Status: Part 1 (inventory) complete · Owner ticket: PS-200
 
 | # | Surface | Gate |
 |---|---|---|
-| S1 | Account CRUD cutover: re-sync carrier-accounts handler drift, add v4 `/store-accounts` route, flip all 14 FE call sites (callVercelFunction → `api` client) | none — same services both sides |
-| S2 | Carrier ops cutover: walmart/ebay pulls + walmart fees + Settings rates probe → v4 routes; delete dead `fetchDirectCarrierRates` + probe/validate-address endpoints | none |
+| S1 | ~~Account CRUD cutover: re-sync carrier-accounts handler drift, add v4 `/store-accounts` route, flip FE call sites to the `api` client~~ | **Done locally; pinned by `test:ps-200-v4-account-carrier-ops-cutover`** |
+| S2 | ~~Carrier ops cutover: walmart/ebay pulls + walmart fees + Settings rates probe → v4 routes; delete dead `fetchDirectCarrierRates` + probe/validate-address endpoints~~ | **Done locally; pinned by `test:ps-200-v4-account-carrier-ops-cutover`** |
 | S3 | `sync-walmart-fees` → v4 worker job in **both** sync-scheduler and sync-job-queue (the register-in-one-scheduler miss is the classic bug); remove `crons` block | none |
 | S4 | eBay OAuth callback port | **DJ**: confirm redirect URI registered with eBay (re-register vs keep Vercel thin-proxy) |
 | S5 | Delete `api/carriers/labels.ts` + `api/carriers/rates.ts` | **DJ**: PS-202 test-mode + canary verification |
