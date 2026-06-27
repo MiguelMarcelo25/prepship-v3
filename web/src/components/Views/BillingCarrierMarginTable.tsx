@@ -11,6 +11,8 @@ export type CarrierMarginRow = {
   carrierCode: string | null
   serviceCode: string | null
   providerAccountNickname: string | null
+  accountDisplayName?: string | null
+  accountDisplaySource?: string | null
   actualShippingTotal: number
   billableShippingTotal: number
   marginTotal: number
@@ -39,7 +41,7 @@ export function BillingCarrierMarginTable({
   // bake the original index into a stable unique key (survives sort/pagination).
   const rows = carriers.map((carrier, index) => ({
     ...carrier,
-    _key: `${carrier.carrierCode ?? ''}|${carrier.serviceCode ?? ''}|${carrier.providerAccountNickname ?? ''}|${index}`,
+    _key: `${carrier.carrierCode ?? ''}|${carrier.serviceCode ?? ''}|${carrier.accountDisplayName ?? carrier.providerAccountNickname ?? ''}|${index}`,
   }))
 
   return (
@@ -85,10 +87,12 @@ export function BillingCarrierMarginTable({
             width: 110,
             minWidth: 70,
             sortable: true,
-            sortValue: (row) => row.providerAccountNickname ?? '',
+            sortValue: (row) => row.accountDisplayName ?? row.providerAccountNickname ?? '',
             render: (row) =>
-              row.providerAccountNickname ? (
-                <span className="text-ink-2">{row.providerAccountNickname}</span>
+              row.accountDisplayName || row.providerAccountNickname ? (
+                <span className={row.accountDisplaySource === 'unknown' ? 'text-ink-3' : 'text-ink-2'}>
+                  {row.accountDisplayName ?? row.providerAccountNickname}
+                </span>
               ) : (
                 <span className="text-ink-3">—</span>
               ),

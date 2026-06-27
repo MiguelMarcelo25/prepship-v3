@@ -511,6 +511,8 @@ type ShippingMarginCarrierDto = {
   carrierCode: string | null
   serviceCode: string | null
   providerAccountNickname: string | null
+  accountDisplayName: string | null
+  accountDisplaySource: string | null
   actualShippingTotal: number
   billableShippingTotal: number
   marginTotal: number
@@ -527,6 +529,8 @@ function normalizeShippingMarginCarriers(value: unknown): ShippingMarginCarrierD
       carrierCode: typeof row.carrierCode === 'string' ? row.carrierCode : null,
       serviceCode: typeof row.serviceCode === 'string' ? row.serviceCode : null,
       providerAccountNickname: typeof row.providerAccountNickname === 'string' ? row.providerAccountNickname : null,
+      accountDisplayName: typeof row.accountDisplayName === 'string' ? row.accountDisplayName : null,
+      accountDisplaySource: typeof row.accountDisplaySource === 'string' ? row.accountDisplaySource : null,
       actualShippingTotal: num(row.actualShippingTotal),
       billableShippingTotal: num(row.billableShippingTotal),
       marginTotal: num(row.marginTotal),

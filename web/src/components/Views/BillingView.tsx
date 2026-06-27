@@ -111,6 +111,8 @@ type ShippingMarginCarrierDto = {
   carrierCode: string | null
   serviceCode: string | null
   providerAccountNickname: string | null
+  accountDisplayName?: string | null
+  accountDisplaySource?: string | null
   actualShippingTotal: number
   billableShippingTotal: number
   marginTotal: number
@@ -128,6 +130,8 @@ type ShippingMarginRowDto = {
   carrierCode: string | null
   serviceCode: string | null
   providerAccountNickname: string | null
+  accountDisplayName?: string | null
+  accountDisplaySource?: string | null
   actualShippingCost: number | null
   billableShippingAmount: number | null
   marginAmount: number | null
@@ -1502,7 +1506,7 @@ export default function BillingView() {
                         <td style={{ textAlign: 'left', padding: '3px 8px 3px 0', fontWeight: 600 }}>{row.orderNumber ?? '—'}</td>
                         <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text3)' }}>{row.shipmentId ?? '—'}</td>
                         <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text2)' }}>{row.shipDate ? row.shipDate.slice(0, 10) : '—'}</td>
-                        <td style={{ textAlign: 'left', padding: '3px 8px' }}>{row.carrierCode ?? '—'}{row.serviceCode ? ` · ${row.serviceCode}` : ''}{row.providerAccountNickname ? ` (${row.providerAccountNickname})` : ''}</td>
+                        <td style={{ textAlign: 'left', padding: '3px 8px' }}>{row.carrierCode ?? '—'}{row.serviceCode ? ` · ${row.serviceCode}` : ''}{(row.accountDisplayName ?? row.providerAccountNickname) ? ` (${row.accountDisplayName ?? row.providerAccountNickname})` : ''}</td>
                         <td style={{ padding: '3px 8px' }}>{row.actualShippingCost == null ? '—' : formatBillingMoney(row.actualShippingCost)}</td>
                         <td style={{ padding: '3px 8px' }}>{row.billableShippingAmount == null ? '—' : formatBillingMoney(row.billableShippingAmount)}</td>
                         <td style={{ padding: '3px 8px', fontWeight: 700, color: row.marginAmount == null ? 'var(--text3)' : marginColor(row.marginAmount) }}>{row.marginAmount == null ? '—' : formatBillingMoney(row.marginAmount)}</td>

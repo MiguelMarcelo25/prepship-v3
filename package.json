@@ -492,6 +492,8 @@
     "test:ps-291-manual-order-preview-closeout": "tsx scripts/ps-291-manual-order-preview-closeout-guard.ts",
     "test:ps-291-manual-order-preview-status": "tsx scripts/ps-291-manual-order-preview-status-guard.ts",
     "test:ps-296-shipping-margin": "tsx scripts/ps-296-shipping-margin-guard.ts",
+    "test:ps-332-shipping-margin-account-labels": "tsx scripts/ps-332-shipping-margin-account-labels-guard.ts",
+    "test:ps-332-shipping-margin-account-labels:browser": "playwright test web/e2e/shipping-margin-account-labels.spec.js --reporter=line",
     "test:ps-296-shipping-margin-closeout": "tsx scripts/ps-296-shipping-margin-closeout-guard.ts",
     "test:ps-296-margin-breakdown": "tsx scripts/ps-296-margin-breakdown-guard.ts",
     "test:ps-296-fe-carrier-breakdown": "tsx scripts/ps-296-fe-carrier-breakdown-guard.ts",

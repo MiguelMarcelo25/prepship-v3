@@ -5,6 +5,10 @@ import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { shipments } from '../db/schema/shipments';
 import { intArraySql, normalizeScopeIds } from '../lib/scope-sql';
+import {
+  isShippBrokeredServiceCode,
+  SHIPP_BROKERED_ACCOUNT_LABEL,
+} from './shipping-workflow/shipp-account-nickname-backfill';
 
 export type ShippingMarginState = 'frozen_billing' | 'projected' | 'missing_billable';
 export type ShippingMarginActualCostSource =
@@ -20,6 +24,11 @@ export type ShippingMarginBillableSource =
 export type ShippingMarginMissingProofReason =
   | 'missing_actual_cost'
   | 'missing_billable_shipping';
+export type ShippingMarginAccountDisplaySource =
+  | 'shipment_nickname'
+  | 'carrier_resolver'
+  | 'shipp_policy'
+  | 'unknown';
 
 export type ShippingMarginInputRow = {
   clientId: number | string | null;
@@ -41,6 +50,7 @@ export type ShippingMarginInputRow = {
   serviceCode: string | null;
   providerAccountId: number | string | null;
   providerAccountNickname: string | null;
+  resolvedProviderAccountNickname?: string | null;
 };
 
 export type ShippingMarginRow = {
@@ -65,6 +75,8 @@ export type ShippingMarginRow = {
   serviceCode: string | null;
   providerAccountId: number | null;
   providerAccountNickname: string | null;
+  accountDisplayName: string;
+  accountDisplaySource: ShippingMarginAccountDisplaySource;
 };
 
 export type ShippingMarginSummary = {
@@ -98,6 +110,8 @@ export type ShippingMarginCarrierSummary = ShippingMarginSummary & {
   serviceCode: string | null;
   providerAccountId: number | null;
   providerAccountNickname: string | null;
+  accountDisplayName: string;
+  accountDisplaySource: ShippingMarginAccountDisplaySource;
 };
 
 export type ShippingMarginAnalytics = {
@@ -135,6 +149,12 @@ function intOrNull(value: unknown): number | null {
 
 function money(value: number): number {
   return Number(value.toFixed(2));
+}
+
+function cleanText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
 function percent(numerator: number, denominator: number): number | null {
@@ -203,9 +223,32 @@ function resolveBillable(row: ShippingMarginInputRow): {
   return { amount: null, source: 'missing', state: 'missing_billable' };
 }
 
+function isShippBrokeredMarginRow(row: ShippingMarginInputRow): boolean {
+  const carrier = cleanText(row.carrierCode)?.toLowerCase();
+  return carrier === 'shipp' || isShippBrokeredServiceCode(row.serviceCode);
+}
+
+export function resolveShippingMarginAccountDisplay(row: ShippingMarginInputRow): {
+  name: string;
+  source: ShippingMarginAccountDisplaySource;
+} {
+  const storedNickname = cleanText(row.providerAccountNickname);
+  if (storedNickname) return { name: storedNickname, source: 'shipment_nickname' };
+
+  const resolvedNickname = cleanText(row.resolvedProviderAccountNickname);
+  if (resolvedNickname) return { name: resolvedNickname, source: 'carrier_resolver' };
+
+  if (isShippBrokeredMarginRow(row)) return { name: SHIPP_BROKERED_ACCOUNT_LABEL, source: 'shipp_policy' };
+
+  return intOrNull(row.providerAccountId) != null
+    ? { name: 'Unresolved account', source: 'unknown' }
+    : { name: 'Unknown account', source: 'unknown' };
+}
+
 export function buildShippingMarginRow(row: ShippingMarginInputRow): ShippingMarginRow {
   const actual = resolveActualCost(row);
   const billable = resolveBillable(row);
+  const accountDisplay = resolveShippingMarginAccountDisplay(row);
   const margin =
     actual.amount != null && billable.amount != null
       ? money(billable.amount - actual.amount)
@@ -234,6 +277,8 @@ export function buildShippingMarginRow(row: ShippingMarginInputRow): ShippingMar
     serviceCode: row.serviceCode?.trim() || null,
     providerAccountId: intOrNull(row.providerAccountId),
     providerAccountNickname: row.providerAccountNickname?.trim() || null,
+    accountDisplayName: accountDisplay.name,
+    accountDisplaySource: accountDisplay.source,
   };
 }
 
@@ -292,6 +337,23 @@ function finalizeClientSummary(summary: ShippingMarginClientSummary): ShippingMa
   return summary;
 }
 
+function accountDisplayPriority(source: ShippingMarginAccountDisplaySource): number {
+  if (source === 'shipment_nickname') return 3;
+  if (source === 'carrier_resolver') return 2;
+  if (source === 'shipp_policy') return 1;
+  return 0;
+}
+
+function preferCarrierAccountDisplay(
+  current: ShippingMarginCarrierSummary,
+  row: ShippingMarginRow,
+): void {
+  if (accountDisplayPriority(row.accountDisplaySource) > accountDisplayPriority(current.accountDisplaySource)) {
+    current.accountDisplayName = row.accountDisplayName;
+    current.accountDisplaySource = row.accountDisplaySource;
+  }
+}
+
 export function buildShippingMarginAnalytics(
   rows: ShippingMarginRow[],
   range: { dateFrom: string; dateTo: string },
@@ -323,9 +385,13 @@ export function buildShippingMarginAnalytics(
         serviceCode: row.serviceCode,
         providerAccountId: row.providerAccountId,
         providerAccountNickname: row.providerAccountNickname,
+        accountDisplayName: row.accountDisplayName,
+        accountDisplaySource: row.accountDisplaySource,
         ...emptySummary(),
       };
       carriersByKey.set(carrierKey, carrierSummary);
+    } else {
+      preferCarrierAccountDisplay(carrierSummary, row);
     }
     addRow(carrierSummary, row);
   }
@@ -410,8 +476,19 @@ export async function shippingMarginAnalytics(
       ${shipments.carrierCode} as "carrierCode",
       ${shipments.serviceCode} as "serviceCode",
       ${shipments.providerAccountId} as "providerAccountId",
-      ${shipments.providerAccountNickname} as "providerAccountNickname"
+      ${shipments.providerAccountNickname} as "providerAccountNickname",
+      provider_account_names.provider_account_nickname as "resolvedProviderAccountNickname"
     from ${shipments}
+    left join (
+      select
+        provider_account_id,
+        max(nullif(btrim(provider_account_nickname), '')) as provider_account_nickname
+      from shipments
+      where provider_account_id is not null
+        and nullif(btrim(provider_account_nickname), '') is not null
+      group by provider_account_id
+    ) provider_account_names
+      on provider_account_names.provider_account_id = ${shipments.providerAccountId}
     left join (
       select
         ${billingLineItems.shipmentId} as shipment_id,
