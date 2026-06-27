@@ -94,6 +94,10 @@ export function withRateRequestMetadata(
 }
 
 export function getSavedBestRateRecord(order: OrderSummaryDto) {
+  // PS-341: temporary compatibility bridge while backend order rows may arrive
+  // with saved best-rate truth in legacy shapes. This may only expose
+  // backend-issued records to proof selectors; it must not choose Best Rate or
+  // mint proof. Remove when the order DTO has one active best-rate shape.
   return (
     toRecord(order.bestRate) ??
     toRecord(getShippingModel(order)?.bestRate) ??

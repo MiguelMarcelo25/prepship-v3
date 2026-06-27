@@ -1,5 +1,5 @@
 /**
- * PS-337 guard - eBay API testing certification.
+ * PS-339 guard - eBay API testing certification.
  *
  * This guard turns the custom Trello card "ebay is ready for api testing" into
  * a PS-track certification without running live eBay calls.
@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 const files = {
   packageJson: 'package.json',
-  doc: 'docs/ps-tickets/ps-337-ebay-api-testing-certification.md',
+  doc: 'docs/ps-tickets/ps-339-ebay-api-testing-certification.md',
   ebayConnector: 'src/connectors/store/ebay.ts',
   outbox: 'src/services/fulfillment/outbox.ts',
   payload: 'src/services/fulfillment/confirmation-payload.ts',
@@ -40,7 +40,7 @@ function includesAll(name: string, source: string, needles: string[]): void {
   }
 }
 
-check('PS-337 certification doc exists', existsSync(files.doc));
+check('PS-339 certification doc exists', existsSync(files.doc));
 
 const packageJson = read(files.packageJson);
 const pkg = JSON.parse(packageJson) as { scripts?: Record<string, string> };
@@ -53,20 +53,20 @@ const smoke = read(files.smoke);
 const retry = read(files.retry);
 
 check(
-  'package wires PS-337 eBay API testing certification guard',
-  pkg.scripts?.['test:ps-337-ebay-api-testing-certification'] ===
-    'tsx scripts/ps-337-ebay-api-testing-certification-guard.ts',
+  'package wires PS-339 eBay API testing certification guard',
+  pkg.scripts?.['test:ps-339-ebay-api-testing-certification'] ===
+    'tsx scripts/ps-339-ebay-api-testing-certification-guard.ts',
 );
 
-includesAll('PS-337 doc records custom Trello source and certification scope', doc, [
+includesAll('PS-339 doc records custom source and certification scope', doc, [
   'Custom Trello source card: https://trello.com/c/gRogisQ0',
-  'PS-337 is the PrepShip PS-track version of the custom card',
+  'PS-339 is the PrepShip PS-track version of the custom card',
   'certification ticket',
   'not a live marketplace mutation',
   'Current finding: eBay is ready for offline/mocked API certification',
 ]);
 
-includesAll('PS-337 doc names canonical backend owners', doc, [
+includesAll('PS-339 doc names canonical backend owners', doc, [
   'src/connectors/store/ebay.ts',
   'src/services/fulfillment/confirmation-payload.ts',
   'src/services/fulfillment/outbox.ts',
@@ -74,10 +74,10 @@ includesAll('PS-337 doc names canonical backend owners', doc, [
   'scripts/ebay-confirmation-mocked-guard.ts',
 ]);
 
-includesAll('PS-337 doc blocks live eBay side effects without exact approval', doc, [
+includesAll('PS-339 doc blocks live eBay side effects without exact approval', doc, [
   'Live eBay confirmation',
   'requires exact DJ approval',
-  'DJ approves PS-337 eBay live API test',
+  'DJ approves PS-339 eBay live API test',
   'No live marketplace notification',
   'No live marketplace notification, label purchase, postage, production order',
 ]);
@@ -148,9 +148,8 @@ includesAll('current exact live retry command is not silently widened to eBay', 
 ]);
 
 if (failures > 0) {
-  console.error(`\nPS-337 eBay API testing certification guard FAILED with ${failures} failure(s).`);
+  console.error(`\nPS-339 eBay API testing certification guard FAILED with ${failures} failure(s).`);
   process.exit(1);
 }
 
-console.log('\nPS-337 eBay API testing certification guard passed.');
-
+console.log('\nPS-339 eBay API testing certification guard passed.');
