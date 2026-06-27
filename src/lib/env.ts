@@ -87,6 +87,11 @@ const schema = z.object({
   DURABLE_PRINT_QUEUE_PDF: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER: booleanFlag(false),
   ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY: booleanFlag(false),
+  // Per user override unlock shipped data on 2026-06-27: the automatic
+  // external-shipped classifier must cover the Orders table's Last 30 Days
+  // shipped/cancelled views, not only the 7-day steady-state window, so older
+  // cancelled marketplace labels do not require manual cleanup.
+  EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS: z.coerce.number().int().min(30).max(90).default(30),
   // Tracking-driven print-queue retirement (delivered → History). Two-stage
   // rollout mirroring the pair above: the SCHEDULER flag turns polling on
   // (observe-only — shipment_tracking_status fills, panel shows status, queue

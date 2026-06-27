@@ -18,6 +18,11 @@ assert.match(
   'env must expose separate explicit opt-in for automatic reversible flag apply.',
 );
 assert.match(
+  envSource,
+  /EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS[\s\S]*\.min\(30\)[\s\S]*\.default\(30\)/,
+  'env must expose a 30+ day automatic external-shipped lookback so Cancelled-table leftovers are not missed.',
+);
+assert.match(
   reconcile,
   /export async function runExternalShippedReconcile/,
   'external-shipped script must export an in-process runner for the scheduler.',
@@ -31,6 +36,11 @@ assert.match(
   syncScheduler,
   /includeCancelled: true/,
   'automatic classifier must include cancelled rows per PS-056 follow-up.',
+);
+assert.match(
+  syncScheduler,
+  /days: env\.EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS/,
+  'automatic classifier must use the configured 30+ day lookback, not a hardcoded 7-day window.',
 );
 assert.match(
   syncScheduler,

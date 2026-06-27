@@ -131,6 +131,10 @@ function readinessResponseBody(readiness: Awaited<ReturnType<typeof checkDeepRea
     externalShippedClassifier: {
       schedulerEnabled: env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER === true,
       autoApplyEnabled: env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true,
+      // Per user override unlock shipped data on 2026-06-27: expose the
+      // automatic shipped/cancelled classifier window so Render config drift is
+      // visible before old Cancelled rows rest on Shipment sync error.
+      lookbackDays: env.EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS,
     },
     ts: new Date().toISOString(),
   };

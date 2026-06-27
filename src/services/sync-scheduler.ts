@@ -351,7 +351,10 @@ export async function runExternalShippedClassifierTick(): Promise<void> {
   try {
     const result = await runHeavySchedulerJob('external-shipped classifier', () =>
       runExternalShippedReconcile({
-        days: 7,
+        // Per user override unlock shipped data on 2026-06-27: use the
+        // configured 30+ day lookback so automatic shipped/cancelled
+        // classification covers the visible Orders table window.
+        days: env.EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS,
         limit: 50,
         includeCancelled: true,
         // Per user override unlock shipped data on 2026-06-01: PS-056 scheduled
