@@ -8,6 +8,12 @@
  * facts from a locally-normalized "Best Rate" wrapper.
  */
 import { readFileSync } from 'node:fs';
+import {
+  getAwaitingDisplayAccountNickname,
+  getBestRateShippingProviderId,
+  getSelectedRateCarrierCode,
+  getSelectedRateServiceCode,
+} from '../web/src/components/Views/orders-row-display';
 
 let failures = 0;
 
@@ -91,6 +97,89 @@ check(
     bestRateAccountBlock.indexOf('backendDisplayAccountNickname') < bestRateAccountBlock.indexOf('rateNickname') &&
     /if \(order\.orderStatus === 'awaiting_shipment'\) return backendDisplayAccountNickname \?\? rateNickname/.test(bestRateAccountBlock),
   bestRateAccountBlock,
+);
+
+const bestRateProviderBlock = sliceBetween(
+  rowDisplay,
+  'export function getBestRateShippingProviderId(',
+  '\nexport function getBestRateServiceCode',
+);
+check(
+  'Awaiting Best Rate provider id prefers backend bestRateWorkflow.display.providerAccountId',
+  /backendDisplayProviderAccountId/.test(bestRateProviderBlock) &&
+    bestRateProviderBlock.indexOf('backendDisplayProviderAccountId') < bestRateProviderBlock.indexOf('rateProviderId') &&
+    /if \(order\.orderStatus === 'awaiting_shipment'\) \{[\s\S]*?return backendDisplayProviderAccountId \?\? rateProviderId/.test(bestRateProviderBlock),
+  bestRateProviderBlock,
+);
+
+const selectedCarrierBlock = sliceBetween(
+  rowDisplay,
+  'export function getSelectedRateCarrierCode(',
+  '\nexport function getSelectedRateServiceCode',
+);
+check(
+  'Awaiting selected-rate carrier display does not fall through to current Best Rate',
+  /order\.orderStatus === 'awaiting_shipment'/.test(selectedCarrierBlock) &&
+    !/order\.bestRate/.test(sliceBetween(selectedCarrierBlock, "order.orderStatus === 'awaiting_shipment'", '\n  return')),
+  selectedCarrierBlock,
+);
+
+const selectedServiceBlock = sliceBetween(
+  rowDisplay,
+  'export function getSelectedRateServiceCode(',
+  '\nexport function getSelectedRateCarrierNickname',
+);
+check(
+  'Awaiting selected-rate service display does not fall through to current Best Rate',
+  /order\.orderStatus === 'awaiting_shipment'/.test(selectedServiceBlock) &&
+    !/order\.bestRate/.test(sliceBetween(selectedServiceBlock, "order.orderStatus === 'awaiting_shipment'", '\n  return')),
+  selectedServiceBlock,
+);
+
+const awaitingAccountBlock = sliceBetween(
+  rowDisplay,
+  'export function getAwaitingDisplayAccountNickname(',
+  '\nexport function getSelectedRateShippingProviderId',
+);
+check(
+  'Awaiting account display reads backend display tuple directly instead of chaining through Best Rate nickname',
+  /backendDisplayAccountNickname/.test(awaitingAccountBlock) &&
+    !/getBestRateCarrierNickname\(order\)/.test(awaitingAccountBlock),
+  awaitingAccountBlock,
+);
+
+check(
+  'backend display provider id beats loose Best Rate provider id on Awaiting rows',
+  getBestRateShippingProviderId({
+    orderStatus: 'awaiting_shipment',
+    bestRate: { shippingProviderId: 111 },
+    bestRateWorkflow: { display: { providerAccountId: 222 } },
+  } as never) === 222,
+);
+
+check(
+  'Awaiting selected-rate carrier does not borrow current Best Rate carrier',
+  getSelectedRateCarrierCode({
+    orderStatus: 'awaiting_shipment',
+    bestRate: { carrierCode: 'ups' },
+  } as never) == null,
+);
+
+check(
+  'Awaiting selected-rate service does not borrow current Best Rate service',
+  getSelectedRateServiceCode({
+    orderStatus: 'awaiting_shipment',
+    bestRate: { serviceCode: 'ups_ground' },
+  } as never) == null,
+);
+
+check(
+  'Awaiting account display consumes backend display account directly',
+  getAwaitingDisplayAccountNickname({
+    orderStatus: 'awaiting_shipment',
+    bestRate: { carrierNickname: 'Raw Best Account' },
+    bestRateWorkflow: { display: { accountNickname: 'Backend Account' } },
+  } as never) === 'Backend Account',
 );
 
 check(

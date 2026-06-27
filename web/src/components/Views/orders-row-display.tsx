@@ -319,9 +319,12 @@ export function getBestRateFinalBaseCost(order: OrderSummaryDto) {
 }
 
 export function getBestRateShippingProviderId(order: OrderSummaryDto) {
+  const backendDisplayProviderAccountId = toProviderAccountId(
+    toRecord(getBestRateWorkflowModel(order)?.display)?.providerAccountId,
+  )
   const rateProviderId = getRateProviderAccountId(toRecord(order.bestRate))
   if (order.orderStatus === 'awaiting_shipment') {
-    return rateProviderId ?? getShippingProviderAccountId(order) ?? undefined
+    return backendDisplayProviderAccountId ?? rateProviderId ?? getShippingProviderAccountId(order) ?? undefined
   }
   return getShippingProviderAccountId(order) ?? rateProviderId ?? undefined
 }
@@ -387,17 +390,27 @@ export function getSelectedRateFinalCost(order: OrderSummaryDto) {
 }
 
 export function getSelectedRateCarrierCode(order: OrderSummaryDto) {
-  return (
+  const selectedCarrierCode =
     getShippingString(order, 'carrierCode') ??
-    toStringValue(order.selectedRate?.carrierCode) ??
+    toStringValue(order.selectedRate?.carrierCode)
+  if (order.orderStatus === 'awaiting_shipment') {
+    return selectedCarrierCode
+  }
+  return (
+    selectedCarrierCode ??
     toStringValue((order.bestRate as LooseBestRate | undefined)?.carrierCode)
   )
 }
 
 export function getSelectedRateServiceCode(order: OrderSummaryDto) {
-  return (
+  const selectedServiceCode =
     getShippingString(order, 'serviceCode') ??
-    toStringValue(order.selectedRate?.serviceCode) ??
+    toStringValue(order.selectedRate?.serviceCode)
+  if (order.orderStatus === 'awaiting_shipment') {
+    return selectedServiceCode
+  }
+  return (
+    selectedServiceCode ??
     toStringValue((order.bestRate as LooseBestRate | undefined)?.serviceCode)
   )
 }
@@ -417,13 +430,16 @@ export function getSelectedRateCarrierNickname(order: OrderSummaryDto) {
 }
 
 export function getAwaitingDisplayAccountNickname(order: OrderSummaryDto) {
+  const backendDisplayAccountNickname = normalizeShippingAccountName(
+    toStringValue(toRecord(getBestRateWorkflowModel(order)?.display)?.accountNickname),
+  )
   return (
+    backendDisplayAccountNickname ??
     getShippingString(order, 'accountNickname') ??
     toStringValue(order.selectedRate?.providerAccountNickname) ??
     // PS-273: brokered awaiting row -> "Shipp" before the raw carrierNickname.
     (isShippBrokeredServiceCode(getSelectedRateServiceCode(order)) ? SHIPP_BROKERED_ACCOUNT_LABEL : null) ??
     toStringValue(order.selectedRate?.carrierNickname) ??
-    normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
     getV2CarrierAccountForOrder(order)?.nickname ??
     null
   )

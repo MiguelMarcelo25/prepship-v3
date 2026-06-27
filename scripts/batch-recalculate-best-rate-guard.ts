@@ -180,9 +180,10 @@ const bestRateProviderEnd = rowDisplay.indexOf('\nexport function getBestRateSer
 const bestRateProviderBlock = bestRateProviderStart >= 0 && bestRateProviderEnd > bestRateProviderStart
   ? rowDisplay.slice(bestRateProviderStart, bestRateProviderEnd)
   : '';
-check('awaiting best-rate provider id wins over stale shipping metadata',
+check('awaiting backend display provider id wins over best-rate and stale shipping metadata',
   /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateProviderBlock) &&
-  /return\s+rateProviderId\s*\?\?\s*getShippingProviderAccountId\(order\)/.test(bestRateProviderBlock));
+  /backendDisplayProviderAccountId/.test(bestRateProviderBlock) &&
+  /return\s+backendDisplayProviderAccountId\s*\?\?\s*rateProviderId\s*\?\?\s*getShippingProviderAccountId\(order\)/.test(bestRateProviderBlock));
 
 // PS-166 Wave 2a re-anchor: getShipAccountDisplay moved VERBATIM to the
 // orders-display-state module (it still receives the live `accounts` array as
