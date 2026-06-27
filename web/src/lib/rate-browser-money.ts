@@ -20,57 +20,8 @@ function firstFiniteNumber(...values: unknown[]): number | null {
   return null;
 }
 
-function moneyAmount(record: RateRecord | null, key: string): number | null {
-  const value = asRecord(record?.[key]);
-  return readFiniteNumber(value?.amount);
-}
-
 function rawRecord(rate: RateRecord | null): RateRecord | null {
   return asRecord(rate?.raw);
-}
-
-function componentOtherTotal(rate: RateRecord | null, raw: RateRecord | null): number {
-  const direct = firstFiniteNumber(rate?.otherCost, raw?.otherCost);
-  if (direct != null) return direct;
-  return (
-    (moneyAmount(raw, 'other_amount') ?? 0) +
-    (moneyAmount(raw, 'confirmation_amount') ?? 0) +
-    (moneyAmount(raw, 'insurance_amount') ?? 0)
-  );
-}
-
-function legacyCustomerTotal(rate: RateRecord | null, raw: RateRecord | null): number | null {
-  const direct = firstFiniteNumber(
-    rate?.amount,
-    raw?.amount,
-    rate?.totalCost,
-    raw?.totalCost,
-    raw?.total_cost,
-  );
-  if (direct != null) return direct;
-
-  const shipping = firstFiniteNumber(
-    rate?.shipmentCost,
-    raw?.shipmentCost,
-    moneyAmount(raw, 'shipping_amount'),
-  );
-  if (shipping == null) return null;
-  return shipping + componentOtherTotal(rate, raw);
-}
-
-function legacyRateCostTotal(rate: RateRecord | null, raw: RateRecord | null): number | null {
-  const shipping = firstFiniteNumber(
-    raw?.rawShippingAmount,
-    raw?.raw_shipping_amount,
-    raw?.internalShippingAmount,
-    raw?.internal_shipping_amount,
-    moneyAmount(raw, 'original_amount'),
-    rate?.shipmentCost,
-    raw?.shipmentCost,
-    moneyAmount(raw, 'shipping_amount'),
-  );
-  if (shipping == null) return null;
-  return shipping + componentOtherTotal(rate, raw);
 }
 
 function roundMoney(value: number): number {
@@ -85,7 +36,12 @@ export function rateBrowserCustomerAmount(rate: unknown): number {
     record?.customer_rate_amount,
     raw?.customerRateAmount,
     raw?.customer_rate_amount,
-  ) ?? legacyCustomerTotal(record, raw) ?? 0;
+    record?.amount,
+    raw?.amount,
+    record?.totalCost,
+    raw?.totalCost,
+    raw?.total_cost,
+  ) ?? 0;
   return roundMoney(amount);
 }
 
@@ -97,7 +53,7 @@ export function rateBrowserRateCostAmount(rate: unknown): number {
     record?.rate_cost_amount,
     raw?.rateCostAmount,
     raw?.rate_cost_amount,
-  ) ?? legacyRateCostTotal(record, raw) ?? rateBrowserCustomerAmount(rate);
+  ) ?? rateBrowserCustomerAmount(rate);
   return roundMoney(amount);
 }
 

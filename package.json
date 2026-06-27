@@ -488,6 +488,7 @@
     "test:ps-340-ratebrowser-bridge-audit": "tsx scripts/ps-340-ratebrowser-bridge-audit-guard.ts",
     "test:ps-341-frontend-compatibility-helper-audit": "tsx scripts/ps-341-frontend-compatibility-helper-audit-guard.ts",
     "test:ps-342-legacy-rate-display-adapter-cleanup": "tsx scripts/ps-342-legacy-rate-display-adapter-cleanup-guard.ts",
+    "test:ps-343-ratebrowsermodal-money-normalization-cleanup": "tsx scripts/ps-343-ratebrowsermodal-money-normalization-cleanup-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",
     "test:ps-307-marked-rate-comparison-closeout": "tsx scripts/ps-307-marked-rate-comparison-closeout-guard.ts",

@@ -14,3 +14,4 @@ This file prevents custom owner tasks and branch-only work from reusing PS numbe
 | PS-340 | Rate Browser frontend bridge audit | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Guards Rate Browser display sorting/emission boundaries. |
 | PS-341 | Frontend compatibility helper audit | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removed saved Best Rate multi-shape proof helper fallback. |
 | PS-342 | Legacy rate display adapter cleanup | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removes frontend provider-money reconstruction from the legacy rate array adapter. |
+| PS-343 | RateBrowserModal money normalization cleanup | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removes Rate Browser frontend provider-money reconstruction; backend stamps rate-cost/customer aliases. |

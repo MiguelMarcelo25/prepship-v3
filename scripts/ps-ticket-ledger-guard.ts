@@ -23,6 +23,7 @@ assert(ledger.includes('| PS-339 | eBay API testing certification |'), 'ledger m
 assert(ledger.includes('| PS-340 | Rate Browser frontend bridge audit |'), 'ledger must reserve PS-340 for Rate Browser bridge cleanup');
 assert(ledger.includes('| PS-341 | Frontend compatibility helper audit |'), 'ledger must reserve PS-341 for frontend compatibility cleanup');
 assert(ledger.includes('| PS-342 | Legacy rate display adapter cleanup |'), 'ledger must reserve PS-342 for legacy rate adapter cleanup');
+assert(ledger.includes('| PS-343 | RateBrowserModal money normalization cleanup |'), 'ledger must reserve PS-343 for RateBrowserModal money cleanup');
 
 const packageJson = read('package.json');
 assert(
@@ -44,6 +45,10 @@ assert(
 assert(
   packageJson.includes('test:ps-342-legacy-rate-display-adapter-cleanup'),
   'PS-342 legacy rate adapter cleanup guard must be registered',
+);
+assert(
+  packageJson.includes('test:ps-343-ratebrowsermodal-money-normalization-cleanup'),
+  'PS-343 RateBrowserModal money cleanup guard must be registered',
 );
 
 assert(!existsSync('docs/ps-tickets/ps-337-ebay-api-testing-certification.md'), 'duplicate PS-337 eBay doc must be renamed');

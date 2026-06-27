@@ -14,7 +14,7 @@ import {
   resolveRateInput,
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
-import { combineCarrierUniverses, rateTotal } from '../services/rates-combined';
+import { combineCarrierUniverses, rateCostTotal, rateTotal } from '../services/rates-combined';
 import { buildRateBrowseTimingDiagnostics } from '../services/rate-browser-timing-diagnostics';
 // PS-293: the SHIPP house-tuple stamp is the ONE owner shared with the rates-backfill, so a HUGRAB
 // house order gets the same nextBestNonHouseRate/houseMargin whether it was rated by /rates/browse or
@@ -230,6 +230,7 @@ function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<str
     readMoneyObjectAmount(rate.insurance_amount)
   );
   const total = roundRateMoney(rateTotal(rate));
+  const rateCostAmount = roundRateMoney(rateCostTotal(rate));
   const shipmentCost = roundRateMoney(total - otherCost);
   const carrierCode = readText(rate.carrierCode ?? rate.carrier_code ?? rate.provider ?? null);
   const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? rate.service ?? null);
@@ -257,6 +258,10 @@ function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<str
     amount: readFiniteRateNumber(rate.amount) ?? total,
     shipmentCost: readFiniteRateNumber(rate.shipmentCost) ?? shipmentCost,
     otherCost: readFiniteRateNumber(rate.otherCost) ?? otherCost,
+    customerRateAmount: readFiniteRateNumber(rate.customerRateAmount) ?? readFiniteRateNumber(rate.customer_rate_amount) ?? total,
+    customer_rate_amount: readFiniteRateNumber(rate.customer_rate_amount) ?? readFiniteRateNumber(rate.customerRateAmount) ?? total,
+    rateCostAmount: readFiniteRateNumber(rate.rateCostAmount) ?? readFiniteRateNumber(rate.rate_cost_amount) ?? rateCostAmount,
+    rate_cost_amount: readFiniteRateNumber(rate.rate_cost_amount) ?? readFiniteRateNumber(rate.rateCostAmount) ?? rateCostAmount,
     secondBestRate: isPlainRecord(rate.secondBestRate)
       ? stampRateBrowserDisplayAlias(rate.secondBestRate)
       : rate.secondBestRate,

@@ -604,38 +604,18 @@ function buildOrderBestRateSeed(
   const raw = (bestRate.raw && typeof bestRate.raw === 'object'
     ? bestRate.raw
     : bestRate) as Record<string, unknown>;
-  const shippingAmount =
-    raw.shipping_amount && typeof raw.shipping_amount === 'object'
-      ? (raw.shipping_amount as Record<string, unknown>)
-      : undefined;
-  const otherAmount =
-    raw.other_amount && typeof raw.other_amount === 'object'
-      ? (raw.other_amount as Record<string, unknown>)
-      : undefined;
-  const confirmationAmount =
-    raw.confirmation_amount && typeof raw.confirmation_amount === 'object'
-      ? (raw.confirmation_amount as Record<string, unknown>)
-      : undefined;
-  const insuranceAmount =
-    raw.insurance_amount && typeof raw.insurance_amount === 'object'
-      ? (raw.insurance_amount as Record<string, unknown>)
-      : undefined;
-  const shipmentCost =
-    toFiniteNumber(bestRate.shipmentCost) ??
-    toFiniteNumber(raw.shipmentCost) ??
-    toFiniteNumber(shippingAmount?.amount) ??
-    toFiniteNumber(raw.cost) ??
+  const rawAmount = toFiniteNumber(raw.amount);
+  const amount =
     toFiniteNumber(bestRate.amount) ??
-    0;
-  const otherAmountCost = toFiniteNumber(otherAmount?.amount) ?? 0;
-  const confirmationAmountCost = toFiniteNumber(confirmationAmount?.amount) ?? 0;
-  const insuranceAmountCost = toFiniteNumber(insuranceAmount?.amount) ?? 0;
-  const componentOtherCost = otherAmountCost + confirmationAmountCost + insuranceAmountCost;
-  const storedOtherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost);
-  const otherCost =
-    storedOtherCost != null
-      ? Math.max(storedOtherCost, componentOtherCost)
-      : componentOtherCost;
+    rawAmount ??
+    toFiniteNumber(bestRate.totalCost) ??
+    toFiniteNumber(raw.totalCost) ??
+    toFiniteNumber(raw.total_cost);
+  const otherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost) ?? 0;
+  const shipmentCostAlias =
+    toFiniteNumber(bestRate.shipmentCost) ??
+    toFiniteNumber(raw.shipmentCost);
+  const shipmentCost = shipmentCostAlias ?? (amount != null ? Math.max(0, amount - otherCost) : null);
   const shippingProviderId =
     toFiniteNumber(bestRate.shippingProviderId) ??
     toFiniteNumber(raw.shippingProviderId) ??
@@ -651,7 +631,7 @@ function buildOrderBestRateSeed(
     toOptionalString(raw.service_code) ??
     '';
 
-  if (!shippingProviderId || !carrierCode || !serviceCode || shipmentCost + otherCost <= 0) {
+  if (!shippingProviderId || !carrierCode || !serviceCode || shipmentCost == null || amount == null || amount <= 0) {
     return null;
   }
 
@@ -673,12 +653,11 @@ function buildOrderBestRateSeed(
     shippingProviderId,
     shipmentCost,
     otherCost,
-    amount: shipmentCost + otherCost,
-    insuranceCost: bestRate.insuranceCost ?? raw.insuranceCost ?? (insuranceAmountCost > 0 ? insuranceAmountCost : undefined),
+    amount,
+    insuranceCost: bestRate.insuranceCost ?? raw.insuranceCost,
     insuranceProvenance: bestRate.insuranceProvenance ?? raw.insuranceProvenance,
     insuranceCostUnresolved: bestRate.insuranceCostUnresolved ?? raw.insuranceCostUnresolved,
     insuranceCostError: bestRate.insuranceCostError ?? raw.insuranceCostError,
-    insurance_amount: bestRate.insurance_amount ?? raw.insurance_amount,
     // PS-274: pass the backend insurance-certainty fact through (display-only).
     insuranceCertainty: bestRate.insuranceCertainty ?? raw.insuranceCertainty,
     raw: bestRate,
@@ -792,18 +771,16 @@ function rateRowMoneyKey(value: unknown): string {
 
 function rateRowDedupeKey(rate: RateRow): string {
   const raw = rate.raw ?? {};
-  const rawOriginalShipping = Number(raw?.original_amount?.amount);
-  const shipmentCost = Number.isFinite(rawOriginalShipping)
-    ? rawOriginalShipping
-    : Number(rate.shipmentCost) || 0;
+  const amount = toFiniteNumber(rate.amount) ?? toFiniteNumber(raw?.amount) ?? 0;
+  const shipmentCost = toFiniteNumber(rate.shipmentCost) ?? toFiniteNumber(raw?.shipmentCost) ?? 0;
+  const otherCost = toFiniteNumber(rate.otherCost) ?? toFiniteNumber(raw?.otherCost) ?? 0;
   return [
     rateRowTextKey(rate.shippingProviderId ?? raw?.carrier_id),
     rateRowTextKey(rate.carrierCode ?? raw?.carrier_code),
     rateRowTextKey(rate.serviceCode ?? raw?.service_code ?? rate.serviceName ?? raw?.service_type),
+    rateRowMoneyKey(amount),
     rateRowMoneyKey(shipmentCost),
-    rateRowMoneyKey(rate.otherCost ?? raw?.other_amount?.amount),
-    rateRowMoneyKey(raw?.confirmation_amount?.amount),
-    rateRowMoneyKey(raw?.insurance_amount?.amount),
+    rateRowMoneyKey(otherCost),
     rateRowTextKey((rate as any).estimatedDelivery ?? raw?.estimated_delivery_date ?? (rate as any).deliveryDays ?? raw?.delivery_days),
   ].join('|');
 }

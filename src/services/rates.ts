@@ -177,7 +177,19 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
       //     a CORRECT ranking fix, not byte-identical. (QA audit 2026-06-23;
       //     ps-307-direct-rate-markup-behavior-test covers the toDirectRate+applyMarkups path.)
       customerShippingAmount: marked,
+      customer_shipping_amount: marked,
+      customerRateAmount: marked,
+      customer_rate_amount: marked,
       markedShippingAmount: marked,
+      marked_shipping_amount: marked,
+      // PS-343: preserve the raw/internal provider cost as backend-owned aliases so Rate Browser
+      // consumers do not need to recover it from provider component money fields.
+      rateCostAmount: orig,
+      rate_cost_amount: orig,
+      rawShippingAmount: orig,
+      raw_shipping_amount: orig,
+      internalShippingAmount: orig,
+      internal_shipping_amount: orig,
     } as Rate;
   });
 }
