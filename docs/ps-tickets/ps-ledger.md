@@ -15,3 +15,4 @@ This file prevents custom owner tasks and branch-only work from reusing PS numbe
 | PS-341 | Frontend compatibility helper audit | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removed saved Best Rate multi-shape proof helper fallback. |
 | PS-342 | Legacy rate display adapter cleanup | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removes frontend provider-money reconstruction from the legacy rate array adapter. |
 | PS-343 | RateBrowserModal money normalization cleanup | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removes Rate Browser frontend provider-money reconstruction; backend stamps rate-cost/customer aliases. |
+| PS-344 | Order row workflow shape cleanup | local cleanup | `codex/ps-ticket-hygiene-bridge-cleanup` | Landed/local only | Removes nested shippingModel bestRateWorkflow fallback from frontend action reader. |

@@ -67,13 +67,10 @@ function asBoolOrNull(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null
 }
 
-// Mirror the established precedence (orders-row-display getRowWorkflow): a nested shipping-model
-// workflow wins over the top-level one; both are tolerated because the row DTO carries it at the
-// top level while some wrapped shapes nest it.
 function readWorkflow(order: unknown): Record<string, unknown> | null {
   const rec = asRecord(order)
   if (!rec) return null
-  return asRecord(rec.bestRateWorkflow) ?? asRecord(asRecord(rec.shippingModel)?.bestRateWorkflow)
+  return asRecord(rec.bestRateWorkflow)
 }
 
 export function getOrderRowAllowedActions(order: unknown): OrderRowAllowedActions {
