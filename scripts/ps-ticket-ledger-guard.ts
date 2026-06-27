@@ -14,6 +14,7 @@ const ledgerPath = 'docs/ps-tickets/ps-ledger.md';
 assert(existsSync(ledgerPath), 'docs/ps-tickets/ps-ledger.md must exist');
 
 const ledger = read(ledgerPath);
+assert(ledger.includes('| PS-331 | PrepShip dead-code inventory + safe deletion plan |'), 'ledger must reserve PS-331 for dead-code inventory planning');
 assert(ledger.includes('| PS-337 | Best Rate remove second line |'), 'ledger must reserve PS-337 for best-rate second-line work');
 assert(
   ledger.includes('| PS-338 | Keep rates visible during browse refresh |'),
@@ -30,6 +31,10 @@ const packageJson = read('package.json');
 assert(
   !packageJson.includes('test:ps-337-ebay-api-testing-certification'),
   'eBay guard must not keep duplicate PS-337 package script',
+);
+assert(
+  packageJson.includes('test:ps-331-dead-code-inventory-safe-deletion-plan'),
+  'PS-331 dead-code inventory safe deletion plan guard must be registered',
 );
 assert(
   packageJson.includes('test:ps-339-ebay-api-testing-certification'),
@@ -60,6 +65,11 @@ assert(!existsSync('docs/ps-tickets/ps-337-ebay-api-testing-certification.md'), 
 assert(
   !existsSync('scripts/ps-337-ebay-api-testing-certification-guard.ts'),
   'duplicate PS-337 eBay guard must be renamed',
+);
+assert(existsSync('docs/ps-tickets/ps-331-dead-code-inventory-safe-deletion-plan.md'), 'PS-331 inventory doc must exist');
+assert(
+  existsSync('scripts/ps-331-dead-code-inventory-safe-deletion-plan-guard.ts'),
+  'PS-331 inventory guard must exist',
 );
 assert(existsSync('docs/ps-tickets/ps-339-ebay-api-testing-certification.md'), 'PS-339 eBay doc must exist');
 assert(existsSync('scripts/ps-339-ebay-api-testing-certification-guard.ts'), 'PS-339 eBay guard must exist');

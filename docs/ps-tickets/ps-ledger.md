@@ -4,6 +4,7 @@ This file prevents custom owner tasks and branch-only work from reusing PS numbe
 
 | PS | Title | Reference | Branch/Commit | Status | Notes |
 | --- | --- | --- | --- | --- | --- |
+| PS-331 | PrepShip dead-code inventory + safe deletion plan | Trello To Do (connector unavailable) | `codex/ps-ticket-hygiene-bridge-cleanup` | Blocked/local artifact only | Inventory and deletion gates only; no deletion performed. |
 | PS-333 | HUGRAB current-rate source of truth | https://trello.com/c/F8jpCPbp | `origin/codex/ps-333-wrapper-sot-cleanup` | Final Review | Backend rate SOT cleanup. |
 | PS-334 | House Rate column / customer Best Rate | https://trello.com/c/qoAI7EQn | `origin/codex/ps-334-house-rate-column-stable` | Final Review | House-rate display split. |
 | PS-335 | SOT guard pack / Rate Browser single-flight | https://trello.com/c/QMAdKM9v | `origin/codex/ps-335-sot-guard-pack` | Final Review | Guard pack plus single-flight branch history. |

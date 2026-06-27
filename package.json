@@ -304,6 +304,7 @@
     "test:ps-267-label-purchase-residual-audit": "tsx scripts/ps-267-label-purchase-residual-audit-guard.ts",
     "test:ps-266-best-rate-residual-audit": "tsx scripts/ps-266-best-rate-residual-audit-guard.ts",
     "test:ps-330-controlled-canary-certification": "tsx scripts/ps-330-controlled-canary-certification-guard.ts",
+    "test:ps-331-dead-code-inventory-safe-deletion-plan": "tsx scripts/ps-331-dead-code-inventory-safe-deletion-plan-guard.ts",
     "test:ps-326-carrier-account-identity-certification": "tsx scripts/ps-326-carrier-account-identity-certification-guard.ts",
     "test:ps-320-v2-api-client-transport": "tsx scripts/ps-320-v2-api-client-transport-guard.ts",
     "test:ps-321-ratebrowsermodal-thin-ui": "tsx scripts/ps-321-ratebrowsermodal-thin-ui-guard.ts",
