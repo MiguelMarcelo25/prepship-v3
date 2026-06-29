@@ -14,12 +14,16 @@ AI coding agents must also follow [AGENTS.md](AGENTS.md) (mirrored to `CLAUDE.md
 1. **Architecture placement notes** (see [ARCHITECTURE.md](ARCHITECTURE.md) and the
    [PR template](.github/pull_request_template.md)):
    - the business rule/workflow changed,
+   - the canonical backend/domain/read-model/policy owner,
+   - Current duplicated/unsafe owners,
    - **where bad, stale, incomplete, ambiguous, or less-than-perfect data could first have
      entered** the workflow, and why the fix moves the rule to the canonical owner rather
      than patching the symptom,
    - the canonical owner / source of truth (file + symbol) and why that layer,
    - which callers were updated to delegate,
+   - Wrapper/resolver/helper logic to delete or explicitly forbid,
    - duplicate logic removed or explicitly left as follow-up debt.
+   If a task or PR does not name the canonical owner, return a placement mismatch note before coding.
 2. **Boundary / source-of-truth tests** at the canonical owner — not only a UI snapshot.
    Add a workflow/API/browser test for the operator-visible symptom too.
 3. **Evidence:** the exact commands you ran with pass/fail results

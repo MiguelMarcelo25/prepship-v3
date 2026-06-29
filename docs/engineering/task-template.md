@@ -20,9 +20,21 @@ PII, tokens, or raw provider payloads). -->
 <!-- Where the relevant truth likely lives: services, policies, adapters, routes, DTOs,
 existing guards/tests. -->
 
-## Architecture placement
+## Architecture placement / source-of-truth gate
 
 > Fix the source of truth, not the symptom. Trace bad data to where it first entered.
+
+- **Business rule/workflow being changed:**
+- **Canonical backend/domain/read-model/policy owner** (file + symbol):
+- **Current duplicated/unsafe owners:**
+- **Where bad/stale/incomplete data can enter** (earliest point bad/stale/incomplete/
+  ambiguous data can enter: sync/webhook, import, provider payload, default/fallback,
+  cache write, input):
+- **Callers that must delegate to the owner:**
+- **Wrapper/resolver/helper logic to delete or explicitly forbid:**
+- **Frontend role: display/action only; no authoritative business logic:**
+- **Backend boundary tests required:**
+- **Workflow/UI proof required** (when operator-facing):
 
 - **Business rule / workflow changing:**
 - **Where imperfect data may enter** (earliest point bad/stale/incomplete/ambiguous data

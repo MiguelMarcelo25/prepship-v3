@@ -177,6 +177,21 @@ Before writing code for any non-trivial change, an AI agent MUST, in order:
    marketplace confirmation, billing, auth/scope, or shipped/cancelled safety, assume
    backend ownership until proven otherwise** — a frontend-only diff for these is rejected.
 
+### PS-336 task placement gate
+
+If a task does not name the canonical owner, return a placement mismatch note before coding.
+For every non-trivial task, capture:
+
+- Business rule/workflow being changed.
+- Canonical backend/domain/read-model/policy owner.
+- Current duplicated/unsafe owners.
+- Where bad/stale/incomplete data can enter.
+- Callers that must delegate to the owner.
+- Wrapper/resolver/helper logic to delete or explicitly forbid.
+- Frontend role: display/action only; no authoritative business logic.
+- Backend boundary tests required.
+- Workflow/UI proof required when operator-facing.
+
 > **Root-cause / imperfect-data rule:**
 > For every non-trivial change, identify where bad, stale, incomplete, ambiguous, or
 > less-than-perfect data can first enter the workflow. Do not patch only the visible

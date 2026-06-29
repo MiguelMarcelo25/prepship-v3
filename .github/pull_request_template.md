@@ -20,9 +20,13 @@ AGENTS.md (shipped/cancelled lockdown) before opening. Fill every section; delet
   **have entered** before this fix? (sync/webhook, import, provider payload,
   default/fallback, cache write, input boundary):
 - **Canonical owner / source of truth** (file + symbol):
+- **Current duplicated/unsafe owners:**
 - **Why is this the canonical source-of-truth owner:**
 - **Which callers now delegate to it:**
 - **What duplicate frontend/route/adapter logic was removed** (or marked as follow-up):
+- **Wrapper/resolver/helper logic to delete or explicitly forbid:**
+- **Frontend role: display/action only; no authoritative business logic:**
+- **Backend boundary tests required:**
 - **What boundary test proves the source-of-truth behavior** (path):
 - **Frontend/adapters stay thin consumers** (no money/label/inventory/fulfillment/auth/
   rate/marketplace decision moved into UI or adapter): yes / N/A — explain

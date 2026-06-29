@@ -18,7 +18,10 @@ nearest symptom.
 7. **Which boundary test proves the rule at the canonical owner?**
 8. **Which workflow / browser / API test proves the operator symptom is fixed?**
 
+If the task does not name the canonical owner, return a placement mismatch note before coding.
 If you cannot name the canonical owner, stop and find it before coding.
+
+The task/PR architecture block must also name the Wrapper/resolver/helper logic to delete or explicitly forbid before implementation begins.
 
 ## PR review checklist
 

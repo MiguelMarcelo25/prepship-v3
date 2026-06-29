@@ -486,6 +486,7 @@
     "test:ps-335-sot-guard-pack": "tsx scripts/ps-335-sot-guard-pack-guard.ts",
     "test:ps-335-rate-browser-singleflight": "tsx scripts/ps-335-rate-browser-singleflight-guard.ts",
     "test:ps-336-rate-browser-loading-cleanup": "tsx scripts/ps-336-rate-browser-loading-cleanup-guard.ts",
+    "test:ps-336-task-sot-gates": "tsx scripts/ps-336-task-sot-gates-guard.ts",
     "test:ps-ticket-ledger": "tsx scripts/ps-ticket-ledger-guard.ts",
     "test:ps-339-ebay-api-testing-certification": "tsx scripts/ps-339-ebay-api-testing-certification-guard.ts",
     "test:ps-339-rate-wrapper-sot": "tsx scripts/ps-339-rate-wrapper-sot-guard.ts",

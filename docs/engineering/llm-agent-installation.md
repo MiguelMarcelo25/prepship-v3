@@ -22,8 +22,10 @@ Read ARCHITECTURE.md and AGENTS.md before coding. For every non-trivial change:
    (they may display, validate input shape, or translate provider payloads, but must
    not own backend-critical business truth).
 5. Add boundary tests at the owner (plus a workflow/API/UI test for the symptom).
-6. Fill the PR's Architecture Placement section, including where bad data could have
-   entered and why this is the canonical source-of-truth owner.
+6. Fill the task/PR Architecture placement / source-of-truth gate, including where bad data
+   could have entered, why this is the canonical source-of-truth owner, and which wrapper
+   logic must be deleted or explicitly forbidden.
+If a task does not name the canonical owner, return a placement mismatch note before coding.
 If a frontend symptom affects money, rates, labels, inventory, marketplace confirmation,
 billing, auth/scope, or shipped/cancelled safety, assume backend ownership until proven
 otherwise.
@@ -46,7 +48,7 @@ otherwise.
 ## How to use it day to day
 
 1. Start the task by asking the agent to **name the canonical owner** before writing code.
-2. Require an **architecture placement note** (see
+2. Require an **Architecture placement / source-of-truth gate** (see
    [task-template.md](task-template.md) and the
    [PR template](../../.github/pull_request_template.md)).
 3. Require a **boundary test at the owner** plus a symptom test.
