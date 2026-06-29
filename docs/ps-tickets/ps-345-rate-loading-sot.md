@@ -33,6 +33,10 @@ interactive Rate Browser even when the operator only opened the page or modal.
 
 - Remove browser-owned passive live-rate constants, counters, workers, and
   overflow backfill handoff from `OrdersView.tsx`.
+- Add a read-only Awaiting observer for backend/sync-started rate backfill
+  jobs. It reads `/rates/backfill-best/latest`, attaches active jobs to the
+  existing job poller, and refetches rows as the backend resolves them without
+  starting hidden frontend live-rate work.
 - Keep explicit manual controls: Recalculate All, per-row Retry, side-panel
   Recalculate, and the Rate Browser button may still ask backend rate endpoints
   for live work.
@@ -51,6 +55,8 @@ npm run test:ps-345-rate-loading-sot
 The guard proves:
 
 - Awaiting no longer has a page-mount passive live-rate drain;
+- Awaiting observes backend/sync-started rate backfill jobs and reuses the
+  existing row-refresh poller;
 - Awaiting retry delegates to an explicit backend recalculate path;
 - Rate Browser open does not auto-promote cached probes into live fan-out;
 - the live Rate Browser request remains behind the explicit button;

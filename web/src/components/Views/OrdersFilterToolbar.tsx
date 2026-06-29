@@ -358,9 +358,9 @@ export function OrdersFilterToolbarBatchControls({
           <button
             type="button"
             onClick={() => void onRecalculateAll()}
-            // Busy state keys off recalcAllSummary (set ONLY for a manual click), not recalcAllJobId
-            // (also set for the silent passive overflow backfill) — so the background backfill leaves
-            // the button idle/clickable and only a deliberate click shows the spinner + disables.
+            // Busy state keys off recalcAllSummary (set ONLY for a manual click), not recalcAllJobId.
+            // Backend/sync-started rate backfill can be observed by OrdersView for row refresh without
+            // turning this operator button into a hidden background-job spinner.
             disabled={recalcAllSummary != null || total === 0}
             title="Re-rate ALL awaiting orders in the background — rows update as they resolve (no popup)"
             className={`

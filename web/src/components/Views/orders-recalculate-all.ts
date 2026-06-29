@@ -19,6 +19,25 @@ export type RecalculateAllJob = {
   message?: string
 }
 
+function normalizeRecalculateAllJob(raw: Record<string, unknown>, fallbackJobId?: string): RecalculateAllJob | null {
+  const jobId = typeof raw.jobId === 'string'
+    ? raw.jobId
+    : typeof raw.job_id === 'string'
+      ? raw.job_id
+      : fallbackJobId
+  if (!jobId) return null
+  return {
+    jobId,
+    status: String(raw.status ?? 'unknown'),
+    processed: typeof raw.processed === 'number' ? raw.processed : undefined,
+    total: typeof raw.total === 'number' ? raw.total : undefined,
+    updated: typeof raw.updated === 'number' ? raw.updated : undefined,
+    skipped: typeof raw.skipped === 'number' ? raw.skipped : undefined,
+    failed: typeof raw.failed === 'number' ? raw.failed : undefined,
+    message: typeof raw.message === 'string' ? raw.message : undefined,
+  }
+}
+
 /** Kick the backend backfill over ALL awaiting orders. Returns the job id. */
 // PS-293: maxAgeHours selects the backend rating mode. 0 = the manual "Recalculate All" force-live
 // fan-out (re-rate every awaiting order). A POSITIVE value is the cache-friendly passive backfill the
@@ -32,20 +51,25 @@ export async function startRecalculateAllBestRates(maxAgeHours = 0): Promise<{ j
 /** Poll the backend job. */
 export async function fetchRecalculateAllJob(jobId: string): Promise<RecalculateAllJob> {
   const job = await api.get<Record<string, unknown>>(`/rates/backfill-best/status/${encodeURIComponent(jobId)}`)
-  return {
-    jobId,
-    status: String(job.status ?? 'unknown'),
-    processed: typeof job.processed === 'number' ? job.processed : undefined,
-    total: typeof job.total === 'number' ? job.total : undefined,
-    updated: typeof job.updated === 'number' ? job.updated : undefined,
-    skipped: typeof job.skipped === 'number' ? job.skipped : undefined,
-    failed: typeof job.failed === 'number' ? job.failed : undefined,
-    message: typeof job.message === 'string' ? job.message : undefined,
-  }
+  return normalizeRecalculateAllJob(job, jobId) ?? { jobId, status: 'unknown' }
+}
+
+/** Observe the backend/latest job started by sync/cron/manual paths without starting new rate work. */
+export async function fetchLatestRecalculateAllJob(): Promise<RecalculateAllJob | null> {
+  const payload = await api.get<{
+    job?: Record<string, unknown> | null
+    durableJob?: Record<string, unknown> | null
+  }>('/rates/backfill-best/latest')
+  const raw = payload.job && typeof payload.job === 'object'
+    ? payload.job
+    : payload.durableJob && typeof payload.durableJob === 'object'
+      ? payload.durableJob
+      : null
+  return raw ? normalizeRecalculateAllJob(raw) : null
 }
 
 export function isRecalculateAllJobDone(job: RecalculateAllJob): boolean {
-  return job.status !== 'running' && job.status !== 'queued'
+  return job.status !== 'pending' && job.status !== 'running' && job.status !== 'queued'
 }
 
 /** One short status line for the toolbar chip / completion toast. */

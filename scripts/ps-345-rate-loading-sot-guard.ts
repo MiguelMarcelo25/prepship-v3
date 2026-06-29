@@ -32,6 +32,7 @@ function sliceBetween(source: string, startNeedle: string, endNeedle: string): s
 }
 
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
+const recalculateAll = read('web/src/components/Views/orders-recalculate-all.ts');
 const modal = read('web/src/components/RateBrowserModal.tsx');
 const packageJson = read('package.json');
 const ledger = read('docs/ps-tickets/ps-ledger.md');
@@ -73,6 +74,27 @@ check(
 check(
   'OrdersView still keeps explicit manual Recalculate All backend-owned',
   /async function handleRecalculateAll\(\)[\s\S]{0,260}startRecalculateAllBestRates\(\)/.test(ordersView),
+);
+
+check(
+  'OrdersView observes backend/sync-started rate backfill jobs and attaches them to the row refresh poller',
+  /fetchLatestRecalculateAllJob/.test(ordersView) &&
+    /currentStatus !== 'awaiting_shipment'/.test(ordersView) &&
+    /setRecalcAllJobId\(job\.jobId\)/.test(ordersView) &&
+    /void attachLatestRateBackfillJob\(\)/.test(ordersView),
+);
+
+check(
+  'Recalculate All helper can read the backend latest active/durable backfill job',
+  /export async function fetchLatestRecalculateAllJob\(\)/.test(recalculateAll) &&
+    /\/rates\/backfill-best\/latest/.test(recalculateAll) &&
+    /durableJob/.test(recalculateAll) &&
+    /normalizeRecalculateAllJob/.test(recalculateAll),
+);
+
+check(
+  'Recalculate All job polling treats pending backend backfill jobs as active',
+  /export function isRecalculateAllJobDone\(job: RecalculateAllJob\): boolean \{[\s\S]{0,180}job\.status !== 'pending'/.test(recalculateAll),
 );
 
 check(

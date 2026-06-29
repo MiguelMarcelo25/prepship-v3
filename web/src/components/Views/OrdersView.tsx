@@ -56,6 +56,7 @@ import { classifyPrintQueuePreflightFromAwaitingState } from './print-queue-pref
 import { classifyPrintQueuePreflightForSavedRate } from './print-queue-preflight-saved-rate'
 import {
   fetchRecalculateAllJob,
+  fetchLatestRecalculateAllJob,
   isRecalculateAllJobDone,
   startRecalculateAllBestRates,
   summarizeRecalculateAllJob,
@@ -516,8 +517,9 @@ export default function OrdersView({
         const job = await fetchRecalculateAllJob(recalcAllJobId)
         if (cancelled) return
         recalcAllPollFailures = 0
-        // Only an operator-started Recalculate All reaches this poller now; PS-345 removed the
-        // frontend passive overflow handoff so hidden page-load jobs cannot share this state.
+        // PS-345 follow-up: this poller handles operator-started Recalculate All AND backend/sync-started
+        // rate backfill jobs discovered through /rates/backfill-best/latest. It only observes/refetches;
+        // it never starts hidden frontend live-rate work.
         if (recalcAllUserInitiatedRef.current) setRecalcAllSummary(summarizeRecalculateAllJob(job))
         if (isRecalculateAllJobDone(job)) {
           setRecalcAllJobId(null)
@@ -560,6 +562,29 @@ export default function OrdersView({
     return () => { cancelled = true; clearInterval(timer); settleTimers.forEach(clearTimeout) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recalcAllJobId])
+
+  useEffect(() => {
+    if (currentStatus !== 'awaiting_shipment' || recalcAllJobId) return
+    let cancelled = false
+    async function attachLatestRateBackfillJob() {
+      try {
+        const job = await fetchLatestRecalculateAllJob()
+        if (cancelled || !job) return
+        if (job.status === 'pending' || job.status === 'running' || job.status === 'queued') {
+          recalcAllUserInitiatedRef.current = false
+          setRecalcAllJobId(job.jobId)
+        }
+      } catch {
+        // Read-only observer. A transient status miss must not block the orders table.
+      }
+    }
+    void attachLatestRateBackfillJob()
+    const timer = setInterval(() => { void attachLatestRateBackfillJob() }, 15_000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [currentStatus, recalcAllJobId])
 
   // PS-181: admin identity is BACKEND-owned — GET /users/me answers via the canonical
   // isAdminEmail (src/lib/admin-emails.ts). The FE never hardcodes admin emails and
