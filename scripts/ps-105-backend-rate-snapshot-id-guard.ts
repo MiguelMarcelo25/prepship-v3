@@ -120,15 +120,21 @@ check('selectedRateKey leaks no cost', !/6\.89|9\.21|6890|9210/.test(keyA) && !/
 
 // ── 9. Slice-2 wiring: emit on the rate path, accept (prefer + fallback) at purchase. ──
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
 const labelsRoute = readFileSync('src/routes/labels.ts', 'utf8');
 const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
 // PS-244: /rates/browse emits the snapshot ref + selection keys via the SINGLE finalizer
-// (finalizeBestRateWithQuote) now, not inline storeRateQuoteSnapshot/withSelectedRateKeys.
+// (finalizeBestRateWithQuote). PS-346 moved that finalizer behind the shared backend
+// browse producer so both /rates/browse and /rates/browse/workflow use the same path.
 check('rates /browse emits rateQuoteId + selectedRateKeys via the single finalizer',
-  /finalizeBestRateWithQuote\(/.test(ratesRoute) && /responseRates = finalized\.rates/.test(ratesRoute) && /rateQuoteId/.test(ratesRoute));
+  /import \{\s*produceRateBrowsePayload\s*\} from ['"]\.\.\/services\/rate-browse-response-producer['"]/.test(ratesRoute) &&
+    /app\.post\('\/browse', zValidator\('json', browseBody\), async \(c\) =>[\s\S]*?const payload = await produceRateBrowsePayload\(\{[\s\S]*?return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute) &&
+    /finalizeBestRateWithQuote\(/.test(rateBrowseProducer) &&
+    /responseRates = finalized\.rates/.test(rateBrowseProducer) &&
+    /rateQuoteId/.test(rateBrowseProducer));
 check('rates /browse stamps snapshot completeness into the single finalizer',
-  /finalizeBestRateWithQuote\(\{[\s\S]*?bestRateComplete,/.test(ratesRoute));
+  /finalizeBestRateWithQuote\(\{[\s\S]*?bestRateComplete,/.test(rateBrowseProducer));
 check('createLabelV2 boundary uses the unified rate-selection resolver',
   /await assertLabelPurchaseRateSelection\(/.test(labelsService));
 check('createLabelV2 input accepts rateQuoteId + selectedRateKey',
@@ -216,7 +222,7 @@ check('backend createLabelV2 owns the direct-carrier buy behind the strict proof
   /createDirectCarrierLabelForOrder\(/.test(labelsServiceForRelocation) &&
   /await assertLabelPurchaseRateSelection\(\{[\s\S]{0,200}?selectedRateProof: body\.selectedRateProof,/.test(labelsServiceForRelocation));
 check('print-queue routes the FE intent (order.label proof/binding) into createLabelV2',
-  /createLabelV2\(\{\s*\.\.\.order\.label,/.test(printQueueService));
+  /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,/.test(printQueueService));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-105 backend rate snapshot id guard (${failures} failing)`);
