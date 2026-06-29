@@ -225,7 +225,9 @@ function queueSendJobStatusKey(jobId: string): string {
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
-const QUEUE_SEND_ORDER_TIMEOUT_MS = 30_000;
+const QUEUE_SEND_ORDER_TIMEOUT_MS = 90_000;
+const QUEUE_SEND_IN_PROGRESS_RECOVERY_MS = 60_000;
+const QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS = 1_500;
 
 export class PrintQueueLabelUrlError extends Error {
   status = 400 as const;
@@ -689,6 +691,24 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
   });
 }
 
+function isLabelPurchaseInProgressError(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'LABEL_PURCHASE_IN_PROGRESS';
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForExistingQueueableLabel(orderId: number): Promise<string | null> {
+  const deadline = Date.now() + QUEUE_SEND_IN_PROGRESS_RECOVERY_MS;
+  while (Date.now() < deadline) {
+    const labelUrl = await findExistingQueueableLabelForOrder(orderId);
+    if (labelUrl) return labelUrl;
+    await delay(QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS);
+  }
+  return findExistingQueueableLabelForOrder(orderId);
+}
+
 async function repairMissingConfirmationForQueuedLabel(orderId: number | string): Promise<void> {
   const parsedOrderId = Number(orderId);
   if (!Number.isInteger(parsedOrderId) || parsedOrderId <= 0) return;
@@ -747,12 +767,19 @@ async function processQueueSendOrder(
         labelUrl = created.labelUrl;
         trackingNumber = created.trackingNumber;
       } catch (err) {
-        existingLabelUrl = getExistingLabelUrl(err);
-        // Per user override unlock shipped data on 2026-05-23: recover labels
-        // that were persisted before a later post-label queue step failed.
-        const recoverCreatedLabelUrl = existingLabelUrl ?? await findExistingQueueableLabelForOrder(order.orderId);
-        if (!recoverCreatedLabelUrl) throw err;
-        labelUrl = recoverCreatedLabelUrl;
+        if (isLabelPurchaseInProgressError(err)) {
+          const recoveredAfterInProgress = await waitForExistingQueueableLabel(order.orderId);
+          if (recoveredAfterInProgress) {
+            labelUrl = recoveredAfterInProgress;
+          } else throw err;
+        } else {
+          existingLabelUrl = getExistingLabelUrl(err);
+          // Per user override unlock shipped data on 2026-05-23: recover labels
+          // that were persisted before a later post-label queue step failed.
+          const recoverCreatedLabelUrl = existingLabelUrl ?? await findExistingQueueableLabelForOrder(order.orderId);
+          if (!recoverCreatedLabelUrl) throw err;
+          labelUrl = recoverCreatedLabelUrl;
+        }
       }
     }
   }
