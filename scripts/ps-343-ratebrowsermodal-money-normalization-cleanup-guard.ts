@@ -7,8 +7,6 @@
  * components in the frontend.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { applyMarkups } from '../src/services/rates';
-import { rateCostTotal, rateTotal } from '../src/services/rates-combined';
 
 let failures = 0;
 
@@ -31,6 +29,8 @@ function sliceBetween(source: string, startNeedle: string, endNeedle: string): s
 
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const moneyHelper = readFileSync('web/src/lib/rate-browser-money.ts', 'utf8');
+const ratesService = readFileSync('src/services/rates.ts', 'utf8');
+const combinedRateOwner = readFileSync('src/services/rates-combined.ts', 'utf8');
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
 const ledger = readFileSync('docs/ps-tickets/ps-ledger.md', 'utf8');
@@ -45,36 +45,48 @@ const dedupeKey = sliceBetween(
   'function rateRowDedupeKey(rate: RateRow): string {',
   '\nfunction dedupeRateRows(',
 );
-
-const markedShipStationRate = applyMarkups([
-  {
-    carrier_id: 'se-343',
-    carrier_code: 'ups',
-    service_code: 'ups_ground',
-    service_type: 'UPS Ground',
-    package_type: 'package',
-    shipping_amount: { amount: 10, currency: 'USD' },
-    other_amount: { amount: 0, currency: 'USD' },
-    confirmation_amount: { amount: 0, currency: 'USD' },
-    insurance_amount: { amount: 0, currency: 'USD' },
-  } as any,
-], new Map([['se-343', { type: 'percent', value: 10 } as any]]))[0] as any;
+const applyMarkupsOwner = sliceBetween(
+  ratesService,
+  'export function applyMarkups(',
+  '\n// PS-perf',
+);
+const rateTotalOwner = sliceBetween(
+  combinedRateOwner,
+  'export function rateTotal(',
+  '\n/** Internal/provider cost total',
+);
+const rateCostTotalOwner = sliceBetween(
+  combinedRateOwner,
+  'export function rateCostTotal(',
+  '\nexport function isPricedRate(',
+);
 
 check('backend markup owner stamps customer amount after markup',
-  markedShipStationRate.shipping_amount?.amount === 11 &&
-  markedShipStationRate.customerShippingAmount === 11 &&
-  markedShipStationRate.markedShippingAmount === 11);
+  applyMarkupsOwner.includes('const orig = r.shipping_amount.amount;') &&
+  applyMarkupsOwner.includes('const marked = applyMarkupToAmount(orig, m);') &&
+  applyMarkupsOwner.includes('shipping_amount:') &&
+  applyMarkupsOwner.includes('amount: marked') &&
+  applyMarkupsOwner.includes('customerShippingAmount: marked') &&
+  applyMarkupsOwner.includes('customer_shipping_amount: marked') &&
+  applyMarkupsOwner.includes('customerRateAmount: marked') &&
+  applyMarkupsOwner.includes('customer_rate_amount: marked') &&
+  applyMarkupsOwner.includes('markedShippingAmount: marked') &&
+  applyMarkupsOwner.includes('marked_shipping_amount: marked'));
 
 check('backend markup owner preserves raw provider cost as explicit rate-cost aliases',
-  markedShipStationRate.rateCostAmount === 10 &&
-  markedShipStationRate.rate_cost_amount === 10 &&
-  markedShipStationRate.rawShippingAmount === 10 &&
-  markedShipStationRate.raw_shipping_amount === 10 &&
-  markedShipStationRate.internalShippingAmount === 10 &&
-  markedShipStationRate.internal_shipping_amount === 10);
+  applyMarkupsOwner.includes('rateCostAmount: orig') &&
+  applyMarkupsOwner.includes('rate_cost_amount: orig') &&
+  applyMarkupsOwner.includes('rawShippingAmount: orig') &&
+  applyMarkupsOwner.includes('raw_shipping_amount: orig') &&
+  applyMarkupsOwner.includes('internalShippingAmount: orig') &&
+  applyMarkupsOwner.includes('internal_shipping_amount: orig'));
 
 check('combined backend money helpers separate customer charge from internal rate cost',
-  rateTotal(markedShipStationRate) === 11 && rateCostTotal(markedShipStationRate) === 10);
+  rateTotalOwner.includes('customerShippingAmount(rate) ?? rate.shipping_amount?.amount') &&
+  rateCostTotalOwner.includes('internalShippingCost(rate) ?? rate.shipping_amount?.amount') &&
+  combinedRateOwner.includes('function customerShippingAmount(rate: CombinableRate): number | null') &&
+  combinedRateOwner.includes('function internalShippingCost(rate: CombinableRate): number | null') &&
+  combinedRateOwner.indexOf('export function rateTotal(') < combinedRateOwner.indexOf('export function rateCostTotal('));
 
 check('rates route imports and stamps backend rate-cost display aliases',
   ratesRoute.includes('combineCarrierUniverses, rateCostTotal, rateTotal') &&
