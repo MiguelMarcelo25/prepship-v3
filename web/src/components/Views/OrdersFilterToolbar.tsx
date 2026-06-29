@@ -530,7 +530,17 @@ export function OrdersFilterToolbarExport({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
-              <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{queueToolbarProgress.label}</span>
+              <span
+                style={{
+                  fontWeight: 800,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {queueToolbarProgress.label}
+              </span>
               <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>

@@ -18,6 +18,7 @@ const v2HooksPath = path.join(root, 'web/src/hooks/useOrders.ts')
 const ordersRoutePath = path.join(root, 'src/routes/orders.ts')
 const homePath = path.join(root, 'web/src/Home.tsx')
 const shellCssPath = path.join(root, 'web/src/app-shell.css')
+const ordersFilterToolbarPath = path.join(root, 'web/src/components/Views/OrdersFilterToolbar.tsx')
 // PS-166 (Wave 2d): the batch-actions panel JSX moved VERBATIM to its own
 // strict <OrdersBatchPanel> component (OrdersView passes the state/handlers
 // as props) — batch-panel string pins read there; the handler DEFINITIONS
@@ -29,7 +30,7 @@ const batchPanelPath = path.join(root, 'web/src/components/Views/OrdersBatchPane
 // props) — the row-click pin reads there; openOrderDetails stays in OrdersView.
 const ordersTablePath = path.join(root, 'web/src/components/Views/OrdersTable.tsx')
 
-const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, batchPanel, ordersTable] = await Promise.all([
+const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, ordersFilterToolbar, batchPanel, ordersTable] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(queueDrawerPath, 'utf8'),
   readFile(selectionToolbarPath, 'utf8'),
@@ -38,6 +39,7 @@ const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, or
   readFile(ordersRoutePath, 'utf8'),
   readFile(homePath, 'utf8'),
   readFile(shellCssPath, 'utf8'),
+  readFile(ordersFilterToolbarPath, 'utf8'),
   readFile(batchPanelPath, 'utf8'),
   readFile(ordersTablePath, 'utf8'),
 ])
@@ -130,6 +132,15 @@ const checks = [
       normalizedOrdersView.includes('void hydrateQueue()\n    if (!queueOpen)') &&
       ordersView.includes('if (queueOpen) setQueueLoading(true)') &&
       ordersView.includes('if (!cancelled && queueOpen)'),
+  },
+  {
+    name: 'queue progress chip cannot overlap the centered Close Queue button',
+    pass:
+      home.includes('translate(calc(-100% - 128px), -50%)') &&
+      home.includes('Right edge anchored 128px left of center') &&
+      ordersFilterToolbar.includes("textOverflow: 'ellipsis'") &&
+      ordersFilterToolbar.includes("overflow: 'hidden'") &&
+      ordersFilterToolbar.includes("minWidth: 0"),
   },
   {
     name: 'Confirm Printed stays disabled until queued labels are printed first',

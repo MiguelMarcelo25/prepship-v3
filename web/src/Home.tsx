@@ -834,11 +834,11 @@ export default function Home() {
             <>
               {/* Slot for the "Sending to queue" progress widget — OrdersView portals it here so
                   it sits immediately LEFT of the centered Queue button (DJ request 2026-06-11).
-                  Right edge anchored 76px left of center (half the button + a gap). */}
+                  Right edge anchored 128px left of center so the wider Close Queue state cannot overlap. */}
               <div
                 id="queue-progress-slot"
                 className="absolute left-1/2 top-1/2 z-10 hidden md:block"
-                style={{ transform: 'translate(calc(-100% - 76px), -50%)' }}
+                style={{ transform: 'translate(calc(-100% - 128px), -50%)' }}
               />
             <button
               id="pq-toggle-btn"
