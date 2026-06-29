@@ -2865,7 +2865,6 @@ export const apiClient = {
   browseRates(data: Record<string, unknown>): Promise<any> {
     return postRateBrowseTransport(data);
   },
-  // ─── Analysis ──────────────────────────────────────────────────────────────
 
   // Server-aggregated daily order counts split by status. Replaces the
   // previous Dashboard pattern of paginating through every order in the
@@ -2893,6 +2892,27 @@ export const apiClient = {
       { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>, meta: null }
     );
   },
+
+  startRateBrowseWorkflow(data: Record<string, unknown>): Promise<any> {
+    const body = translateRatePayloadToV4(data);
+    const requestedCarrierIds = Array.isArray(body.carrierIds)
+      ? body.carrierIds.map((value) => String(value)).filter(Boolean)
+      : [];
+    const preferredCarrierId =
+      typeof body.preferredCarrierId === 'string'
+        ? body.preferredCarrierId
+        : requestedCarrierIds[0];
+    return api.post<any>('/rates/browse/workflow', {
+      ...body,
+      ...(requestedCarrierIds.length ? { carrierIds: requestedCarrierIds } : {}),
+      ...(preferredCarrierId ? { preferredCarrierId } : {}),
+    });
+  },
+
+  fetchRateBrowseWorkflow(jobId: string): Promise<any> {
+    return api.get<any>(`/rates/browse/workflow/${encodeURIComponent(jobId)}`);
+  },
+  // ─── Analysis ──────────────────────────────────────────────────────────────
 
   // Per-client daily order COUNT (and value) for the Daily Orders Trend
   // multi-line ("All Clients") view. Returns long rows; the caller pivots to

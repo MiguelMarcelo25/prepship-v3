@@ -7,29 +7,13 @@ import { rateCache } from '../db/schema/rates';
 import {
   CACHE_TTL_MS,
   getCarrierAccountsForRateContext,
-  getDirectCarrierRatesForRateInput,
   getRates,
   loadDirectCarrierVisibilityEvaluator,
   rateCacheKey,
   resolveRateInput,
   sanitizeRateCacheRowForEligibility,
 } from '../services/rates';
-import { combineCarrierUniverses, rateCostTotal, rateTotal } from '../services/rates-combined';
-import { buildRateBrowseTimingDiagnostics } from '../services/rate-browser-timing-diagnostics';
-// PS-293: the SHIPP house-tuple stamp is the ONE owner shared with the rates-backfill, so a HUGRAB
-// house order gets the same nextBestNonHouseRate/houseMargin whether it was rated by /rates/browse or
-// the backend backfill (no "two competing rate truths").
-import { stampHouseTuple } from '../services/shipping-workflow/house-tuple-stamp';
 import { redactRateBrowserMoney } from '../services/rate-browser-money-redaction';
-import {
-  buildResidentialEvidenceFromOrder,
-  residentialEvidenceRateInput,
-  type ResidentialEvidence,
-} from '../services/shipping-workflow/residential-evidence';
-// PS-276 (slice 2b-2b): the live address-classification resolver (cache-or-USPS), env-gated OFF.
-import { resolveAddressClassification } from '../services/shipping-workflow/resolve-address-classification';
-import { planStrictRecalculateDecision } from '../services/rates-recalculate';
-import { persistStrictRecalculateOutcome } from '../services/rates-recalculate-persist';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   getActiveBackfillJob,
@@ -51,33 +35,15 @@ import {
   isBestRateComplete,
   type BestRateWorkflowCarrierStatus,
 } from '../services/shipping-workflow/best-rate-workflow-dto';
+import { storeRateQuoteSnapshot } from '../services/shipping-workflow/rate-quote-snapshot-store';
 import {
-  finalizeBestRateWithQuote,
-  storeRateQuoteSnapshot,
-  withSelectedRateKeys,
-  selectedRateOpaqueKey,
-  BACKEND_RATE_PROOF_SOURCE,
-} from '../services/shipping-workflow/rate-quote-snapshot-store';
-import {
-  getCarrierEligibilityMode,
-  evaluateOrderCarrierEligibility,
-} from '../services/shipping-workflow/carrier-eligibility-policy';
-import {
-  buildRateBrowseSingleFlightKey,
-  runRateBrowseSingleFlight,
-} from '../services/rate-browse-singleflight';
-import {
-  resolveHugrabLabelPurchasePreflight,
-  resolveShippCustomsValueProofSource,
-} from '../services/shipping-workflow/hugrab-label-purchase-preflight';
+  getRateBrowseWorkflow,
+  startRateBrowseWorkflow,
+} from '../services/rate-browse-workflow';
+import { produceRateBrowsePayload } from '../services/rate-browse-response-producer';
+import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display-fields';
 import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
-import {
-  isHugrabShippingContext,
-  SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-} from '../lib/shipping-service-eligibility';
 import { orderOverrides, orders } from '../db/schema/orders';
-import { clients } from '../db/schema/clients';
-import { isEbayMarketplaceOrder } from '../services/ebay-order-detection';
 
 const app = new Hono();
 
@@ -173,169 +139,6 @@ async function selectRateCachePublicRowsByWeightZip(weightOz: number, toZip: str
       .limit(25);
     return rows.map((row) => ({ ...row, diagnostics: null }));
   }
-}
-
-// PS-277 (slice 1): browse-to-SOT writeback canary. OFF by default — when 'on', a PLAIN browse
-// (modal open) that returns a fresh LIVE complete best for an awaiting order reconciles the
-// persisted SOT, so opening the Rate Browser corrects the BEST RATE column instead of leaving a
-// stale number beside the live one. Flip after a canary (live write on a high-frequency endpoint).
-function browseSotWritebackEnabled(): boolean {
-  return process.env.BROWSE_SOT_WRITEBACK === 'on';
-}
-
-function hugrabShippCustomsValueProofEnabled(): boolean {
-  return process.env.HUGRAB_SHIPP_CUSTOMS_VALUE_PROOF === 'on';
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function readText(value: unknown): string | null {
-  if (value == null) return null;
-  if (typeof value === 'string' || typeof value === 'number') {
-    const text = String(value).trim();
-    return text ? text : null;
-  }
-  return null;
-}
-
-function readMoneyObjectAmount(value: unknown): number {
-  if (!isPlainRecord(value)) return 0;
-  const amount = Number(value.amount ?? 0);
-  return Number.isFinite(amount) ? amount : 0;
-}
-
-function readFiniteRateNumber(value: unknown): number | null {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount : null;
-}
-
-function roundRateMoney(value: number): number {
-  return Math.round(Math.max(0, value) * 100) / 100;
-}
-
-function toRateProviderAccountId(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value !== 'string') return null;
-  const match = value.match(/^se-(\d+)$/i);
-  const parsed = Number.parseInt(match?.[1] ?? value, 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<string, unknown> {
-  const otherCost = roundRateMoney(
-    readMoneyObjectAmount(rate.other_amount) +
-    readMoneyObjectAmount(rate.confirmation_amount) +
-    readMoneyObjectAmount(rate.insurance_amount)
-  );
-  const total = roundRateMoney(rateTotal(rate));
-  const rateCostAmount = roundRateMoney(rateCostTotal(rate));
-  const shipmentCost = roundRateMoney(total - otherCost);
-  const carrierCode = readText(rate.carrierCode ?? rate.carrier_code ?? rate.provider ?? null);
-  const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? rate.service ?? null);
-  const serviceName = readText(rate.serviceName ?? rate.service_type ?? rate.serviceCode ?? rate.service_code ?? null);
-  const carrierNickname = readText(
-    rate.carrierNickname ??
-    rate.carrier_nickname ??
-    rate.providerAccountNickname ??
-    rate.accountNickname ??
-    rate.accountIdentity ??
-    rate._carrierName ??
-    null
-  );
-  const shippingProviderId = toRateProviderAccountId(
-    rate.shippingProviderId ?? rate.providerAccountId ?? rate.carrier_id ?? null
-  );
-
-  return {
-    ...rate,
-    ...(carrierCode ? { carrierCode } : {}),
-    ...(serviceCode ? { serviceCode } : {}),
-    ...(serviceName ? { serviceName } : {}),
-    ...(carrierNickname ? { carrierNickname } : {}),
-    ...(shippingProviderId != null ? { shippingProviderId } : {}),
-    amount: readFiniteRateNumber(rate.amount) ?? total,
-    shipmentCost: readFiniteRateNumber(rate.shipmentCost) ?? shipmentCost,
-    otherCost: readFiniteRateNumber(rate.otherCost) ?? otherCost,
-    customerRateAmount: readFiniteRateNumber(rate.customerRateAmount) ?? readFiniteRateNumber(rate.customer_rate_amount) ?? total,
-    customer_rate_amount: readFiniteRateNumber(rate.customer_rate_amount) ?? readFiniteRateNumber(rate.customerRateAmount) ?? total,
-    rateCostAmount: readFiniteRateNumber(rate.rateCostAmount) ?? readFiniteRateNumber(rate.rate_cost_amount) ?? rateCostAmount,
-    rate_cost_amount: readFiniteRateNumber(rate.rate_cost_amount) ?? readFiniteRateNumber(rate.rateCostAmount) ?? rateCostAmount,
-    secondBestRate: isPlainRecord(rate.secondBestRate)
-      ? stampRateBrowserDisplayAlias(rate.secondBestRate)
-      : rate.secondBestRate,
-  };
-}
-
-function stampRateBrowserDisplayAliases<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((entry) => (
-      isPlainRecord(entry) ? stampRateBrowserDisplayAlias(entry) : entry
-    )) as T;
-  }
-  if (isPlainRecord(value)) {
-    return stampRateBrowserDisplayAlias(value) as T;
-  }
-  return value;
-}
-
-function readRateInsuranceCost(rate: Record<string, unknown>): number {
-  const meta = isPlainRecord(rate.insuranceCost) ? rate.insuranceCost : null;
-  const metaAmount = Number(meta?.amount ?? NaN);
-  if (Number.isFinite(metaAmount)) return metaAmount;
-  return readMoneyObjectAmount(rate.insurance_amount);
-}
-
-function readRateInsuranceProvenance(rate: Record<string, unknown>): string | null {
-  const meta = isPlainRecord(rate.insuranceCost) ? rate.insuranceCost : null;
-  return readText(meta?.provenance ?? rate.insuranceProvenance ?? rate.insurance_provenance ?? null);
-}
-
-function stampHugrabCoverageDisplayFields<T extends Record<string, unknown>>(
-  rate: T,
-  context: {
-    isHugrab: boolean;
-    insuranceProvider: string | null;
-    insuredValue: number | null;
-    shippCustomsValueProofEnabled: boolean;
-  },
-): T {
-  const provider = readText(rate.provider ?? rate.carrierProvider ?? rate.carrier_code ?? null);
-  const accountIdentity = readText(
-    rate.accountIdentity ?? rate.carrierNickname ?? rate.carrier_nickname ?? rate._carrierName ?? null,
-  );
-  const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? null);
-  const proofSource = resolveShippCustomsValueProofSource({
-    enabled: context.shippCustomsValueProofEnabled,
-    provider,
-    accountIdentity,
-    serviceCode,
-    insuredValue: context.insuredValue,
-  });
-  const preflight = resolveHugrabLabelPurchasePreflight({
-    isHugrab: context.isHugrab,
-    insuranceProvider: context.insuranceProvider,
-    insuredValue: context.insuredValue,
-    insuranceCost: readRateInsuranceCost(rate),
-    insuranceProvenance: readRateInsuranceProvenance(rate),
-    provider,
-    accountIdentity,
-    serviceCode,
-    isDirectVerifiedAccount: context.insuranceProvider === 'carrier' && provider !== 'shipp',
-    insuranceCoverageProofSource: proofSource,
-  });
-  return {
-    ...rate,
-    insuranceProvider: context.insuranceProvider,
-    insuredValue: context.insuredValue,
-    insuranceCoverageStatus: preflight.status,
-    insuranceBadgeLabel: preflight.insuranceBadgeLabel,
-    insuranceBadgeTone: preflight.insuranceBadgeTone,
-    insuranceCoverageProofSource: preflight.insuranceCoverageProofSource,
-    hugrabPurchaseAllowed: preflight.allow,
-    hugrabPurchaseBlockReason: preflight.status === 'not_required' ? '' : preflight.reason,
-  };
 }
 
 function canViewRateFinancials(c: Context): boolean {
@@ -455,6 +258,69 @@ function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?
   return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
 }
 
+function publicRateBrowseWorkflowSnapshot(
+  snapshot: Awaited<ReturnType<typeof startRateBrowseWorkflow>>,
+  canViewFinancials: boolean,
+) {
+  const result = snapshot.result
+    ? publicRatesResult(snapshot.result as { rates?: unknown; bestRate?: unknown; secondBestRate?: unknown }, canViewFinancials)
+    : null;
+  return {
+    job_id: snapshot.jobId,
+    status: snapshot.phase,
+    progress: {
+      total_carriers: snapshot.totalCarriers,
+      completed_carriers: snapshot.completedCarriers,
+      successful_carriers: snapshot.successfulCarriers,
+      failed_carriers: snapshot.failedCarriers,
+      rates_count: snapshot.ratesCount,
+    },
+    message: snapshot.message,
+    request_key: snapshot.requestKey,
+    order_id: snapshot.orderId,
+    result,
+    diagnostics: snapshot.diagnostics,
+    error: snapshot.error,
+    started_at: snapshot.startedAt,
+    updated_at: snapshot.updatedAt,
+    finished_at: snapshot.finishedAt,
+  };
+}
+
+app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
+  const body = normalizeRateShipFromOrigin(c.req.valid('json'));
+  const canViewFinancials = canViewRateFinancials(c);
+
+  if (body.orderId) {
+    const browseScope = scopeFromContext(c);
+    const [inScope] = await db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(and(eq(orders.id, body.orderId), orderScopePredicate(browseScope)))
+      .limit(1);
+    if (!inScope) return c.json({ error: 'Order not found' }, 404);
+  }
+
+  const snapshot = await startRateBrowseWorkflow({
+    body: body as Record<string, unknown>,
+    canViewFinancials,
+    orderId: body.orderId ?? null,
+    requestKey: null,
+    run: () => produceRateBrowsePayload({
+      body,
+      canViewFinancials,
+      browseStartedAt: Date.now(),
+    }),
+  });
+  return c.json(publicRateBrowseWorkflowSnapshot(snapshot, canViewFinancials));
+});
+
+app.get('/browse/workflow/:jobId', async (c) => {
+  const snapshot = await getRateBrowseWorkflow(c.req.param('jobId'));
+  if (!snapshot) return c.json({ error: 'Rate browse workflow job not found' }, 404);
+  return c.json(publicRateBrowseWorkflowSnapshot(snapshot, canViewRateFinancials(c)));
+});
+
 // PS-203 (stage 2): does the cached row's diagnostic set cover any DIRECT
 // carrier (synthetic se-1xxxxxxx ids ≥ 10,000,000)? Today's rate_cache rows are
 // ShipStation-only, so this is false — but stage 3's combined cache rows will
@@ -520,9 +386,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
   // PS-250 (Card 5): an order-scoped browse must belong to the caller. A restricted
-  // (client_user) caller passing another tenant's orderId gets 404 — blocking the
-  // cross-tenant rate read, residential-evidence load, AND the order_overrides persist
-  // below (all keyed off body.orderId). Admin/global scope = unrestricted (no-op).
+  // (client_user) caller passing another tenant's orderId gets 404 before the shared
+  // backend producer can load order evidence or persist awaiting-only rate state.
   if (body.orderId) {
     const browseScope = scopeFromContext(c);
     const [inScope] = await db
@@ -532,593 +397,13 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
       .limit(1);
     if (!inScope) return c.json({ error: 'Order not found' }, 404);
   }
-  const {
-    forceRefresh,
-    forceLive,
-    cachedOnly,
-    carrierId,
-    carrierIds,
-    preferredCarrierId,
-    signature,
-    confirmation,
-    ...rest
-  } = body;
-  const requestedCarrierIds = carrierIds?.length ? carrierIds : carrierId ? [carrierId] : undefined;
-  const preferred = preferredCarrierId ?? carrierId ?? requestedCarrierIds?.[0];
-  const orderedIds = orderedCarrierIds(requestedCarrierIds, preferred);
-  // PS-197 (residential parity): when the browse is for a real order, the BACKEND loads the
-  // order's residential/commercial EVIDENCE (manual override > raw ShipStation source flag,
-  // plus company/name for the heuristic tier) and feeds the canonical classifier through the
-  // proper tiers — instead of trusting the FE's collapsed `residential: boolean` (which can
-  // only ever be a source-signal and silently forced r=1 on #1461-style orders). The label
-  // boundary already classifies from this same order evidence (PS-127), so browse == label
-  // classification BY CONSTRUCTION. Best-effort: any load failure falls back to the FE boolean.
-  let orderForBrowse: {
-    sourceProvider: string | null;
-    raw: unknown;
-    shipToPostalCode: string | null;
-    shipToState: string | null;
-    shipToCity: string | null;
-    clientId: number | null;
-    storeId: number | null;
-    orderNumber: string | null;
-    clientName: string | null;
-    externalOrderId: string | null;
-  } | null = null;
-  let residentialEvidence: ResidentialEvidence | null = null;
-  if (body.orderId) {
-    try {
-      const [ord] = await db
-        .select({
-          sourceProvider: orders.sourceProvider,
-          raw: orders.raw,
-          shipToPostalCode: orders.shipToPostalCode,
-          shipToState: orders.shipToState,
-          shipToCity: orders.shipToCity,
-          shipToName: orders.shipToName,
-          clientId: orders.clientId,
-          storeId: orders.storeId,
-          orderNumber: orders.orderNumber,
-          clientName: clients.name,
-          externalOrderId: orders.externalOrderId,
-        })
-        .from(orders)
-        .leftJoin(clients, eq(clients.id, orders.clientId))
-        .where(eq(orders.id, body.orderId))
-        .limit(1);
-      if (ord) {
-        orderForBrowse = ord;
-        const [ovr] = await db
-          .select({ residential: orderOverrides.residential })
-          .from(orderOverrides)
-          .where(eq(orderOverrides.orderId, body.orderId))
-          .limit(1);
-        // PS-276: ONE residential-evidence builder, shared with rates-backfill so the live
-        // Rate Browser and the persisted BEST RATE column feed the classifier the SAME manual
-        // override + source flag (the #1585 residential asymmetry fix — backfill used to drop
-        // the manual override that this path honors).
-        // PS-276 (slice 2b-2b): resolve the carrier address-validation evidence (cache-or-USPS),
-        // env-gated ADDRESS_RESOLVER (OFF -> {} -> classifier unchanged). Async UPSTREAM so the pure
-        // classifier stays sync + the fingerprint matches the backfill path.
-        const browseRawShipTo = ((ord.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
-        const browseResolved = await resolveAddressClassification({
-          street1: typeof browseRawShipTo.street1 === 'string' ? browseRawShipTo.street1 : null,
-          city: typeof browseRawShipTo.city === 'string' ? browseRawShipTo.city : null,
-          state: typeof browseRawShipTo.state === 'string' ? browseRawShipTo.state : null,
-          postalCode: typeof browseRawShipTo.postalCode === 'string' ? browseRawShipTo.postalCode : null,
-          country: typeof browseRawShipTo.country === 'string' ? browseRawShipTo.country : null,
-        });
-        residentialEvidence = buildResidentialEvidenceFromOrder({
-          rawShipTo: (ord.raw as { shipTo?: unknown } | null)?.shipTo,
-          manualOverrideResidential: ovr?.residential,
-          shipToName: ord.shipToName,
-          resolved: browseResolved,
-        });
-      }
-    } catch (err) {
-      console.warn('[rates/browse] order residential-evidence load skipped:', err instanceof Error ? err.message : err);
-    }
-  }
-  const orderRawShipTo = ((orderForBrowse?.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
-  const browseRateInput = {
-    ...rest,
-    toZip: rest.toZip ?? orderForBrowse?.shipToPostalCode ?? readText(orderRawShipTo.postalCode) ?? rest.toZip,
-    toCountry: rest.toCountry ?? readText(orderRawShipTo.country) ?? rest.toCountry,
-    toState: rest.toState ?? orderForBrowse?.shipToState ?? readText(orderRawShipTo.state) ?? rest.toState,
-    toCity: rest.toCity ?? orderForBrowse?.shipToCity ?? readText(orderRawShipTo.city) ?? rest.toCity,
-    confirmation: confirmation ?? signature ?? null,
-    carrierIds: orderedIds,
-    // Order-backed marketplace context: gates eBay Logistics to eBay orders and feeds the eBay
-    // connector the order JSON it needs (ship-to + order id). Null/undefined off an order (e.g.
-    // the Rate Shop calculator), which correctly excludes eBay there.
-    sourceProvider: orderForBrowse?.sourceProvider ?? null,
-    rawOrder: orderForBrowse?.raw ?? undefined,
-    // eBay's direct carrier prices a specific eBay order; gate it on whether this IS an eBay
-    // marketplace order (sync-path-agnostic — an eBay order synced via ShipStation still qualifies,
-    // where the old sourceProvider==='ebay' gate wrongly excluded it). Falsy off any order so eBay
-    // never clutters non-eBay orders.
-    isEbayMarketplaceOrder: isEbayMarketplaceOrder({
-      clientName: orderForBrowse?.clientName ?? null,
-      sourceProvider: orderForBrowse?.sourceProvider ?? null,
-      // The order's STORED external_order_id (synced as `ebay-<id>`) is the canonical eBay signal the
-      // /orders list itself uses (external_order_id ilike 'ebay-%'). The request body rarely carries it,
-      // so read the order's value (the earlier bug: feeding the empty request-body field → eBay stayed
-      // gated out even for real eBay orders).
-      externalOrderId: orderForBrowse?.externalOrderId ?? (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
-      raw: orderForBrowse?.raw ?? null,
-    }),
-    // Feed the eBay connector the order's canonical id: the stored `ebay-<id>` external_order_id (the
-    // connector strips the `ebay-` prefix) or the eBay order number. externalOrderId ?? orderNumber.
-    externalOrderId: orderForBrowse?.externalOrderId ?? (rest as { externalOrderId?: string | null }).externalOrderId ?? null,
-    orderNumber: orderForBrowse?.orderNumber ?? (rest as { orderNumber?: string | null }).orderNumber ?? null,
-    // Evidence decides — the collapsed FE boolean is dropped (residential: undefined) so the
-    // classifier's manual_override / source tiers attribute correctly. See residential-evidence.ts.
-    ...(residentialEvidence ? residentialEvidenceRateInput(residentialEvidence, rest.toName) : {}),
-  };
-  // PS-perf (QA audit 2026-06-23): the ShipStation N-carrier fan-out (getRates) and the
-  // direct-carrier fan-out (getDirectCarrierRatesForRateInput) are INDEPENDENT but were awaited
-  // back-to-back, so their latencies ADDED (a primary cause of the 10-20s Browse Rates wait).
-  // Overlap them. The direct path needs the REQUEST-LEVEL effective insurance the ShipStation
-  // resolver computes, so resolve it ONCE up front via the SAME shared resolver getRates uses
-  // internally (resolveRateInput). That resolver is config/cache-only and DETERMINISTIC on the
-  // input (its own contract — it must stay deterministic so the cache key matches the cached-bulk
-  // lookup), so resolvedForBrowse.effectiveInsurance* is byte-identical to result.effectiveInsurance*
-  // — only the wall-clock changes (max instead of sum), never a quoted amount.
-  const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
-  const resolvedForBrowse = await resolveRateInput(browseRateInput);
-  // PS-335: request-level single-flight for the expensive provider quote fan-out.
-  // ShipStation already dedupes identical per-carrier HTTP calls, but /rates/browse could still
-  // launch duplicate whole fan-outs (ShipStation + direct carriers + cache writes) while a slow
-  // provider was unresolved. Collapse equivalent in-flight requests here; ranking, proof stamping,
-  // SOT reconcile, and redaction still run below per caller from the shared provider result.
-  const browseSingleFlightKey = buildRateBrowseSingleFlightKey({
-    rateCacheKey: rateCacheKey(resolvedForBrowse),
-    forceRefresh: Boolean(forceRefresh || forceLive),
-    forceLive: Boolean(forceLive),
-    cachedOnly: isCachedOnlyLookup,
-    requestedCarrierIds,
-    directContext: {
-      orderId: body.orderId ?? null,
-      externalOrderId: browseRateInput.externalOrderId ?? null,
-      orderNumber: browseRateInput.orderNumber ?? null,
-      purchaseOrderId: browseRateInput.purchaseOrderId ?? null,
-      sourceProvider: browseRateInput.sourceProvider ?? null,
-      isEbayMarketplaceOrder: browseRateInput.isEbayMarketplaceOrder ?? null,
-      includeVisibleDirectCarriers: browseRateInput.includeVisibleDirectCarriers ?? null,
-      includeAllDirectCarriers: browseRateInput.includeAllDirectCarriers ?? null,
-      clientId: browseRateInput.clientId ?? null,
-      storeId: browseRateInput.storeId ?? null,
-      insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
-      insuredValue: resolvedForBrowse.effectiveInsuredValue ?? rest.insuredValue ?? null,
-      effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
-    },
+  const payload = await produceRateBrowsePayload({
+    body,
+    canViewFinancials,
+    browseStartedAt,
   });
-  const { result, directRates, shipStationDurationMs, directCarrierDurationMs } = await runRateBrowseSingleFlight(
-    browseSingleFlightKey,
-    async () => {
-      let shipStationDurationMs = 0;
-      let directCarrierDurationMs = 0;
-      const [result, directRates] = await Promise.all([
-        (async () => {
-          const startedAt = Date.now();
-          const r = await getRates(browseRateInput, {
-            forceRefresh: forceRefresh || forceLive,
-            cachedOnly: isCachedOnlyLookup,
-          });
-          shipStationDurationMs = Date.now() - startedAt;
-          return r;
-        })(),
-        // PS-206: cachedOnly is honored across the WHOLE combined universe — a cached-only probe must
-        // not live-quote direct carriers; the service returns terminal 'uncached' coverage diagnostics
-        // for every visible direct account instead, and the Rate Browser decides its live follow-up
-        // from that coverage identity (never from a carrier count).
-        (async () => {
-          const startedAt = Date.now();
-          const r = await getDirectCarrierRatesForRateInput({
-            // FIX 2026-06-24: was `...rest` (the RAW request body), which dropped every order-derived field
-            // browseRateInput adds — sourceProvider, rawOrder, isEbayMarketplaceOrder, the resolved order
-            // number/external id. That's the real reason the eBay direct carrier never quoted: the gate
-            // never saw isEbayMarketplaceOrder and the connector never got rawOrder. Spread browseRateInput
-            // so the direct-carrier fan-out gets the SAME order context getRates(browseRateInput) does.
-            ...browseRateInput,
-            confirmation: confirmation ?? signature ?? null,
-            carrierIds: requestedCarrierIds,
-            insuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? rest.insuranceProvider ?? null,
-            insuredValue: resolvedForBrowse.effectiveInsuredValue ?? rest.insuredValue ?? null,
-            effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
-            effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
-            effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
-          }, { cachedOnly: isCachedOnlyLookup });
-          directCarrierDurationMs = Date.now() - startedAt;
-          return r;
-        })(),
-      ]);
-      return { result, directRates, shipStationDurationMs, directCarrierDurationMs };
-    },
-  );
-  // PS-106 (Per user override unlock shipped data on 2026-06-06): carrier-family eligibility.
-  // ShipStation candidates are filtered separately from PS-124 backend-owned direct-carrier
-  // candidates. In `enforce` we drop them (the operator then sees only their direct carriers); in
-  // `audit_only` we keep them and log a would-block. Best-effort: any failure (no order, settings
-  // outage) simply allows the rates. The label purchase boundary is the authoritative block. This
-  // only filters result.rates and is independent of the direct fan-out, so it runs after both.
-  let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
-  let shipStationBlocked = false;
-  if (body.orderId) {
-    try {
-      // PS-197: reuse the order row already loaded for the residential-evidence step above.
-      const ord = orderForBrowse;
-      if (ord) {
-        const mode = await getCarrierEligibilityMode();
-        const elig = evaluateOrderCarrierEligibility({ carrierFamily: 'shipstation', order: ord, mode });
-        carrierEligibility = { mode, wouldBlock: elig.wouldBlock, ...(elig.ruleId ? { ruleId: elig.ruleId } : {}) };
-        if (elig.wouldBlock) {
-          if (!elig.allowed) shipStationBlocked = true;
-          else console.warn(`[carrier-eligibility] AUDIT would-block browse: order=${body.orderId} source=${elig.orderSource} mode=${mode} rule=${elig.ruleId}`);
-        }
-      }
-    } catch {
-      /* best-effort: allow; purchase boundary remains authoritative */
-    }
-  }
-  const requestedSet = requestedCarrierIds?.length ? new Set(requestedCarrierIds) : null;
-  const filtered = shipStationBlocked
-    ? []
-    : requestedSet
-      ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
-      : result.rates;
-  const accounts = await getCarrierAccountsForRateContext({
-    storeId: rest.storeId ?? null,
-    clientId: rest.clientId ?? null,
-  }).catch(() => []);
-  // PS-203 (stage 3): the merge, the SINGLE cheapest pick (uniform charge basis —
-  // direct rates now carry the same markup rules as ShipStation), the per-carrier
-  // statuses, and the PS-111 combined-universe completeness are owned by the pure
-  // rates-combined module. The backfill delegates to the SAME owner, so a
-  // persisted best rate can never again be a ShipStation-only self-certified win.
-  const combined = combineCarrierUniverses({
-    ssRates: filtered,
-    ssCacheKey: result.cacheKey,
-    ssCached: result.cached,
-    ssDiagnostics: result.carrierDiagnostics ?? [],
-    directRates: directRates.rates,
-    directDiagnostics: directRates.diagnostics,
-    requestedCarrierIds,
-    accountNamesByCarrierId: new Map(
-      accounts.map((account) => [
-        account.carrier_id,
-        account.friendly_name ?? account.nickname ?? account.carrier_code ?? account.carrier_id,
-      ])
-    ),
-    accountCarrierIds: accounts.map((account) => account.carrier_id),
-    isCachedOnlyLookup,
-  });
-  const {
-    combinedRates,
-    cheapest,
-    secondCheapest,
-    combinedRequestKey,
-    combinedCarrierStatuses,
-    directCarrierDiagnostics,
-    combinedCarrierDiagnostics,
-    bestRateComplete,
-  } = combined;
-  const bestRateMetadata = cheapest
-    ? {
-        ...cheapest,
-        requestFingerprint: combinedRequestKey,
-        cacheKey: combinedRequestKey,
-        cacheCreatedAt: result.fetchedAt,
-        cacheExpiresAt: new Date(
-          new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
-        ).toISOString(),
-        effectiveInsuranceProvider: result.effectiveInsuranceProvider,
-        effectiveInsuredValue: result.effectiveInsuredValue,
-        effectiveInsuranceSource: result.effectiveInsuranceSource,
-        insuranceProvider: result.effectiveInsuranceProvider,
-        insuredValue: result.effectiveInsuredValue,
-        isComplete: bestRateComplete,
-        rateCount: combinedRates.length,
-        matchType: result.cached ? 'cache' : 'live',
-      }
-    : null;
-  // PS-105 (Per user override unlock shipped data on 2026-06-06): stamp each rate
-  // with an opaque selection key and persist a backend-owned quote snapshot keyed
-  // by an opaque rateQuoteId, so a later label purchase can validate the operator's
-  // selection server-side WITHOUT the frontend carrying full proof internals. The
-  // snapshot expires with the analytics-cache TTL; selectedRateProof stays as the
-  // compatibility fallback until the frontend migrates.
-  // PS-244: route the live /rates/browse producer through the SINGLE rate-finalization owner
-  // (finalizeBestRateWithQuote) instead of stamping the selection key + quote snapshot inline,
-  // so browse and the backfill producer can NEVER diverge. selectedRateKey/rateQuoteId are
-  // byte-identical (shared pure fns); the best rate now also carries the backend-owned
-  // proofSource (previously the frontend injected it). The locked label-purchase ENFORCEMENT
-  // boundary is untouched — still dual-path (snapshot preferred, legacy selectedRateProof
-  // fallback); that flip is deferred.
-  //
-  // PS-183: the cache-expiry TTL stays BACKEND-owned (CACHE_TTL_MS over the quote's fetchedAt,
-  // the same expiry the rate cache enforces) so the FE never mints its own "now + 6h" freshness.
-  const browseCacheExpiresAt = new Date(
-    new Date(result.fetchedAt).getTime() + CACHE_TTL_MS
-  ).toISOString();
-  let responseRates: Array<Record<string, unknown>> = withSelectedRateKeys(combinedRates);
-  let rateQuoteId: string | undefined;
-  let bestRateOut = cheapest;
-  let secondBestRateOut: Record<string, unknown> | null = null;
-  if (cheapest) {
-    const finalized = await finalizeBestRateWithQuote({
-      bestRate: cheapest as Record<string, unknown>,
-      rates: combinedRates as Array<Record<string, unknown>>,
-      cacheKey: combinedRequestKey,
-      bestRateComplete,
-      fetchedAt: result.fetchedAt,
-    });
-    rateQuoteId = finalized.rateQuoteId;
-    responseRates = finalized.rates;
-    const finalizedSecondBestRate = secondCheapest
-      ? {
-          ...(secondCheapest as Record<string, unknown>),
-          selectedRateKey: selectedRateOpaqueKey(secondCheapest),
-          ...(rateQuoteId ? { rateQuoteId } : {}),
-          proofSource: BACKEND_RATE_PROOF_SOURCE,
-        }
-      : null;
-    secondBestRateOut =
-      finalizedSecondBestRate && bestRateComplete
-        ? {
-            ...finalizedSecondBestRate,
-            isComplete: bestRateComplete,
-            requestFingerprint: combinedRequestKey,
-            cacheKey: combinedRequestKey,
-            cacheCreatedAt: result.fetchedAt,
-            cacheExpiresAt: browseCacheExpiresAt,
-            effectiveInsuranceProvider: result.effectiveInsuranceProvider,
-            effectiveInsuredValue: result.effectiveInsuredValue,
-            effectiveInsuranceSource: result.effectiveInsuranceSource,
-            insuranceProvider: result.effectiveInsuranceProvider,
-            insuredValue: result.effectiveInsuredValue,
-            eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-            rateCount: combinedRates.length,
-            matchType: result.cached ? 'cache' : 'live',
-          }
-        : null;
-    bestRateOut = {
-      ...finalized.bestRate,
-      secondBestRate: secondBestRateOut,
-      isComplete: bestRateComplete,
-      requestFingerprint: combinedRequestKey,
-      cacheKey: combinedRequestKey,
-      cacheCreatedAt: result.fetchedAt,
-      cacheExpiresAt: browseCacheExpiresAt,
-      effectiveInsuranceProvider: result.effectiveInsuranceProvider,
-      effectiveInsuredValue: result.effectiveInsuredValue,
-      effectiveInsuranceSource: result.effectiveInsuranceSource,
-      insuranceProvider: result.effectiveInsuranceProvider,
-      insuredValue: result.effectiveInsuredValue,
-      eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-      rateCount: combinedRates.length,
-      matchType: result.cached ? 'cache' : 'live',
-    } as typeof cheapest;
-  }
-  // PS-220 (projected house-margin): SHIPP is DRP's house carrier. When the saved winner is SHIPP
-  // AND the client is opted in, capture the cheapest ELIGIBLE non-SHIPP competitor HERE —
-  // combinedRates is the only place the full competitor list survives (the orders route discards it,
-  // the purchase snapshot expires). Stamp it onto bestRateOut so the awaiting-only persist
-  // (order_overrides.best_rate_json) carries it with zero re-fetch; realized capture at label
-  // purchase reads it back. No competitor => pass-through (houseMargin 0). Best-effort: never breaks browse.
-  // PS-293: delegate the house-tuple stamp to the shared owner (the SAME one the rates-backfill calls).
-  // stampHouseTuple is the gate + projection + best-effort try/catch — it returns bestRateOut unchanged
-  // for a non-SHIPP winner or a non-opted-in client (default-OFF inert), so this is byte-identical.
-  if (bestRateOut && cheapest) {
-    bestRateOut = await stampHouseTuple(bestRateOut as Record<string, unknown>, {
-      cheapest,
-      combinedRates,
-      clientId: (rest as { clientId?: unknown }).clientId,
-      storeId: (rest as { storeId?: unknown }).storeId,
-      insuranceProvider: result.effectiveInsuranceProvider ?? null,
-      insuredValue: result.effectiveInsuredValue ?? null,
-    }) as typeof cheapest;
-  }
-  const hugrabCoverageDisplayContext = {
-    isHugrab: isHugrabShippingContext({
-      clientId: orderForBrowse?.clientId ?? rest.clientId ?? null,
-      storeId: orderForBrowse?.storeId ?? rest.storeId ?? null,
-    }),
-    insuranceProvider: result.effectiveInsuranceProvider ?? null,
-    insuredValue: result.effectiveInsuredValue ?? null,
-    shippCustomsValueProofEnabled: hugrabShippCustomsValueProofEnabled(),
-  };
-  responseRates = responseRates.map((rate) =>
-    stampHugrabCoverageDisplayFields(rate as Record<string, unknown>, hugrabCoverageDisplayContext),
-  );
-  responseRates = stampRateBrowserDisplayAliases(responseRates);
-  if (bestRateOut) {
-    bestRateOut = stampHugrabCoverageDisplayFields(
-      bestRateOut as Record<string, unknown>,
-      hugrabCoverageDisplayContext,
-    ) as typeof cheapest;
-  }
-  if (secondBestRateOut) {
-    secondBestRateOut = stampHugrabCoverageDisplayFields(
-      secondBestRateOut,
-      hugrabCoverageDisplayContext,
-    );
-    secondBestRateOut = stampRateBrowserDisplayAliases(secondBestRateOut);
-    if (bestRateOut) {
-      bestRateOut = {
-        ...(bestRateOut as Record<string, unknown>),
-        secondBestRate: secondBestRateOut,
-      } as typeof cheapest;
-    }
-  }
-  if (bestRateOut) {
-    bestRateOut = stampRateBrowserDisplayAliases(bestRateOut) as typeof cheapest;
-  }
-  // PS-197b: on-demand uninsured manual baseline (ShipStation-only — mirrors what ShipStation's
-  // own Rate Browser shows). Reference display ONLY: no withSelectedRateKeys, no snapshot, no
-  // rate-quote id — structurally non-purchasable (the purchase boundary rejects proof-less rates).
-  // Best-effort: a baseline failure never breaks the label-safe browse.
-  let manualEstimate: { rates: unknown[]; fetchedAt: string; cached: boolean } | null = null;
-  if (body.manualEstimate === true) {
-    try {
-      const manual = await getRates(
-        // Same input as the label-safe browse (incl. the PS-197 residential evidence) so the
-        // ONLY difference between the two quotes is the insurance — a true apples-to-apples
-        // baseline.
-        browseRateInput,
-        {
-          rawManualEstimate: true,
-          forceRefresh: forceRefresh || forceLive,
-          cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
-        },
-      );
-      const manualFiltered = requestedSet
-        ? manual.rates.filter((r) => requestedSet.has(r.carrier_id))
-        : manual.rates;
-      manualEstimate = {
-        rates: canViewFinancials
-          ? stampRateBrowserDisplayAliases(manualFiltered)
-          : (redactRateBrowserMoney(stampRateBrowserDisplayAliases(manualFiltered)) as unknown[]),
-        fetchedAt: manual.fetchedAt,
-        cached: manual.cached,
-      };
-    } catch (err) {
-      console.warn('[rates/browse] manual-estimate baseline failed (reference only):', err instanceof Error ? err.message : err);
-    }
-  }
-  // PS-175 (Phase 3): the STRICT recalculation decision is BACKEND-owned —
-  // computed from the SAME combined carrier statuses + best rate this response
-  // returns (byte-compatible port of the FE rule, which becomes a deploy-skew
-  // fallback until Phase 6 deletes it). Part 2: when the request carries an
-  // orderId, the OUTCOME is also persisted server-side (order_overrides only;
-  // refuses non-awaiting orders — the same lock the guarded routes enforce).
-  // The FE skips its own strict persist calls when `persisted: true`.
-  let strictRecalculation: Record<string, unknown> | null = null;
-  if (body.strictRecalculate === true) {
-    const bestProviderMatch = cheapest ? /^se-(\d+)$/i.exec(String(cheapest.carrier_id ?? '')) : null;
-    const bestProviderId = bestProviderMatch ? Number.parseInt(bestProviderMatch[1]!, 10) : null;
-    const strictDecision = planStrictRecalculateDecision({
-      liveBestAmount: cheapest ? rateTotal(cheapest) : null,
-      providerAccountId: bestProviderId != null && Number.isFinite(bestProviderId) ? bestProviderId : null,
-      serviceCode: cheapest ? (String(cheapest.service_code ?? '').trim() || null) : null,
-      carrierStatuses: combinedCarrierStatuses,
-    });
-    let persist: { persisted: boolean; reason?: string } = { persisted: false, reason: 'no orderId on request' };
-    if (typeof body.orderId === 'number' && body.orderId > 0) {
-      try {
-        persist = await persistStrictRecalculateOutcome({
-          orderId: body.orderId,
-          decision: strictDecision,
-          bestRate: (bestRateOut as Record<string, unknown> | null) ?? null,
-          dimsL: body.dimsL ?? null,
-          dimsW: body.dimsW ?? null,
-          dimsH: body.dimsH ?? null,
-          weightOz: body.weightOz ?? null,
-          rateCount: combinedRates.length,
-          fetchedAt: result.fetchedAt,
-          requestFingerprint: combinedRequestKey,
-          // PS-271 (Layer 4 honesty): feed the route's honest combined-universe completeness so a
-          // thin-but-accepted strict best is NOT persisted as complete.
-          bestRateComplete,
-        });
-      } catch (err) {
-        // Persist is best-effort from the response's perspective: the FE falls
-        // back to its own strict endpoints when persisted !== true.
-        persist = { persisted: false, reason: err instanceof Error ? err.message.slice(0, 200) : 'persist failed' };
-      }
-    }
-    strictRecalculation = {
-      ...strictDecision,
-      requestKey: combinedRequestKey,
-      ...persist,
-    };
-  } else if (
-    // PS-277 (slice 1): a PLAIN browse reconciles the SOT (env-gated, OFF by default). Only when a
-    // fresh LIVE complete best exists for an order — never on a cached-only probe, never when the FE
-    // already drove the strict-recalculate persist above. Reuses the awaiting-only persist owner
-    // (refuses shipped/cancelled), so opening the browser corrects the column without a manual recalc.
-    browseSotWritebackEnabled() &&
-    typeof body.orderId === 'number' && body.orderId > 0 &&
-    bestRateOut != null && bestRateComplete && !result.cached
-  ) {
-    const reconcileMatch = cheapest ? /^se-(\d+)$/i.exec(String(cheapest.carrier_id ?? '')) : null;
-    const reconcileProviderId = reconcileMatch ? Number.parseInt(reconcileMatch[1]!, 10) : null;
-    const reconcileDecision = planStrictRecalculateDecision({
-      liveBestAmount: cheapest ? rateTotal(cheapest) : null,
-      providerAccountId: reconcileProviderId != null && Number.isFinite(reconcileProviderId) ? reconcileProviderId : null,
-      serviceCode: cheapest ? (String(cheapest.service_code ?? '').trim() || null) : null,
-      carrierStatuses: combinedCarrierStatuses,
-    });
-    if (reconcileDecision.action === 'apply') {
-      try {
-        await persistStrictRecalculateOutcome({
-          orderId: body.orderId,
-          decision: reconcileDecision,
-          bestRate: (bestRateOut as Record<string, unknown> | null) ?? null,
-          dimsL: body.dimsL ?? null,
-          dimsW: body.dimsW ?? null,
-          dimsH: body.dimsH ?? null,
-          weightOz: body.weightOz ?? null,
-          rateCount: combinedRates.length,
-          fetchedAt: result.fetchedAt,
-          requestFingerprint: combinedRequestKey,
-          // PS-271 (Layer 4 honesty): the reconcile path only fires when bestRateComplete is true
-          // (guarded above), but thread it explicitly so the persisted truth never diverges.
-          bestRateComplete,
-        });
-      } catch (err) {
-        // Best-effort: a browse never fails on a reconcile-write error (the column just stays as-is).
-        console.warn('[rates/browse] SOT reconcile write failed (best-effort):', err instanceof Error ? err.message : err);
-      }
-    }
-  }
-  const rateBrowseTiming = buildRateBrowseTimingDiagnostics({
-    startedAtMs: browseStartedAt,
-    completedAtMs: Date.now(),
-    shipStationDurationMs,
-    directCarrierDurationMs,
-    carrierDiagnostics: combinedCarrierDiagnostics,
-  });
-  const payload = {
-    ...result,
-    ...(strictRecalculation ? { strictRecalculation } : {}),
-    ...(manualEstimate ? { manualEstimate } : {}),
-    requestKey: combinedRequestKey,
-    cacheKey: combinedRequestKey,
-    cacheExpiresAt: browseCacheExpiresAt,
-    effectiveInsuranceProvider: result.effectiveInsuranceProvider,
-    effectiveInsuredValue: result.effectiveInsuredValue,
-    effectiveInsuranceSource: result.effectiveInsuranceSource,
-    rateQuoteId,
-    carrierEligibility,
-    // PS-206: honest source reporting (the old ternary's live/live arms were a
-    // no-op). ShipStation cache + LIVE direct quotes that contributed rates is
-    // 'mixed'; a cached-only lookup (direct skipped as 'uncached') stays
-    // 'cache'; anything that live-quoted ShipStation is 'live'.
-    source: result.cached
-      ? (!isCachedOnlyLookup && directRates.rates.length > 0 ? 'mixed' : 'cache')
-      : 'live',
-    cacheAgeMs: result.cacheAgeMs,
-    rates: responseRates,
-    bestRate: bestRateOut,
-    secondBestRate: secondBestRateOut,
-    carrierStatuses: combinedCarrierStatuses,
-    carrierDiagnostics: combinedCarrierDiagnostics,
-    rateBrowseTiming,
-    bestRateWorkflow: buildBestRateWorkflowDto({
-      currentRequestFingerprint: combinedRequestKey,
-      backendRequestKey: combinedRequestKey,
-      savedBestRate: bestRateMetadata,
-      source: cheapest ? (result.cached ? 'cache' : 'live') : 'none',
-      carrierStatuses: combinedCarrierStatuses,
-    }),
-    directCarrierErrors: directRates.errors,
-    directCarrierMetas: directRates.metas,
-    directCarrierDiagnostics,
-  };
   return c.json(publicRatesResult(payload, canViewFinancials));
 });
-
 // v2-parity: supports v2's param aliases (wt, zip, l, w, h) AND the modern
 // names. Adds optional dims + residential + storeId filters so the rate
 // browser's cache hits return match-quality rates instead of a generic

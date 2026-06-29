@@ -225,10 +225,12 @@ check(
 );
 
 const ratesRouteSrc = read('src/routes/rates.ts');
+const rateBrowseProducerSrc = read('src/services/rate-browse-response-producer.ts');
 check(
   'Browse Rates enriches state/city from the backend order row before building the rate key',
-  /toState:\s*rest\.toState\s*\?\?\s*orderForBrowse\?\.shipToState/.test(ratesRouteSrc) &&
-    /toCity:\s*rest\.toCity\s*\?\?\s*orderForBrowse\?\.shipToCity/.test(ratesRouteSrc),
+  /produceRateBrowsePayload/.test(ratesRouteSrc) &&
+    /toState:\s*rest\.toState\s*\?\?\s*orderForBrowse\?\.shipToState/.test(rateBrowseProducerSrc) &&
+    /toCity:\s*rest\.toCity\s*\?\?\s*orderForBrowse\?\.shipToCity/.test(rateBrowseProducerSrc),
 );
 
 const ratesServiceSrc = read('src/services/rates.ts');

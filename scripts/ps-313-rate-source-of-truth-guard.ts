@@ -208,7 +208,11 @@ checkPatterns('rates.ts provider-level selector applies markup before pickBestRa
 ]);
 
 const ratesRoute = read('src/routes/rates.ts');
+const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
 checkPatterns('/rates/browse delegates selection and proof to backend owners', ratesRoute, [
+  /produceRateBrowsePayload/,
+]);
+checkPatterns('rate browse producer delegates selection and proof to backend owners', rateBrowseProducer, [
   /const combined = combineCarrierUniverses\(\{/,
   /const \{\s*combinedRates,[\s\S]*?cheapest,[\s\S]*?bestRateComplete,[\s\S]*?\} = combined/,
   /const finalized = await finalizeBestRateWithQuote\(\{/,

@@ -160,9 +160,9 @@ check('legacy rate mapper is explicitly display-only and not the official browse
   browseRatesBlock);
 
 check('backend /rates/browse stamps legacy display aliases before the client receives rates',
-  /function stampRateBrowserDisplayAliases(?:<[^>]+>)?\(/.test(read('src/routes/rates.ts')) &&
-  /responseRates = stampRateBrowserDisplayAliases\(responseRates\)/.test(read('src/routes/rates.ts')) &&
-  /bestRateOut = stampRateBrowserDisplayAliases\(bestRateOut\)/.test(read('src/routes/rates.ts')),
+  /export function stampRateBrowserDisplayAliases(?:<[^>]+>)?\(/.test(read('src/services/rate-browser-display-fields.ts')) &&
+  /responseRates = stampRateBrowserDisplayAliases\(responseRates\)/.test(read('src/services/rate-browse-response-producer.ts')) &&
+  /bestRateOut = stampRateBrowserDisplayAliases\(bestRateOut\)/.test(read('src/services/rate-browse-response-producer.ts')),
 );
 
 check('fetchRates/browseRates do not fetch direct carrier rates or locally pick combined[0]',

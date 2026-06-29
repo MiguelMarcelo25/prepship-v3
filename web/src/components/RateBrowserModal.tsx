@@ -69,6 +69,7 @@ import {
 import RateRowItem from './RateRowItem';
 import RateRowsView from './RateRowsView';
 import RateBrowserCarrierSidebar from './RateBrowserCarrierSidebar';
+import { useRateBrowseWorkflow } from '../hooks/useRateBrowseWorkflow';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
 export type RbLocationDto = {
@@ -1004,6 +1005,11 @@ export default function RateBrowserModal({
   const [scopedAccountsLoading, setScopedAccountsLoading] = useState(false);
   const [scopedAccountsError, setScopedAccountsError] = useState<string | null>(null);
   const browseSequenceRef = useRef(0);
+  const {
+    snapshot: rateWorkflowSnapshot,
+    runRateBrowseWorkflow,
+    reset: resetRateBrowseWorkflow,
+  } = useRateBrowseWorkflow();
   // PS-292: the backend canonical bestRate from the latest browse (carries the SHIPP house tuple).
   // The apply helpers (handleRateClick/toAppliedRate) and the recommended-row renderer read it from
   // here because the rows array never carries the stamp — only bestRate does.
@@ -1190,6 +1196,23 @@ export default function RateBrowserModal({
   const hasAnyRateRows = Object.values(ratesByPid).some((rates) => rates.length > 0);
   const hasCarrierStatus = Object.keys(carrierStatusByPid).length > 0;
   const anyFetched = hasAnyRateRows || hasCarrierStatus;
+  const rateWorkflowProgressText = useMemo(() => {
+    if (!rateWorkflowSnapshot || !browsing) return null;
+    const progress = rateWorkflowSnapshot.progress;
+    const completed = toFiniteNumber(progress?.completed_carriers) ?? 0;
+    const total = toFiniteNumber(progress?.total_carriers) ?? 0;
+    const ratesCount = toFiniteNumber(progress?.rates_count) ?? 0;
+    const label = rateWorkflowSnapshot.status === 'queued'
+      ? 'queued'
+      : rateWorkflowSnapshot.status === 'running'
+        ? 'checking'
+        : rateWorkflowSnapshot.status === 'partial'
+          ? 'partial'
+          : rateWorkflowSnapshot.status;
+    return total > 0
+      ? `${label} ${completed}/${total} · ${ratesCount} rates`
+      : `${label} · ${ratesCount} rates`;
+  }, [browsing, rateWorkflowSnapshot]);
   const currentRateShippingOptions = {
     insuranceProvider,
     insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
@@ -1204,6 +1227,10 @@ export default function RateBrowserModal({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) resetRateBrowseWorkflow();
+  }, [open, resetRateBrowseWorkflow]);
 
   // Try the cache on open when weight + dims are already valid. PS-345 keeps
   // modal-open work display-only; live carrier fan-out requires the visible
@@ -1299,6 +1326,7 @@ export default function RateBrowserModal({
     const { insuranceProvider: normalizedInsuranceProvider, insuredValue: normalizedInsuredValue } =
       normalizeInsurance({ insuranceProvider: effectiveInsuranceProvider, insuredValue: effectiveInsuredValue });
     setBrowsing(true);
+    if (options.forceLive !== true) resetRateBrowseWorkflow();
     const seededTestRates = testMode
       ? buildTestMockRateSeeds(rateShippingAccounts, {
           orderId: order?.orderId,
@@ -1395,7 +1423,7 @@ export default function RateBrowserModal({
       // verdict defaults residential-safe so the residential surcharge is never under-quoted, and
       // the backend stays authoritative (resolveRateInput + the label parity guard).
       const residentialForQuote = residentialForRate(order);
-      const browseResult = await apiClient.browseRates({
+      const browsePayload = {
         fromPostalCode: selectedLocation?.postalCode?.slice(0, 5) ?? undefined,
         toPostalCode: zip,
         toCountry: 'US',
@@ -1431,7 +1459,12 @@ export default function RateBrowserModal({
         forceLive: options.forceLive === true,
         forceRefresh: options.forceLive === true,
         ...(options.manualEstimateCompare ? { manualEstimate: true } : {}),
-      });
+      };
+      const browseResult = await (
+        options.forceLive === true
+          ? runRateBrowseWorkflow(browsePayload)
+          : apiClient.browseRates(browsePayload)
+      );
       if (browseSequenceRef.current !== requestSeq) return { carriersWithRates, uncoveredPids };
       // PS-135: capture the backend-selected bestRate for the auto-apply step (the browseResult
       // const is scoped to this try block; the selection runs after the finally).
@@ -2644,6 +2677,15 @@ export default function RateBrowserModal({
                   style={{ fontSize: 11.5, color: 'var(--warn, #b45309)', whiteSpace: 'nowrap' }}
                 >
                   Best rate unresolved — retry
+                </span>
+              ) : null}
+              {rateWorkflowProgressText ? (
+                <span
+                  role="status"
+                  data-rate-browser="workflowProgress"
+                  style={{ fontSize: 11.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}
+                >
+                  {rateWorkflowProgressText}
                 </span>
               ) : null}
               <label

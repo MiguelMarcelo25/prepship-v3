@@ -41,6 +41,7 @@ function sliceFrom(source: string, startNeedle: string): string {
 
 const ratesService = read('src/services/rates.ts');
 const ratesRoute = read('src/routes/rates.ts');
+const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
 const ratesBackfill = read('src/services/rates-backfill.ts');
 const modal = read('web/src/components/RateBrowserModal.tsx');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
@@ -86,8 +87,9 @@ check(
 
 check(
   '/rates/browse collapses identical in-flight provider fan-outs before ranking/proof stamping',
-  /runRateBrowseSingleFlight/.test(ratesRoute) &&
-    /const \{ result, directRates, shipStationDurationMs, directCarrierDurationMs \} = await runRateBrowseSingleFlight/.test(ratesRoute),
+  /produceRateBrowsePayload/.test(ratesRoute) &&
+    /runRateBrowseSingleFlight/.test(rateBrowseProducer) &&
+    /const \{ result, directRates, shipStationDurationMs, directCarrierDurationMs \} = await runRateBrowseSingleFlight/.test(rateBrowseProducer),
 );
 
 check(
