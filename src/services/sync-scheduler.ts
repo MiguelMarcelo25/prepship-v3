@@ -170,7 +170,8 @@ export async function runOrderSync(): Promise<void> {
 
 export function runBackfillTick(): void {
   // startBackfillBestRates is already idempotent (activeJobId guard).
-  // Just trigger it — if a job is running we'll be a no-op.
+  // Just trigger it — if a job is running we'll be a no-op. PS-348 keeps this as a
+  // cache-friendly backend refresh of visible tuples before proof expiry, never manual force-live.
   const active = getActiveBackfillJob();
   if (active && active.status === 'running') {
     console.log(
@@ -178,9 +179,9 @@ export function runBackfillTick(): void {
     );
     return;
   }
-  const job = startBackfillBestRates({});
+  const job = startBackfillBestRates({ mode: 'preexpiry_refresh' });
   console.log(
-    `[scheduler] rate backfill kicked off (job ${job.jobId}) — only orders with stale/no rates will be fetched`
+    `[scheduler] rate backfill kicked off (job ${job.jobId}) — stale, missing, or near-expiry rate tuples will be refreshed`
   );
 }
 

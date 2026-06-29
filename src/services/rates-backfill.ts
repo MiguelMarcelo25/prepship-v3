@@ -39,6 +39,11 @@ import { runWithTimeoutAndRetry, withTimeout } from './with-timeout-retry';
 // persisted a tuple-LESS best rate for HUGRAB house orders, so which surface rated the row decided
 // whether the House tuple appeared. Now both stamp it identically (default-OFF inert).
 import { stampHouseTuple } from './shipping-workflow/house-tuple-stamp';
+import {
+  RATE_PREEXPIRY_REFRESH_LEAD_MS,
+  classifyRatePreExpiryRefresh,
+  shouldPreExpiryRefreshRate,
+} from './rate-preexpiry-refresh-policy';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -135,7 +140,7 @@ export type BackfillJob = {
 export type BackfillJobMode = 'manual_force_live' | 'cache_friendly';
 
 type BackfillOptions = {
-  mode?: 'cache_first' | 'full_live_audit';
+  mode?: 'cache_first' | 'full_live_audit' | 'preexpiry_refresh';
   clientId?: number;
   limit?: number;
   maxAgeHours?: number;
@@ -198,6 +203,7 @@ const queuedBackfillRequests: QueuedBackfillRequest[] = [];
 export function backfillJobModeForOptions(opts: BackfillOptions): BackfillJobMode {
   if (opts.mode === 'full_live_audit') return 'manual_force_live';
   if (opts.mode === 'cache_first') return 'cache_friendly';
+  if (opts.mode === 'preexpiry_refresh') return 'cache_friendly';
   return opts.maxAgeHours === 0 ? 'manual_force_live' : 'cache_friendly';
 }
 
@@ -450,6 +456,26 @@ async function runBackfill(
     const hardLimit = targetedIds
       ? Math.max(1, Math.min(targetedIds.length, 10000))
       : Math.max(1, Math.min(opts.limit ?? 5000, 10000));
+    const preExpiryCutoff = new Date(Date.now() + RATE_PREEXPIRY_REFRESH_LEAD_MS);
+    const preExpiryRefreshPredicate = sql`(
+      ${orderOverrides.bestRateJson} is not null
+      and (
+        case
+          when nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', '') is null then true
+          when nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+            then (nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', ''))::timestamptz <= ${preExpiryCutoff}
+          else true
+        end
+        or coalesce(${orderOverrides.bestRateJson}->>'isComplete', 'false') <> 'true'
+        or nullif(${orderOverrides.bestRateJson}->>'proofSource', '') is distinct from 'backend_rate_response'
+        or nullif(${orderOverrides.bestRateJson}->>'requestFingerprint', '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'cacheKey', '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'rateQuoteId', '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'selectedRateKey', '') is null
+        or nullif(coalesce(${orderOverrides.bestRateJson}->>'customerRateAmount', ${orderOverrides.bestRateJson}->>'customer_rate_amount'), '') is null
+        or nullif(coalesce(${orderOverrides.bestRateJson}->>'rateCostAmount', ${orderOverrides.bestRateJson}->>'rate_cost_amount'), '') is null
+      )
+    )`;
     const needsRatePredicate = staleCutoff
       ? or(isNull(orderOverrides.bestRateAt), lt(orderOverrides.bestRateAt, staleCutoff))
       : isNull(orderOverrides.bestRateAt);
@@ -505,7 +531,7 @@ async function runBackfill(
           // staleness predicate would wrongly skip it and the FE sits on a mismatched_request spinner
           // forever. Bypass staleness for targeted ids; the bulk/passive sweep (targetedIds null) keeps
           // it. The awaiting_shipment + inArray(orders.id, targetedIds) filters above are unchanged.
-          targetedIds ? undefined : or(needsRatePredicate, ineligibleSavedRatePredicate),
+          targetedIds ? undefined : or(needsRatePredicate, preExpiryRefreshPredicate, ineligibleSavedRatePredicate),
           // Skip test-client orders — no real ShipStation rate calls for sandbox data.
           sql`not exists (select 1 from clients c where c.id = ${orders.clientId} and c.is_test = true)`
         )
@@ -565,6 +591,11 @@ async function runBackfill(
     const perOrderTimeoutMs = liveRecalculate ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
+      const preExpiryRefreshReason = shouldPreExpiryRefreshRate(row.bestRateJson, {
+        refreshLeadMs: RATE_PREEXPIRY_REFRESH_LEAD_MS,
+      })
+        ? classifyRatePreExpiryRefresh(row.bestRateJson, { refreshLeadMs: RATE_PREEXPIRY_REFRESH_LEAD_MS })
+        : 'fresh';
       const effectiveWeightOz = getBackfillOrderWeightOz(row);
       const weightLabel = effectiveWeightOz ?? row.weightOz;
 
@@ -617,6 +648,7 @@ async function runBackfill(
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
             `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
+            + (preExpiryRefreshReason !== 'fresh' ? `; PS-348 refresh reason=${preExpiryRefreshReason}` : '')
           );
         }
         job.processed++;

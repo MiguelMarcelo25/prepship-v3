@@ -50,7 +50,7 @@ const checks: Check[] = [
   ),
   ok(
     'rates route accepts an explicit backfill mode so force-live is intentional',
-    /mode:\s*z\.enum\(\[\s*['"]cache_first['"]\s*,\s*['"]full_live_audit['"]\s*\]\)/s.test(ratesRoute),
+    /mode:\s*z\.enum\(\[\s*['"]cache_first['"]\s*,\s*['"]full_live_audit['"]\s*(?:,\s*['"]preexpiry_refresh['"]\s*)?\]\)/s.test(ratesRoute),
   ),
   ok(
     'backend maps full_live_audit to manual force-live and cache_first to cache-friendly',

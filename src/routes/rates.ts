@@ -718,7 +718,7 @@ app.post(
     'json',
     z
       .object({
-        mode: z.enum(['cache_first', 'full_live_audit']).optional(),
+        mode: z.enum(['cache_first', 'full_live_audit', 'preexpiry_refresh']).optional(),
         clientId: z.number().int().optional(),
         limit: z.number().int().positive().max(10000).optional(),
         maxAgeHours: z.number().int().min(0).max(24 * 30).optional(),
