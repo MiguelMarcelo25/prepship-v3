@@ -126,7 +126,6 @@ function freshBestRateWorkflow(rateLike = rate) {
       marginPercent: null,
       customerRateAmount,
       rateCostAmount,
-      houseRateAmount: rateLike.houseRateAmount ?? null,
       shippingMarginAmount,
       markupSource: 'carrier_markup',
     },
@@ -154,7 +153,6 @@ function houseBestRateWorkflow({ carrierCode = 'ups', serviceCode = 'ups_ground'
       marginPercent: 26,
       customerRateAmount: 14.25,
       rateCostAmount: 10.55,
-      houseRateAmount: 10.55,
       shippingMarginAmount: 3.7,
       markupSource: 'house_account',
     },
@@ -275,7 +273,7 @@ const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
 })
 
 // PS-334: house-feature awaiting row. Backend money owns the split:
-// Best Rate is customerRateAmount; House Rate is houseRateAmount.
+// Best Rate is customerRateAmount; Rate Cost is rateCostAmount.
 const houseBestRate = {
   ...rate,
   carrierCode: 'ups',
@@ -291,7 +289,6 @@ const houseBestRate = {
   totalCost: 10.55,
   customerRateAmount: 14.25,
   rateCostAmount: 10.55,
-  houseRateAmount: 10.55,
   shippingMarginAmount: 3.7,
   houseApplied: true,
   houseBadgeVisible: true,
@@ -385,7 +382,7 @@ const shippedShippBrokered = baseRow(980005, 'shipped', 1, {
 })
 
 // PS-334: house-feature shipped row. Selected Rate is the realized
-// customer/billing rate; House Rate is separate and internal.
+// customer/billing rate; Rate Cost is the single internal-cost display.
 const shippedHouseFeature = baseRow(980006, 'shipped', 1, {
   orderNumber: 'SHIPPED-980006-HOUSE',
   bestRate: null,
@@ -401,7 +398,6 @@ const shippedHouseFeature = baseRow(980006, 'shipped', 1, {
     otherCost: 0,
     customerRateAmount: 14.25,
     rateCostAmount: 10.55,
-    houseRateAmount: 10.55,
     shippingMarginAmount: 3.7,
   },
   label: { trackingNumber: '1Z999AA1010980006', carrierCode: 'ups', serviceCode: 'ups_ground', shippingProviderId: 10000025, cost: 10.55, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
@@ -582,16 +578,15 @@ test('Awaiting grid columns render every required field from source of truth', a
     custcarrier: { contains: 'BEST ACCT 111', notContains: 'STALE ACCT 999' },
   })
 
-  // PS-334 - Best Rate is the customer amount, while House Rate is the
-  // backend-owned internal amount in its own column.
+  // PS-334 - Best Rate is the customer amount, while Rate Cost is the
+  // one backend-owned internal amount. There is no separate House Rate column.
   await assertColumns(page, awaitingHouseFeature.orderId, {
     orderNum: { contains: 'ORD-970006-HOUSE' },
     bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
-    houserate: { contains: '10.55', notContains: '14.25' },
     ratecost: { contains: '10.55' },
   })
-  await scrollOrdersTableToColumn(page, 'houserate')
-  await page.screenshot({ path: path.join(screenshotDir, 'awaiting-ps334-house-rate.png'), fullPage: true })
+  await scrollOrdersTableToColumn(page, 'ratecost')
+  await page.screenshot({ path: path.join(screenshotDir, 'awaiting-ps334-rate-cost.png'), fullPage: true })
 
   // Missing-dims awaiting row — rate-dependent columns MUST surface the
   // actionable "— add dims" prompt, not a blank/spinner masquerading as data.
@@ -696,15 +691,14 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
   })
 
   // PS-334 - Selected Rate is the realized customer/billing amount, while
-  // House Rate remains separate and internal.
+  // Rate Cost remains the only internal-cost display.
   await assertColumns(page, shippedHouseFeature.orderId, {
     orderNum: { contains: 'SHIPPED-980006-HOUSE' },
     bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
-    houserate: { contains: '10.55', notContains: '14.25' },
     ratecost: { contains: '10.55' },
   })
-  await scrollOrdersTableToColumn(page, 'houserate')
-  await page.screenshot({ path: path.join(screenshotDir, 'shipped-ps334-house-rate.png'), fullPage: true })
+  await scrollOrdersTableToColumn(page, 'ratecost')
+  await page.screenshot({ path: path.join(screenshotDir, 'shipped-ps334-rate-cost.png'), fullPage: true })
 })
 
 // PS-077 — Shipped "Selected Rate" (internal `bestrate`) must resize compactly

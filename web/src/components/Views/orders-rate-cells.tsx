@@ -34,16 +34,6 @@ export function renderRateCostCell(order: OrderSummaryDto) {
     : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
 }
 
-// PS-334: House Rate is the backend-owned internal/house amount for house-feature rows.
-// Non-house rows and non-financial viewers get null from the backend money tuple, so this is
-// display-only and never reconstructs cost from Best/Selected Rate.
-export function renderHouseRateCell(order: OrderSummaryDto) {
-  const houseRate = getBackendRowMoney(order)?.houseRateAmount
-  return houseRate != null
-    ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap', fontWeight: 600 }}>{formatMoney(houseRate)}</span>
-    : <span style={{ color: 'var(--text3)', fontSize: 12 }}>-</span>
-}
-
 // PS-239: backend-computed marketplace fee (canViewFinancials-redacted). Shows even pre-rating.
 export function renderMarketplaceFeeCell(order: OrderSummaryDto) {
   const mp = getBackendRowMarketplace(order)

@@ -82,9 +82,8 @@ export interface OrderBestRateDto {
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
   // PS-308/PS-334: separated rate money model. Best/Selected Rate uses customerRateAmount; internal
-  // provider cost uses rateCostAmount; house-feature rows expose houseRateAmount as the named House
-  // Rate column. Internal cost/house/margin fields are admin-only and redacted for non-financial
-  // viewers.
+  // provider cost uses rateCostAmount. houseRateAmount is a deprecated compatibility alias derived
+  // from rateCostAmount only; it is not a separate SOT or visible House Rate column.
   customerRateAmount: number | null;
   rateCostAmount: number | null;
   houseRateAmount: number | null;
@@ -567,10 +566,6 @@ export function normalizeOrderBestRateDto(
   );
   const customerRateAmount = explicitCustomerRateAmount ?? nextBestNonHouseRate?.totalCost ?? totalCost;
   const rateCostAmount = explicitRateCostAmount ?? totalCost;
-  const explicitHouseRateAmount = readNullableNumber(
-    record.houseRateAmount ?? record.house_rate_amount ?? null,
-    `${path}.houseRateAmount`,
-  );
   const explicitShippingMarginAmount = readNullableNumber(
     record.shippingMarginAmount ?? record.shipping_margin_amount ?? houseMargin ?? null,
     `${path}.shippingMarginAmount`,
@@ -592,7 +587,7 @@ export function normalizeOrderBestRateDto(
   const rawHouseBadgeVisible = record.houseBadgeVisible ?? record.house_badge_visible ?? null;
   const houseBadgeVisible =
     rawHouseBadgeVisible == null ? (houseApplied === true ? true : null) : readBoolean(rawHouseBadgeVisible, `${path}.houseBadgeVisible`);
-  const houseRateAmount = explicitHouseRateAmount ?? (houseApplied === true ? rateCostAmount : null);
+  const houseRateAmount = houseApplied === true ? rateCostAmount : null;
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(

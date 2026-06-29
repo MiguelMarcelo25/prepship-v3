@@ -1,5 +1,5 @@
 /**
- * PS-334 guard - House Rate column + customer Best/Selected Rate contract.
+ * PS-334 guard - Rate Cost is the one internal-cost SOT.
  *
  * Offline only: no DB, no providers, no labels, no postage, no marketplace
  * notifications, no inventory, no production order/shipment edits, and no
@@ -48,62 +48,19 @@ const houseAwaiting = buildOrderRowMoneyDisplay({
 });
 
 check(
-  'backend money tuple exposes House Rate separately from customer Best Rate for awaiting house rows',
+  'backend money tuple uses rateCostAmount as the canonical internal cost',
   houseAwaiting?.markupSource === 'house_account' &&
     houseAwaiting.customerRateAmount === 14.25 &&
     houseAwaiting.rateCostAmount === 10.55 &&
-    (houseAwaiting as any).houseRateAmount === 10.55 &&
     closeTo(houseAwaiting.shippingMarginAmount, 3.7) &&
     houseAwaiting.insuranceAddOn === 1.25 &&
-    houseAwaiting.customerRateSource === 'projected_house_customer_rate' &&
-    houseAwaiting.rateCostSource === 'shipp_house_internal_cost',
+    houseAwaiting.customerRateSource === 'projected_house_customer_rate',
   houseAwaiting,
-);
-
-const normalAwaiting = buildOrderRowMoneyDisplay({
-  isAwaiting: true,
-  bestRateBaseAmount: 10.55,
-  selectedRateBaseAmount: null,
-  labelFinalCost: null,
-  markupRule: { type: 'percent', value: 35 },
-  insuranceAddOn: 1.25,
-  houseMarkedAmount: null,
-});
-
-check(
-  'house feature off / normal carrier row does not invent a House Rate spread',
-  normalAwaiting?.markupSource === 'carrier_markup' &&
-    normalAwaiting.customerRateAmount === 14.24 &&
-    normalAwaiting.rateCostAmount === 10.55 &&
-    (normalAwaiting as any).houseRateAmount === null,
-  normalAwaiting,
-);
-
-const houseShipped = buildOrderRowMoneyDisplay({
-  isAwaiting: false,
-  bestRateBaseAmount: null,
-  selectedRateBaseAmount: 10.55,
-  labelFinalCost: 10.55,
-  markupRule: null,
-  insuranceAddOn: 1.25,
-  houseMarkedAmount: 14.25,
-});
-
-check(
-  'backend money tuple exposes realized House Rate separately from customer Selected Rate for shipped house rows',
-  houseShipped?.source === 'selected_rate' &&
-    houseShipped.markupSource === 'house_account' &&
-    houseShipped.customerRateAmount === 14.25 &&
-    houseShipped.rateCostAmount === 10.55 &&
-    (houseShipped as any).houseRateAmount === 10.55 &&
-    closeTo(houseShipped.shippingMarginAmount, 3.7) &&
-    houseShipped.customerRateSource === 'realized_house_customer_rate',
-  houseShipped,
 );
 
 const normalizedHouseBest = normalizeOrderBestRateDto({
   carrierCode: 'ups',
-  serviceCode: 'shipp_ups_ground',
+  serviceCode: 'ups_ground',
   shipmentCost: 10.55,
   otherCost: 0,
   totalCost: 10.55,
@@ -117,39 +74,18 @@ const normalizedHouseBest = normalizeOrderBestRateDto({
   houseMargin: 3.7,
   customerRateAmount: 14.25,
   rateCostAmount: 10.55,
-  houseRateAmount: 10.55,
+  houseRateAmount: 99.99,
   shippingMarginAmount: 3.7,
   houseApplied: true,
   houseBadgeVisible: true,
 });
 
 check(
-  'OrderBestRateDto whitelist preserves explicit House Rate amount',
+  'OrderBestRateDto ignores drifting houseRateAmount and derives the deprecated alias from rateCostAmount',
   normalizedHouseBest?.customerRateAmount === 14.25 &&
     normalizedHouseBest.rateCostAmount === 10.55 &&
     (normalizedHouseBest as any).houseRateAmount === 10.55,
   normalizedHouseBest,
-);
-
-const legacyHouseBest = normalizeOrderBestRateDto({
-  carrierCode: 'ups',
-  serviceCode: 'shipp_ups_ground',
-  shipmentCost: 10.55,
-  otherCost: 0,
-  nextBestNonHouseRate: {
-    totalCost: 14.25,
-    shipmentCost: 14.25,
-    otherCost: 0,
-  },
-  houseMargin: 3.7,
-});
-
-check(
-  'OrderBestRateDto derives House Rate for legacy house tuples from backend internal cost',
-  legacyHouseBest?.customerRateAmount === 14.25 &&
-    legacyHouseBest.rateCostAmount === 10.55 &&
-    (legacyHouseBest as any).houseRateAmount === 10.55,
-  legacyHouseBest,
 );
 
 const HUGRAB_CONTEXT = { clientId: 4, clientName: 'HUGRAB', storeId: 378060 };
@@ -223,9 +159,11 @@ const redactedOrder = redactOrderFinancials(
 ) as any;
 
 check(
-  'order financial redaction hides House Rate/internal cost from non-financial viewers',
+  'order financial redaction hides internal cost and deprecated house alias from non-financial viewers',
   redactedOrder.bestRateWorkflow.money === null &&
+    redactedOrder.shipping.rateCostAmount === null &&
     redactedOrder.shipping.houseRateAmount === null &&
+    redactedOrder.overrides.bestRateJson.rateCostAmount === null &&
     redactedOrder.overrides.bestRateJson.houseRateAmount === null,
   redactedOrder,
 );
@@ -241,8 +179,9 @@ const redactedBrowse = redactRateBrowserMoney({
 }) as any;
 
 check(
-  'rate-browser redaction hides House Rate/internal cost from non-financial viewers',
+  'rate-browser redaction hides internal cost and deprecated house alias from non-financial viewers',
   redactedBrowse.bestRate.carrier_code === 'ups' &&
+    redactedBrowse.bestRate.rateCostAmount === null &&
     redactedBrowse.bestRate.houseRateAmount === null &&
     redactedBrowse.bestRate.customerRateAmount === null,
   redactedBrowse,
@@ -260,7 +199,7 @@ const billingDecision = decideShippingLineBilling({
 });
 
 check(
-  'billing charges customer Selected Rate, not House Rate',
+  'billing charges customer Selected Rate, not Rate Cost',
   billingDecision.billedAmount === 14.25 &&
     billingDecision.source === 'house_customer_rate' &&
     billingDecision.markupApplied === false,
@@ -286,58 +225,65 @@ const invoiceCsv = renderInvoiceCsvRow({
 });
 
 check(
-  'invoice CSV carries customer shipping amount and no House Rate/internal column',
-  invoiceCsv.includes('14.25') && !/House Rate|houseRateAmount|10\.55/.test(invoiceCsv),
+  'invoice CSV carries customer shipping amount and no internal cost column',
+  invoiceCsv.includes('14.25') && !/House Rate|houseRateAmount|Rate Cost|rateCostAmount|10\.55/.test(invoiceCsv),
   invoiceCsv,
 );
 
 const rateMoneySrc = read('src/services/shipping-workflow/rate-money.ts');
 check(
-  'backend money owner declares PS-334 House Rate field',
-  /houseRateAmount/.test(rateMoneySrc) && /houseRateAmount:\s*number\s*\|\s*null/.test(rateMoneySrc),
+  'backend money owner documents houseRateAmount as deprecated compatibility alias only',
+  /rateCostAmount:\s*number\s*\|\s*null/.test(rateMoneySrc) &&
+    /deprecated compatibility alias/i.test(rateMoneySrc) &&
+    /houseRateAmount:\s*input\.houseApplied && rateCostAmount != null \? round2\(rateCostAmount\) : null/.test(rateMoneySrc),
 );
 
 const houseStampSrc = read('src/services/shipping-workflow/house-tuple-stamp.ts');
 check(
-  'house stamp persists House Rate amount from internal cost owner',
-  /houseRateAmount:\s*drpCost/.test(houseStampSrc) && /house_rate_amount:\s*drpCost/.test(houseStampSrc),
+  'house tuple stamping no longer writes houseRateAmount as an independent persisted field',
+  !/houseRateAmount\s*:/.test(houseStampSrc) &&
+    !/house_rate_amount\s*:/.test(houseStampSrc) &&
+    /rateCostAmount:\s*drpCost/.test(houseStampSrc) &&
+    /rate_cost_amount:\s*drpCost/.test(houseStampSrc),
 );
 
 const columnsSrc = read('web/src/components/Views/orders-table-columns.ts');
 check(
-  'Orders table registers a House Rate column for Awaiting/Shipped',
-  /'houserate'/.test(columnsSrc) &&
-    /\{ key: 'houserate', label: 'House Rate'/.test(columnsSrc) &&
-    /hidden\.add\('houserate'\)/.test(columnsSrc) &&
-    /case 'houserate':[\s\S]*?houseRateAmount/.test(columnsSrc),
+  'Orders table has no visible House Rate column or sort key',
+  !/'houserate'/.test(columnsSrc) &&
+    !/House Rate/.test(columnsSrc) &&
+    !/case 'houserate'/.test(columnsSrc),
 );
 
-const rowDisplaySrc = read('web/src/components/Views/orders-row-display.tsx');
+const paritySrc = read('web/src/components/Views/orders-parity.ts');
 check(
-  'FE money getter passes through backend House Rate without recomputing',
-  /houseRateAmount: toNumberValue\(money\.houseRateAmount\)/.test(rowDisplaySrc),
+  'orders parity model no longer reserves a House Rate column',
+  !/'houserate'/.test(paritySrc) &&
+    !/houserate:/.test(paritySrc),
 );
 
 const rateCellsSrc = read('web/src/components/Views/orders-rate-cells.tsx');
 check(
-  'House Rate cell renders only backend houseRateAmount',
-  /export function renderHouseRateCell/.test(rateCellsSrc) &&
-    /getBackendRowMoney\(order\)\?\.houseRateAmount/.test(rateCellsSrc) &&
-    !/houseRateAmount\s*[-+*/]\s/.test(rateCellsSrc),
+  'orders rate cells do not render a separate House Rate cell',
+  !/renderHouseRateCell/.test(rateCellsSrc) &&
+    !/House Rate/.test(rateCellsSrc) &&
+    !/getBackendRowMoney\(order\)\?\.houseRateAmount/.test(rateCellsSrc),
 );
 
 const ordersViewSrc = read('web/src/components/Views/OrdersView.tsx');
 check(
-  'OrdersView delegates House Rate cell rendering',
-  /case 'houserate':\s*\n\s*return renderHouseRateCell\(order\)/.test(ordersViewSrc),
+  'OrdersView no longer delegates a House Rate column renderer',
+  !/case 'houserate'/.test(ordersViewSrc) &&
+    !/renderHouseRateCell/.test(ordersViewSrc),
 );
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
 check(
-  'Best/Selected Rate house rows do not render House Rate as a sub-line',
+  'Best/Selected Rate house rows do not render Rate Cost as a sub-line',
   /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderRateAmountWithMarkup\(null,\s*shippedBackendMoney\.markedAmount/.test(orderCellsSrc) &&
     /renderRateAmountWithMarkup\(backendMoney\.markupSource === 'house_account' \? null : backendMoney\.baseAmount,\s*backendMoney\.markedAmount/.test(orderCellsSrc),
 );
+
 check(
   'Awaiting Best Rate cell does not render the second-best sub-line',
   !/2nd\s*\{formatMoney\(secondBestAmount\)\}/.test(orderCellsSrc) &&
@@ -351,8 +297,8 @@ check(
 );
 
 if (failures > 0) {
-  console.error(`\nFAIL PS-334 House Rate column guard (${failures} failing)`);
+  console.error(`\nFAIL PS-334 Rate Cost SOT guard (${failures} failing)`);
   process.exit(1);
 }
 
-console.log('\nPASS PS-334 House Rate column guard');
+console.log('\nPASS PS-334 Rate Cost SOT guard');

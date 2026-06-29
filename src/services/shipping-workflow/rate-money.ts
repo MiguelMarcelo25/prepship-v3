@@ -144,8 +144,8 @@ export type OrderRowMoneyDisplay = {
   markupSource: 'carrier_markup' | 'house_account';
   // PS-308/PS-334: explicit separated money model. Keep base/marked/markup above as compatibility
   // aliases while API/UI callers move to these names: Best/Selected Rate = customerRateAmount,
-  // internal provider cost = rateCostAmount, house-feature internal cost = houseRateAmount, Shipping
-  // Margin = shippingMarginAmount. Ranking still lives in rates-combined.
+  // internal provider cost = rateCostAmount, Shipping Margin = shippingMarginAmount. houseRateAmount
+  // remains only as a deprecated compatibility alias derived from rateCostAmount for legacy payloads.
   customerRateAmount: number | null;
   rateCostAmount: number | null;
   houseRateAmount: number | null;

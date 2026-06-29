@@ -16,7 +16,6 @@ export type TableColumnKey =
   | 'total'
   | 'bestrate'
   | 'bestRateFinal'
-  | 'houserate'
   | 'ratecost'
   | 'margin'
   | 'marketplacefee'
@@ -76,7 +75,6 @@ const COLUMN_MIN_WIDTHS: Partial<Record<TableColumnKey, number>> = {
   customer: 120,
   itemname: 160,
   sku: 150,
-  houserate: 88,
   ratecost: 88,
   bestrate: 175,
   bestRateFinal: 100,
@@ -383,7 +381,6 @@ export function resolveColumnPrefs(
   }
   // PS-239: marketplace fee + profit are Awaiting + Shipped only (never Cancelled).
   if (currentStatus === 'cancelled') {
-    hiddenColumns.add('houserate' as TableColumnKey)
     hiddenColumns.add('ratecost' as TableColumnKey)
     hiddenColumns.add('marketplacefee' as TableColumnKey)
     hiddenColumns.add('profit' as TableColumnKey)
