@@ -48,3 +48,19 @@ export async function acquireLabelPurchaseLock(orderId: number): Promise<LabelPu
     },
   };
 }
+
+export async function isLabelPurchaseLockActive(orderId: number): Promise<boolean> {
+  const [classid, objid] = advisoryLockKeyPair(`label_purchase:order:${orderId}`);
+  const reserved = await sql.reserve();
+  let acquired = false;
+  try {
+    const rows = await reserved`SELECT pg_try_advisory_lock(${classid}, ${objid}) AS locked`;
+    acquired = rows[0]?.locked === true;
+    if (acquired) {
+      await reserved`SELECT pg_advisory_unlock(${classid}, ${objid})`;
+    }
+    return !acquired;
+  } finally {
+    reserved.release();
+  }
+}

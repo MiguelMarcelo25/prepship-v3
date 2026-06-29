@@ -102,9 +102,11 @@ assert(
 
 assert(
   routeSource.includes('durableJob?.jobId === jobId') &&
-    routeSource.includes("status: durableJob.status") &&
+    routeSource.includes('deriveQueueSendSnapshotStatus') &&
+    routeSource.includes('status: durableStatus.status') &&
+    routeSource.includes('stale_reason: durableStatus.staleReason') &&
     routeSource.includes('results: durableJob.resultSamples'),
-  'batch-send status route must fall back to the durable snapshot when the in-memory job is gone',
+  'batch-send status route must derive a safe durable snapshot fallback when the in-memory job is gone',
 );
 
 assert(

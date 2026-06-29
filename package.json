@@ -203,6 +203,7 @@
     "test:recalculate-all-timeout-resilience": "tsx scripts/recalculate-all-timeout-resilience-guard.ts",
     "test:recalculate-all-job-coordination": "tsx scripts/recalculate-all-job-coordination-guard.ts",
     "test:ps-347-cache-first-recalculate": "tsx scripts/ps-347-cache-first-recalculate-guard.ts",
+    "test:ps-347-print-queue-stale-job": "tsx scripts/ps-347-print-queue-stale-job-guard.ts",
     "test:ps-348-pre-expiry-rate-refresh": "tsx scripts/ps-348-pre-expiry-rate-refresh-guard.ts",
     "test:ps-293-awaiting-passive-cap": "tsx scripts/ps-293-awaiting-passive-cap-guard.ts",
     "test:ps-293-canonical-house-tuple": "tsx scripts/ps-293-canonical-house-tuple-guard.ts",

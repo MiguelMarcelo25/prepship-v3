@@ -108,9 +108,12 @@ report.check({
     const processBlock = processStart >= 0 && processEnd > processStart
       ? serviceSource.slice(processStart, processEnd)
       : '';
-    const existingLookupIndex = processBlock.indexOf('findExistingQueueableLabelForOrder(order.orderId)');
+    const existingLookupIndex = processBlock.indexOf('findExistingQueueSendLabel(order)');
     const createLabelIndex = processBlock.indexOf('createLabelV2({');
-    return serviceSource.includes('findExistingQueueableLabelForOrder') &&
+    return serviceSource.includes('findExistingQueueSendLabel') &&
+      serviceSource.includes('findExistingQueuedLabelForOrder') &&
+      serviceSource.includes("eq(printQueue.status, 'queued')") &&
+      serviceSource.includes('findExistingQueueableLabelForOrder') &&
       serviceSource.includes('eq(shipments.orderId, orderId)') &&
       serviceSource.includes('eq(shipments.voided, false)') &&
       serviceSource.includes('eq(shipments.isReturn, false)') &&
@@ -118,10 +121,10 @@ report.check({
       createLabelIndex >= 0 &&
       existingLookupIndex < createLabelIndex;
   })(),
-  why: 'This prevents the SP6744 bug: an already-shipped order with an existing label should queue that label, not buy postage again.',
-  evidence: 'processQueueSendOrder looks up the latest active non-return shipment label before calling createLabelV2.',
+  why: 'This prevents the SP6744 bug and retry duplicates: an order with an existing queued/shipment label should queue that label, not buy postage again.',
+  evidence: 'processQueueSendOrder looks up an active queued label, then the latest active non-return shipment label, before calling createLabelV2.',
   failure: 'Print to Queue may retry label creation for shipped/already-labeled orders and show Cannot create label for shipped order.',
-  fix: 'Restore findExistingQueueableLabelForOrder and call it before createLabelV2 in processQueueSendOrder.',
+  fix: 'Restore findExistingQueueSendLabel before createLabelV2 in processQueueSendOrder.',
 });
 
 report.finish();

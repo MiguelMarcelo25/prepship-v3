@@ -13,6 +13,7 @@ import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
 import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
+import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
@@ -33,6 +34,8 @@ import {
   getMergedPdfBase64,
   cleanupOldMergedPdfs,
 } from './print-queue-pdf-store';
+import { isQueueSendActiveStatus, type QueueSendStatusName } from './print-queue/queue-send-status';
+import { setJsonSettings } from './settings-json';
 
 // PS-138: the pure PDF-rendering helpers live in ./print-queue-pdf. runMergeJob + the staying
 // recipient/DB loaders import them here; the external surface is re-exported so the 8 guard/cert
@@ -146,7 +149,7 @@ export type QueueSendJobResult = {
 
 export type QueueSendJob = {
   jobId: string;
-  status: 'pending' | 'running' | 'done' | 'error';
+  status: QueueSendStatusName;
   clientIds: number[];
   progress: number;
   total: number;
@@ -283,6 +286,23 @@ export function isPrintQueueDurableStatusError(err: unknown): err is PrintQueueD
   return err instanceof PrintQueueDurableStatusError;
 }
 
+class QueueSendStaleLabelAttemptError extends Error {
+  readonly code = 'QUEUE_SEND_STALE_LABEL_ATTEMPT' as const;
+  readonly retryReason = 'stale_label_purchase_attempt' as const;
+
+  constructor(orderId: number) {
+    super(
+      `Previous label attempt for order ${orderId} timed out or was interrupted. No active purchase lock, shipment label, or queued label was found; verify ShipStation/order history, then retry Send to Queue.`
+    );
+    this.name = 'QueueSendStaleLabelAttemptError';
+  }
+}
+
+function isQueueSendStaleLabelAttemptError(err: unknown): err is QueueSendStaleLabelAttemptError {
+  return err instanceof QueueSendStaleLabelAttemptError ||
+    (err as { code?: unknown } | null)?.code === 'QUEUE_SEND_STALE_LABEL_ATTEMPT';
+}
+
 // Per user override unlock shipped data on 2026-05-23: shipped-label queue
 // handling unwraps known provider label URL objects while still rejecting empty/corrupt values.
 function normalizePrintQueueLabelUrl(labelUrl: unknown): string {
@@ -330,7 +350,7 @@ function toQueueSendSnapshot(job: QueueSendJob): QueueSendJobSnapshot {
     durableKey: PRINT_QUEUE_SEND_STATUS_KEY,
     jobId: job.jobId,
     status: job.status,
-    active: job.status === 'pending' || job.status === 'running',
+    active: isQueueSendActiveStatus(job.status),
     clientIds: [...job.clientIds],
     progress: job.progress,
     total: job.total,
@@ -387,18 +407,12 @@ export async function persistQueueSendJobSnapshot(
   options: { required?: boolean } = {},
 ): Promise<void> {
   try {
-    const value = JSON.stringify(toQueueSendSnapshot(job));
+    const snapshot = toQueueSendSnapshot(job);
     const jobKey = queueSendJobStatusKey(job.jobId);
-    await db
-      .insert(settings)
-      .values([
-        { key: PRINT_QUEUE_SEND_STATUS_KEY, value },
-        { key: jobKey, value },
-      ])
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: { value },
-      });
+    await setJsonSettings([
+      { key: PRINT_QUEUE_SEND_STATUS_KEY, value: snapshot },
+      { key: jobKey, value: snapshot },
+    ]);
   } catch (err) {
     console.warn(
       '[print-queue] failed to persist batch-send status:',
@@ -600,6 +614,34 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
   return normalizePrintQueueLabelUrl(recovered.labelUrl);
 }
 
+async function findExistingQueuedLabelForOrder(
+  order: Pick<QueueSendOrderInput, 'orderId' | 'clientId'>,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ labelUrl: printQueue.labelUrl })
+    .from(printQueue)
+    .where(
+      and(
+        eq(printQueue.orderId, String(order.orderId)),
+        eq(printQueue.clientId, order.clientId),
+        eq(printQueue.status, 'queued'),
+      ),
+    )
+    .limit(1);
+
+  if (!row?.labelUrl) return null;
+  return normalizePrintQueueLabelUrl(row.labelUrl);
+}
+
+async function findExistingQueueSendLabel(
+  order: Pick<QueueSendOrderInput, 'orderId' | 'clientId'>,
+): Promise<string | null> {
+  // Per user override unlock shipped data on 2026-05-23: Send-to-Queue may reuse an
+  // already queued label or recover an existing purchased shipment label; it never
+  // creates/voids shipped history or buys duplicate postage in this lookup.
+  return await findExistingQueuedLabelForOrder(order) ?? await findExistingQueueableLabelForOrder(order.orderId);
+}
+
 function printQueueScopePredicate(scope: PrintQueueListScope): SQL {
   const clientIds = normalizeScopeIds(scope.scopeClientIds);
   const storeIds = normalizeScopeIds(scope.scopeStoreIds);
@@ -739,14 +781,16 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForExistingQueueableLabel(orderId: number): Promise<string | null> {
+async function waitForExistingQueueableLabel(
+  order: Pick<QueueSendOrderInput, 'orderId' | 'clientId'>,
+): Promise<string | null> {
   const deadline = Date.now() + QUEUE_SEND_IN_PROGRESS_RECOVERY_MS;
   while (Date.now() < deadline) {
-    const labelUrl = await findExistingQueueableLabelForOrder(orderId);
+    const labelUrl = await findExistingQueueSendLabel(order);
     if (labelUrl) return labelUrl;
     await delay(QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS);
   }
-  return findExistingQueueableLabelForOrder(orderId);
+  return findExistingQueueSendLabel(order);
 }
 
 async function repairMissingConfirmationForQueuedLabel(orderId: number | string): Promise<void> {
@@ -797,7 +841,7 @@ async function processQueueSendOrder(
     let existingLabelUrl = await timeQueueStep(
       timings,
       'existingLabelLookupMs',
-      () => findExistingQueueableLabelForOrder(order.orderId),
+      () => findExistingQueueSendLabel(order),
     );
     if (existingLabelUrl) {
       labelUrl = existingLabelUrl;
@@ -828,12 +872,21 @@ async function processQueueSendOrder(
           const recoveredAfterInProgress = await timeQueueStep(
             timings,
             'inProgressRecoveryMs',
-            () => waitForExistingQueueableLabel(order.orderId),
+            () => waitForExistingQueueableLabel(order),
           );
           if (recoveredAfterInProgress) {
             labelUrl = recoveredAfterInProgress;
             timings.labelSource = 'in_progress_recovered';
-          } else throw err;
+          } else {
+            const lockActive = await isLabelPurchaseLockActive(order.orderId);
+            const recoveredAfterLockCheck = await findExistingQueueSendLabel(order);
+            if (recoveredAfterLockCheck) {
+              labelUrl = recoveredAfterLockCheck;
+              timings.labelSource = 'in_progress_recovered';
+            } else if (!lockActive) {
+              throw new QueueSendStaleLabelAttemptError(order.orderId);
+            } else throw err;
+          }
         } else {
           existingLabelUrl = getExistingLabelUrl(err);
           // Per user override unlock shipped data on 2026-05-23: recover labels
@@ -841,7 +894,7 @@ async function processQueueSendOrder(
           const recoverCreatedLabelUrl = existingLabelUrl ?? await timeQueueStep(
             timings,
             'recoveryLookupMs',
-            () => findExistingQueueableLabelForOrder(order.orderId),
+            () => findExistingQueueSendLabel(order),
           );
           if (!recoverCreatedLabelUrl) throw err;
           labelUrl = recoverCreatedLabelUrl;
@@ -1108,12 +1161,13 @@ async function runQueueSendJob(
           // a "refresh the rate and click again" prompt for eligible failures
           // and must never auto-repurchase.
           const retry = classifyLabelPurchaseRetry(err);
+          const staleLabelAttempt = isQueueSendStaleLabelAttemptError(err);
           job.results.push({
             orderId: order.orderId,
             success: false,
             error: err instanceof Error ? err.message : 'Unknown error',
             retryEligible: retry.retryEligible,
-            retryReason: retry.retryReason,
+            retryReason: staleLabelAttempt ? err.retryReason : retry.retryReason,
             timings: { totalMs: elapsedSince(orderStartedAt), labelSource: 'failed' },
           });
         } finally {

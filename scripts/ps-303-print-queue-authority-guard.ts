@@ -109,7 +109,7 @@ const runJobBlock = blockBetween(
   'export async function getMergedQueueLabels',
 );
 
-const findExistingIndex = processBlock.indexOf('findExistingQueueableLabelForOrder(order.orderId)');
+const findExistingIndex = processBlock.indexOf('findExistingQueueSendLabel(order)');
 const createLabelIndex = processBlock.indexOf('createLabelV2({');
 const queueIndex = processBlock.indexOf('addToQueue({');
 
@@ -125,7 +125,7 @@ check('backend process creates missing labels through createLabelV2 with worker 
   processBlock.includes('}, GLOBAL_SCOPE)'));
 check('backend process recovers labels created before a later queue failure',
   processBlock.includes('existingLabelUrl = getExistingLabelUrl(err)') &&
-  processBlock.includes('findExistingQueueableLabelForOrder(order.orderId)') &&
+  processBlock.includes('findExistingQueueSendLabel(order)') &&
   processBlock.includes('if (!recoverCreatedLabelUrl) throw err'));
 check('backend process normalizes the final label URL before queue insert',
   processBlock.includes('const queueableLabelUrl = normalizePrintQueueLabelUrl(labelUrl)') &&
@@ -146,7 +146,7 @@ check('worker calls the backend process and classifies retry eligibility structu
   runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope)') &&
   runJobBlock.includes('classifyLabelPurchaseRetry(err)') &&
   runJobBlock.includes('retryEligible: retry.retryEligible') &&
-  runJobBlock.includes('retryReason: retry.retryReason'));
+  runJobBlock.includes('retryReason: staleLabelAttempt ? err.retryReason : retry.retryReason'));
 
 const printQueueRoute = read('src/routes/print-queue.ts');
 const batchSendBlock = blockBetween(

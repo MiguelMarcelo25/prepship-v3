@@ -28,6 +28,7 @@ import {
   type PrintQueueListScope,
   type QueueSendJobSnapshot,
 } from '../services/print-queue';
+import { deriveQueueSendSnapshotStatus } from '../services/print-queue/queue-send-status';
 import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
 import {
   getInternalOpsClientStoreScope,
@@ -508,19 +509,26 @@ app.get('/batch-send/status/:jobId', async (c) => {
     await withDurableStatusTimeout(getLatestQueueSendJobSnapshot);
   if (!job) {
     if (durableJob?.jobId === jobId && await canViewQueueSendSnapshot(durableJob, scope)) {
+      const durableStatus = deriveQueueSendSnapshotStatus(durableJob, {
+        inMemoryJobPresent: false,
+      });
       return c.json({
         job_id: durableJob.jobId,
-        status: durableJob.status,
-        progress: durableJob.progress,
+        status: durableStatus.status,
+        progress: durableStatus.total > 0
+          ? Math.round((durableStatus.current / durableStatus.total) * 100)
+          : durableJob.progress,
         total: durableJob.total,
-        current: durableJob.current,
-        queued: durableJob.queued,
-        failed: durableJob.failed,
-        message: durableJob.message,
+        current: durableStatus.current,
+        queued: durableStatus.queued,
+        failed: durableStatus.failed,
+        message: durableStatus.message,
         client_id: durableJob.clientId,
         queued_entry_ids: durableJob.queuedEntryIds,
         results: durableJob.resultSamples,
-        error: durableJob.errorMessage,
+        error: durableStatus.errorMessage,
+        stale: durableStatus.staleReason != null,
+        stale_reason: durableStatus.staleReason,
         durableJob,
       });
     }
@@ -542,6 +550,8 @@ app.get('/batch-send/status/:jobId', async (c) => {
     queued_entry_ids: job.queuedEntryIds,
     results: job.results,
     error: job.errorMessage ?? null,
+    stale: false,
+    stale_reason: null,
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
   });
 });

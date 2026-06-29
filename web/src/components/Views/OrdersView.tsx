@@ -950,9 +950,9 @@ export default function OrdersView({
     )
   }
 
-  const finishQueueActionProgress = (label: string) => {
+  const finishQueueActionProgress = (label: string, options: { complete?: boolean } = {}) => {
     setQueueActionProgress((current) => current
-      ? { ...current, label, completed: current.total }
+      ? { ...current, label, completed: options.complete === false ? current.completed : current.total }
       : current
     )
     clearQueueActionProgressTimer()
@@ -2813,6 +2813,21 @@ export default function OrdersView({
       )
 
       if (status.status === 'done') return status
+      if (status.status === 'interrupted') {
+        setQueueActionProgress((active) => active
+          ? {
+            ...active,
+            label: 'Queue interrupted',
+            total: progressTotal,
+            completed: Math.min(progressTotal, completedOffset + current),
+            failed: failedOffset + failed,
+          }
+          : active
+        )
+        const interrupted = new Error(status.message || 'Queue job interrupted before it could finish')
+        ;(interrupted as Error & { code?: string }).code = 'QUEUE_SEND_INTERRUPTED'
+        throw interrupted
+      }
       if (status.status === 'error') {
         throw new Error(status.error || status.message || 'Queue send failed')
       }
@@ -2954,6 +2969,7 @@ export default function OrdersView({
     const skippedFailed = skipped.length
     const fallbackClientId = toNumberValue(queueOrders[0]?.client_id) ?? null
     let finalStatus: any = null
+    let queueInterrupted = false
 
     for (const entry of skipped) {
       markPersistentQueueJobOrder(queueJobId, entry.order.orderId, true)
@@ -2981,19 +2997,32 @@ export default function OrdersView({
             : Math.min(BACKEND_QUEUE_SEND_CONCURRENCY, Math.max(1, queueOrders.length)),
         })
         attachPersistentQueueBackendJob(queueJobId, started.job_id)
-        finalStatus = await pollBackendQueueSendJob(started.job_id, Math.max(jobOrders.length, 1), {
-          completed: skippedFailed,
-          failed: skippedFailed,
-        })
+        try {
+          finalStatus = await pollBackendQueueSendJob(started.job_id, Math.max(jobOrders.length, 1), {
+            completed: skippedFailed,
+            failed: skippedFailed,
+          })
+        } catch (error) {
+          queueInterrupted = (error as { code?: unknown } | null)?.code === 'QUEUE_SEND_INTERRUPTED'
+          throw error
+        }
         await refreshQueueAfterBackendStatus(finalStatus, fallbackClientId)
       }
 
-      await refetchOrders()
+      try {
+        await refetchOrders()
+      } catch (error) {
+        console.warn('[print-queue] post-queue orders refresh failed', error instanceof Error ? error.message : error)
+        showToast('Queue result saved, but the Orders table refresh timed out. Use Retry if the table does not reload.', 'error')
+      }
     } finally {
       setQueueLoading(false)
       finishPersistentQueueJob(queueJobId)
       const queued = (toNumberValue(finalStatus?.queued) ?? 0) + directQueued
-      finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
+      finishQueueActionProgress(
+        queueInterrupted ? 'Queue interrupted' : queued > 0 ? 'Queue updated' : 'Queue checked',
+        queueInterrupted ? { complete: false } : {},
+      )
     }
 
     const backendResults = (finalStatus?.results ?? []) as Array<Record<string, unknown>>

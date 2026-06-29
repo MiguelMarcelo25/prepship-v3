@@ -203,19 +203,21 @@ const processBlock = blockBetween(
   '// ---- CRUD',
 );
 checkPatterns('Print Queue worker owns existing-label, missing-label, recovery, normalization, and queue write sequence', processBlock, [
-  /let existingLabelUrl = await findExistingQueueableLabelForOrder\(order\.orderId\)/,
-  /const created = await createLabelV2\(\{/,
-  /\.\.\.order\.label/,
+  /let existingLabelUrl = await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
+  /const created = await timeQueueStep\(/,
+  /createLabelV2\(\{/,
+  /const labelInput = order\.label/,
+  /\.\.\.labelInput/,
   /labelUrl = created\.labelUrl/,
   /existingLabelUrl = getExistingLabelUrl\(err\)/,
-  /const recoverCreatedLabelUrl = existingLabelUrl \?\? await findExistingQueueableLabelForOrder\(order\.orderId\)/,
+  /const recoverCreatedLabelUrl = existingLabelUrl \?\? await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
   /if \(!recoverCreatedLabelUrl\) throw err/,
   /const queueableLabelUrl = normalizePrintQueueLabelUrl\(labelUrl\)/,
-  /await addToQueue\(\{/,
+  /timeQueueStep\([\s\S]*?addToQueue\(\{/,
 ]);
 check('Print Queue worker checks existing label before createLabelV2',
-  processBlock.indexOf('findExistingQueueableLabelForOrder(order.orderId)') >= 0 &&
-  processBlock.indexOf('const created = await createLabelV2({') > processBlock.indexOf('findExistingQueueableLabelForOrder(order.orderId)'));
+  processBlock.indexOf('findExistingQueueSendLabel(order)') >= 0 &&
+  processBlock.indexOf('createLabelV2({') > processBlock.indexOf('findExistingQueueSendLabel(order)'));
 
 checkPatterns('Print Queue addToQueue owns duplicate queue idempotency and confirmation repair', printQueue, [
   /export async function addToQueue/,
@@ -239,7 +241,7 @@ checkPatterns('Print Queue state transitions keep queued, printed, delivered, an
 checkPatterns('Print Queue job reports structural retry eligibility instead of raw proof-message ownership', printQueue, [
   /classifyLabelPurchaseRetry\(err\)/,
   /retryEligible: retry\.retryEligible/,
-  /retryReason: retry\.retryReason/,
+  /retryReason: staleLabelAttempt \? err\.retryReason : retry\.retryReason/,
   /persistQueueSendJobSnapshot\(job, \{ required: true \}\)/,
 ]);
 
