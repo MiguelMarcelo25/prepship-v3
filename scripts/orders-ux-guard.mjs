@@ -74,6 +74,25 @@ const checks = [
       ordersView.includes('handleBatchAction={handleBatchAction}'),
   },
   {
+    name: 'batch Send to Queue clears completed selections before the next batch',
+    pass: (() => {
+      const handlerStart = normalizedOrdersView.indexOf("async function handleBatchAction(mode: 'print' | 'queue')")
+      if (handlerStart === -1) return false
+      const queueBranchStart = normalizedOrdersView.indexOf("if (mode === 'queue')", handlerStart)
+      if (queueBranchStart === -1) return false
+      const printBranchStart = normalizedOrdersView.indexOf('const queueJobId', queueBranchStart)
+      if (printBranchStart === -1) return false
+      const queueBranch = normalizedOrdersView.slice(queueBranchStart, printBranchStart)
+
+      return (
+        queueBranch.includes('sendOrdersToQueueBackend(batchOrders') &&
+        queueBranch.includes('finally {') &&
+        queueBranch.includes('setBatchBusy(false)') &&
+        queueBranch.includes('clearSelection()')
+      )
+    })(),
+  },
+  {
     name: 'shipped and cancelled selections are status-appropriate',
     pass:
       selectionToolbar.includes('Queue Existing Labels') &&

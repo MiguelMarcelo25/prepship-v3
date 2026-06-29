@@ -4709,6 +4709,7 @@ export default function OrdersView({
         showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')
       } finally {
         setBatchBusy(false)
+        clearSelection()
       }
       return
     }
