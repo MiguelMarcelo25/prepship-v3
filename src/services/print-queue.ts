@@ -118,6 +118,16 @@ export type QueueSendOrderInput = {
   scope?: PrintQueueListScope;
 };
 
+export type QueueSendTimingBreakdown = {
+  totalMs: number;
+  labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'failed';
+  existingLabelLookupMs?: number;
+  labelPurchaseMs?: number;
+  inProgressRecoveryMs?: number;
+  recoveryLookupMs?: number;
+  queueWriteMs?: number;
+};
+
 export type QueueSendJobResult = {
   orderId: number;
   success: boolean;
@@ -131,6 +141,7 @@ export type QueueSendJobResult = {
   // a re-rate on eligible failures; it never auto-repurchases.
   retryEligible?: boolean;
   retryReason?: string | null;
+  timings?: QueueSendTimingBreakdown;
 };
 
 export type QueueSendJob = {
@@ -168,6 +179,7 @@ type QueueSendResultSnapshot = {
   // failure only PROMPTS the operator — nothing auto-repurchases.
   retryEligible?: boolean;
   retryReason?: string | null;
+  timings?: QueueSendTimingBreakdown;
 };
 
 export type QueueSendJobSnapshot = {
@@ -339,6 +351,7 @@ function toQueueSendSnapshot(job: QueueSendJob): QueueSendJobSnapshot {
       // PS-191: retry verdict survives into the durable snapshot too.
       retryEligible: result.retryEligible,
       retryReason: result.retryReason ?? null,
+      timings: result.timings,
     })),
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt).toISOString(),
@@ -691,6 +704,33 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
   });
 }
 
+function elapsedSince(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt);
+}
+
+async function timeQueueStep<T>(
+  timings: QueueSendTimingBreakdown,
+  key: Exclude<keyof QueueSendTimingBreakdown, 'totalMs' | 'labelSource'>,
+  task: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await task();
+  } finally {
+    timings[key] = (timings[key] ?? 0) + elapsedSince(startedAt);
+  }
+}
+
+function withTotalTiming(result: QueueSendJobResult, startedAt: number): QueueSendJobResult {
+  return {
+    ...result,
+    timings: {
+      ...(result.timings ?? {}),
+      totalMs: elapsedSince(startedAt),
+    },
+  };
+}
+
 function isLabelPurchaseInProgressError(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === 'LABEL_PURCHASE_IN_PROGRESS';
 }
@@ -744,41 +784,68 @@ async function processQueueSendOrder(
   order: QueueSendOrderInput,
   scope: PrintQueueListScope = {}
 ): Promise<QueueSendJobResult> {
+  const startedAt = Date.now();
+  const timings: QueueSendTimingBreakdown = { totalMs: 0 };
   let labelUrl: unknown = order.labelUrl ?? null;
   let trackingNumber: string | null = null;
 
+  if (labelUrl) {
+    timings.labelSource = 'provided';
+  }
+
   if (!labelUrl) {
-    let existingLabelUrl = await findExistingQueueableLabelForOrder(order.orderId);
+    let existingLabelUrl = await timeQueueStep(
+      timings,
+      'existingLabelLookupMs',
+      () => findExistingQueueableLabelForOrder(order.orderId),
+    );
     if (existingLabelUrl) {
       labelUrl = existingLabelUrl;
+      timings.labelSource = 'existing';
     } else if (!order.label) {
       throw new Error('Missing label payload');
     } else {
+      const labelInput = order.label;
       try {
         // PS-233: the print-queue worker is a TRUSTED internal caller — the
         // operator's scope was already enforced when the entry was queued, and
         // the queue routes are gated by print_queue:write (portal roles can't
         // reach them). GLOBAL_SCOPE = no per-resource restriction here.
-        const created = await createLabelV2({
-          ...order.label,
-          orderId: order.orderId,
-          orderNumber: order.orderNumber ?? order.label.orderNumber,
-        }, GLOBAL_SCOPE);
+        const created = await timeQueueStep(
+          timings,
+          'labelPurchaseMs',
+          () => createLabelV2({
+            ...labelInput,
+            orderId: order.orderId,
+            orderNumber: order.orderNumber ?? labelInput.orderNumber,
+          }, GLOBAL_SCOPE),
+        );
         labelUrl = created.labelUrl;
         trackingNumber = created.trackingNumber;
+        timings.labelSource = 'created';
       } catch (err) {
         if (isLabelPurchaseInProgressError(err)) {
-          const recoveredAfterInProgress = await waitForExistingQueueableLabel(order.orderId);
+          const recoveredAfterInProgress = await timeQueueStep(
+            timings,
+            'inProgressRecoveryMs',
+            () => waitForExistingQueueableLabel(order.orderId),
+          );
           if (recoveredAfterInProgress) {
             labelUrl = recoveredAfterInProgress;
+            timings.labelSource = 'in_progress_recovered';
           } else throw err;
         } else {
           existingLabelUrl = getExistingLabelUrl(err);
           // Per user override unlock shipped data on 2026-05-23: recover labels
           // that were persisted before a later post-label queue step failed.
-          const recoverCreatedLabelUrl = existingLabelUrl ?? await findExistingQueueableLabelForOrder(order.orderId);
+          const recoverCreatedLabelUrl = existingLabelUrl ?? await timeQueueStep(
+            timings,
+            'recoveryLookupMs',
+            () => findExistingQueueableLabelForOrder(order.orderId),
+          );
           if (!recoverCreatedLabelUrl) throw err;
           labelUrl = recoverCreatedLabelUrl;
+          timings.labelSource = 'recovered';
         }
       }
     }
@@ -787,18 +854,23 @@ async function processQueueSendOrder(
   if (!labelUrl) throw new Error('Label was created without a queueable URL');
   const queueableLabelUrl = normalizePrintQueueLabelUrl(labelUrl);
 
-  const { entry, alreadyQueued } = await addToQueue({
-    clientId: order.clientId,
-    orderId: String(order.orderId),
-    orderNumber: order.orderNumber ?? null,
-    labelUrl: queueableLabelUrl,
-    skuGroupId: order.skuGroupId,
-    primarySku: order.primarySku ?? null,
-    itemDescription: order.itemDescription ?? null,
-    orderQty: order.orderQty ?? 1,
-    multiSkuData: order.multiSkuData ?? null,
-    scope,
-  });
+  const { entry, alreadyQueued } = await timeQueueStep(
+    timings,
+    'queueWriteMs',
+    () => addToQueue({
+      clientId: order.clientId,
+      orderId: String(order.orderId),
+      orderNumber: order.orderNumber ?? null,
+      labelUrl: queueableLabelUrl,
+      skuGroupId: order.skuGroupId,
+      primarySku: order.primarySku ?? null,
+      itemDescription: order.itemDescription ?? null,
+      orderQty: order.orderQty ?? 1,
+      multiSkuData: order.multiSkuData ?? null,
+      scope,
+    }),
+  );
+  timings.totalMs = elapsedSince(startedAt);
 
   return {
     orderId: order.orderId,
@@ -807,6 +879,7 @@ async function processQueueSendOrder(
     alreadyQueued,
     labelUrl: queueableLabelUrl,
     trackingNumber,
+    timings,
   };
 }
 
@@ -1015,6 +1088,7 @@ async function runQueueSendJob(
     await withConcurrency(
       orders,
       async (order) => {
+        const orderStartedAt = Date.now();
         try {
           const result = await Promise.race([
             processQueueSendOrder(order, order.scope ?? scope),
@@ -1026,7 +1100,7 @@ async function runQueueSendJob(
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);
-          job.results.push(result);
+          job.results.push(withTotalTiming(result, orderStartedAt));
         } catch (err) {
           job.failed += 1;
           // PS-191: classify retry eligibility STRUCTURALLY (proof-error code
@@ -1040,6 +1114,7 @@ async function runQueueSendJob(
             error: err instanceof Error ? err.message : 'Unknown error',
             retryEligible: retry.retryEligible,
             retryReason: retry.retryReason,
+            timings: { totalMs: elapsedSince(orderStartedAt), labelSource: 'failed' },
           });
         } finally {
           job.current += 1;

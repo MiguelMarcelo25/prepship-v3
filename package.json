@@ -108,6 +108,7 @@
     "test:ps-297-recipient-override": "tsx scripts/ps-297-recipient-override-guard.ts",
     "test:batch-send-proof-forwarding": "tsx scripts/batch-send-selected-rate-proof-forwarding-guard.ts",
     "test:print-queue-in-progress-recovery": "node scripts/print-queue-in-progress-recovery-guard.mjs",
+    "test:print-queue-timing-proof": "node scripts/print-queue-timing-proof-guard.mjs",
     "test:ebay-nosku-title-fallback-grouping": "tsx scripts/ebay-nosku-title-fallback-grouping-guard.ts",
     "test:batch-header-package-size": "tsx scripts/batch-header-package-size-guard.ts",
     "test:daily-orders-trend-count": "tsx scripts/daily-orders-trend-count-not-value-guard.ts",

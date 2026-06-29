@@ -111,15 +111,17 @@ const runJobBlock = blockBetween(
 
 const findExistingIndex = processBlock.indexOf('findExistingQueueableLabelForOrder(order.orderId)');
 const createLabelIndex = processBlock.indexOf('createLabelV2({');
-const queueIndex = processBlock.indexOf('await addToQueue({');
+const queueIndex = processBlock.indexOf('addToQueue({');
 
 check('backend process checks for an existing queueable label before purchase',
   findExistingIndex >= 0 && createLabelIndex > findExistingIndex);
 check('backend process creates missing labels through createLabelV2 with worker scope',
-  processBlock.includes('const created = await createLabelV2({') &&
-  processBlock.includes('...order.label') &&
+  processBlock.includes('const created = await timeQueueStep(') &&
+  processBlock.includes('() => createLabelV2({') &&
+  processBlock.includes('const labelInput = order.label') &&
+  processBlock.includes('...labelInput') &&
   processBlock.includes('orderId: order.orderId') &&
-  processBlock.includes('orderNumber: order.orderNumber ?? order.label.orderNumber') &&
+  processBlock.includes('orderNumber: order.orderNumber ?? labelInput.orderNumber') &&
   processBlock.includes('}, GLOBAL_SCOPE)'));
 check('backend process recovers labels created before a later queue failure',
   processBlock.includes('existingLabelUrl = getExistingLabelUrl(err)') &&

@@ -25,7 +25,7 @@ const checks = [
   {
     name: 'queue-send waits for the first purchase to persist a queueable label before failing',
     pass: (() => {
-      const catchIndex = service.indexOf('} catch (err) {', service.indexOf('const created = await createLabelV2({'))
+      const catchIndex = service.indexOf('} catch (err) {', service.indexOf('() => createLabelV2({'))
       if (catchIndex < 0) return false
       const catchBlock = service.slice(catchIndex, service.indexOf('\n    }', catchIndex) + 6)
       return (

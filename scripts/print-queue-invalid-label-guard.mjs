@@ -102,11 +102,22 @@ report.check({
 
 report.check({
   name: 'Batch-send reuses existing active labels before creating labels',
-  condition: serviceSource.includes('findExistingQueueableLabelForOrder') &&
-    serviceSource.includes('eq(shipments.orderId, orderId)') &&
-    serviceSource.includes('eq(shipments.voided, false)') &&
-    serviceSource.includes('eq(shipments.isReturn, false)') &&
-    serviceSource.includes('existingLabelUrl = await findExistingQueueableLabelForOrder(order.orderId)'),
+  condition: (() => {
+    const processStart = serviceSource.indexOf('async function processQueueSendOrder(');
+    const processEnd = serviceSource.indexOf('export async function startQueueSendJob(', processStart);
+    const processBlock = processStart >= 0 && processEnd > processStart
+      ? serviceSource.slice(processStart, processEnd)
+      : '';
+    const existingLookupIndex = processBlock.indexOf('findExistingQueueableLabelForOrder(order.orderId)');
+    const createLabelIndex = processBlock.indexOf('createLabelV2({');
+    return serviceSource.includes('findExistingQueueableLabelForOrder') &&
+      serviceSource.includes('eq(shipments.orderId, orderId)') &&
+      serviceSource.includes('eq(shipments.voided, false)') &&
+      serviceSource.includes('eq(shipments.isReturn, false)') &&
+      existingLookupIndex >= 0 &&
+      createLabelIndex >= 0 &&
+      existingLookupIndex < createLabelIndex;
+  })(),
   why: 'This prevents the SP6744 bug: an already-shipped order with an existing label should queue that label, not buy postage again.',
   evidence: 'processQueueSendOrder looks up the latest active non-return shipment label before calling createLabelV2.',
   failure: 'Print to Queue may retry label creation for shipped/already-labeled orders and show Cannot create label for shipped order.',
