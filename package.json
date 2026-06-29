@@ -493,6 +493,7 @@
     "test:ps-342-legacy-rate-display-adapter-cleanup": "tsx scripts/ps-342-legacy-rate-display-adapter-cleanup-guard.ts",
     "test:ps-343-ratebrowsermodal-money-normalization-cleanup": "tsx scripts/ps-343-ratebrowsermodal-money-normalization-cleanup-guard.ts",
     "test:ps-344-order-row-workflow-shape-cleanup": "tsx scripts/ps-344-order-row-workflow-shape-cleanup-guard.ts",
+    "test:ps-345-rate-loading-sot": "tsx scripts/ps-345-rate-loading-sot-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",
     "test:ps-307-marked-rate-comparison-closeout": "tsx scripts/ps-307-marked-rate-comparison-closeout-guard.ts",

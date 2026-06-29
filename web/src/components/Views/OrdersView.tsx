@@ -208,7 +208,6 @@ interface AllMatchingSelectionState {
   selectionLimit: number
 }
 
-const AUTO_BEST_RATE_WATCHDOG_MS = 45_000
 const BATCH_RECALCULATE_TIMEOUT_MS = 45_000
 const BATCH_RECALCULATE_CONCURRENCY = 3
 
@@ -334,21 +333,6 @@ const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order be
 // on the genuine "couldn't re-rate" failure branches inside refreshStaleRateForOrder; this one is
 // used only where we immediately kick off the one-click re-rate (never auto-repurchases — PS-191).
 const RATE_EXPIRED_RERATE_MESSAGE = 'Rate expired — re-rate this order before printing.'
-// Passive auto-rating live-rates a small visible slice in the browser; overflow
-// rows show a spinner and are handed to the backend backfill/checker.
-// Lowered 4 -> 2 (Phase 1 rate-browser speedup): the background drain shares one
-// process-wide ShipStation rate limiter with the interactive Rate Browser, so a
-// smaller background footprint stops the modal's live fan-out from being starved.
-const PASSIVE_LIVE_BEST_RATE_CONCURRENCY = 2
-// PS-293: the browser may live-rate at most this many Awaiting rows per mount; the rest are handed to
-// the backend backfill so the frontend NEVER drains a 40+ job live-rating queue (the reported bug:
-// rows only got correct rates after clicking Browse Rates one-by-one). This is the card's explicit
-// "immediate safety requirement".
-const PASSIVE_LIVE_BEST_RATE_MAX_ROWS = 5
-// PS-293: the passive overflow uses a CACHE-FRIENDLY backfill (re-rate stale/missing rows, reuse fresh
-// cache) — NOT the force-live maxAgeHours:0 the manual Recalculate All button uses — so auto-triggering
-// it on page load doesn't force-live-re-rate the whole table or re-create the #750 rate-limiter burst.
-const PASSIVE_BACKFILL_MAX_AGE_HOURS = 24
 const BATCH_QUEUE_CONCURRENCY = 2
 // PS-perf (DJ 2026-06-23): the MAX queue-send concurrency. Auto-sized DOWN to the batch size at the
 // call site so a typical small send runs in ONE wave instead of ceil(N/5); the backend clamps to
@@ -532,14 +516,11 @@ export default function OrdersView({
         const job = await fetchRecalculateAllJob(recalcAllJobId)
         if (cancelled) return
         recalcAllPollFailures = 0
-        // Only a MANUAL Recalculate All shows the progress chip + the button spinner; the automatic
-        // passive overflow backfill runs SILENTLY (it sets neither the ref nor the summary).
+        // Only an operator-started Recalculate All reaches this poller now; PS-345 removed the
+        // frontend passive overflow handoff so hidden page-load jobs cannot share this state.
         if (recalcAllUserInitiatedRef.current) setRecalcAllSummary(summarizeRecalculateAllJob(job))
         if (isRecalculateAllJobDone(job)) {
           setRecalcAllJobId(null)
-          // Do NOT reset passiveBackfillStartedRef here. The passive overflow backfill fires at most
-          // ONCE per mount; resetting it let a never-ratable overflow row (needs dims / no live rate)
-          // re-kick the job on every completion → the "infinite Recalculate All" loop.
           recalcAllUserInitiatedRef.current = false
           if (job.failed) {
             showToast(`Recalculate All finished — ${summarizeRecalculateAllJob(job)}`, 'error')
@@ -549,9 +530,8 @@ export default function OrdersView({
           // RC5 settle-poll: the backend finalizes the last rows from a few ms up to a couple MINUTES after
           // the job reports done — a slow/retried ShipStation carrier (RC1) can land a rate well after the
           // job's last worker. So keep refetching on a BOUNDED schedule out to ~2.7min so EVERY row fills in
-          // on its own and the user never has to reload the page. Bounded + cancellable — NOT a backfill
-          // re-kick (no startRecalculateAllBestRates / passiveBackfillStartedRef), so it can't loop. The
-          // 6-min FE watchdog stays the final backstop for a genuinely-stuck row.
+          // on its own and the user never has to reload the page. Bounded + cancellable; it only observes
+          // the existing job and never starts another rate job.
           for (const delay of [3000, 8000, 16000, 24000, 36000, 50000, 70000, 95000, 125000, 160000]) {
             settleTimers.push(setTimeout(() => { if (!cancelled) void refetchOrdersRef.current?.() }, delay))
           }
@@ -873,21 +853,9 @@ export default function OrdersView({
     () => buildBatchRecalculateProgress(batchRecalculateRows),
     [batchRecalculateRows],
   )
-  const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
-  const autoBestRateTimeoutsRef = useRef<Map<string, number>>(new Map())
-  // PS-293: mount-scoped count of live best-rate requests the BROWSER has fired for the Awaiting view.
-  // Capped at PASSIVE_LIVE_BEST_RATE_MAX_ROWS so the frontend never drains the full table; the backend
-  // backfill rates the rest. passiveBackfillStartedRef de-dupes the overflow handoff so a mid-job
-  // refetch (which re-runs the passive effect) can't kick a second backend job.
-  const passiveLiveBestRateCountRef = useRef(0)
-  const passiveBackfillStartedRef = useRef(false)
   // Distinguishes a MANUAL Recalculate All click (operator wants a visible spinner + progress chip)
-  // from the automatic passive overflow backfill (must run silently). Set true ONLY in
-  // handleRecalculateAll; gates the chip/spinner so the background backfill stays invisible.
+  // from future non-UI callers. Set true ONLY in handleRecalculateAll; gates the chip/spinner.
   const recalcAllUserInitiatedRef = useRef(false)
-  // PS-071 — bumped by a per-row "Retry rates" action to re-run the passive
-  // auto-rating effect for an order whose rate came back unavailable.
-  const [rateRetryNonce, setRateRetryNonce] = useState(0)
   // Tracks whether the user has *manually* edited weight or any dim in the
   // panel since the current order was loaded. The auto-rate-refresh effect
   // only fires when this is true. Reset to false whenever panelOrderId
@@ -927,37 +895,6 @@ export default function OrdersView({
       startedAt: Date.now(),
       tick: 0,
     })
-  }
-
-  function clearAutoBestRateWatchdog(key: string) {
-    const timeoutId = autoBestRateTimeoutsRef.current.get(key)
-    if (timeoutId == null) return
-    window.clearTimeout(timeoutId)
-    autoBestRateTimeoutsRef.current.delete(key)
-  }
-
-  function startAutoBestRateWatchdog(
-    order: OrderSummaryDto,
-    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
-  ) {
-    clearAutoBestRateWatchdog(request.key)
-    const timeoutId = window.setTimeout(() => {
-      autoBestRateTimeoutsRef.current.delete(request.key)
-      setAutoBestRateEntries((current) => {
-        const existing = current[order.orderId]
-        if (existing?.key === request.key && (existing.rate || existing.error)) return current
-        return {
-          ...current,
-          [order.orderId]: {
-            key: request.key,
-            rate: null,
-            // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; resolve stuck passive best-rate loading to a retryable UI error, without changing shipped/cancelled edit protections.
-            error: 'Passive rate lookup timed out. Click Retry to fetch the current best rate again.',
-          },
-        }
-      })
-    }, AUTO_BEST_RATE_WATCHDOG_MS)
-    autoBestRateTimeoutsRef.current.set(request.key, timeoutId)
   }
 
   const setQueueActionProgressLabel = (label: string) => {
@@ -1004,10 +941,6 @@ export default function OrdersView({
         window.clearTimeout(transitionalRefetchTimerRef.current)
         transitionalRefetchTimerRef.current = null
       }
-      for (const timeoutId of autoBestRateTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId)
-      }
-      autoBestRateTimeoutsRef.current.clear()
     }
   }, [])
 
@@ -1153,7 +1086,7 @@ export default function OrdersView({
   const { order: activeOrderDetail, isLoading: activeOrderLoading, error: activeOrderError } = useOrderDetail(
     activeOrderId != null ? String(activeOrderId) : '',
   )
-  const passiveRatingAccountsEnabled = currentStatus === 'awaiting_shipment' && orders.length > 0
+  const awaitingRateAccountsEnabled = currentStatus === 'awaiting_shipment' && orders.length > 0
   const ordersSupportDataEnabled =
     activeOrderId != null ||
     selectedOrderIds.length > 0 ||
@@ -1161,7 +1094,7 @@ export default function OrdersView({
     newOrderOpen ||
     queueOpen ||
     sortState.key === 'custcarrier' ||
-    passiveRatingAccountsEnabled
+    awaitingRateAccountsEnabled
   const { locations } = useLocations({ enabled: ordersSupportDataEnabled })
   // PS-075 — also capture the carrier-accounts load error so a FAILED accounts
   // fetch doesn't masquerade as "loading carriers…" forever.
@@ -3660,7 +3593,6 @@ export default function OrdersView({
         ...current,
         [order.orderId]: decision.entry,
       }))
-      clearAutoBestRateWatchdog(request.key)
       return { status: 'blocked', message: decision.message }
     }
 
@@ -3675,7 +3607,6 @@ export default function OrdersView({
       if (options.updatePanel && panelOrderId === order.orderId) {
         setPanelRatePreview([])
       }
-      clearAutoBestRateWatchdog(request.key)
       if (options.refetch) await refetchOrders()
       return { status: 'cleared', message: decision.message, rate: null }
     }
@@ -3691,7 +3622,6 @@ export default function OrdersView({
       requestFingerprint: backendRequestFingerprint,
       cacheKey: backendRequestFingerprint,
     })
-    clearAutoBestRateWatchdog(request.key)
     setAutoBestRateEntries((current) => ({
       ...current,
       [order.orderId]: { key: request.key, rate: rateWithMetadata },
@@ -3838,327 +3768,10 @@ export default function OrdersView({
     }
   }
 
-  useEffect(() => {
-    if (loading || currentStatus !== 'awaiting_shipment' || orderedFilteredOrders.length === 0) return
-
-    let cancelled = false
-    const carrierIds = getRateCarrierIdsForAccounts()
-    const candidates = orderedFilteredOrders
-      .map((order) => {
-        const request = getAutoBestRateRequest(order)
-        if (!request) return null
-        if (!isTestOrder(order, request.detail) && carrierIds.length === 0) return null
-        // Display-drift: the backend flags `needsDisplayRefresh` when a still-displayable saved rate has
-        // aged past the display-freshness window (carrier price may have drifted within the 24h cache).
-        // Such a row is NOT skipped — it is re-quoted LIVE so the table self-corrects to the true best
-        // rate. The backend owns the freshness threshold; the FE only honors the verdict + carries
-        // forceLive through so the re-rate bypasses the 24h rate-fetch cache. Non-display-stale rows keep
-        // the cache-first skip exactly as before.
-        const forceLive = getBestRateWorkflowModel(order)?.needsDisplayRefresh === true
-        if (!forceLive && hasValidSavedBestRateForRequest(order, request)) return null
-        const entry = autoBestRateEntries[order.orderId]
-        if (entry?.key === request.key) return null
-        if (autoBestRateRequestedRef.current.has(request.key)) return null
-        return { order, request, forceLive }
-      })
-      .filter((value): value is { order: OrderSummaryDto; request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>; forceLive: boolean } => value != null)
-
-    if (candidates.length === 0) return
-
-    const queue = [...candidates]
-
-    async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>, forceLive = false) {
-      autoBestRateRequestedRef.current.add(request.key)
-      startAutoBestRateWatchdog(order, request)
-
-      try {
-        if (isTestOrder(order, request.detail)) {
-          const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, request.dims, request.weightOz) ?? undefined)
-          const testRateWithMetadata = withRateRequestMetadata(testRate, request, {
-            isComplete: true,
-            rateCount: 1,
-            matchType: 'test',
-          })
-          await persistAppliedRateForOrder(order.orderId, testRateWithMetadata, {
-            fallbackDims: request.dims,
-            fallbackWeightOz: request.weightOz,
-            request,
-            metadata: { isComplete: true, rateCount: 1, matchType: 'test' },
-          })
-          // PS-081 — always record the keyed entry (even if this run was
-          // superseded by a re-render), so a cancelled-mid-flight fetch can't
-          // strand the row on an infinite spinner.
-          {
-            const settled = planSettledAutoRate({
-              requestKey: request.key,
-              rate: testRateWithMetadata,
-              cancelled,
-              isPanelOrder: panelOrderId === order.orderId,
-            })
-            setAutoBestRateEntry(order.orderId, settled.entry)
-          }
-          clearAutoBestRateWatchdog(request.key)
-          return
-        }
-
-        setAutoBestRateEntry(order.orderId, { key: request.key, rate: null, pending: true })
-
-        // PS-083 follow-up: include the order's visible direct carriers (Walmart
-        // Shipping / SHIPP) so the passively-rated BEST RATE column matches the Rate
-        // Browser drawer instead of showing a ShipStation-only winner.
-        const baseRateRequest = {
-          weightOz: request.weightOz,
-          toZip: request.shipTo.postalCode,
-          toCountry: request.shipTo.country ?? 'US',
-          toState: request.shipTo.state ?? undefined,
-          toCity: request.shipTo.city ?? undefined,
-          dimsL: request.dims.length,
-          dimsW: request.dims.width,
-          dimsH: request.dims.height,
-          residential: residentialForRate(order),
-          carrierIds: carrierIds.length ? carrierIds : undefined,
-          storeId: order.storeId,
-          clientId: order.clientId,
-          confirmation: request.confirmation,
-          insuranceProvider: request.insuranceProvider,
-          insuredValue: request.insuredValue,
-          orderId: order.orderId,
-          orderNumber: order.orderNumber ?? undefined,
-          externalOrderId:
-            order.externalOrderId ??
-            order.external_order_id ??
-            order.orderNumber ??
-            undefined,
-          includeVisibleDirectCarriers: true,
-        } as const
-
-        // First pass: cache-allowed (fast) for a normal row. A display-refresh row (forceLive) re-quotes
-        // LIVE here so it bypasses the 24h rate-fetch cache and actually detects carrier price drift —
-        // the same forceLive+forceRefresh the manual Browse Rates uses. The backend no-downgrade ratchet
-        // (now completeness-aware) records a genuine COMPLETE increase and still rejects a thin re-quote.
-        let response = await apiClient.browseRates({
-          ...baseRateRequest,
-          forceRefresh: forceLive,
-          ...(forceLive ? { forceLive: true } : {}),
-        }) as Record<string, unknown>
-
-        // PS-119: a cached/unproven NEGATIVE is NOT authoritative for the passive table.
-        // Before terminally marking the row "Rate unavailable", do ONE bounded live retry
-        // (same request fingerprint, forceLive + forceRefresh) — exactly what manual
-        // Browse Rates does. Only a live current-fingerprint empty proves "no rate".
-        // (A worker-active speedup that skipped this retry was reverted — it persisted a
-        // null best-rate and stranded the row on a terminal "Rate unavailable"; the retry
-        // is unconditional so a cached-negative can never be marked unavailable unproven.)
-        if (cachedNegativeNeedsLiveRetry(response)) {
-          response = await apiClient.browseRates({
-            ...baseRateRequest,
-            forceLive: true,
-            forceRefresh: true,
-          }) as Record<string, unknown>
-        }
-
-        const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
-
-        const bestRate = toRecord(response?.bestRate)
-        // PS-111: backend owns completeness — do not assert isComplete:true just
-        // because a rate exists. A rate found while a carrier failed/loaded is partial.
-        const backendComplete = deriveBackendBestRateComplete(response, bestRate)
-        // Display-refresh safety: a forceLive re-rate exists ONLY to refresh an already-good, proven
-        // saved rate. It may replace that rate ONLY with a COMPLETE live re-quote — an incomplete/thin
-        // pass (a transient carrier blip) or an empty result must NOT overwrite or null the proven saved
-        // rate. Leave the row on its existing rate; it stays needsDisplayRefresh and retries on a later
-        // mount until a COMPLETE pass lands. (Normal new-row rating still persists partial results.) This
-        // keeps T3 off the no-downgrade-ratchet-exempt FE persist for the only case that could degrade a
-        // good rate, so a thin re-quote can never destroy a good cheap COMPLETE saved best.
-        if (forceLive && !(bestRate && backendComplete)) {
-          clearAutoBestRateWatchdog(request.key)
-          return
-        }
-        if (bestRate) {
-          const bestRateWithMetadata = withRateRequestMetadata(bestRate, request, {
-            isComplete: backendComplete,
-            rateCount: rates.length,
-            matchType: 'live',
-            requestFingerprint: getBackendRateResponseFingerprint(response, bestRate),
-            cacheKey: getBackendRateResponseFingerprint(response, bestRate),
-            cacheCreatedAt: response?.fetchedAt,
-          })
-          await persistAppliedRateForOrder(order.orderId, bestRateWithMetadata, {
-            fallbackDims: request.dims,
-            fallbackWeightOz: request.weightOz,
-            request,
-            metadata: bestRateWithMetadata,
-          })
-        } else {
-          await apiClient.saveOrderBestRate(order.orderId, null, request.dimsLabel)
-        }
-
-        // PS-081 — the row entry is recorded UNCONDITIONALLY (keyed by the
-        // request fingerprint); only the panel preview is gated on `cancelled`.
-        // This is the core deadlock fix: selecting an order re-runs this effect
-        // and cancels the in-flight fetch, but the row must still resolve.
-        {
-          const settledRate = bestRate
-            ? withRateRequestMetadata(bestRate, request, { isComplete: backendComplete, rateCount: rates.length, matchType: 'live' })
-            : null
-          const settled = planSettledAutoRate({
-            requestKey: request.key,
-            rate: settledRate,
-            cancelled,
-            isPanelOrder: panelOrderId === order.orderId,
-          })
-          setAutoBestRateEntry(order.orderId, settled.entry)
-          if (settled.applyPanelPreview) {
-            setPanelRatePreview(bestRate ? [bestRate] : [])
-            // A background display-refresh (forceLive) only refreshes the TABLE value; it must NOT
-            // silently switch the carrier/service the operator currently has selected in the open panel.
-            // New-row rating still seeds the panel selection as before.
-            const shippingProviderId = !forceLive && bestRate ? toProviderAccountId(bestRate.shippingProviderId) : null
-            const serviceCode = !forceLive && bestRate ? toStringValue(bestRate.serviceCode) : null
-            if (shippingProviderId != null && serviceCode) {
-              setPanelForm((current) => ({
-                ...current,
-                shipAccountId: String(shippingProviderId),
-                serviceCode,
-              }))
-            }
-          }
-        }
-        clearAutoBestRateWatchdog(request.key)
-      } catch (error) {
-        // PS-075 — record a TERMINAL error entry for this request key instead of
-        // deleting it. Deleting let the effect re-fetch -> error -> re-fetch,
-        // leaving the Carrier/Account cells spinning forever (e.g. while
-        // /api/carriers/rates is 500ing). Keeping the key + an error entry makes
-        // the cell show a terminal "rate error" with a Retry path (retryOrderRate
-        // clears both). The stored message is sanitized — no raw provider payload.
-        const sanitized = error instanceof Error ? error.message.replace(/\s+/g, ' ').trim().slice(0, 140) : 'Rate lookup failed'
-        // PS-081 — record the terminal error entry even if the run was
-        // superseded, so a cancelled-mid-flight failure still resolves the cell
-        // to a retryable 'error' state instead of an endless spinner.
-        {
-          const settled = planSettledAutoRate({
-            requestKey: request.key,
-            rate: null,
-            error: sanitized || 'Rate lookup failed',
-            cancelled,
-            isPanelOrder: panelOrderId === order.orderId,
-          })
-          setAutoBestRateEntry(order.orderId, settled.entry)
-        }
-        clearAutoBestRateWatchdog(request.key)
-        console.warn(
-          '[OrdersView] auto best-rate refresh failed:',
-          error instanceof Error ? error.message : error,
-        )
-      }
-    }
-
-    async function runPassiveAutoRating() {
-      const cachedResults = await apiClient.fetchCachedRatesBulk(queue.map(({ order, request }) => ({
-        orderId: order.orderId,
-        weightOz: request.weightOz,
-        toZip: request.shipTo.postalCode,
-        toCountry: request.shipTo.country ?? 'US',
-        toState: request.shipTo.state ?? undefined,
-        toCity: request.shipTo.city ?? undefined,
-        dimsL: request.dims.length,
-        dimsW: request.dims.width,
-        dimsH: request.dims.height,
-        residential: residentialForRate(order),
-        carrierIds: request.carrierIds.length ? request.carrierIds : undefined,
-        storeId: order.storeId,
-        clientId: order.clientId,
-        confirmation: request.confirmation,
-        insuranceProvider: request.insuranceProvider,
-        insuredValue: request.insuredValue,
-      })))
-      const exactByOrderId = new Map(
-        cachedResults
-          .filter((result) => result?.matchType === 'exact' && result?.isComplete === true && result?.hit?.bestRate)
-          .map((result) => [Number(result.orderId), result])
-      )
-      for (let index = queue.length - 1; index >= 0; index -= 1) {
-        const item = queue[index]!
-        // Display-refresh rows must re-quote LIVE to detect drift — never satisfy them from the bulk
-        // rate cache (the cache would hand back the very stale price we are trying to refresh).
-        if (item.forceLive) continue
-        const exact = exactByOrderId.get(item.order.orderId)
-        if (!exact) continue
-        const cachedRate = withRateRequestMetadata(exact.hit.bestRate, item.request, exact)
-        await persistAppliedRateForOrder(item.order.orderId, cachedRate, {
-          fallbackDims: item.request.dims,
-          fallbackWeightOz: item.request.weightOz,
-          request: item.request,
-          metadata: exact,
-        })
-        // PS-081 — record the cache-hit entry unconditionally (keyed by request
-        // fingerprint) so a superseded run can't strand the row on a spinner.
-        {
-          const settled = planSettledAutoRate({
-            requestKey: item.request.key,
-            rate: cachedRate,
-            cancelled,
-            isPanelOrder: panelOrderId === item.order.orderId,
-          })
-          setAutoBestRateEntries((current) => ({ ...current, [item.order.orderId]: settled.entry }))
-        }
-        autoBestRateRequestedRef.current.add(item.request.key)
-        queue.splice(index, 1)
-      }
-
-      // PS-293: the browser live-rates at most PASSIVE_LIVE_BEST_RATE_MAX_ROWS rows per mount (a
-      // mount-scoped running budget), then HANDS the rest to the backend backfill — instead of
-      // draining the ENTIRE queue from the browser (the old "no count cap" behavior that fired 40+
-      // live carrier-rate jobs and left HUGRAB tuples needing per-row Browse Rates clicks). Concurrency
-      // stays bounded by PASSIVE_LIVE_BEST_RATE_CONCURRENCY.
-      const liveBudget = Math.max(0, PASSIVE_LIVE_BEST_RATE_MAX_ROWS - passiveLiveBestRateCountRef.current)
-      const liveQueue = queue.splice(0, liveBudget)
-      passiveLiveBestRateCountRef.current += liveQueue.length
-      const overflow = queue.splice(0)
-      const workerCount = Math.min(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue.length)
-      const workers = Array.from({ length: workerCount }, async () => {
-        while (!cancelled && liveQueue.length > 0) {
-          const next = liveQueue.shift()
-          if (!next) continue
-          await refreshVisibleBestRate(next.order, next.request, next.forceLive)
-        }
-      })
-      await Promise.all(workers)
-
-      // PS-293: the overflow rows (beyond the browser budget) are rated SERVER-SIDE by the canonical
-      // backend backfill — the same job the manual Recalculate All uses, but cache-friendly (only
-      // stale/missing rows). The existing recalc poll refetches as each order resolves, so the rows
-      // populate without per-row Browse Rates clicks. De-duped so a mid-job refetch can't double-kick.
-      if (!cancelled && overflow.length > 0 && !passiveBackfillStartedRef.current && recalcAllJobId == null) {
-        passiveBackfillStartedRef.current = true
-        try {
-          // Display-stale overflow rows (forceLive, beyond the browser budget) must be re-quoted LIVE: the
-          // cache-friendly sweep serves their STALE price and its 24h gate even SKIPS a <24h-old row, so a
-          // display-stale row past the budget would otherwise never self-correct (it just keeps showing the
-          // cached value — the order-1869 case). When ANY overflow row is display-stale, force-live the
-          // backend sweep (maxAgeHours:0) so the WHOLE table self-corrects, not just the first
-          // PASSIVE_LIVE_BEST_RATE_MAX_ROWS. The completeness-aware no-downgrade ratchet still gates every
-          // persist (a genuine increase overwrites; a thin re-quote is rejected). Cache-friendly otherwise.
-          const overflowMaxAgeHours = overflow.some((candidate) => candidate.forceLive)
-            ? 0
-            : PASSIVE_BACKFILL_MAX_AGE_HOURS
-          const { jobId } = await startRecalculateAllBestRates(overflowMaxAgeHours)
-          if (!cancelled) setRecalcAllJobId(jobId)
-          else passiveBackfillStartedRef.current = false
-        } catch {
-          passiveBackfillStartedRef.current = false
-        }
-      }
-    }
-
-    void runPassiveAutoRating()
-
-    return () => {
-      cancelled = true
-    }
-  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, shippingAccounts, rateRetryNonce, recalcAllJobId])
-
+  // PS-345: Awaiting Shipment is display-only on mount. Live rate fan-out and
+  // bulk backfill now require explicit operator intent (Recalculate All, row Retry,
+  // side-panel Recalculate, or the Rate Browser button) so the frontend cannot
+  // silently churn carrier jobs or mutate displayed best rates just by loading rows.
   async function refreshPanelBestRate(options: {
     order: OrderSummaryDto
     dims: { length: number; width: number; height: number }
@@ -4183,7 +3796,6 @@ export default function OrdersView({
       }))
       const autoRequest = getAutoBestRateRequest(order)
       if (autoRequest) {
-        clearAutoBestRateWatchdog(autoRequest.key)
         setAutoBestRateEntries((current) => ({
           ...current,
           [order.orderId]: { key: autoRequest.key, rate: testRate },
@@ -4237,7 +3849,7 @@ export default function OrdersView({
         // PS-203 stage 1: the panel refresh compared a ShipStation-only universe
         // and persisted the winner as complete — Shipp/Walmart direct rates never
         // entered the comparison (the $10.44-vs-$9.27 bug). Same flag the
-        // Recalculate + passive-live paths already send.
+        // explicit Recalculate paths send.
         includeVisibleDirectCarriers: true,
       }) as Record<string, unknown>
       const rates = Array.isArray(response?.rates) ? response.rates as Array<Record<string, unknown>> : []
@@ -4248,16 +3860,10 @@ export default function OrdersView({
       const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
 
       if (bestRate) {
-        // PS — `autoRequest` MUST be declared before it is used. Previously
-        // `clearAutoBestRateWatchdog(autoRequest.key)` ran above the
-        // `const autoRequest = ...` line below, which is a temporal-dead-zone
-        // ReferenceError at runtime (this file was untyped, so tsc never
-        // caught it). The throw aborted the refresh BEFORE the panel preview,
-        // the table's autoBestRateEntries sync, and persistAppliedRateForOrder
-        // ran — leaving the Orders table spinning even though a valid rate was
-        // found. Declaring it once up top and guarding both uses fixes it.
+        // PS: `autoRequest` must be declared before metadata/writeback uses it.
+        // This keeps panel preview, table sync, and persistAppliedRateForOrder
+        // on the same request key.
         const autoRequest = getAutoBestRateRequest(order)
-        if (autoRequest) clearAutoBestRateWatchdog(autoRequest.key)
         bestRate.confirmation = shippingOptions.confirmation
         bestRate.insuranceProvider =
           toStringValue(bestRate.effectiveInsuranceProvider) ??
@@ -4270,7 +3876,7 @@ export default function OrdersView({
         const bestRateWithMetadata = autoRequest ? withRateRequestMetadata(bestRate, autoRequest, {
           // PS-135: derive completeness from the backend (its bestRate.isComplete stamp, else
           // carrierStatuses) instead of hardcoding true — a carrier that errors/loads during a
-          // panel forceLive fetch must NOT be stamped complete. Matches the passive path (above).
+          // panel forceLive fetch must NOT be stamped complete. Matches strict recalc.
           isComplete: deriveBackendBestRateComplete(response, bestRate),
           rateCount: rates.length,
           matchType: 'panel-live',
@@ -4777,7 +4383,6 @@ export default function OrdersView({
     }))
     setPanelRatePreview([rateForTable])
     if (autoRequest) {
-      clearAutoBestRateWatchdog(autoRequest.key)
       setAutoBestRateEntries((current) => ({
         ...current,
         [panelOrderId]: { key: autoRequest.key, rate: rateForTable },
@@ -5729,23 +5334,31 @@ export default function OrdersView({
   // live in the presentational OrdersFilterToolbar — OrdersFilterToolbarExport
   // only FIRES this callback. Body lifted VERBATIM from the former inline arrow.
 
-  // PS-071 — re-run passive auto-rating for one order whose rate came back
-  // unavailable (or got stuck) WITHOUT requiring the operator to open Browse
-  // Rates. Clears the request fingerprint + entry and bumps the effect nonce so
-  // the cache-first/bulk passive path runs again for this row. No force-live.
+  // PS-345: per-row Retry is explicit operator intent. It delegates to the same
+  // backend strict recalculate path as batch recalc instead of re-triggering a
+  // page-mount passive rating effect.
   function retryOrderRate(order: OrderSummaryDto) {
     const request = getAutoBestRateRequest(order)
     if (request) {
-      autoBestRateRequestedRef.current.delete(request.key)
-      clearAutoBestRateWatchdog(request.key)
+      setAutoBestRateEntry(order.orderId, { key: request.key, rate: null, pending: true })
     }
-    setAutoBestRateEntries((current) => {
-      if (!(order.orderId in current)) return current
-      const next = { ...current }
-      delete next[order.orderId]
-      return next
-    })
-    setRateRetryNonce((nonce) => nonce + 1)
+    void runBatchRecalculateOrder(order)
+      .then((result) => {
+        if (request && result.status === 'skipped') {
+          setAutoBestRateEntry(order.orderId, { key: request.key, rate: null, error: result.message ?? 'Rate recalculation skipped.' })
+        }
+      })
+      .catch((error) => {
+        if (!request) return
+        setAutoBestRateEntry(order.orderId, {
+          key: request.key,
+          rate: null,
+          error: sanitizeRecalculateError(error) ?? 'Rate recalculation failed.',
+        })
+      })
+      .finally(() => {
+        void refetchOrders()
+      })
   }
 
   // PS-071 — render the bounded/actionable fallback for an awaiting rate cell.
@@ -6009,7 +5622,7 @@ export default function OrdersView({
           </button>
         )
       case 'error': {
-        // PS-075 — terminal error (passive rating failed for this order). Show a
+        // PS-075 — terminal error (rate lookup failed for this order). Show a
         // Retry affordance; tooltip carries the sanitized message.
         const autoReq = getAutoBestRateRequest(order)
         const errMsg = autoReq ? autoBestRateEntries[order.orderId]?.error : null
@@ -6055,11 +5668,9 @@ export default function OrdersView({
             Re-rate needed
           </button>
         )
-      // PS-293: 'deferred' = rateable but BEYOND the browser's live-rate cap
-      // (PASSIVE_LIVE_BEST_RATE_MAX_ROWS=5). The backend backfill rates these rows
-      // server-side (slices 1-2), so show a loading spinner (not a parked "—")
-      // while it resolves; once the job stamps the row it flows through the PS-120
-      // workflow state + watchdog. Mirrors the calculating/pending spinner exactly.
+      // PS-345: 'deferred' means backend workflow state says a rate job has not
+      // resolved yet. The row can show the same spinner as calculating/pending,
+      // but this view no longer starts a live browser drain to resolve it.
       case 'deferred':
       case 'calculating':
       case 'pending':
@@ -7067,7 +6678,6 @@ export default function OrdersView({
                 setPanelRatePreview([testRate])
                 const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
                 if (autoRequest) {
-                  clearAutoBestRateWatchdog(autoRequest.key)
                   setAutoBestRateEntries((current) => ({
                     ...current,
                     [panelOrderId]: { key: autoRequest.key, rate: testRate },
@@ -7097,7 +6707,6 @@ export default function OrdersView({
               setPanelRatePreview([best])
               const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
               if (autoRequest) {
-                clearAutoBestRateWatchdog(autoRequest.key)
                 setAutoBestRateEntries((current) => ({
                   ...current,
                   [panelOrderId]: { key: autoRequest.key, rate: best },

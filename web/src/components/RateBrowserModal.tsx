@@ -1205,8 +1205,9 @@ export default function RateBrowserModal({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Try the cache on open when weight + dims are already valid, then ALWAYS
-  // complete coverage live. Guard with a ref so we only fire once per open.
+  // Try the cache on open when weight + dims are already valid. PS-345 keeps
+  // modal-open work display-only; live carrier fan-out requires the visible
+  // Browse/Refresh button.
   const autoFetchedRef = useRef<number | null>(null);
   useEffect(() => {
     if (!open) {
@@ -1218,23 +1219,7 @@ export default function RateBrowserModal({
     if (!hasWeight || !hasDims || !zip || zip.length < 5) return;
     if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
-    void (async () => {
-      // Instant paint from cache first — often just the order's saved best rate
-      // (a single carrier) when the cache is cold/thin.
-      const probe = await browseRates(undefined, { cachedOnly: true });
-      // PS-206: the Rate Browser is a live shopping workflow — 1, 2, or 3
-      // carriers with cached rates is NEVER "good enough" coverage. The old
-      // `<= 1` carrier-COUNT heuristic is gone: the follow-up decision now
-      // reads the backend's per-carrier COVERAGE identity. Any scoped account
-      // the cached probe left 'uncached' (no cached coverage; direct carriers
-      // are never live-quoted during a cached-only probe) triggers a full
-      // scoped live fan-out — correctness beats avoiding one extra request,
-      // and the sequence ref still supersedes stale updates if the modal
-      // switches orders mid-probe.
-      if (autoFetchedRef.current === orderId && probe.uncoveredPids.length > 0) {
-        await browseRates(undefined, { forceLive: true });
-      }
-    })();
+    void browseRates(undefined, { cachedOnly: true });
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1289,11 +1274,10 @@ export default function RateBrowserModal({
   // Fetch all scoped carrier accounts in one UI request. The backend still calls
   // ShipStation per carrier, but it does that work in parallel and returns one
   // grouped result set for the modal.
-  // PS-206: browseRates reports COVERAGE, not a carrier count. uncoveredPids =
-  // scoped accounts whose terminal state after this request is 'uncached' (no
-  // cached coverage; never live-quoted in a cached-only probe). The modal-open
-  // effect live-fetches when ANY scoped account is uncovered — a count of
-  // accounts-with-rates can never again be read as "coverage is complete".
+  // PS-206 / PS-345: browseRates reports coverage, not a carrier count.
+  // uncoveredPids = scoped accounts whose terminal state after this request is
+  // 'uncached'. A cached-only modal-open probe can display that state, but it
+  // cannot silently start live carrier work.
   type BrowseCoverage = { carriersWithRates: number; uncoveredPids: number[] };
 
   async function browseRates(
@@ -1599,8 +1583,8 @@ export default function RateBrowserModal({
         } else if (options.cachedOnly) {
           // PS-206: a cached-only probe is TERMINAL for this account — it has
           // no cached coverage and was not checked ('uncached'), it is NOT
-          // 'loading' (nothing is in flight). The open-effect live-fetches
-          // every uncovered account right after this paint.
+          // 'loading' (nothing is in flight). The operator can explicitly click
+          // Browse/Refresh when live coverage is needed.
           nextStatusByPid[key] ??= 'uncached';
         } else {
           nextRatesByPid[key] = [];
@@ -1647,18 +1631,12 @@ export default function RateBrowserModal({
       if (browseSequenceRef.current === requestSeq) setPendingPids(new Set());
     }
 
-    // PS-260: never resolve/persist a "best rate" from a cached-only PROBE while a live
-    // fan-out is still pending. The open effect runs the probe first and then a forceLive
-    // pass whenever probe.uncoveredPids.length > 0 (RateBrowserModal open effect); emitting
-    // here would push a premature/partial best through onBestRateResolved into the order
-    // panel (OrdersView.persistAppliedRateForOrder) and auto-select it BEFORE every scoped
-    // carrier finished — the UI would assert a final/"Recommended" rate while still loading.
-    // The cached seed stays VISIBLE (PS-196 cache-first paint via setRatesByPid above); only
-    // the canonical best-rate emission waits for the fan-out. A cached probe with FULL
-    // coverage (uncoveredPids.length === 0 → no live follow-up) still emits, since the cached
-    // set IS the final answer; the forceLive pass (cachedOnly !== true) always emits.
-    const awaitingLiveFanout = options.cachedOnly === true && uncoveredPids.length > 0;
-    if (!awaitingLiveFanout && onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
+    // PS-260 / PS-345: a cached-only probe is display state, not an authority
+    // to apply a new best rate when coverage is incomplete. The cached seed
+    // stays visible, but only a complete cached set or an explicit live browse
+    // can emit the backend canonical best to the order panel.
+    const cachedProbeHasIncompleteCoverage = options.cachedOnly === true && uncoveredPids.length > 0;
+    if (!cachedProbeHasIncompleteCoverage && onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
       // Choose the best only after every carrier account has finished.
       // If ShipStation returns no live rates, fall back to the table's
       // already-saved best rate so the modal stays consistent with the row.

@@ -24,7 +24,7 @@ function check(name: string, condition: boolean): void {
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
-const finishHelper = /function finishBrowseRequest\(requestSeq: number\)[\s\S]*?\n  }\n/.exec(modal)?.[0] ?? '';
+const finishHelper = /function finishBrowseRequest\(requestSeq: number\)(?:: void)?[\s\S]*?\r?\n  }\r?\n/.exec(modal)?.[0] ?? '';
 const modalOutsideFinishHelper = finishHelper ? modal.replace(finishHelper, '') : modal;
 
 check(

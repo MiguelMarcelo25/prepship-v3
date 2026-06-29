@@ -26,6 +26,7 @@ assert(ledger.includes('| PS-341 | Frontend compatibility helper audit |'), 'led
 assert(ledger.includes('| PS-342 | Legacy rate display adapter cleanup |'), 'ledger must reserve PS-342 for legacy rate adapter cleanup');
 assert(ledger.includes('| PS-343 | RateBrowserModal money normalization cleanup |'), 'ledger must reserve PS-343 for RateBrowserModal money cleanup');
 assert(ledger.includes('| PS-344 | Order row workflow shape cleanup |'), 'ledger must reserve PS-344 for order row workflow shape cleanup');
+assert(ledger.includes('| PS-345 | Rate loading orchestration source-of-truth cleanup |'), 'ledger must reserve PS-345 for rate loading SOT cleanup');
 
 const packageJson = read('package.json');
 assert(
@@ -60,6 +61,10 @@ assert(
   packageJson.includes('test:ps-344-order-row-workflow-shape-cleanup'),
   'PS-344 order row workflow shape cleanup guard must be registered',
 );
+assert(
+  packageJson.includes('test:ps-345-rate-loading-sot'),
+  'PS-345 rate loading SOT guard must be registered',
+);
 
 assert(!existsSync('docs/ps-tickets/ps-337-ebay-api-testing-certification.md'), 'duplicate PS-337 eBay doc must be renamed');
 assert(
@@ -73,5 +78,7 @@ assert(
 );
 assert(existsSync('docs/ps-tickets/ps-339-ebay-api-testing-certification.md'), 'PS-339 eBay doc must exist');
 assert(existsSync('scripts/ps-339-ebay-api-testing-certification-guard.ts'), 'PS-339 eBay guard must exist');
+assert(existsSync('docs/ps-tickets/ps-345-rate-loading-sot.md'), 'PS-345 rate loading SOT doc must exist');
+assert(existsSync('scripts/ps-345-rate-loading-sot-guard.ts'), 'PS-345 rate loading SOT guard must exist');
 
 console.log('PS ticket ledger guard passed');
