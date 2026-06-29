@@ -89,6 +89,6 @@ const persistBlock = persistStart >= 0 ? printQueueService.slice(persistStart, p
 assert.doesNotMatch(persistBlock, /\.values\(\[\s*\{\s*key: PRINT_QUEUE_SEND_STATUS_KEY/);
 
 const pkg = read('package.json');
-assert.match(pkg, /"test:ps-347-print-queue-stale-job"/);
+assert.match(pkg, /"test:ps-354-print-queue-stale-job"/);
 
-console.log('PASS PS-347 print queue stale job guard');
+console.log('PASS PS-354 print queue stale job guard');
