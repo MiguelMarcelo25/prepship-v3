@@ -213,6 +213,16 @@ export const RATE_FETCH_CONCURRENCY = Math.max(
   1,
   Math.min(8, Number.parseInt(process.env.RATE_FETCH_CONCURRENCY ?? '4', 10) || 4)
 );
+export const DIRECT_CARRIER_RATE_FETCH_CONCURRENCY = Math.max(
+  1,
+  Math.min(
+    8,
+    Number.parseInt(
+      process.env.DIRECT_CARRIER_RATE_FETCH_CONCURRENCY ?? String(RATE_FETCH_CONCURRENCY),
+      10,
+    ) || RATE_FETCH_CONCURRENCY,
+  )
+);
 export const SHIPSTATION_RATE_LIMIT_PER_MINUTE = Math.max(
   1,
   Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_PER_MINUTE ?? '160', 10) || 160
@@ -2129,7 +2139,10 @@ export async function getDirectCarrierRatesForRateInput(
   // the SAME canonical ship-from as ShipStation — not from an absent input that silently
   // defaults inside each connector (the Walmart Carson/90248 default bug).
   const resolvedShipFrom = input.shipFrom ?? (await getDefaultShipFrom());
-  const calls = accounts.map(async (account) => {
+  const settled = await mapWithConcurrency(
+    accounts,
+    DIRECT_CARRIER_RATE_FETCH_CONCURRENCY,
+    async (account) => {
     const shippingProviderId = directProviderIdFromAccount(account);
     const label = account.label || account.accountIdentifier || account.provider;
     const startedAt = Date.now();
@@ -2347,7 +2360,6 @@ export async function getDirectCarrierRatesForRateInput(
       };
     }
   });
-  const settled = await Promise.all(calls);
   return {
     rates: settled.flatMap((item) => item.rates),
     errors: settled.flatMap((item) => item.errors),
