@@ -115,7 +115,14 @@ import {
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
 import { resolveShippedLabelDisplayState } from '../services/shipping-workflow/shipped-label-display-state';
-import { buildApplyBestRatePatch, validateBestRateDimsForPersistedRate } from '../services/shipping-workflow/apply-best-rate';
+import {
+  applyRateQuoteRef,
+  buildApplyBestRatePatch,
+  finalizeAppliedBestRateFromSnapshot,
+  validateBestRateDimsForPersistedRate,
+} from '../services/shipping-workflow/apply-best-rate';
+import { loadRateQuoteSnapshot } from '../services/shipping-workflow/rate-quote-snapshot-store';
+import { stampHouseTuple } from '../services/shipping-workflow/house-tuple-stamp';
 import { houseMarkedAmountForRow } from '../services/shipping-workflow/house-row-marked-amount';
 import { redactRateMoneyFields, redactOrderFinancials } from '../services/orders-financial-redaction';
 // PS-276 (slice 4): expose the BACKEND's resolved residential verdict on the order DTO
@@ -3801,21 +3808,47 @@ app.post(
     const guard = await assertOrderEditable(c, id);
     if (!guard.ok) return guard.response;
     const body = c.req.valid('json');
-    const built = buildApplyBestRatePatch({
-      bestRateJson: body.bestRateJson,
-      dimsLabel: body.bestRateDims ?? null,
-      selectedPid: body.selectedPid ?? null,
-      weightOz: body.weightOz ?? null,
-      currentRequestFingerprint: body.currentRequestFingerprint ?? null,
-    });
-    if (!built.ok) return c.json({ error: built.error, code: built.code }, 400);
-
     const [existing] = await db
       .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
       .from(orders)
       .where(eq(orders.id, id))
       .limit(1);
     if (!existing) return c.json({ error: 'Order not found' }, 404);
+
+    const quoteRef = applyRateQuoteRef(body.bestRateJson);
+    const quoteSnapshot = quoteRef.rateQuoteId && quoteRef.selectedRateKey
+      ? await loadRateQuoteSnapshot(quoteRef.rateQuoteId)
+      : null;
+    const finalized = finalizeAppliedBestRateFromSnapshot({
+      fallbackRate: body.bestRateJson,
+      rateQuoteId: quoteRef.rateQuoteId,
+      selectedRateKey: quoteRef.selectedRateKey,
+      snapshot: quoteSnapshot,
+    });
+    if (!finalized.ok) return c.json({ error: finalized.error, code: finalized.code }, 400);
+
+    let bestRateJsonForApply = finalized.bestRateJson;
+    if (
+      finalized.source === 'snapshot' &&
+      quoteSnapshot?.bestRateKey &&
+      quoteRef.selectedRateKey === quoteSnapshot.bestRateKey
+    ) {
+      bestRateJsonForApply = await stampHouseTuple(bestRateJsonForApply, {
+        cheapest: bestRateJsonForApply as never,
+        combinedRates: quoteSnapshot.rates as never,
+        clientId: existing.clientId,
+        storeId: existing.storeId,
+      });
+    }
+
+    const built = buildApplyBestRatePatch({
+      bestRateJson: bestRateJsonForApply,
+      dimsLabel: body.bestRateDims ?? null,
+      selectedPid: body.selectedPid ?? null,
+      weightOz: body.weightOz ?? null,
+      currentRequestFingerprint: body.currentRequestFingerprint ?? null,
+    });
+    if (!built.ok) return c.json({ error: built.error, code: built.code }, 400);
 
     let normalizedBestRate: unknown;
     try {
@@ -3836,7 +3869,26 @@ app.post(
       return c.json({ error: eligibilityReason, code: 'RATE_NOT_ELIGIBLE' }, 400);
     }
 
-    const row = await applyOverridesPatch(id, { ...built.patch, bestRateJson: normalizedBestRate });
+    const canonicalBestRate = normalizedBestRate as {
+      nextBestNonHouseRate?: unknown;
+      houseMargin?: number | null;
+      houseTupleStatus?: unknown;
+    };
+    const rawBody = built.patch.bestRateJson as Record<string, unknown> | null;
+    const rawHouseProvider =
+      (rawBody?.provider ?? (rawBody?.raw as Record<string, unknown> | undefined)?.provider) ?? null;
+    const hStatus = houseTupleStatus({
+      rawProvider: rawHouseProvider,
+      nextBestNonHouseRate: canonicalBestRate.nextBestNonHouseRate,
+      houseMargin: canonicalBestRate.houseMargin,
+      optedIn: await clientHouseAccountEnabled(existing.clientId ?? null),
+    });
+    if (shouldRejectHalfHouseSave(hStatus) && process.env.HOUSE_TUPLE_SAVE_GUARD === 'on') {
+      return c.json({ error: HOUSE_TUPLE_REQUIRED_MESSAGE, code: 'HOUSE_TUPLE_REQUIRED' }, 400);
+    }
+    canonicalBestRate.houseTupleStatus = hStatus;
+
+    const row = await applyOverridesPatch(id, { ...built.patch, bestRateJson: canonicalBestRate });
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });
   }

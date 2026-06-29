@@ -481,6 +481,7 @@
     "test:ps-329-orders-wrapper-sot-cleanup": "tsx scripts/ps-329-orders-wrapper-sot-cleanup-guard.ts",
     "test:ps-327-hugrab-margin-policy": "tsx scripts/ps-327-hugrab-margin-policy-guard.ts",
     "test:ps-333-hugrab-current-rate-sot": "tsx scripts/ps-333-hugrab-current-rate-sot-guard.ts",
+    "test:ps-333-345-rate-apply-convergence": "tsx scripts/ps-333-345-rate-apply-convergence-guard.ts",
     "test:ps-334-house-rate-column": "tsx scripts/ps-334-house-rate-column-guard.ts",
     "test:best-rate-final-column": "tsx scripts/best-rate-final-column-guard.ts",
     "test:ps-335-sot-guard-pack": "tsx scripts/ps-335-sot-guard-pack-guard.ts",
