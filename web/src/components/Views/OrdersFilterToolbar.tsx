@@ -229,6 +229,7 @@ export type OrdersFilterToolbarBatchControlsProps = {
   batchRecalculateBusy: boolean
   selectedOrderIds: number[]
   onRecalculateAll: () => void
+  onFullLiveRecalculateAll: () => void
   recalcAllJobId: string | null
   recalcAllSummary: string | null
   batchRecalculateProgress: BatchRecalculateProgressLike
@@ -255,6 +256,7 @@ export function OrdersFilterToolbarBatchControls({
   batchRecalculateBusy,
   selectedOrderIds,
   onRecalculateAll,
+  onFullLiveRecalculateAll,
   recalcAllJobId,
   recalcAllSummary,
   batchRecalculateProgress,
@@ -362,7 +364,7 @@ export function OrdersFilterToolbarBatchControls({
             // Backend/sync-started rate backfill can be observed by OrdersView for row refresh without
             // turning this operator button into a hidden background-job spinner.
             disabled={recalcAllSummary != null || total === 0}
-            title="Re-rate ALL awaiting orders in the background — rows update as they resolve (no popup)"
+            title="Fast cache-first refresh: reuse exact current rate tuples, live-rate only misses or stale rows"
             className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1
@@ -375,6 +377,24 @@ export function OrdersFilterToolbarBatchControls({
           >
             {recalcAllSummary != null ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <Zap size={12.5} strokeWidth={2.25} />}
             Recalculate All
+          </button>
+          <button
+            type="button"
+            onClick={() => void onFullLiveRecalculateAll()}
+            disabled={recalcAllSummary != null || total === 0}
+            title="Full Live Recalculate audit: slow force-live check across all eligible awaiting rows"
+            className={`
+              inline-flex items-center gap-1.5
+              h-8 px-2.5 rounded-lg ring-1
+              text-[12px] font-medium
+              transition-all duration-150
+              ${recalcAllSummary != null || total === 0
+                ? 'opacity-60 cursor-not-allowed bg-surface ring-line text-ink-3'
+                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+            `}
+          >
+            <RefreshCcw size={12.5} strokeWidth={2.25} />
+            Full Live Audit
           </button>
           {recalcAllSummary ? (
             <span

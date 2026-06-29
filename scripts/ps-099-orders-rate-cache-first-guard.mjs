@@ -5,6 +5,7 @@ const root = process.cwd();
 const ordersView = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersView.tsx'), 'utf8');
 const v2ApiClient = fs.readFileSync(path.join(root, 'web/src/lib/v2-apiClient.ts'), 'utf8');
 const ratesRoute = fs.readFileSync(path.join(root, 'src/routes/rates.ts'), 'utf8');
+const rateBrowseProducer = fs.readFileSync(path.join(root, 'src/services/rate-browse-response-producer.ts'), 'utf8');
 // PS-203 (stage 3): the merge + SINGLE cheapest pick moved to the canonical
 // combined-selection owner; the route delegates via combineCarrierUniverses.
 const ratesCombined = fs.readFileSync(path.join(root, 'src/services/rates-combined.ts'), 'utf8');
@@ -96,12 +97,10 @@ assert(
 );
 
 assert(
-  ordersView.includes('AUTO_BEST_RATE_WATCHDOG_MS') &&
-    ordersView.includes('autoBestRateTimeoutsRef') &&
-    ordersView.includes('startAutoBestRateWatchdog') &&
-    ordersView.includes('Passive rate lookup timed out') &&
-    ordersView.includes('clearAutoBestRateWatchdog(request.key)'),
-  'passive best-rate requests have a watchdog that resolves stuck pending rows to a retryable error'
+  !ordersView.includes('startAutoBestRateWatchdog') &&
+    ordersView.includes('fetchLatestRecalculateAllJob') &&
+    ordersView.includes('Recalculate All status unavailable'),
+  'passive frontend best-rate watchdog is gone; backend job observer resolves stuck rate work to retryable status'
 );
 
 assert(
@@ -115,10 +114,11 @@ assert(
   // canonical rates-combined owner; the route delegates via combineCarrierUniverses.
   ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates])') &&
     ratesCombined.includes('const cheapest = rankedEligibleRates[0]') &&
-    ratesRoute.includes('combineCarrierUniverses({') &&
-    ratesRoute.includes('combinedRates,') &&
-    ratesRoute.includes('cheapest,') &&
-    v2ApiClient.includes('res?.bestRate') &&
+    ratesRoute.includes('produceRateBrowsePayload') &&
+    rateBrowseProducer.includes('combineCarrierUniverses({') &&
+    rateBrowseProducer.includes('combinedRates,') &&
+    rateBrowseProducer.includes('cheapest,') &&
+    v2ApiClient.includes('return postRateBrowseTransport(data);') &&
     !v2ApiClient.includes('const combinedBestRate = combined[0]'),
   'Orders passive rating preserves the backend-selected cheapest combined ShipStation/direct-carrier bestRate (canonical rates-combined owner)'
 );

@@ -41,7 +41,7 @@ function shipStationScheduleWithinBudget({ requestCount, perMinute, burst }) {
   return true
 }
 
-const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient, ratesCombined] = await Promise.all([
+const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient, ratesCombined, rateBrowseProducer] = await Promise.all([
   read('src/services/rates.ts'),
   read('src/routes/rates.ts'),
   read('src/services/rates-backfill.ts'),
@@ -52,6 +52,7 @@ const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiC
   // PS-203 (stage 3): the merge + SINGLE cheapest pick moved to the canonical
   // combined-selection owner. The route + backfill both delegate to it.
   read('src/services/rates-combined.ts'),
+  read('src/services/rate-browse-response-producer.ts'),
 ])
 
 assert(
@@ -125,13 +126,15 @@ assert(
 assert(
   // PS-203: the cheapest combined ShipStation/direct-carrier selection lives in
   // the canonical owner rates-combined.ts (merge via dedupeBrowseRates + the single
-  // cheapest pick by rateTotal). The route delegates via combineCarrierUniverses.
+  // cheapest pick by rateTotal). The route delegates to the rate browse producer,
+  // which delegates via combineCarrierUniverses.
   ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates])') &&
     ratesCombined.includes('const cheapest = rankedEligibleRates[0]') &&
-    ratesRoute.includes('combineCarrierUniverses({') &&
-    ratesRoute.includes('combinedRates,') &&
-    ratesRoute.includes('cheapest,') &&
-    v2ApiClient.includes('backendResult?.bestRate') &&
+    ratesRoute.includes('produceRateBrowsePayload') &&
+    rateBrowseProducer.includes('combineCarrierUniverses({') &&
+    rateBrowseProducer.includes('combinedRates,') &&
+    rateBrowseProducer.includes('cheapest,') &&
+    v2ApiClient.includes('return postRateBrowseTransport(data);') &&
     !v2ApiClient.includes('const combinedBestRate = combined[0]'),
   'backend /rates/browse selects the cheapest combined ShipStation/direct-carrier rate (canonical rates-combined owner) and v2 client preserves backend bestRate',
 )

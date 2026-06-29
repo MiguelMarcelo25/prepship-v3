@@ -19,6 +19,8 @@ export type RecalculateAllJob = {
   message?: string
 }
 
+export const FAST_RECALCULATE_MAX_AGE_HOURS = 6
+
 function normalizeRecalculateAllJob(raw: Record<string, unknown>, fallbackJobId?: string): RecalculateAllJob | null {
   const jobId = typeof raw.jobId === 'string'
     ? raw.jobId
@@ -38,13 +40,21 @@ function normalizeRecalculateAllJob(raw: Record<string, unknown>, fallbackJobId?
   }
 }
 
-/** Kick the backend backfill over ALL awaiting orders. Returns the job id. */
-// PS-293: maxAgeHours selects the backend rating mode. 0 = the manual "Recalculate All" force-live
-// fan-out (re-rate every awaiting order). A POSITIVE value is the cache-friendly passive backfill the
-// Awaiting page uses for its overflow rows: re-rate only stale/missing rows and reuse fresh cache, so
-// auto-triggering it on page load never force-live-re-rates the whole table.
-export async function startRecalculateAllBestRates(maxAgeHours = 0): Promise<{ jobId: string }> {
-  const response = await api.post<{ job_id: string }>('/rates/backfill-best', { maxAgeHours })
+/** PS-347: normal Recalculate All is cache-first/fast, not force-live all rows. */
+export async function startRecalculateAllBestRates(maxAgeHours = FAST_RECALCULATE_MAX_AGE_HOURS): Promise<{ jobId: string }> {
+  const response = await api.post<{ job_id: string }>('/rates/backfill-best', {
+    mode: 'cache_first',
+    maxAgeHours,
+  })
+  return { jobId: response.job_id }
+}
+
+/** Explicit slow path for an operator-requested Full Live Recalculate audit. */
+export async function startFullLiveRecalculateAllBestRates(): Promise<{ jobId: string }> {
+  const response = await api.post<{ job_id: string }>('/rates/backfill-best', {
+    mode: 'full_live_audit',
+    maxAgeHours: 0,
+  })
   return { jobId: response.job_id }
 }
 

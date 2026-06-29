@@ -51,8 +51,8 @@ check('override still carries the age for the FE watchdog',
 
 // ── wiring pins ───────────────────────────────────────────────────────────────
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
-check('Recalculate All (maxAgeHours 0) forces the LIVE carrier fan-out',
-  /const liveRecalculate = opts\.maxAgeHours === 0/.test(backfill) &&
+check('Full Live Recalculate audit forces the LIVE carrier fan-out',
+  /const liveRecalculate = opts\.mode === 'full_live_audit' \|\| opts\.maxAgeHours === 0/.test(backfill) &&
   // PS-perf 2026-06-23: the call now also tags priority:'background'; invariant unchanged.
   /liveRecalculate \? \{ forceRefresh: true[^}]*\} :/.test(backfill));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');

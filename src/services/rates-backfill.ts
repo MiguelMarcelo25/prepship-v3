@@ -135,6 +135,7 @@ export type BackfillJob = {
 export type BackfillJobMode = 'manual_force_live' | 'cache_friendly';
 
 type BackfillOptions = {
+  mode?: 'cache_first' | 'full_live_audit';
   clientId?: number;
   limit?: number;
   maxAgeHours?: number;
@@ -195,6 +196,8 @@ let latestJobId: string | null = null;
 const queuedBackfillRequests: QueuedBackfillRequest[] = [];
 
 export function backfillJobModeForOptions(opts: BackfillOptions): BackfillJobMode {
+  if (opts.mode === 'full_live_audit') return 'manual_force_live';
+  if (opts.mode === 'cache_first') return 'cache_friendly';
   return opts.maxAgeHours === 0 ? 'manual_force_live' : 'cache_friendly';
 }
 
@@ -233,6 +236,7 @@ function toBackfillSnapshot(
       clientId: opts.clientId,
       limit: opts.limit,
       maxAgeHours: opts.maxAgeHours,
+      mode: opts.mode,
     },
     startedAt: new Date(job.startedAt).toISOString(),
     finishedAt: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
@@ -437,7 +441,10 @@ async function runBackfill(
     // worse winner than a manual browse (the $13.00-vs-$11.66 class). Nightly /
     // passive sweeps (maxAgeHours unset or > 0) keep cache-allowed behavior so
     // they never hammer the carrier APIs.
-    const liveRecalculate = opts.maxAgeHours === 0;
+    // PS-347: normal operator Recalculate All is cache-first. It reuses exact
+    // current tuples and live-rates only misses/stale rows. Full Live Recalculate
+    // audit is the explicit slow full-live path that bypasses cache.
+    const liveRecalculate = opts.mode === 'full_live_audit' || opts.maxAgeHours === 0;
     // PS-121: when targeting a specific id set, bound the limit to that set.
     const targetedIds = opts.orderIds?.length ? opts.orderIds : null;
     const hardLimit = targetedIds

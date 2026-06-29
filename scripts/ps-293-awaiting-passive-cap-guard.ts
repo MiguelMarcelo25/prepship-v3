@@ -44,10 +44,12 @@ check('the old uncapped full-table browser drain is still gone',
 check('OrdersView no longer starts hidden passive backend backfill on page load',
   !/passiveBackfillStartedRef|startRecalculateAllBestRates\(overflowMaxAgeHours\)/.test(ordersView));
 
-check('manual Recalculate All remains the explicit backend backfill entry point',
+check('manual Recalculate All remains an explicit backend cache-first backfill entry point',
   /async function handleRecalculateAll\(\)[\s\S]{0,260}startRecalculateAllBestRates\(\)/.test(ordersView) &&
-    /export async function startRecalculateAllBestRates\(maxAgeHours = 0\)/.test(recalcAll) &&
-    /'\/rates\/backfill-best', \{ maxAgeHours \}/.test(recalcAll));
+    /export async function startRecalculateAllBestRates\(maxAgeHours = FAST_RECALCULATE_MAX_AGE_HOURS\)/.test(recalcAll) &&
+    /mode:\s*'cache_first'/.test(recalcAll) &&
+    /export async function startFullLiveRecalculateAllBestRates/.test(recalcAll) &&
+    /mode:\s*'full_live_audit'/.test(recalcAll));
 
 check('PS-345 guard explicitly protects against reintroducing passive live orchestration',
   ps345Guard.includes('OrdersView no longer runs a page-mount passive auto-rating worker') &&

@@ -58,6 +58,7 @@ import {
   fetchRecalculateAllJob,
   fetchLatestRecalculateAllJob,
   isRecalculateAllJobDone,
+  startFullLiveRecalculateAllBestRates,
   startRecalculateAllBestRates,
   summarizeRecalculateAllJob,
 } from './orders-recalculate-all'
@@ -504,6 +505,17 @@ export default function OrdersView({
     } catch (error) {
       recalcAllUserInitiatedRef.current = false
       showToast(error instanceof Error ? error.message : 'Failed to start Recalculate All', 'error')
+    }
+  }
+  async function handleFullLiveRecalculateAll() {
+    try {
+      recalcAllUserInitiatedRef.current = true
+      const { jobId } = await startFullLiveRecalculateAllBestRates()
+      setRecalcAllJobId(jobId)
+      setRecalcAllSummary('full live audit starting...')
+    } catch (error) {
+      recalcAllUserInitiatedRef.current = false
+      showToast(error instanceof Error ? error.message : 'Failed to start Full Live Recalculate', 'error')
     }
   }
   useEffect(() => {
@@ -6350,6 +6362,7 @@ export default function OrdersView({
             batchRecalculateBusy,
             selectedOrderIds,
             onRecalculateAll: handleRecalculateAll,
+            onFullLiveRecalculateAll: handleFullLiveRecalculateAll,
             recalcAllJobId,
             recalcAllSummary,
             batchRecalculateProgress,
