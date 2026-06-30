@@ -2,15 +2,18 @@ import { randomUUID } from 'node:crypto';
 import {
   getRateBrowseWorkflowSnapshot,
   persistRateBrowseWorkflowSnapshot,
+  reserveRateBrowseWorkflowSnapshot,
 } from './rate-browse-workflow-store';
 import { buildRateBrowseResultSnapshot } from './rate-browse-workflow-snapshots';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
+import { buildRateBrowseWorkflowRequestKey } from './rate-browse-workflow-key';
 
 export type StartRateBrowseWorkflowInput = {
   body: Record<string, unknown>;
   canViewFinancials: boolean;
   orderId?: number | null;
   requestKey?: string | null;
+  priority?: 'manual' | 'preflight' | 'backfill';
   getInitialResult?: () => Promise<Record<string, unknown> | null>;
   run: () => Promise<Record<string, unknown>>;
 };
@@ -29,7 +32,7 @@ function snapshotFromInput(input: StartRateBrowseWorkflowInput): RateBrowseWorkf
   return {
     jobId: randomUUID(),
     phase: 'queued',
-    requestKey: input.requestKey ?? null,
+    requestKey: input.requestKey ?? buildRateBrowseWorkflowRequestKey(input.body),
     orderId: input.orderId ?? finiteNumber(input.body.orderId),
     totalCarriers: 0,
     completedCarriers: 0,
@@ -53,13 +56,14 @@ async function runRateBrowseWorkflowJob(
   queued: RateBrowseWorkflowSnapshot,
   input: StartRateBrowseWorkflowInput,
 ): Promise<void> {
+  const priority = input.priority ?? 'manual';
   const running: RateBrowseWorkflowSnapshot = {
     ...queued,
     phase: 'running',
     updatedAt: nowIso(),
     message: 'Rate browse workflow running',
   };
-  await persistRateBrowseWorkflowSnapshot(running);
+  await persistRateBrowseWorkflowSnapshot(running, { priority });
 
   try {
     if (input.getInitialResult) {
@@ -73,7 +77,7 @@ async function runRateBrowseWorkflowJob(
             message: 'Cached rates available while live carriers continue',
             finishedAt: null,
             diagnostics: { partialSource: 'cache-first' },
-          }));
+          }), { priority });
         }
       } catch (err) {
         await persistRateBrowseWorkflowSnapshot({
@@ -84,7 +88,7 @@ async function runRateBrowseWorkflowJob(
             ...running.diagnostics,
             partialError: err instanceof Error ? err.message : String(err),
           },
-        });
+        }, { priority });
       }
     }
 
@@ -97,7 +101,7 @@ async function runRateBrowseWorkflowJob(
       message: 'Rate browse workflow complete',
       finishedAt,
       diagnostics: { rateBrowseTiming: result.rateBrowseTiming ?? null },
-    }));
+    }), { priority });
   } catch (err) {
     const finishedAt = nowIso();
     await persistRateBrowseWorkflowSnapshot({
@@ -107,7 +111,7 @@ async function runRateBrowseWorkflowJob(
       finishedAt,
       message: 'Rate browse workflow failed',
       error: err instanceof Error ? err.message : String(err),
-    });
+    }, { priority });
   }
 }
 
@@ -115,9 +119,13 @@ export async function startRateBrowseWorkflow(
   input: StartRateBrowseWorkflowInput,
 ): Promise<RateBrowseWorkflowSnapshot> {
   const queued = snapshotFromInput(input);
-  await persistRateBrowseWorkflowSnapshot(queued);
-  void runRateBrowseWorkflowJob(queued, input);
-  return queued;
+  const reservation = await reserveRateBrowseWorkflowSnapshot(queued, {
+    priority: input.priority ?? 'manual',
+  });
+  if (reservation.created) {
+    void runRateBrowseWorkflowJob(reservation.snapshot, input);
+  }
+  return reservation.snapshot;
 }
 
 export async function getRateBrowseWorkflow(jobId: string): Promise<RateBrowseWorkflowSnapshot | null> {

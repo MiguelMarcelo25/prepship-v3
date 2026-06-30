@@ -317,6 +317,7 @@ app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
     canViewFinancials,
     orderId: body.orderId ?? null,
     requestKey: null,
+    priority: 'manual',
     getInitialResult: body.forceLive === true
       ? () => produceRateBrowsePayload({
           body: cachedRateBrowsePreviewBody(body),

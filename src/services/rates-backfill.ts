@@ -744,6 +744,8 @@ async function runBackfill(
         // order that was stuck waiting for a limiter permit now gets its rate. Non-timeout errors throw
         // immediately (a real rate error is recorded honestly). Passive sweeps get no retry.
         const result = await runWithTimeoutAndRetry(
+          // PS-350: this background backfill is lower-priority bulk work; manual Rate Browser
+          // and Print Queue preflight attach to the backend job owner ahead of this lane.
           // PS-perf: the best-rate backfill is bulk BACKGROUND work — it yields ShipStation
           // budget + fan-out permits to interactive Browse Rates clicks (the limiter priority lane).
           () => getRates(rateInput, toGetRatesOptions(rateFetchDecision)),

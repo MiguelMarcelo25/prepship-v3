@@ -70,6 +70,11 @@ assert(
   packageJson.includes('test:ps-345-rate-loading-sot'),
   'PS-345 rate loading SOT guard must be registered',
 );
+assert(ledger.includes('| PS-350 | Backend rate jobs, partial results, and shared limiter |'), 'ledger must reserve PS-350 for backend rate jobs');
+assert(
+  packageJson.includes('test:ps-350-backend-rate-jobs'),
+  'PS-350 backend rate jobs guard must be registered',
+);
 
 assert(!existsSync('docs/ps-tickets/ps-337-ebay-api-testing-certification.md'), 'duplicate PS-337 eBay doc must be renamed');
 assert(

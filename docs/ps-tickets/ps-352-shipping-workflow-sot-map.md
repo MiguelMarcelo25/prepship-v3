@@ -71,7 +71,7 @@ Bad or less-than-perfect shipping data can first enter at these boundaries:
 | `src/services/shipping-workflow/rate-fingerprint.ts` and `rate-quote-snapshot-store.ts` | Backend freshness/proof ingredients | KEEP ACTIVE | Use for selected-rate proof validity and no-stale-label purchase gates. |
 | `src/routes/rates.ts` | Rate route boundary | KEEP ACTIVE | Keep thin: validate, call backend rate producer/workflow, return DTO. |
 | `src/routes/orders.ts` | Orders list/read model and guarded awaiting mutations | MIGRATE FIRST | Return PS-349 shipping state DTO. Do not add UI-shaped business fallbacks. |
-| `src/services/rate-browse-workflow.ts` and `src/services/rate-browse-workflow-store.ts` | Transitional backend workflow snapshots | MIGRATE FIRST | Standardize into PS-350 durable/shared-limited rate jobs. |
+| `src/services/rate-browse-workflow.ts`, `src/services/rate-browse-workflow-store.ts`, and `src/services/rate-browse-job-store.ts` | Backend Rate Browser workflow/job lifecycle | KEEP ACTIVE | PS-350 durable rate browse job store now owns `rate_browse_jobs` and `rate_browse_job_provider_statuses`; settings snapshots are legacy fallback only. |
 | `src/services/print-queue.ts` | Current label+queue batch job owner | BLOCKED BY CONDITIONAL CARD | PS-351 durable queue-send job store now owns status snapshots; do not delete label/queue orchestration yet. Shipped/shipments touch requires lockdown review. |
 | `src/services/print-queue/queue-send-status.ts` | Backend queue status DTO and stale-job classification | KEEP ACTIVE | Keep until PS-351 replaces or hardens durable status records. |
 | `src/services/settings-json.ts` | Settings-backed job snapshot helper | MIGRATE FIRST | Allowed as transitional persistence helper; not final durable job truth. |
@@ -99,7 +99,8 @@ Bad or less-than-perfect shipping data can first enter at these boundaries:
 
 2. PS-350 - Backend rate jobs, partial results, and shared limiter.
    - Promote rate browse workflow snapshots from transitional settings-backed
-     state into the canonical backend job owner.
+     state into the canonical backend job owner: PS-350 durable rate browse job store
+     (`rate_browse_jobs`, `rate_browse_job_provider_statuses`).
    - Return partial carrier statuses, partial priced rows, final selected best
      DTO, and request-count proof without blocking the whole UI on slow carriers.
    - Keep `/rates/browse` compatibility, but make Rate Browser live browse use
