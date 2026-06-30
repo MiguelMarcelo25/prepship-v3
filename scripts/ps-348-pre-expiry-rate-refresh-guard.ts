@@ -5,6 +5,10 @@ import {
   recordPreExpiryRefreshResult,
   recordPreExpirySelection,
 } from '../src/services/rate-preexpiry-refresh-proof';
+import {
+  backfillUsesLiveRateBudget,
+  buildBackfillRateFetchDecision,
+} from '../src/services/rate-preexpiry-refresh-request';
 
 type Check = {
   name: string;
@@ -31,6 +35,7 @@ const syncJobQueue = read('src/services/sync-job-queue.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const policySource = maybeRead('src/services/rate-preexpiry-refresh-policy.ts');
 const proofSource = maybeRead('src/services/rate-preexpiry-refresh-proof.ts');
+const refreshRequestSource = maybeRead('src/services/rate-preexpiry-refresh-request.ts');
 const docSource = maybeRead('docs/ps-tickets/ps-348-pre-expiry-rate-refresh-proof.md');
 
 const now = Date.parse('2026-06-29T12:00:00.000Z');
@@ -70,6 +75,12 @@ const checks: Check[] = [
       proofSource.includes('recordPreExpiryRefreshResult'),
   ),
   ok(
+    'PS-348 has a focused backend refresh-request module instead of growing the backfill file',
+    refreshRequestSource.includes('shouldForcePreExpiryLiveRefresh') &&
+      refreshRequestSource.includes('buildBackfillRateFetchDecision') &&
+      refreshRequestSource.includes('backfillUsesLiveRateBudget'),
+  ),
+  ok(
     'pre-expiry policy treats near-expiry proof as refreshable before hard TTL',
     /cacheExpiresAt[\s\S]*refreshLeadMs[\s\S]*near_expiry/.test(policySource) &&
       /incomplete_tuple|missing_proof|missing_expiry/.test(policySource),
@@ -103,10 +114,13 @@ const checks: Check[] = [
     /registerWorker\(JOBS\.rateBackfill,\s*async \(\) => runBackfillTick\(\)\)/.test(syncJobQueue),
   ),
   ok(
-    'pre-expiry refresh is cache-friendly and does not force live carrier fan-out',
+    'pre-expiry refresh is scheduler-scoped and forces live only for backend-selected non-fresh rows',
     /mode\?:\s*['"]cache_first['"]\s*\|\s*['"]full_live_audit['"]\s*\|\s*['"]preexpiry_refresh['"]/.test(ratesBackfill) &&
       /opts\.mode === ['"]preexpiry_refresh['"][\s\S]*cache_friendly/.test(ratesBackfill) &&
-      /const liveRecalculate\s*=[^;]*full_live_audit[^;]*\|\|[^;]*maxAgeHours === 0/.test(ratesBackfill),
+      /const liveRecalculate\s*=[^;]*full_live_audit[^;]*\|\|[^;]*maxAgeHours === 0/.test(ratesBackfill) &&
+      /backfillUsesLiveRateBudget\(\{ liveRecalculate, mode: opts\.mode \}\)/.test(ratesBackfill) &&
+      /buildBackfillRateFetchDecision\(\{[\s\S]*preExpiryRefreshReason/.test(ratesBackfill) &&
+      /toGetRatesOptions\(rateFetchDecision\)/.test(ratesBackfill),
   ),
   ok(
     'backfill job snapshots carry pre-expiry selection/result proof',
@@ -203,6 +217,30 @@ if (proofSource) {
     ok('proof records near-expiry selected rows', proof.selected === 1 && proof.reasons.near_expiry === 1, JSON.stringify(proof)),
     ok('proof records pushed-forward cacheExpiresAt after refresh', proof.pushedForward === 1, JSON.stringify(proof)),
     ok('proof records customer and internal tuple refreshed together', proof.tupleRefreshed === 1, JSON.stringify(proof)),
+  );
+}
+
+if (refreshRequestSource) {
+  const nearExpiryDecision = buildBackfillRateFetchDecision({
+    liveRecalculate: false,
+    mode: 'preexpiry_refresh',
+    preExpiryRefreshReason: 'near_expiry',
+  });
+  const freshDecision = buildBackfillRateFetchDecision({
+    liveRecalculate: false,
+    mode: 'preexpiry_refresh',
+    preExpiryRefreshReason: 'fresh',
+  });
+  const cacheFirstDecision = buildBackfillRateFetchDecision({
+    liveRecalculate: false,
+    mode: 'cache_first',
+    preExpiryRefreshReason: 'near_expiry',
+  });
+  checks.push(
+    ok('pre-expiry selected near-expiry rows force live refresh', nearExpiryDecision.forceRefresh === true, JSON.stringify(nearExpiryDecision)),
+    ok('pre-expiry fresh rows remain cache-allowed', freshDecision.forceRefresh === false, JSON.stringify(freshDecision)),
+    ok('normal cache-first backfill still does not force live', cacheFirstDecision.forceRefresh === false, JSON.stringify(cacheFirstDecision)),
+    ok('pre-expiry scheduler uses live timeout budget for selected rows', backfillUsesLiveRateBudget({ liveRecalculate: false, mode: 'preexpiry_refresh' }) === true),
   );
 }
 

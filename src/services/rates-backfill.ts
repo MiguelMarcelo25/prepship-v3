@@ -50,6 +50,11 @@ import {
   recordPreExpirySelection,
   type PreExpiryRefreshProof,
 } from './rate-preexpiry-refresh-proof';
+import {
+  backfillUsesLiveRateBudget,
+  buildBackfillRateFetchDecision,
+  toGetRatesOptions,
+} from './rate-preexpiry-refresh-request';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -599,11 +604,13 @@ async function runBackfill(
       );
     }, PENDING_STAMP_HEARTBEAT_MS);
 
-    // #750: throttle the LIVE burst so 40+ forceRefresh orders don't starve each other for the global
-    // rate-limiter's permits (the cause of the 30s queue-wait timeouts); passive sweeps keep 4.
-    const CONCURRENCY = Math.max(1, Math.min(liveRecalculate ? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY));
-    // #750: the live path needs a larger per-order budget (it wraps the limiter queue wait), passive 30s.
-    const perOrderTimeoutMs = liveRecalculate ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
+    const liveRateBudget = backfillUsesLiveRateBudget({ liveRecalculate, mode: opts.mode });
+    // #750/PS-348: throttle live bursts so force-refresh orders do not starve each other for the global
+    // rate-limiter's permits. PS-348 pre-expiry runs force live only for policy-selected non-fresh rows,
+    // but the job still uses the live budget because those rows must push cacheExpiresAt forward.
+    const CONCURRENCY = Math.max(1, Math.min(liveRateBudget ? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY));
+    // #750/PS-348: live paths need a larger per-order budget because this wraps the limiter queue wait.
+    const perOrderTimeoutMs = liveRateBudget ? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
       const preExpiryRefreshReason = shouldPreExpiryRefreshRate(row.bestRateJson, {
@@ -722,16 +729,21 @@ async function runBackfill(
           storeId: row.storeId,
           clientId: row.clientId,
         };
+        const rateFetchDecision = buildBackfillRateFetchDecision({
+          liveRecalculate,
+          mode: opts.mode,
+          preExpiryRefreshReason,
+        });
         // #750: retry a TIMED-OUT live fetch once — by the retry the initial burst has drained, so the
         // order that was stuck waiting for a limiter permit now gets its rate. Non-timeout errors throw
         // immediately (a real rate error is recorded honestly). Passive sweeps get no retry.
         const result = await runWithTimeoutAndRetry(
           // PS-perf: the best-rate backfill is bulk BACKGROUND work — it yields ShipStation
           // budget + fan-out permits to interactive Browse Rates clicks (the limiter priority lane).
-          () => getRates(rateInput, liveRecalculate ? { forceRefresh: true, priority: 'background' } : { priority: 'background' }),
+          () => getRates(rateInput, toGetRatesOptions(rateFetchDecision)),
           {
             timeoutMs: perOrderTimeoutMs,
-            maxRetries: liveRecalculate ? LIVE_MAX_RETRIES : 0,
+            maxRetries: rateFetchDecision.forceRefresh ? LIVE_MAX_RETRIES : 0,
             label: `getRates(order=${row.id})`,
           },
         );

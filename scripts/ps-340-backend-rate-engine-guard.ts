@@ -119,8 +119,10 @@ check(
 
 check(
   'backend backfill stays bounded and uses background priority for ShipStation quotes',
-  /const CONCURRENCY = Math\.max\(1, Math\.min\(liveRecalculate \? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY\)\)/.test(ratesBackfill) &&
-    /getRates\(rateInput, liveRecalculate \? \{ forceRefresh: true, priority: 'background' \} : \{ priority: 'background' \}\)/.test(ratesBackfill),
+  /const liveRateBudget = backfillUsesLiveRateBudget\(\{ liveRecalculate, mode: opts\.mode \}\)/.test(ratesBackfill) &&
+    /const CONCURRENCY = Math\.max\(1, Math\.min\(liveRateBudget \? LIVE_BACKFILL_CONCURRENCY : 4, RATE_FETCH_CONCURRENCY\)\)/.test(ratesBackfill) &&
+    /buildBackfillRateFetchDecision\(\{[\s\S]*preExpiryRefreshReason/.test(ratesBackfill) &&
+    /getRates\(rateInput, toGetRatesOptions\(rateFetchDecision\)\)/.test(ratesBackfill),
 );
 
 check(

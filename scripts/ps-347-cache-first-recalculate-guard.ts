@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { buildBackfillRateFetchDecision } from '../src/services/rate-preexpiry-refresh-request';
 
 type Check = {
   name: string;
@@ -20,6 +21,22 @@ const toolbar = read('web/src/components/Views/OrdersFilterToolbar.tsx');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const ratesRoute = read('src/routes/rates.ts');
 const backfill = read('src/services/rates-backfill.ts');
+const preExpiryRequest = read('src/services/rate-preexpiry-refresh-request.ts');
+const cacheFirstDecision = buildBackfillRateFetchDecision({
+  liveRecalculate: false,
+  mode: 'cache_first',
+  preExpiryRefreshReason: 'near_expiry',
+});
+const fullLiveDecision = buildBackfillRateFetchDecision({
+  liveRecalculate: true,
+  mode: 'cache_first',
+  preExpiryRefreshReason: 'fresh',
+});
+const preExpiryDecision = buildBackfillRateFetchDecision({
+  liveRecalculate: false,
+  mode: 'preexpiry_refresh',
+  preExpiryRefreshReason: 'near_expiry',
+});
 
 const checks: Check[] = [
   ok(
@@ -59,9 +76,14 @@ const checks: Check[] = [
       && /opts\.mode\s*===\s*['"]cache_first['"]/.test(backfill),
   ),
   ok(
-    'backend live forceRefresh is restricted to manual/full-live audit mode',
+    'normal cache-first backfill does not force live; full-live and PS-348 selected rows delegate to backend decision owner',
     /const liveRecalculate\s*=\s*.*full_live_audit/.test(backfill)
-      && /getRates\(rateInput,\s*liveRecalculate\s*\?\s*\{\s*forceRefresh:\s*true/.test(backfill),
+      && /buildBackfillRateFetchDecision\(\{[\s\S]*liveRecalculate[\s\S]*preExpiryRefreshReason/.test(backfill)
+      && /toGetRatesOptions\(rateFetchDecision\)/.test(backfill)
+      && /mode === 'preexpiry_refresh' && reason !== 'fresh'/.test(preExpiryRequest)
+      && cacheFirstDecision.forceRefresh === false
+      && fullLiveDecision.forceRefresh === true
+      && preExpiryDecision.forceRefresh === true,
   ),
   ok(
     'cache-friendly mode is documented as the normal operator path and keeps provider budget protected',
