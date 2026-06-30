@@ -234,10 +234,10 @@ check('createLabelV2 safety and proof gates run before provider purchase branche
 const printQueue = read('src/services/print-queue.ts');
 checkPatterns('Print Queue owner creates/recovers/queues labels through backend services', printQueue, [
   /findExistingQueueableLabelForOrder/,
-  /const created = await createLabelV2\(\{/,
+  /const created = await timeQueueStep\([\s\S]{0,220}\(\) => createLabelV2\(\{/,
   /recoverCreatedLabelUrl/,
   /normalizePrintQueueLabelUrl\(labelUrl\)/,
-  /await addToQueue\(\{/,
+  /await timeQueueStep\([\s\S]{0,220}\(\) => addToQueue\(\{/,
   /classifyLabelPurchaseRetry\(err\)/,
   /ensureShipmentConfirmationLifecycle\(\{/,
   /processFulfillmentOutboxOnce\(\{ orderId: parsedOrderId/,

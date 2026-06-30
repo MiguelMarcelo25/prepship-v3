@@ -91,6 +91,7 @@ const expectedRuntimeDdlFiles = [
   'src/services/house-account-opt-in.ts',
   'src/services/order-recipient-override.ts',
   'src/services/packaging-rules.ts',
+  'src/services/print-queue/queue-send-job-store.ts',
   'src/services/print-queue-pdf-store.ts',
   // PS-312: combined-shipment-bundle sidecars (shipment_bundles + shipment_bundle_members).
   // Additive; covered by drizzle migration 0052_shipment_bundles.sql + the runtime ensure is the

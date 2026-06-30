@@ -36,6 +36,11 @@ import {
 } from './print-queue-pdf-store';
 import { type QueueSendStatusName } from './print-queue/queue-send-status';
 import { setJsonSettings } from './settings-json';
+import {
+  getLatestQueueSendJobRecord,
+  getQueueSendJobRecord,
+  persistQueueSendJobRecord,
+} from './print-queue/queue-send-job-store';
 // Per user override unlock shipped data on 2026-06-30: durable batch-send
 // snapshots now delegate to a focused backend module that preserves every
 // per-order result, so long queue runs remain auditable after worker fallback.
@@ -347,25 +352,42 @@ export async function persistQueueSendJobSnapshot(
   job: QueueSendJob,
   options: { required?: boolean } = {},
 ): Promise<void> {
+  const snapshot = toQueueSendSnapshot(job);
   try {
-    const snapshot = toQueueSendSnapshot(job);
-    const jobKey = queueSendJobStatusKey(job.jobId);
-    await setJsonSettings([
-      { key: PRINT_QUEUE_SEND_STATUS_KEY, value: snapshot },
-      { key: jobKey, value: snapshot },
-    ]);
+    await persistQueueSendJobRecord(snapshot);
   } catch (err) {
     console.warn(
-      '[print-queue] failed to persist batch-send status:',
+      '[print-queue] failed to persist durable batch-send job:',
       err instanceof Error ? err.message : err
     );
     if (options.required) {
       throw new PrintQueueDurableStatusError();
     }
+    return;
+  }
+
+  try {
+    await persistLegacyQueueSendSettingsSnapshot(snapshot);
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to persist legacy batch-send status:',
+      err instanceof Error ? err.message : err
+    );
   }
 }
 
+async function persistLegacyQueueSendSettingsSnapshot(snapshot: QueueSendJobSnapshot): Promise<void> {
+  const jobKey = queueSendJobStatusKey(snapshot.jobId);
+  await setJsonSettings([
+    { key: PRINT_QUEUE_SEND_STATUS_KEY, value: snapshot },
+    { key: jobKey, value: snapshot },
+  ]);
+}
+
 export async function getQueueSendJobSnapshot(jobId: string): Promise<QueueSendJobSnapshot | null> {
+  const durableJob = await getQueueSendJobRecord(jobId);
+  if (durableJob) return durableJob;
+
   try {
     const [row] = await db
       .select({ value: settings.value })
@@ -402,6 +424,9 @@ export async function persistMergeJobSnapshot(job: MergeJob): Promise<void> {
 }
 
 export async function getLatestQueueSendJobSnapshot(): Promise<QueueSendJobSnapshot | null> {
+  const durableJob = await getLatestQueueSendJobRecord();
+  if (durableJob) return durableJob;
+
   try {
     const [row] = await db
       .select({ value: settings.value })
