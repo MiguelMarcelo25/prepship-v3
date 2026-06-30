@@ -1,5 +1,7 @@
 export const RATE_BROWSER_BACKEND_PROOF_UNAVAILABLE_REASON =
   'Backend rate proof unavailable - browse rates again before selecting.';
+export const RATE_BROWSER_BACKEND_PROOF_FINALIZING_REASON =
+  'Backend rate proof is finalizing - wait for live browse to finish.';
 
 const DEFAULT_ELIGIBILITY_BLOCK_REASON = 'Shipping service is not eligible for this order.';
 
@@ -34,10 +36,17 @@ export function rateBrowserBackendProofIsComplete(rate: unknown): boolean {
   return record?.isComplete === true || raw?.isComplete === true;
 }
 
-export function rateBrowserUnavailableReason(rate: unknown): string | null {
+export function rateBrowserUnavailableReason(
+  rate: unknown,
+  options: { proofFinalizing?: boolean } = {},
+): string | null {
   return (
     readBackendEligibilityBlockReason(rate) ??
-    (rateBrowserBackendProofIsComplete(rate) ? null : RATE_BROWSER_BACKEND_PROOF_UNAVAILABLE_REASON)
+    (rateBrowserBackendProofIsComplete(rate)
+      ? null
+      : options.proofFinalizing === true
+        ? RATE_BROWSER_BACKEND_PROOF_FINALIZING_REASON
+        : RATE_BROWSER_BACKEND_PROOF_UNAVAILABLE_REASON)
   );
 }
 

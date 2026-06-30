@@ -70,6 +70,7 @@ import RateRowItem from './RateRowItem';
 import RateRowsView from './RateRowsView';
 import RateBrowserCarrierSidebar from './RateBrowserCarrierSidebar';
 import { buildPartialRateBrowseDisplayState } from './rate-browser-partial-result';
+import { nextRateBrowserPendingPidsAfterPartial } from './rate-browser-pending-state';
 import { useRateBrowseWorkflow } from '../hooks/useRateBrowseWorkflow';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
@@ -922,8 +923,9 @@ function rateBlockedReason(
   rate: RateRow,
   _order: RbOrderSummaryDto | null,
   _shippingOptions?: { insuranceProvider?: string | null; insuredValue?: number | string | null },
+  displayOptions: { proofFinalizing?: boolean } = {},
 ): string | null {
-  return rateBrowserUnavailableReason(rate);
+  return rateBrowserUnavailableReason(rate, displayOptions);
 }
 
 function isBlockedRate(
@@ -1214,6 +1216,11 @@ export default function RateBrowserModal({
       ? `${label} ${completed}/${total} · ${ratesCount} rates`
       : `${label} · ${ratesCount} rates`;
   }, [browsing, rateWorkflowSnapshot]);
+  const rateProofFinalizing =
+    browsing &&
+    rateWorkflowSnapshot != null &&
+    rateWorkflowSnapshot.status !== 'complete' &&
+    rateWorkflowSnapshot.status !== 'error';
   const currentRateShippingOptions = {
     insuranceProvider,
     insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
@@ -1473,6 +1480,13 @@ export default function RateBrowserModal({
         setCarrierTimingByPid((current) => ({ ...current, ...partialDisplay.timingByPid }));
         setCarrierStatusByPid((current) => ({ ...current, ...partialDisplay.statusByPid }));
         setRatesByPid((current) => ({ ...current, ...partialDisplay.ratesByPid }));
+        setPendingPids((current) =>
+          nextRateBrowserPendingPidsAfterPartial({
+            pendingPids: current,
+            ratesByPid: partialDisplay.ratesByPid,
+            statusByPid: partialDisplay.statusByPid,
+          }),
+        );
         setRateBrowseInfo(partialDisplay.info);
       };
       const browseResult = await (
@@ -2035,7 +2049,9 @@ export default function RateBrowserModal({
         rateShippingAccounts={rateShippingAccounts}
         currentRateShippingOptions={currentRateShippingOptions}
         onRateClick={handleRateClick}
-        rateBlockedReason={rateBlockedReason}
+        rateBlockedReason={(row, rowOrder, shippingOptions) =>
+          rateBlockedReason(row, rowOrder, shippingOptions, { proofFinalizing: rateProofFinalizing })
+        }
         houseTuple={houseTuple}
       />
     );
