@@ -118,6 +118,31 @@ New proof:
   partial snapshots expose cache-first rates, do not finish the workflow, and
   are replaced by the final live result.
 
+## 2026-06-30 Rate Browser Open Live Workflow Slice
+
+Live QA showed the modal could still open on a cached-only state such as
+`7 of 9 carriers checked`, with proofless rows visible and no active workflow.
+That was technically safe, but it violated the operator workflow: Rate Browser
+should load all scoped carriers when opened.
+
+This slice treats opening Rate Browser as explicit operator intent and starts
+the backend live browse workflow immediately:
+
+- `web/src/components/rate-browser-open-workflow.ts` owns the open-time browse
+  options and returns `{ forceLive: true }`.
+- `web/src/components/RateBrowserModal.tsx` calls that helper from the open
+  effect once dimensions, weight, ZIP, and scoped carrier accounts are ready.
+- Awaiting page load remains passive; only the opened Rate Browser starts live
+  carrier work.
+- Selection safety is unchanged: cached/partial rows may display while final
+  proof is building, but row apply still requires backend `isComplete` proof.
+
+New proof:
+
+- `npm run test:ps-346-rate-browser-open-live-workflow -- --no-color` - proves
+  Rate Browser open requests the backend live workflow and does not stop at a
+  cached-only partial preview.
+
 ## 2026-06-30 Print Queue Volume Evidence Slice
 
 The Print Queue high-volume slice is still behind the lockdown gate for any

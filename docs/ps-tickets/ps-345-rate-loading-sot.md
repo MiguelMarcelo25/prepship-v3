@@ -23,8 +23,8 @@ The bad input was not a provider payload. It was frontend request churn:
 
 - `OrdersView.tsx` passively browsed live rates for visible Awaiting rows on
   page mount and silently kicked backend backfill for overflow rows.
-- `RateBrowserModal.tsx` opened with a cached probe and then auto-promoted any
-  uncovered carrier account into a live fan-out without an operator click.
+- `RateBrowserModal.tsx` opened with a cached-only probe that could leave the
+  operator on partial proofless rows such as `7 of 9 carriers checked`.
 
 Those calls could refresh row rates, change display state, and compete with the
 interactive Rate Browser even when the operator only opened the page or modal.
@@ -37,11 +37,12 @@ interactive Rate Browser even when the operator only opened the page or modal.
   jobs. It reads `/rates/backfill-best/latest`, attaches active jobs to the
   existing job poller, and refetches rows as the backend resolves them without
   starting hidden frontend live-rate work.
-- Keep explicit manual controls: Recalculate All, per-row Retry, side-panel
-  Recalculate, and the Rate Browser button may still ask backend rate endpoints
-  for live work.
-- Keep Rate Browser open as cache/display-only. If the cached state is thin,
-  the operator must use the visible Browse/Refresh button to request live rates.
+- Keep explicit manual controls: Recalculate All, per-row Retry, and side-panel
+  Recalculate may still ask backend rate endpoints for live work.
+- Treat opening Rate Browser as explicit operator intent. The modal starts the
+  backend live workflow across all scoped carrier accounts instead of stopping
+  at cached-only partial coverage. Cached partial rows may display while the
+  backend workflow continues, but final selection still requires backend proof.
 - No shipped/cancelled surfaces are touched.
 
 ## Guard
@@ -58,6 +59,6 @@ The guard proves:
 - Awaiting observes backend/sync-started rate backfill jobs and reuses the
   existing row-refresh poller;
 - Awaiting retry delegates to an explicit backend recalculate path;
-- Rate Browser open does not auto-promote cached probes into live fan-out;
-- the live Rate Browser request remains behind the explicit button;
+- Rate Browser open starts the backend live workflow for all scoped carriers;
+- the Refresh Live Rates button remains an explicit retry of that workflow;
 - the ticket ledger and this SOT note stay registered.

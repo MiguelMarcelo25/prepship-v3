@@ -40,9 +40,11 @@ const browseDisplayPath = 'src/services/rate-browser-display-fields.ts';
 const browseProducerPath = 'src/services/rate-browse-response-producer.ts';
 const workflowHookPath = 'web/src/hooks/useRateBrowseWorkflow.ts';
 const partialDisplayPath = 'web/src/components/rate-browser-partial-result.ts';
+const openWorkflowPath = 'web/src/components/rate-browser-open-workflow.ts';
 const ordersRefetchCoordinatorPath = 'web/src/hooks/orders-refetch-coordinator.ts';
 const ordersRefetchBehaviorPath = 'scripts/ps-346-orders-refetch-coordinator-behavior.ts';
 const partialWorkflowBehaviorPath = 'scripts/ps-346-rate-browse-partial-workflow-behavior.ts';
+const openLiveWorkflowGuardPath = 'scripts/ps-346-rate-browser-open-live-workflow-guard.ts';
 const queueVolumeEvidenceGuardPath = 'scripts/ps-346-print-queue-volume-evidence-guard.ts';
 const findings = fileText(findingsPath);
 const queueVolumeEvidence = fileText(queueVolumeEvidencePath);
@@ -56,9 +58,11 @@ const browseDisplay = fileText(browseDisplayPath);
 const browseProducer = fileText(browseProducerPath);
 const workflowHook = fileText(workflowHookPath);
 const partialDisplay = fileText(partialDisplayPath);
+const openWorkflow = fileText(openWorkflowPath);
 const ordersRefetchCoordinator = fileText(ordersRefetchCoordinatorPath);
 const ordersRefetchBehavior = fileText(ordersRefetchBehaviorPath);
 const partialWorkflowBehavior = fileText(partialWorkflowBehaviorPath);
+const openLiveWorkflowGuard = fileText(openLiveWorkflowGuardPath);
 const queueVolumeEvidenceGuard = fileText(queueVolumeEvidenceGuardPath);
 const ratesRoute = read('src/routes/rates.ts');
 const apiClient = read('web/src/lib/v2-apiClient.ts');
@@ -78,6 +82,11 @@ check(
 check(
   'package wires PS-346 partial Rate Browser workflow behavior guard',
   packageJson.includes('"test:ps-346-rate-browse-partial-workflow": "tsx scripts/ps-346-rate-browse-partial-workflow-behavior.ts"'),
+);
+
+check(
+  'package wires PS-346 Rate Browser open live workflow guard',
+  packageJson.includes('"test:ps-346-rate-browser-open-live-workflow": "tsx scripts/ps-346-rate-browser-open-live-workflow-guard.ts"'),
 );
 
 check(
@@ -300,12 +309,6 @@ check(
 );
 
 check(
-  'RateBrowserModal keeps modal-open cache probe display-only',
-  /void browseRates\(undefined, \{ cachedOnly: true \}\)/.test(rateBrowserModal) &&
-    !/Try the cache on open[\s\S]{0,900}forceLive: true/.test(rateBrowserModal),
-);
-
-check(
   'RateBrowserModal routes explicit live browse through the backend workflow hook',
   /import \{ useRateBrowseWorkflow \} from ['"]\.\.\/hooks\/useRateBrowseWorkflow['"]/.test(rateBrowserModal) &&
     /import \{ buildPartialRateBrowseDisplayState \} from ['"]\.\/rate-browser-partial-result['"]/.test(rateBrowserModal) &&
@@ -313,6 +316,17 @@ check(
     /const browsePayload = \{/.test(rateBrowserModal) &&
     /options\.forceLive === true\s*\?\s*runRateBrowseWorkflow\(browsePayload, \{ onPartialResult: applyPartialBrowseResult \}\)\s*:\s*apiClient\.browseRates\(browsePayload\)/.test(rateBrowserModal) &&
     /onClick=\{\(\) => void browseRates\(undefined, \{ forceLive: true \}\)\}/.test(rateBrowserModal),
+);
+
+check(
+  'RateBrowserModal starts all-carrier backend live workflow on open',
+  existsSync(openWorkflowPath) &&
+    /export function rateBrowserOpenBrowseOptions\(\)/.test(openWorkflow) &&
+    /return \{ forceLive: true \}/.test(openWorkflow) &&
+    /import \{ rateBrowserOpenBrowseOptions \} from ['"]\.\/rate-browser-open-workflow['"]/.test(rateBrowserModal) &&
+    /Start the live carrier workflow on open/.test(rateBrowserModal) &&
+    /void browseRates\(undefined, rateBrowserOpenBrowseOptions\(\)\)/.test(rateBrowserModal) &&
+    !/Start the live carrier workflow on open[\s\S]{0,900}cachedOnly:\s*true/.test(rateBrowserModal),
 );
 
 check(
@@ -368,6 +382,13 @@ check(
     /cached preview must be persisted as a partial workflow snapshot/.test(partialWorkflowBehavior) &&
     /partial snapshots must not mark the workflow final/.test(partialWorkflowBehavior) &&
     /final live result replaces the partial request key/.test(partialWorkflowBehavior),
+);
+
+check(
+  'PS-346 guard proves Rate Browser open does not stop at cached-only partial coverage',
+  existsSync(openLiveWorkflowGuardPath) &&
+    /Rate Browser open should request the backend live workflow across all scoped carriers/.test(openLiveWorkflowGuard) &&
+    /Rate Browser open must not stop at cached-only partial coverage/.test(openLiveWorkflowGuard),
 );
 
 check(

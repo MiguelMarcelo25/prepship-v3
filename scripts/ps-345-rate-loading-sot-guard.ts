@@ -3,8 +3,10 @@
  *
  * Offline/static only: no DB, no network, no labels, no queue mutation.
  * This pins the first runtime cleanup slice from the Trello PS-345 card:
- * Awaiting and Rate Browser may display backend/cached state automatically,
- * but live fan-out/backfill must be explicit operator intent or backend-owned.
+ * Awaiting may display backend/cached state automatically, but broad live
+ * Awaiting fan-out/backfill must be explicit operator intent or backend-owned.
+ * Opening Rate Browser is explicit operator intent and must start its backend
+ * live workflow rather than leaving the operator on partial cached rows.
  */
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -34,6 +36,7 @@ function sliceBetween(source: string, startNeedle: string, endNeedle: string): s
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const recalculateAll = read('web/src/components/Views/orders-recalculate-all.ts');
 const modal = read('web/src/components/RateBrowserModal.tsx');
+const openWorkflow = read('web/src/components/rate-browser-open-workflow.ts');
 const packageJson = read('package.json');
 const ledger = read('docs/ps-tickets/ps-ledger.md');
 const docPath = 'docs/ps-tickets/ps-345-rate-loading-sot.md';
@@ -46,7 +49,7 @@ const retryOrderRate = sliceBetween(
 );
 const modalOpenEffect = sliceBetween(
   modal,
-  '// Try the cache on open',
+  '// Start the live carrier workflow on open',
   '// Auto-select a package',
 );
 const browseRatesFunction = sliceBetween(
@@ -98,19 +101,22 @@ check(
 );
 
 check(
-  'RateBrowserModal open effect is cache/display only and does not auto-promote to live fan-out',
-  /browseRates\(undefined, \{ cachedOnly: true \}\)/.test(modalOpenEffect) &&
-    !/forceLive:\s*true|probe\.uncoveredPids|complete coverage live|live-fetches/.test(modalOpenEffect),
+  'RateBrowserModal open effect starts the backend live workflow for all scoped carriers',
+  /rateBrowserOpenBrowseOptions/.test(openWorkflow) &&
+    /return \{ forceLive: true \}/.test(openWorkflow) &&
+    /browseRates\(undefined, rateBrowserOpenBrowseOptions\(\)\)/.test(modalOpenEffect) &&
+    !/cachedOnly:\s*true/.test(modalOpenEffect),
 );
 
 check(
-  'RateBrowserModal keeps live browse behind the explicit button',
+  'RateBrowserModal keeps manual Refresh Live Rates as an explicit backend workflow retry',
   /onClick=\{\(\) => void browseRates\(undefined, \{ forceLive: true \}\)\}/.test(modal),
 );
 
 check(
-  'RateBrowserModal cached-only browse no longer documents an automatic live follow-up',
-  !/open effect live-fetches|forceLive pass whenever probe\.uncoveredPids|no live follow-up/.test(browseRatesFunction),
+  'RateBrowserModal open live workflow does not reintroduce Awaiting-table passive rate loading',
+  !/PASSIVE_LIVE_BEST_RATE|PASSIVE_BACKFILL_MAX_AGE_HOURS|runPassiveAutoRating|fetchCachedRatesBulk/.test(ordersView) &&
+    !/open effect live-fetches|forceLive pass whenever probe\.uncoveredPids|no live follow-up/.test(browseRatesFunction),
 );
 
 check(

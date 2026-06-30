@@ -71,6 +71,7 @@ import RateRowsView from './RateRowsView';
 import RateBrowserCarrierSidebar from './RateBrowserCarrierSidebar';
 import { buildPartialRateBrowseDisplayState } from './rate-browser-partial-result';
 import { nextRateBrowserPendingPidsAfterPartial } from './rate-browser-pending-state';
+import { rateBrowserOpenBrowseOptions } from './rate-browser-open-workflow';
 import { useRateBrowseWorkflow } from '../hooks/useRateBrowseWorkflow';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
@@ -1240,9 +1241,8 @@ export default function RateBrowserModal({
     if (!open) resetRateBrowseWorkflow();
   }, [open, resetRateBrowseWorkflow]);
 
-  // Try the cache on open when weight + dims are already valid. PS-345 keeps
-  // modal-open work display-only; live carrier fan-out requires the visible
-  // Browse/Refresh button.
+  // Start the live carrier workflow on open when weight + dims are valid. Opening
+  // Rate Browser is explicit operator intent; Awaiting page load remains passive.
   const autoFetchedRef = useRef<number | null>(null);
   useEffect(() => {
     if (!open) {
@@ -1254,7 +1254,7 @@ export default function RateBrowserModal({
     if (!hasWeight || !hasDims || !zip || zip.length < 5) return;
     if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
-    void browseRates(undefined, { cachedOnly: true });
+    void browseRates(undefined, rateBrowserOpenBrowseOptions());
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
