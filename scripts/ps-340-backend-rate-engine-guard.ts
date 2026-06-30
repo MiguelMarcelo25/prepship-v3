@@ -9,6 +9,7 @@
  * Offline/static only: no DB, no provider calls, no labels, no queue mutation.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { buildRateEngineVolumeProof } from '../src/services/rate-engine-volume-proof';
 
 let failures = 0;
 
@@ -43,11 +44,26 @@ const ratesService = read('src/services/rates.ts');
 const ratesRoute = read('src/routes/rates.ts');
 const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
 const ratesBackfill = read('src/services/rates-backfill.ts');
+const volumeProofGuard = read('scripts/ps-340-rate-engine-volume-proof-guard.ts');
+const openWorkflow = read('web/src/components/rate-browser-open-workflow.ts');
 const modal = read('web/src/components/RateBrowserModal.tsx');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const packageJson = read('package.json');
 const docPath = 'docs/ps-tickets/ps-340-backend-rate-engine.md';
 const doc = existsSync(docPath) ? read(docPath) : '';
+const volumeProof = buildRateEngineVolumeProof({
+  selectedOrders: 100,
+  visibleShipStationAccounts: 9,
+  visibleDirectCarrierAccounts: 17,
+  rateFetchConcurrency: 4,
+  directCarrierConcurrency: 4,
+  backfillOrderConcurrency: 2,
+  awaitingPageLoadProviderCalls: 0,
+  usesRateBrowseSingleFlight: true,
+  usesCacheFirstOpenPreview: true,
+  pendingHeartbeatMs: 120_000,
+  pendingStaleWindowMs: 360_000,
+});
 
 const directCarrierFunction = sliceFrom(
   ratesService,
@@ -56,7 +72,7 @@ const directCarrierFunction = sliceFrom(
 
 const modalOpenEffect = sliceBetween(
   modal,
-  '// Try the cache on open',
+  '// Start the live carrier workflow on open',
   '// Auto-select a package',
 );
 
@@ -76,6 +92,15 @@ check(
   'direct-carrier quotes still return per-account diagnostics after bounding',
   /settled\.flatMap\(\(item\) => item\.rates\)/.test(directCarrierFunction) &&
     /diagnostics: settled\.map\(\(item\) => item\.diagnostic\)/.test(directCarrierFunction),
+);
+
+check(
+  'PS-340 volume proof models 100 selected orders with backend caps',
+  volumeProof.selectedOrders === 100 &&
+    volumeProof.maxConcurrentBackfillOrders === 2 &&
+    volumeProof.maxShipStationCarrierCalls === 4 &&
+    volumeProof.maxDirectCarrierCalls === 8 &&
+    volumeProof.pendingHeartbeatSafe,
 );
 
 check(
@@ -99,9 +124,10 @@ check(
 );
 
 check(
-  'Rate Browser open remains cache/display-only; live fan-out is explicit operator intent',
-  /browseRates\(undefined, \{ cachedOnly: true \}\)/.test(modalOpenEffect) &&
-    !/forceLive:\s*true/.test(modalOpenEffect) &&
+  'Rate Browser open uses explicit backend live workflow, not a passive Awaiting worker',
+  /return \{ forceLive: true \}/.test(openWorkflow) &&
+    /void browseRates\(undefined, rateBrowserOpenBrowseOptions\(\)\)/.test(modalOpenEffect) &&
+    !/cachedOnly:\s*true/.test(modalOpenEffect) &&
     /onClick=\{\(\) => void browseRates\(undefined, \{ forceLive: true \}\)\}/.test(modal),
 );
 
@@ -113,7 +139,15 @@ check(
 check(
   'package wires PS-340 backend rate-engine guard without replacing the older bridge-audit guard',
   packageJson.includes('"test:ps-340-backend-rate-engine": "tsx scripts/ps-340-backend-rate-engine-guard.ts"') &&
+    packageJson.includes('"test:ps-340-rate-engine-volume-proof": "tsx scripts/ps-340-rate-engine-volume-proof-guard.ts"') &&
     packageJson.includes('"test:ps-340-ratebrowser-bridge-audit": "tsx scripts/ps-340-ratebrowser-bridge-audit-guard.ts"'),
+);
+
+check(
+  'PS-340 volume guard is wired to backend limiter observability and request-count proof',
+  volumeProofGuard.includes('buildRateEngineVolumeProof') &&
+    volumeProofGuard.includes('getRateEngineLimiterSnapshot') &&
+    volumeProofGuard.includes('100 selected orders'),
 );
 
 check(
@@ -121,6 +155,7 @@ check(
   doc.includes('## Backend Owner') &&
     doc.includes('## Imperfect Data Injection') &&
     doc.includes('## PS-340 Number Collision') &&
+    doc.includes('## 2026-06-30 Volume Proof Slice') &&
     doc.includes('No shipped/cancelled surfaces are touched'),
 );
 

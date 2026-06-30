@@ -6,6 +6,7 @@ import { isEbayMarketplaceOrder } from './ebay-order-detection';
 import {
   CACHE_TTL_MS,
   getCarrierAccountsForRateContext,
+  getRateEngineLimiterSnapshot,
   getDirectCarrierRatesForRateInput,
   getRates,
   rateCacheKey,
@@ -196,6 +197,7 @@ export async function produceRateBrowsePayload({
       effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
     },
   });
+  const limiterBefore = getRateEngineLimiterSnapshot();
   const { result, directRates, shipStationDurationMs, directCarrierDurationMs } = await runRateBrowseSingleFlight(
     browseSingleFlightKey,
     async () => {
@@ -230,6 +232,7 @@ export async function produceRateBrowsePayload({
       return { result, directRates, shipStationDurationMs, directCarrierDurationMs };
     },
   );
+  const limiterAfter = getRateEngineLimiterSnapshot();
   let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
   let shipStationBlocked = false;
   if (body.orderId) {
@@ -510,6 +513,10 @@ export async function produceRateBrowsePayload({
     shipStationDurationMs,
     directCarrierDurationMs,
     carrierDiagnostics: combinedCarrierDiagnostics,
+    rateEngineLimiter: {
+      limiterBefore,
+      limiterAfter,
+    },
   });
   return {
     ...result,

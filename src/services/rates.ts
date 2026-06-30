@@ -306,6 +306,20 @@ const interactiveRateFetchWaiters: Array<() => void> = [];
 const backgroundRateFetchWaiters: Array<() => void> = [];
 const shipStationRateLimitTimestamps: number[] = [];
 
+export type RateEngineLimiterSnapshot = {
+  source: 'backend-rate-engine';
+  generatedAt: string;
+  rateFetchConcurrency: number;
+  directCarrierRateFetchConcurrency: number;
+  activeRateFetches: number;
+  interactiveWaiters: number;
+  backgroundWaiters: number;
+  shipStationBudgetWindowMs: number;
+  shipStationBudgetUsed: number;
+  shipStationBurstLimit: number;
+  shipStationPerMinuteLimit: number;
+};
+
 function trimShipStationRateLimitTimestamps(now = Date.now()) {
   while (
     shipStationRateLimitTimestamps.length > 0 &&
@@ -371,6 +385,23 @@ function releaseGlobalRateFetchPermit() {
   // the prior single-queue release, so no permit is lost and active never exceeds the cap.
   const next = interactiveRateFetchWaiters.shift() ?? backgroundRateFetchWaiters.shift();
   if (next) next();
+}
+
+export function getRateEngineLimiterSnapshot(): RateEngineLimiterSnapshot {
+  trimShipStationRateLimitTimestamps();
+  return {
+    source: 'backend-rate-engine',
+    generatedAt: new Date().toISOString(),
+    rateFetchConcurrency: RATE_FETCH_CONCURRENCY,
+    directCarrierRateFetchConcurrency: DIRECT_CARRIER_RATE_FETCH_CONCURRENCY,
+    activeRateFetches: globalRateFetchActive,
+    interactiveWaiters: interactiveRateFetchWaiters.length,
+    backgroundWaiters: backgroundRateFetchWaiters.length,
+    shipStationBudgetWindowMs: SHIPSTATION_RATE_LIMIT_WINDOW_MS,
+    shipStationBudgetUsed: shipStationRateLimitTimestamps.length,
+    shipStationBurstLimit: SHIPSTATION_RATE_LIMIT_BURST,
+    shipStationPerMinuteLimit: SHIPSTATION_RATE_LIMIT_PER_MINUTE,
+  };
 }
 
 // Exported for ps-rate-limiter-priority-behavior-test (proves no-deadlock + interactive-first).

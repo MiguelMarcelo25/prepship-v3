@@ -18,6 +18,29 @@ The repository already has `test:ps-340-ratebrowser-bridge-audit` for an older l
 - Direct-carrier live rating now uses `DIRECT_CARRIER_RATE_FETCH_CONCURRENCY`, defaulting to the backend rate fetch concurrency.
 - `/rates/browse` continues to single-flight identical live provider fan-outs before ranking and proof stamping.
 - Recalculate All/backfill remains backend-owned and uses background ShipStation priority.
-- Rate Browser open stays cache/display-only; live browse remains explicit operator intent.
+- Awaiting page load stays passive; Rate Browser open is explicit operator intent
+  and starts the backend live workflow with a cache-first preview.
+
+## 2026-06-30 Volume Proof Slice
+
+The backend now exposes limiter snapshots from `src/services/rates.ts` and carries
+those snapshots in `rateBrowseTiming.rateEngineLimiter`. This is observability
+only: it reports active ShipStation permits, interactive/background waiters,
+ShipStation budget usage, and direct-carrier concurrency caps. It does not rank
+rates, select carriers, apply markup, persist Best Rate, or change money fields.
+
+The volume proof models DJ/Hermes' high-volume concern without provider calls:
+100 selected orders, 9 visible ShipStation accounts, 17 visible direct-carrier
+accounts, `RATE_FETCH_CONCURRENCY=4`, `DIRECT_CARRIER_RATE_FETCH_CONCURRENCY=4`,
+and live backfill order concurrency of 2. The backend caps the burst to 2 active
+orders, 4 total ShipStation carrier calls, and 8 direct-carrier calls across the
+active order workers. Awaiting page load remains 0 provider calls; Rate Browser
+live work remains explicit and single-flighted; the pending heartbeat refreshes
+before the stale-display window so queued rows do not flip into false unavailable
+state while the burst drains.
+
+Proof command:
+
+- `npm run test:ps-340-rate-engine-volume-proof -- --no-color`
 
 No shipped/cancelled surfaces are touched. No labels, postage, marketplace notifications, billing, inventory, or production data mutations are performed by this guard.

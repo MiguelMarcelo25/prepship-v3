@@ -23,6 +23,10 @@ export type RateBrowseTimingDiagnostics = {
   shipStationDurationMs: number;
   directCarrierDurationMs: number;
   carriers: RateBrowseTimingCarrier[];
+  rateEngineLimiter?: {
+    limiterBefore: Record<string, unknown>;
+    limiterAfter: Record<string, unknown>;
+  };
 };
 
 function durationMs(value: unknown): number | undefined {
@@ -56,11 +60,16 @@ export function buildRateBrowseTimingDiagnostics(input: {
   shipStationDurationMs: number;
   directCarrierDurationMs: number;
   carrierDiagnostics: Array<Record<string, unknown>>;
+  rateEngineLimiter?: {
+    limiterBefore: Record<string, unknown>;
+    limiterAfter: Record<string, unknown>;
+  };
 }): RateBrowseTimingDiagnostics {
   return {
     totalDurationMs: elapsedMs(input.startedAtMs, input.completedAtMs),
     shipStationDurationMs: elapsedMs(0, input.shipStationDurationMs),
     directCarrierDurationMs: elapsedMs(0, input.directCarrierDurationMs),
+    ...(input.rateEngineLimiter ? { rateEngineLimiter: input.rateEngineLimiter } : {}),
     carriers: input.carrierDiagnostics
       .map((diagnostic): RateBrowseTimingCarrier | null => {
         const carrierId = String(diagnostic.carrierId ?? '').trim();
