@@ -89,6 +89,10 @@ export function getBestRateWorkflowModel(order: OrderSummaryDto) {
   return toRecord(getShippingModel(order)?.bestRateWorkflow) ?? toRecord(order.bestRateWorkflow)
 }
 
+export function getOrderShippingWorkflowState(order: OrderSummaryDto) {
+  return toRecord(getShippingModel(order)?.shippingWorkflowState) ?? toRecord(order.shippingWorkflowState)
+}
+
 export function getShippingString(order: OrderSummaryDto, key: string) {
   return toStringValue(getShippingModel(order)?.[key])
 }

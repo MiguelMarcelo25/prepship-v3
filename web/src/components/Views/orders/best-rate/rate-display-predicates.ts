@@ -1,7 +1,7 @@
 // PS-317: pure saved-rate display predicates, moved verbatim out of OrdersView. They decide whether
 // a saved best rate may be shown for the current request, delegating the verdict to the canonical
 // orders-parity contract. Pure on their args — no component state.
-import { toStringValue, toRecord, getBestRateWorkflowModel } from '../../orders-row-display';
+import { toStringValue, toRecord, getBestRateWorkflowModel, getOrderShippingWorkflowState } from '../../orders-row-display';
 import { hasBackendIssuedRateProof } from '../../../../lib/rate-proof';
 import { savedBestRateCanDisplayForCurrentRequest } from '../../orders-parity';
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION } from '../../../../../../src/lib/shipping-service-eligibility';
@@ -9,11 +9,19 @@ import { getSavedBestRateRecord, getRateBaseAmount } from './rate-proof';
 import type { StrictBestRateRequest } from './rate-request';
 import type { OrderSummaryDto } from '../../../../types/api';
 
+export function shippingWorkflowStateCanDisplayRate(order: OrderSummaryDto): boolean {
+  const workflowState = getOrderShippingWorkflowState(order);
+  const rateState = toStringValue(workflowState?.rateState);
+  const displayRate = toRecord(workflowState?.displayRate);
+  return Boolean(displayRate && (rateState === 'ready' || rateState === 'stale' || rateState === 'proof_mismatch'));
+}
+
 export function hasSavedBestRateForRequest(
   order: OrderSummaryDto,
   request: StrictBestRateRequest,
   options: { requireEligibilityVersion?: boolean } = {},
 ) {
+  if (shippingWorkflowStateCanDisplayRate(order)) return true;
   const savedRate = getSavedBestRateRecord(order);
   if (!savedRate) return false;
   const workflow = getBestRateWorkflowModel(order);

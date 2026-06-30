@@ -73,11 +73,19 @@ function readWorkflow(order: unknown): Record<string, unknown> | null {
   return asRecord(rec.bestRateWorkflow)
 }
 
+function readShippingWorkflowState(order: unknown): Record<string, unknown> | null {
+  const rec = asRecord(order)
+  if (!rec) return null
+  const shipping = asRecord(rec.shipping)
+  return asRecord(shipping?.shippingWorkflowState) ?? asRecord(rec.shippingWorkflowState)
+}
+
 export function getOrderRowAllowedActions(order: unknown): OrderRowAllowedActions {
   const actions = asRecord(readWorkflow(order)?.allowedActions)
+  const shippingWorkflowState = readShippingWorkflowState(order)
   return {
     canApplyBestRate: asBoolOrNull(actions?.canApplyBestRate),
-    canPrintToQueue: asBoolOrNull(actions?.canPrintToQueue),
+    canPrintToQueue: asBoolOrNull(shippingWorkflowState?.canPrintQueue) ?? asBoolOrNull(actions?.canPrintToQueue),
     canEditPackage: asBoolOrNull(actions?.canEditPackage),
     canSelectRow: asBoolOrNull(actions?.canSelectRow),
     canBrowseRates: asBoolOrNull(actions?.canBrowseRates),
@@ -102,9 +110,12 @@ export function getOrderRowBlockedReasons(
   order: unknown,
 ): Partial<Record<OrderRowActionVerb, OrderRowBlockedReasonCode>> {
   const raw = asRecord(readWorkflow(order)?.blockedReasons)
-  if (!raw) return {}
+  const shippingWorkflowState = readShippingWorkflowState(order)
+  const shippingPrintQueueReason = asString(shippingWorkflowState?.printQueueBlockedReason)
+  if (!raw && !shippingPrintQueueReason) return {}
   const out: Partial<Record<OrderRowActionVerb, OrderRowBlockedReasonCode>> = {}
-  for (const [verb, code] of Object.entries(raw)) {
+  if (shippingPrintQueueReason) out.printToQueue = shippingPrintQueueReason as OrderRowBlockedReasonCode
+  for (const [verb, code] of Object.entries(raw ?? {})) {
     const value = asString(code)
     if (value) out[verb as OrderRowActionVerb] = value as OrderRowBlockedReasonCode
   }

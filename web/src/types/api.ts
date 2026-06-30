@@ -21,6 +21,8 @@ export type OrderSummaryDto = AnyRecord & {
   items?: unknown
   raw?: unknown
   bestRate?: unknown
+  bestRateWorkflow?: AnyRecord | null
+  shippingWorkflowState?: AnyRecord | null
   selectedRate?: AnyRecord | null
   label?: AnyRecord | null
   shipping?: AnyRecord | null

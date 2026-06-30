@@ -202,7 +202,7 @@ check('fresh + frontend-displayable maps to ready', classifyAwaitingRateCellStat
   hasCarrierContext: true,
   accountsLoading: false,
 }), 'ready');
-check('fresh but NOT frontend-displayable shows a spinner (reload re-rate)', classifyAwaitingRateCellStateWithWorkflow(fresh, {
+check('fresh without a PS-349 display verdict remains bounded pending', classifyAwaitingRateCellStateWithWorkflow(fresh, {
   hasDims: true,
   hasWeight: true,
   hasDisplayableBestRate: false,

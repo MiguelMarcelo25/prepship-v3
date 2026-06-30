@@ -114,6 +114,7 @@ import {
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
 import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
+import { buildOrderShippingWorkflowState } from '../services/shipping-workflow/order-shipping-state';
 import { resolveShippedLabelDisplayState } from '../services/shipping-workflow/shipped-label-display-state';
 import {
   applyRateQuoteRef,
@@ -2448,6 +2449,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         });
       }
     }
+    const shippingWorkflowState = buildOrderShippingWorkflowState({
+      bestRateWorkflow: bestRateWorkflowRow,
+      displayRate: bestRate ? (bestRate as Record<string, unknown>) : null,
+      hasCompleteDims: rowDimsL != null && rowDimsL > 0 && rowDimsW != null && rowDimsW > 0 && rowDimsH != null && rowDimsH > 0,
+      hasWeight: rowWeightOz != null && rowWeightOz > 0,
+      isTest: r.order.clientId != null && testClientIds.has(r.order.clientId),
+    });
     const shipping = {
       carrierCode: canonicalCarrierCode,
       serviceCode: canonicalServiceCode,
@@ -2464,6 +2472,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
       bestRateWorkflow: bestRateWorkflowRow,
+      shippingWorkflowState: shippingWorkflowState,
       sourceMap: {
         'shipping.carrierCode': carrierPick.source,
         'shipping.serviceCode': servicePick.source,
@@ -2557,6 +2566,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
       bestRateWorkflow: bestRateWorkflowRow,
+      shippingWorkflowState: shippingWorkflowState,
       // PS-304: backend-owned package facts ON THE ROW (not just the detail panel),
       // projected from the PS-301 axes + lifecycle/label already in scope — no extra
       // query. immutableReason reinforces the shipped/cancelled lock.

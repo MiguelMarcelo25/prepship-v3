@@ -14,7 +14,7 @@ import { classifyAwaitingBestRateDisplay } from '../../awaiting-best-rate-displa
 import { SHIPPING_SERVICE_ELIGIBILITY_VERSION } from '../../../../../../src/lib/shipping-service-eligibility';
 import { residentialForRate, buildRateRequestDraftKey, orderShippingHold, type StrictBestRateRequest } from './rate-request';
 import { getSavedBestRateRecord } from './rate-proof';
-import { hasSavedBestRateForRequest, hasAnySavedBestRateForDisplay } from './rate-display-predicates';
+import { hasSavedBestRateForRequest, hasAnySavedBestRateForDisplay, shippingWorkflowStateCanDisplayRate } from './rate-display-predicates';
 import type { AutoBestRateEntry } from '../../orders-parity';
 import type { OrderFullDto, OrderSummaryDto, CarrierAccountDto } from '../../../../types/api';
 
@@ -131,6 +131,7 @@ export function createBestRateHelpers(deps: {
   }
 
   function hasDisplayableBestRateForCurrentRequest(order: OrderSummaryDto) {
+    if (shippingWorkflowStateCanDisplayRate(order)) return true;
     const request = getAutoBestRateRequest(order);
     if (!request) return false;
     const entry = autoBestRateEntries[order.orderId];

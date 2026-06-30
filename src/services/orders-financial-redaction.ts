@@ -71,5 +71,6 @@ export function redactOrderFinancials<T extends Record<string, unknown>>(row: T,
     canonicalOrder: redactRateMoneyFields(row.canonicalOrder),
     overrides: redactRateMoneyFields(row.overrides),
     bestRateWorkflow: workflow,
+    shippingWorkflowState: redactRateMoneyFields(row.shippingWorkflowState),
   };
 }
