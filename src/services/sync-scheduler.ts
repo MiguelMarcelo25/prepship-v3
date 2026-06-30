@@ -26,6 +26,11 @@ import { runExternalShippedReconcile } from '../../scripts/reconcile-external-sh
 import { runShipmentTrackingPollOnce } from './shipment-tracking';
 import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';
 import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
+import {
+  getSyncJobLaneBlocker,
+  syncJobLaneFor,
+  type SyncJobLane,
+} from './sync-job-lanes';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -67,7 +72,7 @@ let reportingRefreshRunning = false;
 let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
 let walmartFeesRunning = false;
-let heavySchedulerJobRunning: string | null = null;
+const activeSchedulerJobsByLane = new Map<SyncJobLane, string>();
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
 let backfillTimer: NodeJS.Timeout | null = null;
@@ -114,33 +119,40 @@ async function runHeavySchedulerJob<T>(
   name: string,
   fn: () => Promise<T>,
 ): Promise<T | null> {
-  if (heavySchedulerJobRunning) {
+  const lane = syncJobLaneFor(name);
+  const blockedBy = getSyncJobLaneBlocker(activeSchedulerJobsByLane, name);
+  if (blockedBy) {
     console.log(
-      `[scheduler] ${name} skipped - ${heavySchedulerJobRunning} is still running`
+      `[scheduler] ${name} skipped - ${blockedBy} is still running in ${lane} lane`
     );
     await recordWorkerJobSkipped(
       name,
-      `${heavySchedulerJobRunning} is still running`
+      `${blockedBy} is still running in ${lane} lane`
     );
     return null;
   }
-  return withSchedulerAdvisoryLock(name, async () => {
-    heavySchedulerJobRunning = name;
-    const startedAt = Date.now();
-    await recordWorkerJobStart(name);
-    try {
-      const result = await fn();
-      await recordWorkerJobSuccess(name, startedAt, result);
-      return result;
-    } catch (err) {
-      await recordWorkerJobFailure(name, startedAt, err);
-      throw err;
-    } finally {
-      const elapsedMs = Date.now() - startedAt;
-      console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
-      heavySchedulerJobRunning = null;
+  activeSchedulerJobsByLane.set(lane, name);
+  try {
+    return await withSchedulerAdvisoryLock(name, async () => {
+      const startedAt = Date.now();
+      await recordWorkerJobStart(name);
+      try {
+        const result = await fn();
+        await recordWorkerJobSuccess(name, startedAt, result);
+        return result;
+      } catch (err) {
+        await recordWorkerJobFailure(name, startedAt, err);
+        throw err;
+      } finally {
+        const elapsedMs = Date.now() - startedAt;
+        console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
+      }
+    });
+  } finally {
+    if (activeSchedulerJobsByLane.get(lane) === name) {
+      activeSchedulerJobsByLane.delete(lane);
     }
-  });
+  }
 }
 
 export async function runOrderSync(): Promise<void> {

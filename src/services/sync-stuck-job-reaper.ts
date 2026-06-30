@@ -4,7 +4,7 @@
 //
 // Diagnosis: jobs freeze in state='active' for days when the worker process dies mid-job during a
 // Render redeploy, and pg-boss's expireInMinutes:30 reap isn't firing for those orphaned rows. The
-// stuck 'active' rows hold the per-process activeJobName mutex's logical slot and block the heavy
+// stuck 'active' rows hold the per-process active lane's logical slot and block the heavy
 // syncs from draining their 'created' backlog — so shipped orders never get a shipments row
 // ("Shipment sync error"). This reaper clears stale 'active' rows so the backlog drains.
 //

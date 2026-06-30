@@ -5,6 +5,12 @@ import { withDeadline } from '../lib/with-deadline';
 import { reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
+  getSyncJobLaneBlocker,
+  isSyncJobNameActive,
+  syncJobLaneFor,
+  type SyncJobLane,
+} from './sync-job-lanes';
+import {
   runBackfillTick,
   runFulfillmentOutboxTick,
   runExternalShippedClassifierTick,
@@ -60,7 +66,7 @@ type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
 let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-let activeJobName: JobName | null = null;
+const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const timers: Timer[] = [];
 
 function isRateBackfillSchedulerEnabled(): boolean {
@@ -69,6 +75,11 @@ function isRateBackfillSchedulerEnabled(): boolean {
 
 async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {
   if (!boss) return;
+  if (isSyncJobNameActive(activeJobsByLane, name)) {
+    console.log(`[job-queue] ${name} already active in worker; skipped enqueue`);
+    await recordWorkerJobSkipped(name, 'already active in worker');
+    return;
+  }
   try {
     const id = await boss.send(
       name,
@@ -118,7 +129,7 @@ function scheduleEnqueue(
 }
 
 // PS-265 — bound every job handler so a hung one (e.g. a ShipStation HTTP call
-// that never returns) can't hold the activeJobName mutex forever and deadlock the
+// that never returns) can't hold the active worker lane forever and deadlock the
 // whole worker. Must be < pg-boss expireInMinutes (30) so the in-process timeout
 // fires first. Default 10 min; override via env. The sync is watermark-based and
 // idempotent, so a timed-out tick loses nothing — the next tick re-pulls the gap.
@@ -136,21 +147,23 @@ async function registerWorker(
     name,
     { batchSize: 1, pollingIntervalSeconds: 5 },
     async ([job]) => {
-      if (activeJobName) {
+      const lane = syncJobLaneFor(name);
+      const blockedBy = getSyncJobLaneBlocker(activeJobsByLane, name);
+      if (blockedBy) {
         console.log(
-          `[job-queue] ${name} skipped because ${activeJobName} is already running`
+          `[job-queue] ${name} skipped because ${blockedBy} is already running in ${lane} lane`
         );
-        await recordWorkerJobSkipped(name, `${activeJobName} already running`);
-        return { ok: true, skipped: true, activeJobName };
+        await recordWorkerJobSkipped(name, `${blockedBy} already running in ${lane} lane`);
+        return { ok: true, skipped: true, blockedBy, lane };
       }
 
-      activeJobName = name;
+      activeJobsByLane.set(lane, name);
       const startedAt = Date.now();
       console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
       await recordWorkerJobStart(name);
       try {
         // PS-265: deadline-bounded so a hung handler rejects here → catch records
-        // the failure → finally ALWAYS clears activeJobName (deadlock → self-heal).
+        // the failure -> finally ALWAYS clears the active lane (deadlock -> self-heal).
         const result = await withDeadline(handler, JOB_HANDLER_TIMEOUT_MS, name);
         const durationMs = Date.now() - startedAt;
         console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
@@ -165,7 +178,7 @@ async function registerWorker(
         await recordWorkerJobFailure(name, startedAt, err);
         throw err;
       } finally {
-        activeJobName = null;
+        if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
       }
     }
   );
@@ -349,7 +362,7 @@ export async function stopQueuedSyncScheduler(): Promise<void> {
     await boss.stop({ graceful: true, timeout: 30_000 });
     boss = null;
   }
-  activeJobName = null;
+  activeJobsByLane.clear();
   started = false;
   await setWorkerMode('disabled');
   console.log('[job-queue] stopped');

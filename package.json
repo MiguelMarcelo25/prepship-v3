@@ -510,6 +510,7 @@
     "test:ps-346-rate-browser-partial-finalizing": "tsx scripts/ps-346-rate-browser-partial-finalizing-guard.ts",
     "test:ps-346-rate-browser-open-live-workflow": "tsx scripts/ps-346-rate-browser-open-live-workflow-guard.ts",
     "test:ps-346-print-queue-volume-evidence": "tsx scripts/ps-346-print-queue-volume-evidence-guard.ts",
+    "test:ps-346-shipment-sync-worker-lanes": "tsx scripts/ps-346-shipment-sync-worker-lanes-guard.ts",
     "test:ps-350-backend-rate-jobs": "tsx scripts/ps-350-backend-rate-jobs-guard.ts",
     "test:ps-352-shipping-workflow-sot-map": "tsx scripts/ps-352-shipping-workflow-sot-map-guard.ts",
     "test:ps-356-best-rate-c-shipping-sot": "tsx scripts/ps-356-best-rate-c-shipping-sot-guard.ts",

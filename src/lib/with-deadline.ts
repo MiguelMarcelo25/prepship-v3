@@ -5,7 +5,7 @@
  * promise REJECTS with DeadlineExceededError; the timer is always cleared. Note:
  * this does NOT cancel the underlying work (JS can't), it just stops AWAITING it —
  * which is the point: a hung background job handler must not hold an in-process
- * mutex (sync-job-queue's activeJobName) forever. On rejection the caller's
+ * mutex (sync-job-queue's active lane) forever. On rejection the caller's
  * catch/finally runs, the mutex releases, and the next job can proceed. The
  * underlying hang is addressed separately by per-request HTTP timeouts.
  */
