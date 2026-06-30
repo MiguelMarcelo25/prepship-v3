@@ -279,9 +279,11 @@ check(
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
 check(
-  'Best/Selected Rate house rows do not render internal cost as a sub-line',
+  'Awaiting Best Rate renders customer amount on top and internal cost as the lower/base amount',
   /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderRateAmountWithMarkup\(null,\s*shippedBackendMoney\.markedAmount/.test(orderCellsSrc) &&
-    /renderRateAmountWithMarkup\(null,\s*backendMoney\.rateCostAmount \?\? backendMoney\.baseAmount \?\? backendMoney\.markedAmount/.test(orderCellsSrc),
+    /const backendBestRateCost = backendMoney\?\.rateCostAmount \?\? backendMoney\?\.baseAmount \?\? null/.test(orderCellsSrc) &&
+    /const backendBestRateCustomer =[\s\S]*backendMoney\?\.customerRateAmount \?\? backendMoney\?\.markedAmount \?\? backendBestRateCost/.test(orderCellsSrc) &&
+    /renderRateAmountWithMarkup\(backendBestRateCost,\s*backendBestRateCustomer/.test(orderCellsSrc),
 );
 
 check(

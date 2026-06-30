@@ -148,7 +148,7 @@ export function rateTotal(rate: CombinableRate): number {
   );
 }
 
-/** DJR/DRP purchase-cost total. PS-356 makes this the official Best Rate pick basis. */
+/** Internal carrier cost total. Used for the lower/admin cost line, not the primary Best Rate pick basis. */
 export function rateCostTotal(rate: CombinableRate): number {
   return (
     Number(internalShippingCost(rate) ?? rate.shipping_amount?.amount ?? 0) +
@@ -249,13 +249,13 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
   const combinedRequestKey = directCarrierIds.length
     ? `${input.ssCacheKey}|dc=${directCarrierIds.sort().join(',')}`
     : input.ssCacheKey;
-  // The SINGLE pick, on the DJR/DRP purchase-cost basis. Customer billing is carried
-  // separately as C. Shipping Rate. Only PRICED rates are
+  // The SINGLE pick, on the marked/customer-rate basis. Internal carrier cost is carried
+  // separately as Rate Cost. Only PRICED rates are
   // eligible — an unpriced/$0 rate (a ShipStation account that returned no amount)
   // must never be selected as best just because `?? 0` makes it look cheapest.
   const rankedEligibleRates = [...combinedRates]
     .filter(isPricedRate)
-    .sort((a, b) => (rateCostTotal(a) - rateCostTotal(b)) || (rateTotal(a) - rateTotal(b)));
+    .sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)));
   const cheapest = rankedEligibleRates[0] ?? null;
   const secondCheapest = rankedEligibleRates[1] ?? null;
 

@@ -1,5 +1,6 @@
 /**
- * PS-356 guard - Best Rate is DRP/DJR purchase cost, C. Shipping Rate is customer billing.
+ * PS-356 guard - Best Rate ranks/displays the marked customer rate; internal
+ * cost remains the separated bottom/admin Rate Cost.
  *
  * Offline only: no DB, no providers, no labels, no postage, no marketplace
  * notifications, no inventory, and no production order/shipment edits.
@@ -75,13 +76,13 @@ const combined = combineCarrierUniverses({
 });
 
 check(
-  'combined universe selects official Best Rate by DRP purchase cost, not customer charge',
-  combined.cheapest?.carrier_id === 'se-10000005' &&
-    closeTo(rateCostTotal(combined.cheapest), 5) &&
-    closeTo(rateTotal(combined.cheapest), 12),
+  'combined universe selects official Best Rate by marked/customer rate, not internal cost',
+  combined.cheapest?.carrier_id === 'se-10000007' &&
+    closeTo(rateCostTotal(combined.cheapest), 7) &&
+    closeTo(rateTotal(combined.cheapest), 8),
   {
     picked: combined.cheapest?.carrier_id,
-    pickedPurchaseCost: combined.cheapest ? rateCostTotal(combined.cheapest) : null,
+    pickedRateCost: combined.cheapest ? rateCostTotal(combined.cheapest) : null,
     pickedCustomerCharge: combined.cheapest ? rateTotal(combined.cheapest) : null,
   },
 );
@@ -111,7 +112,7 @@ const passThroughMoney = buildOrderRowMoneyDisplay({
 });
 
 check(
-  'when customer-margin mode is off, C. Shipping Rate equals Best Rate purchase cost',
+  'when customer-margin mode is off, customer Best Rate equals the backend marked amount',
   passThroughMoney?.rateCostAmount === 5 &&
     passThroughMoney.customerRateAmount === 5 &&
     passThroughMoney.shippingMarginAmount === 0,
@@ -129,7 +130,7 @@ const houseMoney = buildOrderRowMoneyDisplay({
 });
 
 check(
-  'when customer-margin mode is on, C. Shipping Rate can differ and margin is customer minus Best Rate',
+  'when customer-margin mode is on, Best Rate display is customer amount and bottom cost is internal amount',
   houseMoney?.rateCostAmount === 5 &&
     houseMoney.customerRateAmount === 8 &&
     houseMoney.shippingMarginAmount === 3,
@@ -152,7 +153,7 @@ check(
 
 const normalized = normalizeOrderBestRateDto(aliasedBest);
 check(
-  'OrderBestRateDto normalizes Best Rate as purchase cost and C. Shipping as customerRateAmount',
+  'OrderBestRateDto preserves purchase cost and customerRateAmount as separated money fields',
   normalized?.shipmentCost === 5 &&
     normalized.totalCost === 5 &&
     normalized.rateCostAmount === 5 &&
@@ -172,7 +173,7 @@ const billingDecision = decideShippingLineBilling({
 });
 
 check(
-  'billing uses C. Shipping Rate/customer rate when present, not Best Rate purchase cost',
+  'billing uses customer rate when present, not internal Rate Cost',
   billingDecision.billedAmount === 8 && billingDecision.source === 'house_customer_rate',
   billingDecision,
 );
@@ -227,9 +228,10 @@ check(
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
 check(
-  'Best Rate cell renders backend purchase cost, not customerRateAmount',
-  /renderRateAmountWithMarkup\([^)]*backendMoney\.rateCostAmount/.test(orderCellsSrc) &&
-    !/renderRateAmountWithMarkup\([^)]*backendMoney\.customerRateAmount/.test(orderCellsSrc),
+  'Best Rate cell renders backend customer amount on top and internal cost as bottom/base',
+  /const backendBestRateCost = backendMoney\?\.rateCostAmount \?\? backendMoney\?\.baseAmount \?\? null/.test(orderCellsSrc) &&
+    /const backendBestRateCustomer =[\s\S]*backendMoney\?\.customerRateAmount \?\? backendMoney\?\.markedAmount \?\? backendBestRateCost/.test(orderCellsSrc) &&
+    /renderRateAmountWithMarkup\(backendBestRateCost,\s*backendBestRateCustomer/.test(orderCellsSrc),
 );
 
 if (failures > 0) {

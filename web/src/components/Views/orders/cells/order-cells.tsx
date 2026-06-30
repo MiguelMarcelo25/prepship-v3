@@ -216,21 +216,23 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
     </span>
   ) : null
 
-  // PS-356: Best Rate renders the backend-owned DJR/DRP purchase cost. C. Shipping
-  // Rate renders the customer billing amount in its own column; the FE never swaps
-  // or reconciles those values locally.
+  // PS-356: Best Rate renders the backend-owned marked/customer amount on top
+  // and the separated internal Rate Cost as the lower/base amount.
   // Operator request (2026-05-12, under `unlock shipped data` override): no
   // per-carrier SVG badge in this cell — the Carrier column already shows it.
   const backendMoney = getBackendRowMoney(displayOrder)
+  const backendBestRateCost = backendMoney?.rateCostAmount ?? backendMoney?.baseAmount ?? null
+  const backendBestRateCustomer =
+    backendMoney?.customerRateAmount ?? backendMoney?.markedAmount ?? backendBestRateCost
   return (
     <div data-rate-state="ready" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       {/* PS-290: pass the backend-owned HUGRAB $100 coverage verdict as the 4th arg so the
           Awaiting Best Rate cell renders the coverage badge (display-only; backend decides). */}
       {backendMoney
-        ? renderRateAmountWithMarkup(null, backendMoney.rateCostAmount ?? backendMoney.baseAmount ?? backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
+        ? renderRateAmountWithMarkup(backendBestRateCost, backendBestRateCustomer, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
         : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
-      {/* PS-356: HOUSE remains a backend verdict marker; C. Shipping shows the customer bill. */}
+      {/* PS-356: HOUSE remains a backend verdict marker on customer/marked Best Rate rows. */}
       {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
       {recalculatingSpinner}
       </div>

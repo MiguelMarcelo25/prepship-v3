@@ -55,7 +55,7 @@ const applyMarkupsOwner = sliceBetween(
 const rateTotalOwner = sliceBetween(
   combinedRateOwner,
   'export function rateTotal(',
-  '\n/** DJR/DRP purchase-cost total',
+  '\n/** Internal carrier cost total',
 );
 const rateCostTotalOwner = sliceBetween(
   combinedRateOwner,

@@ -185,7 +185,7 @@ check('CI runs test:rate-source-of-truth before typecheck/build, directly or thr
   })());
 
 const ratesCombined = read('src/services/rates-combined.ts');
-checkPatterns('rates-combined owns combined-universe Best Rate selection on purchase cost', ratesCombined, [
+checkPatterns('rates-combined owns combined-universe Best Rate selection on marked/customer total', ratesCombined, [
   /export function combineCarrierUniverses/,
   /export function rateTotal/,
   /export function rateCostTotal/,
@@ -193,8 +193,8 @@ checkPatterns('rates-combined owns combined-universe Best Rate selection on purc
   /confirmation_amount/,
   /insurance_amount/,
   /other_amount/,
-  /rateCostTotal\(a\) - rateCostTotal\(b\)/,
   /rateTotal\(a\) - rateTotal\(b\)/,
+  /\|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)/,
   /const cheapest = rankedEligibleRates\[0\] \?\? null/,
 ]);
 check('rates-combined exposes completeness diagnostics with the selected best rate',

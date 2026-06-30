@@ -25,8 +25,8 @@ export function renderBestRateFinalCell(order: OrderSummaryDto) {
     : <span data-best-rate-final="missing" style={{ color: 'var(--text3)', fontSize: 12 }}>-</span>
 }
 
-// PS-356: C. Shipping Rate is the customer billing amount from the backend money
-// tuple. Best Rate is the separate DJR/DRP purchase cost.
+// PS-356: Best Rate and C. Shipping Rate both consume backend customer money;
+// internal carrier cost remains separated as rateCostAmount for breakdown/admin display.
 export function renderRateCostCell(order: OrderSummaryDto) {
   const customerShippingRate = getBackendRowMoney(order)?.customerRateAmount
   return customerShippingRate != null

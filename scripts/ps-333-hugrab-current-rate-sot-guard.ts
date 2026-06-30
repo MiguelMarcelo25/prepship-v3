@@ -267,11 +267,12 @@ const bestRateBaseCostBlock = rowDisplaySrc.slice(
   rowDisplaySrc.indexOf('export function getBestRateFinalBaseCost('),
 );
 check(
-  'Awaiting Best Rate amount reads backend purchase cost, not order.bestRate fallback math',
+  'Awaiting Best Rate amount reads backend customer amount, not order.bestRate fallback math',
     /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
+    /customerRateAmount/.test(bestRateBaseCostBlock) &&
+    /markedAmount/.test(bestRateBaseCostBlock) &&
     /rateCostAmount/.test(bestRateBaseCostBlock) &&
     /baseAmount/.test(bestRateBaseCostBlock) &&
-    /markedAmount/.test(bestRateBaseCostBlock) &&
     /\?\? null/.test(bestRateBaseCostBlock) &&
     !/order\.bestRate|shipmentCost|otherCost/.test(bestRateBaseCostBlock),
 );

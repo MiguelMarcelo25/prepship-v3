@@ -700,7 +700,7 @@ function dedupeRates(rates: Rate[], source: string): Rate[] {
 }
 
 // Exported for PS-356 and legacy guards: the persisted Best Rate ranks on the
-// DJR/DRP purchase cost. Customer billing rides separately as C. Shipping Rate.
+// marked/customer rate. Internal carrier cost rides separately as Rate Cost.
 export function pickBestRate(rates: Rate[]): Rate | null {
   // PS-108: never auto-select an insured rate whose ParcelGuard premium could not be
   // proven. Such rates are flagged `insuranceCostUnresolved` by the enricher; excluding
@@ -710,7 +710,7 @@ export function pickBestRate(rates: Rate[]): Rate | null {
   // lift already drops these, but any other caller of pickBestRate is protected too.
   const selectable = rates.filter((rate) => isRateInsuranceResolved(rate) && isPricedRate(rate));
   if (!selectable.length) return null;
-  return [...selectable].sort((a, b) => (rateCostTotal(a) - rateCostTotal(b)) || (rateTotal(a) - rateTotal(b)))[0]!;
+  return [...selectable].sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)))[0]!;
 }
 
 function rateEligibilityContext(input: Pick<RateInput, 'clientId' | 'storeId'>): ShippingServiceEligibilityContext {
@@ -1317,7 +1317,7 @@ export async function fetchLiveRatesWithDiagnostics(
       `[rates] dropped unpriced ${rate.carrier_code ?? rate.carrier_id} ${rate.service_code ?? ''} rate (${reason})`,
     );
   }
-  priced.sort((a, b) => (rateCostTotal(a) - rateCostTotal(b)) || (rateTotal(a) - rateTotal(b)));
+  priced.sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)));
   const filteredCounts = new Map<string, number>();
   for (const rate of priced) {
     filteredCounts.set(rate.carrier_id, (filteredCounts.get(rate.carrier_id) ?? 0) + 1);

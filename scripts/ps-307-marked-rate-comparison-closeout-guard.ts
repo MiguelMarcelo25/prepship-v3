@@ -1,5 +1,5 @@
 /**
- * PS-307/PS-356 closeout guard - customer charge preservation plus purchase-cost ranking packet.
+ * PS-307/PS-356 closeout guard - customer charge preservation plus marked/customer ranking packet.
  *
  * Offline only: no DB, network, providers, labels, postage, marketplace
  * notifications, queue mutation, or shipped/cancelled data mutation.
@@ -90,16 +90,17 @@ check('PS-300 workflow requires PS-307 closeout guard',
 check('PS-305 authority docs still include PS-307 feature guard',
   readFileSync('docs/ps-tickets/ps-305-authority-drift-guardrails.md', 'utf8')
     .includes('test:ps-307-marked-rate-comparison'));
-check('PS-307 feature guard proves customer amount preservation plus purchase-cost owner',
+check('PS-307 feature guard proves customer amount preservation plus marked/customer owner',
   /rateTotal prefers explicit customer shipping charge/.test(ps307Guard) &&
-    /combined best-rate owner ranks by purchase cost/.test(ps307Guard));
+    /combined best-rate owner ranks by marked\/customer charge/.test(ps307Guard));
 
-check('runtime fixture ranks lower purchase cost as Best Rate while preserving customer charge',
-  combined.cheapest?.service_code === 'shipp_ups_ground' &&
-    combined.secondCheapest?.service_code === 'ups_ground' &&
-    rateCostTotal(combined.cheapest) === 7 &&
-    rateTotal(combined.cheapest) === 13 &&
-    rateTotal(combined.secondCheapest!) === 11,
+check('runtime fixture ranks lower customer charge as Best Rate while preserving internal cost',
+  combined.cheapest?.service_code === 'ups_ground' &&
+    combined.secondCheapest?.service_code === 'shipp_ups_ground' &&
+    rateCostTotal(combined.cheapest) === 10 &&
+    rateTotal(combined.cheapest) === 11 &&
+    rateCostTotal(combined.secondCheapest!) === 7 &&
+    rateTotal(combined.secondCheapest!) === 13,
   {
     cheapest: combined.cheapest?.service_code,
     cheapestCost: combined.cheapest ? rateCostTotal(combined.cheapest) : null,
@@ -111,9 +112,9 @@ check('combined owner customer total prefers PS-307/PS-308 customer fields befor
     /rate\.customer_rate_amount/.test(ratesCombined) &&
     /rate\.markedShippingAmount/.test(ratesCombined) &&
     /rate\.shipping_amount\?\.amount/.test(ratesCombined));
-check('combined owner exposes internal rateCostTotal separately for PS-308',
+check('combined owner exposes internal rateCostTotal separately for PS-308 cost display',
   /export function rateCostTotal/.test(ratesCombined) &&
-    /PS-356 makes this the official Best Rate pick basis/.test(ratesCombined));
+    /not the primary Best Rate pick basis/.test(ratesCombined));
 check('rates service delegates local pick to combinedRateCostTotal and keeps customer total owner',
   /function rateCostTotal\(rate: Rate\): number \{\s*return combinedRateCostTotal\(rate as any\);\s*\}/s.test(ratesService) &&
     /function rateTotal\(rate: Rate\): number \{\s*return combinedRateTotal\(rate as any\);\s*\}/s.test(ratesService));

@@ -80,7 +80,7 @@ const bestRateBaseCostBlock = sliceBetween(
 check(
   'Awaiting Best Rate amount renders backend money only, with no shipping.bestRateAmount fallback',
   /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
-    /money\?\.rateCostAmount \?\? money\?\.baseAmount \?\? money\?\.markedAmount \?\? null/.test(bestRateBaseCostBlock) &&
+    /money\?\.customerRateAmount \?\? money\?\.markedAmount \?\? money\?\.rateCostAmount \?\? money\?\.baseAmount \?\? null/.test(bestRateBaseCostBlock) &&
     bestRateBaseCostBlock.indexOf("order.orderStatus === 'awaiting_shipment'") <
       bestRateBaseCostBlock.indexOf("getShippingNumber(order, 'bestRateAmount')"),
   bestRateBaseCostBlock,

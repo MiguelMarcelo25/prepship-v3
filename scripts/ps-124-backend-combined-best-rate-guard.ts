@@ -18,6 +18,7 @@ function check(name: string, ok: boolean) {
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const rateBrowserModal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 
 const fetchRatesStart = apiClient.indexOf('fetchRates(data: Record<string, unknown>)');
@@ -41,8 +42,8 @@ const browseRouteBlock = browseRouteStart >= 0 && browseRouteEnd > browseRouteSt
   ? ratesRoute.slice(browseRouteStart, browseRouteEnd)
   : '';
 
-const rateBrowserCallStart = rateBrowserModal.indexOf('const browseResult = await apiClient.browseRates({');
-const rateBrowserCallEnd = rateBrowserModal.indexOf('\n      });', rateBrowserCallStart);
+const rateBrowserCallStart = rateBrowserModal.indexOf('const browsePayload = {');
+const rateBrowserCallEnd = rateBrowserModal.indexOf('\n      };', rateBrowserCallStart);
 const rateBrowserCallBlock = rateBrowserCallStart >= 0 && rateBrowserCallEnd > rateBrowserCallStart
   ? rateBrowserModal.slice(rateBrowserCallStart, rateBrowserCallEnd)
   : '';
@@ -78,19 +79,20 @@ check(
 const ratesCombined = readFileSync('src/services/rates-combined.ts', 'utf8');
 check(
   'backend /rates/browse includes direct carrier quotes before choosing cheapest',
-  /getDirectCarrierRatesForRateInput/.test(ratesRoute) &&
-    /const combined = combineCarrierUniverses\(\{/.test(browseRouteBlock) &&
+    /produceRateBrowsePayload/.test(ratesRoute) &&
+    /getDirectCarrierRatesForRateInput/.test(rateBrowseProducer) &&
+    /const combined = combineCarrierUniverses\(\{/.test(rateBrowseProducer) &&
     /dedupeBrowseRates\(\[\.\.\.input\.ssRates, \.\.\.input\.directRates\]\)/.test(ratesCombined) &&
-    /\.sort\(\(a, b\) => rateTotal\(a\) - rateTotal\(b\)\)/.test(ratesCombined) &&
-    /bestRate:\s*bestRateOut/.test(browseRouteBlock),
+    /\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)/.test(ratesCombined) &&
+    /bestRate:\s*bestRateOut/.test(rateBrowseProducer),
 );
 
 check(
   'backend /rates/browse diagnostics include direct carriers instead of hiding failures',
   /directCarrierStatuses/.test(ratesCombined) &&
-    /directCarrierDiagnostics/.test(browseRouteBlock) &&
-    /directCarrierErrors/.test(browseRouteBlock) &&
-    /directCarrierMetas/.test(browseRouteBlock),
+    /directCarrierDiagnostics/.test(rateBrowseProducer) &&
+    /directCarrierErrors/.test(rateBrowseProducer) &&
+    /directCarrierMetas/.test(rateBrowseProducer),
 );
 
 check(

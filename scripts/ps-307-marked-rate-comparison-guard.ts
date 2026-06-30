@@ -1,5 +1,5 @@
 /**
- * PS-307/PS-356 guard - backend preserves customer charge while Best Rate ranks by purchase cost.
+ * PS-307/PS-356 guard - backend preserves customer charge while Best Rate ranks by marked/customer charge.
  *
  * Offline only: no DB, no network, no providers, no labels, no postage, no
  * marketplace notifications, no queue mutation, and no shipped/cancelled data.
@@ -69,12 +69,13 @@ const combined = combineCarrierUniverses({
 });
 
 check(
-  'combined best-rate owner ranks by purchase cost while preserving customer charge',
-  combined.cheapest?.service_code === 'shipp_ups_ground' &&
-    combined.secondCheapest?.service_code === 'ups_ground' &&
-    rateCostTotal(combined.cheapest) === 8.5 &&
-    rateTotal(combined.cheapest) === 14.5 &&
-    rateTotal(combined.secondCheapest) === 12,
+  'combined best-rate owner ranks by marked/customer charge while preserving internal cost',
+  combined.cheapest?.service_code === 'ups_ground' &&
+    combined.secondCheapest?.service_code === 'shipp_ups_ground' &&
+    rateCostTotal(combined.cheapest) === 12 &&
+    rateTotal(combined.cheapest) === 12 &&
+    rateCostTotal(combined.secondCheapest) === 8.5 &&
+    rateTotal(combined.secondCheapest) === 14.5,
   {
     cheapest: combined.cheapest,
     secondCheapest: combined.secondCheapest,
@@ -129,9 +130,9 @@ check(
     /directRawShippingCost\(rate, amount\)/.test(ratesTs),
 );
 check(
-  'local rates pickBestRate delegates comparison to combined purchase-cost owner',
+  'local rates pickBestRate delegates comparison to combined customer-charge owner',
   /function rateCostTotal\(rate: Rate\): number \{\s*return combinedRateCostTotal\(rate as any\);\s*\}/s.test(ratesTs) &&
-    /rateCostTotal\(a\) - rateCostTotal\(b\)/.test(ratesTs),
+    /rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)/.test(ratesTs),
 );
 
 if (failures > 0) {

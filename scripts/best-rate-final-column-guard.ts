@@ -91,8 +91,8 @@ check(
 check(
   'backend all-carrier second-best owner still lives in rates-combined',
   /const rankedEligibleRates = \[\.\.\.combinedRates\]/.test(ratesCombined) &&
-    /rateCostTotal\(a\) - rateCostTotal\(b\)/.test(ratesCombined) &&
     /rateTotal\(a\) - rateTotal\(b\)/.test(ratesCombined) &&
+    /\|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)/.test(ratesCombined) &&
     /const secondCheapest = rankedEligibleRates\[1\] \?\? null/.test(ratesCombined),
 );
 

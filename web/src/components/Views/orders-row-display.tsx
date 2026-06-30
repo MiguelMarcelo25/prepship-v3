@@ -266,6 +266,13 @@ function readMoneyAmount(value: unknown) {
 
 function readRateTotalAmount(rate: Record<string, unknown> | null | undefined) {
   if (!rate) return null
+  const customerAmount =
+    toNumberValue(rate.customerRateAmount) ??
+    toNumberValue(rate.customer_rate_amount) ??
+    toNumberValue(rate.markedAmount) ??
+    toNumberValue(rate.marked_amount)
+  if (customerAmount != null) return customerAmount
+
   const totalCost = toNumberValue(rate.totalCost) ?? toNumberValue(rate.total_cost)
   if (totalCost != null) return totalCost
 
@@ -308,7 +315,7 @@ function getCachedSecondBestRate(order: OrderSummaryDto) {
 export function getBestRateBaseCost(order: OrderSummaryDto) {
   const money = getBackendRowMoney(order)
   if (order.orderStatus === 'awaiting_shipment') {
-    return money?.rateCostAmount ?? money?.baseAmount ?? money?.markedAmount ?? null
+    return money?.customerRateAmount ?? money?.markedAmount ?? money?.rateCostAmount ?? money?.baseAmount ?? null
   }
 
   return money?.customerRateAmount ?? money?.markedAmount ?? getShippingNumber(order, 'bestRateAmount') ?? null

@@ -120,6 +120,7 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 
 // ── stage 2: cached/bulk completeness vs the required universe ────────────────
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 check('cached/bulk loads the direct-carrier visibility evaluator ONCE per request',
   /const hasVisibleDirectCarriers = await loadDirectCarrierVisibilityEvaluator\(\)/.test(ratesRoute));
 check('exact AND rough cache hits evaluate the required universe',
@@ -146,8 +147,9 @@ check('direct rates pass the SAME markup rules at the source (uniform charge bas
   /const directMarkups = await loadCarrierMarkups\(\)/.test(ratesService) &&
   /const rates = applyMarkups\(/.test(ratesService));
 check('/browse delegates the merge/pick/completeness to the canonical owner',
-  /const combined = combineCarrierUniverses\(\{/.test(ratesRoute) &&
-  !/const cheapest = \[\.\.\.combinedRates\]\.sort/.test(ratesRoute));
+  /produceRateBrowsePayload/.test(ratesRoute) &&
+  /const combined = combineCarrierUniverses\(\{/.test(rateBrowseProducer) &&
+  !/const cheapest = \[\.\.\.combinedRates\]\.sort/.test(ratesRoute + rateBrowseProducer));
 
 // ── stage 4 wiring: the backfill persists the COMBINED winner, raw amounts ────
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
