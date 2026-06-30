@@ -28,7 +28,11 @@ const packageJson = read('package.json');
 const printQueue = read('src/services/print-queue.ts');
 const route = read('src/routes/print-queue.ts');
 const jobStorePath = 'src/services/print-queue/queue-send-job-store.ts';
+const preflightPath = 'src/services/print-queue/queue-send-preflight.ts';
+const snapshotPath = 'src/services/print-queue/queue-send-snapshot.ts';
 const jobStore = read(jobStorePath);
+const preflight = read(preflightPath);
+const snapshot = read(snapshotPath);
 const doc = read('docs/ps-tickets/ps-351-durable-print-queue-jobs.md');
 const ps352Doc = read('docs/ps-tickets/ps-352-shipping-workflow-sot-map.md');
 
@@ -38,6 +42,9 @@ check('PS-351 package guard is wired',
 check('dedicated queue-send job store module exists',
   existsSync(jobStorePath));
 
+check('dedicated backend preflight module exists',
+  existsSync(preflightPath));
+
 check('job store owns additive runtime table schema for batch/preflight job snapshots',
   /CREATE TABLE IF NOT EXISTS print_queue_send_jobs/.test(jobStore) &&
     /job_id text PRIMARY KEY/.test(jobStore) &&
@@ -46,6 +53,16 @@ check('job store owns additive runtime table schema for batch/preflight job snap
     /CREATE INDEX IF NOT EXISTS print_queue_send_jobs_updated_at_idx/.test(jobStore) &&
     /ensureQueueSendJobStoreSchema/.test(jobStore));
 
+check('job store owns durable per-order item states, not just batch snapshots',
+  /CREATE TABLE IF NOT EXISTS print_queue_batch_job_items/.test(jobStore) &&
+    /job_id text NOT NULL/.test(jobStore) &&
+    /order_id integer NOT NULL/.test(jobStore) &&
+    /state text NOT NULL/.test(jobStore) &&
+    /blocked_reason text/.test(jobStore) &&
+    /error_message text/.test(jobStore) &&
+    /UNIQUE \(job_id, order_id\)/.test(jobStore) &&
+    /print_queue_batch_job_items_job_idx/.test(jobStore));
+
 check('job store persists and reads per-job snapshots without using the settings blob',
   /export async function persistQueueSendJobRecord/.test(jobStore) &&
     /export async function getQueueSendJobRecord/.test(jobStore) &&
@@ -53,11 +70,39 @@ check('job store persists and reads per-job snapshots without using the settings
     !/settings/.test(jobStore) &&
     !/PRINT_QUEUE_SEND_STATUS_KEY/.test(jobStore));
 
+check('job store exposes item-state persistence APIs',
+  /export async function persistQueueSendJobItems/.test(jobStore) &&
+    /export async function updateQueueSendJobItemState/.test(jobStore) &&
+    /export async function getQueueSendJobItemRecords/.test(jobStore));
+
+check('preflight classifies ready and blocked orders before label purchase',
+  /export async function preflightQueueSendOrders/.test(preflight) &&
+    /QueueSendPreflightBlockReason/.test(preflight) &&
+    /missing_rate_proof/.test(preflight) &&
+    /order_not_editable/.test(preflight) &&
+    /missing_weight/.test(preflight) &&
+    /missing_package/.test(preflight) &&
+    /missing_address/.test(preflight) &&
+    /carrier_provider_unavailable/.test(preflight) &&
+    /assertLabelPurchaseRateSelection/.test(preflight) &&
+    /readyOrders/.test(preflight) &&
+    /blockedResults/.test(preflight));
+
 check('print queue service imports the dedicated job store owner',
   /from '\.\/print-queue\/queue-send-job-store'/.test(printQueue) &&
     /persistQueueSendJobRecord/.test(printQueue) &&
     /getQueueSendJobRecord/.test(printQueue) &&
-    /getLatestQueueSendJobRecord/.test(printQueue));
+    /getLatestQueueSendJobRecord/.test(printQueue) &&
+    /persistQueueSendJobItems/.test(printQueue) &&
+    /updateQueueSendJobItemState/.test(printQueue));
+
+check('print queue service runs backend preflight before starting purchases',
+  /from '\.\/print-queue\/queue-send-preflight'/.test(printQueue) &&
+    /preflightQueueSendOrders/.test(printQueue) &&
+    /const preflight = await preflightQueueSendOrders/.test(printQueue) &&
+    /readyOrders/.test(printQueue) &&
+    /blockedResults/.test(printQueue) &&
+    /persistQueueSendJobItems/.test(printQueue));
 
 check('initial queue-send job requires the durable job store before returning a job id',
   /await persistQueueSendJobSnapshot\(job, \{ required: true \}\);/.test(printQueue) &&
@@ -72,17 +117,32 @@ check('settings status blob is retained only as legacy fallback after the canoni
 
 check('batch-send status route still reads by requested job id before latest fallback',
   /getQueueSendJobSnapshot\(jobId\)[\s\S]{0,120}getLatestQueueSendJobSnapshot/.test(route) &&
-    /durableJob\?\.jobId === jobId/.test(route));
+    /durableJob\?\.jobId === jobId/.test(route) &&
+    /item_states/.test(route));
+
+check('snapshots retain durable per-order item states for cheap status polling',
+  /itemStates/.test(snapshot) &&
+    /toQueueSendItemSnapshot/.test(snapshot) &&
+    /QueueSendItemSnapshot/.test(snapshot));
+
+check('unsafe non-cancelling label-purchase timeout race is removed',
+  !/Promise\.race\(\[\s*processQueueSendOrder/.test(printQueue) &&
+    !/function timeoutAfter/.test(printQueue) &&
+    /provider_pending_recovery/.test(printQueue) &&
+    /QUEUE_SEND_PROVIDER_PENDING_AFTER_MS/.test(printQueue));
 
 check('PS-351 doc records backend owner, imperfect data injection, and safety boundary',
   doc.includes('Backend Owner') &&
     doc.includes('Imperfect Data Injection') &&
+    doc.includes('Bulk Preflight') &&
+    doc.includes('provider_pending_recovery') &&
     doc.includes('settings blob is legacy fallback') &&
     doc.includes('No labels, postage, provider calls, queue mutation, billing, inventory, or shipped/cancelled mutation'));
 
 check('PS-352 map can point PS-351 to durable job-store evidence',
   ps352Doc.includes('PS-351 durable queue-send job store') &&
-    ps352Doc.includes('print_queue_send_jobs'));
+    ps352Doc.includes('print_queue_send_jobs') &&
+    ps352Doc.includes('print_queue_batch_job_items'));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-351 durable print queue jobs guard (${failures} failing)`);

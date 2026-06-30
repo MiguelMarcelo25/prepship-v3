@@ -1,4 +1,5 @@
 import { isQueueSendActiveStatus, type QueueSendStatusName } from './queue-send-status';
+import type { QueueSendJobItemInput, QueueSendJobItemState } from './queue-send-item-state';
 
 export const PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run';
 export const PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.';
@@ -43,9 +44,20 @@ export type QueueSendSnapshotJob = {
   results: QueueSendSnapshotResult[];
   queuedEntryIds: string[];
   errorMessage?: string;
+  itemStates?: QueueSendJobItemInput[];
 };
 
 export type QueueSendResultSnapshot = QueueSendSnapshotResult;
+
+export type QueueSendItemSnapshot = {
+  orderId: number;
+  clientId: number | null;
+  state: QueueSendJobItemState;
+  blockedReason: string | null;
+  errorMessage: string | null;
+  queueEntryId: string | null;
+  trackingNumber: string | null;
+};
 
 export type QueueSendJobSnapshot = {
   version: 1;
@@ -65,6 +77,7 @@ export type QueueSendJobSnapshot = {
   errorMessage: string | null;
   results: QueueSendResultSnapshot[];
   resultSamples: QueueSendResultSnapshot[];
+  itemStates: QueueSendItemSnapshot[];
   createdAt: string;
   updatedAt: string;
   persistedAt: string;
@@ -88,6 +101,18 @@ function toQueueSendResultSnapshot(result: QueueSendSnapshotResult): QueueSendRe
   };
 }
 
+export function toQueueSendItemSnapshot(item: QueueSendJobItemInput): QueueSendItemSnapshot {
+  return {
+    orderId: item.orderId,
+    clientId: item.clientId ?? null,
+    state: item.state,
+    blockedReason: item.blockedReason ?? null,
+    errorMessage: item.errorMessage ?? null,
+    queueEntryId: item.queueEntryId ?? null,
+    trackingNumber: item.trackingNumber ?? null,
+  };
+}
+
 export function queueSendSnapshotResults(snapshot: QueueSendJobSnapshot): QueueSendResultSnapshot[] {
   return Array.isArray(snapshot.results) ? snapshot.results : snapshot.resultSamples;
 }
@@ -97,6 +122,7 @@ export function toQueueSendSnapshot(
   options: { now?: number | Date } = {},
 ): QueueSendJobSnapshot {
   const results = job.results.map(toQueueSendResultSnapshot);
+  const itemStates = (job.itemStates ?? []).map(toQueueSendItemSnapshot);
   const persistedAt = options.now instanceof Date
     ? options.now
     : new Date(options.now ?? Date.now());
@@ -119,6 +145,7 @@ export function toQueueSendSnapshot(
     errorMessage: job.errorMessage ?? null,
     results,
     resultSamples: results.slice(-10),
+    itemStates,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt).toISOString(),
     persistedAt: persistedAt.toISOString(),

@@ -39,7 +39,11 @@ import { setJsonSettings } from './settings-json';
 import {
   getLatestQueueSendJobRecord,
   getQueueSendJobRecord,
+  persistQueueSendJobItems,
   persistQueueSendJobRecord,
+  updateQueueSendJobItemState,
+  type QueueSendJobItemInput,
+  type QueueSendJobItemState,
 } from './print-queue/queue-send-job-store';
 // Per user override unlock shipped data on 2026-06-30: durable batch-send
 // snapshots now delegate to a focused backend module that preserves every
@@ -50,7 +54,9 @@ import {
   queueSendSnapshotResults,
   toQueueSendSnapshot,
   type QueueSendJobSnapshot,
+  type QueueSendItemSnapshot,
 } from './print-queue/queue-send-snapshot';
+import { preflightQueueSendOrders } from './print-queue/queue-send-preflight';
 export {
   PRINT_QUEUE_SEND_STATUS_KEY,
   queueSendJobStatusKey,
@@ -187,6 +193,7 @@ export type QueueSendJob = {
   updatedAt: number;
   results: QueueSendJobResult[];
   queuedEntryIds: string[];
+  itemStates: QueueSendItemSnapshot[];
   errorMessage?: string;
 };
 
@@ -221,7 +228,7 @@ export type PrintQueueListScope = {
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
-const QUEUE_SEND_ORDER_TIMEOUT_MS = 90_000;
+const QUEUE_SEND_PROVIDER_PENDING_AFTER_MS = 90_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_MS = 60_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS = 1_500;
 
@@ -355,6 +362,7 @@ export async function persistQueueSendJobSnapshot(
   const snapshot = toQueueSendSnapshot(job);
   try {
     await persistQueueSendJobRecord(snapshot);
+    await persistQueueSendJobItems(snapshot.jobId, snapshot.itemStates);
   } catch (err) {
     console.warn(
       '[print-queue] failed to persist durable batch-send job:',
@@ -706,14 +714,48 @@ export async function canViewMergeJob(
   }
 }
 
-function timeoutAfter(ms: number, message: string): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(message)), ms);
-  });
-}
-
 function elapsedSince(startedAt: number): number {
   return Math.max(0, Date.now() - startedAt);
+}
+
+function toQueueSendItemSnapshot(input: QueueSendJobItemInput): QueueSendItemSnapshot {
+  return {
+    orderId: input.orderId,
+    clientId: input.clientId ?? null,
+    state: input.state,
+    blockedReason: input.blockedReason ?? null,
+    errorMessage: input.errorMessage ?? null,
+    queueEntryId: input.queueEntryId ?? null,
+    trackingNumber: input.trackingNumber ?? null,
+  };
+}
+
+async function setQueueSendItemState(
+  job: QueueSendJob,
+  order: Pick<QueueSendOrderInput, 'orderId' | 'clientId'>,
+  patch: {
+    state: QueueSendJobItemState;
+    blockedReason?: string | null;
+    errorMessage?: string | null;
+    queueEntryId?: string | null;
+    trackingNumber?: string | null;
+  },
+): Promise<void> {
+  const item: QueueSendJobItemInput = {
+    orderId: order.orderId,
+    clientId: order.clientId,
+    state: patch.state,
+    blockedReason: patch.blockedReason ?? null,
+    errorMessage: patch.errorMessage ?? null,
+    queueEntryId: patch.queueEntryId ?? null,
+    trackingNumber: patch.trackingNumber ?? null,
+  };
+  const snapshot = toQueueSendItemSnapshot(item);
+  const existingIndex = job.itemStates.findIndex((candidate) => candidate.orderId === order.orderId);
+  if (existingIndex >= 0) job.itemStates[existingIndex] = snapshot;
+  else job.itemStates.push(snapshot);
+  job.updatedAt = Date.now();
+  await updateQueueSendJobItemState(job.jobId, order.orderId, item);
 }
 
 async function timeQueueStep<T>(
@@ -738,6 +780,18 @@ function withTotalTiming(result: QueueSendJobResult, startedAt: number): QueueSe
     },
   };
 }
+
+type QueueSendOrderLifecycle = {
+  setState: (
+    state: QueueSendJobItemState,
+    patch?: {
+      blockedReason?: string | null;
+      errorMessage?: string | null;
+      queueEntryId?: string | null;
+      trackingNumber?: string | null;
+    },
+  ) => Promise<void>;
+};
 
 function isLabelPurchaseInProgressError(err: unknown): boolean {
   return (err as { code?: unknown } | null)?.code === 'LABEL_PURCHASE_IN_PROGRESS';
@@ -792,7 +846,8 @@ async function repairMissingConfirmationForQueuedLabel(orderId: number | string)
 
 async function processQueueSendOrder(
   order: QueueSendOrderInput,
-  scope: PrintQueueListScope = {}
+  scope: PrintQueueListScope = {},
+  lifecycle?: QueueSendOrderLifecycle,
 ): Promise<QueueSendJobResult> {
   const startedAt = Date.now();
   const timings: QueueSendTimingBreakdown = { totalMs: 0 };
@@ -817,6 +872,16 @@ async function processQueueSendOrder(
     } else {
       const labelInput = order.label;
       try {
+        await lifecycle?.setState('validating_rate');
+        await lifecycle?.setState('acquiring_lock');
+        await lifecycle?.setState('provider_pending');
+        let providerPendingTimer: NodeJS.Timeout | null = setTimeout(() => {
+          void lifecycle?.setState('provider_pending_recovery', {
+            errorMessage:
+              `Provider purchase still pending after ${Math.round(QUEUE_SEND_PROVIDER_PENDING_AFTER_MS / 1000)}s; ` +
+              'the job is recoverable and must not be retried until existing labels/locks are checked.',
+          });
+        }, QUEUE_SEND_PROVIDER_PENDING_AFTER_MS);
         // PS-233: the print-queue worker is a TRUSTED internal caller â€” the
         // operator's scope was already enforced when the entry was queued, and
         // the queue routes are gated by print_queue:write (portal roles can't
@@ -824,15 +889,27 @@ async function processQueueSendOrder(
         const created = await timeQueueStep(
           timings,
           'labelPurchaseMs',
-          () => createLabelV2({
-            ...labelInput,
-            orderId: order.orderId,
-            orderNumber: order.orderNumber ?? labelInput.orderNumber,
-          }, GLOBAL_SCOPE),
+          async () => {
+            try {
+              return await createLabelV2({
+                ...labelInput,
+                orderId: order.orderId,
+                orderNumber: order.orderNumber ?? labelInput.orderNumber,
+              }, GLOBAL_SCOPE);
+            } finally {
+              if (providerPendingTimer) {
+                clearTimeout(providerPendingTimer);
+                providerPendingTimer = null;
+              }
+            }
+          },
         );
         labelUrl = created.labelUrl;
         trackingNumber = created.trackingNumber;
         timings.labelSource = 'created';
+        await lifecycle?.setState('shipment_persisted', {
+          trackingNumber,
+        });
       } catch (err) {
         if (isLabelPurchaseInProgressError(err)) {
           const recoveredAfterInProgress = await timeQueueStep(
@@ -889,6 +966,10 @@ async function processQueueSendOrder(
       scope,
     }),
   );
+  await lifecycle?.setState('queued', {
+    queueEntryId: entry.id,
+    trackingNumber,
+  });
   timings.totalMs = elapsedSince(startedAt);
 
   return {
@@ -1058,29 +1139,38 @@ export async function startQueueSendJob(input: {
   if (!input.orders.length) throw new Error('orders must be non-empty');
 
   cleanOldJobs();
+  const preflight = await preflightQueueSendOrders(input.orders);
   const jobId = randomUUID();
   const clientIds = normalizeClientIds(input.orders.map((order) => order.clientId));
   const firstClientId = input.orders.find((order) => Number.isFinite(order.clientId))?.clientId ?? null;
+  const blockedResults = preflight.blockedResults;
   const job: QueueSendJob = {
     jobId,
-    status: 'pending',
+    status: preflight.readyOrders.length > 0 ? 'pending' : 'done',
     clientIds,
     progress: 0,
     total: input.orders.length,
-    current: 0,
+    current: blockedResults.length,
     queued: 0,
-    failed: 0,
-    message: `Starting queue send of ${input.orders.length} order${input.orders.length === 1 ? '' : 's'}...`,
+    failed: blockedResults.length,
+    message: preflight.readyOrders.length > 0
+      ? `Starting queue send of ${input.orders.length} order${input.orders.length === 1 ? '' : 's'}...`
+      : `Queued 0/${input.orders.length}${blockedResults.length ? `, ${blockedResults.length} failed` : ''}`,
     clientId: firstClientId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    results: [],
+    results: [...blockedResults],
     queuedEntryIds: [],
+    itemStates: preflight.itemStates.map(toQueueSendItemSnapshot),
   };
+  updateQueueSendProgress(job);
   queueSendJobs.set(jobId, job);
 
   await persistQueueSendJobSnapshot(job, { required: true });
-  void runQueueSendJob(jobId, input.orders, input.concurrency, input.scope);
+  await persistQueueSendJobItems(jobId, preflight.itemStates);
+  if (preflight.readyOrders.length > 0) {
+    void runQueueSendJob(jobId, preflight.readyOrders, input.concurrency, input.scope);
+  }
   return { jobId, total: input.orders.length };
 }
 
@@ -1109,17 +1199,18 @@ async function runQueueSendJob(
       async (order) => {
         const orderStartedAt = Date.now();
         try {
-          const result = await Promise.race([
-            processQueueSendOrder(order, order.scope ?? scope),
-            timeoutAfter(
-              QUEUE_SEND_ORDER_TIMEOUT_MS,
-              `Timed out while sending order ${order.orderNumber ?? order.orderId} to queue`
-            ),
-          ]);
+          const result = await processQueueSendOrder(order, order.scope ?? scope, {
+            setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
+          });
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);
           job.results.push(withTotalTiming(result, orderStartedAt));
+          await setQueueSendItemState(job, order, {
+            state: 'queued',
+            queueEntryId: result.queueEntryId ?? null,
+            trackingNumber: result.trackingNumber ?? null,
+          });
         } catch (err) {
           job.failed += 1;
           // PS-191: classify retry eligibility STRUCTURALLY (proof-error code
@@ -1128,13 +1219,21 @@ async function runQueueSendJob(
           // and must never auto-repurchase.
           const retry = classifyLabelPurchaseRetry(err);
           const staleLabelAttempt = isQueueSendStaleLabelAttemptError(err);
+          const retryEligible = staleLabelAttempt || retry.retryEligible;
+          const retryReason = staleLabelAttempt ? err.retryReason : retry.retryReason;
+          const message = err instanceof Error ? err.message : 'Unknown error';
           job.results.push({
             orderId: order.orderId,
             success: false,
-            error: err instanceof Error ? err.message : 'Unknown error',
-            retryEligible: retry.retryEligible,
-            retryReason: staleLabelAttempt ? err.retryReason : retry.retryReason,
+            error: message,
+            retryEligible,
+            retryReason,
             timings: { totalMs: elapsedSince(orderStartedAt), labelSource: 'failed' },
+          });
+          await setQueueSendItemState(job, order, {
+            state: retryEligible ? 'failed_retryable' : 'failed_terminal',
+            blockedReason: retryReason ?? null,
+            errorMessage: message,
           });
         } finally {
           job.current += 1;

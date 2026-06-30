@@ -117,7 +117,7 @@ check('backend process checks for an existing queueable label before purchase',
   findExistingIndex >= 0 && createLabelIndex > findExistingIndex);
 check('backend process creates missing labels through createLabelV2 with worker scope',
   processBlock.includes('const created = await timeQueueStep(') &&
-  processBlock.includes('() => createLabelV2({') &&
+  processBlock.includes('return await createLabelV2({') &&
   processBlock.includes('const labelInput = order.label') &&
   processBlock.includes('...labelInput') &&
   processBlock.includes('orderId: order.orderId') &&
@@ -141,12 +141,12 @@ check('backend addToQueue owns queue URL normalization and SKU identity derivati
   printQueueService.includes('buildQueueSkuIdentityFromItems('));
 check('startQueueSendJob persists a durable worker job before async processing',
   startJobBlock.includes('await persistQueueSendJobSnapshot(job, { required: true })') &&
-  startJobBlock.includes('void runQueueSendJob(jobId, input.orders, input.concurrency, input.scope)'));
+  startJobBlock.includes('void runQueueSendJob(jobId, preflight.readyOrders, input.concurrency, input.scope)'));
 check('worker calls the backend process and classifies retry eligibility structurally',
-  runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope)') &&
+  runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
   runJobBlock.includes('classifyLabelPurchaseRetry(err)') &&
-  runJobBlock.includes('retryEligible: retry.retryEligible') &&
-  runJobBlock.includes('retryReason: staleLabelAttempt ? err.retryReason : retry.retryReason'));
+  runJobBlock.includes('const retryEligible = staleLabelAttempt || retry.retryEligible') &&
+  runJobBlock.includes('const retryReason = staleLabelAttempt ? err.retryReason : retry.retryReason'));
 
 const printQueueRoute = read('src/routes/print-queue.ts');
 const batchSendBlock = blockBetween(
