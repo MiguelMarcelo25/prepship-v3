@@ -32,6 +32,7 @@ const evidencePath = 'docs/ps-tickets/ps-346-print-queue-volume-evidence.md';
 const evidence = fileText(evidencePath);
 const printQueueService = read('src/services/print-queue.ts');
 const printQueueRoute = read('src/routes/print-queue.ts');
+const queueSnapshot = read('src/services/print-queue/queue-send-snapshot.ts');
 const queueStatus = read('src/services/print-queue/queue-send-status.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const persistentQueueJob = read('web/src/components/Views/orders-persistent-queue-job.ts');
@@ -65,11 +66,11 @@ check(
 );
 
 check(
-  'PS-346 queue volume evidence doc records root cause, current safe proof, and remaining locked blocker',
+  'PS-346 queue volume evidence doc records root cause, current proof, and durable full-result proof',
   evidence.includes('## Root-Cause Findings') &&
     evidence.includes('## Current Safe Proof') &&
-    evidence.includes('## Remaining Blocker') &&
-    evidence.includes('unlock shipped data'),
+    evidence.includes('## Durable Full-Result Proof') &&
+    evidence.includes('queueSendSnapshotResults(durableJob)'),
 );
 
 check(
@@ -104,10 +105,14 @@ check(
 );
 
 check(
-  'durable fallback remains capped and must not be treated as full per-order proof for long batches',
-  /resultSamples: job\.results\.slice\(-10\)/.test(printQueueService) &&
-    /results: durableJob\.resultSamples/.test(routeStatusBlock) &&
-    evidence.includes('durable fallback is capped to the latest 10 result samples'),
+  'durable fallback returns full per-order results while keeping compact result samples',
+  /const results = job\.results\.map\(toQueueSendResultSnapshot\)/.test(queueSnapshot) &&
+    /results,\s*resultSamples: results\.slice\(-10\)/s.test(queueSnapshot) &&
+    /export function queueSendSnapshotResults/.test(queueSnapshot) &&
+    /const durableResults = queueSendSnapshotResults\(durableJob\)/.test(routeStatusBlock) &&
+    /results: durableResults/.test(routeStatusBlock) &&
+    /result_samples: durableJob\.resultSamples/.test(routeStatusBlock) &&
+    evidence.includes('returned `results.length = total`'),
 );
 
 check(

@@ -145,21 +145,24 @@ New proof:
 
 ## 2026-06-30 Print Queue Volume Evidence Slice
 
-The Print Queue high-volume slice is still behind the lockdown gate for any
-implementation that changes `src/services/print-queue.ts` or
-`src/routes/print-queue.ts`. The current safe work is read-only certification:
-active backend queue-send jobs are per-run and expose full in-memory
-`results`, while durable fallback is intentionally capped to `resultSamples`.
+The Print Queue high-volume slice now has durable full-result proof for the
+selected batch. Active backend queue-send jobs are per-run and expose full
+in-memory `results`; durable fallback also preserves and returns full
+per-order `results`, while `resultSamples` remains only a compact preview for
+legacy/debug consumers.
 
 Evidence lives in `docs/ps-tickets/ps-346-print-queue-volume-evidence.md`.
-The guard proves selected-run totals are not cumulative, active status returns
-full current-run results, and the remaining long-batch durable-proof gap is
-documented instead of claimed complete.
+The guards prove selected-run totals are not cumulative, active status returns
+full current-run results, durable fallback returns full per-order results for
+long batches, and stale/interrupted jobs are classified safely.
 
 New proof:
 
 - `npm run test:ps-346-print-queue-volume-evidence -- --no-color` - proves the
-  current safe queue-volume boundary and the remaining locked blocker.
+  selected-run queue-volume boundary and durable full-result status behavior.
+- `npm run test:ps-346-print-queue-durable-full-results -- --no-color` - proves
+  a 20-order durable snapshot preserves every per-order result, retry flag,
+  retry reason, and failure detail.
 
 ## Safety
 

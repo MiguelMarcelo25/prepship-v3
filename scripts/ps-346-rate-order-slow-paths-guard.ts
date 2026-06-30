@@ -113,13 +113,13 @@ check(
 );
 
 check(
-  'PS-346 print queue volume evidence records the current safe boundary and remaining locked blocker',
+  'PS-346 print queue volume evidence records durable full-result proof',
   existsSync(queueVolumeEvidencePath) &&
     queueVolumeEvidence.includes('## Root-Cause Findings') &&
     queueVolumeEvidence.includes('## Current Safe Proof') &&
-    queueVolumeEvidence.includes('## Remaining Blocker') &&
-    queueVolumeEvidence.includes('durable fallback is capped to the latest 10 result samples') &&
-    queueVolumeEvidence.includes('unlock shipped data'),
+    queueVolumeEvidence.includes('## Durable Full-Result Proof') &&
+    queueVolumeEvidence.includes('returned `results.length = total`') &&
+    queueVolumeEvidence.includes('test:ps-346-print-queue-durable-full-results'),
 );
 
 check(
@@ -392,11 +392,11 @@ check(
 );
 
 check(
-  'PS-346 print queue volume evidence guard pins selected-run totals and active-job per-order proof',
+  'PS-346 print queue volume evidence guard pins selected-run totals and durable per-order proof',
   existsSync(queueVolumeEvidenceGuardPath) &&
     /backend active batch-send status returns the full in-memory per-order results for the current run/.test(queueVolumeEvidenceGuard) &&
     /OrdersView polls each backend queue-send job with the selected run total, not a cumulative queue count/.test(queueVolumeEvidenceGuard) &&
-    /durable fallback remains capped and must not be treated as full per-order proof for long batches/.test(queueVolumeEvidenceGuard),
+    /durable fallback returns full per-order results while keeping compact result samples/.test(queueVolumeEvidenceGuard),
 );
 
 if (failures > 0) {
