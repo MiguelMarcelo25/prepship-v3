@@ -26,7 +26,7 @@ The deletion candidates below keep their existing canonical owners:
 - Dead-but-retained schema definitions stay under PS-153.
 - Superseded package/label deletion stays under PS-225.
 - HUGRAB label-purchase safety stays under PS-261.
-- Rate Browser and row DTO cleanup evidence stays under PS-340, PS-341, PS-342, PS-343, and PS-344.
+- Rate Browser and row DTO cleanup evidence stays under PS-340 backend rate-engine plus PS-341, PS-342, PS-343, and PS-344.
 
 ## Imperfect data injection points
 
@@ -40,7 +40,7 @@ The deletion candidates below keep their existing canonical owners:
 
 These tickets reduce compatibility bridges and wrapper-search habits before deletion:
 
-- PS-340 - Rate Browser frontend bridge audit.
+- PS-340 backend rate-engine guard.
 - PS-341 - Frontend compatibility helper audit.
 - PS-342 - Legacy rate display adapter cleanup.
 - PS-343 - RateBrowserModal money normalization cleanup.
@@ -94,7 +94,7 @@ Candidate counts by classification:
 
 | Area | Candidate | Classification | Current decision | Gate before future deletion |
 | --- | --- | --- | --- | --- |
-| Frontend bridges | Rate Browser display helpers, including backend-rank sort/display helpers | KEEP ACTIVE | Display-only helpers may remain when they consume backend rank/proof facts and never emit/persist Best Rate. | Keep PS-340/PS-321/rate-source-of-truth guards green. |
+| Frontend bridges | Rate Browser display helpers, including backend-rank sort/display helpers | KEEP ACTIVE | Display-only helpers may remain when they consume backend rank/proof facts and never emit/persist Best Rate. | Keep PS-340 backend rate-engine, PS-321, and rate-source-of-truth guards green. |
 | Frontend transport | v2-apiClient transport shims | KEEP ACTIVE | These are compatibility transports, not business truth owners. | Keep PS-320 and backend-truth guards green before removing any shim. |
 | Legacy serverless stack | Legacy Vercel `api/` stack and Vercel exclusions | BLOCKED BY CANARY | Blocked by PS-200. | PS-200 S8 must pass: no exclusion patterns, no crons, `api/` absent only after zero Vercel function invocations over a full business day. |
 | Legacy direct carrier endpoints | `api/carriers/labels.ts`, `api/carriers/rates.ts`, provider probes, validate-address | MIGRATE FIRST | Do not delete as a PS-331 bulk action. | Follow PS-200 S2/S5/S8. Preserve PS-229 sanitized carrier errors and PS-230 strict JWT behavior when re-anchored. |
@@ -103,7 +103,7 @@ Candidate counts by classification:
 | Label helper | `src/services/labels.ts#createLabelFromShipment` | DOCUMENT ONLY | Do not delete in PS-331; keep the warning as a revival landmine. | If revived, it must route through `createLabelV2` and the PS-261 HUGRAB preflight before real postage. |
 | Label/queue safety | Print Queue and label safety guards | KEEP ACTIVE | These guards pin backend-owned label purchase, queue, and HUGRAB safety boundaries. | Keep PS-225, PS-261, PS-267, PS-269, PS-318, and PS-319 green before any deletion slice. |
 | Superseded package/label path | `src/services/direct-label-persistence.ts` and related removed calls | DOCUMENT ONLY | Already deleted by PS-225. | Keep PS-225 guard green. Do not recreate `persistDirectCarrierLabel`. |
-| Frontend bridge cleanup | PS-340 to PS-344 docs and guards | KEEP ACTIVE | No further deletion here. These are regression guards for the cleanup sequence. | Future removal must keep backend source-of-truth delegation intact and leave guards green. |
+| Frontend bridge cleanup | PS-340 backend rate-engine guard plus PS-341 to PS-344 docs and guards | KEEP ACTIVE | PS-358 retired the stale PS-340 frontend audit artifact. The remaining guards are regression evidence for backend source-of-truth delegation and cleanup sequencing. | Future removal must keep backend source-of-truth delegation intact and leave guards green. |
 | Conditional cards | PS-281 and PS-282 unresolved conditional dependencies | BLOCKED BY CONDITIONAL CARD | No repo evidence found. | DJ/Hermes must mark not-needed, superseded, or complete before PS-331 can claim the hard gate is fully clear. |
 | Local scratch | untracked scratch files including `apps/` | BLOCKED BY CONDITIONAL CARD | Excluded from repo-owned dead-code planning. | Do not include untracked scratch files in deletion planning until DJ confirms they are repo-owned artifacts. |
 | Marketplace confirmation conditional | PS-284 implementation card | DOCUMENT ONLY | PS-268 says no current implementation gap was proven. | Use PS-284 only if a future provider canary proves a specific connector behavior gap. |

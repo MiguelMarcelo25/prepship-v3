@@ -47,8 +47,9 @@ check('PS-331 doc marks the ticket BLOCKED and forbids deletion in this slice',
 check('PS-331 doc records Trello connector as unavailable, not silently verified',
   /Trello connector unavailable/.test(doc));
 
-check('PS-331 doc anchors cleanup sequence PS-340 through PS-344',
-  ['PS-340', 'PS-341', 'PS-342', 'PS-343', 'PS-344'].every((ticket) => doc.includes(ticket)));
+check('PS-331 doc anchors PS-340 backend plus PS-341 through PS-344 cleanup sequence',
+  doc.includes('PS-340 backend rate-engine') &&
+    ['PS-341', 'PS-342', 'PS-343', 'PS-344'].every((ticket) => doc.includes(ticket)));
 
 check('PS-331 doc separates completed plan slice from incomplete full ticket',
   /Plan slice: complete/.test(doc) &&
@@ -87,7 +88,7 @@ check('PS-331 inventory covers the requested code categories without approving d
     'Legacy direct carrier endpoints',
     'Label helper',
     'Print Queue and label safety guards',
-    'PS-340 to PS-344 docs and guards',
+    'PS-340 backend rate-engine guard plus PS-341 to PS-344 docs and guards',
   ].every((text) => doc.includes(text)) &&
   !/\| DELETE NOW \| [1-9]/.test(doc));
 

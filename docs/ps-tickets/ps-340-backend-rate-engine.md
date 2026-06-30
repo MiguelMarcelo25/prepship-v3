@@ -8,10 +8,6 @@ The canonical owner for rate fan-out remains `src/services/rates.ts`, with `/rat
 
 Bad rate state first enters when one operator action fans out to too many carrier accounts or when a slow provider leaves partial results looking authoritative. PS-345 removed the browser-owned passive live-rate trigger. This PS-340 slice closes the remaining backend fan-out gap: direct-carrier quotes now drain through a bounded backend concurrency cap instead of launching every visible direct account at once.
 
-## PS-340 Number Collision
-
-The repository already has `test:ps-340-ratebrowser-bridge-audit` for an older local cleanup named "Rate Browser frontend bridge audit." The Trello card also uses PS-340 for the backend rate-engine/performance task. To avoid deleting or rewriting the older guard, this slice adds `test:ps-340-backend-rate-engine` and this separate note.
-
 ## Current Slice
 
 - ShipStation live rating stays under `RATE_FETCH_CONCURRENCY` plus the ShipStation budget limiter.

@@ -21,7 +21,7 @@ assert(
   'ledger must reserve PS-338 for browse refresh visibility work',
 );
 assert(ledger.includes('| PS-339 | eBay API testing certification |'), 'ledger must assign eBay API testing to PS-339');
-assert(ledger.includes('| PS-340 | Rate Browser frontend bridge audit |'), 'ledger must reserve PS-340 for Rate Browser bridge cleanup');
+assert(ledger.includes('| PS-340 | Backend rate engine |'), 'ledger must reserve PS-340 for backend rate-engine cleanup');
 assert(ledger.includes('| PS-341 | Frontend compatibility helper audit |'), 'ledger must reserve PS-341 for frontend compatibility cleanup');
 assert(ledger.includes('| PS-342 | Legacy rate display adapter cleanup |'), 'ledger must reserve PS-342 for legacy rate adapter cleanup');
 assert(ledger.includes('| PS-343 | RateBrowserModal money normalization cleanup |'), 'ledger must reserve PS-343 for RateBrowserModal money cleanup');
@@ -42,8 +42,13 @@ assert(
   'eBay guard must be registered as PS-339',
 );
 assert(
-  packageJson.includes('test:ps-340-ratebrowser-bridge-audit'),
-  'PS-340 Rate Browser bridge audit guard must be registered',
+  !packageJson.includes('test:ps-340-ratebrowser-bridge-audit'),
+  'retired PS-340 frontend audit guard must not remain registered',
+);
+assert(
+  packageJson.includes('test:ps-340-backend-rate-engine') &&
+    packageJson.includes('test:ps-340-rate-engine-volume-proof'),
+  'PS-340 backend rate-engine guards must be registered',
 );
 assert(
   packageJson.includes('test:ps-341-frontend-compatibility-helper-audit'),

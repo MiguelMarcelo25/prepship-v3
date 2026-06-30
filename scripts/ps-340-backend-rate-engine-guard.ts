@@ -1,10 +1,9 @@
 /**
  * PS-340 - backend rate-engine bounded fan-out guard.
  *
- * Trello PS-340 is broader than the existing local
- * `ps-340-ratebrowser-bridge-audit` guard. This guard pins the backend engine
- * slice: cache-first display may be instant, but every live carrier fan-out
- * must be backend-owned, bounded, and visible through diagnostics.
+ * This guard pins the canonical backend engine slice: cache-first display may
+ * be instant, but every live carrier fan-out must be backend-owned, bounded,
+ * and visible through diagnostics.
  *
  * Offline/static only: no DB, no provider calls, no labels, no queue mutation.
  */
@@ -139,10 +138,9 @@ check(
 );
 
 check(
-  'package wires PS-340 backend rate-engine guard without replacing the older bridge-audit guard',
+  'package wires canonical PS-340 backend rate-engine guards',
   packageJson.includes('"test:ps-340-backend-rate-engine": "tsx scripts/ps-340-backend-rate-engine-guard.ts"') &&
-    packageJson.includes('"test:ps-340-rate-engine-volume-proof": "tsx scripts/ps-340-rate-engine-volume-proof-guard.ts"') &&
-    packageJson.includes('"test:ps-340-ratebrowser-bridge-audit": "tsx scripts/ps-340-ratebrowser-bridge-audit-guard.ts"'),
+    packageJson.includes('"test:ps-340-rate-engine-volume-proof": "tsx scripts/ps-340-rate-engine-volume-proof-guard.ts"'),
 );
 
 check(
@@ -153,10 +151,9 @@ check(
 );
 
 check(
-  'PS-340 backend-engine doc records owner, imperfect data injection, collision, and no shipped/cancelled touch',
+  'PS-340 backend-engine doc records owner, imperfect data injection, volume proof, and no shipped/cancelled touch',
   doc.includes('## Backend Owner') &&
     doc.includes('## Imperfect Data Injection') &&
-    doc.includes('## PS-340 Number Collision') &&
     doc.includes('## 2026-06-30 Volume Proof Slice') &&
     doc.includes('No shipped/cancelled surfaces are touched'),
 );
