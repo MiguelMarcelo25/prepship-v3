@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
 import { californiaDayEndIso, californiaDayStartIso } from '../lib/ca-time';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
+import { createOrdersRefetchCoordinator } from './orders-refetch-coordinator';
 import {
   ORDERS_STALE_MS,
   ORDERS_CACHE_MS,
@@ -503,14 +504,26 @@ export function useOrders(
   }, [query.data, clientsQuery.data]);
 
   const queryRefetch = query.refetch;
+  const queryRefetchRef = useRef(queryRefetch);
+  useEffect(() => {
+    queryRefetchRef.current = queryRefetch;
+  }, [queryRefetch]);
+
+  const refetchCoordinatorRef = useRef<ReturnType<typeof createOrdersRefetchCoordinator> | null>(null);
+  if (refetchCoordinatorRef.current == null) {
+    refetchCoordinatorRef.current = createOrdersRefetchCoordinator(async () => {
+      await queryRefetchRef.current();
+    });
+  }
+
   const refetch = useCallback(async () => {
     setRefreshing(true);
     try {
-      await queryRefetch();
+      await refetchCoordinatorRef.current?.request('orders-refetch');
     } finally {
       setRefreshing(false);
     }
-  }, [queryRefetch]);
+  }, []);
 
   const goToPage = useCallback(async (pageNum: number) => {
     setCurrentPage(pageNum);

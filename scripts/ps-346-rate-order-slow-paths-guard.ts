@@ -37,6 +37,8 @@ const workflowServicePath = 'src/services/rate-browse-workflow.ts';
 const browseDisplayPath = 'src/services/rate-browser-display-fields.ts';
 const browseProducerPath = 'src/services/rate-browse-response-producer.ts';
 const workflowHookPath = 'web/src/hooks/useRateBrowseWorkflow.ts';
+const ordersRefetchCoordinatorPath = 'web/src/hooks/orders-refetch-coordinator.ts';
+const ordersRefetchBehaviorPath = 'scripts/ps-346-orders-refetch-coordinator-behavior.ts';
 const findings = fileText(findingsPath);
 const plan = fileText(planPath);
 const helper = fileText(helperPath);
@@ -46,13 +48,21 @@ const workflowService = fileText(workflowServicePath);
 const browseDisplay = fileText(browseDisplayPath);
 const browseProducer = fileText(browseProducerPath);
 const workflowHook = fileText(workflowHookPath);
+const ordersRefetchCoordinator = fileText(ordersRefetchCoordinatorPath);
+const ordersRefetchBehavior = fileText(ordersRefetchBehaviorPath);
 const ratesRoute = read('src/routes/rates.ts');
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 const rateBrowserModal = read('web/src/components/RateBrowserModal.tsx');
+const useOrders = read('web/src/hooks/useOrders.ts');
 
 check(
   'package wires PS-346 slow-path guard',
   packageJson.includes('"test:ps-346-rate-order-slow-paths": "tsx scripts/ps-346-rate-order-slow-paths-guard.ts"'),
+);
+
+check(
+  'package wires PS-346 Orders refetch coordinator behavior guard',
+  packageJson.includes('"test:ps-346-orders-refetch-coordinator": "tsx scripts/ps-346-orders-refetch-coordinator-behavior.ts"'),
 );
 
 check(
@@ -170,10 +180,10 @@ check(
 check(
   'rate browser display stamping lives in a focused backend service',
   existsSync(browseDisplayPath) &&
+    /import \{ stampPurchaseCustomerRateAliases \} from ['"]\.\/shipping-workflow\/purchase-customer-rate-aliases\.js['"]/.test(browseDisplay) &&
     /export function stampRateBrowserDisplayAliases<T>\(value: T\): T/.test(browseDisplay) &&
     /export function stampHugrabCoverageDisplayFields<T extends Record<string, unknown>>/.test(browseDisplay) &&
-    /rateTotal/.test(browseDisplay) &&
-    /rateCostTotal/.test(browseDisplay),
+    /return stampPurchaseCustomerRateAliases\(\{/.test(browseDisplay),
 );
 
 check(
@@ -246,6 +256,33 @@ check(
     /data-rate-browser="workflowProgress"/.test(rateBrowserModal) &&
     /rateWorkflowSnapshot\.progress/.test(rateBrowserModal) &&
     !/rateWorkflowSnapshot[\s\S]{0,1200}sort\(/.test(rateBrowserModal),
+);
+
+check(
+  'Orders refetch coordinator helper exists and serializes overlapping /orders refresh requests',
+  existsSync(ordersRefetchCoordinatorPath) &&
+    /export function createOrdersRefetchCoordinator/.test(ordersRefetchCoordinator) &&
+    /let inFlight: Promise<void> \| null = null/.test(ordersRefetchCoordinator) &&
+    /let queued = false/.test(ordersRefetchCoordinator) &&
+    /if \(inFlight\) \{\s*queued = true/.test(ordersRefetchCoordinator) &&
+    /await run\(nextReason \?\? undefined\)/.test(ordersRefetchCoordinator) &&
+    /if \(!queued\) break/.test(ordersRefetchCoordinator),
+);
+
+check(
+  'useOrders delegates manual refetches through the PS-346 coordinator',
+  /import \{ createOrdersRefetchCoordinator \} from ['"]\.\/orders-refetch-coordinator['"]/.test(useOrders) &&
+    /const refetchCoordinatorRef = useRef<ReturnType<typeof createOrdersRefetchCoordinator> \| null>\(null\)/.test(useOrders) &&
+    /createOrdersRefetchCoordinator\(async \(\) => \{\s*await queryRefetchRef\.current\(\);\s*\}\)/s.test(useOrders) &&
+    /await refetchCoordinatorRef\.current\?\.request\('orders-refetch'\)/.test(useOrders),
+);
+
+check(
+  'PS-346 behavior guard proves overlapping refetches collapse into one active and one trailing request',
+  existsSync(ordersRefetchBehaviorPath) &&
+    /concurrent refetch requests must share the active \/orders request/.test(ordersRefetchBehavior) &&
+    /requests arriving during an active refetch collapse into one trailing refresh/.test(ordersRefetchBehavior) &&
+    /maxActive, 1/.test(ordersRefetchBehavior),
 );
 
 if (failures > 0) {

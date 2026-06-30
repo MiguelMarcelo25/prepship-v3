@@ -61,6 +61,27 @@ Run on 2026-06-29 from branch `codex/ps-346-slow-paths-plan`:
 - `npm run test:ps-321-ratebrowsermodal-thin-ui -- --no-color` - PASS
 - `npm run test:ps-rate-limiter-priority-behavior -- --no-color` - PASS
 
+## 2026-06-30 Orders Refetch Pressure Slice
+
+The remaining `/orders` pressure root cause was not one single button. It was
+the shared hook contract: many existing `OrdersView` workflows call
+`refetchOrders()` after rate jobs, label actions, queue actions, row settle
+timers, and manual refresh. Before this slice, each caller could ask React Query
+for another full Orders read while a same-hook request was already active.
+
+This slice adds `web/src/hooks/orders-refetch-coordinator.ts` and wires
+`useOrders.refetch()` through it. The coordinator keeps only one active
+`/orders` refetch per `useOrders` hook and collapses any requests that arrive
+while it is active into one trailing refresh. That preserves the "latest row
+state after the burst" behavior without allowing overlapping full-table reads
+from the same Orders surface.
+
+New proof:
+
+- `npm run test:ps-346-orders-refetch-coordinator -- --no-color` - covers
+  concurrent request coalescing, no overlapping active requests, one trailing
+  refresh for status/settle bursts, and normal later idle refreshes.
+
 ## Safety
 
 No labels, postage, marketplace notifications, billing, inventory, production
