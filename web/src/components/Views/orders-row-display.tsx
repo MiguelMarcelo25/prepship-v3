@@ -308,7 +308,7 @@ function getCachedSecondBestRate(order: OrderSummaryDto) {
 export function getBestRateBaseCost(order: OrderSummaryDto) {
   const money = getBackendRowMoney(order)
   if (order.orderStatus === 'awaiting_shipment') {
-    return money?.customerRateAmount ?? money?.markedAmount ?? null
+    return money?.rateCostAmount ?? money?.baseAmount ?? money?.markedAmount ?? null
   }
 
   return money?.customerRateAmount ?? money?.markedAmount ?? getShippingNumber(order, 'bestRateAmount') ?? null

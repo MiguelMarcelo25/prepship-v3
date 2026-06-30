@@ -25,12 +25,12 @@ export function renderBestRateFinalCell(order: OrderSummaryDto) {
     : <span data-best-rate-final="missing" style={{ color: 'var(--text3)', fontSize: 12 }}>-</span>
 }
 
-// PS-308: the raw provider Rate Cost from the backend money tuple, SEPARATED from the
-// customer-facing Best/Selected Rate. Financial-only — a null money tuple renders a dash.
+// PS-356: C. Shipping Rate is the customer billing amount from the backend money
+// tuple. Best Rate is the separate DJR/DRP purchase cost.
 export function renderRateCostCell(order: OrderSummaryDto) {
-  const rateCost = getBackendRowMoney(order)?.rateCostAmount
-  return rateCost != null
-    ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(rateCost)}</span>
+  const customerShippingRate = getBackendRowMoney(order)?.customerRateAmount
+  return customerShippingRate != null
+    ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(customerShippingRate)}</span>
     : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
 }
 

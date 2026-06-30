@@ -1,4 +1,4 @@
-import { rateCostTotal, rateTotal } from './rates-combined';
+import { stampPurchaseCustomerRateAliases } from './shipping-workflow/purchase-customer-rate-aliases.js';
 import {
   resolveHugrabLabelPurchasePreflight,
   resolveShippCustomsValueProofSource,
@@ -23,15 +23,6 @@ function readMoneyObjectAmount(value: unknown): number {
   return Number.isFinite(amount) ? amount : 0;
 }
 
-function readFiniteRateNumber(value: unknown): number | null {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount : null;
-}
-
-function roundRateMoney(value: number): number {
-  return Math.round(Math.max(0, value) * 100) / 100;
-}
-
 function toRateProviderAccountId(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string') return null;
@@ -41,14 +32,6 @@ function toRateProviderAccountId(value: unknown): number | null {
 }
 
 function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<string, unknown> {
-  const otherCost = roundRateMoney(
-    readMoneyObjectAmount(rate.other_amount) +
-    readMoneyObjectAmount(rate.confirmation_amount) +
-    readMoneyObjectAmount(rate.insurance_amount)
-  );
-  const total = roundRateMoney(rateTotal(rate));
-  const rateCostAmount = roundRateMoney(rateCostTotal(rate));
-  const shipmentCost = roundRateMoney(total - otherCost);
   const carrierCode = readText(rate.carrierCode ?? rate.carrier_code ?? rate.provider ?? null);
   const serviceCode = readText(rate.serviceCode ?? rate.service_code ?? rate.service ?? null);
   const serviceName = readText(rate.serviceName ?? rate.service_type ?? rate.serviceCode ?? rate.service_code ?? null);
@@ -65,24 +48,17 @@ function stampRateBrowserDisplayAlias(rate: Record<string, unknown>): Record<str
     rate.shippingProviderId ?? rate.providerAccountId ?? rate.carrier_id ?? null
   );
 
-  return {
+  return stampPurchaseCustomerRateAliases({
     ...rate,
     ...(carrierCode ? { carrierCode } : {}),
     ...(serviceCode ? { serviceCode } : {}),
     ...(serviceName ? { serviceName } : {}),
     ...(carrierNickname ? { carrierNickname } : {}),
     ...(shippingProviderId != null ? { shippingProviderId } : {}),
-    amount: readFiniteRateNumber(rate.amount) ?? total,
-    shipmentCost: readFiniteRateNumber(rate.shipmentCost) ?? shipmentCost,
-    otherCost: readFiniteRateNumber(rate.otherCost) ?? otherCost,
-    customerRateAmount: readFiniteRateNumber(rate.customerRateAmount) ?? readFiniteRateNumber(rate.customer_rate_amount) ?? total,
-    customer_rate_amount: readFiniteRateNumber(rate.customer_rate_amount) ?? readFiniteRateNumber(rate.customerRateAmount) ?? total,
-    rateCostAmount: readFiniteRateNumber(rate.rateCostAmount) ?? readFiniteRateNumber(rate.rate_cost_amount) ?? rateCostAmount,
-    rate_cost_amount: readFiniteRateNumber(rate.rate_cost_amount) ?? readFiniteRateNumber(rate.rateCostAmount) ?? rateCostAmount,
     secondBestRate: isPlainRecord(rate.secondBestRate)
       ? stampRateBrowserDisplayAlias(rate.secondBestRate)
       : rate.secondBestRate,
-  };
+  });
 }
 
 export function stampRateBrowserDisplayAliases<T>(value: T): T {

@@ -505,6 +505,7 @@
     "test:ps-345-rate-loading-sot": "tsx scripts/ps-345-rate-loading-sot-guard.ts",
     "test:ps-346-rate-order-slow-paths": "tsx scripts/ps-346-rate-order-slow-paths-guard.ts",
     "test:ps-352-shipping-workflow-sot-map": "tsx scripts/ps-352-shipping-workflow-sot-map-guard.ts",
+    "test:ps-356-best-rate-c-shipping-sot": "tsx scripts/ps-356-best-rate-c-shipping-sot-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",
     "test:ps-307-marked-rate-comparison-closeout": "tsx scripts/ps-307-marked-rate-comparison-closeout-guard.ts",

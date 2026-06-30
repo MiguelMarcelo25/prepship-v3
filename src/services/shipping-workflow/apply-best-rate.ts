@@ -11,7 +11,7 @@
 // payload and runs the single applyOverridesPatch behind assertOrderEditable.
 
 import { validateExactSelectedRate } from './rate-fingerprint.js';
-import { rateCostTotal, rateTotal } from '../rates-combined.js';
+import { stampPurchaseCustomerRateAliases } from './purchase-customer-rate-aliases.js';
 
 type ApplyRateQuoteSnapshot = {
   cacheKey: string;
@@ -76,28 +76,6 @@ function recordOrNull(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
 }
 
-function numberOrNull(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function roundMoney(value: number): number {
-  return Math.round(Math.max(0, value) * 100) / 100;
-}
-
-function moneyObjectAmount(record: Record<string, unknown>, key: string): number {
-  const value = recordOrNull(record[key]);
-  return numberOrNull(value?.amount) ?? 0;
-}
-
-function amountLooksLikeTotal(amount: number, rawTotal: number): boolean {
-  return amount >= rawTotal - 0.005;
-}
-
 function fetchedAtMs(value: string | number | null | undefined): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
@@ -134,39 +112,7 @@ function findSnapshotRateForApply(snapshot: ApplyRateQuoteSnapshot, selectedRate
 }
 
 function stampApplyDisplayAliases(rate: Record<string, unknown>): Record<string, unknown> {
-  const rawShippingAmount = moneyObjectAmount(rate, 'shipping_amount');
-  const otherCost = roundMoney(
-    moneyObjectAmount(rate, 'other_amount') +
-      moneyObjectAmount(rate, 'confirmation_amount') +
-      moneyObjectAmount(rate, 'insurance_amount'),
-  );
-  const rawCustomerTotal = roundMoney(rawShippingAmount + otherCost);
-  const explicitCustomerAmount = numberOrNull(rate.customerRateAmount) ?? numberOrNull(rate.customer_rate_amount);
-  const total = explicitCustomerAmount == null
-    ? roundMoney(rateTotal(rate))
-    : amountLooksLikeTotal(explicitCustomerAmount, rawCustomerTotal)
-      ? roundMoney(explicitCustomerAmount)
-      : roundMoney(explicitCustomerAmount + otherCost);
-  const rawRateCostTotal = roundMoney(rawShippingAmount + otherCost);
-  const explicitRateCostAmount = numberOrNull(rate.rateCostAmount) ?? numberOrNull(rate.rate_cost_amount);
-  const rateCostAmount = explicitRateCostAmount == null
-    ? roundMoney(rateCostTotal(rate))
-    : amountLooksLikeTotal(explicitRateCostAmount, rawRateCostTotal)
-      ? roundMoney(explicitRateCostAmount)
-      : roundMoney(explicitRateCostAmount + otherCost);
-  const shipmentCost = roundMoney(total - otherCost);
-  return {
-    ...rate,
-    amount: total,
-    shipmentCost: numberOrNull(rate.shipmentCost) ?? shipmentCost,
-    otherCost: numberOrNull(rate.otherCost) ?? otherCost,
-    totalCost: total,
-    total_cost: total,
-    customerRateAmount: total,
-    customer_rate_amount: total,
-    rateCostAmount: rateCostAmount,
-    rate_cost_amount: rateCostAmount,
-  };
+  return stampPurchaseCustomerRateAliases(rate);
 }
 
 export function applyRateQuoteRef(rate: unknown): { rateQuoteId: string | null; selectedRateKey: string | null } {

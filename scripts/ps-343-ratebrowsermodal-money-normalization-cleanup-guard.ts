@@ -32,6 +32,8 @@ const moneyHelper = readFileSync('web/src/lib/rate-browser-money.ts', 'utf8');
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 const combinedRateOwner = readFileSync('src/services/rates-combined.ts', 'utf8');
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const displayFields = readFileSync('src/services/rate-browser-display-fields.ts', 'utf8');
+const purchaseCustomerAliases = readFileSync('src/services/shipping-workflow/purchase-customer-rate-aliases.ts', 'utf8');
 const packageJson = readFileSync('package.json', 'utf8');
 const ledger = readFileSync('docs/ps-tickets/ps-ledger.md', 'utf8');
 
@@ -53,7 +55,7 @@ const applyMarkupsOwner = sliceBetween(
 const rateTotalOwner = sliceBetween(
   combinedRateOwner,
   'export function rateTotal(',
-  '\n/** Internal/provider cost total',
+  '\n/** DJR/DRP purchase-cost total',
 );
 const rateCostTotalOwner = sliceBetween(
   combinedRateOwner,
@@ -88,11 +90,13 @@ check('combined backend money helpers separate customer charge from internal rat
   combinedRateOwner.includes('function internalShippingCost(rate: CombinableRate): number | null') &&
   combinedRateOwner.indexOf('export function rateTotal(') < combinedRateOwner.indexOf('export function rateCostTotal('));
 
-check('rates route imports and stamps backend rate-cost display aliases',
-  ratesRoute.includes('combineCarrierUniverses, rateCostTotal, rateTotal') &&
-  ratesRoute.includes('const rateCostAmount = roundRateMoney(rateCostTotal(rate));') &&
-  ratesRoute.includes('customerRateAmount: readFiniteRateNumber') &&
-  ratesRoute.includes('rateCostAmount: readFiniteRateNumber'));
+check('rates route delegates backend purchase/customer display aliases to shared owner',
+  ratesRoute.includes("import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display-fields'") &&
+  ratesRoute.includes('rates: stampRateBrowserDisplayAliases(row.rates)') &&
+  ratesRoute.includes('bestRate: stampRateBrowserDisplayAliases(row.bestRate)') &&
+  displayFields.includes('stampPurchaseCustomerRateAliases') &&
+  purchaseCustomerAliases.includes('rateCostTotal(rate as CombinableRate)') &&
+  purchaseCustomerAliases.includes('rateTotal(rate as CombinableRate)'));
 
 check('saved best-rate seed does not read provider money components',
   !/shipping_amount|original_amount|other_amount|confirmation_amount|insurance_amount/.test(bestRateSeed));

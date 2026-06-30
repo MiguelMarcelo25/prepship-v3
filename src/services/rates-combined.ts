@@ -11,7 +11,7 @@
  *
  * PURE module (zero io): callers fetch the two families (getRates +
  * getDirectCarrierRatesForRateInput, which now applies the SAME markup rules
- * to direct rates so the pick compares a uniform charge basis) and delegate
+ * to direct rates so the customer-billing field is available) and delegate
  * the merge, the single cheapest-pick, the per-carrier statuses, and the
  * combined-universe completeness here. /rates/browse and the rates backfill
  * both consume this one owner; the offline guard runs the $9.27-beats-$10.44
@@ -97,7 +97,7 @@ export type CombinedRateSelection = {
   bestRateThin: boolean;
 };
 
-/** The uniform CHARGE total a rate costs the customer — the single pick basis. */
+/** The C. Shipping total billed to the customer. Not the official Best Rate pick basis. */
 function finiteAmount(value: unknown): number | null {
   if (value == null || value === '') return null;
   const amount = Number(value);
@@ -148,7 +148,7 @@ export function rateTotal(rate: CombinableRate): number {
   );
 }
 
-/** Internal/provider cost total for PS-308 Rate Cost display. Never use this for cheapest ranking. */
+/** DJR/DRP purchase-cost total. PS-356 makes this the official Best Rate pick basis. */
 export function rateCostTotal(rate: CombinableRate): number {
   return (
     Number(internalShippingCost(rate) ?? rate.shipping_amount?.amount ?? 0) +
@@ -249,11 +249,13 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
   const combinedRequestKey = directCarrierIds.length
     ? `${input.ssCacheKey}|dc=${directCarrierIds.sort().join(',')}`
     : input.ssCacheKey;
-  // The SINGLE pick, on the uniform charge basis (both families carry the same
-  // markup rules by the time they reach this module). Only PRICED rates are
+  // The SINGLE pick, on the DJR/DRP purchase-cost basis. Customer billing is carried
+  // separately as C. Shipping Rate. Only PRICED rates are
   // eligible — an unpriced/$0 rate (a ShipStation account that returned no amount)
   // must never be selected as best just because `?? 0` makes it look cheapest.
-  const rankedEligibleRates = [...combinedRates].filter(isPricedRate).sort((a, b) => rateTotal(a) - rateTotal(b));
+  const rankedEligibleRates = [...combinedRates]
+    .filter(isPricedRate)
+    .sort((a, b) => (rateCostTotal(a) - rateCostTotal(b)) || (rateTotal(a) - rateTotal(b)));
   const cheapest = rankedEligibleRates[0] ?? null;
   const secondCheapest = rankedEligibleRates[1] ?? null;
 

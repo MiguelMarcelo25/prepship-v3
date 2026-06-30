@@ -1,12 +1,10 @@
 /**
- * PS-307 guard — Best Rate comparison ranks by the marked-up CUSTOMER charge.
+ * PS-307/PS-356 guard — customer charge is preserved, Best Rate ranks by purchase cost.
  *
- * Drives the real comparison owner (rates-combined.rateTotal — which rates.ts rateTotal,
- * and therefore pickBestRate + the priced.sort, delegate to) and asserts the card's core
- * rule: a house-like rate that is CHEAPER on raw provider cost but MORE EXPENSIVE to the
- * customer must NOT win Best Rate. Also pins that applyMarkups stamps the explicit
- * customer charge and that selection uses combinedRateTotal (so this unit proof maps to
- * the live pipeline).
+ * Drives the real money owners (rates-combined.rateTotal for C. Shipping and
+ * rateCostTotal for Best Rate) and asserts PS-356's core rule: a house-like rate
+ * can win Best Rate by purchase cost while its higher customer charge remains a
+ * separate C. Shipping value.
  *
  * Offline only: no DB, no network, no providers, no labels, no postage, no marketplace,
  * no Trello mutation, no shipped/cancelled mutation.
@@ -38,26 +36,28 @@ check('rateTotal ranks house by CUSTOMER charge (13), not raw cost (8)', rateTot
 check('rateTotal(normal) = 10', rateTotal(normal) === 10, rateTotal(normal));
 check('rateTotal(legacy) falls back to shipping_amount (9)', rateTotal(legacy) === 9, rateTotal(legacy));
 
-// The card's rule: cheapest-by-customer wins, NOT cheapest-by-raw-cost.
-const winner = [house, normal, legacy].slice().sort((a, b) => rateTotal(a) - rateTotal(b))[0];
-check('cheapest-by-customer-charge wins (legacy 9), house does NOT win despite cheapest raw cost',
-  winner === legacy, { winnerTotal: winner ? rateTotal(winner) : null });
-check('house would have WRONGLY won if ranked by raw cost (8 is the lowest raw)',
-  rateCostTotal(house) === 8 && rateCostTotal(house) < rateTotal(normal), { houseRaw: rateCostTotal(house) });
+// PS-356: cheapest-by-purchase wins Best Rate; customer amount stays separate.
+const winner = [house, normal, legacy].slice().sort((a, b) => rateCostTotal(a) - rateCostTotal(b))[0];
+check('cheapest-by-purchase-cost wins Best Rate (house 8)',
+  winner === house, { winnerCost: winner ? rateCostTotal(winner) : null, winnerCustomer: winner ? rateTotal(winner) : null });
+check('house still carries the higher customer charge separately for C. Shipping',
+  rateCostTotal(house) === 8 && rateTotal(house) === 13, { houseRaw: rateCostTotal(house), houseCustomer: rateTotal(house) });
 
-// Two-rate isolation: house (raw 8 / cust 13) vs normal (10) → normal wins on customer charge.
-const headToHead = [house, normal].slice().sort((a, b) => rateTotal(a) - rateTotal(b))[0];
-check('head-to-head: normal (customer 10) beats house (customer 13) despite house raw 8',
-  headToHead === normal, headToHead ? rateTotal(headToHead) : null);
+// Two-rate isolation: house (raw 8 / cust 13) vs normal (10) → house wins Best Rate by purchase.
+const headToHead = [house, normal].slice().sort((a, b) => rateCostTotal(a) - rateCostTotal(b))[0];
+check('head-to-head: house purchase cost 8 beats normal 10 while customer charge remains 13',
+  headToHead === house, headToHead ? { cost: rateCostTotal(headToHead), customer: rateTotal(headToHead) } : null);
 
 // Pipeline wiring: applyMarkups stamps the explicit customer charge, and selection uses combinedRateTotal.
 const ratesSrc = read('src/services/rates.ts');
 check('applyMarkups stamps customerShippingAmount (explicit customer charge in the real read path)',
   /customerShippingAmount: marked/.test(ratesSrc));
-check('rates.ts rateTotal delegates to the combined comparison owner',
+check('rates.ts rateCostTotal delegates to the combined purchase-cost owner',
+  /function rateCostTotal\(rate: Rate\): number\s*\{\s*return combinedRateCostTotal/.test(ratesSrc));
+check('rates.ts rateTotal still delegates to the combined customer amount owner',
   /function rateTotal\(rate: Rate\): number\s*\{\s*return combinedRateTotal/.test(ratesSrc));
-check('pickBestRate + priced.sort rank via rateTotal',
-  /\.sort\(\(a, b\) => rateTotal\(a\) - rateTotal\(b\)\)/.test(ratesSrc));
+check('pickBestRate + priced.sort rank via rateCostTotal',
+  /rateCostTotal\(a\) - rateCostTotal\(b\)/.test(ratesSrc));
 
 if (failures > 0) {
   console.error(`\nPS-307 customer-charge ranking guard FAILED with ${failures} failure(s).`);

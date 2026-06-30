@@ -142,7 +142,7 @@ check(
 const printQueueSource = readFileSync('src/services/print-queue.ts', 'utf8');
 check(
   'backend queue worker buys via createLabelV2 from the intent payload (order.label)',
-  /createLabelV2\(\{\s*\.\.\.order\.label,/.test(printQueueSource),
+  /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,/.test(printQueueSource),
 );
 const labelsSource = readFileSync('src/services/labels.ts', 'utf8');
 check(

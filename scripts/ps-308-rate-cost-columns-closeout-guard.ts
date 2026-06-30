@@ -150,9 +150,10 @@ check('backend money owner declares separated PS-308 field names and sources',
     /shippingMarginAmount/.test(rateMoney) &&
     /customerRateSource/.test(rateMoney) &&
     /rateCostSource/.test(rateMoney));
-check('combined-rate owner documents Rate Cost is not the ranking basis',
+check('combined-rate owner documents purchase cost as Best Rate basis and customer total as separate',
   /export function rateCostTotal/.test(ratesCombined) &&
-    /Never use this for cheapest ranking/.test(ratesCombined));
+    /PS-356 makes this the official Best Rate pick basis/.test(ratesCombined) &&
+    /C\. Shipping total billed to the customer/.test(ratesCombined));
 check('OrderBestRateDto preserves separated fields',
   /customerRateAmount/.test(orderRateDto) &&
     /rateCostAmount/.test(orderRateDto) &&

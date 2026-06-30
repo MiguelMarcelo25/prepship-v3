@@ -57,11 +57,9 @@ export const TABLE_COLUMNS: TableColumn[] = [
   { key: 'total', label: 'Order Total', width: 85, sort: 'total' },
   { key: 'bestrate', label: 'Best Rate', width: 175, sort: 'bestrate' },
   { key: 'bestRateFinal', label: 'Best Rate Final', width: 110, sort: 'bestRateFinal' },
-  // PS-308: the raw provider Rate Cost, SEPARATED from the customer-facing Best/Selected
-  // Rate. Financial-only by construction (the backend money tuple is null for non-financial
-  // viewers, so the cell renders blank for them). Placed next to Best Rate for at-a-glance
-  // best-vs-cost comparison.
-  { key: 'ratecost', label: 'Rate Cost', width: 90, sort: 'ratecost' },
+  // PS-356: C. Shipping Rate is the backend-owned customer billing amount,
+  // separated from Best Rate (DJR/DRP purchase cost).
+  { key: 'ratecost', label: 'C. Shipping Rate', width: 110, sort: 'ratecost' },
   { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: 'test_carrierCode' },
   { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: 'test_shippingProviderID' },
   { key: 'test_clientID', label: 'Client ID', width: 90, sort: 'test_clientID' },
@@ -85,7 +83,7 @@ export function getVisibleColumns(currentStatus: OrderStatus) {
     hidden.add('bestRateFinal')
   }
   // PS-239: marketplace fee + profit show on Awaiting + Shipped only, not Cancelled.
-  // PS-308: Rate Cost is a rate/financial column — same Cancelled hide.
+  // PS-356: C. Shipping Rate is a rate/financial column — same Cancelled hide.
   if (currentStatus === 'cancelled') { hidden.add('marketplacefee'); hidden.add('profit'); hidden.add('ratecost') }
 
   return TABLE_COLUMNS.filter((column) => !hidden.has(column.key)).map((column) => (
@@ -141,9 +139,9 @@ export function getSortValue(
       return getBestRateBaseCost(order) ?? -1
     case 'bestRateFinal':
       return getBestRateFinalBaseCost(order) ?? -1
-    // PS-308: sort by the backend raw Rate Cost (blanks/non-financial → -1, grouped together).
+    // PS-356: sort by the backend customer billing amount (blanks/non-financial → -1).
     case 'ratecost':
-      return getBackendRowMoney(order)?.rateCostAmount ?? -1
+      return getBackendRowMoney(order)?.customerRateAmount ?? -1
     case 'margin': {
       // PS-178 final part: the margin sort value is the BACKEND money tuple's
       // markupAmount (PS-177) — the FE markup-math fallback is deleted. Rows

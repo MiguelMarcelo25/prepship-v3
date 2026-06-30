@@ -1,5 +1,5 @@
 /**
- * PS-307 guard - backend rate comparison uses customer/marked charge.
+ * PS-307/PS-356 guard - backend preserves customer charge while Best Rate ranks by purchase cost.
  *
  * Offline only: no DB, no network, no providers, no labels, no postage, no
  * marketplace notifications, no queue mutation, and no shipped/cancelled data.
@@ -9,6 +9,7 @@ import { resolveNextBestNonHouseRate } from '../src/lib/next-best-non-house-rate
 import {
   combineCarrierUniverses,
   dedupeBrowseRates,
+  rateCostTotal,
   rateTotal,
   type CombinableRate,
 } from '../src/services/rates-combined';
@@ -68,18 +69,19 @@ const combined = combineCarrierUniverses({
 });
 
 check(
-  'combined best-rate owner ranks by customer charge, not raw/internal cost',
-  combined.cheapest?.service_code === 'ups_ground' &&
-    combined.secondCheapest?.service_code === 'shipp_ups_ground' &&
-    rateTotal(combined.cheapest) === 12 &&
-    rateTotal(combined.secondCheapest) === 14.5,
+  'combined best-rate owner ranks by purchase cost while preserving customer charge',
+  combined.cheapest?.service_code === 'shipp_ups_ground' &&
+    combined.secondCheapest?.service_code === 'ups_ground' &&
+    rateCostTotal(combined.cheapest) === 8.5 &&
+    rateTotal(combined.cheapest) === 14.5 &&
+    rateTotal(combined.secondCheapest) === 12,
   {
     cheapest: combined.cheapest,
     secondCheapest: combined.secondCheapest,
     ranked: combined.rankedEligibleRates.map((rate) => ({
       service: rate.service_code,
       total: rateTotal(rate),
-      raw: rate.shipping_amount?.amount,
+      purchaseCost: rateCostTotal(rate),
       customerShippingAmount: rate.customerShippingAmount,
     })),
   },
@@ -127,8 +129,9 @@ check(
     /directRawShippingCost\(rate, amount\)/.test(ratesTs),
 );
 check(
-  'local rates pickBestRate delegates comparison to combined rateTotal owner',
-  /function rateTotal\(rate: Rate\): number \{\s*return combinedRateTotal\(rate as any\);\s*\}/s.test(ratesTs),
+  'local rates pickBestRate delegates comparison to combined purchase-cost owner',
+  /function rateCostTotal\(rate: Rate\): number \{\s*return combinedRateCostTotal\(rate as any\);\s*\}/s.test(ratesTs) &&
+    /rateCostTotal\(a\) - rateCostTotal\(b\)/.test(ratesTs),
 );
 
 if (failures > 0) {

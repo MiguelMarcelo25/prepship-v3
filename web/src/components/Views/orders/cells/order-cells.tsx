@@ -216,10 +216,9 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
     </span>
   ) : null
 
-  // PS-178 final part: the BACKEND money tuple (PS-177) is the only markup
-  // source — the FE markup-math fallback is deleted. A row without the tuple
-  // (pre-deploy cache edge) degrades to the plain carrier base amount, never
-  // FE-computed markup.
+  // PS-356: Best Rate renders the backend-owned DJR/DRP purchase cost. C. Shipping
+  // Rate renders the customer billing amount in its own column; the FE never swaps
+  // or reconciles those values locally.
   // Operator request (2026-05-12, under `unlock shipped data` override): no
   // per-carrier SVG badge in this cell — the Carrier column already shows it.
   const backendMoney = getBackendRowMoney(displayOrder)
@@ -229,9 +228,9 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       {/* PS-290: pass the backend-owned HUGRAB $100 coverage verdict as the 4th arg so the
           Awaiting Best Rate cell renders the coverage badge (display-only; backend decides). */}
       {backendMoney
-        ? renderRateAmountWithMarkup(backendMoney.markupSource === 'house_account' ? null : backendMoney.baseAmount, backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
+        ? renderRateAmountWithMarkup(null, backendMoney.rateCostAmount ?? backendMoney.baseAmount ?? backendMoney.markedAmount, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
         : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
-      {/* PS-220 (slice 4b): SHIPP house order — the shown amount is the customer_rate billed. */}
+      {/* PS-356: HOUSE remains a backend verdict marker; C. Shipping shows the customer bill. */}
       {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
       {recalculatingSpinner}
       </div>

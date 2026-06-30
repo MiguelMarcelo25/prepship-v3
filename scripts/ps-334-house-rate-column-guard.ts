@@ -279,9 +279,9 @@ check(
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
 check(
-  'Best/Selected Rate house rows do not render Rate Cost as a sub-line',
+  'Best/Selected Rate house rows do not render internal cost as a sub-line',
   /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderRateAmountWithMarkup\(null,\s*shippedBackendMoney\.markedAmount/.test(orderCellsSrc) &&
-    /renderRateAmountWithMarkup\(backendMoney\.markupSource === 'house_account' \? null : backendMoney\.baseAmount,\s*backendMoney\.markedAmount/.test(orderCellsSrc),
+    /renderRateAmountWithMarkup\(null,\s*backendMoney\.rateCostAmount \?\? backendMoney\.baseAmount \?\? backendMoney\.markedAmount/.test(orderCellsSrc),
 );
 
 check(
