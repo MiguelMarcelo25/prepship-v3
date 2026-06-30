@@ -76,6 +76,12 @@ const checks: Check[] = [
       /rateCostAmount|rate_cost_amount/.test(ratesBackfill),
   ),
   ok(
+    'pre-expiry SQL binds cutoff as ISO text, not a JavaScript Date object',
+    /preExpiryCutoffIso\s*=\s*new Date[\s\S]{0,120}\.toISOString\(\)/.test(ratesBackfill) &&
+      /\(nullif\(\$\{orderOverrides\.bestRateJson\}->>'cacheExpiresAt', ''\)\)::timestamptz\s*<=\s*\$\{preExpiryCutoffIso\}::timestamptz/.test(ratesBackfill) &&
+      !/\(nullif\(\$\{orderOverrides\.bestRateJson\}->>'cacheExpiresAt', ''\)\)::timestamptz\s*<=\s*\$\{preExpiryCutoff\}/.test(ratesBackfill),
+  ),
+  ok(
     'scheduler runs the rate backfill as explicit pre-expiry refresh, not manual force-live',
     /startBackfillBestRates\(\{\s*mode:\s*['"]preexpiry_refresh['"]\s*\}\)/.test(syncScheduler),
   ),

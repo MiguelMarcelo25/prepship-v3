@@ -456,14 +456,14 @@ async function runBackfill(
     const hardLimit = targetedIds
       ? Math.max(1, Math.min(targetedIds.length, 10000))
       : Math.max(1, Math.min(opts.limit ?? 5000, 10000));
-    const preExpiryCutoff = new Date(Date.now() + RATE_PREEXPIRY_REFRESH_LEAD_MS);
+    const preExpiryCutoffIso = new Date(Date.now() + RATE_PREEXPIRY_REFRESH_LEAD_MS).toISOString();
     const preExpiryRefreshPredicate = sql`(
       ${orderOverrides.bestRateJson} is not null
       and (
         case
           when nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', '') is null then true
           when nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-            then (nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', ''))::timestamptz <= ${preExpiryCutoff}
+            then (nullif(${orderOverrides.bestRateJson}->>'cacheExpiresAt', ''))::timestamptz <= ${preExpiryCutoffIso}::timestamptz
           else true
         end
         or coalesce(${orderOverrides.bestRateJson}->>'isComplete', 'false') <> 'true'
