@@ -57,6 +57,7 @@ import {
   getSelectedRateBaseCost,
   getShipAccountLabelById,
 } from './orders-row-display'
+import { resolveAwaitingBestRatePriceDisplay } from './orders/best-rate-price-display'
 import { getActiveItems, getAddressBlock, getMergedItems, getShipTo } from './orders-items'
 import {
   copyText,
@@ -281,6 +282,18 @@ export function OrdersDetailSidePanel({
   const panelTestRateDetail = panelTestRate
     ? `${toStringValue(panelTestRate.carrierNickname) ?? formatCarrierCode(toStringValue(panelTestRate.carrierCode))} · ${toStringValue(panelTestRate.serviceName) ?? formatServiceCode(toStringValue(panelTestRate.serviceCode))}`
     : `${TEST_SHIPPING_ACCOUNT_LABEL} · PrepShip Test Standard`
+  const sidePanelBackendMoney = getBackendRowMoney(panelDisplayOrder)
+  const sidePanelBestRatePriceDisplay = sidePanelBackendMoney
+    ? resolveAwaitingBestRatePriceDisplay({
+      markupSource: sidePanelBackendMoney.markupSource,
+      rateCostAmount: sidePanelBackendMoney.rateCostAmount,
+      baseAmount: sidePanelBackendMoney.baseAmount,
+      customerRateAmount: sidePanelBackendMoney.customerRateAmount,
+      markedAmount: sidePanelBackendMoney.markedAmount,
+      insuranceAddOn: sidePanelBackendMoney.insuranceAddOn,
+      fallbackAmount: getBestRateBaseCost(panelDisplayOrder),
+    })
+    : null
   const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
   const trackingNumber = toStringValue(panelOrder.label?.trackingNumber)
   const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder) && !getIsMissingShipmentSync(panelOrder)
@@ -879,14 +892,10 @@ export function OrdersDetailSidePanel({
                     </div>
                   ) : panelDisplayOrder.bestRate ? (
                     <>
-                      {/* PS-277 (slice 2): the side panel reads the PERSISTED SOT FIRST — the SAME
-                          getBackendRowMoney(...).markedAmount the BEST RATE column reads — so panel == column
-                          (incl. markup). refreshPanelBestRate persists every live result to the SOT
-                          (persistAppliedRateForOrder), so this is always fresh; the ephemeral preview below
-                          is only a transient fallback for the brief window before the SOT row refetches.
-                          PS-178: BACKEND money tuple only — no FE markup math. */}
+                      {/* PS-357: mirror the Best Rate column display policy over the backend money tuple.
+                          HOUSE shows purchase cost; C. Shipping owns the customer billing amount. */}
                       <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney(getBackendRowMoney(panelDisplayOrder)?.markedAmount ?? getBestRateBaseCost(panelDisplayOrder))}
+                        {formatMoney(sidePanelBestRatePriceDisplay?.primaryAmount ?? getBestRateBaseCost(panelDisplayOrder))}
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
                         {panelBestRateAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelDisplayOrder))}

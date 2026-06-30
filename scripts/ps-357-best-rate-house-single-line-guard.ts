@@ -89,6 +89,7 @@ check(
 );
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
+const sidePanelSrc = read('web/src/components/Views/OrdersDetailSidePanel.tsx');
 
 check(
   'Best Rate cell delegates the display tuple decision to the focused display policy',
@@ -100,6 +101,13 @@ check(
 check(
   'Best Rate cell renders HOUSE under the price instead of beside a two-rate tuple',
   /bestRatePriceDisplay\??\.showHouseBadge \? renderHouseBadge\(\) : null/.test(orderCellsSrc),
+);
+
+check(
+  'detail panel rate display delegates to the same focused display policy as the Best Rate cell',
+  sidePanelSrc.includes('resolveAwaitingBestRatePriceDisplay') &&
+    /sidePanelBestRatePriceDisplay\??\.primaryAmount/.test(sidePanelSrc) &&
+    !/getBackendRowMoney\(panelDisplayOrder\)\?\.markedAmount\s*\?\?\s*getBestRateBaseCost/.test(sidePanelSrc),
 );
 
 if (failures > 0) {
