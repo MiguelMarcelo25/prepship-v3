@@ -52,6 +52,16 @@ check(
   true,
 );
 check(
+  'backend final-display verdict can show a proven rate with missing legacy eligibility metadata',
+  savedBestRateCanDisplayForCurrentRequest({
+    ...finalDisplayInput,
+    eligibilityVersion: null,
+    backendWorkflowCanDisplayFinalRate: true,
+    backendSavedRateDisplay: 'fresh',
+  }),
+  true,
+);
+check(
   'backend saved-unproven verdict is not displayable',
   savedBestRateCanDisplayForCurrentRequest({
     ...finalDisplayInput,

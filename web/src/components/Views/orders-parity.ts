@@ -920,6 +920,10 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
     input.backendSavedRateDisplay !== 'fresh' &&
     input.backendSavedRateDisplay !== 'stale'
   ) return false
+  // Backend owns the final awaiting-rate display verdict. When the API has already
+  // classified the saved rate as final/displayable, do not re-veto it in the UI with
+  // older metadata fields such as eligibilityVersion; those are backend inputs.
+  if (input.backendWorkflowCanDisplayFinalRate === true) return true
   if (
     input.requireEligibilityVersion !== false &&
     input.requiredEligibilityVersion &&
@@ -929,7 +933,6 @@ export function savedBestRateCanDisplayForCurrentRequest(input: {
   }
   if (!input.hasBackendIssuedRateProof && input.matchType !== 'test') return false
   if (input.isComplete !== true) return false
-  if (input.backendWorkflowCanDisplayFinalRate === true) return true
   const expiresAt = input.cacheExpiresAt
   if (!expiresAt) return false
   const expiresMs = Date.parse(expiresAt)
