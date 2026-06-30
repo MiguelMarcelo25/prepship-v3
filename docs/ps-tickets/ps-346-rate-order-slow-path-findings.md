@@ -118,6 +118,24 @@ New proof:
   partial snapshots expose cache-first rates, do not finish the workflow, and
   are replaced by the final live result.
 
+## 2026-06-30 Print Queue Volume Evidence Slice
+
+The Print Queue high-volume slice is still behind the lockdown gate for any
+implementation that changes `src/services/print-queue.ts` or
+`src/routes/print-queue.ts`. The current safe work is read-only certification:
+active backend queue-send jobs are per-run and expose full in-memory
+`results`, while durable fallback is intentionally capped to `resultSamples`.
+
+Evidence lives in `docs/ps-tickets/ps-346-print-queue-volume-evidence.md`.
+The guard proves selected-run totals are not cumulative, active status returns
+full current-run results, and the remaining long-batch durable-proof gap is
+documented instead of claimed complete.
+
+New proof:
+
+- `npm run test:ps-346-print-queue-volume-evidence -- --no-color` - proves the
+  current safe queue-volume boundary and the remaining locked blocker.
+
 ## Safety
 
 No labels, postage, marketplace notifications, billing, inventory, production

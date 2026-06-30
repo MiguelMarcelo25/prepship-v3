@@ -506,6 +506,7 @@
     "test:ps-346-rate-order-slow-paths": "tsx scripts/ps-346-rate-order-slow-paths-guard.ts",
     "test:ps-346-orders-refetch-coordinator": "tsx scripts/ps-346-orders-refetch-coordinator-behavior.ts",
     "test:ps-346-rate-browse-partial-workflow": "tsx scripts/ps-346-rate-browse-partial-workflow-behavior.ts",
+    "test:ps-346-print-queue-volume-evidence": "tsx scripts/ps-346-print-queue-volume-evidence-guard.ts",
     "test:ps-352-shipping-workflow-sot-map": "tsx scripts/ps-352-shipping-workflow-sot-map-guard.ts",
     "test:ps-356-best-rate-c-shipping-sot": "tsx scripts/ps-356-best-rate-c-shipping-sot-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",

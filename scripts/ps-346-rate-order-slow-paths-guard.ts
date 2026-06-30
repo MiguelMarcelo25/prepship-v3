@@ -29,6 +29,7 @@ function fileText(path: string): string {
 const packageJson = read('package.json');
 const ledger = read('docs/ps-tickets/ps-ledger.md');
 const findingsPath = 'docs/ps-tickets/ps-346-rate-order-slow-path-findings.md';
+const queueVolumeEvidencePath = 'docs/ps-tickets/ps-346-print-queue-volume-evidence.md';
 const planPath = 'docs/superpowers/plans/2026-06-29-ps-346-rate-order-slow-paths.md';
 const helperPath = 'src/services/settings-json.ts';
 const workflowTypesPath = 'src/services/rate-browse-workflow-types.ts';
@@ -42,7 +43,9 @@ const partialDisplayPath = 'web/src/components/rate-browser-partial-result.ts';
 const ordersRefetchCoordinatorPath = 'web/src/hooks/orders-refetch-coordinator.ts';
 const ordersRefetchBehaviorPath = 'scripts/ps-346-orders-refetch-coordinator-behavior.ts';
 const partialWorkflowBehaviorPath = 'scripts/ps-346-rate-browse-partial-workflow-behavior.ts';
+const queueVolumeEvidenceGuardPath = 'scripts/ps-346-print-queue-volume-evidence-guard.ts';
 const findings = fileText(findingsPath);
+const queueVolumeEvidence = fileText(queueVolumeEvidencePath);
 const plan = fileText(planPath);
 const helper = fileText(helperPath);
 const workflowTypes = fileText(workflowTypesPath);
@@ -56,6 +59,7 @@ const partialDisplay = fileText(partialDisplayPath);
 const ordersRefetchCoordinator = fileText(ordersRefetchCoordinatorPath);
 const ordersRefetchBehavior = fileText(ordersRefetchBehaviorPath);
 const partialWorkflowBehavior = fileText(partialWorkflowBehaviorPath);
+const queueVolumeEvidenceGuard = fileText(queueVolumeEvidenceGuardPath);
 const ratesRoute = read('src/routes/rates.ts');
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 const rateBrowserModal = read('web/src/components/RateBrowserModal.tsx');
@@ -77,6 +81,11 @@ check(
 );
 
 check(
+  'package wires PS-346 print queue volume evidence guard',
+  packageJson.includes('"test:ps-346-print-queue-volume-evidence": "tsx scripts/ps-346-print-queue-volume-evidence-guard.ts"'),
+);
+
+check(
   'PS-346 findings doc exists and records root-cause findings, baseline guards, and safety',
   existsSync(findingsPath) &&
     findings.includes('## Root-Cause Findings') &&
@@ -92,6 +101,16 @@ check(
     plan.includes('## Lockdown Gate') &&
     plan.includes('unlock shipped data') &&
     plan.includes('Print Queue work in this plan is limited to docs, guards, and read-only evidence outside locked files'),
+);
+
+check(
+  'PS-346 print queue volume evidence records the current safe boundary and remaining locked blocker',
+  existsSync(queueVolumeEvidencePath) &&
+    queueVolumeEvidence.includes('## Root-Cause Findings') &&
+    queueVolumeEvidence.includes('## Current Safe Proof') &&
+    queueVolumeEvidence.includes('## Remaining Blocker') &&
+    queueVolumeEvidence.includes('durable fallback is capped to the latest 10 result samples') &&
+    queueVolumeEvidence.includes('unlock shipped data'),
 );
 
 check(
@@ -349,6 +368,14 @@ check(
     /cached preview must be persisted as a partial workflow snapshot/.test(partialWorkflowBehavior) &&
     /partial snapshots must not mark the workflow final/.test(partialWorkflowBehavior) &&
     /final live result replaces the partial request key/.test(partialWorkflowBehavior),
+);
+
+check(
+  'PS-346 print queue volume evidence guard pins selected-run totals and active-job per-order proof',
+  existsSync(queueVolumeEvidenceGuardPath) &&
+    /backend active batch-send status returns the full in-memory per-order results for the current run/.test(queueVolumeEvidenceGuard) &&
+    /OrdersView polls each backend queue-send job with the selected run total, not a cumulative queue count/.test(queueVolumeEvidenceGuard) &&
+    /durable fallback remains capped and must not be treated as full per-order proof for long batches/.test(queueVolumeEvidenceGuard),
 );
 
 if (failures > 0) {
