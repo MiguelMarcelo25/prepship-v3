@@ -1,6 +1,6 @@
 /**
- * PS-356 guard - Best Rate ranks/displays the marked customer rate; internal
- * cost remains the separated bottom/admin Rate Cost.
+ * PS-356 guard - backend preserves the selected Best Rate purchase cost and
+ * customer-facing C. Shipping Rate as separated money fields.
  *
  * Offline only: no DB, no providers, no labels, no postage, no marketplace
  * notifications, no inventory, and no production order/shipment edits.
@@ -130,7 +130,7 @@ const houseMoney = buildOrderRowMoneyDisplay({
 });
 
 check(
-  'when customer-margin mode is on, Best Rate display is customer amount and bottom cost is internal amount',
+  'when customer-margin mode is on, backend separates customer rate and internal purchase cost',
   houseMoney?.rateCostAmount === 5 &&
     houseMoney.customerRateAmount === 8 &&
     houseMoney.shippingMarginAmount === 3,
@@ -228,10 +228,10 @@ check(
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
 check(
-  'Best Rate cell renders backend customer amount on top and internal cost as bottom/base',
-  /const backendBestRateCost = backendMoney\?\.rateCostAmount \?\? backendMoney\?\.baseAmount \?\? null/.test(orderCellsSrc) &&
-    /const backendBestRateCustomer =[\s\S]*backendMoney\?\.customerRateAmount \?\? backendMoney\?\.markedAmount \?\? backendBestRateCost/.test(orderCellsSrc) &&
-    /renderRateAmountWithMarkup\(backendBestRateCost,\s*backendBestRateCustomer/.test(orderCellsSrc),
+  'Best Rate cell delegates separated tuple display to focused presentation policy',
+  orderCellsSrc.includes('resolveAwaitingBestRatePriceDisplay') &&
+    /renderRateAmountWithMarkup\(\s*bestRatePriceDisplay\.baseAmount,\s*bestRatePriceDisplay\.primaryAmount/.test(orderCellsSrc) &&
+    /bestRatePriceDisplay\.showHouseBadge \? null : getBestRateInsuranceCoverage/.test(orderCellsSrc),
 );
 
 if (failures > 0) {

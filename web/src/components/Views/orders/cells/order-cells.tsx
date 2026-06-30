@@ -59,6 +59,7 @@ import {
 } from '../../orders-display-state'
 import { formatServiceCode, truncate } from '../../orders-formatting'
 import { TEST_SHIPPING_ACCOUNT_LABEL } from '../test-mock-rate-normalizer'
+import { resolveAwaitingBestRatePriceDisplay } from '../best-rate-price-display'
 
 /**
  * The component-scoped closures + state the four leaf renderers read in
@@ -216,26 +217,39 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
     </span>
   ) : null
 
-  // PS-356: Best Rate renders the backend-owned marked/customer amount on top
-  // and the separated internal Rate Cost as the lower/base amount.
+  // PS-357: Best Rate display is presentation-only over the backend money tuple.
+  // HOUSE rows show DJR purchase cost once; marked carrier rows may show a breakdown.
   // Operator request (2026-05-12, under `unlock shipped data` override): no
   // per-carrier SVG badge in this cell — the Carrier column already shows it.
   const backendMoney = getBackendRowMoney(displayOrder)
-  const backendBestRateCost = backendMoney?.rateCostAmount ?? backendMoney?.baseAmount ?? null
-  const backendBestRateCustomer =
-    backendMoney?.customerRateAmount ?? backendMoney?.markedAmount ?? backendBestRateCost
+  const bestRatePriceDisplay = backendMoney
+    ? resolveAwaitingBestRatePriceDisplay({
+      markupSource: backendMoney.markupSource,
+      rateCostAmount: backendMoney.rateCostAmount,
+      baseAmount: backendMoney.baseAmount,
+      customerRateAmount: backendMoney.customerRateAmount,
+      markedAmount: backendMoney.markedAmount,
+      insuranceAddOn: backendMoney.insuranceAddOn,
+      fallbackAmount: bestRateBaseCost,
+    })
+    : null
   return (
     <div data-rate-state="ready" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       {/* PS-290: pass the backend-owned HUGRAB $100 coverage verdict as the 4th arg so the
           Awaiting Best Rate cell renders the coverage badge (display-only; backend decides). */}
-      {backendMoney
-        ? renderRateAmountWithMarkup(backendBestRateCost, backendBestRateCustomer, backendMoney.insuranceAddOn, getBestRateInsuranceCoverage(displayOrder))
+      {bestRatePriceDisplay
+        ? renderRateAmountWithMarkup(
+          bestRatePriceDisplay.baseAmount,
+          bestRatePriceDisplay.primaryAmount,
+          bestRatePriceDisplay.insuranceAddOn,
+          bestRatePriceDisplay.showHouseBadge ? null : getBestRateInsuranceCoverage(displayOrder),
+        )
         : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
-      {/* PS-356: HOUSE remains a backend verdict marker on customer/marked Best Rate rows. */}
-      {backendMoney?.markupSource === 'house_account' ? renderHouseBadge() : null}
       {recalculatingSpinner}
       </div>
+      {/* PS-357: HOUSE remains a backend verdict marker, but sits under the single purchase-cost rate. */}
+      {bestRatePriceDisplay?.showHouseBadge ? renderHouseBadge() : null}
     </div>
   )
 }

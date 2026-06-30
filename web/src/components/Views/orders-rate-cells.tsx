@@ -25,8 +25,8 @@ export function renderBestRateFinalCell(order: OrderSummaryDto) {
     : <span data-best-rate-final="missing" style={{ color: 'var(--text3)', fontSize: 12 }}>-</span>
 }
 
-// PS-356: Best Rate and C. Shipping Rate both consume backend customer money;
-// internal carrier cost remains separated as rateCostAmount for breakdown/admin display.
+// PS-356/PS-357: C. Shipping Rate consumes backend customer money. Best Rate display
+// policy lives in the Best Rate cell and also reads the same backend tuple.
 export function renderRateCostCell(order: OrderSummaryDto) {
   const customerShippingRate = getBackendRowMoney(order)?.customerRateAmount
   return customerShippingRate != null

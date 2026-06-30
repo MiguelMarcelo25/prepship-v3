@@ -279,11 +279,11 @@ check(
 
 const orderCellsSrc = read('web/src/components/Views/orders/cells/order-cells.tsx');
 check(
-  'Awaiting Best Rate renders customer amount on top and internal cost as the lower/base amount',
+  'Awaiting Best Rate delegates house/marked display to the focused presentation policy',
   /shippedBackendMoney\.markupSource === 'house_account'[\s\S]*?renderRateAmountWithMarkup\(null,\s*shippedBackendMoney\.markedAmount/.test(orderCellsSrc) &&
-    /const backendBestRateCost = backendMoney\?\.rateCostAmount \?\? backendMoney\?\.baseAmount \?\? null/.test(orderCellsSrc) &&
-    /const backendBestRateCustomer =[\s\S]*backendMoney\?\.customerRateAmount \?\? backendMoney\?\.markedAmount \?\? backendBestRateCost/.test(orderCellsSrc) &&
-    /renderRateAmountWithMarkup\(backendBestRateCost,\s*backendBestRateCustomer/.test(orderCellsSrc),
+    orderCellsSrc.includes('resolveAwaitingBestRatePriceDisplay') &&
+    /renderRateAmountWithMarkup\(\s*bestRatePriceDisplay\.baseAmount,\s*bestRatePriceDisplay\.primaryAmount/.test(orderCellsSrc) &&
+    /bestRatePriceDisplay\??\.showHouseBadge \? renderHouseBadge\(\) : null/.test(orderCellsSrc),
 );
 
 check(

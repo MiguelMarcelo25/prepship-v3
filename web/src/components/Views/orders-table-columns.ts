@@ -57,8 +57,8 @@ export const TABLE_COLUMNS: TableColumn[] = [
   { key: 'total', label: 'Order Total', width: 85, sort: 'total' },
   { key: 'bestrate', label: 'Best Rate', width: 175, sort: 'bestrate' },
   { key: 'bestRateFinal', label: 'Best Rate Final', width: 110, sort: 'bestRateFinal' },
-  // PS-356: C. Shipping Rate is the backend-owned customer billing amount;
-  // Best Rate also ranks/displays by customer amount, with internal cost kept separate.
+  // PS-356/PS-357: C. Shipping Rate is the backend-owned customer billing amount;
+  // Best Rate renders the backend purchase/display policy without recomputing money.
   { key: 'ratecost', label: 'C. Shipping Rate', width: 110, sort: 'ratecost' },
   { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: 'test_carrierCode' },
   { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: 'test_shippingProviderID' },
