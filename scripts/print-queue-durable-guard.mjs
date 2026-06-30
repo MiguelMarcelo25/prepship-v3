@@ -18,6 +18,7 @@ function assert(condition, message) {
 
 const serviceSource = read('src/services/print-queue.ts');
 const routeSource = read('src/routes/print-queue.ts');
+const snapshotSource = read('src/services/print-queue/queue-send-snapshot.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -26,7 +27,8 @@ assert(
 );
 
 assert(
-  serviceSource.includes("PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run'"),
+  snapshotSource.includes("PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run'") &&
+    serviceSource.includes("} from './print-queue/queue-send-snapshot'"),
   'print queue batch-send uses durable settings key',
 );
 
@@ -40,10 +42,17 @@ assert(
   'print queue persists batch-send job snapshots',
 );
 assert(
-  serviceSource.includes("PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.'") &&
-    serviceSource.includes('queueSendJobStatusKey(jobId)') &&
+  snapshotSource.includes("PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.'") &&
+    snapshotSource.includes('queueSendJobStatusKey(jobId: string)') &&
     serviceSource.includes('getQueueSendJobSnapshot'),
   'print queue persists readable per-job batch-send snapshots',
+);
+assert(
+  snapshotSource.includes('results: QueueSendResultSnapshot[]') &&
+    snapshotSource.includes('const results = job.results.map(toQueueSendResultSnapshot)') &&
+    snapshotSource.includes('results,') &&
+    snapshotSource.includes('resultSamples: results.slice(-10)'),
+  'print queue durable snapshots preserve full results plus compact samples',
 );
 assert(
   serviceSource.includes('PrintQueueDurableStatusError') &&
@@ -105,12 +114,19 @@ assert(
     routeSource.includes('deriveQueueSendSnapshotStatus') &&
     routeSource.includes('status: durableStatus.status') &&
     routeSource.includes('stale_reason: durableStatus.staleReason') &&
-    routeSource.includes('results: durableJob.resultSamples'),
-  'batch-send status route must derive a safe durable snapshot fallback when the in-memory job is gone',
+    routeSource.includes('const durableResults = queueSendSnapshotResults(durableJob)') &&
+    routeSource.includes('results: durableResults') &&
+    routeSource.includes('result_samples: durableJob.resultSamples'),
+  'batch-send status route must derive safe durable status and return full durable results when the in-memory job is gone',
 );
 
 assert(
   packageJson.scripts?.['test:print-queue-durable'] ===
     'node scripts/print-queue-durable-guard.mjs',
   'package exposes print queue durable guard',
+);
+assert(
+  packageJson.scripts?.['test:ps-346-print-queue-durable-full-results'] ===
+    'tsx scripts/ps-346-print-queue-durable-full-results-guard.ts',
+  'package exposes PS-346 full durable queue result guard',
 );

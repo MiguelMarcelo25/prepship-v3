@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+﻿import { randomUUID } from 'node:crypto';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
@@ -28,14 +28,34 @@ import {
 } from './print-queue-identity';
 // PS-256 (restart-safe print-queue merged PDF): durable side-store for the immutable merged PDF
 // artifact so the view/download/signed-url routes survive a server restart. Env-gated default OFF
-// (DURABLE_PRINT_QUEUE_PDF) — the OFF path is a true no-op, so existing behavior is unchanged.
+// (DURABLE_PRINT_QUEUE_PDF) â€” the OFF path is a true no-op, so existing behavior is unchanged.
 import {
   persistMergedPdf,
   getMergedPdfBase64,
   cleanupOldMergedPdfs,
 } from './print-queue-pdf-store';
-import { isQueueSendActiveStatus, type QueueSendStatusName } from './print-queue/queue-send-status';
+import { type QueueSendStatusName } from './print-queue/queue-send-status';
 import { setJsonSettings } from './settings-json';
+// Per user override unlock shipped data on 2026-06-30: durable batch-send
+// snapshots now delegate to a focused backend module that preserves every
+// per-order result, so long queue runs remain auditable after worker fallback.
+import {
+  PRINT_QUEUE_SEND_STATUS_KEY,
+  queueSendJobStatusKey,
+  queueSendSnapshotResults,
+  toQueueSendSnapshot,
+  type QueueSendJobSnapshot,
+} from './print-queue/queue-send-snapshot';
+export {
+  PRINT_QUEUE_SEND_STATUS_KEY,
+  queueSendJobStatusKey,
+  queueSendSnapshotResults,
+  toQueueSendSnapshot,
+} from './print-queue/queue-send-snapshot';
+export type {
+  QueueSendJobSnapshot,
+  QueueSendResultSnapshot,
+} from './print-queue/queue-send-snapshot';
 
 // PS-138: the pure PDF-rendering helpers live in ./print-queue-pdf. runMergeJob + the staying
 // recipient/DB loaders import them here; the external surface is re-exported so the 8 guard/cert
@@ -93,12 +113,12 @@ export type MergeJob = {
   errorMessage?: string;
   labelErrors?: string[];
   // PS-194: the entries that ACTUALLY merged into the batch PDF. Previously
-  // computed inside runMergeJob and discarded after the count — so the FE's
+  // computed inside runMergeJob and discarded after the count â€” so the FE's
   // Confirm-Printed gate ran on a session-only Set that a page refresh wiped.
   // Persisted on the job + durable snapshot and returned on the status DTO so
   // the gate is backend truth.
   successfulEntryIds: string[];
-  // PS-195: every entry this merge covers — clearQueue refuses to delete an
+  // PS-195: every entry this merge covers â€” clearQueue refuses to delete an
   // entry that sits inside a pending/running merge job.
   entryIds: string[];
   createdAt: number;
@@ -140,7 +160,7 @@ export type QueueSendJobResult = {
   trackingNumber?: string | null;
   error?: string;
   // PS-191: backend-owned retry eligibility on purchase failures (structural
-  // proof-error classification — classifyLabelPurchaseRetry). The FE prompts
+  // proof-error classification â€” classifyLabelPurchaseRetry). The FE prompts
   // a re-rate on eligible failures; it never auto-repurchases.
   retryEligible?: boolean;
   retryReason?: string | null;
@@ -165,47 +185,7 @@ export type QueueSendJob = {
   errorMessage?: string;
 };
 
-export const PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run';
 export const PRINT_QUEUE_MERGE_STATUS_KEY = 'print_queue.pdf_merge.last_run';
-const PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.';
-
-type QueueSendResultSnapshot = {
-  orderId: number;
-  success: boolean;
-  queueEntryId?: string;
-  alreadyQueued?: boolean;
-  trackingNumber?: string | null;
-  error?: string;
-  // PS-191: backend-owned retry eligibility on purchase failures (derived
-  // structurally from the proof-error shape — see classifyLabelPurchaseRetry).
-  // The FE renders these; it never regex-parses error text, and a retryable
-  // failure only PROMPTS the operator — nothing auto-repurchases.
-  retryEligible?: boolean;
-  retryReason?: string | null;
-  timings?: QueueSendTimingBreakdown;
-};
-
-export type QueueSendJobSnapshot = {
-  version: 1;
-  durableKey: typeof PRINT_QUEUE_SEND_STATUS_KEY;
-  jobId: string;
-  status: QueueSendJob['status'];
-  active: boolean;
-  clientIds: number[];
-  progress: number;
-  total: number;
-  current: number;
-  queued: number;
-  failed: number;
-  message: string;
-  clientId: number | null;
-  queuedEntryIds: string[];
-  errorMessage: string | null;
-  resultSamples: QueueSendResultSnapshot[];
-  createdAt: string;
-  updatedAt: string;
-  persistedAt: string;
-};
 
 export type MergeJobSnapshot = {
   version: 1;
@@ -222,7 +202,7 @@ export type MergeJobSnapshot = {
   errorMessage: string | null;
   labelErrors: string[];
   // PS-194: optional for back-compat with snapshots persisted before the
-  // field existed — readers default to [].
+  // field existed â€” readers default to [].
   successfulEntryIds?: string[];
   createdAt: string;
   persistedAt: string;
@@ -233,10 +213,6 @@ export type PrintQueueListScope = {
   scopeStoreIds?: number[];
   scopeRestricted?: boolean;
 };
-
-function queueSendJobStatusKey(jobId: string): string {
-  return `${PRINT_QUEUE_SEND_JOB_STATUS_PREFIX}${jobId}`;
-}
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
@@ -342,41 +318,6 @@ function collectInvalidLabelErrors(entries: PrintQueueEntry[]): string[] {
     }
   }
   return errors;
-}
-
-function toQueueSendSnapshot(job: QueueSendJob): QueueSendJobSnapshot {
-  return {
-    version: 1,
-    durableKey: PRINT_QUEUE_SEND_STATUS_KEY,
-    jobId: job.jobId,
-    status: job.status,
-    active: isQueueSendActiveStatus(job.status),
-    clientIds: [...job.clientIds],
-    progress: job.progress,
-    total: job.total,
-    current: job.current,
-    queued: job.queued,
-    failed: job.failed,
-    message: job.message,
-    clientId: job.clientId ?? null,
-    queuedEntryIds: [...job.queuedEntryIds],
-    errorMessage: job.errorMessage ?? null,
-    resultSamples: job.results.slice(-10).map((result) => ({
-      orderId: result.orderId,
-      success: result.success,
-      queueEntryId: result.queueEntryId,
-      alreadyQueued: result.alreadyQueued,
-      trackingNumber: result.trackingNumber ?? null,
-      error: result.error,
-      // PS-191: retry verdict survives into the durable snapshot too.
-      retryEligible: result.retryEligible,
-      retryReason: result.retryReason ?? null,
-      timings: result.timings,
-    })),
-    createdAt: new Date(job.createdAt).toISOString(),
-    updatedAt: new Date(job.updatedAt).toISOString(),
-    persistedAt: new Date().toISOString(),
-  };
 }
 
 function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
@@ -514,7 +455,7 @@ function cleanOldJobs() {
   for (const [id, job] of queueSendJobs.entries()) {
     if (job.createdAt < cutoff) queueSendJobs.delete(id);
   }
-  // Per user override unlock shipped data on 2026-06-16: PS-256 — prune old rows from the durable
+  // Per user override unlock shipped data on 2026-06-16: PS-256 â€” prune old rows from the durable
   // merged-PDF side-store (the NEW print_queue_merged_pdfs table only). DELETEs nothing from
   // orders/shipments; best-effort + env-gated default OFF.
   void cleanupOldMergedPdfs(DURABLE_PDF_RETENTION_MS);
@@ -581,18 +522,18 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
   if (!row) return null;
   if (row.labelUrl) return normalizePrintQueueLabelUrl(row.labelUrl);
 
-  // PS-288 — the local label_url went NULL (shipment-sync never wrote it; ~72% of synced shipped
+  // PS-288 â€” the local label_url went NULL (shipment-sync never wrote it; ~72% of synced shipped
   // shipments, so "Send to Queue" greys out even though the label was already purchased). Recover the
-  // EXISTING ShipStation label by tracking number, then label_id — a READ of /v2/labels, never a new
+  // EXISTING ShipStation label by tracking number, then label_id â€” a READ of /v2/labels, never a new
   // postage purchase. No match => return null (no guess).
   const recoveryKey = { trackingNumber: row.trackingNumber, labelShipmentId: row.labelShipmentId };
   let recovered = matchRecoverableLabel(await ssListRecentLabels(), recoveryKey);
 
-  // PS-288 (continuation) — the label may have been bought on the SECOND ShipStation account
-  // (the KFG account — env SHIPSTATION_KFG_API_KEY_V2), which the PRIMARY account's recent labels
+  // PS-288 (continuation) â€” the label may have been bought on the SECOND ShipStation account
+  // (the KFG account â€” env SHIPSTATION_KFG_API_KEY_V2), which the PRIMARY account's recent labels
   // never list. When the primary set had no match, ALSO read the second account's recent labels and
   // re-run the SAME exact-match matchRecoverableLabel (tracking, then label_id), so a second
-  // account can never produce a cross-account false positive. Still a READ of /v2/labels — never a
+  // account can never produce a cross-account false positive. Still a READ of /v2/labels â€” never a
   // new postage purchase. No second account configured (or no match there) => null (no guess).
   if (!recovered) {
     const secondaryKey = resolveSecondaryShipstationLabelKey(process.env);
@@ -601,12 +542,12 @@ async function findExistingQueueableLabelForOrder(orderId: number): Promise<stri
     }
   }
   if (!recovered?.labelUrl) return null;
-  // Per user override unlock shipped data on 2026-06-18: PS-288 — backfill ONLY the recovered
+  // Per user override unlock shipped data on 2026-06-18: PS-288 â€” backfill ONLY the recovered
   // label_url + the ALREADY-purchased label's OWN label_format (from /v2/labels) onto this existing
   // (non-voided) shipment row; only fall back to the row's stored format (then 'pdf') when the
   // recovered label didn't carry one. No other shipped/cancelled column is written, no postage is
   // bought, no shipment is created/voided. This is the documented label_url sync gap (recoverable
-  // via tracking/label_id) — the format source is now the real label, not the stale local default.
+  // via tracking/label_id) â€” the format source is now the real label, not the stale local default.
   await db
     .update(shipments)
     .set({ labelUrl: recovered.labelUrl, labelFormat: recovered.labelFormat ?? row.labelFormat ?? 'pdf' })
@@ -798,12 +739,12 @@ async function repairMissingConfirmationForQueuedLabel(orderId: number | string)
   if (!Number.isInteger(parsedOrderId) || parsedOrderId <= 0) return;
   try {
     // Per user override unlock shipped data on 2026-06-23: queueing an existing shipped label
-    // repairs only the missing confirmation lifecycle — it never creates labels, buys postage, or
+    // repairs only the missing confirmation lifecycle â€” it never creates labels, buys postage, or
     // marks printed. (Continues the 2026-06-01 override that introduced this repair.)
     //
     // PS-perf: the lifecycle now ENQUEUES the durable outbox row but no longer DISPATCHES it
     // synchronously (processNow:false), so a batch Send-to-Queue no longer pays a per-order marketplace
-    // round-trip on the hot path. Safety: the durable row is written regardless — outbox.ts enqueues
+    // round-trip on the hot path. Safety: the durable row is written regardless â€” outbox.ts enqueues
     // BEFORE the processNow check, so no confirmation is ever dropped. We then kick a fire-and-forget
     // drain so the common case still confirms sub-second; the 60s outbox scheduler and
     // enqueueMissingShipmentConfirmations re-enqueue are the backstops if this process exits first.
@@ -851,7 +792,7 @@ async function processQueueSendOrder(
     } else {
       const labelInput = order.label;
       try {
-        // PS-233: the print-queue worker is a TRUSTED internal caller — the
+        // PS-233: the print-queue worker is a TRUSTED internal caller â€” the
         // operator's scope was already enforced when the entry was queued, and
         // the queue routes are gated by print_queue:write (portal roles can't
         // reach them). GLOBAL_SCOPE = no per-resource restriction here.
@@ -936,7 +877,7 @@ async function processQueueSendOrder(
   };
 }
 
-// ─── CRUD ─────────────────────────────────────────────────────────────
+// â”€â”€â”€ CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function listQueue(
   clientId?: number,
@@ -991,8 +932,8 @@ export async function addToQueue(
   const labelUrl = normalizePrintQueueLabelUrl(input.labelUrl);
 
   // PS-177 (Phase 5): the queue SKU identity is backend-derivable. When the
-  // caller sent no real identity — absent, or the degraded ORDER:/order-<id>
-  // fallback identifier-only callers use — rebuild it from the order's items
+  // caller sent no real identity â€” absent, or the degraded ORDER:/order-<id>
+  // fallback identifier-only callers use â€” rebuild it from the order's items
   // (the SAME collapse/combo-key rule the FE mirrors), so grouping and pick
   // identity never depend on what the frontend happened to carry. A caller-sent
   // real identity is kept verbatim (no churn for existing flows); derivation is
@@ -1157,7 +1098,7 @@ async function runQueueSendJob(
         } catch (err) {
           job.failed += 1;
           // PS-191: classify retry eligibility STRUCTURALLY (proof-error code
-          // + details.reason) — never by parsing the message. The FE surfaces
+          // + details.reason) â€” never by parsing the message. The FE surfaces
           // a "refresh the rate and click again" prompt for eligible failures
           // and must never auto-repurchase.
           const retry = classifyLabelPurchaseRetry(err);
@@ -1220,7 +1161,7 @@ export async function removeFromQueue(
 
 // PS-195: entry ids currently inside a PENDING/RUNNING merge job. Clearing
 // one of these mid-merge would yank a label out from under an operator's
-// in-flight print — those entries are refused, not deleted.
+// in-flight print â€” those entries are refused, not deleted.
 function inFlightMergeEntryIds(): Set<string> {
   const ids = new Set<string>();
   for (const job of mergeJobs.values()) {
@@ -1230,7 +1171,7 @@ function inFlightMergeEntryIds(): Set<string> {
   return ids;
 }
 
-// PS-195: clears are EXPLICITLY TARGETED — the caller names the queued entry
+// PS-195: clears are EXPLICITLY TARGETED â€” the caller names the queued entry
 // ids it intends to remove (the route schema already rejects id-less
 // requests). Deletion stays bounded to status='queued' within client/scope,
 // and entries belonging to a running merge job are skipped and reported.
@@ -1299,13 +1240,13 @@ export async function removeQueueEntriesForOrder(orderId: number): Promise<numbe
 /**
  * Tracking-driven retirement (per user override unlock shipped data on
  * 2026-06-11): when carrier tracking shows a package was DELIVERED, its label
- * never needs printing — the shipment-tracking poller moves the entry
- * 'queued' → 'delivered' so it leaves the ACTIVE queue (which filters
+ * never needs printing â€” the shipment-tracking poller moves the entry
+ * 'queued' â†’ 'delivered' so it leaves the ACTIVE queue (which filters
  * status='queued') but stays in History with auto_retired_at. This is the
  * ONLY writer of the 'delivered' status. Strictly narrower than the operator
  * actions above: the WHERE pins status='queued' so 'printed' history is never
  * touched, and nothing is ever DELETED (the no-op policy in
- * removeQueueEntriesForOrder still holds — order status alone never removes a
+ * removeQueueEntriesForOrder still holds â€” order status alone never removes a
  * row; only a carrier-confirmed delivery retires one, and only to History).
  */
 export async function retireDeliveredQueueEntries(input: {
@@ -1331,7 +1272,7 @@ export async function retireDeliveredQueueEntries(input: {
   return { retiredCount: retiredEntryIds.length, retiredEntryIds };
 }
 
-// ─── PDF MERGE ────────────────────────────────────────────────────────
+// â”€â”€â”€ PDF MERGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function startPrintJob(input: {
   clientId?: number;
@@ -1354,8 +1295,8 @@ export async function startPrintJob(input: {
   }
   // Print labels ascending by order number. `inArray` (IN (...)) does NOT
   // preserve the caller's id order and the DB returns rows arbitrarily, so we
-  // sort here — this is what guarantees the merged PDF comes out in order
-  // (1231, 1239, 1247, …). Natural sort handles numeric and mixed-format
+  // sort here â€” this is what guarantees the merged PDF comes out in order
+  // (1231, 1239, 1247, â€¦). Natural sort handles numeric and mixed-format
   // order numbers; null/blank order numbers sort first, stably.
   entries.sort((a, b) =>
     String(a.orderNumber ?? '').localeCompare(String(b.orderNumber ?? ''), undefined, {
@@ -1384,7 +1325,7 @@ export async function startPrintJob(input: {
     progress: 0,
     total: entries.length,
     current: 0,
-    message: `Starting merge of ${entries.length} label${entries.length === 1 ? '' : 's'}…`,
+    message: `Starting merge of ${entries.length} label${entries.length === 1 ? '' : 's'}â€¦`,
     createdAt: Date.now(),
     labelErrors: [],
     successfulEntryIds: [],
@@ -1401,30 +1342,30 @@ export function getMergeJobStatus(jobId: string): MergeJob | null {
   return mergeJobs.get(jobId) ?? null;
 }
 
-// Per user override unlock shipped data on 2026-06-16: PS-256 — the PDF-serving routes
+// Per user override unlock shipped data on 2026-06-16: PS-256 â€” the PDF-serving routes
 // (view / download / signed-url) obtain the merged batch PDF here. The in-memory mergeJobs Map
 // is the fast default; on a MISS (job evicted/never in this process, OR present but with empty
 // bytes) we fall back to the durable snapshot + side-store: if the snapshot says the merge
 // completed, we rehydrate the bytes from print_queue_merged_pdfs so the batch survives a server
-// restart instead of 404ing. Env-gated default OFF — when the flag is OFF this returns exactly
+// restart instead of 404ing. Env-gated default OFF â€” when the flag is OFF this returns exactly
 // the in-memory job (current behavior), since getMergedPdfBase64 is a no-op returning null. This
 // only RE-READS the already-generated PDF artifact; it never re-generates labels, buys postage,
 // notifies a marketplace, or mutates any shipped/cancelled order or shipment.
 export async function getMergeJobForServe(jobId: string): Promise<MergeJob | null> {
   const inMemory = mergeJobs.get(jobId) ?? null;
   if (inMemory && inMemory.status === 'done' && inMemory.mergedPdfBase64) {
-    return inMemory; // fast path — bytes already in process memory
+    return inMemory; // fast path â€” bytes already in process memory
   }
 
   // In-memory miss (or done-without-bytes). Only attempt a durable rehydrate when the durable
-  // snapshot confirms THIS job completed — otherwise leave the caller's miss as-is.
+  // snapshot confirms THIS job completed â€” otherwise leave the caller's miss as-is.
   const snapshot = await getLatestMergeJobSnapshot();
   if (!snapshot || snapshot.jobId !== jobId || snapshot.status !== 'done') {
     return inMemory;
   }
 
   const base64 = await getMergedPdfBase64(jobId);
-  if (!base64) return inMemory; // flag OFF or no durable bytes — unchanged behavior
+  if (!base64) return inMemory; // flag OFF or no durable bytes â€” unchanged behavior
 
   return {
     jobId: snapshot.jobId,
@@ -1444,9 +1385,9 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
   };
 }
 
-// PS-109 — canonical product-name resolution for the batch header. When a queued
+// PS-109 â€” canonical product-name resolution for the batch header. When a queued
 // entry's multi_sku_data line (or the entry's primary item) has only a SKU and no real
-// product name — a legacy row enqueued before the batch-send description fix — resolve
+// product name â€” a legacy row enqueued before the batch-send description fix â€” resolve
 // the name from the canonical order_items table so the header shows the product name
 // instead of the "Unnamed item" fallback. Mutates entries in place; best-effort (a
 // lookup failure leaves the safe fallback intact).
@@ -1519,7 +1460,7 @@ async function runMergeJob(
   const job = mergeJobs.get(jobId)!;
   job.status = 'running';
   void persistMergeJobSnapshot(job);
-  job.message = 'Initializing PDF merge…';
+  job.message = 'Initializing PDF mergeâ€¦';
 
   try {
     const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
@@ -1549,7 +1490,7 @@ async function runMergeJob(
     // queued must not be merged into the print batch.
     const shippingHoldsByOrderId = await loadShippingHoldsByOrderId(entriesByGroup);
     let lastGroup: string | null = null;
-    // PS-194: the job carries the live array — progress snapshots and the
+    // PS-194: the job carries the live array â€” progress snapshots and the
     // final done-persist serialize whatever has merged so far, and the status
     // DTO exposes it for the FE Confirm-Printed gate.
     const successfulEntryIds: string[] = [];
@@ -1563,14 +1504,14 @@ async function runMergeJob(
       if (shouldPersistProgress(i, sorted.length)) {
         void persistMergeJobSnapshot(job);
       }
-      job.message = `Merging label ${i + 1} of ${sorted.length}…`;
+      job.message = `Merging label ${i + 1} of ${sorted.length}â€¦`;
 
       // PS-129: skip + clearly fail any entry whose order is now on a shipping hold
       // (cancelled upstream / externally shipped). Mirrors the existing per-entry failure
       // handling so one held order never blocks the rest of the batch.
       const holdReason = shippingHoldsByOrderId.get(Number(e.orderId));
       if (holdReason) {
-        job.labelErrors!.push(`Order ${e.orderNumber ?? e.orderId}: ${holdReason} — excluded from print batch`);
+        job.labelErrors!.push(`Order ${e.orderNumber ?? e.orderId}: ${holdReason} â€” excluded from print batch`);
         failedEntryIds.add(e.id);
         continue;
       }
@@ -1677,7 +1618,7 @@ async function runMergeJob(
           throw new Error('PDF contained no pages');
         }
         addGroupHeaderIfNeeded();
-        // Per user override unlock shipped data on 2026-06-02: display-only —
+        // Per user override unlock shipped data on 2026-06-02: display-only â€”
         // normalize each label onto the standard 4x6 print page (see
         // appendNormalizedLabelPages) so an oversized carrier label (e.g. FedEx
         // Home Delivery) prints the same size as USPS/UPS instead of dwarfing
@@ -1698,13 +1639,13 @@ async function runMergeJob(
 
     if (merged.getPageCount() === 0) {
       throw new Error(
-        `All labels failed to load — no PDF produced.\n${job.labelErrors!.slice(0, 3).join('\n')}`
+        `All labels failed to load â€” no PDF produced.\n${job.labelErrors!.slice(0, 3).join('\n')}`
       );
     }
 
     job.progress = 95;
     void persistMergeJobSnapshot(job);
-    job.message = 'Finalizing PDF…';
+    job.message = 'Finalizing PDFâ€¦';
     const bytes = await merged.save();
     job.mergedPdfBase64 = Buffer.from(bytes).toString('base64');
 
@@ -1726,19 +1667,19 @@ async function runMergeJob(
     job.current = success;
     job.message = doneMessage;
     await persistMergeJobSnapshot(job);
-    // Per user override unlock shipped data on 2026-06-16: PS-256 — persist the
+    // Per user override unlock shipped data on 2026-06-16: PS-256 â€” persist the
     // already-generated merged batch PDF to a durable side-store so the
     // view/download/signed-url routes can still serve it after a server restart
     // (today the bytes live only in process memory and a restart 404s them). This
     // only STORES the immutable PDF artifact + re-reads it; it never re-generates
     // labels, buys postage, notifies a marketplace, or mutates any shipped/cancelled
-    // order or shipment row. Best-effort + env-gated default OFF — never blocks the
+    // order or shipment row. Best-effort + env-gated default OFF â€” never blocks the
     // merge hot path.
     void persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
     job.message =
       failed > 0
-        ? `Done — ${success} merged (${failed} failed — re-create those labels and re-queue).`
-        : `Done — ${success} label${success === 1 ? '' : 's'} merged.`;
+        ? `Done â€” ${success} merged (${failed} failed â€” re-create those labels and re-queue).`
+        : `Done â€” ${success} label${success === 1 ? '' : 's'} merged.`;
   } catch (err) {
     job.status = 'error';
     job.errorMessage = (err as Error).message;
@@ -1787,7 +1728,7 @@ function isMockLabelUrl(labelUrl: unknown): boolean {
 // Resolve a recipient for a queued entry from an order row, gating the
 // ENTIRE row on client scope. Only when the order belongs to the same
 // client as the queued entry do we trust ANY of its fields (name AND
-// order number) — so a cross-client id collision can never surface either
+// order number) â€” so a cross-client id collision can never surface either
 // the other client's name or their order number on this batch.
 export function resolveScopedRecipient(
   entry: { clientId: number; orderId: string; orderNumber?: string | null },
@@ -1805,7 +1746,7 @@ export function resolveScopedRecipient(
 
 // Render-time join: resolve recipient names for every queued entry from
 // authoritative order data (orders.shipToName) keyed by orderId, scoped
-// to the entry's own clientId. No migration needed — already-queued rows
+// to the entry's own clientId. No migration needed â€” already-queued rows
 // render names immediately. Cross-client names can never attach because
 // the shipToName is only trusted when orders.clientId === entry.clientId.
 async function loadBatchRecipientsByGroup(
@@ -1848,7 +1789,7 @@ async function loadBatchRecipientsByGroup(
       const idNum = Number(entry.orderId);
       const row = Number.isFinite(idNum) ? orderById.get(idNum) : undefined;
       // Whole-row client-scope gate (name AND order number). See
-      // resolveScopedRecipient — defense-in-depth vs orderId collision.
+      // resolveScopedRecipient â€” defense-in-depth vs orderId collision.
       return resolveScopedRecipient(entry, row);
     });
     result.set(groupId, sortBatchRecipients(recipients));
@@ -1877,7 +1818,7 @@ export function formatPackageDims(
 
 // Render-time join: map each batched order to the package dimensions actually
 // used for its label (latest active shipment). Mirrors loadBatchRecipientsByGroup
-// — read-only, display-only. Per user override unlock shipped data on
+// â€” read-only, display-only. Per user override unlock shipped data on
 // 2026-05-23: reads shipped dims for the batch-header packer hint; no writes.
 async function loadPackageDimsByOrderId(
   entriesByGroup: Map<string, PrintQueueEntry[]>
@@ -1918,16 +1859,16 @@ async function loadPackageDimsByOrderId(
 }
 
 // PS-129 (per user override unlock shipped data on 2026-06-09): identify queue entries whose
-// order is now on a shipping hold — cancelled locally/upstream (canonical_status) or shipped
-// externally (PS-128) — so the merged print job EXCLUDES them. The batch SEND path already
+// order is now on a shipping hold â€” cancelled locally/upstream (canonical_status) or shipped
+// externally (PS-128) â€” so the merged print job EXCLUDES them. The batch SEND path already
 // blocks creation via createLabelV2's guard; this covers a label that was already queued and
 // only later became held. Read-only; never mutates orders.
 //
 // Per user override unlock shipped data on 2026-06-11: 'local_shipped' is deliberately NOT a
-// print-queue hold. It is a label-CREATION guard (never buy second postage) — createLabelV2
+// print-queue hold. It is a label-CREATION guard (never buy second postage) â€” createLabelV2
 // marks the order shipped BEFORE its queue entry exists, so every normally-labeled order is
 // locally shipped by the time it reaches the queue. Treating it as a hold hid every fresh
-// label from the active queue and failed it at merge with "Already shipped — excluded from
+// label from the active queue and failed it at merge with "Already shipped â€” excluded from
 // print batch" (DJ report: order 1463 invisible in an empty queue). Printing an existing
 // label purchases nothing; the creation-time block in decideShippingSafety is unchanged.
 export async function loadShippingHoldsForOrderIds(ids: number[]): Promise<Map<number, string>> {

@@ -17,6 +17,7 @@ import {
   isPrintQueueDurableStatusError,
   isPrintQueueLabelUrlError,
   getMergeJobStatus,
+  queueSendSnapshotResults,
   // PS-256: durable-aware accessor — falls back to the persisted merged-PDF side-store on an
   // in-memory miss so the view/download/signed-url routes serve the batch after a server restart.
   getMergeJobForServe,
@@ -512,6 +513,10 @@ app.get('/batch-send/status/:jobId', async (c) => {
       const durableStatus = deriveQueueSendSnapshotStatus(durableJob, {
         inMemoryJobPresent: false,
       });
+      // Per user override unlock shipped data on 2026-06-30: durable fallback
+      // returns full per-order batch results; resultSamples remains a compact
+      // legacy preview for older UI/debug consumers.
+      const durableResults = queueSendSnapshotResults(durableJob);
       return c.json({
         job_id: durableJob.jobId,
         status: durableStatus.status,
@@ -525,7 +530,8 @@ app.get('/batch-send/status/:jobId', async (c) => {
         message: durableStatus.message,
         client_id: durableJob.clientId,
         queued_entry_ids: durableJob.queuedEntryIds,
-        results: durableJob.resultSamples,
+        results: durableResults,
+        result_samples: durableJob.resultSamples,
         error: durableStatus.errorMessage,
         stale: durableStatus.staleReason != null,
         stale_reason: durableStatus.staleReason,
