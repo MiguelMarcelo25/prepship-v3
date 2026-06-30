@@ -34,22 +34,28 @@ const helperPath = 'src/services/settings-json.ts';
 const workflowTypesPath = 'src/services/rate-browse-workflow-types.ts';
 const workflowStorePath = 'src/services/rate-browse-workflow-store.ts';
 const workflowServicePath = 'src/services/rate-browse-workflow.ts';
+const workflowSnapshotsPath = 'src/services/rate-browse-workflow-snapshots.ts';
 const browseDisplayPath = 'src/services/rate-browser-display-fields.ts';
 const browseProducerPath = 'src/services/rate-browse-response-producer.ts';
 const workflowHookPath = 'web/src/hooks/useRateBrowseWorkflow.ts';
+const partialDisplayPath = 'web/src/components/rate-browser-partial-result.ts';
 const ordersRefetchCoordinatorPath = 'web/src/hooks/orders-refetch-coordinator.ts';
 const ordersRefetchBehaviorPath = 'scripts/ps-346-orders-refetch-coordinator-behavior.ts';
+const partialWorkflowBehaviorPath = 'scripts/ps-346-rate-browse-partial-workflow-behavior.ts';
 const findings = fileText(findingsPath);
 const plan = fileText(planPath);
 const helper = fileText(helperPath);
 const workflowTypes = fileText(workflowTypesPath);
 const workflowStore = fileText(workflowStorePath);
 const workflowService = fileText(workflowServicePath);
+const workflowSnapshots = fileText(workflowSnapshotsPath);
 const browseDisplay = fileText(browseDisplayPath);
 const browseProducer = fileText(browseProducerPath);
 const workflowHook = fileText(workflowHookPath);
+const partialDisplay = fileText(partialDisplayPath);
 const ordersRefetchCoordinator = fileText(ordersRefetchCoordinatorPath);
 const ordersRefetchBehavior = fileText(ordersRefetchBehaviorPath);
+const partialWorkflowBehavior = fileText(partialWorkflowBehaviorPath);
 const ratesRoute = read('src/routes/rates.ts');
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 const rateBrowserModal = read('web/src/components/RateBrowserModal.tsx');
@@ -63,6 +69,11 @@ check(
 check(
   'package wires PS-346 Orders refetch coordinator behavior guard',
   packageJson.includes('"test:ps-346-orders-refetch-coordinator": "tsx scripts/ps-346-orders-refetch-coordinator-behavior.ts"'),
+);
+
+check(
+  'package wires PS-346 partial Rate Browser workflow behavior guard',
+  packageJson.includes('"test:ps-346-rate-browse-partial-workflow": "tsx scripts/ps-346-rate-browse-partial-workflow-behavior.ts"'),
 );
 
 check(
@@ -152,6 +163,7 @@ check(
   'backend rate browse workflow service owns durable job lifecycle without rate-ranking business rules',
   existsSync(workflowServicePath) &&
     /export type StartRateBrowseWorkflowInput = \{/.test(workflowService) &&
+    /getInitialResult\?: \(\) => Promise<Record<string, unknown> \| null>/.test(workflowService) &&
     /run: \(\) => Promise<Record<string, unknown>>/.test(workflowService) &&
     /export async function startRateBrowseWorkflow\(/.test(workflowService) &&
     /export async function getRateBrowseWorkflow\(jobId: string\): Promise<RateBrowseWorkflowSnapshot \| null>/.test(workflowService) &&
@@ -160,12 +172,24 @@ check(
 );
 
 check(
-  'backend rate browse workflow service records queued, running, complete, and error snapshots',
+  'backend rate browse workflow service records queued, running, partial, complete, and error snapshots',
   /phase: 'queued'/.test(workflowService) &&
     /phase: 'running'/.test(workflowService) &&
+    /phase: 'partial'/.test(workflowService) &&
     /phase: 'complete'/.test(workflowService) &&
     /phase: 'error'/.test(workflowService) &&
     /void runRateBrowseWorkflowJob/.test(workflowService),
+);
+
+check(
+  'backend rate browse workflow snapshots count partial coverage without owning rate ranking',
+  existsSync(workflowSnapshotsPath) &&
+    /export function countRateBrowseCarrierStatuses\(result: Record<string, unknown>\)/.test(workflowSnapshots) &&
+    /export function buildRateBrowseResultSnapshot\(input: \{/.test(workflowSnapshots) &&
+    /phase: Extract<RateBrowseWorkflowPhase, 'partial' \| 'complete'>/.test(workflowSnapshots) &&
+    /ratesCount: arrayLength\(input\.result\.rates\)/.test(workflowSnapshots) &&
+    /requestKey: resultRequestKey\(input\.result, input\.base\.requestKey\)/.test(workflowSnapshots) &&
+    !/combineCarrierUniverses|rateTotal|loadCarrierMarkups|withSelectedRateKeys|selectedRateOpaqueKey/.test(workflowSnapshots),
 );
 
 check(
@@ -204,6 +228,17 @@ check(
 );
 
 check(
+  'workflow endpoint emits a cache-first partial preview before the live browse finishes',
+  /function cachedRateBrowsePreviewBody<T extends Record<string, unknown>>\(body: T\): T/.test(ratesRoute) &&
+    /cachedOnly: true/.test(ratesRoute) &&
+    /forceLive: false/.test(ratesRoute) &&
+    /forceRefresh: false/.test(ratesRoute) &&
+    /strictRecalculate: false/.test(ratesRoute) &&
+    /manualEstimate: false/.test(ratesRoute) &&
+    /getInitialResult: body\.forceLive === true\s*\?\s*\(\) => produceRateBrowsePayload\(\{[\s\S]*cachedRateBrowsePreviewBody\(body\)/.test(ratesRoute),
+);
+
+check(
   'normal /rates/browse route returns the same backend producer payload',
   /const payload = await produceRateBrowsePayload\(\{/.test(ratesRoute) &&
     /return c\.json\(publicRatesResult\(payload, canViewFinancials\)\)/.test(ratesRoute),
@@ -227,12 +262,22 @@ check(
   'useRateBrowseWorkflow hook polls backend workflow status and returns backend result only',
   existsSync(workflowHookPath) &&
     /export function useRateBrowseWorkflow\(\)/.test(workflowHook) &&
+    /export type RunRateBrowseWorkflowOptions = \{/.test(workflowHook) &&
+    /onPartialResult\?: \(result: Record<string, unknown>, snapshot: RateBrowseWorkflowSnapshot\) => void/.test(workflowHook) &&
     /apiClient\.startRateBrowseWorkflow/.test(workflowHook) &&
     /apiClient\.fetchRateBrowseWorkflow/.test(workflowHook) &&
     /while \(true\)/.test(workflowHook) &&
     /snapshot\.status === 'complete'/.test(workflowHook) &&
     /snapshot\.result/.test(workflowHook) &&
     !/apiClient\.browseRates/.test(workflowHook),
+);
+
+check(
+  'useRateBrowseWorkflow emits each backend partial result once while still waiting for final complete',
+  /const emittedPartialKeys = new Set<string>\(\)/.test(workflowHook) &&
+    /nextSnapshot\.status === 'partial'/.test(workflowHook) &&
+    /options\.onPartialResult\?\.\(nextSnapshot\.result, nextSnapshot\)/.test(workflowHook) &&
+    /return snapshot\.result/.test(workflowHook),
 );
 
 check(
@@ -244,10 +289,23 @@ check(
 check(
   'RateBrowserModal routes explicit live browse through the backend workflow hook',
   /import \{ useRateBrowseWorkflow \} from ['"]\.\.\/hooks\/useRateBrowseWorkflow['"]/.test(rateBrowserModal) &&
+    /import \{ buildPartialRateBrowseDisplayState \} from ['"]\.\/rate-browser-partial-result['"]/.test(rateBrowserModal) &&
     /runRateBrowseWorkflow/.test(rateBrowserModal) &&
     /const browsePayload = \{/.test(rateBrowserModal) &&
-    /options\.forceLive === true\s*\?\s*runRateBrowseWorkflow\(browsePayload\)\s*:\s*apiClient\.browseRates\(browsePayload\)/.test(rateBrowserModal) &&
+    /options\.forceLive === true\s*\?\s*runRateBrowseWorkflow\(browsePayload, \{ onPartialResult: applyPartialBrowseResult \}\)\s*:\s*apiClient\.browseRates\(browsePayload\)/.test(rateBrowserModal) &&
     /onClick=\{\(\) => void browseRates\(undefined, \{ forceLive: true \}\)\}/.test(rateBrowserModal),
+);
+
+check(
+  'RateBrowserModal displays partial workflow results without applying or persisting them',
+  existsSync(partialDisplayPath) &&
+    /export function buildPartialRateBrowseDisplayState\(input: \{/.test(partialDisplay) &&
+    /sortRateRowsByBackendDisplayRank/.test(partialDisplay) &&
+    /return \{\s*ratesByPid,/s.test(partialDisplay) &&
+    /const applyPartialBrowseResult = \(partialResult: Record<string, unknown>\) => \{/.test(rateBrowserModal) &&
+    /setRatesByPid\(\(current\) => \(\{ \.\.\.current, \.\.\.partialDisplay\.ratesByPid \}\)\)/.test(rateBrowserModal) &&
+    !/buildPartialRateBrowseDisplayState[\s\S]{0,2400}emitBestRateResolved/.test(rateBrowserModal) &&
+    !/buildPartialRateBrowseDisplayState[\s\S]{0,2400}onApplyRate/.test(rateBrowserModal),
 );
 
 check(
@@ -283,6 +341,14 @@ check(
     /concurrent refetch requests must share the active \/orders request/.test(ordersRefetchBehavior) &&
     /requests arriving during an active refetch collapse into one trailing refresh/.test(ordersRefetchBehavior) &&
     /maxActive, 1/.test(ordersRefetchBehavior),
+);
+
+check(
+  'PS-346 behavior guard proves partial workflow snapshots expose cache-first rates before final live result',
+  existsSync(partialWorkflowBehaviorPath) &&
+    /cached preview must be persisted as a partial workflow snapshot/.test(partialWorkflowBehavior) &&
+    /partial snapshots must not mark the workflow final/.test(partialWorkflowBehavior) &&
+    /final live result replaces the partial request key/.test(partialWorkflowBehavior),
 );
 
 if (failures > 0) {

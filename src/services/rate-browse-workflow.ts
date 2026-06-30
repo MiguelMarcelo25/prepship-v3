@@ -3,6 +3,7 @@ import {
   getRateBrowseWorkflowSnapshot,
   persistRateBrowseWorkflowSnapshot,
 } from './rate-browse-workflow-store';
+import { buildRateBrowseResultSnapshot } from './rate-browse-workflow-snapshots';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 
 export type StartRateBrowseWorkflowInput = {
@@ -10,6 +11,7 @@ export type StartRateBrowseWorkflowInput = {
   canViewFinancials: boolean;
   orderId?: number | null;
   requestKey?: string | null;
+  getInitialResult?: () => Promise<Record<string, unknown> | null>;
   run: () => Promise<Record<string, unknown>>;
 };
 
@@ -20,30 +22,6 @@ function nowIso(): string {
 function finiteNumber(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
-}
-
-function arrayLength(value: unknown): number {
-  return Array.isArray(value) ? value.length : 0;
-}
-
-function countCarrierStatuses(result: Record<string, unknown>) {
-  const carrierStatuses = Array.isArray(result.carrierStatuses)
-    ? result.carrierStatuses as Array<Record<string, unknown>>
-    : [];
-  const completed = carrierStatuses.filter((status) => {
-    const text = String(status.status ?? '').toLowerCase();
-    return text && text !== 'loading' && text !== 'pending' && text !== 'queued';
-  }).length;
-  const failed = carrierStatuses.filter((status) => {
-    const text = String(status.status ?? '').toLowerCase();
-    return text === 'error' || text === 'failed' || text === 'timeout';
-  }).length;
-  return {
-    totalCarriers: carrierStatuses.length,
-    completedCarriers: completed,
-    failedCarriers: failed,
-    successfulCarriers: Math.max(0, completed - failed),
-  };
 }
 
 function snapshotFromInput(input: StartRateBrowseWorkflowInput): RateBrowseWorkflowSnapshot {
@@ -73,7 +51,7 @@ function snapshotFromInput(input: StartRateBrowseWorkflowInput): RateBrowseWorkf
 
 async function runRateBrowseWorkflowJob(
   queued: RateBrowseWorkflowSnapshot,
-  run: () => Promise<Record<string, unknown>>,
+  input: StartRateBrowseWorkflowInput,
 ): Promise<void> {
   const running: RateBrowseWorkflowSnapshot = {
     ...queued,
@@ -84,29 +62,42 @@ async function runRateBrowseWorkflowJob(
   await persistRateBrowseWorkflowSnapshot(running);
 
   try {
-    const result = await run();
-    const counts = countCarrierStatuses(result);
+    if (input.getInitialResult) {
+      try {
+        const partialResult = await input.getInitialResult();
+        if (partialResult && Array.isArray(partialResult.rates) && partialResult.rates.length > 0) {
+          await persistRateBrowseWorkflowSnapshot(buildRateBrowseResultSnapshot({
+            base: running,
+            result: partialResult,
+            phase: 'partial',
+            message: 'Cached rates available while live carriers continue',
+            finishedAt: null,
+            diagnostics: { partialSource: 'cache-first' },
+          }));
+        }
+      } catch (err) {
+        await persistRateBrowseWorkflowSnapshot({
+          ...running,
+          updatedAt: nowIso(),
+          message: 'Rate browse workflow running; cached partial unavailable',
+          diagnostics: {
+            ...running.diagnostics,
+            partialError: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    }
+
+    const result = await input.run();
     const finishedAt = nowIso();
-    await persistRateBrowseWorkflowSnapshot({
-      ...running,
-      ...counts,
-      phase: 'complete',
-      ratesCount: arrayLength(result.rates),
-      requestKey: typeof result.requestKey === 'string'
-        ? result.requestKey
-        : typeof result.cacheKey === 'string'
-          ? result.cacheKey
-          : running.requestKey,
-      updatedAt: finishedAt,
-      finishedAt,
-      message: 'Rate browse workflow complete',
+    await persistRateBrowseWorkflowSnapshot(buildRateBrowseResultSnapshot({
+      base: running,
       result,
-      diagnostics: {
-        ...running.diagnostics,
-        rateBrowseTiming: result.rateBrowseTiming ?? null,
-      },
-      error: null,
-    });
+      phase: 'complete',
+      message: 'Rate browse workflow complete',
+      finishedAt,
+      diagnostics: { rateBrowseTiming: result.rateBrowseTiming ?? null },
+    }));
   } catch (err) {
     const finishedAt = nowIso();
     await persistRateBrowseWorkflowSnapshot({
@@ -125,7 +116,7 @@ export async function startRateBrowseWorkflow(
 ): Promise<RateBrowseWorkflowSnapshot> {
   const queued = snapshotFromInput(input);
   await persistRateBrowseWorkflowSnapshot(queued);
-  void runRateBrowseWorkflowJob(queued, input.run);
+  void runRateBrowseWorkflowJob(queued, input);
   return queued;
 }
 

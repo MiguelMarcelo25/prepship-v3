@@ -24,6 +24,11 @@ export type RateBrowseWorkflowSnapshot = {
   finished_at?: string | null;
 };
 
+export type RunRateBrowseWorkflowOptions = {
+  onSnapshot?: (snapshot: RateBrowseWorkflowSnapshot) => void;
+  onPartialResult?: (result: Record<string, unknown>, snapshot: RateBrowseWorkflowSnapshot) => void;
+};
+
 const RATE_BROWSE_WORKFLOW_POLL_MS = 750;
 const RATE_BROWSE_WORKFLOW_MAX_POLLS = 120;
 
@@ -49,11 +54,29 @@ export function useRateBrowseWorkflow() {
     setSnapshot(null);
   }, []);
 
-  const runRateBrowseWorkflow = useCallback(async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const runRateBrowseWorkflow = useCallback(async (
+    payload: Record<string, unknown>,
+    options: RunRateBrowseWorkflowOptions = {},
+  ): Promise<Record<string, unknown>> => {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
+    const emittedPartialKeys = new Set<string>();
+    const publishSnapshot = (nextSnapshot: RateBrowseWorkflowSnapshot) => {
+      setSnapshot(nextSnapshot);
+      options.onSnapshot?.(nextSnapshot);
+      const partialKey = `${nextSnapshot.job_id}:${nextSnapshot.updated_at ?? ''}:${nextSnapshot.status}`;
+      if (
+        nextSnapshot.status === 'partial' &&
+        nextSnapshot.result &&
+        !emittedPartialKeys.has(partialKey)
+      ) {
+        emittedPartialKeys.add(partialKey);
+        options.onPartialResult?.(nextSnapshot.result, nextSnapshot);
+      }
+    };
+
     let snapshot = normalizeSnapshot(await apiClient.startRateBrowseWorkflow(payload));
-    setSnapshot(snapshot);
+    publishSnapshot(snapshot);
 
     let pollCount = 0;
     while (true) {
@@ -70,7 +93,7 @@ export function useRateBrowseWorkflow() {
       }
       await sleep(RATE_BROWSE_WORKFLOW_POLL_MS);
       snapshot = normalizeSnapshot(await apiClient.fetchRateBrowseWorkflow(snapshot.job_id));
-      setSnapshot(snapshot);
+      publishSnapshot(snapshot);
     }
 
     throw new Error('Rate browse workflow timed out');

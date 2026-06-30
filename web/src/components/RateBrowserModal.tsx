@@ -69,6 +69,7 @@ import {
 import RateRowItem from './RateRowItem';
 import RateRowsView from './RateRowsView';
 import RateBrowserCarrierSidebar from './RateBrowserCarrierSidebar';
+import { buildPartialRateBrowseDisplayState } from './rate-browser-partial-result';
 import { useRateBrowseWorkflow } from '../hooks/useRateBrowseWorkflow';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
@@ -1460,9 +1461,23 @@ export default function RateBrowserModal({
         forceRefresh: options.forceLive === true,
         ...(options.manualEstimateCompare ? { manualEstimate: true } : {}),
       };
+      const applyPartialBrowseResult = (partialResult: Record<string, unknown>) => {
+        if (browseSequenceRef.current !== requestSeq) return;
+        const partialDisplay = buildPartialRateBrowseDisplayState({
+          partialResult,
+          accounts: rateShippingAccounts,
+          formatAccountDisplay,
+        });
+        if (!partialDisplay) return;
+        setRateErrorsByPid((current) => ({ ...current, ...partialDisplay.errorsByPid }));
+        setCarrierTimingByPid((current) => ({ ...current, ...partialDisplay.timingByPid }));
+        setCarrierStatusByPid((current) => ({ ...current, ...partialDisplay.statusByPid }));
+        setRatesByPid((current) => ({ ...current, ...partialDisplay.ratesByPid }));
+        setRateBrowseInfo(partialDisplay.info);
+      };
       const browseResult = await (
         options.forceLive === true
-          ? runRateBrowseWorkflow(browsePayload)
+          ? runRateBrowseWorkflow(browsePayload, { onPartialResult: applyPartialBrowseResult })
           : apiClient.browseRates(browsePayload)
       );
       if (browseSequenceRef.current !== requestSeq) return { carriersWithRates, uncoveredPids };

@@ -287,6 +287,17 @@ function publicRateBrowseWorkflowSnapshot(
   };
 }
 
+function cachedRateBrowsePreviewBody<T extends Record<string, unknown>>(body: T): T {
+  return {
+    ...body,
+    cachedOnly: true,
+    forceLive: false,
+    forceRefresh: false,
+    strictRecalculate: false,
+    manualEstimate: false,
+  };
+}
+
 app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
   const body = normalizeRateShipFromOrigin(c.req.valid('json'));
   const canViewFinancials = canViewRateFinancials(c);
@@ -306,6 +317,13 @@ app.post('/browse/workflow', zValidator('json', browseBody), async (c) => {
     canViewFinancials,
     orderId: body.orderId ?? null,
     requestKey: null,
+    getInitialResult: body.forceLive === true
+      ? () => produceRateBrowsePayload({
+          body: cachedRateBrowsePreviewBody(body),
+          canViewFinancials,
+          browseStartedAt: Date.now(),
+        })
+      : undefined,
     run: () => produceRateBrowsePayload({
       body,
       canViewFinancials,

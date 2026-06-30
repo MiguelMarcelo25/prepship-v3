@@ -2,8 +2,15 @@
 
 ## Status
 
-PS-346 is in planning/root-cause mode. No implementation or deletion has been
-performed in this slice.
+PS-346 has two implemented source-of-truth slices:
+
+- Orders refetch pressure is coalesced in the shared `useOrders` hook.
+- Rate Browser live browse now has a backend-owned cache-first partial workflow
+  snapshot so the modal can show available cached rates while slow live carriers
+  continue.
+
+The card remains In Progress until live high-volume proof confirms the remaining
+Print Queue / unavailable-rate patterns under DJ's workflow.
 
 ## Backend Owners
 
@@ -81,6 +88,35 @@ New proof:
 - `npm run test:ps-346-orders-refetch-coordinator -- --no-color` - covers
   concurrent request coalescing, no overlapping active requests, one trailing
   refresh for status/settle bursts, and normal later idle refreshes.
+
+## 2026-06-30 Rate Browser Partial Workflow Slice
+
+The Rate Browser slow path was not a rate-ranking bug by itself. The backend
+already owns final Best Rate ranking and proof, but the explicit live browse
+workflow still behaved like a final-response request: the modal could sit mostly
+blank until every slow carrier finished or timed out.
+
+This slice keeps the final backend live result authoritative, but adds a
+cache-first partial snapshot before the live provider fanout completes:
+
+- `src/services/rate-browse-workflow-snapshots.ts` builds partial/complete
+  workflow snapshots and counts carrier coverage without owning rate ranking.
+- `src/services/rate-browse-workflow.ts` can persist a `partial` snapshot from a
+  cache-only result, then replace it with the final `complete` live result.
+- `src/routes/rates.ts` starts that cache-only preview only for explicit live
+  browse workflows and clamps it to read-only cache behavior (`cachedOnly: true`,
+  no live force, no strict recalc, no manual estimate).
+- `web/src/hooks/useRateBrowseWorkflow.ts` emits each partial backend result once
+  while continuing to wait for the final complete snapshot.
+- `web/src/components/rate-browser-partial-result.ts` maps the partial backend
+  DTO into display state. The modal renders that state only; it does not apply,
+  persist, or mint Best Rate truth from a partial result.
+
+New proof:
+
+- `npm run test:ps-346-rate-browse-partial-workflow -- --no-color` - proves
+  partial snapshots expose cache-first rates, do not finish the workflow, and
+  are replaced by the final live result.
 
 ## Safety
 
