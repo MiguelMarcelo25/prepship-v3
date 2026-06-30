@@ -44,6 +44,12 @@ import {
   classifyRatePreExpiryRefresh,
   shouldPreExpiryRefreshRate,
 } from './rate-preexpiry-refresh-policy';
+import {
+  createPreExpiryRefreshProof,
+  recordPreExpiryRefreshResult,
+  recordPreExpirySelection,
+  type PreExpiryRefreshProof,
+} from './rate-preexpiry-refresh-proof';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -133,6 +139,7 @@ export type BackfillJob = {
   message: string;
   error: string | null;
   failureSamples: string[];
+  preExpiryRefresh: PreExpiryRefreshProof | null;
   startedAt: number;
   finishedAt: number | null;
 };
@@ -175,6 +182,7 @@ export type BackfillJobSnapshot = {
   message: string;
   error: string | null;
   failureSamples: string[];
+  preExpiryRefresh: PreExpiryRefreshProof | null;
   options: BackfillOptions;
   startedAt: string;
   finishedAt: string | null;
@@ -238,6 +246,12 @@ function toBackfillSnapshot(
     message: job.message,
     error: job.error,
     failureSamples: [...job.failureSamples],
+    preExpiryRefresh: job.preExpiryRefresh
+      ? {
+          ...job.preExpiryRefresh,
+          reasons: { ...job.preExpiryRefresh.reasons },
+        }
+      : null,
     options: {
       clientId: opts.clientId,
       limit: opts.limit,
@@ -337,6 +351,7 @@ function createBackfillJob(opts: BackfillOptions, mode: BackfillJobMode, message
     message,
     error: null,
     failureSamples: [],
+    preExpiryRefresh: opts.mode === 'preexpiry_refresh' ? createPreExpiryRefreshProof() : null,
     startedAt: Date.now(),
     finishedAt: null,
   };
@@ -598,6 +613,17 @@ async function runBackfill(
         : 'fresh';
       const effectiveWeightOz = getBackfillOrderWeightOz(row);
       const weightLabel = effectiveWeightOz ?? row.weightOz;
+      const recordPreExpiryOutcome = (after: unknown, updated: boolean) => {
+        if (opts.mode !== 'preexpiry_refresh' || !job.preExpiryRefresh) return;
+        recordPreExpiryRefreshResult(job.preExpiryRefresh, {
+          before: row.bestRateJson,
+          after,
+          updated,
+        });
+      };
+      if (opts.mode === 'preexpiry_refresh' && job.preExpiryRefresh) {
+        recordPreExpirySelection(job.preExpiryRefresh, preExpiryRefreshReason);
+      }
 
       // PS-120 (producer): the job has PICKED this order up to rate it -> mark `rating`. The
       // FE classifier shows "actively rating" (calculating) for this row, bounded by the
@@ -645,6 +671,7 @@ async function runBackfill(
       if (!dims) {
         await resolveRateJob();
         job.skipped++;
+        recordPreExpiryOutcome(null, false);
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
             `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
@@ -752,6 +779,7 @@ async function runBackfill(
 
         if (!best) {
           job.skipped++;
+          recordPreExpiryOutcome(null, false);
           if (job.failureSamples.length < 5) {
             job.failureSamples.push(
               `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`
@@ -840,6 +868,7 @@ async function runBackfill(
           // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
           if (await isPersistedBestDowngrade(row.id, stampedBest)) {
             job.skipped++;
+            recordPreExpiryOutcome(stampedBest, false);
             if (job.failureSamples.length < 5) {
               job.failureSamples.push(
                 `order ${row.id} (${row.orderNumber}): kept cheaper fresh best (PS-271 no-downgrade) — re-quote was more expensive for the same inputs`
@@ -865,10 +894,12 @@ async function runBackfill(
                 },
               });
             job.updated++;
+            recordPreExpiryOutcome(stampedBest, true);
           }
         }
       } catch (err) {
         job.failed++;
+        recordPreExpiryOutcome(null, false);
         const msg = (err as Error).message ?? 'unknown';
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
