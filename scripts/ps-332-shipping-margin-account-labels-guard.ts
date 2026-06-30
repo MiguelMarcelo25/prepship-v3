@@ -10,6 +10,7 @@ import {
   buildShippingMarginRow,
   type ShippingMarginInputRow,
 } from '../src/services/shipping-margin-analytics';
+import { resolveShippingMarginAccountLabels } from '../src/services/shipping-margin-account-labels';
 
 let failures = 0;
 
@@ -44,6 +45,7 @@ function row(overrides: Partial<ShippingMarginInputRow> = {}): ShippingMarginInp
     houseCustomerRate: null,
     carrierCode: 'ups',
     serviceCode: 'ups_ground',
+    trackingNumber: '1ZORION1234567890',
     providerAccountId: 607855,
     providerAccountNickname: null,
     ...overrides,
@@ -67,6 +69,29 @@ check('row with providerAccountId but missing nickname can consume backend-resol
   (resolverNickname as any).accountDisplayName === 'UPS Direct / GG6381' &&
   (resolverNickname as any).accountDisplaySource === 'carrier_resolver',
   resolverNickname);
+
+const liveStyleResolvedRows = await resolveShippingMarginAccountLabels([
+  row({
+    providerAccountId: 596001,
+    providerAccountNickname: null,
+    resolvedProviderAccountNickname: null,
+    carrierCode: 'ups',
+    serviceCode: 'ups_ground',
+    trackingNumber: '1ZR05H19YW39876873',
+  }),
+], async (providerAccountId, carrierCode, trackingNumber, clientId) => {
+  return providerAccountId === 596001 &&
+    carrierCode === 'ups' &&
+    trackingNumber === '1ZR05H19YW39876873' &&
+    clientId === 4
+    ? 'ORION'
+    : null;
+});
+const liveStyleResolvedRow = buildShippingMarginRow(liveStyleResolvedRows[0]!);
+check('live-style row with known providerAccountId and missing persisted nickname resolves through backend account resolver',
+  liveStyleResolvedRow.accountDisplayName === 'ORION' &&
+  liveStyleResolvedRow.accountDisplaySource === 'carrier_resolver',
+  liveStyleResolvedRow);
 
 const shippBrokered = buildShippingMarginRow(row({
   providerAccountId: 10000025,
@@ -139,6 +164,7 @@ check('backend owner defines accountDisplayName/accountDisplaySource on row and 
   serviceSrc.includes('resolvedProviderAccountNickname'));
 check('shipping-margin read query resolves account labels read-time without writing shipments',
   /resolvedProviderAccountNickname/.test(serviceSrc) &&
+  /resolveShippingMarginAccountLabels/.test(serviceSrc) &&
   !/\.insert\(|\.update\(|\.delete\(/.test(serviceSrc));
 check('shared Dashboard/Billing table renders backend accountDisplayName before legacy nickname',
   /accountDisplayName/.test(tableSrc) &&

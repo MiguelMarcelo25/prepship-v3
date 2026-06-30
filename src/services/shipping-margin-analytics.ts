@@ -5,6 +5,7 @@ import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { shipments } from '../db/schema/shipments';
 import { intArraySql, normalizeScopeIds } from '../lib/scope-sql';
+import { resolveShippingMarginAccountLabels } from './shipping-margin-account-labels';
 import {
   isShippBrokeredServiceCode,
   SHIPP_BROKERED_ACCOUNT_LABEL,
@@ -48,6 +49,7 @@ export type ShippingMarginInputRow = {
   // PS-296: carrier/service/account identity for the breakdown + provider filter.
   carrierCode: string | null;
   serviceCode: string | null;
+  trackingNumber?: string | null;
   providerAccountId: number | string | null;
   providerAccountNickname: string | null;
   resolvedProviderAccountNickname?: string | null;
@@ -475,6 +477,7 @@ export async function shippingMarginAnalytics(
       ${orderCompetitiveRate.customerRate}::text as "houseCustomerRate",
       ${shipments.carrierCode} as "carrierCode",
       ${shipments.serviceCode} as "serviceCode",
+      ${shipments.trackingNumber} as "trackingNumber",
       ${shipments.providerAccountId} as "providerAccountId",
       ${shipments.providerAccountNickname} as "providerAccountNickname",
       provider_account_names.provider_account_nickname as "resolvedProviderAccountNickname"
@@ -513,9 +516,10 @@ export async function shippingMarginAnalytics(
       and ${scopePredicate}
     order by ${shippedAt} desc, ${shipments.id} desc
   `);
+  const resolvedRows = await resolveShippingMarginAccountLabels(rawRows);
 
   return buildShippingMarginAnalytics(
-    rawRows.map((row) => buildShippingMarginRow(row)),
+    resolvedRows.map((row) => buildShippingMarginRow(row)),
     { dateFrom: input.dateFrom, dateTo: input.dateTo },
   );
 }
