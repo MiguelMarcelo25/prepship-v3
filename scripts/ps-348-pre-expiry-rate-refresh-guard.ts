@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { resolveRateQuoteForPurchase } from '../src/services/shipping-workflow/rate-quote-snapshot';
 import {
   createPreExpiryRefreshProof,
   recordPreExpiryRefreshResult,
@@ -28,6 +27,15 @@ function ok(name: string, pass: boolean, detail?: string): Check {
   return { name, pass, detail };
 }
 
+Object.assign(process.env, {
+  DATABASE_URL: process.env.DATABASE_URL ?? 'postgres://guard:guard@127.0.0.1:5432/guard',
+  SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://guard.supabase.co',
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ?? 'guard-anon',
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ?? 'guard-service',
+  SUPABASE_JWT_SECRET: process.env.SUPABASE_JWT_SECRET ?? 'guard-secret',
+  NODE_ENV: process.env.NODE_ENV ?? 'test',
+});
+
 const packageJson = read('package.json');
 const ratesBackfill = read('src/services/rates-backfill.ts');
 const syncScheduler = read('src/services/sync-scheduler.ts');
@@ -39,6 +47,7 @@ const refreshRequestSource = maybeRead('src/services/rate-preexpiry-refresh-requ
 const docSource = maybeRead('docs/ps-tickets/ps-348-pre-expiry-rate-refresh-proof.md');
 
 const now = Date.parse('2026-06-29T12:00:00.000Z');
+const { resolveRateQuoteForPurchase } = await import('../src/services/shipping-workflow/rate-quote-snapshot');
 const expiredProof = resolveRateQuoteForPurchase({
   now,
   ttlMs: 60 * 60 * 1000,
@@ -72,7 +81,8 @@ const checks: Check[] = [
     'PS-348 has a focused backend proof module instead of growing the backfill file',
     proofSource.includes('createPreExpiryRefreshProof') &&
       proofSource.includes('recordPreExpirySelection') &&
-      proofSource.includes('recordPreExpiryRefreshResult'),
+      proofSource.includes('recordPreExpiryRefreshResult') &&
+      proofSource.includes('liveRefreshed'),
   ),
   ok(
     'PS-348 has a focused backend refresh-request module instead of growing the backfill file',
@@ -130,12 +140,17 @@ const checks: Check[] = [
       /recordPreExpiryRefreshResult/.test(ratesBackfill),
   ),
   ok(
+    'pre-expiry refresh result proof ties saved tuple to forced live non-cached getRates result',
+    /recordPreExpiryRefreshResult\(job\.preExpiryRefresh,\s*\{[\s\S]*forceRefresh:\s*rateFetchDecision\.forceRefresh[\s\S]*cached:\s*result\.cached/.test(ratesBackfill),
+  ),
+  ok(
     'PS-348 proof doc records scheduler/progress/log proof boundary',
     docSource.includes('## Scheduler Proof') &&
       docSource.includes('near-expiry') &&
       docSource.includes('cacheExpiresAt') &&
       docSource.includes('customerRateAmount') &&
       docSource.includes('rateCostAmount') &&
+      docSource.includes('liveRefreshed') &&
       docSource.includes('No shipped/cancelled surfaces are touched'),
   ),
   ok(
@@ -212,9 +227,16 @@ if (proofSource) {
     cacheExpiresAt: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
   };
   recordPreExpirySelection(proof, 'near_expiry');
-  recordPreExpiryRefreshResult(proof, { before, after, updated: true });
+  recordPreExpiryRefreshResult(proof, {
+    before,
+    after,
+    updated: true,
+    forceRefresh: true,
+    cached: false,
+  });
   checks.push(
     ok('proof records near-expiry selected rows', proof.selected === 1 && proof.reasons.near_expiry === 1, JSON.stringify(proof)),
+    ok('proof records forced-live non-cached pre-expiry refreshes', proof.liveRefreshed === 1, JSON.stringify(proof)),
     ok('proof records pushed-forward cacheExpiresAt after refresh', proof.pushedForward === 1, JSON.stringify(proof)),
     ok('proof records customer and internal tuple refreshed together', proof.tupleRefreshed === 1, JSON.stringify(proof)),
   );

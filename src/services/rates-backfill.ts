@@ -620,12 +620,18 @@ async function runBackfill(
         : 'fresh';
       const effectiveWeightOz = getBackfillOrderWeightOz(row);
       const weightLabel = effectiveWeightOz ?? row.weightOz;
-      const recordPreExpiryOutcome = (after: unknown, updated: boolean) => {
+      const recordPreExpiryOutcome = (
+        after: unknown,
+        updated: boolean,
+        evidence?: { forceRefresh?: boolean; cached?: boolean },
+      ) => {
         if (opts.mode !== 'preexpiry_refresh' || !job.preExpiryRefresh) return;
         recordPreExpiryRefreshResult(job.preExpiryRefresh, {
           before: row.bestRateJson,
           after,
           updated,
+          forceRefresh: evidence?.forceRefresh,
+          cached: evidence?.cached,
         });
       };
       if (opts.mode === 'preexpiry_refresh' && job.preExpiryRefresh) {
@@ -791,7 +797,10 @@ async function runBackfill(
 
         if (!best) {
           job.skipped++;
-          recordPreExpiryOutcome(null, false);
+          recordPreExpiryOutcome(null, false, {
+            forceRefresh: rateFetchDecision.forceRefresh,
+            cached: result.cached,
+          });
           if (job.failureSamples.length < 5) {
             job.failureSamples.push(
               `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`
@@ -880,7 +889,10 @@ async function runBackfill(
           // equal incoming always overwrites. The operator's deliberate FE save is a separate path.
           if (await isPersistedBestDowngrade(row.id, stampedBest)) {
             job.skipped++;
-            recordPreExpiryOutcome(stampedBest, false);
+            recordPreExpiryOutcome(stampedBest, false, {
+              forceRefresh: rateFetchDecision.forceRefresh,
+              cached: result.cached,
+            });
             if (job.failureSamples.length < 5) {
               job.failureSamples.push(
                 `order ${row.id} (${row.orderNumber}): kept cheaper fresh best (PS-271 no-downgrade) — re-quote was more expensive for the same inputs`
@@ -906,7 +918,10 @@ async function runBackfill(
                 },
               });
             job.updated++;
-            recordPreExpiryOutcome(stampedBest, true);
+            recordPreExpiryOutcome(stampedBest, true, {
+              forceRefresh: rateFetchDecision.forceRefresh,
+              cached: result.cached,
+            });
           }
         }
       } catch (err) {

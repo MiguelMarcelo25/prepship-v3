@@ -18,8 +18,11 @@ push `cacheExpiresAt` forward instead of merely reusing the same expiring cache
 entry. Fresh rows remain cache-allowed.
 
 The job snapshot carries `preExpiryRefresh`, including selected reason counts,
-refreshed/skipped counts, `pushedForward`, and `tupleRefreshed`.
+refreshed/skipped counts, `liveRefreshed`, `pushedForward`, and
+`tupleRefreshed`.
 
+`liveRefreshed` proves the persisted row came from a forced live, non-cached
+`getRates` result, not from reprocessing the same expiring cache entry.
 `pushedForward` proves the refreshed backend tuple has a later `cacheExpiresAt`
 than the previous visible tuple. `tupleRefreshed` proves the customer-facing
 `customerRateAmount` and internal `rateCostAmount` are present together on the

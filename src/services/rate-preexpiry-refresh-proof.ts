@@ -18,6 +18,7 @@ export type PreExpiryRefreshProof = {
   selected: number;
   refreshed: number;
   skipped: number;
+  liveRefreshed: number;
   pushedForward: number;
   tupleRefreshed: number;
   reasons: Record<RatePreExpiryRefreshReason, number>;
@@ -27,6 +28,8 @@ export type PreExpiryRefreshResultInput = {
   before: unknown;
   after: unknown;
   updated: boolean;
+  forceRefresh?: boolean;
+  cached?: boolean;
 };
 
 function createReasonCounters(): Record<RatePreExpiryRefreshReason, number> {
@@ -69,6 +72,7 @@ export function createPreExpiryRefreshProof(): PreExpiryRefreshProof {
     selected: 0,
     refreshed: 0,
     skipped: 0,
+    liveRefreshed: 0,
     pushedForward: 0,
     tupleRefreshed: 0,
     reasons: createReasonCounters(),
@@ -92,6 +96,9 @@ export function recordPreExpiryRefreshResult(
     return;
   }
   proof.refreshed += 1;
+  if (input.forceRefresh === true && input.cached === false) {
+    proof.liveRefreshed += 1;
+  }
 
   const beforeExpiresAt = rateCacheExpiresAtMs(input.before);
   const afterExpiresAt = rateCacheExpiresAtMs(input.after);
