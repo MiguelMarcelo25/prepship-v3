@@ -108,7 +108,8 @@ import {
   type PersistentQueueJobKind,
   type PersistentQueueOrderRef,
 } from './orders-persistent-queue-job'
-import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters'
+import type { OrdersDateFilter } from './orders-view-filters'
+import { resolveOrdersDateRangeForFilter } from './orders-date-query-contract'
 // PS-258/PS-166: the Awaiting orders ORDER/sort computation lifted to a pure, testable owner.
 // (buildSkuCompositionKey now lives only in orders-filtered-sort, where the sku-sort moved.)
 // PS-166/PS-306/PS-258: pure filter/sort derivation memos extracted VERBATIM.
@@ -999,20 +1000,10 @@ export default function OrdersView({
     }
   }
 
-  const dateRange = dateFilter === 'custom'
-    ? {
-      start: customDateFrom || undefined,
-      end: customDateTo || undefined,
-    }
-    : (() => {
-      const range = getOrdersDateRange(dateFilter)
-      if (!range) return { start: undefined, end: undefined }
-
-      return {
-        start: range.start.toISOString().split('T')[0],
-        end: range.end.toISOString().split('T')[0],
-      }
-    })()
+  const dateRange = resolveOrdersDateRangeForFilter(dateFilter, {
+    start: customDateFrom,
+    end: customDateTo,
+  })
 
   // PS-317: the Export CSV action lives in useCsvExport.
   const { csvExporting, handleExportCsv } = useCsvExport({ currentStatus, dateRange, showToast })

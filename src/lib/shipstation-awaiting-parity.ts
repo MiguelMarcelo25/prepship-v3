@@ -26,10 +26,11 @@ export type ShipStationAwaitingParityFindingKind =
   | 'in_sync'
   | 'awaiting_with_terminal_evidence'
   | 'local_awaiting_missing_from_shipstation'
-  | 'terminal_local_but_shipstation_awaiting';
+  | 'terminal_local_but_shipstation_awaiting'
+  | 'shipstation_awaiting_missing_from_prepship';
 
 export type ShipStationAwaitingParityFinding = {
-  id: number;
+  id: number | null;
   orderNumber: string;
   externalOrderId: string | null;
   storeId: number | null;
@@ -141,8 +142,12 @@ export function classifyShipStationAwaitingParity(
   for (const liveOrder of liveAwaitingOrders) {
     for (const key of keyVariants(liveOrder)) liveKeys.add(key);
   }
+  const localKeys = new Set<string>();
+  for (const localOrder of localOrders) {
+    for (const key of keyVariants(localOrder)) localKeys.add(key);
+  }
 
-  return localOrders.map((order) => {
+  const findings: ShipStationAwaitingParityFinding[] = localOrders.map((order): ShipStationAwaitingParityFinding => {
     const liveAwaiting = keyVariants(order).some((key) => liveKeys.has(key));
     const orderNumber = cleanString(order.orderNumber);
     const externalOrderId = nullableString(order.externalOrderId);
@@ -231,6 +236,36 @@ export function classifyShipStationAwaitingParity(
       blockedByLockdown: false,
     };
   });
+
+  const reportedMissingLiveKeys = new Set<string>();
+  for (const liveOrder of liveAwaitingOrders) {
+    const variants = keyVariants(liveOrder);
+    if (variants.length === 0) continue;
+    if (variants.some((key) => localKeys.has(key))) continue;
+
+    const firstVariant = variants[0];
+    if (!firstVariant) continue;
+    const primaryKey = keyFor(liveOrder) ?? firstVariant;
+    if (reportedMissingLiveKeys.has(primaryKey)) continue;
+    reportedMissingLiveKeys.add(primaryKey);
+
+    findings.push({
+      id: null,
+      orderNumber: cleanString(liveOrder.orderNumber),
+      externalOrderId: nullableString(liveOrder.externalOrderId),
+      storeId: nullableNumber(liveOrder.storeId),
+      currentStatus: 'missing',
+      targetStatus: null,
+      kind: 'shipstation_awaiting_missing_from_prepship',
+      reason: 'live ShipStation awaiting order is missing from local PrepShip orders under the selected filter',
+      sourceEvidence: ['live ShipStation awaiting'],
+      liveAwaiting: true,
+      eligibleWithOverride: false,
+      blockedByLockdown: false,
+    });
+  }
+
+  return findings;
 }
 
 export function shouldApplyShipStationAwaitingParityCandidate(

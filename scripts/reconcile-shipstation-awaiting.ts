@@ -65,10 +65,13 @@ type ShipStationAwaitingParityRunStatus = {
   blocked: number;
   needsConfirmation: number;
   shippedOverrideEligible: number;
+  missingFromPrepShip: number;
+  localAwaitingMissingFromShipStation: number;
+  terminalLocalButShipStationAwaiting: number;
   updatedSafe: number | null;
   updatedOverride: number | null;
   sampleFindings: Array<{
-    id: number;
+    id: number | null;
     orderNumber: string | null;
     externalOrderId: string | null;
     storeId: number | null;
@@ -583,6 +586,12 @@ async function main(): Promise<void> {
     const overrideSafe = actionable.filter(shouldApplyShipStationAwaitingParityOverrideCandidate);
     const testFixtureCleanup = actionable.filter(isTestFixtureFinding);
     const blocked = actionable.filter((finding) => finding.blockedByLockdown);
+    const missingFromPrepShip = actionable.filter(
+      (finding) => finding.kind === 'shipstation_awaiting_missing_from_prepship',
+    );
+    const terminalLocalButShipStationAwaiting = actionable.filter(
+      (finding) => finding.kind === 'terminal_local_but_shipstation_awaiting',
+    );
     // Only the local-awaiting-missing-from-ShipStation findings are deleted-upstream suspects. We pin the
     // explicit kind (not the `targetStatus === null` proxy) so a future classifier kind that also leaves
     // targetStatus null can never silently flow into the auto-cancel sweep.
@@ -596,6 +605,9 @@ async function main(): Promise<void> {
     console.log(`\n[shipstation-awaiting] ${apply ? 'APPLY' : 'DRY RUN'}`);
     console.log(
       `liveAwaiting=${liveAwaiting.length} localChecked=${localRows.length} findings=${actionable.length} safeCandidates=${safe.length} testFixtureCleanup=${testFixtureCleanup.length} blocked=${blocked.length} needsConfirmation=${needsConfirmation.length}`,
+    );
+    console.log(
+      `missingFromPrepShip=${missingFromPrepShip.length} localAwaitingMissingFromShipStation=${needsConfirmation.length} terminalLocalButShipStationAwaiting=${terminalLocalButShipStationAwaiting.length}`,
     );
 
     if (allowShippedOverride) {
@@ -641,6 +653,15 @@ async function main(): Promise<void> {
           : 'not eligible';
         console.log(
           `- ${finding.orderNumber} (${finding.id}) ${finding.currentStatus} -> ${finding.targetStatus}: ${eligible}; ${finding.reason}`,
+        );
+      }
+    }
+
+    if (missingFromPrepShip.length) {
+      console.log('\nMissing from PrepShip (live ShipStation awaiting only):');
+      for (const finding of missingFromPrepShip) {
+        console.log(
+          `- ${finding.orderNumber || '(no order number)'} ext=${finding.externalOrderId ?? '-'} store=${finding.storeId ?? '-'}: ${finding.reason}`,
         );
       }
     }
@@ -727,6 +748,9 @@ async function main(): Promise<void> {
       blocked: blocked.length,
       needsConfirmation: needsConfirmation.length,
       shippedOverrideEligible: overrideSafe.length,
+      missingFromPrepShip: missingFromPrepShip.length,
+      localAwaitingMissingFromShipStation: needsConfirmation.length,
+      terminalLocalButShipStationAwaiting: terminalLocalButShipStationAwaiting.length,
       updatedSafe,
       updatedOverride,
       sampleFindings: actionable.slice(0, 25).map((finding) => ({

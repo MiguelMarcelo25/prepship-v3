@@ -47,8 +47,8 @@ const SettingsView = lazy(() => import('./components/Views/SettingsView'))
 const BillingView = lazy(() => import('./components/Views/BillingView'))
 const ManifestsView = lazy(() => import('./components/Views/ManifestsView'))
 import { formatSyncPill } from './components/Views/orders-parity'
+import { resolveOrdersDateRangeForFilter } from './components/Views/orders-date-query-contract'
 import {
-  getResolvedDateRange,
   INVENTORY_TAB_PATHS,
   pathToRoute,
   VALID_STATUSES,
@@ -257,9 +257,14 @@ export default function Home() {
   // idempotent across rapid clicks — every click produces a distinct
   // value, so the OrdersView useEffect never misses an event.
   const [filterResetVersion, setFilterResetVersion] = useState(0)
+  const [dateFilter, setDateFilter] = useState<OrdersDateFilter>('last-30')
+  const [ordersDateRange, setOrdersDateRange] = useState<{ start?: string; end?: string }>(
+    () => resolveOrdersDateRangeForFilter('last-30'),
+  )
   const resetAllOrdersFilters = () => {
     setSearchQuery('')
     setDateFilter('last-30')
+    setOrdersDateRange(resolveOrdersDateRangeForFilter('last-30'))
     setFilterResetVersion((v) => v + 1)
   }
   // Separate slot for SKU pre-fills coming from Dashboard clicks. Routed into
@@ -270,10 +275,12 @@ export default function Home() {
     sku: '',
     requestId: 0,
   })
-  const [dateFilter, setDateFilter] = useState<OrdersDateFilter>('last-30')
-  const [ordersDateRange, setOrdersDateRange] = useState<{ start?: string; end?: string }>(
-    () => getResolvedDateRange('last-30'),
-  )
+  function handleOrdersDateFilterChange(nextFilter: OrdersDateFilter) {
+    setDateFilter(nextFilter)
+    if (nextFilter !== 'custom') {
+      setOrdersDateRange(resolveOrdersDateRangeForFilter(nextFilter))
+    }
+  }
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([])
   // Initial value pulled from URL so a deep-link like
   // /orders/awaiting_shipment/12345 opens the drawer immediately on
@@ -1140,7 +1147,7 @@ export default function Home() {
                 onSearchQueryChange={setSearchQuery}
                 activeStore={activeStore}
                 dateFilter={dateFilter}
-                onDateFilterChange={setDateFilter}
+                onDateFilterChange={handleOrdersDateFilterChange}
                 onResolvedDateRangeChange={setOrdersDateRange}
                 // Counter from Home — bumps every time the user clicks
                 // a sidebar entry. OrdersView watches this and clears

@@ -12,6 +12,7 @@ const liveAwaiting = [
   { externalOrderId: '287241662', orderNumber: '200014491676217', storeId: 376661 },
   { externalOrderId: '287226234', orderNumber: '200014583978848', storeId: 376661 },
   { externalOrderId: '999', orderNumber: 'fresh-label', storeId: 111 },
+  { externalOrderId: '1000', orderNumber: 'missing-local-row', storeId: 378060 },
 ];
 
 const findings = classifyShipStationAwaitingParity(
@@ -93,6 +94,16 @@ assert.equal(freshLabel?.kind, 'terminal_local_but_shipstation_awaiting');
 assert.equal(freshLabel?.eligibleWithOverride, false);
 assert.equal(shouldApplyShipStationAwaitingParityCandidate(freshLabel!), false);
 assert.equal(shouldApplyShipStationAwaitingParityOverrideCandidate(freshLabel!), false);
+
+const missingLocal = byOrderNumber.get('missing-local-row');
+assert.equal(missingLocal?.id, null);
+assert.equal(missingLocal?.kind, 'shipstation_awaiting_missing_from_prepship');
+assert.equal(missingLocal?.targetStatus, null);
+assert.equal(
+  shouldApplyShipStationAwaitingParityCandidate(missingLocal!),
+  false,
+  'ShipStation-only awaiting rows must be reported but never auto-mutated',
+);
 
 const pkg = readFileSync('package.json', 'utf8');
 assert.match(pkg, /shipstation:awaiting:diff/);
