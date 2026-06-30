@@ -27,7 +27,7 @@ export function renderBestRateFinalCell(order: OrderSummaryDto) {
 
 // PS-356/PS-357: C. Shipping Rate consumes backend customer money. Best Rate display
 // policy lives in the Best Rate cell and also reads the same backend tuple.
-export function renderRateCostCell(order: OrderSummaryDto) {
+export function renderCShippingRateCell(order: OrderSummaryDto) {
   const customerShippingRate = getBackendRowMoney(order)?.customerRateAmount
   return customerShippingRate != null
     ? <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatMoney(customerShippingRate)}</span>

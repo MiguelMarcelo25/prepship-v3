@@ -25,7 +25,7 @@ import {
   getBestRateServiceCode,
 } from './orders-row-display'
 // PS-166/PS-306 (decomposition): pure money/rate cell renderers extracted to OrdersRateCells.
-import { renderOrderTotalCell, renderBestRateFinalCell, renderRateCostCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
+import { renderOrderTotalCell, renderBestRateFinalCell, renderCShippingRateCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
 // PS-166/PS-306/PS-258 (Wave 2): the four leaf cell renderers (Best Rate / Ship
 // Margin / Carrier / Shipping Account) extracted VERBATIM to ./orders/cells/order-cells.
 // renderTableCell stays here as a thin dispatcher; the component-scoped closures
@@ -6081,7 +6081,7 @@ export default function OrdersView({
       case 'bestRateFinal':
         return renderBestRateFinalCell(order)
       case 'ratecost':
-        return renderRateCostCell(order)
+        return renderCShippingRateCell(order)
       case 'margin':
         return renderMargin(order)
       case 'marketplacefee':

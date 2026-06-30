@@ -290,15 +290,13 @@ export default function RateRowItem({
         )}
         {carrierBadgeLarge(r.carrierCode)}
         <div style={{ textAlign: 'right', minWidth: 145 }}>
-          {/* PS-308: the SHIPP house-account row no longer renders a STACKED TUPLE (customer_rate /
-              Rate Cost / Margin in one price cell — the exact thing this card removes, DoD: "no
-              stacked tuple display in Rate Browser"). Instead the customer comparison rate is the
-              row's PRIMARY price (same headline grammar as every other rate) and the internal DJR
-              Rate Cost is a delineated, admin-only annotation beneath it. houseTuple is the parent's
+          {/* PS-308/PS-357: the SHIPP house-account row no longer renders a stacked tuple. The
+              C. Shipping Rate is the row's primary comparison price, and the internal DJR
+              Purchase Cost is a delineated, admin-only annotation beneath it. houseTuple is the parent's
               pass-through of the canonical bestRate and is null for non-financial viewers (redacted)
               and on every non-house row, so its presence already gates the internal figure. The
-              FE-computed Margin line is dropped — margin is backend-owned and shown in the
-              Awaiting/Shipped Rate Cost columns — so the row performs no money math. HOUSE badge
+              FE-computed margin line is dropped because margin is backend-owned and shown in the
+              Awaiting/Shipped financial columns, so the row performs no money math. HOUSE badge
               retained. Supersedes PS-292's tuple direction; non-house / blocked rows fall back to
               the normal single price. */}
           {houseTuple && !blocked ? (
@@ -321,7 +319,7 @@ export default function RateRowItem({
                 <span style={{ fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase' }}>
                   Internal
                 </span>
-                {' · Rate Cost $'}
+                {' · DJR Purchase Cost $'}
                 {houseTuple.drpCost.toFixed(2)}
               </div>
             </div>

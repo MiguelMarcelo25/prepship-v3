@@ -2,8 +2,8 @@
  * PS-308/PS-356 (FE) guard — the separated C. Shipping Rate column exists and reads the backend field.
  *
  * The PS-308 audit found the existing guard "stays green while the headline deliverable
- * (the Awaiting/Shipped Rate Cost columns) is absent." This guard closes that: it asserts
- * the 'ratecost' compatibility key is registered, hidden on Cancelled, sortable by the backend
+ * (the Awaiting/Shipped customer billing columns) is absent." This guard closes that: it asserts
+ * the 'ratecost' legacy compatibility key is registered, hidden on Cancelled, sortable by the backend
  * customer billing amount, rendered from getBackendRowMoney().customerRateAmount (NOT recomputed), and that the FE money
  * getter exposes the separated backend fields. (On Shipped, the Best Rate column relabels to
  * Selected Rate, so the same compatibility key now gives "Selected Rate + C. Shipping Rate".)
@@ -44,11 +44,11 @@ check('FE money getter exposes the separated backend fields',
   /customerRateAmount: toNumberValue\(money\.customerRateAmount\)/.test(rowDisplay));
 
 // PS-166/PS-306: OrdersView now DELEGATES the rate cells to the extracted module; the backend
-// money read lives in orders-rate-cells.tsx (renderRateCostCell), so assert it there.
-check("OrdersView delegates the C. Shipping cell to renderRateCostCell (PS-166 extraction)",
-  /case 'ratecost':\s*\n\s*return renderRateCostCell\(order\)/.test(ordersView));
-check("renderRateCostCell renders from the backend money tuple",
-  /export function renderRateCostCell/.test(rateCells) &&
+// money read lives in orders-rate-cells.tsx (renderCShippingRateCell), so assert it there.
+check("OrdersView delegates the C. Shipping cell to renderCShippingRateCell (PS-166 extraction)",
+  /case 'ratecost':\s*\n\s*return renderCShippingRateCell\(order\)/.test(ordersView));
+check("renderCShippingRateCell renders from the backend money tuple",
+  /export function renderCShippingRateCell/.test(rateCells) &&
   /getBackendRowMoney\(order\)\?\.customerRateAmount/.test(rateCells));
 check("C. Shipping cell does NOT recompute (no client-side cost math)",
   !/customerRateAmount\s*[-+*/]\s/.test(rateCells) &&

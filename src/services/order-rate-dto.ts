@@ -81,9 +81,10 @@ export interface OrderBestRateDto {
   // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
-  // PS-308/PS-334: separated rate money model. Best/Selected Rate uses customerRateAmount; internal
-  // provider cost uses rateCostAmount. houseRateAmount is a deprecated compatibility alias derived
-  // from rateCostAmount only; it is not a separate SOT or visible House Rate column.
+  // PS-356: separated rate money model. customerRateAmount is C. Shipping Rate
+  // (customer billing); rateCostAmount is Best/Selected purchase cost. houseRateAmount
+  // is a deprecated compatibility alias derived from rateCostAmount only; it is not a
+  // separate SOT or visible operator column.
   customerRateAmount: number | null;
   rateCostAmount: number | null;
   houseRateAmount: number | null;

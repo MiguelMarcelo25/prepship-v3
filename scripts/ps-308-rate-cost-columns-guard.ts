@@ -1,5 +1,5 @@
 /**
- * PS-308 guard - separated Best/Selected Rate, Rate Cost, and Shipping Margin.
+ * PS-308/PS-357 guard - separated Best/Selected purchase cost, C. Shipping Rate, and Shipping Margin.
  *
  * Offline only: no DB, no network, no providers, no labels, no postage, no
  * marketplace notifications, no queue mutation, and no shipped/cancelled data.
@@ -181,7 +181,7 @@ const splitRate = {
 };
 
 check(
-  'combined-rate owner keeps customer ranking separate from internal Rate Cost',
+  'combined-rate owner keeps customer billing separate from DJR purchase cost',
   rateTotal(splitRate) === 12 && rateCostTotal(splitRate) === 8.5,
   { customerTotal: rateTotal(splitRate), rateCost: rateCostTotal(splitRate) },
 );
@@ -259,7 +259,7 @@ check(
 
 const houseStampTs = readFileSync('src/services/shipping-workflow/house-tuple-stamp.ts', 'utf8');
 check(
-  'house stamp writes separated customer rate and Rate Cost fields from internal cost owner',
+  'house stamp writes separated customer billing and DJR purchase cost fields from internal cost owner',
   /rateCostTotal/.test(houseStampTs) &&
     /customerRateAmount/.test(houseStampTs) &&
     /rateCostAmount/.test(houseStampTs) &&
@@ -269,7 +269,7 @@ check(
 
 const ratesServiceTs = readFileSync('src/services/rates.ts', 'utf8');
 check(
-  'direct-carrier adapter emits explicit customer and internal Rate Cost amounts',
+  'direct-carrier adapter emits explicit customer billing and DJR purchase cost amounts',
   /customerRateAmount: amount/.test(ratesServiceTs) &&
     /rateCostAmount: rawShippingCost/.test(ratesServiceTs) &&
     /rateCostAmount/.test(ratesServiceTs) &&
@@ -280,9 +280,11 @@ const rateRowItemTs = readFileSync('web/src/components/RateRowItem.tsx', 'utf8')
 check(
   'Rate Browser no longer renders SHIPP House as a stacked price tuple',
   !/priceDisplay\(houseTuple\.drpCost,\s*houseTuple\.customerRate/.test(rateRowItemTs) &&
-    /Rate Cost/.test(rateRowItemTs) &&
-    /Margin/.test(rateRowItemTs) &&
-    /renderHouseBadge/.test(rateRowItemTs),
+    /DJR Purchase Cost/.test(rateRowItemTs) &&
+    /renderHouseBadge/.test(rateRowItemTs) &&
+    !/houseTuple\.customerRate\s*-\s*houseTuple\.drpCost/.test(rateRowItemTs) &&
+    !/Margin \$\{/.test(rateRowItemTs) &&
+    !/>\s*Margin \$/.test(rateRowItemTs),
 );
 
 const packageJson = readFileSync('package.json', 'utf8');

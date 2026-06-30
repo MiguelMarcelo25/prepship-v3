@@ -489,10 +489,11 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     markupAmount: toNumberValue(money.markupAmount),
     insuranceAddOn: toNumberValue(money.insuranceAddOn),
     marginPercent: toNumberValue(money.marginPercent),
-    // PS-308: the backend SEPARATED money fields — customer-facing Best/Selected Rate
-    // (customerRateAmount), the raw provider Rate Cost (rateCostAmount, financial-only —
+    // PS-356: the backend separated money fields. customerRateAmount is C. Shipping Rate
+    // (customer billing), rateCostAmount is Best/Selected purchase cost (financial-only,
     // null for non-financial viewers since the whole money tuple is backend-redacted), and
-    // the shipping margin. Read-only pass-through; the FE never recomputes these.
+    // shippingMarginAmount is the customer-vs-purchase spread. Read-only pass-through; the
+    // FE never recomputes these.
     customerRateAmount: toNumberValue(money.customerRateAmount),
     rateCostAmount: toNumberValue(money.rateCostAmount),
     houseRateAmount: toNumberValue(money.houseRateAmount),
@@ -693,10 +694,9 @@ export function renderVoidedLabelBadge() {
   )
 }
 
-// PS-220 (slice 4b): SHIPP house-account order. The displayed Best/Selected Rate is the
-// customer_rate DRP bills (cheapest eligible non-SHIPP); the green Margin is DRP's spread
-// over its actual SHIPP cost. Shows ONLY when the backend money tuple is markupSource
-// 'house_account' — never inferred client-side.
+// PS-220/PS-356: SHIPP house-account order. Best Rate shows the DJR purchase cost;
+// C. Shipping Rate shows the customer billing amount. Shows ONLY when the backend
+// money tuple is markupSource 'house_account' — never inferred client-side.
 export function renderHouseBadge() {
   return (
     <span
@@ -710,7 +710,7 @@ export function renderHouseBadge() {
         fontWeight: 700,
         cursor: 'help',
       }}
-      title="SHIPP house account: the shown rate is the customer_rate billed (cheapest eligible non-SHIPP); the green margin is DRP's spread over its SHIPP cost."
+      title="SHIPP house account: Best Rate shows DJR purchase cost; C. Shipping Rate shows customer billing."
     >
       HOUSE
     </span>

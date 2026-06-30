@@ -835,7 +835,7 @@ export function priceDisplay(
       style={{ lineHeight: 1.3 }}
       title={
         hasSeparateCost
-          ? `Customer Rate $${customerCost.toFixed(2)} | Rate Cost $${rateCost.toFixed(2)} | Spread $${spread.toFixed(2)}`
+          ? `C. Shipping Rate $${customerCost.toFixed(2)} | DJR Purchase Cost $${rateCost.toFixed(2)} | Margin $${spread.toFixed(2)}`
           : undefined
       }
     >

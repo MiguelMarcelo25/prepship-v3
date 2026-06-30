@@ -142,10 +142,11 @@ export type OrderRowMoneyDisplay = {
   // margin so display + guards never double-apply. 'house_account' => marked is the customer_rate
   // (next-best non-SHIPP), base is the SHIPP drp_cost, and NO carrier markupRule was applied.
   markupSource: 'carrier_markup' | 'house_account';
-  // PS-308/PS-334: explicit separated money model. Keep base/marked/markup above as compatibility
-  // aliases while API/UI callers move to these names: Best/Selected Rate = customerRateAmount,
-  // internal provider cost = rateCostAmount, Shipping Margin = shippingMarginAmount. houseRateAmount
-  // remains only as a deprecated compatibility alias derived from rateCostAmount for legacy payloads.
+  // PS-356: explicit separated money model. Keep base/marked/markup above as compatibility
+  // aliases while API/UI callers move to these names: C. Shipping Rate = customerRateAmount,
+  // Best/Selected purchase cost = rateCostAmount, Shipping Margin = shippingMarginAmount.
+  // houseRateAmount remains only as a deprecated compatibility alias derived from rateCostAmount
+  // for legacy payloads.
   customerRateAmount: number | null;
   rateCostAmount: number | null;
   houseRateAmount: number | null;

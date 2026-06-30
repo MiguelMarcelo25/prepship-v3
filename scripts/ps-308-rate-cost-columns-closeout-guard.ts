@@ -1,5 +1,5 @@
 /**
- * PS-308 closeout guard - separated Best/Selected Rate, Rate Cost, and Margin.
+ * PS-308/PS-357 closeout guard - separated Best/Selected purchase cost, C. Shipping Rate, and Margin.
  *
  * Offline only: no DB, network, providers, labels, postage, marketplace
  * notifications, queue mutation, or shipped/cancelled data mutation.
@@ -87,7 +87,7 @@ const splitRate = {
   customerRateAmount: 12,
   rateCostAmount: 8.5,
 };
-check('runtime fixture keeps customer ranking separate from internal Rate Cost',
+check('runtime fixture keeps customer billing separate from DJR purchase cost',
   rateTotal(splitRate) === 12 && rateCostTotal(splitRate) === 8.5);
 
 const normalized = normalizeOrderBestRateDto({
@@ -158,20 +158,20 @@ check('OrderBestRateDto preserves separated fields',
   /customerRateAmount/.test(orderRateDto) &&
     /rateCostAmount/.test(orderRateDto) &&
     /shippingMarginAmount/.test(orderRateDto));
-check('redaction owners scrub separated Rate Cost and margin fields',
+check('redaction owners scrub separated DJR purchase cost and margin fields',
   /rateCostAmount/.test(orderRedaction) &&
     /shippingMarginAmount/.test(orderRedaction) &&
     /rateCostAmount/.test(rateBrowserRedaction) &&
     /shippingMarginAmount/.test(rateBrowserRedaction));
 // PS-308 (2026-06-23): the Rate Browser row was corrected to the SEPARATED form — the customer
-// comparison rate is the primary price and the internal Rate Cost is a delineated admin block;
+// comparison rate is the primary price and the internal DJR Purchase Cost is a delineated admin block;
 // Margin is NOT rendered in the row (it lives in the Awaiting/Shipped columns, per the card's Rate
 // Browser spec). The prior assertion required a rendered "Margin" line, which pinned the very
 // stacked tuple this card removes; it is replaced with positive separation + tuple-absence checks.
-check('RateRowItem renders the customer rate as primary + a SEPARATED admin Rate Cost (no stacked tuple)',
+check('RateRowItem renders the customer rate as primary + a SEPARATED admin DJR Purchase Cost (no stacked tuple)',
   /houseTuple\.customerRate\.toFixed\(2\)/.test(rateRowItem) &&
     /data-ps308-internal-cost/.test(rateRowItem) &&
-    /Rate Cost/.test(rateRowItem) &&
+    /DJR Purchase Cost/.test(rateRowItem) &&
     /renderHouseBadge/.test(rateRowItem) &&
     !/houseTuple\.customerRate\s*-\s*houseTuple\.drpCost/.test(rateRowItem) &&
     !/Margin \$\{/.test(rateRowItem) &&
