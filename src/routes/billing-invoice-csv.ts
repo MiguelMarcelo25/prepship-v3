@@ -114,5 +114,5 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
 export function renderInvoiceCsv(details: InvoiceCsvDetailRow[]): string {
   const lines = [INVOICE_CSV_HEADERS.join(',')];
   for (const d of details) lines.push(renderInvoiceCsvRow(d));
-  return lines.join('\r\n');
+  return `\uFEFF${lines.join('\r\n')}`;
 }

@@ -86,6 +86,10 @@ function marginColor(value: number) {
   return 'var(--text3)'
 }
 
+function splitBillingDetailLines(value: string): string[] {
+  return value.split(/\r?\n| \| /).filter((line) => line.trim())
+}
+
 export function BillingDetailTable({
   detailState,
   detailPanelState,
@@ -257,7 +261,7 @@ export function BillingDetailTable({
               case 'itemNames':
                 return (
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={lineLabel}>
-                    {lineLabel ? lineLabel.split(' | ').map((name: string, index: number) => (
+                    {lineLabel ? splitBillingDetailLines(lineLabel).map((name: string, index: number) => (
                       <div key={`name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                     )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                   </div>
@@ -266,7 +270,7 @@ export function BillingDetailTable({
                 const skuText = row.itemSkus || ''
                 return (
                   <div style={{ fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
-                    {skuText ? skuText.split(' | ').map((sku: string, index: number) => (
+                    {skuText ? splitBillingDetailLines(skuText).map((sku: string, index: number) => (
                       <div key={`sku-${index}`}>{sku || '—'}</div>
                     )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                   </div>

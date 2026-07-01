@@ -12,7 +12,6 @@ import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
   BILLING_DETAIL_COLUMNS,
-  aggregateBillingDetailRowsByOrder,
   buildBackfillRefRatesToast,
   buildBillingConfigInput,
   buildBillingPackagePriceRows,
@@ -520,18 +519,13 @@ export default function BillingView() {
 
   const summaryTotals = useMemo(() => buildBillingSummaryTotals(filteredSummaryRows), [filteredSummaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
-  // Collapse per-lineType API rows into one row per order. Without this
-  // the same order shows up 2-5 times in the table — once per fee type
-  // — which is what we're fixing here.
+  // PS-362: /billing/details returns backend-owned order-level rows.
+  // React renders the DTO instead of collapsing raw billing fee lines.
   const mergedDetailRows = useMemo(
     () => {
-      const merged = aggregateBillingDetailRowsByOrder(detailState.rows)
-      // PS-275: the $0-shipping review flag rides on the per-order SHIPPING line
-      // only; the order-merge seeds from whichever line is first (often
-      // pick_pack), so OR it back across the order's raw lines here. feeWaived is
-      // order-level (set on every raw line by the backend), so it already
-      // survives the seed spread — this only rescues shippingZeroNeedsReview.
-      // Additive: rows without the flag are untouched.
+      const merged = detailState.rows
+      // Back-compat for old cached raw-line payloads. Fresh PS-362 payloads
+      // already carry this backend-owned order-level flag.
       const zeroReviewByOrderId = new Map<unknown, boolean>()
       for (const raw of detailState.rows) {
         const oid = (raw as { orderId?: unknown }).orderId

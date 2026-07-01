@@ -104,7 +104,8 @@ const fallbackRow: InvoiceCsvDetailRow = {
 const csv = renderInvoiceCsv([richRow, fallbackRow]);
 const lines = csv.split('\r\n');
 
-assert.equal(lines[0], INVOICE_CSV_HEADERS.join(','), 'first CSV line is the header row');
+assert.equal(csv.charCodeAt(0), 0xfeff, 'CSV starts with a UTF-8 BOM for Excel');
+assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'first CSV line is the header row');
 
 // Rich row: ship day extracted at UTC (calendar day, never timezone-shifted),
 // qty = 3+2 = 5, pickPackFee = 6.00+1.50 = 7.5, additional shown (addl>0) = 1.5,

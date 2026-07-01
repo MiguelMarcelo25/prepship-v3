@@ -287,7 +287,6 @@ const generateSchema = generateRawSchema
   });
 
 const detailsSchema = generateRawSchema
-  .extend({ limit: z.coerce.number().int().max(2000).optional() })
   .transform((v) => {
     const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
     return {
@@ -295,7 +294,6 @@ const detailsSchema = generateRawSchema
       clientIds: parseClientIds(v.clientIds),
       dateFrom: range?.fromUtc,
       dateTo: range?.toUtcExclusive,
-      limit: v.limit,
     };
   })
   .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
@@ -392,7 +390,6 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
     clientId: q.clientId,
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
-    limit: q.limit,
   }));
   return c.json({ data: rows });
 });
@@ -1104,8 +1101,8 @@ async function billingInvoiceData(
         where oi.order_id = b.order_id
           and oi.quantity > 0
       ) as skus,
-      -- PS-310: per-SKU rows so the EXPORT reuses the SAME canonical summarizer the
-      -- Billing detail SCREEN uses (summarizeBillingItemsForDetail) → ×N quantity +
+      -- PS-310/PS-362: per-SKU rows so the EXPORT reuses the SAME canonical summarizer the
+      -- Billing detail SCREEN uses (summarizeBillingItemsForDetail) -> xN quantity +
       -- duplicate-SKU aggregation, and screen vs export can never drift. The bare
       -- skus column above stays as the fallback for orders with no order_items rows.
       (
@@ -1170,8 +1167,8 @@ async function billingInvoiceData(
       shipping_amt: r.shipping_amt,
       storage_amt: r.storage_amt,
       row_total: r.row_total,
-      // PS-310: build the export SKU string from the SAME summarizer the detail screen
-      // uses (×N per SKU, duplicate aggregation); fall back to the bare string_agg when
+      // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
+      // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
       // the order has no order_items rows so legacy/imported orders still show their SKUs.
       skus: summarizeBillingItemsForDetail(r.item_rows).itemSkus ?? r.skus,
       package_cost_amt: r.package_cost_amt,
@@ -1456,7 +1453,7 @@ async function renderInvoiceXlsx(args: {
   items.columns = [
     { header: 'Ship Date', key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
     { header: 'Order #', key: 'orderNumber', width: 20 },
-    { header: 'SKUs', key: 'skus', width: 40 },
+    { header: 'SKUs', key: 'skus', width: 40, style: { alignment: { wrapText: true } } },
     // PS-217: billed box size (display) + billed box cost (the package_cost line).
     { header: 'Box Size', key: 'boxSize', width: 22 },
     { header: 'Box Cost', key: 'boxCost', width: 12, style: { numFmt: MONEY_FMT } },

@@ -58,6 +58,7 @@ import {
 import { getBundlesForOrders } from './shipment-bundles/bundle-read-model';
 import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-policy';
 import { env } from '../lib/env';
+import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -1652,7 +1653,7 @@ export async function billingInvoiceHeaderTotals(
   };
 }
 
-export async function billingDetails(input: GenerateInput & { limit?: number }) {
+export async function billingDetails(input: GenerateInput) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
   const rows = await db
@@ -1705,8 +1706,7 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         billingLineItemScopePredicate(input)
       )
     )
-    .orderBy(desc(billingLineItems.shipDate), desc(billingLineItems.id))
-    .limit(input.limit ?? 2000);
+    .orderBy(desc(billingLineItems.shipDate), desc(billingLineItems.id));
 
   const staleOrderIds = Array.from(
     new Set(
@@ -1823,7 +1823,7 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
   );
   const feeWaiverByOrderId = await readBillingFeeWaivers(detailOrderIds);
 
-  return Promise.all(
+  const detailRows = await Promise.all(
     rows.map(async (row) => {
       const fallbackShipment =
         row.shipmentId == null
@@ -2009,6 +2009,8 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       };
     })
   );
+
+  return toBillingDetailOrderRows(detailRows);
 }
 
 export async function upsertBillingConfig(

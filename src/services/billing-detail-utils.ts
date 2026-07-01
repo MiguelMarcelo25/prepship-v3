@@ -11,7 +11,8 @@ type BillingItemGroup = {
   qty: number;
 };
 
-const QTY_SUFFIX_MULTIPLY = '\u00d7';
+export const BILLING_ITEM_DETAIL_SEPARATOR = '\n';
+export const BILLING_ITEM_QTY_SUFFIX = 'x';
 
 function stringOrNull(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -38,7 +39,7 @@ function itemSkuOrFallback(record: Record<string, unknown>): string | null {
 }
 
 function formatQtyLabel(value: string, qty: number): string {
-  return qty > 1 ? `${value} ${QTY_SUFFIX_MULTIPLY}${qty}` : value;
+  return qty > 1 ? `${value} ${BILLING_ITEM_QTY_SUFFIX}${qty}` : value;
 }
 
 export function summarizeBillingItemsForDetail(items: unknown): BillingItemSummary {
@@ -84,11 +85,11 @@ export function summarizeBillingItemsForDetail(items: unknown): BillingItemSumma
     itemNames: groups
       .filter((group) => group.name)
       .map((group) => formatQtyLabel(group.name!, group.qty))
-      .join(' | ') || null,
+      .join(BILLING_ITEM_DETAIL_SEPARATOR) || null,
     itemSkus: groups
       .filter((group) => group.sku)
       .map((group) => formatQtyLabel(group.sku!, group.qty))
-      .join(' | ') || null,
+      .join(BILLING_ITEM_DETAIL_SEPARATOR) || null,
     totalQty: totalQty > 0 ? totalQty : null,
   };
 }

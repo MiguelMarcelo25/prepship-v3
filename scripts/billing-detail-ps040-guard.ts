@@ -26,7 +26,7 @@ assertEqual(
 
 assertEqual(
   summary([{ name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 2 }]).itemSkus,
-  'Booster-gel-001 \u00d72',
+  'Booster-gel-001 x2',
   'single item qty 2 has SKU suffix',
 );
 
@@ -36,7 +36,7 @@ const mixed = summary([
 ]);
 assertEqual(
   mixed.itemNames,
-  'Leeds Line V2 | Booster Gel \u00d72',
+  'Leeds Line V2\nBooster Gel x2',
   'mixed SKU summary suffixes only qty greater than 1',
 );
 assertEqual(mixed.totalQty, 3, 'mixed SKU total quantity remains billable units');
@@ -48,12 +48,12 @@ const duplicate = summary([
 ]);
 assertEqual(
   duplicate.itemNames,
-  'Booster Gel \u00d73',
+  'Booster Gel x3',
   'duplicate SKU lines aggregate and adjustment rows are skipped',
 );
 assertEqual(
   duplicate.itemSkus,
-  'Booster-gel-001 \u00d73',
+  'Booster-gel-001 x3',
   'duplicate SKU aggregation also applies to SKU display',
 );
 assertEqual(duplicate.totalQty, 3, 'duplicate SKU quantity excludes adjustment rows');

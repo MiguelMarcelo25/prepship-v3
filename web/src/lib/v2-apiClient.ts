@@ -2756,7 +2756,7 @@ export const apiClient = {
     // (throwOnError:true) — this brings details to the same honesty.
     return (async () => {
       const res = await api.get<any>(
-        `/billing/details${qs({ dateFrom, dateTo, clientId, limit: 2000 })}`
+        `/billing/details${qs({ dateFrom, dateTo, clientId })}`
       );
       if (Array.isArray(res)) return res;
       if (Array.isArray(res?.data)) return res.data;
