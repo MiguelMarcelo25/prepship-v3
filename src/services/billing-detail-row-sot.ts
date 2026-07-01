@@ -1,3 +1,5 @@
+import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
+
 export type BillingDetailReadModelRow = Record<string, unknown>;
 
 function numberValue(value: unknown): number {
@@ -118,9 +120,17 @@ const VALUE_CARRY_FIELDS = [
   'ref_usps_rate',
   'feeWaiverDecision',
   'fee_waiver_decision',
+  'billingBadges',
+  'billing_badges',
 ] as const;
 
 const BOOLEAN_OR_FIELDS = [
+  'hasPackageCostLine',
+  'has_package_cost_line',
+  'boxCostNoCharge',
+  'box_cost_no_charge',
+  'boxCostAlert',
+  'box_cost_alert',
   'stalePackagePrice',
   'stale_package_price',
   'packageCostNeedsReview',
@@ -131,6 +141,21 @@ const BOOLEAN_OR_FIELDS = [
   'fee_waived',
 ] as const;
 
+function applyBoxCostAlert(row: BillingDetailReadModelRow): void {
+  const result = resolveBillingBoxCostAlert({
+    packageCost: row.packageTotal ?? row.package_total,
+    hasPackageCostLine: row.hasPackageCostLine === true || row.has_package_cost_line === true,
+    packageCostNeedsReview: row.packageCostNeedsReview === true || row.package_cost_needs_review === true,
+    isNoChargeBoxCostLine: row.boxCostNoCharge === true || row.box_cost_no_charge === true,
+    canAlertMissing: nonEmpty(row.orderId ?? row.order_id),
+    existingBadges: row.billingBadges ?? row.billing_badges,
+  });
+  row.boxCostAlert = result.boxCostAlert;
+  row.box_cost_alert = result.boxCostAlert;
+  row.billingBadges = result.billingBadges;
+  row.billing_badges = result.billingBadges;
+}
+
 export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): BillingDetailReadModelRow[] {
   const byKey = new Map<string, BillingDetailReadModelRow>();
   const order: string[] = [];
@@ -138,6 +163,14 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
   for (const row of rows) {
     const key = rowKey(row);
     const metrics = billingLineMetrics(row);
+    const lineType = row.lineType ?? row.line_type;
+    const hasPackageCostLine =
+      lineType === 'package_cost' ||
+      row.hasPackageCostLine === true ||
+      row.has_package_cost_line === true;
+    const boxCostNoCharge =
+      row.boxCostNoCharge === true ||
+      row.box_cost_no_charge === true;
     const existing = byKey.get(key);
 
     if (!existing) {
@@ -163,7 +196,12 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
         grand_total: metrics.total,
         totalCost: 0,
         total_cost: 0,
+        hasPackageCostLine,
+        has_package_cost_line: hasPackageCostLine,
+        boxCostNoCharge,
+        box_cost_no_charge: boxCostNoCharge,
       };
+      applyBoxCostAlert(next);
       byKey.set(key, next);
       order.push(key);
       continue;
@@ -190,10 +228,15 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     existing.fulfillment_fee_total = existing.fulfillmentFeeTotal;
     existing.grandTotal = numberValue(existing.grandTotal) + metrics.total;
     existing.grand_total = existing.grandTotal;
+    existing.hasPackageCostLine = existing.hasPackageCostLine === true || hasPackageCostLine;
+    existing.has_package_cost_line = existing.hasPackageCostLine;
+    existing.boxCostNoCharge = existing.boxCostNoCharge === true || boxCostNoCharge;
+    existing.box_cost_no_charge = existing.boxCostNoCharge;
 
     for (const field of TEXT_CARRY_FIELDS) carryText(existing, row, field);
     for (const field of VALUE_CARRY_FIELDS) carryValue(existing, row, field);
     for (const field of BOOLEAN_OR_FIELDS) carryBooleanOr(existing, row, field);
+    applyBoxCostAlert(existing);
   }
 
   return order.map((key) => byKey.get(key)!);

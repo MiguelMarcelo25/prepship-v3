@@ -33,6 +33,7 @@ import { SS_BASELINE_CARRIER_CODES, loadCarrierMarkups } from './rates';
 import {
   boxDimsKey,
   decidePackageCostLine,
+  NO_CHARGE_BOX_SOURCE,
   resolveShippedPackageId,
   type BoxLookups,
   type BoxPackage,
@@ -60,6 +61,7 @@ import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-
 import { env } from '../lib/env';
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
+import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -1778,6 +1780,7 @@ export async function billingDetails(input: GenerateInput) {
       length: packages.length,
       width: packages.width,
       height: packages.height,
+      source: packages.source,
     })
     .from(packages);
   const packagesById = new Map(packageRows.map((pkg) => [pkg.id, pkg]));
@@ -1902,6 +1905,7 @@ export async function billingDetails(input: GenerateInput) {
       // FE renders a NEEDS REVIEW chip from these flags; it does no policy
       // math of its own.
       const isBoxReviewLine = lineType === 'package_cost_missing';
+      const isPackageCostLine = lineType === 'package_cost';
       const stalePackagePrice =
         lineType === 'package_cost' &&
         row.createdAt != null &&
@@ -1940,6 +1944,17 @@ export async function billingDetails(input: GenerateInput) {
         selectedPackage?.name ??
         row.description.match(/^Box\s+\((.+)\)$/i)?.[1] ??
         dimsLabel(dimsL, dimsW, dimsH);
+      const boxCostNoCharge =
+        isPackageCostLine &&
+        toFiniteNumber(row.totalCost) === 0 &&
+        selectedPackage?.source === NO_CHARGE_BOX_SOURCE;
+      const boxCostAlert = resolveBillingBoxCostAlert({
+        packageCost: isPackageCostLine ? row.totalCost : null,
+        hasPackageCostLine: isPackageCostLine,
+        packageCostNeedsReview: isBoxReviewLine,
+        isNoChargeBoxCostLine: boxCostNoCharge,
+        canAlertMissing: false,
+      });
 
       const {
         selectedRateJson: _selectedRateJson,
@@ -1990,6 +2005,14 @@ export async function billingDetails(input: GenerateInput) {
         package_cost_needs_review: isBoxReviewLine,
         packageCostReviewReason: isBoxReviewLine ? row.description : null,
         package_cost_review_reason: isBoxReviewLine ? row.description : null,
+        hasPackageCostLine: isPackageCostLine,
+        has_package_cost_line: isPackageCostLine,
+        boxCostNoCharge,
+        box_cost_no_charge: boxCostNoCharge,
+        boxCostAlert: boxCostAlert.boxCostAlert,
+        box_cost_alert: boxCostAlert.boxCostAlert,
+        billingBadges: boxCostAlert.billingBadges,
+        billing_badges: boxCostAlert.billingBadges,
         refUspsRate: isShippingLine ? refUspsRate : null,
         ref_usps_rate: isShippingLine ? refUspsRate : null,
         refUpsRate: isShippingLine ? refUpsRate : null,

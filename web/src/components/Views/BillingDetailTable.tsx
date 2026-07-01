@@ -10,7 +10,7 @@
 // DETAIL_COLUMN_WIDTHS / DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET / BILLING_DETAIL_PAGE_SIZE_OPTIONS
 // are byte-identical copies of the parent's pure module-level helpers/constants.
 import type { CSSProperties } from 'react'
-import { Pencil } from 'lucide-react'
+import { AlertTriangle, Pencil } from 'lucide-react'
 import type { BillingDetailColumnId, BillingDetailDto, BillingDetailPanelState } from './billing-parity'
 import {
   billingShipDateSortValue,
@@ -88,6 +88,17 @@ function marginColor(value: number) {
 
 function splitBillingDetailLines(value: string): string[] {
   return value.split(/\r?\n| \| /).filter((line) => line.trim())
+}
+
+function billingBadges(row: BillingDetailDto): string[] {
+  const raw = row.billingBadges ?? row.billing_badges
+  return Array.isArray(raw)
+    ? raw.filter((badge: unknown): badge is string => typeof badge === 'string')
+    : []
+}
+
+function hasNoBoxCostBadge(row: BillingDetailDto): boolean {
+  return row.boxCostAlert === true || row.box_cost_alert === true || billingBadges(row).includes('NO_BOX_COST')
 }
 
 export function BillingDetailTable({
@@ -323,6 +334,31 @@ export function BillingDetailTable({
                         NEEDS REVIEW
                       </span>
                     </button>
+                  )
+                }
+                if (hasNoBoxCostBadge(row)) {
+                  return (
+                    <span
+                      data-billing-badge="NO_BOX_COST"
+                      title="No box cost on this row - informational only"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        color: '#b45309',
+                        background: '#fffbeb',
+                        border: '1px solid #fde68a',
+                        borderRadius: 4,
+                        padding: '1px 4px',
+                        fontSize: 9,
+                        fontWeight: 700,
+                        lineHeight: 1.4,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <AlertTriangle size={10} strokeWidth={2.4} />
+                      No box cost
+                    </span>
                   )
                 }
                 // PS-068: badge box charges whose stored price predates the

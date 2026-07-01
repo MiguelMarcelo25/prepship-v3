@@ -388,6 +388,31 @@ export function getDefaultBillingDetailColumnIds() {
   return [...DEFAULT_BILLING_DETAIL_COLUMN_IDS]
 }
 
+function billingBadgeList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const badges: string[] = []
+  for (const badge of value) {
+    if (typeof badge !== 'string') continue
+    const trimmed = badge.trim()
+    if (trimmed && !badges.includes(trimmed)) badges.push(trimmed)
+  }
+  return badges
+}
+
+function mergeBillingBadges(...values: unknown[]): string[] {
+  const merged: string[] = []
+  for (const value of values) {
+    for (const badge of billingBadgeList(value)) {
+      if (!merged.includes(badge)) merged.push(badge)
+    }
+  }
+  return merged
+}
+
+function hasNoBoxCostBadge(row: Record<string, unknown>, badges = mergeBillingBadges(row.billingBadges, row.billing_badges)): boolean {
+  return row.boxCostAlert === true || row.box_cost_alert === true || badges.includes('NO_BOX_COST')
+}
+
 export function readBillingDetailColumnIds(storage?: Pick<Storage, 'getItem'> | null) {
   if (!storage) return getDefaultBillingDetailColumnIds()
 
@@ -485,6 +510,11 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
         : `storage:${String(description ?? '')}:${String(lineType ?? '')}`
 
     const metrics = computeBillingDetailMetrics(row)
+    const rowBadges = mergeBillingBadges(
+      (row as { billingBadges?: unknown }).billingBadges,
+      (row as { billing_badges?: unknown }).billing_badges,
+    )
+    const rowBoxCostAlert = hasNoBoxCostBadge(row as Record<string, unknown>, rowBadges)
 
     if (!byKey.has(key)) {
       // Seed merged row with this lineType's contribution. Reset
@@ -521,6 +551,10 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
         // chip from these — it does NO box policy math of its own.
         packageCostNeedsReview: (row as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true,
         packageCostReviewReason: (row as { packageCostReviewReason?: unknown }).packageCostReviewReason ?? null,
+        boxCostAlert: rowBoxCostAlert,
+        box_cost_alert: rowBoxCostAlert,
+        billingBadges: rowBadges,
+        billing_badges: rowBadges,
       } as BillingDetailDto & Record<string, unknown>)
       order.push(key)
       continue
@@ -547,6 +581,15 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
       (existing as { packageCostReviewReason?: unknown }).packageCostReviewReason ??
       (row as { packageCostReviewReason?: unknown }).packageCostReviewReason ??
       null
+    const mergedBadges = mergeBillingBadges(existing.billingBadges, existing.billing_badges, rowBadges)
+    existing.billingBadges = mergedBadges
+    existing.billing_badges = mergedBadges
+    existing.boxCostAlert =
+      (existing as { boxCostAlert?: unknown }).boxCostAlert === true ||
+      (existing as { box_cost_alert?: unknown }).box_cost_alert === true ||
+      rowBoxCostAlert ||
+      mergedBadges.includes('NO_BOX_COST')
+    existing.box_cost_alert = existing.boxCostAlert
 
     // First-wins for the non-monetary fields. The shipping row is
     // usually richer (carrier, ref rates, ship date, actual label
