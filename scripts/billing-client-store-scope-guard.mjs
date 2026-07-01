@@ -123,7 +123,10 @@ assert(
 assert(
   routeSource.includes('packagePriceScope') &&
     (routeSource.includes('billingClientScopePredicate(packagePriceScope)') ||
-      routeSource.includes('billingClientIdScopePredicate(packagePriceScope)')),
+      routeSource.includes('billingClientIdScopePredicate(packagePriceScope)') ||
+      (routeSource.includes('canAccessBillingClient(clientId, packagePriceScope)') &&
+        routeSource.includes('function canAccessBillingClient') &&
+        routeSource.includes('billingClientScopePredicate(scope)'))),
   'billing package prices applies client/store scope',
 );
 assert(

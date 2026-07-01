@@ -432,8 +432,8 @@ export default function BillingView() {
   }
 
   const packagePricingRows = useMemo(
-    () => buildBillingPackagePriceRows(packages, savedPackagePrices, packagePriceDrafts),
-    [packages, savedPackagePrices, packagePriceDrafts],
+    () => buildBillingPackagePriceRows(savedPackagePrices, packagePriceDrafts),
+    [savedPackagePrices, packagePriceDrafts],
   )
   const availableBillingClients = useMemo(() => configs.map((config) => ({
     clientId: Number(config.clientId),
@@ -776,7 +776,7 @@ export default function BillingView() {
         if (!active) return
 
         setSavedPackagePrices(rows)
-        const nextRows = buildBillingPackagePriceRows(packages, rows)
+        const nextRows = buildBillingPackagePriceRows(rows)
         setPackagePriceDrafts(Object.fromEntries(nextRows.map((row) => [row.packageId, (Number(row.charge) || 0).toFixed(2)])))
       } catch (error) {
         if (!active) return
@@ -793,7 +793,7 @@ export default function BillingView() {
     return () => {
       active = false
     }
-  }, [packages, selectedPkgClientId])
+  }, [selectedPkgClientId])
 
   useEffect(() => {
     if (!from || !to) return
@@ -1232,6 +1232,10 @@ export default function BillingView() {
       toastContext?.addToast('Select a client first', 'error')
       return
     }
+    if (packagePricingRows.length === 0) {
+      toastContext?.addToast('No package sizes found for this client yet.', 'info')
+      return
+    }
 
     try {
       await apiClient.saveBillingPackagePrices({
@@ -1250,9 +1254,13 @@ export default function BillingView() {
         // the existing 0/1 runtime value byte-identical.
         is_custom: (row.isCustom ? 1 : 0) as unknown as boolean,
         name: row.name,
-        length: packages.find((pkg) => pkg.packageId === row.packageId)?.length ?? null,
-        width: packages.find((pkg) => pkg.packageId === row.packageId)?.width ?? null,
-        height: packages.find((pkg) => pkg.packageId === row.packageId)?.height ?? null,
+        length: row.length,
+        width: row.width,
+        height: row.height,
+        dimsText: row.dimsText,
+        ourCost: row.ourCost,
+        usageCount: row.usageCount,
+        usageSources: row.usageSources,
       })))
       toastContext?.addToast('Package prices saved ✓', 'success')
       // PS-068: a price change makes already-generated billing for this client

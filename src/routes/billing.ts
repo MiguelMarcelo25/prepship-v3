@@ -39,6 +39,7 @@ import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 // PS-311b: the dims-based companion — sweep the SAME unmatched box size across a date range.
 import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
+import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
@@ -82,6 +83,15 @@ function billingClientScopePredicate(scope: ClientStoreScope): SQL {
   }
   if (predicates.length === 1) return predicates[0]!;
   return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+async function canAccessBillingClient(clientId: number, scope: ClientStoreScope): Promise<boolean> {
+  const [row] = await db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(and(eq(clients.id, clientId), billingClientScopePredicate(scope)))
+    .limit(1);
+  return Boolean(row);
 }
 
 // Like billingClientScopePredicate, but keyed on billing_line_items.client_id — for queries that
@@ -1578,20 +1588,10 @@ app.get(
   async (c) => {
     const { clientId } = c.req.valid('query');
     const packagePriceScope = billingScopeFromContext(c);
-    const packagePriceScopePredicate = billingClientScopePredicate(packagePriceScope);
-    const rows = await db
-      .select()
-      .from(clientPackagePrices)
-      .where(
-        and(
-          eq(clientPackagePrices.clientId, clientId),
-          sql`exists (
-            select 1 from ${clients}
-            where ${clients.id} = ${clientPackagePrices.clientId}
-              and ${packagePriceScopePredicate}
-          )`
-        )
-      );
+    if (!(await canAccessBillingClient(clientId, packagePriceScope))) {
+      return c.json({ data: [] });
+    }
+    const rows = await clientUsedPackagePricingRows(clientId);
     return c.json({ data: rows });
   }
 );
@@ -1612,8 +1612,17 @@ const pricesBody = z.object({
 
 app.put('/package-prices', requirePermission('financials:write'), zValidator('json', pricesBody), async (c) => {
   const { clientId, prices } = c.req.valid('json');
+  const packagePriceScope = billingScopeFromContext(c);
+  if (!(await canAccessBillingClient(clientId, packagePriceScope))) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
+
+  const visiblePackageIds = new Set(
+    (await clientUsedPackagePricingRows(clientId)).map((row) => row.packageId)
+  );
+  const scopedPrices = prices.filter((row) => visiblePackageIds.has(row.packageId));
   let updated = 0;
-  for (const row of prices) {
+  for (const row of scopedPrices) {
     await db
       .insert(clientPackagePrices)
       .values({
@@ -1632,7 +1641,7 @@ app.put('/package-prices', requirePermission('financials:write'), zValidator('js
       });
     updated += 1;
   }
-  return c.json({ updated });
+  return c.json({ updated, skipped: prices.length - scopedPrices.length });
 });
 
 app.post(

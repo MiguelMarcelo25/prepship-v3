@@ -1,4 +1,3 @@
-import type { PackageDto } from '../../types/api'
 
 // PS-257: the billing DTOs below are phantom names that were imported from
 // types/api but never actually exported there. They're defined locally (and
@@ -24,6 +23,22 @@ export type BillingDetailDto = BillingAnyRecord
 export type BillingPackagePriceDto = BillingAnyRecord & {
   packageId: number
   price: number
+  name?: string | null
+  length?: number | string | null
+  width?: number | string | null
+  height?: number | string | null
+  dimsText?: string | null
+  dims_text?: string | null
+  unitCost?: number | string | null
+  unit_cost?: number | string | null
+  ourCost?: number | string | null
+  our_cost?: number | string | null
+  charge?: number | string | null
+  usageCount?: number | null
+  usage_count?: number | null
+  usageSources?: string[] | null
+  usage_sources?: string[] | null
+  isCustom?: boolean
   is_custom?: boolean
 }
 export type BillingReferenceRateFetchStatusDto = BillingAnyRecord & {
@@ -131,11 +146,16 @@ export interface BillingPackagePriceRow {
   packageId: number
   name: string
   dimsText: string
+  length: number | null
+  width: number | null
+  height: number | null
   ourCost: number | null
   charge: number
   isCustom: boolean
   marginPct: number | null
   marginColor: string | null
+  usageCount: number
+  usageSources: string[]
 }
 
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
@@ -708,44 +728,64 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
 }
 
 export function buildBillingPackagePriceRows(
-  packages: PackageDto[],
   savedRows: BillingPackagePriceDto[],
   draftPrices?: Record<number, string | number>,
 ) {
-  const savedByPackageId = new Map(savedRows.map((row) => [row.packageId, row]))
-
-  return packages
-    .filter((pkg) => pkg.source === 'custom')
-    .map<BillingPackagePriceRow>((pkg) => {
-      const saved = savedByPackageId.get(pkg.packageId)
-      const draft = draftPrices?.[pkg.packageId]
-      const charge = draft != null ? parseNumber(String(draft)) : saved ? saved.price : 0
-      const ourCost = pkg.unitCost != null ? Number(pkg.unitCost) : null
-      const dimsText = pkg.length && pkg.width && pkg.height ? `${pkg.length}×${pkg.width}×${pkg.height}"` : '—'
+  return savedRows
+    .map<BillingPackagePriceRow>((row) => {
+      const packageId = Number(row.packageId)
+      const draft = draftPrices?.[packageId]
+      const charge = draft != null ? parseNumber(String(draft)) : Number(row.charge ?? row.price ?? 0)
+      const ourCostRaw = row.ourCost ?? row.our_cost ?? row.unitCost ?? row.unit_cost
+      const ourCost = ourCostRaw != null && Number.isFinite(Number(ourCostRaw)) ? Number(ourCostRaw) : null
+      const length = row.length != null && Number.isFinite(Number(row.length)) ? Number(row.length) : null
+      const width = row.width != null && Number.isFinite(Number(row.width)) ? Number(row.width) : null
+      const height = row.height != null && Number.isFinite(Number(row.height)) ? Number(row.height) : null
+      const dimsText =
+        row.dimsText ??
+        row.dims_text ??
+        (length != null && width != null && height != null ? `${length}x${width}x${height}"` : '-')
+      const isCustom = Boolean(row.isCustom ?? row.is_custom)
+      const usageSources = Array.isArray(row.usageSources)
+        ? row.usageSources
+        : Array.isArray(row.usage_sources)
+          ? row.usage_sources
+          : []
+      const usageCount = Number(row.usageCount ?? row.usage_count ?? 0)
 
       if (ourCost == null || charge <= 0) {
         return {
-          packageId: pkg.packageId,
-          name: pkg.name,
+          packageId,
+          name: row.name ?? `Box #${packageId}`,
           dimsText,
+          length,
+          width,
+          height,
           ourCost,
           charge,
-          isCustom: Boolean(saved?.is_custom),
+          isCustom,
           marginPct: null,
           marginColor: null,
+          usageCount: Number.isFinite(usageCount) ? usageCount : 0,
+          usageSources,
         }
       }
 
       const marginPct = Number.parseFloat((((charge - ourCost) / charge) * 100).toFixed(0))
       return {
-        packageId: pkg.packageId,
-        name: pkg.name,
+        packageId,
+        name: row.name ?? `Box #${packageId}`,
         dimsText,
+        length,
+        width,
+        height,
         ourCost,
         charge,
-        isCustom: Boolean(saved?.is_custom),
+        isCustom,
         marginPct,
         marginColor: marginPct >= 30 ? 'var(--green)' : marginPct >= 0 ? 'var(--yellow,#f59e0b)' : 'var(--red)',
+        usageCount: Number.isFinite(usageCount) ? usageCount : 0,
+        usageSources,
       }
     })
 }

@@ -301,6 +301,7 @@
     "test:ps-362-billing-detail-sot-export": "tsx scripts/ps-362-billing-detail-sot-export-guard.ts",
     "test:ps-363-billing-no-box-cost-alert": "tsx scripts/ps-363-billing-no-box-cost-alert-guard.ts",
     "test:ps-364-billing-selected-rate-sot": "tsx scripts/ps-364-billing-selected-rate-sot-guard.ts",
+    "test:ps-365-client-used-package-pricing": "tsx scripts/ps-365-client-used-package-pricing-guard.ts",
     "test:ps-309-voided-label-display": "tsx scripts/ps-309-voided-label-display-guard.ts",
     "test:ps-311-bulk-box-cost-preview": "tsx scripts/ps-311-bulk-box-cost-preview-guard.ts",
     "test:ps-311-bulk-box-cost-integration": "tsx scripts/ps-311-bulk-box-cost-integration.ts",

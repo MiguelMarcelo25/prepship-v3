@@ -1,6 +1,6 @@
-// PS-155: "Package Pricing by Client" card extracted verbatim from BillingView.tsx (behavior-preserving).
-// Note: the package-price rows carry phantom fields
-// (marginPct / marginColor / ourCost / dimsText / isCustom) produced by buildBillingPackagePriceRows.
+// PS-155: "Package Pricing by Client" card extracted from BillingView.tsx.
+// PS-365: row membership is backend-owned; this table only renders the
+// client-used package DTOs and local draft edits.
 //
 // IMPORTANT — money/state ownership stays in BillingView:
 //   • The price DRAFT map (packagePriceDrafts) + setter, the selected client id + setter, and the
@@ -75,7 +75,7 @@ export function BillingPackagePricingTable({
             stickyHeader={false}
             showColumnControls={false}
             loading={packagePricingLoading}
-            emptyMessage="No custom packages found"
+            emptyMessage="No package sizes found for this client yet. Ship or bill orders first, then package prices can be configured."
             defaultSort={{ key: 'box', direction: 'asc' }}
             columns={[
               {
