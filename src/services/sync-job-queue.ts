@@ -68,6 +68,8 @@ let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const timers: Timer[] = [];
+const BUSY_DEFER_SECONDS = 60;
+const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
 
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
@@ -109,6 +111,53 @@ async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {
       `[job-queue] failed to enqueue ${name}:`,
       err instanceof Error ? err.message : err
     );
+  }
+}
+
+async function deferBusySyncJob(
+  name: JobName,
+  blockedBy: string,
+  lane: SyncJobLane,
+): Promise<string | null> {
+  if (!boss || !BUSY_DEFER_JOB_NAMES.has(name)) return null;
+  try {
+    // Per user override unlock shipped data on 2026-07-01: this only creates a
+    // replacement pg-boss sync tick for order/shipment import when the shared
+    // ShipStation lane is busy. It does not touch orders, shipments, labels,
+    // postage, or marketplace notifications.
+    const id = await boss.sendAfter(
+      name,
+      {
+        requestedAt: new Date().toISOString(),
+        deferredBecause: blockedBy,
+        deferredLane: lane,
+      },
+      {
+        singletonKey: 'busy-defer',
+        singletonSeconds: BUSY_DEFER_SECONDS,
+        retryLimit: 2,
+        retryDelay: 30,
+        retryBackoff: true,
+        expireInMinutes: 30,
+        retentionDays: 7,
+      },
+      BUSY_DEFER_SECONDS,
+    );
+
+    if (id) {
+      console.log(
+        `[job-queue] deferred ${name} for ${BUSY_DEFER_SECONDS}s because ${blockedBy} is running in ${lane} lane (${id})`
+      );
+    } else {
+      console.log(`[job-queue] ${name} already has a busy-defer job queued`);
+    }
+    return id;
+  } catch (err) {
+    console.error(
+      `[job-queue] failed to defer ${name}:`,
+      err instanceof Error ? err.message : err
+    );
+    return null;
   }
 }
 
@@ -154,7 +203,15 @@ async function registerWorker(
           `[job-queue] ${name} skipped because ${blockedBy} is already running in ${lane} lane`
         );
         await recordWorkerJobSkipped(name, `${blockedBy} already running in ${lane} lane`);
-        return { ok: true, skipped: true, blockedBy, lane };
+        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane);
+        return {
+          ok: true,
+          skipped: true,
+          deferred: Boolean(deferredJobId),
+          deferredJobId,
+          blockedBy,
+          lane,
+        };
       }
 
       activeJobsByLane.set(lane, name);
