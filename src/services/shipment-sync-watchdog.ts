@@ -279,16 +279,6 @@ export function evaluateShipmentSyncWatchdog(
     missingShipmentRate,
   };
 
-  if (workerStale) {
-    return {
-      ...base,
-      state: 'worker_stale',
-      alert: true,
-      reason: `worker heartbeat stale (${input.workerHeartbeatAgeSeconds ?? 'none'}s)`,
-      recommendedAction: 'restart_worker',
-    };
-  }
-
   if (
     input.queue.active > 0 &&
     input.queue.activeMaxAgeSeconds !== null &&
@@ -300,6 +290,16 @@ export function evaluateShipmentSyncWatchdog(
       alert: true,
       reason: `shipment sync active job held ${input.queue.activeMaxAgeSeconds}s`,
       recommendedAction: 'reap_stale_jobs',
+    };
+  }
+
+  if (workerStale) {
+    return {
+      ...base,
+      state: 'worker_stale',
+      alert: true,
+      reason: `worker heartbeat stale (${input.workerHeartbeatAgeSeconds ?? 'none'}s)`,
+      recommendedAction: 'restart_worker',
     };
   }
 

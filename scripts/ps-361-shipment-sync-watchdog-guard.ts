@@ -96,6 +96,25 @@ const stuckJob = evaluateShipmentSyncWatchdog({
 });
 check('stale active shipment job -> reap stale jobs before enqueue', stuckJob.state === 'shipment_job_stuck' && stuckJob.recommendedAction === 'reap_stale_jobs');
 
+const staleWorkerAndStuckJob = evaluateShipmentSyncWatchdog({
+  nowMs: Date.parse('2026-07-01T12:00:00Z'),
+  orderLastSyncedAt: '2026-07-01T11:58:00Z',
+  shipmentLastSyncedAt: '2026-07-01T11:57:00Z',
+  workerHeartbeatAgeSeconds: thresholds.workerHeartbeatStaleSeconds + 1,
+  queue: {
+    created: 0,
+    retry: 0,
+    active: 1,
+    failed: 0,
+    activeMaxAgeSeconds: thresholds.activeJobStuckSeconds + 1,
+  },
+  missingShipments: { recentShippedOrders: 12, missingActiveShipments: 0 },
+  consecutiveBacklogChecks: 0,
+});
+check('stale active shipment job is reaped before worker restart escalation',
+  staleWorkerAndStuckJob.state === 'shipment_job_stuck' &&
+  staleWorkerAndStuckJob.recommendedAction === 'reap_stale_jobs');
+
 const backlog = evaluateShipmentSyncWatchdog({
   nowMs: Date.parse('2026-07-01T12:00:00Z'),
   orderLastSyncedAt: '2026-07-01T11:58:00Z',
