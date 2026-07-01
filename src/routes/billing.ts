@@ -254,8 +254,17 @@ app.put(
 // every billing endpoint agrees on exactly which days belong to the month;
 // the previous California-day coercion EXCLUDED UTC-midnight rows like
 // 2026-05-01T00:00:00Z from May.
+function parseClientIds(raw: string | null | undefined): number[] | undefined {
+  const ids = String(raw ?? '')
+    .split(',')
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  return ids.length ? [...new Set(ids)] : undefined;
+}
+
 const generateRawSchema = z.object({
   clientId: z.coerce.number().int().optional(),
+  clientIds: z.string().optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
   from: z.string().optional(),
@@ -266,6 +275,7 @@ const generateSchema = generateRawSchema
     const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
     return {
       clientId: v.clientId,
+      clientIds: parseClientIds(v.clientIds),
       dateFrom: range?.fromUtc,
       dateTo: range?.toUtcExclusive,
       fromDay: range?.fromDay,
@@ -282,6 +292,7 @@ const detailsSchema = generateRawSchema
     const range = billingDayRange(v.dateFrom ?? v.from ?? '', v.dateTo ?? v.to ?? '');
     return {
       clientId: v.clientId,
+      clientIds: parseClientIds(v.clientIds),
       dateFrom: range?.fromUtc,
       dateTo: range?.toUtcExclusive,
       limit: v.limit,
@@ -349,6 +360,7 @@ app.get('/summary', zValidator('query', generateSchema), async (c) => {
   const q = c.req.valid('query');
   const summary = await billingSummary(withBillingScope(c, {
     clientId: q.clientId,
+    clientIds: q.clientIds,
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
   }));
@@ -367,6 +379,7 @@ app.get('/shipping-margin', zValidator('query', generateSchema), async (c) => {
   const q = c.req.valid('query');
   const analytics = await shippingMarginAnalytics(withBillingScope(c, {
     clientId: q.clientId,
+    clientIds: q.clientIds,
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
   }));

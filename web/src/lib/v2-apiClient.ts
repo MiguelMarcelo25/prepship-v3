@@ -229,6 +229,19 @@ function toLegacyRateArray(backendResult: any): any[] {
   return rows;
 }
 
+function billingClientFilterParams(clientFilter?: number | number[]) {
+  if (Array.isArray(clientFilter)) {
+    const ids = [...new Set(clientFilter)]
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    if (ids.length === 1) return { clientId: ids[0] };
+    if (ids.length > 1) return { clientIds: ids.join(',') };
+    return {};
+  }
+  const clientId = Number(clientFilter);
+  return Number.isInteger(clientId) && clientId > 0 ? { clientId } : {};
+}
+
 export const apiClient = {
   // ─── Auth / token (no-op — v4 uses Supabase) ────────────────────────────────
 
@@ -2635,7 +2648,7 @@ export const apiClient = {
     );
   },
 
-  fetchBillingSummary(from: string, to: string, clientId?: number): Promise<any[]> {
+  fetchBillingSummary(from: string, to: string, clientFilter?: number | number[]): Promise<any[]> {
     // v4's /billing/summary validates `dateFrom`/`dateTo` as ISO datetime
     // (z.string().datetime()) — plain `YYYY-MM-DD` or the legacy `from`/`to`
     // param names will 400. Coerce both.
@@ -2647,14 +2660,15 @@ export const apiClient = {
     // (the /billing/summary response doesn't join client names).
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
+    const clientParams = billingClientFilterParams(clientFilter);
     return cachedSafe(
       'fetchBillingSummary',
-      `fetchBillingSummary:${dateFrom ?? ''}:${dateTo ?? ''}:${clientId ?? ''}`,
+      `fetchBillingSummary:${dateFrom ?? ''}:${dateTo ?? ''}:${clientParams.clientId ?? clientParams.clientIds ?? ''}`,
       60_000,
       10 * 60_000,
       async () => {
         const [res, clientsRes] = await Promise.all([
-          api.get<any>(`/billing/summary${qs({ dateFrom, dateTo, clientId })}`),
+          api.get<any>(`/billing/summary${qs({ dateFrom, dateTo, ...clientParams })}`),
           apiClient.fetchClients().catch(() => []),
         ]);
 
@@ -2697,16 +2711,17 @@ export const apiClient = {
     );
   },
 
-  fetchShippingMarginAnalytics(from: string, to: string, clientId?: number): Promise<any> {
+  fetchShippingMarginAnalytics(from: string, to: string, clientFilter?: number | number[]): Promise<any> {
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
+    const clientParams = billingClientFilterParams(clientFilter);
     return cachedSafe(
       'fetchShippingMarginAnalytics',
-      `fetchShippingMarginAnalytics:${dateFrom ?? ''}:${dateTo ?? ''}:${clientId ?? ''}`,
+      `fetchShippingMarginAnalytics:${dateFrom ?? ''}:${dateTo ?? ''}:${clientParams.clientId ?? clientParams.clientIds ?? ''}`,
       60_000,
       10 * 60_000,
       async () => {
-        const res = await api.get<any>(`/billing/shipping-margin${qs({ dateFrom, dateTo, clientId })}`);
+        const res = await api.get<any>(`/billing/shipping-margin${qs({ dateFrom, dateTo, ...clientParams })}`);
         return res?.data ?? res;
       },
       {

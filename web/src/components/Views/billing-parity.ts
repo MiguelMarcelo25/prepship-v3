@@ -185,7 +185,16 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
 ]
 
 function formatDateInput(value: Date) {
-  return value.toISOString().slice(0, 10)
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addCalendarDays(value: Date, days: number) {
+  const next = new Date(value)
+  next.setDate(next.getDate() + days)
+  return next
 }
 
 function parseNumber(value: string) {
@@ -224,10 +233,9 @@ export function calculateBillingFulfillmentFee(input: {
 }
 
 export function getBillingInitialRange(now = new Date()): BillingDateRange {
-  const from = new Date(now)
   // Default the billing summary to the last 30 days (was 90) so the
   // initial fetch matches the 'last_30' preset selected on load.
-  from.setDate(from.getDate() - 30)
+  const from = addCalendarDays(now, -29)
   return {
     from: formatDateInput(from),
     to: formatDateInput(now),
@@ -249,12 +257,10 @@ export function getBillingPresetRange(preset: BillingPresetId, now = new Date())
     to = new Date(now.getFullYear(), now.getMonth(), 0)
   } else if (preset === 'last_30') {
     to = new Date(now)
-    from = new Date(now)
-    from.setDate(from.getDate() - 30)
+    from = addCalendarDays(now, -29)
   } else {
     to = new Date(now)
-    from = new Date(now)
-    from.setDate(from.getDate() - 90)
+    from = addCalendarDays(now, -89)
   }
 
   return {

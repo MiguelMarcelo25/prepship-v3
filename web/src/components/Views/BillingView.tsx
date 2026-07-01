@@ -293,6 +293,8 @@ function splitBillingRangeIntoBatches(fromValue: string, toValue: string, batchD
 
 function isoToDateInput(value: string | null | undefined) {
   if (!value) return null
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(value)
+  if (match) return match[1]!
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return null
   return formatDateInputUtc(date)
@@ -448,6 +450,10 @@ export default function BillingView() {
     [selectedBillingClientIds],
   )
   const billingClientFilterActive = selectedBillingClientIds.length > 0
+  const billingClientQueryIds = useMemo(
+    () => (billingClientFilterActive ? selectedBillingClientIds : undefined),
+    [billingClientFilterActive, selectedBillingClientIds],
+  )
   const filteredSummaryRows = useMemo(() => {
     if (!billingClientFilterActive) return summaryRows
     return summaryRows.filter((row) => selectedBillingClientIdSet.has(Number(row.clientId)))
@@ -808,8 +814,8 @@ export default function BillingView() {
 
       try {
         const [rows, marginAnalytics] = await Promise.all([
-          apiClient.fetchBillingSummary(from, to),
-          apiClient.fetchShippingMarginAnalytics(from, to),
+          apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
+          apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
         ])
         if (!active) return
         setSummaryRows(rows)
@@ -837,6 +843,52 @@ export default function BillingView() {
     return () => {
       active = false
     }
+  }, [from, to, billingClientQueryIds])
+
+  useEffect(() => {
+    if (!from || !to || !detailState.open || detailState.clientId == null) return
+
+    let active = true
+    const clientId = detailState.clientId
+    const clientName = detailState.clientName
+
+    setDetailPage(1)
+    setDetailState((current) => (
+      current.open && current.clientId === clientId
+        ? { ...current, loading: true, rows: [], error: null }
+        : current
+    ))
+
+    void apiClient.fetchBillingDetails(from, to, clientId)
+      .then((rows) => {
+        if (!active) return
+        setDetailState({
+          open: true,
+          loading: false,
+          clientId,
+          clientName,
+          rows,
+          error: null,
+        })
+      })
+      .catch((error) => {
+        if (!active) return
+        setDetailState({
+          open: true,
+          loading: false,
+          clientId,
+          clientName,
+          rows: [],
+          error: error instanceof Error ? error.message : 'Error loading details',
+        })
+      })
+
+    return () => {
+      active = false
+    }
+  // Reload the open detail table only when the operator changes the date filter.
+  // Opening a new client still goes through handleLoadDetails to avoid duplicate fetches.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to])
 
   async function handleSaveConfig(clientId: number) {
@@ -967,8 +1019,8 @@ export default function BillingView() {
       }
 
       const [rows, marginAnalytics] = await Promise.all([
-        apiClient.fetchBillingSummary(from, to),
-        apiClient.fetchShippingMarginAnalytics(from, to),
+        apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
+        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
       ])
       const rowsForStatus = targetClientIds.length > 0
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
@@ -1106,11 +1158,11 @@ export default function BillingView() {
 
       const [rows] = await Promise.all([
         apiClient.fetchBillingDetails(from, to, detailState.clientId),
-        apiClient.fetchBillingSummary(from, to).then((nextRows) => {
+        apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((nextRows) => {
           setSummaryRows(nextRows)
           setSummaryError(null)
         }),
-        apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
+        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds).then((marginAnalytics) => {
           setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
           setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
           setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
@@ -1153,11 +1205,11 @@ export default function BillingView() {
 
       const [rows] = await Promise.all([
         apiClient.fetchBillingDetails(from, to, detailState.clientId),
-        apiClient.fetchBillingSummary(from, to).then((nextRows) => {
+        apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((nextRows) => {
           setSummaryRows(nextRows)
           setSummaryError(null)
         }),
-        apiClient.fetchShippingMarginAnalytics(from, to).then((marginAnalytics) => {
+        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds).then((marginAnalytics) => {
           setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
           setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
           setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
@@ -1872,7 +1924,7 @@ export default function BillingView() {
           onClose={() => setBulkBoxCostOpen(false)}
           onApplied={() => {
             // Re-fetch the summary so the bulk-re-priced box costs show immediately.
-            void apiClient.fetchBillingSummary(from, to).then((rows) => setSummaryRows(rows)).catch(() => {})
+            void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
           }}
         />
       ) : null}
@@ -1895,7 +1947,7 @@ export default function BillingView() {
           onApplied={() => {
             // Refresh the summary and reload the open detail grid so the swept (now resolved) box
             // costs show immediately.
-            void apiClient.fetchBillingSummary(from, to).then((rows) => setSummaryRows(rows)).catch(() => {})
+            void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
             if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
           }}
         />

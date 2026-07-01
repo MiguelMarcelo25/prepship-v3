@@ -68,6 +68,7 @@ const systemClientNamesSql = sql.join(
 
 export type GenerateInput = {
   clientId?: number;
+  clientIds?: number[];
   // PS-208: UTC-midnight calendar-day bounds from billingDayRange (the
   // canonical owner, src/lib/time/billing-day.ts). dateFrom is INCLUSIVE
   // (midnight of the first day); dateTo is EXCLUSIVE (midnight of the day
@@ -218,6 +219,11 @@ function billingLineItemScopePredicate(input: GenerateInput): SQL {
   }
   if (predicates.length === 1) return predicates[0]!;
   return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function requestedClientIds(input: GenerateInput): number[] {
+  if (input.clientId !== undefined) return [input.clientId];
+  return normalizeScopeIds(input.clientIds);
 }
 
 function isoDayStart(value: Date): string {
@@ -1495,6 +1501,7 @@ export async function billingSummary(
   // Totals are filtered SUMs per line_type; orderCount counts distinct billed
   // orders from any order-backed line so clients with $0 pick/pack defaults
   // still show order volume when shipping lines were generated.
+  const selectedClientIds = requestedClientIds(input);
   const rows = await db.execute<{
     client_id: number;
     client_name: string;
@@ -1525,7 +1532,7 @@ export async function billingSummary(
       and b.ship_date < ${input.dateTo}::timestamptz
     where c.active = true
       and c.name not in (${systemClientNamesSql})
-      ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+      ${selectedClientIds.length ? sql`and c.id = any(${intArraySql(selectedClientIds)})` : sql``}
       and ${billingClientScopePredicate(input)}
     group by c.id, c.name
     order by c.name asc

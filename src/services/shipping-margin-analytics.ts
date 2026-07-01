@@ -127,6 +127,7 @@ export type ShippingMarginAnalytics = {
 
 export type ShippingMarginAnalyticsInput = {
   clientId?: number;
+  clientIds?: number[];
   storeId?: number;
   // PS-296: optional provider/account filter (DJ: "filterable by client/provider").
   providerAccountId?: number;
@@ -459,6 +460,9 @@ export async function shippingMarginAnalytics(
     ${shipments.createdAt}
   )`;
   const scopePredicate = shippingMarginScopePredicate(input);
+  const selectedClientIds = input.clientId !== undefined
+    ? [input.clientId]
+    : normalizeScopeIds(input.clientIds);
   const rawRows = await db.execute<ShippingMarginInputRow>(sql`
     select
       coalesce(bli.client_id, ${shipments.clientId}) as "clientId",
@@ -510,7 +514,7 @@ export async function shippingMarginAnalytics(
       and coalesce(${shipments.isReturn}, false) = false
       and ${shippedAt} >= ${input.dateFrom}::timestamptz
       and ${shippedAt} < ${input.dateTo}::timestamptz
-      ${input.clientId !== undefined ? sql`and coalesce(bli.client_id, ${shipments.clientId}) = ${input.clientId}` : sql``}
+      ${selectedClientIds.length ? sql`and coalesce(bli.client_id, ${shipments.clientId}) = any(${intArraySql(selectedClientIds)})` : sql``}
       ${input.storeId !== undefined ? sql`and ${clients.storeIds} && ${intArraySql([input.storeId])}` : sql``}
       ${input.providerAccountId !== undefined ? sql`and ${shipments.providerAccountId} = ${input.providerAccountId}` : sql``}
       and ${scopePredicate}
