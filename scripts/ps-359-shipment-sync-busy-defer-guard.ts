@@ -55,8 +55,14 @@ check(
     !/pg_advisory_unlock/.test(laneLock),
 );
 check(
+  'cross-process lane lock uses a dedicated DB client so heartbeats are not starved',
+  /import postgres from 'postgres';/.test(laneLock) &&
+    /const laneLockSql = postgres\(env\.DATABASE_URL/.test(laneLock) &&
+    !/from ['"]\.\.\/db\/client['"]/.test(laneLock),
+);
+check(
   'cross-process ShipStation lane lock is transaction-scoped for Supavisor restarts',
-  /return pg\.begin\(async \(tx\) => \{[\s\S]*pg_try_advisory_xact_lock/.test(laneLock),
+  /return laneLockSql\.begin\(async \(tx\) => \{[\s\S]*pg_try_advisory_xact_lock/.test(laneLock),
 );
 check(
   'worker acquires DB lane lock before marking local lane active',
