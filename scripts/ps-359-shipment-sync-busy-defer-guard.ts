@@ -32,6 +32,7 @@ function read(path: string): string {
 }
 
 const queue = read('src/services/sync-job-queue.ts');
+const laneLock = read('src/services/sync-lane-lock.ts');
 const pkg = read('package.json');
 const deferSet = queue.match(/const BUSY_DEFER_JOB_NAMES = new Set<JobName>\(\[([\s\S]*?)\]\);/)?.[1] ?? '';
 const skipBlock =
@@ -47,6 +48,20 @@ check('busy-defer uses pg-boss sendAfter for durable retry', /await boss\.sendAf
 check('busy-defer uses its own singleton key to prevent pileups', /singletonKey:\s*'busy-defer'/.test(queue));
 check('blocked queue jobs call deferBusySyncJob before returning skipped', /deferBusySyncJob\(name, blockedBy, lane\)/.test(skipBlock));
 check('blocked queue return exposes deferred status', /deferred:\s*Boolean\(deferredJobId\)/.test(skipBlock));
+check(
+  'cross-process ShipStation lane lock module exists',
+  /export async function withSyncLaneAdvisoryLock/.test(laneLock) &&
+    /pg_try_advisory_lock/.test(laneLock) &&
+    /pg_advisory_unlock/.test(laneLock),
+);
+check(
+  'worker acquires DB lane lock before marking local lane active',
+  /withSyncLaneAdvisoryLock\(lane,\s*async\s*\(\)\s*=>\s*\{[\s\S]*?activeJobsByLane\.set\(lane, name\);/.test(queue),
+);
+check(
+  'cross-process lane lock miss defers order\/shipment sync instead of running concurrently',
+  /lane_lock_held/.test(queue) && /deferBusySyncJob\(name, blockedBy, lane\)/.test(queue),
+);
 check('busy-defer comment records the shipped-data override and safety boundary', /unlock shipped data on 2026-07-01/.test(queue));
 check(
   'package.json wires test:ps-359-shipment-sync-busy-defer',

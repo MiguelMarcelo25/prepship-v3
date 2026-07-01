@@ -10,6 +10,7 @@ import {
   syncJobLaneFor,
   type SyncJobLane,
 } from './sync-job-lanes';
+import { withSyncLaneAdvisoryLock } from './sync-lane-lock';
 import {
   runBackfillTick,
   runFulfillmentOutboxTick,
@@ -303,29 +304,49 @@ async function registerWorker(
         };
       }
 
-      activeJobsByLane.set(lane, name);
-      const startedAt = Date.now();
-      console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
-      await recordWorkerJobStart(name);
-      try {
-        // PS-265: deadline-bounded so a hung handler rejects here → catch records
-        // the failure -> finally ALWAYS clears the active lane (deadlock -> self-heal).
-        const result = await withDeadline(handler, JOB_HANDLER_TIMEOUT_MS, name);
-        const durationMs = Date.now() - startedAt;
-        console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
-        await recordWorkerJobSuccess(name, startedAt, result);
-        return { ok: true, durationMs };
-      } catch (err) {
-        const durationMs = Date.now() - startedAt;
-        console.error(
-          `[job-queue] failed ${name} after ${durationMs}ms:`,
-          err instanceof Error ? err.message : err
-        );
-        await recordWorkerJobFailure(name, startedAt, err);
-        throw err;
-      } finally {
-        if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
+      const laneLock = await withSyncLaneAdvisoryLock(lane, async () => {
+        activeJobsByLane.set(lane, name);
+        const startedAt = Date.now();
+        console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
+        await recordWorkerJobStart(name);
+        try {
+          // PS-265: deadline-bounded so a hung handler rejects here -> catch records
+          // the failure -> finally ALWAYS clears the active lane (deadlock -> self-heal).
+          const result = await withDeadline(handler, JOB_HANDLER_TIMEOUT_MS, name);
+          const durationMs = Date.now() - startedAt;
+          console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
+          await recordWorkerJobSuccess(name, startedAt, result);
+          return { ok: true, durationMs };
+        } catch (err) {
+          const durationMs = Date.now() - startedAt;
+          console.error(
+            `[job-queue] failed ${name} after ${durationMs}ms:`,
+            err instanceof Error ? err.message : err
+          );
+          await recordWorkerJobFailure(name, startedAt, err);
+          throw err;
+        } finally {
+          if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
+        }
+      });
+
+      if (!laneLock.acquired) {
+        const blockedBy = `cross-process ${lane} lane lock`;
+        console.log(`[job-queue] ${name} skipped because ${blockedBy} is held`);
+        await recordWorkerJobSkipped(name, `${blockedBy} held`);
+        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane);
+        return {
+          ok: true,
+          skipped: true,
+          deferred: Boolean(deferredJobId),
+          deferredJobId,
+          blockedBy,
+          lane,
+          reason: 'lane_lock_held',
+        };
       }
+
+      return laneLock.result;
     }
   );
 }
