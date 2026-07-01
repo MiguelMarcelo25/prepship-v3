@@ -49,6 +49,11 @@ export const REAPER_SAFE_JOB_NAMES: readonly string[] = [
 export const REAPER_MIN_ACTIVE_AGE_MS = 15 * 60_000;
 export const REAPER_STALE_QUEUED_MIN_AGE_MS = 15 * 60_000;
 export const REAPER_STALE_QUEUED_KEEP_PER_JOB = 1;
+export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
+  'cadence',
+  'busy-defer',
+  'watchdog-recovery',
+];
 
 type StuckJobRow = {
   id: string;
@@ -152,11 +157,13 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
 }
 
 /**
- * EFFECTFUL stale-cadence reaper. ShipStation/order/reporting cadence jobs are watermark-based:
+ * EFFECTFUL stale-queued reaper. ShipStation/order/reporting sync jobs are watermark-based:
  * a tick from hours ago does not carry unique business data, it only says "sync from the durable
- * watermark now". When the worker is down or wedged, hundreds of old `created` cadence rows can
- * pile up and keep the worker chewing stale ticks before it reaches today's work. Keep the newest
- * queued cadence row per safe job name and fail older redundant rows.
+ * watermark now". When the worker is down or wedged, old `created` cadence/busy-defer/watchdog
+ * rows can pile up and keep the worker chewing stale ticks before it reaches today's work.
+ * Per user override unlock shipped data on 2026-07-01: PS-361 extends the PS-360 cadence cleanup
+ * to the same safe shipment-sync recovery singleton rows. Keep the newest queued row per safe
+ * job/singleton and fail older redundant rows.
  */
 export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
   if (!env.SYNC_STUCK_JOB_REAPER) {
@@ -170,11 +177,15 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
         SELECT
           id::text AS id,
           name,
-          row_number() OVER (PARTITION BY name ORDER BY created_on DESC, id DESC) AS newest_rank
+          singleton_key,
+          row_number() OVER (
+            PARTITION BY name, singleton_key
+            ORDER BY created_on DESC, id DESC
+          ) AS newest_rank
         FROM ${pg(jobTable)}
         WHERE state IN ('created', 'retry')
           AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
-          AND singleton_key = 'cadence'
+          AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
           AND created_on < now() - (${Math.floor(REAPER_STALE_QUEUED_MIN_AGE_MS / 1000)} * interval '1 second')
       )
       SELECT id, name
@@ -191,11 +202,11 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
       UPDATE ${pg(jobTable)}
       SET state = 'failed',
           completed_on = now(),
-          output = '{"reason":"PS-360 stale-cadence reaper"}'::jsonb
+          output = '{"reason":"PS-360/PS-361 stale queued sync reaper"}'::jsonb
       WHERE id = ANY(${ids})
         AND state IN ('created', 'retry')
         AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
-        AND singleton_key = 'cadence'
+        AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
       RETURNING id::text AS id, name
     `;
 

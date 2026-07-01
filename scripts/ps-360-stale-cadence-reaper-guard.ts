@@ -1,10 +1,10 @@
 /**
  * PS-360 stale cadence reaper guard.
  *
- * Cadence sync jobs are watermark-based. If the worker is down or wedged, old
- * `created` cadence ticks become redundant backlog and can starve current
- * shipment work. The queue owner may fail old redundant cadence rows, but only
- * for the safe sync allow-list and never for side-effect queues.
+ * Cadence/busy-defer sync jobs are watermark-based. If the worker is down or
+ * wedged, old `created` sync ticks become redundant backlog and can starve
+ * current shipment work. The queue owner may fail old redundant queued rows,
+ * but only for the safe sync allow-list and never for side-effect queues.
  */
 import { readFileSync } from 'node:fs';
 
@@ -35,17 +35,21 @@ check('reaper exports stale queued cadence age threshold',
   /REAPER_STALE_QUEUED_MIN_AGE_MS\s*=\s*15 \* 60_000/.test(reaper));
 check('reaper keeps the newest cadence row per safe job',
   /REAPER_STALE_QUEUED_KEEP_PER_JOB\s*=\s*1/.test(reaper) &&
-  /row_number\(\) OVER \(PARTITION BY name ORDER BY created_on DESC, id DESC\)/.test(reaper));
+  /PARTITION BY name, singleton_key/.test(reaper));
 check('stale cadence reaper only considers created/retry rows',
   /state IN \('created', 'retry'\)/.test(reaper));
-check('stale cadence reaper only considers cadence singleton rows',
-  /singleton_key = 'cadence'/.test(reaper));
+check('stale queued reaper only considers safe sync singleton rows',
+  /REAPER_STALE_QUEUED_SINGLETON_KEYS/.test(reaper) &&
+  /'cadence'/.test(reaper) &&
+  /'busy-defer'/.test(reaper) &&
+  /'watchdog-recovery'/.test(reaper) &&
+  /singleton_key = ANY\(\$\{REAPER_STALE_QUEUED_SINGLETON_KEYS as string\[\]\}\)/.test(reaper));
 check('stale cadence reaper uses the same safe allow-list',
   /name = ANY\(\$\{REAPER_SAFE_JOB_NAMES as string\[\]\}\)/.test(reaper));
 check('stale cadence reaper fails pgboss rows rather than deleting data',
   /SET state = 'failed'/.test(reaper) && !/DELETE FROM/.test(reaper));
-check('stale cadence reaper records PS-360 reason',
-  /PS-360 stale-cadence reaper/.test(reaper));
+check('stale queued reaper records PS-360/PS-361 reason',
+  /PS-360\/PS-361 stale queued sync reaper/.test(reaper));
 check('side-effect jobs remain excluded from the shared safe allow-list',
   !/prepship\.sync\.fulfillment-outbox'/.test(
     reaper.match(/REAPER_SAFE_JOB_NAMES[\s\S]*?\];/)?.[0] ?? ''

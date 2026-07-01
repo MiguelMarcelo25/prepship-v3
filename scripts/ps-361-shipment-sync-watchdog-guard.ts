@@ -113,6 +113,7 @@ const main = read('src/main.ts');
 const env = read('src/lib/env.ts');
 const queue = read('src/services/sync-job-queue.ts');
 const service = read('src/services/shipment-sync-watchdog.ts');
+const reaper = read('src/services/sync-stuck-job-reaper.ts');
 const pkg = read('package.json');
 
 check('sync status exposes shipment watchdog state', syncRoute.includes('readShipmentSyncWatchdogStatus') && /watchdog/.test(syncRoute));
@@ -129,6 +130,11 @@ check('watchdog only targets shipment sync queue, not fulfillment outbox side ef
   service.includes('prepship.sync.shipments') &&
   !service.includes('prepship.sync.fulfillment-outbox') &&
   !service.includes('external-shipped-classifier'));
+check('watchdog recovery can clear stale busy-defer/watchdog shipment queue rows',
+  service.includes('reapStaleQueuedCadenceJobs') &&
+  reaper.includes("'busy-defer'") &&
+  reaper.includes("'watchdog-recovery'") &&
+  /PARTITION BY name, singleton_key/.test(reaper));
 check('Render restart path is explicit, env-gated, and auditable',
   service.includes('SHIPMENT_SYNC_WATCHDOG_ALLOW_RESTARTS') &&
   service.includes('RENDER_API_KEY') &&
