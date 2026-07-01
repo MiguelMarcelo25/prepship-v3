@@ -5,7 +5,7 @@
  * marketplace notifications, and no production data mutation. This guard pins
  * the current backend worker boundary plus the deferred frontend cutover state.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   classifyQueueOrderRouteServer,
   planQueueRouteForOrders,
@@ -73,20 +73,20 @@ check('explicit payload provider controls only the residual route question',
     baseRoute({ isDirectCarrier: false, explicitPayloadProviderId: 10_000_001 }),
   ) === 'direct-create');
 
-// PS-306/PS-317 (A1) — directViaBackend post-filter. OFF/absent is byte-identical; ON turns a
+// PS-306/PS-317 (A1) â€” directViaBackend post-filter. OFF/absent is byte-identical; ON turns a
 // would-be FE 'direct-create' buy into a BACKEND create (createLabelV2 owns the direct buy). The
-// red-team invariant: it can ONLY reduce FE buys — never add one, never override a never-buy rung.
-check('directViaBackend OFF/absent → byte-identical (direct order still direct-create)',
+// red-team invariant: it can ONLY reduce FE buys â€” never add one, never override a never-buy rung.
+check('directViaBackend OFF/absent â†’ byte-identical (direct order still direct-create)',
   classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true })) === 'direct-create' &&
   classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true }), {}) === 'direct-create');
-check('directViaBackend ON → a direct-carrier order needing a label routes to BACKEND (not a FE buy)',
+check('directViaBackend ON â†’ a direct-carrier order needing a label routes to BACKEND (not a FE buy)',
   classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true }), { directViaBackend: true }) === 'backend' &&
   classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: true, explicitPayloadProviderId: 10_000_001 }), { directViaBackend: true }) === 'backend');
 check('directViaBackend ON NEVER creates a buy: test / existing-label / ShipStation stay backend',
   classifyQueueOrderRouteServer(baseRoute({ isTest: true, isDirectCarrier: true }), { directViaBackend: true }) === 'backend' &&
   classifyQueueOrderRouteServer(baseRoute({ hasQueueableLabel: true, isDirectCarrier: true }), { directViaBackend: true }) === 'backend' &&
   classifyQueueOrderRouteServer(baseRoute({ isDirectCarrier: false }), { directViaBackend: true }) === 'backend');
-check('directViaBackend ON → route planner yields ZERO direct-create (all buys move to the backend)',
+check('directViaBackend ON â†’ route planner yields ZERO direct-create (all buys move to the backend)',
   planQueueRouteForOrders([
     { orderId: 401, route: baseRoute({ isDirectCarrier: true }) },
     { orderId: 402, route: baseRoute({ isDirectCarrier: true, explicitPayloadProviderId: 10_000_001 }) },
@@ -199,30 +199,23 @@ check('label proof gate accepts snapshot refs from the queue worker',
 const envText = read('src/lib/env.ts');
 check('backend route-plan flag defaults off',
   envText.includes('PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)'));
-check('frontend queue delegation flag defaults off',
-  envText.includes('PRINT_QUEUE_FE_DELEGATION: booleanFlag(false)'));
-
-const routePlanHelper = read('web/src/lib/resolve-backend-route-plan.ts');
-check('frontend route-plan helper fails safe to local fallback',
-  routePlanHelper.includes('export async function resolveBackendRoutePlan') &&
-  /catch\s*\{[\s\S]{0,180}return null/.test(routePlanHelper));
+check('frontend queue delegation flag is removed after PS-359',
+  !envText.includes('PRINT_QUEUE_FE_DELEGATION'));
 
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
-check('frontend Print Queue delegation is still flag-gated',
-  ordersView.includes('printQueueFeDelegation') &&
-  /if \(printQueueFeDelegation\)[\s\S]{0,500}resolveBackendRoutePlan\(/.test(ordersView));
-// PS-303 (Per user override unlock shipped data on 2026-06-23): the buy-vs-defer route
-// DECISION cutover is done — OrdersView consumes the backend plan as BINDING via
-// bindOrFallbackQueueRoute when FE delegation is ON (an omitted order defers to 'backend',
-// never a silent FE direct-buy). The FE createLabel direct-create path + the local
-// classifier remain ONLY for the OFF default and 'direct-create' routes (the backend
-// cannot create direct-carrier labels yet). Supersedes the prior "fallback remains until
-// cutover" pin; the binding semantics are proven by test:ps-303-fe-route-binding.
-check('frontend route DECISION binds to the backend plan when FE delegation is on (cutover done)',
-  ordersView.includes('apiClient.createLabel') &&
-  ordersView.includes('classifyQueueOrderRoute(') &&
-  /bindOrFallbackQueueRoute\(\s*printQueueFeDelegation,/.test(ordersView));
-
+const ordersViewCode = ordersView
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1');
+check('obsolete frontend route-plan helper is deleted',
+  !existsSync('web/src/lib/resolve-backend-route-plan.ts'));
+check('obsolete frontend route classifier helper is deleted',
+  !existsSync('web/src/lib/shipping-routes.ts'));
+check('frontend route decision bridge is deleted after PS-359',
+  !ordersViewCode.includes('printQueueFeDelegation') &&
+  !ordersViewCode.includes('resolveBackendRoutePlan') &&
+  !ordersViewCode.includes('bindOrFallbackQueueRoute') &&
+  !ordersViewCode.includes('classifyQueueOrderRoute') &&
+  ordersViewCode.includes('const backendJobOrders = jobOrders'));
 const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workflow.md');
 check('workflow doc records PS-303 print queue authority guard',
   workflowDoc.includes('test:ps-303-print-queue-authority'));

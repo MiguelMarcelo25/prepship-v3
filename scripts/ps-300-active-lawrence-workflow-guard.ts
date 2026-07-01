@@ -170,8 +170,8 @@ check('package wires PS-285 phase evidence matrix guard',
 
 check('print queue backend orchestration flag defaults off',
   envText.includes('PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)'));
-check('print queue frontend delegation flag defaults off',
-  envText.includes('PRINT_QUEUE_FE_DELEGATION: booleanFlag(false)'));
+check('print queue frontend delegation flag is removed after PS-359',
+  !envText.includes('PRINT_QUEUE_FE_DELEGATION'));
 check('route-plan endpoint is registered',
   printQueueRoute.includes("app.post('/route-plan'"));
 check('route-plan is gated before planning',
@@ -183,11 +183,11 @@ check('route-plan is gated before planning',
   })());
 check('route-plan disabled state is explicit',
   printQueueRoute.includes("'FEATURE_DISABLED'") && printQueueRoute.includes('503'));
-check('user DTO exposes backend and FE queue flags separately',
+check('user DTO exposes backend queue diagnostics only',
   usersRoute.includes('printQueueBackendOrchestration') &&
-  usersRoute.includes('printQueueFeDelegation') &&
   usersRoute.includes('env.PRINT_QUEUE_BACKEND_ORCHESTRATION') &&
-  usersRoute.includes('env.PRINT_QUEUE_FE_DELEGATION'));
+  !usersRoute.includes('printQueueFeDelegation') &&
+  !usersRoute.includes('env.PRINT_QUEUE_FE_DELEGATION'));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-300 active Lawrence workflow guard (${failures} failing)`);

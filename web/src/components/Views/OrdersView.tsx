@@ -118,8 +118,6 @@ import { useOrdersSelection } from './hooks/useOrdersSelection'
 // PS-166/PS-258 (Hook wave 3): pure panel section-collapse UI state extracted VERBATIM.
 import { usePanelState } from './hooks/usePanelState'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
-import { classifyQueueOrderRoute, type QueueOrderRoute } from '../../lib/shipping-routes'
-import { resolveBackendRoutePlan, bindOrFallbackQueueRoute } from '../../lib/resolve-backend-route-plan'
 // PS-286: close the Rate-Browser-apply -> persist+refetch -> close race by awaiting
 // the in-flight persist before the modal actually closes (exposes the row to Send).
 import { trackAppliedRatePersist, awaitAppliedRatePersists } from './orders-applied-rate-sync'
@@ -604,18 +602,12 @@ export default function OrdersView({
   // defaults to non-admin until the backend answers (the server still enforces every
   // admin-only route regardless of this display flag).
   const [callerIsAdmin, setCallerIsAdmin] = useState(false)
-  // PS-279: dedicated FE-delegation flag (default OFF), decoupled from the backend
-  // endpoint flag so the money-path cutover is a deliberate, post-canary switch.
-  // When true the buy path delegates the route decision to /print-queue/route-plan;
-  // when false the local classifier stays authoritative (zero behavior change).
-  const [printQueueFeDelegation, setPrintQueueFeDelegation] = useState(false)
   useEffect(() => {
     let cancelled = false
-    void api.get<{ id: string | null; email: string | null; isAdmin: boolean; printQueueFeDelegation?: boolean }>('/users/me')
+    void api.get<{ id: string | null; email: string | null; isAdmin: boolean }>('/users/me')
       .then((res) => {
         if (cancelled) return
         setCallerIsAdmin(res.isAdmin === true)
-        setPrintQueueFeDelegation(res.printQueueFeDelegation === true)
       })
       .catch((err) => console.warn('[orders] failed to load caller identity:', err))
     return () => { cancelled = true }
@@ -2845,17 +2837,6 @@ export default function OrdersView({
     }
   }
 
-  // Resolve the provider id the order would ship on (best rate → selected rate
-  // → any existing label), used to detect a direct carrier_accounts carrier.
-  function resolveOrderShippingProviderId(order: OrderSummaryDto): number | null {
-    return (
-      toNumberValue((order.bestRate as any)?.shippingProviderId) ??
-      order.selectedRate?.shippingProviderId ??
-      order.label?.shippingProviderId ??
-      null
-    )
-  }
-
   async function sendOrdersToQueueBackend(
     jobOrders: OrderSummaryDto[],
     options: {
@@ -2871,85 +2852,10 @@ export default function OrdersView({
       batchTestMode: options.batchTestMode,
     })
 
-    // PS-279: when the backend orchestrator is enabled (flag default OFF), let it
-    // own the per-order buy-vs-defer route. Default OFF => this block is skipped
-    // entirely and the local classifier below stays authoritative (byte-identical
-    // to before). On any failure resolveBackendRoutePlan returns null and each
-    // order falls back to the local classifier — the plan is an override, never a
-    // hard dependency on the money path.
-    let backendRoutePlan: Map<number, QueueOrderRoute> | null = null
-    if (printQueueFeDelegation) {
-      backendRoutePlan = await resolveBackendRoutePlan(
-        (body) => api.post('/print-queue/route-plan', body),
-        {
-          existingLabelOnly: options.existingLabelOnly,
-          batchTestMode: options.batchTestMode,
-          orders: jobOrders.map((order) => ({
-            order_id: order.orderId,
-            has_queueable_label: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
-            is_test: isBackendTestOrder(order),
-            is_direct_carrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
-            backend_queue_route: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
-            explicit_payload_provider_id:
-              toNumberValue(toRecord(options.labelPayloadOverrides?.get(order.orderId))?.shippingProviderId) ?? null,
-          })),
-        },
-      )
-    }
-
-    // Split direct-carrier orders that still need a label (the Render queue job
-    // can't create those) from everything else. Direct ones buy + queue via the
-    // Vercel path; the rest flow through the backend create/recover job below.
-    // PS-317 A4: the FE never buys direct labels anymore (backend owns every purchase), so these
-    // stay inert (the backend job reports its own queued/failed counts). Kept as zero/empty so the
-    // result-assembly tail below is unchanged.
-    const directQueuedItems: ReturnType<typeof getActiveItems> = []
-    const directErrors: string[] = []
-    const directQueued = 0
-    const backendJobOrders: OrderSummaryDto[] = []
-    for (const order of jobOrders) {
-      // PS-204: when the caller carries the LIVE single-order panel payload,
-      // its shippingProviderId is the purchase account — routing must follow
-      // it, not the stale saved DTO. (Batch flows have no override → null.)
-      const overridePayload = options.labelPayloadOverrides?.get(order.orderId) ?? null
-      const overrideProviderId = toNumberValue(toRecord(overridePayload)?.shippingProviderId) ?? null
-      // PS-303 (Per user override unlock shipped data on 2026-06-23): when FE delegation
-      // is ON and the backend returned a route plan, that plan is now BINDING — the
-      // frontend no longer owns the buy-vs-defer money-path decision. An order the plan
-      // omits routes to 'backend' (the create/recover job), NEVER a silent FE direct-buy.
-      // Flag OFF (default) or no plan -> the local classifier, byte-identical to before
-      // (resolveBackendRoutePlan above is only called when the flag is on, so the OFF
-      // path never reaches the bound branch). bindOrFallbackQueueRoute is the pure owner.
-      const route = bindOrFallbackQueueRoute(
-        printQueueFeDelegation,
-        backendRoutePlan,
-        order.orderId,
-        () => classifyQueueOrderRoute(
-          {
-            hasQueueableLabel: Boolean(getQueueableLabelUrl(order.label?.labelUrl)),
-            // PS-186: queue ROUTING is a money-path decision — backend fact only.
-            isTest: isBackendTestOrder(order),
-            isDirectCarrier: isDirectCarrierId(resolveOrderShippingProviderId(order)),
-            // PS-176: the backend's routing policy — consulted only after the live
-            // never-buy ladder inside the classifier.
-            backendQueueRoute: toStringValue(toRecord(order.bestRateWorkflow)?.queueRoute),
-            explicitPayloadProviderId: overrideProviderId,
-          },
-          options,
-        ),
-      )
-      if (route !== 'direct-create') {
-        backendJobOrders.push(order)
-        continue
-      }
-      // PS-317 A4: the frontend no longer buys ANY label. A 'direct-create' route — now only the
-      // flag-OFF local fallback produces it (the backend plan returns 'backend' for direct orders) —
-      // routes to the SAME backend create/recover job as everything else. createLabelV2 buys
-      // direct-carrier labels server-side (labels.ts directRef → createDirectCarrierLabelForOrder,
-      // with the same selected-rate-proof gate, inventory deduction, and marketplace-confirmation
-      // tail), so the backend owns every purchase and the FE is a pure intent-sender.
-      backendJobOrders.push(order)
-    }
+    // PS-359: OrdersView no longer computes a direct-vs-backend route or asks
+    // for a route plan. Every selected order is sent as backend intent; the
+    // Print Queue owner performs create/recover/queue routing.
+    const backendJobOrders = jobOrders
 
     const prepared = backendJobOrders.map((order) => buildQueueSendOrderPayload(order, options))
     const skipped = prepared.filter((entry) => !entry.payload)
@@ -3009,7 +2915,7 @@ export default function OrdersView({
     } finally {
       setQueueLoading(false)
       finishPersistentQueueJob(queueJobId)
-      const queued = (toNumberValue(finalStatus?.queued) ?? 0) + directQueued
+      const queued = toNumberValue(finalStatus?.queued) ?? 0
       finishQueueActionProgress(
         queueInterrupted ? 'Queue interrupted' : queued > 0 ? 'Queue updated' : 'Queue checked',
         queueInterrupted ? { complete: false } : {},
@@ -3055,13 +2961,12 @@ export default function OrdersView({
     )
 
     return {
-      // Direct-carrier orders bought + queued via the Vercel path count too.
-      queued: directQueued + (toNumberValue(finalStatus?.queued) ?? 0),
-      failed: directErrors.length + skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
-      queuedItems: [...directQueuedItems, ...queuedItems],
-      // Direct-carrier failures first, then client-side skips, then the backend's
-      // per-order reasons. The toasts show skippedErrors[0].
-      skippedErrors: [...directErrors, ...skippedErrors, ...backendErrors],
+      queued: toNumberValue(finalStatus?.queued) ?? 0,
+      failed: skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
+      queuedItems,
+      // Client-side skips first, then the backend's per-order reasons.
+      // The toasts show skippedErrors[0].
+      skippedErrors: [...skippedErrors, ...backendErrors],
       retryEligibleOrderIds,
     }
   }

@@ -17,8 +17,9 @@ IDs, and queued, printed, shipped, and marketplace-confirmed states.
 
 It also checks label/print state, fulfillment outbox state, and
 marketplace-confirmation separation. The `PRINT_QUEUE_BACKEND_ORCHESTRATION`
-route-plan path remains flag-gated and pure; live queue/label behavior remains
-PS-330 canary-only.
+route-plan path remains flag-gated and pure for backend diagnostics/canary use.
+PS-359 deleted the obsolete FE route-plan bridge, so live Send-to-Queue submits
+backend job intent directly.
 
 ## Canonical owner map
 
@@ -32,7 +33,7 @@ PS-330 canary-only.
 | Marketplace/source confirmation lifecycle after queueing an existing shipped label | `src/services/fulfillment/outbox.ts` | already guarded; PS-330 canary-only for live marketplace notification |
 | Durable merged PDF side-store | `src/services/print-queue-pdf-store.ts` | already guarded |
 | Operator intent payload and deleted frontend direct buy path | `web/src/components/Views/OrdersView.tsx` | already guarded |
-| FE route-plan binding/fallback helper | `web/src/lib/resolve-backend-route-plan.ts` | already guarded |
+| Deleted frontend route-plan bridge | PS-359 deleted the obsolete FE route-plan bridge | already guarded |
 
 ## Imperfect data injection points
 
@@ -46,7 +47,7 @@ PS-330 canary-only.
 | Direct-carrier synthetic provider ID | Queue route owner applies the never-buy ladder and `directViaBackend`; selected-rate proof and ShipStation label builder also block synthetic IDs on the wrong provider path. | already guarded |
 | Operator opens/merges/downloads a PDF | PDF generation/open/download is not proof of physical printing; explicit confirm moves only successful queued entry ids to `printed`. | already guarded |
 | Local shipped status or marketplace confirmation state changes | Queue rows remain separate from shipped status and fulfillment outbox confirmation lifecycle; queueing an existing shipped label only repairs missing confirmation lifecycle through the outbox owner. | already guarded |
-| `PRINT_QUEUE_BACKEND_ORCHESTRATION` route plan fails or is disabled | Route-plan endpoint returns `FEATURE_DISABLED`; FE helper returns `null` and falls back only when delegation is not bound. | already guarded |
+| `PRINT_QUEUE_BACKEND_ORCHESTRATION` route plan fails or is disabled | Route-plan endpoint returns `FEATURE_DISABLED`; live Send-to-Queue no longer depends on a frontend route-plan helper. | already guarded |
 | Live provider/queue/printer behavior | Offline guards prove owner boundaries only; exact live queue/label/printer behavior remains controlled canary work. | PS-330 canary-only |
 
 ## Print Queue path matrix
@@ -95,7 +96,7 @@ Required residual audit evidence:
 | --- | --- | --- |
 | `npm run test:ps-269-print-queue-residual-audit` | Pass | Initial red run failed until this residual matrix existed; final guard passed. |
 | `npm run test:ps-303-print-queue-authority` | Pass | Backend Print Queue create/recover/queue authority. |
-| `npm run test:ps-303-fe-route-binding` | Pass | FE route-plan binding cutover. |
+| `npm run test:ps-303-fe-route-binding` | Pass | PS-359 frontend route-plan bridge deletion. |
 | `npm run test:ps-317-fe-buy-anti-regression` | Pass | Deleted frontend direct-carrier buy anti-regression. |
 | `npm run test:ps-318-shipping-workflow-certification` | Pass | Shipping workflow predecessor. |
 | `npm run test:ps-319-rate-convergence-certification` | Pass | Rate/proof convergence predecessor. |

@@ -91,9 +91,9 @@ ceiling('OrdersView deriveShipmentDimsFromProductDefaults occurrences',
 ceiling('OrdersView fetchProductsBySku sites', count(ordersView, /fetchProductsBySku\(/g), 1, 'n/a — verification read only');
 
 // ── queue routing: backend queueRoute first (PS-176) ─────────────────────────
-// classifyQueueOrderRoute stays (it hosts the live never-buy ladder); the pin is
-// that OrdersView consults it through the ladder, not a second local rule.
-ceiling('OrdersView classifyQueueOrderRoute calls', count(ordersView, /classifyQueueOrderRoute\(/g), 1, 'PS-178 (ladder is permanent; local residual rule deletes)');
+// The frontend route classifier bridge is deleted; OrdersView sends intent and
+// the backend Print Queue owner performs create/recover/queue routing.
+ceiling('OrdersView classifyQueueOrderRoute calls', count(ordersView, /classifyQueueOrderRoute\(/g), 0, 'PS-359 deleted the frontend route classifier bridge');
 
 // ── decomposition ratchet: OrdersView must shrink, not grow ──────────────────
 {

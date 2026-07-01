@@ -1262,6 +1262,5 @@ export function selectBatchRecalculateOrderIds(input: {
 }
 
 // ─── Send-to-Queue routing (direct carriers vs ShipStation) ─────────────────
-// PS-279 (slice 1): classifyQueueOrderRoute + QueueOrderRoute MOVED to the shareable
-// web/src/lib/shipping-routes.ts — a money-path routing decision belongs at a lib
-// boundary, not inside this component module. Callers import it from there.
+// PS-359: Send-to-Queue routing is backend-owned. OrdersView sends selected
+// order intent; the Print Queue owner performs create/recover/queue routing.

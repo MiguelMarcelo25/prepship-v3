@@ -586,11 +586,10 @@ function displayTupleFor(facts: OrderRowWorkflowFacts): OrderRowWorkflowDisplay 
 }
 
 /**
- * PS-176 — the queue ROUTING policy: which path a queue/label intent takes.
- * Mirrors the FE classifyQueueOrderRoute base ladder (test/existing-label →
- * backend; direct-carrier needing a label → the Vercel direct purchase path;
- * everything else → the backend job). The FE's LIVE never-buy overrides
- * (operator options, fresh label facts) still run before this value is used.
+ * PS-176/PS-359 — queue-route hint for which path a queue/label intent takes.
+ * Mirrors the backend queue-route orchestrator base ladder. OrdersView only
+ * sends intent; the Print Queue owner applies live never-buy guards and final
+ * create/recover/queue routing.
  */
 function queueRouteFor(facts: OrderRowWorkflowFacts): 'backend' | 'direct-create' {
   if (facts.isTest) return 'backend';

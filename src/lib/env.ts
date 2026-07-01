@@ -175,21 +175,13 @@ const schema = z.object({
   RENDER_WORKER_SERVICE_ID: z.string().optional(),
   RENDER_SERVICE_ID: z.string().optional(),
   RENDER_API_KEY: z.string().optional(),
-  // PS-279: default-OFF backend ownership of the Send-to-Queue ROUTE decision (the
-  // money-path direct-buy-vs-backend-job ladder, ported from the FE classifier into
-  // src/services/print-queue/queue-route-orchestrator.ts). When ON, the new
-  // POST /print-queue/route-plan route returns the server-computed route plan so the
-  // FE can delegate instead of owning the decision. When OFF the route is INERT (503
-  // FEATURE_DISABLED before any work — no DB, no provider, no postage) and the existing
-  // /batch-send path is byte-identical to today. The FE buy-path cutover is DEFERRED to
-  // a DJ canary; DJ flips this on Render after route-plan reads parity-equal on a live order.
+  // PS-279/PS-359: default-OFF backend diagnostics/canary endpoint for the
+  // Send-to-Queue route decision. Live Send-to-Queue no longer depends on a
+  // frontend delegation flag; the backend create/recover job owns routing.
+  // When OFF the route-plan endpoint is INERT (503 FEATURE_DISABLED before any
+  // work — no DB, no provider, no postage).
   PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false),
-  // PS-279: separate, deliberate switch for the FE buy-path cutover. Decoupled
-  // from PRINT_QUEUE_BACKEND_ORCHESTRATION (which only makes the /route-plan
-  // endpoint live) so enabling the endpoint never auto-activates the money-path
-  // FE delegation. Flip this ON only AFTER canarying a test label.
-  PRINT_QUEUE_FE_DELEGATION: booleanFlag(false),
-  // PS-306 (A1, money path): default-OFF. When ON — together with the two flags above — a
+  // PS-306 (A1, money path): default-OFF. When ON with backend orchestration, a
   // direct-carrier order that still needs a label routes to the BACKEND create job instead of
   // the FE 'direct-create' buy, because createLabelV2 already buys direct-carrier labels
   // server-side. This only ever turns a 'direct-create' into a 'backend' route (it can never

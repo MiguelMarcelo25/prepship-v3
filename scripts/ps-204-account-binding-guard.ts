@@ -38,7 +38,7 @@ import {
   selectProofFromCandidates,
   rateQuoteRefFromCandidates,
 } from '../web/src/lib/rate-proof';
-import { classifyQueueOrderRoute } from '../web/src/lib/shipping-routes';
+import { classifyQueueOrderRouteServer } from '../src/services/print-queue/queue-route-orchestrator';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -156,20 +156,26 @@ check('proof identity readable from raw + shippingProviderId forms',
 
 // ── (6) Queue routing follows the LIVE panel payload, never-buy rungs intact ──
 {
-  const base = { hasQueueableLabel: false, isTest: false, isDirectCarrier: false, backendQueueRoute: 'backend' as const };
+  const base = {
+    hasQueueableLabel: false,
+    isTest: false,
+    isDirectCarrier: false,
+    backendQueueRoute: 'backend' as const,
+    explicitPayloadProviderId: null,
+  };
   check('explicit direct payload (10000025) routes direct-create even when saved DTO says backend',
-    classifyQueueOrderRoute({ ...base, explicitPayloadProviderId: 10000025 }) === 'direct-create');
+    classifyQueueOrderRouteServer({ ...base, explicitPayloadProviderId: 10000025 }) === 'direct-create');
   check('explicit ShipStation payload (565377) routes backend even when saved DTO says direct-create',
-    classifyQueueOrderRoute({ ...base, backendQueueRoute: 'direct-create', explicitPayloadProviderId: 565377 }) === 'backend');
+    classifyQueueOrderRouteServer({ ...base, backendQueueRoute: 'direct-create', explicitPayloadProviderId: 565377 }) === 'backend');
   check('never-buy rungs outrank the explicit payload (existing label / test modes)',
-    classifyQueueOrderRoute({ ...base, hasQueueableLabel: true, explicitPayloadProviderId: 10000025 }) === 'backend' &&
-    classifyQueueOrderRoute({ ...base, isTest: true, explicitPayloadProviderId: 10000025 }) === 'backend' &&
-    classifyQueueOrderRoute({ ...base, explicitPayloadProviderId: 10000025 }, { batchTestMode: true }) === 'backend' &&
-    classifyQueueOrderRoute({ ...base, explicitPayloadProviderId: 10000025 }, { existingLabelOnly: true }) === 'backend');
+    classifyQueueOrderRouteServer({ ...base, hasQueueableLabel: true, explicitPayloadProviderId: 10000025 }) === 'backend' &&
+    classifyQueueOrderRouteServer({ ...base, isTest: true, explicitPayloadProviderId: 10000025 }) === 'backend' &&
+    classifyQueueOrderRouteServer({ ...base, explicitPayloadProviderId: 10000025 }, { batchTestMode: true }) === 'backend' &&
+    classifyQueueOrderRouteServer({ ...base, explicitPayloadProviderId: 10000025 }, { existingLabelOnly: true }) === 'backend');
   check('no explicit payload → PS-176 backend policy preserved (batch flows unchanged)',
-    classifyQueueOrderRoute({ ...base, backendQueueRoute: 'direct-create' }) === 'direct-create' &&
-    classifyQueueOrderRoute({ ...base, backendQueueRoute: null, isDirectCarrier: true }) === 'direct-create' &&
-    classifyQueueOrderRoute({ ...base, backendQueueRoute: null }) === 'backend');
+    classifyQueueOrderRouteServer({ ...base, backendQueueRoute: 'direct-create' }) === 'direct-create' &&
+    classifyQueueOrderRouteServer({ ...base, backendQueueRoute: null, isDirectCarrier: true }) === 'direct-create' &&
+    classifyQueueOrderRouteServer({ ...base, backendQueueRoute: null }) === 'backend');
 }
 
 // ── (7) Wiring pins: the binding is enforced at the real boundaries ───────────
@@ -219,9 +225,11 @@ check('print-queue processQueueSendOrder routes the queue order through the back
 check('Ship Acct change drops a preview rate from another account (no mixed-source card)',
   /setPanelRatePreview\(\(current\) => \{\s*\n\s*const belongs = rateBelongsToProviderAccount\(current\[0\], nextValue\)/.test(ordersView));
 check('mixed-source purchase shows the re-rate action instead of a generic failure',
-  /belongs to a different carrier account — Browse Rates for/.test(ordersView));
-check('queue routing consumes the live override payload pid',
-  /explicitPayloadProviderId: overrideProviderId/.test(ordersView));
+  /different carrier account/.test(ordersView) && /Browse Rates for/.test(ordersView));
+check('OrdersView no longer owns queue route classification after PS-359',
+  !/from '\.\.\/\.\.\/lib\/shipping-routes'/.test(ordersView) &&
+  !/from '\.\.\/\.\.\/lib\/resolve-backend-route-plan'/.test(ordersView) &&
+  /const backendJobOrders = jobOrders/.test(ordersView));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-204 account-binding guard (${failures} failing)`);

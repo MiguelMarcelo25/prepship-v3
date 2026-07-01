@@ -1,25 +1,13 @@
 /**
- * PS-279 (slice 1) — web shipping-route AUTHORITY lives at a lib boundary, not a component module.
- *
- * classifyQueueOrderRoute is a MONEY-PATH decision (buy-then-queue vs backend create/recover job). Its
- * home must be the shareable web/src/lib boundary, NOT web/src/components/Views. This pins the move:
- * the function lives in web/src/lib/shipping-routes.ts, the component module (orders-parity) no longer
- * defines it, and OrdersView imports it from the lib path. The full routing BEHAVIOR matrix is pinned
- * by ps-176 / ps-204 / direct-carrier-queue-route; this guard owns the BOUNDARY (where authority lives).
- *
- * PS-317 A4 update: the FE no longer BUYS anything for queue. createDirectCarrierLabelThenQueue (the
- * only FE direct-carrier apiClient.createLabel buy) was DELETED — every queue order now routes to the
- * backend create/recover job. This guard now asserts that FE buy is GONE (anti-regression) and that the
- * proof / account-binding / no-silent-postage protections it used to carry were RELOCATED, not lost:
- *  - to the INTENT payload buildQueueSendOrderPayload (testLabel + selectedRateProof + shippingProviderId
- *    + rate-quote ref), and
- *  - to the backend rate owner (labels.ts createLabelV2: direct-carrier detection +
- *    assertLabelPurchaseRateSelection proof/binding gate; print-queue.ts feeds the FE intent to it).
- *
- *   npx tsx scripts/ps-279-web-boundary-guards.ts
+ * PS-279 / PS-359 guard - Print Queue routing is no longer a frontend web
+ * boundary. The old `web/src/lib/shipping-routes.ts` helper and FE route-plan
+ * bridge are intentionally deleted; backend services own routing and purchase.
  */
-import { readFileSync } from 'node:fs';
-import { classifyQueueOrderRoute, type QueueOrderRoute } from '../web/src/lib/shipping-routes';
+import { existsSync, readFileSync } from 'node:fs';
+import {
+  classifyQueueOrderRouteServer,
+  planQueueRouteForOrders,
+} from '../src/services/print-queue/queue-route-orchestrator';
 
 let failures = 0;
 function check(name: string, cond: boolean): void {
@@ -27,83 +15,74 @@ function check(name: string, cond: boolean): void {
   else console.log(`ok   ${name}`);
 }
 
-// ── the authority lives at the lib boundary ──
-const lib = readFileSync('web/src/lib/shipping-routes.ts', 'utf8');
-check('shipping-routes.ts exports classifyQueueOrderRoute', /export function classifyQueueOrderRoute/.test(lib));
-check('shipping-routes.ts exports the QueueOrderRoute type', /export type QueueOrderRoute/.test(lib));
-
-// ── the component module no longer OWNS it ──
-const parity = readFileSync('web/src/components/Views/orders-parity.ts', 'utf8');
-check('orders-parity no longer defines classifyQueueOrderRoute', !/export function classifyQueueOrderRoute/.test(parity));
-check('orders-parity no longer defines the QueueOrderRoute type', !/export type QueueOrderRoute/.test(parity));
-
-// ── OrdersView imports the classifier FROM the lib boundary (not the component module) ──
-const ov = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('OrdersView imports classifyQueueOrderRoute from the lib boundary',
-  /import \{[^}]*\bclassifyQueueOrderRoute\b[^}]*\} from '\.\.\/\.\.\/lib\/shipping-routes'/.test(ov));
-
-// ── smoke: the moved function still decides correctly (full matrix lives in ps-176/204) ──
-const shipStation: QueueOrderRoute = classifyQueueOrderRoute({ hasQueueableLabel: false, isTest: false, isDirectCarrier: false });
-check('moved classifier: ShipStation needing a label -> backend', shipStation === 'backend');
-check('moved classifier: direct carrier needing a label -> direct-create',
-  classifyQueueOrderRoute({ hasQueueableLabel: false, isTest: false, isDirectCarrier: true }) === 'direct-create');
-check('moved classifier: existing label never re-buys -> backend',
-  classifyQueueOrderRoute({ hasQueueableLabel: true, isTest: false, isDirectCarrier: true }) === 'backend');
-
-// ── the FE no longer OWNS the direct-carrier label BUY — it moved to the backend ──
-// PS-317 A4 DELETED createDirectCarrierLabelThenQueue (the only FE path that bought a
-// direct-carrier label via apiClient.createLabel for a queue-send). The frontend now
-// buys NOTHING for queue: every queue order routes to the backend create/recover job.
-// These checks are ANTI-REGRESSION — the FE direct-buy and its synthetic-id detection
-// must NOT reappear in OrdersView, so a future change can't silently re-home a money
-// decision in React (CLAUDE.md "Backend owns business truth").
-check('OrdersView: createDirectCarrierLabelThenQueue is GONE (no FE direct-carrier buy)',
-  !/createDirectCarrierLabelThenQueue/.test(ov));
-check('OrdersView: no FE synthetic direct-carrier provider-id detection (directLabelAccountRefFromProviderId)',
-  !/directLabelAccountRefFromProviderId/.test(ov));
-
-// ── the test-order NO-SILENT-POSTAGE protection now travels in the INTENT payload ──
-// The deleted FE buy used to gate a test row before apiClient.createLabel. That intent
-// is now carried into buildQueueSendOrderPayload: a backend-fact `isBackendTestOrder`
-// stamps `testLabel` on the queue payload (orderIsTest), and the proof/account-binding
-// the buy used to enforce locally now travel as selectedRateProof + shippingProviderId
-// + the rate-quote ref. The Render job (createLabelV2) re-applies the SAME proof gate.
-{
-  const builderMatch = /function buildQueueSendOrderPayload\([\s\S]*?\r?\n  }\r?\n/.exec(ov);
-  const builder = builderMatch ? builderMatch[0] : '';
-  check('OrdersView: buildQueueSendOrderPayload body located', builder.length > 0);
-  // backend-fact test detection (heuristics must never shape a label payload)
-  check('OrdersView: queue payload derives test-row status from the backend fact (isBackendTestOrder)',
-    /isBackendTestOrder\s*\(\s*order\s*\)/.test(builder));
-  check('OrdersView: queue payload stamps testLabel so the backend forces the $0 mock path for a test row',
-    /testLabel:\s*(?:Boolean\(options\.batchTestMode\)\s*\|\|\s*)?orderIsTest/.test(builder));
-  // proof + account binding the deleted buy carried now ride INTENT to the backend gate
-  check('OrdersView: queue payload carries the account-bound selectedRateProof (PS-204 binding)',
-    /selectedRateProof:\s*buildSelectedRateProofPayload\(order,[^)]*shippingProviderId\)/.test(builder));
-  check('OrdersView: queue payload carries the rate-quote ref + shippingProviderId binding',
-    /buildRateQuoteRefForOrder\(order,[^)]*shippingProviderId\)/.test(builder) &&
-      /shippingProviderId:\s*shippingProviderId\s*\?\?\s*undefined/.test(builder));
+function read(path: string): string {
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
 }
 
-// ── the backend rate owner is where the BUY + proof gate + direct detection now live ──
-// labels.ts createLabelV2 detects direct carriers via directLabelAccountRefFromProviderId
-// and runs the SAME selected-rate-proof + PS-204 account-binding gate
-// (assertLabelPurchaseRateSelection w/ purchaseShippingProviderId) ahead of BOTH the
-// direct and ShipStation provider calls. print-queue.ts processQueueSendOrder feeds the
-// FE intent (order.label) into createLabelV2 — so the queue buy is fully backend-owned.
-const labelsSvc = readFileSync('src/services/labels.ts', 'utf8');
-check('labels.ts: backend createLabelV2 owns the label BUY',
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+check('obsolete FE shipping-routes helper is deleted',
+  !existsSync('web/src/lib/shipping-routes.ts'));
+check('obsolete FE route-plan helper is deleted',
+  !existsSync('web/src/lib/resolve-backend-route-plan.ts'));
+
+const ov = stripComments(read('web/src/components/Views/OrdersView.tsx'));
+check('OrdersView has no Print Queue route classifier import or call',
+  !/classifyQueueOrderRoute/.test(ov) &&
+  !/resolveBackendRoutePlan/.test(ov) &&
+  !/bindOrFallbackQueueRoute/.test(ov) &&
+  !/printQueueFeDelegation/.test(ov));
+check('OrdersView sends queue intent to backend job owner',
+  /const backendJobOrders = jobOrders/.test(ov) &&
+  /startQueueSendJob\(\{/.test(ov));
+check('OrdersView still has no FE direct-carrier buy path',
+  !/createDirectCarrierLabelThenQueue/.test(ov) &&
+  !/directLabelAccountRefFromProviderId/.test(ov));
+
+const directFixture = {
+  hasQueueableLabel: false,
+  isTest: false,
+  isDirectCarrier: true,
+  backendQueueRoute: null,
+  explicitPayloadProviderId: null,
+};
+check('backend route owner still classifies ShipStation vs direct residual routes',
+  classifyQueueOrderRouteServer({ ...directFixture, isDirectCarrier: false }) === 'backend' &&
+  classifyQueueOrderRouteServer(directFixture) === 'direct-create');
+check('backend route owner still blocks never-buy cases',
+  classifyQueueOrderRouteServer({ ...directFixture, hasQueueableLabel: true }) === 'backend' &&
+  classifyQueueOrderRouteServer({ ...directFixture, isTest: true }) === 'backend' &&
+  classifyQueueOrderRouteServer(directFixture, { existingLabelOnly: true }) === 'backend' &&
+  classifyQueueOrderRouteServer(directFixture, { batchTestMode: true }) === 'backend');
+check('backend plan can force all residual direct routes through backend orchestration',
+  (() => {
+    const plan = planQueueRouteForOrders([
+      { orderId: 2791, route: directFixture },
+      { orderId: 2792, route: { ...directFixture, isDirectCarrier: false } },
+    ], { directViaBackend: true });
+    return plan.directCreateOrderIds.length === 0 &&
+      JSON.stringify(plan.backendOrderIds) === JSON.stringify([2791, 2792]);
+  })());
+
+const labelsSvc = read('src/services/labels.ts');
+check('labels.ts: backend createLabelV2 owns the label buy',
   /function createLabelV2/.test(labelsSvc));
-check('labels.ts: backend detects direct carriers (directLabelAccountRefFromProviderId)',
+check('labels.ts: backend detects direct carriers',
   /directLabelAccountRefFromProviderId\(body\.shippingProviderId\)/.test(labelsSvc));
-check('labels.ts: backend enforces the selected-rate proof + PS-204 account binding before purchase',
+check('labels.ts: backend enforces selected-rate proof + account binding before purchase',
   /assertLabelPurchaseRateSelection\(\{[\s\S]*?selectedRateProof:\s*body\.selectedRateProof[\s\S]*?purchaseShippingProviderId:\s*body\.shippingProviderId[\s\S]*?\}\)/.test(labelsSvc));
-const printQueueSvc = readFileSync('src/services/print-queue.ts', 'utf8');
-check('print-queue.ts: the queue worker buys via the backend createLabelV2 (not the FE)',
-  /createLabelV2\(\{[\s\S]*?\.\.\.order\.label/.test(printQueueSvc));
+
+const printQueueSvc = read('src/services/print-queue.ts');
+check('print-queue.ts: queue worker buys via backend createLabelV2',
+  /const labelInput = order\.label/.test(printQueueSvc) &&
+  /createLabelV2\(\{\s*\.\.\.labelInput/.test(printQueueSvc));
 
 check('package.json wires test:ps-279-web-boundary-guards',
-  /test:ps-279-web-boundary-guards/.test(readFileSync('package.json', 'utf8')));
+  /test:ps-279-web-boundary-guards/.test(read('package.json')));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-279 web boundary guards (${failures} failing)`);

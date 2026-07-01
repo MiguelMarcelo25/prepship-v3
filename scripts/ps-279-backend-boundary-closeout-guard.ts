@@ -1,15 +1,9 @@
 /**
- * PS-279 closeout guard: backend-boundary cleanup remains code/test complete,
- * but the money-path cutover stays flag-gated until a DJ canary.
+ * PS-279 / PS-359 closeout guard: backend-boundary cleanup remains complete.
  *
- * This guard ties together the focused PS-279 guards:
- * - backend route-plan owner exists, is pure, and preserves never-buy behavior
- * - /print-queue/route-plan is inert while PRINT_QUEUE_BACKEND_ORCHESTRATION is off
- * - FE delegation is separately gated by PRINT_QUEUE_FE_DELEGATION and has fallback
- * - Rate Browser emits only backend canonical best-rate decisions
- * - backend eligibility stamps are rendered by the UI without local recompute
- *
- * Offline only: no DB, no network, no provider calls, no labels, no queue mutation.
+ * Print Queue routing is now backend-only from the frontend perspective: the old
+ * FE delegation flag/helper is gone. Rate Browser and eligibility proofs from
+ * the original PS-279 closeout remain pinned here.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import {
@@ -35,6 +29,12 @@ function readText(path: string): string {
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
 }
 
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 function base(extra: Partial<QueueOrderRouteInput> = {}): QueueOrderRouteInput {
   return {
     hasQueueableLabel: false,
@@ -50,8 +50,7 @@ const packageJson = readText('package.json');
 const orchestrator = readText('src/services/print-queue/queue-route-orchestrator.ts');
 const printQueueRoute = readText('src/routes/print-queue.ts');
 const envText = readText('src/lib/env.ts');
-const ordersView = readText('web/src/components/Views/OrdersView.tsx');
-const routePlanHelper = readText('web/src/lib/resolve-backend-route-plan.ts');
+const ordersView = stripComments(readText('web/src/components/Views/OrdersView.tsx'));
 const rateBrowserModal = readText('web/src/components/RateBrowserModal.tsx');
 const orderRateDto = readText('src/services/order-rate-dto.ts');
 
@@ -71,7 +70,7 @@ check('backend orchestrator source exists',
 check('backend orchestrator reuses synthetic provider id owner',
   orchestrator.includes('DIRECT_SYNTHETIC_PROVIDER_ID_FLOOR') &&
   orchestrator.includes("from '../shipping-workflow/rate-fingerprint'"));
-check('backend orchestrator is pure: no fetch/db/drizzle/provider calls',
+check('backend orchestrator is pure',
   !orchestrator.includes('fetch(') &&
   !orchestrator.includes('drizzle') &&
   !/\bfrom\s+['"][^'"]*\/db/.test(orchestrator) &&
@@ -81,23 +80,23 @@ check('backend route ladder keeps existing labels on backend path',
   classifyQueueOrderRouteServer(base({ hasQueueableLabel: true, isDirectCarrier: true })) === 'backend');
 check('backend route ladder keeps test orders on backend mock path',
   classifyQueueOrderRouteServer(base({ isTest: true, isDirectCarrier: true })) === 'backend');
-check('backend route ladder sends direct carrier label-needed orders to direct-create',
+check('backend route ladder sends direct carrier label-needed orders to direct-create classification',
   classifyQueueOrderRouteServer(base({ isDirectCarrier: true })) === 'direct-create');
 check('backend route ladder sends ShipStation label-needed orders to backend',
   classifyQueueOrderRouteServer(base({ isDirectCarrier: false })) === 'backend');
-check('backend plan splits backend vs direct-create order ids',
+check('backend directViaBackend plan routes all live send-to-queue orders to backend',
   (() => {
     const plan = planQueueRouteForOrders([
       { orderId: 101, route: base({ isDirectCarrier: true }) },
       { orderId: 102, route: base({ hasQueueableLabel: true, isDirectCarrier: true }) },
       { orderId: 103, route: base({ isTest: true, isDirectCarrier: true }) },
       { orderId: 104, route: base({ isDirectCarrier: false }) },
-    ]);
-    return JSON.stringify(plan.directCreateOrderIds) === JSON.stringify([101]) &&
-      JSON.stringify(plan.backendOrderIds) === JSON.stringify([102, 103, 104]);
+    ], { directViaBackend: true });
+    return plan.directCreateOrderIds.length === 0 &&
+      JSON.stringify(plan.backendOrderIds) === JSON.stringify([101, 102, 103, 104]);
   })());
 
-check('POST /print-queue/route-plan is registered',
+check('POST /print-queue/route-plan is registered for backend diagnostics/canary',
   printQueueRoute.includes("app.post('/route-plan'"));
 check('route-plan checks PRINT_QUEUE_BACKEND_ORCHESTRATION before planning',
   (() => {
@@ -108,30 +107,23 @@ check('route-plan checks PRINT_QUEUE_BACKEND_ORCHESTRATION before planning',
   })());
 check('route-plan disabled response is FEATURE_DISABLED 503',
   printQueueRoute.includes("'FEATURE_DISABLED'") && printQueueRoute.includes('503'));
-check('route-plan returns route ids only and does not start a queue job',
-  /return c\.json\(\{\s*plans:[\s\S]*backend_order_ids:[\s\S]*direct_create_order_ids:[\s\S]*\}\)/.test(printQueueRoute) &&
-  !/app\.post\('\/route-plan'[\s\S]*startQueueSendJob/.test(printQueueRoute));
 check('existing /batch-send route remains registered',
   printQueueRoute.includes("app.post('/batch-send'"));
 
 check('PRINT_QUEUE_BACKEND_ORCHESTRATION defaults off',
   envText.includes('PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)'));
-check('PRINT_QUEUE_FE_DELEGATION defaults off',
-  envText.includes('PRINT_QUEUE_FE_DELEGATION: booleanFlag(false)'));
-check('frontend reads dedicated printQueueFeDelegation flag',
-  ordersView.includes('printQueueFeDelegation'));
-check('frontend calls backend route-plan only inside printQueueFeDelegation gate',
-  /if \(printQueueFeDelegation\)[\s\S]{0,700}resolveBackendRoutePlan\(/.test(ordersView));
-// PS-303 (Per user override unlock shipped data on 2026-06-23): the route is BINDING when
-// FE delegation is ON (bindOrFallbackQueueRoute); the per-order local classifier is the
-// fallback ONLY when the flag is OFF or no plan exists (byte-identical OFF default).
-// Supersedes PS-279's "fallback always preserved" pin.
-check('frontend route binds to the backend plan when delegation on; local classifier is the OFF/no-plan fallback',
-  /bindOrFallbackQueueRoute\(\s*printQueueFeDelegation,/.test(ordersView) &&
-  ordersView.includes('classifyQueueOrderRoute('));
-check('route-plan helper fails safe to null',
-  routePlanHelper.includes('export async function resolveBackendRoutePlan') &&
-  /catch\s*\{[\s\S]{0,200}return null/.test(routePlanHelper));
+check('PRINT_QUEUE_FE_DELEGATION has been removed',
+  !envText.includes('PRINT_QUEUE_FE_DELEGATION'));
+check('frontend route bridge/delegation is deleted',
+  !existsSync('web/src/lib/resolve-backend-route-plan.ts') &&
+  !existsSync('web/src/lib/shipping-routes.ts') &&
+  !ordersView.includes('resolveBackendRoutePlan') &&
+  !ordersView.includes('bindOrFallbackQueueRoute') &&
+  !ordersView.includes('printQueueFeDelegation') &&
+  !ordersView.includes('classifyQueueOrderRoute'));
+check('frontend sends backend queue job intent only',
+  ordersView.includes('const backendJobOrders = jobOrders') &&
+  ordersView.includes('startQueueSendJob({'));
 
 check('Rate Browser pure emission emits canonical best verbatim',
   (() => {
@@ -167,16 +159,16 @@ check('RateBrowserModal reads backend eligibility stamps without deploy-skew fal
 const closeoutStatus = {
   card: 'PS-279',
   codeStatus: 'code/test proof complete',
-  runtimeStatus: 'flags default off; route-plan and FE delegation canary pending',
-  trelloRecommendation: 'keep In Progress until flagged backend route-plan canary passes',
+  runtimeStatus: 'frontend route bridge deleted; backend route-plan remains default-off diagnostic/canary endpoint',
+  trelloRecommendation: 'PS-279 remains a dependency proof; PS-359 owns bridge deletion',
   safety: 'no label purchase, provider call, queue mutation, marketplace notification, or production data repair',
 };
 
-check('PS-279 closeout status is explicit about canary pending',
+check('PS-279 closeout status is explicit about PS-359 bridge deletion',
   closeoutStatus.card === 'PS-279' &&
   closeoutStatus.codeStatus === 'code/test proof complete' &&
-  closeoutStatus.runtimeStatus.includes('canary pending') &&
-  closeoutStatus.trelloRecommendation.includes('keep In Progress') &&
+  closeoutStatus.runtimeStatus.includes('bridge deleted') &&
+  closeoutStatus.trelloRecommendation.includes('PS-359') &&
   closeoutStatus.safety.startsWith('no label purchase'));
 
 if (failures > 0) {

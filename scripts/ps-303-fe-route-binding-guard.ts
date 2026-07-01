@@ -1,21 +1,20 @@
 /**
- * PS-303 (Per user override unlock shipped data on 2026-06-23) — REAL execution test
- * for the binding cutover of the buy-vs-defer queue route.
+ * PS-359 / PS-303 guard - frontend Print Queue route-plan bridge deletion.
  *
- * The PS-306 dependency-gate audit found PS-303's central claim unmet: the backend
- * route plan was a NON-binding override (OrdersView did `backendRoutePlan?.get(id) ??
- * classifyQueueOrderRoute(...)`), so the FRONTEND remained the live source of truth for
- * the money-path route decision even when the FE-delegation flag was on. This guard pins
- * the cutover: bindOrFallbackQueueRoute makes the plan BINDING when delegation is ON
- * (the frontend no longer decides), defers an omitted order to 'backend' (never a silent
- * FE direct-buy), and stays byte-identical to the local classifier when the flag is OFF.
+ * The backend queue job is now the source of truth for create/recover/queue
+ * routing. The frontend may send queue intent and render job results, but it
+ * must not keep a route-plan bridge, delegation flag, or local direct-vs-backend
+ * classifier on the Print Queue money path.
  *
- * It DRIVES the real decision function (not a marker-string grep), so re-introducing the
- * FE fallback on the ON path would fail here. Offline/pure: no DB, no network, no labels,
- * no postage, no shipped/cancelled mutation.
+ * Offline only: reads files and imports the pure backend route orchestrator.
+ * No DB, no network, no labels, no postage, no shipped/cancelled mutation.
  */
-import { bindOrFallbackQueueRoute } from '../web/src/lib/resolve-backend-route-plan';
-import type { QueueOrderRoute } from '../web/src/lib/shipping-routes';
+import { existsSync, readFileSync } from 'node:fs';
+import {
+  classifyQueueOrderRouteServer,
+  planQueueRouteForOrders,
+  type QueueOrderRouteInput,
+} from '../src/services/print-queue/queue-route-orchestrator';
 
 let failures = 0;
 function check(name: string, condition: boolean): void {
@@ -27,36 +26,78 @@ function check(name: string, condition: boolean): void {
   console.log(`ok   ${name}`);
 }
 
-const plan = new Map<number, QueueOrderRoute>([
-  [1, 'direct-create'],
-  [2, 'backend'],
-]);
+function read(path: string): string {
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
 
-// Flag OFF (the default): always the local classifier fallback, even if a plan exists —
-// byte-identical to the pre-cutover behavior.
-check('flag OFF -> local classifier fallback, plan ignored',
-  bindOrFallbackQueueRoute(false, plan, 1, () => 'backend') === 'backend' &&
-  bindOrFallbackQueueRoute(false, null, 2, () => 'direct-create') === 'direct-create');
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
 
-// Flag ON but no plan (resolveBackendRoutePlan returned null on 503/failure) -> fallback.
-check('flag ON + null plan -> local classifier fallback',
-  bindOrFallbackQueueRoute(true, null, 1, () => 'backend') === 'backend');
+const ordersView = stripComments(read('web/src/components/Views/OrdersView.tsx'));
+const env = read('src/lib/env.ts');
+const usersRoute = read('src/routes/users.ts');
+const printQueueRoute = read('src/routes/print-queue.ts');
 
-// Flag ON + plan present: the plan is BINDING — the route comes from the backend, NOT
-// the FE fallback (the fallback returns the opposite value to prove binding wins).
-check('flag ON + plan entry direct-create -> BINDING direct-create',
-  bindOrFallbackQueueRoute(true, plan, 1, () => 'backend') === 'direct-create');
-check('flag ON + plan entry backend -> BINDING backend',
-  bindOrFallbackQueueRoute(true, plan, 2, () => 'direct-create') === 'backend');
+check('obsolete FE route-plan helper file is deleted',
+  !existsSync('web/src/lib/resolve-backend-route-plan.ts'));
+check('obsolete FE shipping route classifier file is deleted',
+  !existsSync('web/src/lib/shipping-routes.ts'));
 
-// THE CUTOVER LINCHPIN: flag ON + plan present but the order OMITTED -> defers to
-// 'backend' (the create/recover job), NEVER the FE fallback. So a partial plan can never
-// trigger a silent FE direct-buy; the backend stays authoritative.
-check('flag ON + MISSING plan entry -> defers to backend, NOT the FE fallback',
-  bindOrFallbackQueueRoute(true, plan, 999, () => 'direct-create') === 'backend');
+check('OrdersView does not import or call the FE route-plan bridge',
+  !ordersView.includes('resolveBackendRoutePlan') &&
+  !ordersView.includes('bindOrFallbackQueueRoute') &&
+  !ordersView.includes("'/print-queue/route-plan'") &&
+  !ordersView.includes('"/print-queue/route-plan"'));
+check('OrdersView does not import or call the FE queue route classifier',
+  !ordersView.includes('classifyQueueOrderRoute'));
+check('OrdersView no longer reads a printQueueFeDelegation switch',
+  !ordersView.includes('printQueueFeDelegation'));
+check('OrdersView sends all Send-to-Queue orders through backend job payloads',
+  ordersView.includes('const backendJobOrders = jobOrders') &&
+  ordersView.includes('const prepared = backendJobOrders.map((order) => buildQueueSendOrderPayload(order, options))'));
+check('OrdersView no longer keeps inert direct-queue result assembly',
+  !ordersView.includes('directQueuedItems') &&
+  !ordersView.includes('directErrors') &&
+  !ordersView.includes('directQueued'));
+
+check('PRINT_QUEUE_FE_DELEGATION env flag is removed',
+  !env.includes('PRINT_QUEUE_FE_DELEGATION'));
+check('GET /users/me no longer exposes printQueueFeDelegation',
+  !usersRoute.includes('printQueueFeDelegation'));
+
+check('backend route-plan endpoint remains backend-only and flag-gated',
+  printQueueRoute.includes("app.post('/route-plan'") &&
+  printQueueRoute.includes('env.PRINT_QUEUE_BACKEND_ORCHESTRATION') &&
+  printQueueRoute.includes('planQueueRouteForOrders('));
+
+const base = (extra: Partial<QueueOrderRouteInput> = {}): QueueOrderRouteInput => ({
+  hasQueueableLabel: false,
+  isTest: false,
+  isDirectCarrier: false,
+  backendQueueRoute: null,
+  explicitPayloadProviderId: null,
+  ...extra,
+});
+
+check('backend owner still prevents existing-label/test routes from buying',
+  classifyQueueOrderRouteServer(base({ hasQueueableLabel: true, isDirectCarrier: true })) === 'backend' &&
+  classifyQueueOrderRouteServer(base({ isTest: true, isDirectCarrier: true })) === 'backend');
+check('backend owner still owns direct-vs-backend route plans',
+  (() => {
+    const plan = planQueueRouteForOrders([
+      { orderId: 3031, route: base({ isDirectCarrier: true }) },
+      { orderId: 3032, route: base({ isDirectCarrier: false }) },
+    ], { directViaBackend: true });
+    return plan.directCreateOrderIds.length === 0 &&
+      JSON.stringify(plan.backendOrderIds) === JSON.stringify([3031, 3032]);
+  })());
 
 if (failures > 0) {
-  console.error(`\nPS-303 FE route-binding guard FAILED with ${failures} failure(s).`);
+  console.error(`\nPS-359 frontend Print Queue route bridge deletion guard FAILED with ${failures} failure(s).`);
   process.exit(1);
 }
-console.log('\nPS-303 FE route-binding guard passed.');
+
+console.log('\nPS-359 frontend Print Queue route bridge deletion guard passed.');

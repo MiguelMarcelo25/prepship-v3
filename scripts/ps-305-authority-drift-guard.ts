@@ -258,7 +258,7 @@ const FORBIDDEN_FRONTEND_AUTHORITY: ForbiddenClass[] = [
     id: 'fe_queue_route_authority',
     description: "FE classifies the queue/label money-path route ('direct-create' vs backend) — backend owns routing (PS-303).",
     pattern: /classifyQueueOrderRoute\s*\(/,
-    allowlist: ['web/src/components/Views/OrdersView.tsx', 'web/src/lib/shipping-routes.ts'],
+    allowlist: [],
   },
   {
     id: 'hugrab_hardcoded_insurance',

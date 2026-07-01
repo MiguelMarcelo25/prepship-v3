@@ -77,7 +77,7 @@ checkIncludesAll('PS-269 doc names backend Print Queue owner cluster', doc, [
   'src/services/fulfillment/outbox.ts',
   'src/services/print-queue-pdf-store.ts',
   'web/src/components/Views/OrdersView.tsx',
-  'web/src/lib/resolve-backend-route-plan.ts',
+  'PS-359 deleted the obsolete FE route-plan bridge',
 ]);
 
 checkIncludesAll('PS-269 doc covers every Print Queue path requested by the card', doc, [
@@ -311,33 +311,28 @@ const ordersViewCode = stripComments(ordersView);
 check('frontend direct-carrier buy remains deleted from OrdersView',
   !ordersViewCode.includes('createDirectCarrierLabelThenQueue') &&
   !/createDirectCarrierLabel(ThenQueue|ForOrder)?\s*\(/.test(ordersViewCode));
-checkIncludesAll('OrdersView sends Print Queue intent and consumes backend route plan when delegated', ordersView, [
+checkIncludesAll('OrdersView sends Print Queue intent to the backend job owner', ordersView, [
   'function buildQueueSendOrderPayload',
   'sendOrdersToQueueBackend',
   'backendJobOrders',
   'buildSelectedRateProofPayload',
   'buildRateQuoteRefForOrder',
-  'resolveBackendRoutePlan',
-  'bindOrFallbackQueueRoute',
 ]);
 
-const routePlanHelper = read('web/src/lib/resolve-backend-route-plan.ts');
-checkPatterns('route-plan helper binds to backend plan only when delegation succeeds', routePlanHelper, [
-  /export async function resolveBackendRoutePlan/,
-  /return null/,
-  /export function bindOrFallbackQueueRoute/,
-  /if \(feDelegation && backendRoutePlan\)/,
-  /return backendRoutePlan\.get\(orderId\) \?\? 'backend'/,
-  /return fallback\(\)/,
-]);
+check('obsolete frontend route-plan bridge remains deleted',
+  !existsSync('web/src/lib/resolve-backend-route-plan.ts') &&
+  !existsSync('web/src/lib/shipping-routes.ts') &&
+  !ordersViewCode.includes('resolveBackendRoutePlan') &&
+  !ordersViewCode.includes('bindOrFallbackQueueRoute') &&
+  !ordersViewCode.includes('classifyQueueOrderRoute'));
 
 const envText = read('src/lib/env.ts');
 checkIncludesAll('Print Queue cutover flags default off', envText, [
   'DURABLE_PRINT_QUEUE_PDF: booleanFlag(false)',
   'PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false)',
-  'PRINT_QUEUE_FE_DELEGATION: booleanFlag(false)',
   'PRINT_QUEUE_DIRECT_VIA_BACKEND: booleanFlag(false)',
 ]);
+check('Print Queue FE delegation flag is removed', !envText.includes('PRINT_QUEUE_FE_DELEGATION'));
 
 const ps303 = read('scripts/ps-303-print-queue-authority-guard.ts');
 const ps317 = read('scripts/ps-317-fe-buy-anti-regression-guard.ts');

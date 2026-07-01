@@ -1,40 +1,33 @@
 /**
- * PS-176 (Phase 4, part 1) guard — queue ROUTING policy is backend-owned,
- * with the live never-buy ladder intact.
+ * PS-176 / PS-359 guard - queue route authority is backend-owned.
  *
- * Repo-verified before this part: the spec's validation chain ALREADY runs
- * server-side immediately before side effects (createLabelV2: editable lock,
- * PS-128/129 shipping safety, duplicate-label, PS-186 test policy, PS-105
- * proof, residential parity, service + carrier-family eligibility; idempotent
- * queue upsert). What remained FE-owned was the direct-vs-backend ROUTING
- * decision — this part moves that policy onto the row workflow DTO
- * (queueRoute), while the FE's LIVE safety ladder (operator options, fresh
- * label/test facts) still runs FIRST so a stale list-time value can never
- * cause a postage re-buy.
- *
- * Pins:
- *   1. Backend queueRouteFor matrix (via withOrderRowWorkflow): test → backend;
- *      existing label → backend; direct selection needing a label →
- *      direct-create; ShipStation → backend.
- *   2. FE classifier consults backendQueueRoute ONLY AFTER the never-buy
- *      ladder (behavioral: options/test/label override a stale direct-create).
- *   3. Wiring: route computes the facts from the shipment + provider id range;
- *      OrdersView passes the DTO value through.
- *
- *   npx tsx scripts/ps-176-queue-route-authority-guard.ts
+ * The row workflow DTO can still stamp queueRoute, but the frontend no longer
+ * imports a route classifier or route-plan bridge. All live Send-to-Queue
+ * requests are backend job intent; the backend owner keeps the never-buy ladder
+ * and direct-via-backend cutover.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   buildBestRateWorkflowDto,
   withOrderRowWorkflow,
   type OrderRowWorkflowFacts,
 } from '../src/services/shipping-workflow/best-rate-workflow-dto';
-import { classifyQueueOrderRoute } from '../web/src/lib/shipping-routes';
+import { classifyQueueOrderRouteServer } from '../src/services/print-queue/queue-route-orchestrator';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
-  if (!cond) { failures += 1; console.error(`FAIL ${name}${detail ? ` — ${detail}` : ''}`); }
+  if (!cond) { failures += 1; console.error(`FAIL ${name}${detail ? ` - ${detail}` : ''}`); }
   else console.log(`ok   ${name}`);
+}
+
+function read(path: string): string {
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
+
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
 const baseFacts: OrderRowWorkflowFacts = {
@@ -61,86 +54,74 @@ function routeFor(facts: Partial<OrderRowWorkflowFacts>): string | undefined {
   return withOrderRowWorkflow(dto, { ...baseFacts, ...facts }).queueRoute;
 }
 
-// ── 1. backend routing matrix ─────────────────────────────────────────────────
-check('ShipStation selection needing a label → backend', routeFor({}) === 'backend');
-check('direct-carrier selection needing a label → direct-create',
+check('ShipStation selection needing a label -> backend', routeFor({}) === 'backend');
+check('direct-carrier selection needing a label -> direct-create',
   routeFor({ isDirectCarrierSelection: true }) === 'direct-create');
-check('existing queueable label → backend even for direct selections (never re-buy)',
+check('existing queueable label -> backend even for direct selections',
   routeFor({ isDirectCarrierSelection: true, hasQueueableLabel: true }) === 'backend');
-check('test order → backend (mock path) even for direct selections',
+check('test order -> backend even for direct selections',
   routeFor({ isDirectCarrierSelection: true, isTest: true }) === 'backend');
 
-// ── 2. FE never-buy ladder runs BEFORE the backend policy ────────────────────
-const NEEDS_LABEL_DIRECT = { hasQueueableLabel: false, isTest: false, isDirectCarrier: true };
-check('FE honors the backend policy for the residual decision',
-  classifyQueueOrderRoute({ ...NEEDS_LABEL_DIRECT, isDirectCarrier: false, backendQueueRoute: 'direct-create' }) === 'direct-create' &&
-  classifyQueueOrderRoute({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'backend' }) === 'backend');
-check('a LIVE existing label overrides a stale backend direct-create (no re-buy)',
-  classifyQueueOrderRoute({ hasQueueableLabel: true, isTest: false, isDirectCarrier: true, backendQueueRoute: 'direct-create' }) === 'backend');
-check('a LIVE test fact overrides a stale backend direct-create',
-  classifyQueueOrderRoute({ hasQueueableLabel: false, isTest: true, isDirectCarrier: true, backendQueueRoute: 'direct-create' }) === 'backend');
-check('operator options override everything',
-  classifyQueueOrderRoute({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'direct-create' }, { existingLabelOnly: true }) === 'backend' &&
-  classifyQueueOrderRoute({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'direct-create' }, { batchTestMode: true }) === 'backend');
-check('garbage backend value falls through to the local rule',
-  classifyQueueOrderRoute({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'wat' }) === 'direct-create' &&
-  classifyQueueOrderRoute({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: null }) === 'direct-create');
+const NEEDS_LABEL_DIRECT = {
+  hasQueueableLabel: false,
+  isTest: false,
+  isDirectCarrier: true,
+  backendQueueRoute: null,
+  explicitPayloadProviderId: null,
+};
+check('backend owner honors backend policy for the residual decision',
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, isDirectCarrier: false, backendQueueRoute: 'direct-create' }) === 'direct-create' &&
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'backend' }) === 'backend');
+check('backend owner never-buy ladder outranks stale direct-create policy',
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, hasQueueableLabel: true, backendQueueRoute: 'direct-create' }) === 'backend' &&
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, isTest: true, backendQueueRoute: 'direct-create' }) === 'backend');
+check('backend owner operator options override everything',
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'direct-create' }, { existingLabelOnly: true }) === 'backend' &&
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'direct-create' }, { batchTestMode: true }) === 'backend');
+check('backend owner can force residual direct routes through backend orchestration',
+  classifyQueueOrderRouteServer({ ...NEEDS_LABEL_DIRECT, backendQueueRoute: 'direct-create' }, { directViaBackend: true }) === 'backend');
 
-// ── 3. wiring pins ────────────────────────────────────────────────────────────
-const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
-check('route derives the queueable-label + direct-selection facts',
+const ordersRoute = read('src/routes/orders.ts');
+check('route derives queueable-label + direct-selection facts for the row workflow DTO',
   /rowHasQueueableLabel/.test(ordersRoute) &&
   /\[object Object\]/.test(ordersRoute) &&
   />= 10_000_000/.test(ordersRoute));
-const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('OrdersView passes the DTO queueRoute into the classifier',
-  /backendQueueRoute: toStringValue\(toRecord\(order\.bestRateWorkflow\)\?\.queueRoute\)/.test(ordersView));
-// PS-279 (slice 1): the classifier moved to the shareable web/src/lib boundary, OUT of the
-// component module — a money-path routing decision belongs at a lib boundary. Pin the new home
-// (ladder source order) + that orders-parity no longer owns it.
-const shippingRoutes = readFileSync('web/src/lib/shipping-routes.ts', 'utf8');
-check('classifier consults the backend policy AFTER the never-buy ladder (source order)',
-  (() => {
-    const start = shippingRoutes.indexOf('export function classifyQueueOrderRoute');
-    const block = shippingRoutes.slice(start, start + 2400);
-    const ladder = block.indexOf("if (input.hasQueueableLabel) return 'backend'");
-    const backend = block.indexOf('input.backendQueueRoute');
-    return ladder > 0 && backend > ladder;
-  })());
-check('classifyQueueOrderRoute no longer lives in the component module (orders-parity)',
-  !/export function classifyQueueOrderRoute/.test(readFileSync('web/src/components/Views/orders-parity.ts', 'utf8')));
 
-// ── 4. PART 2: localStorage holds no purchase authority ───────────────────────
-// PS-166 Wave 1a re-anchor: the persistent queue-job machinery (incl.
-// createQueueOrderSnapshot) moved VERBATIM to orders-persistent-queue-job.ts.
-// The identifiers-only contract is pinned at its new home; resume logic below
-// is component-internal and stays pinned in OrdersView.
-{
-  const queueJobModule = readFileSync('web/src/components/Views/orders-persistent-queue-job.ts', 'utf8');
-  const snapStart = queueJobModule.indexOf('export function createQueueOrderSnapshot');
-  const snapBlock = queueJobModule.slice(snapStart, queueJobModule.indexOf('\n}', snapStart));
-  check('persisted queue snapshot carries IDENTIFIERS ONLY (no money/label payloads)',
-    snapStart > 0 &&
-    !/bestRate/.test(snapBlock) && !/selectedRate/.test(snapBlock) &&
-    !/label:/.test(snapBlock) && !/shipping/.test(snapBlock) && !/raw/.test(snapBlock));
-  check('OrdersView consumes the queue-job machinery from the strict module (no local copy)',
-    ordersView.includes("from './orders-persistent-queue-job'") &&
-    !/\nfunction createQueueOrderSnapshot/.test(ordersView) &&
-    !/\nfunction readPersistentQueueJob/.test(ordersView));
-}
-{
-  const resumeStart = ordersView.indexOf('async function resumePersistentQueueJob');
-  const resumeEnd = ordersView.indexOf('\n  useEffect', resumeStart);
-  const resumeBlock = ordersView.slice(resumeStart, resumeEnd > 0 ? resumeEnd : resumeStart + 9000);
-  check('resume NEVER buys labels (no createLabel call in the resume path)',
-    resumeStart > 0 && !/apiClient\.createLabel\(/.test(resumeBlock));
-  check('interrupted batch-queue jobs hand control back to the operator',
-    /Queue send was interrupted/.test(resumeBlock) && /Print to Queue again/.test(resumeBlock));
-  check('existing-label resume re-reads the label FRESH from the backend',
-    /apiClient\.retrieveLabel\(ref\.orderId, true\)/.test(resumeBlock));
-  check('backend-job resume path intact (durable job id re-attach)',
-    /job\.backendJobId/.test(resumeBlock) && /pollBackendQueueSendJob\(job\.backendJobId/.test(resumeBlock));
-}
+const ordersView = stripComments(read('web/src/components/Views/OrdersView.tsx'));
+check('OrdersView has no frontend queue route classifier import/call',
+  !ordersView.includes('classifyQueueOrderRoute') &&
+  !ordersView.includes('resolveBackendRoutePlan') &&
+  !ordersView.includes('bindOrFallbackQueueRoute'));
+check('obsolete frontend route helper files stay deleted',
+  !existsSync('web/src/lib/shipping-routes.ts') &&
+  !existsSync('web/src/lib/resolve-backend-route-plan.ts'));
+check('OrdersView sends backend job intent for every selected queue order',
+  ordersView.includes('const backendJobOrders = jobOrders') &&
+  ordersView.includes('buildQueueSendOrderPayload'));
+
+const queueJobModule = read('web/src/components/Views/orders-persistent-queue-job.ts');
+const snapStart = queueJobModule.indexOf('export function createQueueOrderSnapshot');
+const snapBlock = queueJobModule.slice(snapStart, queueJobModule.indexOf('\n}', snapStart));
+check('persisted queue snapshot carries identifiers only',
+  snapStart > 0 &&
+  !/bestRate/.test(snapBlock) && !/selectedRate/.test(snapBlock) &&
+  !/label:/.test(snapBlock) && !/shipping/.test(snapBlock) && !/raw/.test(snapBlock));
+check('OrdersView consumes queue-job machinery from the strict module',
+  ordersView.includes("from './orders-persistent-queue-job'") &&
+  !/\nfunction createQueueOrderSnapshot/.test(ordersView) &&
+  !/\nfunction readPersistentQueueJob/.test(ordersView));
+
+const resumeStart = ordersView.indexOf('async function resumePersistentQueueJob');
+const resumeEnd = ordersView.indexOf('\n  useEffect', resumeStart);
+const resumeBlock = ordersView.slice(resumeStart, resumeEnd > 0 ? resumeEnd : resumeStart + 9000);
+check('resume never buys labels',
+  resumeStart > 0 && !/apiClient\.createLabel\(/.test(resumeBlock));
+check('interrupted batch-queue jobs hand control back to the operator',
+  /Queue send was interrupted/.test(resumeBlock) && /Print to Queue again/.test(resumeBlock));
+check('existing-label resume re-reads the label fresh from the backend',
+  /apiClient\.retrieveLabel\(ref\.orderId, true\)/.test(resumeBlock));
+check('backend-job resume path intact',
+  /job\.backendJobId/.test(resumeBlock) && /pollBackendQueueSendJob\(job\.backendJobId/.test(resumeBlock));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-176 queue route authority guard (${failures} failing)`);

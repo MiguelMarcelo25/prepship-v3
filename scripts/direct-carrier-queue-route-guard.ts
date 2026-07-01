@@ -1,43 +1,50 @@
 import assert from 'node:assert/strict';
-import { classifyQueueOrderRoute } from '../web/src/lib/shipping-routes';
+import { classifyQueueOrderRouteServer } from '../src/services/print-queue/queue-route-orchestrator';
 
-// Send-to-Queue routing: a direct-carrier order that still needs a label is the
-// ONLY case the Render queue job (ShipStation-only createLabelV2) can't handle,
-// so it must be routed to the Vercel direct-label create+queue path. Everything
-// else stays on the backend job. Buying real postage is gated to exactly this
-// case — never for test orders or test-mode runs.
+// Send-to-Queue routing is backend-owned. A direct-carrier order that still
+// needs a label may classify as direct-create inside the pure backend owner,
+// but PS-317/PS-359 live queue submission sends all orders through the backend
+// create/recover/queue job.
 
-const DIRECT_NO_LABEL = { hasQueueableLabel: false, isTest: false, isDirectCarrier: true };
+const DIRECT_NO_LABEL = {
+  hasQueueableLabel: false,
+  isTest: false,
+  isDirectCarrier: true,
+  backendQueueRoute: null,
+  explicitPayloadProviderId: null,
+};
 
-// The one case that buys via the Vercel path:
-assert.equal(classifyQueueOrderRoute(DIRECT_NO_LABEL), 'direct-create',
-  'direct carrier, no label, real order -> Vercel direct create+queue');
+assert.equal(classifyQueueOrderRouteServer(DIRECT_NO_LABEL), 'direct-create',
+  'backend owner: direct carrier, no label, real order -> direct-create classification');
 
-// Everything that must NOT auto-buy here (stays on the backend job/mock):
 assert.equal(
-  classifyQueueOrderRoute({ hasQueueableLabel: true, isTest: false, isDirectCarrier: true }),
+  classifyQueueOrderRouteServer({ ...DIRECT_NO_LABEL, hasQueueableLabel: true }),
   'backend',
-  'direct carrier that ALREADY has a queueable label -> backend queues it as-is',
+  'direct carrier that already has a queueable label -> backend queues it as-is',
 );
 assert.equal(
-  classifyQueueOrderRoute({ hasQueueableLabel: false, isTest: true, isDirectCarrier: true }),
+  classifyQueueOrderRouteServer({ ...DIRECT_NO_LABEL, isTest: true }),
   'backend',
   'test-client order never buys real postage -> backend mock',
 );
 assert.equal(
-  classifyQueueOrderRoute(DIRECT_NO_LABEL, { batchTestMode: true }),
+  classifyQueueOrderRouteServer(DIRECT_NO_LABEL, { batchTestMode: true }),
   'backend',
   'test-mode run never buys real postage -> backend mock',
 );
 assert.equal(
-  classifyQueueOrderRoute(DIRECT_NO_LABEL, { existingLabelOnly: true }),
+  classifyQueueOrderRouteServer(DIRECT_NO_LABEL, { existingLabelOnly: true }),
   'backend',
   'existing-label-only callers never create a label',
 );
-
-// ShipStation (non-direct) providers always stay on the backend job:
 assert.equal(
-  classifyQueueOrderRoute({ hasQueueableLabel: false, isTest: false, isDirectCarrier: false }),
+  classifyQueueOrderRouteServer(DIRECT_NO_LABEL, { directViaBackend: true }),
+  'backend',
+  'live queue submission can force residual direct carriers through backend orchestration',
+);
+
+assert.equal(
+  classifyQueueOrderRouteServer({ ...DIRECT_NO_LABEL, isDirectCarrier: false }),
   'backend',
   'ShipStation provider -> backend createLabelV2',
 );

@@ -83,13 +83,9 @@ app.get('/me', (c) => {
     id: userId ?? null,
     email,
     isAdmin: isAdminEmail(email),
-    // PS-279: surface the print-queue flags so the FE can decide whether to
-    // delegate the buy-vs-defer route to /print-queue/route-plan. The FE gates on
-    // the DEDICATED feDelegation flag (default OFF) so the money-path cutover is a
-    // deliberate, post-canary switch — NOT auto-activated by the endpoint flag.
-    // backendOrchestration is exposed for diagnostics/visibility only.
+    // PS-359: expose backend route-plan diagnostics only. The frontend no
+    // longer receives a switch for the money-path route decision.
     printQueueBackendOrchestration: env.PRINT_QUEUE_BACKEND_ORCHESTRATION === true,
-    printQueueFeDelegation: env.PRINT_QUEUE_FE_DELEGATION === true,
   });
 });
 
