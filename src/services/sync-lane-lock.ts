@@ -15,19 +15,12 @@ export async function withSyncLaneAdvisoryLock<T>(
   fn: () => Promise<T>,
 ): Promise<SyncLaneLockResult<T>> {
   const lockName = `${SYNC_LANE_LOCK_PREFIX}.${lane}`;
-  const reserved = await pg.reserve();
-  let acquired = false;
-  try {
-    const [row] = await reserved<{ acquired: boolean }[]>`
-      select pg_try_advisory_lock(hashtext(${lockName})) as acquired
+  return pg.begin(async (tx) => {
+    const [row] = await tx<{ acquired: boolean }[]>`
+      select pg_try_advisory_xact_lock(hashtext(${lockName})) as acquired
     `;
-    acquired = Boolean(row?.acquired);
+    const acquired = Boolean(row?.acquired);
     if (!acquired) return { acquired: false, result: null };
     return { acquired: true, result: await fn() };
-  } finally {
-    if (acquired) {
-      await reserved`select pg_advisory_unlock(hashtext(${lockName}))`;
-    }
-    reserved.release();
-  }
+  });
 }
