@@ -1,8 +1,13 @@
 import { env } from '../lib/env';
+import { withDeadline } from '../lib/with-deadline';
 import { getSetting, setSetting } from './settings';
 import { recordWorkerStatusEvent } from './worker-status-events';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
+const WORKER_STATUS_PERSIST_TIMEOUT_MS = Math.max(
+  250,
+  Math.min(5_000, Number(process.env.WORKER_STATUS_PERSIST_TIMEOUT_MS) || 3_000),
+);
 
 type WorkerMode = 'api-scheduler' | 'worker-scheduler' | 'placeholder' | 'disabled';
 type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
@@ -32,6 +37,7 @@ export type WorkerStatusSnapshot = {
 
 const processStartedAt = new Date().toISOString();
 let snapshot: WorkerStatusSnapshot = createSnapshot('disabled');
+let persistSnapshotInFlight: Promise<void> | null = null;
 
 function createSnapshot(mode: WorkerMode): WorkerStatusSnapshot {
   const now = new Date().toISOString();
@@ -79,11 +85,36 @@ function summarizeResult(result: unknown): Record<string, unknown> | null {
 }
 
 async function persistSnapshot(): Promise<void> {
+  if (persistSnapshotInFlight) {
+    console.warn('[worker-status] persist already in flight; skipping snapshot write');
+    return;
+  }
+
+  // Worker status is observability. A slow settings write must not hold sync lanes.
+  let tracked: Promise<void>;
+  tracked = setSetting(WORKER_STATUS_KEY, JSON.stringify(snapshot))
+    .catch((err) => {
+      console.warn(
+        '[worker-status] failed to persist status:',
+        err instanceof Error ? err.message : err
+      );
+    })
+    .finally(() => {
+      if (persistSnapshotInFlight === tracked) {
+        persistSnapshotInFlight = null;
+      }
+    });
+  persistSnapshotInFlight = tracked;
+
   try {
-    await setSetting(WORKER_STATUS_KEY, JSON.stringify(snapshot));
+    await withDeadline(
+      () => tracked,
+      WORKER_STATUS_PERSIST_TIMEOUT_MS,
+      'worker-status persist'
+    );
   } catch (err) {
     console.warn(
-      '[worker-status] failed to persist status:',
+      '[worker-status] status persist exceeded deadline; continuing without blocking sync:',
       err instanceof Error ? err.message : err
     );
   }

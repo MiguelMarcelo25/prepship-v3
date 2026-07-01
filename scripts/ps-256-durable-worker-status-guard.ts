@@ -87,6 +87,21 @@ check("emits 'job_failed' on recordWorkerJobFailure",
   /recordWorkerStatusEvent\(\{[\s\S]*eventType: 'job_failed'/.test(workerStatus));
 
 // ── static: watchdog emits a staleness_alert ───────────────────────────────────────────────────
+check('worker-status imports withDeadline for bounded snapshot persistence',
+  /import \{ withDeadline \} from '\.\.\/lib\/with-deadline'/.test(workerStatus));
+check('worker-status snapshot persist has a short deadline',
+  /WORKER_STATUS_PERSIST_TIMEOUT_MS/.test(workerStatus) &&
+  /Math\.min\(5_000/.test(workerStatus) &&
+  /await withDeadline\([\s\S]*'worker-status persist'/.test(workerStatus));
+check('worker-status persist is single-flight so hung writes cannot pile up',
+  /let persistSnapshotInFlight: Promise<void> \| null = null;/.test(workerStatus) &&
+  /if \(persistSnapshotInFlight\)/.test(workerStatus) &&
+  /persistSnapshotInFlight = tracked/.test(workerStatus));
+check('worker-status does not await setSetting directly in the sync hot path',
+  !/await setSetting\(WORKER_STATUS_KEY/.test(workerStatus));
+check('worker-status documents observability must not hold sync lanes',
+  /Worker status is observability\. A slow settings write must not hold sync lanes\./.test(workerStatus));
+
 const watchdog = readFileSync('src/services/sync-staleness-watchdog.ts', 'utf8');
 check('watchdog emits a staleness_alert when a verdict alerts',
   /recordWorkerStatusEvent\(\{[\s\S]*eventType: 'staleness_alert'/.test(watchdog) &&
