@@ -90,16 +90,18 @@ const ordersViewPath = join('web', 'src', 'components', 'Views', 'OrdersView.tsx
 const ordersView = readFileSync(ordersViewPath, 'utf8');
 
 check(
-  "OrdersView references the 'direct-create' route token",
-  ordersView.includes("'direct-create'") || ordersView.includes('"direct-create"'),
+  "OrdersView no longer has the obsolete 'direct-create' frontend route token",
+  !ordersView.includes("'direct-create'") && !ordersView.includes('"direct-create"'),
 );
 check(
   "OrdersView routes orders to the backend job (backendJobOrders) — no FE purchase",
   ordersView.includes('backendJobOrders'),
 );
 check(
-  "the 'direct-create' branch carries the FE-no-longer-buys intent comment",
-  /frontend no longer buys ANY label/.test(ordersView),
+  "OrdersView keeps the backend-owned queue intent comment",
+  /OrdersView no longer computes a direct-vs-backend route/.test(ordersView) &&
+    /Every selected order is sent as backend intent/.test(ordersView) &&
+    /Print Queue owner performs create\/recover\/queue routing/.test(ordersView),
 );
 // The genuinely-dead pattern a regression would reintroduce: an FE direct/synthetic
 // -carrier label purchase orchestration OUTSIDE apiClient.createLabel. Pin that the

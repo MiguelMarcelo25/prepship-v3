@@ -4652,15 +4652,11 @@ export default function OrdersView({
     }
 
     setBatchBusy(true)
-    const queueJobId = (mode as string) === 'queue'
-      ? beginPersistentQueueJob('batch-queue', batchOrders, { label: 'Sending to queue', batchTestMode })
-      : null
     let created = 0
     let failed = 0
     // Label/print-queue audit (2026-06-11): per-order failure reasons so a failed batch isn't a bare
     // "N failed" count that invites a blind re-run (and a possible double-charge). Surfaced in the toast.
     const failureReasons: string[] = []
-    const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
 
     const processOrder = async (order: OrderSummaryDto) => {
       let bestRate = order.bestRate
@@ -4753,10 +4749,7 @@ export default function OrdersView({
         const response = await apiClient.createLabel(payload)
         const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
 
-        if ((mode as string) === 'queue' && queueableLabelUrl && order.clientId != null) {
-          await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
-          queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-        } else if (queueableLabelUrl) {
+        if (queueableLabelUrl) {
           // 2026-05-14: routed through apiClient.openLabelPdf so
           // auth-gated label URLs proxy through a Bearer-authed
           // fetch + blob: open instead of failing silently with the
@@ -4807,54 +4800,34 @@ export default function OrdersView({
 
           transitionalTimeoutsRef.current.set(order.orderId, timer)
         }
-        if ((mode as string) === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, false)
-        if ((mode as string) === 'queue') advanceQueueActionProgress()
       } catch (err) {
         failed += 1
         // Capture WHY this order failed. A reason like "Cannot create label for shipped order" /
         // "Label already exists" tells the operator the postage was likely already spent — do NOT
         // re-buy; use Reprint / Queue Existing Labels — vs a fixable "select a carrier/service".
         failureReasons.push(`${order.orderNumber ?? order.orderId}: ${err instanceof Error ? err.message : String(err)}`)
-        if ((mode as string) === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-        if ((mode as string) === 'queue') advanceQueueActionProgress(1)
       }
     }
 
-    if ((mode as string) === 'queue') {
-      await runWithConcurrency(batchOrders, BATCH_QUEUE_CONCURRENCY, async (order) => {
-        await processOrder(order)
-      })
-    } else {
-      for (const order of batchOrders) {
-        await processOrder(order)
-      }
+    for (const order of batchOrders) {
+      await processOrder(order)
     }
 
     setBatchBusy(false)
-    if ((mode as string) === 'queue' && created > 0) {
-      setQueueActionProgressLabel('Refreshing queue')
-      await hydrateQueue(true)
-    }
     // Print mode skips the immediate refetch — the per-row 5s timer
     // handles refetching AFTER the strikethrough transition completes.
     // If we refetch here, the awaiting list updates instantly and the
     // row disappears before the visual cue plays.
-    if (mode !== 'print' || created === 0) {
+    if (created === 0) {
       await refetchOrders()
-    }
-    if ((mode as string) === 'queue') {
-      finishPersistentQueueJob(queueJobId)
-      finishQueueActionProgress(created > 0 ? 'Queue updated' : 'Queue checked')
     }
     const reasonSuffix = failureReasons.length
       ? ` — ${failureReasons.slice(0, 3).join('; ')}${failureReasons.length > 3 ? ` (+${failureReasons.length - 3} more)` : ''}`
       : ''
-    if ((mode as string) === 'queue' && created > 0) {
-      showToast(`${formatQueuedOrdersToast(created, queuedItems, failed)}${failed > 0 ? reasonSuffix : ''}`, 'success')
-    } else if (failed === 0) {
-      showToast(`✅ ${(mode as string) === 'queue' ? 'Queued' : 'Created'} ${created} orders`, 'success')
+    if (failed === 0) {
+      showToast(`✅ Created ${created} orders`, 'success')
     } else {
-      showToast(`⚠ ${created} ${(mode as string) === 'queue' ? 'queued' : 'created'}, ${failed} failed${reasonSuffix}`)
+      showToast(`⚠ ${created} created, ${failed} failed${reasonSuffix}`)
     }
   }
 

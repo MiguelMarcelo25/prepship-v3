@@ -115,8 +115,9 @@ assert(
 assert(
   /const labelUrl = getQueueableLabelUrl\(order\.label\?\.labelUrl\)/.test(ordersViewSource) &&
     /const queueableLabelUrl = getQueueableLabelUrl\(response\.labelUrl\)/.test(ordersViewSource) &&
-    /await apiClient\.addToQueue\(buildQueueAddPayload\(order, queueableLabelUrl\)\)/.test(ordersViewSource),
-  'OrdersView validates labelUrl before queueing existing labels and newly-created labels',
+    /await apiClient\.addToQueue\(buildQueueAddPayload\(order, queueableLabelUrl\)\)/.test(ordersViewSource) &&
+    /await apiClient\.openLabelPdf\(queueableLabelUrl\)/.test(ordersViewSource),
+  'OrdersView validates existing-label queue URLs before addToQueue and created-label URLs before Create+Print opens PDFs',
 );
 
 assert(

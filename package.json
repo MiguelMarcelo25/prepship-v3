@@ -517,6 +517,7 @@
     "test:ps-357-best-rate-house-single-line": "tsx scripts/ps-357-best-rate-house-single-line-guard.ts",
     "test:ps-358-ps340-cleanup": "tsx scripts/ps-358-ps340-cleanup-guard.ts",
     "test:ps-359-shipment-sync-busy-defer": "tsx scripts/ps-359-shipment-sync-busy-defer-guard.ts",
+    "test:ps-360-print-queue-tail": "tsx scripts/ps-360-print-queue-tail-guard.ts",
     "test:ps-360-stale-cadence-reaper": "tsx scripts/ps-360-stale-cadence-reaper-guard.ts",
     "test:ps-361-shipment-sync-watchdog": "tsx scripts/ps-361-shipment-sync-watchdog-guard.ts",
     "test:ps-357-rate-language-breadcrumb-guard": "tsx scripts/ps-357-rate-language-breadcrumb-guard.ts",

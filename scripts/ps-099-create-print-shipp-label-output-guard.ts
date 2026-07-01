@@ -94,12 +94,32 @@ assert(singleCreateOrQueue.includes('sendOrdersToQueueBackend([order]'), 'single
 assert(singleCreateOrQueue.includes('openLabelPdfUrl(queueableLabelUrl, labelPopup)'), 'single-order Create+Print must open the created label');
 
 const batchAction = sliceBetween(ordersView, "async function handleBatchAction(mode: 'print' | 'queue')", '// Batch Mark-as-Shipped');
-// PS-257: `mode` carries a type-only `(mode as string)` cast in handleBatchAction (the inline queue
-// branch is dead but preserved — queue is handled by the early-return sendOrdersToQueueBackend path).
-// Runtime comparison unchanged; match the cast form.
-assert(batchAction.includes("if ((mode as string) === 'queue' && queueableLabelUrl && order.clientId != null)"), 'batch queue must add labels to print queue only in queue mode');
-assert(batchAction.includes('await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))'), 'batch queue must call addToQueue');
-assert(batchAction.includes('} else if (queueableLabelUrl)') && batchAction.includes('await apiClient.openLabelPdf(queueableLabelUrl)'), 'batch Create+Print must open labels instead of queueing them');
+// PS-360: batch queue delegates to the backend queue/recovery owner and returns before
+// the legacy label-create tail; the remaining tail is Create+Print only.
+const queueEarlyReturnStart = batchAction.indexOf("if (mode === 'queue')");
+const queueEarlyReturnBoundary = queueEarlyReturnStart >= 0
+  ? /return\r?\n    }\r?\n\r?\n    setBatchBusy\(true\)/.exec(batchAction.slice(queueEarlyReturnStart))
+  : null;
+const printOnlyBatchTailStart = queueEarlyReturnBoundary
+  ? queueEarlyReturnStart + queueEarlyReturnBoundary.index + queueEarlyReturnBoundary[0].lastIndexOf('setBatchBusy(true)')
+  : -1;
+const queueEarlyReturnBlock = printOnlyBatchTailStart >= 0
+  ? batchAction.slice(queueEarlyReturnStart, printOnlyBatchTailStart)
+  : '';
+const printOnlyBatchTail = printOnlyBatchTailStart >= 0 ? batchAction.slice(printOnlyBatchTailStart) : '';
+assert(
+  queueEarlyReturnBlock.includes('sendOrdersToQueueBackend(batchOrders') && /\breturn\b/.test(queueEarlyReturnBlock),
+  'batch Print to Queue must delegate to the backend queue/recovery owner and return before label-create tail',
+);
+assert(
+  !printOnlyBatchTail.includes('apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))'),
+  'batch Print to Queue must not keep the unreachable createLabel-then-addToQueue tail',
+);
+assert(
+  printOnlyBatchTail.includes('await apiClient.createLabel(payload)') &&
+    printOnlyBatchTail.includes('await apiClient.openLabelPdf(queueableLabelUrl)'),
+  'batch Create+Print must create labels and open PDFs from the print-only tail',
+);
 
 assert(!singleCreateOrQueue.includes("mode === 'print' &&") || !singleCreateOrQueue.includes('addToQueue'), 'single-order Create+Print must not add to print queue');
 assert(packageJson.includes('"test:ps-099-create-print-shipp-label-output"'), 'package.json must register the PS-099 guard');
