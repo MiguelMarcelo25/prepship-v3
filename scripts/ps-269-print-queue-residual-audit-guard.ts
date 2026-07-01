@@ -240,8 +240,12 @@ checkPatterns('Print Queue state transitions keep queued, printed, delivered, an
 ]);
 checkPatterns('Print Queue job reports structural retry eligibility instead of raw proof-message ownership', printQueue, [
   /classifyLabelPurchaseRetry\(err\)/,
-  /retryEligible: retry\.retryEligible/,
-  /retryReason: staleLabelAttempt \? err\.retryReason : retry\.retryReason/,
+  /const staleLabelAttempt = isQueueSendStaleLabelAttemptError\(err\)/,
+  /const retryEligible = staleLabelAttempt \|\| retry\.retryEligible/,
+  /const retryReason = staleLabelAttempt \? err\.retryReason : retry\.retryReason/,
+  /retryEligible,\s*retryReason,/,
+  /state: retryEligible \? 'failed_retryable' : 'failed_terminal'/,
+  /blockedReason: retryReason \?\? null/,
   /persistQueueSendJobSnapshot\(job, \{ required: true \}\)/,
 ]);
 

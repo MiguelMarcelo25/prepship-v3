@@ -44,8 +44,9 @@ check('PS-331 doc marks the ticket BLOCKED and forbids deletion in this slice',
   /BLOCKED/.test(doc) &&
   /No deletion in PS-331/.test(doc));
 
-check('PS-331 doc records Trello connector as unavailable, not silently verified',
-  /Trello connector unavailable/.test(doc));
+check('PS-331 doc records Trello was checked without deletion acceptance',
+  /Comments\/actions checked from Codex on 2026-07-01/.test(doc) &&
+    /No explicit DJ\/Hermes acceptance was found/.test(doc));
 
 check('PS-331 doc anchors PS-340 backend plus PS-341 through PS-344 cleanup sequence',
   doc.includes('PS-340 backend rate-engine') &&
@@ -65,7 +66,8 @@ check('PS-331 doc records repo-side hard start gate evidence',
   /Repo guard green/.test(doc));
 
 check('PS-331 doc keeps external acceptance blockers explicit',
-  /Trello\/Hermes\/DJ acceptance is not verified from Codex/.test(doc) &&
+  /Trello checked; deletion acceptance not found/.test(doc) &&
+  /must not claim acceptance without an explicit DJ\/Hermes comment/.test(doc) &&
   /PS-281/.test(doc) &&
   /PS-282/.test(doc) &&
   /PS-284/.test(doc));

@@ -1,8 +1,8 @@
 # PS-331 - BLOCKED: PrepShip dead-code inventory + safe deletion plan
 
-Date: 2026-06-27
+Date: 2026-07-01
 Status: Blocked/full-ticket audit plan. Plan slice: complete. Full ticket: blocked.
-Trello: Trello connector unavailable in Codex (`Transport closed`), so this file records local evidence from the repo and the title DJ provided. Do not treat this as live Trello comment verification.
+Trello: Comments/actions checked from Codex on 2026-07-01. No explicit DJ/Hermes acceptance was found that authorizes PS-331 deletion or the PS-359/PS-360 Print Queue deletion sequence.
 
 ## Decision
 
@@ -30,7 +30,7 @@ The deletion candidates below keep their existing canonical owners:
 
 ## Imperfect data injection points
 
-- Trello comments cannot be read from this thread, so PS-331 must not claim Trello-confirmed acceptance.
+- Trello comments can be read from this thread now, but the current comments do not clear the deletion gate; PS-331 must not claim acceptance without an explicit DJ/Hermes comment.
 - Untracked scratch files can look like repo-owned dead code during broad searches.
 - Legacy guard scripts still read old files by design; deleting those files before re-anchoring guards can remove important safety checks.
 - Drizzle schema definitions can look code-dead while still representing live database tables.
@@ -52,23 +52,25 @@ PS-331 depends on that sequence, but it does not delete additional code from it.
 
 Repo-side guard evidence is green for the known dependency set after the PS-266 guard
 was re-anchored to tolerate the current `rates-combined` import shape while still
-requiring `combineCarrierUniverses` and `rateTotal`.
+requiring `combineCarrierUniverses` and `rateTotal`. On 2026-07-01, the PS-269
+static guard was re-anchored to the current structural retry variables used by
+`src/services/print-queue.ts`, then the PS-269 guard passed again.
 
 | Dependency | Repo evidence | External acceptance |
 | --- | --- | --- |
-| PS-266 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-267 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-268 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-269 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-322 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-328 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-329 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-330 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-340 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-341 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-342 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-343 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
-| PS-344 | Repo guard green | Trello/Hermes/DJ acceptance is not verified from Codex |
+| PS-266 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-267 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-268 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-269 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-322 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-328 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-329 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-330 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-340 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-341 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-342 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-343 | Repo guard green | Trello checked; deletion acceptance not found |
+| PS-344 | Repo guard green | Trello checked; deletion acceptance not found |
 
 Conditional dependency notes:
 
