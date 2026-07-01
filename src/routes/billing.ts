@@ -42,6 +42,7 @@ import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulk
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
+import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
 // title + per-row marker + period note) so the HTML/XLSX/CSV exports render it
 // identically off the fee_waived flag billingInvoiceData stamps from the SOT.
@@ -1455,6 +1456,7 @@ async function renderInvoiceXlsx(args: {
     const note = addSummaryRow('Prep fee waivers', waivedSummaryNote(waivedCount));
     note.getCell(2).font = { italic: true };
   }
+  applyInvoiceXlsxReadableLayout(summary);
 
   // ── Sheet 2: Line Items (one row per order, mirroring the HTML table) ──
   const items = workbook.addWorksheet('Line Items', {
@@ -1523,6 +1525,7 @@ async function renderInvoiceXlsx(args: {
     });
     totalsRow.font = { bold: true };
   }
+  applyInvoiceXlsxReadableLayout(items);
 
   const out = await workbook.xlsx.writeBuffer();
   return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer);
