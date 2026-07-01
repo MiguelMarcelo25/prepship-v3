@@ -86,7 +86,7 @@ export type BillingDetailColumnId =
   | 'additional'
   | 'packageCost'
   | 'packageName'
-  | 'bestRate'
+  | 'selectedRate'
   | 'upsss'
   | 'uspsss'
   | 'shipping'
@@ -124,7 +124,7 @@ export interface BillingDetailMetrics {
   ourCost: number
   margin: number
   ssCharged: boolean
-  chargedRate: 'bestRate' | 'upsss' | 'uspsss' | null
+  chargedRate: 'selectedRate' | 'upsss' | 'uspsss' | null
 }
 
 export interface BillingPackagePriceRow {
@@ -150,7 +150,7 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'additional', label: 'Addl Units', align: 'right', always: false },
   { id: 'packageCost', label: 'Box Cost', align: 'right', always: false },
   { id: 'packageName', label: 'Box Size', align: 'center', always: false },
-  { id: 'bestRate', label: 'Best Rate', align: 'right', always: false },
+  { id: 'selectedRate', label: 'Selected Rate', align: 'right', always: false },
   { id: 'upsss', label: 'UPS SS', align: 'right', always: false },
   { id: 'uspsss', label: 'USPS SS', align: 'right', always: false },
   { id: 'shipping', label: 'Shipping', align: 'right', always: false },
@@ -162,7 +162,7 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
 // row actions so operators can audit/edit a full invoice line at once.
 // Bumping the storage key resets returning users to the new default
 // order; if they had custom toggles, they re-pick them once.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v4'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v5'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
@@ -176,7 +176,7 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'additional',
   'packageCost',
   'packageName',
-  'bestRate',
+  'selectedRate',
   'upsss',
   'uspsss',
   'shipping',
@@ -588,6 +588,14 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
     )
 
     existing.totalQty = carryNullable(existing.totalQty, (row as { totalQty?: unknown }).totalQty)
+    existing.selectedRateCost = carryNullable(
+      existing.selectedRateCost,
+      (row as { selectedRateCost?: unknown }).selectedRateCost,
+    )
+    existing.selected_rate_cost = carryNullable(
+      existing.selected_rate_cost,
+      (row as { selected_rate_cost?: unknown }).selected_rate_cost,
+    )
     existing.actualLabelCost = carryNullable(
       existing.actualLabelCost,
       (row as { actualLabelCost?: unknown }).actualLabelCost,
@@ -625,17 +633,17 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
       }),
   ) || 0
   const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || fulfillmentFee
-  const ourCost = Number(detail.actualLabelCost ?? detail.actual_label_cost ?? 0) || 0
+  const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost ?? detail.actualLabelCost ?? detail.actual_label_cost
+  const ourCost = Number(selectedRateCost ?? 0) || 0
   const margin = shipping - ourCost
-  const actualLabelCost = detail.actualLabelCost ?? detail.actual_label_cost
   const refUpsRate = detail.ref_ups_rate ?? detail.refUpsRate
   const refUspsRate = detail.ref_usps_rate ?? detail.refUspsRate
-  const ssCharged = shipping > 0 && actualLabelCost != null && shipping > Number(actualLabelCost) + 0.01
+  const ssCharged = shipping > 0 && selectedRateCost != null && shipping > Number(selectedRateCost) + 0.01
 
   let chargedRate: BillingDetailMetrics['chargedRate'] = null
   if (shipping > 0) {
     const tol = 0.01
-    if (actualLabelCost != null && Math.abs(shipping - Number(actualLabelCost)) <= tol) chargedRate = 'bestRate'
+    if (selectedRateCost != null && Math.abs(shipping - Number(selectedRateCost)) <= tol) chargedRate = 'selectedRate'
     else if (refUpsRate != null && Math.abs(shipping - Number(refUpsRate)) <= tol) chargedRate = 'upsss'
     else if (refUspsRate != null && Math.abs(shipping - Number(refUspsRate)) <= tol) chargedRate = 'uspsss'
   }

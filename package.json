@@ -299,6 +299,7 @@
     "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",
     "test:ps-310-billing-export-sku-qty": "tsx scripts/ps-310-billing-export-sku-qty-guard.ts",
     "test:ps-362-billing-detail-sot-export": "tsx scripts/ps-362-billing-detail-sot-export-guard.ts",
+    "test:ps-364-billing-selected-rate-sot": "tsx scripts/ps-364-billing-selected-rate-sot-guard.ts",
     "test:ps-309-voided-label-display": "tsx scripts/ps-309-voided-label-display-guard.ts",
     "test:ps-311-bulk-box-cost-preview": "tsx scripts/ps-311-bulk-box-cost-preview-guard.ts",
     "test:ps-311-bulk-box-cost-integration": "tsx scripts/ps-311-bulk-box-cost-integration.ts",

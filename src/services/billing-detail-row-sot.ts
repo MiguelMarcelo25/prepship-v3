@@ -108,6 +108,8 @@ const VALUE_CARRY_FIELDS = [
   'tracking_number',
   'totalQty',
   'total_qty',
+  'selectedRateCost',
+  'selected_rate_cost',
   'actualLabelCost',
   'actual_label_cost',
   'refUpsRate',

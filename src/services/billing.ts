@@ -59,6 +59,7 @@ import { getBundlesForOrders } from './shipment-bundles/bundle-read-model';
 import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-policy';
 import { env } from '../lib/env';
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
+import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -1909,13 +1910,12 @@ export async function billingDetails(input: GenerateInput) {
           const changedAt = pricingChangedByClient.get(row.clientId);
           return changedAt ? new Date(row.createdAt) < changedAt : false;
         })();
-      const labelCost =
-        toFiniteNumber(row.labelCost ?? fallbackShipment?.labelCost) ??
-        (() => {
-          const cost = toFiniteNumber(row.cost ?? fallbackShipment?.cost);
-          if (cost == null) return null;
-          return cost + (toFiniteNumber(row.otherCost ?? fallbackShipment?.otherCost) ?? 0);
-        })();
+      const selectedRateCost = resolveBillingSelectedRateCost({
+        cost: row.cost ?? fallbackShipment?.cost,
+        labelCost: row.labelCost ?? fallbackShipment?.labelCost,
+        otherCost: row.otherCost ?? fallbackShipment?.otherCost,
+        selectedRateJson: row.selectedRateJson ?? fallbackShipment?.selectedRateJson,
+      });
       const refUspsRate = toFiniteNumber(row.refUspsRate);
       const refUpsRate = toFiniteNumber(row.refUpsRate);
       const selectedPackageId = row.selectedPackageId ?? fallbackShipment?.selectedPackageId ?? null;
@@ -1975,8 +1975,12 @@ export async function billingDetails(input: GenerateInput) {
         itemSkus: items.itemSkus,
         totalQty: items.totalQty,
         packageName,
-        actualLabelCost: isShippingLine ? labelCost : null,
-        actual_label_cost: isShippingLine ? labelCost : null,
+        selectedRateCost: isShippingLine ? selectedRateCost : null,
+        selected_rate_cost: isShippingLine ? selectedRateCost : null,
+        // Deprecated compatibility alias: shipped Billing now owns Selected Rate
+        // as selectedRateCost; old readers get the same backend-owned value.
+        actualLabelCost: isShippingLine ? selectedRateCost : null,
+        actual_label_cost: isShippingLine ? selectedRateCost : null,
         shippingCostMissing: isMissingShippingLine,
         shipping_cost_missing: isMissingShippingLine,
         // PS-207: box-review flag + the generator's reason text (the review

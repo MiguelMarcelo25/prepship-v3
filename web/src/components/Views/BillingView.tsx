@@ -187,7 +187,7 @@ const DETAIL_COLUMN_WIDTHS: Partial<Record<BillingDetailColumnId, number>> = {
   additional: 100,
   packageCost: 100,
   packageName: 110,
-  bestRate: 100,
+  selectedRate: 100,
   upsss: 90,
   uspsss: 90,
   shipping: 110,
@@ -219,7 +219,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
     case 'packageName': return row.packageName
-    case 'bestRate': return row.actualLabelCost
+    case 'selectedRate': return row.selectedRateCost ?? row.selected_rate_cost
     case 'upsss': return row.ref_ups_rate
     case 'uspsss': return row.ref_usps_rate
     case 'shipping': return metrics.shipping
@@ -573,8 +573,8 @@ export default function BillingView() {
           return metrics.packageCost
         case 'packageName':
           return row.packageName
-        case 'bestRate':
-          return row.actualLabelCost
+        case 'selectedRate':
+          return row.selectedRateCost ?? row.selected_rate_cost
         case 'upsss':
           return row.ref_ups_rate
         case 'uspsss':
@@ -1693,7 +1693,7 @@ export default function BillingView() {
                   })}
                 </select>
               </div>
-              <div><span>Best Rate</span><strong>{formatBillingMoney(billingEditModal.row.actualLabelCost, { dashIfZero: true })}</strong></div>
+              <div><span>Selected Rate</span><strong>{formatBillingMoney(billingEditModal.row.selectedRateCost ?? billingEditModal.row.selected_rate_cost, { dashIfZero: true })}</strong></div>
               <div><span>UPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_ups_rate, { dashIfZero: true })}</strong></div>
               <div><span>USPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_usps_rate, { dashIfZero: true })}</strong></div>
             </div>
