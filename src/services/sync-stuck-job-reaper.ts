@@ -26,7 +26,7 @@ import { env } from '../lib/env.js';
  * Allow-list of pgboss queue names the reaper may clear. These are idempotent, watermark-based,
  * side-effect-free sync/reporting/tracking jobs — re-running a tick loses nothing.
  *
- * EXCLUDED on purpose (side effects):
+ * EXCLUDED from active reaping on purpose (side effects):
  *   - 'prepship.sync.fulfillment-outbox'                 (real marketplace ship-confirmations)
  *   - 'prepship.shipping.external-shipped-classifier'    (mutates order state)
  *   - 'prepship.fees.walmart-sync'
@@ -53,6 +53,14 @@ export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
   'cadence',
   'busy-defer',
   'watchdog-recovery',
+];
+
+export const REAPER_STALE_QUEUED_JOB_NAMES: readonly string[] = [
+  ...REAPER_SAFE_JOB_NAMES,
+  // Per user override unlock shipped data on 2026-07-02: queued fulfillment-outbox
+  // cadence rows are only wake-up ticks. Collapsing stale duplicates never sends
+  // confirmations, deletes outbox data, or mutates shipped/cancelled orders.
+  'prepship.sync.fulfillment-outbox',
 ];
 
 type StuckJobRow = {
@@ -157,13 +165,15 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
 }
 
 /**
- * EFFECTFUL stale-queued reaper. ShipStation/order/reporting sync jobs are watermark-based:
- * a tick from hours ago does not carry unique business data, it only says "sync from the durable
- * watermark now". When the worker is down or wedged, old `created` cadence/busy-defer/watchdog
- * rows can pile up and keep the worker chewing stale ticks before it reaches today's work.
+ * EFFECTFUL stale-queued reaper. Cadence/busy-defer/watchdog rows are wake-up ticks:
+ * a tick from hours ago does not carry unique business data, it only says "run the durable
+ * owner now". When the worker is down or wedged, old `created` rows can pile up and keep the
+ * worker chewing stale ticks before it reaches today's work.
  * Per user override unlock shipped data on 2026-07-01: PS-361 extends the PS-360 cadence cleanup
  * to the same safe shipment-sync recovery singleton rows. Keep the newest queued row per safe
  * job/singleton and fail older redundant rows.
+ * Per user override unlock shipped data on 2026-07-02: fulfillment-outbox is included only for
+ * stale QUEUED cadence rows. ACTIVE fulfillment jobs remain excluded from reapStuckActiveJobs.
  */
 export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
   if (!env.SYNC_STUCK_JOB_REAPER) {
@@ -184,7 +194,7 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
           ) AS newest_rank
         FROM ${pg(jobTable)}
         WHERE state IN ('created', 'retry')
-          AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
+          AND name = ANY(${REAPER_STALE_QUEUED_JOB_NAMES as string[]})
           AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
           AND created_on < now() - (${Math.floor(REAPER_STALE_QUEUED_MIN_AGE_MS / 1000)} * interval '1 second')
       )
@@ -205,7 +215,7 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
           output = '{"reason":"PS-360/PS-361 stale queued sync reaper"}'::jsonb
       WHERE id = ANY(${ids})
         AND state IN ('created', 'retry')
-        AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
+        AND name = ANY(${REAPER_STALE_QUEUED_JOB_NAMES as string[]})
         AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
       RETURNING id::text AS id, name
     `;
