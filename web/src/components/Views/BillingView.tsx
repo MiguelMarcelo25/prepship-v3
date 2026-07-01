@@ -54,6 +54,7 @@ import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 // PS-155: per-client detail table extracted (behavior-preserving; rows/sort/totals/handlers
 // stay here and are passed as props, the table calls the pure computeBillingDetailMetrics).
 import { BillingDetailTable } from './BillingDetailTable'
+import { BillingLineItemWarningSummary } from './BillingLineItemWarningSummary'
 // PS-155: Client Billing Config + Package Pricing tables extracted (behavior-preserving; the
 // config/price DRAFT state + setters and the Save handlers stay here and are passed as props).
 import { BillingConfigTable } from './BillingConfigTable'
@@ -1393,12 +1394,12 @@ export default function BillingView() {
     : 0
 
   return (
-    <div id="view-billing" className="view-content !p-5 !overflow-y-auto">
+    <div id="view-billing" className="view-content !p-5 !overflow-y-auto flex flex-col">
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        className="flex items-center gap-3 mb-5"
+        className="order-0 flex items-center gap-3 mb-5"
       >
         <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-md ring-1 ring-emerald-400/20">
           <Receipt size={20} strokeWidth={2.25} className="text-white" />
@@ -1409,7 +1410,7 @@ export default function BillingView() {
         </div>
       </motion.div>
 
-      <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
+      <div className="billing-grid order-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
         {/* PS-155: Client Billing Config table extracted to <BillingConfigTable />.
             The config DRAFT state (configDrafts) + setter and the Save handler
             (handleSaveConfig → buildBillingConfigInput → updateBillingConfig) stay here. */}
@@ -1438,7 +1439,7 @@ export default function BillingView() {
         />
       </div>
 
-      <div className="rounded-xl bg-surface ring-1 ring-line p-4">
+      <div className="order-1 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
         <div className="flex items-center gap-2 mb-3">
           <SlidersHorizontal size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
           <h3 className="text-[13px] font-semibold text-ink">Generate &amp; summary</h3>
@@ -1604,6 +1605,7 @@ export default function BillingView() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Line Items — {detailState.clientName}</h3>
               <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
+              <BillingLineItemWarningSummary rows={sortedDetailRows} onOpenWarningRow={handleOpenBillingEdit} />
               {/* PS-275: surface HOW MANY of the currently-rendered line items
                   need the $0-shipping prep-fee review, so operators don't have
                   to open each Edit modal to find them. Count derives from the

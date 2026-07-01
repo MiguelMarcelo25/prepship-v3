@@ -297,6 +297,7 @@
     "test:billing-client-scope": "tsx scripts/billing-client-store-scope-guard.mjs",
     "test:billing-formula": "tsx scripts/billing-formula-guard.ts",
     "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",
+    "test:billing-line-item-warning-summary": "tsx scripts/billing-line-item-warning-summary-guard.ts",
     "test:ps-310-billing-export-sku-qty": "tsx scripts/ps-310-billing-export-sku-qty-guard.ts",
     "test:ps-362-billing-detail-sot-export": "tsx scripts/ps-362-billing-detail-sot-export-guard.ts",
     "test:ps-363-billing-no-box-cost-alert": "tsx scripts/ps-363-billing-no-box-cost-alert-guard.ts",
