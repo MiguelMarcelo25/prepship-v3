@@ -136,6 +136,9 @@ const reaper = read('src/services/sync-stuck-job-reaper.ts');
 const pkg = read('package.json');
 
 check('sync status exposes shipment watchdog state', syncRoute.includes('readShipmentSyncWatchdogStatus') && /watchdog/.test(syncRoute));
+check('sync status nudges safe shipment watchdog recovery when red',
+  syncRoute.includes('nudgeShipmentSyncWatchdogRecovery') &&
+  /void\s+nudgeShipmentSyncWatchdogRecovery\(watchdog,\s*\{\s*source:\s*'status'\s*\}\)/.test(syncRoute));
 check('cron route exposes cron-secret shipment watchdog tick', cronRoute.includes("'/shipment-sync-watchdog'") && cronRoute.includes('runShipmentSyncWatchdogTick'));
 check('API process starts independent shipment watchdog timer', main.includes('startShipmentSyncWatchdog') && main.includes('SHIPMENT_SYNC_WATCHDOG_ENABLED'));
 check('env defines PS-361 watchdog thresholds and restart gates',
@@ -159,6 +162,14 @@ check('Render restart path is explicit, env-gated, and auditable',
   service.includes('RENDER_API_KEY') &&
   service.includes('recordWatchdogAction') &&
   service.includes('restart-requested'));
+const statusNudgeBlock = service.match(/export async function nudgeShipmentSyncWatchdogRecovery[\s\S]*?\n}\n\nasync function persistWatchdogSnapshot/)?.[0] ?? '';
+check('status nudge is limited to enqueue/reap and never restarts workers',
+  statusNudgeBlock.includes('isStatusNudgeRecoveryAction') &&
+  statusNudgeBlock.includes('enqueueShipmentSyncWatchdogJob') &&
+  statusNudgeBlock.includes('reapStuckActiveJobs') &&
+  statusNudgeBlock.includes('reapStaleQueuedCadenceJobs') &&
+  !statusNudgeBlock.includes('triggerRenderWorkerRestart') &&
+  !statusNudgeBlock.includes('restart_worker'));
 check('watchdog records shipped-data override comment and safety boundary', /unlock shipped data on 2026-07-01/.test(service));
 check('package wires test:ps-361-shipment-sync-watchdog',
   /"test:ps-361-shipment-sync-watchdog"\s*:\s*"tsx scripts\/ps-361-shipment-sync-watchdog-guard\.ts"/.test(pkg));

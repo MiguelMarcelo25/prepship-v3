@@ -10,7 +10,10 @@ import {
 } from '../services/worker-status';
 import { getSyncJobQueueStatus } from '../services/sync-job-queue';
 import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
-import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
+import {
+  nudgeShipmentSyncWatchdogRecovery,
+  readShipmentSyncWatchdogStatus,
+} from '../services/shipment-sync-watchdog';
 
 const app = new Hono();
 
@@ -62,6 +65,14 @@ app.get('/status', async (c) => {
     getSyncJobQueueStatus(),
   ]);
   const watchdog = await readShipmentSyncWatchdogStatus();
+  if (watchdog.enabled && watchdog.verdict.alert) {
+    void nudgeShipmentSyncWatchdogRecovery(watchdog, { source: 'status' }).catch((err) => {
+      console.warn(
+        '[sync/status] shipment watchdog recovery nudge failed:',
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
   const workerSchedulerActive = Boolean(
     worker.status?.schedulerEnabled && !worker.stale
   );

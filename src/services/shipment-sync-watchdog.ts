@@ -731,6 +731,60 @@ async function runRecoveryAction(
   return null;
 }
 
+function isStatusNudgeRecoveryAction(
+  action: ShipmentSyncWatchdogRecommendedAction,
+): action is 'enqueue_shipment_sync' | 'reap_stale_jobs' {
+  return action === 'enqueue_shipment_sync' || action === 'reap_stale_jobs';
+}
+
+export async function nudgeShipmentSyncWatchdogRecovery(
+  status: ShipmentSyncWatchdogStatus,
+  options: { nowMs?: number; source?: 'status' } = {},
+): Promise<ShipmentSyncWatchdogAction | null> {
+  if (!env.SHIPMENT_SYNC_WATCHDOG_ENABLED || !status.verdict.alert) return null;
+
+  const action = status.verdict.recommendedAction;
+  if (!isStatusNudgeRecoveryAction(action)) return null;
+
+  const nowMs = options.nowMs ?? Date.now();
+  const cooldown = shouldCooldown(status, action, nowMs);
+  if (cooldown) return cooldown;
+
+  let recovery: ShipmentSyncWatchdogAction;
+  // Per user override unlock shipped data on 2026-07-01: protected sync-status
+  // reads may nudge only pg-boss shipment-sync recovery. This never buys labels,
+  // creates postage, notifies marketplaces, or modifies orders/shipments rows.
+  if (action === 'reap_stale_jobs') {
+    const [active, cadence]: [ReapResult, ReapResult] = await Promise.all([
+      reapStuckActiveJobs(),
+      reapStaleQueuedCadenceJobs(),
+    ]);
+    recovery = {
+      action,
+      status: 'completed',
+      at: new Date(nowMs).toISOString(),
+      reason: `safe pg-boss reapers ran from ${options.source ?? 'status'} nudge`,
+      details: { active, cadence },
+    };
+  } else {
+    const enqueued = await enqueueShipmentSyncWatchdogJob();
+    recovery = {
+      action,
+      status: enqueued.error ? 'failed' : 'completed',
+      at: new Date(nowMs).toISOString(),
+      reason: enqueued.error
+        ? `shipment sync enqueue failed: ${enqueued.error}`
+        : enqueued.enqueued
+          ? `shipment sync recovery job enqueued from ${options.source ?? 'status'} nudge`
+          : 'shipment sync recovery job already queued',
+      details: enqueued,
+    };
+  }
+
+  await recordWatchdogAction(recovery);
+  return recovery;
+}
+
 async function persistWatchdogSnapshot(status: ShipmentSyncWatchdogStatus): Promise<void> {
   await setSetting(
     SNAPSHOT_KEY,
