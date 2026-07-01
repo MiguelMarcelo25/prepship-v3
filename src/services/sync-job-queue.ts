@@ -114,6 +114,95 @@ async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {
   }
 }
 
+export type ShipmentSyncWatchdogEnqueueResult = {
+  enqueued: boolean;
+  jobId: string | null;
+  queueStarted: boolean;
+  error: string | null;
+};
+
+async function sendShipmentSyncWatchdogJob(
+  targetBoss: PgBoss,
+  queueStarted: boolean,
+): Promise<ShipmentSyncWatchdogEnqueueResult> {
+  try {
+    // Per user override unlock shipped data on 2026-07-01: PS-361 recovery
+    // enqueues one shipment import tick only. It does not buy labels, create
+    // postage, notify marketplaces, or mutate shipped/cancelled rows here.
+    const id = await targetBoss.send(
+      JOBS.shipments,
+      {
+        requestedAt: new Date().toISOString(),
+        requestedBy: 'shipment-sync-watchdog',
+      },
+      {
+        singletonKey: 'watchdog-recovery',
+        singletonSeconds: 60,
+        retryLimit: 2,
+        retryDelay: 30,
+        retryBackoff: true,
+        expireInMinutes: 30,
+        retentionDays: 7,
+      },
+    );
+    return {
+      enqueued: Boolean(id),
+      jobId: id ? String(id) : null,
+      queueStarted,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      enqueued: false,
+      jobId: null,
+      queueStarted,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function enqueueShipmentSyncWatchdogJob(): Promise<ShipmentSyncWatchdogEnqueueResult> {
+  if (boss && started) {
+    return sendShipmentSyncWatchdogJob(boss, true);
+  }
+
+  const transientBoss = new PgBoss({
+    connectionString: env.DATABASE_URL,
+    schema: env.PG_BOSS_SCHEMA,
+    application_name: 'prepship-api-watchdog',
+    max: 1,
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    expireInSeconds: 30 * 60,
+    retentionDays: 7,
+    deleteAfterDays: 7,
+    supervise: false,
+  });
+
+  try {
+    await transientBoss.start();
+    await transientBoss.createQueue(JOBS.shipments, {
+      name: JOBS.shipments,
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInSeconds: 30 * 60,
+      retentionDays: 7,
+    });
+    return await sendShipmentSyncWatchdogJob(transientBoss, false);
+  } catch (err) {
+    return {
+      enqueued: false,
+      jobId: null,
+      queueStarted: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    await transientBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
 async function deferBusySyncJob(
   name: JobName,
   blockedBy: string,

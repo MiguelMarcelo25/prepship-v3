@@ -10,6 +10,7 @@ import {
 } from '../services/worker-status';
 import { getSyncJobQueueStatus } from '../services/sync-job-queue';
 import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
+import { readShipmentSyncWatchdogStatus } from '../services/shipment-sync-watchdog';
 
 const app = new Hono();
 
@@ -60,6 +61,7 @@ app.get('/status', async (c) => {
     getPersistedWorkerStatus(),
     getSyncJobQueueStatus(),
   ]);
+  const watchdog = await readShipmentSyncWatchdogStatus();
   const workerSchedulerActive = Boolean(
     worker.status?.schedulerEnabled && !worker.stale
   );
@@ -91,6 +93,7 @@ app.get('/status', async (c) => {
     shipments,
     worker,
     queue: queueStatus,
+    watchdog,
     api: getApiRuntimeStatus(),
   });
 });

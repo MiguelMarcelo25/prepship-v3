@@ -518,6 +518,7 @@
     "test:ps-358-ps340-cleanup": "tsx scripts/ps-358-ps340-cleanup-guard.ts",
     "test:ps-359-shipment-sync-busy-defer": "tsx scripts/ps-359-shipment-sync-busy-defer-guard.ts",
     "test:ps-360-stale-cadence-reaper": "tsx scripts/ps-360-stale-cadence-reaper-guard.ts",
+    "test:ps-361-shipment-sync-watchdog": "tsx scripts/ps-361-shipment-sync-watchdog-guard.ts",
     "test:ps-357-rate-language-breadcrumb-guard": "tsx scripts/ps-357-rate-language-breadcrumb-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
     "test:ps-307-marked-rate-comparison": "tsx scripts/ps-307-marked-rate-comparison-guard.ts",

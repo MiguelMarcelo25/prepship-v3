@@ -151,6 +151,30 @@ const schema = z.object({
   // confirmations, never order/shipment data. Default OFF — the OFF path is a TRUE no-op (no DB, no
   // mutation). DJ flips this on Render.
   SYNC_STUCK_JOB_REAPER: booleanFlag(false),
+  // PS-361: API-side shipment-sync watchdog. This is the independent control-plane observer for
+  // the failure where order sync stays fresh but shipment/label sync stalls, causing shipped rows
+  // without shipment SOT records. It logs/exposes health by default; recovery is cooldown-bound and
+  // restarts require SHIPMENT_SYNC_WATCHDOG_ALLOW_RESTARTS plus Render API credentials.
+  SHIPMENT_SYNC_WATCHDOG_ENABLED: booleanFlag(true),
+  SHIPMENT_SYNC_WATCHDOG_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  SHIPMENT_SYNC_WATCHDOG_WORKER_STALE_SECONDS: z.coerce.number().int().positive().default(5 * 60),
+  SHIPMENT_SYNC_WATCHDOG_ORDER_FRESH_SECONDS: z.coerce.number().int().positive().default(15 * 60),
+  SHIPMENT_SYNC_WATCHDOG_SHIPMENT_STALE_SECONDS: z.coerce.number().int().positive().default(30 * 60),
+  SHIPMENT_SYNC_WATCHDOG_ACTIVE_JOB_STUCK_SECONDS: z.coerce.number().int().positive().default(15 * 60),
+  SHIPMENT_SYNC_WATCHDOG_QUEUE_BACKLOG_THRESHOLD: z.coerce.number().int().nonnegative().default(5),
+  SHIPMENT_SYNC_WATCHDOG_QUEUE_BACKLOG_CHECKS: z.coerce.number().int().positive().default(2),
+  SHIPMENT_SYNC_WATCHDOG_MISSING_COUNT_THRESHOLD: z.coerce.number().int().nonnegative().default(5),
+  SHIPMENT_SYNC_WATCHDOG_MISSING_RATE_THRESHOLD: z.coerce.number().positive().max(1).default(0.25),
+  SHIPMENT_SYNC_WATCHDOG_RECENT_HOURS: z.coerce.number().int().positive().default(24),
+  SHIPMENT_SYNC_WATCHDOG_RECOVERY_COOLDOWN_MS: z.coerce.number().int().positive().default(5 * 60_000),
+  SHIPMENT_SYNC_WATCHDOG_NO_PROGRESS_RESTART_MS: z.coerce.number().int().positive().default(20 * 60_000),
+  SHIPMENT_SYNC_WATCHDOG_RESTART_COOLDOWN_MS: z.coerce.number().int().positive().default(15 * 60_000),
+  SHIPMENT_SYNC_WATCHDOG_MAX_RESTARTS_PER_HOUR: z.coerce.number().int().nonnegative().default(2),
+  SHIPMENT_SYNC_WATCHDOG_ALLOW_RESTARTS: booleanFlag(false),
+  SHIPMENT_SYNC_WATCHDOG_RENDER_SERVICE_ID: z.string().optional(),
+  RENDER_WORKER_SERVICE_ID: z.string().optional(),
+  RENDER_SERVICE_ID: z.string().optional(),
+  RENDER_API_KEY: z.string().optional(),
   // PS-279: default-OFF backend ownership of the Send-to-Queue ROUTE decision (the
   // money-path direct-buy-vs-backend-job ladder, ported from the FE classifier into
   // src/services/print-queue/queue-route-orchestrator.ts). When ON, the new

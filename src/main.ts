@@ -254,6 +254,15 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
     console.log('[runtime] RUN_SYNC_SCHEDULER=false; API scheduler disabled');
   }
 
+  if (env.SHIPMENT_SYNC_WATCHDOG_ENABLED) {
+    console.log('[runtime] SHIPMENT_SYNC_WATCHDOG_ENABLED=true; starting API-side shipment watchdog');
+    void import('./services/shipment-sync-watchdog').then(({ startShipmentSyncWatchdog }) =>
+      startShipmentSyncWatchdog()
+    );
+  } else {
+    console.log('[runtime] shipment sync watchdog disabled');
+  }
+
   const runMaintenance = env.RUN_ORDERS_PERFORMANCE_MAINTENANCE === true;
   if (runMaintenance) {
     console.log(

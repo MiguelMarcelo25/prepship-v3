@@ -640,6 +640,8 @@ export function formatSyncPill(sync: {
   mode: 'idle' | 'incremental' | 'full'
   page: number
   lastSync: number | null
+  shipments?: { lastSyncedAt?: string | null } | null
+  watchdog?: { verdict?: { alert?: boolean; state?: string | null } | null } | null
   ratePrefetchRunning?: boolean
   ratePrefetchJob?: {
     total?: number
@@ -674,17 +676,26 @@ export function formatSyncPill(sync: {
     // CA time. lastSync is a numeric ms-since-epoch from Date.now()
     // — true UTC, so we use formatCaTimeOnly (the CA-flavored helper)
     // not formatNaivePtTimeOnly (which is for naive-stamped-Z fields).
-    const syncTime = sync.lastSync
+    const formatCa = (ms: number | null) => ms
       ? `${new Intl.DateTimeFormat('en-US', {
           hour: 'numeric',
           minute: '2-digit',
           hour12: true,
           timeZone: 'America/Los_Angeles',
-        }).format(new Date(sync.lastSync))} CA`
+        }).format(new Date(ms))} CA`
       : '—'
+    const orderSyncTime = formatCa(sync.lastSync)
+    const shipmentSyncMs =
+      sync.shipments?.lastSyncedAt && Number.isFinite(Date.parse(sync.shipments.lastSyncedAt))
+        ? Date.parse(sync.shipments.lastSyncedAt)
+        : null
+    const labelSyncTime = shipmentSyncMs ? formatCa(shipmentSyncMs) : null
+    const labelSyncAlert = Boolean(sync.watchdog?.verdict?.alert)
     return {
-      className: 'sync-pill done',
-      text: `Last sync ${syncTime}`,
+      className: labelSyncAlert ? 'sync-pill error' : 'sync-pill done',
+      text: labelSyncTime
+        ? `Orders ${orderSyncTime} / Labels ${labelSyncTime}`
+        : `Order sync ${orderSyncTime}`,
     }
   }
 

@@ -8,6 +8,7 @@ import {
   syncShipStationProducts,
 } from '../services/inventory-enrichment';
 import { processFulfillmentOutboxOnce } from '../services/fulfillment/outbox';
+import { runShipmentSyncWatchdogTick } from '../services/shipment-sync-watchdog';
 
 const app = new Hono();
 
@@ -125,6 +126,16 @@ app.post('/sync-products', async (c) => {
 
 app.get('/sync-products', async (c) => {
   const result = await syncShipStationProducts();
+  return c.json(result);
+});
+
+app.post('/shipment-sync-watchdog', async (c) => {
+  const result = await runShipmentSyncWatchdogTick({ recover: true, source: 'cron' });
+  return c.json(result);
+});
+
+app.get('/shipment-sync-watchdog', async (c) => {
+  const result = await runShipmentSyncWatchdogTick({ recover: true, source: 'cron' });
   return c.json(result);
 });
 
