@@ -13,9 +13,10 @@ import type { CSSProperties } from 'react'
 import { Pencil } from 'lucide-react'
 import type { BillingDetailColumnId, BillingDetailDto, BillingDetailPanelState } from './billing-parity'
 import {
+  billingShipDateSortValue,
   BILLING_DETAIL_COLUMNS,
   computeBillingDetailMetrics,
-  formatBillingDateTime,
+  formatBillingShipDate,
   formatBillingMoney,
   getDefaultBillingDetailColumnIds,
 } from './billing-parity'
@@ -60,7 +61,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
   switch (key) {
     case 'actions': return ''
     case 'orderNumber': return row.orderNumber || row.orderId
-    case 'shipDate': return row.shipDate ? new Date(row.shipDate) : null
+    case 'shipDate': return billingShipDateSortValue(row.shipDate)
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
@@ -248,7 +249,7 @@ export function BillingDetailTable({
                   <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
                 )
               case 'shipDate':
-                return <span style={{ color: 'var(--text2)', fontSize: 11 }}>{formatBillingDateTime(row.shipDate)}</span>
+                return <span style={{ color: 'var(--text2)', fontSize: 11 }}>{formatBillingShipDate(row.shipDate)}</span>
               case 'carrierNickname': {
                 const carrierText = row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
                 return <span style={{ color: carrierText ? 'var(--text)' : 'var(--text4)', fontSize: 11, fontWeight: carrierText ? 600 : 400 }}>{carrierText || '-'}</span>
@@ -394,7 +395,7 @@ export function BillingDetailTable({
         } satisfies TableColumn<BillingDetailDto>
       })}
       rowKey={(row) => row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? 'row'}`}
-      storageKey="billing-detail-table-v2"
+      storageKey="billing-detail-table-v3-newest-first"
       defaultSort={{ key: 'shipDate', direction: 'desc' }}
       paginated
       stickyPagination

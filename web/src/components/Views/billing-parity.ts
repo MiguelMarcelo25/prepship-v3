@@ -347,9 +347,32 @@ export function formatBillingMoney(value: number | null | undefined, options: { 
   return `$${value.toFixed(2)}`
 }
 
-// Billing dates are true UTC instants and render in California time, not the
-// operator's browser timezone.
-export { formatCaDateTime as formatBillingDateTime } from '../../lib/ca-time'
+const BILLING_DAY_RE = /^(\d{4})-(\d{2})-(\d{2})/
+
+function billingDayParts(value: string | null | undefined) {
+  const match = BILLING_DAY_RE.exec(String(value ?? '').trim())
+  if (!match) return null
+  return {
+    year: match[1]!,
+    month: match[2]!,
+    day: match[3]!,
+  }
+}
+
+// Billing ship_date is a calendar day stored at UTC midnight, not an instant.
+// Display and sort by the leading YYYY-MM-DD components only, with no timezone
+// conversion. Otherwise 2026-06-30T00:00Z renders as 06/29/26 5:00 PM in CA.
+export function formatBillingShipDate(value: string | null | undefined) {
+  const parts = billingDayParts(value)
+  if (!parts) return value ? String(value) : '—'
+  return `${parts.month}/${parts.day}/${parts.year.slice(2)}`
+}
+
+export function billingShipDateSortValue(value: string | null | undefined) {
+  const parts = billingDayParts(value)
+  if (!parts) return null
+  return Number(`${parts.year}${parts.month}${parts.day}`)
+}
 
 export function getBillingDetailColumnStorageKey() {
   return BILLING_DETAIL_COLS_KEY

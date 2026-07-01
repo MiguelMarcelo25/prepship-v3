@@ -159,5 +159,24 @@ assert(
   read('src/routes/billing.ts').includes("to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD')"),
   'billing.ts invoice ship_date must extract the calendar day at UTC (PS-208)',
 );
+const billingParity = read('web/src/components/Views/billing-parity.ts');
+const billingDetailTable = read('web/src/components/Views/BillingDetailTable.tsx');
+assert(
+  billingParity.includes('export function formatBillingShipDate') &&
+    billingParity.includes('export function billingShipDateSortValue'),
+  'billing detail UI must use date-only billing-day helpers for ship_date',
+);
+assert(
+  !billingParity.includes('formatBillingDateTime') &&
+    !billingDetailTable.includes('formatBillingDateTime') &&
+    billingDetailTable.includes('formatBillingShipDate(row.shipDate)') &&
+    billingDetailTable.includes('billingShipDateSortValue(row.shipDate)'),
+  'billing detail ship date must not render/sort UTC-midnight billing days as CA timestamps',
+);
+assert(
+  billingDetailTable.includes('defaultSort={{ key: \'shipDate\', direction: \'desc\' }}') &&
+    billingDetailTable.includes('storageKey="billing-detail-table-v3-newest-first"'),
+  'billing detail table must default to newest ship_date first and ignore stale ascending persisted sort',
+);
 
 console.log('PASS date/time standard guard');
