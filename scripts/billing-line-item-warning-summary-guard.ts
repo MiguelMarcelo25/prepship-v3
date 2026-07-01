@@ -37,9 +37,16 @@ assert.match(
   /<BillingLineItemWarningSummary rows=\{sortedDetailRows\} onOpenWarningRow=\{handleOpenBillingEdit\} \/>/,
   'BillingView must render the warning summary beside the Line Items header',
 )
-assert.match(view, /id="view-billing" className="view-content !p-5 !overflow-y-auto flex flex-col"/, 'Billing root must allow explicit visual ordering')
-assert.match(view, /className="billing-grid order-2"/, 'Client config and package pricing must render after Generate & summary')
-assert.match(view, /className="order-1 rounded-xl bg-surface ring-1 ring-line p-4 mb-\[18px\]"/, 'Generate & summary card must render above the config grid')
+const generateStart = view.indexOf('<h3 className="text-[13px] font-semibold text-ink">Generate &amp; summary</h3>')
+const configStart = view.indexOf('<BillingConfigTable', generateStart)
+const pricingStart = view.indexOf('<BillingPackagePricingTable', configStart)
+const carrierTableStart = view.indexOf('<BillingCarrierMarginTable', pricingStart)
+const perOrderStart = view.indexOf('Per-order reconciliation', pricingStart)
+assert.ok(generateStart > -1, 'BillingView must render the Generate & summary heading')
+assert.ok(configStart > generateStart, 'Client Billing Config must render inside/below Generate & summary')
+assert.ok(pricingStart > configStart, 'Package Pricing by client must render next to/below Client Billing Config')
+assert.ok(carrierTableStart > pricingStart, 'Config/pricing must render before the carrier margin table')
+assert.ok(perOrderStart > pricingStart, 'Config/pricing must render before Per-order reconciliation')
 
 const pkg = readFileSync('package.json', 'utf8')
 assert.match(pkg, /"test:billing-line-item-warning-summary": "tsx scripts\/billing-line-item-warning-summary-guard\.ts"/, 'package.json must expose the guard script')

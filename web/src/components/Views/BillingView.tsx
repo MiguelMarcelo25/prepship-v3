@@ -1410,35 +1410,6 @@ export default function BillingView() {
         </div>
       </motion.div>
 
-      <div className="billing-grid order-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
-        {/* PS-155: Client Billing Config table extracted to <BillingConfigTable />.
-            The config DRAFT state (configDrafts) + setter and the Save handler
-            (handleSaveConfig → buildBillingConfigInput → updateBillingConfig) stay here. */}
-        <BillingConfigTable
-          configs={configs}
-          configsLoading={configsLoading}
-          configDrafts={configDrafts}
-          setConfigDrafts={setConfigDrafts}
-          onSaveConfig={handleSaveConfig}
-          onToggleHouseAccount={handleToggleHouseAccount}
-        />
-
-        {/* PS-155: Package Pricing card extracted to <BillingPackagePricingTable />.
-            The price DRAFT state (packagePriceDrafts) + setter, selected-client state,
-            the PURE-built packagePricingRows, and the Save handler stay here. */}
-        <BillingPackagePricingTable
-          configs={configs}
-          selectedPkgClientId={selectedPkgClientId}
-          setSelectedPkgClientId={setSelectedPkgClientId}
-          packagePricingRows={packagePricingRows}
-          packagePriceDrafts={packagePriceDrafts}
-          setPackagePriceDrafts={setPackagePriceDrafts}
-          packagePricingLoading={packagePricingLoading}
-          packagePricingError={packagePricingError}
-          onSavePackagePrices={handleSavePackagePrices}
-        />
-      </div>
-
       <div className="order-1 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
         <div className="flex items-center gap-2 mb-3">
           <SlidersHorizontal size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
@@ -1523,6 +1494,34 @@ export default function BillingView() {
                 : `${shippingMarginSummary.missingAnyProofCount} shipment(s) missing proof (${shippingMarginSummary.missingBillableCount} billable, ${shippingMarginSummary.missingActualCostCount} actual)`}
           </div>
         ) : null}
+        <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, margin: '0 0 14px' }}>
+          {/* PS-155: Client Billing Config table extracted to <BillingConfigTable />.
+              The config DRAFT state (configDrafts) + setter and the Save handler
+              (handleSaveConfig → buildBillingConfigInput → updateBillingConfig) stay here. */}
+          <BillingConfigTable
+            configs={configs}
+            configsLoading={configsLoading}
+            configDrafts={configDrafts}
+            setConfigDrafts={setConfigDrafts}
+            onSaveConfig={handleSaveConfig}
+            onToggleHouseAccount={handleToggleHouseAccount}
+          />
+
+          {/* PS-155: Package Pricing card extracted to <BillingPackagePricingTable />.
+              The price DRAFT state (packagePriceDrafts) + setter, selected-client state,
+              the PURE-built packagePricingRows, and the Save handler stay here. */}
+          <BillingPackagePricingTable
+            configs={configs}
+            selectedPkgClientId={selectedPkgClientId}
+            setSelectedPkgClientId={setSelectedPkgClientId}
+            packagePricingRows={packagePricingRows}
+            packagePriceDrafts={packagePriceDrafts}
+            setPackagePriceDrafts={setPackagePriceDrafts}
+            packagePricingLoading={packagePricingLoading}
+            packagePricingError={packagePricingError}
+            onSavePackagePrices={handleSavePackagePrices}
+          />
+        </div>
         {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
             analytics.carriers[] rollup. Now on the shared <Table> with pagination
             (BillingCarrierMarginTable); renders nothing when there are no carrier rows. */}
