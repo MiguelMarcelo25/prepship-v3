@@ -8,6 +8,13 @@ const WORKER_STATUS_PERSIST_TIMEOUT_MS = Math.max(
   250,
   Math.min(5_000, Number(process.env.WORKER_STATUS_PERSIST_TIMEOUT_MS) || 3_000),
 );
+const WORKER_STATUS_PERSIST_ABANDON_MS = Math.max(
+  15_000,
+  Math.min(
+    120_000,
+    Number(process.env.WORKER_STATUS_PERSIST_ABANDON_MS) || 60_000
+  ),
+);
 
 type WorkerMode = 'api-scheduler' | 'worker-scheduler' | 'placeholder' | 'disabled';
 type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
@@ -38,6 +45,7 @@ export type WorkerStatusSnapshot = {
 const processStartedAt = new Date().toISOString();
 let snapshot: WorkerStatusSnapshot = createSnapshot('disabled');
 let persistSnapshotInFlight: Promise<void> | null = null;
+let persistSnapshotStartedAtMs = 0;
 
 function createSnapshot(mode: WorkerMode): WorkerStatusSnapshot {
   const now = new Date().toISOString();
@@ -86,12 +94,21 @@ function summarizeResult(result: unknown): Record<string, unknown> | null {
 
 async function persistSnapshot(): Promise<void> {
   if (persistSnapshotInFlight) {
-    console.warn('[worker-status] persist already in flight; skipping snapshot write');
-    return;
+    const ageMs = Date.now() - persistSnapshotStartedAtMs;
+    if (ageMs < WORKER_STATUS_PERSIST_ABANDON_MS) {
+      console.warn('[worker-status] persist already in flight; skipping snapshot write');
+      return;
+    }
+    console.warn(
+      '[worker-status] abandoning stale status persist; allowing a fresh snapshot write'
+    );
+    persistSnapshotInFlight = null;
+    persistSnapshotStartedAtMs = 0;
   }
 
   // Worker status is observability. A slow settings write must not hold sync lanes.
   let tracked: Promise<void>;
+  persistSnapshotStartedAtMs = Date.now();
   tracked = setSetting(WORKER_STATUS_KEY, JSON.stringify(snapshot))
     .catch((err) => {
       console.warn(
@@ -102,6 +119,7 @@ async function persistSnapshot(): Promise<void> {
     .finally(() => {
       if (persistSnapshotInFlight === tracked) {
         persistSnapshotInFlight = null;
+        persistSnapshotStartedAtMs = 0;
       }
     });
   persistSnapshotInFlight = tracked;

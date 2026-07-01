@@ -97,6 +97,11 @@ check('worker-status persist is single-flight so hung writes cannot pile up',
   /let persistSnapshotInFlight: Promise<void> \| null = null;/.test(workerStatus) &&
   /if \(persistSnapshotInFlight\)/.test(workerStatus) &&
   /persistSnapshotInFlight = tracked/.test(workerStatus));
+check('worker-status abandons stale in-flight persists so heartbeats can recover',
+  /WORKER_STATUS_PERSIST_ABANDON_MS/.test(workerStatus) &&
+  /let persistSnapshotStartedAtMs = 0;/.test(workerStatus) &&
+  /ageMs < WORKER_STATUS_PERSIST_ABANDON_MS/.test(workerStatus) &&
+  /abandoning stale status persist/.test(workerStatus));
 check('worker-status does not await setSetting directly in the sync hot path',
   !/await setSetting\(WORKER_STATUS_KEY/.test(workerStatus));
 check('worker-status documents observability must not hold sync lanes',
