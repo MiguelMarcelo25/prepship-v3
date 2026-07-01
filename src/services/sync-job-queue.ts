@@ -2,7 +2,7 @@
 import PgBoss from 'pg-boss';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
-import { reapStuckActiveJobs } from './sync-stuck-job-reaper';
+import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
   getSyncJobLaneBlocker,
@@ -317,7 +317,11 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   void reapStuckActiveJobs().then(
     (r) => r.reaped && console.log(`[job-queue] stuck-active reaper cleared ${r.reaped} orphan(s): ${r.names.join(', ')}`)
   );
+  void reapStaleQueuedCadenceJobs().then(
+    (r) => r.reaped && console.log(`[job-queue] stale-cadence reaper cleared ${r.reaped} queued tick(s): ${r.names.join(', ')}`)
+  );
   timers.push(setInterval(() => void reapStuckActiveJobs(), 10 * 60_000));
+  timers.push(setInterval(() => void reapStaleQueuedCadenceJobs(), 10 * 60_000));
 
   console.log('[job-queue] pg-boss scheduler started');
   console.log(

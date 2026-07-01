@@ -1,4 +1,4 @@
-// Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
+// Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active/cadence rows only, never shipped/cancelled order/shipment data.
 //
 // PS-272 — default-OFF "stuck-active pgboss job reaper".
 //
@@ -16,9 +16,9 @@
 // direct-carrier-rate-cache.ts (import { sql as pg } from '../db/client.js').
 //
 // SAFETY: this NEVER touches the orders or shipments tables, never marketplace ship-confirms. It
-// only flips orphaned pgboss queue rows for an explicit ALLOW-LIST of idempotent, side-effect-free
-// sync jobs from 'active' → 'failed' (which lets pg-boss requeue the next cadence tick). Jobs with
-// real side effects (marketplace confirmations, order-state mutation) are EXCLUDED on purpose.
+// only flips orphaned/redundant pgboss queue rows for an explicit ALLOW-LIST of idempotent,
+// side-effect-free sync jobs to 'failed'. Jobs with real side effects (marketplace confirmations,
+// order-state mutation) are EXCLUDED on purpose.
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
 
@@ -47,6 +47,8 @@ export const REAPER_SAFE_JOB_NAMES: readonly string[] = [
  * legitimately-running long tick is never reaped — only orphans whose worker process is gone.
  */
 export const REAPER_MIN_ACTIVE_AGE_MS = 15 * 60_000;
+export const REAPER_STALE_QUEUED_MIN_AGE_MS = 15 * 60_000;
+export const REAPER_STALE_QUEUED_KEEP_PER_JOB = 1;
 
 type StuckJobRow = {
   id: string;
@@ -84,6 +86,11 @@ export type ReapResult = {
   scanned: number;
   reaped: number;
   names: string[];
+};
+
+type ReapedJobRow = {
+  id: string;
+  name: string;
 };
 
 /**
@@ -140,6 +147,66 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
     };
   } catch (err) {
     console.warn('[stuck-reaper] reap skipped:', err instanceof Error ? err.message : err);
+    return { enabled: false, scanned: 0, reaped: 0, names: [] };
+  }
+}
+
+/**
+ * EFFECTFUL stale-cadence reaper. ShipStation/order/reporting cadence jobs are watermark-based:
+ * a tick from hours ago does not carry unique business data, it only says "sync from the durable
+ * watermark now". When the worker is down or wedged, hundreds of old `created` cadence rows can
+ * pile up and keep the worker chewing stale ticks before it reaches today's work. Keep the newest
+ * queued cadence row per safe job name and fail older redundant rows.
+ */
+export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
+  if (!env.SYNC_STUCK_JOB_REAPER) {
+    return { enabled: false, scanned: 0, reaped: 0, names: [] };
+  }
+
+  try {
+    const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+    const stale = await pg<ReapedJobRow[]>`
+      WITH candidates AS (
+        SELECT
+          id::text AS id,
+          name,
+          row_number() OVER (PARTITION BY name ORDER BY created_on DESC, id DESC) AS newest_rank
+        FROM ${pg(jobTable)}
+        WHERE state IN ('created', 'retry')
+          AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
+          AND singleton_key = 'cadence'
+          AND created_on < now() - (${Math.floor(REAPER_STALE_QUEUED_MIN_AGE_MS / 1000)} * interval '1 second')
+      )
+      SELECT id, name
+      FROM candidates
+      WHERE newest_rank > ${REAPER_STALE_QUEUED_KEEP_PER_JOB}
+    `;
+
+    if (stale.length === 0) {
+      return { enabled: true, scanned: 0, reaped: 0, names: [] };
+    }
+
+    const ids = stale.map((s) => s.id);
+    const updated = await pg<ReapedJobRow[]>`
+      UPDATE ${pg(jobTable)}
+      SET state = 'failed',
+          completed_on = now(),
+          output = '{"reason":"PS-360 stale-cadence reaper"}'::jsonb
+      WHERE id = ANY(${ids})
+        AND state IN ('created', 'retry')
+        AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
+        AND singleton_key = 'cadence'
+      RETURNING id::text AS id, name
+    `;
+
+    return {
+      enabled: true,
+      scanned: stale.length,
+      reaped: updated.length,
+      names: updated.map((s) => s.name),
+    };
+  } catch (err) {
+    console.warn('[stuck-reaper] stale cadence reap skipped:', err instanceof Error ? err.message : err);
     return { enabled: false, scanned: 0, reaped: 0, names: [] };
   }
 }
