@@ -21,6 +21,7 @@ import {
   rateBrowserCustomerAmount,
   rateBrowserRateCostAmount,
 } from '../lib/rate-browser-money';
+import { rateBrowserOtherCostAmount } from '../lib/rate-browser-cost-components';
 // PS-290 (slice 2): render the HUGRAB $100-insurance coverage badge with the SAME backend-owned
 // reader + renderer the Awaiting column uses — TRUE parity by construction, not a forked copy.
 // getRowInsuranceCoverage is a PURE pass-through of the backend verdict (insuranceCoverageStatus /
@@ -118,6 +119,7 @@ export default function RateRowItem({
       typeof d?.amount?.amount === 'number' &&
       d.amount.amount > 0
   );
+  const otherCostAmount = rateBrowserOtherCostAmount(r);
 
   return (
     <div
@@ -196,7 +198,15 @@ export default function RateRowItem({
         <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
           Rate Source: {sourceText}
         </div>
-        {surcharges.length > 0 && (
+        {otherCostAmount > 0 && (
+          <div
+            data-rate-browser-other-cost=""
+            style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}
+          >
+            Other Cost +${otherCostAmount.toFixed(2)}
+          </div>
+        )}
+        {otherCostAmount <= 0 && surcharges.length > 0 && (
           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, lineHeight: 1.5 }}>
             {surcharges.map((d: any, i: number) => (
               <span key={i} style={{ marginRight: 8 }}>

@@ -4,7 +4,7 @@ import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
 import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getDirectCarrierRatesForRateInput, getRates } from './rates';
-import { combineCarrierUniverses } from './rates-combined';
+import { combineCarrierUniverses, rateTotal } from './rates-combined';
 import {
   buildResidentialEvidenceFromOrder,
   residentialEvidenceRateInput,
@@ -86,9 +86,7 @@ function pickBestForTier(rates: Rate[], tier: ServiceTier): Rate | null {
   // shipped something — cheapest-available beats nothing).
   const candidates = pool.length ? pool : rates;
   if (!candidates.length) return null;
-  return [...candidates].sort(
-    (a, b) => a.shipping_amount.amount - b.shipping_amount.amount
-  )[0]!;
+  return [...candidates].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
 }
 
 function toPositiveNumber(value: unknown): number | null {
