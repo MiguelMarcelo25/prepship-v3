@@ -46,11 +46,19 @@ check('PS-331 doc marks the ticket BLOCKED and forbids deletion in this slice',
 
 check('PS-331 doc records Trello was checked without deletion acceptance',
   /Comments\/actions checked from Codex on 2026-07-01/.test(doc) &&
-    /No explicit DJ\/Hermes acceptance was found/.test(doc));
+    /PS-359 and PS-360 implementation proof is present/.test(doc) &&
+    /no explicit DJ\/Hermes acceptance was found/.test(doc));
 
 check('PS-331 doc anchors PS-340 backend plus PS-341 through PS-344 cleanup sequence',
   doc.includes('PS-340 backend rate-engine') &&
     ['PS-341', 'PS-342', 'PS-343', 'PS-344'].every((ticket) => doc.includes(ticket)));
+
+check('PS-331 doc records PS-359/PS-360 landed Print Queue cleanup evidence without opening deletion',
+  doc.includes('PS-359 - Obsolete frontend Print Queue route-plan bridge deletion') &&
+    doc.includes('PS-360 - Unreachable batch Print Queue tail cleanup after queue early-return') &&
+    doc.includes('a6dc1138') &&
+    /not permission for PS-331 to delete additional code/.test(doc) &&
+    /PS-261 guard was also[\s\S]*timeQueueStep\(\.\.\. createLabelV2 \.\.\.\)/.test(doc));
 
 check('PS-331 doc separates completed plan slice from incomplete full ticket',
   /Plan slice: complete/.test(doc) &&
@@ -89,7 +97,7 @@ check('PS-331 inventory covers the requested code categories without approving d
     'Legacy Vercel `api/` stack',
     'Legacy direct carrier endpoints',
     'Label helper',
-    'Print Queue and label safety guards',
+    'Print Queue and label safety guards, including PS-359/PS-360 bridge/tail guards',
     'PS-340 backend rate-engine guard plus PS-341 to PS-344 docs and guards',
   ].every((text) => doc.includes(text)) &&
   !/\| DELETE NOW \| [1-9]/.test(doc));
@@ -118,7 +126,8 @@ check('PS-331 package script is wired',
   packageJson.includes('"test:ps-331-dead-code-inventory-safe-deletion-plan"'));
 
 check('PS-331 ledger row is reserved',
-  ledger.includes('| PS-331 | PrepShip dead-code inventory + safe deletion plan |'));
+  ledger.includes('| PS-331 | PrepShip dead-code inventory + safe deletion plan |') &&
+    ledger.includes('https://trello.com/c/0kT7F9Ld'));
 
 check('PS-200 doc still requires zero Vercel function invocations over a business day before api deletion',
   /zero Vercel function invocations over a business day/.test(ps200) &&

@@ -247,7 +247,7 @@ const printQueueRoute = read('src/routes/print-queue.ts');
 check('print-queue service imports createLabelV2 as the missing-label purchase boundary',
   /import \{ createLabelV2, type CreateLabelInputDto \} from '\.\/labels'/.test(printQueue));
 check('print-queue missing-label path delegates to createLabelV2 (therefore uses the same PS-261 preflight)',
-  /const created = await createLabelV2\(\{[\s\S]*?\.\.\.order\.label,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? order\.label\.orderNumber,[\s\S]*?\}, GLOBAL_SCOPE\)/.test(printQueue));
+  /const labelInput = order\.label;[\s\S]*?const created = await timeQueueStep\([\s\S]*?'labelPurchaseMs'[\s\S]*?return await createLabelV2\(\{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?\}, GLOBAL_SCOPE\)/.test(printQueue));
 check('print-queue does NOT recompute HUGRAB coverage or call provider purchase APIs directly',
   !/resolveHugrabLabelPurchasePreflight|resolveHugrabLabelPurchaseGate|createDirectCarrierLabelForOrder|createLabelShipp|createLabelEasyPost/.test(printQueue));
 check('print-queue route schema preserves selectedRateProof for the createLabelV2 purchase boundary',

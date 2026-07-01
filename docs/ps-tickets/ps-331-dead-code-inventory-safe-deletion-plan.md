@@ -2,7 +2,7 @@
 
 Date: 2026-07-01
 Status: Blocked/full-ticket audit plan. Plan slice: complete. Full ticket: blocked.
-Trello: Comments/actions checked from Codex on 2026-07-01. No explicit DJ/Hermes acceptance was found that authorizes PS-331 deletion or the PS-359/PS-360 Print Queue deletion sequence.
+Trello: Comments/actions checked from Codex on 2026-07-01. PS-359 and PS-360 implementation proof is present, but no explicit DJ/Hermes acceptance was found that authorizes PS-331 code deletion.
 
 ## Decision
 
@@ -45,6 +45,8 @@ These tickets reduce compatibility bridges and wrapper-search habits before dele
 - PS-342 - Legacy rate display adapter cleanup.
 - PS-343 - RateBrowserModal money normalization cleanup.
 - PS-344 - Order row workflow shape cleanup.
+- PS-359 - Obsolete frontend Print Queue route-plan bridge deletion.
+- PS-360 - Unreachable batch Print Queue tail cleanup after queue early-return.
 
 PS-331 depends on that sequence, but it does not delete additional code from it.
 
@@ -54,7 +56,13 @@ Repo-side guard evidence is green for the known dependency set after the PS-266 
 was re-anchored to tolerate the current `rates-combined` import shape while still
 requiring `combineCarrierUniverses` and `rateTotal`. On 2026-07-01, the PS-269
 static guard was re-anchored to the current structural retry variables used by
-`src/services/print-queue.ts`, then the PS-269 guard passed again.
+`src/services/print-queue.ts`, then the PS-269 guard passed again. PS-359 and
+PS-360 are now landed on `prepshipv4-stable` through `a6dc1138`, and their
+Print Queue authority/tail guards pass; that proves the bridge cleanup sequence,
+not permission for PS-331 to delete additional code. The PS-261 guard was also
+re-anchored to the current Print Queue `timeQueueStep(... createLabelV2 ...)`
+missing-label purchase wrapper so it continues to prove queue-created labels use
+the same HUGRAB preflight boundary.
 
 | Dependency | Repo evidence | External acceptance |
 | --- | --- | --- |
@@ -103,7 +111,7 @@ Candidate counts by classification:
 | Legacy shared Vercel helpers | `api/_lib/*` | MIGRATE FIRST | Still has live import dependency risk. | PS-200 S6 must relocate live imports first. `src/lib/imported-handlers/carrier-accounts.ts` still depends on `api/_lib/safe-error`. |
 | Schema definitions | `skuQtyDims`, `syncMeta` | KEEP ACTIVE | Dead-but-retained schema definitions stay. | PS-153 proved these are dead-but-retained. Deleting them can arm a Drizzle DROP migration. Only a deliberate, approval-gated migration may remove them. |
 | Label helper | `src/services/labels.ts#createLabelFromShipment` | DOCUMENT ONLY | Do not delete in PS-331; keep the warning as a revival landmine. | If revived, it must route through `createLabelV2` and the PS-261 HUGRAB preflight before real postage. |
-| Label/queue safety | Print Queue and label safety guards | KEEP ACTIVE | These guards pin backend-owned label purchase, queue, and HUGRAB safety boundaries. | Keep PS-225, PS-261, PS-267, PS-269, PS-318, and PS-319 green before any deletion slice. |
+| Label/queue safety | Print Queue and label safety guards, including PS-359/PS-360 bridge/tail guards | KEEP ACTIVE | These guards pin backend-owned label purchase, queue, and HUGRAB safety boundaries. | Keep PS-225, PS-261, PS-267, PS-269, PS-303, PS-317, PS-318, PS-319, PS-351, and PS-360 green before any deletion slice. |
 | Superseded package/label path | `src/services/direct-label-persistence.ts` and related removed calls | DOCUMENT ONLY | Already deleted by PS-225. | Keep PS-225 guard green. Do not recreate `persistDirectCarrierLabel`. |
 | Frontend bridge cleanup | PS-340 backend rate-engine guard plus PS-341 to PS-344 docs and guards | KEEP ACTIVE | PS-358 retired the stale PS-340 frontend audit artifact. The remaining guards are regression evidence for backend source-of-truth delegation and cleanup sequencing. | Future removal must keep backend source-of-truth delegation intact and leave guards green. |
 | Conditional cards | PS-281 and PS-282 unresolved conditional dependencies | BLOCKED BY CONDITIONAL CARD | No repo evidence found. | DJ/Hermes must mark not-needed, superseded, or complete before PS-331 can claim the hard gate is fully clear. |
