@@ -14,11 +14,11 @@
  *      shipment package at invoice time.
  *   3. Both renderers expose visible Box Size + Box Cost columns.
  *   4. billingInvoiceData is consumed by BOTH renderers (no forked query).
- *   5. NO double-counting: the per-row Fulfillment Fee (HTML) and Total (XLSX)
+ *   5. NO double-counting: the per-row Fulfillment Fee (HTML/XLSX)
  *      fallbacks are byte-identical and contain no box-cost term — box cost is
  *      DISPLAY-ONLY (already inside row_total).
- *   6. The XLSX totals SUM formulas are re-lettered for the +2 column shift
- *      (Total → K) and a Box Cost SUM exists.
+ *   6. The XLSX totals SUM formulas match the one-sheet Invoice layout
+ *      (Fulfillment Fee -> M) and a Box Cost SUM exists.
  *   7. Unresolved/mismatched boxes surface a review reason, not a blank.
  *
  *   npx tsx scripts/ps-217-billing-export-box-fields.ts
@@ -74,13 +74,13 @@ check(`both renderers consume billingInvoiceData (found ${dataCalls})`, dataCall
 //    are byte-identical and carry NO box-cost term.
 check('HTML per-row Fulfillment Fee fallback unchanged (no box term)',
   routes.includes(': pickPackFeeAmt + shippingAmt + storageAmt;'));
-check('XLSX per-row Total fallback unchanged (no box term)',
-  routes.includes('total: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,'));
+check('XLSX per-row Fulfillment Fee fallback unchanged (no box term)',
+  routes.includes('fulfillmentFee: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,'));
 
-// 6. XLSX totals re-lettered for the +2 shift, with a Box Cost SUM.
-check('XLSX Total SUM re-lettered to column K', routes.includes('SUM(K${first}:K${last})'));
+// 6. XLSX totals match the current one-sheet Invoice layout.
+check('XLSX Fulfillment Fee SUM targets column M', routes.includes('SUM(M${first}:M${last})'));
 check('XLSX Qty SUM re-lettered to column F', routes.includes('SUM(F${first}:F${last})'));
-check('XLSX totals include a Box Cost SUM (column E)', /boxCost: \{ formula: /.test(routes) && routes.includes('SUM(E${first}:E${last})'));
+check('XLSX totals include a Box Cost SUM (column I)', /boxCost: \{ formula: /.test(routes) && routes.includes('SUM(I${first}:I${last})'));
 
 // Self-wiring.
 check('package.json exposes test:ps-217-billing-export-box-fields',

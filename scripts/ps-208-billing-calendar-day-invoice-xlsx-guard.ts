@@ -133,14 +133,14 @@ assert.ok(!routes.includes('function formatInvoiceDate'),
 assert.ok(routes.includes('formatBillingDay(fromDay)') && routes.includes('formatBillingDay(toDay)'),
   'invoice header must format the operator-picked days via formatBillingDay');
 assert.ok(routes.includes('invoiceShipDateTimeCell(d.ship_date)'),
-  'invoice rows must format ship_date via the Los Angeles date/time cell');
+  'HTML invoice rows must format ship_date via the Los Angeles date/time cell');
 assert.ok(invoiceText.includes("INVOICE_SHIP_DATE_HEADER = 'Ship Date/Time (Los Angeles)'"),
   'invoice ship-date header must make the Los Angeles billing date/time explicit');
 assert.ok(routes.includes('INVOICE_SHIP_DATE_HEADER'),
-  'HTML/XLSX invoice renderers must use the shared Los Angeles ship-date/time header');
+  'HTML invoice renderer must use the shared Los Angeles ship-date/time header');
 
-// XLSX export: same dataset (billingInvoiceData), exceljs, day cells, SUM
-// formulas, frozen header, attachment headers.
+// XLSX export: same dataset (billingInvoiceData), exceljs, plain billing
+// ship-date cells, SUM formulas, frozen header, attachment headers.
 assert.ok(routes.includes("app.get('/invoice.xlsx'"),
   'GET /billing/invoice.xlsx route must exist');
 const invoiceDataCalls = routes.split('await billingInvoiceData(').length - 1;
@@ -149,13 +149,15 @@ assert.ok(invoiceDataCalls >= 2,
 assert.ok(routes.includes("import('exceljs')"),
   'XLSX renderer must lazy-import exceljs');
 assert.ok(routes.includes("state: 'frozen'"),
-  'Line Items sheet must freeze the header row');
-assert.ok(routes.includes('SUM(E${first}:E${last})'),
-  'Line Items totals row must use real SUM formulas');
-assert.ok(routes.includes('excelDayCell'),
-  'XLSX date cells must come from excelDayCell (UTC-anchored Date)');
-assert.ok(!/excelDayCell[\s\S]{0,200}toLocale/.test(routes),
-  'excelDayCell must not involve locale formatting');
+  'Invoice sheet must freeze the header row');
+assert.ok(routes.includes('SUM(M${first}:M${last})'),
+  'Invoice totals row must use real SUM formulas for Fulfillment Fee');
+assert.ok(routes.includes('invoiceShipDateCell(d.ship_date)'),
+  'XLSX invoice rows must use the plain billing ship-date cell');
+assert.ok(routes.includes('INVOICE_XLSX_SHIP_DATE_HEADER'),
+  'XLSX invoice must use the date-only Ship Date header');
+assert.ok(!routes.includes('excelDayCell'),
+  'XLSX invoice must not revive Date-object day cells');
 assert.ok(routes.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
   'XLSX response must carry the workbook MIME type');
 

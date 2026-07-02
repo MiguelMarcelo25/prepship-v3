@@ -43,16 +43,20 @@ export const INVOICE_XLSX_LEFT_ALIGNMENT: InvoiceXlsxAlignment = {
 const DEFAULT_COLUMN_BOUNDS = { min: 10, max: 42 };
 
 export const INVOICE_XLSX_COLUMN_WIDTH_BOUNDS: Record<string, { min: number; max: number }> = {
-  shipDate: { min: 24, max: 34 },
-  orderNumber: { min: 12, max: 24 },
-  skus: { min: 28, max: 80 },
-  boxSize: { min: 18, max: 34 },
+  orderNumber: { min: 10, max: 14 },
+  shipDate: { min: 12, max: 14 },
+  carrier: { min: 10, max: 16 },
+  itemName: { min: 28, max: 52 },
+  sku: { min: 24, max: 52 },
+  skus: { min: 24, max: 52 },
+  boxSize: { min: 12, max: 22 },
   boxCost: { min: 10, max: 14 },
-  qty: { min: 8, max: 10 },
-  pickPackFee: { min: 16, max: 20 },
-  additional: { min: 16, max: 20 },
+  qty: { min: 6, max: 8 },
+  pickPackFee: { min: 12, max: 16 },
+  additional: { min: 12, max: 16 },
   shipping: { min: 12, max: 16 },
   storage: { min: 12, max: 16 },
+  fulfillmentFee: { min: 16, max: 20 },
   total: { min: 12, max: 16 },
 };
 

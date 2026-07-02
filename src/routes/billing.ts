@@ -47,8 +47,15 @@ import {
 } from '../services/hugrab-billing-shipping-floor';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
-import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell, invoiceShipDateTimeCell } from './billing-invoice-text';
+import {
+  INVOICE_SHIP_DATE_HEADER,
+  INVOICE_XLSX_SHIP_DATE_HEADER,
+  invoiceOneLineCell,
+  invoiceShipDateCell,
+  invoiceShipDateTimeCell,
+} from './billing-invoice-text';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
+import { invoiceCarrierCell } from './billing-invoice-xlsx-row';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
 // from the fee_waived flag billingInvoiceData stamps from the SOT.
 import { waivedSummaryNote } from './billing-invoice-waiver-indicator';
@@ -1094,7 +1101,9 @@ type InvoiceDetailRow = {
   shipping_amt: string;
   storage_amt: string;
   row_total: string;
+  item_names: string | null;
   skus: string | null;
+  carrier_code: string | null;
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
@@ -1106,7 +1115,7 @@ type InvoiceDetailRow = {
 
 // PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
 // fee_waived is NOT from the SQL aggregate (it's a separate billing_fee_waivers read) — omit it here.
-type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived'> & {
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names'> & {
   billed_package_id: number | null;
   box_cost_desc: string | null;
   box_review_reason: string | null;
@@ -1186,6 +1195,7 @@ async function billingInvoiceData(
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.total_cost else 0 end), 0)::text as additional_amt,
       coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
       coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_amt,
+      max(coalesce(nullif(s.label_carrier, ''), nullif(s.carrier_code, ''), nullif(s.carrier_provider, ''))) as carrier_code,
       -- PS-217: the BILLED box cost is the generated package_cost line value for
       -- this order in the period — never the current package price table, and
       -- never the package_cost_missing $0.00 review rows. The stamped package_id
@@ -1219,6 +1229,7 @@ async function billingInvoiceData(
           and oi.quantity > 0
       ) as item_rows
     from billing_line_items b
+    left join shipments s on s.id = b.shipment_id
     where b.client_id = ${clientId}
       -- PS-208: identical date-only bounds as every billing endpoint — UTC
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
@@ -1257,6 +1268,7 @@ async function billingInvoiceData(
 
   const details: InvoiceDetailRow[] = rawDetails.map((r) => {
     const { box_label, box_review } = resolveInvoiceBoxLabel(r, packagesById);
+    const itemSummary = summarizeBillingItemsForDetail(r.item_rows);
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -1268,10 +1280,12 @@ async function billingInvoiceData(
       shipping_amt: r.shipping_amt,
       storage_amt: r.storage_amt,
       row_total: r.row_total,
+      item_names: itemSummary.itemNames,
       // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
       // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
       // the order has no order_items rows so legacy/imported orders still show their SKUs.
-      skus: summarizeBillingItemsForDetail(r.item_rows).itemSkus ?? r.skus,
+      skus: itemSummary.itemSkus ?? r.skus,
+      carrier_code: r.carrier_code,
       package_cost_amt: r.package_cost_amt,
       box_label,
       box_review,
@@ -1489,15 +1503,6 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
 // the exact dataset behind the HTML invoice (no forked query, so the two
 // exports can never disagree about rows, totals, or which days are in range).
 
-/** UTC-midnight Date for a YYYY-MM-DD day. exceljs serializes Date cells via
- * pure epoch math (dateToExcel = 25569 + ms/86400000), so a UTC-midnight Date
- * renders as exactly that calendar day in Excel on every machine. */
-function excelDayCell(day: string | null | undefined): Date | string {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(day ?? ''));
-  if (!match) return String(day ?? '');
-  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-}
-
 async function renderInvoiceXlsx(args: {
   clientName: string;
   fromDay: string;
@@ -1507,65 +1512,33 @@ async function renderInvoiceXlsx(args: {
 }): Promise<Buffer> {
   // Lazy import: exceljs is heavy and only this route needs it.
   const { default: ExcelJS } = await import('exceljs');
-  const { clientName, fromDay, toDay, totals, details } = args;
-  // PS-275 item 2: orders whose prep fee was WAIVED (for the per-row marker +
-  // the Summary-sheet note). Default-inert: 0 waived => no note added.
-  const waivedCount = details.filter((d) => d.fee_waived).length;
+  const { totals, details } = args;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'PrepShip';
 
-  const MONEY_FMT = '"$"#,##0.00';
-  const DATE_FMT = 'mmm dd, yyyy';
+  const NUMBER_FMT = '0.00';
 
-  // ── Sheet 1: Summary ──
-  const summary = workbook.addWorksheet('Summary');
-  summary.columns = [{ width: 26 }, { width: 22 }];
-  const addSummaryRow = (label: string, value: unknown, fmt?: string) => {
-    const row = summary.addRow([label, value]);
-    row.getCell(1).font = { bold: true };
-    if (fmt) row.getCell(2).numFmt = fmt;
-    return row;
-  };
-  addSummaryRow('Client', clientName);
-  addSummaryRow('Period start', excelDayCell(fromDay), DATE_FMT);
-  addSummaryRow('Period end', excelDayCell(toDay), DATE_FMT);
-  addSummaryRow('Orders', totals.orderCount);
-  summary.addRow([]);
-  addSummaryRow('Pick & Pack fees', totals.pickPackFeeTotal, MONEY_FMT);
-  addSummaryRow('Additional units', totals.additionalTotal, MONEY_FMT);
-  addSummaryRow('Package cost', totals.packageTotal, MONEY_FMT);
-  addSummaryRow('Shipping', totals.shippingTotal, MONEY_FMT);
-  addSummaryRow('Storage', totals.storageTotal, MONEY_FMT);
-  // Same fallback as the HTML tfoot: fulfillmentFeeTotal || grandTotal.
-  const grand = addSummaryRow('Total', totals.fulfillmentFeeTotal || totals.grandTotal, MONEY_FMT);
-  grand.getCell(2).font = { bold: true };
-  // PS-275 item 2: a Summary-sheet note when any prep fee was waived this period.
-  if (waivedCount > 0) {
-    summary.addRow([]);
-    const note = addSummaryRow('Prep fee waivers', waivedSummaryNote(waivedCount));
-    note.getCell(2).font = { italic: true };
-  }
-  applyInvoiceXlsxReadableLayout(summary);
-
-  // ── Sheet 2: Line Items (one row per order, mirroring the HTML table) ──
-  const items = workbook.addWorksheet('Line Items', {
-    views: [{ state: 'frozen', ySplit: 1 }],
-  });
-  items.columns = [
-    { header: INVOICE_SHIP_DATE_HEADER, key: 'shipDate', width: 28 },
-    { header: 'Order #', key: 'orderNumber', width: 20 },
-    { header: 'SKUs', key: 'skus', width: 40 },
-    // PS-217: billed box size (display) + billed box cost (the package_cost line).
-    { header: 'Box Size', key: 'boxSize', width: 22 },
-    { header: 'Box Cost', key: 'boxCost', width: 12, style: { numFmt: MONEY_FMT } },
+  const invoice = workbook.addWorksheet('Invoice');
+  invoice.views = [{ state: 'frozen', ySplit: 1 }];
+  // Single operator-facing invoice sheet, one row per order.
+  invoice.columns = [
+    { header: 'Order #', key: 'orderNumber', width: 12 },
+    { header: INVOICE_XLSX_SHIP_DATE_HEADER, key: 'shipDate', width: 12 },
+    { header: 'Carrier', key: 'carrier', width: 12 },
+    { header: 'Item Name', key: 'itemName', width: 36 },
+    { header: 'SKU', key: 'sku', width: 30 },
     { header: 'Qty', key: 'qty', width: 8 },
-    { header: 'Pick & Pack Fee', key: 'pickPackFee', width: 16, style: { numFmt: MONEY_FMT } },
-    { header: 'Additional Units', key: 'additional', width: 16, style: { numFmt: MONEY_FMT } },
-    { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: MONEY_FMT } },
-    { header: 'Storage', key: 'storage', width: 12, style: { numFmt: MONEY_FMT } },
-    { header: 'Total', key: 'total', width: 14, style: { numFmt: MONEY_FMT } },
+    { header: 'Pick & Pack', key: 'pickPackFee', width: 12, style: { numFmt: NUMBER_FMT } },
+    { header: 'Addl Units', key: 'additional', width: 12, style: { numFmt: NUMBER_FMT } },
+    // PS-217: billed box cost is the package_cost line value; it is displayed
+    // separately, already included in Fulfillment Fee.
+    { header: 'Box Cost', key: 'boxCost', width: 10, style: { numFmt: NUMBER_FMT } },
+    { header: 'Box Size', key: 'boxSize', width: 14 },
+    { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: NUMBER_FMT } },
+    { header: 'Storage', key: 'storage', width: 10, style: { numFmt: NUMBER_FMT } },
+    { header: 'Fulfillment Fee', key: 'fulfillmentFee', width: 16, style: { numFmt: NUMBER_FMT } },
   ];
-  items.getRow(1).font = { bold: true };
+  invoice.getRow(1).font = { bold: true };
   for (const d of details) {
     // Identical derivation to the HTML rows — qty/fee composition and the
     // rowTotal>0 fallback must stay in lockstep with renderInvoiceHtml.
@@ -1575,42 +1548,40 @@ async function renderInvoiceXlsx(args: {
     const shippingAmt = Number(d.shipping_amt);
     const storageAmt = Number(d.storage_amt);
     const rowTotal = Number(d.row_total);
-    items.addRow({
-      shipDate: invoiceShipDateTimeCell(d.ship_date),
+    invoice.addRow({
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
-      skus: invoiceOneLineCell(d.skus),
-      boxSize: invoiceOneLineCell(d.box_label),
-      boxCost: Number(d.package_cost_amt),
+      shipDate: invoiceShipDateCell(d.ship_date),
+      carrier: invoiceCarrierCell(d.carrier_code),
+      itemName: invoiceOneLineCell(d.item_names),
+      sku: invoiceOneLineCell(d.skus),
       qty: baseQty + addlQty,
       pickPackFee: pickPackFeeAmt,
       additional: addlQty > 0 ? Number(d.additional_amt) : 0,
+      boxCost: Number(d.package_cost_amt),
+      boxSize: invoiceOneLineCell(d.box_label),
       shipping: shippingAmt,
       storage: storageAmt,
-      total: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,
+      fulfillmentFee: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,
     });
   }
   if (details.length) {
     const first = 2;
     const last = first + details.length - 1;
-    const totalsRow = items.addRow({
-      skus: `Totals — ${totals.orderCount} orders`,
-      // PS-217: two columns (Box Size = D, Box Cost = E) were inserted before
-      // Qty, shifting every numeric column right by two. Box Cost totals in
-      // column E; Qty→F, Pick&Pack→G, Additional→H, Shipping→I, Storage→J,
-      // Total→K. Box Cost is DISPLAY-ONLY — it is already inside each row's
-      // Total (row_total sums all line types incl. package_cost), so the Total
-      // SUM is unchanged in meaning and box cost is never double-counted.
-      boxCost: { formula: `SUM(E${first}:E${last})` },
+    const totalsRow = invoice.addRow({
+      itemName: `Totals - ${totals.orderCount} orders`,
+      // Box Cost is display-only here; it is already inside each row's
+      // Fulfillment Fee, so it is never added a second time.
+      boxCost: { formula: `SUM(I${first}:I${last})` },
       qty: { formula: `SUM(F${first}:F${last})` },
       pickPackFee: { formula: `SUM(G${first}:G${last})` },
       additional: { formula: `SUM(H${first}:H${last})` },
-      shipping: { formula: `SUM(I${first}:I${last})` },
-      storage: { formula: `SUM(J${first}:J${last})` },
-      total: { formula: `SUM(K${first}:K${last})` },
+      shipping: { formula: `SUM(K${first}:K${last})` },
+      storage: { formula: `SUM(L${first}:L${last})` },
+      fulfillmentFee: { formula: `SUM(M${first}:M${last})` },
     });
     totalsRow.font = { bold: true };
   }
-  applyInvoiceXlsxReadableLayout(items);
+  applyInvoiceXlsxReadableLayout(invoice);
 
   const out = await workbook.xlsx.writeBuffer();
   return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer);

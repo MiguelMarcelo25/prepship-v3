@@ -121,8 +121,8 @@ check('frontend Billing details request no longer sends limit=2000',
   !/billing\/details[\s\S]{0,160}limit:\s*2000/.test(apiClient));
 check('BillingView no longer calls the frontend raw-line order merge',
   !/aggregateBillingDetailRowsByOrder\(detailState\.rows\)/.test(billingView));
-check('XLSX Line Items SKU column uses one-line readable SKU text',
-  /skus:\s*invoiceOneLineCell\(d\.skus\)/.test(xlsxRoute) &&
+check('XLSX Invoice SKU column uses one-line readable SKU text',
+  /sku:\s*invoiceOneLineCell\(d\.skus\)/.test(xlsxRoute) &&
   !/header:\s*'SKUs'[\s\S]{0,120}wrapText:\s*true/.test(xlsxRoute));
 check('package.json wires the PS-362 guard',
   packageJson.includes('"test:ps-362-billing-detail-sot-export"'));
