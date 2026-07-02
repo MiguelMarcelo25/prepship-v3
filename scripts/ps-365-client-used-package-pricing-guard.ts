@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 type Check = { name: string; run: () => void | Promise<void> };
 
 const servicePath = 'src/services/billing-client-package-pricing.ts';
+const pureRowsPath = 'src/services/billing-client-used-package-pricing-rows.ts';
 const routePath = 'src/routes/billing.ts';
 const billingParityPath = 'web/src/components/Views/billing-parity.ts';
 const billingViewPath = 'web/src/components/Views/BillingView.tsx';
@@ -15,6 +16,7 @@ function src(path: string) {
 }
 
 const route = src(routePath);
+const service = src(servicePath);
 const billingParity = src(billingParityPath);
 const billingView = src(billingViewPath);
 const packageJson = src(packageJsonPath);
@@ -24,6 +26,8 @@ const checks: Check[] = [
     name: 'backend client-used package pricing owner exists',
     run: () => {
       assert.equal(existsSync(servicePath), true);
+      assert.equal(existsSync(pureRowsPath), true);
+      assert.match(service, /billing-client-used-package-pricing-rows/);
     },
   },
   {
@@ -67,8 +71,8 @@ const checks: Check[] = [
   {
     name: 'backend pure owner includes billing-line package usage and excludes unused global packages',
     run: async () => {
-      assert.equal(existsSync(servicePath), true);
-      const mod = await import(pathToFileURL(`${process.cwd()}/${servicePath}`).href) as {
+      assert.equal(existsSync(pureRowsPath), true);
+      const mod = await import(pathToFileURL(`${process.cwd()}/${pureRowsPath}`).href) as {
         buildClientUsedPackagePricingRows: (input: unknown) => Array<{ packageId: number; name: string }>;
       };
 
@@ -90,8 +94,8 @@ const checks: Check[] = [
   {
     name: 'backend pure owner resolves shipment selected_pid, selected_package_id code, and dims evidence',
     run: async () => {
-      assert.equal(existsSync(servicePath), true);
-      const mod = await import(pathToFileURL(`${process.cwd()}/${servicePath}`).href) as {
+      assert.equal(existsSync(pureRowsPath), true);
+      const mod = await import(pathToFileURL(`${process.cwd()}/${pureRowsPath}`).href) as {
         buildClientUsedPackagePricingRows: (input: unknown) => Array<{ packageId: number }>;
       };
 
