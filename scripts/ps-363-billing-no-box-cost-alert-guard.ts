@@ -77,6 +77,8 @@ const billingParity = read('web/src/components/Views/billing-parity.ts');
 const billingDetailTable = read('web/src/components/Views/BillingDetailTable.tsx');
 const billingNoBoxCostActionPath = 'web/src/components/Views/BillingNoBoxCostAction.tsx';
 const billingNoBoxCostAction = existsSync(billingNoBoxCostActionPath) ? read(billingNoBoxCostActionPath) : '';
+const billingNoBoxCostPreviewPath = 'web/src/components/Views/BillingNoBoxCostPreview.tsx';
+const billingNoBoxCostPreview = existsSync(billingNoBoxCostPreviewPath) ? read(billingNoBoxCostPreviewPath) : '';
 const billingView = read('web/src/components/Views/BillingView.tsx');
 const packageJson = read('package.json');
 
@@ -117,9 +119,23 @@ check('row-level NO_BOX_COST badge is a clickable edit action',
 
 check('NO_BOX_COST edit modal explains Box Cost can be fixed',
   billingView.includes('hasBillingNoBoxCostAlert(billingEditModal.row)') &&
-  billingView.includes('No box cost') &&
-  billingView.includes('Enter the Box Cost') &&
+  billingView.includes('<BillingNoBoxCostPreview') &&
+  billingNoBoxCostPreview.includes('No box cost') &&
+  billingNoBoxCostPreview.includes('Enter the Box Cost') &&
   billingView.includes('<span>Box Cost</span>'));
+
+check('NO_BOX_COST edit modal previews every current no-box-cost row',
+  existsSync(billingNoBoxCostPreviewPath) &&
+  billingView.includes("from './BillingNoBoxCostPreview'") &&
+  billingView.includes('billingNoBoxCostRows') &&
+  billingView.includes('<BillingNoBoxCostPreview') &&
+  billingView.includes('rows={billingNoBoxCostRows}') &&
+  billingView.includes('activeRow={billingEditModal.row}') &&
+  billingNoBoxCostPreview.includes('No box cost preview') &&
+  billingNoBoxCostPreview.includes('rows need box cost') &&
+  billingNoBoxCostPreview.includes('onOpenBillingEdit(row)') &&
+  billingNoBoxCostPreview.includes('max-h-') &&
+  billingNoBoxCostPreview.includes('overflow-y-auto'));
 
 check('package.json wires the PS-363 guard',
   packageJson.includes('"test:ps-363-billing-no-box-cost-alert"'));
