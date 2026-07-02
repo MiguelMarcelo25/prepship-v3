@@ -14,6 +14,9 @@ export type BillingConfigDto = BillingAnyRecord & {
   clientName?: string | null
   houseAccountEnabled?: boolean | null
   shippingMarginPolicyMode?: 'pass_through' | 'next_best_customer_rate' | string | null
+  hugrabShippingRateOverrideEnabled?: boolean | null
+  hugrabShippingRateOverrideThreshold?: number | string | null
+  hugrabShippingRateOverrideAmount?: number | string | null
 }
 export type BillingSummaryDto = BillingAnyRecord & {
   clientId: number
@@ -65,6 +68,9 @@ export type UpdateBillingConfigInput = {
   packageCostMarkup: number
   shippingMarkupPct: number
   shippingMarkupFlat: number
+  hugrabShippingRateOverrideEnabled: boolean
+  hugrabShippingRateOverrideThreshold: number
+  hugrabShippingRateOverrideAmount: number
   storageFeePerCuFt: number
   billingMode: string
   active: boolean
@@ -84,6 +90,9 @@ export interface BillingConfigDraft {
   packageCostMarkup: string
   shippingMarkupPct: string
   shippingMarkupFlat: string
+  hugrabShippingRateOverrideEnabled: boolean
+  hugrabShippingRateOverrideThreshold: string
+  hugrabShippingRateOverrideAmount: string
   storageFeePerCuFt: string
   billingMode: string
   active: boolean
@@ -293,6 +302,7 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
   // Accept either the v4 camelCase (`billingMode`, `pickPackMaxUnits`) or
   // legacy snake_case (`billing_mode`) shapes on the incoming DTO.
   const c = config as any
+  const isHugrabClient = String(c.clientName ?? '').trim().toUpperCase() === 'HUGRAB'
   return {
     pickPackFee: Number(c.pickPackFee ?? 0).toFixed(2),
     pickPackMaxUnits: String(c.pickPackMaxUnits ?? 1),
@@ -300,6 +310,12 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
     packageCostMarkup: Number(c.packageCostMarkup ?? 0).toFixed(1),
     shippingMarkupPct: Number(c.shippingMarkupPct ?? 0).toFixed(1),
     shippingMarkupFlat: Number(c.shippingMarkupFlat ?? 0).toFixed(2),
+    hugrabShippingRateOverrideEnabled:
+      c.hugrabShippingRateOverrideEnabled == null
+        ? isHugrabClient
+        : c.hugrabShippingRateOverrideEnabled !== false,
+    hugrabShippingRateOverrideThreshold: Number(c.hugrabShippingRateOverrideThreshold ?? 6).toFixed(2),
+    hugrabShippingRateOverrideAmount: Number(c.hugrabShippingRateOverrideAmount ?? 6).toFixed(2),
     storageFeePerCuFt: Number(c.storageFeePerCuFt ?? 0).toFixed(2),
     billingMode: c.billingMode ?? c.billing_mode ?? 'per_shipment',
     active: c.active === false ? false : true,
@@ -319,6 +335,9 @@ export function buildBillingConfigInput(draft: BillingConfigDraft): UpdateBillin
     packageCostMarkup: parseNumber(draft.packageCostMarkup),
     shippingMarkupPct: parseNumber(draft.shippingMarkupPct),
     shippingMarkupFlat: parseNumber(draft.shippingMarkupFlat),
+    hugrabShippingRateOverrideEnabled: draft.hugrabShippingRateOverrideEnabled !== false,
+    hugrabShippingRateOverrideThreshold: parseNumber(draft.hugrabShippingRateOverrideThreshold || '6'),
+    hugrabShippingRateOverrideAmount: parseNumber(draft.hugrabShippingRateOverrideAmount || '6'),
     storageFeePerCuFt: parseNumber(draft.storageFeePerCuFt),
     billingMode: draft.billingMode || 'per_shipment',
     active: draft.active !== false,

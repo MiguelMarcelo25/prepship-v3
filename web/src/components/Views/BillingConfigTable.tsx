@@ -12,6 +12,10 @@
 //     it only closes over the draft map + setter, both of which arrive as props.
 import { Settings2 } from 'lucide-react'
 import type { BillingConfigDto, BillingConfigDraft } from './billing-parity'
+import {
+  BillingHugrabShippingOverrideAmountInput,
+  BillingHugrabShippingOverrideToggle,
+} from './BillingHugrabShippingOverrideControls'
 import { Table } from '../ui/Table'
 
 export function BillingConfigTable({
@@ -30,13 +34,20 @@ export function BillingConfigTable({
   // PS-220/PS-327: immediate per-client opt-in into the backend shipping margin policy.
   onToggleHouseAccount: (clientId: number, enabled: boolean) => void
 }) {
+  function updateConfigDraft(config: BillingConfigDto, field: keyof BillingConfigDraft, value: string | boolean) {
+    setConfigDrafts((current) => ({
+      ...current,
+      [config.clientId]: { ...current[config.clientId], [field]: value } as BillingConfigDraft,
+    }))
+  }
+
   // Editable numeric cell for the Client Billing Config <Table>. The input
   // fills the cell (width:100%) and right-aligns its own text; the column's
   // `align:'right'` only drives the header label, so the numeric look comes
   // from this inline style (Table hardcodes cell text-align to left).
   function renderConfigNumberCell(
     config: BillingConfigDto,
-    field: Exclude<keyof BillingConfigDraft, 'active'>,
+    field: Exclude<keyof BillingConfigDraft, 'active' | 'hugrabShippingRateOverrideEnabled'>,
     fallback: string,
     step: string,
     min: string,
@@ -52,10 +63,7 @@ export function BillingConfigTable({
         style={{ width: '100%', textAlign: 'right', fontSize: 11.5 }}
         title={title}
         value={draft?.[field] ?? fallback}
-        onChange={(event) => setConfigDrafts((current) => ({
-          ...current,
-          [config.clientId]: { ...current[config.clientId], [field]: event.target.value } as BillingConfigDraft,
-        }))}
+        onChange={(event) => updateConfigDraft(config, field, event.target.value)}
       />
     )
   }
@@ -138,6 +146,60 @@ export function BillingConfigTable({
               sortable: true,
               sortValue: (row) => Number(configDrafts[row.clientId]?.shippingMarkupFlat ?? row.shippingMarkupFlat ?? 0),
               render: (row) => renderConfigNumberCell(row, 'shippingMarkupFlat', '0.00', '0.01', '0'),
+            },
+            {
+              key: 'hugrabOverrideEnabled',
+              label: 'HUGRAB <$',
+              width: 82,
+              minWidth: 72,
+              align: 'center',
+              sortable: true,
+              sortValue: (row) => (configDrafts[row.clientId]?.hugrabShippingRateOverrideEnabled ?? row.hugrabShippingRateOverrideEnabled ?? false) ? 1 : 0,
+              render: (row) => (
+                <BillingHugrabShippingOverrideToggle
+                  config={row}
+                  draft={configDrafts[row.clientId]}
+                  onChange={(field, value) => updateConfigDraft(row, field, value)}
+                />
+              ),
+            },
+            {
+              key: 'hugrabOverrideThreshold',
+              label: 'Below $',
+              width: 82,
+              minWidth: 72,
+              align: 'right',
+              sortable: true,
+              sortValue: (row) => Number(configDrafts[row.clientId]?.hugrabShippingRateOverrideThreshold ?? row.hugrabShippingRateOverrideThreshold ?? 0),
+              render: (row) => (
+                <BillingHugrabShippingOverrideAmountInput
+                  config={row}
+                  draft={configDrafts[row.clientId]}
+                  field="hugrabShippingRateOverrideThreshold"
+                  fallback="6.00"
+                  title="HUGRAB only: override C. Shipping Rate when it is below this amount."
+                  onChange={(field, value) => updateConfigDraft(row, field, value)}
+                />
+              ),
+            },
+            {
+              key: 'hugrabOverrideAmount',
+              label: 'Bill $',
+              width: 82,
+              minWidth: 72,
+              align: 'right',
+              sortable: true,
+              sortValue: (row) => Number(configDrafts[row.clientId]?.hugrabShippingRateOverrideAmount ?? row.hugrabShippingRateOverrideAmount ?? 0),
+              render: (row) => (
+                <BillingHugrabShippingOverrideAmountInput
+                  config={row}
+                  draft={configDrafts[row.clientId]}
+                  field="hugrabShippingRateOverrideAmount"
+                  fallback="6.00"
+                  title="HUGRAB only: bill this C. Shipping Rate amount when the threshold is triggered."
+                  onChange={(field, value) => updateConfigDraft(row, field, value)}
+                />
+              ),
             },
             {
               key: 'storage',

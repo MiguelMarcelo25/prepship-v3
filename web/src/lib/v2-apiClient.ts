@@ -2579,6 +2579,9 @@ export const apiClient = {
       package_cost_markup: 'packageCostMarkup',
       shipping_markup_pct: 'shippingMarkupPct',
       shipping_markup_flat: 'shippingMarkupFlat',
+      hugrab_shipping_rate_override_enabled: 'hugrabShippingRateOverrideEnabled',
+      hugrab_shipping_rate_override_threshold: 'hugrabShippingRateOverrideThreshold',
+      hugrab_shipping_rate_override_amount: 'hugrabShippingRateOverrideAmount',
     };
     const ACCEPTED = new Set([
       'pickPackFee',
@@ -2587,6 +2590,9 @@ export const apiClient = {
       'packageCostMarkup',
       'shippingMarkupPct',
       'shippingMarkupFlat',
+      'hugrabShippingRateOverrideEnabled',
+      'hugrabShippingRateOverrideThreshold',
+      'hugrabShippingRateOverrideAmount',
       'billingMode',
       'active',
     ]);

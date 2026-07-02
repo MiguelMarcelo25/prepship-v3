@@ -45,6 +45,13 @@ import {
   HugrabBillingShippingFloorCountMismatchError,
   listHugrabBillingShippingFloorCandidates,
 } from '../services/hugrab-billing-shipping-floor';
+import {
+  DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
+  DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
+  ensureHugrabShippingRateOverrideColumns,
+  hugrabShippingRateOverrideConfigsByClientId,
+  setClientHugrabShippingRateOverrideConfig,
+} from '../services/billing-hugrab-shipping-rate-override';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 import {
@@ -152,6 +159,7 @@ function withBillingScope<T extends object>(c: Context, q: T): T & {
 
 app.get('/config', async (c) => {
   const configScope = billingScopeFromContext(c);
+  await ensureHugrabShippingRateOverrideColumns();
   // v2 parity: the Config grid is keyed on `clients`, not `billing_config`.
   // Every active non-system client appears — clients without a billing_config
   // row surface with defaults (pickPackFee: 0, pickPackMaxUnits: 1, etc.) so
@@ -188,14 +196,23 @@ app.get('/config', async (c) => {
   // PS-220 (P4): the house-account opt-in flag lives off the drizzle schema (raw SQL), so enrich
   // the grid here. Best-effort — an empty set just shows every toggle OFF.
   const houseAccountIds = await houseAccountEnabledClientIds();
+  const hugrabOverrideByClient = await hugrabShippingRateOverrideConfigsByClientId(rows.map((r) => r.clientId));
 
   const data = rows.map((r) => {
     const houseAccountEnabled = houseAccountIds.has(r.clientId);
+    const hugrabOverride = hugrabOverrideByClient.get(r.clientId) ?? {
+      enabled: String(r.clientName ?? '').trim().toUpperCase() === 'HUGRAB',
+      threshold: DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
+      amount: DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
+    };
     return {
       clientId: r.clientId,
       clientName: r.clientName,
       houseAccountEnabled,
       shippingMarginPolicyMode: shippingMarginPolicyModeFromEnabled(houseAccountEnabled),
+      hugrabShippingRateOverrideEnabled: hugrabOverride.enabled,
+      hugrabShippingRateOverrideThreshold: hugrabOverride.threshold.toFixed(2),
+      hugrabShippingRateOverrideAmount: hugrabOverride.amount.toFixed(2),
       pickPackFee: r.pickPackFee ?? '0.00',
       pickPackMaxUnits: r.pickPackMaxUnits ?? 1,
       additionalUnitFee: r.additionalUnitFee ?? '0.00',
@@ -219,6 +236,9 @@ const configBody = z.object({
   packageCostMarkup: z.coerce.number().nonnegative().optional(),
   shippingMarkupPct: z.coerce.number().nonnegative().optional(),
   shippingMarkupFlat: z.coerce.number().nonnegative().optional(),
+  hugrabShippingRateOverrideEnabled: z.boolean().optional(),
+  hugrabShippingRateOverrideThreshold: z.coerce.number().positive().optional(),
+  hugrabShippingRateOverrideAmount: z.coerce.number().positive().optional(),
   storageFeePerCuFt: z.coerce.number().nonnegative().optional(),
   billingMode: z
     .enum(['per_shipment', 'monthly', 'label_cost', 'ss_ref_rate', 'reference_rate'])
@@ -261,7 +281,25 @@ app.put(
       billingMode: body.billingMode,
       active: body.active,
     });
-    return c.json(row);
+    const hasHugrabOverridePatch =
+      body.hugrabShippingRateOverrideEnabled !== undefined ||
+      body.hugrabShippingRateOverrideThreshold !== undefined ||
+      body.hugrabShippingRateOverrideAmount !== undefined;
+    const hugrabOverride = hasHugrabOverridePatch
+      ? await setClientHugrabShippingRateOverrideConfig(clientId, {
+          enabled: body.hugrabShippingRateOverrideEnabled,
+          threshold: body.hugrabShippingRateOverrideThreshold,
+          amount: body.hugrabShippingRateOverrideAmount,
+        })
+      : (await hugrabShippingRateOverrideConfigsByClientId([clientId])).get(clientId);
+    return c.json({
+      ...row,
+      ...(hugrabOverride ? {
+        hugrabShippingRateOverrideEnabled: hugrabOverride.enabled,
+        hugrabShippingRateOverrideThreshold: hugrabOverride.threshold.toFixed(2),
+        hugrabShippingRateOverrideAmount: hugrabOverride.amount.toFixed(2),
+      } : {}),
+    });
   }
 );
 

@@ -62,6 +62,12 @@ import { env } from '../lib/env';
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
+import {
+  DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
+  DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
+  ensureHugrabShippingRateOverrideColumns,
+  resolveHugrabShippingRateOverride,
+} from './billing-hugrab-shipping-rate-override';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -623,6 +629,7 @@ export async function generateLineItems(input: GenerateInput) {
   const to = new Date(input.dateTo);
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
+  await ensureHugrabShippingRateOverrideColumns();
 
   // Match /billing/config: active clients without a billing_config row still
   // generate with defaults, otherwise a fresh install has visible clients but
@@ -639,6 +646,9 @@ export async function generateLineItems(input: GenerateInput) {
     storageFeePerCuFt: string;
     billingMode: string;
     active: boolean;
+    hugrabShippingRateOverrideEnabled: boolean;
+    hugrabShippingRateOverrideThreshold: string;
+    hugrabShippingRateOverrideAmount: string;
   }>(sql`
     select
       c.id as "clientId",
@@ -651,7 +661,19 @@ export async function generateLineItems(input: GenerateInput) {
       coalesce(b.shipping_markup_flat, '0'::numeric)::text as "shippingMarkupFlat",
       coalesce(b.storage_fee_per_cu_ft, '0'::numeric)::text as "storageFeePerCuFt",
       coalesce(b.billing_mode, 'per_shipment') as "billingMode",
-      coalesce(b.active, true) as active
+      coalesce(b.active, true) as active,
+      coalesce(
+        b.hugrab_shipping_rate_override_enabled,
+        upper(c.name) = 'HUGRAB'
+      ) as "hugrabShippingRateOverrideEnabled",
+      coalesce(
+        b.hugrab_shipping_rate_override_threshold,
+        ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD}::numeric
+      )::text as "hugrabShippingRateOverrideThreshold",
+      coalesce(
+        b.hugrab_shipping_rate_override_amount,
+        ${DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT}::numeric
+      )::text as "hugrabShippingRateOverrideAmount"
     from clients c
     left join billing_config b on b.client_id = c.id
     where c.active = true
@@ -1126,6 +1148,17 @@ export async function generateLineItems(input: GenerateInput) {
         shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
         shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
       });
+      const shippingOverride = resolveHugrabShippingRateOverride({
+        clientName: cfg.clientName,
+        customerShippingRate: shippingDecision.billedAmount,
+        selectedRateCost: labelCost,
+        config: {
+          enabled: cfg.hugrabShippingRateOverrideEnabled,
+          threshold: cfg.hugrabShippingRateOverrideThreshold,
+          amount: cfg.hugrabShippingRateOverrideAmount,
+        },
+      });
+      const billedShippingAmount = shippingOverride.customerShippingRate;
       rows.push({
         clientId,
         orderId: s.orderId,
@@ -1135,8 +1168,8 @@ export async function generateLineItems(input: GenerateInput) {
         lineType: 'shipping',
         description: `Shipping${shippingDecision.descriptionSuffix} · order ${s.orderNumber ?? s.orderId}`,
         qty: '1',
-        unitCost: shippingDecision.billedAmount.toFixed(2),
-        totalCost: shippingDecision.billedAmount.toFixed(2),
+        unitCost: billedShippingAmount.toFixed(2),
+        totalCost: billedShippingAmount.toFixed(2),
         packageId: billedPackageId,
       });
     } else if (s.externallyShipped || s.externallyFulfilled || s.id === null) {
