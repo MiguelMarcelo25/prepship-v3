@@ -12,10 +12,10 @@
  * the same display arithmetic the XLSX export already performs.
  *
  * Calendar-day safety: ship_date is a calendar day stored at UTC midnight. We
- * emit the leading YYYY-MM-DD verbatim (no timezone conversion), the same
- * UTC-anchored day the XLSX `excelDayCell` renders.
+ * render it as a Los Angeles billing date/time without converting that midnight
+ * instant into the prior Pacific evening.
  */
-import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell } from './billing-invoice-text';
+import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell, invoiceShipDateTimeCell } from './billing-invoice-text';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
@@ -54,13 +54,6 @@ export const INVOICE_CSV_HEADERS = [
   'Total',
 ] as const;
 
-/** YYYY-MM-DD for a UTC-midnight ship day — the leading date component verbatim,
- *  never timezone-converted (matches the XLSX excelDayCell anchor). */
-function csvDayCell(day: string | null | undefined): string {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(day ?? ''));
-  return match ? `${match[1]}-${match[2]}-${match[3]}` : String(day ?? '');
-}
-
 /** RFC-4180 quote a field, with spreadsheet formula-injection neutralization:
  *  a leading =, +, -, @, tab or CR gets a leading apostrophe before quoting so
  *  the cell is treated as text, not a live formula. */
@@ -89,7 +82,7 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const rowTotal = Number(row.row_total);
 
   const cells = [
-    csvDayCell(row.ship_date),
+    invoiceShipDateTimeCell(row.ship_date),
     String(row.order_number ?? row.order_id ?? ''),
     invoiceOneLineCell(row.skus),
     invoiceOneLineCell(row.box_label),

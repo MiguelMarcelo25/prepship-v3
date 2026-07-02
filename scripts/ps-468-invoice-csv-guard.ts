@@ -42,7 +42,7 @@ function read(path: string): string {
 assert.deepEqual(
   INVOICE_CSV_HEADERS,
   [
-    'Ship Date (CA)',
+    'Ship Date/Time (Los Angeles)',
     'Order #',
     'SKUs',
     'Box Size',
@@ -105,12 +105,12 @@ const lines = csv.split('\r\n');
 assert.equal(csv.charCodeAt(0), 0xfeff, 'CSV starts with a UTF-8 BOM for Excel');
 assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'first CSV line is the header row');
 
-// Rich row: ship day extracted at UTC (calendar day, never timezone-shifted),
+// Rich row: ship day rendered as the Los Angeles billing date/time,
 // qty = 3+2 = 5, pickPackFee = 6.00+1.50 = 7.5, additional shown (addl>0) = 1.5,
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  '2026-05-04,PO-9001,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
+  '5/4/2026 12:00 AM PT,PO-9001,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -118,7 +118,7 @@ assert.equal(
 // pickPackFee(3) + shipping(2) + storage(1) = 6. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '2026-05-05,PO-9002,,—,0,1,3,0,2,1,6',
+  '5/5/2026 12:00 AM PT,PO-9002,,—,0,1,3,0,2,1,6',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

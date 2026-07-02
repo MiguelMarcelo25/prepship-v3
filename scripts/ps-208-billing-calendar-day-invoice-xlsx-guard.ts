@@ -26,6 +26,7 @@ import {
   billingDayOf,
   billingDayRange,
   formatBillingDay,
+  formatBillingLosAngelesDateTime,
 } from '../src/lib/time/billing-day';
 
 function read(path: string): string {
@@ -88,6 +89,8 @@ assert.equal(formatBillingDay('2026-05-01'), 'May 01, 2026');
 assert.equal(formatBillingDay('2026-12-31'), 'December 31, 2026');
 assert.equal(formatBillingDay(null), '');
 assert.equal(formatBillingDay('weird-value'), 'weird-value');
+assert.equal(formatBillingLosAngelesDateTime('2026-05-04T00:00:00.000Z'), '5/4/2026 12:00 AM PT');
+assert.equal(formatBillingLosAngelesDateTime('2026-05-01'), '5/1/2026 12:00 AM PT');
 
 // ── 2. Source pins ──────────────────────────────────────────────────────────
 
@@ -129,12 +132,12 @@ assert.ok(!routes.includes('function formatInvoiceDate'),
   'formatInvoiceDate must stay deleted — formatBillingDay owns display');
 assert.ok(routes.includes('formatBillingDay(fromDay)') && routes.includes('formatBillingDay(toDay)'),
   'invoice header must format the operator-picked days via formatBillingDay');
-assert.ok(routes.includes('formatBillingDay(d.ship_date)'),
-  'invoice rows must format ship_date via formatBillingDay');
-assert.ok(invoiceText.includes("INVOICE_SHIP_DATE_HEADER = 'Ship Date (CA)'"),
-  'invoice ship-date header must make the California billing-day timezone explicit');
+assert.ok(routes.includes('invoiceShipDateTimeCell(d.ship_date)'),
+  'invoice rows must format ship_date via the Los Angeles date/time cell');
+assert.ok(invoiceText.includes("INVOICE_SHIP_DATE_HEADER = 'Ship Date/Time (Los Angeles)'"),
+  'invoice ship-date header must make the Los Angeles billing date/time explicit');
 assert.ok(routes.includes('INVOICE_SHIP_DATE_HEADER'),
-  'HTML/XLSX invoice renderers must use the shared California ship-date header');
+  'HTML/XLSX invoice renderers must use the shared Los Angeles ship-date/time header');
 
 // XLSX export: same dataset (billingInvoiceData), exceljs, day cells, SUM
 // formulas, frozen header, attachment headers.
@@ -185,8 +188,10 @@ assert.ok(!/b\.ship_date <= /.test(reporting),
 // The canonical helper itself never reaches for a timezone. Pin CODE shapes
 // (quoted zone literal, timeZone option, Intl/locale formatting) — the
 // header COMMENTS legitimately mention timezones while documenting the bugs.
-assert.ok(!/['"]America\/Los_Angeles['"]/.test(helper) && !/timeZone\s*:/.test(helper),
-  'billing-day.ts must be timezone-free');
+assert.ok(helper.includes("BILLING_LOS_ANGELES_TIME_ZONE = 'America/Los_Angeles'"),
+  'billing-day.ts must name the Los Angeles billing timezone');
+assert.ok(!/timeZone\s*:/.test(helper),
+  'billing-day.ts must not use Intl timezone conversion for calendar-day ship_date');
 assert.ok(!helper.includes('toLocale') && !/Intl\./.test(helper),
   'billing-day.ts must not use locale/Date display formatting');
 

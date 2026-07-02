@@ -47,15 +47,15 @@ const skuCell: FakeCell = { value: 'Booster-gel-001 x2 | HU-10' };
 const totalCell: FakeCell = { value: 14.28 };
 const worksheet: InvoiceXlsxWorksheet & { columns: FakeColumn[]; rows: FakeRow[] } = {
   columns: [
-    column('shipDate', 'Ship Date (CA)', [{ value: new Date('2026-06-03T00:00:00.000Z') }]),
+    column('shipDate', 'Ship Date/Time (Los Angeles)', [{ value: '6/3/2026 12:00 AM PT' }]),
     column('orderNumber', 'Order #', [{ value: '1194' }]),
     column('skus', 'SKUs', [skuCell]),
     column('boxSize', 'Box Size', [{ value: '12x10x3 (12x10x3)' }]),
     column('total', 'Total', [totalCell]),
   ],
   rows: [
-    row([{ value: 'Ship Date (CA)' }, { value: 'Order #' }, { value: 'SKUs' }, { value: 'Box Size' }, { value: 'Total' }]),
-    row([{ value: new Date('2026-06-03T00:00:00.000Z') }, { value: '1194' }, skuCell, { value: '12x10x3 (12x10x3)' }, totalCell]),
+    row([{ value: 'Ship Date/Time (Los Angeles)' }, { value: 'Order #' }, { value: 'SKUs' }, { value: 'Box Size' }, { value: 'Total' }]),
+    row([{ value: '6/3/2026 12:00 AM PT' }, { value: '1194' }, skuCell, { value: '12x10x3 (12x10x3)' }, totalCell]),
   ],
   eachRow: (_options, callback) => {
     worksheet.rows.forEach((fakeRow, index) => callback(fakeRow, index + 1));
@@ -90,7 +90,8 @@ const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? billingRoute.slice(
 assert.match(xlsxRenderer, /skus:\s*invoiceOneLineCell\(d\.skus\)/, 'Line Items sheet must flatten SKUs to one readable cell like the CSV export');
 assert.doesNotMatch(xlsxRenderer, /skus:\s*d\.skus\s*\?\?\s*''/, 'Line Items sheet must not export raw multiline SKU text');
 assert.doesNotMatch(xlsxRenderer, /WAIVED_COLUMN_HEADER|key:\s*'waiver'|waivedCellText\(d\.fee_waived\)/, 'Line Items sheet must omit the Prep Fee Waiver column');
-assert.match(xlsxRenderer, /header:\s*INVOICE_SHIP_DATE_HEADER/, 'Line Items sheet must use the shared California ship-date header');
+assert.match(xlsxRenderer, /header:\s*INVOICE_SHIP_DATE_HEADER/, 'Line Items sheet must use the shared Los Angeles ship-date/time header');
+assert.match(xlsxRenderer, /shipDate:\s*invoiceShipDateTimeCell\(d\.ship_date\)/, 'Line Items sheet must render Los Angeles ship date/time text');
 assert.match(billingRoute, /order by b\.ship_date desc,\s*b\.order_id desc/, 'Invoice detail source must sort latest ship date/order first for Excel');
 assert.doesNotMatch(billingRoute, /order by b\.ship_date asc,\s*b\.order_id asc/, 'Invoice detail source must not sort oldest orders first');
 

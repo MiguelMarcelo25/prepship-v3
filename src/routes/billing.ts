@@ -42,7 +42,7 @@ import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulk
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
-import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell } from './billing-invoice-text';
+import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell, invoiceShipDateTimeCell } from './billing-invoice-text';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
 // from the fee_waived flag billingInvoiceData stamps from the SOT.
@@ -1247,7 +1247,7 @@ function renderInvoiceHtml(args: {
       const fulfillmentFeeAmt = rowTotal > 0
         ? rowTotal
         : pickPackFeeAmt + shippingAmt + storageAmt;
-      const shipDate = formatBillingDay(d.ship_date);
+      const shipDate = invoiceShipDateTimeCell(d.ship_date);
       return `
       <tr>
         <td class="ship-date">${escHtml(shipDate)}</td>
@@ -1458,7 +1458,7 @@ async function renderInvoiceXlsx(args: {
     views: [{ state: 'frozen', ySplit: 1 }],
   });
   items.columns = [
-    { header: INVOICE_SHIP_DATE_HEADER, key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
+    { header: INVOICE_SHIP_DATE_HEADER, key: 'shipDate', width: 28 },
     { header: 'Order #', key: 'orderNumber', width: 20 },
     { header: 'SKUs', key: 'skus', width: 40 },
     // PS-217: billed box size (display) + billed box cost (the package_cost line).
@@ -1482,7 +1482,7 @@ async function renderInvoiceXlsx(args: {
     const storageAmt = Number(d.storage_amt);
     const rowTotal = Number(d.row_total);
     items.addRow({
-      shipDate: excelDayCell(d.ship_date),
+      shipDate: invoiceShipDateTimeCell(d.ship_date),
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
       skus: invoiceOneLineCell(d.skus),
       boxSize: invoiceOneLineCell(d.box_label),

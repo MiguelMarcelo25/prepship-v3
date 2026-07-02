@@ -4,8 +4,9 @@
  * BUSINESS INVARIANT: `billing_line_items.ship_date` is a CALENDAR DAY, not an
  * instant. Rows are stored as UTC midnight of the ship day (source chain:
  * shipments.ship_date / orders.raw->>'shipDate', themselves date-only). NO
- * timezone conversion is ever allowed for billing-range inclusion or invoice
- * display — a row stored as 2026-05-01T00:00:00Z IS May 1, never April 30/29.
+ * instant timezone conversion is allowed for billing-range inclusion. Invoice
+ * display may label that billing day as Los Angeles time, but it must not
+ * convert UTC midnight into the prior Pacific evening.
  *
  * Every billing endpoint (generate, status, summary, details, HTML/PDF
  * invoice, XLSX invoice) derives its range bounds and display strings from
@@ -28,6 +29,8 @@ const MONTHS = [
 ] as const;
 
 const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})/;
+export const BILLING_LOS_ANGELES_TIME_ZONE = 'America/Los_Angeles';
+export const BILLING_LOS_ANGELES_TIME_LABEL = 'PT';
 
 /**
  * The operator-selected calendar day carried by a raw param. Accepts plain
@@ -92,4 +95,17 @@ export function formatBillingDay(raw: string | null | undefined): string {
   const month = MONTHS[Number(m) - 1];
   if (!month) return day;
   return `${month} ${d}, ${y}`;
+}
+
+/**
+ * Display the billing calendar day as a Los Angeles billing timestamp. The
+ * source has no real time-of-day, so this intentionally shows the start of the
+ * Los Angeles billing day instead of converting UTC midnight into the prior
+ * Pacific evening.
+ */
+export function formatBillingLosAngelesDateTime(raw: string | null | undefined): string {
+  const day = billingDayOf(raw);
+  if (!day) return raw == null ? '' : String(raw);
+  const [y, m, d] = day.split('-').map(Number);
+  return `${m}/${d}/${y} 12:00 AM ${BILLING_LOS_ANGELES_TIME_LABEL}`;
 }

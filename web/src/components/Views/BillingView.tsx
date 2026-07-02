@@ -1687,7 +1687,7 @@ export default function BillingView() {
 
             <div className="billing-edit-readonly-grid">
               <div><span>Order #</span><strong>{billingEditModal.row.orderNumber || '—'}</strong></div>
-              <div><span>Ship Date</span><strong>{formatBillingShipDate(billingEditModal.row.shipDate)}</strong></div>
+              <div><span>Ship Date/Time (Los Angeles)</span><strong>{formatBillingShipDate(billingEditModal.row.shipDate)}</strong></div>
               <div><span>Carrier</span><strong>{billingEditModal.row.carrierNickname || billingEditModal.row.providerAccountNickname || billingEditModal.row.carrierCode || '—'}</strong></div>
               <div><span>Qty</span><strong>{billingEditModal.row.totalQty || billingEditModal.row.qty || 0}</strong></div>
               <div><span>Item Name</span><strong>{billingEditModal.row.itemNames || billingEditModal.row.description || '—'}</strong></div>

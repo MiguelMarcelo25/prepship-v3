@@ -164,14 +164,14 @@ const billingDetailTable = read('web/src/components/Views/BillingDetailTable.tsx
 assert(
   billingParity.includes('export function formatBillingShipDate') &&
     billingParity.includes('export function billingShipDateSortValue'),
-  'billing detail UI must use date-only billing-day helpers for ship_date',
+  'billing detail UI must use billing-day helpers for ship_date display/sort',
 );
 assert(
-  !billingParity.includes('formatBillingDateTime') &&
-    !billingDetailTable.includes('formatBillingDateTime') &&
+  billingParity.includes("label: 'Ship Date/Time (Los Angeles)'") &&
+    billingParity.includes('12:00 AM PT') &&
     billingDetailTable.includes('formatBillingShipDate(row.shipDate)') &&
     billingDetailTable.includes('billingShipDateSortValue(row.shipDate)'),
-  'billing detail ship date must not render/sort UTC-midnight billing days as CA timestamps',
+  'billing detail ship date must render Los Angeles billing date/time while sorting by billing day',
 );
 assert(
   billingDetailTable.includes('defaultSort={{ key: \'shipDate\', direction: \'desc\' }}') &&

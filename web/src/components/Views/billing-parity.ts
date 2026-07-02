@@ -161,7 +161,7 @@ export interface BillingPackagePriceRow {
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
-  { id: 'shipDate', label: 'Ship Date (CA)', align: 'left', always: false },
+  { id: 'shipDate', label: 'Ship Date/Time (Los Angeles)', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
   { id: 'itemSkus', label: 'SKU', align: 'left', always: false },
@@ -386,12 +386,12 @@ function billingDayParts(value: string | null | undefined) {
 }
 
 // Billing ship_date is a calendar day stored at UTC midnight, not an instant.
-// Display and sort by the leading YYYY-MM-DD components only, with no timezone
-// conversion. Otherwise 2026-06-30T00:00Z renders as 06/29/26 5:00 PM in CA.
+// Display the start of that Los Angeles billing day; do not convert the UTC
+// midnight instant into the prior Pacific evening.
 export function formatBillingShipDate(value: string | null | undefined) {
   const parts = billingDayParts(value)
   if (!parts) return value ? String(value) : '—'
-  return `${parts.month}/${parts.day}/${parts.year.slice(2)}`
+  return `${Number(parts.month)}/${Number(parts.day)}/${parts.year} 12:00 AM PT`
 }
 
 export function billingShipDateSortValue(value: string | null | undefined) {
