@@ -42,7 +42,7 @@ import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulk
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
-import { invoiceOneLineCell } from './billing-invoice-text';
+import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell } from './billing-invoice-text';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
 // from the fee_waived flag billingInvoiceData stamps from the SOT.
@@ -1336,7 +1336,7 @@ function renderInvoiceHtml(args: {
   <table>
     <thead>
       <tr>
-        <th class="ship-date">Ship Date</th>
+        <th class="ship-date">${escHtml(INVOICE_SHIP_DATE_HEADER)}</th>
         <th>Order #</th>
         <th>SKU(s)</th>
         <th>Box Size</th>
@@ -1458,7 +1458,7 @@ async function renderInvoiceXlsx(args: {
     views: [{ state: 'frozen', ySplit: 1 }],
   });
   items.columns = [
-    { header: 'Ship Date', key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
+    { header: INVOICE_SHIP_DATE_HEADER, key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
     { header: 'Order #', key: 'orderNumber', width: 20 },
     { header: 'SKUs', key: 'skus', width: 40 },
     // PS-217: billed box size (display) + billed box cost (the package_cost line).

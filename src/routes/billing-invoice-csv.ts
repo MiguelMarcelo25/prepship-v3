@@ -15,7 +15,7 @@
  * emit the leading YYYY-MM-DD verbatim (no timezone conversion), the same
  * UTC-anchored day the XLSX `excelDayCell` renders.
  */
-import { invoiceOneLineCell } from './billing-invoice-text';
+import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell } from './billing-invoice-text';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
@@ -41,7 +41,7 @@ export type InvoiceCsvDetailRow = {
 
 /** Column order mirrors the operator-facing invoice line item sheet. */
 export const INVOICE_CSV_HEADERS = [
-  'Ship Date',
+  INVOICE_SHIP_DATE_HEADER,
   'Order #',
   'SKUs',
   'Box Size',

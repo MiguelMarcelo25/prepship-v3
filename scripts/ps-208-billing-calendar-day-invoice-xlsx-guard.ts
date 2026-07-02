@@ -95,6 +95,7 @@ const routes = read('src/routes/billing.ts');
 const service = read('src/services/billing.ts');
 const reporting = read('src/services/reporting-metrics.ts');
 const helper = read('src/lib/time/billing-day.ts');
+const invoiceText = read('src/routes/billing-invoice-text.ts');
 const feClient = read('web/src/lib/v2-apiClient.ts');
 const feTable = read('web/src/components/Views/BillingSummaryTable.tsx');
 const feView = read('web/src/components/Views/BillingView.tsx');
@@ -130,6 +131,10 @@ assert.ok(routes.includes('formatBillingDay(fromDay)') && routes.includes('forma
   'invoice header must format the operator-picked days via formatBillingDay');
 assert.ok(routes.includes('formatBillingDay(d.ship_date)'),
   'invoice rows must format ship_date via formatBillingDay');
+assert.ok(invoiceText.includes("INVOICE_SHIP_DATE_HEADER = 'Ship Date (CA)'"),
+  'invoice ship-date header must make the California billing-day timezone explicit');
+assert.ok(routes.includes('INVOICE_SHIP_DATE_HEADER'),
+  'HTML/XLSX invoice renderers must use the shared California ship-date header');
 
 // XLSX export: same dataset (billingInvoiceData), exceljs, day cells, SUM
 // formulas, frozen header, attachment headers.

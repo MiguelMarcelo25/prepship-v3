@@ -24,7 +24,7 @@ function check(name: string, condition: boolean) {
 }
 
 check('HTML invoice renderer was found', html.length > 0);
-check('HTML invoice marks Ship Date header with the ship-date class', /<th class="ship-date">Ship Date<\/th>/.test(html));
+check('HTML invoice marks Ship Date header with the ship-date class', /<th class="ship-date">\$\{escHtml\(INVOICE_SHIP_DATE_HEADER\)\}<\/th>/.test(html));
 check('HTML invoice marks Ship Date cells with the ship-date class', /<td class="ship-date">\$\{escHtml\(shipDate\)\}<\/td>/.test(html));
 check(
   'HTML invoice Ship Date column is widened and non-wrapping',

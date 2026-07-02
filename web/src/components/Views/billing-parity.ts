@@ -161,7 +161,7 @@ export interface BillingPackagePriceRow {
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
-  { id: 'shipDate', label: 'Ship Date', align: 'left', always: false },
+  { id: 'shipDate', label: 'Ship Date (CA)', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
   { id: 'itemSkus', label: 'SKU', align: 'left', always: false },

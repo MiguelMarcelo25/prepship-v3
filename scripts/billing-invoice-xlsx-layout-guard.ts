@@ -47,14 +47,14 @@ const skuCell: FakeCell = { value: 'Booster-gel-001 x2 | HU-10' };
 const totalCell: FakeCell = { value: 14.28 };
 const worksheet: InvoiceXlsxWorksheet & { columns: FakeColumn[]; rows: FakeRow[] } = {
   columns: [
-    column('shipDate', 'Ship Date', [{ value: new Date('2026-06-03T00:00:00.000Z') }]),
+    column('shipDate', 'Ship Date (CA)', [{ value: new Date('2026-06-03T00:00:00.000Z') }]),
     column('orderNumber', 'Order #', [{ value: '1194' }]),
     column('skus', 'SKUs', [skuCell]),
     column('boxSize', 'Box Size', [{ value: '12x10x3 (12x10x3)' }]),
     column('total', 'Total', [totalCell]),
   ],
   rows: [
-    row([{ value: 'Ship Date' }, { value: 'Order #' }, { value: 'SKUs' }, { value: 'Box Size' }, { value: 'Total' }]),
+    row([{ value: 'Ship Date (CA)' }, { value: 'Order #' }, { value: 'SKUs' }, { value: 'Box Size' }, { value: 'Total' }]),
     row([{ value: new Date('2026-06-03T00:00:00.000Z') }, { value: '1194' }, skuCell, { value: '12x10x3 (12x10x3)' }, totalCell]),
   ],
   eachRow: (_options, callback) => {
@@ -90,6 +90,7 @@ const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? billingRoute.slice(
 assert.match(xlsxRenderer, /skus:\s*invoiceOneLineCell\(d\.skus\)/, 'Line Items sheet must flatten SKUs to one readable cell like the CSV export');
 assert.doesNotMatch(xlsxRenderer, /skus:\s*d\.skus\s*\?\?\s*''/, 'Line Items sheet must not export raw multiline SKU text');
 assert.doesNotMatch(xlsxRenderer, /WAIVED_COLUMN_HEADER|key:\s*'waiver'|waivedCellText\(d\.fee_waived\)/, 'Line Items sheet must omit the Prep Fee Waiver column');
+assert.match(xlsxRenderer, /header:\s*INVOICE_SHIP_DATE_HEADER/, 'Line Items sheet must use the shared California ship-date header');
 
 const packageJson = readFileSync('package.json', 'utf8');
 assert.match(packageJson, /"test:billing-invoice-xlsx-layout": "tsx scripts\/billing-invoice-xlsx-layout-guard\.ts"/, 'package.json must expose the XLSX layout guard');

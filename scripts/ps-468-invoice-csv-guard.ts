@@ -42,7 +42,7 @@ function read(path: string): string {
 assert.deepEqual(
   INVOICE_CSV_HEADERS,
   [
-    'Ship Date',
+    'Ship Date (CA)',
     'Order #',
     'SKUs',
     'Box Size',
