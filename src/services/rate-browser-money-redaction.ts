@@ -7,6 +7,11 @@
 // Raw provider rate money keys (snake_case) AND the camelCase competitor-cost keys the PS-220 projected
 // stamp writes onto bestRate.nextBestNonHouseRate (shipmentCost/otherCost/totalCost). houseMargin is the
 // INTERNAL SHIPP spread. All are nulled for a viewer who cannot see financials.
+import {
+  CANONICAL_SHIPPING_RATE_MONEY_KEYS,
+  LEGACY_SHIPPING_RATE_MONEY_KEYS,
+} from './shipping-workflow/shipping-rate-money-normalizer';
+
 export const RATE_BROWSER_MONEY_FIELD_KEYS: ReadonlySet<string> = new Set([
   'shipping_amount',
   'other_amount',
@@ -20,11 +25,8 @@ export const RATE_BROWSER_MONEY_FIELD_KEYS: ReadonlySet<string> = new Set([
   'labelCost',
   'rawCost',
   'amount',
-  'customerRateAmount',
-  'rateCostAmount',
-  'houseRateAmount',
-  'shippingMarginAmount',
-  'shippingMarginPct',
+  ...CANONICAL_SHIPPING_RATE_MONEY_KEYS,
+  ...LEGACY_SHIPPING_RATE_MONEY_KEYS,
   'houseApplied',
   'houseBadgeVisible',
   'customerRateSource',

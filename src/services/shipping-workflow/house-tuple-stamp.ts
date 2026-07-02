@@ -59,17 +59,15 @@ export async function stampHouseTuple(
         }
         : null,
       houseMargin,
-      customerRateAmount: customerRate,
-      customer_rate_amount: customerRate,
-      rateCostAmount: drpCost,
-      rate_cost_amount: drpCost,
+      cShippingRateAmount: customerRate,
+      selectedRateCost: drpCost,
       shippingMarginAmount: houseMargin,
       shipping_margin_amount: houseMargin,
       shippingMarginPct,
       shipping_margin_pct: shippingMarginPct,
       houseApplied: true,
       houseBadgeVisible: true,
-      customerRateSource: 'projected_house_customer_rate',
+      customerRateSource: 'projected_customer_shipping_rate',
       rateCostSource: 'shipp_house_internal_cost',
     };
   } catch (err) {

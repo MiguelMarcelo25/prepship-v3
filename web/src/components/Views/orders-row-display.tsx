@@ -263,40 +263,9 @@ export function getRateProviderAccountId(rate: Record<string, unknown> | null | 
   )
 }
 
-function readMoneyAmount(value: unknown) {
-  const record = toRecord(value)
-  return toNumberValue(record?.amount) ?? toNumberValue(value)
-}
-
 function readRateTotalAmount(rate: Record<string, unknown> | null | undefined) {
   if (!rate) return null
-  const customerAmount =
-    toNumberValue(rate.customerRateAmount) ??
-    toNumberValue(rate.customer_rate_amount) ??
-    toNumberValue(rate.markedAmount) ??
-    toNumberValue(rate.marked_amount)
-  if (customerAmount != null) return customerAmount
-
-  const totalCost = toNumberValue(rate.totalCost) ?? toNumberValue(rate.total_cost)
-  if (totalCost != null) return totalCost
-
-  const shipmentCost =
-    toNumberValue(rate.shipmentCost) ??
-    toNumberValue(rate.shipment_cost) ??
-    readMoneyAmount(rate.shippingAmount) ??
-    readMoneyAmount(rate.shipping_amount) ??
-    toNumberValue(rate.cost) ??
-    toNumberValue(rate.amount)
-  if (shipmentCost == null) return null
-
-  const directOtherCost = toNumberValue(rate.otherCost) ?? toNumberValue(rate.other_cost)
-  const otherCost =
-    directOtherCost ??
-    ((readMoneyAmount(rate.otherAmount) ?? readMoneyAmount(rate.other_amount) ?? 0) +
-      (readMoneyAmount(rate.confirmationAmount) ?? readMoneyAmount(rate.confirmation_amount) ?? 0) +
-      (readMoneyAmount(rate.insuranceAmount) ?? readMoneyAmount(rate.insurance_amount) ?? 0))
-
-  return shipmentCost + otherCost
+  return toNumberValue(rate.cShippingRateAmount)
 }
 
 function getCachedSecondBestRate(order: OrderSummaryDto) {
@@ -319,10 +288,10 @@ function getCachedSecondBestRate(order: OrderSummaryDto) {
 export function getBestRateBaseCost(order: OrderSummaryDto) {
   const money = getBackendRowMoney(order)
   if (order.orderStatus === 'awaiting_shipment') {
-    return money?.customerRateAmount ?? money?.markedAmount ?? money?.rateCostAmount ?? money?.baseAmount ?? null
+    return money?.cShippingRateAmount ?? null
   }
 
-  return money?.customerRateAmount ?? money?.markedAmount ?? getShippingNumber(order, 'bestRateAmount') ?? null
+  return money?.cShippingRateAmount ?? null
 }
 
 export function getBestRateFinalBaseCost(order: OrderSummaryDto) {
@@ -493,14 +462,9 @@ export function getBackendRowMoney(order: OrderSummaryDto) {
     markupAmount: toNumberValue(money.markupAmount),
     insuranceAddOn: toNumberValue(money.insuranceAddOn),
     marginPercent: toNumberValue(money.marginPercent),
-    // PS-356: the backend separated money fields. customerRateAmount is C. Shipping Rate
-    // (customer billing), rateCostAmount is Best/Selected purchase cost (financial-only,
-    // null for non-financial viewers since the whole money tuple is backend-redacted), and
-    // shippingMarginAmount is the customer-vs-purchase spread. Read-only pass-through; the
-    // FE never recomputes these.
-    customerRateAmount: toNumberValue(money.customerRateAmount),
-    rateCostAmount: toNumberValue(money.rateCostAmount),
-    houseRateAmount: toNumberValue(money.houseRateAmount),
+    // PS-356/PS-367: backend-owned shipping money. The FE reads the clean DTO only.
+    cShippingRateAmount: toNumberValue(money.cShippingRateAmount),
+    selectedRateCost: toNumberValue(money.selectedRateCost),
     shippingMarginAmount: toNumberValue(money.shippingMarginAmount),
     // PS-220 (slice 4b): 'house_account' => SHIPP house order (marked = the customer_rate DRP bills,
     // base = DRP's SHIPP cost, markup = the house margin). Defaults to 'carrier_markup' on deploy-skew

@@ -972,11 +972,11 @@ export async function generateLineItems(input: GenerateInput) {
   };
   const allRows: LineRow[] = [];
 
-  // PS-220 (billing branch): for opted-in SHIPP house orders, bill the captured customer_rate
+  // PS-220 (billing branch): for opted-in SHIPP house orders, bill the captured C. Shipping Rate
   // (cheapest eligible non-SHIPP) instead of the SHIPP drp_cost, and suppress the carrier markup —
   // the margin IS the spread. Best-effort bulk load keyed by shipment id; empty when the sidecar is
   // absent or no house orders exist (then billing is byte-identical to today). Reads only.
-  const houseCustomerRateByShipmentId = new Map<number, number>();
+  const cShippingRateByShipmentId = new Map<number, number>();
   try {
     const houseShipmentIds = [
       ...new Set(billableRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
@@ -988,7 +988,7 @@ export async function generateLineItems(input: GenerateInput) {
         .from(orderCompetitiveRate)
         .where(and(eq(orderCompetitiveRate.isHouseOrder, true), inArray(orderCompetitiveRate.shipmentId, houseShipmentIds)));
       for (const hr of houseRows) {
-        if (hr.shipmentId != null) houseCustomerRateByShipmentId.set(Number(hr.shipmentId), Number(hr.customerRate));
+        if (hr.shipmentId != null) cShippingRateByShipmentId.set(Number(hr.shipmentId), Number(hr.customerRate));
       }
     }
   } catch {
@@ -1119,7 +1119,7 @@ export async function generateLineItems(input: GenerateInput) {
         packageId: billedPackageId,
       });
     } else if (labelCost > 0) {
-      const houseCustomerRate = s.id != null ? houseCustomerRateByShipmentId.get(Number(s.id)) : undefined;
+      const cShippingRateAmount = s.id != null ? cShippingRateByShipmentId.get(Number(s.id)) : undefined;
       // PS-220: single source of truth for the billed shipping amount. A captured house
       // customer_rate is billed verbatim (carrier markup + reference-rate suppressed); otherwise
       // the label cost flows through optional reference-rate flooring + the carrier markup. The
@@ -1140,7 +1140,7 @@ export async function generateLineItems(input: GenerateInput) {
       });
       const shippingDecision = decideShippingLineBilling({
         labelCost,
-        houseCustomerRate,
+        cShippingRateAmount,
         billingMode: cfg.billingMode,
         isBaselineCarrier: SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? ''),
         refUspsRate: toNum(s.refUspsRate),

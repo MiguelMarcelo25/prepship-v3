@@ -79,6 +79,7 @@ import {
   parseMarkupSettingValue,
   type MarkupRule,
 } from './shipping-workflow/rate-money';
+import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 import { resolveWalmartPurchaseOrder } from './walmart-po-resolution';
 // PS-271 (Layer 2): 60s per-carrier union cache (additive backstop for Shipp's non-deterministic
 // thin response). Default-OFF; a COLD cache / flag OFF is byte-for-byte identical to today.
@@ -181,16 +182,12 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
       //     the same marked-CHARGE basis as ShipStation (PS-203's uniform-charge intent). This is
       //     a CORRECT ranking fix, not byte-identical. (QA audit 2026-06-23;
       //     ps-307-direct-rate-markup-behavior-test covers the toDirectRate+applyMarkups path.)
-      customerShippingAmount: marked,
-      customer_shipping_amount: marked,
-      customerRateAmount: marked,
-      customer_rate_amount: marked,
+      cShippingRateAmount: marked,
       markedShippingAmount: marked,
       marked_shipping_amount: marked,
       // PS-343: preserve the raw/internal provider cost as backend-owned aliases so Rate Browser
       // consumers do not need to recover it from provider component money fields.
-      rateCostAmount: orig,
-      rate_cost_amount: orig,
+      selectedRateCost: orig,
       rawShippingAmount: orig,
       raw_shipping_amount: orig,
       internalShippingAmount: orig,
@@ -757,29 +754,7 @@ function rateShippingOptionEligibilityContext(input: Pick<RateInput, 'insuranceP
 
 function genericRateTotal(rate: unknown): number {
   if (!rate || typeof rate !== 'object') return Number.POSITIVE_INFINITY;
-  const row = rate as Record<string, any>;
-  return (
-    Number(
-      row.customerShippingAmount ??
-      row.customer_shipping_amount ??
-      row.customerChargeAmount ??
-      row.customer_charge_amount ??
-      row.customerRateAmount ??
-      row.customer_rate_amount ??
-      row.markedShippingAmount ??
-      row.marked_shipping_amount ??
-      row.billableShippingAmount ??
-      row.billable_shipping_amount ??
-      row.shipping_amount?.amount ??
-      row.shipmentCost ??
-      row.amount ??
-      row.cost ??
-      0,
-    ) +
-    Number(row.other_amount?.amount ?? row.otherCost ?? 0) +
-    Number(row.confirmation_amount?.amount ?? row.confirmationCost ?? 0) +
-    Number(row.insurance_amount?.amount ?? row.insuranceCost ?? 0)
-  );
+  return normalizeShippingRateMoney(rate).cShippingRateAmount ?? Number.POSITIVE_INFINITY;
 }
 
 export function rateToShippingServiceDescriptor(rate: unknown): ShippingServiceDescriptor {
@@ -1835,35 +1810,11 @@ function directFiniteAmount(...values: unknown[]): number | null {
 }
 
 function directCustomerShippingAmount(rate: Record<string, unknown>): number {
-  return directFiniteAmount(
-    rate.customerShippingAmount,
-    rate.customer_shipping_amount,
-    rate.customerChargeAmount,
-    rate.customer_charge_amount,
-    rate.customerRateAmount,
-    rate.customer_rate_amount,
-    rate.markedShippingAmount,
-    rate.marked_shipping_amount,
-    rate.billableShippingAmount,
-    rate.billable_shipping_amount,
-    rate.amount,
-    rate.price,
-    rate.cost,
-  ) ?? 0;
+  return normalizeShippingRateMoney(rate).cShippingRateAmount ?? directFiniteAmount(rate.amount, rate.price, rate.cost) ?? 0;
 }
 
 function directRawShippingCost(rate: Record<string, unknown>, fallback: number): number {
-  return directFiniteAmount(
-    rate.rateCostAmount,
-    rate.rate_cost_amount,
-    rate.rawShippingAmount,
-    rate.raw_shipping_amount,
-    rate.internalShippingAmount,
-    rate.internal_shipping_amount,
-    rate.cost,
-    rate.price,
-    fallback,
-  ) ?? fallback;
+  return normalizeShippingRateMoney(rate).selectedRateCost ?? directFiniteAmount(rate.cost, rate.price, fallback) ?? fallback;
 }
 
 function toDirectRate(
@@ -1894,12 +1845,8 @@ function toDirectRate(
     cost: rawShippingCost,
     rawShippingAmount: rawShippingCost,
     raw_shipping_amount: rawShippingCost,
-    rateCostAmount: rawShippingCost,
-    rate_cost_amount: rawShippingCost,
-    customerRateAmount: amount,
-    customer_rate_amount: amount,
-    customerShippingAmount: amount,
-    customer_shipping_amount: amount,
+    cShippingRateAmount: amount,
+    selectedRateCost: rawShippingCost,
     shipping_amount: { amount, currency: String(rate.currency ?? 'USD') },
     other_amount: { amount: Number(rate.otherCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },
     confirmation_amount: { amount: Number(rate.confirmationCost ?? 0) || 0, currency: String(rate.currency ?? 'USD') },

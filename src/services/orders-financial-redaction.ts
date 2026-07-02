@@ -1,18 +1,19 @@
 // Canonical owner of ORDER FINANCIAL REDACTION for non-financial / client_user (portal)
-// sessions. Extracted from src/routes/orders.ts so it is PURE (zero imports) and can be
+// sessions. Extracted from src/routes/orders.ts so it is PURE and can be
 // proven behaviorally by an offline guard — not just grepped. The route still owns WHO can
 // view financials (canViewOrderFinancials → hasAppPermission); this module owns WHAT gets
 // scrubbed once the answer is "no".
+import {
+  CANONICAL_SHIPPING_RATE_MONEY_KEYS,
+  LEGACY_SHIPPING_RATE_MONEY_KEYS,
+} from './shipping-workflow/shipping-rate-money-normalizer';
 
 // Money-bearing field names nulled anywhere they appear (recursively). houseMargin is the
 // SHIPP house-account margin (PS-220) — INTERNAL, must never reach a client.
 export const RATE_MONEY_FIELD_KEYS = new Set([
   'amount',
-  'customerRateAmount',
-  'rateCostAmount',
-  'houseRateAmount',
-  'shippingMarginAmount',
-  'shippingMarginPct',
+  ...CANONICAL_SHIPPING_RATE_MONEY_KEYS,
+  ...LEGACY_SHIPPING_RATE_MONEY_KEYS,
   'houseApplied',
   'houseBadgeVisible',
   'customerRateSource',

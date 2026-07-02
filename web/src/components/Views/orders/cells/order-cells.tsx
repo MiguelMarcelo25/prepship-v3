@@ -225,9 +225,9 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
   const bestRatePriceDisplay = backendMoney
     ? resolveAwaitingBestRatePriceDisplay({
       markupSource: backendMoney.markupSource,
-      rateCostAmount: backendMoney.rateCostAmount,
+      selectedRateCost: backendMoney.selectedRateCost,
       baseAmount: backendMoney.baseAmount,
-      customerRateAmount: backendMoney.customerRateAmount,
+      cShippingRateAmount: backendMoney.cShippingRateAmount,
       markedAmount: backendMoney.markedAmount,
       insuranceAddOn: backendMoney.insuranceAddOn,
       fallbackAmount: bestRateBaseCost,

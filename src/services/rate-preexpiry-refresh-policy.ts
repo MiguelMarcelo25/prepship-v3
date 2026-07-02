@@ -73,8 +73,8 @@ export function classifyRatePreExpiryRefresh(
   options: PolicyOptions = {},
 ): RatePreExpiryRefreshReason {
   if (!isRecord(rate)) return 'missing_rate';
-  if (rateNumber(rate, 'customerRateAmount', 'customer_rate_amount') == null) return 'incomplete_tuple';
-  if (rateNumber(rate, 'rateCostAmount', 'rate_cost_amount') == null) return 'incomplete_tuple';
+  if (rateNumber(rate, 'cShippingRateAmount') == null) return 'incomplete_tuple';
+  if (rateNumber(rate, 'selectedRateCost') == null) return 'incomplete_tuple';
   if (rate.isComplete !== true && nestedMetadata(rate).isComplete !== true) return 'incomplete_proof';
 
   const proofSource = rateString(rate, 'proofSource');

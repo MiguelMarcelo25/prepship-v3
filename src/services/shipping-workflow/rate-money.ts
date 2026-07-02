@@ -142,14 +142,11 @@ export type OrderRowMoneyDisplay = {
   // margin so display + guards never double-apply. 'house_account' => marked is the customer_rate
   // (next-best non-SHIPP), base is the SHIPP drp_cost, and NO carrier markupRule was applied.
   markupSource: 'carrier_markup' | 'house_account';
-  // PS-356: explicit separated money model. Keep base/marked/markup above as compatibility
-  // aliases while API/UI callers move to these names: C. Shipping Rate = customerRateAmount,
-  // Best/Selected purchase cost = rateCostAmount, Shipping Margin = shippingMarginAmount.
-  // houseRateAmount remains only as a deprecated compatibility alias derived from rateCostAmount
-  // for legacy payloads.
-  customerRateAmount: number | null;
-  rateCostAmount: number | null;
-  houseRateAmount: number | null;
+  // PS-356/PS-367: explicit separated money model. C. Shipping Rate is the customer-billed
+  // amount; selectedRateCost is the selected/purchased label cost; shippingMarginAmount is
+  // cShippingRateAmount - selectedRateCost.
+  cShippingRateAmount: number | null;
+  selectedRateCost: number | null;
   shippingMarginAmount: number | null;
   shippingMarginPct: number | null;
   houseApplied: boolean;
@@ -157,8 +154,8 @@ export type OrderRowMoneyDisplay = {
   customerRateSource:
     | 'best_rate_marked_amount'
     | 'selected_rate_marked_amount'
-    | 'projected_house_customer_rate'
-    | 'realized_house_customer_rate';
+    | 'projected_customer_shipping_rate'
+    | 'realized_customer_shipping_rate';
   rateCostSource:
     | 'best_rate_internal_cost'
     | 'selected_rate_internal_cost'
@@ -195,16 +192,15 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     value != null && Number.isFinite(value) && value > 0 ? value : null;
   const insuranceAddOn = positive(facts.insuranceAddOn);
   const separatedFields = (input: {
-    customerRateAmount: number | null;
-    rateCostAmount: number | null;
+    cShippingRateAmount: number | null;
+    selectedRateCost: number | null;
     houseApplied: boolean;
     customerRateSource: OrderRowMoneyDisplay['customerRateSource'];
     rateCostSource: OrderRowMoneyDisplay['rateCostSource'];
   }): Pick<
     OrderRowMoneyDisplay,
-    | 'customerRateAmount'
-    | 'rateCostAmount'
-    | 'houseRateAmount'
+    | 'cShippingRateAmount'
+    | 'selectedRateCost'
     | 'shippingMarginAmount'
     | 'shippingMarginPct'
     | 'houseApplied'
@@ -212,20 +208,22 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     | 'customerRateSource'
     | 'rateCostSource'
   > => {
-    const customerRateAmount = positive(input.customerRateAmount);
-    const rateCostAmount = positive(input.rateCostAmount);
+    const cShippingRateAmount = positive(input.cShippingRateAmount);
+    const selectedRateCost = positive(input.selectedRateCost);
     const shippingMarginAmount =
-      customerRateAmount != null && rateCostAmount != null
-        ? Math.max(0, round2(customerRateAmount - rateCostAmount))
+      cShippingRateAmount != null && selectedRateCost != null
+        ? round2(cShippingRateAmount - selectedRateCost)
         : null;
     return {
-      customerRateAmount: customerRateAmount != null ? round2(customerRateAmount) : null,
-      rateCostAmount: rateCostAmount != null ? round2(rateCostAmount) : null,
-      houseRateAmount: input.houseApplied && rateCostAmount != null ? round2(rateCostAmount) : null,
+      cShippingRateAmount: cShippingRateAmount != null ? round2(cShippingRateAmount) : null,
+      selectedRateCost: selectedRateCost != null ? round2(selectedRateCost) : null,
       shippingMarginAmount,
       shippingMarginPct:
-        shippingMarginAmount != null && shippingMarginAmount >= 0.005 && customerRateAmount != null && customerRateAmount > 0
-          ? Math.round((shippingMarginAmount / customerRateAmount) * 1000) / 10
+        shippingMarginAmount != null &&
+        Math.abs(shippingMarginAmount) >= 0.005 &&
+        cShippingRateAmount != null &&
+        cShippingRateAmount > 0
+          ? Math.round((shippingMarginAmount / cShippingRateAmount) * 1000) / 10
           : null,
       houseApplied: input.houseApplied,
       houseBadgeVisible: input.houseApplied,
@@ -252,10 +250,10 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       source: facts.isAwaiting ? 'best_rate' : 'selected_rate',
       markupSource: 'house_account',
       ...separatedFields({
-        customerRateAmount: houseMarked,
-        rateCostAmount: base,
+        cShippingRateAmount: houseMarked,
+        selectedRateCost: base,
         houseApplied: true,
-        customerRateSource: facts.isAwaiting ? 'projected_house_customer_rate' : 'realized_house_customer_rate',
+        customerRateSource: facts.isAwaiting ? 'projected_customer_shipping_rate' : 'realized_customer_shipping_rate',
         rateCostSource: 'shipp_house_internal_cost',
       }),
     };
@@ -278,8 +276,8 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       source: 'best_rate',
       markupSource: 'carrier_markup',
       ...separatedFields({
-        customerRateAmount: marked,
-        rateCostAmount: base,
+        cShippingRateAmount: marked,
+        selectedRateCost: base,
         houseApplied: false,
         customerRateSource: 'best_rate_marked_amount',
         rateCostSource: 'best_rate_internal_cost',
@@ -306,8 +304,8 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     source: 'selected_rate',
     markupSource: 'carrier_markup',
     ...separatedFields({
-      customerRateAmount: marked,
-      rateCostAmount: markupBasis,
+      cShippingRateAmount: marked,
+      selectedRateCost: markupBasis,
       houseApplied: false,
       customerRateSource: 'selected_rate_marked_amount',
       rateCostSource: base != null ? 'selected_rate_internal_cost' : 'label_final_cost',

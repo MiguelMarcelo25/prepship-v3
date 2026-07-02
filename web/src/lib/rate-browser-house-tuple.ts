@@ -27,13 +27,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 export function houseTuplePassThrough(rate: unknown): {
   nextBestNonHouseRate: unknown;
   houseMargin: number | null;
-  houseRateAmount: number | null;
 } {
   const obj = asRecord(rate);
   const nextBestNonHouseRate = obj?.nextBestNonHouseRate ?? null;
   const houseMargin = obj && typeof obj.houseMargin === 'number' ? obj.houseMargin : null;
-  const houseRateAmount = obj && typeof obj.houseRateAmount === 'number' ? obj.houseRateAmount : null;
-  return { nextBestNonHouseRate, houseMargin, houseRateAmount };
+  return { nextBestNonHouseRate, houseMargin };
 }
 
 // Rate Browser apply path: lift the house tuple onto the applied rate ONLY when the applied row IS
@@ -44,7 +42,7 @@ export function houseTuplePassThrough(rate: unknown): {
 export function houseTupleForRow(
   row: unknown,
   canonicalBest: unknown,
-): { nextBestNonHouseRate?: unknown; houseMargin?: number | null; houseRateAmount?: number | null } {
+): { nextBestNonHouseRate?: unknown; houseMargin?: number | null } {
   const best = asRecord(canonicalBest);
   const r = asRecord(row);
   if (!best || !r) return {};
@@ -55,7 +53,6 @@ export function houseTupleForRow(
   return {
     nextBestNonHouseRate: best.nextBestNonHouseRate,
     houseMargin: typeof best.houseMargin === 'number' ? best.houseMargin : null,
-    houseRateAmount: typeof best.houseRateAmount === 'number' ? best.houseRateAmount : null,
   };
 }
 

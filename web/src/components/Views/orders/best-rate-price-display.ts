@@ -2,9 +2,9 @@ export type AwaitingBestRateMarkupSource = 'house_account' | 'carrier_markup'
 
 export type AwaitingBestRatePriceDisplayInput = {
   markupSource: AwaitingBestRateMarkupSource
-  rateCostAmount: number | null | undefined
+  selectedRateCost: number | null | undefined
   baseAmount: number | null | undefined
-  customerRateAmount: number | null | undefined
+  cShippingRateAmount: number | null | undefined
   markedAmount: number | null | undefined
   insuranceAddOn: number | null | undefined
   fallbackAmount: number | null | undefined
@@ -29,9 +29,9 @@ function hasVisibleMarkup(baseAmount: number | null, primaryAmount: number | nul
 export function resolveAwaitingBestRatePriceDisplay(
   input: AwaitingBestRatePriceDisplayInput,
 ): AwaitingBestRatePriceDisplay {
-  const purchaseAmount = finiteAmount(input.rateCostAmount) ?? finiteAmount(input.baseAmount)
+  const purchaseAmount = finiteAmount(input.selectedRateCost) ?? finiteAmount(input.baseAmount)
   const customerAmount =
-    finiteAmount(input.customerRateAmount) ??
+    finiteAmount(input.cShippingRateAmount) ??
     finiteAmount(input.markedAmount) ??
     purchaseAmount ??
     finiteAmount(input.fallbackAmount)

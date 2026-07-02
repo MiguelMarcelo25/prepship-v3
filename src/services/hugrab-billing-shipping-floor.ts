@@ -215,7 +215,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
             src.cost,
             src.label_cost,
             max(case
-              when j.key in ('shipmentCost', 'shipment_cost', 'labelCost', 'label_cost', 'rateCostAmount')
+              when j.key in ('selectedRateCost', 'shipmentCost', 'shipment_cost', 'labelCost', 'label_cost')
                 and (j.value #>> '{}') ~ '^-?[0-9]+(\\.[0-9]+)?$'
               then (j.value #>> '{}')::numeric
               else null

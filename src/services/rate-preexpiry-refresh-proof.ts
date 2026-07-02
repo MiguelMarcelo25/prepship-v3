@@ -62,8 +62,8 @@ function readTupleNumber(rate: unknown, ...keys: string[]): number | null {
 
 function hasCustomerAndCostTuple(rate: unknown): boolean {
   return (
-    readTupleNumber(rate, 'customerRateAmount', 'customer_rate_amount') != null &&
-    readTupleNumber(rate, 'rateCostAmount', 'rate_cost_amount') != null
+    readTupleNumber(rate, 'cShippingRateAmount') != null &&
+    readTupleNumber(rate, 'selectedRateCost') != null
   );
 }
 

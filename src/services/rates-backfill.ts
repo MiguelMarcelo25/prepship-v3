@@ -490,8 +490,8 @@ async function runBackfill(
         or nullif(${orderOverrides.bestRateJson}->>'cacheKey', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'rateQuoteId', '') is null
         or nullif(${orderOverrides.bestRateJson}->>'selectedRateKey', '') is null
-        or nullif(coalesce(${orderOverrides.bestRateJson}->>'customerRateAmount', ${orderOverrides.bestRateJson}->>'customer_rate_amount'), '') is null
-        or nullif(coalesce(${orderOverrides.bestRateJson}->>'rateCostAmount', ${orderOverrides.bestRateJson}->>'rate_cost_amount'), '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'cShippingRateAmount', '') is null
+        or nullif(${orderOverrides.bestRateJson}->>'selectedRateCost', '') is null
       )
     )`;
     const needsRatePredicate = staleCutoff

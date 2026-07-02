@@ -142,7 +142,7 @@ export function getSortValue(
       return getBestRateFinalBaseCost(order) ?? -1
     // PS-356: sort by the backend customer billing amount (blanks/non-financial → -1).
     case 'ratecost':
-      return getBackendRowMoney(order)?.customerRateAmount ?? -1
+      return getBackendRowMoney(order)?.cShippingRateAmount ?? -1
     case 'margin': {
       // PS-178 final part: the margin sort value is the BACKEND money tuple's
       // markupAmount (PS-177) — the FE markup-math fallback is deleted. Rows

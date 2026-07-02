@@ -286,9 +286,9 @@ export function OrdersDetailSidePanel({
   const sidePanelBestRatePriceDisplay = sidePanelBackendMoney
     ? resolveAwaitingBestRatePriceDisplay({
       markupSource: sidePanelBackendMoney.markupSource,
-      rateCostAmount: sidePanelBackendMoney.rateCostAmount,
+      selectedRateCost: sidePanelBackendMoney.selectedRateCost,
       baseAmount: sidePanelBackendMoney.baseAmount,
-      customerRateAmount: sidePanelBackendMoney.customerRateAmount,
+      cShippingRateAmount: sidePanelBackendMoney.cShippingRateAmount,
       markedAmount: sidePanelBackendMoney.markedAmount,
       insuranceAddOn: sidePanelBackendMoney.insuranceAddOn,
       fallbackAmount: getBestRateBaseCost(panelDisplayOrder),

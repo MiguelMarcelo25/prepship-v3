@@ -10,13 +10,13 @@
 //     rate for non-baseline carriers under reference_rate mode, then the carrier markup (pct + flat).
 //
 // Pure: numbers/bools in, decision out. The caller (billing.ts) still derives the inputs
-// (toNum, SS_BASELINE_CARRIER_CODES.has, the houseCustomerRate map) and builds the row.
+// (toNum, SS_BASELINE_CARRIER_CODES.has, the C. Shipping Rate map) and builds the row.
 
 export type ShippingLineBillingInput = {
   /** drp_cost: synced shipment cost (+ otherCost). Always the carrier-path basis. */
   labelCost: number;
-  /** captured customer_rate for an opted-in SHIPP house order; null/undefined => carrier path. */
-  houseCustomerRate: number | null | undefined;
+  /** captured C. Shipping Rate for an opted-in SHIPP order; null/undefined => carrier path. */
+  cShippingRateAmount?: number | null | undefined;
   billingMode: string | null | undefined;
   /** true when the carrier IS an SS baseline carrier (reference-rate flooring then does NOT apply). */
   isBaselineCarrier: boolean;
@@ -29,23 +29,24 @@ export type ShippingLineBillingInput = {
 export type ShippingLineBillingResult = {
   /** the amount to bill (raw; caller applies .toFixed(2), matching prior behavior). */
   billedAmount: number;
-  source: 'house_customer_rate' | 'reference_rate' | 'label_cost';
+  source: 'c_shipping_rate' | 'reference_rate' | 'label_cost';
   markupApplied: boolean;
   /** description suffix: '' for house/no-markup; ' (P% + $F.FF)' when a carrier markup applies. */
   descriptionSuffix: string;
 };
 
 export function decideShippingLineBilling(input: ShippingLineBillingInput): ShippingLineBillingResult {
+  const cShippingRateAmount = input.cShippingRateAmount;
   // HOUSE: bill the captured customer_rate; markup + reference-rate suppressed. Floor at the SHIPP
   // drp_cost (labelCost) so a house order can NEVER bill below DRP's own cost — the margin>=0 invariant
   // (enforced by the order_competitive_rate CHECK and the capture clamp) held at the money-commit point.
   // Under the model this is a no-op (SHIPP won => customer_rate >= drp_cost); it only guards a stale/forged
   // customer_rate below cost. labelCost <= 0 (unknown cost) leaves the customer_rate untouched.
-  if (input.houseCustomerRate != null) {
-    const floor = input.labelCost > 0 ? input.labelCost : input.houseCustomerRate;
+  if (cShippingRateAmount != null) {
+    const floor = input.labelCost > 0 ? input.labelCost : cShippingRateAmount;
     return {
-      billedAmount: Math.max(input.houseCustomerRate, floor),
-      source: 'house_customer_rate',
+      billedAmount: Math.max(cShippingRateAmount, floor),
+      source: 'c_shipping_rate',
       markupApplied: false,
       descriptionSuffix: '',
     };

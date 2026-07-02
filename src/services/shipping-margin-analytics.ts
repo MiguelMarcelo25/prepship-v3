@@ -19,7 +19,7 @@ export type ShippingMarginActualCostSource =
   | 'missing';
 export type ShippingMarginBillableSource =
   | 'billing_line_items.shipping.total_cost'
-  | 'order_competitive_rate.customer_rate'
+  | 'order_competitive_rate.customer_shipping_rate'
   | 'projected.billing_policy'
   | 'missing';
 export type ShippingMarginMissingProofReason =
@@ -45,7 +45,7 @@ export type ShippingMarginInputRow = {
   billingTotalCost: string | number | null;
   projectedBillableAmount: string | number | null;
   projectedBillableSource: ShippingMarginBillableSource | null;
-  houseCustomerRate: string | number | null;
+  cShippingRateAmount: string | number | null;
   // PS-296: carrier/service/account identity for the breakdown + provider filter.
   carrierCode: string | null;
   serviceCode: string | null;
@@ -70,7 +70,7 @@ export type ShippingMarginRow = {
   marginAmount: number | null;
   marginPct: number | null;
   billingLineItemId: number | null;
-  houseCustomerRate: number | null;
+  cShippingRateAmount: number | null;
   missingProofReasons: ShippingMarginMissingProofReason[];
   // PS-296: carrier/service/account identity (display-safe; no technical secrets).
   carrierCode: string | null;
@@ -214,11 +214,11 @@ function resolveBillable(row: ShippingMarginInputRow): {
     };
   }
 
-  const houseCustomerRate = numberOrNull(row.houseCustomerRate);
-  if (houseCustomerRate != null) {
+  const cShippingRateAmount = numberOrNull(row.cShippingRateAmount);
+  if (cShippingRateAmount != null) {
     return {
-      amount: money(houseCustomerRate),
-      source: 'order_competitive_rate.customer_rate',
+      amount: money(cShippingRateAmount),
+      source: 'order_competitive_rate.customer_shipping_rate',
       state: 'projected',
     };
   }
@@ -274,7 +274,7 @@ export function buildShippingMarginRow(row: ShippingMarginInputRow): ShippingMar
     marginAmount: margin,
     marginPct: margin != null && actual.amount != null ? percent(margin, actual.amount) : null,
     billingLineItemId: intOrNull(row.billingLineItemId),
-    houseCustomerRate: numberOrNull(row.houseCustomerRate),
+    cShippingRateAmount: numberOrNull(row.cShippingRateAmount),
     missingProofReasons,
     carrierCode: row.carrierCode?.trim() || null,
     serviceCode: row.serviceCode?.trim() || null,
@@ -478,7 +478,7 @@ export async function shippingMarginAnalytics(
       bli.billing_total_cost as "billingTotalCost",
       null::numeric as "projectedBillableAmount",
       null::text as "projectedBillableSource",
-      ${orderCompetitiveRate.customerRate}::text as "houseCustomerRate",
+      ${orderCompetitiveRate.customerRate}::text as "cShippingRateAmount",
       ${shipments.carrierCode} as "carrierCode",
       ${shipments.serviceCode} as "serviceCode",
       ${shipments.trackingNumber} as "trackingNumber",

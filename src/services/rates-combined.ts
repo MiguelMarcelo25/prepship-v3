@@ -18,6 +18,7 @@
  * fixture and the incomplete-on-direct-error rule against it directly.
  */
 import type { BestRateWorkflowCarrierStatus } from './shipping-workflow/best-rate-workflow-dto';
+import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 
 type MoneyAmount = { amount?: number };
 
@@ -27,22 +28,8 @@ export type CombinableRate = Record<string, any> & {
   other_amount?: MoneyAmount;
   confirmation_amount?: MoneyAmount;
   insurance_amount?: MoneyAmount;
-  customerShippingAmount?: number | string | null;
-  customer_shipping_amount?: number | string | null;
-  customerChargeAmount?: number | string | null;
-  customer_charge_amount?: number | string | null;
-  customerRateAmount?: number | string | null;
-  customer_rate_amount?: number | string | null;
-  rateCostAmount?: number | string | null;
-  rate_cost_amount?: number | string | null;
-  rawShippingAmount?: number | string | null;
-  raw_shipping_amount?: number | string | null;
-  internalShippingAmount?: number | string | null;
-  internal_shipping_amount?: number | string | null;
-  markedShippingAmount?: number | string | null;
-  marked_shipping_amount?: number | string | null;
-  billableShippingAmount?: number | string | null;
-  billable_shipping_amount?: number | string | null;
+  cShippingRateAmount?: number | string | null;
+  selectedRateCost?: number | string | null;
 };
 
 export type CombinableSsDiagnostic = {
@@ -97,65 +84,13 @@ export type CombinedRateSelection = {
   bestRateThin: boolean;
 };
 
-/** The C. Shipping total billed to the customer. Not the official Best Rate pick basis. */
-function finiteAmount(value: unknown): number | null {
-  if (value == null || value === '') return null;
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount : null;
-}
-
-function firstFiniteAmount(...values: unknown[]): number | null {
-  for (const value of values) {
-    const amount = finiteAmount(value);
-    if (amount != null) return amount;
-  }
-  return null;
-}
-
-function customerShippingAmount(rate: CombinableRate): number | null {
-  return firstFiniteAmount(
-    rate.customerShippingAmount,
-    rate.customer_shipping_amount,
-    rate.customerChargeAmount,
-    rate.customer_charge_amount,
-    rate.customerRateAmount,
-    rate.customer_rate_amount,
-    rate.markedShippingAmount,
-    rate.marked_shipping_amount,
-    rate.billableShippingAmount,
-    rate.billable_shipping_amount,
-  );
-}
-
-function internalShippingCost(rate: CombinableRate): number | null {
-  return firstFiniteAmount(
-    rate.rateCostAmount,
-    rate.rate_cost_amount,
-    rate.rawShippingAmount,
-    rate.raw_shipping_amount,
-    rate.internalShippingAmount,
-    rate.internal_shipping_amount,
-    rate.cost,
-  );
-}
-
 export function rateTotal(rate: CombinableRate): number {
-  return (
-    Number(customerShippingAmount(rate) ?? rate.shipping_amount?.amount ?? 0) +
-    Number(rate.other_amount?.amount ?? 0) +
-    Number(rate.confirmation_amount?.amount ?? 0) +
-    Number(rate.insurance_amount?.amount ?? 0)
-  );
+  return normalizeShippingRateMoney(rate).cShippingRateAmount ?? 0;
 }
 
 /** Internal carrier cost total. Used for the lower/admin cost line, not the primary Best Rate pick basis. */
 export function rateCostTotal(rate: CombinableRate): number {
-  return (
-    Number(internalShippingCost(rate) ?? rate.shipping_amount?.amount ?? 0) +
-    Number(rate.other_amount?.amount ?? 0) +
-    Number(rate.confirmation_amount?.amount ?? 0) +
-    Number(rate.insurance_amount?.amount ?? 0)
-  );
+  return normalizeShippingRateMoney(rate).selectedRateCost ?? 0;
 }
 
 /**
@@ -180,7 +115,7 @@ export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[
     const key = [
       String(rate.carrier_id ?? rate.carrierId ?? '').toLowerCase(),
       String(rate.service_code ?? rate.serviceCode ?? rate.service ?? '').toLowerCase(),
-      Number(customerShippingAmount(rate) ?? rate.shipping_amount?.amount ?? rate.shipmentCost ?? rate.cost ?? rate.amount ?? 0).toFixed(4),
+      Number(rateTotal(rate)).toFixed(4),
       Number(rate.other_amount?.amount ?? rate.otherCost ?? 0).toFixed(4),
       String(rate.requestFingerprint ?? rate.cacheKey ?? ''),
     ].join('|');

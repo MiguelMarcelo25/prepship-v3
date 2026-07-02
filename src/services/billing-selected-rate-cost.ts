@@ -1,3 +1,5 @@
+import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
+
 export type BillingSelectedRateCostInput = {
   cost?: unknown;
   labelCost?: unknown;
@@ -39,10 +41,10 @@ export function resolveBillingSelectedRateCost(input: BillingSelectedRateCostInp
   const postageCost =
     toFiniteNumber(input.cost) ??
     toFiniteNumber(input.labelCost) ??
-    firstNumber(selectedRate, ['shipmentCost', 'shipment_cost', 'labelCost', 'label_cost', 'rateCostAmount']);
+    firstNumber(selectedRate, ['shipmentCost', 'shipment_cost', 'labelCost', 'label_cost']);
 
   if (postageCost != null) return roundCents(postageCost + otherCost);
 
-  const selectedTotal = firstNumber(selectedRate, ['totalCost', 'total_cost']);
+  const selectedTotal = normalizeShippingRateMoney(selectedRate).selectedRateCost;
   return selectedTotal != null ? roundCents(selectedTotal) : null;
 }

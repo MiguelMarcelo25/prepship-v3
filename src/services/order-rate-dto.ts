@@ -33,6 +33,7 @@ import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label
 // re-deriving the block-list reason client-side. Inert (UNBLOCKED) until a caller passes ctx.eligibility.
 import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibility-stamp';
 import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
+import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 // PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
 // (the route has client opt-in + the raw provider); persisted into best_rate_json and round-tripped
 // here so the awaiting row renders 'House rate needs refresh' verbatim instead of a plain SHIPP amount.
@@ -81,13 +82,9 @@ export interface OrderBestRateDto {
   // normalizeOrderBestRateDto is a whitelist with no spread, so a bare best_rate_json key is dropped.
   nextBestNonHouseRate: NextBestNonHouseRateDto | null;
   houseMargin: number | null;
-  // PS-356: separated rate money model. customerRateAmount is C. Shipping Rate
-  // (customer billing); rateCostAmount is Best/Selected purchase cost. houseRateAmount
-  // is a deprecated compatibility alias derived from rateCostAmount only; it is not a
-  // separate SOT or visible operator column.
-  customerRateAmount: number | null;
-  rateCostAmount: number | null;
-  houseRateAmount: number | null;
+  // PS-356/PS-367: separated rate money model.
+  cShippingRateAmount: number | null;
+  selectedRateCost: number | null;
   shippingMarginAmount: number | null;
   shippingMarginPct: number | null;
   houseApplied: boolean | null;
@@ -551,44 +548,18 @@ export function normalizeOrderBestRateDto(
     readNullableNumber(record.totalCost ?? record.total_cost ?? null, `${path}.totalCost`) ?? shipmentCost + otherCost;
   const nextBestNonHouseRate = normalizeNextBestNonHouseRate(record.nextBestNonHouseRate, `${path}.nextBestNonHouseRate`);
   const houseMargin = readNullableNumber(record.houseMargin ?? null, `${path}.houseMargin`);
-  const explicitCustomerRateAmount = readNullableNumber(
-    record.customerRateAmount ?? record.customer_rate_amount ?? null,
-    `${path}.customerRateAmount`,
-  );
-  const explicitRateCostAmount = readNullableNumber(
-    record.rateCostAmount ??
-      record.rate_cost_amount ??
-      record.rawShippingAmount ??
-      record.raw_shipping_amount ??
-      record.internalShippingAmount ??
-      record.internal_shipping_amount ??
-      null,
-    `${path}.rateCostAmount`,
-  );
-  const customerRateAmount = explicitCustomerRateAmount ?? nextBestNonHouseRate?.totalCost ?? totalCost;
-  const rateCostAmount = explicitRateCostAmount ?? totalCost;
-  const explicitShippingMarginAmount = readNullableNumber(
-    record.shippingMarginAmount ?? record.shipping_margin_amount ?? houseMargin ?? null,
-    `${path}.shippingMarginAmount`,
-  );
-  const shippingMarginAmount =
-    explicitShippingMarginAmount ??
-    (customerRateAmount != null && rateCostAmount != null ? Math.max(0, roundMoney(customerRateAmount - rateCostAmount)) : null);
-  const explicitShippingMarginPct = readNullableNumber(
-    record.shippingMarginPct ?? record.shipping_margin_pct ?? null,
-    `${path}.shippingMarginPct`,
-  );
-  const shippingMarginPct =
-    explicitShippingMarginPct ??
-    (shippingMarginAmount != null && shippingMarginAmount >= 0.005 && customerRateAmount != null && customerRateAmount > 0
-      ? roundPercent(shippingMarginAmount / customerRateAmount)
-      : null);
+  const shippingRateMoney = normalizeShippingRateMoney({
+    ...record,
+    shipmentCost,
+    otherCost,
+    cShippingRateAmount: record.cShippingRateAmount ?? nextBestNonHouseRate?.totalCost,
+    selectedRateCost: record.selectedRateCost ?? totalCost,
+  });
   const rawHouseApplied = record.houseApplied ?? record.house_applied ?? null;
   const houseApplied = rawHouseApplied == null ? (houseMargin != null ? true : null) : readBoolean(rawHouseApplied, `${path}.houseApplied`);
   const rawHouseBadgeVisible = record.houseBadgeVisible ?? record.house_badge_visible ?? null;
   const houseBadgeVisible =
     rawHouseBadgeVisible == null ? (houseApplied === true ? true : null) : readBoolean(rawHouseBadgeVisible, `${path}.houseBadgeVisible`);
-  const houseRateAmount = houseApplied === true ? rateCostAmount : null;
   const rate: OrderBestRateDto = {
     serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
     serviceName: readNullableString(
@@ -637,15 +608,16 @@ export function normalizeOrderBestRateDto(
     secondBestRate: normalizeSecondBestRate(record.secondBestRate ?? record.second_best_rate, `${path}.secondBestRate`),
     nextBestNonHouseRate,
     houseMargin,
-    customerRateAmount: customerRateAmount != null ? roundMoney(customerRateAmount) : null,
-    rateCostAmount: rateCostAmount != null ? roundMoney(rateCostAmount) : null,
-    houseRateAmount: houseRateAmount != null ? roundMoney(houseRateAmount) : null,
-    shippingMarginAmount: shippingMarginAmount != null ? roundMoney(shippingMarginAmount) : null,
-    shippingMarginPct,
+    cShippingRateAmount: shippingRateMoney.cShippingRateAmount,
+    selectedRateCost: shippingRateMoney.selectedRateCost,
+    shippingMarginAmount: shippingRateMoney.shippingMarginAmount,
+    shippingMarginPct: shippingRateMoney.shippingMarginPct,
     houseApplied,
     houseBadgeVisible,
     customerRateSource: readNullableString(
-      record.customerRateSource ?? record.customer_rate_source ?? (houseApplied === true ? 'projected_house_customer_rate' : 'best_rate_marked_amount'),
+      record.customerRateSource ??
+        record.customer_rate_source ??
+        (houseApplied === true ? 'projected_customer_shipping_rate' : 'best_rate_marked_amount'),
       `${path}.customerRateSource`,
     ),
     rateCostSource: readNullableString(

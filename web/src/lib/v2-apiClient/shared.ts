@@ -1003,9 +1003,8 @@ export function translateRateToLegacyDisplayShape(r: unknown): Record<string, un
       // level so the FE save path persists it and the row/Rate-Browser can render the two-tier
       // display. Pass-through ONLY (backend nulls it for non-financial viewers before it gets here).
       ...houseTuplePassThrough(obj),
-      customerRateAmount: obj.customerRateAmount ?? null,
-      rateCostAmount: obj.rateCostAmount ?? null,
-      houseRateAmount: obj.houseRateAmount ?? null,
+      cShippingRateAmount: obj.cShippingRateAmount ?? null,
+      selectedRateCost: obj.selectedRateCost ?? null,
       shippingMarginAmount: obj.shippingMarginAmount ?? null,
       raw: obj,
     };

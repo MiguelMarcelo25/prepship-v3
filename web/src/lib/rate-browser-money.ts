@@ -30,43 +30,14 @@ function roundMoney(value: number): number {
 
 export function rateBrowserCustomerAmount(rate: unknown): number {
   const record = asRecord(rate);
-  const raw = rawRecord(record);
-  const amount = firstFiniteNumber(
-    record?.customerRateAmount,
-    record?.customer_rate_amount,
-    raw?.customerRateAmount,
-    raw?.customer_rate_amount,
-    record?.amount,
-    raw?.amount,
-    record?.totalCost,
-    raw?.totalCost,
-    raw?.total_cost,
-  ) ?? 0;
+  const amount = readFiniteNumber(record?.cShippingRateAmount) ?? 0;
   return roundMoney(amount);
 }
 
 export function rateBrowserRateCostAmount(rate: unknown): number {
   const record = asRecord(rate);
-  const raw = rawRecord(record);
-  const amount = firstFiniteNumber(
-    record?.rateCostAmount,
-    record?.rate_cost_amount,
-    raw?.rateCostAmount,
-    raw?.rate_cost_amount,
-  ) ?? rateBrowserCustomerAmount(rate);
+  const amount = readFiniteNumber(record?.selectedRateCost) ?? rateBrowserCustomerAmount(rate);
   return roundMoney(amount);
-}
-
-export function rateBrowserHouseAmount(rate: unknown): number | null {
-  const record = asRecord(rate);
-  const raw = rawRecord(record);
-  const amount = firstFiniteNumber(
-    record?.houseRateAmount,
-    record?.house_rate_amount,
-    raw?.houseRateAmount,
-    raw?.house_rate_amount,
-  );
-  return amount == null ? null : roundMoney(amount);
 }
 
 function backendDisplayRank(rate: unknown): number | null {
