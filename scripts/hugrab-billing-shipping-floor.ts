@@ -10,6 +10,7 @@
  *   npx tsx scripts/hugrab-billing-shipping-floor.ts
  *   npx tsx scripts/hugrab-billing-shipping-floor.ts --date-from=2026-07-01 --date-to=2026-07-03
  *   npx tsx scripts/hugrab-billing-shipping-floor.ts --apply --date-from=2026-07-01 --date-to=2026-07-03
+ *   npx tsx scripts/hugrab-billing-shipping-floor.ts --revert --expect=465 --apply
  */
 
 const CLIENT_NAME = 'HUGRAB';
@@ -56,6 +57,16 @@ function positiveInt(name: string, fallback: number): number {
   return parsed;
 }
 
+function optionalPositiveInt(name: string): number | null {
+  const raw = argValue(name);
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`--${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function money(value: unknown): string {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? `$${parsed.toFixed(2)}` : '$0.00';
@@ -71,10 +82,14 @@ Dry-run:
 Apply:
   npx tsx scripts/hugrab-billing-shipping-floor.ts --apply
 
+Revert the floor back to Selected Rate:
+  npx tsx scripts/hugrab-billing-shipping-floor.ts --revert --expect=465 --apply
+
 Optional:
   --date-from=YYYY-MM-DD   only billing ship_date on/after this date
   --date-to=YYYY-MM-DD     only billing ship_date before this date
   --limit=5000             max rows to inspect/update
+  --expect=465             abort apply/revert unless the row count matches
 
 Rule:
   client = ${CLIENT_NAME}
@@ -93,9 +108,11 @@ async function main(): Promise<void> {
   }
 
   const apply = hasFlag('apply');
+  const revert = hasFlag('revert');
   const dateFrom = isoOrNull('date-from');
   const dateTo = isoOrNull('date-to');
   const limit = positiveInt('limit', DEFAULT_LIMIT);
+  const expectCount = optionalPositiveInt('expect');
   const { sql } = await import('../src/db/client');
 
   const candidates = await sql<CandidateRow[]>`
@@ -185,16 +202,26 @@ async function main(): Promise<void> {
     from priced_rows
     where selected_rate_cost is not null
       and selected_rate_cost < ${SELECTED_RATE_BELOW}
-      and abs(current_shipping::numeric - ${TARGET_SHIPPING}) > 0.004
+      and (
+        case
+          when ${revert}::boolean
+            then abs(current_shipping::numeric - ${TARGET_SHIPPING}) <= 0.004
+              and abs(current_shipping::numeric - selected_rate_cost) > 0.004
+          else abs(current_shipping::numeric - ${TARGET_SHIPPING}) > 0.004
+        end
+      )
     order by ship_date desc nulls last, billing_line_id desc
     limit ${limit}
   `;
 
   const currentTotal = candidates.reduce((sum, row) => sum + Number(row.current_shipping), 0);
-  const newTotal = candidates.length * TARGET_SHIPPING;
+  const newTotal = candidates.reduce(
+    (sum, row) => sum + (revert ? Number(row.selected_rate_cost) : TARGET_SHIPPING),
+    0,
+  );
   const delta = newTotal - currentTotal;
 
-  console.log(`${apply ? 'APPLY' : 'DRY RUN'}: ${CLIENT_NAME} billing shipping floor`);
+  console.log(`${apply ? 'APPLY' : 'DRY RUN'}: ${CLIENT_NAME} billing shipping ${revert ? 'floor revert' : 'floor'}`);
   console.log(`Rows matched: ${candidates.length}`);
   console.log(`Current shipping total: ${money(currentTotal)}`);
   console.log(`New shipping total:     ${money(newTotal)}`);
@@ -209,7 +236,7 @@ async function main(): Promise<void> {
       shipDate: row.ship_date,
       selectedRate: money(row.selected_rate_cost),
       from: money(row.current_shipping),
-      to: money(TARGET_SHIPPING),
+      to: money(revert ? row.selected_rate_cost : TARGET_SHIPPING),
     })),
   );
   if (candidates.length > 25) {
@@ -222,21 +249,38 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (expectCount !== null && candidates.length !== expectCount) {
+    console.log(
+      `\nRefusing to update: --expect=${expectCount}, but matched ${candidates.length} row(s).`,
+    );
+    await sql.end({ timeout: 5 });
+    process.exit(1);
+  }
+
   if (!candidates.length) {
     console.log('\nNothing to update.');
     await sql.end({ timeout: 5 });
     return;
   }
 
-  const ids = candidates.map((row) => row.billing_line_id);
-  const updated = await sql<{ id: number }[]>`
-    update billing_line_items
-       set unit_cost = ${TARGET_SHIPPING.toFixed(2)}::numeric,
-           total_cost = ${TARGET_SHIPPING.toFixed(2)}::numeric
-     where id = any(${ids})
-     returning id
-  `;
-  console.log(`\nUpdated ${updated.length} billing shipping row(s) to ${money(TARGET_SHIPPING)}.`);
+  const updated = await sql.begin(async (tx) => {
+    const ids: number[] = [];
+    for (const row of candidates) {
+      const amount = revert ? Number(row.selected_rate_cost) : TARGET_SHIPPING;
+      const rows = await tx<{ id: number }[]>`
+        update billing_line_items
+           set unit_cost = ${amount.toFixed(2)}::numeric,
+               total_cost = ${amount.toFixed(2)}::numeric
+         where id = ${row.billing_line_id}
+         returning id
+      `;
+      ids.push(...rows.map((updatedRow) => updatedRow.id));
+    }
+    return ids;
+  });
+  console.log(
+    `\nUpdated ${updated.length} billing shipping row(s) ${revert ? 'back to Selected Rate' : `to ${money(TARGET_SHIPPING)}`}.`,
+  );
   await sql.end({ timeout: 5 });
 }
 
