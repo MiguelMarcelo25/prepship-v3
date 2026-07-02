@@ -161,6 +161,7 @@ const SUMMARY_COL_COUNT = 8
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 const BILLING_CLIENT_FILTER_STORAGE_KEY = 'billing_summary_client_filter_v1'
 const BILLING_GENERATE_BATCH_DAYS = 7
+const BILLING_AUTO_UPDATE_MS = 3 * 60_000
 const SHIPSTATION_BILLING_CLIENT_NAMES = [
   'eBay - DJC',
   'Heritage Kids Press',
@@ -317,6 +318,8 @@ export default function BillingView() {
   const initialRange = getBillingInitialRange(typeof window === 'undefined' ? new Date('2026-03-22T00:00:00Z') : new Date())
   const detailWrapRef = useRef<HTMLDivElement | null>(null)
   const fetchRefPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const billingUpdateRunningRef = useRef(false)
+  const autoBillingUpdateRef = useRef<() => void>(() => {})
 
   const [configs, setConfigs] = useState<BillingConfigDto[]>([])
   const [configDrafts, setConfigDrafts] = useState<Record<number, BillingConfigDraft>>({})
@@ -631,6 +634,18 @@ export default function BillingView() {
     }
   }, [])
 
+  autoBillingUpdateRef.current = () => {
+    void handleGenerateBilling({ silent: true })
+  }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const timer = window.setInterval(() => {
+      autoBillingUpdateRef.current()
+    }, BILLING_AUTO_UPDATE_MS)
+    return () => window.clearInterval(timer)
+  }, [])
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(getBillingDetailColumnStorageKey(), JSON.stringify(detailColumnIds))
@@ -918,22 +933,36 @@ export default function BillingView() {
     }
   }
 
-  async function handleGenerateBilling(forceRegenerate = false) {
+  async function handleGenerateBilling(options: boolean | { silent?: boolean } = false) {
+    const forceRegenerate = typeof options === 'boolean' ? options : false
+    const silent = typeof options === 'object' && options.silent === true
+    const setStatus = (message: string) => {
+      if (!silent) setGenerateStatus(message)
+    }
+
     if (!from || !to) {
-      toastContext?.addToast('Select a date range first', 'error')
+      if (!silent) toastContext?.addToast('Select a date range first', 'error')
       return
     }
 
     if (forceRegenerate && regenerateRangeBlocked) {
-      toastContext?.addToast('Regenerate Range is limited to 120 days. Use Update Billing for All/history.', 'error')
+      if (!silent) toastContext?.addToast('Regenerate Range is limited to 120 days. Use Update Billing for All/history.', 'error')
       return
     }
+
+    if (billingUpdateRunningRef.current) {
+      return
+    }
+
+    billingUpdateRunningRef.current = true
 
     // The Regenerate confirmation is now handled by the styled ConfirmModal (regenerateConfirmOpen),
     // which only calls this with forceRegenerate=true AFTER the operator confirms.
 
-    setGenerateLoading(true)
-    setGenerateStatus('')
+    if (!silent) {
+      setGenerateLoading(true)
+      setGenerateStatus('')
+    }
 
     try {
       const targetClientIds = billingClientFilterActive
@@ -952,7 +981,7 @@ export default function BillingView() {
           let batchTo = to
 
           if (!forceRegenerate) {
-            setGenerateStatus(`Checking ${clientName} (${index + 1}/${targetClientIds.length})...`)
+            setStatus(`Checking ${clientName} (${index + 1}/${targetClientIds.length})...`)
             const status = await apiClient.fetchBillingGenerationStatus(from, to, clientId)
             if (status?.upToDate) {
               alreadyCurrent += 1
@@ -971,7 +1000,7 @@ export default function BillingView() {
         for (const plan of batchPlan) {
           for (const batch of plan.batches) {
             step += 1
-            setGenerateStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} ${plan.clientName}: ${batch.from} to ${batch.to} (${step}/${totalSteps})...`)
+            setStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} ${plan.clientName}: ${batch.from} to ${batch.to} (${step}/${totalSteps})...`)
             const result = await apiClient.generateBilling(batch.from, batch.to, plan.clientId)
             generated += Number(result.generated ?? result.count ?? 0)
           }
@@ -981,7 +1010,7 @@ export default function BillingView() {
         let batchTo = to
 
         if (!forceRegenerate) {
-          setGenerateStatus('Checking billing freshness...')
+          setStatus('Checking billing freshness...')
           const status = await apiClient.fetchBillingGenerationStatus(from, to)
           if (status?.upToDate) {
             alreadyCurrent = 1
@@ -993,22 +1022,24 @@ export default function BillingView() {
 
         const batches = alreadyCurrent && !forceRegenerate ? [] : splitBillingRangeIntoBatches(batchFrom, batchTo)
         if (!alreadyCurrent && !batches.length) {
-          toastContext?.addToast('Select a valid billing date range first', 'error')
+          if (!silent) toastContext?.addToast('Select a valid billing date range first', 'error')
           return
         }
 
         for (let index = 0; index < batches.length; index += 1) {
           const batch = batches[index]!
-          setGenerateStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
+          setStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
           const result = await apiClient.generateBilling(batch.from, batch.to)
           generated += Number(result.generated ?? result.count ?? 0)
         }
       }
       const result = { generated }
-      if (generated > 0) {
-        toastContext?.addToast(`Billing ${forceRegenerate ? 'regenerated' : 'updated'}: ${result.generated} line items`, 'success')
-      } else {
-        toastContext?.addToast('Billing is already up to date', 'success')
+      if (!silent) {
+        if (generated > 0) {
+          toastContext?.addToast(`Billing ${forceRegenerate ? 'regenerated' : 'updated'}: ${result.generated} line items`, 'success')
+        } else {
+          toastContext?.addToast('Billing is already up to date', 'success')
+        }
       }
 
       const [rows, marginAnalytics] = await Promise.all([
@@ -1019,7 +1050,7 @@ export default function BillingView() {
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
-      setGenerateStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`)
+      setStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`)
       setSummaryRows(rows)
       setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
       setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
@@ -1034,9 +1065,10 @@ export default function BillingView() {
         await handleLoadDetails(detailTarget.clientId, detailTarget.clientName)
       }
     } catch (error) {
-      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update billing', 'error')
+      if (!silent) toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update billing', 'error')
     } finally {
-      setGenerateLoading(false)
+      billingUpdateRunningRef.current = false
+      if (!silent) setGenerateLoading(false)
     }
   }
 
@@ -1471,10 +1503,6 @@ export default function BillingView() {
           from={from}
           to={to}
           generateLoading={generateLoading}
-          regenerateRangeBlocked={regenerateRangeBlocked}
-          backfillLoading={backfillLoading}
-          fetchRefRunning={fetchRefRunning}
-          fetchRefStatus={fetchRefStatus}
           generateStatus={generateStatus}
           onSelectPreset={(preset) => {
             const range = getBillingPresetRange(preset)
@@ -1491,9 +1519,6 @@ export default function BillingView() {
             setTo(value)
           }}
           onGenerate={() => void handleGenerateBilling()}
-          onRegenerate={() => setRegenerateConfirmOpen(true)}
-          onBackfillRefRates={() => void handleBackfillRefRates()}
-          onFetchRefRates={() => void handleFetchRefRates()}
         />
 
         <BillingClientFilterPanel

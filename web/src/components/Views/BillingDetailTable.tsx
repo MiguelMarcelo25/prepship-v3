@@ -160,8 +160,8 @@ export function BillingDetailTable({
           {detailState.clientName}, but no line items loaded for this date range.
         </div>
         <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-          The summary is likely stale, or billing was mid-regenerate. Click <strong>Update Billing</strong>{' '}
-          (or <strong>Regenerate Range</strong>) to rebuild, then reopen Line Items.
+          The summary is likely stale, or billing was mid-update. Click <strong>Update Billing</strong> to rebuild,
+          then reopen Line Items.
         </div>
       </div>
     )
