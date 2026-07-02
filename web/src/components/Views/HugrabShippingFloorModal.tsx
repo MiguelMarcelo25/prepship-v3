@@ -26,6 +26,15 @@ type HugrabShippingFloorPreview = {
   sampleRows: HugrabShippingFloorPreviewRow[]
 }
 
+const DEFAULT_SELECTED_RATE_BELOW = '7.95'
+const DEFAULT_TARGET_SHIPPING = '7.73'
+
+function parsePositiveMoneyInput(value: string): number | null {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.round(parsed * 100) / 100
+}
+
 export function HugrabShippingFloorModal({
   dateFrom,
   dateTo,
@@ -43,16 +52,46 @@ export function HugrabShippingFloorModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [doneMsg, setDoneMsg] = useState<string | null>(null)
+  const [selectedRateBelowInput, setSelectedRateBelowInput] = useState(DEFAULT_SELECTED_RATE_BELOW)
+  const [targetShippingInput, setTargetShippingInput] = useState(DEFAULT_TARGET_SHIPPING)
 
-  function selectAction(next: HugrabShippingFloorAction) {
-    setAction(next)
+  function resetPreviewState() {
     setPreview(null)
     setConfirmed(false)
     setError(null)
     setDoneMsg(null)
   }
 
+  function selectAction(next: HugrabShippingFloorAction) {
+    setAction(next)
+    resetPreviewState()
+  }
+
+  function updateSelectedRateBelow(value: string) {
+    setSelectedRateBelowInput(value)
+    resetPreviewState()
+  }
+
+  function updateTargetShipping(value: string) {
+    setTargetShippingInput(value)
+    resetPreviewState()
+  }
+
+  function currentParams(): { selectedRateBelow: number; targetShipping: number } | null {
+    const selectedRateBelow = parsePositiveMoneyInput(selectedRateBelowInput)
+    const targetShipping = parsePositiveMoneyInput(targetShippingInput)
+    if (selectedRateBelow == null || targetShipping == null) {
+      setError('Enter positive dollar values for Selected Rate below and Set Shipping to.')
+      setPreview(null)
+      setConfirmed(false)
+      return null
+    }
+    return { selectedRateBelow, targetShipping }
+  }
+
   async function runPreview(nextAction = action) {
+    const params = currentParams()
+    if (!params) return
     setBusy(true)
     setError(null)
     setDoneMsg(null)
@@ -62,6 +101,8 @@ export function HugrabShippingFloorModal({
         action: nextAction,
         dateFrom,
         dateTo,
+        selectedRateBelow: params.selectedRateBelow,
+        targetShipping: params.targetShipping,
       })
       setPreview(result as HugrabShippingFloorPreview)
     } catch (e) {
@@ -81,6 +122,8 @@ export function HugrabShippingFloorModal({
         action: preview.action,
         dateFrom,
         dateTo,
+        selectedRateBelow: preview.selectedRateBelow,
+        targetShipping: preview.targetShipping,
         apply: true,
         expectedCount: preview.count,
       })
@@ -99,6 +142,10 @@ export function HugrabShippingFloorModal({
     busy || doneMsg != null || !preview || preview.action !== action || !confirmed || preview.count === 0
   const actionLabel = action === 'revert' ? 'revert' : 'floor'
   const previewLabel = action === 'revert' ? 'Preview revert' : 'Preview floor'
+  const selectedRateBelow = parsePositiveMoneyInput(selectedRateBelowInput)
+  const targetShipping = parsePositiveMoneyInput(targetShippingInput)
+  const selectedRateBelowLabel = selectedRateBelow == null ? 'threshold' : formatBillingMoney(selectedRateBelow)
+  const targetShippingLabel = targetShipping == null ? 'shipping' : formatBillingMoney(targetShipping)
 
   return (
     <div
@@ -133,7 +180,7 @@ export function HugrabShippingFloorModal({
               disabled={busy}
             >
               <ShieldCheck size={13} aria-hidden="true" />
-              Set $7.73
+              Set {targetShippingLabel}
             </button>
             <button
               type="button"
@@ -146,10 +193,45 @@ export function HugrabShippingFloorModal({
             </button>
           </div>
 
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label className="block text-[11px] font-extrabold uppercase tracking-wide text-ink-3">
+              Selected Rate below
+              <span className="mt-1 flex h-8 items-center rounded-md border border-line bg-surface px-2 text-[12px] font-semibold text-ink focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15">
+                <span className="mr-1 text-ink-3">$</span>
+                <input
+                  data-hugrab-selected-rate-below-input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={selectedRateBelowInput}
+                  onChange={(event) => updateSelectedRateBelow(event.target.value)}
+                  disabled={busy}
+                  className="h-full w-full border-0 bg-transparent p-0 text-[12px] font-semibold text-ink outline-none"
+                />
+              </span>
+            </label>
+            <label className="block text-[11px] font-extrabold uppercase tracking-wide text-ink-3">
+              Set Shipping to
+              <span className="mt-1 flex h-8 items-center rounded-md border border-line bg-surface px-2 text-[12px] font-semibold text-ink focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15">
+                <span className="mr-1 text-ink-3">$</span>
+                <input
+                  data-hugrab-target-shipping-input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={targetShippingInput}
+                  onChange={(event) => updateTargetShipping(event.target.value)}
+                  disabled={busy}
+                  className="h-full w-full border-0 bg-transparent p-0 text-[12px] font-semibold text-ink outline-none"
+                />
+              </span>
+            </label>
+          </div>
+
           <div className="text-[12px] leading-5 text-ink-2">
             {action === 'floor'
-              ? 'Preview HUGRAB shipping rows where Selected Rate is below $7.95, then set Shipping to $7.73.'
-              : 'Preview HUGRAB rows currently at $7.73, then put Shipping back to the Selected Rate.'}
+              ? `Preview HUGRAB shipping rows where Selected Rate is below ${selectedRateBelowLabel}, then set Shipping to ${targetShippingLabel}.`
+              : `Preview HUGRAB rows currently at ${targetShippingLabel}, then put Shipping back to the Selected Rate.`}
           </div>
 
           <button
@@ -214,7 +296,7 @@ export function HugrabShippingFloorModal({
           </button>
           <button className="btn btn-primary btn-sm" type="button" disabled={applyDisabled} onClick={() => void runApply()}>
             {busy && preview ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : null}
-            {action === 'revert' ? 'Revert rows' : 'Apply $7.73'}
+            {action === 'revert' ? 'Revert rows' : `Apply ${preview ? formatBillingMoney(preview.targetShipping) : targetShippingLabel}`}
           </button>
         </div>
       </div>

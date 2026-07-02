@@ -2784,6 +2784,8 @@ export const apiClient = {
     action: 'floor' | 'revert';
     dateFrom: string;
     dateTo: string;
+    selectedRateBelow?: number;
+    targetShipping?: number;
     apply?: boolean;
     expectedCount?: number;
     limit?: number;

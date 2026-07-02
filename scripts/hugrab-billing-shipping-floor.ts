@@ -2,7 +2,8 @@
  * HUGRAB billing shipping floor.
  *
  * Rule: for HUGRAB billing shipping rows, when the backend-derived Selected Rate
- * is below $7.95, set the billed Shipping amount to $7.73.
+ * is below the configured threshold, set the billed Shipping amount to the
+ * configured target.
  *
  * Dry-run by default. Apply/revert requires --expect from a fresh preview.
  *
@@ -15,10 +16,10 @@
 
 import {
   applyHugrabBillingShippingFloor,
+  DEFAULT_HUGRAB_SELECTED_RATE_BELOW,
+  DEFAULT_HUGRAB_TARGET_SHIPPING,
   HUGRAB_BILLING_CLIENT_NAME,
-  HUGRAB_SELECTED_RATE_BELOW,
   HUGRAB_SHIPPING_FLOOR_DEFAULT_LIMIT,
-  HUGRAB_TARGET_SHIPPING,
   HugrabBillingShippingFloorCountMismatchError,
   listHugrabBillingShippingFloorCandidates,
   type HugrabBillingShippingFloorAction,
@@ -66,6 +67,16 @@ function optionalNonnegativeInt(name: string): number | null {
   return parsed;
 }
 
+function optionalPositiveMoney(name: string): number | undefined {
+  const raw = argValue(name);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`--${name} must be a positive money amount`);
+  }
+  return Math.round(parsed * 100) / 100;
+}
+
 function money(value: unknown): string {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? `$${parsed.toFixed(2)}` : '$0.00';
@@ -87,22 +98,26 @@ Revert the floor back to Selected Rate:
 Optional:
   --date-from=YYYY-MM-DD   only billing ship_date on/after this date
   --date-to=YYYY-MM-DD     only billing ship_date before this date
+  --selected-rate-below=7.95  only rows whose Selected Rate is below this amount
+  --target-shipping=7.73      billed Shipping amount to set
   --limit=5000             max rows to inspect/update
   --expect=465             required for apply/revert; aborts unless row count matches
 
 Rule:
   client = ${HUGRAB_BILLING_CLIENT_NAME}
   line_type = shipping
-  selected_rate_cost < ${money(HUGRAB_SELECTED_RATE_BELOW)}
+  selected_rate_cost < ${money(DEFAULT_HUGRAB_SELECTED_RATE_BELOW)}
   current shipping > $0.00
-  current shipping != ${money(HUGRAB_TARGET_SHIPPING)}
-  set unit_cost and total_cost to ${money(HUGRAB_TARGET_SHIPPING)}
+  current shipping != ${money(DEFAULT_HUGRAB_TARGET_SHIPPING)}
+  set unit_cost and total_cost to ${money(DEFAULT_HUGRAB_TARGET_SHIPPING)}
 `);
 }
 
 function printSummary(summary: HugrabBillingShippingFloorPreview, apply: boolean): void {
   console.log(`${apply ? 'APPLY' : 'DRY RUN'}: ${HUGRAB_BILLING_CLIENT_NAME} billing shipping ${summary.action === 'revert' ? 'floor revert' : 'floor'}`);
   console.log(`Rows matched: ${summary.count}`);
+  console.log(`Selected Rate below: ${money(summary.selectedRateBelow)}`);
+  console.log(`Target Shipping:     ${money(summary.targetShipping)}`);
   console.log(`Current shipping total: ${money(summary.currentTotal)}`);
   console.log(`New shipping total:     ${money(summary.newTotal)}`);
   console.log(`Delta:                  ${money(summary.delta)}`);
@@ -134,10 +149,13 @@ async function main(): Promise<void> {
   const action: HugrabBillingShippingFloorAction = hasFlag('revert') ? 'revert' : 'floor';
   const dateFrom = isoOrNull('date-from') ?? new Date('1970-01-01T00:00:00.000Z').toISOString();
   const dateTo = isoOrNull('date-to') ?? new Date('2999-12-31T00:00:00.000Z').toISOString();
+  const selectedRateBelow = optionalPositiveMoney('selected-rate-below');
+  const targetShipping = optionalPositiveMoney('target-shipping');
   const limit = positiveInt('limit', HUGRAB_SHIPPING_FLOOR_DEFAULT_LIMIT);
   const expectedCount = optionalNonnegativeInt('expect');
 
-  const preview = await listHugrabBillingShippingFloorCandidates({ action, dateFrom, dateTo, limit });
+  const floorParams = { selectedRateBelow, targetShipping };
+  const preview = await listHugrabBillingShippingFloorCandidates({ action, dateFrom, dateTo, limit, ...floorParams });
   printSummary(preview, apply);
 
   if (!apply) {
@@ -152,9 +170,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const result = await applyHugrabBillingShippingFloor({ action, dateFrom, dateTo, limit, expectedCount });
+  const result = await applyHugrabBillingShippingFloor({ action, dateFrom, dateTo, limit, expectedCount, ...floorParams });
   console.log(
-    `\nUpdated ${result.updatedCount} billing shipping row(s) ${action === 'revert' ? 'back to Selected Rate' : `to ${money(HUGRAB_TARGET_SHIPPING)}`}.`,
+    `\nUpdated ${result.updatedCount} billing shipping row(s) ${action === 'revert' ? 'back to Selected Rate' : `to ${money(result.targetShipping)}`}.`,
   );
   await sql.end({ timeout: 5 });
 }

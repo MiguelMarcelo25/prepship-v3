@@ -3,11 +3,23 @@ import { db } from '../db/client.js';
 import { billingLineItems } from '../db/schema/billing.js';
 
 export const HUGRAB_BILLING_CLIENT_NAME = 'HUGRAB';
-export const HUGRAB_SELECTED_RATE_BELOW = 7.95;
-export const HUGRAB_TARGET_SHIPPING = 7.73;
+export const DEFAULT_HUGRAB_SELECTED_RATE_BELOW = 7.95;
+export const DEFAULT_HUGRAB_TARGET_SHIPPING = 7.73;
+export const HUGRAB_SELECTED_RATE_BELOW = DEFAULT_HUGRAB_SELECTED_RATE_BELOW;
+export const HUGRAB_TARGET_SHIPPING = DEFAULT_HUGRAB_TARGET_SHIPPING;
 export const HUGRAB_SHIPPING_FLOOR_DEFAULT_LIMIT = 5000;
 
 export type HugrabBillingShippingFloorAction = 'floor' | 'revert';
+
+export type HugrabBillingShippingFloorParamInput = {
+  selectedRateBelow?: number | string | null;
+  targetShipping?: number | string | null;
+};
+
+export type HugrabBillingShippingFloorParams = {
+  selectedRateBelow: number;
+  targetShipping: number;
+};
 
 export type HugrabBillingShippingFloorCandidate = {
   billingLineId: number;
@@ -26,8 +38,8 @@ export type HugrabBillingShippingFloorPreviewRow = HugrabBillingShippingFloorCan
 export type HugrabBillingShippingFloorPreview = {
   action: HugrabBillingShippingFloorAction;
   clientName: typeof HUGRAB_BILLING_CLIENT_NAME;
-  selectedRateBelow: typeof HUGRAB_SELECTED_RATE_BELOW;
-  targetShipping: typeof HUGRAB_TARGET_SHIPPING;
+  selectedRateBelow: number;
+  targetShipping: number;
   count: number;
   currentTotal: number;
   newTotal: number;
@@ -75,27 +87,47 @@ function toNumber(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function nextShippingFor(action: HugrabBillingShippingFloorAction, row: HugrabBillingShippingFloorCandidate): number {
-  return action === 'revert' ? round2(row.selectedRateCost) : HUGRAB_TARGET_SHIPPING;
+function positiveMoneyOrDefault(value: number | string | null | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? round2(parsed) : fallback;
+}
+
+export function resolveHugrabBillingShippingFloorParams(
+  input: HugrabBillingShippingFloorParamInput = {},
+): HugrabBillingShippingFloorParams {
+  return {
+    selectedRateBelow: positiveMoneyOrDefault(input.selectedRateBelow, DEFAULT_HUGRAB_SELECTED_RATE_BELOW),
+    targetShipping: positiveMoneyOrDefault(input.targetShipping, DEFAULT_HUGRAB_TARGET_SHIPPING),
+  };
+}
+
+function nextShippingFor(
+  action: HugrabBillingShippingFloorAction,
+  row: HugrabBillingShippingFloorCandidate,
+  params: HugrabBillingShippingFloorParams,
+): number {
+  return action === 'revert' ? round2(row.selectedRateCost) : params.targetShipping;
 }
 
 export function summarizeHugrabBillingShippingFloorCandidates(
   action: 'floor' | 'revert',
   rows: HugrabBillingShippingFloorCandidate[],
+  paramsInput: HugrabBillingShippingFloorParamInput = {},
 ): HugrabBillingShippingFloorPreview {
+  const params = resolveHugrabBillingShippingFloorParams(paramsInput);
   const currentTotal = round2(rows.reduce((sum, row) => sum + row.currentShipping, 0));
   const sampleRows = rows.slice(0, 25).map((row) => ({
     ...row,
     currentShipping: round2(row.currentShipping),
     selectedRateCost: round2(row.selectedRateCost),
-    nextShipping: nextShippingFor(action, row),
+    nextShipping: nextShippingFor(action, row, params),
   }));
-  const newTotal = round2(rows.reduce((sum, row) => sum + nextShippingFor(action, row), 0));
+  const newTotal = round2(rows.reduce((sum, row) => sum + nextShippingFor(action, row, params), 0));
   return {
     action,
     clientName: HUGRAB_BILLING_CLIENT_NAME,
-    selectedRateBelow: HUGRAB_SELECTED_RATE_BELOW,
-    targetShipping: HUGRAB_TARGET_SHIPPING,
+    selectedRateBelow: params.selectedRateBelow,
+    targetShipping: params.targetShipping,
     count: rows.length,
     currentTotal,
     newTotal,
@@ -121,8 +153,9 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
   dateFrom: string;
   dateTo: string;
   limit?: number;
-}, clientScopePredicate: SQL | undefined): Promise<HugrabBillingShippingFloorCandidate[]> {
+} & HugrabBillingShippingFloorParamInput, clientScopePredicate: SQL | undefined): Promise<HugrabBillingShippingFloorCandidate[]> {
   const action = input.action;
+  const params = resolveHugrabBillingShippingFloorParams(input);
   const limit = input.limit ?? HUGRAB_SHIPPING_FLOOR_DEFAULT_LIMIT;
   const scoped = clientScopePredicate ?? sql`true`;
 
@@ -217,13 +250,13 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
       selected_rate_cost::text as selected_rate_cost
     from priced_rows
     where selected_rate_cost is not null
-      and selected_rate_cost < ${HUGRAB_SELECTED_RATE_BELOW}
+      and selected_rate_cost < ${params.selectedRateBelow}
       and (
         case
           when ${action === 'revert'}::boolean
-            then abs(current_shipping::numeric - ${HUGRAB_TARGET_SHIPPING}) <= 0.004
+            then abs(current_shipping::numeric - ${params.targetShipping}) <= 0.004
               and abs(current_shipping::numeric - selected_rate_cost) > 0.004
-          else abs(current_shipping::numeric - ${HUGRAB_TARGET_SHIPPING}) > 0.004
+          else abs(current_shipping::numeric - ${params.targetShipping}) > 0.004
         end
       )
     order by ship_date desc nulls last, billing_line_id desc
@@ -238,9 +271,10 @@ export async function listHugrabBillingShippingFloorCandidates(input: {
   dateFrom: string;
   dateTo: string;
   limit?: number;
-}, clientScopePredicate?: SQL): Promise<HugrabBillingShippingFloorPreview> {
+} & HugrabBillingShippingFloorParamInput, clientScopePredicate?: SQL): Promise<HugrabBillingShippingFloorPreview> {
+  const params = resolveHugrabBillingShippingFloorParams(input);
   const rows = await fetchHugrabBillingShippingFloorCandidates(input, clientScopePredicate);
-  return summarizeHugrabBillingShippingFloorCandidates(input.action, rows);
+  return summarizeHugrabBillingShippingFloorCandidates(input.action, rows, params);
 }
 
 export async function applyHugrabBillingShippingFloor(input: {
@@ -249,9 +283,10 @@ export async function applyHugrabBillingShippingFloor(input: {
   dateTo: string;
   expectedCount: number;
   limit?: number;
-}, clientScopePredicate?: SQL): Promise<HugrabBillingShippingFloorApplyResult> {
+} & HugrabBillingShippingFloorParamInput, clientScopePredicate?: SQL): Promise<HugrabBillingShippingFloorApplyResult> {
+  const params = resolveHugrabBillingShippingFloorParams(input);
   const rows = await fetchHugrabBillingShippingFloorCandidates(input, clientScopePredicate);
-  const current = summarizeHugrabBillingShippingFloorCandidates(input.action, rows);
+  const current = summarizeHugrabBillingShippingFloorCandidates(input.action, rows, params);
   const expectedCount = input.expectedCount;
 
   if (current.count !== expectedCount) {
@@ -262,7 +297,7 @@ export async function applyHugrabBillingShippingFloor(input: {
   if (rows.length > 0) {
     await db.transaction(async (tx) => {
       for (const row of rows) {
-        const amount = money(nextShippingFor(input.action, row));
+        const amount = money(nextShippingFor(input.action, row, params));
         const currentAmount = money(row.currentShipping);
         const updated = await tx
           .update(billingLineItems)

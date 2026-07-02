@@ -25,19 +25,30 @@ function check(name: string, condition: boolean): void {
 check('script delegates to the backend HUGRAB billing service', script.includes('listHugrabBillingShippingFloorCandidates') && script.includes('applyHugrabBillingShippingFloor'));
 check('script is HUGRAB-only', script.includes('HUGRAB_BILLING_CLIENT_NAME'));
 check('script targets only billing shipping rows through the backend service', service.includes("billing_line_items.line_type = 'shipping'"));
-check('script uses selected-rate threshold below 7.95 through the backend service', service.includes('HUGRAB_SELECTED_RATE_BELOW = 7.95') && service.includes('selected_rate_cost < ${HUGRAB_SELECTED_RATE_BELOW}'));
-check('script sets billed shipping floor from TARGET_SHIPPING through the backend service', service.includes('HUGRAB_TARGET_SHIPPING = 7.73') && service.includes('HUGRAB_TARGET_SHIPPING'));
+check('script uses configurable selected-rate threshold through the backend service',
+  service.includes('DEFAULT_HUGRAB_SELECTED_RATE_BELOW = 7.95') &&
+  service.includes('resolveHugrabBillingShippingFloorParams') &&
+  service.includes('selected_rate_cost < ${params.selectedRateBelow}'));
+check('script sets configurable billed shipping target through the backend service',
+  service.includes('DEFAULT_HUGRAB_TARGET_SHIPPING = 7.73') &&
+  service.includes('targetShipping?:') &&
+  service.includes('${params.targetShipping}'));
 check('script is dry-run by default', script.includes('if (!apply)') && script.includes('Dry run only'));
 check('script updates only after --apply through applyHugrabBillingShippingFloor', script.includes("const apply = hasFlag('apply')") && script.includes('applyHugrabBillingShippingFloor'));
 check('script can revert the floor back to selected rate', script.includes("hasFlag('revert') ? 'revert' : 'floor'") && script.includes('back to Selected Rate'));
 check('script supports expected row count guard', script.includes("optionalNonnegativeInt('expect')") && script.includes('Refusing to update: --expect='));
+check('script supports operator-configured threshold and target flags',
+  script.includes("optionalPositiveMoney('selected-rate-below')") &&
+  script.includes("optionalPositiveMoney('target-shipping')") &&
+  script.includes('selectedRateBelow') &&
+  script.includes('targetShipping'));
 check('script does not touch orders or shipments', !/update\s+(orders|shipments)\b/i.test(script) && !/delete\s+from\s+(orders|shipments)\b/i.test(script));
 
 check('backend service owns the HUGRAB billing shipping floor rule',
   existsSync(servicePath) &&
   service.includes("HUGRAB_BILLING_CLIENT_NAME = 'HUGRAB'") &&
-  service.includes('HUGRAB_SELECTED_RATE_BELOW = 7.95') &&
-  service.includes('HUGRAB_TARGET_SHIPPING = 7.73') &&
+  service.includes('DEFAULT_HUGRAB_SELECTED_RATE_BELOW = 7.95') &&
+  service.includes('DEFAULT_HUGRAB_TARGET_SHIPPING = 7.73') &&
   service.includes('listHugrabBillingShippingFloorCandidates') &&
   service.includes('applyHugrabBillingShippingFloor'));
 check('backend service updates billing_line_items only, never orders or shipments',
@@ -53,6 +64,10 @@ check('backend service can preview both floor and revert candidates',
   service.includes('targetShipping') &&
   service.includes('selectedRateCost') &&
   service.includes('sampleRows'));
+check('backend preview preserves the exact configured threshold and target',
+  service.includes('selectedRateBelow: params.selectedRateBelow') &&
+  service.includes('targetShipping: params.targetShipping') &&
+  /summarizeHugrabBillingShippingFloorCandidates\([\s\S]*params/.test(service));
 
 check('billing route exposes a financials:write-gated HUGRAB bulk endpoint',
   /\/hugrab-shipping-floor/.test(route) &&
@@ -63,6 +78,11 @@ check('billing route exposes a financials:write-gated HUGRAB bulk endpoint',
 check('billing route normalizes the selected date range through billingDayRange',
   /normalizeHugrabShippingFloorRange[\s\S]{0,180}billingDayRange\(/.test(route) &&
   /hugrabShippingFloorSchema[\s\S]{0,260}\.transform\(normalizeHugrabShippingFloorRange\)/.test(route));
+check('billing route accepts configurable HUGRAB shipping floor money values',
+  /selectedRateBelow:\s*z\.coerce\.number\(\)\.positive\(\)\.optional\(\)/.test(route) &&
+  /targetShipping:\s*z\.coerce\.number\(\)\.positive\(\)\.optional\(\)/.test(route) &&
+  route.includes('selectedRateBelow: body.selectedRateBelow') &&
+  route.includes('targetShipping: body.targetShipping'));
 check('billing route maps expected-count mismatch to HTTP 409',
   route.includes('HugrabBillingShippingFloorCountMismatchError') &&
   route.includes('409'));
@@ -70,6 +90,8 @@ check('billing route maps expected-count mismatch to HTTP 409',
 check('api client has a thin HUGRAB shipping floor wrapper and clears billing caches',
   apiClient.includes('hugrabBillingShippingFloor') &&
   apiClient.includes('/billing/hugrab-shipping-floor') &&
+  apiClient.includes('selectedRateBelow?: number') &&
+  apiClient.includes('targetShipping?: number') &&
   apiClient.includes("clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics')"));
 check('BillingView puts the HUGRAB bulk button next to the detail Columns control',
   billingView.includes('HugrabShippingFloorModal') &&
@@ -79,6 +101,12 @@ check('HUGRAB modal previews, applies, and reverts through the backend endpoint'
   existsSync(modalPath) &&
   modal.includes('data-hugrab-shipping-floor-modal') &&
   modal.includes('apiClient.hugrabBillingShippingFloor') &&
+  modal.includes('data-hugrab-selected-rate-below-input') &&
+  modal.includes('data-hugrab-target-shipping-input') &&
+  modal.includes('selectedRateBelow: params.selectedRateBelow') &&
+  modal.includes('targetShipping: params.targetShipping') &&
+  modal.includes('selectedRateBelow: preview.selectedRateBelow') &&
+  modal.includes('targetShipping: preview.targetShipping') &&
   modal.includes("selectAction('floor')") &&
   modal.includes("selectAction('revert')") &&
   modal.includes('expectedCount') &&

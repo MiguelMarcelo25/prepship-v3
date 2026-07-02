@@ -375,6 +375,8 @@ const hugrabShippingFloorRawSchema = z.object({
   action: z.enum(['floor', 'revert']).default('floor'),
   dateFrom: z.string().min(1),
   dateTo: z.string().min(1),
+  selectedRateBelow: z.coerce.number().positive().optional(),
+  targetShipping: z.coerce.number().positive().optional(),
   apply: z.boolean().optional().default(false),
   expectedCount: z.coerce.number().int().nonnegative().optional(),
   limit: z.coerce.number().int().positive().max(5000).optional(),
@@ -491,6 +493,8 @@ app.post(
       action: body.action,
       dateFrom: body.dateFrom!,
       dateTo: body.dateTo!,
+      selectedRateBelow: body.selectedRateBelow,
+      targetShipping: body.targetShipping,
       limit: body.limit,
     };
     const clientScopePredicate = billingLineItemClientScopePredicate(scope);
@@ -521,6 +525,8 @@ app.post(
           dateFrom: body.dateFrom,
           dateTo: body.dateTo,
           expectedCount: body.expectedCount,
+          selectedRateBelow: result.selectedRateBelow,
+          targetShipping: result.targetShipping,
           count: result.count,
           updatedCount: result.updatedCount,
           currentTotal: result.currentTotal,

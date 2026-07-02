@@ -7,7 +7,8 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'test-service-role-key';
 process.env.SUPABASE_JWT_SECRET ||= 'test-jwt-secret';
 
 const {
-  HUGRAB_TARGET_SHIPPING,
+  DEFAULT_HUGRAB_SELECTED_RATE_BELOW,
+  DEFAULT_HUGRAB_TARGET_SHIPPING,
   summarizeHugrabBillingShippingFloorCandidates,
 } = await import('../src/services/hugrab-billing-shipping-floor');
 
@@ -42,14 +43,27 @@ const rows: HugrabBillingShippingFloorCandidate[] = [
 const floor = summarizeHugrabBillingShippingFloorCandidates('floor', rows);
 assert.equal(floor.action, 'floor');
 assert.equal(floor.count, 2);
+assert.equal(floor.selectedRateBelow, DEFAULT_HUGRAB_SELECTED_RATE_BELOW);
+assert.equal(floor.targetShipping, DEFAULT_HUGRAB_TARGET_SHIPPING);
 assert.equal(floor.currentTotal, 11.77);
 assert.equal(floor.newTotal, 15.46);
 assert.equal(floor.delta, 3.69);
-assert.equal(floor.sampleRows[0]?.nextShipping, HUGRAB_TARGET_SHIPPING);
+assert.equal(floor.sampleRows[0]?.nextShipping, DEFAULT_HUGRAB_TARGET_SHIPPING);
+
+const customFloor = summarizeHugrabBillingShippingFloorCandidates('floor', rows, {
+  selectedRateBelow: 6.25,
+  targetShipping: 6.15,
+});
+assert.equal(customFloor.selectedRateBelow, 6.25);
+assert.equal(customFloor.targetShipping, 6.15);
+assert.equal(customFloor.currentTotal, 11.77);
+assert.equal(customFloor.newTotal, 12.3);
+assert.equal(customFloor.delta, 0.53);
+assert.equal(customFloor.sampleRows[0]?.nextShipping, 6.15);
 
 const revert = summarizeHugrabBillingShippingFloorCandidates('revert', rows.map((row) => ({
   ...row,
-  currentShipping: HUGRAB_TARGET_SHIPPING,
+  currentShipping: DEFAULT_HUGRAB_TARGET_SHIPPING,
 })));
 assert.equal(revert.action, 'revert');
 assert.equal(revert.count, 2);
@@ -57,6 +71,15 @@ assert.equal(revert.currentTotal, 15.46);
 assert.equal(revert.newTotal, 11.77);
 assert.equal(revert.delta, -3.69);
 assert.equal(revert.sampleRows[0]?.nextShipping, 5.7);
+
+const customRevert = summarizeHugrabBillingShippingFloorCandidates(
+  'revert',
+  rows.map((row) => ({ ...row, currentShipping: 6.15 })),
+  { selectedRateBelow: 6.25, targetShipping: 6.15 },
+);
+assert.equal(customRevert.currentTotal, 12.3);
+assert.equal(customRevert.newTotal, 11.77);
+assert.equal(customRevert.delta, -0.53);
 
 const empty = summarizeHugrabBillingShippingFloorCandidates('floor', []);
 assert.equal(empty.count, 0);
