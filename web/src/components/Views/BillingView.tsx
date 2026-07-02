@@ -57,6 +57,14 @@ import { BillingDetailTable } from './BillingDetailTable'
 import { BillingLineItemWarningSummary } from './BillingLineItemWarningSummary'
 import { hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
 import { BillingNoBoxCostPreview } from './BillingNoBoxCostPreview'
+import {
+  billingEditDraftForRow,
+  clearBillingEditDraft,
+  createBillingEditDraft,
+  rememberBillingEditDraft,
+  type BillingEditDraft,
+  type BillingEditDraftCache,
+} from './billing-edit-draft-cache'
 // PS-155: Client Billing Config + Package Pricing tables extracted (behavior-preserving; the
 // config/price DRAFT state + setters and the Save handlers stay here and are passed as props).
 import { BillingConfigTable } from './BillingConfigTable'
@@ -74,16 +82,6 @@ interface BillingDetailState {
   clientName: string
   rows: BillingDetailDto[]
   error: string | null
-}
-
-type BillingEditDraft = {
-  pickPack: string
-  additional: string
-  packageCost: string
-  shipping: string
-  // PS — selected Box Size package id (billing-line-only override). '' = keep
-  // the shipment-derived box.
-  packageId: string
 }
 
 type BillingEditModalState = {
@@ -232,17 +230,6 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
   }
 }
 
-function createBillingEditDraft(row: BillingDetailDto): BillingEditDraft {
-  const metrics = computeBillingDetailMetrics(row)
-  return {
-    pickPack: metrics.pickPack.toFixed(2),
-    additional: metrics.additional.toFixed(2),
-    packageCost: metrics.packageCost.toFixed(2),
-    shipping: metrics.shipping.toFixed(2),
-    packageId: (row as Record<string, unknown>).packageId != null ? String((row as Record<string, unknown>).packageId) : '',
-  }
-}
-
 function parseMoneyDraft(value: string) {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : 0
@@ -383,6 +370,7 @@ export default function BillingView() {
   const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
   const [billingEditModal, setBillingEditModal] = useState<BillingEditModalState>(null)
+  const billingEditDraftCacheRef = useRef<BillingEditDraftCache>({})
   // PS-275: in-flight flag for the $0-shipping prep-fee review POST. Separate
   // from the edit-modal save state so the review action does not entangle with
   // the line-item save. Additive — only used when shippingZeroNeedsReview.
@@ -1089,11 +1077,18 @@ export default function BillingView() {
 
   function handleOpenBillingEdit(row: BillingDetailDto) {
     if (!row.orderId || !detailState.clientId) return
-    setBillingEditModal({
-      row,
-      draft: createBillingEditDraft(row),
-      saving: false,
-      error: null,
+    setBillingEditModal((current) => {
+      const cache = current
+        ? rememberBillingEditDraft(billingEditDraftCacheRef.current, current.row, current.draft)
+        : billingEditDraftCacheRef.current
+      const carryFrom = current ? { row: current.row, draft: current.draft } : null
+      billingEditDraftCacheRef.current = cache
+      return {
+        row,
+        draft: billingEditDraftForRow(cache, row, createBillingEditDraft(row), carryFrom),
+        saving: false,
+        error: null,
+      }
     })
     // Load the client's saved package prices so changing the Box Size can
     // auto-fill Box Cost from the same source billing uses.
@@ -1111,6 +1106,11 @@ export default function BillingView() {
       .catch(() => setBillingEditPackagePrices({}))
   }
 
+  function handleCloseBillingEditModal() {
+    billingEditDraftCacheRef.current = {}
+    setBillingEditModal(null)
+  }
+
   // PS — operator changed the Box Size: set the package + auto-fill Box Cost
   // from the client's saved price for that box (still manually overridable).
   function handleBillingEditPackageChange(value: string) {
@@ -1118,27 +1118,34 @@ export default function BillingView() {
       if (!current) return current
       const pid = Number(value)
       const price = Number.isFinite(pid) ? billingEditPackagePrices[pid] : undefined
+      const draft = {
+        ...current.draft,
+        packageId: value,
+        packageCost: price != null ? price.toFixed(2) : current.draft.packageCost,
+      }
+      billingEditDraftCacheRef.current = rememberBillingEditDraft(billingEditDraftCacheRef.current, current.row, draft)
       return {
         ...current,
-        draft: {
-          ...current.draft,
-          packageId: value,
-          packageCost: price != null ? price.toFixed(2) : current.draft.packageCost,
-        },
+        draft,
         error: null,
       }
     })
   }
 
   function handleBillingEditDraftChange(field: keyof BillingEditDraft, value: string) {
-    setBillingEditModal((current) => current ? {
-      ...current,
-      draft: {
+    setBillingEditModal((current) => {
+      if (!current) return current
+      const draft = {
         ...current.draft,
         [field]: value,
-      },
-      error: null,
-    } : current)
+      }
+      billingEditDraftCacheRef.current = rememberBillingEditDraft(billingEditDraftCacheRef.current, current.row, draft)
+      return {
+        ...current,
+        draft,
+        error: null,
+      }
+    })
   }
 
   async function handleSaveBillingEdit() {
@@ -1177,6 +1184,7 @@ export default function BillingView() {
         loading: false,
         error: null,
       }))
+      billingEditDraftCacheRef.current = clearBillingEditDraft(billingEditDraftCacheRef.current, billingEditModal.row)
       setBillingEditModal(null)
       toastContext?.addToast('Billing detail saved', 'success')
     } catch (error) {
@@ -1219,7 +1227,7 @@ export default function BillingView() {
       ])
 
       setDetailState((current) => ({ ...current, rows, loading: false, error: null }))
-      setBillingEditModal(null)
+      handleCloseBillingEditModal()
       toastContext?.addToast(
         decision === 'waived'
           ? 'Prep fee marked waived — run "Update Billing" for this range to zero the prep lines.'
@@ -1673,14 +1681,14 @@ export default function BillingView() {
         ) : null}
       </div>
       {billingEditModal ? (
-        <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !billingEditModal.saving && setBillingEditModal(null)}>
+        <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !billingEditModal.saving && handleCloseBillingEditModal()}>
           <div className="billing-edit-modal" role="dialog" aria-modal="true" aria-label="Edit billing detail" onMouseDown={(event) => event.stopPropagation()}>
             <div className="billing-edit-head">
               <div>
                 <h3>Edit Billing Detail</h3>
                 <p>{billingEditModal.row.orderNumber || `Order ${billingEditModal.row.orderId}`}</p>
               </div>
-              <button className="btn btn-ghost btn-xs" type="button" disabled={billingEditModal.saving} onClick={() => setBillingEditModal(null)}>
+              <button className="btn btn-ghost btn-xs" type="button" disabled={billingEditModal.saving} onClick={handleCloseBillingEditModal}>
                 <X size={14} aria-hidden="true" />
               </button>
             </div>
@@ -1915,7 +1923,7 @@ export default function BillingView() {
             {billingEditModal.error ? <div className="billing-edit-error">{billingEditModal.error}</div> : null}
 
             <div className="billing-edit-actions">
-              <button className="btn btn-secondary btn-sm" type="button" disabled={billingEditModal.saving} onClick={() => setBillingEditModal(null)}>Cancel</button>
+              <button className="btn btn-secondary btn-sm" type="button" disabled={billingEditModal.saving} onClick={handleCloseBillingEditModal}>Cancel</button>
               <button className="btn btn-primary btn-sm" type="button" disabled={billingEditModal.saving} onClick={() => void handleSaveBillingEdit()}>
                 {billingEditModal.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
                 Save
