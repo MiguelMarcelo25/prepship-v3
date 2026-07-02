@@ -69,6 +69,21 @@ const systemClientNamesSql = sql.join(
   SYSTEM_CLIENT_NAMES.map((name) => sql`${name}`),
   sql`, `,
 );
+const HUGRAB_CANCELLED_BILLING_CLIENT_NAME = 'HUGRAB';
+
+function normalizeBillingClientName(value: string | null | undefined) {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+export function isBillingSourceOrderBillable(input: { orderStatus: string | null; clientName: string | null }) {
+  const status = String(input.orderStatus ?? '').trim().toLowerCase();
+  if (status === 'shipped') return true;
+  // Per user override unlock shipped data on 2026-07-02: HUGRAB cancelled orders
+  // are treated as billing source rows, while cancelled orders for every other
+  // client remain excluded from normal billing.
+  if (status === 'cancelled') return normalizeBillingClientName(input.clientName) === HUGRAB_CANCELLED_BILLING_CLIENT_NAME;
+  return false;
+}
 
 export type GenerateInput = {
   clientId?: number;
@@ -377,7 +392,7 @@ export async function billingGenerationStatus(
     latest_source_ship_date: string | null;
   }>(sql`
     with scoped_clients as (
-      select c.id, c.store_ids
+      select c.id, c.name, c.store_ids
       from clients c
       where c.active = true
         and c.name not in (${systemClientNamesSql})
@@ -405,7 +420,7 @@ export async function billingGenerationStatus(
     ))::text as latest_source_ship_date
     from orders o
     left join shipments s on s.order_id = o.id and s.voided = false
-    where o.order_status = 'shipped'
+    where o.order_status in ('shipped', 'cancelled')
       and coalesce(
         s.ship_date,
         case
@@ -469,22 +484,28 @@ export async function billingGenerationStatus(
       and exists (
         select 1
         from scoped_clients sc
-        where o.client_id = sc.id
-           or (o.store_id is not null and o.store_id = any(sc.store_ids))
-           or (
-             coalesce(
-               case
-                 when coalesce(o.raw->>'storeId', '') ~ '^[0-9]+$'
-                   then (o.raw->>'storeId')::int
-                 else null
-               end,
-               case
-                 when coalesce(o.raw->'advancedOptions'->>'storeId', '') ~ '^[0-9]+$'
-                   then (o.raw->'advancedOptions'->>'storeId')::int
-                 else null
-               end
-             ) = any(sc.store_ids)
-           )
+        where (
+          o.client_id = sc.id
+          or (o.store_id is not null and o.store_id = any(sc.store_ids))
+          or (
+            coalesce(
+              case
+                when coalesce(o.raw->>'storeId', '') ~ '^[0-9]+$'
+                  then (o.raw->>'storeId')::int
+                else null
+              end,
+              case
+                when coalesce(o.raw->'advancedOptions'->>'storeId', '') ~ '^[0-9]+$'
+                  then (o.raw->'advancedOptions'->>'storeId')::int
+                else null
+              end
+            ) = any(sc.store_ids)
+          )
+        )
+        and (
+          o.order_status = 'shipped'
+          or (o.order_status = 'cancelled' and upper(trim(sc.name)) = ${HUGRAB_CANCELLED_BILLING_CLIENT_NAME})
+        )
       )
   `);
 
@@ -608,6 +629,7 @@ export async function generateLineItems(input: GenerateInput) {
   // "Generate Invoices" finds no configs and produces an empty summary.
   const configs = await db.execute<{
     clientId: number;
+    clientName: string;
     pickPackFee: string;
     pickPackMaxUnits: number;
     additionalUnitFee: string;
@@ -620,6 +642,7 @@ export async function generateLineItems(input: GenerateInput) {
   }>(sql`
     select
       c.id as "clientId",
+      c.name as "clientName",
       coalesce(b.pick_pack_fee, '0'::numeric)::text as "pickPackFee",
       coalesce(b.pick_pack_max_units, 1)::int as "pickPackMaxUnits",
       coalesce(b.additional_unit_fee, '0'::numeric)::text as "additionalUnitFee",
@@ -649,6 +672,7 @@ export async function generateLineItems(input: GenerateInput) {
   }
 
   const configByClient = new Map(configs.map((c) => [c.clientId, c]));
+  const clientNameById = new Map(configs.map((c) => [c.clientId, c.clientName]));
 
   const clientRows = await db
     .select({ id: clients.id, storeIds: clients.storeIds })
@@ -681,6 +705,7 @@ export async function generateLineItems(input: GenerateInput) {
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
       orderId: orders.id,
+      orderStatus: orders.orderStatus,
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
       orderDate: orders.orderDate,
@@ -699,7 +724,7 @@ export async function generateLineItems(input: GenerateInput) {
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
       and(
-        eq(orders.orderStatus, 'shipped'),
+        inArray(orders.orderStatus, ['shipped', 'cancelled']),
         sql`${billingShipDateSql} >= ${fromIso}::timestamptz`,
         sql`${billingShipDateSql} < ${toIso}::timestamptz`
       )
@@ -743,13 +768,19 @@ export async function generateLineItems(input: GenerateInput) {
   };
 
   const billableRows: BillableRow[] = orderShipmentRows
-    .map((row) => {
+    .map<BillableRow | null>((row) => {
       const storeId = rawStoreId(row.orderRaw ?? {}, row.orderStoreId ?? null);
       const clientId =
         (storeId !== null ? clientByStore.get(storeId) ?? null : null) ??
         row.orderClientId ??
         row.shipmentClientId ??
         null;
+      if (!isBillingSourceOrderBillable({
+        orderStatus: row.orderStatus,
+        clientName: clientId == null ? null : clientNameById.get(clientId) ?? null,
+      })) {
+        return null;
+      }
       return {
         id: row.shipmentId,
         orderId: row.orderId,
@@ -780,7 +811,8 @@ export async function generateLineItems(input: GenerateInput) {
       };
     })
     .filter(
-      (row) =>
+      (row): row is BillableRow =>
+        row !== null &&
         row.shipDate !== null &&
         (input.clientId === undefined || row.clientId === input.clientId)
     );
@@ -791,7 +823,7 @@ export async function generateLineItems(input: GenerateInput) {
       count: 0,
       total: 0,
       skipped: 0,
-      message: 'No billable shipped orders or shipments found for this range.',
+      message: 'No billable shipped orders or HUGRAB cancelled orders found for this range.',
     };
   }
 
