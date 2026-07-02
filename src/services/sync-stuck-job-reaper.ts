@@ -23,12 +23,14 @@ import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
 
 /**
- * Allow-list of pgboss queue names the reaper may clear. These are idempotent, watermark-based,
- * side-effect-free sync/reporting/tracking jobs — re-running a tick loses nothing.
+ * Allow-list of pgboss queue names the reaper may clear. These are idempotent queue jobs where
+ * failing an orphaned active row only unblocks a fresh bounded tick.
+ *
+ * The external-shipped classifier is included because the reaper only fails the stale queue row;
+ * the next classifier run remains bounded and idempotent at its own owner.
  *
  * EXCLUDED from active reaping on purpose (side effects):
  *   - 'prepship.sync.fulfillment-outbox'                 (real marketplace ship-confirmations)
- *   - 'prepship.shipping.external-shipped-classifier'    (mutates order state)
  *   - 'prepship.fees.walmart-sync'
  */
 export const REAPER_SAFE_JOB_NAMES: readonly string[] = [
@@ -39,6 +41,10 @@ export const REAPER_SAFE_JOB_NAMES: readonly string[] = [
   'prepship.sync.rate-backfill',
   'prepship.reporting.refresh',
   'prepship.tracking.poll',
+  // Per user override unlock shipped data on 2026-07-02: the bounded external-shipped
+  // classifier is idempotent flag reconciliation. Reaping stale active pgboss rows does not
+  // mutate orders/shipments directly; it only lets the next bounded classifier tick run.
+  'prepship.shipping.external-shipped-classifier',
 ];
 
 /**

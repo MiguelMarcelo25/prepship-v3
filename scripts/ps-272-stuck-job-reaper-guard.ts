@@ -9,8 +9,8 @@
  *   2. A 3-day-old active prepship.sync.shipments IS selected.
  *   3. A recently-started (< 15 min) active shipments job is NOT selected.
  *   4. A created/completed shipments job is NOT selected (state filter).
- *   5. external-shipped-classifier, fulfillment-outbox, and fees.walmart-sync are NOT in the
- *      allow-list.
+ *   5. bounded external-shipped-classifier IS in the allow-list, while fulfillment-outbox and
+ *      fees.walmart-sync are NOT.
  *
  *   npx tsx scripts/ps-272-stuck-job-reaper-guard.ts
  */
@@ -101,11 +101,11 @@ check(
   [],
 );
 
-// 5) Excluded side-effect jobs are NOT in the allow-list.
+// 5) The bounded classifier is safe to reap; real side-effect jobs remain excluded.
 check(
-  'external-shipped-classifier is NOT in REAPER_SAFE_JOB_NAMES',
+  'external-shipped-classifier IS in REAPER_SAFE_JOB_NAMES',
   REAPER_SAFE_JOB_NAMES.includes('prepship.shipping.external-shipped-classifier'),
-  false,
+  true,
 );
 check(
   'fulfillment-outbox is NOT in REAPER_SAFE_JOB_NAMES',
@@ -132,6 +132,7 @@ check(
     [
       { id: 'o-1', name: 'prepship.sync.orders', state: 'active', started_on: THREE_DAYS_AGO },
       { id: 'ob-2', name: 'prepship.sync.fulfillment-outbox', state: 'active', started_on: THREE_DAYS_AGO },
+      { id: 'cl-1', name: 'prepship.shipping.external-shipped-classifier', state: 'active', started_on: THREE_DAYS_AGO },
       { id: 'sh-4', name: 'prepship.sync.shipments', state: 'active', started_on: FIVE_MIN_AGO },
       { id: 'tr-1', name: 'prepship.tracking.poll', state: 'active', started_on: THREE_DAYS_AGO },
     ],
@@ -139,6 +140,7 @@ check(
   ),
   [
     { id: 'o-1', name: 'prepship.sync.orders' },
+    { id: 'cl-1', name: 'prepship.shipping.external-shipped-classifier' },
     { id: 'tr-1', name: 'prepship.tracking.poll' },
   ],
 );

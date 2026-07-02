@@ -153,7 +153,7 @@ async function main(): Promise<void> {
   check('OFF: real reaper reaped 0 / scanned 0 (no DB touched)', off.reaped === 0 && off.scanned === 0);
   check('OFF: real reaper returns an empty names list', off.names.length === 0);
 
-  // 2) ON path: a backlog with both safe-stuck rows and an excluded outbox row.
+  // 2) ON path: a backlog with safe-stuck rows, bounded classifier, and an excluded outbox row.
   const table: FakeJobRow[] = [
     { id: 'o-1', name: 'prepship.sync.orders', state: 'active', started_on: THREE_DAYS_AGO },
     { id: 'sh-1', name: 'prepship.sync.shipments', state: 'active', started_on: THREE_DAYS_AGO },
@@ -165,10 +165,15 @@ async function main(): Promise<void> {
   const fake = makeFakePg(table);
   const res = await reapWithFakePg(fake, NOW_MS);
 
-  check('ON: only the two old, safe, active rows are reaped', res.reaped === 2);
+  check('ON: the old safe active rows including classifier are reaped', res.reaped === 3);
   check(
-    'ON: reaped names are exactly orders + shipments (order preserved)',
-    JSON.stringify(res.names) === JSON.stringify(['prepship.sync.orders', 'prepship.sync.shipments']),
+    'ON: reaped names are exactly orders + shipments + classifier (order preserved)',
+    JSON.stringify(res.names) ===
+      JSON.stringify([
+        'prepship.sync.orders',
+        'prepship.sync.shipments',
+        'prepship.shipping.external-shipped-classifier',
+      ]),
   );
 
   const selectCall = fake.calls.find((c) => c.kind === 'select');
@@ -176,23 +181,23 @@ async function main(): Promise<void> {
   check('ON: a SELECT was issued', selectCall != null);
   check('ON: an UPDATE was issued', updateCall != null);
 
-  // The SELECT is already narrowed to the allow-list (belt) — the outbox/classifier never even surface.
+  // The SELECT is already narrowed to the allow-list (belt) - the outbox never even surfaces.
   check(
-    'ON: SELECT name filter carries the allow-list (no side-effect job names)',
+    'ON: SELECT name filter carries the allow-list (outbox excluded, classifier allowed)',
     !!selectCall?.names &&
       !selectCall.names.includes('prepship.sync.fulfillment-outbox') &&
-      !selectCall.names.includes('prepship.shipping.external-shipped-classifier'),
+      selectCall.names.includes('prepship.shipping.external-shipped-classifier'),
   );
 
-  // The UPDATE id set NEVER contains the excluded outbox / classifier / young / completed rows.
+  // The UPDATE id set NEVER contains the excluded outbox / young / completed rows.
   const updIds = updateCall?.ids ?? [];
   check('ON: UPDATE never touches the fulfillment-outbox id', !updIds.includes('ob-1'));
-  check('ON: UPDATE never touches the external-shipped-classifier id', !updIds.includes('cl-1'));
+  check('ON: UPDATE may clear the stale external-shipped-classifier id', updIds.includes('cl-1'));
   check('ON: UPDATE never touches the < 15-min young shipments id', !updIds.includes('sh-young'));
   check('ON: UPDATE never touches the completed row id', !updIds.includes('done-1'));
   check(
-    'ON: UPDATE id set is exactly the two stuck safe rows',
-    JSON.stringify([...updIds].sort()) === JSON.stringify(['o-1', 'sh-1']),
+    'ON: UPDATE id set is exactly the stuck safe rows',
+    JSON.stringify([...updIds].sort()) === JSON.stringify(['cl-1', 'o-1', 'sh-1']),
   );
 
   // The UPDATE is doubly-guarded with the allow-list too (belt-and-suspenders with the id set).
@@ -200,7 +205,8 @@ async function main(): Promise<void> {
     'ON: UPDATE name filter ALSO carries the allow-list (double guard)',
     !!updateCall?.names &&
       !updateCall.names.includes('prepship.sync.fulfillment-outbox') &&
-      updateCall.names.includes('prepship.sync.shipments'),
+      updateCall.names.includes('prepship.sync.shipments') &&
+      updateCall.names.includes('prepship.shipping.external-shipped-classifier'),
   );
 
   // The fake table reflects only the safe rows flipped to 'failed'; outbox stays 'active'.
@@ -209,9 +215,10 @@ async function main(): Promise<void> {
     table.find((r) => r.id === 'ob-1')?.state === 'active',
   );
   check(
-    'ON: in the fake db both stuck safe rows are now failed',
+    'ON: in the fake db stuck safe rows including classifier are now failed',
     table.find((r) => r.id === 'o-1')?.state === 'failed' &&
-      table.find((r) => r.id === 'sh-1')?.state === 'failed',
+      table.find((r) => r.id === 'sh-1')?.state === 'failed' &&
+      table.find((r) => r.id === 'cl-1')?.state === 'failed',
   );
 
   // 3) ON path with NO stuck rows -> a SELECT but NO UPDATE (no needless write).

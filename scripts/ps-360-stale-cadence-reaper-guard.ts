@@ -4,7 +4,7 @@
  * Cadence/busy-defer sync jobs are watermark-based. If the worker is down or
  * wedged, old `created` sync ticks become redundant backlog and can starve
  * current shipment work. The queue owner may fail old redundant queued rows;
- * active side-effect jobs remain excluded from stuck-active reaping.
+ * active fulfillment/fee side-effect jobs remain excluded from stuck-active reaping.
  */
 import { readFileSync } from 'node:fs';
 
@@ -51,16 +51,16 @@ check('stale cadence reaper fails pgboss rows rather than deleting data',
   /SET state = 'failed'/.test(reaper) && !/DELETE FROM/.test(reaper));
 check('stale queued reaper records PS-360/PS-361 reason',
   /PS-360\/PS-361 stale queued sync reaper/.test(reaper));
-check('side-effect jobs remain excluded from the active safe allow-list',
+check('fulfillment and fee side-effect jobs remain excluded from the active safe allow-list',
   !/prepship\.sync\.fulfillment-outbox'/.test(
-    reaper.match(/REAPER_SAFE_JOB_NAMES[\s\S]*?\];/)?.[0] ?? ''
-  ) &&
-  !/prepship\.shipping\.external-shipped-classifier'/.test(
     reaper.match(/REAPER_SAFE_JOB_NAMES[\s\S]*?\];/)?.[0] ?? ''
   ) &&
   !/prepship\.fees\.walmart-sync'/.test(
     reaper.match(/REAPER_SAFE_JOB_NAMES[\s\S]*?\];/)?.[0] ?? ''
   ));
+check('bounded external-shipped classifier active rows are explicitly reapable',
+  /REAPER_SAFE_JOB_NAMES[\s\S]*prepship\.shipping\.external-shipped-classifier/.test(reaper) &&
+  /bounded external-shipped[\s\S]*idempotent flag reconciliation/.test(reaper));
 check('stale queued fulfillment-outbox cadence rows are explicitly collapsible',
   /REAPER_STALE_QUEUED_JOB_NAMES[\s\S]*prepship\.sync\.fulfillment-outbox/.test(reaper) &&
   /queued fulfillment-outbox[\s\S]*wake-up ticks/.test(reaper) &&

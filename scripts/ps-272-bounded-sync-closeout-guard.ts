@@ -74,15 +74,15 @@ check(
 );
 
 check(
-  'selector guard proves side-effect jobs are excluded from the stuck-active allow-list',
+  'selector guard proves classifier is allowed while true side-effect jobs stay excluded',
   /fulfillment-outbox is NOT in REAPER_SAFE_JOB_NAMES/.test(selectorGuard) &&
-    /external-shipped-classifier is NOT in REAPER_SAFE_JOB_NAMES/.test(selectorGuard) &&
+    /external-shipped-classifier IS in REAPER_SAFE_JOB_NAMES/.test(selectorGuard) &&
     /fees\.walmart-sync is NOT in REAPER_SAFE_JOB_NAMES/.test(selectorGuard),
 );
 check(
   'on-path guard proves default-off reaper is inert and fake-db ON path updates only selected safe ids',
   /OFF: real reaper returns enabled=false/.test(onPathGuard) &&
-    /UPDATE id set is exactly the two stuck safe rows/.test(onPathGuard) &&
+    /UPDATE id set is exactly the stuck safe rows/.test(onPathGuard) &&
     /NO real DB, NO network/.test(onPathGuard),
 );
 
@@ -94,9 +94,10 @@ check(
 );
 check(
   'queued worker registers the bounded sync workers and schedules the default-off reaper',
-  /registerWorker\(JOBS\.orders, runOrderSync\)/.test(syncJobQueue) &&
-    /registerWorker\(JOBS\.shipments, runShipmentSync\)/.test(syncJobQueue) &&
+  /registerWorker\(JOBS\.orders, \(\) => syncOrders\(\{\}\)\)/.test(syncJobQueue) &&
+    /registerWorker\(JOBS\.shipments, \(\) => syncShipments\(\{\}\)\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.inventoryImport, runInventoryImportFromOrders\)/.test(syncJobQueue) &&
+    /registerWorker\(JOBS\.externalShippedClassifier, runExternalShippedClassifierJob\)/.test(syncJobQueue) &&
     /setInterval\(\(\) => void reapStuckActiveJobs\(\), 10 \* 60_000\)/.test(syncJobQueue),
 );
 check(
