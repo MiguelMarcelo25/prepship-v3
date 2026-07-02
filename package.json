@@ -529,6 +529,7 @@
     "test:ps-358-ps340-cleanup": "tsx scripts/ps-358-ps340-cleanup-guard.ts",
     "test:ps-359-shipment-sync-busy-defer": "tsx scripts/ps-359-shipment-sync-busy-defer-guard.ts",
     "test:ps-360-print-queue-tail": "tsx scripts/ps-360-print-queue-tail-guard.ts",
+    "test:direct-print-skips-queue": "tsx scripts/direct-print-skips-queue-guard.ts",
     "test:ps-360-stale-cadence-reaper": "tsx scripts/ps-360-stale-cadence-reaper-guard.ts",
     "test:ps-361-shipment-sync-watchdog": "tsx scripts/ps-361-shipment-sync-watchdog-guard.ts",
     "test:ps-365-shipment-sync-cron-safety-net": "tsx scripts/ps-365-shipment-sync-cron-safety-net-guard.ts",
