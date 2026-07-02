@@ -52,7 +52,7 @@ export function BillingFilters({
         <span className="text-ink-3">To</span>
         <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => onToChange(event.target.value)} />
       </div>
-      <div className="flex items-center gap-1.5 flex-wrap ml-auto">
+      <div className="flex items-center gap-1.5 flex-wrap">
         <button className="btn btn-primary btn-sm" type="button" onClick={onGenerate} disabled={generateLoading}>
           {generateLoading ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
