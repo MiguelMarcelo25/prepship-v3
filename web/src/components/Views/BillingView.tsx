@@ -1179,6 +1179,20 @@ export default function BillingView() {
     setBillingEditModal(null)
   }
 
+  function handleOpenNoBoxCostBulkApply(row: BillingDetailDto) {
+    const packageId =
+      billingEditModal?.draft.packageId ||
+      String(row.packageId ?? row.package_id ?? row.selectedPackageId ?? row.selected_package_id ?? '')
+
+    if (!packageId.trim()) {
+      toastContext?.addToast('Pick a Box Size first, then bulk set the Box Cost for matching boxes.', 'error')
+      handleOpenBillingEdit(row)
+      return
+    }
+
+    setBulkBoxCostOpen(true)
+  }
+
   // PS — operator changed the Box Size: set the package + auto-fill Box Cost
   // from the client's saved price for that box (still manually overridable).
   function handleBillingEditPackageChange(value: string) {
@@ -1804,6 +1818,7 @@ export default function BillingView() {
                 rows={billingNoBoxCostRows}
                 activeRow={billingEditModal.row}
                 onOpenBillingEdit={handleOpenBillingEdit}
+                onBulkApplyBoxCost={handleOpenNoBoxCostBulkApply}
               />
             ) : null}
 
@@ -2024,10 +2039,12 @@ export default function BillingView() {
             packages.find((pkg) => pkg.packageId === Number(billingEditModal.draft.packageId))?.name ??
             `Box #${billingEditModal.draft.packageId}`
           }
+          initialCost={billingEditModal.draft.packageCost}
           onClose={() => setBulkBoxCostOpen(false)}
           onApplied={() => {
-            // Re-fetch the summary so the bulk-re-priced box costs show immediately.
+            // Re-fetch summary + details so the bulk-re-priced box costs show immediately.
             void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
+            if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
           }}
         />
       ) : null}

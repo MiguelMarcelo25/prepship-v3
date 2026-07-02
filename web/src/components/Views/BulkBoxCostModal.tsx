@@ -33,6 +33,7 @@ export type BulkBoxCostModalProps = {
   dateTo: string
   packageId: number
   packageLabel: string
+  initialCost?: string | number | null
   onClose: () => void
   onApplied: () => void
 }
@@ -41,8 +42,16 @@ function money(n: number): string {
   return `$${(Number.isFinite(n) ? n : 0).toFixed(2)}`
 }
 
+function initialCostString(value: string | number | null | undefined): string {
+  if (value == null) return ''
+  const trimmed = String(value).trim()
+  if (!trimmed) return ''
+  const numeric = Number(trimmed)
+  return Number.isFinite(numeric) ? numeric.toFixed(2) : trimmed
+}
+
 export default function BulkBoxCostModal(props: BulkBoxCostModalProps) {
-  const [cost, setCost] = useState('')
+  const [cost, setCost] = useState(() => initialCostString(props.initialCost))
   const [preview, setPreview] = useState<BulkBoxCostPreview | null>(null)
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState(false)

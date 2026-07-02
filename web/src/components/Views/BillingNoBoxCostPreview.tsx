@@ -40,18 +40,33 @@ function rowBoxLabel(row: BillingDetailDto) {
   return row.packageName ?? row.package_name ?? row.boxSize ?? row.box_size ?? 'No box selected'
 }
 
+function normalizeBoxLabel(value: unknown) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
 export function BillingNoBoxCostPreview({
   rows,
   activeRow,
   onOpenBillingEdit,
+  onBulkApplyBoxCost,
 }: {
   rows: BillingDetailDto[]
   activeRow?: BillingDetailDto | null
   onOpenBillingEdit: (row: BillingDetailDto) => void
+  onBulkApplyBoxCost?: (row: BillingDetailDto) => void
 }) {
   const noBoxCostRows = rows.filter(hasBillingNoBoxCostAlert)
 
   if (noBoxCostRows.length === 0) return null
+
+  const activeNoBoxCostRow =
+    activeRow && hasBillingNoBoxCostAlert(activeRow) ? activeRow : noBoxCostRows[0] ?? null
+  const activeBoxLabel = activeNoBoxCostRow ? rowBoxLabel(activeNoBoxCostRow) : ''
+  const activeBoxKey = normalizeBoxLabel(activeBoxLabel)
+  const sameBoxRows = activeBoxKey
+    ? noBoxCostRows.filter((row) => normalizeBoxLabel(rowBoxLabel(row)) === activeBoxKey)
+    : []
+  const sameBoxCount = sameBoxRows.length || noBoxCostRows.length
 
   return (
     <section
@@ -69,9 +84,21 @@ export function BillingNoBoxCostPreview({
           Click a row to edit its Box Cost.
         </span>
       </div>
-      <p className="mt-1 text-[10.5px] text-ink-2">
-        Enter the Box Cost below, then Save. The saved billing override will be used when this billing range is regenerated.
-      </p>
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[10.5px] text-ink-2">
+          Enter the Box Cost below, then Save. The saved billing override will be used when this billing range is regenerated.
+        </p>
+        {activeNoBoxCostRow && onBulkApplyBoxCost ? (
+          <button
+            type="button"
+            className="rounded border border-amber-300 bg-amber-100 px-2 py-1 text-[10px] font-extrabold text-amber-900 hover:bg-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-300"
+            data-billing-no-box-cost-bulk
+            onClick={() => onBulkApplyBoxCost(activeNoBoxCostRow)}
+          >
+            Bulk set {sameBoxCount} same box
+          </button>
+        ) : null}
+      </div>
       <div className="mt-2 max-h-44 overflow-y-auto rounded-md border border-amber-200 bg-surface">
         {noBoxCostRows.map((row, index) => {
           const active = sameBillingRow(activeRow, row)

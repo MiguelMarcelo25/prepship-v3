@@ -137,6 +137,16 @@ check('NO_BOX_COST edit modal previews every current no-box-cost row',
   billingNoBoxCostPreview.includes('max-h-') &&
   billingNoBoxCostPreview.includes('overflow-y-auto'));
 
+check('NO_BOX_COST preview offers same-box bulk apply through the backend bulk box-cost flow',
+  billingNoBoxCostPreview.includes('onBulkApplyBoxCost') &&
+  billingNoBoxCostPreview.includes('data-billing-no-box-cost-bulk') &&
+  billingNoBoxCostPreview.includes('sameBoxRows.length') &&
+  billingView.includes('handleOpenNoBoxCostBulkApply') &&
+  billingView.includes('onBulkApplyBoxCost={handleOpenNoBoxCostBulkApply}') &&
+  billingView.includes('<BulkBoxCostModal') &&
+  billingView.includes('initialCost=') &&
+  read('web/src/components/Views/BulkBoxCostModal.tsx').includes('initialCost?:'));
+
 check('package.json wires the PS-363 guard',
   packageJson.includes('"test:ps-363-billing-no-box-cost-alert"'));
 

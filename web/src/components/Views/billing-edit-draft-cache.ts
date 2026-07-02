@@ -12,12 +12,17 @@ export type BillingEditDraftCache = Record<string, BillingEditDraft>
 
 export function createBillingEditDraft(row: BillingDetailDto): BillingEditDraft {
   const metrics = computeBillingDetailMetrics(row)
+  const rawPackageId =
+    (row as Record<string, unknown>).packageId ??
+    (row as Record<string, unknown>).package_id ??
+    (row as Record<string, unknown>).selectedPackageId ??
+    (row as Record<string, unknown>).selected_package_id
   return {
     pickPack: metrics.pickPack.toFixed(2),
     additional: metrics.additional.toFixed(2),
     packageCost: metrics.packageCost.toFixed(2),
     shipping: metrics.shipping.toFixed(2),
-    packageId: (row as Record<string, unknown>).packageId != null ? String((row as Record<string, unknown>).packageId) : '',
+    packageId: rawPackageId != null ? String(rawPackageId) : '',
   }
 }
 
