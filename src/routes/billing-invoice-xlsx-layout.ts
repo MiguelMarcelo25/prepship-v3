@@ -1,7 +1,7 @@
 type InvoiceXlsxAlignment = {
   horizontal: 'left';
   vertical: 'top';
-  wrapText: true;
+  wrapText: false;
 };
 
 type InvoiceXlsxCell = {
@@ -37,7 +37,7 @@ export type InvoiceXlsxWorksheet = {
 export const INVOICE_XLSX_LEFT_ALIGNMENT: InvoiceXlsxAlignment = {
   horizontal: 'left',
   vertical: 'top',
-  wrapText: true,
+  wrapText: false,
 };
 
 const DEFAULT_COLUMN_BOUNDS = { min: 10, max: 42 };
@@ -45,7 +45,7 @@ const DEFAULT_COLUMN_BOUNDS = { min: 10, max: 42 };
 export const INVOICE_XLSX_COLUMN_WIDTH_BOUNDS: Record<string, { min: number; max: number }> = {
   shipDate: { min: 12, max: 16 },
   orderNumber: { min: 12, max: 24 },
-  skus: { min: 24, max: 52 },
+  skus: { min: 28, max: 80 },
   boxSize: { min: 18, max: 34 },
   boxCost: { min: 10, max: 14 },
   qty: { min: 8, max: 10 },

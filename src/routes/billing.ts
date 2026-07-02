@@ -42,6 +42,7 @@ import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulk
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
+import { invoiceOneLineCell } from './billing-invoice-text';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
 // from the fee_waived flag billingInvoiceData stamps from the SOT.
@@ -1459,7 +1460,7 @@ async function renderInvoiceXlsx(args: {
   items.columns = [
     { header: 'Ship Date', key: 'shipDate', width: 14, style: { numFmt: DATE_FMT } },
     { header: 'Order #', key: 'orderNumber', width: 20 },
-    { header: 'SKUs', key: 'skus', width: 40, style: { alignment: { wrapText: true } } },
+    { header: 'SKUs', key: 'skus', width: 40 },
     // PS-217: billed box size (display) + billed box cost (the package_cost line).
     { header: 'Box Size', key: 'boxSize', width: 22 },
     { header: 'Box Cost', key: 'boxCost', width: 12, style: { numFmt: MONEY_FMT } },
@@ -1483,8 +1484,8 @@ async function renderInvoiceXlsx(args: {
     items.addRow({
       shipDate: excelDayCell(d.ship_date),
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
-      skus: d.skus ?? '',
-      boxSize: d.box_label,
+      skus: invoiceOneLineCell(d.skus),
+      boxSize: invoiceOneLineCell(d.box_label),
       boxCost: Number(d.package_cost_amt),
       qty: baseQty + addlQty,
       pickPackFee: pickPackFeeAmt,

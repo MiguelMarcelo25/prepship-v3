@@ -15,6 +15,7 @@
  * emit the leading YYYY-MM-DD verbatim (no timezone conversion), the same
  * UTC-anchored day the XLSX `excelDayCell` renders.
  */
+import { invoiceOneLineCell } from './billing-invoice-text';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
@@ -77,14 +78,6 @@ function num(n: number): string {
   return Number.isFinite(n) ? String(n) : '0';
 }
 
-function oneLineCell(value: unknown): string {
-  return String(value ?? '')
-    .split(/\r\n|\r|\n/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(' | ');
-}
-
 /** Derive the display columns for one order — same arithmetic as the
  *  renderInvoiceXlsx Line Items loop (qty/fee composition + total fallback). */
 export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
@@ -98,8 +91,8 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const cells = [
     csvDayCell(row.ship_date),
     String(row.order_number ?? row.order_id ?? ''),
-    oneLineCell(row.skus),
-    oneLineCell(row.box_label),
+    invoiceOneLineCell(row.skus),
+    invoiceOneLineCell(row.box_label),
     num(Number(row.package_cost_amt)),
     num(baseQty + addlQty),
     num(pickPackFeeAmt),

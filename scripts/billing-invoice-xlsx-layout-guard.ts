@@ -43,7 +43,7 @@ function row(cells: FakeCell[]): FakeRow {
   };
 }
 
-const skuCell: FakeCell = { value: 'HU-10\nBooster-gel-001 x2' };
+const skuCell: FakeCell = { value: 'Booster-gel-001 x2 | HU-10' };
 const totalCell: FakeCell = { value: 14.28 };
 const worksheet: InvoiceXlsxWorksheet & { columns: FakeColumn[]; rows: FakeRow[] } = {
   columns: [
@@ -62,7 +62,9 @@ const worksheet: InvoiceXlsxWorksheet & { columns: FakeColumn[]; rows: FakeRow[]
   },
 };
 
-assert.equal(invoiceXlsxCellDisplayWidth('HU-10\nBooster-gel-001 x2'), 'Booster-gel-001 x2'.length);
+assert.equal(INVOICE_XLSX_LEFT_ALIGNMENT.horizontal, 'left');
+assert.equal(INVOICE_XLSX_LEFT_ALIGNMENT.wrapText, false, 'XLSX layout should keep invoice rows single-line like the operator CSV view');
+assert.equal(invoiceXlsxCellDisplayWidth('Booster-gel-001 x2 | HU-10'), 'Booster-gel-001 x2 | HU-10'.length);
 
 applyInvoiceXlsxReadableLayout(worksheet);
 
@@ -73,9 +75,9 @@ for (const col of worksheet.columns) {
     assert.deepEqual(cell.alignment, INVOICE_XLSX_LEFT_ALIGNMENT, `cells in ${col.key} must be left-aligned and wrapped`);
   }
 }
-assert.ok(Number(worksheet.columns[2]?.width) >= 24, 'SKU column must stay wide enough for multi-line SKU text');
+assert.ok(Number(worksheet.columns[2]?.width) >= 'Booster-gel-001 x2 | HU-10'.length, 'SKU column must fit one-line SKU text');
 assert.ok(Number(worksheet.columns[3]?.width) >= '12x10x3 (12x10x3)'.length, 'Box Size column must fit the full box label');
-assert.ok(Number(worksheet.rows[1]?.height) > 15, 'multi-line SKU rows must receive expanded height');
+assert.equal(worksheet.rows[1]?.height, undefined, 'one-line SKU rows must keep the normal Excel row height');
 assert.deepEqual(totalCell.alignment, INVOICE_XLSX_LEFT_ALIGNMENT, 'money cells must be left-aligned too');
 
 const billingRoute = readFileSync('src/routes/billing.ts', 'utf8');
@@ -85,6 +87,8 @@ assert.match(billingRoute, /applyInvoiceXlsxReadableLayout\(items\)/, 'Line Item
 const xlsxStart = billingRoute.indexOf('async function renderInvoiceXlsx(');
 const xlsxEnd = billingRoute.indexOf("app.get('/invoice.xlsx'", xlsxStart);
 const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? billingRoute.slice(xlsxStart, xlsxEnd) : '';
+assert.match(xlsxRenderer, /skus:\s*invoiceOneLineCell\(d\.skus\)/, 'Line Items sheet must flatten SKUs to one readable cell like the CSV export');
+assert.doesNotMatch(xlsxRenderer, /skus:\s*d\.skus\s*\?\?\s*''/, 'Line Items sheet must not export raw multiline SKU text');
 assert.doesNotMatch(xlsxRenderer, /WAIVED_COLUMN_HEADER|key:\s*'waiver'|waivedCellText\(d\.fee_waived\)/, 'Line Items sheet must omit the Prep Fee Waiver column');
 
 const packageJson = readFileSync('package.json', 'utf8');
