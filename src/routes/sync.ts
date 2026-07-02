@@ -1,14 +1,13 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { getSyncStatus, syncOrders } from '../services/order-sync';
+import { getSyncStatus } from '../services/order-sync';
 import { getShipmentSyncStatus } from '../services/shipment-sync';
-import { startBackfillBestRates } from '../services/rates-backfill';
 import {
   getApiRuntimeStatus,
   getPersistedWorkerStatus,
 } from '../services/worker-status';
-import { getSyncJobQueueStatus } from '../services/sync-job-queue';
+import { enqueueManualOrderSyncJob, getSyncJobQueueStatus } from '../services/sync-job-queue';
 import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
 import {
   nudgeShipmentSyncWatchdogRecovery,
@@ -32,29 +31,17 @@ const triggerBody = z
 
 app.post('/orders', zValidator('json', triggerBody), async (c) => {
   const body = c.req.valid('json') ?? {};
-  const fullResync = body.fullResync === true;
-  const legacyFull = body.full === true;
-  const sinceMs = fullResync
-    ? 0
-    : body.sinceMs !== undefined
-      ? body.sinceMs
-    : body.sinceIso
-      ? Date.parse(body.sinceIso)
-      : undefined;
-  const result = await syncOrders({
-    sinceMs,
-    awaitingSinceMs: fullResync ? 0 : sinceMs,
-    pageSize: body.pageSize,
-  });
-  const shouldBackfillRates = fullResync || legacyFull || result.synced > 0;
-  const rateBackfillJob = shouldBackfillRates
-    ? (() => {
-        const job = startBackfillBestRates({ limit: 1000 });
-        return { jobId: job.jobId, status: job.status };
-      })()
-    : null;
-
-  return c.json({ ...result, rateBackfillJob });
+  const result = await enqueueManualOrderSyncJob(body);
+  const response = {
+    ...result,
+    status: result.queued ? 'queued' : result.error ? 'error' : 'already_queued',
+    message: result.queued
+      ? 'Order sync queued'
+      : result.error
+        ? result.error
+        : 'Order sync is already queued or running',
+  };
+  return c.json(response, result.error ? 503 : 202);
 });
 
 app.get('/status', async (c) => {

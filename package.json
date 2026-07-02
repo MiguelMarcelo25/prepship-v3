@@ -523,6 +523,7 @@
     "test:ps-346-shipment-sync-worker-lanes": "tsx scripts/ps-346-shipment-sync-worker-lanes-guard.ts",
     "test:ps-350-backend-rate-jobs": "tsx scripts/ps-350-backend-rate-jobs-guard.ts",
     "test:ps-352-shipping-workflow-sot-map": "tsx scripts/ps-352-shipping-workflow-sot-map-guard.ts",
+    "test:ps-356-manual-order-sync-job-lane": "tsx scripts/ps-356-manual-order-sync-job-lane-guard.ts",
     "test:ps-356-best-rate-c-shipping-sot": "tsx scripts/ps-356-best-rate-c-shipping-sot-guard.ts",
     "test:ps-357-best-rate-house-single-line": "tsx scripts/ps-357-best-rate-house-single-line-guard.ts",
     "test:ps-358-ps340-cleanup": "tsx scripts/ps-358-ps340-cleanup-guard.ts",

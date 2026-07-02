@@ -704,9 +704,9 @@ export const apiClient = {
       () =>
         api.post<any>(
           '/sync/orders',
-          mode === 'full' ? { full: true } : {}
+          mode === 'full' ? { full: true, fullResync: true } : {}
         ),
-      { queued: false }
+      { queued: false, error: 'Failed to queue order sync' }
     );
   },
 

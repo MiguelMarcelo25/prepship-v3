@@ -94,7 +94,7 @@ check(
 );
 check(
   'queued worker registers the bounded sync workers and schedules the default-off reaper',
-  /registerWorker\(JOBS\.orders, \(\) => syncOrders\(\{\}\)\)/.test(syncJobQueue) &&
+  /registerWorker\(JOBS\.orders, async \(jobData\) => \{[\s\S]*syncOrders\(orderSyncOptionsFromJobPayload\(jobData\)\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.shipments, \(\) => syncShipments\(\{\}\)\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.inventoryImport, runInventoryImportFromOrders\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.externalShippedClassifier, runExternalShippedClassifierJob\)/.test(syncJobQueue) &&

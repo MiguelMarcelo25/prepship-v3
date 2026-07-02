@@ -623,6 +623,23 @@ export default function Home() {
     setOrdersRefreshVersion((value) => value + 1)
   }
 
+  const applyQueuedSync = (mode: 'incremental' | 'full', result: any) => {
+    setSyncStatus((current) => ({
+      ...current,
+      status: 'syncing',
+      mode,
+      page: 0,
+      total: 0,
+      count: 0,
+      error: null,
+    }))
+    const message =
+      typeof result?.message === 'string' && result.message.trim()
+        ? result.message.trim()
+        : 'Order sync queued'
+    toastContext?.addToast(message)
+  }
+
   const workerPill = useMemo(() => {
     if (!workerStatus || !workerStatus.enabled) {
       return null
@@ -942,8 +959,14 @@ export default function Home() {
                     setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'incremental', page: 0, total: 0, error: null }))
                     try {
                       const result = await apiClient.triggerLegacySync('incremental')
-                      applyCompletedSync('incremental', result)
-                      toastContext?.addToast('🔄 Incremental sync triggered')
+                      if (result?.queued || result?.status === 'already_queued') {
+                        applyQueuedSync('incremental', result)
+                      } else if (result?.error) {
+                        setSyncStatus((current) => ({ ...current, status: 'error', error: String(result.error) }))
+                        toastContext?.addToast(String(result.error), 'error')
+                      } else {
+                        applyCompletedSync('incremental', result)
+                      }
                     } catch (error) {
                       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to trigger sync', 'error')
                     }
@@ -966,8 +989,14 @@ export default function Home() {
                     setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'full', page: 0, total: 0, error: null }))
                     try {
                       const result = await apiClient.triggerLegacySync('full')
-                      applyCompletedSync('full', result)
-                      toastContext?.addToast('🔄 Full re-sync triggered')
+                      if (result?.queued || result?.status === 'already_queued') {
+                        applyQueuedSync('full', result)
+                      } else if (result?.error) {
+                        setSyncStatus((current) => ({ ...current, status: 'error', error: String(result.error) }))
+                        toastContext?.addToast(String(result.error), 'error')
+                      } else {
+                        applyCompletedSync('full', result)
+                      }
                     } catch (error) {
                       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to trigger sync', 'error')
                     }

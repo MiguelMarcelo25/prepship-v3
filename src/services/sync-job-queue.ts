@@ -24,6 +24,11 @@ import {
 import { syncOrders } from './order-sync';
 import { syncShipments } from './shipment-sync';
 import {
+  buildManualOrderSyncJobPayload,
+  orderSyncOptionsFromJobPayload,
+  type ManualOrderSyncRequest,
+} from './manual-order-sync-job';
+import {
   recordWorkerHeartbeat,
   recordWorkerJobFailure,
   recordWorkerJobSkipped,
@@ -71,6 +76,16 @@ const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const timers: Timer[] = [];
 const BUSY_DEFER_SECONDS = 60;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
+
+export type ManualOrderSyncEnqueueResult = {
+  queued: boolean;
+  jobId: string | null;
+  queueStarted: boolean;
+  jobName: typeof JOBS.orders;
+  mode: 'incremental' | 'full';
+  requestedAt: string;
+  error: string | null;
+};
 
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
@@ -159,6 +174,113 @@ async function sendShipmentSyncWatchdogJob(
       queueStarted,
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+async function sendManualOrderSyncJob(
+  targetBoss: PgBoss,
+  queueStarted: boolean,
+  request: ManualOrderSyncRequest,
+): Promise<ManualOrderSyncEnqueueResult> {
+  const payload = buildManualOrderSyncJobPayload(request);
+  try {
+    // Per user override unlock shipped data on 2026-07-02: this only
+    // enqueues the existing backend order-sync worker lane. The request no
+    // longer runs ShipStation import inline, buys labels, prints postage, or
+    // mutates marketplace notifications.
+    const id = await targetBoss.send(
+      JOBS.orders,
+      payload,
+      {
+        singletonKey: `manual-${payload.mode}`,
+        singletonSeconds: 60,
+        retryLimit: 2,
+        retryDelay: 30,
+        retryBackoff: true,
+        expireInMinutes: 30,
+        retentionDays: 7,
+      },
+    );
+    return {
+      queued: Boolean(id),
+      jobId: id ? String(id) : null,
+      queueStarted,
+      jobName: JOBS.orders,
+      mode: payload.mode,
+      requestedAt: payload.requestedAt,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted,
+      jobName: JOBS.orders,
+      mode: payload.mode,
+      requestedAt: payload.requestedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function enqueueManualOrderSyncJob(
+  request: ManualOrderSyncRequest = {},
+): Promise<ManualOrderSyncEnqueueResult> {
+  if (!env.USE_PG_BOSS_SCHEDULER && !started) {
+    const payload = buildManualOrderSyncJobPayload(request);
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted: false,
+      jobName: JOBS.orders,
+      mode: payload.mode,
+      requestedAt: payload.requestedAt,
+      error: 'pg-boss scheduler is disabled; manual order sync must run through the backend job lane',
+    };
+  }
+
+  if (boss && started) {
+    return sendManualOrderSyncJob(boss, true, request);
+  }
+
+  const transientBoss = new PgBoss({
+    connectionString: env.DATABASE_URL,
+    schema: env.PG_BOSS_SCHEMA,
+    application_name: 'prepship-api-manual-order-sync',
+    max: 1,
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    expireInSeconds: 30 * 60,
+    retentionDays: 7,
+    deleteAfterDays: 7,
+    supervise: false,
+  });
+
+  try {
+    await transientBoss.start();
+    await transientBoss.createQueue(JOBS.orders, {
+      name: JOBS.orders,
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInSeconds: 30 * 60,
+      retentionDays: 7,
+    });
+    return await sendManualOrderSyncJob(transientBoss, false, request);
+  } catch (err) {
+    const payload = buildManualOrderSyncJobPayload(request);
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted: false,
+      jobName: JOBS.orders,
+      mode: payload.mode,
+      requestedAt: payload.requestedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    await transientBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
   }
 }
 
@@ -279,7 +401,7 @@ const JOB_HANDLER_TIMEOUT_MS = Math.max(
 
 async function registerWorker(
   name: JobName,
-  handler: () => Promise<unknown> | unknown
+  handler: (jobData: unknown) => Promise<unknown> | unknown
 ): Promise<void> {
   if (!boss) return;
   await boss.work(
@@ -312,7 +434,11 @@ async function registerWorker(
         try {
           // PS-265: deadline-bounded so a hung handler rejects here -> catch records
           // the failure -> finally ALWAYS clears the active lane (deadlock -> self-heal).
-          const result = await withDeadline(handler, JOB_HANDLER_TIMEOUT_MS, name);
+          const result = await withDeadline(
+            () => handler(job?.data),
+            JOB_HANDLER_TIMEOUT_MS,
+            name,
+          );
           const durationMs = Date.now() - startedAt;
           console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
           await recordWorkerJobSuccess(name, startedAt, result);
@@ -409,7 +535,13 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   // queue locking, deadlines, and worker-status writes. Call the canonical
   // ShipStation sync services directly so queued mode does not also take the
   // legacy interval-scheduler advisory lock and starve worker heartbeats.
-  await registerWorker(JOBS.orders, () => syncOrders({}));
+  await registerWorker(JOBS.orders, async (jobData) => {
+    const result = await syncOrders(orderSyncOptionsFromJobPayload(jobData));
+    if (result.synced > 0 && isRateBackfillSchedulerEnabled()) {
+      runBackfillTick();
+    }
+    return result;
+  });
   await registerWorker(JOBS.shipments, () => syncShipments({}));
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
