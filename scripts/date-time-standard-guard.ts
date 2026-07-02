@@ -167,11 +167,11 @@ assert(
   'billing detail UI must use billing-day helpers for ship_date display/sort',
 );
 assert(
-  billingParity.includes("label: 'Ship Date/Time (Los Angeles)'") &&
-    billingParity.includes('12:00 AM PT') &&
+  billingParity.includes("label: 'Ship Date'") &&
+    !billingParity.includes('12:00 AM PT') &&
     billingDetailTable.includes('formatBillingShipDate(row.shipDate)') &&
     billingDetailTable.includes('billingShipDateSortValue(row.shipDate)'),
-  'billing detail ship date must render Los Angeles billing date/time while sorting by billing day',
+  'billing detail ship date must render the billing date without a fake time while sorting by billing day',
 );
 assert(
   billingDetailTable.includes('defaultSort={{ key: \'shipDate\', direction: \'desc\' }}') &&
