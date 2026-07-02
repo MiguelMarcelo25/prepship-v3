@@ -55,6 +55,7 @@ import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 // stay here and are passed as props, the table calls the pure computeBillingDetailMetrics).
 import { BillingDetailTable } from './BillingDetailTable'
 import { BillingLineItemWarningSummary } from './BillingLineItemWarningSummary'
+import { hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
 // PS-155: Client Billing Config + Package Pricing tables extracted (behavior-preserving; the
 // config/price DRAFT state + setters and the Save handlers stay here and are passed as props).
 import { BillingConfigTable } from './BillingConfigTable'
@@ -1706,6 +1707,24 @@ export default function BillingView() {
               <div><span>UPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_ups_rate, { dashIfZero: true })}</strong></div>
               <div><span>USPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_usps_rate, { dashIfZero: true })}</strong></div>
             </div>
+
+            {hasBillingNoBoxCostAlert(billingEditModal.row) ? (
+              <div
+                role="alert"
+                style={{
+                  margin: '8px 0',
+                  padding: '8px 12px',
+                  border: '1px solid #fde68a',
+                  borderRadius: 8,
+                  background: 'rgba(245, 158, 11, 0.10)',
+                  fontSize: 11.5,
+                  color: 'var(--text)',
+                }}
+              >
+                <strong style={{ color: '#b45309' }}>No box cost:</strong>{' '}
+                Enter the Box Cost below, then Save. The saved billing override will be used when this billing range is regenerated.
+              </div>
+            ) : null}
 
             {/* PS-207: backend box-review flag — the shipped box could not be
                 resolved (or selected box ≠ shipment dims). Picking a Box Size

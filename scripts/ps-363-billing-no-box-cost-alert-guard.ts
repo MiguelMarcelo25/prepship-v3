@@ -75,6 +75,9 @@ const billingService = read('src/services/billing.ts');
 const billingRowSot = read('src/services/billing-detail-row-sot.ts');
 const billingParity = read('web/src/components/Views/billing-parity.ts');
 const billingDetailTable = read('web/src/components/Views/BillingDetailTable.tsx');
+const billingNoBoxCostActionPath = 'web/src/components/Views/BillingNoBoxCostAction.tsx';
+const billingNoBoxCostAction = existsSync(billingNoBoxCostActionPath) ? read(billingNoBoxCostActionPath) : '';
+const billingView = read('web/src/components/Views/BillingView.tsx');
 const packageJson = read('package.json');
 
 check('billingDetails delegates no-box-cost decision to backend owner',
@@ -98,11 +101,25 @@ check('frontend compatibility aggregator ORs/carries backend no-box-cost fields'
   billingParity.includes('billingBadges') &&
   !/metrics\.packageCost\s*===?\s*0[\s\S]{0,120}NO_BOX_COST/.test(billingParity));
 
-check('Billing table renders backend-provided NO_BOX_COST badge copy',
-  billingDetailTable.includes('NO_BOX_COST') &&
-  billingDetailTable.includes('data-billing-badge="NO_BOX_COST"') &&
-  billingDetailTable.includes('No box cost') &&
+check('Billing table delegates backend-provided NO_BOX_COST badge copy',
+  billingDetailTable.includes('hasBillingNoBoxCostAlert(row)') &&
+  billingDetailTable.includes('<BillingNoBoxCostAction row={row} onOpenBillingEdit={onOpenBillingEdit} />') &&
   !billingDetailTable.includes('Box Cost required'));
+
+check('row-level NO_BOX_COST badge is a clickable edit action',
+  existsSync(billingNoBoxCostActionPath) &&
+  billingDetailTable.includes("from './BillingNoBoxCostAction'") &&
+  billingDetailTable.includes('<BillingNoBoxCostAction') &&
+  billingNoBoxCostAction.includes('data-billing-badge="NO_BOX_COST"') &&
+  billingNoBoxCostAction.includes('type="button"') &&
+  billingNoBoxCostAction.includes('onOpenBillingEdit(row)') &&
+  !billingNoBoxCostAction.includes('informational only'));
+
+check('NO_BOX_COST edit modal explains Box Cost can be fixed',
+  billingView.includes('hasBillingNoBoxCostAlert(billingEditModal.row)') &&
+  billingView.includes('No box cost') &&
+  billingView.includes('Enter the Box Cost') &&
+  billingView.includes('<span>Box Cost</span>'));
 
 check('package.json wires the PS-363 guard',
   packageJson.includes('"test:ps-363-billing-no-box-cost-alert"'));
