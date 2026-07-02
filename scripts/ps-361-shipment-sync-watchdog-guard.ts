@@ -162,7 +162,9 @@ check('Render restart path is explicit, env-gated, and auditable',
   service.includes('RENDER_API_KEY') &&
   service.includes('recordWatchdogAction') &&
   service.includes('restart-requested'));
-const statusNudgeBlock = service.match(/export async function nudgeShipmentSyncWatchdogRecovery[\s\S]*?\n}\n\nasync function persistWatchdogSnapshot/)?.[0] ?? '';
+const statusNudgeBlock = service.match(
+  /export async function nudgeShipmentSyncWatchdogRecovery[\s\S]*?\r?\n}\r?\n\r?\nasync function persistWatchdogSnapshot/
+)?.[0] ?? '';
 check('status nudge is limited to enqueue/reap and never restarts workers',
   statusNudgeBlock.includes('isStatusNudgeRecoveryAction') &&
   statusNudgeBlock.includes('enqueueShipmentSyncWatchdogJob') &&

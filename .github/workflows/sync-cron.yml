@@ -1,8 +1,11 @@
 name: Sync ShipStation orders + shipments
 
 on:
-  # Automatic GitHub schedules are disabled. The Render worker scheduler owns
-  # background sync/reporting; keep this only for manual recovery/backfills.
+  # Safety net for the Render worker. The worker remains the primary 3-minute
+  # scheduler, but this direct shipment sync keeps labels backfilled if the
+  # pg-boss worker/queue gets wedged and avoids manual deploys as recovery.
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -20,6 +23,10 @@ on:
         default: '0'
         type: string
 
+concurrency:
+  group: sync-cron-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   sync:
     name: POST Render sync endpoint
@@ -30,11 +37,15 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           API_URL: ${{ vars.SYNC_API_URL || 'https://prepshipv4-api-l5xc.onrender.com' }}
-          MODE: ${{ github.event.inputs.mode || 'all' }}
+          MODE: ${{ github.event_name == 'schedule' && 'shipments' || github.event.inputs.mode || 'all' }}
           SINCE_DAYS: ${{ github.event.inputs.since_days || '0' }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
-            echo "::warning::CRON_SECRET GitHub secret is not set - keepalive still runs in render-keepalive.yml, but protected sync is skipped."
+            if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+              echo "::error::CRON_SECRET GitHub secret is not set - scheduled shipment sync cannot run."
+              exit 1
+            fi
+            echo "::warning::CRON_SECRET GitHub secret is not set - protected sync was skipped."
             exit 0
           fi
 
