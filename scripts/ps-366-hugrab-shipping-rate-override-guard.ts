@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
@@ -36,13 +37,28 @@ assert.equal(custom.overrideAmount, 6.15);
 
 const aboveThreshold = resolveHugrabShippingRateOverride({
   clientName: 'HUGRAB',
-  customerShippingRate: 6,
-  selectedRateCost: 5.88,
+  customerShippingRate: 5.88,
+  selectedRateCost: 6,
 });
 
-assert.equal(aboveThreshold.customerShippingRate, 6);
-assert.equal(aboveThreshold.selectedRateCost, 5.88);
+assert.equal(aboveThreshold.customerShippingRate, 5.88);
+assert.equal(aboveThreshold.selectedRateCost, 6);
 assert.equal(aboveThreshold.overrideApplied, false);
+
+const selectedRateTrigger = resolveHugrabShippingRateOverride({
+  clientName: 'HUGRAB',
+  customerShippingRate: 6.5,
+  selectedRateCost: 5.88,
+  config: {
+    enabled: true,
+    threshold: 6,
+    amount: 7.73,
+  },
+});
+
+assert.equal(selectedRateTrigger.customerShippingRate, 7.73);
+assert.equal(selectedRateTrigger.selectedRateCost, 5.88);
+assert.equal(selectedRateTrigger.overrideApplied, true);
 
 const disabled = resolveHugrabShippingRateOverride({
   clientName: 'HUGRAB',
@@ -83,5 +99,9 @@ const invalidTargetNeverLowers = resolveHugrabShippingRateOverride({
 assert.equal(invalidTargetNeverLowers.customerShippingRate, 5.75);
 assert.equal(invalidTargetNeverLowers.selectedRateCost, 5.75);
 assert.equal(invalidTargetNeverLowers.overrideApplied, false);
+
+const configTable = readFileSync('web/src/components/Views/BillingConfigTable.tsx', 'utf8');
+assert.match(configTable, /Selected < \$/);
+assert.match(configTable, /Then C\. Ship \$/);
 
 console.log('PASS PS-366 HUGRAB shipping-rate override guard');

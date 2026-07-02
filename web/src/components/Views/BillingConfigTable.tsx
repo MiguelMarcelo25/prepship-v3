@@ -149,7 +149,7 @@ export function BillingConfigTable({
             },
             {
               key: 'hugrabOverrideEnabled',
-              label: 'HUGRAB <$',
+              label: 'Floor On',
               width: 82,
               minWidth: 72,
               align: 'center',
@@ -165,7 +165,7 @@ export function BillingConfigTable({
             },
             {
               key: 'hugrabOverrideThreshold',
-              label: 'Below $',
+              label: 'Selected < $',
               width: 82,
               minWidth: 72,
               align: 'right',
@@ -177,14 +177,14 @@ export function BillingConfigTable({
                   draft={configDrafts[row.clientId]}
                   field="hugrabShippingRateOverrideThreshold"
                   fallback="6.00"
-                  title="HUGRAB only: override C. Shipping Rate when it is below this amount."
+                  title="HUGRAB only: override C. Shipping Rate when Selected Rate is below this amount."
                   onChange={(field, value) => updateConfigDraft(row, field, value)}
                 />
               ),
             },
             {
               key: 'hugrabOverrideAmount',
-              label: 'Bill $',
+              label: 'Then C. Ship $',
               width: 82,
               minWidth: 72,
               align: 'right',
@@ -196,7 +196,7 @@ export function BillingConfigTable({
                   draft={configDrafts[row.clientId]}
                   field="hugrabShippingRateOverrideAmount"
                   fallback="6.00"
-                  title="HUGRAB only: bill this C. Shipping Rate amount when the threshold is triggered."
+                  title="HUGRAB only: bill this C. Shipping Rate amount when the selected-rate threshold is triggered."
                   onChange={(field, value) => updateConfigDraft(row, field, value)}
                 />
               ),

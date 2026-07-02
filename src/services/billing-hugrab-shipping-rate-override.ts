@@ -67,7 +67,8 @@ export function resolveHugrabShippingRateOverride(
     };
   }
 
-  const overrideApplied = currentShippingRate < threshold && amount > currentShippingRate;
+  const triggerRate = selectedRateCost ?? currentShippingRate;
+  const overrideApplied = triggerRate < threshold && amount > currentShippingRate;
   return {
     customerShippingRate: overrideApplied ? amount : currentShippingRate,
     selectedRateCost,
