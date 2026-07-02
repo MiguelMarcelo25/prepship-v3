@@ -165,6 +165,7 @@ import {
 import { loadCarrierMarkups } from '../services/rates';
 // PS-798: the ONE markup resolver (per-account override -> per-client default) billing also consumes.
 import { resolveCanonicalMarkup } from '../services/shipping-workflow/markup-resolver';
+import { hugrabShippingRateOverrideConfigsByClientId } from '../services/billing-hugrab-shipping-rate-override';
 // PS-239: marketplace-fee rules (loaded once per request) + per-row resolution + subtotal.
 import {
   loadMarketplaceFeeRules,
@@ -1283,6 +1284,7 @@ const orderListSelect = {
   id: orders.id,
   externalOrderId: orders.externalOrderId,
   clientId: orders.clientId,
+  clientName: sql<string | null>`(select c.name from clients c where c.id = ${orders.clientId} limit 1)`.as('client_name'),
   orderNumber: orders.orderNumber,
   orderStatus: orders.orderStatus,
   // PS-128/PS-129: surfaced so the UI can show the shipping-hold badge (cancelled upstream /
@@ -1854,20 +1856,24 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // -> per-account-only display exactly as today). Display-only; never breaks /orders. Only non-zero
   // markups are mapped, so default (0/0) clients stay byte-identical.
   const clientShippingMarkupByClientId = new Map<number, { pct: number; flat: number }>();
+  const hugrabShippingOverrideByClientId = new Map<number, { enabled: boolean; threshold: number; amount: number }>();
   if (canViewFinancials) {
     try {
-      const markupClientIds = [...new Set(
+      const billingClientIds = [...new Set(
         joined.map((r) => finiteNumberOrNull(r.order.clientId)).filter((id): id is number => id != null),
       )];
-      if (markupClientIds.length) {
-        const cfgRows = await db
-          .select({
-            clientId: billingConfig.clientId,
-            pct: billingConfig.shippingMarkupPct,
-            flat: billingConfig.shippingMarkupFlat,
-          })
-          .from(billingConfig)
-          .where(inArray(billingConfig.clientId, markupClientIds));
+      if (billingClientIds.length) {
+        const [cfgRows, hugrabConfigs] = await Promise.all([
+          db
+            .select({
+              clientId: billingConfig.clientId,
+              pct: billingConfig.shippingMarkupPct,
+              flat: billingConfig.shippingMarkupFlat,
+            })
+            .from(billingConfig)
+            .where(inArray(billingConfig.clientId, billingClientIds)),
+          hugrabShippingRateOverrideConfigsByClientId(billingClientIds),
+        ]);
         for (const cfg of cfgRows) {
           const pct = Number(cfg.pct);
           const flat = Number(cfg.flat);
@@ -1878,9 +1884,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             });
           }
         }
+        for (const [clientId, cfg] of hugrabConfigs) {
+          hugrabShippingOverrideByClientId.set(clientId, cfg);
+        }
       }
     } catch (err) {
-      console.warn('[ps-798] client shipping markup bulk-load skipped:', err instanceof Error ? err.message : err);
+      console.warn('[ps-798/ps-367] client billing config bulk-load skipped:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -2354,6 +2363,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     // per-account path. Byte-identical for existing per-account markups (resolver returns the account
     // override verbatim) and for default clients (0/0 -> null -> base unchanged).
     const rowClientMarkup = r.order.clientId != null ? clientShippingMarkupByClientId.get(r.order.clientId) : undefined;
+    const rowHugrabShippingOverride =
+      r.order.clientId != null ? hugrabShippingOverrideByClientId.get(r.order.clientId) : undefined;
     const rowCanonicalMarkup = canViewFinancials
       ? resolveCanonicalMarkup({
           carrierAccountMarkup: rowMarkupRule,
@@ -2397,6 +2408,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
               ),
               realizedCustomerRate: null,
             }),
+            clientName: r.order.clientName ?? null,
+            hugrabShippingRateOverrideConfig: rowHugrabShippingOverride ?? null,
             // PS-239: marketplace-fee facts. Subtotal from the order items (Σ
             // non-adjustment unitPrice×qty); rule resolved most-specific-wins. The
             // marketplace axis is an optional refinement — store/client scope covers
@@ -2443,6 +2456,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             markupRule: null, // house: the margin IS the markup; no carrier markup applied
             insuranceAddOn: extractInsuranceAddOn(selectedRateRecord),
             houseMarkedAmount: realizedHouse.customerRate,
+            clientName: r.order.clientName ?? null,
+            hugrabShippingRateOverrideConfig: rowHugrabShippingOverride ?? null,
             productSubtotal: null,
             marketplaceFeeRule: null,
           },

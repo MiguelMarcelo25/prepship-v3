@@ -315,7 +315,7 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
         ? isHugrabClient
         : c.hugrabShippingRateOverrideEnabled !== false,
     hugrabShippingRateOverrideThreshold: Number(c.hugrabShippingRateOverrideThreshold ?? 6).toFixed(2),
-    hugrabShippingRateOverrideAmount: Number(c.hugrabShippingRateOverrideAmount ?? 6).toFixed(2),
+    hugrabShippingRateOverrideAmount: Number(c.hugrabShippingRateOverrideAmount ?? 7.73).toFixed(2),
     storageFeePerCuFt: Number(c.storageFeePerCuFt ?? 0).toFixed(2),
     billingMode: c.billingMode ?? c.billing_mode ?? 'per_shipment',
     active: c.active === false ? false : true,
@@ -337,7 +337,7 @@ export function buildBillingConfigInput(draft: BillingConfigDraft): UpdateBillin
     shippingMarkupFlat: parseNumber(draft.shippingMarkupFlat),
     hugrabShippingRateOverrideEnabled: draft.hugrabShippingRateOverrideEnabled !== false,
     hugrabShippingRateOverrideThreshold: parseNumber(draft.hugrabShippingRateOverrideThreshold || '6'),
-    hugrabShippingRateOverrideAmount: parseNumber(draft.hugrabShippingRateOverrideAmount || '6'),
+    hugrabShippingRateOverrideAmount: parseNumber(draft.hugrabShippingRateOverrideAmount || '7.73'),
     storageFeePerCuFt: parseNumber(draft.storageFeePerCuFt),
     billingMode: draft.billingMode || 'per_shipment',
     active: draft.active !== false,

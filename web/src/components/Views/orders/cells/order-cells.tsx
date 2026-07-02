@@ -231,6 +231,7 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
       markedAmount: backendMoney.markedAmount,
       insuranceAddOn: backendMoney.insuranceAddOn,
       fallbackAmount: bestRateBaseCost,
+      customerRateSource: backendMoney.customerRateSource,
     })
     : null
   return (

@@ -8,6 +8,7 @@ export type AwaitingBestRatePriceDisplayInput = {
   markedAmount: number | null | undefined
   insuranceAddOn: number | null | undefined
   fallbackAmount: number | null | undefined
+  customerRateSource?: string | null | undefined
 }
 
 export type AwaitingBestRatePriceDisplay = {
@@ -30,8 +31,12 @@ export function resolveAwaitingBestRatePriceDisplay(
   input: AwaitingBestRatePriceDisplayInput,
 ): AwaitingBestRatePriceDisplay {
   const purchaseAmount = finiteAmount(input.selectedRateCost) ?? finiteAmount(input.baseAmount)
+  const cShippingAmountForBestRate =
+    input.customerRateSource === 'hugrab_shipping_rate_override'
+      ? null
+      : finiteAmount(input.cShippingRateAmount)
   const customerAmount =
-    finiteAmount(input.cShippingRateAmount) ??
+    cShippingAmountForBestRate ??
     finiteAmount(input.markedAmount) ??
     purchaseAmount ??
     finiteAmount(input.fallbackAmount)

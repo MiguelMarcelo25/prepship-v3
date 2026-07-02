@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
+import { buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
+import { resolveAwaitingBestRatePriceDisplay } from '../web/src/components/Views/orders/best-rate-price-display';
 
 const {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
   resolveHugrabShippingRateOverride,
 } = await import('../src/services/billing-hugrab-shipping-rate-override');
+
+assert.equal(DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD, 6);
+assert.equal(DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT, 7.73);
 
 const defaulted = resolveHugrabShippingRateOverride({
   clientName: 'HUGRAB',
@@ -45,6 +51,16 @@ assert.equal(aboveThreshold.customerShippingRate, 5.88);
 assert.equal(aboveThreshold.selectedRateCost, 6);
 assert.equal(aboveThreshold.overrideApplied, false);
 
+const aboveFloor = resolveHugrabShippingRateOverride({
+  clientName: 'HUGRAB',
+  customerShippingRate: 6.82,
+  selectedRateCost: 6.82,
+});
+
+assert.equal(aboveFloor.customerShippingRate, 6.82);
+assert.equal(aboveFloor.selectedRateCost, 6.82);
+assert.equal(aboveFloor.overrideApplied, false);
+
 const selectedRateTrigger = resolveHugrabShippingRateOverride({
   clientName: 'HUGRAB',
   customerShippingRate: 6.5,
@@ -59,6 +75,74 @@ const selectedRateTrigger = resolveHugrabShippingRateOverride({
 assert.equal(selectedRateTrigger.customerShippingRate, 7.73);
 assert.equal(selectedRateTrigger.selectedRateCost, 5.88);
 assert.equal(selectedRateTrigger.overrideApplied, true);
+
+const billingDecision = decideShippingLineBilling({
+  labelCost: 5.88,
+  cShippingRateAmount: undefined,
+  billingMode: 'label_cost',
+  isBaselineCarrier: true,
+  refUspsRate: 0,
+  refUpsRate: 0,
+  shippingMarkupPct: 0,
+  shippingMarkupFlat: 0,
+  hugrabShippingRateOverride: {
+    clientName: 'HUGRAB',
+    selectedRateCost: 5.88,
+    config: { enabled: true, threshold: 6, amount: 7.73 },
+  },
+});
+
+assert.equal(billingDecision.billedAmount, 7.73);
+assert.equal(billingDecision.source, 'label_cost');
+assert.equal(billingDecision.markupApplied, false);
+
+const gridMoney = buildOrderRowMoneyDisplay({
+  isAwaiting: false,
+  bestRateBaseAmount: null,
+  selectedRateBaseAmount: 5.88,
+  labelFinalCost: 5.88,
+  markupRule: null,
+  insuranceAddOn: null,
+  houseMarkedAmount: null,
+  clientName: 'HUGRAB',
+  hugrabShippingRateOverrideConfig: { enabled: true, threshold: 6, amount: 7.73 },
+});
+
+assert.equal(gridMoney?.selectedRateCost, 5.88);
+assert.equal(gridMoney?.cShippingRateAmount, billingDecision.billedAmount);
+assert.equal(gridMoney?.shippingMarginAmount, 1.85);
+assert.equal(gridMoney?.markedAmount, 5.88);
+
+const bestRateDisplay = resolveAwaitingBestRatePriceDisplay({
+  markupSource: 'carrier_markup',
+  selectedRateCost: gridMoney?.selectedRateCost,
+  baseAmount: gridMoney?.baseAmount,
+  cShippingRateAmount: gridMoney?.cShippingRateAmount,
+  markedAmount: gridMoney?.markedAmount,
+  insuranceAddOn: gridMoney?.insuranceAddOn,
+  fallbackAmount: 5.88,
+  customerRateSource: gridMoney?.customerRateSource,
+});
+
+assert.equal(bestRateDisplay.primaryAmount, 5.88);
+assert.equal(bestRateDisplay.baseAmount, null);
+assert.equal(bestRateDisplay.mode, 'single_amount');
+
+const gridMoneyAtThreshold = buildOrderRowMoneyDisplay({
+  isAwaiting: false,
+  bestRateBaseAmount: null,
+  selectedRateBaseAmount: 6,
+  labelFinalCost: 6,
+  markupRule: null,
+  insuranceAddOn: null,
+  houseMarkedAmount: null,
+  clientName: 'HUGRAB',
+  hugrabShippingRateOverrideConfig: { enabled: true, threshold: 6, amount: 7.73 },
+});
+
+assert.equal(gridMoneyAtThreshold?.selectedRateCost, 6);
+assert.equal(gridMoneyAtThreshold?.cShippingRateAmount, 6);
+assert.equal(gridMoneyAtThreshold?.markedAmount, 6);
 
 const disabled = resolveHugrabShippingRateOverride({
   clientName: 'HUGRAB',
@@ -104,4 +188,19 @@ const configTable = readFileSync('web/src/components/Views/BillingConfigTable.ts
 assert.match(configTable, /Selected < \$/);
 assert.match(configTable, /Then C\. Ship \$/);
 
-console.log('PASS PS-366 HUGRAB shipping-rate override guard');
+const billingService = readFileSync('src/services/billing.ts', 'utf8');
+assert.doesNotMatch(billingService, /resolveHugrabShippingRateOverride/);
+assert.match(billingService, /hugrabShippingRateOverride:\s*\{/);
+
+const billingOwner = readFileSync('src/services/billing-shipping-line.ts', 'utf8');
+assert.match(billingOwner, /resolveHugrabShippingRateOverride/);
+
+const rateMoneyOwner = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
+assert.match(rateMoneyOwner, /resolveHugrabShippingRateOverride/);
+assert.match(rateMoneyOwner, /hugrabShippingRateOverrideConfig/);
+
+const billingParity = readFileSync('web/src/components/Views/billing-parity.ts', 'utf8');
+assert.match(billingParity, /hugrabShippingRateOverrideAmount:\s*Number\(c\.hugrabShippingRateOverrideAmount \?\? 7\.73\)/);
+assert.match(billingParity, /hugrabShippingRateOverrideAmount:\s*parseNumber\(draft\.hugrabShippingRateOverrideAmount \|\| '7\.73'\)/);
+
+console.log('PASS PS-367 HUGRAB C. Shipping Rate override guard');

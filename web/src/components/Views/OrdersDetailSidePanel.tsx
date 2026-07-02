@@ -292,6 +292,7 @@ export function OrdersDetailSidePanel({
       markedAmount: sidePanelBackendMoney.markedAmount,
       insuranceAddOn: sidePanelBackendMoney.insuranceAddOn,
       fallbackAmount: getBestRateBaseCost(panelDisplayOrder),
+      customerRateSource: sidePanelBackendMoney.customerRateSource,
     })
     : null
   const shipped = panelOrder.orderStatus !== 'awaiting_shipment'

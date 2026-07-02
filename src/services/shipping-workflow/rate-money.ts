@@ -8,7 +8,7 @@
  * FE re-deriving money policy — exactly what ARCHITECTURE.md forbids for
  * billing-adjacent display.
  *
- * This module owns, PURE (zero imports — offline guard-importable):
+ * This module owns the row money display tuple:
  *   - parsing a `markup.<pidOrCarrier>` settings value into a MarkupRule
  *   - the markup application math (percent / flat amount, 2dp rounding)
  *   - the row markup-rule lookup precedence (FE getCarrierMarkup parity:
@@ -22,6 +22,11 @@
  * FE prefers the DTO tuple and keeps its computation only as a deploy-skew
  * fallback (deleted in Phase 6).
  */
+
+import {
+  resolveHugrabShippingRateOverride,
+  type HugrabShippingRateOverrideConfig,
+} from '../billing-hugrab-shipping-rate-override';
 
 export type MarkupRule = { type: 'amount' | 'percent'; value: number };
 
@@ -155,7 +160,8 @@ export type OrderRowMoneyDisplay = {
     | 'best_rate_marked_amount'
     | 'selected_rate_marked_amount'
     | 'projected_customer_shipping_rate'
-    | 'realized_customer_shipping_rate';
+    | 'realized_customer_shipping_rate'
+    | 'hugrab_shipping_rate_override';
   rateCostSource:
     | 'best_rate_internal_cost'
     | 'selected_rate_internal_cost'
@@ -179,6 +185,8 @@ export type OrderRowMoneyFacts = {
   // PS-220: presence => this is a SHIPP house order. The captured customer_rate (cheapest eligible
   // non-SHIPP) becomes the bold marked amount; the carrier markupRule is suppressed (margin = spread).
   houseMarkedAmount?: number | null;
+  clientName?: string | null;
+  hugrabShippingRateOverrideConfig?: HugrabShippingRateOverrideConfig | null;
 };
 
 /**
@@ -208,8 +216,20 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     | 'customerRateSource'
     | 'rateCostSource'
   > => {
-    const cShippingRateAmount = positive(input.cShippingRateAmount);
+    const rawCShippingRateAmount = positive(input.cShippingRateAmount);
     const selectedRateCost = positive(input.selectedRateCost);
+    const overrideDecision =
+      rawCShippingRateAmount != null
+        ? resolveHugrabShippingRateOverride({
+            clientName: facts.clientName,
+            customerShippingRate: rawCShippingRateAmount,
+            selectedRateCost,
+            config: facts.hugrabShippingRateOverrideConfig,
+          })
+        : null;
+    const cShippingRateAmount = overrideDecision
+      ? positive(overrideDecision.customerShippingRate)
+      : rawCShippingRateAmount;
     const shippingMarginAmount =
       cShippingRateAmount != null && selectedRateCost != null
         ? round2(cShippingRateAmount - selectedRateCost)
@@ -227,7 +247,9 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
           : null,
       houseApplied: input.houseApplied,
       houseBadgeVisible: input.houseApplied,
-      customerRateSource: input.customerRateSource,
+      customerRateSource: overrideDecision?.overrideApplied === true
+        ? 'hugrab_shipping_rate_override'
+        : input.customerRateSource,
       rateCostSource: input.rateCostSource,
     };
   };

@@ -1,6 +1,6 @@
 export const HUGRAB_SHIPPING_RATE_OVERRIDE_CLIENT_NAME = 'HUGRAB';
 export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD = 6;
-export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT = 6;
+export const DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT = 7.73;
 
 export type HugrabShippingRateOverrideConfig = {
   enabled?: boolean | null;

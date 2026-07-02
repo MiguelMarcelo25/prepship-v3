@@ -499,6 +499,10 @@ export type OrderRowWorkflowFacts = {
     // awaiting, realized for shipped). Present => the money tuple's house branch
     // fires (marked = customer_rate, base = SHIPP drp_cost, carrier markup suppressed).
     houseMarkedAmount?: number | null;
+    // PS-367: pass-through HUGRAB C. Shipping Rate floor facts. The row-money owner
+    // applies these to cShippingRateAmount only; selected/purchased cost stays stable.
+    clientName?: string | null;
+    hugrabShippingRateOverrideConfig?: import('../billing-hugrab-shipping-rate-override').HugrabShippingRateOverrideConfig | null;
     // PS-239: marketplace-fee facts (display-only, redacted with the rest of money).
     productSubtotal?: number | null;
     marketplaceFeeRule?: MarketplaceFeeRule | null;
@@ -647,6 +651,8 @@ export function withOrderRowWorkflow(dto: BestRateWorkflowDto, facts: OrderRowWo
           markupRuleCanonical: facts.money.markupRuleCanonical,
           insuranceAddOn: facts.money.insuranceAddOn,
           houseMarkedAmount: facts.money.houseMarkedAmount ?? null,
+          clientName: facts.money.clientName ?? null,
+          hugrabShippingRateOverrideConfig: facts.money.hugrabShippingRateOverrideConfig ?? null,
         })
       : null;
     const marketplace = facts.money.canViewFinancials

@@ -66,7 +66,6 @@ import {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
   ensureHugrabShippingRateOverrideColumns,
-  resolveHugrabShippingRateOverride,
 } from './billing-hugrab-shipping-rate-override';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
@@ -1147,18 +1146,17 @@ export async function generateLineItems(input: GenerateInput) {
         refUpsRate: toNum(s.refUpsRate),
         shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
         shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
-      });
-      const shippingOverride = resolveHugrabShippingRateOverride({
-        clientName: cfg.clientName,
-        customerShippingRate: shippingDecision.billedAmount,
-        selectedRateCost: labelCost,
-        config: {
-          enabled: cfg.hugrabShippingRateOverrideEnabled,
-          threshold: cfg.hugrabShippingRateOverrideThreshold,
-          amount: cfg.hugrabShippingRateOverrideAmount,
+        hugrabShippingRateOverride: {
+          clientName: cfg.clientName,
+          selectedRateCost: labelCost,
+          config: {
+            enabled: cfg.hugrabShippingRateOverrideEnabled,
+            threshold: cfg.hugrabShippingRateOverrideThreshold,
+            amount: cfg.hugrabShippingRateOverrideAmount,
+          },
         },
       });
-      const billedShippingAmount = shippingOverride.customerShippingRate;
+      const billedShippingAmount = shippingDecision.billedAmount;
       rows.push({
         clientId,
         orderId: s.orderId,

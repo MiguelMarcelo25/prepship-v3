@@ -1,3 +1,8 @@
+import {
+  resolveHugrabShippingRateOverride,
+  type HugrabShippingRateOverrideConfig,
+} from './billing-hugrab-shipping-rate-override';
+
 // PS-220 — pure decision for a shipment's billed SHIPPING line amount. Extracted from
 // billing.ts so the money-committing choice (the worst-case failure is billing the WRONG
 // amount) is provable behaviorally, offline, instead of living inline + untested.
@@ -24,6 +29,11 @@ export type ShippingLineBillingInput = {
   refUpsRate: number;
   shippingMarkupPct: number;
   shippingMarkupFlat: number;
+  hugrabShippingRateOverride?: {
+    clientName: string | null | undefined;
+    selectedRateCost?: number | null | undefined;
+    config?: HugrabShippingRateOverrideConfig | null;
+  } | null | undefined;
 };
 
 export type ShippingLineBillingResult = {
@@ -35,6 +45,25 @@ export type ShippingLineBillingResult = {
   descriptionSuffix: string;
 };
 
+function withHugrabShippingRateOverride(
+  input: ShippingLineBillingInput,
+  result: ShippingLineBillingResult,
+): ShippingLineBillingResult {
+  const override = input.hugrabShippingRateOverride;
+  if (!override) return result;
+  const decision = resolveHugrabShippingRateOverride({
+    clientName: override.clientName,
+    customerShippingRate: result.billedAmount,
+    selectedRateCost: override.selectedRateCost ?? input.labelCost,
+    config: override.config,
+  });
+  if (decision.customerShippingRate === result.billedAmount) return result;
+  return {
+    ...result,
+    billedAmount: decision.customerShippingRate,
+  };
+}
+
 export function decideShippingLineBilling(input: ShippingLineBillingInput): ShippingLineBillingResult {
   const cShippingRateAmount = input.cShippingRateAmount;
   // HOUSE: bill the captured customer_rate; markup + reference-rate suppressed. Floor at the SHIPP
@@ -44,12 +73,12 @@ export function decideShippingLineBilling(input: ShippingLineBillingInput): Ship
   // customer_rate below cost. labelCost <= 0 (unknown cost) leaves the customer_rate untouched.
   if (cShippingRateAmount != null) {
     const floor = input.labelCost > 0 ? input.labelCost : cShippingRateAmount;
-    return {
+    return withHugrabShippingRateOverride(input, {
       billedAmount: Math.max(cShippingRateAmount, floor),
       source: 'c_shipping_rate',
       markupApplied: false,
       descriptionSuffix: '',
-    };
+    });
   }
 
   let billedCost = input.labelCost;
@@ -67,10 +96,10 @@ export function decideShippingLineBilling(input: ShippingLineBillingInput): Ship
   const flat = input.shippingMarkupFlat;
   const billedAmount = billedCost * (1 + pct / 100) + flat;
   const markupApplied = pct > 0 || flat > 0;
-  return {
+  return withHugrabShippingRateOverride(input, {
     billedAmount,
     source,
     markupApplied,
     descriptionSuffix: markupApplied ? ` (${pct}% + $${flat.toFixed(2)})` : '',
-  };
+  });
 }
