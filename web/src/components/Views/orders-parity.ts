@@ -641,7 +641,7 @@ export function formatSyncPill(sync: {
   page: number
   lastSync: number | null
   shipments?: { lastSyncedAt?: string | null } | null
-  watchdog?: { verdict?: { alert?: boolean; state?: string | null } | null } | null
+  watchdog?: { verdict?: { alert?: boolean; state?: string | null; reason?: string | null; recommendedAction?: string | null } | null } | null
   ratePrefetchRunning?: boolean
   ratePrefetchJob?: {
     total?: number
@@ -654,6 +654,7 @@ export function formatSyncPill(sync: {
     return {
       className: 'sync-pill syncing',
       text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}… (${sync.page || 0})`,
+      title: 'Sync is running now. Orders and labels may update after it finishes.\nClick to view API timing.',
     }
   }
 
@@ -667,6 +668,7 @@ export function formatSyncPill(sync: {
       text: updated > 0
         ? `Best rates ${progress} - ${updated} updated`
         : `Best rates ${progress}`,
+      title: `Best-rate refresh is running: ${progress}${updated > 0 ? `, ${updated} updated` : ''}.\nClick to view API timing.`,
     }
   }
 
@@ -690,12 +692,32 @@ export function formatSyncPill(sync: {
         ? Date.parse(sync.shipments.lastSyncedAt)
         : null
     const labelSyncTime = shipmentSyncMs ? formatCa(shipmentSyncMs) : null
-    const labelSyncAlert = Boolean(sync.watchdog?.verdict?.alert)
+    const watchdogVerdict = sync.watchdog?.verdict ?? null
+    const labelSyncAlert = Boolean(watchdogVerdict?.alert)
+    const watchdogReason = typeof watchdogVerdict?.reason === 'string' && watchdogVerdict.reason.trim()
+      ? watchdogVerdict.reason.trim()
+      : null
+    const watchdogState = typeof watchdogVerdict?.state === 'string' && watchdogVerdict.state.trim()
+      ? watchdogVerdict.state.trim().replace(/_/g, ' ')
+      : null
+    const watchdogAction = typeof watchdogVerdict?.recommendedAction === 'string' && watchdogVerdict.recommendedAction.trim()
+      ? watchdogVerdict.recommendedAction.trim().replace(/_/g, ' ')
+      : null
+    const syncTitle = [
+      labelSyncAlert ? 'Warning: shipment/label sync needs attention.' : 'Sync healthy.',
+      `Orders last synced: ${orderSyncTime}.`,
+      labelSyncTime ? `Labels last synced: ${labelSyncTime}.` : 'Labels have not synced yet.',
+      labelSyncAlert && watchdogReason ? `Reason: ${watchdogReason}.` : null,
+      labelSyncAlert && !watchdogReason && watchdogState ? `Reason: ${watchdogState}.` : null,
+      labelSyncAlert && watchdogAction && watchdogAction !== 'none' ? `Recovery: ${watchdogAction}.` : null,
+      'Click to view API timing.',
+    ].filter(Boolean).join('\n')
     return {
-      className: labelSyncAlert ? 'sync-pill error' : 'sync-pill done',
+      className: labelSyncAlert ? 'sync-pill warning' : 'sync-pill done',
       text: labelSyncTime
         ? `Orders ${orderSyncTime} / Labels ${labelSyncTime}`
         : `Order sync ${orderSyncTime}`,
+      title: syncTitle,
     }
   }
 
@@ -703,12 +725,14 @@ export function formatSyncPill(sync: {
     return {
       className: 'sync-pill error',
       text: 'Sync error',
+      title: 'Sync status failed to load.\nClick to view API timing.',
     }
   }
 
   return {
     className: 'sync-pill',
     text: 'Last sync —',
+    title: 'Waiting for first sync status.\nClick to view API timing.',
   }
 }
 

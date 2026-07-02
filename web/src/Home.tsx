@@ -905,8 +905,8 @@ export default function Home() {
                 className={`hidden md:inline-flex items-center gap-1.5 h-8 pl-2.5 pr-3 rounded-full text-[11.5px] font-medium font-mono tabular-nums whitespace-nowrap transition-colors hover:ring-1 hover:ring-brand/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${syncPill.className}`}
                 id="syncPill"
                 onClick={openApiTiming}
-                aria-label="Open API timing"
-                title="Click to view API timing"
+                aria-label={`${syncPill.text}. ${syncPill.title}`}
+                title={syncPill.title}
               >
                 <span className="sync-dot" aria-hidden />
                 <span id="syncText">

@@ -174,6 +174,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .sync-pill{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:12px;font-size:11px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text3);white-space:nowrap;}
 .sync-pill.syncing{background:var(--yellow-bg);border-color:#fcd34d;color:var(--yellow);}
 .sync-pill.done{background:var(--green-bg);border-color:var(--green-border);color:var(--green);}
+.sync-pill.warning{background:var(--orange-bg);border-color:#fed7aa;color:var(--orange);}
 .sync-pill.error{background:var(--red-bg);border-color:#fecaca;color:var(--red);}
 .sync-dot{width:6px;height:6px;border-radius:50%;background:currentColor;}
 .syncing .sync-dot{animation:pulse .8s ease-in-out infinite;}
