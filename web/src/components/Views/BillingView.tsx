@@ -1,6 +1,5 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { motion } from 'framer-motion'
-import { Check, ListFilter, Loader2, Pencil, Receipt, ShieldCheck, SlidersHorizontal, X } from 'lucide-react'
+import { ListFilter, Loader2, Pencil, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { apiClient } from '../../api/client'
 // PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
 // (that adapter is out of this ticket's scope); call the shared low-level
@@ -23,7 +22,6 @@ import {
   classifyBillingDetailPanel,
   computeBillingDetailMetrics,
   createBillingConfigDraftMap,
-  formatBillingShipDate,
   formatBillingMoney,
   getBillingDetailColumnStorageKey,
   getBillingInitialRange,
@@ -56,7 +54,16 @@ import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 import { BillingDetailTable } from './BillingDetailTable'
 import { BillingLineItemWarningSummary } from './BillingLineItemWarningSummary'
 import { hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
-import { BillingNoBoxCostPreview } from './BillingNoBoxCostPreview'
+import { BillingEditDetailModal, type BillingEditModalViewState } from './BillingEditDetailModal'
+import { BillingDashboardHeader } from './BillingDashboardHeader'
+import {
+  BillingShippingMarginSummary,
+  type BillingShippingMarginSummaryDto as ShippingMarginSummaryDto,
+} from './BillingShippingMarginSummary'
+import {
+  BillingShippingMarginReconciliation,
+  type BillingShippingMarginReconciliationRow as ShippingMarginRowDto,
+} from './BillingShippingMarginReconciliation'
 import {
   billingEditDraftForRow,
   clearBillingEditDraft,
@@ -85,26 +92,7 @@ interface BillingDetailState {
   error: string | null
 }
 
-type BillingEditModalState = {
-  row: BillingDetailDto
-  draft: BillingEditDraft
-  saving: boolean
-  error: string | null
-} | null
-
-type ShippingMarginSummaryDto = {
-  rowCount: number
-  marginRowCount: number
-  frozenCount: number
-  projectedCount: number
-  missingBillableCount: number
-  missingActualCostCount: number
-  missingAnyProofCount: number
-  actualShippingTotal: number
-  billableShippingTotal: number
-  marginTotal: number
-  marginPct: number | null
-}
+type BillingEditModalState = BillingEditModalViewState | null
 
 // PS-296 (FE): the backend carrier/account margin rollup (analytics.carriers[]) — was
 // fetched but discarded; surfaced as the Billing "Margin by carrier / account" breakdown.
@@ -121,27 +109,6 @@ type ShippingMarginCarrierDto = {
   marginRowCount: number
   negativeMarginCount: number
 }
-
-// PS-296 (FE, req6): per-shipment margin reconciliation rows (backend analytics.rows[]).
-type ShippingMarginRowDto = {
-  orderNumber: string | null
-  orderId: number | null
-  shipmentId: number | null
-  shipDate: string | null
-  carrierCode: string | null
-  serviceCode: string | null
-  providerAccountNickname: string | null
-  accountDisplayName?: string | null
-  accountDisplaySource?: string | null
-  actualShippingCost: number | null
-  billableShippingAmount: number | null
-  marginAmount: number | null
-  marginPct: number | null
-  state: string
-  missingProofReasons: string[]
-}
-
-const SHIPPING_MARGIN_DRILLDOWN_LIMIT = 250
 
 const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummaryDto = {
   rowCount: 0,
@@ -235,12 +202,6 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
 function parseMoneyDraft(value: string) {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : 0
-}
-
-function marginColor(value: number) {
-  if (value > 0) return 'var(--green)'
-  if (value < 0) return 'var(--red)'
-  return 'var(--text3)'
 }
 
 function normalizeBillingClientName(value: string | null | undefined) {
@@ -1491,20 +1452,7 @@ export default function BillingView() {
 
   return (
     <div id="view-billing" className="view-content !p-5 !overflow-y-auto flex flex-col">
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        className="order-0 flex items-center gap-3 mb-5"
-      >
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-md ring-1 ring-emerald-400/20">
-          <Receipt size={20} strokeWidth={2.25} className="text-white" />
-        </div>
-        <div>
-          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Billing Dashboard</h2>
-          <p className="text-tiny text-ink-3 mt-0.5">Per-client billing config, package pricing and invoice history</p>
-        </div>
-      </motion.div>
+      <BillingDashboardHeader />
 
       <div className="order-1 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
         <div className="flex items-center gap-2 mb-3">
@@ -1550,39 +1498,11 @@ export default function BillingView() {
           onToggleClient={handleToggleBillingClient}
         />
 
-        <div
-          aria-label="Shipping margin analytics"
-          className="grid gap-2.5 my-3.5"
-          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}
-        >
-          {[
-            ['Actual shipping', formatBillingMoney(shippingMarginSummary.actualShippingTotal, { dashIfZero: true })],
-            ['Billable shipping', formatBillingMoney(shippingMarginSummary.billableShippingTotal, { dashIfZero: true })],
-            ['Margin', formatBillingMoney(shippingMarginSummary.marginTotal, { dashIfZero: true })],
-            ['Margin %', shippingMarginSummary.marginPct == null ? '—' : `${shippingMarginSummary.marginPct.toFixed(2)}%`],
-            ['Rows', `${shippingMarginSummary.marginRowCount}/${shippingMarginSummary.rowCount}`],
-            ['State', `${shippingMarginSummary.frozenCount} frozen · ${shippingMarginSummary.projectedCount} projected`],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-lg bg-surface-2 px-3 py-2.5 min-w-0">
-              <div className="text-[10.5px] text-ink-3 truncate">{label}</div>
-              <div
-                className="text-[15px] font-bold tabular-nums truncate"
-                style={label === 'Margin' ? { color: marginColor(shippingMarginSummary.marginTotal) } : undefined}
-              >
-                {value}
-              </div>
-            </div>
-          ))}
-        </div>
-        {(shippingMarginLoading || shippingMarginError || shippingMarginSummary.missingAnyProofCount > 0) ? (
-          <div className="text-[11px] mb-3" style={{ color: shippingMarginError ? 'var(--red)' : 'var(--text3)' }}>
-            {shippingMarginLoading
-              ? 'Loading shipping margin…'
-              : shippingMarginError
-                ? shippingMarginError
-                : `${shippingMarginSummary.missingAnyProofCount} shipment(s) missing proof (${shippingMarginSummary.missingBillableCount} billable, ${shippingMarginSummary.missingActualCostCount} actual)`}
-          </div>
-        ) : null}
+        <BillingShippingMarginSummary
+          summary={shippingMarginSummary}
+          loading={shippingMarginLoading}
+          error={shippingMarginError}
+        />
         <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, margin: '0 0 14px' }}>
           {/* PS-155: Client Billing Config table extracted to <BillingConfigTable />.
               The config DRAFT state (configDrafts) + setter and the Save handler
@@ -1615,59 +1535,11 @@ export default function BillingView() {
             analytics.carriers[] rollup. Now on the shared <Table> with pagination
             (BillingCarrierMarginTable); renders nothing when there are no carrier rows. */}
         <BillingCarrierMarginTable carriers={shippingMarginCarriers} />
-        {/* PS-296 (FE, req6): per-shipment reconciliation drilldown — consumes the backend
-            analytics.rows[] (previously discarded). Collapsed by default; capped with a
-            visible "showing X of N" note (no silent truncation). Display-only. */}
-        {shippingMarginRows.length > 0 ? (
-          <div style={{ margin: '0 0 14px' }}>
-            <button
-              type="button"
-              onClick={() => setShippingMarginDrilldownOpen((open) => !open)}
-              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.04em' }}
-            >
-              {shippingMarginDrilldownOpen ? '▾' : '▸'} Per-order reconciliation ({shippingMarginRows.length})
-            </button>
-            {shippingMarginDrilldownOpen ? (
-              <div style={{ overflowX: 'auto', marginTop: 6 }}>
-                <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
-                  <thead>
-                    <tr style={{ color: 'var(--text3)', textAlign: 'right', borderBottom: '1px solid var(--border)' }}>
-                      <th style={{ textAlign: 'left', padding: '3px 8px 3px 0' }}>Order #</th>
-                      <th style={{ textAlign: 'left', padding: '3px 8px' }}>Shipment</th>
-                      <th style={{ textAlign: 'left', padding: '3px 8px' }}>Ship date</th>
-                      <th style={{ textAlign: 'left', padding: '3px 8px' }}>Carrier / account</th>
-                      <th style={{ padding: '3px 8px' }}>Cost</th>
-                      <th style={{ padding: '3px 8px' }}>Billable</th>
-                      <th style={{ padding: '3px 8px' }}>Margin</th>
-                      <th style={{ padding: '3px 8px' }}>%</th>
-                      <th style={{ textAlign: 'left', padding: '3px 0 3px 8px' }}>Issues</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shippingMarginRows.slice(0, SHIPPING_MARGIN_DRILLDOWN_LIMIT).map((row, index) => (
-                      <tr key={`${row.shipmentId ?? ''}|${row.orderId ?? ''}|${index}`} style={{ textAlign: 'right', borderBottom: '1px solid var(--border-subtle, rgba(0,0,0,0.05))' }}>
-                        <td style={{ textAlign: 'left', padding: '3px 8px 3px 0', fontWeight: 600 }}>{row.orderNumber ?? '—'}</td>
-                        <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text3)' }}>{row.shipmentId ?? '—'}</td>
-                        <td style={{ textAlign: 'left', padding: '3px 8px', color: 'var(--text2)' }}>{row.shipDate ? row.shipDate.slice(0, 10) : '—'}</td>
-                        <td style={{ textAlign: 'left', padding: '3px 8px' }}>{row.carrierCode ?? '—'}{row.serviceCode ? ` · ${row.serviceCode}` : ''}{(row.accountDisplayName ?? row.providerAccountNickname) ? ` (${row.accountDisplayName ?? row.providerAccountNickname})` : ''}</td>
-                        <td style={{ padding: '3px 8px' }}>{row.actualShippingCost == null ? '—' : formatBillingMoney(row.actualShippingCost)}</td>
-                        <td style={{ padding: '3px 8px' }}>{row.billableShippingAmount == null ? '—' : formatBillingMoney(row.billableShippingAmount)}</td>
-                        <td style={{ padding: '3px 8px', fontWeight: 700, color: row.marginAmount == null ? 'var(--text3)' : marginColor(row.marginAmount) }}>{row.marginAmount == null ? '—' : formatBillingMoney(row.marginAmount)}</td>
-                        <td style={{ padding: '3px 8px' }}>{row.marginPct == null ? '—' : `${row.marginPct.toFixed(1)}%`}</td>
-                        <td style={{ textAlign: 'left', padding: '3px 0 3px 8px', color: (row.missingProofReasons ?? []).length > 0 ? 'var(--red)' : 'var(--text3)' }}>{(row.missingProofReasons ?? []).length > 0 ? (row.missingProofReasons ?? []).join(', ') : (row.state ?? '')}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {shippingMarginRows.length > SHIPPING_MARGIN_DRILLDOWN_LIMIT ? (
-                  <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>
-                    Showing first {SHIPPING_MARGIN_DRILLDOWN_LIMIT} of {shippingMarginRows.length} shipments — narrow the date range to see the rest.
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        <BillingShippingMarginReconciliation
+          rows={shippingMarginRows}
+          open={shippingMarginDrilldownOpen}
+          onToggle={() => setShippingMarginDrilldownOpen((open) => !open)}
+        />
 
         {/* Summary table — migrated 2026-05-12 to the reusable <Table>
             primitive (components/ui/Table.tsx). Operator-controlled
@@ -1773,257 +1645,27 @@ export default function BillingView() {
         ) : null}
       </div>
       {billingEditModal ? (
-        <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !billingEditModal.saving && handleCloseBillingEditModal()}>
-          <div className="billing-edit-modal" role="dialog" aria-modal="true" aria-label="Edit billing detail" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="billing-edit-head">
-              <div>
-                <h3>Edit Billing Detail</h3>
-                <p>{billingEditModal.row.orderNumber || `Order ${billingEditModal.row.orderId}`}</p>
-              </div>
-              <button className="btn btn-ghost btn-xs" type="button" disabled={billingEditModal.saving} onClick={handleCloseBillingEditModal}>
-                <X size={14} aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="billing-edit-readonly-grid">
-              <div><span>Order #</span><strong>{billingEditModal.row.orderNumber || '—'}</strong></div>
-              <div><span>Ship Date</span><strong>{formatBillingShipDate(billingEditModal.row.shipDate)}</strong></div>
-              <div><span>Carrier</span><strong>{billingEditModal.row.carrierNickname || billingEditModal.row.providerAccountNickname || billingEditModal.row.carrierCode || '—'}</strong></div>
-              <div><span>Qty</span><strong>{billingEditModal.row.totalQty || billingEditModal.row.qty || 0}</strong></div>
-              <div><span>Item Name</span><strong>{billingEditModal.row.itemNames || billingEditModal.row.description || '—'}</strong></div>
-              <div><span>SKU</span><strong>{billingEditModal.row.itemSkus || '—'}</strong></div>
-              <div>
-                <span>Box Size</span>
-                <select
-                  className="ship-select billing-edit-box-select"
-                  style={{ width: '100%', fontSize: 12, fontWeight: 600 }}
-                  value={billingEditModal.draft.packageId}
-                  disabled={billingEditModal.saving}
-                  onChange={(event) => handleBillingEditPackageChange(event.target.value)}
-                >
-                  <option value="">{billingEditModal.row.packageName ? `${billingEditModal.row.packageName} (shipment box)` : '— (shipment box)'}</option>
-                  {packages.map((pkg) => {
-                    const id = String(pkg.packageId ?? pkg.id)
-                    return <option key={id} value={id}>{pkg.name || id}</option>
-                  })}
-                </select>
-              </div>
-              <div><span>Selected Rate</span><strong>{formatBillingMoney(billingEditModal.row.selectedRateCost ?? billingEditModal.row.selected_rate_cost, { dashIfZero: true })}</strong></div>
-              <div><span>UPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_ups_rate, { dashIfZero: true })}</strong></div>
-              <div><span>USPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_usps_rate, { dashIfZero: true })}</strong></div>
-            </div>
-
-            {hasBillingNoBoxCostAlert(billingEditModal.row) ? (
-              <BillingNoBoxCostPreview
-                rows={billingNoBoxCostRows}
-                activeRow={billingEditModal.row}
-                onOpenBillingEdit={handleOpenBillingEdit}
-                onBulkApplyBoxCost={handleOpenNoBoxCostBulkApply}
-              />
-            ) : null}
-
-            {/* PS-207: backend box-review flag — the shipped box could not be
-                resolved (or selected box ≠ shipment dims). Picking a Box Size
-                and/or typing a Box Cost below resolves it: the save persists a
-                billing_box_resolutions directive that survives regeneration. */}
-            {billingEditModal.row.packageCostNeedsReview ? (
-              <div
-                role="alert"
-                style={{
-                  margin: '8px 0',
-                  padding: '8px 12px',
-                  border: '1px solid #fde68a',
-                  borderRadius: 8,
-                  background: 'rgba(245, 158, 11, 0.10)',
-                  fontSize: 11.5,
-                  color: 'var(--text)',
-                }}
-              >
-                <strong style={{ color: '#b45309' }}>Box needs review:</strong>{' '}
-                {billingEditModal.row.packageCostReviewReason || 'the shipped box could not be matched to a known package.'}
-                {' '}Pick the correct Box Size (or set a Box Cost) and Save — the decision persists across billing regeneration.
-                {/* PS-311b: sweep this SAME unmatched box size across a date range you pick — set the
-                    cost once and apply it to every needs-review bill of this box for THIS client
-                    (preview-first, gated). Available for any needs-review box (no package pick needed,
-                    since unmatched custom boxes have no package to choose). */}
-                {detailState.clientId != null ? (
-                  <div style={{ marginTop: 8 }}>
-                    <button
-                      data-box-review-sweep-trigger
-                      className="btn btn-secondary btn-xs"
-                      type="button"
-                      onClick={() => setBoxReviewSweepOpen(true)}
-                    >
-                      Set this box cost across a date range…
-                    </button>
-                  </div>
-                ) : null}
-                {/* PS-311: once a real box is chosen from the dropdown, re-price every order ALREADY
-                    billed for that resolved box in the current client + date range. */}
-                {billingEditModal.draft.packageId && detailState.clientId != null ? (
-                  <div style={{ marginTop: 8 }}>
-                    <button
-                      data-bulk-box-cost-trigger
-                      className="btn btn-secondary btn-xs"
-                      type="button"
-                      onClick={() => setBulkBoxCostOpen(true)}
-                    >
-                      Re-price the chosen box across {from} → {to}…
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            {/* PS-275: $0-shipping review. The backend flags a billed shipping
-                line of EXACTLY $0.00 (shippingZeroNeedsReview) — a real recorded
-                zero-dollar label, distinct from a missing cost. The operator
-                decides: WAIVE the prep fee (the order shipped free, so comp the
-                prep), or KEEP it. The decision is durable + reversible; a waive
-                takes effect on the next "Update Billing". Additive, behind the
-                backend flag — canary; needs DJ eyeball. */}
-            {billingEditModal.row.shippingZeroNeedsReview && billingEditModal.row.feeWaiverDecision == null ? (
-              <div
-                role="group"
-                aria-label="Review $0 shipping"
-                style={{
-                  margin: '8px 0',
-                  padding: '8px 12px',
-                  border: '1px solid #bfdbfe',
-                  borderRadius: 8,
-                  background: 'rgba(59, 130, 246, 0.08)',
-                  fontSize: 11.5,
-                  color: 'var(--text)',
-                }}
-              >
-                <div style={{ marginBottom: 6 }}>
-                  <strong style={{ color: '#1d4ed8' }}>$0 shipping — review:</strong>{' '}
-                  this order shipped at a recorded cost of exactly $0.00 — often the customer handled
-                  shipping themselves. If they did, waive the DR PREPPER prep/fulfillment fees.
-                  {billingEditModal.row.feeWaived ? ' Prep fee is currently WAIVED.' : ''}
-                </div>
-                {/* PS-275 (item 1): enumerate exactly what a waive zeroes — ONLY the prep/fulfillment
-                    fee lines, for THIS client — so the operator decides safely. */}
-                <div style={{ marginBottom: 8, fontSize: 11, opacity: 0.85 }}>
-                  Client <strong>{detailState.clientName || '—'}</strong> — waiving sets these to $0:{' '}
-                  Pick &amp; Pack <strong>{formatBillingMoney(Number(billingEditModal.draft.pickPack || 0))}</strong>
-                  {' '}+ Add&apos;l Units <strong>{formatBillingMoney(Number(billingEditModal.draft.additional || 0))}</strong>
-                  {' '}= <strong>{formatBillingMoney(Number(billingEditModal.draft.pickPack || 0) + Number(billingEditModal.draft.additional || 0))}</strong>
-                  {' '}prep. Box, storage, shipping label, product &amp; marketplace fees are NOT touched.
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    className="btn btn-secondary btn-xs"
-                    type="button"
-                    disabled={zeroShippingReviewSaving}
-                    onClick={() => void handleZeroShippingReview('waived')}
-                  >
-                    {zeroShippingReviewSaving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : null}
-                    Customer handled shipping — set prep fees to $0
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-xs"
-                    type="button"
-                    disabled={zeroShippingReviewSaving}
-                    onClick={() => void handleZeroShippingReview('not_waived')}
-                  >
-                    DR PREPPER handled — keep fees
-                  </button>
-                </div>
-              </div>
-            ) : billingEditModal.row.feeWaived ? (
-              // PS-275 (item 3): a recorded waive only takes effect on the next "Update Billing"
-              // regenerate (which re-applies applyPrepFeeWaiver). Until then the prep lines still bill,
-              // so DISTINGUISH "pending" (decision saved, prep not yet zeroed) from "applied" — never let
-              // the operator believe the fee is already off the invoice. Pending = feeWaived AND the
-              // row's prep total is still > 0.
-              (Number(billingEditModal.draft.pickPack || 0) + Number(billingEditModal.draft.additional || 0)) > 0 ? (
-                <div
-                  role="status"
-                  style={{
-                    margin: '8px 0', padding: '6px 12px',
-                    border: '1px solid #fde68a', borderRadius: 8,
-                    background: 'rgba(245, 158, 11, 0.10)', fontSize: 11.5, color: '#92400e',
-                  }}
-                >
-                  <strong>Prep fee waived — pending.</strong> The decision is saved; run{' '}
-                  <strong>Update Billing</strong> for this range to zero the prep lines on the invoice. (Reversible.)
-                </div>
-              ) : (
-                <div
-                  role="status"
-                  style={{
-                    margin: '8px 0', padding: '6px 12px',
-                    border: '1px solid #bbf7d0', borderRadius: 8,
-                    background: 'rgba(34, 197, 94, 0.08)', fontSize: 11.5, color: '#166534',
-                  }}
-                >
-                  <strong>Prep fee waived — applied</strong> ($0 prep). Reversible via Update Billing.
-                </div>
-              )
-            ) : billingEditModal.row.feeWaiverDecision === 'not_waived' ? (
-              <div
-                role="status"
-                style={{
-                  margin: '8px 0',
-                  padding: '6px 12px',
-                  border: '1px solid #bfdbfe',
-                  borderRadius: 8,
-                  background: 'rgba(59, 130, 246, 0.08)',
-                  fontSize: 11.5,
-                  color: '#1d4ed8',
-                }}
-              >
-                <strong>$0 shipping reviewed — prep fee kept.</strong> Reversible via the $0-shipping review action if this order should be waived later.
-                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                  <button
-                    className="btn btn-secondary btn-xs"
-                    type="button"
-                    disabled={zeroShippingReviewSaving}
-                    onClick={() => void handleZeroShippingReview('waived')}
-                  >
-                    {zeroShippingReviewSaving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : null}
-                    Change to waive prep fees
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="billing-edit-money-grid">
-              <label>
-                <span>Pick & Pack</span>
-                <input type="number" min="0" step="0.01" value={billingEditModal.draft.pickPack} onChange={(event) => handleBillingEditDraftChange('pickPack', event.target.value)} />
-              </label>
-              <label>
-                <span>Addl Units</span>
-                <input type="number" min="0" step="0.01" value={billingEditModal.draft.additional} onChange={(event) => handleBillingEditDraftChange('additional', event.target.value)} />
-              </label>
-              <label>
-                <span>Box Cost</span>
-                <input type="number" min="0" step="0.01" value={billingEditModal.draft.packageCost} onChange={(event) => handleBillingEditDraftChange('packageCost', event.target.value)} />
-              </label>
-              <label>
-                <span>Shipping</span>
-                <input type="number" min="0" step="0.01" value={billingEditModal.draft.shipping} onChange={(event) => handleBillingEditDraftChange('shipping', event.target.value)} />
-              </label>
-            </div>
-
-            <div className="billing-edit-total-row">
-              <div><span>Total</span><strong>{formatBillingMoney(billingEditDraftTotal)}</strong></div>
-              <div><span>Shipping Margin</span><strong style={{ color: marginColor(billingEditDraftMargin) }}>{billingEditDraftMargin > 0 ? '+' : ''}${billingEditDraftMargin.toFixed(2)}</strong></div>
-            </div>
-
-            {billingEditModal.error ? <div className="billing-edit-error">{billingEditModal.error}</div> : null}
-
-            <div className="billing-edit-actions">
-              <button className="btn btn-secondary btn-sm" type="button" disabled={billingEditModal.saving} onClick={handleCloseBillingEditModal}>Cancel</button>
-              <button className="btn btn-primary btn-sm" type="button" disabled={billingEditModal.saving} onClick={() => void handleSaveBillingEdit()}>
-                {billingEditModal.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
+        <BillingEditDetailModal
+          modal={billingEditModal}
+          packages={packages}
+          noBoxCostRows={billingNoBoxCostRows}
+          clientId={detailState.clientId}
+          clientName={detailState.clientName}
+          from={from}
+          to={to}
+          draftTotal={billingEditDraftTotal}
+          draftMargin={billingEditDraftMargin}
+          zeroShippingReviewSaving={zeroShippingReviewSaving}
+          onClose={handleCloseBillingEditModal}
+          onPackageChange={handleBillingEditPackageChange}
+          onDraftChange={handleBillingEditDraftChange}
+          onOpenBillingEdit={handleOpenBillingEdit}
+          onOpenNoBoxCostBulkApply={handleOpenNoBoxCostBulkApply}
+          onOpenBoxReviewSweep={() => setBoxReviewSweepOpen(true)}
+          onOpenBulkBoxCost={() => setBulkBoxCostOpen(true)}
+          onZeroShippingReview={handleZeroShippingReview}
+          onSave={handleSaveBillingEdit}
+        />
       ) : null}
 
       {/* PS-311: bulk box-cost modal — opened from the per-order edit modal's box-review action.
