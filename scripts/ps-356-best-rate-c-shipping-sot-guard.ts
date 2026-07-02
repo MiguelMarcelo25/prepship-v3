@@ -112,9 +112,9 @@ const passThroughMoney = buildOrderRowMoneyDisplay({
 });
 
 check(
-  'when customer-margin mode is off, customer Best Rate equals the backend marked amount',
-  passThroughMoney?.rateCostAmount === 5 &&
-    passThroughMoney.customerRateAmount === 5 &&
+  'when customer-margin mode is off, C. Shipping Rate equals the backend marked amount',
+  passThroughMoney?.selectedRateCost === 5 &&
+    passThroughMoney.cShippingRateAmount === 5 &&
     passThroughMoney.shippingMarginAmount === 0,
   passThroughMoney,
 );
@@ -131,8 +131,8 @@ const houseMoney = buildOrderRowMoneyDisplay({
 
 check(
   'when customer-margin mode is on, backend separates customer rate and internal purchase cost',
-  houseMoney?.rateCostAmount === 5 &&
-    houseMoney.customerRateAmount === 8 &&
+  houseMoney?.selectedRateCost === 5 &&
+    houseMoney.cShippingRateAmount === 8 &&
     houseMoney.shippingMarginAmount === 3,
   houseMoney,
 );
@@ -146,24 +146,24 @@ check(
   'Rate Browser DTO keeps shipmentCost/totalCost on the Best Rate purchase basis',
   (aliasedBest as any).shipmentCost === 5 &&
     (aliasedBest as any).totalCost === 5 &&
-    (aliasedBest as any).rateCostAmount === 5 &&
-    (aliasedBest as any).customerRateAmount === 12,
+    (aliasedBest as any).selectedRateCost === 5 &&
+    (aliasedBest as any).cShippingRateAmount === 12,
   aliasedBest,
 );
 
 const normalized = normalizeOrderBestRateDto(aliasedBest);
 check(
-  'OrderBestRateDto preserves purchase cost and customerRateAmount as separated money fields',
+  'OrderBestRateDto preserves purchase cost and C. Shipping Rate as separated money fields',
   normalized?.shipmentCost === 5 &&
     normalized.totalCost === 5 &&
-    normalized.rateCostAmount === 5 &&
-    normalized.customerRateAmount === 12,
+    normalized.selectedRateCost === 5 &&
+    normalized.cShippingRateAmount === 12,
   normalized,
 );
 
 const billingDecision = decideShippingLineBilling({
   labelCost: 5,
-  houseCustomerRate: 8,
+  cShippingRateAmount: 8,
   billingMode: 'label_cost',
   isBaselineCarrier: false,
   refUspsRate: 7,
@@ -174,21 +174,21 @@ const billingDecision = decideShippingLineBilling({
 
 check(
   'billing uses customer rate when present, not internal Rate Cost',
-  billingDecision.billedAmount === 8 && billingDecision.source === 'house_customer_rate',
+  billingDecision.billedAmount === 8 && billingDecision.source === 'c_shipping_rate',
   billingDecision,
 );
 
 const redactedOrder = redactOrderFinancials(
   {
     shipping: {
-      customerRateAmount: 12,
-      rateCostAmount: 5,
+      cShippingRateAmount: 12,
+      selectedRateCost: 5,
       shippingMarginAmount: 7,
     },
     bestRateWorkflow: {
       money: {
-        customerRateAmount: 12,
-        rateCostAmount: 5,
+        cShippingRateAmount: 12,
+        selectedRateCost: 5,
         shippingMarginAmount: 7,
       },
     },
@@ -199,24 +199,24 @@ const redactedOrder = redactOrderFinancials(
 check(
   'non-financial order viewers cannot see Best Rate purchase or C. Shipping money tuple',
   redactedOrder.bestRateWorkflow.money === null &&
-    redactedOrder.shipping.customerRateAmount === null &&
-    redactedOrder.shipping.rateCostAmount === null,
+    redactedOrder.shipping.cShippingRateAmount === null &&
+    redactedOrder.shipping.selectedRateCost === null,
   redactedOrder,
 );
 
 const redactedBrowse = redactRateBrowserMoney({
   bestRate: {
     carrier_code: 'ups',
-    customerRateAmount: 12,
-    rateCostAmount: 5,
+    cShippingRateAmount: 12,
+    selectedRateCost: 5,
     shippingMarginAmount: 7,
   },
 }) as any;
 
 check(
   'non-financial Rate Browser viewers cannot see Best Rate purchase or C. Shipping values',
-  redactedBrowse.bestRate.customerRateAmount === null &&
-    redactedBrowse.bestRate.rateCostAmount === null,
+  redactedBrowse.bestRate.cShippingRateAmount === null &&
+    redactedBrowse.bestRate.selectedRateCost === null,
   redactedBrowse,
 );
 

@@ -195,7 +195,7 @@ export function BillingConfigTable({
                   config={row}
                   draft={configDrafts[row.clientId]}
                   field="hugrabShippingRateOverrideAmount"
-                  fallback="6.00"
+                  fallback="7.73"
                   title="HUGRAB only: bill this C. Shipping Rate amount when the selected-rate threshold is triggered."
                   onChange={(field, value) => updateConfigDraft(row, field, value)}
                 />

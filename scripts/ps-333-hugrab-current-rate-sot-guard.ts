@@ -267,23 +267,23 @@ const bestRateBaseCostBlock = rowDisplaySrc.slice(
   rowDisplaySrc.indexOf('export function getBestRateFinalBaseCost('),
 );
 check(
-  'Awaiting Best Rate amount reads backend customer amount, not order.bestRate fallback math',
+  'Awaiting Best Rate amount reads backend selected/C. Shipping money, not order.bestRate fallback math',
     /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
-    /customerRateAmount/.test(bestRateBaseCostBlock) &&
-    /markedAmount/.test(bestRateBaseCostBlock) &&
-    /rateCostAmount/.test(bestRateBaseCostBlock) &&
+    /selectedRateCost/.test(bestRateBaseCostBlock) &&
     /baseAmount/.test(bestRateBaseCostBlock) &&
+    /cShippingRateAmount/.test(bestRateBaseCostBlock) &&
+    /markedAmount/.test(bestRateBaseCostBlock) &&
     /\?\? null/.test(bestRateBaseCostBlock) &&
-    !/order\.bestRate|shipmentCost|otherCost/.test(bestRateBaseCostBlock),
+    !/order\.bestRate|shipmentCost|otherCost|customerRateAmount|rateCostAmount/.test(bestRateBaseCostBlock),
 );
 
 const v2SharedSrc = read('web/src/lib/v2-apiClient/shared.ts');
 check(
-  'rate transport translation preserves backend-named money fields instead of minting a second money truth',
-  /customerRateAmount: obj\.customerRateAmount \?\? null/.test(v2SharedSrc) &&
-    /rateCostAmount: obj\.rateCostAmount \?\? null/.test(v2SharedSrc) &&
-    /houseRateAmount: obj\.houseRateAmount \?\? null/.test(v2SharedSrc) &&
-    /shippingMarginAmount: obj\.shippingMarginAmount \?\? null/.test(v2SharedSrc),
+  'rate transport translation preserves backend-named canonical money fields instead of minting a second money truth',
+  /cShippingRateAmount: obj\.cShippingRateAmount \?\? null/.test(v2SharedSrc) &&
+    /selectedRateCost: obj\.selectedRateCost \?\? null/.test(v2SharedSrc) &&
+    /shippingMarginAmount: obj\.shippingMarginAmount \?\? null/.test(v2SharedSrc) &&
+    !/customerRateAmount:|rateCostAmount:|houseRateAmount:/.test(v2SharedSrc),
 );
 
 if (failures > 0) {
