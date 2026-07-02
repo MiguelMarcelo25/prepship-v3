@@ -91,6 +91,8 @@ assert.match(xlsxRenderer, /skus:\s*invoiceOneLineCell\(d\.skus\)/, 'Line Items 
 assert.doesNotMatch(xlsxRenderer, /skus:\s*d\.skus\s*\?\?\s*''/, 'Line Items sheet must not export raw multiline SKU text');
 assert.doesNotMatch(xlsxRenderer, /WAIVED_COLUMN_HEADER|key:\s*'waiver'|waivedCellText\(d\.fee_waived\)/, 'Line Items sheet must omit the Prep Fee Waiver column');
 assert.match(xlsxRenderer, /header:\s*INVOICE_SHIP_DATE_HEADER/, 'Line Items sheet must use the shared California ship-date header');
+assert.match(billingRoute, /order by b\.ship_date desc,\s*b\.order_id desc/, 'Invoice detail source must sort latest ship date/order first for Excel');
+assert.doesNotMatch(billingRoute, /order by b\.ship_date asc,\s*b\.order_id asc/, 'Invoice detail source must not sort oldest orders first');
 
 const packageJson = readFileSync('package.json', 'utf8');
 assert.match(packageJson, /"test:billing-invoice-xlsx-layout": "tsx scripts\/billing-invoice-xlsx-layout-guard\.ts"/, 'package.json must expose the XLSX layout guard');

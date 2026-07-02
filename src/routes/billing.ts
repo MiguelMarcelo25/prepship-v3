@@ -1131,7 +1131,7 @@ async function billingInvoiceData(
       and b.ship_date >= ${dateFrom}::timestamptz
       and b.ship_date < ${dateTo}::timestamptz
     group by b.order_id, b.order_number, b.ship_date
-    order by b.ship_date asc, b.order_id asc
+    order by b.ship_date desc, b.order_id desc
   `);
 
   // PS-217: resolve the human-readable billed box from the stamped package_id.
