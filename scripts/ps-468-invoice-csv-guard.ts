@@ -38,7 +38,7 @@ function read(path: string): string {
 
 // ── 1. Behavioral: derivation parity with the XLSX Line Items sheet ──────────
 
-// Header columns must mirror the XLSX "Line Items" sheet, in order.
+// Header columns must mirror the operator-facing invoice line item sheet, in order.
 assert.deepEqual(
   INVOICE_CSV_HEADERS,
   [
@@ -53,12 +53,10 @@ assert.deepEqual(
     'Shipping',
     'Storage',
     'Total',
-    // PS-275 item 2: the prep-fee waiver indicator column (last, mirroring the
-    // XLSX Line Items sheet; HTML keeps only the period-level waiver note).
-    'Prep Fee Waiver',
   ],
-  'CSV columns must mirror the XLSX Line Items sheet, in order',
+  'CSV columns must keep the operator-facing line item order and omit Prep Fee Waiver',
 );
+assert.ok(!INVOICE_CSV_HEADERS.includes('Prep Fee Waiver'), 'CSV must not include the Prep Fee Waiver column');
 
 // A representative billed order: 3 base + 2 additional units, all line types,
 // row_total present so the fallback is NOT used.
@@ -73,7 +71,7 @@ const richRow: InvoiceCsvDetailRow = {
   shipping_amt: '4.25',
   storage_amt: '0.75',
   row_total: '14.50',
-  skus: 'SKU-A, SKU-B',
+  skus: 'SKU-A\nSKU-B',
   package_cost_amt: '2.00',
   box_label: 'Small (6x4x4)',
   box_review: false,
@@ -112,30 +110,24 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  '2026-05-04,PO-9001,"SKU-A, SKU-B",Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5,',
-  'rich row must serialize the XLSX-identical derived columns (qty/fee/additional/total) + blank waiver cell',
+  '2026-05-04,PO-9001,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
+  'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
 // Fallback row: addl_qty 0 → Additional = 0; row_total 0 → Total falls back to
 // pickPackFee(3) + shipping(2) + storage(1) = 6. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '2026-05-05,PO-9002,,—,0,1,3,0,2,1,6,',
-  'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop + blank waiver cell',
+  '2026-05-05,PO-9002,,—,0,1,3,0,2,1,6',
+  'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 
-// PS-275 item 2: the prep-fee WAIVER indicator is a real CSV column. A waived
-// order serializes the "Waived" marker in the trailing column; a non-waived
-// order leaves it blank. The dollar columns are untouched — the waiver only
-// drives the indicator (billingInvoiceData already reflects the zeroed prep).
-assert.ok(
-  renderInvoiceCsvRow({ ...richRow, fee_waived: true }).endsWith(',Waived'),
-  'a WAIVED order must serialize the "Waived" marker in the trailing prep-fee-waiver column',
+assert.equal(
+  renderInvoiceCsvRow({ ...richRow, fee_waived: true }),
+  renderInvoiceCsvRow({ ...richRow, fee_waived: false }),
+  'prep-fee waiver status must not add a trailing CSV column or marker',
 );
-assert.ok(
-  renderInvoiceCsvRow({ ...richRow, fee_waived: false }).endsWith(',14.5,'),
-  'a non-waived order must leave the trailing prep-fee-waiver column blank',
-);
+assert.ok(!renderInvoiceCsv([richRow]).includes('\nSKU-B'), 'CSV SKU cells must be normalized to one readable line for Excel');
 
 // CSV injection / comma / quote safety: a field with a comma or a leading "="
 // must be quoted; embedded quotes doubled. (No raw provider payloads here —
@@ -189,6 +181,8 @@ assert.ok(/content-disposition['"]\s*:\s*[`'"]attachment;[^\n]*\.csv/.test(route
 // import the db client (it is a pure serializer of the SOT rows).
 assert.ok(!/from ['"]\.\.\/db\//.test(csvSrc) && !csvSrc.includes('db.execute'),
   'billing-invoice-csv.ts must be a pure serializer — no DB access');
+assert.ok(!csvSrc.includes('WAIVED_COLUMN_HEADER') && !csvSrc.includes('waivedCellText'),
+  'CSV serializer must not import the prep-fee waiver column owner');
 // Derivation parity tokens with the XLSX loop (no independent recomputation).
 assert.ok(csvSrc.includes('Number(row.row_total)') || csvSrc.includes('Number(d.row_total)'),
   'CSV total must derive from row_total (XLSX-identical), not a recomputed sum');

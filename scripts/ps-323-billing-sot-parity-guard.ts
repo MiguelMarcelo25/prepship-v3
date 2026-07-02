@@ -13,8 +13,8 @@
  *   2. Cross-export lockstep: that SAME Total expression appears in all THREE renderers (CSV file +
  *      the HTML and XLSX loops in routes/billing.ts), so they cannot silently diverge.
  *   3. Single source: all three export routes feed off billingInvoiceData, whose per-order Total is
- *      sum(b.total_cost) — the generated/frozen line-item dollars — and they share ONE waiver
- *      indicator owner.
+ *      sum(b.total_cost) — the generated/frozen line-item dollars — and waiver visibility stays as
+ *      the invoice-level period note (not a trailing CSV/XLSX column).
  *   4. FE pin: the shared FE billing math prefers the backend DTO fields (fulfillmentFeeTotal /
  *      grandTotal) and only falls back to the shared calculate* helpers (the backend's own formula),
  *      so the frontend never invents a divergent authoritative total.
@@ -44,7 +44,7 @@ function read(path: string): string {
 }
 
 // Total column index in the CSV row (Ship Date, Order #, SKUs, Box Size, Box Cost, Qty,
-// Pick & Pack Fee, Additional Units, Shipping, Storage, Total, Prep Fee Waiver).
+// Pick & Pack Fee, Additional Units, Shipping, Storage, Total).
 const TOTAL_COL = 10;
 const ADDITIONAL_COL = 7;
 const QTY_COL = 5;
@@ -111,10 +111,11 @@ check('HTML / XLSX / CSV invoice routes all consume the single billingInvoiceDat
 check('CSV serializer applies NO markup / price re-derivation (formats backend dollars only)',
   !/markup/i.test(csvSrc) && !/\*\s*\(1\s*\+/.test(csvSrc) && !/clientPackagePrices/.test(csvSrc));
 
-// ── 7) Shared waiver indicator owner: all three exports read the prep-fee waiver column from ONE
-//        owner so they cannot disagree (PS-275 item 2) ──
-check('all three exports use the shared billing-invoice-waiver-indicator owner',
-  /billing-invoice-waiver-indicator/.test(csvSrc) && /billing-invoice-waiver-indicator/.test(billingRoute));
+// ── 7) Waiver visibility stays invoice-level only; CSV carries no trailing marker column ──
+check('CSV serializer omits the prep-fee waiver marker column',
+  !/billing-invoice-waiver-indicator/.test(csvSrc) && !/Prep Fee Waiver|waivedCellText/.test(csvSrc));
+check('invoice routes keep the shared waiver period note owner',
+  /billing-invoice-waiver-indicator/.test(billingRoute) && /waivedSummaryNote/.test(billingRoute));
 
 // ── 8) FE pin: the shared FE billing math prefers the backend DTO totals and only falls back to the
 //        shared calculate* helpers (the backend's own formula) — it invents no divergent total ──

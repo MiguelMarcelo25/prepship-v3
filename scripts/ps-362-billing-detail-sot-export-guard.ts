@@ -101,8 +101,8 @@ const csvRow: InvoiceCsvDetailRow = {
 const csv = renderInvoiceCsv([csvRow]);
 check('CSV export starts with a UTF-8 BOM for Excel',
   csv.charCodeAt(0) === 0xfeff);
-check('CSV export quotes multiline SKU cells',
-  csv.includes('"Booster-gel-001 x2\nHU-10"'));
+check('CSV export flattens multiline SKU cells for readable Excel rows',
+  csv.includes('Booster-gel-001 x2 | HU-10') && !csv.includes('\nHU-10'));
 
 const billingService = read('src/services/billing.ts');
 const billingRoute = read('src/routes/billing.ts');

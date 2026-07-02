@@ -43,14 +43,9 @@ import { clientUsedPackagePricingRows } from '../services/billing-client-package
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 import { applyInvoiceXlsxReadableLayout } from './billing-invoice-xlsx-layout';
-// PS-275 item 2: the shared owner of the prep-fee WAIVER indicator (column
-// title + per-row marker + period note) so the HTML/XLSX/CSV exports render it
-// identically off the fee_waived flag billingInvoiceData stamps from the SOT.
-import {
-  WAIVED_COLUMN_HEADER,
-  waivedCellText,
-  waivedSummaryNote,
-} from './billing-invoice-waiver-indicator';
+// PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
+// from the fee_waived flag billingInvoiceData stamps from the SOT.
+import { waivedSummaryNote } from './billing-invoice-waiver-indicator';
 
 const app = new Hono();
 
@@ -1449,8 +1444,7 @@ async function renderInvoiceXlsx(args: {
   // Same fallback as the HTML tfoot: fulfillmentFeeTotal || grandTotal.
   const grand = addSummaryRow('Total', totals.fulfillmentFeeTotal || totals.grandTotal, MONEY_FMT);
   grand.getCell(2).font = { bold: true };
-  // PS-275 item 2: a Summary-sheet note when any prep fee was waived this period
-  // (in addition to the per-row "Waived" marker on the Line Items sheet).
+  // PS-275 item 2: a Summary-sheet note when any prep fee was waived this period.
   if (waivedCount > 0) {
     summary.addRow([]);
     const note = addSummaryRow('Prep fee waivers', waivedSummaryNote(waivedCount));
@@ -1475,9 +1469,6 @@ async function renderInvoiceXlsx(args: {
     { header: 'Shipping', key: 'shipping', width: 12, style: { numFmt: MONEY_FMT } },
     { header: 'Storage', key: 'storage', width: 12, style: { numFmt: MONEY_FMT } },
     { header: 'Total', key: 'total', width: 14, style: { numFmt: MONEY_FMT } },
-    // PS-275 item 2: the prep-fee waiver indicator — "Waived" for a waived
-    // order, blank otherwise (so a waived $0 is distinct from a genuine $0).
-    { header: WAIVED_COLUMN_HEADER, key: 'waiver', width: 16 },
   ];
   items.getRow(1).font = { bold: true };
   for (const d of details) {
@@ -1501,7 +1492,6 @@ async function renderInvoiceXlsx(args: {
       shipping: shippingAmt,
       storage: storageAmt,
       total: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,
-      waiver: waivedCellText(d.fee_waived),
     });
   }
   if (details.length) {

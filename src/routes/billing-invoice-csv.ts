@@ -4,20 +4,17 @@
  *
  * This module is a PURE serializer: it takes the per-order rows already
  * produced by billingInvoiceData (the invoice source of truth) and emits CSV
- * with the IDENTICAL column derivation as renderInvoiceXlsx — qty, pick&pack
- * fee composition, the addl_qty>0 gate on Additional Units, and the
- * `row_total > 0 ? row_total : pickPackFee + shipping + storage` fallback all
- * match the XLSX loop exactly. No DB access, no recomputation of any money
- * verdict beyond the same display arithmetic the XLSX export already performs.
+ * with the same money derivation as renderInvoiceXlsx — qty, pick&pack fee
+ * composition, the addl_qty>0 gate on Additional Units, and the
+ * `row_total > 0 ? row_total : pickPackFee + shipping + storage` fallback.
+ * Text cells are normalized to one line so Excel does not open the CSV with
+ * tall/clipped rows. No DB access, no recomputation of any money verdict beyond
+ * the same display arithmetic the XLSX export already performs.
  *
  * Calendar-day safety: ship_date is a calendar day stored at UTC midnight. We
  * emit the leading YYYY-MM-DD verbatim (no timezone conversion), the same
  * UTC-anchored day the XLSX `excelDayCell` renders.
  */
-
-// PS-275 (item 2): the prep-fee waiver indicator column comes from the ONE shared owner so the CSV,
-// XLSX, and HTML exports cannot disagree.
-import { WAIVED_COLUMN_HEADER, waivedCellText } from './billing-invoice-waiver-indicator';
 
 /** The renderer-facing per-order row — the subset of InvoiceDetailRow the CSV
  *  serializes. Kept structurally identical to routes/billing.ts InvoiceDetailRow
@@ -37,11 +34,11 @@ export type InvoiceCsvDetailRow = {
   package_cost_amt: string;
   box_label: string;
   box_review: boolean;
-  // PS-275 (item 2): prep-fee WAIVED indicator (the dollars already reflect it; this drives a column).
+  // PS-275: fee_waived is carried for route parity; the CSV line items no longer render it as a column.
   fee_waived: boolean;
 };
 
-/** Column order mirrors the XLSX "Line Items" sheet exactly. */
+/** Column order mirrors the operator-facing invoice line item sheet. */
 export const INVOICE_CSV_HEADERS = [
   'Ship Date',
   'Order #',
@@ -54,7 +51,6 @@ export const INVOICE_CSV_HEADERS = [
   'Shipping',
   'Storage',
   'Total',
-  WAIVED_COLUMN_HEADER,
 ] as const;
 
 /** YYYY-MM-DD for a UTC-midnight ship day — the leading date component verbatim,
@@ -81,7 +77,15 @@ function num(n: number): string {
   return Number.isFinite(n) ? String(n) : '0';
 }
 
-/** Derive the 11 display columns for one order — IDENTICAL arithmetic to the
+function oneLineCell(value: unknown): string {
+  return String(value ?? '')
+    .split(/\r\n|\r|\n/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(' | ');
+}
+
+/** Derive the display columns for one order — same arithmetic as the
  *  renderInvoiceXlsx Line Items loop (qty/fee composition + total fallback). */
 export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const baseQty = Number(row.base_qty);
@@ -94,8 +98,8 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const cells = [
     csvDayCell(row.ship_date),
     String(row.order_number ?? row.order_id ?? ''),
-    row.skus ?? '',
-    row.box_label,
+    oneLineCell(row.skus),
+    oneLineCell(row.box_label),
     num(Number(row.package_cost_amt)),
     num(baseQty + addlQty),
     num(pickPackFeeAmt),
@@ -103,8 +107,6 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
     num(shippingAmt),
     num(storageAmt),
     num(rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt),
-    // PS-275 (item 2): the waiver indicator — last column, mirrors the XLSX/HTML "Prep Fee Waiver".
-    waivedCellText(row.fee_waived),
   ];
   return cells.map(csvField).join(',');
 }

@@ -29,20 +29,16 @@ import {
   PREP_FEE_LINE_TYPES,
   type WaivableLine,
 } from '../src/services/billing-shipping-policy';
-// PS-275 item 2: the prep-fee WAIVER indicator surfaced on the invoice exports
-// (XLSX / HTML-PDF / CSV). The CSV serializer + the shared indicator owner are
-// pure and importable offline; the heavy HTML/XLSX renderers (DB/app imports)
-// are pinned by static source read, mirroring sections 7/8.
+// PS-275 item 2: the prep-fee WAIVER decision remains visible as a period note
+// without a trailing per-row export column. The CSV serializer is pure and
+// importable offline; the heavy HTML/XLSX renderers (DB/app imports) are pinned
+// by static source read, mirroring sections 7/8.
 import {
   INVOICE_CSV_HEADERS,
   renderInvoiceCsvRow,
   type InvoiceCsvDetailRow,
 } from '../src/routes/billing-invoice-csv';
-import {
-  WAIVED_COLUMN_HEADER,
-  waivedCellText,
-  waivedSummaryNote,
-} from '../src/routes/billing-invoice-waiver-indicator';
+import { waivedSummaryNote } from '../src/routes/billing-invoice-waiver-indicator';
 
 let failures = 0;
 function check(name: string, cond: boolean): void {
@@ -279,20 +275,13 @@ function sampleOrderLines(): WaivableLine[] {
 //       Source of truth: the waiver DECISION stays owned by billing_fee_waivers
 //       and is read via the canonical readBillingFeeWaivers — the SAME owner the
 //       billing detail view's "Prep fee waived" chip already delegates to.
-//       billingInvoiceData threads it onto each row as fee_waived; row-level exports
-//       show it through ONE shared indicator owner (waivedCellText /
-//       WAIVED_COLUMN_HEADER), while HTML keeps the shared waivedSummaryNote and no
-//       longer shows the per-row waiver column. No line-item denormalization, no schema migration, and the
+//       billingInvoiceData threads it onto each row as fee_waived; invoice
+//       exports use the shared waivedSummaryNote and no longer show the per-row
+//       waiver column. No line-item denormalization, no schema migration, and the
 //       generator's (order_id, line_type, description) ON CONFLICT key is untouched.
 {
-  // (a) The shared indicator owner: a WAIVED order shows a visible "Waived"
-  //     marker; a genuinely $0/free order leaves the cell BLANK (so the two are
-  //     no longer indistinguishable). The summary note names the waived count
+  // (a) The shared indicator owner: the summary note names the waived count
   //     only when something was waived (default-inert otherwise).
-  check('indicator: a waived order renders the visible "Waived" marker',
-    waivedCellText(true) === 'Waived');
-  check('indicator: a genuinely $0/free order leaves the waiver cell BLANK',
-    waivedCellText(false) === '');
   check('indicator: the period summary note names the waived-order count',
     /\b1 order\b/.test(waivedSummaryNote(1)) && /waiv/i.test(waivedSummaryNote(1)));
   check('indicator: pluralizes the summary note for multiple waived orders',
@@ -300,28 +289,24 @@ function sampleOrderLines(): WaivableLine[] {
   check('indicator: NO summary note when nothing in the period was waived (default-inert)',
     waivedSummaryNote(0) === '' && waivedSummaryNote(-1) === '');
 
-  // (b) CSV (behavioral, offline): the waiver column exists and a WAIVED row
-  //     serializes the marker in that column; a non-waived row leaves it blank.
-  //     Proves the CSV export — not just the HTML — carries the indicator.
+  // (b) CSV (behavioral, offline): the waiver decision must not add a trailing
+  //     line-item column. The period note carries the audit signal instead.
   const csvBase: InvoiceCsvDetailRow = {
     order_id: 7001, order_number: 'PO-7001', ship_date: '2026-05-04',
     base_qty: '1', addl_qty: '0', pickpack_amt: '2.50', additional_amt: '0',
     shipping_amt: '0', storage_amt: '0', row_total: '2.50', skus: 'SKU-1',
     package_cost_amt: '0', box_label: '—', box_review: false, fee_waived: false,
   };
-  check('CSV: the header row carries the waiver column',
-    INVOICE_CSV_HEADERS.includes(WAIVED_COLUMN_HEADER));
-  check('CSV: a WAIVED order serializes the "Waived" marker in the last column',
-    renderInvoiceCsvRow({ ...csvBase, fee_waived: true }).endsWith(',Waived'));
-  check('CSV: a non-waived order leaves the waiver column blank (trailing empty cell)',
-    renderInvoiceCsvRow({ ...csvBase, fee_waived: false }).endsWith(','));
+  check('CSV: the header row omits the waiver column',
+    !INVOICE_CSV_HEADERS.includes('Prep Fee Waiver'));
+  check('CSV: waived and non-waived rows have the same line-item columns',
+    renderInvoiceCsvRow({ ...csvBase, fee_waived: true }) === renderInvoiceCsvRow({ ...csvBase, fee_waived: false }));
 
   // (c) Data + the heavy route renderers live in routes/billing.ts behind
   //     DB/app imports (renderInvoiceHtml / renderInvoiceXlsx) — static source
   //     pins, same approach as sections 7/8. billingInvoiceData must read the
-  //     waiver SOT and stamp fee_waived. CSV/XLSX retain the row-level marker
-  //     for export/audit; the HTML invoice uses the period summary note only
-  //     so the visible table stays compact.
+  //     waiver SOT and stamp fee_waived. HTML/XLSX/CSV invoices use the period
+  //     summary note only so the visible line-item tables stay compact.
   const routeSrc = readFileSync('src/routes/billing.ts', 'utf8');
   const htmlStart = routeSrc.indexOf('function renderInvoiceHtml(');
   const htmlEnd = routeSrc.indexOf("app.get('/invoice'", htmlStart);
@@ -335,8 +320,8 @@ function sampleOrderLines(): WaivableLine[] {
     !/WAIVED_COLUMN_HEADER|waiver-cell|waiver-badge|waivedCellText\(/.test(htmlRenderer));
   check('HTML: invoice still renders the period summary note from waivedSummaryNote',
     /waiverNote/.test(htmlRenderer) && /waivedSummaryNote\(/.test(routeSrc));
-  check('XLSX: invoice keeps the row-level waiver column via shared owners',
-    /WAIVED_COLUMN_HEADER/.test(xlsxRenderer) && /waivedCellText\(d\.fee_waived\)/.test(xlsxRenderer));
+  check('XLSX: invoice hides the per-row prep-fee waiver column',
+    !/WAIVED_COLUMN_HEADER|waivedCellText\(d\.fee_waived\)|key:\s*'waiver'/.test(xlsxRenderer));
 }
 
 if (failures > 0) {

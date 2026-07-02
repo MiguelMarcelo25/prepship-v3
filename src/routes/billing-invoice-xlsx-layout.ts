@@ -54,7 +54,6 @@ export const INVOICE_XLSX_COLUMN_WIDTH_BOUNDS: Record<string, { min: number; max
   shipping: { min: 12, max: 16 },
   storage: { min: 12, max: 16 },
   total: { min: 12, max: 16 },
-  waiver: { min: 16, max: 22 },
 };
 
 function clamp(value: number, min: number, max: number): number {

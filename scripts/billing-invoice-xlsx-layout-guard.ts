@@ -82,6 +82,10 @@ const billingRoute = readFileSync('src/routes/billing.ts', 'utf8');
 assert.match(billingRoute, /from '\.\/billing-invoice-xlsx-layout'/, 'billing route must import the XLSX layout owner');
 assert.match(billingRoute, /applyInvoiceXlsxReadableLayout\(summary\)/, 'Summary sheet must receive readable layout');
 assert.match(billingRoute, /applyInvoiceXlsxReadableLayout\(items\)/, 'Line Items sheet must receive readable layout');
+const xlsxStart = billingRoute.indexOf('async function renderInvoiceXlsx(');
+const xlsxEnd = billingRoute.indexOf("app.get('/invoice.xlsx'", xlsxStart);
+const xlsxRenderer = xlsxStart >= 0 && xlsxEnd > xlsxStart ? billingRoute.slice(xlsxStart, xlsxEnd) : '';
+assert.doesNotMatch(xlsxRenderer, /WAIVED_COLUMN_HEADER|key:\s*'waiver'|waivedCellText\(d\.fee_waived\)/, 'Line Items sheet must omit the Prep Fee Waiver column');
 
 const packageJson = readFileSync('package.json', 'utf8');
 assert.match(packageJson, /"test:billing-invoice-xlsx-layout": "tsx scripts\/billing-invoice-xlsx-layout-guard\.ts"/, 'package.json must expose the XLSX layout guard');
