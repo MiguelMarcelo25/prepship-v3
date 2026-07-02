@@ -77,6 +77,8 @@ assert.doesNotMatch(script, /\.update\(shipments\)/, 'must never mutate shipment
 assert.doesNotMatch(script, /buyLabel|purchaseLabel|createLabel|voidLabel|notifyMarketplace|notifySalesChannel/i, 'must never create/void labels or notify marketplaces');
 assert.match(script, /coalesce\(s\.voided, false\) = false/, 'candidates must require NO non-voided local shipment');
 assert.match(script, /const includeCancelled = options\.includeCancelled === true/, 'runner must keep cancelled opt-in by default');
+assert.match(script, /lookupTimeoutMs = Math\.max/, 'runner must bound upstream lookups so one slow ShipStation row cannot stall the batch');
+assert.match(script, /timeBudgetExhausted/, 'runner must report clean time-budget exhaustion instead of relying on the outer worker timeout');
 assert.match(script, /includeCancelled: hasFlag\('include-cancelled'\)/, 'CLI cancelled scope must require explicit --include-cancelled');
 assert.match(script, /inArray\(orders\.orderStatus, statuses\)/, 'candidate query must scope by the resolved status set');
 assert.match(script, /invokedDirectly/, 'main() must be guarded so the classifier can be imported without DB/network');

@@ -14,7 +14,7 @@ import { withSyncLaneAdvisoryLock } from './sync-lane-lock';
 import {
   runBackfillTick,
   runFulfillmentOutboxTick,
-  runExternalShippedClassifierTick,
+  runExternalShippedClassifierJob,
   runInventoryImportFromOrders,
   runReportingRefreshTick,
   runShipmentTrackingTick,
@@ -415,7 +415,11 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
   await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
-  await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierTick);
+  // Per user override unlock shipped data on 2026-07-02: queued mode already
+  // owns the external-shipped lane via pg-boss + advisory locks. Call the
+  // bounded classifier job directly so a stale legacy interval-scheduler lock
+  // cannot make the queued worker wait until the outer 10-minute deadline.
+  await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierJob);
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
   await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());

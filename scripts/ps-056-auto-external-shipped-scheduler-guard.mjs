@@ -5,6 +5,7 @@ const envSource = readFileSync('src/lib/env.ts', 'utf8');
 const syncScheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
 const jobQueue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
 const reconcile = readFileSync('scripts/reconcile-external-shipped-orders.ts', 'utf8');
+const syncCadence = readFileSync('src/lib/sync-cadence.ts', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert.match(
@@ -34,8 +35,33 @@ assert.match(
 );
 assert.match(
   syncScheduler,
+  /runExternalShippedClassifierJob/,
+  'scheduler must expose a direct bounded classifier job for queued workers.',
+);
+assert.match(
+  syncScheduler,
   /includeCancelled: true/,
   'automatic classifier must include cancelled rows per PS-056 follow-up.',
+);
+assert.match(
+  syncCadence,
+  /externalShippedClassifier:\s*3\s*\*\s*60\s*\*\s*1000/,
+  'automatic classifier must run on the same 3-minute cadence as the visible sync loop.',
+);
+assert.match(
+  syncScheduler,
+  /limit: EXTERNAL_SHIPPED_CLASSIFIER_LIMIT/,
+  'automatic classifier must use bounded batches instead of large timeout-prone sweeps.',
+);
+assert.match(
+  syncScheduler,
+  /lookupTimeoutMs: EXTERNAL_SHIPPED_CLASSIFIER_LOOKUP_TIMEOUT_MS/,
+  'automatic classifier must bound each upstream ShipStation lookup.',
+);
+assert.match(
+  syncScheduler,
+  /timeBudgetMs: EXTERNAL_SHIPPED_CLASSIFIER_TIME_BUDGET_MS/,
+  'automatic classifier must return before the worker job deadline.',
 );
 assert.match(
   syncScheduler,
@@ -51,6 +77,11 @@ assert.match(
   jobQueue,
   /externalShippedClassifier/,
   'pg-boss scheduler must register/enqueue the external-shipped classifier job.',
+);
+assert.match(
+  jobQueue,
+  /registerWorker\(JOBS\.externalShippedClassifier, runExternalShippedClassifierJob\)/,
+  'pg-boss classifier worker must call the bounded job directly, not the legacy interval lock wrapper.',
 );
 assert.equal(
   pkg.scripts['test:ps-056-auto-external-shipped'],

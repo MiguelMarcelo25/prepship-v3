@@ -23,6 +23,25 @@ import { enrichLabelUrls } from './shipment-label-url-enrich';
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
 const WATERMARK_OVERLAP_MS = 1000 * 60 * 60 * 48; // re-read recent labels so missed rows self-heal
+// Per user override unlock shipped data on 2026-07-02: background shipment sync
+// owns the shipped shipment read model, so it must be bounded. A slow provider
+// page should fail this tick and retry shortly, not hold the shared lane for 10m.
+const BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS = 25_000;
+const SHIPMENT_ENRICHMENT_MIN_REMAINING_MS = 90_000;
+
+function syncBudgetRemainingMs(
+  budget: ReturnType<typeof createSyncRunBudget>,
+  nowMs = Date.now(),
+): number {
+  return budget.timeBudgetMs - (nowMs - budget.startedAtMs);
+}
+
+function hasSyncBudgetRoom(
+  budget: ReturnType<typeof createSyncRunBudget>,
+  requiredMs = SHIPMENT_ENRICHMENT_MIN_REMAINING_MS,
+): boolean {
+  return syncBudgetRemainingMs(budget) >= requiredMs;
+}
 
 type SSShipment = {
   shipmentId: number;
@@ -445,6 +464,7 @@ export async function syncShipments(
           apiKey: acct.apiKey,
           apiSecret: acct.apiSecret,
           dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}`,
+          timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
         });
         if (res.pages > maxPages) maxPages = res.pages;
 
@@ -487,9 +507,9 @@ export async function syncShipments(
       // PS-265: skip the (paginated) V2 enrichment when the run is out of time budget — it
       // is best-effort backfill and would push the handler past its deadline. It resumes on
       // a later run once the V1 window is caught up.
-      if (!syncRunBudgetTimeExhausted(budget)) {
+      if (hasSyncBudgetRoom(budget)) {
         try {
-          const enriched = await enrichProviderAccountIds(acct, lastSync);
+          const enriched = await enrichProviderAccountIds(acct, lastSync, budget);
           if (enriched > 0) {
             console.log(
               `[shipment-sync] enriched providerAccountId on ${enriched} shipments for "${acct.label}"`
@@ -505,16 +525,22 @@ export async function syncShipments(
 
         // PS-286: fill any null shipments.label_url from the account's recent v2 labels so
         // shipped orders are re-queueable. Best-effort — never block the sync on this.
-        try {
-          const filled = await enrichLabelUrls(acct, lastSync);
-          if (filled > 0) {
-            console.log(`[shipment-sync] filled label_url on ${filled} shipments for "${acct.label}"`);
+        if (hasSyncBudgetRoom(budget)) {
+          try {
+            const filled = await enrichLabelUrls(acct, lastSync, {
+              timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
+              shouldContinue: () =>
+                hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000),
+            });
+            if (filled > 0) {
+              console.log(`[shipment-sync] filled label_url on ${filled} shipments for "${acct.label}"`);
+            }
+          } catch (err) {
+            console.warn(
+              `[shipment-sync] label_url enrichment failed for "${acct.label}":`,
+              (err as Error).message
+            );
           }
-        } catch (err) {
-          console.warn(
-            `[shipment-sync] label_url enrichment failed for "${acct.label}":`,
-            (err as Error).message
-          );
         }
       }
 
@@ -606,6 +632,7 @@ export async function getShipmentSyncStatus(options: { includeShipmentCount?: bo
 async function enrichProviderAccountIds(
   acct: { label: string; apiKeyV2: string | null },
   sinceMs: number,
+  budget: ReturnType<typeof createSyncRunBudget>,
 ): Promise<number> {
   if (!acct.apiKeyV2) return 0; // No V2 key → can't enrich this account
   const createdAtStart = new Date(sinceMs).toISOString();
@@ -646,7 +673,7 @@ async function enrichProviderAccountIds(
     return updated;
   }
 
-  while (page <= maxPages) {
+  while (page <= maxPages && hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000)) {
     const qs = new URLSearchParams({
       page_size: '500',
       page: String(page),
@@ -660,6 +687,7 @@ async function enrichProviderAccountIds(
         {
           apiKeyV2: acct.apiKeyV2,
           dedupeKey: `v2-shipments:enrich:${acct.label}:${createdAtStart}:${page}`,
+          timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
         },
       );
     } catch (err) {
@@ -687,7 +715,7 @@ async function enrichProviderAccountIds(
   // tracking_number + carrier_id pair, so use it as a second best-effort
   // source for older ShipStation-synced shipped rows.
   page = 1;
-  while (page <= maxPages) {
+  while (page <= maxPages && hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000)) {
     const qs = new URLSearchParams({
       page_size: '500',
       page: String(page),
@@ -701,6 +729,7 @@ async function enrichProviderAccountIds(
         {
           apiKeyV2: acct.apiKeyV2,
           dedupeKey: `v2-labels:provider-enrich:${acct.label}:${createdAtStart}:${page}`,
+          timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
         },
       );
     } catch (err) {
@@ -715,6 +744,7 @@ async function enrichProviderAccountIds(
           {
             apiKeyV2: acct.apiKeyV2,
             dedupeKey: `v2-labels:provider-enrich:fallback:${acct.label}:${page}`,
+            timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
           },
         );
       } catch {

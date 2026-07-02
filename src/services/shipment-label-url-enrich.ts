@@ -29,6 +29,7 @@ const LABEL_PAGE_SIZE = 200;
 export async function enrichLabelUrls(
   acct: { label: string; apiKeyV2: string | null },
   sinceMs: number,
+  opts: { timeoutMs?: number; shouldContinue?: () => boolean } = {},
 ): Promise<number> {
   if (!acct.apiKeyV2) return 0; // No V2 key → can't resolve labels for this account.
 
@@ -51,7 +52,12 @@ export async function enrichLabelUrls(
 
   const labelRecords: LabelUrlRecord[] = [];
   for (let page = 1; page <= MAX_LABEL_PAGES; page += 1) {
-    const batch = await ssListRecentLabels(acct.apiKeyV2, { page, pageSize: LABEL_PAGE_SIZE });
+    if (opts.shouldContinue && !opts.shouldContinue()) break;
+    const batch = await ssListRecentLabels(acct.apiKeyV2, {
+      page,
+      pageSize: LABEL_PAGE_SIZE,
+      timeoutMs: opts.timeoutMs,
+    });
     if (!batch.length) break;
     for (const rec of batch) labelRecords.push({ trackingNumber: rec.trackingNumber, labelUrl: rec.labelUrl });
     if (batch.length < LABEL_PAGE_SIZE) break; // last page

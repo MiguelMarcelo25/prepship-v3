@@ -56,10 +56,13 @@ const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
 const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
 const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedClassifier; // 3 minutes
 const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking; // 15 minutes
 const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees; // daily (legacy Vercel cron parity)
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
+const EXTERNAL_SHIPPED_CLASSIFIER_LIMIT = 10;
+const EXTERNAL_SHIPPED_CLASSIFIER_LOOKUP_TIMEOUT_MS = 12_000;
+const EXTERNAL_SHIPPED_CLASSIFIER_TIME_BUDGET_MS = 4 * 60_000;
 const REAP_RATE_JOBS_INTERVAL_MS = 5 * 60 * 1000; // 5 min — durable cleanup of orphaned rate-job stamps
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -362,24 +365,16 @@ export async function runExternalShippedClassifierTick(): Promise<void> {
   }
   externalShippedClassifierRunning = true;
   try {
-    const result = await runHeavySchedulerJob('external-shipped classifier', () =>
-      runExternalShippedReconcile({
-        // Per user override unlock shipped data on 2026-06-27: use the
-        // configured 30+ day lookback so automatic shipped/cancelled
-        // classification covers the visible Orders table window.
-        days: env.EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS,
-        limit: 50,
-        includeCancelled: true,
-        // Per user override unlock shipped data on 2026-06-01: PS-056 scheduled
-        // apply is reversible-flag-only and requires this explicit Render env.
-        apply: env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true,
-      })
+    const result = await runHeavySchedulerJob(
+      'external-shipped classifier',
+      runExternalShippedClassifierJob,
     );
     if (!result) return;
     console.log(
       `[scheduler] external-shipped classifier: missingLocalUnflagged=${result.missingLocalUnflagged}, ` +
       `alreadyFlaggedExternal=${result.alreadyFlaggedExternal}, external=${result.classifiedExternal}, ` +
-      `recoverable=${result.classifiedRecoverable}, lookupFailures=${result.lookupFailures}, flagged=${result.flagged}`
+      `recoverable=${result.classifiedRecoverable}, lookupFailures=${result.lookupFailures}, flagged=${result.flagged}, ` +
+      `timeBudgetExhausted=${result.timeBudgetExhausted}`
     );
   } catch (err) {
     console.error(
@@ -389,6 +384,25 @@ export async function runExternalShippedClassifierTick(): Promise<void> {
   } finally {
     externalShippedClassifierRunning = false;
   }
+}
+
+export function runExternalShippedClassifierJob() {
+  return runExternalShippedReconcile({
+    // Per user override unlock shipped data on 2026-06-27: use the
+    // configured 30+ day lookback so automatic shipped/cancelled
+    // classification covers the visible Orders table window.
+    days: env.EXTERNAL_SHIPPED_CLASSIFIER_LOOKBACK_DAYS,
+    // Per user override unlock shipped data on 2026-07-02: run small,
+    // bounded batches often so marketplace-shipped rows clear from the
+    // yellow "Shipment sync error" state without timing out the worker.
+    limit: EXTERNAL_SHIPPED_CLASSIFIER_LIMIT,
+    lookupTimeoutMs: EXTERNAL_SHIPPED_CLASSIFIER_LOOKUP_TIMEOUT_MS,
+    timeBudgetMs: EXTERNAL_SHIPPED_CLASSIFIER_TIME_BUDGET_MS,
+    includeCancelled: true,
+    // Per user override unlock shipped data on 2026-06-01: PS-056 scheduled
+    // apply is reversible-flag-only and requires this explicit Render env.
+    apply: env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true,
+  });
 }
 
 export async function runShipmentTrackingTick(): Promise<void> {

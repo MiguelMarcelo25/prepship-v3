@@ -335,14 +335,14 @@ export async function ssListRecentLabels(
   // PS-286: optional 1-based `page` so a backfill can walk past the first page of recent
   // labels, and `pageSize` so a slow caller can use smaller, faster responses. Omitted →
   // page 1, size 500 (unchanged behavior for existing callers).
-  opts: { page?: number; pageSize?: number } = {}
+  opts: { page?: number; pageSize?: number; timeoutMs?: number } = {}
 ): Promise<ShipstationLabelRecord[]> {
   try {
     const pageSize = opts.pageSize && opts.pageSize > 0 ? opts.pageSize : 500;
     const pageParam = opts.page && opts.page > 1 ? `&page=${opts.page}` : '';
     const payload = await ssRequest<{ labels?: Array<Record<string, unknown>> }>(
       `/v2/labels?page_size=${pageSize}&sort_dir=desc${pageParam}`,
-      { apiKey: apiKeyV2, dedupeKey: `labels:list:${pageSize}:${opts.page ?? 1}` }
+      { apiKey: apiKeyV2, dedupeKey: `labels:list:${pageSize}:${opts.page ?? 1}`, timeoutMs: opts.timeoutMs }
     );
     return (payload.labels ?? []).map((label) => {
       const labelDownload = (label.label_download as Record<string, unknown> | undefined) ?? {};

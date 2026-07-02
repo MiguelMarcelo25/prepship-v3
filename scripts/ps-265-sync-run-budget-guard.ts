@@ -53,8 +53,9 @@ check('watermark resumes from the cursor on a budget-bounded run, advances to no
   /drained \? runStartMs : cursorCreateMs/.test(ship));
 check('run-level time budget stops starting new accounts',
   /syncRunBudgetTimeExhausted\(budget\)\) break/.test(ship));
-check('V2 enrichment is skipped when out of time budget',
-  /if \(!syncRunBudgetTimeExhausted\(budget\)\) \{/.test(ship));
+check('V2 enrichment is skipped unless enough time remains to finish cleanly',
+  /hasSyncBudgetRoom\(budget\)/.test(ship)
+  && /BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS/.test(ship));
 check('the deadline is NOT raised (no JOB_HANDLER_TIMEOUT_MS change here)',
   !/JOB_HANDLER_TIMEOUT_MS/.test(ship));
 

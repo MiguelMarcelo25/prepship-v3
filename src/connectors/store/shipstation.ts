@@ -60,6 +60,7 @@ type ShipStationV1RequestOptions = {
   apiKey?: string;
   apiSecret?: string;
   dedupeKey?: string;
+  timeoutMs?: number;
 };
 
 type ShipStationStore = {
@@ -134,6 +135,7 @@ export async function listShipStationStores(
     apiKey: options.apiKey,
     apiSecret: options.apiSecret,
     dedupeKey: options.dedupeKey ?? 'stores:list',
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -144,6 +146,7 @@ export async function listShipStationWarehouses(
     apiKey: options.apiKey,
     apiSecret: options.apiSecret,
     dedupeKey: options.dedupeKey ?? 'warehouses:list',
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -158,6 +161,7 @@ export async function listShipStationProducts<TProduct = unknown>(
     apiKey: input.apiKey,
     apiSecret: input.apiSecret,
     dedupeKey: input.dedupeKey,
+    timeoutMs: input.timeoutMs,
   });
 }
 
@@ -169,6 +173,7 @@ export async function listShipStationOrders<TList = SSOrdersList>(
     apiKey: options.apiKey,
     apiSecret: options.apiSecret,
     dedupeKey: options.dedupeKey,
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -180,6 +185,7 @@ export async function listShipStationShipments<TList>(
     apiKey: options.apiKey,
     apiSecret: options.apiSecret,
     dedupeKey: options.dedupeKey,
+    timeoutMs: options.timeoutMs,
   });
 }
 
@@ -245,6 +251,7 @@ export function createShipStationStoreConnector(): StoreConnector {
         apiKey: input.credentials?.apiKey ?? undefined,
         apiSecret: input.credentials?.apiSecret ?? undefined,
         dedupeKey: input.dedupeKey,
+        timeoutMs: input.timeoutMs,
       });
 
       return {

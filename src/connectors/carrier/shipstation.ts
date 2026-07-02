@@ -40,6 +40,7 @@ type ShipStationV2ListInput = {
   apiKeyV2?: string;
   apiKey?: string;
   dedupeKey?: string;
+  timeoutMs?: number;
 };
 
 function isRateLabelInput(input: ShipStationCreateLabelInput): input is ShipStationCreateLabelFromRateInput {
@@ -57,6 +58,7 @@ export async function listShipStationV2Shipments<TList>(
   return ssRequest<TList>(`/v2/shipments?${query.toString()}`, {
     apiKey: input.apiKeyV2 ?? input.apiKey,
     dedupeKey: input.dedupeKey,
+    timeoutMs: input.timeoutMs,
   });
 }
 
@@ -67,6 +69,7 @@ export async function listShipStationV2Labels<TList>(
   return ssRequest<TList>(`/v2/labels?${query.toString()}`, {
     apiKey: input.apiKeyV2 ?? input.apiKey,
     dedupeKey: input.dedupeKey,
+    timeoutMs: input.timeoutMs,
   });
 }
 

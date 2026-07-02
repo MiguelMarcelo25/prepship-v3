@@ -78,6 +78,7 @@ export type StoreOrderImportInput = {
   createdStartDate?: string;
   sinceDate?: string;
   limit?: number;
+  timeoutMs?: number;
 };
 
 export type StoreOrderStatusSyncInput = {

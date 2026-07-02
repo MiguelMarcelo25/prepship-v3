@@ -24,6 +24,10 @@ const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
 const STATUS_CATCHUP_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const AWAITING_CATCHUP_LOOKBACK_MS = STATUS_CATCHUP_LOOKBACK_MS;
+// Per user override unlock shipped data on 2026-07-02: background order sync
+// must finish and release the shared ShipStation lane. Slow provider calls are
+// retried on the next 3-minute tick instead of burning the 10-minute job guard.
+const BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS = 25_000;
 
 async function buildStoreToClientMap(): Promise<{
   byStore: Map<number, number>;
@@ -426,6 +430,7 @@ async function fetchOrdersPage(
       page,
       storeId: args.storeId,
       dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${page}:${args.pageSize}`,
+      timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
     });
 
     pages = res.pages ?? 1;

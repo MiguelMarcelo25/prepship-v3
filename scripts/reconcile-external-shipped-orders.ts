@@ -38,6 +38,7 @@ import { ssV1Request } from '../src/lib/shipstation/v1-client';
  */
 
 const DEFAULT_DAYS = 30;
+const DEFAULT_LOOKUP_TIMEOUT_MS = 25_000;
 
 // ---------------------------------------------------------------------------
 // Pure classifier — exported for the guard.
@@ -119,6 +120,7 @@ async function loadAccountByClient(): Promise<{ main: Account; byClient: Map<num
 async function checkUpstream(
   orderNumber: string,
   account: Account,
+  opts: { timeoutMs?: number } = {},
 ): Promise<{ lookupFailed: boolean; hasShipment: boolean; hasFulfillment: boolean }> {
   let hasShipment = false;
   let hasFulfillment = false;
@@ -126,7 +128,12 @@ async function checkUpstream(
   try {
     const sh = await listShipStationShipments<{ shipments?: Array<{ voided?: boolean | null }> }>(
       new URLSearchParams({ orderNumber, pageSize: '5', page: '1' }),
-      { apiKey: account.apiKey, apiSecret: account.apiSecret, dedupeKey: `extship:sh:${account.label}:${orderNumber}` },
+      {
+        apiKey: account.apiKey,
+        apiSecret: account.apiSecret,
+        dedupeKey: `extship:sh:${account.label}:${orderNumber}`,
+        timeoutMs: opts.timeoutMs,
+      },
     );
     // Only a NON-VOIDED shipment is recoverable — a voided label is dead.
     hasShipment = Array.isArray(sh.shipments) && sh.shipments.some((s) => s?.voided !== true);
@@ -136,7 +143,12 @@ async function checkUpstream(
   try {
     const fu = await ssV1Request<{ fulfillments?: Array<{ voided?: boolean | null; trackingNumber?: string | null }> }>(
       `/fulfillments?orderNumber=${encodeURIComponent(orderNumber)}&pageSize=5&page=1`,
-      { apiKey: account.apiKey, apiSecret: account.apiSecret, dedupeKey: `extship:fu:${account.label}:${orderNumber}` },
+      {
+        apiKey: account.apiKey,
+        apiSecret: account.apiSecret,
+        dedupeKey: `extship:fu:${account.label}:${orderNumber}`,
+        timeoutMs: opts.timeoutMs,
+      },
     );
     // Only a NON-VOIDED fulfillment WITH a tracking number is recoverable
     // (mirrors the PS-039 fulfillment backfill's "active" definition). A
@@ -179,6 +191,8 @@ export interface ExternalShippedReconcileOptions {
   days?: number;
   limit?: number;
   orderNumbers?: string[] | null;
+  lookupTimeoutMs?: number;
+  timeBudgetMs?: number;
 }
 
 export async function runExternalShippedReconcile(
@@ -191,6 +205,7 @@ export async function runExternalShippedReconcile(
   classifiedRecoverable: number;
   lookupFailures: number;
   flagged: number;
+  timeBudgetExhausted: boolean;
 }> {
   const apply = options.apply === true;
   const includeCancelled = options.includeCancelled === true;
@@ -198,6 +213,11 @@ export async function runExternalShippedReconcile(
   const limit = options.limit ?? 200;
   const orderNumbersFilter = options.orderNumbers ?? null;
   const statuses = includeCancelled ? ['shipped', 'cancelled'] : ['shipped'];
+  const lookupTimeoutMs = Math.max(1_000, options.lookupTimeoutMs ?? DEFAULT_LOOKUP_TIMEOUT_MS);
+  const timeBudgetMs = options.timeBudgetMs == null ? null : Math.max(10_000, options.timeBudgetMs);
+  const startedAtMs = Date.now();
+  const isTimeBudgetExhausted = () =>
+    timeBudgetMs != null && Date.now() - startedAtMs >= timeBudgetMs;
 
   console.log(`\n[external-shipped] PS-056 ${apply ? 'APPLY' : 'DRY RUN'} — statuses=${statuses.join(',')} days=${days} limit=${limit}${orderNumbersFilter ? ` orderNumbers=${orderNumbersFilter.join(',')}` : ''}`);
 
@@ -245,18 +265,24 @@ export async function runExternalShippedReconcile(
   const report = {
     missingLocalUnflagged: missingLocalUnflaggedRow[0]?.count ?? 0,
     alreadyFlaggedExternal: alreadyFlaggedExternalRow[0]?.count ?? 0,
-    scanned: candidates.length,
+    scanned: 0,
     classifiedExternal: 0,
     classifiedRecoverable: 0,
     lookupFailures: 0,
     flagged: 0,
+    timeBudgetExhausted: false,
     samples: [] as Array<{ orderNumber: string | null; clientId: number | null; storeId: number | null; classification: ExternalShippedClass }> };
 
   for (const o of candidates) {
+    if (isTimeBudgetExhausted()) {
+      report.timeBudgetExhausted = true;
+      break;
+    }
     const account = (o.clientId != null && byClient.get(o.clientId)) || main;
     const upstream = o.orderNumber
-      ? await checkUpstream(o.orderNumber, account)
+      ? await checkUpstream(o.orderNumber, account, { timeoutMs: lookupTimeoutMs })
       : { lookupFailed: false, hasShipment: false, hasFulfillment: false };
+    report.scanned += 1;
 
     const classification = classifyExternalShipped({
       orderStatus: o.orderStatus,
@@ -274,6 +300,9 @@ export async function runExternalShippedReconcile(
     }
 
     if (apply && classification === 'external') {
+      // Per user override unlock shipped data on 2026-07-02: automatic apply
+      // only sets the reversible external-shipped flag for orders proven to
+      // have no upstream shipment/fulfillment. It never mutates shipments.
       await db.update(orders).set({ externallyShipped: true, updatedAt: new Date() }).where(eq(orders.id, o.id));
       await db
         .insert(orderOverrides)
@@ -292,6 +321,7 @@ export async function runExternalShippedReconcile(
     classified_recoverable: report.classifiedRecoverable,
     lookup_failures: report.lookupFailures,
     flagged: report.flagged,
+    time_budget_exhausted: report.timeBudgetExhausted,
   }]);
   if (report.samples.length) {
     console.log('\nSamples:');
@@ -311,6 +341,7 @@ export async function runExternalShippedReconcile(
     classifiedRecoverable: report.classifiedRecoverable,
     lookupFailures: report.lookupFailures,
     flagged: report.flagged,
+    timeBudgetExhausted: report.timeBudgetExhausted,
   };
 }
 

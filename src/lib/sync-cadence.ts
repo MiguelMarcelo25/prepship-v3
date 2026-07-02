@@ -14,7 +14,7 @@ export const SYNC_CADENCE_MS = {
   productCatalog: 60 * 60 * 1000,
   fulfillmentOutbox: 60 * 1000,
   reportingMetrics: 30 * 60 * 1000,
-  externalShippedClassifier: 30 * 60 * 1000,
+  externalShippedClassifier: 3 * 60 * 1000,
   // Tracking-driven print-queue retirement: ~50 read-only tracking calls per
   // tick is <2% of the ShipStation v2 budget, and a delivery surfaces within
   // one operator shift.
