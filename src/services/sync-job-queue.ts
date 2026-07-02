@@ -16,13 +16,13 @@ import {
   runFulfillmentOutboxTick,
   runExternalShippedClassifierTick,
   runInventoryImportFromOrders,
-  runOrderSync,
   runReportingRefreshTick,
-  runShipmentSync,
   runShipmentTrackingTick,
   runSyncProductsTick,
   runWalmartFeesTick,
 } from './sync-scheduler';
+import { syncOrders } from './order-sync';
+import { syncShipments } from './shipment-sync';
 import {
   recordWorkerHeartbeat,
   recordWorkerJobFailure,
@@ -279,7 +279,7 @@ const JOB_HANDLER_TIMEOUT_MS = Math.max(
 
 async function registerWorker(
   name: JobName,
-  handler: () => Promise<void> | void
+  handler: () => Promise<unknown> | unknown
 ): Promise<void> {
   if (!boss) return;
   await boss.work(
@@ -405,8 +405,12 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await setWorkerMode('worker-scheduler');
   await createQueues();
 
-  await registerWorker(JOBS.orders, runOrderSync);
-  await registerWorker(JOBS.shipments, runShipmentSync);
+  // Per user override unlock shipped data on 2026-07-02: pg-boss owns
+  // queue locking, deadlines, and worker-status writes. Call the canonical
+  // ShipStation sync services directly so queued mode does not also take the
+  // legacy interval-scheduler advisory lock and starve worker heartbeats.
+  await registerWorker(JOBS.orders, () => syncOrders({}));
+  await registerWorker(JOBS.shipments, () => syncShipments({}));
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
   await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);

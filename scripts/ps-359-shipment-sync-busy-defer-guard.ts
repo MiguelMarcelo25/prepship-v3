@@ -69,6 +69,15 @@ check(
   /withSyncLaneAdvisoryLock\(lane,\s*async\s*\(\)\s*=>\s*\{[\s\S]*?activeJobsByLane\.set\(lane, name\);/.test(queue),
 );
 check(
+  'pg-boss order and shipment workers call canonical sync services directly',
+  /import \{ syncOrders \} from '\.\/order-sync';/.test(queue) &&
+    /import \{ syncShipments \} from '\.\/shipment-sync';/.test(queue) &&
+    /registerWorker\(JOBS\.orders,\s*\(\) => syncOrders\(\{\}\)\)/.test(queue) &&
+    /registerWorker\(JOBS\.shipments,\s*\(\) => syncShipments\(\{\}\)\)/.test(queue) &&
+    !/runOrderSync/.test(queue) &&
+    !/runShipmentSync/.test(queue),
+);
+check(
   'cross-process lane lock miss defers order\/shipment sync instead of running concurrently',
   /lane_lock_held/.test(queue) && /deferBusySyncJob\(name, blockedBy, lane\)/.test(queue),
 );
