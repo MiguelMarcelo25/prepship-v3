@@ -1,6 +1,6 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Check, ListFilter, Loader2, Pencil, Receipt, SlidersHorizontal, X } from 'lucide-react'
+import { Check, ListFilter, Loader2, Pencil, Receipt, ShieldCheck, SlidersHorizontal, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 // PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
 // (that adapter is out of this ticket's scope); call the shared low-level
@@ -71,6 +71,7 @@ import { BillingConfigTable } from './BillingConfigTable'
 import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
 import { ConfirmModal } from '../ui/ConfirmModal'
 import { BillingPackagePricingTable } from './BillingPackagePricingTable'
+import { HugrabShippingFloorModal } from './HugrabShippingFloorModal'
 import './BillingView.css'
 
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -334,6 +335,8 @@ export default function BillingView() {
   const [bulkBoxCostOpen, setBulkBoxCostOpen] = useState(false)
   // PS-311b: the needs-review box-cost sweep (date range picker + same-box-size apply).
   const [boxReviewSweepOpen, setBoxReviewSweepOpen] = useState(false)
+  const [hugrabShippingFloorOpen, setHugrabShippingFloorOpen] = useState(false)
+  const [detailColumnsAnchorEl, setDetailColumnsAnchorEl] = useState<HTMLElement | null>(null)
   // Regenerate Range confirmation — a styled modal instead of the native browser confirm().
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
@@ -492,6 +495,7 @@ export default function BillingView() {
     if (!detailState.clientId) return null
     return filteredSummaryRows.find((row) => Number(row.clientId) === Number(detailState.clientId)) ?? null
   }, [detailState.clientId, filteredSummaryRows])
+  const isHugrabDetailClient = normalizeBillingClientName(detailState.clientName) === normalizeBillingClientName('HUGRAB')
 
   // PS-069 — what the open client's Summary row claims, so a nonzero summary
   // with zero detail rows renders a mismatch warning instead of a silent
@@ -1075,6 +1079,38 @@ export default function BillingView() {
     }
   }
 
+  async function refreshBillingAfterHugrabFloor() {
+    try {
+      const detailClientId = detailState.clientId
+      const detailClientName = detailState.clientName
+      const [rows, marginAnalytics, detailRows] = await Promise.all([
+        apiClient.fetchBillingSummary(from, to, billingClientQueryIds),
+        apiClient.fetchShippingMarginAnalytics(from, to, billingClientQueryIds),
+        detailState.open && detailClientId != null
+          ? apiClient.fetchBillingDetails(from, to, detailClientId)
+          : Promise.resolve(null),
+      ])
+      setSummaryRows(rows)
+      setSummaryError(null)
+      setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
+      setShippingMarginCarriers(marginAnalytics?.carriers ?? [])
+      setShippingMarginRows((marginAnalytics?.rows ?? []) as ShippingMarginRowDto[])
+      setShippingMarginError(null)
+      if (detailRows && detailClientId != null) {
+        setDetailState({
+          open: true,
+          loading: false,
+          clientId: detailClientId,
+          clientName: detailClientName,
+          rows: detailRows,
+          error: null,
+        })
+      }
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to refresh billing rows', 'error')
+    }
+  }
+
   function handleOpenBillingEdit(row: BillingDetailDto) {
     if (!row.orderId || !detailState.clientId) return
     setBillingEditModal((current) => {
@@ -1646,6 +1682,22 @@ export default function BillingView() {
                   </span>
                 ) : null
               })()}
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+                {isHugrabDetailClient ? (
+                  <button
+                    data-hugrab-shipping-floor-trigger
+                    className="btn btn-secondary btn-xs"
+                    type="button"
+                    disabled={detailState.loading}
+                    title="Preview/apply/revert HUGRAB bulk shipping changes"
+                    onClick={() => setHugrabShippingFloorOpen(true)}
+                  >
+                    <ShieldCheck size={13} aria-hidden="true" />
+                    HUGRAB bulk
+                  </button>
+                ) : null}
+                <span ref={setDetailColumnsAnchorEl} style={{ display: 'inline-flex' }} />
+              </span>
             </div>
 
             <BillingDetailClientStrip
@@ -1674,6 +1726,7 @@ export default function BillingView() {
               selectedSummaryTotal={selectedSummaryTotal}
               sortedDetailRows={sortedDetailRows}
               detailTotals={detailTotals as { pickPack: number; additional: number; packageCost: number; shipping: number; total: number; margin: number }}
+              columnsAnchorEl={detailColumnsAnchorEl}
               onOpenBillingEdit={handleOpenBillingEdit}
               onOpenOrderDetail={setOrderDetailModalId}
             />
@@ -1979,6 +2032,17 @@ export default function BillingView() {
       ) : null}
 
       {/* Regenerate Range confirmation — styled modal replacing the native browser confirm(). */}
+      {hugrabShippingFloorOpen ? (
+        <HugrabShippingFloorModal
+          dateFrom={from}
+          dateTo={to}
+          onClose={() => setHugrabShippingFloorOpen(false)}
+          onApplied={() => {
+            void refreshBillingAfterHugrabFloor()
+          }}
+        />
+      ) : null}
+
       <ConfirmModal
         open={regenerateConfirmOpen}
         title="Regenerate billing range?"

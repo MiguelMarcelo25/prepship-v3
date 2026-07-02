@@ -98,6 +98,7 @@ export function BillingDetailTable({
   selectedSummaryTotal,
   sortedDetailRows,
   detailTotals,
+  columnsAnchorEl,
   onOpenBillingEdit,
   onOpenOrderDetail,
 }: {
@@ -114,6 +115,7 @@ export function BillingDetailTable({
     total: number
     margin: number
   }
+  columnsAnchorEl?: HTMLElement | null
   onOpenBillingEdit: (row: BillingDetailDto) => void
   onOpenOrderDetail: (orderId: number) => void
 }) {
@@ -408,6 +410,7 @@ export function BillingDetailTable({
       defaultPageSize={50}
       pageSizeOptions={BILLING_DETAIL_PAGE_SIZE_OPTIONS}
       loading={detailState.loading}
+      columnsAnchorEl={columnsAnchorEl}
       emptyMessage="No line items found."
       rowClassName={(row) => (computeBillingDetailMetrics(row).ssCharged ? 'billing-detail-ss-row' : undefined)}
       footerRow={(cols) => cols.map((c) => {

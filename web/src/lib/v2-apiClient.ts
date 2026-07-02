@@ -2774,6 +2774,22 @@ export const apiClient = {
     });
   },
 
+  hugrabBillingShippingFloor(data: {
+    action: 'floor' | 'revert';
+    dateFrom: string;
+    dateTo: string;
+    apply?: boolean;
+    expectedCount?: number;
+    limit?: number;
+  }): Promise<any> {
+    return api.post<any>('/billing/hugrab-shipping-floor', data).then((res) => {
+      if (data.apply) {
+        clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
+      }
+      return res?.data ?? res;
+    });
+  },
+
   fetchBillingPackagePrices(clientId: number): Promise<any[]> {
     return cachedSafe(
       'fetchBillingPackagePrices',

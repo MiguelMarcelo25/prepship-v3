@@ -40,6 +40,11 @@ import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/bil
 // PS-311b: the dims-based companion — sweep the SAME unmatched box size across a date range.
 import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
+import {
+  applyHugrabBillingShippingFloor,
+  HugrabBillingShippingFloorCountMismatchError,
+  listHugrabBillingShippingFloorCandidates,
+} from '../services/hugrab-billing-shipping-floor';
 // PS-468: CSV export of the SAME invoice dataset — thin serializer, no fork.
 import { renderInvoiceCsv } from './billing-invoice-csv';
 import { INVOICE_SHIP_DATE_HEADER, invoiceOneLineCell, invoiceShipDateTimeCell } from './billing-invoice-text';
@@ -321,6 +326,26 @@ const detailPatchSchema = z.object({
   note: z.string().max(500).optional(),
 });
 
+const hugrabShippingFloorRawSchema = z.object({
+  action: z.enum(['floor', 'revert']).default('floor'),
+  dateFrom: z.string().min(1),
+  dateTo: z.string().min(1),
+  apply: z.boolean().optional().default(false),
+  expectedCount: z.coerce.number().int().nonnegative().optional(),
+  limit: z.coerce.number().int().positive().max(5000).optional(),
+});
+
+function normalizeHugrabShippingFloorRange<T extends { dateFrom: string; dateTo: string }>(v: T) {
+  const range = billingDayRange(v.dateFrom, v.dateTo);
+  return { ...v, dateFrom: range?.fromUtc, dateTo: range?.toUtcExclusive };
+}
+
+const hugrabShippingFloorSchema = hugrabShippingFloorRawSchema
+  .transform(normalizeHugrabShippingFloorRange)
+  .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
+    message: 'dateFrom and dateTo are required (YYYY-MM-DD)',
+  });
+
 const EDITABLE_BILLING_LINES = [
   ['pickPack', 'pick_pack', 'Pick & Pack'],
   ['additional', 'additional_unit', 'Additional Units'],
@@ -406,6 +431,75 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
 // Returns a full HTML invoice for a single client + date range. The
 // browser opens it and the user can Ctrl+P → Save as PDF. Mirrors the
 // template from v2 billing-routes.ts:19-128 exactly.
+
+// HUGRAB-only bulk shipping adjustment for already-generated billing rows.
+// Source-of-truth lives in src/services/hugrab-billing-shipping-floor.ts: the route only
+// normalizes the calendar-day range, enforces write permission/scope, and delegates.
+app.post(
+  '/hugrab-shipping-floor',
+  requirePermission('financials:write'),
+  zValidator('json', hugrabShippingFloorSchema),
+  async (c) => {
+    const body = c.req.valid('json');
+    const scope = billingScopeFromContext(c);
+    const serviceScope = {
+      action: body.action,
+      dateFrom: body.dateFrom!,
+      dateTo: body.dateTo!,
+      limit: body.limit,
+    };
+    const clientScopePredicate = billingLineItemClientScopePredicate(scope);
+
+    try {
+      if (!body.apply) {
+        const preview = await listHugrabBillingShippingFloorCandidates(serviceScope, clientScopePredicate);
+        return c.json({ data: preview });
+      }
+
+      if (body.expectedCount === undefined) {
+        return c.json({ error: 'expectedCount is required before applying HUGRAB billing changes. Preview first.' }, 400);
+      }
+
+      const result = await applyHugrabBillingShippingFloor(
+        { ...serviceScope, expectedCount: body.expectedCount },
+        clientScopePredicate,
+      );
+
+      await recordAuditEvent({
+        eventType: 'billing',
+        ...auditActorFromContext(c),
+        resourceType: 'billing_hugrab_shipping_floor',
+        resourceId: 'HUGRAB',
+        action: body.action === 'revert' ? 'hugrab_shipping_floor_revert' : 'hugrab_shipping_floor_apply',
+        details: {
+          action: body.action,
+          dateFrom: body.dateFrom,
+          dateTo: body.dateTo,
+          expectedCount: body.expectedCount,
+          count: result.count,
+          updatedCount: result.updatedCount,
+          currentTotal: result.currentTotal,
+          newTotal: result.newTotal,
+          delta: result.delta,
+        },
+      });
+
+      return c.json({ data: result });
+    } catch (error) {
+      if (error instanceof HugrabBillingShippingFloorCountMismatchError) {
+        return c.json(
+          {
+            error: error.message,
+            expectedCount: error.expectedCount,
+            currentCount: error.currentCount,
+          },
+          409,
+        );
+      }
+      throw error;
+    }
+  },
+);
 
 app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zValidator('json', detailPatchSchema), async (c) => {
   const orderId = Number(c.req.param('orderId'));
