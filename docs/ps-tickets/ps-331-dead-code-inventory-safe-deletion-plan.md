@@ -141,3 +141,56 @@ npm run test:ps-261-hugrab-label-purchase-gate
 ```
 
 No database, network, label purchase, queue mutation, marketplace notification, or production order mutation is part of PS-331.
+
+## 2026-07-04 completion update — gate cleared, ticket complete, zero deletions by design
+
+The 2026-07-01 plan above stands unchanged. This update records that the two
+outstanding blockers are now resolved, so the PS-331 deliverable (inventory +
+safe-deletion plan + hard gate) is complete.
+
+Repo-side hard gate — re-verified fully green on `prepshipv4-stable`. On
+re-check, three dependency guards had rotted again after the OrdersView / rates /
+print-queue refactors and were re-anchored to the current (verified-correct)
+source — behaviour intact, patterns drifted, no product code changed (commit
+`c74bb068`):
+
+- PS-329 — the awaiting Best Rate SOT cleanup finished; `getBackendRowMoney` now
+  returns `selectedRateCost/baseAmount/cShippingRateAmount/markedAmount` and the
+  `shipping.bestRateAmount` fallback is gone. Guard now asserts backend-money-only
+  + the absence of the fallback.
+- PS-266 — `customerShippingAmount()` folded into `rateTotal()` (reads
+  `cShippingRateAmount`, the customer charge) with a `rateCostTotal()` tie-breaker;
+  `/browse` combined-selection + quote-proof moved into
+  `src/services/rate-browse-response-producer.ts` (route delegates via
+  `produceRateBrowsePayload`). Guard repointed to the current owners.
+- PS-267 — the print-queue queue-existing-without-rebuy + `createLabelV2` + recovery
+  ladder is intact; calls are wrapped in `timeQueueStep()` and `order.label` hoisted
+  to `labelInput`. Guard repointed to the wrapped forms.
+
+All eight dependency guards now pass: PS-266, PS-267, PS-268, PS-269, PS-322,
+PS-328, PS-329, PS-330. PS-153 / PS-225 / PS-261 safety guards remain green.
+
+Conditional cards — no repo implementation gap. PS-281 and PS-282 have no source
+implementation and were never triggered; PS-284 is documented by PS-268 as
+not-triggered (no proven connector gap). DJ authorized treating all three as
+not-needed for the PS-331 gate.
+
+External acceptance — DJ authorized finishing PS-331 on 2026-07-04.
+
+Deletion outcome — UNCHANGED: `DELETE NOW = 0`. No code is deleted under PS-331,
+by design. The dead code that can eventually be removed keeps its canonical owner
+and its own separate gate, and must be executed as guarded follow-up slices there,
+never as a PS-331 bulk deletion:
+
+- Legacy Vercel `api/` stack → PS-200 (final delete only after zero Vercel function
+  invocations over a full business day — S8).
+- `api/_lib/*` shared helpers → PS-200 S6 (relocate live imports first;
+  `src/lib/imported-handlers/carrier-accounts.ts` still imports `api/_lib/safe-error`).
+- Dead-but-retained schema (`skuQtyDims`, `syncMeta`) → PS-153 (deletion needs a
+  deliberate, approval-gated Drizzle migration; "dead code" alone is not enough).
+- `createLabelFromShipment` label helper → keep as a HUGRAB revival landmine
+  (DOCUMENT ONLY); if revived it must route through `createLabelV2` + the PS-261
+  preflight.
+
+PS-331 (the inventory + gate) is complete. Nothing further is safe to delete under
+this ticket; the safe removals are correctly deferred to the owner cards above.
