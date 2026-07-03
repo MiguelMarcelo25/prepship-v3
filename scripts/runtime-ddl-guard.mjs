@@ -87,6 +87,10 @@ const expectedRuntimeDdlFiles = [
   'src/services/audit-log.ts',
   'src/services/billing-fee-waiver-store.ts',
   'src/services/billing.ts',
+  // PS-327/0053: HUGRAB shipping-rate-override billing_config columns (enabled/threshold/amount).
+  // Additive; covered by drizzle migration 0053_billing_hugrab_shipping_rate_override.sql; the
+  // runtime ensure is the belt-and-suspenders fallback. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
+  'src/services/billing-hugrab-shipping-rate-override.ts',
   'src/services/fulfillment/webhook-ledger.ts',
   'src/services/house-account-opt-in.ts',
   'src/services/order-recipient-override.ts',
@@ -98,6 +102,11 @@ const expectedRuntimeDdlFiles = [
   // Additive; covered by drizzle migration 0052_shipment_bundles.sql + the runtime ensure is the
   // belt-and-suspenders fallback. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
   'src/services/shipment-bundles/ensure-shipment-bundles-schema.ts',
+  // PS-370: the additive shipments.selected_rate_cost column (persisted selected/label total).
+  // Covered by drizzle migration 0054_shipments_selected_rate_cost.sql; the runtime ensure is the
+  // belt-and-suspenders fallback so the label/sync writers work pre-migration. ADD COLUMN IF NOT
+  // EXISTS only — no shipped-row mutation. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
+  'src/db/ensure-shipments-selected-rate-cost.ts',
   'src/services/shipment-tracking.ts',
   'src/services/shipping-workflow/address-classification-cache.ts',
   'src/services/shipping-workflow/order-rate-job-status.ts',

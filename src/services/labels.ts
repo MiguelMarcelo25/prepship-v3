@@ -2,6 +2,7 @@ import { and, eq, or, desc, inArray, sql } from 'drizzle-orm';
 import { performance } from 'node:perf_hooks';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
+import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
 // PS-233 (Per user override unlock shipped data on 2026-06-13): caller-scope
@@ -981,6 +982,10 @@ async function persistCreatedLabel(args: {
       dimsH: args.height,
       cost: created.cost.toFixed(2),
       otherCost: insuranceCost.toFixed(2),
+      // PS-370: the persisted normalized selected/label total = postage + other,
+      // identical to selectedRateJson.totalCost below and to what every reader
+      // derives for this row (byte-consistent by construction).
+      selectedRateCost: Number((created.cost + insuranceCost).toFixed(2)).toFixed(2),
       labelUrl: created.labelUrl,
       labelCreatedAt: createdAt,
       labelFormat: created.labelFormat ?? 'pdf',
@@ -1633,6 +1638,12 @@ async function createLabelV2Impl(
       )) ?? created.providerAccountNickname ?? null;
   }
 
+  // PS-370: ensure the additive selected_rate_cost column exists BEFORE the
+  // shipment-insert transaction opens. Running the ADD COLUMN (ACCESS EXCLUSIVE)
+  // here — outside the tx, on the raw connection — avoids a lock/deadlock against
+  // the tx's shipments INSERT. Memoized: real DDL only on the first label after a
+  // deploy, then a no-op (and a no-op once migration 0054 is applied).
+  await ensureShipmentsSelectedRateCostColumn();
   // PS-248 (Per user override unlock shipped data on 2026-06-16): persist the shipment AND flip the
   // order to 'shipped' in ONE transaction, so a crash between them can't orphan a shipment row while
   // the order stays awaiting (torn state / broken invariant). The external label buy already happened

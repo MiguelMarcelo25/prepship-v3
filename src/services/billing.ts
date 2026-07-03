@@ -13,6 +13,7 @@ import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
+import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { decideShippingLineBilling } from './billing-shipping-line';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
@@ -629,6 +630,10 @@ export async function generateLineItems(input: GenerateInput) {
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
   await ensureHugrabShippingRateOverrideColumns();
+  // PS-370: the shipment query below SELECTs shipments.selected_rate_cost — ensure
+  // the additive column exists before reading it (belt-and-suspenders, pre-migration
+  // 0054). Memoized + idempotent; matches the read-side ensure convention above.
+  await ensureShipmentsSelectedRateCostColumn();
 
   // Match /billing/config: active clients without a billing_config row still
   // generate with defaults, otherwise a fresh install has visible clients but
@@ -713,6 +718,10 @@ export async function generateLineItems(input: GenerateInput) {
       labelCost: shipments.labelCost,
       cost: shipments.cost,
       otherCost: shipments.otherCost,
+      // PS-370: the persisted normalized selected/label total (postage + other),
+      // read by the invoice shipping line so TS + SQL share one value. NULL for
+      // un-backfilled rows -> the reader falls back to cost/labelCost + otherCost.
+      selectedRateCost: shipments.selectedRateCost,
       carrierCode: shipments.carrierCode,
       // #798 2c (fixed): the shipment's reliably-written provider ACCOUNT id (sync + labels both write
       // it; carrierAccountId was NULL on synced rows). Keys settings markup.<account> in the SAME
@@ -774,6 +783,7 @@ export async function generateLineItems(input: GenerateInput) {
     labelCost: string | null;
     cost: string | null;
     otherCost: string | null;
+    selectedRateCost: string | null;
     carrierCode: string | null;
     providerAccountId: number | null;
     selectedPid: number | null;
@@ -817,6 +827,7 @@ export async function generateLineItems(input: GenerateInput) {
         labelCost: row.labelCost,
         cost: row.cost,
         otherCost: row.otherCost,
+        selectedRateCost: row.selectedRateCost,
         carrierCode: row.carrierCode,
         providerAccountId: row.providerAccountId,
         selectedPid: row.selectedPid,
@@ -1099,7 +1110,13 @@ export async function generateLineItems(input: GenerateInput) {
     // v2 bills shipmentCost + otherCost from the synced shipment row. In v4
     // that source column is `cost`; `labelCost` is only a fallback for rows
     // created before the synced cost was available.
-    const labelCost = (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
+    // PS-370: prefer the persisted normalized total (shipments.selected_rate_cost)
+    // so this line and the HUGRAB floor SQL read ONE value. NULL (un-backfilled)
+    // -> the exact prior derivation, so this is byte-identical until Phase 2.
+    const persistedSelectedRateCost = toFiniteNumber(s.selectedRateCost);
+    const labelCost = persistedSelectedRateCost != null
+      ? persistedSelectedRateCost
+      : (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
     if (bundleTreatment.kind === 'included-in-bundle') {
       // PS-312 S5: bundle child — shipping is billed ONCE on the primary. Emit a $0 "Included" line in
       // the shipping slot (mirrors the shipping_missing/$0 pattern; the unique (order_id, line_type,
@@ -1725,6 +1742,9 @@ export async function billingInvoiceHeaderTotals(
 export async function billingDetails(input: GenerateInput) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
+  // PS-370: the SELECT below reads shipments.selected_rate_cost — ensure the
+  // additive column exists first (belt-and-suspenders, pre-migration 0054).
+  await ensureShipmentsSelectedRateCostColumn();
   const rows = await db
     .select({
       id: billingLineItems.id,
@@ -1755,6 +1775,7 @@ export async function billingDetails(input: GenerateInput) {
       labelCost: shipments.labelCost,
       cost: shipments.cost,
       otherCost: shipments.otherCost,
+      selectedRateCost: shipments.selectedRateCost, // PS-370
       orderItems: orders.items,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
@@ -1822,6 +1843,7 @@ export async function billingDetails(input: GenerateInput) {
           labelCost: shipments.labelCost,
           cost: shipments.cost,
           otherCost: shipments.otherCost,
+          selectedRateCost: shipments.selectedRateCost, // PS-370
         })
         .from(shipments)
         .where(and(eq(shipments.voided, false), fallbackShipmentWhere))
@@ -1987,6 +2009,9 @@ export async function billingDetails(input: GenerateInput) {
           return changedAt ? new Date(row.createdAt) < changedAt : false;
         })();
       const selectedRateCost = resolveBillingSelectedRateCost({
+        // PS-370: prefer the persisted normalized total; the resolver falls back
+        // to the component derivation for un-backfilled NULL rows.
+        selectedRateCost: row.selectedRateCost ?? fallbackShipment?.selectedRateCost,
         cost: row.cost ?? fallbackShipment?.cost,
         labelCost: row.labelCost ?? fallbackShipment?.labelCost,
         otherCost: row.otherCost ?? fallbackShipment?.otherCost,

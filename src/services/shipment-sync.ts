@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
+import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { clients } from '../db/schema/clients';
 import { listShipStationShipments } from '../connectors/store/shipstation';
 import {
@@ -290,8 +291,16 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
       if (values.createDate == null && existing.createDate != null) {
         values.createDate = existing.createDate;
       }
+      // PS-370: do NOT set selected_rate_cost on UPDATE — the update SET omits
+      // otherCost (existing value is preserved), so writing cost-only here would
+      // drop a labeled row's insurance/other and change its billed total. Updates
+      // keep the column untouched; a labeled row keeps its exact persisted value,
+      // an un-backfilled row stays NULL and reads its fallback.
       toUpdate.push({ id: existing.id, values });
     } else {
+      // NEW synced row: otherCost defaults to '0', so the normalized total IS the
+      // synced cost (postage + 0), byte-consistent with every reader's fallback.
+      values.selectedRateCost = toNumeric(s.shipmentCost);
       toInsert.push(values);
     }
 
@@ -313,6 +322,10 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
   }
 
   // 4a. Single INSERT for all new rows (chunk to 500 to stay below pg param limits)
+  // PS-370: ensure the additive selected_rate_cost column exists before the new-row
+  // inserts reference it. Standalone insert (no wrapping tx) so no lock/deadlock risk;
+  // memoized (real DDL only on the first sync after a deploy, then a no-op).
+  if (toInsert.length) await ensureShipmentsSelectedRateCostColumn();
   let inserted = 0;
   const chunkSize = 500;
   for (let i = 0; i < toInsert.length; i += chunkSize) {

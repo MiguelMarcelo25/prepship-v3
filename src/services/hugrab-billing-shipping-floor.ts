@@ -1,6 +1,7 @@
 import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems } from '../db/schema/billing.js';
+import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost.js';
 
 export const HUGRAB_BILLING_CLIENT_NAME = 'HUGRAB';
 export const DEFAULT_HUGRAB_SELECTED_RATE_BELOW = 7.95;
@@ -159,6 +160,10 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
   const limit = input.limit ?? HUGRAB_SHIPPING_FLOOR_DEFAULT_LIMIT;
   const scoped = clientScopePredicate ?? sql`true`;
 
+  // PS-370: the SQL below coalesces s.selected_rate_cost — ensure the additive
+  // column exists before the read (belt-and-suspenders, pre-migration 0054).
+  // Memoized + idempotent (ADD COLUMN IF NOT EXISTS).
+  await ensureShipmentsSelectedRateCostColumn();
   const rows = await db.execute<RawCandidate>(sql`
     with source_rows as (
       select
@@ -171,6 +176,10 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
         coalesce(s.cost, fs.cost) as cost,
         coalesce(s.label_cost, fs.label_cost) as label_cost,
         coalesce(s.other_cost, fs.other_cost) as other_cost,
+        -- PS-370: the persisted normalized total, preferred over the re-derivation
+        -- below so this SQL and billing.ts read ONE value. NULL for un-backfilled
+        -- rows -> the existing postage+other / JSON coalesce, byte-identical today.
+        coalesce(s.selected_rate_cost, fs.selected_rate_cost) as persisted_selected_rate_cost,
         coalesce(s.selected_rate_json, fs.selected_rate_json) as selected_rate_json
       from billing_line_items
       join clients c on c.id = billing_line_items.client_id
@@ -203,6 +212,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
         src.current_shipping::text as current_shipping,
         round(
           coalesce(
+            src.persisted_selected_rate_cost,
             money.postage_cost + money.other_cost,
             money.selected_total
           ),

@@ -1,6 +1,10 @@
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
 
 export type BillingSelectedRateCostInput = {
+  // PS-370: the persisted normalized total (shipments.selected_rate_cost). When
+  // present it wins — TS and SQL then read ONE value. NULL (un-backfilled) falls
+  // through to the component derivation below, so this is byte-identical today.
+  selectedRateCost?: unknown;
   cost?: unknown;
   labelCost?: unknown;
   otherCost?: unknown;
@@ -33,6 +37,17 @@ function roundCents(value: number): number {
 }
 
 export function resolveBillingSelectedRateCost(input: BillingSelectedRateCostInput): number | null {
+  // PS-370: the persisted column is the source of truth when present.
+  const persisted = toFiniteNumber(input.selectedRateCost);
+  if (persisted != null) return roundCents(persisted);
+
+  // NULL column (un-backfilled row) -> the component derivation, UNCHANGED. The
+  // card's Phase-1 note to collapse this to normalizeShippingRateMoney is
+  // deferred: the normalizer reads otherCost from money-OBJECTS ({amount}) while
+  // this reads a plain otherCost number, so collapsing would drop insurance/other
+  // on un-backfilled rows and change billed totals — barred by "NEVER change
+  // amounts". After the Phase-2 backfill this fallback becomes NULL-safety only
+  // and can be deleted safely.
   const selectedRate = recordOrNull(input.selectedRateJson);
   const otherCost =
     toFiniteNumber(input.otherCost) ??

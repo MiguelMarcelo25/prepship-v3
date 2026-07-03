@@ -35,6 +35,13 @@ export const shipments = pgTable(
     dimsH: real(),
     cost: numeric({ precision: 10, scale: 2 }),
     otherCost: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+    // PS-370: the normalized selected/label total (postage + other), persisted so
+    // TS and SQL read ONE value instead of each re-deriving "what did the label
+    // cost". Nullable — NULL means un-backfilled; every reader falls back to its
+    // existing derivation, so this is byte-neutral until the Phase-2 backfill.
+    // Additive column on a lockdown table (read/type addition, not a drop/type
+    // change) — no shipped-row mutation in Phase 1.
+    selectedRateCost: numeric({ precision: 10, scale: 2 }),
     labelUrl: text(),
     labelCreatedAt: timestamp({ withTimezone: true }),
     labelFormat: text(),
