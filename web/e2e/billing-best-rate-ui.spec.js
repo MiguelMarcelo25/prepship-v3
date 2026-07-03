@@ -8,6 +8,9 @@ const clients = [
   { id: 1, clientId: 1, name: 'Mock Billing Client', active: true, isTest: false, storeId: 101 },
 ]
 
+// Mirrors the real /billing/details contract: PS-364 made Billing display the
+// SELECTED/purchased rate (selectedRateCost), and PS-368 made the detail order
+// row camelCase-only with always-present totals.
 const billingDetails = [
   {
     id: 9001,
@@ -21,14 +24,18 @@ const billingDetails = [
     totalQty: 1,
     pickpackTotal: 4,
     additionalTotal: 0,
+    pickPackFeeTotal: 4,
     packageTotal: 0.5,
+    storageTotal: 0,
     packageName: '12x10x3',
+    selectedRateCost: 8.12,
     actualLabelCost: 8.12,
-    ref_ups_rate: 9.44,
-    ref_usps_rate: 7.95,
+    refUpsRate: 9.44,
+    refUspsRate: 7.95,
     shippingTotal: 8.12,
     fulfillmentFeeTotal: 12.62,
-    lineType: 'shipping',
+    grandTotal: 12.62,
+    lineType: 'billing_order',
   },
 ]
 
@@ -154,7 +161,10 @@ async function setup(page) {
   })
 }
 
-test('Billing Detail Best Rate cell has no blue outline', async ({ page }) => {
+// PS-364 replaced the Billing detail Best Rate column with Selected Rate (Billing
+// shows purchased-rate truth, never current Best Rate — PS-313). Same UI assertion,
+// current column: the rate cell renders flat, with no blue outline.
+test('Billing Detail Selected Rate cell has no blue outline', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await setup(page)
   await page.goto(`${baseUrl}/billing`)
@@ -162,11 +172,11 @@ test('Billing Detail Best Rate cell has no blue outline', async ({ page }) => {
   await expect(page.getByText('Mock Billing Client')).toBeVisible()
   await page.getByText('Mock Billing Client').click()
 
-  const bestRateCell = page.locator('td[data-col-key="bestRate"]').first()
-  await expect(bestRateCell).toBeVisible()
-  await expect(bestRateCell.locator('[data-billing-rate="bestRate"]')).toHaveText('$8.12')
+  const rateCell = page.locator('[data-billing-rate="selectedRate"]').first()
+  await expect(rateCell).toBeVisible()
+  await expect(rateCell).toHaveText('$8.12')
 
-  const styles = await bestRateCell.locator('[data-billing-rate="bestRate"]').evaluate((element) => {
+  const styles = await rateCell.evaluate((element) => {
     const computed = window.getComputedStyle(element)
     return {
       borderTopWidth: computed.borderTopWidth,

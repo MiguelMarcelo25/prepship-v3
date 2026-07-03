@@ -235,31 +235,10 @@ function moneyNumber(value: number) {
   return Number((Number.isFinite(value) ? value : 0).toFixed(2))
 }
 
-export function calculateBillingPickPackFee(input: {
-  baseFee: number
-  additionalUnitFee: number
-  quantity: number
-  includedUnits?: number
-}) {
-  const includedUnits = Math.max(1, Math.floor(input.includedUnits ?? 1))
-  const quantity = Math.max(0, Number(input.quantity) || 0)
-  const extraUnits = Math.max(0, quantity - includedUnits)
-  return moneyNumber((Number(input.baseFee) || 0) + extraUnits * (Number(input.additionalUnitFee) || 0))
-}
-
-export function calculateBillingFulfillmentFee(input: {
-  shippingCharge: number
-  pickPackFee: number
-  boxFee: number
-  storageFee: number
-}) {
-  return moneyNumber(
-    (Number(input.shippingCharge) || 0)
-      + (Number(input.pickPackFee) || 0)
-      + (Number(input.boxFee) || 0)
-      + (Number(input.storageFee) || 0),
-  )
-}
+// PS-369: calculateBillingPickPackFee / calculateBillingFulfillmentFee are DELETED.
+// They duplicated the backend fee math (src/services/billing.ts generator) in React;
+// the backend emits pickPackFeeTotal / fulfillmentFeeTotal on every summary and
+// detail row (typed since PS-368), so the FE displays them verbatim.
 
 export function getBillingInitialRange(now = new Date()): BillingDateRange {
   // Default the billing summary to the last 30 days (was 90) so the
@@ -348,20 +327,13 @@ export function buildBillingSummaryTotals(rows: BillingSummaryDto[]): BillingSum
   return rows.reduce<BillingSummaryTotals>((totals, row) => {
     const pickPack = Number(row.pickPackTotal || 0)
     const additional = Number(row.additionalTotal || 0)
-    const pickPackFee = Number(row.pickPackFeeTotal ?? row.pick_pack_fee_total ?? pickPack + additional)
+    // PS-369: display-only — the backend summary emits both fee totals on every
+    // row; the FE no longer recomputes them (snake key kept as deploy-skew fallback).
+    const pickPackFee = Number(row.pickPackFeeTotal ?? row.pick_pack_fee_total ?? 0)
     const shipping = Number(row.shippingTotal || 0)
     const boxFee = Number(row.packageTotal || 0)
     const storage = Number(row.storageTotal || 0)
-    const fulfillmentFee = Number(
-      row.fulfillmentFeeTotal
-        ?? row.fulfillment_fee_total
-        ?? calculateBillingFulfillmentFee({
-          shippingCharge: shipping,
-          pickPackFee,
-          boxFee,
-          storageFee: storage,
-        }),
-    )
+    const fulfillmentFee = Number(row.fulfillmentFeeTotal ?? row.fulfillment_fee_total ?? 0)
     return {
       orders: totals.orders + (row.orderCount || 0),
       pickPack: totals.pickPack + pickPack,
@@ -424,31 +396,6 @@ export function getBillingDetailColumnStorageKey() {
 
 export function getDefaultBillingDetailColumnIds() {
   return [...DEFAULT_BILLING_DETAIL_COLUMN_IDS]
-}
-
-function billingBadgeList(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  const badges: string[] = []
-  for (const badge of value) {
-    if (typeof badge !== 'string') continue
-    const trimmed = badge.trim()
-    if (trimmed && !badges.includes(trimmed)) badges.push(trimmed)
-  }
-  return badges
-}
-
-function mergeBillingBadges(...values: unknown[]): string[] {
-  const merged: string[] = []
-  for (const value of values) {
-    for (const badge of billingBadgeList(value)) {
-      if (!merged.includes(badge)) merged.push(badge)
-    }
-  }
-  return merged
-}
-
-function hasNoBoxCostBadge(row: Record<string, unknown>, badges = mergeBillingBadges(row.billingBadges, row.billing_badges)): boolean {
-  return row.boxCostAlert === true || row.box_cost_alert === true || badges.includes('NO_BOX_COST')
 }
 
 export function readBillingDetailColumnIds(storage?: Pick<Storage, 'getItem'> | null) {
@@ -518,181 +465,10 @@ export function getVisibleBillingDetailColumns(columnIds: BillingDetailColumnId[
   return result
 }
 
-// Collapse per-lineType rows into one row per order. The generator
-// emits a separate BillingDetailDto for each fee type (pick_pack,
-// additional_unit, package_cost, shipping, storage) which would
-// otherwise show as multiple rows for the same order in the UI. After
-// this pass each merged row carries explicit *Total fields, which
-// `computeBillingDetailMetrics` prefers over the lineType fallback —
-// so the downstream rendering and sorting code needs no changes.
-//
-// Aggregation key is `orderId`. Storage rows (no orderId) fall back
-// to their description so each storage line stays distinct.
-export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): BillingDetailDto[] {
-  const byKey = new Map<string, BillingDetailDto & Record<string, unknown>>()
-  const order: string[] = []
+// PS-369: aggregateBillingDetailRowsByOrder is DELETED. It was the dead FE twin of the
+// backend toBillingDetailOrderRows (billing-detail-row-sot.ts) — zero callers since PS-362
+// moved order-row aggregation behind the API. The backend SOT is the only aggregator.
 
-  const num = (value: unknown) => {
-    if (value == null) return 0
-    const parsed = typeof value === 'number' ? value : Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
-  }
-
-  for (const row of rows) {
-    const orderId = (row as { orderId?: unknown }).orderId
-    const description = (row as { description?: unknown }).description
-    const lineType = (row as { lineType?: unknown }).lineType
-    const key =
-      orderId != null && orderId !== ''
-        ? `order:${orderId}`
-        : `storage:${String(description ?? '')}:${String(lineType ?? '')}`
-
-    const metrics = computeBillingDetailMetrics(row)
-    const rowBadges = mergeBillingBadges(
-      (row as { billingBadges?: unknown }).billingBadges,
-      (row as { billing_badges?: unknown }).billing_badges,
-    )
-    const rowBoxCostAlert = hasNoBoxCostBadge(row as Record<string, unknown>, rowBadges)
-
-    if (!byKey.has(key)) {
-      // Seed merged row with this lineType's contribution. Reset
-      // totalCost so the *Total fallback never re-applies the same
-      // dollars (lineType becomes 'merged' as a tripwire).
-      byKey.set(key, {
-        ...(row as Record<string, unknown>),
-        lineType: 'merged',
-        line_type: 'merged',
-        pickpackTotal: metrics.pickPack,
-        pick_pack_total: metrics.pickPack,
-        additionalTotal: metrics.additional,
-        additional_total: metrics.additional,
-        packageTotal: metrics.packageCost,
-        package_total: metrics.packageCost,
-        shippingTotal: metrics.shipping,
-        shipping_total: metrics.shipping,
-        storageTotal: num((row as { storageTotal?: unknown; storage_total?: unknown }).storageTotal
-          ?? (row as { storage_total?: unknown }).storage_total
-          ?? (lineType === 'storage' ? metrics.total : 0)),
-        storage_total: num((row as { storageTotal?: unknown; storage_total?: unknown }).storageTotal
-          ?? (row as { storage_total?: unknown }).storage_total
-          ?? (lineType === 'storage' ? metrics.total : 0)),
-        grandTotal: metrics.total,
-        grand_total: metrics.total,
-        totalCost: 0,
-        total_cost: 0,
-        // PS-068: carry the box-line stale-price flag up to the order row so
-        // the Box Cost cell can badge "stale — regenerate". Only package_cost
-        // lines set this, so OR-ing across the order's lines is correct.
-        stalePackagePrice: (row as { stalePackagePrice?: unknown }).stalePackagePrice === true,
-        // PS-207: carry the box-review flag + backend reason up to the order
-        // row (only package_cost_missing lines set them). The FE renders the
-        // chip from these — it does NO box policy math of its own.
-        packageCostNeedsReview: (row as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true,
-        packageCostReviewReason: (row as { packageCostReviewReason?: unknown }).packageCostReviewReason ?? null,
-        boxCostAlert: rowBoxCostAlert,
-        box_cost_alert: rowBoxCostAlert,
-        billingBadges: rowBadges,
-        billing_badges: rowBadges,
-      } as BillingDetailDto & Record<string, unknown>)
-      order.push(key)
-      continue
-    }
-
-    const existing = byKey.get(key)!
-    existing.pickpackTotal = num(existing.pickpackTotal) + metrics.pickPack
-    existing.pick_pack_total = existing.pickpackTotal
-    existing.additionalTotal = num(existing.additionalTotal) + metrics.additional
-    existing.additional_total = existing.additionalTotal
-    existing.packageTotal = num(existing.packageTotal) + metrics.packageCost
-    existing.package_total = existing.packageTotal
-    existing.shippingTotal = num(existing.shippingTotal) + metrics.shipping
-    existing.shipping_total = existing.shippingTotal
-    existing.grandTotal = num(existing.grandTotal) + metrics.total
-    existing.grand_total = existing.grandTotal
-    existing.stalePackagePrice =
-      (existing as { stalePackagePrice?: unknown }).stalePackagePrice === true ||
-      (row as { stalePackagePrice?: unknown }).stalePackagePrice === true
-    existing.packageCostNeedsReview =
-      (existing as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true ||
-      (row as { packageCostNeedsReview?: unknown }).packageCostNeedsReview === true
-    existing.packageCostReviewReason =
-      (existing as { packageCostReviewReason?: unknown }).packageCostReviewReason ??
-      (row as { packageCostReviewReason?: unknown }).packageCostReviewReason ??
-      null
-    const mergedBadges = mergeBillingBadges(existing.billingBadges, existing.billing_badges, rowBadges)
-    existing.billingBadges = mergedBadges
-    existing.billing_badges = mergedBadges
-    existing.boxCostAlert =
-      (existing as { boxCostAlert?: unknown }).boxCostAlert === true ||
-      (existing as { box_cost_alert?: unknown }).box_cost_alert === true ||
-      rowBoxCostAlert ||
-      mergedBadges.includes('NO_BOX_COST')
-    existing.box_cost_alert = existing.boxCostAlert
-
-    // First-wins for the non-monetary fields. The shipping row is
-    // usually richer (carrier, ref rates, ship date, actual label
-    // cost) than the pick_pack row, so we backfill from later rows
-    // any time the seed row had a null.
-    const carryString = (
-      ours: string | null | undefined,
-      theirs: string | null | undefined,
-    ) => (ours && String(ours).trim() ? ours : theirs)
-    const carryNullable = (ours: unknown, theirs: unknown) => (ours != null && ours !== '' ? ours : theirs)
-
-    existing.shipDate = carryString(
-      existing.shipDate as string | null | undefined,
-      (row as { shipDate?: string | null }).shipDate,
-    )
-    existing.carrierCode = carryString(
-      existing.carrierCode as string | null | undefined,
-      (row as { carrierCode?: string | null }).carrierCode,
-    )
-    existing.carrierNickname = carryString(
-      existing.carrierNickname as string | null | undefined,
-      (row as { carrierNickname?: string | null }).carrierNickname,
-    )
-    existing.providerAccountNickname = carryString(
-      existing.providerAccountNickname as string | null | undefined,
-      (row as { providerAccountNickname?: string | null }).providerAccountNickname,
-    )
-    existing.itemNames = carryString(
-      existing.itemNames as string | null | undefined,
-      (row as { itemNames?: string | null }).itemNames,
-    )
-    existing.itemSkus = carryString(
-      existing.itemSkus as string | null | undefined,
-      (row as { itemSkus?: string | null }).itemSkus,
-    )
-    existing.packageName = carryString(
-      existing.packageName as string | null | undefined,
-      (row as { packageName?: string | null }).packageName,
-    )
-
-    existing.totalQty = carryNullable(existing.totalQty, (row as { totalQty?: unknown }).totalQty)
-    existing.selectedRateCost = carryNullable(
-      existing.selectedRateCost,
-      (row as { selectedRateCost?: unknown }).selectedRateCost,
-    )
-    existing.selected_rate_cost = carryNullable(
-      existing.selected_rate_cost,
-      (row as { selected_rate_cost?: unknown }).selected_rate_cost,
-    )
-    existing.actualLabelCost = carryNullable(
-      existing.actualLabelCost,
-      (row as { actualLabelCost?: unknown }).actualLabelCost,
-    )
-    existing.ref_ups_rate = carryNullable(
-      existing.ref_ups_rate,
-      (row as { ref_ups_rate?: unknown }).ref_ups_rate,
-    )
-    existing.ref_usps_rate = carryNullable(
-      existing.ref_usps_rate,
-      (row as { ref_usps_rate?: unknown }).ref_usps_rate,
-    )
-  }
-
-  return order.map((key) => byKey.get(key) as BillingDetailDto)
-}
 
 export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDetailMetrics {
   const lineType = detail.lineType ?? detail.line_type
@@ -702,17 +478,10 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   const packageCost = Number(detail.packageTotal ?? detail.package_total ?? (lineType === 'package_cost' ? lineTotal : 0)) || 0
   const shipping = Number(detail.shippingTotal ?? detail.shipping_total ?? (lineType === 'shipping' ? lineTotal : 0)) || 0
   const storage = Number(detail.storageTotal ?? detail.storage_total ?? (lineType === 'storage' ? lineTotal : 0)) || 0
-  const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? pickPack + additional) || 0
-  const fulfillmentFee = Number(
-    detail.fulfillmentFeeTotal
-      ?? detail.fulfillment_fee_total
-      ?? calculateBillingFulfillmentFee({
-        shippingCharge: shipping,
-        pickPackFee,
-        boxFee: packageCost,
-        storageFee: storage,
-      }),
-  ) || 0
+  // PS-369: display-only — the backend detail row DTO (PS-368) always carries both
+  // fee totals; the FE no longer recomputes them (snake key kept as deploy-skew fallback).
+  const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? 0) || 0
+  const fulfillmentFee = Number(detail.fulfillmentFeeTotal ?? detail.fulfillment_fee_total ?? 0) || 0
   const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || fulfillmentFee
   const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost ?? detail.actualLabelCost ?? detail.actual_label_cost
   const ourCost = Number(selectedRateCost ?? 0) || 0

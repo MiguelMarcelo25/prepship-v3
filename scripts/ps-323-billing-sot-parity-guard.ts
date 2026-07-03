@@ -117,16 +117,17 @@ check('CSV serializer omits the prep-fee waiver marker column',
 check('invoice routes keep the shared waiver period note owner',
   /billing-invoice-waiver-indicator/.test(billingRoute) && /waivedSummaryNote/.test(billingRoute));
 
-// ── 8) FE pin: the shared FE billing math prefers the backend DTO totals and only falls back to the
-//        shared calculate* helpers (the backend's own formula) — it invents no divergent total ──
+// ── 8) FE pin: the shared FE billing math displays the backend DTO totals VERBATIM.
+//        PS-369 deleted the calculate* fallback helpers entirely — the FE recomputes
+//        no money; a missing backend total renders 0 instead of a re-derived number ──
 const parity = read('web/src/components/Views/billing-parity.ts');
 const billingSvc = read('src/services/billing.ts');
 check('FE summary/detail math prefers the backend fulfillmentFeeTotal / grandTotal DTO fields',
   /row\.fulfillmentFeeTotal/.test(parity) &&
   /row\.grandTotal/.test(parity) &&
   /detail\.fulfillmentFeeTotal/.test(parity));
-check('FE fulfillmentFee fallback delegates to the shared calculateBillingFulfillmentFee helper (backend-mirrored formula, not a new one)',
-  /calculateBillingFulfillmentFee\(/.test(parity));
+check('PS-369: FE fee recompute is GONE (no calculateBillingFulfillmentFee/PickPackFee in billing-parity)',
+  !/calculateBillingFulfillmentFee\s*\(|calculateBillingPickPackFee\s*\(/.test(parity.replace(/\/\/[^\n]*/g, '')));
 check('backend billingSummary RETURNS the fulfillmentFeeTotal / pickPackFeeTotal the FE reads (single formula, owned backend)',
   /fulfillmentFeeTotal/.test(billingSvc) && /pickPackFeeTotal/.test(billingSvc));
 
