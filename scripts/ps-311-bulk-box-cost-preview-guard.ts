@@ -114,10 +114,21 @@ check('UI modal previews THEN applies via the two backend routes',
 check('UI Apply is GATED (needs a fetched preview + a confirm tick + a non-empty editable set)',
   /applyDisabled\s*=/.test(modal) && /!confirmed/.test(modal) && /editableOrderCount === 0/.test(modal));
 const billingView = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
-check('BillingView wires the bulk modal from the box-review action',
-  /import BulkBoxCostModal/.test(billingView) &&
-  /<BulkBoxCostModal/.test(billingView) &&
-  /data-bulk-box-cost-trigger/.test(billingView));
+// The Billing modal/layout extraction (d9942d62) split the wiring across three files:
+// BillingView owns the open-state + threads the callbacks; BillingEditDetailModal renders
+// the trigger buttons; BillingDetailModalStack mounts the modals. The guard follows the
+// full chain across all three so it proves the wiring survived the extraction intact.
+const editModal = readFileSync('web/src/components/Views/BillingEditDetailModal.tsx', 'utf8');
+const modalStack = readFileSync('web/src/components/Views/BillingDetailModalStack.tsx', 'utf8');
+check('bulk modal wired end-to-end (trigger → BillingView state → mounted modal)',
+  // trigger button in the edit modal opens the bulk flow
+  /data-bulk-box-cost-trigger/.test(editModal) && /onClick=\{onOpenBulkBoxCost\}/.test(editModal) &&
+  // BillingView owns the open-state and threads the open callback + the state down
+  /const \[bulkBoxCostOpen, setBulkBoxCostOpen\] = useState/.test(billingView) &&
+  /onOpenBulkBoxCost=\{\(\) => setBulkBoxCostOpen\(true\)\}/.test(billingView) &&
+  /bulkBoxCostOpen=\{bulkBoxCostOpen\}/.test(billingView) &&
+  // the modal is imported + mounted in the detail modal stack
+  /import BulkBoxCostModal/.test(modalStack) && /<BulkBoxCostModal/.test(modalStack));
 
 // ── PS-311b: the NEEDS-REVIEW dims-based sweep (companion to the packageId-based bulk). It matches
 // unmatched orders by their package_cost_missing review-line description (the dims signature) — the
@@ -189,10 +200,15 @@ check('sweep modal Apply is GATED (preview fetched + confirm tick + non-empty ed
   /applyDisabled\s*=/.test(sweepModal) && /!confirmed/.test(sweepModal) && /editableOrderCount === 0/.test(sweepModal) && /!rangeValid/.test(sweepModal));
 check('sweep modal offers UNDO after apply (one-click revert via the by-dims/revert route)',
   /data-box-review-sweep-undo/.test(sweepModal) && /\/billing\/box-cost\/by-dims\/revert/.test(sweepModal));
-check('BillingView wires the sweep modal from the needs-review row (no package pick required)',
-  /import BoxReviewSweepModal/.test(billingView) &&
-  /<BoxReviewSweepModal/.test(billingView) &&
-  /data-box-review-sweep-trigger/.test(billingView));
+check('sweep modal wired end-to-end (needs-review trigger → BillingView state → mounted modal)',
+  // trigger button in the edit modal opens the sweep (no package pick required)
+  /data-box-review-sweep-trigger/.test(editModal) && /onClick=\{onOpenBoxReviewSweep\}/.test(editModal) &&
+  // BillingView owns the open-state and threads the open callback + the state down
+  /const \[boxReviewSweepOpen, setBoxReviewSweepOpen\] = useState/.test(billingView) &&
+  /onOpenBoxReviewSweep=\{\(\) => setBoxReviewSweepOpen\(true\)\}/.test(billingView) &&
+  /boxReviewSweepOpen=\{boxReviewSweepOpen\}/.test(billingView) &&
+  // the modal is imported + mounted in the detail modal stack
+  /import BoxReviewSweepModal/.test(modalStack) && /<BoxReviewSweepModal/.test(modalStack));
 
 if (failures > 0) {
   console.error(`\nPS-311 bulk box-cost preview guard FAILED with ${failures} failure(s).`);
