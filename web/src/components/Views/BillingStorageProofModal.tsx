@@ -7,7 +7,7 @@
 // per-client scope on the backend) and renders the sidecar verbatim. It owns no
 // storage math — the backend rate/billing owner is the single source of truth,
 // so what shows here is exactly how the invoiced total was built.
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { apiClient } from '../../api/client'
 
 type StorageSegment = {
@@ -200,9 +200,8 @@ export default function BillingStorageProofModal(props: BillingStorageProofModal
                 {skuProofs.map((s) => {
                   const isOpen = expanded.has(s.inventoryId)
                   return (
-                    <>
+                    <Fragment key={s.inventoryId}>
                       <tr
-                        key={s.inventoryId}
                         onClick={() => toggle(s.inventoryId)}
                         style={{ cursor: 'pointer', borderBottom: '1px solid var(--border, #eee)' }}
                       >
@@ -232,7 +231,7 @@ export default function BillingStorageProofModal(props: BillingStorageProofModal
                         <td style={{ padding: '6px 8px', textAlign: 'center', opacity: 0.7 }}>{s.segments.length}</td>
                       </tr>
                       {isOpen ? (
-                        <tr key={`${s.inventoryId}-seg`}>
+                        <tr>
                           <td colSpan={5} style={{ padding: '0 8px 10px 22px' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, opacity: 0.9 }}>
                               <thead>
@@ -263,7 +262,7 @@ export default function BillingStorageProofModal(props: BillingStorageProofModal
                           </td>
                         </tr>
                       ) : null}
-                    </>
+                    </Fragment>
                   )
                 })}
                 {skuProofs.length === 0 ? (
