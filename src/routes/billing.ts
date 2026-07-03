@@ -660,7 +660,16 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
 
       updated += rows.length;
 
-      if (rows.length === 0 && value > 0) {
+      // PS-375: insert a line when none exists yet. For a FEE line (pick_pack /
+      // additional_unit / shipping) only a POSITIVE value creates one — a $0
+      // there just means "no such fee". But for the BOX COST a saved $0 is a
+      // DELIBERATE resolved-zero decision (the operator confirmed a free box), so
+      // emit an explicit $0 package_cost line: the row then reads resolved
+      // (hasPackageCostLine=true, packageTotal=0 → resolveBillingBoxCostAlert's
+      // resolved-zero branch, no NO_BOX_COST alert) instead of missing. Without
+      // this the package_cost_missing line was deleted below but nothing replaced
+      // it, so the missing-cost alert re-fired and the row still showed review.
+      if (rows.length === 0 && (value > 0 || lineType === 'package_cost')) {
         await tx.insert(billingLineItems).values({
           clientId: body.clientId,
           orderId,
