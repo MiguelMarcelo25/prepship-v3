@@ -9,7 +9,8 @@
  * to a known package — or the selected box and the shipment dims disagree —
  * billing emits an explicit $0.00 review line; it never guesses.
  *
- * This module is PURE (zero imports, no db) so the PS-207 guard can exercise
+ * This module is PURE (no db; its only import is the equally-pure canonical
+ * markup owner, PS-371) so the PS-207 guard can exercise
  * the full resolution matrix offline. The generator (services/billing.ts)
  * builds the lookup maps and delegates here; billingDetails and the FE render
  * the outcome — neither re-implements the policy.
@@ -43,6 +44,8 @@
  *    alone it is UNRESOLVED, never silently dropped.
  *  - Partial dims (missing/non-positive L, W, or H) are treated as no dims.
  */
+
+import { canonicalMarkupAmount } from './shipping-workflow/markup-resolver';
 
 export type BoxPackage = {
   id: number;
@@ -298,7 +301,9 @@ export function decidePackageCostLine(args: {
     r.overridePrice != null
       ? r.overridePrice
       : args.configuredPrice != null && args.configuredPrice > 0
-        ? args.configuredPrice * (1 + args.markupPct / 100)
+        // PS-371: delegate to the single formula owner. Box markup is percent-only BY DESIGN
+        // (flat: 0) and unrounded here — the caller formats, matching prior behavior exactly.
+        ? canonicalMarkupAmount(args.configuredPrice, { pct: args.markupPct, flat: 0 })
         : null;
   // PS-222b: a flagged no-charge/factory box shows an EXPLICIT $0.00 line when no
   // positive price applies — instead of the silent suppression below. A real

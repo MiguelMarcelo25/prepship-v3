@@ -27,6 +27,10 @@ import {
   resolveHugrabShippingRateOverride,
   type HugrabShippingRateOverrideConfig,
 } from '../billing-hugrab-shipping-rate-override';
+// PS-371: the markup FORMULA lives in exactly one owner (markup-resolver). This module keeps its
+// public API (applyMarkupToAmount / the canonical row markup) but delegates the math. The import is
+// value-safe: markup-resolver only imports a TYPE from this file, so no runtime cycle exists.
+import { applyCanonicalMarkup, markupRuleToCanonical } from './markup-resolver';
 
 export type MarkupRule = { type: 'amount' | 'percent'; value: number };
 
@@ -54,24 +58,21 @@ function round2(value: number): number {
 }
 
 /**
- * Apply a markup rule to a base amount. Identical math to rates.ts
- * applyMarkups and the FE applyCarrierMarkup: percent = base*(1+v/100),
+ * Apply a markup rule to a base amount. Same observable behavior as the historical
+ * rates.ts applyMarkups and the FE applyCarrierMarkup: percent = base*(1+v/100),
  * amount = base+v; rounded to cents. No rule → the base unchanged.
+ * PS-371: delegates to the single formula owner (markup-resolver) — a percent rule is
+ * {pct,flat:0}, an amount rule is {pct:0,flat}, byte-identical (pinned by the guard).
  */
 export function applyMarkupToAmount(amount: number, rule: MarkupRule | null | undefined): number {
-  if (!rule || !rule.value) return round2(amount);
-  return round2(rule.type === 'percent' ? amount * (1 + rule.value / 100) : amount + rule.value);
+  return applyCanonicalMarkup(amount, markupRuleToCanonical(rule));
 }
 
-// PS-798 (slice 2b): apply the CANONICAL per-client+per-account markup ({pct,flat}, additive) — the
-// SAME formula markup-resolver.applyCanonicalMarkup uses (parity pinned by the markup-single-source
-// guard), inlined here to preserve this module's zero-import purity. A SUPERSET of applyMarkupToAmount
-// (percent-only => {pct,flat:0}; flat-only => {pct:0,flat}), so a resolved canonical markup keeps the
-// existing per-account display byte-identical while also honoring the per-client default. null => base.
-function applyCanonicalRowMarkup(base: number, markup: { pct: number; flat: number } | null | undefined): number {
-  if (!markup) return round2(base);
-  return round2(base * (1 + markup.pct / 100) + markup.flat);
-}
+// PS-798 (slice 2b) / PS-371: the CANONICAL per-client+per-account markup ({pct,flat}, additive).
+// Formerly an inlined copy kept in parity with markup-resolver by guard; now a direct alias of the
+// single owner so drift is impossible. A SUPERSET of applyMarkupToAmount (percent-only =>
+// {pct,flat:0}; flat-only => {pct:0,flat}). null => base unchanged (2dp).
+const applyCanonicalRowMarkup = applyCanonicalMarkup;
 
 export type OrderRowMarkupLookupFacts = {
   isAwaiting: boolean;

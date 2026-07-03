@@ -2,6 +2,7 @@ import {
   resolveHugrabShippingRateOverride,
   type HugrabShippingRateOverrideConfig,
 } from './billing-hugrab-shipping-rate-override';
+import { canonicalMarkupAmount } from './shipping-workflow/markup-resolver';
 
 // PS-220 — pure decision for a shipment's billed SHIPPING line amount. Extracted from
 // billing.ts so the money-committing choice (the worst-case failure is billing the WRONG
@@ -94,7 +95,9 @@ export function decideShippingLineBilling(input: ShippingLineBillingInput): Ship
 
   const pct = input.shippingMarkupPct;
   const flat = input.shippingMarkupFlat;
-  const billedAmount = billedCost * (1 + pct / 100) + flat;
+  // PS-371: the formula lives in ONE owner (markup-resolver.canonicalMarkupAmount); this site
+  // stays unrounded — the caller applies .toFixed(2), matching prior behavior exactly.
+  const billedAmount = canonicalMarkupAmount(billedCost, { pct, flat });
   const markupApplied = pct > 0 || flat > 0;
   return withHugrabShippingRateOverride(input, {
     billedAmount,

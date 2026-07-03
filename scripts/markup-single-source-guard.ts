@@ -10,13 +10,17 @@
  *
  *   npx tsx scripts/markup-single-source-guard.ts
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   markupRuleToCanonical,
   resolveCanonicalMarkup,
   applyCanonicalMarkup,
+  canonicalMarkupAmount,
 } from '../src/services/shipping-workflow/markup-resolver';
 import { applyMarkupToAmount, parseMarkupSettingValue, buildOrderRowMoneyDisplay } from '../src/services/shipping-workflow/rate-money';
+import { decideShippingLineBilling } from '../src/services/billing-shipping-line';
+import { decidePackageCostLine } from '../src/services/billing-box-policy';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -126,6 +130,76 @@ check('best-rate-workflow-dto threads markupRuleCanonical into buildOrderRowMone
 const rateMoneySrc2 = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 check('rate-money PREFERS the canonical markup in the carrier branch (falls back to legacy per-account)',
   /facts\.markupRuleCanonical !== undefined[\s\S]*?applyCanonicalRowMarkup/.test(rateMoneySrc2));
+
+// ── PS-371: ONE formula owner — every call site delegates to markup-resolver ──────────────
+// canonicalMarkupAmount is the UNROUNDED single formula; applyCanonicalMarkup = round2 of it.
+check('PS-371 canonicalMarkupAmount is unrounded (call sites keep their own rounding)',
+  canonicalMarkupAmount(10.555, null) === 10.555 &&
+  canonicalMarkupAmount(10, { pct: 15, flat: 1 }) === 10 * (1 + 15 / 100) + 1);
+check('PS-371 applyCanonicalMarkup === round2(canonicalMarkupAmount)',
+  applyCanonicalMarkup(10.555, null) === 10.56 &&
+  applyCanonicalMarkup(9.85, { pct: 15, flat: 0 }) === Math.round(canonicalMarkupAmount(9.85, { pct: 15, flat: 0 }) * 100) / 100);
+
+// billing-shipping-line: billed amount byte-identical to the historical inline formula (raw, unrounded;
+// the caller applies .toFixed(2)).
+for (const [billedCost, pct, flat] of [[9.85, 15, 1], [12.34, 0, 0], [7.5, 7.5, 0], [100, 0, 2.25]] as const) {
+  const decision = decideShippingLineBilling({
+    labelCost: billedCost, cShippingRateAmount: null, billingMode: 'label_cost',
+    isBaselineCarrier: true, refUspsRate: 0, refUpsRate: 0,
+    shippingMarkupPct: pct, shippingMarkupFlat: flat,
+  });
+  check(`PS-371 shipping line byte-identical (cost=${billedCost}, pct=${pct}, flat=${flat})`,
+    decision.billedAmount === billedCost * (1 + pct / 100) + flat,
+    `got=${decision.billedAmount}`);
+}
+
+// billing-box-policy: box price byte-identical to the historical inline percent-only formula
+// (unrounded; percent-only BY DESIGN — flat never applies to box pricing).
+for (const [configuredPrice, markupPct] of [[1.11, 15], [0.75, 0], [2.5, 7.5]] as const) {
+  const decision = decidePackageCostLine({
+    resolution: { status: 'resolved', source: 'dims', packageId: 7, pkg: { id: 7, name: '12x10x3', packageCode: null, length: 12, width: 10, height: 3 }, overridePrice: null, note: null },
+    clientHasBoxPricing: true, configuredPrice, markupPct,
+  });
+  check(`PS-371 box price byte-identical + percent-only (price=${configuredPrice}, pct=${markupPct})`,
+    decision.kind === 'line' && decision.amount === configuredPrice * (1 + markupPct / 100),
+    `got=${JSON.stringify(decision)}`);
+}
+
+// applyMarkupToAmount now DELEGATES (byte-identical already proven above in the parity loop).
+const rateMoneySrc3 = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
+check('PS-371 rate-money applyMarkupToAmount delegates to the owner (no inline formula)',
+  /return applyCanonicalMarkup\(amount, markupRuleToCanonical\(rule\)\)/.test(rateMoneySrc3));
+check('PS-371 rate-money canonical row markup is an ALIAS of the owner (no duplicated body)',
+  /const applyCanonicalRowMarkup = applyCanonicalMarkup/.test(rateMoneySrc3));
+check('PS-371 billing-shipping-line imports the owner',
+  /import \{ canonicalMarkupAmount \} from '\.\/shipping-workflow\/markup-resolver'/.test(readFileSync('src/services/billing-shipping-line.ts', 'utf8')));
+check('PS-371 billing-box-policy imports the owner',
+  /import \{ canonicalMarkupAmount \} from '\.\/shipping-workflow\/markup-resolver'/.test(readFileSync('src/services/billing-box-policy.ts', 'utf8')));
+
+// Single-source sweep: NO file under src/ may re-implement base*(1+pct/100) except the owner.
+// (web/src/utils/markups.ts + MarkupsContext.tsx are the documented FE deploy-skew fallbacks,
+// scheduled for deletion in the PS-177 Phase 6 cleanup — backend truth is what this guard pins.)
+{
+  const FORMULA = /\*\s*\(1\s*\+\s*[A-Za-z_.$][\w.$]*\s*\/\s*100\s*\)/;
+  const OWNER = join('src', 'services', 'shipping-workflow', 'markup-resolver.ts');
+  // CODE only — comments may legitimately describe the math (e.g. rate-money's docstrings).
+  const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const offenders: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      const stats = statSync(path);
+      if (stats.isDirectory()) { walk(path); continue; }
+      if (!/\.(ts|tsx)$/.test(entry)) continue;
+      if (path === OWNER) continue;
+      if (FORMULA.test(stripComments(readFileSync(path, 'utf8')))) offenders.push(path);
+    }
+  };
+  walk('src');
+  check('PS-371 single-source sweep: no src/ file re-implements the markup formula',
+    offenders.length === 0, offenders.join(', '));
+}
 
 if (failures > 0) {
   console.error(`\nFAIL markup single-source guard (${failures} failing)`);

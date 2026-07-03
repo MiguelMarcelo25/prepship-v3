@@ -185,6 +185,13 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
       cShippingRateAmount: marked,
       markedShippingAmount: marked,
       marked_shipping_amount: marked,
+      // PS-371 hygiene: toDirectRate pre-stamps the UN-marked provider amount into the legacy
+      // customer aliases; overwrite them with the marked charge so no stale raw value survives
+      // on the rate object as a second customer-amount truth (ps-307 test pins this).
+      customerShippingAmount: marked,
+      customer_shipping_amount: marked,
+      customerRateAmount: marked,
+      customer_rate_amount: marked,
       // PS-343: preserve the raw/internal provider cost as backend-owned aliases so Rate Browser
       // consumers do not need to recover it from provider component money fields.
       selectedRateCost: orig,

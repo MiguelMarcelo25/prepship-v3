@@ -49,10 +49,17 @@ export function resolveCanonicalMarkup(input: {
   return { pct, flat };
 }
 
+// PS-371 — THE single base*(1+pct/100)+flat formula, UNROUNDED. Every markup application in the
+// repo delegates here (billing-shipping-line, billing-box-policy, rate-money); each call site keeps
+// its own rounding/formatting so billed numbers stay byte-identical. No markup -> base unchanged.
+export function canonicalMarkupAmount(base: number, markup: CanonicalMarkup | null | undefined): number {
+  if (!markup) return base;
+  return base * (1 + markup.pct / 100) + markup.flat;
+}
+
 // Apply the canonical markup additively: base*(1+pct/100)+flat, 2dp. The SAME formula billing already
 // uses, and a superset of the display applyMarkupToAmount (percent-only OR flat-only), so it reproduces
 // both current behaviors exactly. No markup -> base unchanged (2dp).
 export function applyCanonicalMarkup(base: number, markup: CanonicalMarkup | null | undefined): number {
-  if (!markup) return round2(base);
-  return round2(base * (1 + markup.pct / 100) + markup.flat);
+  return round2(canonicalMarkupAmount(base, markup));
 }

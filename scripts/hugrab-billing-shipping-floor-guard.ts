@@ -6,11 +6,17 @@ const routePath = 'src/routes/billing.ts';
 const apiClientPath = 'web/src/lib/v2-apiClient.ts';
 const modalPath = 'web/src/components/Views/HugrabShippingFloorModal.tsx';
 const billingViewPath = 'web/src/components/Views/BillingView.tsx';
+// The billing-view decomposition (d9942d62) moved the trigger button into the
+// line-items header component and the modal mount into the detail modal stack.
+const lineItemsHeaderPath = 'web/src/components/Views/BillingLineItemsHeader.tsx';
+const modalStackPath = 'web/src/components/Views/BillingDetailModalStack.tsx';
 const service = existsSync(servicePath) ? readFileSync(servicePath, 'utf8') : '';
 const route = existsSync(routePath) ? readFileSync(routePath, 'utf8') : '';
 const apiClient = existsSync(apiClientPath) ? readFileSync(apiClientPath, 'utf8') : '';
 const modal = existsSync(modalPath) ? readFileSync(modalPath, 'utf8') : '';
 const billingView = existsSync(billingViewPath) ? readFileSync(billingViewPath, 'utf8') : '';
+const lineItemsHeader = existsSync(lineItemsHeaderPath) ? readFileSync(lineItemsHeaderPath, 'utf8') : '';
+const modalStack = existsSync(modalStackPath) ? readFileSync(modalStackPath, 'utf8') : '';
 let failures = 0;
 
 function check(name: string, condition: boolean): void {
@@ -93,10 +99,13 @@ check('api client has a thin HUGRAB shipping floor wrapper and clears billing ca
   apiClient.includes('selectedRateBelow?: number') &&
   apiClient.includes('targetShipping?: number') &&
   apiClient.includes("clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics')"));
-check('BillingView puts the HUGRAB bulk button next to the detail Columns control',
-  billingView.includes('HugrabShippingFloorModal') &&
+check('HUGRAB bulk button sits next to the detail Columns control (line-items header + modal stack)',
+  // trigger renders in the header, immediately before the Columns anchor span
+  /data-hugrab-shipping-floor-trigger[\s\S]*?columnsAnchorRef/.test(lineItemsHeader) &&
+  // BillingView still owns the Columns anchor state the header receives
   billingView.includes('setDetailColumnsAnchorEl') &&
-  billingView.includes('data-hugrab-shipping-floor-trigger'));
+  // the modal mounts through the detail modal stack
+  modalStack.includes('HugrabShippingFloorModal'));
 check('HUGRAB modal previews, applies, and reverts through the backend endpoint',
   existsSync(modalPath) &&
   modal.includes('data-hugrab-shipping-floor-modal') &&
