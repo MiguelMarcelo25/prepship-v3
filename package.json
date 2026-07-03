@@ -567,6 +567,7 @@
     "test:ps-324-inventory-writepath": "tsx scripts/ps-324-inventory-writepath-test.ts",
     "test:ps-324-inventory-proof:browser": "playwright test web/e2e/inventory-ps324-proof.spec.js --reporter=line",
     "test:ps-373-storage-proof:browser": "playwright test web/e2e/billing-ps373-storage-proof.spec.js --reporter=line",
+    "test:ps-374-resolved-zero-box-cost:browser": "playwright test web/e2e/billing-ps374-resolved-zero-box-cost.spec.js --reporter=line",
     "test:ps-325-dashboard-inventory-snapshot": "tsx scripts/ps-325-dashboard-inventory-snapshot-guard.ts",
     "test:ps-325-dashboard-kpi-delta": "tsx scripts/ps-325-dashboard-kpi-delta-guard.ts",
     "test:ps-325-dashboard-heatmap-deviation": "tsx scripts/ps-325-dashboard-heatmap-deviation-guard.ts",
