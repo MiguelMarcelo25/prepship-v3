@@ -1455,7 +1455,7 @@ export default function BillingView() {
     <div id="view-billing" className="view-content !p-5 !overflow-y-auto flex flex-col">
       <BillingDashboardHeader />
 
-      <div className="order-1 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
+      <div className="order-2 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
         <div className="flex items-center gap-2 mb-3">
           <SlidersHorizontal size={16} strokeWidth={2.25} className="text-ink-3" aria-hidden="true" />
           <h3 className="text-[13px] font-semibold text-ink">Generate &amp; summary</h3>
@@ -1581,9 +1581,10 @@ export default function BillingView() {
           table is much wider (~15 columns), so it takes the larger 3fr track and
           pricing the 2fr track; min-w-0 on each cell lets the cards' own
           horizontal scroll (stickyHeader={false} → overflow-x-auto) handle
-          overflow instead of blowing out the row. Kept in the order-2 slot so the
-          sequence after the summary card is unchanged. */}
-      <div className="order-2 mb-[18px] grid grid-cols-1 xl:grid-cols-[3fr_2fr] gap-[18px] items-start">
+          overflow instead of blowing out the row. Placed in the order-1 slot so
+          these config cards sit at the TOP (under the dashboard header), above the
+          Generate & summary card (order-2). */}
+      <div className="order-1 mb-[18px] grid grid-cols-1 xl:grid-cols-[3fr_2fr] gap-[18px] items-start">
         <div className="min-w-0">
           <BillingConfigTable
             configs={configs}
