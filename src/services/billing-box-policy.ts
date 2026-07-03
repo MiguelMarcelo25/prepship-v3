@@ -269,9 +269,12 @@ export function resolveShippedPackageId(input: ShippedBoxInput): ShippedBoxResol
  * markup; the DECISION lives here so the guard can exercise the whole matrix
  * offline:
  *   no box pricing configured        → none (no line, no review)
- *   resolved + override price        → line at the override VERBATIM (no markup)
+ *   resolved + override price (incl. explicit $0.00)
+ *                                    → line at the override VERBATIM (no markup);
+ *                                      a confirmed $0 is a resolved zero, NOT missing (PS-374)
  *   resolved + configured price > 0  → line at configured × (1 + markup%)
- *   resolved + no/zero price         → none (visible zero config = free)
+ *   resolved, no override, no/zero configured price
+ *                                    → none (visible zero config = free)
  *   mismatch / unresolved            → $0.00 package_cost_missing review line
  */
 export type PackageCostDecision =
@@ -297,14 +300,33 @@ export function decidePackageCostLine(args: {
   if (r.status !== 'resolved') {
     return { kind: 'review', description: describeBoxReview(r) };
   }
+
+  // PS-374: an explicit operator override — INCLUDING a confirmed $0.00 — is a
+  // FINAL resolved box-cost decision (the operator set it in the Edit Billing
+  // Detail modal or via Bulk set N same box). It emits an explicit package_cost
+  // line at the override amount and NEVER collapses to 'none'. A resolved $0 that
+  // fell through to 'none' dropped the box line entirely, and the missing-cost
+  // alert (resolveBillingBoxCostAlert, via billing-detail-row-sot) then re-flagged
+  // the order as "No box cost / Needs Review" — the exact bug PS-374 reports. An
+  // explicit $0 line instead lands in that alert's hasPackageCostLine +
+  // packageCost === 0 branch → resolved, no alert — the same shape a
+  // no-charge/factory box already uses. Positive overrides are unchanged.
+  if (r.overridePrice != null) {
+    return {
+      kind: 'line',
+      amount: r.overridePrice > 0 ? r.overridePrice : 0,
+      packageId: r.packageId,
+      pkgName: r.pkg?.name ?? (r.packageId != null ? `Box #${r.packageId}` : 'operator-resolved'),
+    };
+  }
+
+  // No operator override — price from the client's configured box price (+ markup).
   const effective =
-    r.overridePrice != null
-      ? r.overridePrice
-      : args.configuredPrice != null && args.configuredPrice > 0
-        // PS-371: delegate to the single formula owner. Box markup is percent-only BY DESIGN
-        // (flat: 0) and unrounded here — the caller formats, matching prior behavior exactly.
-        ? canonicalMarkupAmount(args.configuredPrice, { pct: args.markupPct, flat: 0 })
-        : null;
+    args.configuredPrice != null && args.configuredPrice > 0
+      // PS-371: delegate to the single formula owner. Box markup is percent-only BY DESIGN
+      // (flat: 0) and unrounded here — the caller formats, matching prior behavior exactly.
+      ? canonicalMarkupAmount(args.configuredPrice, { pct: args.markupPct, flat: 0 })
+      : null;
   // PS-222b: a flagged no-charge/factory box shows an EXPLICIT $0.00 line when no
   // positive price applies — instead of the silent suppression below. A real
   // positive price (or override) still bills normally, so this never lowers a

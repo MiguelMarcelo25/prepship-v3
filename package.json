@@ -312,6 +312,7 @@
     "test:ps-370-selected-rate-cost-parity": "tsx scripts/ps-370-selected-rate-cost-parity-guard.ts",
     "test:ps-373-prorated-storage-billing": "tsx scripts/ps-373-prorated-storage-billing-guard.ts",
     "test:ps-373-storage-proof": "tsx scripts/ps-373-storage-proof-guard.ts",
+    "test:ps-374-resolved-zero-box-cost": "tsx scripts/ps-374-resolved-zero-box-cost-guard.ts",
     "test:ps-370-selected-rate-cost-backfill": "tsx scripts/ps-370-selected-rate-cost-backfill-guard.ts",
     "test:ps-309-voided-label-display": "tsx scripts/ps-309-voided-label-display-guard.ts",
     "test:ps-311-bulk-box-cost-preview": "tsx scripts/ps-311-bulk-box-cost-preview-guard.ts",
