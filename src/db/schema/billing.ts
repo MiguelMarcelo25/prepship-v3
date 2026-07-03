@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   serial,
@@ -139,3 +140,46 @@ export const billingBoxResolutions = pgTable(
 );
 
 export type BillingBoxResolution = typeof billingBoxResolutions.$inferSelect;
+
+// PS-373 (slice 2) — frozen per-period storage-billing PROOF sidecar.
+//
+// The one `storage` billing_line_items row carries only a display total and a
+// short description; it CANNOT hold the structured per-SKU / per-interval
+// evidence (segments, clamped negatives, daily rate) that a client dispute or
+// admin audit needs — and its description is part of the line's onConflict
+// unique key, so it can't be widened without forking idempotency. This sidecar
+// freezes computeClientStorageBilling()'s full proof at generate time, keyed by
+// the billing PERIOD (clientId + the canonical UTC-midnight [periodStart,
+// periodEnd) bounds). Additive, no order/shipment coupling. Upserted per
+// client+period on each Update Billing so it always matches the latest line.
+export const billingStorageProof = pgTable(
+  'billing_storage_proof',
+  {
+    id: serial().primaryKey(),
+    clientId: integer()
+      .notNull()
+      .references(() => clients.id, { onDelete: 'cascade' }),
+    // Canonical billing-period bounds (billingDayRange): periodStart is the
+    // INCLUSIVE UTC midnight of the first day; periodEnd is the EXCLUSIVE UTC
+    // midnight of the day AFTER the last billed day. Same instants billing.ts
+    // stamps from generateLineItems' input, so a read matches exactly.
+    periodStart: timestamp({ withTimezone: true }).notNull(),
+    periodEnd: timestamp({ withTimezone: true }).notNull(),
+    daysInMonth: integer('days_in_month').notNull(),
+    monthlyRatePerCuFt: numeric('monthly_rate_per_cu_ft', { precision: 10, scale: 4 }).notNull(),
+    dailyRatePerCuFt: numeric('daily_rate_per_cu_ft', { precision: 18, scale: 10 }).notNull(),
+    totalCuFtDays: numeric('total_cu_ft_days', { precision: 18, scale: 6 }).notNull(),
+    amount: numeric({ precision: 10, scale: 2 }).notNull(),
+    skuCount: integer('sku_count').notNull(),
+    exceptionCount: integer('exception_count').notNull(),
+    // { skuProofs: SkuStorageProof[], exceptions: [...] } — the frozen evidence.
+    proof: jsonb().notNull(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    unique('billing_storage_proof_client_period_unq').on(t.clientId, t.periodStart, t.periodEnd),
+  ]
+);
+
+export type BillingStorageProof = typeof billingStorageProof.$inferSelect;

@@ -2770,6 +2770,18 @@ export const apiClient = {
     })();
   },
 
+  // PS-373 (slice 2): admin drilldown for a client's FROZEN storage proof over a
+  // billing period. Returns the sidecar the backend froze at generate time
+  // ({ found:true, skuCount, proof:{ skuProofs, exceptions }, … }) or
+  // { found:false, proof:null } for a period with no storage proof. Not wrapped
+  // in safe(...) — a real 403/500 must REJECT so the modal shows an honest error
+  // rather than a false "no proof" empty state (same contract as fetchBillingDetails).
+  fetchBillingStorageProof(clientId: number, from: string, to: string): Promise<any> {
+    const dateFrom = toIsoDayStart(from);
+    const dateTo = toIsoDayEnd(to);
+    return api.get<any>(`/billing/storage-proof${qs({ dateFrom, dateTo, clientId })}`);
+  },
+
   updateBillingDetail(orderId: number, clientId: number, data: Record<string, unknown>): Promise<any> {
     return api.patch<any>(`/billing/details/${orderId}`, {
       clientId,

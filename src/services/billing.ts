@@ -5,6 +5,7 @@ import {
   billingBoxResolutions,
   billingConfig,
   billingLineItems,
+  billingStorageProof,
   clientPackagePrices,
 } from '../db/schema/billing';
 import { shipments } from '../db/schema/shipments';
@@ -14,6 +15,7 @@ import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
+import { ensureBillingStorageProofSchema } from '../db/ensure-billing-storage-proof';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
 import { decideShippingLineBilling } from './billing-shipping-line';
@@ -1367,6 +1369,15 @@ export async function generateLineItems(input: GenerateInput) {
   // inventory_ledger only (never mutates order/shipment rows).
   const periodStart = new Date(input.dateFrom);
   const periodEnd = new Date(input.dateTo);
+  // PS-373: the one storage line is dated on the LAST billed day of the period
+  // (inclusive), NOT the exclusive period end. The summary aggregate and the
+  // regen delete both bound on `ship_date < dateTo`, so a line dated exactly on
+  // periodEnd was excluded from its own month's storage_total and only swept up
+  // by the NEXT month's regen. periodEnd is the exclusive UTC-midnight day-after,
+  // so periodEnd − 1 day is the last billed day and lives inside [dateFrom,
+  // dateTo): it lands in the correct month and regen cleanly rebuilds it.
+  const STORAGE_LINE_DAY_MS = 24 * 60 * 60 * 1000;
+  const storageShipDate = new Date(periodEnd.getTime() - STORAGE_LINE_DAY_MS);
   for (const [clientId, cfg] of configByClient.entries()) {
     const storageRate = toNum(cfg.storageFeePerCuFt ?? 0);
     if (storageRate <= 0) continue;
@@ -1444,7 +1455,7 @@ export async function generateLineItems(input: GenerateInput) {
           orderId: null,
           orderNumber: null,
           shipmentId: null,
-          shipDate: periodEnd,
+          shipDate: storageShipDate,
           lineType: 'storage',
           description,
           qty: cuFtMonths.toFixed(2),
@@ -1462,6 +1473,47 @@ export async function generateLineItems(input: GenerateInput) {
       total += storage.amount;
     } catch {
       skipped += 1;
+    }
+
+    // PS-373 (slice 2): freeze the per-SKU / per-interval PROOF for this
+    // client+period so the admin drilldown — and any client dispute — can see
+    // exactly how the storage total was built (each SKU's on-hand segments,
+    // clamped-negative days, cuft-days, and the daily rate). The billing line
+    // itself only carries a display total + a short description (which is part of
+    // its onConflict key), so the structured evidence needs this sidecar. Keyed
+    // by the billing period and upserted, so a regen overwrites it with the
+    // latest evidence — consistent with the line, which regen now rebuilds too.
+    // Non-fatal: a proof-freeze failure must never break the authoritative line.
+    try {
+      await ensureBillingStorageProofSchema();
+      const proofValues = {
+        daysInMonth: storage.daysInMonth,
+        monthlyRatePerCuFt: storage.monthlyRatePerCuFt.toFixed(4),
+        dailyRatePerCuFt: storage.dailyRatePerCuFt.toFixed(10),
+        totalCuFtDays: storage.totalCuFtDays.toFixed(6),
+        amount: storage.amount.toFixed(2),
+        skuCount: storage.skuProofs.length,
+        exceptionCount: storage.exceptions.length,
+        proof: { skuProofs: storage.skuProofs, exceptions: storage.exceptions },
+        updatedAt: new Date(),
+      };
+      await db
+        .insert(billingStorageProof)
+        .values({ clientId, periodStart, periodEnd, ...proofValues })
+        .onConflictDoUpdate({
+          target: [
+            billingStorageProof.clientId,
+            billingStorageProof.periodStart,
+            billingStorageProof.periodEnd,
+          ],
+          set: proofValues,
+        });
+    } catch (proofErr) {
+      console.warn(
+        '[billing] storage line generated but proof freeze failed',
+        { clientId },
+        proofErr instanceof Error ? proofErr.message : proofErr
+      );
     }
   }
 

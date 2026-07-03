@@ -101,6 +101,7 @@ export function BillingDetailTable({
   columnsAnchorEl,
   onOpenBillingEdit,
   onOpenOrderDetail,
+  onOpenStorageProof,
 }: {
   detailState: { open: boolean; loading: boolean; clientName: string; error: string | null }
   detailPanelState: BillingDetailPanelState
@@ -118,6 +119,10 @@ export function BillingDetailTable({
   columnsAnchorEl?: HTMLElement | null
   onOpenBillingEdit: (row: BillingDetailDto) => void
   onOpenOrderDetail: (orderId: number) => void
+  // PS-373 (slice 2): admin drilldown into the frozen storage proof. Optional —
+  // when provided, the storage line's cell becomes a button that opens the
+  // per-SKU / per-interval evidence. Passed through from BillingView.
+  onOpenStorageProof?: () => void
 }) {
   if (detailState.error) {
     return (
@@ -242,19 +247,35 @@ export function BillingDetailTable({
                   <span style={{ color: 'var(--text4)' }}>—</span>
                 )
               case 'orderNumber':
-                return row.orderId ? (
-                  <button
-                    type="button"
-                    className="inventory-inline-button"
-                    title="Open order detail"
-                    onClick={(e) => { e.stopPropagation(); onOpenOrderDetail(row.orderId as number) }}
-                    style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
-                  >
-                    {row.orderNumber}
-                  </button>
-                ) : (
-                  <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
-                )
+                if (row.orderId) {
+                  return (
+                    <button
+                      type="button"
+                      className="inventory-inline-button"
+                      title="Open order detail"
+                      onClick={(e) => { e.stopPropagation(); onOpenOrderDetail(row.orderId as number) }}
+                      style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
+                    >
+                      {row.orderNumber}
+                    </button>
+                  )
+                }
+                // PS-373 (slice 2): the storage line has no order — make it a
+                // drilldown into the frozen per-SKU / per-interval proof (admin).
+                if (row.lineType === 'storage' && onOpenStorageProof) {
+                  return (
+                    <button
+                      type="button"
+                      className="inventory-inline-button"
+                      title="View the storage-fee proof (per-SKU cubic-foot-days)"
+                      onClick={(e) => { e.stopPropagation(); onOpenStorageProof() }}
+                      style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
+                    >
+                      Storage · proof ▸
+                    </button>
+                  )
+                }
+                return <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
               case 'shipDate':
                 return <span style={{ color: 'var(--text2)', fontSize: 11 }}>{formatBillingShipDate(row.shipDate)}</span>
               case 'carrierNickname': {

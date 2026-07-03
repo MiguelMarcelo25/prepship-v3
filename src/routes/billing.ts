@@ -9,6 +9,7 @@ import {
   billingConfig,
   billingLineItems,
   billingRefRates,
+  billingStorageProof,
   clientPackagePrices,
 } from '../db/schema/billing';
 import { clients } from '../db/schema/clients';
@@ -471,6 +472,43 @@ app.get('/details', zValidator('query', detailsSchema), async (c) => {
     dateTo: q.dateTo!,
   }));
   return c.json({ data: rows });
+});
+
+// ─── Storage-fee PROOF drilldown (admin) ───────────────────────────────
+// PS-373 (slice 2): return the FROZEN per-SKU / per-interval evidence behind a
+// client's single storage line for a billing period. financials:read-gated (the
+// global app.use above) + per-client scope. The period is matched on the SAME
+// canonical UTC-midnight [dateFrom, dateTo) bounds generateSchema produces — the
+// exact instants billing froze at generate time. The route only reads and
+// returns the sidecar row; the FE renders it verbatim and never recomputes
+// storage (the backend rate owner stays the source of truth).
+app.get('/storage-proof', zValidator('query', generateSchema), async (c) => {
+  const q = c.req.valid('query');
+  if (q.clientId == null) {
+    return c.json({ error: 'clientId is required' }, 400);
+  }
+  const scope = billingScopeFromContext(c);
+  if (!(await canAccessBillingClient(q.clientId, scope))) {
+    // Same opaque 404 as other out-of-scope billing reads — don't leak existence.
+    return c.json({ found: false, proof: null }, 404);
+  }
+  const [row] = await db
+    .select()
+    .from(billingStorageProof)
+    .where(
+      and(
+        eq(billingStorageProof.clientId, q.clientId),
+        sql`${billingStorageProof.periodStart} = ${q.dateFrom}::timestamptz`,
+        sql`${billingStorageProof.periodEnd} = ${q.dateTo}::timestamptz`,
+      ),
+    )
+    .limit(1);
+  if (!row) {
+    // 200 with found:false — a valid period that simply has no storage proof yet
+    // (no storage rate, or billing not generated for this range). Not an error.
+    return c.json({ found: false, proof: null });
+  }
+  return c.json({ found: true, ...row });
 });
 
 // ─── Invoice (HTML) ────────────────────────────────────────────────────

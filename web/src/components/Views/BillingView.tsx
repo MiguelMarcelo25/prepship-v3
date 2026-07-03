@@ -50,6 +50,7 @@ import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 // PS-155: per-client detail table extracted (behavior-preserving; rows/sort/totals/handlers
 // stay here and are passed as props, the table calls the pure computeBillingDetailMetrics).
 import { BillingDetailTable } from './BillingDetailTable'
+import BillingStorageProofModal from './BillingStorageProofModal'
 import { BillingLineItemsHeader } from './BillingLineItemsHeader'
 import { hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
 import { BillingEditDetailModal, type BillingEditModalViewState } from './BillingEditDetailModal'
@@ -334,6 +335,8 @@ export default function BillingView() {
   const [detailPage, setDetailPage] = useState(1)
   const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
+  // PS-373 (slice 2): storage-fee proof drilldown, opened from the storage line.
+  const [storageProofOpen, setStorageProofOpen] = useState(false)
   const [billingEditModal, setBillingEditModal] = useState<BillingEditModalState>(null)
   const billingEditDraftCacheRef = useRef<BillingEditDraftCache>({})
   // PS-275: in-flight flag for the $0-shipping prep-fee review POST. Separate
@@ -1566,6 +1569,7 @@ export default function BillingView() {
               columnsAnchorEl={detailColumnsAnchorEl}
               onOpenBillingEdit={handleOpenBillingEdit}
               onOpenOrderDetail={setOrderDetailModalId}
+              onOpenStorageProof={() => setStorageProofOpen(true)}
             />
           </div>
         ) : null}
@@ -1617,6 +1621,16 @@ export default function BillingView() {
           onToggle={() => setShippingMarginDrilldownOpen((open) => !open)}
         />
       </div>
+
+      {storageProofOpen && detailState.clientId != null ? (
+        <BillingStorageProofModal
+          clientId={detailState.clientId}
+          clientName={detailState.clientName}
+          from={from}
+          to={to}
+          onClose={() => setStorageProofOpen(false)}
+        />
+      ) : null}
 
       {billingEditModal ? (
         <BillingEditDetailModal

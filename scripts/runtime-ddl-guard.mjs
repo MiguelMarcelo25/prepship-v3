@@ -107,6 +107,12 @@ const expectedRuntimeDdlFiles = [
   // belt-and-suspenders fallback so the label/sync writers work pre-migration. ADD COLUMN IF NOT
   // EXISTS only — no shipped-row mutation. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
   'src/db/ensure-shipments-selected-rate-cost.ts',
+  // PS-373: the additive billing_storage_proof sidecar (frozen per-period storage
+  // evidence). Covered by drizzle migration 0055_billing_storage_proof.sql; the
+  // runtime ensure is the belt-and-suspenders fallback so the billing generate path
+  // can freeze the proof pre-migration. CREATE TABLE IF NOT EXISTS on an additive
+  // sidecar only — no order/shipment mutation. Documented in RUNTIME_DDL_MIGRATION_AUDIT.md.
+  'src/db/ensure-billing-storage-proof.ts',
   'src/services/shipment-tracking.ts',
   'src/services/shipping-workflow/address-classification-cache.ts',
   'src/services/shipping-workflow/order-rate-job-status.ts',
