@@ -209,11 +209,16 @@ check('legacy direct-carrier label API remains retired instead of bypassing crea
 const printQueueService = read('src/services/print-queue.ts');
 checkPatterns('Print Queue owner queues existing labels without rebuy and creates missing labels through createLabelV2', printQueueService, [
   /findExistingQueueableLabelForOrder/,
-  /let existingLabelUrl = await findExistingQueueableLabelForOrder\(order\.orderId\)/,
+  // Repointed (guard rot): the lookup / purchase / recovery calls are now wrapped
+  // in timeQueueStep() timing instrumentation, findExistingQueueableLabelForOrder
+  // is reached via findExistingQueueSendLabel(order), and order.label is hoisted
+  // to a local labelInput. Behaviour is unchanged — queue an existing label
+  // without rebuy, buy a missing one via createLabelV2, recover before failing.
+  /let existingLabelUrl = await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
   /if \(!labelUrl\) \{/,
-  /const created = await createLabelV2\(\{/,
-  /\.\.\.order\.label/,
-  /const recoverCreatedLabelUrl = existingLabelUrl \?\? await findExistingQueueableLabelForOrder\(order\.orderId\)/,
+  /const labelInput = order\.label/,
+  /return await createLabelV2\(\{\s*\.\.\.labelInput/,
+  /const recoverCreatedLabelUrl = existingLabelUrl \?\? await timeQueueStep\([\s\S]*?findExistingQueueSendLabel\(order\)/,
   /normalizePrintQueueLabelUrl\(labelUrl\)/,
   /classifyLabelPurchaseRetry\(err\)/,
   /ensureShipmentConfirmationLifecycle\(\{/,

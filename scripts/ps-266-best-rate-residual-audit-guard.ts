@@ -143,27 +143,40 @@ for (const command of [
 const combinedOwner = read('src/services/rates-combined.ts');
 checkPatterns('combined rate owner still owns priced ranking and complete/second-best facts', combinedOwner, [
   /export function combineCarrierUniverses\(/,
-  /function customerShippingAmount\(/,
+  // Repointed (guard rot): the old inline customerShippingAmount() helper was
+  // folded into rateTotal(), which reads the marked CUSTOMER charge
+  // (cShippingRateAmount) — still the combined owner's Best Rate ranking basis.
+  // PS-307/308 added a rateCostTotal() internal-cost tie-breaker to the sort.
+  /export function rateTotal\(rate: CombinableRate\): number \{\s*return normalizeShippingRateMoney\(rate\)\.cShippingRateAmount \?\? 0/,
   /export function isPricedRate\(/,
-  /\.filter\(isPricedRate\)\.sort\(\(a, b\) => rateTotal\(a\) - rateTotal\(b\)\)/,
+  /\.filter\(isPricedRate\)\s*\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)/,
   /const secondCheapest = rankedEligibleRates\[1\] \?\? null/,
   /bestRateComplete/,
 ]);
 
+// Repointed (guard rot): the /browse combined-selection + quote-proof logic moved
+// out of the route into src/services/rate-browse-response-producer.ts; the route
+// now delegates to it via produceRateBrowsePayload(). Pin the delegation on the
+// route AND the owner patterns in the producer (where they actually live now).
 const ratesRoute = read('src/routes/rates.ts');
-checkPatterns('Rate Browser route delegates combined selection and quote proof to backend owners', ratesRoute, [
-  /import \{[^}]*combineCarrierUniverses[^}]*rateTotal[^}]*\} from '\.\.\/services\/rates-combined'/,
+check('Rate Browser route delegates to the backend rate-browse producer (no inline rate authority)',
+  /import \{ produceRateBrowsePayload \} from '\.\.\/services\/rate-browse-response-producer'/.test(ratesRoute) &&
+    /produceRateBrowsePayload\(\{/.test(ratesRoute));
+const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
+checkPatterns('Rate Browser producer delegates combined selection and quote proof to backend owners', rateBrowseProducer, [
+  /import \{[^}]*combineCarrierUniverses[^}]*rateTotal[^}]*\} from '\.\/rates-combined'/,
   /const combined = combineCarrierUniverses\(\{/,
   /finalizeBestRateWithQuote\(\{/,
   /bestRateComplete/,
   /secondBestRate/,
-  /loadShippingAutomationRules/,
   /evaluateOrderCarrierEligibility/,
 ]);
 
 const ratesBackfill = read('src/services/rates-backfill.ts');
 checkPatterns('Best Rate backfill delegates to the same combined owner and quote finalizer', ratesBackfill, [
-  /import \{ combineCarrierUniverses \} from '\.\/rates-combined'/,
+  // Repointed (guard rot): the import now also pulls rateTotal, so the exact
+  // single-name form drifted; the delegation itself is unchanged.
+  /import \{[^}]*combineCarrierUniverses[^}]*\} from '\.\/rates-combined'/,
   /const combined = combineCarrierUniverses\(\{/,
   /const secondBest = combined\.secondCheapest/,
   /finalizeBestRateWithQuote\(\{/,
@@ -192,9 +205,11 @@ const printQueueService = read('src/services/print-queue.ts');
 checkPatterns('Print Queue delegates missing-label creation and retry classification to backend label/proof owners', printQueueService, [
   /import \{ createLabelV2/,
   /import \{ classifyLabelPurchaseRetry \}/,
-  /const created = await createLabelV2\(\{/,
+  // Repointed (guard rot): createLabelV2 is wrapped in timeQueueStep() timing and
+  // retryEligible OR-s in staleLabelAttempt — the delegation is unchanged.
+  /const created = await timeQueueStep\([\s\S]*?await createLabelV2\(\{/,
   /classifyLabelPurchaseRetry\(err\)/,
-  /retryEligible: retry\.retryEligible/,
+  /const retryEligible = staleLabelAttempt \|\| retry\.retryEligible/,
 ]);
 
 const modal = read('web/src/components/RateBrowserModal.tsx');

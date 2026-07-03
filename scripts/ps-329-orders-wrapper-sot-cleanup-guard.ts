@@ -78,11 +78,15 @@ const bestRateBaseCostBlock = sliceBetween(
   '\nexport function getBestRateFinalBaseCost',
 );
 check(
+  // Repointed (guard rot): the SOT cleanup FINISHED — the shipping.bestRateAmount
+  // fallback (getShippingNumber(order, 'bestRateAmount')) is gone entirely, and
+  // getBackendRowMoney now exposes selectedRateCost/baseAmount/cShippingRateAmount/
+  // markedAmount (not the old customerRateAmount/rateCostAmount names). Assert
+  // backend-money-only + the ABSENCE of the shipping fallback.
   'Awaiting Best Rate amount renders backend money only, with no shipping.bestRateAmount fallback',
   /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
-    /money\?\.customerRateAmount \?\? money\?\.markedAmount \?\? money\?\.rateCostAmount \?\? money\?\.baseAmount \?\? null/.test(bestRateBaseCostBlock) &&
-    bestRateBaseCostBlock.indexOf("order.orderStatus === 'awaiting_shipment'") <
-      bestRateBaseCostBlock.indexOf("getShippingNumber(order, 'bestRateAmount')"),
+    /money\?\.selectedRateCost \?\? money\?\.baseAmount \?\? money\?\.cShippingRateAmount \?\? money\?\.markedAmount \?\? null/.test(bestRateBaseCostBlock) &&
+    !/getShippingNumber\(order, 'bestRateAmount'\)/.test(bestRateBaseCostBlock),
   bestRateBaseCostBlock,
 );
 
