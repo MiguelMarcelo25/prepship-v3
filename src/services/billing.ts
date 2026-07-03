@@ -14,6 +14,8 @@ import { clients } from '../db/schema/clients';
 import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { ensureOrderCompetitiveRateSchema } from '../db/ensure-order-competitive-rate';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
+import { cuFtPerUnit } from '../lib/inventory-cuft';
+import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
 import { decideShippingLineBilling } from './billing-shipping-line';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
@@ -1354,38 +1356,85 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
-  // ─── Storage fees (once per client per billing period) ──────────────────────
-  // v2 charged storage per cuft/month on current inventory on hand. v4
-  // approximates: for each client with storageFeePerCuFt > 0, compute
-  // SUM(stock_qty × cuFt_per_unit) × feeRate, emitted as one line item
-  // dated at the period's end.
+  // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
+  // The billable-storage math is owned by computeClientStorageBilling
+  // (src/services/billing-storage.ts). For each client with a positive storage
+  // rate, it rebuilds each active positive-volume SKU's on-hand timeline from the
+  // canonical inventory_ledger and integrates cubic-foot-DAYS over the billing
+  // month, prorated by the actual days in that month — replacing the old
+  // end-of-period Σ stock_qty × cuFt snapshot. One frozen storage line per client;
+  // per-unit volume via cuFtPerUnit(); rate from billing_config. Reads inventory /
+  // inventory_ledger only (never mutates order/shipment rows).
+  const periodStart = new Date(input.dateFrom);
   const periodEnd = new Date(input.dateTo);
   for (const [clientId, cfg] of configByClient.entries()) {
     const storageRate = toNum(cfg.storageFeePerCuFt ?? 0);
     if (storageRate <= 0) continue;
     if (cfg.active === false) continue;
 
+    // The client's active SKUs with their canonical cuFt inputs.
     const invRows = await db.execute<{
-      total_cuft: string | number | null;
+      id: number;
+      sku: string;
+      cu_ft_override: number | null;
+      length: number | null;
+      width: number | null;
+      height: number | null;
     }>(sql`
-      select
-        coalesce(sum(
-          case
-            when coalesce(cu_ft_override, 0) > 0 then stock_qty * cu_ft_override
-            when length > 0 and width > 0 and height > 0
-              then stock_qty * ((length * width * height) / 1728.0)
-            else 0
-          end
-        ), 0)::numeric(14,4) as total_cuft
+      select id, sku, cu_ft_override, length, width, height
       from inventory
-      where client_id = ${clientId}
-        and active = true
-        and stock_qty > 0
+      where client_id = ${clientId} and active = true
     `);
-    const totalCuFt = Number(invRows[0]?.total_cuft ?? 0);
-    if (totalCuFt <= 0) continue;
-    const fee = totalCuFt * storageRate;
-    if (fee <= 0) continue;
+    if (!invRows.length) continue;
+    const invIds = invRows.map((r) => Number(r.id));
+
+    // Ledger movements up to the period end — pre-period rows set the starting
+    // balance (storage carries over from prior months); in-period rows move it.
+    const ledgerRows = await db.execute<{
+      inventory_id: number;
+      type: string;
+      qty: number;
+      order_id: number | null;
+      created_at: string;
+    }>(sql`
+      select inventory_id, type, qty, order_id, created_at
+      from inventory_ledger
+      where inventory_id = any(${intArraySql(invIds)})
+        and created_at < ${periodEnd.toISOString()}::timestamptz
+    `);
+    const movesByInv = new Map<number, StorageLedgerMovement[]>();
+    for (const row of ledgerRows) {
+      const id = Number(row.inventory_id);
+      const list = movesByInv.get(id) ?? [];
+      list.push({ type: row.type, qty: row.qty, orderId: row.order_id, createdAt: row.created_at });
+      movesByInv.set(id, list);
+    }
+
+    const storage = computeClientStorageBilling({
+      skus: invRows.map((r) => ({
+        inventoryId: Number(r.id),
+        sku: r.sku,
+        cuFtPerUnit: cuFtPerUnit(r.cu_ft_override, r.length, r.width, r.height),
+        movements: movesByInv.get(Number(r.id)) ?? [],
+      })),
+      storageFeePerCuFtMonth: storageRate,
+      periodStart,
+      periodEnd,
+    });
+    if (storage.amount <= 0) continue;
+
+    const description =
+      `Storage — ${storage.totalCuFtDays.toFixed(2)} cuft-days over ${storage.daysInMonth} days ` +
+      `× $${storageRate.toFixed(4)}/cuft/mo (${storage.skuProofs.length} SKU${storage.skuProofs.length === 1 ? '' : 's'})` +
+      (storage.exceptions.length
+        ? ` — ${storage.exceptions.length} negative-balance exception${storage.exceptions.length === 1 ? '' : 's'}`
+        : '');
+
+    // Invoice-line display (numeric(10,2)): bill the average cuft held over the
+    // month (cuft-months = cuft-days / days) at the monthly rate, so
+    // qty × unitCost reconciles to totalCost. The frozen totalCost (Σ per-SKU
+    // rounded amounts) stays authoritative.
+    const cuFtMonths = storage.daysInMonth > 0 ? storage.totalCuFtDays / storage.daysInMonth : 0;
 
     try {
       await db
@@ -1397,10 +1446,10 @@ export async function generateLineItems(input: GenerateInput) {
           shipmentId: null,
           shipDate: periodEnd,
           lineType: 'storage',
-          description: `Storage — ${totalCuFt.toFixed(2)} cuft × $${storageRate.toFixed(4)}/cuft`,
-          qty: totalCuFt.toFixed(2),
-          unitCost: storageRate.toFixed(4),
-          totalCost: fee.toFixed(2),
+          description,
+          qty: cuFtMonths.toFixed(2),
+          unitCost: storageRate.toFixed(2),
+          totalCost: storage.amount.toFixed(2),
         })
         .onConflictDoNothing({
           target: [
@@ -1410,7 +1459,7 @@ export async function generateLineItems(input: GenerateInput) {
           ],
         });
       generated += 1;
-      total += fee;
+      total += storage.amount;
     } catch {
       skipped += 1;
     }

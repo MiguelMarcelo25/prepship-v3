@@ -34,7 +34,9 @@ check('partial unique index on (client_id, ship_date) for null-order storage row
 
 // the index is a safe BACKSTOP only because the existing storage insert swallows the violation
 const billing = readFileSync('src/services/billing.ts', 'utf8');
-const storageBlock = billing.slice(billing.indexOf('Storage fees (once per client'));
+// PS-373 renamed the storage block header when it moved the snapshot formula to the
+// prorated ledger calculator; the unique-index backstop (try/catch) it pins is unchanged.
+const storageBlock = billing.slice(billing.indexOf('Storage fees (PS-373'));
 check('billing storage insert keeps its try/catch (unique violation -> skipped, not a crash)',
   /lineType: 'storage'/.test(storageBlock) && /catch \{\s*\n\s*skipped \+= 1;/.test(storageBlock));
 
