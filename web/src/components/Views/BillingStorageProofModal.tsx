@@ -175,7 +175,12 @@ export default function BillingStorageProofModal(props: BillingStorageProofModal
               ].map(([label, value]) => (
                 <div key={label} style={{ background: 'var(--surface-2, #f6f6f6)', borderRadius: 8, padding: '8px 10px' }}>
                   <div style={{ fontSize: 10.5, opacity: 0.7 }}>{label}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700 }}>{value}</div>
+                  <div
+                    style={{ fontSize: 15, fontWeight: 700 }}
+                    data-testid={label === 'Storage total' ? 'storage-proof-total' : undefined}
+                  >
+                    {value}
+                  </div>
                 </div>
               ))}
             </div>
@@ -202,6 +207,7 @@ export default function BillingStorageProofModal(props: BillingStorageProofModal
                   return (
                     <Fragment key={s.inventoryId}>
                       <tr
+                        data-storage-proof-sku={s.sku}
                         onClick={() => toggle(s.inventoryId)}
                         style={{ cursor: 'pointer', borderBottom: '1px solid var(--border, #eee)' }}
                       >
@@ -227,7 +233,7 @@ export default function BillingStorageProofModal(props: BillingStorageProofModal
                         </td>
                         <td style={{ padding: '6px 8px', textAlign: 'right' }}>{num(s.cuFtPerUnit).toFixed(3)}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'right' }}>{cuft(s.cuFtDays)}</td>
-                        <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{money(s.amount)}</td>
+                        <td data-testid="storage-proof-sku-amount" style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{money(s.amount)}</td>
                         <td style={{ padding: '6px 8px', textAlign: 'center', opacity: 0.7 }}>{s.segments.length}</td>
                       </tr>
                       {isOpen ? (
