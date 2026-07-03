@@ -5,8 +5,6 @@ import { apiClient } from '../../api/client'
 // (that adapter is out of this ticket's scope); call the shared low-level
 // client directly. Additive, behind the backend shippingZeroNeedsReview flag.
 import { api } from '../../lib/api'
-import BulkBoxCostModal from './BulkBoxCostModal'
-import BoxReviewSweepModal from './BoxReviewSweepModal'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
@@ -78,7 +76,7 @@ import { BillingConfigTable } from './BillingConfigTable'
 import { BillingCarrierMarginTable } from './BillingCarrierMarginTable'
 import { ConfirmModal } from '../ui/ConfirmModal'
 import { BillingPackagePricingTable } from './BillingPackagePricingTable'
-import { HugrabShippingFloorModal } from './HugrabShippingFloorModal'
+import { BillingDetailModalStack } from './BillingDetailModalStack'
 import './BillingView.css'
 
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
@@ -1630,64 +1628,31 @@ export default function BillingView() {
         />
       ) : null}
 
-      {/* PS-311: bulk box-cost modal — opened from the per-order edit modal's box-review action.
-          Previews + applies the reviewed box cost across the whole client + date-range scope. */}
-      {bulkBoxCostOpen && billingEditModal && billingEditModal.draft.packageId && detailState.clientId != null ? (
-        <BulkBoxCostModal
-          clientId={detailState.clientId}
-          clientName={detailState.clientName || `Client ${detailState.clientId}`}
-          dateFrom={from}
-          dateTo={to}
-          packageId={Number(billingEditModal.draft.packageId)}
-          packageLabel={
-            packages.find((pkg) => pkg.packageId === Number(billingEditModal.draft.packageId))?.name ??
-            `Box #${billingEditModal.draft.packageId}`
-          }
-          initialCost={billingEditModal.draft.packageCost}
-          onClose={() => setBulkBoxCostOpen(false)}
-          onApplied={() => {
-            // Re-fetch summary + details so the bulk-re-priced box costs show immediately.
-            void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
-            if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
-          }}
-        />
-      ) : null}
-
-      {/* PS-311b: the needs-review box-cost sweep — a date range picker + same-box-size apply across
-          the current client. Available for any needs-review row (no package pick needed). */}
-      {boxReviewSweepOpen && billingEditModal && billingEditModal.row.orderId != null && detailState.clientId != null ? (
-        <BoxReviewSweepModal
-          clientId={detailState.clientId}
-          clientName={detailState.clientName || `Client ${detailState.clientId}`}
-          sourceOrderId={Number(billingEditModal.row.orderId)}
-          boxLabel={(() => {
-            const reason = billingEditModal.row.packageCostReviewReason || ''
-            const m = reason.match(/\(([^)]+)\)/)
-            return m?.[1] ?? (reason || 'this box')
-          })()}
-          initialFrom={from}
-          initialTo={to}
-          onClose={() => setBoxReviewSweepOpen(false)}
-          onApplied={() => {
-            // Refresh the summary and reload the open detail grid so the swept (now resolved) box
-            // costs show immediately.
-            void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
-            if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
-          }}
-        />
-      ) : null}
-
-      {/* Regenerate Range confirmation — styled modal replacing the native browser confirm(). */}
-      {hugrabShippingFloorOpen ? (
-        <HugrabShippingFloorModal
-          dateFrom={from}
-          dateTo={to}
-          onClose={() => setHugrabShippingFloorOpen(false)}
-          onApplied={() => {
-            void refreshBillingAfterHugrabFloor()
-          }}
-        />
-      ) : null}
+      <BillingDetailModalStack
+        bulkBoxCostOpen={bulkBoxCostOpen}
+        boxReviewSweepOpen={boxReviewSweepOpen}
+        hugrabShippingFloorOpen={hugrabShippingFloorOpen}
+        billingEditModal={billingEditModal}
+        clientId={detailState.clientId}
+        clientName={detailState.clientName}
+        dateFrom={from}
+        dateTo={to}
+        packages={packages}
+        onCloseBulkBoxCost={() => setBulkBoxCostOpen(false)}
+        onBulkBoxCostApplied={() => {
+          void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
+          if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
+        }}
+        onCloseBoxReviewSweep={() => setBoxReviewSweepOpen(false)}
+        onBoxReviewSweepApplied={() => {
+          void apiClient.fetchBillingSummary(from, to, billingClientQueryIds).then((rows) => setSummaryRows(rows)).catch(() => {})
+          if (detailState.clientId != null) void handleLoadDetails(detailState.clientId, detailState.clientName || '')
+        }}
+        onCloseHugrabShippingFloor={() => setHugrabShippingFloorOpen(false)}
+        onHugrabShippingFloorApplied={() => {
+          void refreshBillingAfterHugrabFloor()
+        }}
+      />
 
       <ConfirmModal
         open={regenerateConfirmOpen}
