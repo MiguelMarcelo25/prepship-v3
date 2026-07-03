@@ -72,8 +72,8 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'packageCost': return metrics.packageCost
     case 'packageName': return row.packageName
     case 'selectedRate': return row.selectedRateCost ?? row.selected_rate_cost
-    case 'upsss': return row.ref_ups_rate
-    case 'uspsss': return row.ref_usps_rate
+    case 'upsss': return row.refUpsRate ?? row.ref_ups_rate
+    case 'uspsss': return row.refUspsRate ?? row.ref_usps_rate
     case 'shipping': return metrics.shipping
     case 'total': return metrics.total
     case 'margin': return metrics.margin
@@ -370,14 +370,14 @@ export function BillingDetailTable({
                 )
               case 'upsss':
                 return (
-                  <span style={{ fontSize: 11, color: row.ref_ups_rate ? '#2563eb' : undefined }} className={metrics.chargedRate === 'upsss' ? 'billing-detail-rate-hit' : undefined}>
-                    {formatBillingMoney(row.ref_ups_rate, { dashIfZero: true })}
+                  <span style={{ fontSize: 11, color: (row.refUpsRate ?? row.ref_ups_rate) ? '#2563eb' : undefined }} className={metrics.chargedRate === 'upsss' ? 'billing-detail-rate-hit' : undefined}>
+                    {formatBillingMoney(row.refUpsRate ?? row.ref_ups_rate, { dashIfZero: true })}
                   </span>
                 )
               case 'uspsss':
                 return (
-                  <span style={{ fontSize: 11, color: row.ref_usps_rate ? '#16a34a' : undefined }} className={metrics.chargedRate === 'uspsss' ? 'billing-detail-rate-hit' : undefined}>
-                    {formatBillingMoney(row.ref_usps_rate, { dashIfZero: true })}
+                  <span style={{ fontSize: 11, color: (row.refUspsRate ?? row.ref_usps_rate) ? '#16a34a' : undefined }} className={metrics.chargedRate === 'uspsss' ? 'billing-detail-rate-hit' : undefined}>
+                    {formatBillingMoney(row.refUspsRate ?? row.ref_usps_rate, { dashIfZero: true })}
                   </span>
                 )
               case 'shipping':

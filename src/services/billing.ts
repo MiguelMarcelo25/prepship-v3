@@ -2053,49 +2053,36 @@ export async function billingDetails(input: GenerateInput) {
         itemSkus: items.itemSkus,
         totalQty: items.totalQty,
         packageName,
+        // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto);
+        // the snake_case mirrors this block used to write are deleted.
         selectedRateCost: isShippingLine ? selectedRateCost : null,
-        selected_rate_cost: isShippingLine ? selectedRateCost : null,
         // Deprecated compatibility alias: shipped Billing now owns Selected Rate
         // as selectedRateCost; old readers get the same backend-owned value.
         actualLabelCost: isShippingLine ? selectedRateCost : null,
-        actual_label_cost: isShippingLine ? selectedRateCost : null,
         shippingCostMissing: isMissingShippingLine,
-        shipping_cost_missing: isMissingShippingLine,
         // PS-207: box-review flag + the generator's reason text (the review
         // line's description, e.g. "Box mismatch — selected box (12x10x3)
         // disagrees with shipment dims (12x10x1)").
         packageCostNeedsReview: isBoxReviewLine,
-        package_cost_needs_review: isBoxReviewLine,
         packageCostReviewReason: isBoxReviewLine ? row.description : null,
-        package_cost_review_reason: isBoxReviewLine ? row.description : null,
         hasPackageCostLine: isPackageCostLine,
-        has_package_cost_line: isPackageCostLine,
         boxCostNoCharge,
-        box_cost_no_charge: boxCostNoCharge,
         boxCostAlert: boxCostAlert.boxCostAlert,
-        box_cost_alert: boxCostAlert.boxCostAlert,
         billingBadges: boxCostAlert.billingBadges,
-        billing_badges: boxCostAlert.billingBadges,
         refUspsRate: isShippingLine ? refUspsRate : null,
-        ref_usps_rate: isShippingLine ? refUspsRate : null,
         refUpsRate: isShippingLine ? refUpsRate : null,
-        ref_ups_rate: isShippingLine ? refUpsRate : null,
         // PS-068: true when this box charge was generated BEFORE the client's
         // latest package-price/config change — the stored cost may be stale and
         // the range should be regenerated. Only meaningful for box lines.
         stalePackagePrice,
-        stale_package_price: stalePackagePrice,
         // PS-275: a billed shipping line of EXACTLY $0.00 — the FE shows a
         // "Review $0 shipping" affordance from this flag (it does NO policy math
         // of its own; the decision is owned by decideZeroShippingReview).
         shippingZeroNeedsReview: isZeroShippingReviewLine,
-        shipping_zero_needs_review: isZeroShippingReviewLine,
         // PS-275: the order's prep-fee waiver decision (durable, reversible).
         // null = undecided; the FE badges "Prep fee waived" when true.
         feeWaived,
-        fee_waived: feeWaived,
         feeWaiverDecision: feeWaiver?.decision ?? null,
-        fee_waiver_decision: feeWaiver?.decision ?? null,
       };
     })
   );

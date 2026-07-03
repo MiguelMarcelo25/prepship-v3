@@ -72,6 +72,34 @@ check('backend order row carries rich shipping fields and review flags',
   detailRows[0]?.carrierNickname === 'USPS Chase x7439' &&
   detailRows[0]?.shippingZeroNeedsReview === true);
 
+// ── PS-368: the typed camelCase-only BillingDetailRowDto boundary ─────────────
+check('PS-368 detail order rows emit camelCase ONLY — no snake_case duplicate keys',
+  detailRows.every((row) => Object.keys(row).every((key) => !key.includes('_'))));
+check('PS-368 money totals are typed numbers, always present',
+  detailRows.every((row) =>
+    typeof row.pickpackTotal === 'number' &&
+    typeof row.additionalTotal === 'number' &&
+    typeof row.packageTotal === 'number' &&
+    typeof row.shippingTotal === 'number' &&
+    typeof row.storageTotal === 'number' &&
+    typeof row.pickPackFeeTotal === 'number' &&
+    typeof row.fulfillmentFeeTotal === 'number' &&
+    typeof row.grandTotal === 'number' &&
+    row.totalCost === 0 &&
+    row.lineType === 'billing_order' &&
+    typeof row.boxCostAlert === 'boolean' &&
+    Array.isArray(row.billingBadges)));
+check('PS-368 derived totals reconcile (pickPackFee = pickpack+addl; fulfillment = all five; grand)',
+  detailRows[0]?.pickPackFeeTotal === 3.75 &&
+  detailRows[0]?.fulfillmentFeeTotal === 12.5 &&
+  detailRows[0]?.grandTotal === 12.5);
+const sotSrc = read('src/services/billing-detail-row-sot.ts');
+check('PS-368 billing-detail-row-sot has NO dual-casing tolerance left (no snake reads/writes)',
+  !/pick_pack_total|additional_total|package_total|shipping_total|storage_total|grand_total|selected_rate_cost|actual_label_cost|billing_badges|box_cost_alert|has_package_cost_line|box_cost_no_charge|fee_waived|line_type|order_id|ship_date/.test(sotSrc) &&
+  sotSrc.includes('export interface BillingDetailRowDto'));
+check('PS-368 billingDetails assembly writes camelCase only (snake mirrors deleted)',
+  !/selected_rate_cost:|actual_label_cost:|shipping_cost_missing:|package_cost_needs_review:|has_package_cost_line:|box_cost_no_charge:|box_cost_alert:|billing_badges:|ref_usps_rate:|ref_ups_rate:|stale_package_price:|shipping_zero_needs_review:|fee_waived:|fee_waiver_decision:/.test(read('src/services/billing.ts')));
+
 const skuSummary = summarizeBillingItemsForDetail([
   { sku: 'Booster-gel-001', name: 'Booster Gel', quantity: 2 },
   { sku: 'HU-10', name: 'Leeds Line V2', quantity: 1 },

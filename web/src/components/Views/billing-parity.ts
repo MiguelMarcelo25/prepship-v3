@@ -717,8 +717,8 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost ?? detail.actualLabelCost ?? detail.actual_label_cost
   const ourCost = Number(selectedRateCost ?? 0) || 0
   const margin = shipping - ourCost
-  const refUpsRate = detail.ref_ups_rate ?? detail.refUpsRate
-  const refUspsRate = detail.ref_usps_rate ?? detail.refUspsRate
+  const refUpsRate = detail.refUpsRate ?? detail.ref_ups_rate
+  const refUspsRate = detail.refUspsRate ?? detail.ref_usps_rate
   const ssCharged = shipping > 0 && selectedRateCost != null && shipping > Number(selectedRateCost) + 0.01
 
   let chargedRate: BillingDetailMetrics['chargedRate'] = null

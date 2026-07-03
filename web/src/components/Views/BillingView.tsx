@@ -188,8 +188,8 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'packageCost': return metrics.packageCost
     case 'packageName': return row.packageName
     case 'selectedRate': return row.selectedRateCost ?? row.selected_rate_cost
-    case 'upsss': return row.ref_ups_rate
-    case 'uspsss': return row.ref_usps_rate
+    case 'upsss': return row.refUpsRate ?? row.ref_ups_rate
+    case 'uspsss': return row.refUspsRate ?? row.ref_usps_rate
     case 'shipping': return metrics.shipping
     case 'total': return metrics.total
     case 'margin': return metrics.margin
@@ -533,9 +533,9 @@ export default function BillingView() {
         case 'selectedRate':
           return row.selectedRateCost ?? row.selected_rate_cost
         case 'upsss':
-          return row.ref_ups_rate
+          return row.refUpsRate ?? row.ref_ups_rate
         case 'uspsss':
-          return row.ref_usps_rate
+          return row.refUspsRate ?? row.ref_usps_rate
         case 'shipping':
           return metrics.shipping
         case 'total':

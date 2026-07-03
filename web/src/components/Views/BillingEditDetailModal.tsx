@@ -118,8 +118,8 @@ export function BillingEditDetailModal({
             </select>
           </div>
           <div><span>Selected Rate</span><strong>{formatBillingMoney(row.selectedRateCost ?? row.selected_rate_cost, { dashIfZero: true })}</strong></div>
-          <div><span>UPS SS</span><strong>{formatBillingMoney(row.ref_ups_rate, { dashIfZero: true })}</strong></div>
-          <div><span>USPS SS</span><strong>{formatBillingMoney(row.ref_usps_rate, { dashIfZero: true })}</strong></div>
+          <div><span>UPS SS</span><strong>{formatBillingMoney(row.refUpsRate ?? row.ref_ups_rate, { dashIfZero: true })}</strong></div>
+          <div><span>USPS SS</span><strong>{formatBillingMoney(row.refUspsRate ?? row.ref_usps_rate, { dashIfZero: true })}</strong></div>
         </div>
 
         {hasBillingNoBoxCostAlert(row) ? (
