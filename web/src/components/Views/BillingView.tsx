@@ -1501,43 +1501,9 @@ export default function BillingView() {
           loading={shippingMarginLoading}
           error={shippingMarginError}
         />
-        <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, margin: '0 0 14px' }}>
-          {/* PS-155: Client Billing Config table extracted to <BillingConfigTable />.
-              The config DRAFT state (configDrafts) + setter and the Save handler
-              (handleSaveConfig → buildBillingConfigInput → updateBillingConfig) stay here. */}
-          <BillingConfigTable
-            configs={configs}
-            configsLoading={configsLoading}
-            configDrafts={configDrafts}
-            setConfigDrafts={setConfigDrafts}
-            onSaveConfig={handleSaveConfig}
-            onToggleHouseAccount={handleToggleHouseAccount}
-          />
-
-          {/* PS-155: Package Pricing card extracted to <BillingPackagePricingTable />.
-              The price DRAFT state (packagePriceDrafts) + setter, selected-client state,
-              the PURE-built packagePricingRows, and the Save handler stay here. */}
-          <BillingPackagePricingTable
-            configs={configs}
-            selectedPkgClientId={selectedPkgClientId}
-            setSelectedPkgClientId={setSelectedPkgClientId}
-            packagePricingRows={packagePricingRows}
-            packagePriceDrafts={packagePriceDrafts}
-            setPackagePriceDrafts={setPackagePriceDrafts}
-            packagePricingLoading={packagePricingLoading}
-            packagePricingError={packagePricingError}
-            onSavePackagePrices={handleSavePackagePrices}
-          />
-        </div>
-        {/* PS-296 (FE): carrier/account margin breakdown — consumes the backend
-            analytics.carriers[] rollup. Now on the shared <Table> with pagination
-            (BillingCarrierMarginTable); renders nothing when there are no carrier rows. */}
-        <BillingCarrierMarginTable carriers={shippingMarginCarriers} />
-        <BillingShippingMarginReconciliation
-          rows={shippingMarginRows}
-          open={shippingMarginDrilldownOpen}
-          onToggle={() => setShippingMarginDrilldownOpen((open) => !open)}
-        />
+        {/* Layout: Client billing config, Package pricing, and Margin by carrier /
+            account each moved to their own separated section cards below, so this
+            card stays focused on generating billing and reading the summary. */}
 
         {/* Summary table — migrated 2026-05-12 to the reusable <Table>
             primitive (components/ui/Table.tsx). Operator-controlled
@@ -1604,6 +1570,54 @@ export default function BillingView() {
           </div>
         ) : null}
       </div>
+
+      {/* ── Section: Client billing config ──────────────────────────────
+          Own separated card (BillingConfigTable renders its own bordered card
+          + "Client billing config" header). Was nested in a 2-col grid inside
+          the summary card; now full-width and individually separated. The
+          explicit flex order keeps the sequence (the parent is flex-col and the
+          summary card carries order-1). */}
+      <div className="order-2 mb-[18px]">
+        <BillingConfigTable
+          configs={configs}
+          configsLoading={configsLoading}
+          configDrafts={configDrafts}
+          setConfigDrafts={setConfigDrafts}
+          onSaveConfig={handleSaveConfig}
+          onToggleHouseAccount={handleToggleHouseAccount}
+        />
+      </div>
+
+      {/* ── Section: Package pricing by client ──────────────────────────
+          Own separated card (BillingPackagePricingTable renders its own bordered
+          card + "Package pricing by client" header). */}
+      <div className="order-3 mb-[18px]">
+        <BillingPackagePricingTable
+          configs={configs}
+          selectedPkgClientId={selectedPkgClientId}
+          setSelectedPkgClientId={setSelectedPkgClientId}
+          packagePricingRows={packagePricingRows}
+          packagePriceDrafts={packagePriceDrafts}
+          setPackagePriceDrafts={setPackagePriceDrafts}
+          packagePricingLoading={packagePricingLoading}
+          packagePricingError={packagePricingError}
+          onSavePackagePrices={handleSavePackagePrices}
+        />
+      </div>
+
+      {/* ── Section: Margin by carrier / account ────────────────────────
+          Own separated card. BillingCarrierMarginTable titles itself in its
+          toolbar ("Margin by carrier / account"); the reconciliation drilldown
+          lives with it. PS-296 (FE): consumes analytics.carriers[]. */}
+      <div className="order-4 rounded-xl bg-surface ring-1 ring-line p-4 mb-[18px]">
+        <BillingCarrierMarginTable carriers={shippingMarginCarriers} />
+        <BillingShippingMarginReconciliation
+          rows={shippingMarginRows}
+          open={shippingMarginDrilldownOpen}
+          onToggle={() => setShippingMarginDrilldownOpen((open) => !open)}
+        />
+      </div>
+
       {billingEditModal ? (
         <BillingEditDetailModal
           modal={billingEditModal}
