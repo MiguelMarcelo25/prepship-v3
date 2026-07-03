@@ -1,5 +1,5 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { ListFilter, Loader2, Pencil, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { ListFilter, Loader2, Pencil, SlidersHorizontal } from 'lucide-react'
 import { apiClient } from '../../api/client'
 // PS-275: the new $0-shipping prep-fee review POST has no apiClient wrapper
 // (that adapter is out of this ticket's scope); call the shared low-level
@@ -52,7 +52,7 @@ import { BillingDetailClientStrip } from './BillingDetailClientStrip'
 // PS-155: per-client detail table extracted (behavior-preserving; rows/sort/totals/handlers
 // stay here and are passed as props, the table calls the pure computeBillingDetailMetrics).
 import { BillingDetailTable } from './BillingDetailTable'
-import { BillingLineItemWarningSummary } from './BillingLineItemWarningSummary'
+import { BillingLineItemsHeader } from './BillingLineItemsHeader'
 import { hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
 import { BillingEditDetailModal, type BillingEditModalViewState } from './BillingEditDetailModal'
 import { BillingDashboardHeader } from './BillingDashboardHeader'
@@ -1562,54 +1562,16 @@ export default function BillingView() {
 
         {detailState.open ? (
           <div ref={detailWrapRef} style={{ display: 'block', marginTop: 16, borderTop: '2px solid var(--border)', paddingTop: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-              <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Line Items — {detailState.clientName}</h3>
-              <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
-              <BillingLineItemWarningSummary rows={sortedDetailRows} onOpenWarningRow={handleOpenBillingEdit} />
-              {/* PS-275: surface HOW MANY of the currently-rendered line items
-                  need the $0-shipping prep-fee review, so operators don't have
-                  to open each Edit modal to find them. Count derives from the
-                  SAME sortedDetailRows the table maps over (no refetch). Renders
-                  nothing when zero — additive + default-inert. */}
-              {(() => {
-                const needReview = sortedDetailRows.filter((row) => row.shippingZeroNeedsReview === true && row.feeWaiverDecision == null).length
-                return needReview > 0 ? (
-                  <span
-                    role="status"
-                    title="Rows with a recorded $0.00 shipping cost awaiting a prep-fee decision (waive or keep). Use the amber Review button on the row."
-                    style={{
-                      fontSize: 10.5,
-                      fontWeight: 800,
-                      color: '#b45309',
-                      background: '#fef3c7',
-                      border: '1px solid #fde68a',
-                      borderRadius: 6,
-                      padding: '2px 8px',
-                      lineHeight: 1.5,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {needReview} $0-shipping need review
-                  </span>
-                ) : null
-              })()}
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-                {isHugrabDetailClient ? (
-                  <button
-                    data-hugrab-shipping-floor-trigger
-                    className="btn btn-secondary btn-xs"
-                    type="button"
-                    disabled={detailState.loading}
-                    title="Preview/apply/revert HUGRAB bulk shipping changes"
-                    onClick={() => setHugrabShippingFloorOpen(true)}
-                  >
-                    <ShieldCheck size={13} aria-hidden="true" />
-                    HUGRAB bulk
-                  </button>
-                ) : null}
-                <span ref={setDetailColumnsAnchorEl} style={{ display: 'inline-flex' }} />
-              </span>
-            </div>
+            <BillingLineItemsHeader
+              clientName={detailState.clientName}
+              rows={sortedDetailRows}
+              loading={detailState.loading}
+              isHugrabClient={isHugrabDetailClient}
+              columnsAnchorRef={setDetailColumnsAnchorEl}
+              onClose={() => setDetailState((current) => ({ ...current, open: false }))}
+              onOpenWarningRow={handleOpenBillingEdit}
+              onOpenHugrabBulk={() => setHugrabShippingFloorOpen(true)}
+            />
 
             <BillingDetailClientStrip
               sortedSummaryRows={sortedSummaryRows}
