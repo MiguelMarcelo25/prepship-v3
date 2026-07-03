@@ -1878,6 +1878,9 @@ export async function billingDetails(input: GenerateInput) {
       otherCost: shipments.otherCost,
       selectedRateCost: shipments.selectedRateCost, // PS-370
       orderItems: orders.items,
+      // PS-376: order status feeds the $0-shipping review reason (cancelled →
+      // prep fee may be unwarranted vs a real recorded $0 label).
+      orderStatus: orders.orderStatus,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
     })
@@ -2084,17 +2087,22 @@ export async function billingDetails(input: GenerateInput) {
       // $0-shipping review chip (which would pollute the operator's review queue with a false entry).
       const isBundleIncludedShippingLine =
         isShippingLine && (row.description ?? '').startsWith('Included — bundled');
-      // PS-275: a billed shipping line of EXACTLY $0.00 needs operator review
-      // (a real recorded $0 label — distinct from the missing-cost review,
-      // which fires when the cost is unknown). The decision is owned by the
-      // pure policy module; this just reads its boolean off the billed line.
-      const isZeroShippingReviewLine =
-        isShippingLine &&
-        !isBundleIncludedShippingLine &&
-        decideZeroShippingReview({
-          shippingAmount: toFiniteNumber(row.totalCost),
-          hasShipmentRow: row.shipmentId != null,
-        }).needsReview;
+      // PS-275 + PS-376: a billed shipping line of EXACTLY $0.00 needs operator
+      // review; the decision AND its reason are owned by the pure policy module —
+      // this only reads them off the billed line. PS-376: the bundle-child's $0
+      // "Included" line is now flagged too (reason 'bundled_with_order'), so EVERY
+      // $0 shipping row is reviewable — the reason lets the operator tell a
+      // cancelled row (prep fee may be unwarranted) from a bundled row (prep fee
+      // likely valid) from one with no shipment proof.
+      const zeroShippingReview = isShippingLine
+        ? decideZeroShippingReview({
+            shippingAmount: toFiniteNumber(row.totalCost),
+            hasShipmentRow: row.shipmentId != null,
+            orderStatus: row.orderStatus,
+            isBundledChild: isBundleIncludedShippingLine,
+          })
+        : { needsReview: false, reason: null, label: '', severity: 'info' as const };
+      const isZeroShippingReviewLine = zeroShippingReview.needsReview;
       // PS-207: $0.00 box review line — the shipped box could not be resolved
       // to a known package (or selected box and shipment dims disagree). The
       // FE renders a NEEDS REVIEW chip from these flags; it does no policy
@@ -2217,6 +2225,11 @@ export async function billingDetails(input: GenerateInput) {
         // "Review $0 shipping" affordance from this flag (it does NO policy math
         // of its own; the decision is owned by decideZeroShippingReview).
         shippingZeroNeedsReview: isZeroShippingReviewLine,
+        // PS-376: WHY the $0-shipping row needs review + a thin-UI label/severity
+        // (the FE renders these verbatim; it does no classification of its own).
+        zeroShippingReviewReason: zeroShippingReview.reason,
+        zeroShippingReviewLabel: zeroShippingReview.label,
+        zeroShippingReviewSeverity: zeroShippingReview.severity,
         // PS-275: the order's prep-fee waiver decision (durable, reversible).
         // null = undecided; the FE badges "Prep fee waived" when true.
         feeWaived,

@@ -125,6 +125,12 @@ const TEXT_CARRY_FIELDS = [
   'itemSkus',
   'packageName',
   'packageCostReviewReason',
+  // PS-376: the $0-shipping review reason/label/severity ride on the order's
+  // shipping line; carry them to the collapsed order row so the FE badge (and
+  // Invoice) render the backend classification verbatim.
+  'zeroShippingReviewReason',
+  'zeroShippingReviewLabel',
+  'zeroShippingReviewSeverity',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [

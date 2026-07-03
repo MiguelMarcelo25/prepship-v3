@@ -41,11 +41,45 @@ export type ZeroShippingReviewInput = {
   externallyShipped?: boolean;
   /** True when a shipments row backs this order (a real label exists). */
   hasShipmentRow?: boolean;
+  /** orders.order_status (persisted). 'cancelled' → the auto-assigned prep fee
+   *  may be unwarranted (the work may not have happened). */
+  orderStatus?: string | null;
+  /** True when this order is a bundle CHILD — shipping is billed ONCE on the
+   *  primary, so $0 here is legitimate and the prep fee may still be valid. */
+  isBundledChild?: boolean;
 };
+
+// PS-376: WHY a $0-shipping row needs review — the situations carry different
+// prep-fee implications, so the operator must be able to tell them apart.
+export type ZeroShippingReviewReason =
+  | 'cancelled_or_not_shipped'
+  | 'bundled_with_order'
+  | 'missing_shipping_proof'
+  | 'zero_shipping_unknown';
+
+export type ZeroShippingReviewSeverity = 'warn' | 'info';
 
 export type ZeroShippingReviewDecision = {
   /** True ONLY when shippingAmount is EXACTLY 0. */
   needsReview: boolean;
+  /** WHY it needs review (null when it does not). */
+  reason: ZeroShippingReviewReason | null;
+  /** Short operator-facing label for the badge ('' when no review). */
+  label: string;
+  /** 'warn' for prep-fee-risk cases (cancelled / missing proof / unknown);
+   *  'info' for the benign bundled case. */
+  severity: ZeroShippingReviewSeverity;
+};
+
+// The canonical label + severity per reason. Thin UI renders these verbatim.
+const ZERO_SHIPPING_REVIEW_META: Record<
+  ZeroShippingReviewReason,
+  { label: string; severity: ZeroShippingReviewSeverity }
+> = {
+  cancelled_or_not_shipped: { label: 'Cancelled — review prep fee', severity: 'warn' },
+  bundled_with_order: { label: 'Bundled — shipping on another order', severity: 'info' },
+  missing_shipping_proof: { label: '$0 shipping — no shipment proof', severity: 'warn' },
+  zero_shipping_unknown: { label: '$0 shipping — review', severity: 'warn' },
 };
 
 /** Strict exact-$0 detector. A non-finite, null, or undefined amount is
@@ -59,16 +93,32 @@ function isExactlyZero(amount: number | null | undefined): boolean {
 }
 
 /**
- * Decide whether a billed shipping line needs the $0-shipping review.
- * TRUE only when the shipping amount is EXACTLY 0. Missing/unknown is NOT $0 —
- * that remains the separate missing-cost review (unchanged). externallyShipped
- * / hasShipmentRow are accepted for context (and so callers pass the full
- * shape) but do not relax the exact-$0 rule.
+ * Decide whether a billed shipping line needs the $0-shipping review, AND WHY.
+ * needsReview is TRUE only when the shipping amount is EXACTLY 0 (missing/unknown
+ * is NOT $0 — that remains the separate missing-cost review, unchanged). PS-376:
+ * classify the reason from canonical persisted facts so the operator can tell a
+ * cancelled row (prep fee may be unwarranted) from a bundled row (prep fee likely
+ * valid) from a row with no shipment proof. Priority: cancelled → bundled →
+ * missing-proof → unknown. The reason never changes needsReview — every exact-$0
+ * shipping line is flagged; the reason only explains it.
  */
 export function decideZeroShippingReview(
   input: ZeroShippingReviewInput,
 ): ZeroShippingReviewDecision {
-  return { needsReview: isExactlyZero(input.shippingAmount) };
+  if (!isExactlyZero(input.shippingAmount)) {
+    return { needsReview: false, reason: null, label: '', severity: 'info' };
+  }
+  const status = String(input.orderStatus ?? '').trim().toLowerCase();
+  const reason: ZeroShippingReviewReason =
+    status === 'cancelled' || status === 'canceled'
+      ? 'cancelled_or_not_shipped'
+      : input.isBundledChild === true
+        ? 'bundled_with_order'
+        : input.hasShipmentRow !== true
+          ? 'missing_shipping_proof'
+          : 'zero_shipping_unknown';
+  const { label, severity } = ZERO_SHIPPING_REVIEW_META[reason];
+  return { needsReview: true, reason, label, severity };
 }
 
 /** Minimal line shape the waiver reads/writes. Extra fields pass through

@@ -12,6 +12,7 @@
 import type { CSSProperties } from 'react'
 import { Pencil } from 'lucide-react'
 import { BillingNoBoxCostAction, hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
+import { BillingZeroShippingBadge, hasBillingZeroShippingReview } from './BillingZeroShippingBadge'
 import type { BillingDetailColumnId, BillingDetailDto, BillingDetailPanelState } from './billing-parity'
 import {
   billingShipDateSortValue,
@@ -221,7 +222,7 @@ export function BillingDetailTable({
                     {row.shippingZeroNeedsReview && row.feeWaiverDecision == null ? (
                       <button
                         type="button"
-                        title="$0 shipping — review the prep fee (waive or keep). Opens the edit modal."
+                        title={`${(row.zeroShippingReviewLabel as string) || '$0 shipping'} — review the prep fee (waive or keep). Opens the edit modal.`}
                         onClick={(event) => { event.stopPropagation(); onOpenBillingEdit(row) }}
                         style={{
                           display: 'inline-flex',
@@ -402,12 +403,25 @@ export function BillingDetailTable({
                   </span>
                 )
               case 'shipping':
-                return metrics.ssCharged ? (
-                  <>
-                    <span style={{ color: '#b45309', fontWeight: 600 }}>{formatBillingMoney(metrics.shipping)}</span>
-                    <span style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 3 }}>↑SS</span>
-                  </>
-                ) : formatBillingMoney(metrics.shipping)
+                // PS-376: every $0-shipping row shows the backend-owned review
+                // badge (with its reason) right in the Shipping cell. SS-charged
+                // rows are >$0, so they never carry the badge.
+                if (metrics.ssCharged) {
+                  return (
+                    <>
+                      <span style={{ color: '#b45309', fontWeight: 600 }}>{formatBillingMoney(metrics.shipping)}</span>
+                      <span style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 3 }}>↑SS</span>
+                    </>
+                  )
+                }
+                return hasBillingZeroShippingReview(row) ? (
+                  <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                    <span>{formatBillingMoney(metrics.shipping)}</span>
+                    <BillingZeroShippingBadge row={row} />
+                  </span>
+                ) : (
+                  formatBillingMoney(metrics.shipping)
+                )
               case 'total':
                 return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.fulfillmentFee)}</span>
               case 'margin':
