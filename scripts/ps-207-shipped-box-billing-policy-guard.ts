@@ -202,6 +202,11 @@ const policy = read('src/services/billing-box-policy.ts');
 const feTable = read('web/src/components/Views/BillingDetailTable.tsx');
 const feParity = read('web/src/components/Views/billing-parity.ts');
 const feView = read('web/src/components/Views/BillingView.tsx');
+// PS-368/369: order-row aggregation is backend-owned (billing-detail-row-sot,
+// the only aggregator since the dead FE twin was deleted). d9942d62: the Edit
+// Billing Detail modal markup moved into BillingEditDetailModal.
+const backendRowSot = read('src/services/billing-detail-row-sot.ts');
+const feEditModal = read('web/src/components/Views/BillingEditDetailModal.tsx');
 const feOrders = read('web/src/components/Views/OrdersView.tsx');
 // PS-166 W4f: the side-panel Size row (the lockstepPanelDims dim inputs) moved
 // VERBATIM to the presentational OrdersPanelShippingFields component; OrdersView
@@ -283,10 +288,10 @@ assert.ok(feTable.includes('packageCostNeedsReview') && feTable.includes('NEEDS 
   'Box Cost cell must render the amber NEEDS REVIEW chip');
 assert.ok(/packageCostNeedsReview[\s\S]{0,800}onOpenBillingEdit\(row\)/.test(feTable),
   'the chip must open the Edit Billing Detail modal (resolve flow)');
-assert.ok(feParity.includes('packageCostNeedsReview'),
-  'order-row aggregation must carry the review flag');
-assert.ok(feView.includes('packageCostNeedsReview'),
-  'Edit modal must surface the review reason');
+assert.ok(backendRowSot.includes('packageCostNeedsReview'),
+  'backend order-row aggregation (billing-detail-row-sot) must carry the review flag');
+assert.ok(feEditModal.includes('packageCostNeedsReview'),
+  'Edit modal (BillingEditDetailModal) must surface the review reason');
 assert.ok(feOrders.includes('lockstepPanelDims'),
   'OrdersView must still own + thread the lockstepPanelDims handler');
 // PS-166 W4f re-anchor: the three Size inputs (L/W/H) that route through the
@@ -300,8 +305,22 @@ assert.equal(lockstepUses, 3, `all three Size inputs route through the lockstep 
 assert.ok(pkgJson.includes('"test:ps-207-shipped-box-billing-policy"'),
   'guard must be wired into package.json');
 
-// The policy module stays pure (importable offline by this guard).
-assert.ok(!/from '\.\.?\//.test(policy) && !policy.includes('import {'),
-  'billing-box-policy.ts must stay zero-import pure');
+// The policy module stays OFFLINE-IMPORTABLE (no db/schema/service/env deps), so
+// this guard can exercise the full resolution matrix without a database. PS-371
+// let it delegate to the single markup-formula owner (markup-resolver), which is
+// itself runtime-import-free (only an `import type`), so offline import still holds
+// — proven: this guard imports decidePackageCostLine from the policy module above.
+// The ONLY permitted import is that pure markup owner; db/schema/service imports
+// stay banned.
+{
+  const importLines = policy.match(/^import\b.*$/gm) ?? [];
+  const badImports = importLines.filter(
+    (line) => !/from '\.\/shipping-workflow\/markup-resolver'/.test(line),
+  );
+  assert.ok(badImports.length === 0,
+    `billing-box-policy.ts may import ONLY the pure markup owner; found: ${badImports.join(' | ')}`);
+  assert.ok(!/from '\.\.\/(db|services|routes)\//.test(policy) && !/schema\//.test(policy),
+    'billing-box-policy.ts must not import db/schema/service modules (offline-importable)');
+}
 
 console.log('PASS ps-207 shipped-box billing policy guard (resolver matrix + decision matrix + source pins)');

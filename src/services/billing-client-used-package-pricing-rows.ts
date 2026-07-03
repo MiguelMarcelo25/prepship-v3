@@ -43,8 +43,11 @@ export type ClientUsedPackagePricingRow = {
   dimsText: string;
   unitCost: number | null;
   ourCost: number | null;
-  price: number;
-  charge: number;
+  // PS-372(a): null = NO CONFIGURED PRICE — the one sentinel shared with the
+  // billing generator's box price map lookup (billing.ts). 0 is reserved for a
+  // genuinely configured $0 price, never for "unconfigured".
+  price: number | null;
+  charge: number | null;
   isCustom: boolean;
   is_custom: boolean;
   marginPct: number | null;
@@ -114,8 +117,8 @@ function formatDims(l: number | null, w: number | null, h: number | null): strin
   return l !== null && w !== null && h !== null ? `${l}x${w}x${h}"` : '-';
 }
 
-function marginPct(charge: number, ourCost: number | null): number | null {
-  if (ourCost === null || charge <= 0) return null;
+function marginPct(charge: number | null, ourCost: number | null): number | null {
+  if (charge === null || ourCost === null || charge <= 0) return null;
   return Number.parseFloat((((charge - ourCost) / charge) * 100).toFixed(0));
 }
 
@@ -176,7 +179,9 @@ export function buildClientUsedPackagePricingRows(input: {
       const width = toFiniteNumber(pkg.width);
       const height = toFiniteNumber(pkg.height);
       const ourCost = toFiniteNumber(pkg.unitCost);
-      const charge = toFiniteNumber(saved?.price) ?? 0;
+      // PS-372(a): unconfigured price is null (not 0) — same sentinel as the
+      // billing generator's clientPrices map miss.
+      const charge = toFiniteNumber(saved?.price);
       const isCustom = saved ? Boolean(saved.isCustom ?? saved.is_custom) : false;
       return {
         packageId,

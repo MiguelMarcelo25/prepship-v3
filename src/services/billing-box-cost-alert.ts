@@ -6,6 +6,12 @@ export type BillingBoxCostAlertInput = {
   packageCostNeedsReview?: boolean;
   isNoChargeBoxCostLine?: boolean;
   canAlertMissing?: boolean;
+  // PS-372(b): the EMITTER's first gate (decidePackageCostLine returns 'none'
+  // when the client has no box pricing configured). When explicitly false the
+  // missing-cost alert is suppressed so the alert badge can never flag an order
+  // whose box line the generator intentionally suppressed. Tri-state: undefined
+  // (caller doesn't know) keeps the historical alert behavior.
+  clientHasBoxPricing?: boolean;
   existingBadges?: unknown;
 };
 
@@ -51,6 +57,13 @@ export function resolveBillingBoxCostAlert(input: BillingBoxCostAlertInput): Bil
   }
 
   if (input.canAlertMissing === false) {
+    return { boxCostAlert: false, billingBadges: existingBadges };
+  }
+
+  // PS-372(b): agree with the emitter — a client without configured box pricing
+  // gets NO box line by decidePackageCostLine's own gate, so "missing box cost"
+  // is not an alertable state for it.
+  if (input.clientHasBoxPricing === false) {
     return { boxCostAlert: false, billingBadges: existingBadges };
   }
 

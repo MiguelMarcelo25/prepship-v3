@@ -1217,10 +1217,13 @@ export async function generateLineItems(input: GenerateInput) {
     const packageCostDecision = decidePackageCostLine({
       resolution: boxResolution,
       clientHasBoxPricing: (clientPrices?.size ?? 0) > 0,
+      // PS-372(a): NULL is the one "no configured price" sentinel (shared with
+      // clientUsedPackagePricingRows). A map miss normalizes to null here so no
+      // caller ever sees 0-vs-undefined ambiguity for "unconfigured".
       configuredPrice:
         boxResolution.status === 'resolved' && boxResolution.packageId != null
-          ? clientPrices?.get(boxResolution.packageId)
-          : undefined,
+          ? clientPrices?.get(boxResolution.packageId) ?? null
+          : null,
       markupPct: toNum(cfg.packageCostMarkup),
     });
     if (bundleTreatment.kind === 'included-in-bundle') {
@@ -1866,18 +1869,24 @@ export async function billingDetails(input: GenerateInput) {
     new Set(rows.map((row) => row.clientId).filter((id): id is number => id != null))
   );
   const pricingChangedByClient = new Map<number, Date>();
+  // PS-372(b): which detail clients have ANY configured box pricing — the same
+  // gate decidePackageCostLine uses to suppress box lines, threaded to the
+  // box-cost alert so badge and emitter can never disagree.
+  const boxPricingByClient = new Map<number, boolean>();
   if (detailClientIds.length) {
-    const priceChangeRows = await db.execute<{ client_id: number; changed_at: string | null }>(sql`
+    const priceChangeRows = await db.execute<{ client_id: number; changed_at: string | null; has_box_pricing: boolean }>(sql`
       select c.id as client_id,
         greatest(
           coalesce((select max(updated_at) from client_package_prices where client_id = c.id), 'epoch'::timestamptz),
           coalesce((select max(updated_at) from billing_config        where client_id = c.id), 'epoch'::timestamptz)
-        )::text as changed_at
+        )::text as changed_at,
+        exists(select 1 from client_package_prices where client_id = c.id) as has_box_pricing
       from clients c
       where c.id = any(${intArraySql(detailClientIds)})
     `);
     for (const row of priceChangeRows) {
       if (row.changed_at) pricingChangedByClient.set(row.client_id, new Date(row.changed_at));
+      boxPricingByClient.set(row.client_id, row.has_box_pricing === true);
     }
   }
 
@@ -2053,6 +2062,9 @@ export async function billingDetails(input: GenerateInput) {
         itemSkus: items.itemSkus,
         totalQty: items.totalQty,
         packageName,
+        // PS-372(b): the emitter's box-pricing gate, carried on the row so the
+        // aggregated order row's alert consumes the SAME suppression decision.
+        clientHasBoxPricing: row.clientId != null ? boxPricingByClient.get(row.clientId) : undefined,
         // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto);
         // the snake_case mirrors this block used to write are deleted.
         selectedRateCost: isShippingLine ? selectedRateCost : null,

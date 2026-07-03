@@ -68,9 +68,12 @@ check('billingDetails emits selectedRateCost and a deprecated compatibility alia
   /selectedRateCost:\s*isShippingLine \? selectedRateCost : null/.test(billingService) &&
   /actualLabelCost:\s*isShippingLine \? selectedRateCost : null/.test(billingService));
 
-check('backend order-row SOT carries selectedRateCost through grouped detail rows',
+// PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto); the
+// snake_case 'selected_rate_cost' twin was intentionally removed from the SOT
+// carry fields. camelCase-only is the contract (ps-362 pins no snake duplicates).
+check('backend order-row SOT carries selectedRateCost (camelCase-only) through grouped detail rows',
   billingRowSot.includes("'selectedRateCost'") &&
-  billingRowSot.includes("'selected_rate_cost'"));
+  !billingRowSot.includes("'selected_rate_cost'"));
 
 check('Billing detail column is Selected Rate, not Best Rate',
   billingParity.includes("{ id: 'selectedRate', label: 'Selected Rate'") &&

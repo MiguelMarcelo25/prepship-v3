@@ -159,6 +159,12 @@ function applyBoxCostAlert(row: BillingDetailRowDto): void {
     packageCostNeedsReview: row.packageCostNeedsReview === true,
     isNoChargeBoxCostLine: row.boxCostNoCharge === true,
     canAlertMissing: nonEmpty(row.orderId),
+    // PS-372(b): tri-state passthrough of the emitter's box-pricing gate —
+    // explicitly false suppresses the missing-cost alert (the generator
+    // intentionally emits no box line for unpriced clients); absent keeps
+    // the historical behavior.
+    clientHasBoxPricing:
+      row.clientHasBoxPricing === true ? true : row.clientHasBoxPricing === false ? false : undefined,
     existingBadges: row.billingBadges,
   });
   row.boxCostAlert = result.boxCostAlert;
