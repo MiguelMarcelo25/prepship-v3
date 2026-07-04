@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import ExcelJS from 'exceljs';
 import {
   INVOICE_XLSX_LEFT_ALIGNMENT,
   applyInvoiceXlsxReadableLayout,
@@ -83,6 +84,42 @@ assert.ok(Number(worksheet.columns[4]?.width) >= 'Booster-gel-001, HU-10'.length
 assert.ok(Number(worksheet.columns[5]?.width) >= '12x10x3'.length, 'Box Size column must fit the full box label');
 assert.equal(worksheet.rows[1]?.height, undefined, 'one-line SKU rows must keep the normal Excel row height');
 assert.deepEqual(feeCell.alignment, INVOICE_XLSX_LEFT_ALIGNMENT, 'money cells must be left-aligned too');
+
+// ── REAL exceljs reproduction (the fakes above cannot catch a `this` bug) ──
+// The FakeColumn/FakeRow eachRow/eachCell are plain closures that never touch
+// `this._rows`, so they passed even while prod crashed. In prod (2026-07-04) the
+// layout captured worksheet.eachRow DETACHED and called it without `this`, so
+// real exceljs threw "Cannot read properties of undefined (reading '_rows')" and
+// EVERY /billing/invoice.xlsx returned 500. Drive the layout with a REAL exceljs
+// worksheet + writeBuffer so a regression fails HERE, not in production.
+{
+  const workbook = new ExcelJS.Workbook();
+  const invoice = workbook.addWorksheet('Invoice', { views: [{ state: 'frozen', ySplit: 1 }] });
+  invoice.columns = [
+    { header: 'Order #', key: 'orderNumber', width: 40 },
+    { header: 'SKU', key: 'sku', width: 8 },
+    { header: 'Fulfillment Fee', key: 'fulfillmentFee', width: 40 },
+  ];
+  invoice.getRow(1).font = { bold: true };
+  invoice.addRow({ orderNumber: '1194', sku: 'Booster-gel-001, HU-10', fulfillmentFee: 14.28 });
+  // A long cell exercises the multi-line row-height branch inside eachRow.
+  invoice.addRow({ orderNumber: '1195', sku: 'X'.repeat(120), fulfillmentFee: 0 });
+
+  assert.doesNotThrow(
+    () => applyInvoiceXlsxReadableLayout(invoice as unknown as InvoiceXlsxWorksheet),
+    'applyInvoiceXlsxReadableLayout must not throw on a REAL exceljs worksheet (eachRow must keep its `this`)',
+  );
+  // The row pass actually ran against the real worksheet (not a silent no-op).
+  assert.equal(
+    invoice.getRow(2).getCell(1).alignment?.horizontal,
+    'left',
+    'real exceljs data cells must be left-aligned by the row pass',
+  );
+  // End-to-end: the route calls writeBuffer() immediately after the layout.
+  const realBytes = await workbook.xlsx.writeBuffer();
+  const realBuf = Buffer.isBuffer(realBytes) ? realBytes : Buffer.from(realBytes as ArrayBuffer);
+  assert.ok(realBuf.length > 0, 'workbook.xlsx.writeBuffer() must produce bytes after the readable layout');
+}
 
 const billingRoute = readFileSync('src/routes/billing.ts', 'utf8');
 assert.match(billingRoute, /from '\.\/billing-invoice-xlsx-layout'/, 'billing route must import the XLSX layout owner');

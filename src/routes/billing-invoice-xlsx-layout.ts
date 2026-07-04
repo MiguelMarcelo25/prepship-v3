@@ -93,12 +93,19 @@ export function invoiceXlsxCellDisplayWidth(value: unknown): number {
 
 export function applyInvoiceXlsxReadableLayout(worksheet: InvoiceXlsxWorksheet): void {
   const columns = Array.isArray(worksheet.columns) ? (worksheet.columns as InvoiceXlsxColumn[]) : [];
+  // `eachRow` MUST stay bound to the worksheet. exceljs's eachRow reads
+  // `this._rows`, so capturing it via a ternary (which yields the bare function
+  // value, losing the method receiver) and calling it detached throws
+  // "Cannot read properties of undefined (reading '_rows')" — every
+  // /billing/invoice.xlsx 500s. `.bind(worksheet)` preserves `this`. (The
+  // `column.eachCell` / `row.eachCell` calls below are method-call syntax, so
+  // their receiver is already correct.)
   const eachRow =
     typeof worksheet.eachRow === 'function'
       ? (worksheet.eachRow as (
           options: { includeEmpty?: boolean },
           callback: (row: InvoiceXlsxRow, rowNumber?: number) => void,
-        ) => void)
+        ) => void).bind(worksheet)
       : null;
 
   columns.forEach((column) => {
