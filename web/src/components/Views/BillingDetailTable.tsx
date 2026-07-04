@@ -249,16 +249,35 @@ export function BillingDetailTable({
                 )
               case 'orderNumber':
                 if (row.orderId) {
+                  // PS-377: backend-owned CANCELLED marker (the FE never infers
+                  // cancellation from $0). A cancelled order is shown at $0 for
+                  // audit visibility instead of being silently excluded.
+                  const isCancelled = row.billingStatusBadge === 'CANCELLED' || row.orderStatus === 'cancelled'
                   return (
-                    <button
-                      type="button"
-                      className="inventory-inline-button"
-                      title="Open order detail"
-                      onClick={(e) => { e.stopPropagation(); onOpenOrderDetail(row.orderId as number) }}
-                      style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
-                    >
-                      {row.orderNumber}
-                    </button>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <button
+                        type="button"
+                        className="inventory-inline-button"
+                        title="Open order detail"
+                        onClick={(e) => { e.stopPropagation(); onOpenOrderDetail(row.orderId as number) }}
+                        style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
+                      >
+                        {row.orderNumber}
+                      </button>
+                      {isCancelled ? (
+                        <span
+                          data-billing-badge="CANCELLED"
+                          title="Order cancelled — shown at $0 for visibility, not billed"
+                          style={{
+                            fontSize: 8.5, fontWeight: 700, color: '#b91c1c', background: '#fee2e2',
+                            border: '1px solid #fecaca', borderRadius: 4, padding: '0 3px', lineHeight: 1.4,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          CANCELLED
+                        </span>
+                      ) : null}
+                    </span>
                   )
                 }
                 // PS-373 (slice 2): the storage line has no order — make it a

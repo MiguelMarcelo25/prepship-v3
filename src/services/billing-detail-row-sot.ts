@@ -131,6 +131,8 @@ const TEXT_CARRY_FIELDS = [
   'zeroShippingReviewReason',
   'zeroShippingReviewLabel',
   'zeroShippingReviewSeverity',
+  // PS-377: the backend-owned cancelled-order status marker ('CANCELLED').
+  'billingStatusBadge',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [

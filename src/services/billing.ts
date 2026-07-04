@@ -87,12 +87,15 @@ function normalizeBillingClientName(value: string | null | undefined) {
 
 export function isBillingSourceOrderBillable(input: { orderStatus: string | null; clientName: string | null }) {
   const status = String(input.orderStatus ?? '').trim().toLowerCase();
-  if (status === 'shipped') return true;
-  // Per user override unlock shipped data on 2026-07-02: HUGRAB cancelled orders
-  // are treated as billing source rows, while cancelled orders for every other
-  // client remain excluded from normal billing.
-  if (status === 'cancelled') return normalizeBillingClientName(input.clientName) === HUGRAB_CANCELLED_BILLING_CLIENT_NAME;
-  return false;
+  // Per user override unlock shipped data on 2026-07-04 (PS-377): shipped AND
+  // cancelled orders are billing SOURCE rows for EVERY client (was shipped +
+  // HUGRAB-only cancelled), so cancelled orders are VISIBLE in Billing instead of
+  // silently excluded. The $0-vs-fees decision for cancelled rows is made in
+  // generateLineItems (default: a single $0.00 "Cancelled" row; HUGRAB keeps its
+  // existing cancelled billing). This is read-only classification — no orders /
+  // shipments source rows are mutated. clientName is retained for the caller
+  // shape + the generator's per-client cancelled-policy check.
+  return status === 'shipped' || status === 'cancelled';
 }
 
 export type GenerateInput = {
@@ -512,10 +515,11 @@ export async function billingGenerationStatus(
             ) = any(sc.store_ids)
           )
         )
-        and (
-          o.order_status = 'shipped'
-          or (o.order_status = 'cancelled' and upper(trim(sc.name)) = ${HUGRAB_CANCELLED_BILLING_CLIENT_NAME})
-        )
+        -- PS-377 (Per user override unlock shipped data on 2026-07-04): the
+        -- freshness/source query includes cancelled orders for EVERY client (was
+        -- shipped + HUGRAB-only cancelled), matching the billable-rows query, so a
+        -- new cancelled order marks Billing out-of-date. Read-only.
+        and o.order_status in ('shipped', 'cancelled')
       )
   `);
 
@@ -800,6 +804,9 @@ export async function generateLineItems(input: GenerateInput) {
     items: unknown[];
     externallyShipped: boolean;
     externallyFulfilled: boolean;
+    // PS-377: source order status ('shipped' | 'cancelled'), so the generator can
+    // emit a $0 no-charge line for cancelled orders. Read-only.
+    orderStatus: string | null;
   };
 
   const billableRows: BillableRow[] = orderShipmentRows
@@ -844,6 +851,7 @@ export async function generateLineItems(input: GenerateInput) {
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
         externallyShipped: row.externallyShipped === true,
         externallyFulfilled: row.externallyFulfilled === true,
+        orderStatus: row.orderStatus, // PS-377
       };
     })
     .filter(
@@ -859,7 +867,7 @@ export async function generateLineItems(input: GenerateInput) {
       count: 0,
       total: 0,
       skipped: 0,
-      message: 'No billable shipped orders or HUGRAB cancelled orders found for this range.',
+      message: 'No billable shipped or cancelled orders found for this range.',
     };
   }
 
@@ -1037,6 +1045,17 @@ export async function generateLineItems(input: GenerateInput) {
       skipped += 1;
       continue;
     }
+
+    // PS-377 (Per user override unlock shipped data on 2026-07-04): a CANCELLED
+    // order is shown in Billing as a single visible $0.00 "Cancelled" row so it's
+    // auditable as an intentional no-charge, not missing data. The one exception
+    // is a client with an explicit cancelled-billing policy (HUGRAB), which keeps
+    // its existing cancelled billing. Read-only — source order/shipment rows are
+    // never mutated.
+    const cancelledNoCharge =
+      String(s.orderStatus ?? '').trim().toLowerCase() === 'cancelled' &&
+      normalizeBillingClientName(clientNameById.get(clientId) ?? null) !==
+        HUGRAB_CANCELLED_BILLING_CLIENT_NAME;
 
     const rows: LineRow[] = [];
 
@@ -1292,7 +1311,26 @@ export async function generateLineItems(input: GenerateInput) {
     // export math.
     const waiver = s.orderId != null ? feeWaiverByOrderId.get(s.orderId) : undefined;
     const waived = waiver?.decision === 'waived';
-    const effectiveRows = applyPrepFeeWaiver(rows, waived);
+    // PS-377: a cancelled no-charge order is billed as a SINGLE $0.00 "Cancelled"
+    // row — the per-order fee lines above were computed (pure, no side effects)
+    // and are discarded here so the row is VISIBLE but adds no dollars to totals.
+    const effectiveRows: LineRow[] = cancelledNoCharge
+      ? [
+          {
+            clientId,
+            orderId: s.orderId,
+            orderNumber: s.orderNumber,
+            shipmentId: s.id,
+            shipDate: s.shipDate,
+            lineType: 'cancelled',
+            description: `Cancelled — order ${s.orderNumber ?? s.orderId} (no charge)`,
+            qty: '1',
+            unitCost: '0.00',
+            totalCost: '0.00',
+            packageId: null,
+          },
+        ]
+      : applyPrepFeeWaiver(rows, waived);
 
     // Collect for batch insert instead of inserting one at a time.
     for (const row of effectiveRows) {
@@ -2230,6 +2268,12 @@ export async function billingDetails(input: GenerateInput) {
         zeroShippingReviewReason: zeroShippingReview.reason,
         zeroShippingReviewLabel: zeroShippingReview.label,
         zeroShippingReviewSeverity: zeroShippingReview.severity,
+        // PS-377: backend-owned cancelled-order status marker. The FE / Invoice
+        // render a CANCELLED badge from this — they never infer cancellation from
+        // $0. Driven by orders.order_status, so a cancelled order is marked whether
+        // it's a $0 no-charge row or a HUGRAB row that keeps its cancelled billing.
+        billingStatusBadge:
+          String(row.orderStatus ?? '').trim().toLowerCase() === 'cancelled' ? 'CANCELLED' : null,
         // PS-275: the order's prep-fee waiver decision (durable, reversible).
         // null = undecided; the FE badges "Prep fee waived" when true.
         feeWaived,
