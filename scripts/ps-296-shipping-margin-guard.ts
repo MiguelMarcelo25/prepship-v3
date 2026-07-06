@@ -45,7 +45,7 @@ const frozenHouseRow = buildShippingMarginRow({
   billingTotalCost: '10.00',
   projectedBillableAmount: null,
   projectedBillableSource: null,
-  houseCustomerRate: '10.00',
+  cShippingRateAmount: '10.00',
 } satisfies ShippingMarginInputRow);
 check('frozen row uses shipment cost + other cost as actual postage',
   frozenHouseRow.actualShippingCost === 7 &&
@@ -58,7 +58,7 @@ check('frozen row computes margin and pct from backend-owned values',
   frozenHouseRow.marginAmount === 3 &&
   frozenHouseRow.marginPct === 42.86);
 check('frozen row carries house provenance without exposing it as the billable source',
-  frozenHouseRow.houseCustomerRate === 10 &&
+  frozenHouseRow.cShippingRateAmount === 10 &&
   frozenHouseRow.missingProofReasons.length === 0);
 
 const projectedHouseRow = buildShippingMarginRow({
@@ -75,12 +75,12 @@ const projectedHouseRow = buildShippingMarginRow({
   billingTotalCost: null,
   projectedBillableAmount: null,
   projectedBillableSource: null,
-  houseCustomerRate: '12.00',
+  cShippingRateAmount: '12.00',
 } satisfies ShippingMarginInputRow);
 check('projected house row uses explicit order_competitive_rate customer rate source',
   projectedHouseRow.state === 'projected' &&
   projectedHouseRow.billableShippingAmount === 12 &&
-  projectedHouseRow.billableSource === 'order_competitive_rate.customer_rate' &&
+  projectedHouseRow.billableSource === 'order_competitive_rate.customer_shipping_rate' &&
   projectedHouseRow.actualCostSource === 'shipments.label_cost_plus_other_cost' &&
   projectedHouseRow.missingProofReasons.length === 0);
 
@@ -98,7 +98,7 @@ const missingActualOnlyRow = buildShippingMarginRow({
   billingTotalCost: null,
   projectedBillableAmount: '9.00',
   projectedBillableSource: 'projected.billing_policy',
-  houseCustomerRate: null,
+  cShippingRateAmount: null,
 } satisfies ShippingMarginInputRow);
 check('projected row without postage proof is explicitly missing actual-cost proof only',
   missingActualOnlyRow.state === 'projected' &&
@@ -121,7 +121,7 @@ const missingBillableRow = buildShippingMarginRow({
   billingTotalCost: null,
   projectedBillableAmount: null,
   projectedBillableSource: null,
-  houseCustomerRate: null,
+  cShippingRateAmount: null,
 } satisfies ShippingMarginInputRow);
 check('missing billable row is explicit and does not invent margin',
   missingBillableRow.state === 'missing_billable' &&

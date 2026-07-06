@@ -735,6 +735,7 @@ export async function generateLineItems(input: GenerateInput) {
       // read by the invoice shipping line so TS + SQL share one value. NULL for
       // un-backfilled rows -> the reader falls back to cost/labelCost + otherCost.
       selectedRateCost: shipments.selectedRateCost,
+      selectedRateJson: shipments.selectedRateJson,
       carrierCode: shipments.carrierCode,
       // #798 2c (fixed): the shipment's reliably-written provider ACCOUNT id (sync + labels both write
       // it; carrierAccountId was NULL on synced rows). Keys settings markup.<account> in the SAME
@@ -797,6 +798,7 @@ export async function generateLineItems(input: GenerateInput) {
     cost: string | null;
     otherCost: string | null;
     selectedRateCost: string | null;
+    selectedRateJson: unknown;
     carrierCode: string | null;
     providerAccountId: number | null;
     selectedPid: number | null;
@@ -844,6 +846,7 @@ export async function generateLineItems(input: GenerateInput) {
         cost: row.cost,
         otherCost: row.otherCost,
         selectedRateCost: row.selectedRateCost,
+        selectedRateJson: row.selectedRateJson,
         carrierCode: row.carrierCode,
         providerAccountId: row.providerAccountId,
         selectedPid: row.selectedPid,
@@ -1136,16 +1139,17 @@ export async function generateLineItems(input: GenerateInput) {
       });
     }
 
-    // v2 bills shipmentCost + otherCost from the synced shipment row. In v4
-    // that source column is `cost`; `labelCost` is only a fallback for rows
-    // created before the synced cost was available.
-    // PS-370: prefer the persisted normalized total (shipments.selected_rate_cost)
-    // so this line and the HUGRAB floor SQL read ONE value. NULL (un-backfilled)
-    // -> the exact prior derivation, so this is byte-identical until Phase 2.
-    const persistedSelectedRateCost = toFiniteNumber(s.selectedRateCost);
-    const labelCost = persistedSelectedRateCost != null
-      ? persistedSelectedRateCost
-      : (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
+    // Per user override unlock shipped data on 2026-07-06: PS-381 makes billing
+    // generation delegate selected/purchased shipping cost to the same backend
+    // resolver used by billing detail and the backfill planner. This reads only
+    // shipment proof fields and does not mutate shipments.
+    const labelCost = resolveBillingSelectedRateCost({
+      selectedRateCost: s.selectedRateCost,
+      cost: s.cost,
+      labelCost: s.labelCost,
+      otherCost: s.otherCost,
+      selectedRateJson: s.selectedRateJson,
+    }) ?? 0;
     if (bundleTreatment.kind === 'included-in-bundle') {
       // PS-312 S5: bundle child — shipping is billed ONCE on the primary. Emit a $0 "Included" line in
       // the shipping slot (mirrors the shipping_missing/$0 pattern; the unique (order_id, line_type,

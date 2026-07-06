@@ -323,6 +323,7 @@
     "test:ps-392-manual-billing-overrides": "tsx scripts/ps-392-manual-billing-overrides-guard.ts",
     "test:hugrab-cancelled-billing-guard": "tsx scripts/hugrab-cancelled-billing-guard.ts",
     "test:ps-370-selected-rate-cost-backfill": "tsx scripts/ps-370-selected-rate-cost-backfill-guard.ts",
+    "test:ps-381-selected-rate-cost-sot": "tsx scripts/ps-381-selected-rate-cost-sot-guard.ts",
     "test:ps-309-voided-label-display": "tsx scripts/ps-309-voided-label-display-guard.ts",
     "test:ps-311-bulk-box-cost-preview": "tsx scripts/ps-311-bulk-box-cost-preview-guard.ts",
     "test:ps-311-bulk-box-cost-integration": "tsx scripts/ps-311-bulk-box-cost-integration.ts",

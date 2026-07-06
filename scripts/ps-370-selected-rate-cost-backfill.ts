@@ -19,14 +19,14 @@ import {
  * NULL-safety only afterward.
  *
  * SAFETY (per CLAUDE.md shipped/cancelled lockdown):
+ *   - Per user override unlock shipped data on 2026-07-06: PS-381 is authorized
+ *     to write ONLY shipments.selected_rate_cost after dry-run review.
  *   - DRY-RUN by DEFAULT. Prints what WOULD change; writes NOTHING.
  *   - `--apply` is DOUBLE-GATED: it ALSO requires `--confirm-production`, so it
  *     can never mutate shipped rows by accident.
- *   - BYTE-IDENTICAL by construction: a row is only written when the value equals
- *     what BOTH billing readers already derive for it (cost/labelCost present).
- *     Rows with no recorded cost (reader-divergent) are SKIPPED and left NULL, so
- *     no billed/selected number ever changes — the column just persists the value
- *     already returned on read.
+ *   - A row is only written when the backend selected-rate resolver can prove a
+ *     durable cost from selected-rate JSON total or from cost/labelCost + otherCost.
+ *     Rows with no durable proof are SKIPPED and left NULL for review.
  *   - Writes ONLY shipments.selected_rate_cost, ONLY where it is currently NULL.
  *     NEVER touches cost/labelCost/otherCost/selectedRateJson, carrier/service/
  *     tracking, order status, dims, weight, package, items, or any other row.

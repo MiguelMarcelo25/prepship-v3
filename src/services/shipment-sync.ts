@@ -5,6 +5,7 @@ import { shipments } from '../db/schema/shipments';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost';
 import { clients } from '../db/schema/clients';
 import { listShipStationShipments } from '../connectors/store/shipstation';
+import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import {
   listShipStationV2Labels,
   listShipStationV2Shipments,
@@ -298,9 +299,16 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
       // an un-backfilled row stays NULL and reads its fallback.
       toUpdate.push({ id: existing.id, values });
     } else {
-      // NEW synced row: otherCost defaults to '0', so the normalized total IS the
-      // synced cost (postage + 0), byte-consistent with every reader's fallback.
-      values.selectedRateCost = toNumeric(s.shipmentCost);
+      // Per user override unlock shipped data on 2026-07-06: PS-381 stamps the
+      // selected/purchased cost SOT on NEW ShipStation sync rows only. Updates
+      // still leave existing selected_rate_cost untouched to avoid rewriting
+      // historical shipment truth.
+      values.otherCost = toNumeric(s.insuranceCost) ?? '0.00';
+      values.selectedRateCost = resolveBillingSelectedRateCost({
+        cost: values.cost,
+        otherCost: values.otherCost,
+        selectedRateJson: null,
+      })?.toFixed(2) ?? null;
       toInsert.push(values);
     }
 

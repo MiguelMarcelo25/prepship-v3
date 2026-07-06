@@ -1,9 +1,9 @@
 /**
  * PS-370 Phase 2 — backfill planner guard (offline, no db).
  *
- * Proves the HISTORY backfill can never change a billed number:
- *   - affected rows write EXACTLY what both billing readers already derive;
- *   - reader-divergent / no-cost rows are SKIPPED (left NULL);
+ * Proves the HISTORY backfill writes only durable selected-cost proof:
+ *   - affected rows write resolver-proven JSON total or postage + other;
+ *   - no-cost/no-JSON-proof rows are SKIPPED (left NULL);
  *   - already-set rows are idempotently skipped (never overwritten);
  *   - the script is dry-run-first + double-gated and writes ONLY the column.
  *
@@ -24,7 +24,7 @@ function check(name: string, cond: boolean, detail?: string) {
 const read = (p: string) => readFileSync(p, 'utf8');
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-// The billing-generate reader's exact fallback (used to prove byte-identity).
+// The billing-generate component fallback for rows with postage proof.
 const toNum = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const generateReader = (r: { cost?: unknown; labelCost?: unknown; otherCost?: unknown }) =>
   round2((toNum(r.cost) || toNum(r.labelCost)) + toNum(r.otherCost));
@@ -50,13 +50,13 @@ for (const f of [
     `plan=${plan.value} gen=${gen} res=${res}`);
 }
 
-// ── reader-divergent / no-cost rows: SKIPPED, left NULL (no number change) ────
+// ── JSON-total proof is durable; no-proof rows are SKIPPED, left NULL ─────────
 {
-  // cost+labelCost both null, but JSON has a total: generate=$otherCost, resolver=JSON+other → diverge.
+  // PS-381: cost+labelCost both null, but selected-rate JSON has a total.
   const r = row({ cost: null, labelCost: null, otherCost: '2.00', selectedRateJson: { shipmentCost: 5, totalCost: 7 } });
   const plan = planSelectedRateCostBackfillRow(r);
-  check('reader-divergent (no cost, JSON-only) is SKIPPED and left NULL',
-    !plan.affected && plan.value === null && plan.skipReason === 'no_recorded_cost');
+  check('JSON-total proof is backfilled from the resolver',
+    plan.affected && plan.value === 7 && plan.skipReason === null);
 }
 {
   // No cost data at all.

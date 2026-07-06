@@ -6,6 +6,7 @@ import { orderCompetitiveRate } from '../db/schema/order-competitive-rate';
 import { shipments } from '../db/schema/shipments';
 import { intArraySql, normalizeScopeIds } from '../lib/scope-sql';
 import { resolveShippingMarginAccountLabels } from './shipping-margin-account-labels';
+import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import {
   isShippBrokeredServiceCode,
   SHIPP_BROKERED_ACCOUNT_LABEL,
@@ -13,6 +14,8 @@ import {
 
 export type ShippingMarginState = 'frozen_billing' | 'projected' | 'missing_billable';
 export type ShippingMarginActualCostSource =
+  | 'shipments.selected_rate_cost'
+  | 'shipments.selected_rate_json_total'
   | 'shipments.cost_plus_other_cost'
   | 'shipments.label_cost_plus_other_cost'
   | 'shipments.other_cost_only'
@@ -41,6 +44,8 @@ export type ShippingMarginInputRow = {
   shipmentCost: string | number | null;
   shipmentLabelCost: string | number | null;
   shipmentOtherCost: string | number | null;
+  selectedRateCost?: string | number | null;
+  selectedRateJson?: unknown;
   billingLineItemId: number | string | null;
   billingTotalCost: string | number | null;
   projectedBillableAmount: string | number | null;
@@ -175,6 +180,23 @@ function resolveActualCost(row: ShippingMarginInputRow): {
   amount: number | null;
   source: ShippingMarginActualCostSource;
 } {
+  // Per user override unlock shipped data on 2026-07-06: PS-381 makes Shipping
+  // Margin consume the same selected/purchased shipment cost SOT as Billing
+  // detail/generation. Read-only analytics only; no shipment rows are mutated.
+  const selectedRateCost = resolveBillingSelectedRateCost({
+    selectedRateCost: row.selectedRateCost,
+    cost: row.shipmentCost,
+    labelCost: row.shipmentLabelCost,
+    otherCost: row.shipmentOtherCost,
+    selectedRateJson: row.selectedRateJson,
+  });
+  if (selectedRateCost != null) {
+    const persisted = numberOrNull(row.selectedRateCost);
+    if (persisted != null) {
+      return { amount: money(selectedRateCost), source: 'shipments.selected_rate_cost' };
+    }
+  }
+
   const shipmentCost = numberOrNull(row.shipmentCost);
   const labelCost = numberOrNull(row.shipmentLabelCost);
   const otherCost = numberOrNull(row.shipmentOtherCost) ?? 0;
@@ -184,6 +206,9 @@ function resolveActualCost(row: ShippingMarginInputRow): {
   }
   if (labelCost != null && labelCost > 0) {
     return { amount: money(labelCost + otherCost), source: 'shipments.label_cost_plus_other_cost' };
+  }
+  if (selectedRateCost != null) {
+    return { amount: money(selectedRateCost), source: 'shipments.selected_rate_json_total' };
   }
   if (otherCost > 0) {
     return { amount: money(otherCost), source: 'shipments.other_cost_only' };
@@ -474,6 +499,8 @@ export async function shippingMarginAnalytics(
       ${shipments.cost}::text as "shipmentCost",
       ${shipments.labelCost}::text as "shipmentLabelCost",
       ${shipments.otherCost}::text as "shipmentOtherCost",
+      ${shipments.selectedRateCost}::text as "selectedRateCost",
+      ${shipments.selectedRateJson} as "selectedRateJson",
       bli.billing_line_item_id as "billingLineItemId",
       bli.billing_total_cost as "billingTotalCost",
       null::numeric as "projectedBillableAmount",

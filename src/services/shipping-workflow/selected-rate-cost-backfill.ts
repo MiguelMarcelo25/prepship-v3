@@ -8,16 +8,10 @@ import { resolveBillingSelectedRateCost } from '../billing-selected-rate-cost';
  * derived value into the column for existing (incl. shipped) rows — so after backfill
  * the read-time fallback becomes NULL-safety only.
  *
- * BYTE-IDENTITY GATE (the safety keystone): a row is only `affected` when the value
- * to write equals what BOTH the billing-generate reader `(cost||labelCost)+otherCost`
- * AND resolveBillingSelectedRateCost derive for it. In practice that is exactly the
- * rows where `cost` or `labelCost` is present (postage known) — there all three
- * readers agree, so writing the column changes NO billed number. Rows with neither
- * cost nor labelCost (JSON-only / no recorded cost) are the "agree only by luck"
- * divergent case where the generate reader ($0) and the resolver (JSON/normalizer)
- * can disagree; those are SKIPPED and left NULL so both readers keep their exact
- * current behavior. The backfill therefore never mutates a money value — it only
- * persists a value already returned on read.
+ * SAFETY GATE: a row is only `affected` when the backend resolver can prove a
+ * durable selected-rate cost from either the selected-rate JSON total or from
+ * `(cost || labelCost) + otherCost` where postage proof exists. Rows with neither
+ * proof are SKIPPED and left NULL for review.
  *
  * Pure: numbers/JSON in, a plan out. No db, no io — the script builds the rows and
  * the guard exercises the full matrix offline.
@@ -70,26 +64,31 @@ export function planSelectedRateCostBackfillRow(row: SelectedRateCostBackfillRow
     return { ...base, affected: false, value: null, skipReason: 'already_set' };
   }
 
-  // Postage must be known (cost or labelCost) for the readers to agree. Without it
-  // the generate reader yields $0 while the resolver may read the JSON total — the
-  // divergent case. Leave NULL so neither reader's number changes.
-  const postage = toFiniteNumber(row.cost) ?? toFiniteNumber(row.labelCost);
-  if (postage == null) {
-    return { ...base, affected: false, value: null, skipReason: 'no_recorded_cost' };
-  }
-
-  // The billing-generate reader's EXACT formula.
-  const generateValue = round2((toNum(row.cost) || toNum(row.labelCost)) + toNum(row.otherCost));
-  // The billing-details resolver (column omitted → its component derivation).
+  // Per user override unlock shipped data on 2026-07-06: PS-381 backfills only
+  // shipments.selected_rate_cost, and only when durable shipment cost proof
+  // exists. Selected-rate JSON totals are durable proof; rows without JSON total
+  // or postage proof stay NULL for review.
   const resolverValue = resolveBillingSelectedRateCost({
     cost: row.cost,
     labelCost: row.labelCost,
     otherCost: row.otherCost,
     selectedRateJson: row.selectedRateJson,
   });
+  if (resolverValue == null) {
+    return { ...base, affected: false, value: null, skipReason: 'no_recorded_cost' };
+  }
 
-  // Byte-identity gate: only write when the two readers already agree to the cent.
-  if (resolverValue == null || round2(resolverValue) !== generateValue) {
+  const postage = toFiniteNumber(row.cost) ?? toFiniteNumber(row.labelCost);
+  if (postage == null) {
+    return { ...base, affected: true, value: round2(resolverValue), skipReason: null };
+  }
+
+  // The billing-generate reader's component formula. When postage proof exists,
+  // keep the byte-identity gate so a conflicting JSON blob cannot overwrite the
+  // component truth.
+  const generateValue = round2((toNum(row.cost) || toNum(row.labelCost)) + toNum(row.otherCost));
+
+  if (round2(resolverValue) !== generateValue) {
     return { ...base, affected: false, value: null, skipReason: 'reader_divergent' };
   }
 

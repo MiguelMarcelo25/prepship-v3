@@ -576,6 +576,7 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
   const ssShipmentId = Number(String(label.shipment_id ?? '').replace(/^se-/, ''));
   // Per user override unlock shipped data on 2026-05-23: normalize nested ShipStation label downloads before shipment persistence so queue recovery receives a plain URL string.
   const labelUrl = extractShipstationLabelUrl(label.label_download);
+  await ensureShipmentsSelectedRateCostColumn();
   const [row] = await db
     .insert(shipments)
     .values({
@@ -593,6 +594,9 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
       labelService: label.service_code,
       labelTracking: label.tracking_number,
       labelCost: label.shipment_cost.amount.toFixed(2),
+      // Per user override unlock shipped data on 2026-07-06: PS-381 stamps the
+      // selected/purchased shipment cost SOT on new legacy ShipStation label rows.
+      selectedRateCost: label.shipment_cost.amount.toFixed(2),
       labelShipDate: shipDate,
       labelShipmentId: Number.isFinite(ssShipmentId) ? ssShipmentId : null,
       voided: !!label.voided,
@@ -1381,6 +1385,7 @@ async function createLabelV2Impl(
     saveMockLabel(fakeShipmentId, { ...mockData, pdfBase64 });
 
     const createdAt = new Date();
+    await ensureShipmentsSelectedRateCostColumn();
     await db
       .insert(shipments)
       .values({
@@ -1404,6 +1409,9 @@ async function createLabelV2Impl(
         labelService: body.serviceCode,
         labelTracking: fakeTracking,
         labelCost: '0.00',
+        // Per user override unlock shipped data on 2026-07-06: PS-381 stamps
+        // the selected-rate SOT even for offline/test shipment rows with $0 proof.
+        selectedRateCost: '0.00',
         labelShipDate: createdAt,
         labelShipmentId: fakeShipmentId,
         selectedPackageId: resolvedPackageId != null ? String(resolvedPackageId) : null,
@@ -1958,6 +1966,7 @@ async function createMockShipmentForOrder(args: {
   }
   saveMockLabel(fakeShipmentId, { ...mockData, pdfBase64 });
 
+  await ensureShipmentsSelectedRateCostColumn();
   const [row] = await db
     .insert(shipments)
     .values({
@@ -1978,6 +1987,9 @@ async function createMockShipmentForOrder(args: {
       labelService: serviceCode,
       labelTracking: fakeTracking,
       labelCost: '0.00',
+      // Per user override unlock shipped data on 2026-07-06: PS-381 stamps
+      // the selected-rate SOT even for offline/test shipment rows with $0 proof.
+      selectedRateCost: '0.00',
       labelShipDate: createdAt,
       labelShipmentId: fakeShipmentId,
       source: 'test_offline',
@@ -2266,6 +2278,7 @@ export async function createReturnLabelV2(
   const result = await ssCreateReturnLabel(row.labelShipmentId, reason, creds.apiKeyV2 ?? undefined);
   const now = new Date();
 
+  await ensureShipmentsSelectedRateCostColumn();
   const [newShipment] = await db
     .insert(shipments)
     .values({
@@ -2285,6 +2298,9 @@ export async function createReturnLabelV2(
       labelService: row.serviceCode,
       labelTracking: result.returnTrackingNumber,
       labelCost: result.cost.toFixed(2),
+      // Per user override unlock shipped data on 2026-07-06: PS-381 stamps the
+      // selected/purchased cost SOT on return shipment rows when postage proof exists.
+      selectedRateCost: result.cost.toFixed(2),
       labelShipDate: now,
       labelShipmentId: result.returnShipmentId,
       source: 'prepship_v2',

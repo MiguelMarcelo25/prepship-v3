@@ -104,10 +104,12 @@ check('runtime ensure exists (belt-and-suspenders, additive only)',
 
 const billing = read('src/services/billing.ts');
 check('reader (billing generate) prefers the persisted column, falls back to cost/labelCost + otherCost',
-  /const persistedSelectedRateCost = toFiniteNumber\(s\.selectedRateCost\)/.test(billing) &&
-  /persistedSelectedRateCost != null[\s\S]{0,120}\(toNum\(s\.cost\) \|\| toNum\(s\.labelCost\)\) \+ toNum\(s\.otherCost\)/.test(billing));
+  /const labelCost = resolveBillingSelectedRateCost\(\{/.test(billing) &&
+  /selectedRateCost: s\.selectedRateCost/.test(billing) &&
+  /selectedRateJson: s\.selectedRateJson/.test(billing));
 check('reader (billing generate) SELECTs the new column',
-  /selectedRateCost: shipments\.selectedRateCost/.test(billing));
+  /selectedRateCost: shipments\.selectedRateCost/.test(billing) &&
+  /selectedRateJson: shipments\.selectedRateJson/.test(billing));
 check('reader (billingDetails) threads the column into resolveBillingSelectedRateCost',
   /selectedRateCost: row\.selectedRateCost \?\? fallbackShipment\?\.selectedRateCost/.test(billing));
 
@@ -139,7 +141,8 @@ check('label writer populates the column = postage + other (byte-consistent with
   /await ensureShipmentsSelectedRateCostColumn\(\);/.test(labels));
 const sync = read('src/services/shipment-sync.ts');
 check('sync writer populates the column on NEW inserts only (never on update — preserves otherCost)',
-  /values\.selectedRateCost = toNumeric\(s\.shipmentCost\)/.test(sync) &&
+  /values\.otherCost = toNumeric\(s\.insuranceCost\) \?\? '0\.00'/.test(sync) &&
+  /values\.selectedRateCost = resolveBillingSelectedRateCost\(\{/.test(sync) &&
   /if \(toInsert\.length\) await ensureShipmentsSelectedRateCostColumn\(\)/.test(sync));
 
 // ── 5) safety: no shipped-row MUTATION in Phase 1 (additive column only) ─────
