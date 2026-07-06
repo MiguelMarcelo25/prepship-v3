@@ -48,13 +48,13 @@ const houseAwaiting = buildOrderRowMoneyDisplay({
 });
 
 check(
-  'backend money tuple uses rateCostAmount as the canonical internal cost',
+  'backend money tuple uses selectedRateCost as the canonical internal cost',
   houseAwaiting?.markupSource === 'house_account' &&
-    houseAwaiting.customerRateAmount === 14.25 &&
-    houseAwaiting.rateCostAmount === 10.55 &&
+    houseAwaiting.cShippingRateAmount === 14.25 &&
+    houseAwaiting.selectedRateCost === 10.55 &&
     closeTo(houseAwaiting.shippingMarginAmount, 3.7) &&
     houseAwaiting.insuranceAddOn === 1.25 &&
-    houseAwaiting.customerRateSource === 'projected_house_customer_rate',
+    houseAwaiting.customerRateSource === 'projected_house_c_shipping_rate',
   houseAwaiting,
 );
 
@@ -72,19 +72,20 @@ const normalizedHouseBest = normalizeOrderBestRateDto({
     totalCost: 14.25,
   },
   houseMargin: 3.7,
-  customerRateAmount: 14.25,
-  rateCostAmount: 10.55,
-  houseRateAmount: 99.99,
+  cShippingRateAmount: 14.25,
+  selectedRateCost: 10.55,
   shippingMarginAmount: 3.7,
   houseApplied: true,
   houseBadgeVisible: true,
 });
 
 check(
-  'OrderBestRateDto ignores drifting houseRateAmount and derives the deprecated alias from rateCostAmount',
-  normalizedHouseBest?.customerRateAmount === 14.25 &&
-    normalizedHouseBest.rateCostAmount === 10.55 &&
-    (normalizedHouseBest as any).houseRateAmount === 10.55,
+  'OrderBestRateDto exposes canonical C. Shipping and selected-rate cost only',
+  normalizedHouseBest?.cShippingRateAmount === 14.25 &&
+    normalizedHouseBest.selectedRateCost === 10.55 &&
+    !('customerRateAmount' in (normalizedHouseBest as any)) &&
+    !('rateCostAmount' in (normalizedHouseBest as any)) &&
+    !('houseRateAmount' in (normalizedHouseBest as any)),
   normalizedHouseBest,
 );
 
@@ -133,24 +134,21 @@ check(
 const redactedOrder = redactOrderFinancials(
   {
     shipping: {
-      customerRateAmount: 14.25,
-      rateCostAmount: 10.55,
-      houseRateAmount: 10.55,
+      cShippingRateAmount: 14.25,
+      selectedRateCost: 10.55,
       shippingMarginAmount: 3.7,
     },
     overrides: {
       bestRateJson: {
-        customerRateAmount: 14.25,
-        rateCostAmount: 10.55,
-        houseRateAmount: 10.55,
+        cShippingRateAmount: 14.25,
+        selectedRateCost: 10.55,
         shippingMarginAmount: 3.7,
       },
     },
     bestRateWorkflow: {
       money: {
-        customerRateAmount: 14.25,
-        rateCostAmount: 10.55,
-        houseRateAmount: 10.55,
+        cShippingRateAmount: 14.25,
+        selectedRateCost: 10.55,
         shippingMarginAmount: 3.7,
       },
     },
@@ -159,37 +157,35 @@ const redactedOrder = redactOrderFinancials(
 ) as any;
 
 check(
-  'order financial redaction hides internal cost and deprecated house alias from non-financial viewers',
+  'order financial redaction hides canonical shipping money from non-financial viewers',
   redactedOrder.bestRateWorkflow.money === null &&
-    redactedOrder.shipping.rateCostAmount === null &&
-    redactedOrder.shipping.houseRateAmount === null &&
-    redactedOrder.overrides.bestRateJson.rateCostAmount === null &&
-    redactedOrder.overrides.bestRateJson.houseRateAmount === null,
+    redactedOrder.shipping.cShippingRateAmount === null &&
+    redactedOrder.shipping.selectedRateCost === null &&
+    redactedOrder.overrides.bestRateJson.cShippingRateAmount === null &&
+    redactedOrder.overrides.bestRateJson.selectedRateCost === null,
   redactedOrder,
 );
 
 const redactedBrowse = redactRateBrowserMoney({
   bestRate: {
     carrier_code: 'ups',
-    customerRateAmount: 14.25,
-    rateCostAmount: 10.55,
-    houseRateAmount: 10.55,
+    cShippingRateAmount: 14.25,
+    selectedRateCost: 10.55,
     shippingMarginAmount: 3.7,
   },
 }) as any;
 
 check(
-  'rate-browser redaction hides internal cost and deprecated house alias from non-financial viewers',
+  'rate-browser redaction hides canonical shipping money from non-financial viewers',
   redactedBrowse.bestRate.carrier_code === 'ups' &&
-    redactedBrowse.bestRate.rateCostAmount === null &&
-    redactedBrowse.bestRate.houseRateAmount === null &&
-    redactedBrowse.bestRate.customerRateAmount === null,
+    redactedBrowse.bestRate.selectedRateCost === null &&
+    redactedBrowse.bestRate.cShippingRateAmount === null,
   redactedBrowse,
 );
 
 const billingDecision = decideShippingLineBilling({
   labelCost: 10.55,
-  houseCustomerRate: 14.25,
+  cShippingRateAmount: 14.25,
   billingMode: 'label_cost',
   isBaselineCarrier: false,
   refUspsRate: 8,
@@ -201,7 +197,7 @@ const billingDecision = decideShippingLineBilling({
 check(
   'billing charges customer Selected Rate, not Rate Cost',
   billingDecision.billedAmount === 14.25 &&
-    billingDecision.source === 'house_customer_rate' &&
+    billingDecision.source === 'c_shipping_rate' &&
     billingDecision.markupApplied === false,
   billingDecision,
 );
@@ -226,25 +222,25 @@ const invoiceCsv = renderInvoiceCsvRow({
 
 check(
   'invoice CSV carries customer shipping amount and no internal cost column',
-  invoiceCsv.includes('14.25') && !/House Rate|houseRateAmount|Rate Cost|rateCostAmount|10\.55/.test(invoiceCsv),
+  invoiceCsv.includes('14.25') && !/House Rate|houseRateAmount|Rate Cost|rateCostAmount|selectedRateCost|10\.55/.test(invoiceCsv),
   invoiceCsv,
 );
 
 const rateMoneySrc = read('src/services/shipping-workflow/rate-money.ts');
 check(
-  'backend money owner documents houseRateAmount as deprecated compatibility alias only',
-  /rateCostAmount:\s*number\s*\|\s*null/.test(rateMoneySrc) &&
-    /deprecated compatibility alias/i.test(rateMoneySrc) &&
-    /houseRateAmount:\s*input\.houseApplied && rateCostAmount != null \? round2\(rateCostAmount\) : null/.test(rateMoneySrc),
+  'backend money owner documents canonical shipping money only',
+  /cShippingRateAmount:\s*number\s*\|\s*null/.test(rateMoneySrc) &&
+    /selectedRateCost:\s*number\s*\|\s*null/.test(rateMoneySrc) &&
+    !/\bcustomerRateAmount\b|\brateCostAmount\b|\bhouseRateAmount\b/.test(rateMoneySrc),
 );
 
 const houseStampSrc = read('src/services/shipping-workflow/house-tuple-stamp.ts');
 check(
-  'house tuple stamping no longer writes houseRateAmount as an independent persisted field',
+  'house tuple stamping writes canonical C. Shipping and selected-rate cost fields',
   !/houseRateAmount\s*:/.test(houseStampSrc) &&
     !/house_rate_amount\s*:/.test(houseStampSrc) &&
-    /rateCostAmount:\s*drpCost/.test(houseStampSrc) &&
-    /rate_cost_amount:\s*drpCost/.test(houseStampSrc),
+    /cShippingRateAmount:\s*customerRate/.test(houseStampSrc) &&
+    /selectedRateCost:\s*drpCost/.test(houseStampSrc),
 );
 
 const columnsSrc = read('web/src/components/Views/orders-table-columns.ts');

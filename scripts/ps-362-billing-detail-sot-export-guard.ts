@@ -55,7 +55,7 @@ const detailRows = toBillingDetailOrderRows([
     orderNumber: 'PS362-A',
     lineType: 'shipping',
     totalCost: '8.00',
-    actualLabelCost: 7,
+    selectedRateCost: 7,
     carrierNickname: 'USPS Chase x7439',
     shippingZeroNeedsReview: true,
   },
@@ -68,7 +68,7 @@ check('backend order row keeps pick/pack, addl, box, and shipping totals',
   detailRows[0]?.packageTotal === 0.75 &&
   detailRows[0]?.shippingTotal === 8);
 check('backend order row carries rich shipping fields and review flags',
-  detailRows[0]?.actualLabelCost === 7 &&
+  detailRows[0]?.selectedRateCost === 7 &&
   detailRows[0]?.carrierNickname === 'USPS Chase x7439' &&
   detailRows[0]?.shippingZeroNeedsReview === true);
 

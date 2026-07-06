@@ -74,18 +74,18 @@ const houseAwaiting = buildOrderRowMoneyDisplay({
   houseMarkedAmount: 8.05,
 });
 check('runtime fixture separates house customer rate from SHIPP internal rate cost',
-  houseAwaiting?.customerRateAmount === 8.05 &&
-    houseAwaiting.rateCostAmount === 7.75 &&
+  houseAwaiting?.cShippingRateAmount === 8.05 &&
+    houseAwaiting.selectedRateCost === 7.75 &&
     closeTo(houseAwaiting.shippingMarginAmount, 0.3) &&
-    houseAwaiting.customerRateSource === 'projected_house_customer_rate' &&
+    houseAwaiting.customerRateSource === 'projected_house_c_shipping_rate' &&
     houseAwaiting.rateCostSource === 'shipp_house_internal_cost',
   houseAwaiting);
 
 const splitRate = {
   shipping_amount: { amount: 8.5 },
   other_amount: { amount: 0 },
-  customerRateAmount: 12,
-  rateCostAmount: 8.5,
+  cShippingRateAmount: 12,
+  selectedRateCost: 8.5,
 };
 check('runtime fixture keeps customer billing separate from DJR purchase cost',
   rateTotal(splitRate) === 12 && rateCostTotal(splitRate) === 8.5);
@@ -99,30 +99,30 @@ const normalized = normalizeOrderBestRateDto({
   houseMargin: 1.14,
 });
 check('runtime fixture derives separated fields for older house best-rate rows',
-  normalized?.customerRateAmount === 9.64 &&
-    normalized.rateCostAmount === 8.5 &&
+  normalized?.cShippingRateAmount === 9.64 &&
+    normalized.selectedRateCost === 8.5 &&
     normalized.shippingMarginAmount === 1.14 &&
     normalized.houseApplied === true,
   normalized);
 
 const redactedOrder = redactOrderFinancials({
   shipping: {
-    customerRateAmount: 12,
-    rateCostAmount: 8.5,
+    cShippingRateAmount: 12,
+    selectedRateCost: 8.5,
     shippingMarginAmount: 3.5,
     shippingMarginPct: 29.2,
   },
   bestRateWorkflow: {
     money: {
-      customerRateAmount: 12,
-      rateCostAmount: 8.5,
+      cShippingRateAmount: 12,
+      selectedRateCost: 8.5,
       shippingMarginAmount: 3.5,
     },
   },
 }, false) as any;
 check('runtime fixture redacts internal order money fields from non-financial viewers',
-  redactedOrder.shipping.customerRateAmount === null &&
-    redactedOrder.shipping.rateCostAmount === null &&
+  redactedOrder.shipping.cShippingRateAmount === null &&
+    redactedOrder.shipping.selectedRateCost === null &&
     redactedOrder.shipping.shippingMarginAmount === null &&
     redactedOrder.bestRateWorkflow.money === null,
   redactedOrder);
@@ -130,23 +130,23 @@ check('runtime fixture redacts internal order money fields from non-financial vi
 const redactedRateBrowser = redactRateBrowserMoney({
   bestRate: {
     service_code: 'shipp_ups_ground',
-    customerRateAmount: 12,
-    rateCostAmount: 8.5,
+    cShippingRateAmount: 12,
+    selectedRateCost: 8.5,
     shippingMarginAmount: 3.5,
     rateCostSource: 'shipp_house_internal_cost',
   },
 }) as any;
 check('runtime fixture redacts internal Rate Browser money fields from non-financial viewers',
   redactedRateBrowser.bestRate.service_code === 'shipp_ups_ground' &&
-    redactedRateBrowser.bestRate.customerRateAmount === null &&
-    redactedRateBrowser.bestRate.rateCostAmount === null &&
+    redactedRateBrowser.bestRate.cShippingRateAmount === null &&
+    redactedRateBrowser.bestRate.selectedRateCost === null &&
     redactedRateBrowser.bestRate.shippingMarginAmount === null &&
     redactedRateBrowser.bestRate.rateCostSource === null,
   redactedRateBrowser);
 
 check('backend money owner declares separated PS-308 field names and sources',
-  /customerRateAmount/.test(rateMoney) &&
-    /rateCostAmount/.test(rateMoney) &&
+  /cShippingRateAmount/.test(rateMoney) &&
+    /selectedRateCost/.test(rateMoney) &&
     /shippingMarginAmount/.test(rateMoney) &&
     /customerRateSource/.test(rateMoney) &&
     /rateCostSource/.test(rateMoney));
@@ -155,14 +155,12 @@ check('combined-rate owner documents customer total as Best Rate basis and inter
     /not the primary Best Rate pick basis/.test(ratesCombined) &&
     /marked\/customer-rate basis/.test(ratesCombined));
 check('OrderBestRateDto preserves separated fields',
-  /customerRateAmount/.test(orderRateDto) &&
-    /rateCostAmount/.test(orderRateDto) &&
+  /cShippingRateAmount/.test(orderRateDto) &&
+    /selectedRateCost/.test(orderRateDto) &&
     /shippingMarginAmount/.test(orderRateDto));
 check('redaction owners scrub separated DJR purchase cost and margin fields',
-  /rateCostAmount/.test(orderRedaction) &&
-    /shippingMarginAmount/.test(orderRedaction) &&
-    /rateCostAmount/.test(rateBrowserRedaction) &&
-    /shippingMarginAmount/.test(rateBrowserRedaction));
+  /CANONICAL_SHIPPING_RATE_MONEY_KEYS/.test(orderRedaction) &&
+    /CANONICAL_SHIPPING_RATE_MONEY_KEYS/.test(rateBrowserRedaction));
 // PS-308 (2026-06-23): the Rate Browser row was corrected to the SEPARATED form — the customer
 // comparison rate is the primary price and the internal DJR Purchase Cost is a delineated admin block;
 // Margin is NOT rendered in the row (it lives in the Awaiting/Shipped columns, per the card's Rate

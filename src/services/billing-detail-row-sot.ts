@@ -169,7 +169,6 @@ const VALUE_CARRY_FIELDS = [
   'trackingNumber',
   'totalQty',
   'selectedRateCost',
-  'actualLabelCost',
   'refUpsRate',
   'refUspsRate',
   'feeWaiverDecision',

@@ -65,9 +65,9 @@ check('billingDetails delegates selected-rate cost to the backend owner',
   billingService.includes("from './billing-selected-rate-cost'") &&
   billingService.includes('resolveBillingSelectedRateCost({'));
 
-check('billingDetails emits selectedRateCost and a deprecated compatibility alias',
+check('billingDetails emits only canonical selectedRateCost',
   /selectedRateCost:\s*isShippingLine \? selectedRateCost : null/.test(billingService) &&
-  /actualLabelCost:\s*isShippingLine \? selectedRateCost : null/.test(billingService));
+  !/actualLabelCost/.test(billingService));
 
 // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto); the
 // snake_case 'selected_rate_cost' twin was intentionally removed from the SOT

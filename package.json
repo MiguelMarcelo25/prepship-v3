@@ -160,6 +160,7 @@
     "test:ps-385-rate-adjustment-classification": "tsx scripts/ps-385-rate-adjustment-classification-guard.ts",
     "test:ps-388-order-source-identity-sot": "tsx scripts/ps-388-order-source-identity-sot-guard.ts",
     "test:ps-387-effective-order-status-sot": "tsx scripts/ps-387-effective-order-status-sot-guard.ts",
+    "test:ps-386-stale-rate-aliases": "tsx scripts/ps-386-stale-rate-aliases-guard.ts",
     "test:ps-127-address-classification-parity": "tsx scripts/ps-127-address-classification-parity-guard.ts",
     "test:ps-120-rate-job-status": "tsx scripts/ps-120-rate-job-status-guard.ts",
     "test:ps-165-order-shipping-display": "tsx scripts/ps-165-order-shipping-display-guard.ts",

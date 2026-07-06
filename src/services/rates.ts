@@ -190,13 +190,11 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
       cShippingRateAmount: marked,
       markedShippingAmount: marked,
       marked_shipping_amount: marked,
-      // PS-371 hygiene: toDirectRate pre-stamps the UN-marked provider amount into the legacy
-      // customer aliases; overwrite them with the marked charge so no stale raw value survives
-      // on the rate object as a second customer-amount truth (ps-307 test pins this).
+      // PS-386: canonical runtime DTOs use cShippingRateAmount for the
+      // customer/ranking total. Legacy customerRate aliases are read only by
+      // the compatibility normalizer, not emitted here as a second truth.
       customerShippingAmount: marked,
       customer_shipping_amount: marked,
-      customerRateAmount: marked,
-      customer_rate_amount: marked,
       customerRateSource: rateAdjustmentKind === 'true_cost_uplift' ? 'true_cost_uplift' : 'projected_customer_shipping_rate',
       customer_rate_source: rateAdjustmentKind === 'true_cost_uplift' ? 'true_cost_uplift' : 'projected_customer_shipping_rate',
       rateAdjustmentKind,

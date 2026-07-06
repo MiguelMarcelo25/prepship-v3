@@ -37,8 +37,8 @@ const lowRawHighCustomer: CombinableRate = {
   provider: 'shipp',
   service_code: 'shipp_ups_ground',
   shipping_amount: { amount: 7 },
-  customerRateAmount: 13,
-  rateCostAmount: 7,
+  cShippingRateAmount: 13,
+  selectedRateCost: 7,
   other_amount: { amount: 0 },
 };
 const higherRawLowerCustomer: CombinableRate = {
@@ -47,8 +47,8 @@ const higherRawLowerCustomer: CombinableRate = {
   provider: 'ups',
   service_code: 'ups_ground',
   shipping_amount: { amount: 10 },
-  customerRateAmount: 11,
-  rateCostAmount: 10,
+  cShippingRateAmount: 11,
+  selectedRateCost: 10,
   other_amount: { amount: 0 },
 };
 
@@ -108,21 +108,21 @@ check('runtime fixture ranks lower customer charge as Best Rate while preserving
     secondCustomer: combined.secondCheapest ? rateTotal(combined.secondCheapest) : null,
   });
 check('combined owner customer total prefers PS-307/PS-308 customer fields before raw cost',
-  /rate\.customerRateAmount/.test(ratesCombined) &&
-    /rate\.customer_rate_amount/.test(ratesCombined) &&
-    /rate\.markedShippingAmount/.test(ratesCombined) &&
-    /rate\.shipping_amount\?\.amount/.test(ratesCombined));
+  /normalizeShippingRateMoney\(rate\)\.cShippingRateAmount/.test(ratesCombined));
 check('combined owner exposes internal rateCostTotal separately for PS-308 cost display',
   /export function rateCostTotal/.test(ratesCombined) &&
+    /normalizeShippingRateMoney\(rate\)\.selectedRateCost/.test(ratesCombined) &&
     /not the primary Best Rate pick basis/.test(ratesCombined));
 check('rates service delegates local pick to combinedRateCostTotal and keeps customer total owner',
   /function rateCostTotal\(rate: Rate\): number \{\s*return combinedRateCostTotal\(rate as any\);\s*\}/s.test(ratesService) &&
     /function rateTotal\(rate: Rate\): number \{\s*return combinedRateTotal\(rate as any\);\s*\}/s.test(ratesService));
 check('rates service keeps raw/internal cost separate from customer amount',
-  /const amount = directCustomerShippingAmount\(rate\);/.test(ratesService) &&
+  /function directCustomerShippingAmount[\s\S]*?normalizeShippingRateMoney\(rate\)\.cShippingRateAmount/.test(ratesService) &&
+    /function directRawShippingCost[\s\S]*?normalizeShippingRateMoney\(rate\)\.selectedRateCost/.test(ratesService) &&
+    /const amount = directCustomerShippingAmount\(rate\);/.test(ratesService) &&
     /const rawShippingCost = directRawShippingCost\(rate, amount\);/.test(ratesService) &&
-    /customerRateAmount: amount/.test(ratesService) &&
-    /rateCostAmount: rawShippingCost/.test(ratesService));
+    /cShippingRateAmount: amount/.test(ratesService) &&
+    /selectedRateCost: rawShippingCost/.test(ratesService));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-307 marked-rate comparison closeout guard (${failures} failing)`);

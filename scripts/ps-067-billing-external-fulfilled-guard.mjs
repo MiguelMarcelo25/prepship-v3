@@ -42,7 +42,8 @@ assert(
 assert(
   billingSource.includes('isMissingShippingLine') &&
     billingSource.includes('shippingCostMissing: isMissingShippingLine') &&
-    billingSource.includes('actualLabelCost: isShippingLine ? labelCost : null'),
+    billingSource.includes('selectedRateCost: isShippingLine ? selectedRateCost : null') &&
+    !billingSource.includes('actualLabelCost'),
   'billing details safely identify missing shipping rows without exposing provider payloads',
 );
 assert(

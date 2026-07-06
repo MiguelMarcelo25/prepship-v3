@@ -2352,9 +2352,6 @@ export async function billingDetails(input: GenerateInput) {
         // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto);
         // the snake_case mirrors this block used to write are deleted.
         selectedRateCost: isShippingLine ? selectedRateCost : null,
-        // Deprecated compatibility alias: shipped Billing now owns Selected Rate
-        // as selectedRateCost; old readers get the same backend-owned value.
-        actualLabelCost: isShippingLine ? selectedRateCost : null,
         shippingCostMissing: isMissingShippingLine,
         // PS-207: box-review flag + the generator's reason text (the review
         // line's description, e.g. "Box mismatch — selected box (12x10x3)

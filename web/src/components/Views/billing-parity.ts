@@ -487,7 +487,7 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? 0) || 0
   const fulfillmentFee = Number(detail.fulfillmentFeeTotal ?? detail.fulfillment_fee_total ?? 0) || 0
   const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || fulfillmentFee
-  const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost ?? detail.actualLabelCost ?? detail.actual_label_cost
+  const selectedRateCost = detail.selectedRateCost ?? detail.selected_rate_cost
   const ourCost = Number(selectedRateCost ?? 0) || 0
   const margin = shipping - ourCost
   const refUpsRate = detail.refUpsRate ?? detail.ref_ups_rate
