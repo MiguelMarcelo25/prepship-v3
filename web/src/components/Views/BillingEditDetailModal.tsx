@@ -51,6 +51,18 @@ function moneyDraft(value: string) {
   return Number.isFinite(amount) ? amount : 0
 }
 
+function manualBillingOverrideLabels(row: BillingDetailDto): string[] {
+  const raw = row.manualBillingOverrideLabels ?? row.manual_billing_override_labels
+  if (Array.isArray(raw)) return [...new Set(raw.map((value) => String(value)).filter(Boolean))]
+  const types = row.manualBillingOverrideLineTypes ?? row.manual_billing_override_line_types
+  if (!Array.isArray(types)) return []
+  return [
+    ...new Set(
+      types.map((value) => String(value) === 'shipping' ? 'Shipping override' : 'Manual override'),
+    ),
+  ]
+}
+
 export function BillingEditDetailModal({
   modal,
   packages,
@@ -74,6 +86,7 @@ export function BillingEditDetailModal({
 }: BillingEditDetailModalProps) {
   const { row, draft, saving, error } = modal
   const prepTotal = moneyDraft(draft.pickPack) + moneyDraft(draft.additional)
+  const manualOverrideLabels = manualBillingOverrideLabels(row)
 
   return (
     <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !saving && onClose()}>
@@ -121,6 +134,23 @@ export function BillingEditDetailModal({
           <div><span>UPS SS</span><strong>{formatBillingMoney(row.refUpsRate ?? row.ref_ups_rate, { dashIfZero: true })}</strong></div>
           <div><span>USPS SS</span><strong>{formatBillingMoney(row.refUspsRate ?? row.ref_usps_rate, { dashIfZero: true })}</strong></div>
         </div>
+
+        {manualOverrideLabels.length ? (
+          <div
+            role="status"
+            style={{
+              margin: '8px 0',
+              padding: '6px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'var(--bg2)',
+              fontSize: 11.5,
+              color: 'var(--text)',
+            }}
+          >
+            <strong>Manual override:</strong> {manualOverrideLabels.join(', ')}. Saved backend override will be reused when this billing range is regenerated.
+          </div>
+        ) : null}
 
         {hasBillingNoBoxCostAlert(row) ? (
           <BillingNoBoxCostPreview

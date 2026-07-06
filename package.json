@@ -317,6 +317,7 @@
     "test:ps-376-zero-shipping-review-reason": "tsx scripts/ps-376-zero-shipping-review-reason-guard.ts",
     "test:ps-377-cancelled-billing-rows": "tsx scripts/ps-377-cancelled-billing-rows-guard.ts",
     "test:ps-389-manual-prep-fee-waiver": "tsx scripts/ps-389-manual-prep-fee-waiver-guard.ts",
+    "test:ps-392-manual-billing-overrides": "tsx scripts/ps-392-manual-billing-overrides-guard.ts",
     "test:hugrab-cancelled-billing-guard": "tsx scripts/hugrab-cancelled-billing-guard.ts",
     "test:ps-370-selected-rate-cost-backfill": "tsx scripts/ps-370-selected-rate-cost-backfill-guard.ts",
     "test:ps-309-voided-label-display": "tsx scripts/ps-309-voided-label-display-guard.ts",

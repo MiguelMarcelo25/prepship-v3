@@ -42,6 +42,8 @@ export interface BillingDetailRowDto {
   boxCostNoCharge: boolean;
   boxCostAlert: boolean;
   billingBadges: string[];
+  manualBillingOverrideLineTypes?: string[];
+  manualBillingOverrideLabels?: string[];
 }
 
 function numberValue(value: unknown): number {
@@ -148,6 +150,8 @@ const VALUE_CARRY_FIELDS = [
   'refUspsRate',
   'feeWaiverDecision',
   'billingBadges',
+  'manualBillingOverrideLineTypes',
+  'manualBillingOverrideLabels',
 ] as const;
 
 const BOOLEAN_OR_FIELDS = [

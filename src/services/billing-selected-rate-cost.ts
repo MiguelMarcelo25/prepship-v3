@@ -60,6 +60,9 @@ export function resolveBillingSelectedRateCost(input: BillingSelectedRateCostInp
 
   if (postageCost != null) return roundCents(postageCost + otherCost);
 
+  const selectedJsonTotal = firstNumber(selectedRate, ['totalCost', 'total_cost', 'total']);
+  if (selectedJsonTotal != null) return roundCents(selectedJsonTotal);
+
   const selectedTotal = normalizeShippingRateMoney(selectedRate).selectedRateCost;
   return selectedTotal != null ? roundCents(selectedTotal) : null;
 }

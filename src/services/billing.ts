@@ -61,6 +61,11 @@ import {
   ensureBillingFeeWaiverSchema,
   readBillingFeeWaivers,
 } from './billing-fee-waiver-store';
+import {
+  applyManualBillingOverrides,
+  manualBillingOverrideLabel,
+  readBillingManualOverrides,
+} from './billing-manual-overrides';
 import { getBundlesForOrders } from './shipment-bundles/bundle-read-model';
 import { decideBundleBillingTreatment } from './shipment-bundles/bundle-billing-policy';
 import { env } from '../lib/env';
@@ -1027,6 +1032,7 @@ export async function generateLineItems(input: GenerateInput) {
     ...new Set(billableRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
   ];
   const feeWaiverByOrderId = await readBillingFeeWaivers(orderIdsInScope);
+  const manualBillingOverrideByOrderId = await readBillingManualOverrides(orderIdsInScope);
   // PS-312 S5 bill-once (Per user override unlock shipped data on 2026-06-24): load the bundle
   // membership for the in-scope orders (mirrors feeWaiverByOrderId). OFF -> the map is never loaded ->
   // every order bills normally -> byte-identical. Reads the additive bundle read-model only.
@@ -1330,7 +1336,18 @@ export async function generateLineItems(input: GenerateInput) {
             packageId: null,
           },
         ]
-      : applyPrepFeeWaiver(rows, waived);
+      : applyManualBillingOverrides(
+          applyPrepFeeWaiver(rows, waived),
+          s.orderId != null ? manualBillingOverrideByOrderId.get(s.orderId) ?? [] : [],
+          {
+            clientId,
+            orderId: s.orderId,
+            orderNumber: s.orderNumber,
+            shipmentId: s.id,
+            shipDate: s.shipDate,
+            packageId: billedPackageId,
+          },
+        );
 
     // Collect for batch insert instead of inserting one at a time.
     for (const row of effectiveRows) {
@@ -2062,6 +2079,31 @@ export async function billingDetails(input: GenerateInput) {
     new Set(rows.map((row) => row.orderId).filter((id): id is number => id != null))
   );
   const feeWaiverByOrderId = await readBillingFeeWaivers(detailOrderIds);
+  const manualBillingOverrideByOrderId = await readBillingManualOverrides(detailOrderIds);
+  const manuallyResolvedBoxOrderIds = new Set<number>();
+  if (detailOrderIds.length) {
+    try {
+      await ensureBillingBoxResolutionsSchema();
+      const boxResolutionRows = await db
+        .select({
+          orderId: billingBoxResolutions.orderId,
+          packageId: billingBoxResolutions.packageId,
+          overridePrice: billingBoxResolutions.overridePrice,
+        })
+        .from(billingBoxResolutions)
+        .where(inArray(billingBoxResolutions.orderId, detailOrderIds));
+      for (const row of boxResolutionRows) {
+        if (row.packageId != null || row.overridePrice != null) {
+          manuallyResolvedBoxOrderIds.add(row.orderId);
+        }
+      }
+    } catch (err) {
+      console.warn(
+        '[billing] manual box override markers skipped:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   const detailRows = await Promise.all(
     rows.map(async (row) => {
@@ -2118,6 +2160,15 @@ export async function billingDetails(input: GenerateInput) {
 
       const items = itemSummary(row.orderItems);
       const lineType = row.lineType ?? '';
+      const manualBillingOverrideLineTypes = row.orderId != null
+        ? [
+            ...(manualBillingOverrideByOrderId.get(row.orderId)?.map((override) => override.lineType) ?? []),
+            ...(manuallyResolvedBoxOrderIds.has(row.orderId) ? ['package_cost'] : []),
+          ]
+        : [];
+      const manualBillingOverrideLabels = [
+        ...new Set(manualBillingOverrideLineTypes.map(manualBillingOverrideLabel)),
+      ];
       const isShippingLine = lineType === 'shipping';
       const isMissingShippingLine = lineType === 'shipping_missing';
       // PS-312 S5: a bundle CHILD's "Included — bundled with #N" line is intentionally $0 (shipping is
@@ -2253,6 +2304,8 @@ export async function billingDetails(input: GenerateInput) {
         boxCostNoCharge,
         boxCostAlert: boxCostAlert.boxCostAlert,
         billingBadges: boxCostAlert.billingBadges,
+        manualBillingOverrideLineTypes,
+        manualBillingOverrideLabels,
         refUspsRate: isShippingLine ? refUspsRate : null,
         refUpsRate: isShippingLine ? refUpsRate : null,
         // PS-068: true when this box charge was generated BEFORE the client's

@@ -39,6 +39,11 @@ import {
   upsertBillingFeeWaiver,
   readBillingFeeWaivers,
 } from '../services/billing-fee-waiver-store';
+import {
+  ensureBillingManualOverridesSchema,
+  upsertBillingManualOverride,
+  type ManualBillingOverrideLineType,
+} from '../services/billing-manual-overrides';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
@@ -405,6 +410,12 @@ const EDITABLE_BILLING_LINES = [
   ['shipping', 'shipping', 'Shipping'],
 ] as const;
 
+const MANUAL_BILLING_OVERRIDE_LINES = [
+  ['pickPack', 'pick_pack', 'Pick & Pack'],
+  ['additional', 'additional_unit', 'Additional Units'],
+  ['shipping', 'shipping', 'Shipping'],
+] as const satisfies ReadonlyArray<readonly [keyof z.infer<typeof detailPatchSchema>, ManualBillingOverrideLineType, string]>;
+
 function money(value: number): string {
   return (Number.isFinite(value) ? value : 0).toFixed(2);
 }
@@ -626,12 +637,21 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   let updated = 0;
   let inserted = 0;
   const prepFeePatchTouched = body.pickPack !== undefined || body.additional !== undefined;
+  const manualBillingPatchTouched =
+    body.pickPack !== undefined ||
+    body.additional !== undefined ||
+    body.shipping !== undefined;
   const manualPrepFeeAuditRef: {
     current: {
       decision: 'waived' | 'not_waived';
       originalPrepAmount: number | null;
     } | null;
   } = { current: null };
+  const manualBillingOverrideAuditRefs: Array<{
+    lineType: ManualBillingOverrideLineType;
+    amount: string;
+    note: string | null;
+  }> = [];
 
   // PS-249 (Card 4): a single /details save edits MANY rows for one order — a
   // per-line update/insert loop, a packageId stamp, a box-resolution upsert, and
@@ -645,6 +665,7 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   // change and needs no lockdown override.
   await ensureBillingBoxResolutionsSchema();
   if (prepFeePatchTouched) await ensureBillingFeeWaiverSchema();
+  if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
 
   await db.transaction(async (tx) => {
     let manualPrepFeeDecision: 'waived' | 'not_waived' | null = null;
@@ -728,6 +749,34 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
     // PS — billing-line-only Box Size override. Stamp the chosen package id on
     // every billing line for this order so billingDetails renders the new box
     // name/dims. Does NOT touch shipments.selectedPackageId (source of truth).
+    // PS-392: manual Billing edits are durable backend decisions, not just
+    // generated-row edits. Store pick/pack, addl units, and customer-billed
+    // shipping overrides in the same transaction as the visible row update so
+    // range regeneration can replay them before billing_line_items are frozen.
+    if (manualBillingPatchTouched) {
+      const reviewer = (c.get('email' as never) as string | undefined) ?? null;
+      for (const [bodyKey, lineType, label] of MANUAL_BILLING_OVERRIDE_LINES) {
+        const value = body[bodyKey];
+        if (typeof value !== 'number') continue;
+        const amount = money(value);
+        const note = body.note ?? `Manual Billing edit set ${label} to $${amount}`;
+        await upsertBillingManualOverride(
+          {
+            orderId,
+            clientId: body.clientId,
+            lineType,
+            amount: Number(amount),
+            reviewer,
+            note,
+          },
+          tx,
+        );
+        manualBillingOverrideAuditRefs.push({ lineType, amount, note });
+      }
+    }
+
+    // Box Size override below is billing-line-only; it does not touch the
+    // shipment-selected package source of truth.
     if (body.packageId !== undefined) {
       const pkgRows = await tx
         .update(billingLineItems)
@@ -891,6 +940,24 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
         orderId,
         decision: manualPrepFeeAudit.decision,
         originalPrepAmount: manualPrepFeeAudit.originalPrepAmount,
+      },
+    });
+  }
+
+  for (const manualOverrideAudit of manualBillingOverrideAuditRefs) {
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'billing_manual_override',
+      resourceId: orderId,
+      action: 'manual_override',
+      details: {
+        source: 'billing_details_patch',
+        clientId: body.clientId,
+        orderId,
+        lineType: manualOverrideAudit.lineType,
+        amount: manualOverrideAudit.amount,
+        note: manualOverrideAudit.note,
       },
     });
   }

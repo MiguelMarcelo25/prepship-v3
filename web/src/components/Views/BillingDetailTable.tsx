@@ -9,7 +9,7 @@
 // handlers stay in BillingView and arrive as props. detailSortValueOf / marginColor /
 // DETAIL_COLUMN_WIDTHS / DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET / BILLING_DETAIL_PAGE_SIZE_OPTIONS
 // are byte-identical copies of the parent's pure module-level helpers/constants.
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { Pencil } from 'lucide-react'
 import { BillingNoBoxCostAction, hasBillingNoBoxCostAlert } from './BillingNoBoxCostAction'
 import { BillingZeroShippingBadge, hasBillingZeroShippingReview } from './BillingZeroShippingBadge'
@@ -90,6 +90,50 @@ function marginColor(value: number) {
 
 function splitBillingDetailLines(value: string): string[] {
   return value.split(/\r?\n| \| /).filter((line) => line.trim())
+}
+
+function manualBillingOverrideLineTypes(row: BillingDetailDto): string[] {
+  const raw = row.manualBillingOverrideLineTypes ?? row.manual_billing_override_line_types
+  return Array.isArray(raw) ? raw.map((value) => String(value)) : []
+}
+
+function hasManualBillingOverride(row: BillingDetailDto, lineType: string): boolean {
+  return manualBillingOverrideLineTypes(row).includes(lineType)
+}
+
+function MoneyWithBillingBadges({
+  children,
+  badges,
+}: {
+  children: ReactNode
+  badges: string[]
+}) {
+  const visibleBadges = badges.filter(Boolean)
+  if (!visibleBadges.length) return <>{children}</>
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+      <span>{children}</span>
+      {visibleBadges.map((badge) => (
+        <span
+          key={badge}
+          title={badge}
+          style={{
+            fontSize: 8.5,
+            fontWeight: 700,
+            color: 'var(--text2)',
+            background: 'var(--bg2)',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            padding: '0 3px',
+            lineHeight: 1.4,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {badge}
+        </span>
+      ))}
+    </span>
+  )
 }
 
 export function BillingDetailTable({
@@ -325,9 +369,22 @@ export function BillingDetailTable({
               case 'pickpack':
                 // PS — flat first-unit Pick & Pack fee only; extra units
                 // are shown in the Addl Units column (not folded in here).
-                return formatBillingMoney(metrics.pickPack)
+                return (
+                  <MoneyWithBillingBadges
+                    badges={[
+                      hasManualBillingOverride(row, 'pick_pack') ? 'Manual override' : '',
+                      row.feeWaived ? 'Prep fee waived' : '',
+                    ]}
+                  >
+                    {formatBillingMoney(metrics.pickPack)}
+                  </MoneyWithBillingBadges>
+                )
               case 'additional':
-                return formatBillingMoney(metrics.additional, { dashIfZero: true })
+                return (
+                  <MoneyWithBillingBadges badges={[hasManualBillingOverride(row, 'additional_unit') ? 'Manual override' : '']}>
+                    {formatBillingMoney(metrics.additional, { dashIfZero: true })}
+                  </MoneyWithBillingBadges>
+                )
               case 'packageCost':
                 // PS-207: the shipped box could not be resolved to a known
                 // package (or selected box ≠ shipment dims) — the backend
@@ -373,8 +430,10 @@ export function BillingDetailTable({
                 // PS-068: badge box charges whose stored price predates the
                 // client's latest package-price/config change, so operators can
                 // see un-repriced rows before exporting (run Update Billing to fix).
-                return row.stalePackagePrice ? (
-                  <span
+                return (
+                  <MoneyWithBillingBadges badges={[hasManualBillingOverride(row, 'package_cost') ? 'Manual override' : '']}>
+                    {row.stalePackagePrice ? (
+                      <span
                     title="Box price changed since this was billed — run Update Billing to re-price this range"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
                   >
@@ -394,8 +453,10 @@ export function BillingDetailTable({
                       STALE
                     </span>
                   </span>
-                ) : (
-                  formatBillingMoney(metrics.packageCost, { dashIfZero: true })
+                    ) : (
+                      formatBillingMoney(metrics.packageCost, { dashIfZero: true })
+                    )}
+                  </MoneyWithBillingBadges>
                 )
               case 'packageName':
                 return <span style={{ fontSize: 10.5, color: 'var(--text2)' }}>{row.packageName || '—'}</span>
@@ -427,19 +488,23 @@ export function BillingDetailTable({
                 // rows are >$0, so they never carry the badge.
                 if (metrics.ssCharged) {
                   return (
-                    <>
+                    <MoneyWithBillingBadges badges={[hasManualBillingOverride(row, 'shipping') ? 'Shipping override' : '']}>
                       <span style={{ color: '#b45309', fontWeight: 600 }}>{formatBillingMoney(metrics.shipping)}</span>
                       <span style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 3 }}>↑SS</span>
-                    </>
+                    </MoneyWithBillingBadges>
                   )
                 }
                 return hasBillingZeroShippingReview(row) ? (
                   <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                    <span>{formatBillingMoney(metrics.shipping)}</span>
+                    <MoneyWithBillingBadges badges={[hasManualBillingOverride(row, 'shipping') ? 'Shipping override' : '']}>
+                      {formatBillingMoney(metrics.shipping)}
+                    </MoneyWithBillingBadges>
                     <BillingZeroShippingBadge row={row} />
                   </span>
                 ) : (
-                  formatBillingMoney(metrics.shipping)
+                  <MoneyWithBillingBadges badges={[hasManualBillingOverride(row, 'shipping') ? 'Shipping override' : '']}>
+                    {formatBillingMoney(metrics.shipping)}
+                  </MoneyWithBillingBadges>
                 )
               case 'total':
                 return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.fulfillmentFee)}</span>

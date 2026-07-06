@@ -58,6 +58,7 @@ const billingRowSot = read('src/services/billing-detail-row-sot.ts');
 const billingParity = read('web/src/components/Views/billing-parity.ts');
 const billingView = read('web/src/components/Views/BillingView.tsx');
 const billingDetailTable = read('web/src/components/Views/BillingDetailTable.tsx');
+const billingEditModal = read('web/src/components/Views/BillingEditDetailModal.tsx');
 const packageJson = read('package.json');
 
 check('billingDetails delegates selected-rate cost to the backend owner',
@@ -91,8 +92,8 @@ check('Billing table renders selectedRateCost and no bestRate data marker',
 
 check('Billing view sort and edit modal use Selected Rate copy',
   billingView.includes("case 'selectedRate':") &&
-  billingView.includes('<span>Selected Rate</span>') &&
-  !billingView.includes('<span>Best Rate</span>'));
+  billingEditModal.includes('<span>Selected Rate</span>') &&
+  !billingEditModal.includes('<span>Best Rate</span>'));
 
 check('package.json wires the PS-364 guard',
   packageJson.includes('"test:ps-364-billing-selected-rate-sot"'));
