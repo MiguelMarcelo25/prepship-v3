@@ -96,6 +96,8 @@ export type ShippedBoxResolution =
       /** null only for operator override-price-only resolutions. */
       packageId: number | null;
       pkg: BoxPackage | null;
+      /** Shipment dims for override-price-only custom boxes with no package row. */
+      customDims?: ShippedBoxDims | null;
       overridePrice: number | null;
       note: string | null;
     }
@@ -183,6 +185,7 @@ function selectionSource(input: ShippedBoxInput, pkg: BoxPackage): 'selected_pid
 }
 
 export function resolveShippedPackageId(input: ShippedBoxInput): ShippedBoxResolution {
+  const dims = shipmentDims(input);
   // 1. Operator directive — explicit, wins over all shipment evidence. A row
   //    carrying neither a package nor an override price is a note, not a
   //    directive, and does not resolve anything.
@@ -196,12 +199,12 @@ export function resolveShippedPackageId(input: ShippedBoxInput): ShippedBoxResol
       source: 'operator',
       packageId: input.operator.packageId,
       pkg,
+      customDims: pkg ? null : dims,
       overridePrice: input.operator.overridePrice,
       note: input.operator.note,
     };
   }
 
-  const dims = shipmentDims(input);
   const dimsKey = dims ? boxDimsKey(dims.l, dims.w, dims.h) : null;
   const dimsPkg = dimsKey ? input.lookups.byDims.get(dimsKey) ?? null : null;
   const selectedPkg = selectedPackageOf(input);
@@ -288,6 +291,18 @@ export type PackageCostDecision =
 // PS-222 seeder creates such boxes with source = 'factory'.
 export const NO_CHARGE_BOX_SOURCE = 'factory';
 
+export function resolvedPackageDisplayName(
+  resolution: Extract<ShippedBoxResolution, { status: 'resolved' }>,
+  fallback: string,
+): string {
+  return (
+    resolution.pkg?.name ??
+    (resolution.packageId != null ? `Box #${resolution.packageId}` : null) ??
+    (resolution.customDims ? `Custom ${formatBoxDims(resolution.customDims)}` : null) ??
+    fallback
+  );
+}
+
 export function decidePackageCostLine(args: {
   resolution: ShippedBoxResolution;
   clientHasBoxPricing: boolean;
@@ -316,7 +331,7 @@ export function decidePackageCostLine(args: {
       kind: 'line',
       amount: r.overridePrice > 0 ? r.overridePrice : 0,
       packageId: r.packageId,
-      pkgName: r.pkg?.name ?? (r.packageId != null ? `Box #${r.packageId}` : 'operator-resolved'),
+      pkgName: resolvedPackageDisplayName(r, 'operator-resolved'),
     };
   }
 
@@ -337,7 +352,7 @@ export function decidePackageCostLine(args: {
       kind: 'line',
       amount: 0,
       packageId: r.packageId,
-      pkgName: r.pkg?.name ?? (r.packageId != null ? `Box #${r.packageId}` : 'no-charge box'),
+      pkgName: resolvedPackageDisplayName(r, 'no-charge box'),
     };
   }
   if (effective == null || effective <= 0) return { kind: 'none' };
@@ -345,9 +360,7 @@ export function decidePackageCostLine(args: {
     kind: 'line',
     amount: effective,
     packageId: r.packageId,
-    pkgName:
-      r.pkg?.name ??
-      (r.packageId != null ? `Box #${r.packageId}` : 'operator-resolved'),
+    pkgName: resolvedPackageDisplayName(r, 'operator-resolved'),
   };
 }
 

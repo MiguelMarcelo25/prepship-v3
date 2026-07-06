@@ -179,7 +179,20 @@ const dOverride = decidePackageCostLine({
   configuredPrice: undefined,
   markupPct: 25,
 });
-assert.deepEqual(dOverride, { kind: 'line', amount: 0.74, packageId: null, pkgName: 'operator-resolved' });
+assert.deepEqual(dOverride, { kind: 'line', amount: 0.74, packageId: null, pkgName: 'Custom 11.5x9x3' });
+
+const r1767 = resolveShippedPackageId({
+  ...base,
+  operator: { packageId: null, overridePrice: 0.2, note: 'bulk custom box override' },
+  dimsL: 10, dimsW: 6.5, dimsH: 2,
+});
+const d1767 = decidePackageCostLine({
+  resolution: r1767 as Extract<ShippedBoxResolution, { status: 'resolved' }>,
+  clientHasBoxPricing: true,
+  configuredPrice: undefined,
+  markupPct: 25,
+});
+assert.deepEqual(d1767, { kind: 'line', amount: 0.2, packageId: null, pkgName: 'Custom 10x6.5x2' });
 
 // Unresolved/mismatch → $0.00 review line with the generator's description.
 const dReview = decidePackageCostLine({ resolution: r6, clientHasBoxPricing: true, configuredPrice: 0.55, markupPct: 0 });

@@ -13,6 +13,8 @@ import {
   clientPackagePrices,
 } from '../db/schema/billing';
 import { clients } from '../db/schema/clients';
+import { packages } from '../db/schema/packages';
+import { shipments } from '../db/schema/shipments';
 import {
   billingDetails,
   billingGenerationStatus,
@@ -48,6 +50,11 @@ import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 import { resolveBillingRowStatus } from '../services/billing-row-status';
+import {
+  resolveShippedPackageId,
+  resolvedPackageDisplayName,
+  type BoxLookups,
+} from '../services/billing-box-policy';
 // PS-311b: the dims-based companion — sweep the SAME unmatched box size across a date range.
 import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
@@ -669,6 +676,21 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
 
   await db.transaction(async (tx) => {
+    const [currentPackageCostLineBeforeEdit] = await tx
+      .select({ totalCost: billingLineItems.totalCost })
+      .from(billingLineItems)
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId),
+          eq(billingLineItems.lineType, 'package_cost')
+        )
+      )
+      .limit(1);
+    const currentBoxAmountBeforeEdit = currentPackageCostLineBeforeEdit
+      ? money(Number(currentPackageCostLineBeforeEdit.totalCost))
+      : null;
+
     let manualPrepFeeDecision: 'waived' | 'not_waived' | null = null;
     let originalPrepAmount: number | null = null;
     if (prepFeePatchTouched) {
@@ -832,22 +854,8 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       const boxChanged =
         submittedPkgId !== undefined && (submittedPkgId ?? null) !== (base.packageId ?? null);
 
-      const [currentPackageCostLine] = await tx
-        .select({ totalCost: billingLineItems.totalCost })
-        .from(billingLineItems)
-        .where(
-          and(
-            eq(billingLineItems.clientId, body.clientId),
-            eq(billingLineItems.orderId, orderId),
-            eq(billingLineItems.lineType, 'package_cost')
-          )
-        )
-        .limit(1);
-      const currentBoxAmount = currentPackageCostLine
-        ? money(Number(currentPackageCostLine.totalCost))
-        : null;
       const priceChanged =
-        body.packageCost !== undefined && money(body.packageCost) !== currentBoxAmount;
+        body.packageCost !== undefined && money(body.packageCost) !== currentBoxAmountBeforeEdit;
 
       if (boxChanged || priceChanged) {
         const [existing] = await tx
@@ -909,6 +917,64 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
               updatedAt: new Date(),
             },
           });
+
+        const [shipmentBoxFacts] = base.shipmentId != null
+          ? await tx
+              .select({
+                selectedPid: shipments.selectedPid,
+                selectedPackageId: shipments.selectedPackageId,
+                dimsL: shipments.dimsL,
+                dimsW: shipments.dimsW,
+                dimsH: shipments.dimsH,
+              })
+              .from(shipments)
+              .where(eq(shipments.id, base.shipmentId))
+              .limit(1)
+          : [];
+        const packageRows = newPackageId != null
+          ? await tx
+              .select({
+                id: packages.id,
+                name: packages.name,
+                packageCode: packages.packageCode,
+                length: packages.length,
+                width: packages.width,
+                height: packages.height,
+                source: packages.source,
+              })
+              .from(packages)
+              .where(eq(packages.id, newPackageId))
+          : [];
+        const boxLookups: BoxLookups = {
+          byId: new Map(packageRows.map((pkg) => [pkg.id, pkg])),
+          byCode: new Map(packageRows.filter((pkg) => pkg.packageCode).map((pkg) => [pkg.packageCode!, pkg])),
+          byDims: new Map(),
+        };
+        const boxResolution = resolveShippedPackageId({
+          operator: {
+            packageId: newPackageId,
+            overridePrice: overridePrice != null ? Number(overridePrice) : null,
+            note: body.note ?? existing?.note ?? null,
+          },
+          selectedPid: shipmentBoxFacts?.selectedPid ?? null,
+          selectedPackageId: shipmentBoxFacts?.selectedPackageId ?? null,
+          dimsL: shipmentBoxFacts?.dimsL ?? null,
+          dimsW: shipmentBoxFacts?.dimsW ?? null,
+          dimsH: shipmentBoxFacts?.dimsH ?? null,
+          lookups: boxLookups,
+        });
+        if (boxResolution.status === 'resolved') {
+          await tx
+            .update(billingLineItems)
+            .set({ description: `Box (${resolvedPackageDisplayName(boxResolution, 'Package Cost')})` })
+            .where(
+              and(
+                eq(billingLineItems.clientId, body.clientId),
+                eq(billingLineItems.orderId, orderId),
+                eq(billingLineItems.lineType, 'package_cost')
+              )
+            );
+        }
 
         // The review is resolved — convert the $0.00 package_cost_missing line
         // immediately (regeneration would also do it; this makes the modal save
