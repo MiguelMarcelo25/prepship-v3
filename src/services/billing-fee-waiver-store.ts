@@ -16,7 +16,8 @@
  * today. The read helpers return null/empty on any error and never throw into
  * the billing hot path.
  */
-import { sql as pg } from '../db/client';
+import { sql as drizzleSql, type SQL } from 'drizzle-orm';
+import { db, sql as pg } from '../db/client';
 
 export type FeeWaiverDecision = 'waived' | 'not_waived';
 
@@ -36,6 +37,10 @@ export type BillingFeeWaiverUpsert = {
   note: string | null;
   /** The prep total at decision time, captured so the waiver is reversible. */
   originalPrepAmount: number | null;
+};
+
+export type BillingFeeWaiverExecutor = {
+  execute: (query: SQL) => Promise<unknown>;
 };
 
 let schemaEnsured: Promise<void> | null = null;
@@ -132,11 +137,12 @@ export async function readBillingFeeWaiver(
  */
 export async function upsertBillingFeeWaiver(
   input: BillingFeeWaiverUpsert,
+  executor: BillingFeeWaiverExecutor = db,
 ): Promise<void> {
   await ensureBillingFeeWaiverSchema();
   const original =
     input.originalPrepAmount == null ? null : input.originalPrepAmount.toFixed(2);
-  await pg`
+  await executor.execute(drizzleSql`
     INSERT INTO billing_fee_waivers
       (order_id, decision, reviewer, reviewed_at, note, original_prep_amount, updated_at)
     VALUES (
@@ -150,5 +156,5 @@ export async function upsertBillingFeeWaiver(
           note = EXCLUDED.note,
           original_prep_amount = EXCLUDED.original_prep_amount,
           updated_at = now()
-  `;
+  `);
 }

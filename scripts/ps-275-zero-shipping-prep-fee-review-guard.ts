@@ -156,7 +156,8 @@ function sampleOrderLines(): WaivableLine[] {
   // Repo convention (see ps-258/ps-177 FE guards): cwd-relative paths, run from
   // the repo root via `npx tsx`. Avoids ESM `__dirname is not defined`.
   const detailTableSrc = readFileSync('web/src/components/Views/BillingDetailTable.tsx', 'utf8');
-  const billingViewSrc = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8');
+  const lineItemsHeaderSrc = readFileSync('web/src/components/Views/BillingLineItemsHeader.tsx', 'utf8');
+  const editModalSrc = readFileSync('web/src/components/Views/BillingEditDetailModal.tsx', 'utf8');
 
   // (a) Row-level Review control: a >Review< button rendered only when the row
   //     flag is set, wired to the existing modal-open handler (no new handler).
@@ -172,10 +173,9 @@ function sampleOrderLines(): WaivableLine[] {
   // (b) Header count/badge: a needs-review tally derived from
   //     shippingZeroNeedsReview over the rendered rows array, with the badge copy.
   const badgeDerivesFromFlag =
-    /sortedDetailRows[\s\S]{0,80}shippingZeroNeedsReview\s*===\s*true/.test(billingViewSrc) ||
-    /shippingZeroNeedsReview\s*===\s*true[\s\S]{0,80}\.length/.test(billingViewSrc);
-  const hasBadgeCopy = /\$0-shipping need review/.test(billingViewSrc);
-  check('FE(b): a needs-review count derives from shippingZeroNeedsReview over sortedDetailRows',
+    /rows\.filter\(\(row\) => row\.shippingZeroNeedsReview === true && row\.feeWaiverDecision == null\)\.length/.test(lineItemsHeaderSrc);
+  const hasBadgeCopy = /\$0-shipping need review/.test(lineItemsHeaderSrc);
+  check('FE(b): a needs-review count derives from shippingZeroNeedsReview over rendered rows',
     badgeDerivesFromFlag);
   check('FE(b): the header renders the $0-shipping needs-review badge copy',
     hasBadgeCopy);
@@ -185,15 +185,15 @@ function sampleOrderLines(): WaivableLine[] {
   // affordance must drop. This is the DJ live-fail regression: the decision
   // saved, but the badge stayed visible.
   const unresolvedCountPredicate =
-    /sortedDetailRows\.filter\(\(row\) => row\.shippingZeroNeedsReview === true && row\.feeWaiverDecision == null\)\.length/.test(billingViewSrc);
+    /rows\.filter\(\(row\) => row\.shippingZeroNeedsReview === true && row\.feeWaiverDecision == null\)\.length/.test(lineItemsHeaderSrc);
   check('FE(c): the unresolved count excludes rows that already have a feeWaiverDecision',
     unresolvedCountPredicate);
   check('FE(c): the row Review button only renders for unresolved $0-shipping rows',
     /row\.shippingZeroNeedsReview\s*&&\s*row\.feeWaiverDecision\s*==\s*null/.test(detailTableSrc));
   check('FE(c): reviewed-kept rows keep a neutral action to change the decision to waived',
-    /feeWaiverDecision === 'not_waived'/.test(billingViewSrc) &&
-    /Change to waive prep fees/.test(billingViewSrc) &&
-    /handleZeroShippingReview\('waived'\)/.test(billingViewSrc));
+    /feeWaiverDecision === 'not_waived'/.test(editModalSrc) &&
+    /Change to waive prep fees/.test(editModalSrc) &&
+    /onZeroShippingReview\('waived'\)/.test(editModalSrc));
 }
 
 // ── 8) ROOT CAUSE: the generator must EMIT a $0.00 shipping review line for ──
@@ -230,7 +230,7 @@ function sampleOrderLines(): WaivableLine[] {
   check('gen: each order resolves its decision (waived = waiver?.decision === \'waived\')',
     /const waived = waiver\?\.decision === 'waived'/.test(gen));
   check('gen: the PERSISTED rows are the WAIVED rows (effectiveRows = applyPrepFeeWaiver(rows, waived) is what is collected)',
-    /const effectiveRows = applyPrepFeeWaiver\(rows, waived\)/.test(gen) &&
+    /const effectiveRows: LineRow\[\]\s*=[\s\S]{0,900}applyPrepFeeWaiver\(rows, waived\)/.test(gen) &&
     /for \(const row of effectiveRows\)/.test(gen));
   check('gen: regenerate DELETEs the period then rebuilds with ON CONFLICT DO NOTHING (idempotent)',
     /\.delete\(billingLineItems\)/.test(gen) && /onConflictDoNothing\(/.test(gen));

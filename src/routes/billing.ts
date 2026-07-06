@@ -33,8 +33,12 @@ import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 // PS-134: reference-rate backfill ETL is owned by the billing service.
 import { backfillReferenceRates } from '../services/billing-ref-rates';
-// PS-275: durable, reversible prep-fee waiver state ($0-shipping review).
-import { upsertBillingFeeWaiver, readBillingFeeWaivers } from '../services/billing-fee-waiver-store';
+// PS-275/PS-389: durable, reversible prep-fee waiver state.
+import {
+  ensureBillingFeeWaiverSchema,
+  upsertBillingFeeWaiver,
+  readBillingFeeWaivers,
+} from '../services/billing-fee-waiver-store';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
@@ -621,6 +625,13 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
 
   let updated = 0;
   let inserted = 0;
+  const prepFeePatchTouched = body.pickPack !== undefined || body.additional !== undefined;
+  const manualPrepFeeAuditRef: {
+    current: {
+      decision: 'waived' | 'not_waived';
+      originalPrepAmount: number | null;
+    } | null;
+  } = { current: null };
 
   // PS-249 (Card 4): a single /details save edits MANY rows for one order — a
   // per-line update/insert loop, a packageId stamp, a box-resolution upsert, and
@@ -633,8 +644,36 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   // shipments.selectedPackageId (source of truth) — so this is NOT a shipped-data
   // change and needs no lockdown override.
   await ensureBillingBoxResolutionsSchema();
+  if (prepFeePatchTouched) await ensureBillingFeeWaiverSchema();
 
   await db.transaction(async (tx) => {
+    let manualPrepFeeDecision: 'waived' | 'not_waived' | null = null;
+    let originalPrepAmount: number | null = null;
+    if (prepFeePatchTouched) {
+      const [prepSumRow] = await tx.execute<{ original_prep_amount: string | null }>(sql`
+        select coalesce(sum(total_cost), 0)::text as original_prep_amount
+        from billing_line_items
+        where client_id = ${body.clientId}
+          and order_id = ${orderId}
+          and line_type in (${sql.join(PREP_FEE_LINE_TYPE_LIST.map((t) => sql`${t}`), sql`, `)})
+      `);
+      originalPrepAmount = prepSumRow?.original_prep_amount != null
+        ? Number(prepSumRow.original_prep_amount)
+        : null;
+
+      // PS-389: a manual Pick & Pack $0 save is the same durable business
+      // decision as the $0-shipping review waiver. A later positive prep edit
+      // clears the waiver so regeneration does not silently re-zero the row.
+      if (body.pickPack !== undefined && money(body.pickPack) === '0.00') {
+        manualPrepFeeDecision = 'waived';
+      } else if (
+        (body.pickPack !== undefined && money(body.pickPack) !== '0.00') ||
+        (body.additional !== undefined && money(body.additional) !== '0.00')
+      ) {
+        manualPrepFeeDecision = 'not_waived';
+      }
+    }
+
     // Only generated billing_line_items are changed here. Source order,
     // shipment, package, and marketplace fields remain read-only.
     for (const [bodyKey, lineType, description] of EDITABLE_BILLING_LINES) {
@@ -701,6 +740,29 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
         )
         .returning({ id: billingLineItems.id });
       updated += pkgRows.length;
+    }
+
+    // PS-389: persist the manual prep-fee decision in the same transaction as
+    // the generated line edit. Range regeneration consults billing_fee_waivers
+    // before final billing_line_items are written.
+    if (manualPrepFeeDecision != null) {
+      await upsertBillingFeeWaiver(
+        {
+          orderId,
+          decision: manualPrepFeeDecision,
+          reviewer: (c.get('email' as never) as string | undefined) ?? null,
+          note:
+            body.note ??
+            (manualPrepFeeDecision === 'waived'
+              ? 'Manual Billing edit set Pick & Pack to $0.00'
+              : 'Manual Billing edit restored prep fee'),
+          originalPrepAmount: Number.isFinite(originalPrepAmount as number)
+            ? originalPrepAmount
+            : null,
+        },
+        tx,
+      );
+      manualPrepFeeAuditRef.current = { decision: manualPrepFeeDecision, originalPrepAmount };
     }
 
     // ─── PS-207: persist the operator's box decision across regeneration ─────
@@ -814,6 +876,24 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       }
     }
   });
+
+  const manualPrepFeeAudit = manualPrepFeeAuditRef.current;
+  if (manualPrepFeeAudit) {
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'billing_fee_waiver',
+      resourceId: orderId,
+      action: manualPrepFeeAudit.decision,
+      details: {
+        source: 'billing_details_patch',
+        clientId: body.clientId,
+        orderId,
+        decision: manualPrepFeeAudit.decision,
+        originalPrepAmount: manualPrepFeeAudit.originalPrepAmount,
+      },
+    });
+  }
 
   return c.json({ ok: true, orderId, clientId: body.clientId, updated, inserted });
 });
