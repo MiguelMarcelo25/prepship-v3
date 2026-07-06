@@ -74,6 +74,11 @@ import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
 import {
+  cancelledNoChargeBillingLinePredicateSql,
+  cancelledNoChargeBillingAmountSql,
+  isCancelledBillingStatus,
+} from './billing-cancelled-no-charge';
+import {
   isBillingLifecycleSourceStatus,
   orderLifecycleBillingSourcePredicateAlias,
   orderLifecycleBillingSourcePredicate,
@@ -91,11 +96,6 @@ const systemClientNamesSql = sql.join(
   SYSTEM_CLIENT_NAMES.map((name) => sql`${name}`),
   sql`, `,
 );
-const HUGRAB_CANCELLED_BILLING_CLIENT_NAME = 'HUGRAB';
-
-function normalizeBillingClientName(value: string | null | undefined) {
-  return String(value ?? '').trim().toUpperCase();
-}
 
 export function isBillingSourceOrderBillable(input: {
   orderStatus: string | null;
@@ -1089,16 +1089,13 @@ export async function generateLineItems(input: GenerateInput) {
       continue;
     }
 
-    // PS-377 (Per user override unlock shipped data on 2026-07-04): a CANCELLED
-    // order is shown in Billing as a single visible $0.00 "Cancelled" row so it's
-    // auditable as an intentional no-charge, not missing data. The one exception
-    // is a client with an explicit cancelled-billing policy (HUGRAB), which keeps
-    // its existing cancelled billing. Read-only — source order/shipment rows are
-    // never mutated.
+    // Per user override unlock shipped data on 2026-07-06: PS-396 makes every
+    // cancelled/canceled lifecycle row a single visible $0.00 "Cancelled" audit
+    // row. Source order/shipment rows are never mutated.
     const cancelledNoCharge =
-      String(s.orderStatus ?? '').trim().toLowerCase() === 'cancelled' &&
-      normalizeBillingClientName(clientNameById.get(clientId) ?? null) !==
-        HUGRAB_CANCELLED_BILLING_CLIENT_NAME;
+      isCancelledBillingStatus(s.orderStatus) ||
+      isCancelledBillingStatus(s.effectiveOrderStatus) ||
+      isCancelledBillingStatus(s.orderLifecycleStatus);
 
     const rows: LineRow[] = [];
 
@@ -1783,6 +1780,17 @@ export async function billingSummary(
   // orders from any order-backed line so clients with $0 pick/pack defaults
   // still show order volume when shipping lines were generated.
   const selectedClientIds = requestedClientIds(input);
+  const summaryAmount = cancelledNoChargeBillingAmountSql({
+    lineType: sql`b.line_type`,
+    orderStatus: sql`o.order_status`,
+    canonicalStatus: sql`o.canonical_status`,
+    totalCost: sql`b.total_cost`,
+  });
+  const summaryCancelledNoCharge = cancelledNoChargeBillingLinePredicateSql({
+    lineType: sql`b.line_type`,
+    orderStatus: sql`o.order_status`,
+    canonicalStatus: sql`o.canonical_status`,
+  });
   const rows = await db.execute<{
     client_id: number;
     client_name: string;
@@ -1798,19 +1806,20 @@ export async function billingSummary(
     select
       c.id as client_id,
       c.name as client_name,
-      coalesce(sum(case when b.line_type = 'pick_pack' then b.total_cost else 0 end), 0)::text as pickpack_total,
-      coalesce(sum(case when b.line_type = 'additional_unit' then b.total_cost else 0 end), 0)::text as additional_total,
-      coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_total,
-      coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_total,
-      sum(case when b.line_type = 'shipping_missing' then 1 else 0 end)::int as missing_shipping_cost_count,
-      coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_total,
+      coalesce(sum(case when b.line_type = 'pick_pack' then ${summaryAmount} else 0 end), 0)::text as pickpack_total,
+      coalesce(sum(case when b.line_type = 'additional_unit' then ${summaryAmount} else 0 end), 0)::text as additional_total,
+      coalesce(sum(case when b.line_type = 'package_cost' then ${summaryAmount} else 0 end), 0)::text as package_total,
+      coalesce(sum(case when b.line_type = 'shipping' then ${summaryAmount} else 0 end), 0)::text as shipping_total,
+      sum(case when b.line_type = 'shipping_missing' and not ${summaryCancelledNoCharge} then 1 else 0 end)::int as missing_shipping_cost_count,
+      coalesce(sum(case when b.line_type = 'storage' then ${summaryAmount} else 0 end), 0)::text as storage_total,
       count(distinct b.order_id)::int as order_count,
-      coalesce(sum(b.total_cost), 0)::text as grand_total
+      coalesce(sum(${summaryAmount}), 0)::text as grand_total
     from clients c
     left join billing_line_items b
       on b.client_id = c.id
       and b.ship_date >= ${input.dateFrom}::timestamptz
       and b.ship_date < ${input.dateTo}::timestamptz
+    left join orders o on o.id = b.order_id
     where c.active = true
       and c.name not in (${systemClientNamesSql})
       ${selectedClientIds.length ? sql`and c.id = any(${intArraySql(selectedClientIds)})` : sql``}
@@ -1885,6 +1894,12 @@ export async function billingInvoiceHeaderTotals(
   dateFrom: string,
   dateTo: string,
 ): Promise<BillingInvoiceHeaderTotals> {
+  const invoiceAmount = cancelledNoChargeBillingAmountSql({
+    lineType: sql`b.line_type`,
+    orderStatus: sql`o.order_status`,
+    canonicalStatus: sql`o.canonical_status`,
+    totalCost: sql`b.total_cost`,
+  });
   const summaryRow = await db.execute<{
     pickpack_total: string;
     additional_total: string;
@@ -1895,17 +1910,18 @@ export async function billingInvoiceHeaderTotals(
     grand_total: string;
   }>(sql`
     select
-      coalesce(sum(case when line_type in ('pick_pack', 'pickpack') then total_cost else 0 end), 0)::text as pickpack_total,
-      coalesce(sum(case when line_type in ('additional_unit', 'additional') then total_cost else 0 end), 0)::text as additional_total,
-      coalesce(sum(case when line_type in ('package_cost', 'package') then total_cost else 0 end), 0)::text as package_total,
-      coalesce(sum(case when line_type = 'shipping' then total_cost else 0 end), 0)::text as shipping_total,
-      coalesce(sum(case when line_type = 'storage' then total_cost else 0 end), 0)::text as storage_total,
-      count(distinct order_id)::int as order_count,
-      coalesce(sum(total_cost), 0)::text as grand_total
-    from billing_line_items
-    where client_id = ${clientId}
-      and ship_date >= ${dateFrom}::timestamptz
-      and ship_date < ${dateTo}::timestamptz
+      coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then ${invoiceAmount} else 0 end), 0)::text as pickpack_total,
+      coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then ${invoiceAmount} else 0 end), 0)::text as additional_total,
+      coalesce(sum(case when b.line_type in ('package_cost', 'package') then ${invoiceAmount} else 0 end), 0)::text as package_total,
+      coalesce(sum(case when b.line_type = 'shipping' then ${invoiceAmount} else 0 end), 0)::text as shipping_total,
+      coalesce(sum(case when b.line_type = 'storage' then ${invoiceAmount} else 0 end), 0)::text as storage_total,
+      count(distinct b.order_id)::int as order_count,
+      coalesce(sum(${invoiceAmount}), 0)::text as grand_total
+    from billing_line_items b
+    left join orders o on o.id = b.order_id
+    where b.client_id = ${clientId}
+      and b.ship_date >= ${dateFrom}::timestamptz
+      and b.ship_date < ${dateTo}::timestamptz
   `);
   const s = summaryRow[0];
 
@@ -2206,6 +2222,9 @@ export async function billingDetails(input: GenerateInput) {
         externallyShipped: row.externallyShipped === true,
       });
       const detailOrderStatus = rowLifecycle.billingStatus ?? rowLifecycle.effectiveOrderStatus;
+      const isCancelledNoChargeDetailRow =
+        isCancelledBillingStatus(detailOrderStatus) ||
+        isCancelledBillingStatus(rowLifecycle.orderLifecycleStatus);
       const manualBillingOverrideLineTypes = row.orderId != null
         ? [
             ...(manualBillingOverrideByOrderId.get(row.orderId)?.map((override) => override.lineType) ?? []),
@@ -2230,7 +2249,7 @@ export async function billingDetails(input: GenerateInput) {
       // $0 shipping row is reviewable — the reason lets the operator tell a
       // cancelled row (prep fee may be unwarranted) from a bundled row (prep fee
       // likely valid) from one with no shipment proof.
-      const zeroShippingReview = isShippingLine && !hasManualShippingOverride
+      const zeroShippingReview = isShippingLine && !hasManualShippingOverride && !isCancelledNoChargeDetailRow
         ? decideZeroShippingReview({
             shippingAmount: toFiniteNumber(row.totalCost),
             hasShipmentRow: row.shipmentId != null,
@@ -2243,8 +2262,8 @@ export async function billingDetails(input: GenerateInput) {
       // to a known package (or selected box and shipment dims disagree). The
       // FE renders a NEEDS REVIEW chip from these flags; it does no policy
       // math of its own.
-      const isBoxReviewLine = lineType === 'package_cost_missing';
-      const isPackageCostLine = lineType === 'package_cost';
+      const isBoxReviewLine = !isCancelledNoChargeDetailRow && lineType === 'package_cost_missing';
+      const isPackageCostLine = !isCancelledNoChargeDetailRow && lineType === 'package_cost';
       const stalePackagePrice =
         lineType === 'package_cost' &&
         row.createdAt != null &&
@@ -2351,8 +2370,8 @@ export async function billingDetails(input: GenerateInput) {
         clientHasBoxPricing: row.clientId != null ? boxPricingByClient.get(row.clientId) : undefined,
         // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto);
         // the snake_case mirrors this block used to write are deleted.
-        selectedRateCost: isShippingLine ? selectedRateCost : null,
-        shippingCostMissing: isMissingShippingLine,
+        selectedRateCost: isShippingLine && !isCancelledNoChargeDetailRow ? selectedRateCost : null,
+        shippingCostMissing: isMissingShippingLine && !isCancelledNoChargeDetailRow,
         // PS-207: box-review flag + the generator's reason text (the review
         // line's description, e.g. "Box mismatch — selected box (12x10x3)
         // disagrees with shipment dims (12x10x1)").
@@ -2364,8 +2383,8 @@ export async function billingDetails(input: GenerateInput) {
         billingBadges: boxCostAlert.billingBadges,
         manualBillingOverrideLineTypes,
         manualBillingOverrideLabels,
-        refUspsRate: isShippingLine ? refUspsRate : null,
-        refUpsRate: isShippingLine ? refUpsRate : null,
+        refUspsRate: isShippingLine && !isCancelledNoChargeDetailRow ? refUspsRate : null,
+        refUpsRate: isShippingLine && !isCancelledNoChargeDetailRow ? refUpsRate : null,
         // PS-068: true when this box charge was generated BEFORE the client's
         // latest package-price/config change — the stored cost may be stale and
         // the range should be regenerated. Only meaningful for box lines.

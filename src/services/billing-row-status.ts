@@ -1,3 +1,5 @@
+import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
+
 export type BillingLifecycleStatus =
   | 'fulfilled'
   | 'cancelled_no_charge'
@@ -53,12 +55,6 @@ function normalizedLineTypes(input: BillingRowStatusInput): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
-function numericValue(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null;
-  const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 export function isBillingReturnLineType(lineType: unknown): boolean {
   const value = normalizedText(lineType)?.toLowerCase();
   return value === 'return' || value === 'return_label' || value === 'return_processing';
@@ -101,15 +97,13 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
     normalizedText(input.orderStatus)?.toLowerCase() ??
     normalizedText(input.effectiveOrderStatus)?.toLowerCase();
   const orderLifecycleStatus = normalizedText(input.orderLifecycleStatus)?.toLowerCase();
-  const totalCost = numericValue(input.totalCost);
   const cancelledLine = hasLine('cancelled');
-  const cancelledLifecycle =
-    orderLifecycleStatus === 'cancelled' || orderLifecycleStatus === 'upstream_cancelled';
-  if (cancelledLine || ((orderStatus === 'cancelled' || cancelledLifecycle) && (totalCost == null || totalCost <= 0))) {
+  const cancelledLifecycle = isCancelledBillingStatus(orderLifecycleStatus);
+  // Per user override unlock shipped data on 2026-07-06: PS-396 makes every
+  // cancelled/canceled Billing fulfillment row a visible audit row with no
+  // charges, even when stale generated line items still carry positive dollars.
+  if (cancelledLine || isCancelledBillingStatus(orderStatus) || cancelledLifecycle) {
     return result('cancelled_no_charge', 'Cancelled \u00b7 No charge', 'red', 'cancelled', 'CANCELLED', input);
-  }
-  if (orderStatus === 'cancelled' || cancelledLifecycle) {
-    return result('cancelled_billable', 'Cancelled', 'red', null, 'CANCELLED', input);
   }
 
   if (input.packageCostNeedsReview === true || input.shippingZeroNeedsReview === true) {

@@ -2,6 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
+import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge';
 
 // PS-132: synthetic/system clients excluded from reporting metrics — single source.
 const systemClientNamesSql = sql.join(
@@ -520,6 +521,12 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
   await ensureReportingMetricsTables();
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
+  const billingSummaryAmount = cancelledNoChargeBillingAmountSql({
+    lineType: sql`b.line_type`,
+    orderStatus: sql`o.order_status`,
+    canonicalStatus: sql`o.canonical_status`,
+    totalCost: sql`b.total_cost`,
+  });
 
   return withRefreshRun('billing-summary', async () => {
     await db.execute(sql`
@@ -547,12 +554,12 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         ${fromDay}::date as period_from,
         ${toDay}::date as period_to,
         count(distinct b.order_id)::int as order_count,
-        coalesce(sum(case when b.line_type = 'pick_pack' then b.total_cost else 0 end), 0)::numeric(14, 2) as pick_pack_total,
-        coalesce(sum(case when b.line_type = 'additional_unit' then b.total_cost else 0 end), 0)::numeric(14, 2) as additional_total,
-        coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::numeric(14, 2) as package_total,
-        coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::numeric(14, 2) as shipping_total,
-        coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::numeric(14, 2) as storage_total,
-        coalesce(sum(b.total_cost), 0)::numeric(14, 2) as grand_total,
+        coalesce(sum(case when b.line_type = 'pick_pack' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as pick_pack_total,
+        coalesce(sum(case when b.line_type = 'additional_unit' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as additional_total,
+        coalesce(sum(case when b.line_type = 'package_cost' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as package_total,
+        coalesce(sum(case when b.line_type = 'shipping' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as shipping_total,
+        coalesce(sum(case when b.line_type = 'storage' then ${billingSummaryAmount} else 0 end), 0)::numeric(14, 2) as storage_total,
+        coalesce(sum(${billingSummaryAmount}), 0)::numeric(14, 2) as grand_total,
         now() as updated_at
       from clients c
       left join billing_line_items b
@@ -562,6 +569,7 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
         -- midnight); an inclusive bound would aggregate the next period's
         -- first day into this cache row.
         and b.ship_date < ${to.toISOString()}::timestamptz
+      left join orders o on o.id = b.order_id
       where c.active = true
         and c.name not in (${systemClientNamesSql})
       group by c.id

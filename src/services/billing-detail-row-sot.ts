@@ -1,4 +1,5 @@
-import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
+import { NO_BOX_COST_BILLING_BADGE, resolveBillingBoxCostAlert } from './billing-box-cost-alert';
+import { isCancelledNoChargeBillingRow } from './billing-cancelled-no-charge';
 import { isBillingReturnLineType } from './billing-row-status';
 
 // PS-368 — the TYPED canonical billing detail order-row boundary.
@@ -140,6 +141,10 @@ function duplicateOrderNumbers(rows: BillingDetailReadModelRow[]): Set<string> {
 // camelCase aliases (drizzle .select map), so the reads here are camel-only;
 // missing totals fall back to the lineType inference exactly as before.
 function billingLineMetrics(row: BillingDetailReadModelRow) {
+  if (isCancelledNoChargeBillingRow(row)) {
+    return { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, storage: 0, total: 0 };
+  }
+
   const lineType = row.lineType;
   const lineTotal = numberValue(row.totalCost);
   const pickPack = numberValue(
@@ -283,7 +288,37 @@ function appendBillingBadge(row: BillingDetailRowDto, badge: string): void {
   row.billingBadges = badges.includes(badge) ? badges : [...badges, badge];
 }
 
+function applyCancelledNoCharge(row: BillingDetailRowDto): void {
+  if (!isCancelledNoChargeBillingRow(row)) return;
+
+  // Per user override unlock shipped data on 2026-07-06: cancelled Billing rows
+  // remain visible for audit, but stale prep/box/shipping generated lines and
+  // their review badges cannot contribute money or review noise.
+  row.pickpackTotal = 0;
+  row.additionalTotal = 0;
+  row.packageTotal = 0;
+  row.shippingTotal = 0;
+  row.storageTotal = 0;
+  row.pickPackFeeTotal = 0;
+  row.fulfillmentFeeTotal = 0;
+  row.grandTotal = 0;
+  row.totalCost = 0;
+  row.hasPackageCostLine = false;
+  row.boxCostNoCharge = false;
+  row.boxCostAlert = false;
+  row.packageCostNeedsReview = false;
+  row.shippingZeroNeedsReview = false;
+  row.packageCostReviewReason = null;
+  row.zeroShippingReviewReason = null;
+  row.zeroShippingReviewLabel = null;
+  row.zeroShippingReviewSeverity = null;
+  row.billingBadges = Array.isArray(row.billingBadges)
+    ? row.billingBadges.filter((badge) => badge !== NO_BOX_COST_BILLING_BADGE)
+    : [];
+}
+
 function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
+  applyCancelledNoCharge(row);
   row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
   const orderNumber = orderNumberValue(row);
   if (orderNumber && duplicatedOrderNumbers.has(orderNumber)) {

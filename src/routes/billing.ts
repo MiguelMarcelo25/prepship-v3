@@ -51,6 +51,10 @@ import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 import { resolveBillingRowStatus } from '../services/billing-row-status';
 import {
+  cancelledNoChargeBillingAmountSql,
+  isCancelledBillingStatus,
+} from '../services/billing-cancelled-no-charge';
+import {
   resolveShippedPackageId,
   resolvedPackageDisplayName,
   type BoxLookups,
@@ -1442,6 +1446,8 @@ type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | '
   box_cost_desc: string | null;
   box_review_reason: string | null;
   billing_line_types: unknown;
+  order_status: string | null;
+  canonical_status: string | null;
   // PS-310: raw per-SKU rows ({ sku, name, quantity }) fed to the canonical export
   // summarizer. `unknown` because summarizeBillingItemsForDetail validates shape itself.
   item_rows: unknown;
@@ -1503,6 +1509,12 @@ async function billingInvoiceData(
   // single source of truth). Byte-identical to the prior inline query. The per-order breakdown
   // below stays here (billingSummary/the service has no per-order representation to delegate to).
   const totals = await billingInvoiceHeaderTotals(clientId, dateFrom, dateTo);
+  const detailAmount = cancelledNoChargeBillingAmountSql({
+    lineType: sql`b.line_type`,
+    orderStatus: sql`o.order_status`,
+    canonicalStatus: sql`o.canonical_status`,
+    totalCost: sql`b.total_cost`,
+  });
 
   const rawDetails = await db.execute<InvoiceDetailSqlRow>(sql`
     select
@@ -1514,22 +1526,24 @@ async function billingInvoiceData(
       to_char(b.ship_date at time zone 'UTC', 'YYYY-MM-DD') as ship_date,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
-      coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.total_cost else 0 end), 0)::text as pickpack_amt,
-      coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.total_cost else 0 end), 0)::text as additional_amt,
-      coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
-      coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_amt,
+      coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then ${detailAmount} else 0 end), 0)::text as pickpack_amt,
+      coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then ${detailAmount} else 0 end), 0)::text as additional_amt,
+      coalesce(sum(case when b.line_type = 'shipping' then ${detailAmount} else 0 end), 0)::text as shipping_amt,
+      coalesce(sum(case when b.line_type = 'storage' then ${detailAmount} else 0 end), 0)::text as storage_amt,
       max(coalesce(nullif(s.label_carrier, ''), nullif(s.carrier_code, ''), nullif(s.carrier_provider, ''))) as carrier_code,
       -- PS-217: the BILLED box cost is the generated package_cost line value for
       -- this order in the period — never the current package price table, and
       -- never the package_cost_missing $0.00 review rows. The stamped package_id
       -- (PS-207 puts the same billedPackageId on every line of the order) and the
       -- line descriptions carry the human box label + review reason.
-      coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_cost_amt,
+      coalesce(sum(case when b.line_type = 'package_cost' then ${detailAmount} else 0 end), 0)::text as package_cost_amt,
       max(b.package_id) as billed_package_id,
       max(case when b.line_type = 'package_cost' then b.description else null end) as box_cost_desc,
       max(case when b.line_type = 'package_cost_missing' then b.description else null end) as box_review_reason,
-      sum(b.total_cost)::text as row_total,
+      sum(${detailAmount})::text as row_total,
       array_agg(distinct b.line_type) as billing_line_types,
+      max(o.order_status) as order_status,
+      max(o.canonical_status) as canonical_status,
       (
         select string_agg(oi.sku, ', ' order by oi.line_index)
         from order_items oi
@@ -1554,6 +1568,7 @@ async function billingInvoiceData(
       ) as item_rows
     from billing_line_items b
     left join shipments s on s.id = b.shipment_id
+    left join orders o on o.id = b.order_id
     where b.client_id = ${clientId}
       -- PS-208: identical date-only bounds as every billing endpoint — UTC
       -- midnight inclusive lower, EXCLUSIVE day-after upper.
@@ -1593,10 +1608,16 @@ async function billingInvoiceData(
   const details: InvoiceDetailRow[] = rawDetails.map((r) => {
     const { box_label, box_review } = resolveInvoiceBoxLabel(r, packagesById);
     const itemSummary = summarizeBillingItemsForDetail(r.item_rows);
+    const orderLifecycleStatus = isCancelledBillingStatus(r.canonical_status)
+      ? 'upstream_cancelled'
+      : null;
     const billingStatus = resolveBillingRowStatus({
       lineTypes: Array.isArray(r.billing_line_types) ? r.billing_line_types : [],
+      orderStatus: r.order_status,
+      orderLifecycleStatus,
       totalCost: r.row_total,
     });
+    const cancelledNoCharge = billingStatus.billingLifecycleStatus === 'cancelled_no_charge';
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -1616,8 +1637,8 @@ async function billingInvoiceData(
       skus: itemSummary.itemSkus ?? r.skus,
       carrier_code: r.carrier_code,
       package_cost_amt: r.package_cost_amt,
-      box_label,
-      box_review,
+      box_label: cancelledNoCharge ? '—' : box_label,
+      box_review: cancelledNoCharge ? false : box_review,
       fee_waived: r.order_id != null && feeWaiverByOrderId.get(r.order_id)?.decision === 'waived',
     };
   });

@@ -1,17 +1,16 @@
 /**
- * PS-377 — cancelled orders are VISIBLE in Billing as $0 rows (was HUGRAB-only).
+ * PS-377 - cancelled orders are VISIBLE in Billing as $0 rows (was HUGRAB-only).
  *
  * Per user override unlock shipped data on 2026-07-04: cancelled orders are
- * billing source rows for EVERY client. A cancelled order shows a single $0.00
- * "Cancelled" row with a backend-owned CANCELLED badge (fees suppressed → no
- * dollar inflation); HUGRAB keeps its existing cancelled billing as a layered
- * policy. Read-model only — no orders/shipments source mutation.
+ * billing source rows for EVERY client. PS-396 (2026-07-06) removes the old
+ * billable-cancelled exception, so every cancelled/canceled fulfillment row is
+ * no-charge. Read-model only - no orders/shipments source mutation.
  *
  * Offline (no db):
- *   Layer 1 — the inclusion policy (isBillingSourceOrderBillable).
- *   Layer 2 — the grouped billing-detail DTO the FE + Invoice consume: a cancelled
+ *   Layer 1 - the inclusion policy (isBillingSourceOrderBillable).
+ *   Layer 2 - the grouped billing-detail DTO the FE + Invoice consume: a cancelled
  *             $0 row is visible, badged CANCELLED, and adds no dollars.
- *   Layer 3 — source pins: the generator's $0 no-charge line + HUGRAB layering,
+ *   Layer 3 - source pins: the generator's $0 no-charge line for all cancelled rows,
  *             the DTO badge, and the FE rendering it verbatim.
  *
  *   npx tsx scripts/ps-377-cancelled-billing-rows-guard.ts
@@ -23,12 +22,17 @@ import { toBillingDetailOrderRows } from '../src/services/billing-detail-row-sot
 
 let failures = 0;
 function check(name: string, fn: () => void): void {
-  try { fn(); console.log(`ok   ${name}`); }
-  catch (err) { failures += 1; console.error(`FAIL ${name} — ${err instanceof Error ? err.message : err}`); }
+  try {
+    fn();
+    console.log(`ok   ${name}`);
+  } catch (err) {
+    failures += 1;
+    console.error(`FAIL ${name} - ${err instanceof Error ? err.message : err}`);
+  }
 }
 const read = (p: string) => readFileSync(p, 'utf8');
 
-// ── Layer 1: inclusion policy — cancelled billable for EVERY client ──────────
+// Layer 1: inclusion policy - cancelled billable for EVERY client.
 check('shipped order is billable (any client)', () => {
   assert.equal(isBillingSourceOrderBillable({ orderStatus: 'shipped', clientName: 'eBay - DJC' }), true);
 });
@@ -52,7 +56,7 @@ check('a non-shipped / non-cancelled order is NOT billable', () => {
   assert.equal(isBillingSourceOrderBillable({ orderStatus: 'awaiting_shipment', clientName: 'x' }), false);
 });
 
-// ── Layer 2: the grouped DTO the FE + Invoice consume ────────────────────────
+// Layer 2: the grouped DTO the FE + Invoice consume.
 check('grouped DTO: a cancelled $0 order is visible, badged CANCELLED, adds no dollars', () => {
   const [dto] = toBillingDetailOrderRows([
     {
@@ -74,7 +78,7 @@ check('grouped DTO: a shipped order keeps its fees and is NOT badged cancelled',
   assert.ok(dto.billingStatusBadge == null);
 });
 
-// ── Layer 3: source pins ─────────────────────────────────────────────────────
+// Layer 3: source pins.
 const billing = read('src/services/billing.ts');
 
 check('policy: cancelled orders are billing source rows for every client (no HUGRAB-only branch)', () => {
@@ -84,10 +88,11 @@ check('policy: cancelled orders are billing source rows for every client (no HUG
   assert.ok(!/if \(status === 'cancelled'\) return normalizeBillingClientName\(input\.clientName\)/.test(billing));
 });
 
-check('generator: a non-HUGRAB cancelled order is a SINGLE $0 "Cancelled" line; HUGRAB is the layered exception', () => {
-  assert.ok(/const cancelledNoCharge =[\s\S]*?=== 'cancelled' &&[\s\S]*?!==\s*\n?\s*HUGRAB_CANCELLED_BILLING_CLIENT_NAME/.test(billing));
+check('generator: every cancelled/canceled fulfillment order is a SINGLE $0 "Cancelled" line', () => {
+  assert.ok(/const cancelledNoCharge =[\s\S]*?isCancelledBillingStatus\(s\.orderStatus\)[\s\S]*?isCancelledBillingStatus\(s\.orderLifecycleStatus\)/.test(billing));
   assert.ok(/effectiveRows: LineRow\[\] = cancelledNoCharge[\s\S]*?lineType: 'cancelled'[\s\S]*?totalCost: '0\.00'[\s\S]*?applyPrepFeeWaiver\(rows, waived\)/.test(billing),
     'cancelled no-charge must swap to a single $0 cancelled line; else apply the normal rows');
+  assert.ok(!/HUGRAB_CANCELLED_BILLING_CLIENT_NAME/.test(billing), 'PS-396 removed the HUGRAB billable-cancelled exception');
 });
 
 check('billingDetails emits the backend-owned CANCELLED status badge from lifecycle status', () => {
@@ -111,8 +116,6 @@ check('empty billing message no longer says HUGRAB-only cancelled', () => {
 });
 
 check('safety: the cancelled path writes generated billing_line_items only (no orders/shipments UPDATE/DELETE)', () => {
-  // generateLineItems only delete/inserts billing_line_items; it never mutates
-  // orders or shipments (the shipped/cancelled-locked source tables).
   assert.ok(!/\.update\(orders\)/.test(billing) && !/\.update\(shipments\)/.test(billing));
   assert.ok(!/delete\(orders\)/.test(billing) && !/delete\(shipments\)/.test(billing));
 });

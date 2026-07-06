@@ -11,16 +11,16 @@ function check(name: string, condition: boolean) {
   console.error(`FAIL ${name}`);
 }
 
-// PS-377 (2026-07-04, unlock shipped data): cancelled orders are billing source
-// rows for EVERY client (was HUGRAB-only). HUGRAB is retained as a LAYERED
-// cancelled-BILLING policy — its cancelled orders keep real fees, while every
-// other client's cancelled order shows a single $0.00 no-charge row.
+// PS-377 made cancelled orders billing source rows for EVERY client (was
+// HUGRAB-only). PS-396 (2026-07-06, unlock shipped data) removes the old HUGRAB
+// billable-cancelled exception: HUGRAB cancelled rows remain visible, but they
+// are the same single $0.00 no-charge audit rows as every client.
 const billing = readFileSync('src/services/billing.ts', 'utf8');
 
 check(
-  'billing keeps the named HUGRAB cancelled-billing policy + the source-order gate',
-  /HUGRAB_CANCELLED_BILLING_CLIENT_NAME\s*=\s*'HUGRAB'/.test(billing) &&
-    /function isBillingSourceOrderBillable/.test(billing),
+  'billing keeps cancelled source-order gate without a named HUGRAB billable-cancelled policy',
+  /function isBillingSourceOrderBillable/.test(billing) &&
+    !/HUGRAB_CANCELLED_BILLING_CLIENT_NAME\s*=\s*'HUGRAB'/.test(billing),
 );
 
 check(
@@ -37,9 +37,10 @@ check(
 );
 
 check(
-  'PS-377: HUGRAB is layered as the cancelled-BILLING policy; every other cancelled order gets a $0 no-charge line',
-  /const cancelledNoCharge =[\s\S]*?=== 'cancelled' &&[\s\S]*?normalizeBillingClientName\(clientNameById\.get\(clientId\)[\s\S]*?!==\s*\n?\s*HUGRAB_CANCELLED_BILLING_CLIENT_NAME/.test(billing) &&
-    /lineType: 'cancelled'/.test(billing),
+  'PS-396: HUGRAB no longer has a billable-cancelled exception; all cancelled rows get a $0 no-charge line',
+  /const cancelledNoCharge =[\s\S]*?isCancelledBillingStatus\(s\.orderStatus\)[\s\S]*?isCancelledBillingStatus\(s\.orderLifecycleStatus\)/.test(billing) &&
+    /lineType: 'cancelled'/.test(billing) &&
+    !/HUGRAB_CANCELLED_BILLING_CLIENT_NAME/.test(billing),
 );
 
 check(
