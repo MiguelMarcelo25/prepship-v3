@@ -2215,6 +2215,7 @@ export async function billingDetails(input: GenerateInput) {
       const manualBillingOverrideLabels = [
         ...new Set(manualBillingOverrideLineTypes.map(manualBillingOverrideLabel)),
       ];
+      const hasManualShippingOverride = manualBillingOverrideLineTypes.includes('shipping');
       const isShippingLine = lineType === 'shipping';
       const isMissingShippingLine = lineType === 'shipping_missing';
       // PS-312 S5: a bundle CHILD's "Included — bundled with #N" line is intentionally $0 (shipping is
@@ -2229,7 +2230,7 @@ export async function billingDetails(input: GenerateInput) {
       // $0 shipping row is reviewable — the reason lets the operator tell a
       // cancelled row (prep fee may be unwarranted) from a bundled row (prep fee
       // likely valid) from one with no shipment proof.
-      const zeroShippingReview = isShippingLine
+      const zeroShippingReview = isShippingLine && !hasManualShippingOverride
         ? decideZeroShippingReview({
             shippingAmount: toFiniteNumber(row.totalCost),
             hasShipmentRow: row.shipmentId != null,

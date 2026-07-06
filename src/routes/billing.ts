@@ -798,6 +798,22 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
       }
     }
 
+    // PS-395: a manual Shipping save is an operator resolution of the shipping
+    // review state. Even an explicit $0.00 override is durable in
+    // billing_manual_overrides, so stale shipping_missing rows must disappear
+    // immediately instead of waiting for range regeneration.
+    if (body.shipping !== undefined) {
+      await tx
+        .delete(billingLineItems)
+        .where(
+          and(
+            eq(billingLineItems.clientId, body.clientId),
+            eq(billingLineItems.orderId, orderId),
+            eq(billingLineItems.lineType, 'shipping_missing')
+          )
+        );
+    }
+
     // Box Size override below is billing-line-only; it does not touch the
     // shipment-selected package source of truth.
     if (body.packageId !== undefined) {

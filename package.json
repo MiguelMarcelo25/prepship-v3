@@ -328,6 +328,7 @@
     "test:ps-392-manual-billing-overrides": "tsx scripts/ps-392-manual-billing-overrides-guard.ts",
     "test:ps-393-billing-status-column": "tsx scripts/ps-393-billing-status-column-guard.ts",
     "test:ps-394-billing-qty-shipping-display": "tsx scripts/ps-394-billing-qty-shipping-display-guard.ts",
+    "test:ps-395-billing-review-resolution": "tsx scripts/ps-395-billing-review-resolution-guard.ts",
     "test:ps-398-billing-custom-box-override": "tsx scripts/ps-398-billing-custom-box-override-guard.ts",
     "test:hugrab-cancelled-billing-guard": "tsx scripts/hugrab-cancelled-billing-guard.ts",
     "test:ps-370-selected-rate-cost-backfill": "tsx scripts/ps-370-selected-rate-cost-backfill-guard.ts",
