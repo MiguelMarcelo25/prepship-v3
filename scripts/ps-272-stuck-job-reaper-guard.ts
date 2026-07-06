@@ -16,6 +16,7 @@
  */
 import {
   REAPER_MIN_ACTIVE_AGE_MS,
+  REAPER_ORPHAN_ACTIVE_GRACE_MS,
   REAPER_SAFE_JOB_NAMES,
   selectStuckActiveJobs,
 } from '../src/services/sync-stuck-job-reaper';
@@ -69,6 +70,32 @@ check(
 );
 
 // 3b) Belt: 20 min (> threshold) active shipments IS selected — the boundary holds.
+check(
+  'a young active shipments job is selected when the ShipStation lane lock is free',
+  selectStuckActiveJobs(
+    [{ id: 'sh-orphan', name: 'prepship.sync.shipments', state: 'active', started_on: FIVE_MIN_AGO }],
+    {
+      ...OPTS,
+      activeLanesHeld: new Set(),
+      orphanActiveGraceMs: REAPER_ORPHAN_ACTIVE_GRACE_MS,
+    },
+  ),
+  [{ id: 'sh-orphan', name: 'prepship.sync.shipments' }],
+);
+
+check(
+  'a young active shipments job is protected when the ShipStation lane lock is still held',
+  selectStuckActiveJobs(
+    [{ id: 'sh-held', name: 'prepship.sync.shipments', state: 'active', started_on: FIVE_MIN_AGO }],
+    {
+      ...OPTS,
+      activeLanesHeld: new Set(['shipstation-sync']),
+      orphanActiveGraceMs: REAPER_ORPHAN_ACTIVE_GRACE_MS,
+    },
+  ),
+  [],
+);
+
 check(
   'a 20-min-old active shipments job is selected (past the 15-min threshold)',
   selectStuckActiveJobs(

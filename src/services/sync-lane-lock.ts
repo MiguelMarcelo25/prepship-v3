@@ -24,11 +24,15 @@ export type SyncLaneLockResult<T> =
   | { acquired: true; result: T }
   | { acquired: false; result: null };
 
+export function syncLaneLockName(lane: SyncJobLane): string {
+  return `${SYNC_LANE_LOCK_PREFIX}.${lane}`;
+}
+
 export async function withSyncLaneAdvisoryLock<T>(
   lane: SyncJobLane,
   fn: () => Promise<T>,
 ): Promise<SyncLaneLockResult<T>> {
-  const lockName = `${SYNC_LANE_LOCK_PREFIX}.${lane}`;
+  const lockName = syncLaneLockName(lane);
   return laneLockSql.begin(async (tx) => {
     const [row] = await tx<{ acquired: boolean }[]>`
       select pg_try_advisory_xact_lock(hashtext(${lockName})) as acquired
@@ -37,4 +41,12 @@ export async function withSyncLaneAdvisoryLock<T>(
     if (!acquired) return { acquired: false, result: null };
     return { acquired: true, result: await fn() };
   });
+}
+
+export async function isSyncLaneAdvisoryLockHeld(lane: SyncJobLane): Promise<boolean> {
+  const lockName = syncLaneLockName(lane);
+  const rows = await laneLockSql.begin((tx) => tx<{ acquired: boolean }[]>`
+    select pg_try_advisory_xact_lock(hashtext(${lockName})) as acquired
+  `);
+  return !Boolean(rows[0]?.acquired);
 }

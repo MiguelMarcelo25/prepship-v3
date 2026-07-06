@@ -21,6 +21,8 @@
 // order-state mutation) are EXCLUDED on purpose.
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
+import { syncJobLaneFor, type SyncJobLane } from './sync-job-lanes';
+import { isSyncLaneAdvisoryLockHeld } from './sync-lane-lock';
 
 /**
  * Allow-list of pgboss queue names the reaper may clear. These are idempotent queue jobs where
@@ -53,6 +55,11 @@ export const REAPER_SAFE_JOB_NAMES: readonly string[] = [
  * legitimately-running long tick is never reaped — only orphans whose worker process is gone.
  */
 export const REAPER_MIN_ACTIVE_AGE_MS = 15 * 60_000;
+// Per user override unlock shipped data on 2026-07-07: deploy handoffs can leave a young pg-boss
+// row in state='active' after the worker transaction died. The ShipStation lane advisory lock is
+// the source of truth for whether a job still owns the lane; if it is free after this grace window,
+// the active row is an orphan and may be failed without touching orders, shipments, or labels.
+export const REAPER_ORPHAN_ACTIVE_GRACE_MS = 60_000;
 export const REAPER_STALE_QUEUED_MIN_AGE_MS = 15 * 60_000;
 export const REAPER_STALE_QUEUED_KEEP_PER_JOB = 1;
 export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
@@ -83,10 +90,16 @@ type StuckJobRow = {
  */
 export function selectStuckActiveJobs(
   jobs: ReadonlyArray<StuckJobRow>,
-  opts: { nowMs: number; minActiveAgeMs: number },
+  opts: {
+    nowMs: number;
+    minActiveAgeMs: number;
+    activeLanesHeld?: ReadonlySet<SyncJobLane>;
+    orphanActiveGraceMs?: number;
+  },
 ): Array<{ id: string; name: string }> {
   const safe = new Set(REAPER_SAFE_JOB_NAMES);
   const out: Array<{ id: string; name: string }> = [];
+  const orphanActiveGraceMs = opts.orphanActiveGraceMs ?? opts.minActiveAgeMs;
   for (const job of jobs) {
     if (job.state !== 'active') continue;
     if (!safe.has(job.name)) continue;
@@ -94,7 +107,12 @@ export function selectStuckActiveJobs(
     const startedMs =
       job.started_on instanceof Date ? job.started_on.getTime() : Date.parse(String(job.started_on));
     if (!Number.isFinite(startedMs)) continue;
-    if (opts.nowMs - startedMs < opts.minActiveAgeMs) continue;
+    const ageMs = opts.nowMs - startedMs;
+    const pastAgeThreshold = ageMs >= opts.minActiveAgeMs;
+    const lane = syncJobLaneFor(job.name);
+    const laneIsFree = opts.activeLanesHeld != null && !opts.activeLanesHeld.has(lane);
+    const orphanedActiveRow = laneIsFree && ageMs >= orphanActiveGraceMs;
+    if (!pastAgeThreshold && !orphanedActiveRow) continue;
     out.push({ id: job.id, name: job.name });
   }
   return out;
@@ -111,6 +129,21 @@ type ReapedJobRow = {
   id: string;
   name: string;
 };
+
+async function detectActiveLanesHeld(rows: ReadonlyArray<StuckJobRow>): Promise<Set<SyncJobLane>> {
+  const lanes = new Set<SyncJobLane>();
+  for (const row of rows) {
+    lanes.add(syncJobLaneFor(row.name));
+  }
+
+  const held = new Set<SyncJobLane>();
+  for (const lane of lanes) {
+    if (await isSyncLaneAdvisoryLockHeld(lane)) {
+      held.add(lane);
+    }
+  }
+  return held;
+}
 
 /**
  * EFFECTFUL reaper. NO-OP when the flag is OFF (no DB, no mutation). When ON: reads 'active' rows
@@ -138,9 +171,12 @@ export async function reapStuckActiveJobs(): Promise<ReapResult> {
         AND name = ANY(${REAPER_SAFE_JOB_NAMES as string[]})
     `;
 
+    const activeLanesHeld = await detectActiveLanesHeld(rows);
     const stuck = selectStuckActiveJobs(rows, {
       nowMs: Date.now(),
       minActiveAgeMs: REAPER_MIN_ACTIVE_AGE_MS,
+      activeLanesHeld,
+      orphanActiveGraceMs: REAPER_ORPHAN_ACTIVE_GRACE_MS,
     });
 
     if (stuck.length === 0) {
