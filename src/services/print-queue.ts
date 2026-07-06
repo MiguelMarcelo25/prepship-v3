@@ -229,6 +229,9 @@ export type PrintQueueListScope = {
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
 const QUEUE_SEND_PROVIDER_PENDING_AFTER_MS = 90_000;
+// Per user override unlock shipped data on 2026-07-06: bound queue-send order work
+// so a stuck label purchase cannot leave label recovery status running indefinitely.
+const QUEUE_SEND_ORDER_TIMEOUT_MS = 90_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_MS = 60_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS = 1_500;
 
@@ -801,6 +804,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function timeoutAfter(ms: number, message: string): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), ms);
+  });
+}
+
 async function waitForExistingQueueableLabel(
   order: Pick<QueueSendOrderInput, 'orderId' | 'clientId'>,
 ): Promise<string | null> {
@@ -1199,9 +1208,15 @@ async function runQueueSendJob(
       async (order) => {
         const orderStartedAt = Date.now();
         try {
-          const result = await processQueueSendOrder(order, order.scope ?? scope, {
-            setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
-          });
+          const result = await Promise.race([
+            processQueueSendOrder(order, order.scope ?? scope, {
+              setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
+            }),
+            timeoutAfter(
+              QUEUE_SEND_ORDER_TIMEOUT_MS,
+              `Timed out while sending order ${order.orderNumber ?? order.orderId} to queue; check the queue and existing labels before retrying.`
+            ),
+          ]);
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);

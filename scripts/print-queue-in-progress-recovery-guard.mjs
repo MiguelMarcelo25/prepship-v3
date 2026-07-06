@@ -25,17 +25,27 @@ const checks = [
   {
     name: 'queue-send waits for the first purchase to persist a queueable label before failing',
     pass: (() => {
-      const catchIndex = service.indexOf('} catch (err) {', service.indexOf('() => createLabelV2({'))
+      const purchaseIndex = service.indexOf("'labelPurchaseMs'")
+      const catchIndex = service.indexOf('} catch (err) {', purchaseIndex)
       if (catchIndex < 0) return false
       const catchBlock = service.slice(catchIndex, service.indexOf('\n    }', catchIndex) + 6)
       return (
         catchBlock.includes('isLabelPurchaseInProgressError(err)') &&
-        catchBlock.includes('waitForExistingQueueableLabel(order.orderId)') &&
+        catchBlock.includes('waitForExistingQueueableLabel(order)') &&
         catchBlock.includes('if (recoveredAfterInProgress)') &&
         catchBlock.includes('labelUrl = recoveredAfterInProgress') &&
         catchBlock.includes('else throw err')
       )
     })(),
+  },
+  {
+    name: 'queue-send wraps each order with the backend timeout guard',
+    pass:
+      service.includes('Promise.race([') &&
+      service.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
+      service.includes('timeoutAfter(') &&
+      service.includes('QUEUE_SEND_ORDER_TIMEOUT_MS') &&
+      service.includes('Timed out while sending order'),
   },
   {
     name: 'package.json exposes the in-progress recovery guard',

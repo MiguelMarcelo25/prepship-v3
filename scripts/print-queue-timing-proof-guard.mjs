@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 
 const service = readFileSync('src/services/print-queue.ts', 'utf8')
+const snapshot = readFileSync('src/services/print-queue/queue-send-snapshot.ts', 'utf8')
 const route = readFileSync('src/routes/print-queue.ts', 'utf8')
 const pkg = readFileSync('package.json', 'utf8')
 
@@ -33,13 +34,16 @@ const checks = [
   {
     name: 'durable queue-send snapshots include timings',
     pass:
-      service.includes('timings?: QueueSendTimingBreakdown') &&
-      service.includes('timings: result.timings'),
+      snapshot.includes('timings?: QueueSendTimingBreakdown') &&
+      snapshot.includes('timings: result.timings') &&
+      snapshot.includes('results: QueueSendResultSnapshot[]') &&
+      snapshot.includes('resultSamples: results.slice(-10)'),
   },
   {
     name: 'status route returns queue-send results for timing inspection',
     pass:
-      route.includes('results: durableJob.resultSamples') &&
+      route.includes('const durableResults = queueSendSnapshotResults(durableJob)') &&
+      route.includes('results: durableResults') &&
       route.includes('results: job.results'),
   },
   {
