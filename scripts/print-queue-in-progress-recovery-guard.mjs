@@ -1,14 +1,17 @@
 import { readFileSync } from 'node:fs'
 
 const service = readFileSync('src/services/print-queue.ts', 'utf8')
+const worker = readFileSync('src/services/print-queue-worker.ts', 'utf8')
+const env = readFileSync('src/lib/env.ts', 'utf8')
 const pkg = readFileSync('package.json', 'utf8')
 
 const checks = [
   {
-    name: 'queue-send gives real label purchases enough time before timing out',
+    name: 'queue-send does not use a non-cancelling per-order timeout race',
     pass:
-      /const QUEUE_SEND_ORDER_TIMEOUT_MS = 90_000/.test(service) &&
-      !/const QUEUE_SEND_ORDER_TIMEOUT_MS = 30_000/.test(service),
+      !/QUEUE_SEND_ORDER_TIMEOUT_MS/.test(service) &&
+      !/function timeoutAfter/.test(service) &&
+      !/Promise\.race\(\[\s*processQueueSendOrder/.test(service),
   },
   {
     name: 'queue-send has a bounded recovery window for concurrent label purchases',
@@ -39,13 +42,12 @@ const checks = [
     })(),
   },
   {
-    name: 'queue-send wraps each order with the backend timeout guard',
+    name: 'print worker owns the backend batch deadline',
     pass:
-      service.includes('Promise.race([') &&
-      service.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
-      service.includes('timeoutAfter(') &&
-      service.includes('QUEUE_SEND_ORDER_TIMEOUT_MS') &&
-      service.includes('Timed out while sending order'),
+      /PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS/.test(env) &&
+      /withDeadline\(/.test(worker) &&
+      /env\.PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS/.test(worker) &&
+      /runQueueSendJobFromWorker\(payload\)/.test(worker),
   },
   {
     name: 'package.json exposes the in-progress recovery guard',

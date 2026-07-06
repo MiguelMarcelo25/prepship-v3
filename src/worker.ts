@@ -11,6 +11,10 @@ import {
   startQueuedSyncScheduler,
   stopQueuedSyncScheduler,
 } from './services/sync-job-queue';
+import {
+  startPrintQueueWorker,
+  stopPrintQueueWorker,
+} from './services/print-queue-worker';
 import { ensureOrdersPerformanceIndexes } from './services/orders-performance-maintenance';
 import { ensureReportingMetricsTables } from './services/reporting-metrics';
 
@@ -25,10 +29,13 @@ function startKeepAliveHeartbeat(): void {
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[worker] received ${signal}; shutting down`);
-  if (env.USE_PG_BOSS_SCHEDULER) {
-    await stopQueuedSyncScheduler();
-  } else {
-    stopSyncScheduler();
+  await stopPrintQueueWorker();
+  if (env.RUN_SYNC_SCHEDULER) {
+    if (env.USE_PG_BOSS_SCHEDULER) {
+      await stopQueuedSyncScheduler();
+    } else {
+      stopSyncScheduler();
+    }
   }
   if (keepAliveTimer) {
     clearInterval(keepAliveTimer);
@@ -68,7 +75,7 @@ process.on('uncaughtException', (err) => {
 async function main(): Promise<void> {
   console.log('[worker] PrepShip worker booting');
   console.log(
-    `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}; USE_PG_BOSS_SCHEDULER=${env.USE_PG_BOSS_SCHEDULER}`
+    `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; RUN_PRINT_QUEUE_WORKER=${env.RUN_PRINT_QUEUE_WORKER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}; USE_PG_BOSS_SCHEDULER=${env.USE_PG_BOSS_SCHEDULER}`
   );
 
   if (env.WORKER_PLACEHOLDER) {
@@ -99,6 +106,11 @@ async function main(): Promise<void> {
     );
   }
 
+  if (env.RUN_PRINT_QUEUE_WORKER) {
+    console.log('[worker] starting print queue worker');
+    await startPrintQueueWorker();
+  }
+
   if (env.RUN_SYNC_SCHEDULER) {
     if (env.USE_PG_BOSS_SCHEDULER) {
       console.log('[worker] starting pg-boss sync scheduler');
@@ -108,8 +120,13 @@ async function main(): Promise<void> {
       startSyncScheduler({ mode: 'worker-scheduler' });
     }
   } else {
-    console.log('[worker] RUN_SYNC_SCHEDULER=false; worker is idle');
-    await setWorkerMode('disabled');
+    if (env.RUN_PRINT_QUEUE_WORKER) {
+      console.log('[worker] RUN_SYNC_SCHEDULER=false; print queue worker running');
+      await setWorkerMode('print-worker');
+    } else {
+      console.log('[worker] RUN_SYNC_SCHEDULER=false; worker is idle');
+      await setWorkerMode('disabled');
+    }
     startKeepAliveHeartbeat();
   }
 }

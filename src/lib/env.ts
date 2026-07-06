@@ -181,6 +181,12 @@ const schema = z.object({
   // When OFF the route-plan endpoint is INERT (503 FEATURE_DISABLED before any
   // work — no DB, no provider, no postage).
   PRINT_QUEUE_BACKEND_ORCHESTRATION: booleanFlag(false),
+  // Dedicated Print Queue worker rollout. API enqueue is separate from worker
+  // consumption so the service can be deployed dark, then canaried without
+  // changing the operator's Print to Queue workflow.
+  PRINT_QUEUE_WORKER_ENABLED: booleanFlag(false),
+  RUN_PRINT_QUEUE_WORKER: booleanFlag(false),
+  PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(10 * 60_000),
   // PS-306 (A1, money path): default-OFF. When ON with backend orchestration, a
   // direct-carrier order that still needs a label routes to the BACKEND create job instead of
   // the FE 'direct-create' buy, because createLabelV2 already buys direct-carrier labels

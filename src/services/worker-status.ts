@@ -16,7 +16,7 @@ const WORKER_STATUS_PERSIST_ABANDON_MS = Math.max(
   ),
 );
 
-type WorkerMode = 'api-scheduler' | 'worker-scheduler' | 'placeholder' | 'disabled';
+type WorkerMode = 'api-scheduler' | 'worker-scheduler' | 'print-worker' | 'placeholder' | 'disabled';
 type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 
 export type WorkerJobSnapshot = {

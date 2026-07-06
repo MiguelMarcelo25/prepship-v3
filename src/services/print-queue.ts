@@ -8,6 +8,7 @@ import { orderItems } from '../db/schema/order-items';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
+import { env } from '../lib/env';
 import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
 import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
@@ -57,6 +58,7 @@ import {
   type QueueSendItemSnapshot,
 } from './print-queue/queue-send-snapshot';
 import { preflightQueueSendOrders } from './print-queue/queue-send-preflight';
+import { enqueueQueueSendWorkerJob } from './print-queue-worker';
 export {
   PRINT_QUEUE_SEND_STATUS_KEY,
   queueSendJobStatusKey,
@@ -229,9 +231,6 @@ export type PrintQueueListScope = {
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
 const QUEUE_SEND_PROVIDER_PENDING_AFTER_MS = 90_000;
-// Per user override unlock shipped data on 2026-07-06: bound queue-send order work
-// so a stuck label purchase cannot leave label recovery status running indefinitely.
-const QUEUE_SEND_ORDER_TIMEOUT_MS = 90_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_MS = 60_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS = 1_500;
 
@@ -527,6 +526,32 @@ function updateQueueSendProgress(job: QueueSendJob) {
       : `Sending to queue ${job.current}/${job.total}`;
 }
 
+function timestampFromSnapshot(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function queueSendJobFromSnapshot(snapshot: QueueSendJobSnapshot): QueueSendJob {
+  return {
+    jobId: snapshot.jobId,
+    status: snapshot.status,
+    clientIds: [...snapshot.clientIds],
+    progress: snapshot.progress,
+    total: snapshot.total,
+    current: snapshot.current,
+    queued: snapshot.queued,
+    failed: snapshot.failed,
+    message: snapshot.message,
+    clientId: snapshot.clientId,
+    createdAt: timestampFromSnapshot(snapshot.createdAt),
+    updatedAt: timestampFromSnapshot(snapshot.updatedAt),
+    results: queueSendSnapshotResults(snapshot),
+    queuedEntryIds: [...snapshot.queuedEntryIds],
+    itemStates: snapshot.itemStates ?? [],
+    errorMessage: snapshot.errorMessage ?? undefined,
+  };
+}
+
 function getExistingLabelUrl(err: unknown): string | null {
   const details = (err as { details?: Record<string, unknown> })?.details;
   const labelUrl = details?.labelUrl;
@@ -802,12 +827,6 @@ function isLabelPurchaseInProgressError(err: unknown): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function timeoutAfter(ms: number, message: string): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(message)), ms);
-  });
 }
 
 async function waitForExistingQueueableLabel(
@@ -1178,6 +1197,22 @@ export async function startQueueSendJob(input: {
   await persistQueueSendJobSnapshot(job, { required: true });
   await persistQueueSendJobItems(jobId, preflight.itemStates);
   if (preflight.readyOrders.length > 0) {
+    if (env.PRINT_QUEUE_WORKER_ENABLED) {
+      const enqueueResult = await enqueueQueueSendWorkerJob({
+        jobId,
+        orders: preflight.readyOrders,
+        concurrency: input.concurrency,
+        scope: input.scope,
+        requestedAt: new Date(job.createdAt).toISOString(),
+      });
+      if (enqueueResult.queued) {
+        return { jobId, total: input.orders.length };
+      }
+      console.warn(
+        '[print-queue] worker enqueue failed; falling back to in-process queue send:',
+        enqueueResult.error ?? 'pg-boss did not accept the job',
+      );
+    }
     void runQueueSendJob(jobId, preflight.readyOrders, input.concurrency, input.scope);
   }
   return { jobId, total: input.orders.length };
@@ -1186,6 +1221,42 @@ export async function startQueueSendJob(input: {
 export function getQueueSendJobStatus(jobId: string): QueueSendJob | null {
   cleanOldJobs();
   return queueSendJobs.get(jobId) ?? null;
+}
+
+export async function runQueueSendJobFromWorker(payload: {
+  jobId: string;
+  orders: QueueSendOrderInput[];
+  concurrency?: number;
+  scope?: PrintQueueListScope;
+}): Promise<{ ok: true; jobId: string; skipped?: string; remaining: number }> {
+  const durableJob = await getQueueSendJobRecord(payload.jobId);
+  if (!durableJob) {
+    throw new Error(`Queue send job ${payload.jobId} was not found`);
+  }
+
+  if (durableJob.status === 'done' || durableJob.status === 'error') {
+    return {
+      ok: true,
+      jobId: payload.jobId,
+      skipped: `already_${durableJob.status}`,
+      remaining: 0,
+    };
+  }
+
+  const job = queueSendJobs.get(payload.jobId) ?? queueSendJobFromSnapshot(durableJob);
+  queueSendJobs.set(payload.jobId, job);
+
+  const completedOrderIds = new Set(job.results.map((result) => result.orderId));
+  const remainingOrders = payload.orders.filter((order) => !completedOrderIds.has(order.orderId));
+  if (remainingOrders.length === 0) {
+    job.status = 'done';
+    updateQueueSendProgress(job);
+    await persistQueueSendJobSnapshot(job);
+    return { ok: true, jobId: payload.jobId, skipped: 'no_remaining_orders', remaining: 0 };
+  }
+
+  await runQueueSendJob(payload.jobId, remainingOrders, payload.concurrency, payload.scope);
+  return { ok: true, jobId: payload.jobId, remaining: remainingOrders.length };
 }
 
 async function runQueueSendJob(
@@ -1208,15 +1279,9 @@ async function runQueueSendJob(
       async (order) => {
         const orderStartedAt = Date.now();
         try {
-          const result = await Promise.race([
-            processQueueSendOrder(order, order.scope ?? scope, {
-              setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
-            }),
-            timeoutAfter(
-              QUEUE_SEND_ORDER_TIMEOUT_MS,
-              `Timed out while sending order ${order.orderNumber ?? order.orderId} to queue; check the queue and existing labels before retrying.`
-            ),
-          ]);
+          const result = await processQueueSendOrder(order, order.scope ?? scope, {
+            setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
+          });
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);

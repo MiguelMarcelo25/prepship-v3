@@ -638,6 +638,7 @@
     "test:print-queue-durable": "node scripts/print-queue-durable-guard.mjs",
     "test:ps-346-print-queue-durable-full-results": "tsx scripts/ps-346-print-queue-durable-full-results-guard.ts",
     "test:ps-351-durable-print-queue-jobs": "tsx scripts/ps-351-durable-print-queue-jobs-guard.ts",
+    "test:print-queue-worker-offload": "tsx scripts/print-queue-worker-offload-guard.ts",
     "test:print-queue-persistence": "node scripts/print-queue-persistence-guard.mjs",
     "test:print-queue-invalid-label": "node scripts/print-queue-invalid-label-guard.mjs",
     "test:print-queue-signed-pdf": "node scripts/print-queue-signed-pdf-guard.mjs",
