@@ -36,6 +36,9 @@ check('reaper exports stale queued cadence age threshold',
 check('reaper keeps the newest cadence row per safe job',
   /REAPER_STALE_QUEUED_KEEP_PER_JOB\s*=\s*1/.test(reaper) &&
   /PARTITION BY name, singleton_key/.test(reaper));
+check('stale queued reaper ranks all queued ticks before applying stale cutoff',
+  /created_on,\s*row_number\(\) OVER/.test(reaper) &&
+  /WHERE newest_rank > \$\{REAPER_STALE_QUEUED_KEEP_PER_JOB\}\s*AND created_on < now\(\)/.test(reaper));
 check('stale cadence reaper only considers created/retry rows',
   /state IN \('created', 'retry'\)/.test(reaper));
 check('stale queued reaper only considers safe sync singleton rows',

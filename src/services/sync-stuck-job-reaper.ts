@@ -234,6 +234,7 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
           id::text AS id,
           name,
           singleton_key,
+          created_on,
           row_number() OVER (
             PARTITION BY name, singleton_key
             ORDER BY created_on DESC, id DESC
@@ -242,11 +243,11 @@ export async function reapStaleQueuedCadenceJobs(): Promise<ReapResult> {
         WHERE state IN ('created', 'retry')
           AND name = ANY(${REAPER_STALE_QUEUED_JOB_NAMES as string[]})
           AND singleton_key = ANY(${REAPER_STALE_QUEUED_SINGLETON_KEYS as string[]})
-          AND created_on < now() - (${Math.floor(REAPER_STALE_QUEUED_MIN_AGE_MS / 1000)} * interval '1 second')
       )
       SELECT id, name
       FROM candidates
       WHERE newest_rank > ${REAPER_STALE_QUEUED_KEEP_PER_JOB}
+        AND created_on < now() - (${Math.floor(REAPER_STALE_QUEUED_MIN_AGE_MS / 1000)} * interval '1 second')
     `;
 
     if (stale.length === 0) {
