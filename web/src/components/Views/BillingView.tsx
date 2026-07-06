@@ -128,7 +128,6 @@ const SUMMARY_COL_COUNT = 8
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 const BILLING_CLIENT_FILTER_STORAGE_KEY = 'billing_summary_client_filter_v1'
 const BILLING_GENERATE_BATCH_DAYS = 7
-const BILLING_AUTO_UPDATE_MS = 3 * 60_000
 const SHIPSTATION_BILLING_CLIENT_NAMES = [
   'eBay - DJC',
   'Heritage Kids Press',
@@ -280,7 +279,6 @@ export default function BillingView() {
   const detailWrapRef = useRef<HTMLDivElement | null>(null)
   const fetchRefPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const billingUpdateRunningRef = useRef(false)
-  const autoBillingUpdateRef = useRef<() => void>(() => {})
 
   const [configs, setConfigs] = useState<BillingConfigDto[]>([])
   const [configDrafts, setConfigDrafts] = useState<Record<number, BillingConfigDraft>>({})
@@ -595,18 +593,6 @@ export default function BillingView() {
     return () => {
       if (fetchRefPollRef.current) clearInterval(fetchRefPollRef.current)
     }
-  }, [])
-
-  autoBillingUpdateRef.current = () => {
-    void handleGenerateBilling({ silent: true })
-  }
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const timer = window.setInterval(() => {
-      autoBillingUpdateRef.current()
-    }, BILLING_AUTO_UPDATE_MS)
-    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {

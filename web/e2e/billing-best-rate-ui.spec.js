@@ -51,7 +51,28 @@ function apiPath(url) {
   return url.pathname.replace(/^\/api/, '') || '/'
 }
 
-async function setup(page) {
+async function setup(page, options = {}) {
+  const {
+    triggerBillingAutoIntervalImmediately = false,
+    onBillingGenerationStatus = () => {},
+    onBillingGenerate = () => {},
+  } = options
+
+  if (triggerBillingAutoIntervalImmediately) {
+    await page.addInitScript(() => {
+      const originalSetInterval = window.setInterval.bind(window)
+      window.setInterval = (handler, timeout, ...args) => {
+        const id = originalSetInterval(handler, timeout, ...args)
+        if (timeout === 3 * 60 * 1000) {
+          window.setTimeout(() => {
+            if (typeof handler === 'function') handler(...args)
+          }, 0)
+        }
+        return id
+      }
+    })
+  }
+
   await page.addInitScript((projectRef) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60
     window.localStorage.setItem(
@@ -114,6 +135,16 @@ async function setup(page) {
     }
     if (path === '/billing/fetch-ref-rates/status') {
       await route.fulfill(json({ status: 'idle' }))
+      return
+    }
+    if (path === '/billing/generate/status') {
+      onBillingGenerationStatus()
+      await route.fulfill(json({ upToDate: true, missingFrom: null, missingTo: null }))
+      return
+    }
+    if (path === '/billing/generate') {
+      onBillingGenerate()
+      await route.fulfill(json({ generated: 0, count: 0 }))
       return
     }
     if (path === '/billing/summary') {
@@ -190,4 +221,27 @@ test('Billing Detail Selected Rate cell has no blue outline', async ({ page }) =
   expect(styles.borderTopWidth).toBe('0px')
   expect(styles.outlineStyle).toBe('none')
   expect(styles.borderTopColor).not.toBe('rgb(42, 91, 215)')
+})
+
+test('Billing updates only after the operator clicks Update Billing', async ({ page }) => {
+  let statusCalls = 0
+  let generateCalls = 0
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await setup(page, {
+    triggerBillingAutoIntervalImmediately: true,
+    onBillingGenerationStatus: () => { statusCalls += 1 },
+    onBillingGenerate: () => { generateCalls += 1 },
+  })
+  await page.goto(`${baseUrl}/billing`)
+
+  await expect(page.locator('.billing-summary-client-chip', { hasText: 'Mock Billing Client' })).toBeVisible()
+  await page.waitForTimeout(250)
+  expect(statusCalls).toBe(0)
+  expect(generateCalls).toBe(0)
+
+  await page.getByRole('button', { name: 'Update Billing' }).click()
+
+  await expect.poll(() => statusCalls).toBe(1)
+  expect(generateCalls).toBe(0)
 })
