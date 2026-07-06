@@ -162,6 +162,7 @@
     "test:ps-387-effective-order-status-sot": "tsx scripts/ps-387-effective-order-status-sot-guard.ts",
     "test:ps-386-stale-rate-aliases": "tsx scripts/ps-386-stale-rate-aliases-guard.ts",
     "test:ps-383-billing-storage-proof-migration": "tsx scripts/ps-383-billing-storage-proof-migration-guard.ts",
+    "test:ps-380-billing-summary-cache-freshness": "tsx scripts/ps-380-billing-summary-cache-freshness-guard.ts",
     "test:ps-127-address-classification-parity": "tsx scripts/ps-127-address-classification-parity-guard.ts",
     "test:ps-120-rate-job-status": "tsx scripts/ps-120-rate-job-status-guard.ts",
     "test:ps-165-order-shipping-display": "tsx scripts/ps-165-order-shipping-display-guard.ts",

@@ -972,7 +972,7 @@ export async function getFreshBillingSummaryMetrics(options: {
     const storeIds = normalizeScopeIds(options.scopeStoreIds);
     const predicates: SQL[] = [];
     if (clientIds.length) {
-      predicates.push(sql`m.client_id = any(${intArraySql(clientIds)})`);
+      predicates.push(sql`c.id = any(${intArraySql(clientIds)})`);
     }
     if (storeIds.length) {
       predicates.push(sql`c.store_ids && ${intArraySql(storeIds)}`);
@@ -995,28 +995,81 @@ export async function getFreshBillingSummaryMetrics(options: {
       storage_total: string | number;
       order_count: number;
       grand_total: string | number;
+      fresh_count: string | number;
+      expected_count: string | number;
     }>(sql`
+      with scoped_clients as (
+        select
+          c.id,
+          c.name
+        from clients c
+        where c.active = true
+          and c.name not in (${systemClientNamesSql})
+          and (${options.clientId ?? null}::int is null or c.id = ${options.clientId ?? null}::int)
+          and ${billingMetricsScopePredicate}
+      ),
+      line_item_watermarks as (
+        select
+          b.client_id,
+          max(b.created_at) as newest_line_item_created_at
+        from billing_line_items b
+        join scoped_clients sc on sc.id = b.client_id
+        where b.ship_date >= ${options.dateFrom}::timestamptz
+          and b.ship_date < ${options.dateTo}::timestamptz
+        group by b.client_id
+      ),
+      candidate_metrics as (
+        select
+          sc.id as client_id,
+          sc.name as client_name,
+          m.pick_pack_total,
+          m.additional_total,
+          m.package_total,
+          m.shipping_total,
+          m.storage_total,
+          m.order_count,
+          m.grand_total,
+          m.updated_at as updated_at,
+          w.newest_line_item_created_at
+        from scoped_clients sc
+        join billing_summary_metrics m on m.client_id = sc.id
+        left join line_item_watermarks w on w.client_id = sc.id
+        where m.period_from = ${fromDay}::date
+          and m.period_to = ${toDay}::date
+          and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
+      ),
+      fresh_metrics as (
+        select *
+        from candidate_metrics
+        where newest_line_item_created_at is null
+          or newest_line_item_created_at <= updated_at
+      ),
+      coverage as (
+        select
+          (select count(*) from fresh_metrics)::int as fresh_count,
+          (select count(*) from scoped_clients)::int as expected_count
+      )
       select
-        c.id as client_id,
-        c.name as client_name,
-        m.pick_pack_total,
-        m.additional_total,
-        m.package_total,
-        m.shipping_total,
-        m.storage_total,
-        m.order_count,
-        m.grand_total
-      from billing_summary_metrics m
-      join clients c on c.id = m.client_id
-      where m.period_from = ${fromDay}::date
-        and m.period_to = ${toDay}::date
-        and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
-        and (${options.clientId ?? null}::int is null or m.client_id = ${options.clientId ?? null}::int)
-        and ${billingMetricsScopePredicate}
-      order by c.name asc
+        fm.client_id,
+        fm.client_name,
+        fm.pick_pack_total,
+        fm.additional_total,
+        fm.package_total,
+        fm.shipping_total,
+        fm.storage_total,
+        fm.order_count,
+        fm.grand_total,
+        coverage.fresh_count,
+        coverage.expected_count
+      from fresh_metrics fm
+      cross join coverage
+      order by fm.client_name asc
     `);
 
     if (rows.length === 0) return null;
+    const fresh_count = num(rows[0]?.fresh_count);
+    const expected_count = num(rows[0]?.expected_count);
+    if (fresh_count < expected_count || rows.length < expected_count) return null;
 
     const clients = rows.map((row) => {
       const pickPackTotal = num(row.pick_pack_total);

@@ -1696,6 +1696,11 @@ export async function billingSummary(
   if (!metrics || !billingSummaryHasValues(metrics)) {
     if (await hasLineItems()) {
       try {
+        console.info('[billing] refreshing stale or incomplete summary metrics from billing_line_items', {
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+          clientId: input.clientId ?? null,
+        });
         await refreshBillingSummaryMetrics(
           new Date(input.dateFrom),
           new Date(input.dateTo)
