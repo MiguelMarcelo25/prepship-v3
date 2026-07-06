@@ -1,5 +1,6 @@
 // Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
 import PgBoss from 'pg-boss';
+import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
 import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-job-reaper';
@@ -68,6 +69,12 @@ const JOBS = {
 type JobName = (typeof JOBS)[keyof typeof JOBS];
 
 type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
+type PgBossJobLike = {
+  id?: unknown;
+  data?: unknown;
+  singletonKey?: unknown;
+  createdOn?: unknown;
+};
 
 let boss: PgBoss | null = null;
 let started = false;
@@ -88,6 +95,67 @@ export type ManualOrderSyncEnqueueResult = {
   requestedAt: string;
   error: string | null;
 };
+
+function manualOrderSyncMode(data: unknown): 'incremental' | 'full' | null {
+  if (!data || typeof data !== 'object') return null;
+  const source = data as { requestedBy?: unknown; mode?: unknown };
+  if (source.requestedBy !== 'manual-sync') return null;
+  if (source.mode === 'incremental' || source.mode === 'full') return source.mode;
+  return null;
+}
+
+function dateFromUnknown(value: unknown): Date | null {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  }
+  return null;
+}
+
+async function findSupersedingManualOrderSyncJob(
+  name: JobName,
+  job: PgBossJobLike | undefined,
+): Promise<string | null> {
+  if (name !== JOBS.orders || !job) return null;
+  const mode = manualOrderSyncMode(job.data);
+  if (!mode || typeof job.id !== 'string') return null;
+
+  try {
+    const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+    const [current] = await pg<Array<{ created_on: Date; singleton_key: string | null }>>`
+      SELECT created_on, singleton_key
+      FROM ${pg(jobTable)}
+      WHERE id = ${job.id}
+        AND name = ${name}
+      LIMIT 1
+    `;
+    const createdOn = dateFromUnknown(job.createdOn) ?? dateFromUnknown(current?.created_on);
+    if (!createdOn) return null;
+    const singletonKey =
+      (typeof job.singletonKey === 'string' && job.singletonKey) ||
+      current?.singleton_key ||
+      `manual-${mode}`;
+
+    const [newer] = await pg<Array<{ id: string }>>`
+      SELECT id::text AS id
+      FROM ${pg(jobTable)}
+      WHERE name = ${name}
+        AND singleton_key = ${singletonKey}
+        AND state IN ('created', 'retry')
+        AND created_on > ${createdOn}
+      ORDER BY created_on DESC, id DESC
+      LIMIT 1
+    `;
+    return newer?.id ?? null;
+  } catch (err) {
+    console.warn(
+      '[job-queue] manual order-sync superseded check skipped:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
 
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
@@ -425,6 +493,23 @@ async function registerWorker(
     name,
     { batchSize: 1, pollingIntervalSeconds: 5 },
     async ([job]) => {
+      const supersededBy = await findSupersedingManualOrderSyncJob(
+        name,
+        job as PgBossJobLike | undefined,
+      );
+      if (supersededBy) {
+        console.log(
+          `[job-queue] skipped stale manual ${name} (${job?.id ?? 'unknown'}); newer job ${supersededBy} is queued`
+        );
+        await recordWorkerJobSkipped(name, `superseded by newer manual order sync ${supersededBy}`);
+        return {
+          ok: true,
+          skipped: true,
+          reason: 'superseded_manual_order_sync',
+          supersededBy,
+        };
+      }
+
       const lane = syncJobLaneFor(name);
       const blockedBy = getSyncJobLaneBlocker(activeJobsByLane, name);
       if (blockedBy) {

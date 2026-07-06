@@ -60,6 +60,11 @@ check(
   'manual full sync preserves fullResync as sinceMs zero',
   /fullResync\s*\?\s*0/.test(payload) && /payload\.fullResync = true/.test(payload),
 );
+check(
+  'manual incremental sync is awaiting-freshness first, not historical status catch-up',
+  /payload\.skipStatusPasses = true/.test(payload) &&
+    /if \(source\.skipStatusPasses === true\) options\.skipStatusPasses = true;/.test(payload),
+);
 
 check(
   'sync-job-queue exposes a manual enqueue helper for the order job',
@@ -76,6 +81,12 @@ check(
   'queued order worker consumes job payload instead of ignoring manual options',
   /await registerWorker\(JOBS\.orders, async \(jobData\) => \{/.test(queue) &&
     /syncOrders\(orderSyncOptionsFromJobPayload\(jobData\)\)/.test(queue),
+);
+check(
+  'queued order worker skips stale manual refresh rows when a newer one is queued',
+  /findSupersedingManualOrderSyncJob/.test(queue) &&
+    /state IN \('created', 'retry'\)/.test(queue) &&
+    /reason: 'superseded_manual_order_sync'/.test(queue),
 );
 check(
   'queued order worker preserves backend rate backfill handoff after changed orders',

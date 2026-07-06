@@ -16,6 +16,7 @@ export type ManualOrderSyncJobPayload = {
   awaitingSinceMs?: number;
   pageSize?: number;
   fullResync?: boolean;
+  skipStatusPasses?: boolean;
 };
 
 export type OrderSyncJobOptions = {
@@ -61,6 +62,13 @@ export function buildManualOrderSyncJobPayload(
   const pageSize = boundedPageSize(input.pageSize);
   if (pageSize !== undefined) payload.pageSize = pageSize;
   if (fullResync) payload.fullResync = true;
+  if (payload.mode === 'incremental') {
+    // Per user override unlock shipped data on 2026-07-07: the operator refresh
+    // button is an awaiting-order freshness request. Historical shipped/cancelled/
+    // hold reconciliation remains owned by cadence/watchdog sync, so clicks cannot
+    // spend the whole worker deadline on redundant status catch-up.
+    payload.skipStatusPasses = true;
+  }
 
   return payload;
 }
@@ -83,6 +91,7 @@ export function orderSyncOptionsFromJobPayload(data: unknown): OrderSyncJobOptio
 
   const pageSize = boundedPageSize(source.pageSize);
   if (pageSize !== undefined) options.pageSize = pageSize;
+  if (source.skipStatusPasses === true) options.skipStatusPasses = true;
 
   return options;
 }
