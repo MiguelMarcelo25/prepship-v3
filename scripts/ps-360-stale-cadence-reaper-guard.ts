@@ -42,8 +42,11 @@ check('stale queued reaper only considers safe sync singleton rows',
   /REAPER_STALE_QUEUED_SINGLETON_KEYS/.test(reaper) &&
   /'cadence'/.test(reaper) &&
   /'busy-defer'/.test(reaper) &&
+  /'manual-incremental'/.test(reaper) &&
   /'watchdog-recovery'/.test(reaper) &&
   /singleton_key = ANY\(\$\{REAPER_STALE_QUEUED_SINGLETON_KEYS as string\[\]\}\)/.test(reaper));
+check('stale queued reaper collapses old manual refresh ticks',
+  /manual refresh clicks enqueue[\s\S]*watermark-based order sync ticks/.test(reaper));
 check('stale cadence reaper uses the stale-queued allow-list',
   /REAPER_STALE_QUEUED_JOB_NAMES/.test(reaper) &&
   /name = ANY\(\$\{REAPER_STALE_QUEUED_JOB_NAMES as string\[\]\}\)/.test(reaper));

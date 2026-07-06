@@ -65,6 +65,10 @@ export const REAPER_STALE_QUEUED_KEEP_PER_JOB = 1;
 export const REAPER_STALE_QUEUED_SINGLETON_KEYS: readonly string[] = [
   'cadence',
   'busy-defer',
+  // Per user override unlock shipped data on 2026-07-07: manual refresh clicks enqueue
+  // watermark-based order sync ticks too. Old queued manual ticks are redundant once a newer
+  // one exists, and keeping them can starve the fresh sync that turns the UI badge green.
+  'manual-incremental',
   'watchdog-recovery',
 ];
 
