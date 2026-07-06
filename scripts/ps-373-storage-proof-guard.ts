@@ -54,8 +54,12 @@ check('billing upserts on the period key (onConflictDoUpdate, not silent drop)',
   /onConflictDoUpdate\(\{[\s\S]*billingStorageProof\.clientId,[\s\S]*billingStorageProof\.periodStart,[\s\S]*billingStorageProof\.periodEnd/.test(storageBlock));
 check('billing freezes the full per-SKU + exceptions evidence',
   /proof: \{ skuProofs: storage\.skuProofs, exceptions: storage\.exceptions \}/.test(storageBlock));
-check('billing proof-freeze is NON-fatal (never breaks the money line)',
-  /catch \(proofErr\)[\s\S]*proof freeze failed/.test(storageBlock));
+check('billing gates the storage charge on durable proof',
+  /await ensureBillingStorageProofSchema\(\)[\s\S]*await db\.transaction\(async \(tx\) =>/.test(storageBlock) &&
+    /tx\s*\n\s*\.insert\(billingStorageProof\)[\s\S]*tx\s*\n\s*\.insert\(billingLineItems\)/.test(storageBlock) &&
+    /catch \(storageErr\)[\s\S]*skipped \+= 1/.test(storageBlock) &&
+    /storage line skipped because proof freeze failed/.test(storageBlock) &&
+    !/storage line generated but proof freeze failed/.test(storageBlock));
 
 // ── 5b) Slice-1 dating FIX the proof consistency depends on: the storage line is
 //        dated on the LAST billed day (inside [from, to)), not the exclusive end.

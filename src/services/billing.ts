@@ -1541,72 +1541,66 @@ export async function generateLineItems(input: GenerateInput) {
     // rounded amounts) stays authoritative.
     const cuFtMonths = storage.daysInMonth > 0 ? storage.totalCuFtDays / storage.daysInMonth : 0;
 
-    try {
-      await db
-        .insert(billingLineItems)
-        .values({
-          clientId,
-          orderId: null,
-          orderNumber: null,
-          shipmentId: null,
-          shipDate: storageShipDate,
-          lineType: 'storage',
-          description,
-          qty: cuFtMonths.toFixed(2),
-          unitCost: storageRate.toFixed(2),
-          totalCost: storage.amount.toFixed(2),
-        })
-        .onConflictDoNothing({
-          target: [
-            billingLineItems.orderId,
-            billingLineItems.lineType,
-            billingLineItems.description,
-          ],
-        });
-      generated += 1;
-      total += storage.amount;
-    } catch {
-      skipped += 1;
-    }
-
     // PS-373 (slice 2): freeze the per-SKU / per-interval PROOF for this
-    // client+period so the admin drilldown — and any client dispute — can see
-    // exactly how the storage total was built (each SKU's on-hand segments,
-    // clamped-negative days, cuft-days, and the daily rate). The billing line
-    // itself only carries a display total + a short description (which is part of
-    // its onConflict key), so the structured evidence needs this sidecar. Keyed
-    // by the billing period and upserted, so a regen overwrites it with the
-    // latest evidence — consistent with the line, which regen now rebuilds too.
-    // Non-fatal: a proof-freeze failure must never break the authoritative line.
+    // client+period so the admin drilldown and any client dispute can see
+    // exactly how the storage total was built. PS-383 makes this proof
+    // durability the gate: proof schema + proof row + line row commit together,
+    // or the storage charge is skipped.
+    const proofValues = {
+      daysInMonth: storage.daysInMonth,
+      monthlyRatePerCuFt: storage.monthlyRatePerCuFt.toFixed(4),
+      dailyRatePerCuFt: storage.dailyRatePerCuFt.toFixed(10),
+      totalCuFtDays: storage.totalCuFtDays.toFixed(6),
+      amount: storage.amount.toFixed(2),
+      skuCount: storage.skuProofs.length,
+      exceptionCount: storage.exceptions.length,
+      proof: { skuProofs: storage.skuProofs, exceptions: storage.exceptions },
+      updatedAt: new Date(),
+    };
     try {
       await ensureBillingStorageProofSchema();
-      const proofValues = {
-        daysInMonth: storage.daysInMonth,
-        monthlyRatePerCuFt: storage.monthlyRatePerCuFt.toFixed(4),
-        dailyRatePerCuFt: storage.dailyRatePerCuFt.toFixed(10),
-        totalCuFtDays: storage.totalCuFtDays.toFixed(6),
-        amount: storage.amount.toFixed(2),
-        skuCount: storage.skuProofs.length,
-        exceptionCount: storage.exceptions.length,
-        proof: { skuProofs: storage.skuProofs, exceptions: storage.exceptions },
-        updatedAt: new Date(),
-      };
-      await db
-        .insert(billingStorageProof)
-        .values({ clientId, periodStart, periodEnd, ...proofValues })
-        .onConflictDoUpdate({
-          target: [
-            billingStorageProof.clientId,
-            billingStorageProof.periodStart,
-            billingStorageProof.periodEnd,
-          ],
-          set: proofValues,
-        });
-    } catch (proofErr) {
+      await db.transaction(async (tx) => {
+        await tx
+          .insert(billingStorageProof)
+          .values({ clientId, periodStart, periodEnd, ...proofValues })
+          .onConflictDoUpdate({
+            target: [
+              billingStorageProof.clientId,
+              billingStorageProof.periodStart,
+              billingStorageProof.periodEnd,
+            ],
+            set: proofValues,
+          });
+        await tx
+          .insert(billingLineItems)
+          .values({
+            clientId,
+            orderId: null,
+            orderNumber: null,
+            shipmentId: null,
+            shipDate: storageShipDate,
+            lineType: 'storage',
+            description,
+            qty: cuFtMonths.toFixed(2),
+            unitCost: storageRate.toFixed(2),
+            totalCost: storage.amount.toFixed(2),
+          })
+          .onConflictDoNothing({
+            target: [
+              billingLineItems.orderId,
+              billingLineItems.lineType,
+              billingLineItems.description,
+            ],
+          });
+      });
+      generated += 1;
+      total += storage.amount;
+    } catch (storageErr) {
+      skipped += 1;
       console.warn(
-        '[billing] storage line generated but proof freeze failed',
+        '[billing] storage line skipped because proof freeze failed',
         { clientId },
-        proofErr instanceof Error ? proofErr.message : proofErr
+        storageErr instanceof Error ? storageErr.message : storageErr
       );
     }
   }

@@ -86,6 +86,7 @@ const expectedRuntimeDdlFiles = [
   'src/lib/shipstation/durable-rate-limiter.ts',
   'src/services/audit-log.ts',
   'src/services/billing-fee-waiver-store.ts',
+  'src/services/billing-manual-overrides.ts',
   'src/services/billing.ts',
   // PS-327/0053: HUGRAB shipping-rate-override billing_config columns (enabled/threshold/amount).
   // Additive; covered by drizzle migration 0053_billing_hugrab_shipping_rate_override.sql; the
