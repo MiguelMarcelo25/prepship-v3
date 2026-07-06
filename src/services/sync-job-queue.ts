@@ -132,6 +132,7 @@ async function findSupersedingManualOrderSyncJob(
     `;
     const createdOn = dateFromUnknown(job.createdOn) ?? dateFromUnknown(current?.created_on);
     if (!createdOn) return null;
+    const createdOnIso = createdOn.toISOString();
     const singletonKey =
       (typeof job.singletonKey === 'string' && job.singletonKey) ||
       current?.singleton_key ||
@@ -143,7 +144,7 @@ async function findSupersedingManualOrderSyncJob(
       WHERE name = ${name}
         AND singleton_key = ${singletonKey}
         AND state IN ('created', 'retry')
-        AND created_on > ${createdOn}
+        AND created_on > ${createdOnIso}::timestamptz
       ORDER BY created_on DESC, id DESC
       LIMIT 1
     `;
