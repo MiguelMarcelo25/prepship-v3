@@ -2098,6 +2098,21 @@ async function createLabelFromOrderId(args: {
  * test/local rows that have no provider label). Provider failure leaves the
  * row active and reports 'provider_failed' — never a silent local void.
  */
+function sanitizeProviderVoidError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error ?? 'Unknown provider error');
+  return (
+    raw
+      .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
+      .replace(
+        /\b(api[_-]?key|token|secret|password|authorization|client[_-]?secret)["'=:\s]+[A-Za-z0-9._~+/=-]{8,}/gi,
+        '$1=[redacted]',
+      )
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500) || 'Unknown provider error'
+  );
+}
+
 export async function voidLabelV2(
   shipmentId: number,
   scope: ClientStoreScope,
@@ -2180,7 +2195,9 @@ export async function voidLabelV2(
         ...(creds?.apiKeyV2 ? { apiKeyV2: creds.apiKeyV2 } : {}),
       } as Parameters<typeof voidCarrierLabel>[1]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown provider error';
+      // Per user override unlock shipped data on 2026-07-06 (PS-399): expose
+      // sanitized provider detail while preserving the no-local-void invariant.
+      const message = sanitizeProviderVoidError(err);
       // The provider refused or errored — the label is still purchased there,
       // so the local record stays ACTIVE (no silent local void).
       return failureShape(

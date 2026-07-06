@@ -266,6 +266,23 @@ app.post('/:shipmentId{[0-9]+}/void', requireInternalPermission('print_queue:wri
       result.status === 'provider_failed' ? 502
       : result.status === 'not_supported' || result.status === 'not_voidable' ? 409
       : 200;
+    if (result.status === 'provider_failed') {
+      // Per user override unlock shipped data on 2026-07-06 (PS-399): include
+      // sanitized provider detail in the error field consumed by ApiRequestError.
+      return c.json(
+        {
+          ...result,
+          error: result.message,
+          code: 'LABEL_VOID_PROVIDER_FAILED',
+          providerFailure: {
+            provider: result.provider,
+            status: result.status,
+            detail: result.message,
+          },
+        },
+        httpStatus,
+      );
+    }
     return c.json(result, httpStatus);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

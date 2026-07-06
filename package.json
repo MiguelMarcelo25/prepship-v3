@@ -247,6 +247,7 @@
     "test:ps-219-void-label-ui": "tsx scripts/ps-219-void-label-ui-guard.ts",
     "test:ps-214-hugrab-universal-insurance": "tsx scripts/ps-214-hugrab-universal-insurance-guard.ts",
     "test:ps-211-universal-void": "tsx scripts/ps-211-universal-void-guard.ts",
+    "test:ps-399-shipstation-void-label-id": "tsx scripts/ps-399-shipstation-void-label-id-guard.ts",
     "test:ps-213-top-combos": "tsx scripts/ps-213-top-combos-guard.ts",
     "test:ps-210-global-orders-search": "tsx scripts/ps-210-global-orders-search-guard.ts",
     "test:ps-192-shipped-external-provider": "tsx scripts/ps-192-shipped-external-provider-guard.ts",

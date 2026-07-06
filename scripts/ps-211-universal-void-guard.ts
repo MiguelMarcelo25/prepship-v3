@@ -39,7 +39,7 @@ const row = (overrides: Partial<LabelVoidRowFacts>): LabelVoidRowFacts => ({
   labelShipmentId: 987654,
   voided: false,
   trackingNumber: '1Z999AA10123456784',
-  providerLabelId: null,
+  providerLabelId: 'se-987654-label',
   clientIsTest: false,
   ...overrides,
 });
@@ -52,24 +52,24 @@ assert.deepEqual(resolveLabelVoidDispatch(row({ voided: true, source: 'test_offl
 assert.deepEqual(resolveLabelVoidDispatch(row({ source: 'test_offline' })), { kind: 'local_test' });
 assert.deepEqual(resolveLabelVoidDispatch(row({ clientIsTest: true, source: 'shipp' })), { kind: 'local_test' });
 // ShipStation purchases (incl. legacy null/'' sources) void at ShipStation by
-// the NUMERIC SS shipment id.
+// the provider-native label_id.
 assert.deepEqual(resolveLabelVoidDispatch(row({})), {
   kind: 'provider',
   provider: 'shipstation',
-  voidKey: '987654',
-  voidKeySource: 'shipstation_shipment_id',
+  voidKey: 'se-987654-label',
+  voidKeySource: 'provider_label_id',
 });
 assert.deepEqual(resolveLabelVoidDispatch(row({ source: null })).kind, 'provider');
 assert.deepEqual(
   (resolveLabelVoidDispatch(row({ source: '' })) as { provider?: string }).provider,
   'shipstation',
 );
-// A ShipStation row with NO stored SS id is honestly not_voidable — the old
-// code silently local-voided exactly this shape.
+// A ShipStation row with NO stored label_id is honestly not_voidable: PrepShip
+// must not guess with the shipment container id.
 {
-  const d = resolveLabelVoidDispatch(row({ labelShipmentId: null }));
+  const d = resolveLabelVoidDispatch(row({ providerLabelId: null }));
   assert.equal(d.kind, 'not_voidable');
-  assert.match((d as { reason: string }).reason, /cannot address it for a void/i);
+  assert.match((d as { reason: string }).reason, /cannot address it for .*void/i);
 }
 // Direct purchases route to THEIR provider, preferring the provider-native
 // label id (PS-211 persists it), falling back to tracking for pre-PS-211 rows.
@@ -121,7 +121,7 @@ const labelsRoute = readFileSync('src/routes/labels.ts', 'utf8');
 const ssConnector = readFileSync('src/connectors/carrier/shipstation.ts', 'utf8');
 
 // voidLabelV2 dispatches through the policy + orchestrator — the ShipStation
-// hardcode is gone from the service entirely (the connector owns ssVoidShipment).
+// hardcode is gone from the service entirely (the connector owns ssVoidLabel).
 assert.ok(labelsSvc.includes('resolveLabelVoidDispatch('), 'voidLabelV2 must route through the dispatch policy');
 assert.ok(labelsSvc.includes('voidCarrierLabel(dispatch.provider'), 'voidLabelV2 must dispatch the void to the OWNING provider');
 assert.ok(labelsSvc.includes('carrierConnectorSupportsVoid(dispatch.provider)'), 'unsupported providers must classify not_supported BEFORE dispatch');
@@ -151,8 +151,9 @@ assert.ok(labelsSvc.includes('providerLabelId: created.labelId'), 'persistCreate
 assert.ok(/provider_failed'\s*\?\s*502/.test(labelsRoute), 'route must return 502 for provider_failed');
 assert.ok(/not_supported'\s*\|\|\s*result\.status === 'not_voidable'\s*\?\s*409/.test(labelsRoute), 'route must return 409 for not_supported/not_voidable');
 
-// The ShipStation connector normalizes numeric ids so the v2 `se-` prefix is applied.
-assert.ok(/\/\^\\d\+\$\/\.test\(raw\) \? Number\(raw\) : raw/.test(ssConnector), 'shipstation voidLabel must hand numeric ids to ssVoidShipment as numbers');
+// The ShipStation connector voids provider-native label ids, not shipment ids.
+assert.ok(/await ssVoidLabel\(raw/.test(ssConnector), 'shipstation voidLabel must call ssVoidLabel(label_id)');
+assert.ok(!/await ssVoidShipment\(/.test(ssConnector), 'shipstation voidLabel must not call ssVoidShipment');
 
 // npm wiring.
 assert.ok(readFileSync('package.json', 'utf8').includes('"test:ps-211-universal-void"'), 'guard must be wired into package.json');

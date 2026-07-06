@@ -7,7 +7,7 @@
  *     there is no provider label to void.
  *   - ShipStation purchases (source 'prepship_v2', legacy NULL/'' sources, and
  *     v1-import sources) void at ShipStation via the connector, addressed by
- *     the numeric ShipStation shipment id (labelShipmentId).
+ *     the ShipStation label_id persisted in selectedRateJson.providerLabelId.
  *   - Direct purchases (source = the provider key: 'shipp', 'ups',
  *     'walmart_shipping', 'easypost', …) void at THAT provider, addressed by
  *     the provider-native label id persisted in selectedRateJson.providerLabelId
@@ -55,19 +55,22 @@ export function resolveLabelVoidDispatch(row: LabelVoidRowFacts): LabelVoidDispa
 
   const source = String(row.source ?? '').trim().toLowerCase();
   if (SHIPSTATION_SOURCES.has(source)) {
-    if (row.labelShipmentId == null) {
+    const providerLabelId = String(row.providerLabelId ?? '').trim();
+    // Per user override unlock shipped data on 2026-07-06 (PS-399): ShipStation
+    // label voids must use label_id, not the shipment container id.
+    if (!providerLabelId) {
       return {
         kind: 'not_voidable',
         reason:
-          'This ShipStation label has no stored ShipStation shipment id, so PrepShip cannot address it for a void. ' +
+          'This ShipStation label has no stored ShipStation label id, so PrepShip cannot address it for a provider-confirmed void. ' +
           'Void it in the ShipStation dashboard; the local record stays active until then.',
       };
     }
     return {
       kind: 'provider',
       provider: 'shipstation',
-      voidKey: String(row.labelShipmentId),
-      voidKeySource: 'shipstation_shipment_id',
+      voidKey: providerLabelId,
+      voidKeySource: 'provider_label_id',
     };
   }
 

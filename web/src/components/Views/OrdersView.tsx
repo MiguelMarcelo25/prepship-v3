@@ -4119,7 +4119,9 @@ export default function OrdersView({
         status === 409
           ? 'This label can’t be voided from PrepShip — void it at the carrier portal. The label stays active.'
           : status === 502
-            ? 'Provider void failed — the label is still active. Try again in a moment.'
+            // Per user override unlock shipped data on 2026-07-06 (PS-399): show
+            // the backend-sanitized provider detail while leaving the label active.
+            ? (error instanceof Error ? error.message : 'Provider void failed — the label is still active. Try again in a moment.')
             : status === 404
               ? 'Shipment not found — refresh the order and try again.'
               : error instanceof Error ? error.message : 'Void failed'
