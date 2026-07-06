@@ -1,3 +1,5 @@
+import { buildOrderSourceIdentity } from './order-source-identity';
+
 export type NormalizedOrderSource = {
   sourceProvider: string;
   sourceAccountId: string;
@@ -13,10 +15,14 @@ export function buildNormalizedOrderSource(input: {
   sourceOrderNumber?: string | null;
   raw: Record<string, unknown>;
 }): NormalizedOrderSource {
+  const identity = buildOrderSourceIdentity(input);
+  if (!identity) {
+    throw new Error('Normalized order source requires sourceProvider, sourceAccountId, and sourceOrderId');
+  }
   return {
-    sourceProvider: input.sourceProvider,
-    sourceAccountId: input.sourceAccountId,
-    sourceOrderId: String(input.sourceOrderId),
+    sourceProvider: identity.sourceProvider,
+    sourceAccountId: identity.sourceAccountId,
+    sourceOrderId: identity.sourceOrderId,
     sourceOrderNumber: input.sourceOrderNumber ?? null,
     rawSourcePayload: input.raw,
   };

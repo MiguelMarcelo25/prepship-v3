@@ -53,8 +53,8 @@ assert(
 assert(
   storeOrderImport.includes('NormalizedStoreOrder') &&
     storeOrderImport.includes('upsertNormalizedStoreOrders') &&
-    storeOrderImport.includes('replaceOrderItemsForExternalOrderIds'),
-  'store-order-import service must provide provider-agnostic order upsert into orders + order_items',
+    storeOrderImport.includes('replaceOrderItemsForOrders(persistedRows)'),
+  'store-order-import service must provide provider-agnostic order upsert into orders + order_items from persisted local rows',
 );
 assert(
   orderSync.includes('upsertNormalizedStoreOrders') &&

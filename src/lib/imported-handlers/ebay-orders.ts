@@ -31,6 +31,8 @@ import {
 } from '../auth/verify-supabase-jwt';
 import { corsHeaders } from '../http/cors';
 import { importStoreOrders } from '../../services/store-connector-orchestrator';
+import { buildNormalizedOrderSource } from '../../services/normalized-order-persistence';
+import { upsertNormalizedStoreOrders } from '../../services/store-order-import';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -362,58 +364,33 @@ export default async function handler(req: any, res: any): Promise<void> {
           continue;
         }
 
-        await sql`
-          INSERT INTO orders (
-            external_order_id, client_id, order_number, order_status,
-            order_date, store_id, customer_email, ship_to_name,
-            ship_to_city, ship_to_state, ship_to_postal_code,
-            weight_oz, order_total, shipping_amount, items, raw,
-            externally_shipped, externally_fulfilled_verified,
-            created_at, updated_at
-          ) VALUES (
-            ${externalOrderIdPrefixed},
-            ${ebayClientId},
-            ${customerOrderId ?? externalOrderId},
-            ${ppStatus},
-            ${orderDate},
-            ${syntheticStoreId},
-            ${shipTo?.email ?? null},
-            ${shipTo?.name ?? null},
-            ${shipTo?.city ?? null},
-            ${shipTo?.state ?? null},
-            ${shipTo?.postalCode ?? null},
-            ${weightOzForOrder},
-            ${(totals as any)?.total ?? 0},
-            ${(totals as any)?.shipping ?? 0},
-            ${items as Array<Record<string, unknown>>},
-            ${{ source: 'ebay', accountId, ...o } as Record<string, unknown>},
-            false, false,
-            NOW(), NOW()
-          )
-          ON CONFLICT (external_order_id) DO UPDATE SET
-            client_id = COALESCE(EXCLUDED.client_id, orders.client_id),
-            order_number = EXCLUDED.order_number,
-            order_status = CASE
-              WHEN orders.order_status = 'shipped' THEN orders.order_status
-              ELSE EXCLUDED.order_status
-            END,
-            order_date = COALESCE(EXCLUDED.order_date, orders.order_date),
-            store_id = EXCLUDED.store_id,
-            customer_email = COALESCE(EXCLUDED.customer_email, orders.customer_email),
-            ship_to_name = COALESCE(EXCLUDED.ship_to_name, orders.ship_to_name),
-            ship_to_city = EXCLUDED.ship_to_city,
-            ship_to_state = EXCLUDED.ship_to_state,
-            ship_to_postal_code = EXCLUDED.ship_to_postal_code,
-            weight_oz = CASE
-              WHEN EXCLUDED.weight_oz > 0 THEN EXCLUDED.weight_oz
-              ELSE orders.weight_oz
-            END,
-            order_total = EXCLUDED.order_total,
-            shipping_amount = EXCLUDED.shipping_amount,
-            items = EXCLUDED.items,
-            raw = EXCLUDED.raw,
-            updated_at = NOW()
-        `;
+        const rawParam = { source: 'ebay', accountId, ...o } as Record<string, unknown>;
+        await upsertNormalizedStoreOrders([{
+          source: buildNormalizedOrderSource({
+            sourceProvider: 'ebay',
+            sourceAccountId: String(accountId),
+            sourceOrderId: externalOrderId,
+            sourceOrderNumber: marketplaceOrderNumber,
+            raw: rawParam,
+          }),
+          externalOrderId: externalOrderIdPrefixed,
+          orderNumber: marketplaceOrderNumber,
+          orderStatus: ppStatus,
+          orderDate: orderDate ? new Date(orderDate) : null,
+          clientId: ebayClientId,
+          storeId: syntheticStoreId,
+          customerEmail: shipTo?.email ?? null,
+          shipToName: shipTo?.name ?? null,
+          shipToCity: shipTo?.city ?? null,
+          shipToState: shipTo?.state ?? null,
+          shipToPostalCode: shipTo?.postalCode ?? null,
+          weightOz: weightOzForOrder,
+          orderTotal: String((totals as any)?.total ?? 0),
+          shippingAmount: String((totals as any)?.shipping ?? 0),
+          items: items as Array<Record<string, unknown>>,
+          raw: rawParam,
+          externallyShipped: false,
+        }]);
       } catch (mirrorErr) {
         console.warn(
           '[carriers/ebay/orders] mirror to orders table failed for',

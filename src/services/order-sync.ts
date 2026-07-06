@@ -9,6 +9,14 @@ import {
   upsertNormalizedStoreOrders,
   type NormalizedStoreOrder,
 } from './store-order-import';
+import {
+  buildOrderSourceIdentity,
+  legacyExternalOrderIdForSource,
+  orderSourceIdentitiesPredicate,
+  orderSourceIdentityKey,
+  orderSourceIdentityOrLegacyPredicate,
+  type OrderSourceIdentity,
+} from './order-source-identity';
 import { deductInventoryForOrder } from './fulfillment-deductions';
 import { importStoreOrders } from './store-connector-orchestrator';
 import type { NormalizedOrder } from '../connectors/types';
@@ -184,43 +192,59 @@ async function upsertMissingShippedOrdersBatch(
   },
   fallbackClientId: number | null = null,
 ): Promise<number> {
-  const externalIds = Array.from(
-    new Set(
-      ordersIn
-        .map((o) => o.sourceOrderId || null)
-        .filter((v): v is string => Boolean(v))
-    )
-  );
-  if (!externalIds.length) return 0;
+  const normalizedOrders = buildNormalizedStoreOrders(ordersIn, storeToClient, fallbackClientId);
+  const keyedOrders = normalizedOrders
+    .map((order) => {
+      const identity = buildOrderSourceIdentity(order.source);
+      return identity ? { order, identity, legacyExternalOrderId: order.externalOrderId ?? legacyExternalOrderIdForSource(identity) } : null;
+    })
+    .filter((entry): entry is { order: NormalizedStoreOrder; identity: OrderSourceIdentity; legacyExternalOrderId: string } => entry !== null);
+  if (!keyedOrders.length) return 0;
 
+  const existingPredicate = orderSourceIdentityOrLegacyPredicate({
+    identities: keyedOrders.map((entry) => entry.identity),
+    legacyExternalOrderIds: keyedOrders.map((entry) => entry.legacyExternalOrderId),
+    includeUnqualifiedShipStationLegacy: true,
+  });
+  if (!existingPredicate) return 0;
   const existingRows = await db
-    .select({ externalOrderId: orders.externalOrderId })
+    .select({
+      externalOrderId: orders.externalOrderId,
+      sourceProvider: orders.sourceProvider,
+      sourceAccountId: orders.sourceAccountId,
+      sourceOrderId: orders.sourceOrderId,
+    })
     .from(orders)
-    .where(inArray(orders.externalOrderId, externalIds));
-  const existing = new Set(existingRows.map((row) => row.externalOrderId).filter(Boolean));
+    .where(existingPredicate);
+  const existingSourceKeys = new Set<string>();
+  const existingLegacyExternalIds = new Set<string>();
+  for (const row of existingRows) {
+    const identity = buildOrderSourceIdentity(row);
+    if (identity) existingSourceKeys.add(orderSourceIdentityKey(identity));
+    if (row.externalOrderId) existingLegacyExternalIds.add(row.externalOrderId);
+  }
 
-  const missingOrders = ordersIn.filter(
-    (order) => order.sourceOrderId && !existing.has(order.sourceOrderId)
+  const missingEntries = keyedOrders.filter(
+    (entry) =>
+      !existingSourceKeys.has(orderSourceIdentityKey(entry.identity)) &&
+      !existingLegacyExternalIds.has(entry.legacyExternalOrderId)
   );
-  if (!missingOrders.length) return 0;
-
-  const normalizedOrders = buildNormalizedStoreOrders(missingOrders, storeToClient, fallbackClientId);
-  if (!normalizedOrders.length) return 0;
+  if (!missingEntries.length) return 0;
+  const missingOrders = missingEntries.map((entry) => entry.order);
 
   // Per user override `unlock shipped data` on 2026-05-29: shipped ShipStation
   // orders that were created and shipped before PrepShip saw the awaiting row
   // must be imported so Inventory History can deduct from real order items.
   // This is insert-only for missing shipped rows; existing shipped/cancelled
   // protections and the inventory auto-deduct kill switch remain in force.
-  await upsertNormalizedStoreOrders(normalizedOrders);
+  await upsertNormalizedStoreOrders(missingOrders);
 
-  const insertedExternalIds = normalizedOrders
-    .map((order) => order.externalOrderId ?? null)
-    .filter((id): id is string => Boolean(id));
+  const insertedPredicate = orderSourceIdentitiesPredicate(missingEntries.map((entry) => entry.identity));
+  if (!insertedPredicate) return 0;
   const insertedRows = await db
     .select()
     .from(orders)
-    .where(inArray(orders.externalOrderId, insertedExternalIds));
+    .where(insertedPredicate);
 
   let shipmentsLinked = 0;
   let shippedHydrated = 0;
@@ -273,27 +297,32 @@ async function updateExistingOrderStatusesBatch(
   ordersIn: NormalizedOrder[],
   orderStatus: CatchUpOrderStatus
 ): Promise<number> {
-  const externalIds = Array.from(
-    new Set(
-      ordersIn
-        .map((o) => o.sourceOrderId || null)
-        .filter((v): v is string => Boolean(v))
-    )
-  );
-  if (!externalIds.length) return 0;
+  const identities = ordersIn
+    .map((order) => buildOrderSourceIdentity(order))
+    .filter((identity): identity is OrderSourceIdentity => identity !== null);
+  if (!identities.length) return 0;
 
   // v2 parity: shipped/cancelled sync is a status catch-up for orders already
   // loaded as awaiting_shipment. It must not insert shipped-only rows or
   // rewrite the original order details/date.
   let updated = 0;
-  for (let i = 0; i < externalIds.length; i += 500) {
-    const chunk = externalIds.slice(i, i + 500);
+  for (let i = 0; i < identities.length; i += 250) {
+    const chunk = identities.slice(i, i + 250);
+    const identityPredicate = orderSourceIdentityOrLegacyPredicate({
+      identities: chunk,
+      legacyExternalOrderIds: chunk.map(legacyExternalOrderIdForSource),
+      includeUnqualifiedShipStationLegacy: true,
+    });
+    if (!identityPredicate) continue;
     const rows = await db
       .update(orders)
       .set({ orderStatus, updatedAt: new Date() })
       .where(
         and(
-          inArray(orders.externalOrderId, chunk),
+          // Per user override unlock shipped data on 2026-07-06: PS-388
+          // narrows status catch-up matching to the composite source identity,
+          // with external_order_id fallback only for legacy/unqualified rows.
+          identityPredicate,
           // Transition from ANY non-terminal state to the ShipStation-reported status. Terminal rows
           // (shipped/cancelled) are NEVER overwritten here — they stay locked/preserved (and the import
           // upsert preserves them too). `ne` skips no-op rewrites (e.g. on_hold -> on_hold). This lets

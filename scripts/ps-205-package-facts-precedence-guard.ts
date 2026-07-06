@@ -120,8 +120,8 @@ check('combo default lookups are CLIENT-scoped (clientId is part of every key/lo
 // ── (5) future imports get combo facts BEFORE rating can use imported data ───
 const importer = readFileSync('src/services/store-order-import.ts', 'utf8');
 check('the single import-persistence helper materializes saved combo defaults after every batch',
-  /await replaceOrderItemsForExternalOrderIds\(externalIds\);/.test(importer) &&
-  /await materializePackageFactsForImportedOrders\(externalIds\);/.test(importer));
+  /await replaceOrderItemsForOrders\(persistedRows\);/.test(importer) &&
+  /await materializePackageFactsForImportedOrderIds\(persistedOrderIds\);/.test(importer));
 check('materialization failures never fail the sync itself (best-effort)',
   /catch \(err\) \{\s*\n\s*console\.warn\(\s*\n\s*'\[store-order-import\] package-facts materialization skipped:'/.test(importer));
 

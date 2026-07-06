@@ -14,6 +14,12 @@ import { deductInventoryForOrder } from './fulfillment-deductions';
 import { getSettingNumber, setSetting } from './settings';
 import { formatShipStationV1DateParam, parseShipStationV1Date } from '../lib/shipstation/v1-date';
 import {
+  buildOrderSourceIdentity,
+  orderSourceIdentityKey,
+  orderSourceIdentityOrLegacyPredicate,
+  type OrderSourceIdentity,
+} from './order-source-identity';
+import {
   createSyncRunBudget,
   syncRunBudgetExhausted,
   syncRunBudgetTimeExhausted,
@@ -135,12 +141,20 @@ function shipmentValues(
   };
 }
 
+function shipStationShipmentSourceIdentity(s: SSShipment): OrderSourceIdentity | null {
+  return buildOrderSourceIdentity({
+    sourceProvider: 'shipstation',
+    sourceAccountId: s.advancedOptions?.storeId != null ? `store:${s.advancedOptions.storeId}` : 'shipstation-default',
+    sourceOrderId: s.orderId,
+  });
+}
+
 // Batched upsert — one page of shipments becomes (at most) four DB
 // round-trips total instead of 5 per shipment. ~10x faster than the
 // old per-row loop.
 //
 // Flow:
-//   1. Pre-fetch every matching order in one query (by externalOrderId IN ...)
+//   1. Pre-fetch every matching order in one query (by source identity with bounded legacy fallback)
 //   2. Pre-fetch every isTest client flag in one query
 //   3. Pre-fetch every existing shipment (by labelShipmentId IN ...)
 //   4. Split into inserts (new) + updates (existing), then run them
@@ -155,26 +169,49 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
     return { inserted: 0, updated: 0, matched: 0, shippedOrderIds: [] };
   }
 
+  const sourceIdentities = pageShipments
+    .map(shipStationShipmentSourceIdentity)
+    .filter((identity): identity is OrderSourceIdentity => identity !== null);
   const externalIds = [...new Set(pageShipments.map((s) => String(s.orderId)))];
   const labelIds = [...new Set(pageShipments.map((s) => s.shipmentId))];
+  const orderLookupPredicate = orderSourceIdentityOrLegacyPredicate({
+    identities: sourceIdentities,
+    legacyExternalOrderIds: externalIds,
+    includeUnqualifiedShipStationLegacy: true,
+  });
 
   // 1. Orders lookup
-  const orderRows = externalIds.length
+  const orderRows = orderLookupPredicate
     ? await db
         .select({
           id: orders.id,
           clientId: orders.clientId,
           externalOrderId: orders.externalOrderId,
+          sourceProvider: orders.sourceProvider,
+          sourceAccountId: orders.sourceAccountId,
+          sourceOrderId: orders.sourceOrderId,
           status: orders.orderStatus,
         })
         .from(orders)
-        .where(inArray(orders.externalOrderId, externalIds))
+        .where(orderLookupPredicate)
     : [];
   const orderByExt = new Map<
     string,
     { id: number; clientId: number | null; status: string }
   >();
+  const orderBySource = new Map<
+    string,
+    { id: number; clientId: number | null; status: string }
+  >();
   for (const o of orderRows) {
+    const identity = buildOrderSourceIdentity(o);
+    if (identity) {
+      orderBySource.set(orderSourceIdentityKey(identity), {
+        id: o.id,
+        clientId: o.clientId ?? null,
+        status: o.status,
+      });
+    }
     if (o.externalOrderId) {
       orderByExt.set(o.externalOrderId, {
         id: o.id,
@@ -258,7 +295,10 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
   const shippedOrderIds: number[] = [];
 
   for (const s of pageShipments) {
-    const ord = orderByExt.get(String(s.orderId));
+    const identity = shipStationShipmentSourceIdentity(s);
+    const ord =
+      (identity ? orderBySource.get(orderSourceIdentityKey(identity)) : undefined) ??
+      orderByExt.get(String(s.orderId));
     // Test-client guard: skip entirely if matched order's client is isTest
     if (ord?.clientId && testClientSet.has(ord.clientId)) continue;
 

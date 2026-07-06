@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { withAdvisorySessionLock } from '../lib/advisory-session-lock';
 import { orderOverrides, orders } from '../db/schema/orders';
@@ -358,7 +358,20 @@ export async function materializePackageFactsForImportedOrders(
 ): Promise<MaterializePackageFactsResult> {
   const ids = [...new Set(externalOrderIds.filter((id) => typeof id === 'string' && id.trim()))];
   if (!ids.length) return { examined: 0, materialized: 0, invalidatedOrderIds: [] };
+  return materializePackageFactsForImportedOrdersWhere(inArray(orders.externalOrderId, ids));
+}
 
+export async function materializePackageFactsForImportedOrderIds(
+  orderIds: number[],
+): Promise<MaterializePackageFactsResult> {
+  const ids = [...new Set(orderIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (!ids.length) return { examined: 0, materialized: 0, invalidatedOrderIds: [] };
+  return materializePackageFactsForImportedOrdersWhere(inArray(orders.id, ids));
+}
+
+async function materializePackageFactsForImportedOrdersWhere(
+  importedOrdersPredicate: SQL,
+): Promise<MaterializePackageFactsResult> {
   const candidates = await db
     .select({
       id: orders.id,
@@ -385,7 +398,7 @@ export async function materializePackageFactsForImportedOrders(
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
       and(
-        inArray(orders.externalOrderId, ids),
+        importedOrdersPredicate,
         // Lockdown gate: mutable awaiting rows only.
         eq(orders.orderStatus, 'awaiting_shipment'),
       ),

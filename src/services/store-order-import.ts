@@ -1,9 +1,15 @@
-import { sql } from 'drizzle-orm';
+import { and, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
-import { replaceOrderItemsForExternalOrderIds } from './order-items';
-import { materializePackageFactsForImportedOrders } from './combo-package-defaults';
+import { replaceOrderItemsForOrders } from './order-items';
+import { materializePackageFactsForImportedOrderIds } from './combo-package-defaults';
 import type { NormalizedOrderSource } from './normalized-order-persistence';
+import {
+  legacyExternalOrderIdForSource,
+  buildOrderSourceIdentity,
+  legacyOrderSourceCompatibilityPredicate,
+  orderSourceIdentityKey,
+} from './order-source-identity';
 
 export type NormalizedStoreOrder = {
   source: NormalizedOrderSource;
@@ -30,7 +36,55 @@ export type NormalizedStoreOrder = {
 
 function compatibilityExternalOrderId(order: NormalizedStoreOrder): string {
   if (order.externalOrderId) return order.externalOrderId;
-  return `${order.source.sourceProvider}-${order.source.sourceOrderId}`;
+  const identity = buildOrderSourceIdentity(order.source);
+  if (!identity) {
+    throw new Error('Cannot derive compatibility externalOrderId without a complete source identity');
+  }
+  return legacyExternalOrderIdForSource(identity);
+}
+
+async function claimLegacyOrderSourceIdentities(rows: Array<typeof orders.$inferInsert>): Promise<void> {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const identity = buildOrderSourceIdentity(row);
+    if (!identity || !row.externalOrderId) continue;
+    const key = `${orderSourceIdentityKey(identity)}:${row.externalOrderId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const legacyPredicate = legacyOrderSourceCompatibilityPredicate([row.externalOrderId], {
+      includeUnqualifiedShipStation: identity.sourceProvider === 'shipstation',
+    });
+    if (!legacyPredicate) continue;
+
+    // Per user override unlock shipped data on 2026-07-06: PS-388 may claim
+    // an exact legacy external_order_id row into the composite source identity
+    // before the authoritative upsert. This only fills identity/provenance
+    // fields and lets the existing terminal-status preservation below keep
+    // shipped/cancelled protections intact.
+    await db
+      .update(orders)
+      .set({
+        sourceProvider: identity.sourceProvider,
+        sourceAccountId: identity.sourceAccountId,
+        sourceOrderId: identity.sourceOrderId,
+        sourceOrderNumber: row.sourceOrderNumber ?? null,
+        rawSourcePayload: row.rawSourcePayload ?? null,
+      })
+      .where(
+        and(
+          legacyPredicate,
+          sql`not exists (
+            select 1
+            from orders source_conflict
+            where source_conflict.source_provider = ${identity.sourceProvider}
+              and source_conflict.source_account_id = ${identity.sourceAccountId}
+              and source_conflict.source_order_id = ${identity.sourceOrderId}
+              and source_conflict.id <> ${orders.id}
+          )`,
+        ),
+      );
+  }
 }
 
 export async function upsertNormalizedStoreOrders(
@@ -67,12 +121,16 @@ export async function upsertNormalizedStoreOrders(
     updatedAt: new Date(),
   }));
 
-  await db
+  await claimLegacyOrderSourceIdentities(rows);
+
+  const persistedRows = await db
     .insert(orders)
     .values(rows)
     .onConflictDoUpdate({
-      target: orders.externalOrderId,
+      target: [orders.sourceProvider, orders.sourceAccountId, orders.sourceOrderId],
+      targetWhere: sql`${orders.sourceProvider} is not null and ${orders.sourceAccountId} is not null and ${orders.sourceOrderId} is not null`,
       set: {
+        externalOrderId: sql`excluded.external_order_id`,
         orderNumber: sql`excluded.order_number`,
         sourceProvider: sql`excluded.source_provider`,
         sourceAccountId: sql`excluded.source_account_id`,
@@ -83,10 +141,11 @@ export async function upsertNormalizedStoreOrders(
         // existing terminal local statuses while moving import persistence to
         // a store-connector-first helper. This keeps shipped/cancelled
         // protections intact and avoids reopening labels during provider lag.
+        // Per user override unlock shipped data on 2026-07-06: PS-388 changes
+        // the import identity key only. Existing terminal local rows stay
+        // terminal; imports cannot rewrite shipped/cancelled state.
         orderStatus: sql`case
-          when ${orders.orderStatus} in ('shipped', 'cancelled')
-            and excluded.order_status = 'awaiting_shipment'
-            then ${orders.orderStatus}
+          when ${orders.orderStatus} in ('shipped', 'cancelled') then ${orders.orderStatus}
           else excluded.order_status
         end`,
         orderDate: sql`excluded.order_date`,
@@ -107,12 +166,18 @@ export async function upsertNormalizedStoreOrders(
         externallyShipped: sql`case when excluded.externally_shipped = true then true else orders.externally_shipped end`,
         updatedAt: sql`excluded.updated_at`,
       },
+    })
+    .returning({
+      id: orders.id,
+      items: orders.items,
+      clientId: orders.clientId,
+      storeId: orders.storeId,
+      orderStatus: orders.orderStatus,
+      orderDate: orders.orderDate,
     });
 
-  const externalIds = rows
-    .map((row) => row.externalOrderId)
-    .filter((id): id is string => Boolean(id));
-  await replaceOrderItemsForExternalOrderIds(externalIds);
+  await replaceOrderItemsForOrders(persistedRows);
+  const persistedOrderIds = persistedRows.map((row) => row.id);
 
   // PS-205: imported package facts are FALLBACK ONLY. After every import batch
   // (this is the single persistence helper all order sources flow through),
@@ -122,7 +187,7 @@ export async function upsertNormalizedStoreOrders(
   // combo default at any rating/label/list read site. Best-effort: a
   // materialization failure never fails the sync itself.
   try {
-    await materializePackageFactsForImportedOrders(externalIds);
+    await materializePackageFactsForImportedOrderIds(persistedOrderIds);
   } catch (err) {
     console.warn(
       '[store-order-import] package-facts materialization skipped:',
