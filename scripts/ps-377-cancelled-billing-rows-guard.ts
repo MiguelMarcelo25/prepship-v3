@@ -79,7 +79,8 @@ check('generator: a non-HUGRAB cancelled order is a SINGLE $0 "Cancelled" line; 
 });
 
 check('billingDetails emits the backend-owned CANCELLED status badge from order_status', () => {
-  assert.ok(/billingStatusBadge:[\s\S]*?orderStatus[\s\S]*?=== 'cancelled' \? 'CANCELLED' : null/.test(billing));
+  assert.ok(/resolveBillingRowStatus\([\s\S]*?orderStatus: row\.orderStatus/.test(billing));
+  assert.ok(/billingStatusBadge/.test(read('src/services/billing-row-status.ts')));
 });
 
 check('detail-row DTO carries billingStatusBadge to the collapsed order row', () => {

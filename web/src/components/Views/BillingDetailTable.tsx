@@ -31,6 +31,7 @@ const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 const DETAIL_COLUMN_WIDTHS: Partial<Record<BillingDetailColumnId, number>> = {
   actions: 88,
   orderNumber: 130,
+  billingStatus: 150,
   shipDate: 130,
   carrierNickname: 110,
   itemNames: 220,
@@ -63,6 +64,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
   switch (key) {
     case 'actions': return ''
     case 'orderNumber': return row.orderNumber || row.orderId
+    case 'billingStatus': return row.billingStatusLabel || row.billingLifecycleStatus || ''
     case 'shipDate': return billingShipDateSortValue(row.shipDate)
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
     case 'itemNames': return row.itemNames || row.description
@@ -134,6 +136,82 @@ function MoneyWithBillingBadges({
       ))}
     </span>
   )
+}
+
+type BillingStatusTone = 'neutral' | 'red' | 'purple' | 'amber' | 'blue'
+
+function billingStatusLifecycle(row: BillingDetailDto): string {
+  return String(row.billingLifecycleStatus || 'fulfilled')
+}
+
+function billingStatusLabel(row: BillingDetailDto): string {
+  const label = typeof row.billingStatusLabel === 'string' ? row.billingStatusLabel.trim() : ''
+  return label || 'Fulfilled'
+}
+
+function billingStatusTone(row: BillingDetailDto): BillingStatusTone {
+  const tone = String(row.billingStatusTone || 'neutral')
+  if (tone === 'red' || tone === 'purple' || tone === 'amber' || tone === 'blue') return tone
+  return 'neutral'
+}
+
+function billingStatusChipStyle(tone: BillingStatusTone): CSSProperties {
+  const styles: Record<BillingStatusTone, CSSProperties> = {
+    neutral: {
+      color: 'var(--text2)',
+      background: 'var(--surface2)',
+      border: '1px solid var(--border)',
+    },
+    red: {
+      color: '#b91c1c',
+      background: '#fee2e2',
+      border: '1px solid #fecaca',
+    },
+    purple: {
+      color: '#6d28d9',
+      background: '#ede9fe',
+      border: '1px solid #ddd6fe',
+    },
+    amber: {
+      color: '#b45309',
+      background: '#fef3c7',
+      border: '1px solid #fde68a',
+    },
+    blue: {
+      color: '#1d4ed8',
+      background: '#dbeafe',
+      border: '1px solid #bfdbfe',
+    },
+  }
+  return {
+    ...styles[tone],
+    borderRadius: 4,
+    display: 'inline-flex',
+    fontSize: 10,
+    fontWeight: 800,
+    lineHeight: 1.4,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    padding: '1px 5px',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  }
+}
+
+function billingOrderBackupStatus(row: BillingDetailDto): 'Cancelled' | 'Return' | null {
+  const lifecycle = billingStatusLifecycle(row)
+  if (lifecycle === 'cancelled_no_charge' || lifecycle === 'cancelled_billable' || row.billingStatusBadge === 'CANCELLED') {
+    return 'Cancelled'
+  }
+  if (lifecycle === 'return' || lifecycle === 'return_label' || lifecycle === 'return_processing') return 'Return'
+  return null
+}
+
+function billingStatusRowClass(row: BillingDetailDto): string | null {
+  const lifecycle = billingStatusLifecycle(row)
+  if (lifecycle === 'cancelled_no_charge' || lifecycle === 'cancelled_billable') return 'billing-detail-status-cancelled'
+  if (lifecycle === 'return' || lifecycle === 'return_label' || lifecycle === 'return_processing') return 'billing-detail-status-return'
+  return null
 }
 
 export function BillingDetailTable({
@@ -293,10 +371,8 @@ export function BillingDetailTable({
                 )
               case 'orderNumber':
                 if (row.orderId) {
-                  // PS-377: backend-owned CANCELLED marker (the FE never infers
-                  // cancellation from $0). A cancelled order is shown at $0 for
-                  // audit visibility instead of being silently excluded.
-                  const isCancelled = row.billingStatusBadge === 'CANCELLED' || row.orderStatus === 'cancelled'
+                  const backupStatus = billingOrderBackupStatus(row)
+                  const backupTone = billingStatusTone(row)
                   return (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                       <button
@@ -308,17 +384,21 @@ export function BillingDetailTable({
                       >
                         {row.orderNumber}
                       </button>
-                      {isCancelled ? (
+                      {backupStatus === 'Cancelled' ? (
                         <span
                           data-billing-badge="CANCELLED"
-                          title="Order cancelled — shown at $0 for visibility, not billed"
-                          style={{
-                            fontSize: 8.5, fontWeight: 700, color: '#b91c1c', background: '#fee2e2',
-                            border: '1px solid #fecaca', borderRadius: 4, padding: '0 3px', lineHeight: 1.4,
-                            whiteSpace: 'nowrap',
-                          }}
+                          title={billingStatusLabel(row)}
+                          style={{ ...billingStatusChipStyle(backupTone), fontSize: 8.5, padding: '0 3px' }}
                         >
-                          CANCELLED
+                          Cancelled
+                        </span>
+                      ) : backupStatus ? (
+                        <span
+                          data-billing-badge="RETURN"
+                          title={billingStatusLabel(row)}
+                          style={{ ...billingStatusChipStyle(backupTone), fontSize: 8.5, padding: '0 3px' }}
+                        >
+                          {backupStatus}
                         </span>
                       ) : null}
                     </span>
@@ -340,6 +420,16 @@ export function BillingDetailTable({
                   )
                 }
                 return <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
+              case 'billingStatus':
+                return (
+                  <span
+                    data-billing-status={billingStatusLifecycle(row)}
+                    title={billingStatusLabel(row)}
+                    style={billingStatusChipStyle(billingStatusTone(row))}
+                  >
+                    {billingStatusLabel(row)}
+                  </span>
+                )
               case 'shipDate':
                 return <span style={{ color: 'var(--text2)', fontSize: 11 }}>{formatBillingShipDate(row.shipDate)}</span>
               case 'carrierNickname': {
@@ -531,7 +621,13 @@ export function BillingDetailTable({
       loading={detailState.loading}
       columnsAnchorEl={columnsAnchorEl}
       emptyMessage="No line items found."
-      rowClassName={(row) => (computeBillingDetailMetrics(row).ssCharged ? 'billing-detail-ss-row' : undefined)}
+      rowClassName={(row) => {
+        const classes = [
+          computeBillingDetailMetrics(row).ssCharged ? 'billing-detail-ss-row' : '',
+          billingStatusRowClass(row) || '',
+        ].filter(Boolean)
+        return classes.length ? classes.join(' ') : undefined
+      }}
       footerRow={(cols) => cols.map((c) => {
         const td: CSSProperties = {
           padding: '6px 10px',

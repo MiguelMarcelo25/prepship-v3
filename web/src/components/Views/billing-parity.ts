@@ -101,6 +101,7 @@ export interface BillingConfigDraft {
 export type BillingDetailColumnId =
   | 'actions'
   | 'orderNumber'
+  | 'billingStatus'
   | 'shipDate'
   | 'carrierNickname'
   | 'itemNames'
@@ -170,6 +171,7 @@ export interface BillingPackagePriceRow {
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
+  { id: 'billingStatus', label: 'Status', align: 'left', always: false },
   { id: 'shipDate', label: 'Ship Date', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
@@ -187,15 +189,17 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
+// v6 (2026-07-06): defaults add backend-owned Billing Status after Order #.
 // v4 (2026-05-27): defaults now expose every billing detail column plus
 // row actions so operators can audit/edit a full invoice line at once.
 // Bumping the storage key resets returning users to the new default
 // order; if they had custom toggles, they re-pick them once.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v5'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v6'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'actions',
   'orderNumber',
+  'billingStatus',
   'shipDate',
   'carrierNickname',
   'itemNames',

@@ -191,7 +191,7 @@ const csvCells = renderInvoiceCsvRow({
   fee_waived: false,
 }).split(',');
 check('closeout behavior invoice CSV consumes generated shipping_amt',
-  csvCells[8] === '9.64' && csvCells[10] === '9.64',
+  csvCells[9] === '9.64' && csvCells[11] === '9.64',
   csvCells.join('|'));
 
 check('realized capture writes sidecar only, not locked shipments',

@@ -1,4 +1,5 @@
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
+import { isBillingReturnLineType } from './billing-row-status';
 
 // PS-368 — the TYPED canonical billing detail order-row boundary.
 //
@@ -42,6 +43,13 @@ export interface BillingDetailRowDto {
   boxCostNoCharge: boolean;
   boxCostAlert: boolean;
   billingBadges: string[];
+  billingLifecycleStatus?: string;
+  billingStatusLabel?: string;
+  billingStatusTone?: string;
+  billingZeroReason?: string | null;
+  billingStatusBadge?: string | null;
+  relatedOrderId?: number | string | null;
+  returnId?: number | string | null;
   manualBillingOverrideLineTypes?: string[];
   manualBillingOverrideLabels?: string[];
 }
@@ -70,7 +78,7 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   const lineTotal = numberValue(row.totalCost);
   const pickPack = numberValue(
     row.pickpackTotal ??
-      (lineType === 'pick_pack' || lineType === 'pickpack' ? lineTotal : 0),
+      (lineType === 'pick_pack' || lineType === 'pickpack' || lineType === 'return_processing' ? lineTotal : 0),
   );
   const additional = numberValue(
     row.additionalTotal ??
@@ -80,7 +88,7 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
     row.packageTotal ?? (lineType === 'package_cost' ? lineTotal : 0),
   );
   const shipping = numberValue(
-    row.shippingTotal ?? (lineType === 'shipping' ? lineTotal : 0),
+    row.shippingTotal ?? (lineType === 'shipping' || lineType === 'return_label' || lineType === 'return' ? lineTotal : 0),
   );
   const storage = numberValue(
     row.storageTotal ?? (lineType === 'storage' ? lineTotal : 0),
@@ -92,6 +100,16 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
 }
 
 function rowKey(row: BillingDetailReadModelRow): string {
+  if (isBillingReturnLineType(row.lineType)) {
+    if (nonEmpty(row.returnId)) return `return:${String(row.returnId)}`;
+    if (nonEmpty(row.id)) return `return-line:${String(row.orderId ?? 'none')}:${String(row.id)}`;
+    return [
+      'return',
+      String(row.orderId ?? ''),
+      String(row.description ?? ''),
+      String(row.lineType ?? ''),
+    ].join(':');
+  }
   const orderId = row.orderId;
   if (nonEmpty(orderId)) return `order:${String(orderId)}`;
   return [
@@ -135,6 +153,12 @@ const TEXT_CARRY_FIELDS = [
   'zeroShippingReviewSeverity',
   // PS-377: the backend-owned cancelled-order status marker ('CANCELLED').
   'billingStatusBadge',
+  // PS-393: explicit backend-owned Billing Status column fields. The FE and
+  // exports render these verbatim instead of inferring status from dollars.
+  'billingLifecycleStatus',
+  'billingStatusLabel',
+  'billingStatusTone',
+  'billingZeroReason',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [
@@ -150,6 +174,8 @@ const VALUE_CARRY_FIELDS = [
   'refUspsRate',
   'feeWaiverDecision',
   'billingBadges',
+  'relatedOrderId',
+  'returnId',
   'manualBillingOverrideLineTypes',
   'manualBillingOverrideLabels',
 ] as const;

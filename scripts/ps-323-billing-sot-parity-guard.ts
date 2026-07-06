@@ -43,11 +43,11 @@ function read(path: string): string {
   }
 }
 
-// Total column index in the CSV row (Ship Date, Order #, SKUs, Box Size, Box Cost, Qty,
-// Pick & Pack Fee, Additional Units, Shipping, Storage, Total).
-const TOTAL_COL = 10;
-const ADDITIONAL_COL = 7;
-const QTY_COL = 5;
+// Total column index in the CSV row (Ship Date, Order #, Status, SKUs, Box Size,
+// Box Cost, Qty, Pick & Pack Fee, Additional Units, Shipping, Storage, Total).
+const TOTAL_COL = 11;
+const ADDITIONAL_COL = 8;
+const QTY_COL = 6;
 
 function baseRow(over: Partial<InvoiceCsvDetailRow>): InvoiceCsvDetailRow {
   return {

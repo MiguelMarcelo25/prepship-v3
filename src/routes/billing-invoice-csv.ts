@@ -31,6 +31,7 @@ export type InvoiceCsvDetailRow = {
   shipping_amt: string;
   storage_amt: string;
   row_total: string;
+  billing_status_label?: string | null;
   skus: string | null;
   package_cost_amt: string;
   box_label: string;
@@ -43,6 +44,7 @@ export type InvoiceCsvDetailRow = {
 export const INVOICE_CSV_HEADERS = [
   INVOICE_SHIP_DATE_HEADER,
   'Order #',
+  'Status',
   'SKUs',
   'Box Size',
   'Box Cost',
@@ -84,6 +86,7 @@ export function renderInvoiceCsvRow(row: InvoiceCsvDetailRow): string {
   const cells = [
     invoiceShipDateTimeCell(row.ship_date),
     String(row.order_number ?? row.order_id ?? ''),
+    row.billing_status_label || 'Fulfilled',
     invoiceOneLineCell(row.skus),
     invoiceOneLineCell(row.box_label),
     num(Number(row.package_cost_amt)),

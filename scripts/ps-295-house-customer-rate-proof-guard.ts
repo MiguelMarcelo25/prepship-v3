@@ -158,7 +158,7 @@ const csvRow = renderInvoiceCsvRow({
 const csvCells = csvRow.split(',');
 check(
   'invoice CSV row consumes the same shipping_amt customer_rate value',
-  csvCells[8] === '9.64' && csvCells[10] === '9.64',
+  csvCells[9] === '9.64' && csvCells[11] === '9.64',
   csvRow,
 );
 

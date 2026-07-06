@@ -85,6 +85,14 @@
   background:rgba(234,179,8,.06);
 }
 
+.billing-detail-status-cancelled{
+  background:rgba(248,113,113,.10);
+}
+
+.billing-detail-status-return{
+  background:rgba(139,92,246,.08);
+}
+
 .billing-detail-edit-button{
   align-items:center;
   background:var(--surface);
@@ -449,7 +457,7 @@
 #view-billing table tbody tr{
   transition:background .12s ease;
 }
-#view-billing table tbody tr:nth-child(even):not(.is-detail-selected):not(.billing-detail-ss-row){
+#view-billing table tbody tr:nth-child(even):not(.is-detail-selected):not(.billing-detail-ss-row):not(.billing-detail-status-cancelled):not(.billing-detail-status-return){
   background:color-mix(in srgb,var(--surface2) 45%,transparent);
 }
 #view-billing table tbody tr:not(.is-detail-selected):hover{

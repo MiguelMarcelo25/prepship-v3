@@ -44,6 +44,7 @@ assert.deepEqual(
   [
     'Ship Date/Time (Los Angeles)',
     'Order #',
+    'Status',
     'SKUs',
     'Box Size',
     'Box Cost',
@@ -110,7 +111,7 @@ assert.equal(lines[0]?.replace(/^\uFEFF/, ''), INVOICE_CSV_HEADERS.join(','), 'f
 // total = row_total (14.5) since it is > 0.
 assert.equal(
   lines[1],
-  '5/4/2026 12:00 AM PT,PO-9001,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
+  '5/4/2026 12:00 AM PT,PO-9001,Fulfilled,SKU-A | SKU-B,Small (6x4x4),2,5,7.5,1.5,4.25,0.75,14.5',
   'rich row must serialize readable one-line SKU text plus the XLSX-identical derived columns',
 );
 
@@ -118,7 +119,7 @@ assert.equal(
 // pickPackFee(3) + shipping(2) + storage(1) = 6. Empty SKUs serialize blank.
 assert.equal(
   lines[2],
-  '5/5/2026 12:00 AM PT,PO-9002,,—,0,1,3,0,2,1,6',
+  '5/5/2026 12:00 AM PT,PO-9002,Fulfilled,,—,0,1,3,0,2,1,6',
   'fallback row must use the row_total>0?:sum fallback identical to the XLSX loop',
 );
 

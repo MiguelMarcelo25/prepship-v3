@@ -72,6 +72,7 @@ import { env } from '../lib/env';
 import { toBillingDetailOrderRows } from './billing-detail-row-sot';
 import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
+import { resolveBillingRowStatus } from './billing-row-status';
 import {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
@@ -2255,6 +2256,17 @@ export async function billingDetails(input: GenerateInput) {
         isNoChargeBoxCostLine: boxCostNoCharge,
         canAlertMissing: false,
       });
+      const feeWaiver = row.orderId != null ? feeWaiverByOrderId.get(row.orderId) ?? null : null;
+      const feeWaived = feeWaiver?.decision === 'waived';
+      const billingStatus = resolveBillingRowStatus({
+        lineType,
+        orderStatus: row.orderStatus,
+        totalCost: row.totalCost,
+        feeWaived,
+        packageCostNeedsReview: isBoxReviewLine,
+        shippingZeroNeedsReview: isZeroShippingReviewLine,
+        manualBillingOverrideLabels,
+      });
 
       const {
         selectedRateJson: _selectedRateJson,
@@ -2273,9 +2285,6 @@ export async function billingDetails(input: GenerateInput) {
         overridePackageId: _overridePackageId,
         ...rest
       } = row;
-      // PS-275: this order's prep-fee waiver decision (if any), for the FE chip.
-      const feeWaiver = row.orderId != null ? feeWaiverByOrderId.get(row.orderId) ?? null : null;
-      const feeWaived = feeWaiver?.decision === 'waived';
       return {
         ...rest,
         shipmentId: row.shipmentId ?? fallbackShipment?.id ?? null,
@@ -2326,12 +2335,9 @@ export async function billingDetails(input: GenerateInput) {
         zeroShippingReviewReason: zeroShippingReview.reason,
         zeroShippingReviewLabel: zeroShippingReview.label,
         zeroShippingReviewSeverity: zeroShippingReview.severity,
-        // PS-377: backend-owned cancelled-order status marker. The FE / Invoice
-        // render a CANCELLED badge from this — they never infer cancellation from
-        // $0. Driven by orders.order_status, so a cancelled order is marked whether
-        // it's a $0 no-charge row or a HUGRAB row that keeps its cancelled billing.
-        billingStatusBadge:
-          String(row.orderStatus ?? '').trim().toLowerCase() === 'cancelled' ? 'CANCELLED' : null,
+        // Per user override unlock shipped data on 2026-07-06: PS-393 adds
+        // read-only billing status fields for cancelled no-charge and return rows.
+        ...billingStatus,
         // PS-275: the order's prep-fee waiver decision (durable, reversible).
         // null = undecided; the FE badges "Prep fee waived" when true.
         feeWaived,

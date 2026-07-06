@@ -44,6 +44,7 @@ const DEFAULT_COLUMN_BOUNDS = { min: 10, max: 42 };
 
 export const INVOICE_XLSX_COLUMN_WIDTH_BOUNDS: Record<string, { min: number; max: number }> = {
   orderNumber: { min: 10, max: 14 },
+  status: { min: 16, max: 22 },
   shipDate: { min: 12, max: 14 },
   carrier: { min: 10, max: 16 },
   itemName: { min: 28, max: 52 },

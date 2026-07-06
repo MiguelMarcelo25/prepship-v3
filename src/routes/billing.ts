@@ -47,6 +47,7 @@ import {
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
+import { resolveBillingRowStatus } from '../services/billing-row-status';
 // PS-311b: the dims-based companion — sweep the SAME unmatched box size across a date range.
 import { previewBulkBoxCostByDims, applyBulkBoxCostByDimsResolutions, revertBulkBoxCostByDimsResolutions } from '../services/billing-box-cost-by-dims';
 import { clientUsedPackagePricingRows } from '../services/billing-client-package-pricing';
@@ -1339,6 +1340,7 @@ type InvoiceDetailRow = {
   shipping_amt: string;
   storage_amt: string;
   row_total: string;
+  billing_status_label: string;
   item_names: string | null;
   skus: string | null;
   carrier_code: string | null;
@@ -1353,10 +1355,11 @@ type InvoiceDetailRow = {
 
 // PS-217: the raw SQL shape billingInvoiceData fetches before box resolution.
 // fee_waived is NOT from the SQL aggregate (it's a separate billing_fee_waivers read) — omit it here.
-type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names'> & {
+type InvoiceDetailSqlRow = Omit<InvoiceDetailRow, 'box_label' | 'box_review' | 'fee_waived' | 'item_names' | 'billing_status_label'> & {
   billed_package_id: number | null;
   box_cost_desc: string | null;
   box_review_reason: string | null;
+  billing_line_types: unknown;
   // PS-310: raw per-SKU rows ({ sku, name, quantity }) fed to the canonical export
   // summarizer. `unknown` because summarizeBillingItemsForDetail validates shape itself.
   item_rows: unknown;
@@ -1444,6 +1447,7 @@ async function billingInvoiceData(
       max(case when b.line_type = 'package_cost' then b.description else null end) as box_cost_desc,
       max(case when b.line_type = 'package_cost_missing' then b.description else null end) as box_review_reason,
       sum(b.total_cost)::text as row_total,
+      array_agg(distinct b.line_type) as billing_line_types,
       (
         select string_agg(oi.sku, ', ' order by oi.line_index)
         from order_items oi
@@ -1507,6 +1511,10 @@ async function billingInvoiceData(
   const details: InvoiceDetailRow[] = rawDetails.map((r) => {
     const { box_label, box_review } = resolveInvoiceBoxLabel(r, packagesById);
     const itemSummary = summarizeBillingItemsForDetail(r.item_rows);
+    const billingStatus = resolveBillingRowStatus({
+      lineTypes: Array.isArray(r.billing_line_types) ? r.billing_line_types : [],
+      totalCost: r.row_total,
+    });
     return {
       order_id: r.order_id,
       order_number: r.order_number,
@@ -1518,6 +1526,7 @@ async function billingInvoiceData(
       shipping_amt: r.shipping_amt,
       storage_amt: r.storage_amt,
       row_total: r.row_total,
+      billing_status_label: billingStatus.billingStatusLabel,
       item_names: itemSummary.itemNames,
       // PS-310/PS-362: build the export SKU string from the SAME summarizer the detail screen
       // uses (Excel-safe xN per SKU, duplicate aggregation); fall back to the bare string_agg when
@@ -1598,6 +1607,7 @@ function renderInvoiceHtml(args: {
       <tr>
         <td class="ship-date">${escHtml(shipDate)}</td>
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
+        <td>${escHtml(d.billing_status_label || 'Fulfilled')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td${d.box_review ? ' class="review"' : ''}>${escHtml(d.box_label)}</td>
         <td class="num">${Number(d.package_cost_amt) > 0 ? fmt(d.package_cost_amt) : '—'}</td>
@@ -1684,6 +1694,7 @@ function renderInvoiceHtml(args: {
       <tr>
         <th class="ship-date">${escHtml(INVOICE_SHIP_DATE_HEADER)}</th>
         <th>Order #</th>
+        <th>Status</th>
         <th>SKU(s)</th>
         <th>Box Size</th>
         <th class="num">Box Cost</th>
@@ -1698,7 +1709,7 @@ function renderInvoiceHtml(args: {
     <tbody>${rowsHtml}</tbody>
     <tfoot>
       <tr>
-        <td colspan="4">Totals — ${orderCount} orders</td>
+        <td colspan="5">Totals — ${orderCount} orders</td>
         <td class="num">${packageTotal > 0 ? fmt(packageTotal) : '—'}</td>
         <td></td>
         <td class="num">${fmt(pickPackFeeTotal)}</td>
@@ -1761,6 +1772,7 @@ async function renderInvoiceXlsx(args: {
   // Single operator-facing invoice sheet, one row per order.
   invoice.columns = [
     { header: 'Order #', key: 'orderNumber', width: 12 },
+    { header: 'Status', key: 'status', width: 18 },
     { header: INVOICE_XLSX_SHIP_DATE_HEADER, key: 'shipDate', width: 12 },
     { header: 'Carrier', key: 'carrier', width: 12 },
     { header: 'Item Name', key: 'itemName', width: 36 },
@@ -1788,6 +1800,7 @@ async function renderInvoiceXlsx(args: {
     const rowTotal = Number(d.row_total);
     invoice.addRow({
       orderNumber: String(d.order_number ?? d.order_id ?? ''),
+      status: d.billing_status_label || 'Fulfilled',
       shipDate: invoiceShipDateCell(d.ship_date),
       carrier: invoiceCarrierCell(d.carrier_code),
       itemName: invoiceOneLineCell(d.item_names),
@@ -1809,13 +1822,13 @@ async function renderInvoiceXlsx(args: {
       itemName: `Totals - ${totals.orderCount} orders`,
       // Box Cost is display-only here; it is already inside each row's
       // Fulfillment Fee, so it is never added a second time.
-      boxCost: { formula: `SUM(I${first}:I${last})` },
-      qty: { formula: `SUM(F${first}:F${last})` },
-      pickPackFee: { formula: `SUM(G${first}:G${last})` },
-      additional: { formula: `SUM(H${first}:H${last})` },
-      shipping: { formula: `SUM(K${first}:K${last})` },
-      storage: { formula: `SUM(L${first}:L${last})` },
-      fulfillmentFee: { formula: `SUM(M${first}:M${last})` },
+      boxCost: { formula: `SUM(J${first}:J${last})` },
+      qty: { formula: `SUM(G${first}:G${last})` },
+      pickPackFee: { formula: `SUM(H${first}:H${last})` },
+      additional: { formula: `SUM(I${first}:I${last})` },
+      shipping: { formula: `SUM(L${first}:L${last})` },
+      storage: { formula: `SUM(M${first}:M${last})` },
+      fulfillmentFee: { formula: `SUM(N${first}:N${last})` },
     });
     totalsRow.font = { bold: true };
   }
