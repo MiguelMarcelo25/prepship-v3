@@ -11,11 +11,12 @@
  */
 import { readFileSync } from 'node:fs';
 
-const routesRates = readFileSync('src/routes/rates.ts', 'utf8');
+const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const svcRates = readFileSync('src/services/rates.ts', 'utf8');
 const ratesCombined = readFileSync('src/services/rates-combined.ts', 'utf8');
 const ssClient = readFileSync('src/lib/shipstation/client.ts', 'utf8');
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+const openWorkflow = readFileSync('web/src/components/rate-browser-open-workflow.ts', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
 let failures = 0;
@@ -27,15 +28,17 @@ function check(name: string, cond: boolean) {
 // 1. The cached-only probe is GENUINELY cache-only — direct carriers are not
 //    live-quoted during it (the original bug #1). The route threads cachedOnly
 //    into the direct-carrier path, and the service short-circuits to empty.
-check('route passes cachedOnly into the direct-carrier path',
-  /getDirectCarrierRatesForRateInput\([\s\S]*?cachedOnly:\s*isCachedOnlyLookup/.test(routesRates));
+check('producer passes cachedOnly into the direct-carrier path',
+  /getDirectCarrierRatesForRateInput\([\s\S]*?cachedOnly:\s*isCachedOnlyLookup/.test(rateBrowseProducer));
 check('cachedOnly lookup is gated (not forceRefresh/forceLive)',
-  /isCachedOnlyLookup = Boolean\(cachedOnly && !forceRefresh && !forceLive\)/.test(routesRates));
+  /isCachedOnlyLookup = Boolean\(cachedOnly && !forceRefresh && !forceLive\)/.test(rateBrowseProducer));
 check('service returns empty on a cached-only lookup (no live quote)',
   /if \(opts\.cachedOnly\)[\s\S]{0,200}rates: \[\],/.test(svcRates));
 
 // 2. The follow-up fan-out is COVERAGE-driven, not a carrier-COUNT heuristic.
-check('modal fans out on uncovered coverage identity', modal.includes('probe.uncoveredPids.length > 0'));
+check('modal opens the explicit live workflow instead of stopping at cached coverage',
+  modal.includes('void browseRates(undefined, rateBrowserOpenBrowseOptions())') &&
+  openWorkflow.includes('forceLive: true'));
 check('modal does NOT use a <=1 carrier-count heuristic to decide fan-out',
   !/(carriers?WithRates|ratedCount|withRates)\s*<=\s*1/.test(modal));
 
@@ -51,7 +54,7 @@ check('empty results use the short negative cache TTL',
   /cacheTtlMs = cachedRaw\.length \? CACHE_TTL_MS : RATE_NEGATIVE_CACHE_TTL_MS/.test(svcRates));
 
 // 5. The misleading no-op `source: x ? 'live' : 'live'` ternary is gone.
-check('no no-op live/live source ternary', !/\?\s*'live'\s*:\s*'live'/.test(routesRates));
+check('no no-op live/live source ternary', !/\?\s*'live'\s*:\s*'live'/.test(rateBrowseProducer));
 
 // Self-wiring.
 check('package.json exposes test:ps-241-rate-browser-fanout', /test:ps-241-rate-browser-fanout/.test(pkg));

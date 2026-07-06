@@ -155,6 +155,7 @@
     "test:ps-125-hugrab-zero-insurance-premium": "tsx scripts/ps-125-hugrab-zero-insurance-premium-guard.ts",
     "test:ps-126-parcelguard-schedule-premium": "tsx scripts/ps-126-parcelguard-schedule-premium-guard.ts",
     "test:ps-126-zip4-rate-parity": "tsx scripts/ps-126-zip4-rate-parity-guard.ts",
+    "test:ps-390-rate-browser-country": "tsx scripts/ps-390-rate-browser-country-guard.ts",
     "test:ps-127-address-classification-parity": "tsx scripts/ps-127-address-classification-parity-guard.ts",
     "test:ps-120-rate-job-status": "tsx scripts/ps-120-rate-job-status-guard.ts",
     "test:ps-165-order-shipping-display": "tsx scripts/ps-165-order-shipping-display-guard.ts",

@@ -127,7 +127,11 @@ export type RbOrderSummaryDto = {
   bestRate?: Record<string, unknown> | null;
   weight?: { value?: number } | null;
   rateDims?: { length?: number | null; width?: number | null; height?: number | null } | null;
-  shipTo?: { postalCode?: string | null; company?: string | null } | null;
+  shipTo?: {
+    postalCode?: string | null;
+    company?: string | null;
+    country?: string | null;
+  } | null;
   residential?: boolean | null;
   sourceResidential?: boolean | null;
   // PS-276 (slice 4-UI): the backend's resolved residential verdict for the resi/comm header tag.
@@ -864,6 +868,11 @@ function sanitizePostalInput(value: string | null | undefined): string {
   return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
 }
 
+function normalizeDestinationCountry(value: string | null | undefined): string {
+  const country = String(value ?? 'US').trim().toUpperCase();
+  return country || 'US';
+}
+
 // PS-108 display helper: pretty-print the insurance provider key the backend
 // stamps onto each enriched rate (lowercased, e.g. 'parcelguard'). Display-only —
 // the premium itself is computed and owned by the backend
@@ -1431,10 +1440,11 @@ export default function RateBrowserModal({
       // verdict defaults residential-safe so the residential surcharge is never under-quoted, and
       // the backend stays authoritative (resolveRateInput + the label parity guard).
       const residentialForQuote = residentialForRate(order);
+      const destinationCountry = normalizeDestinationCountry(order?.shipTo?.country);
       const browsePayload = {
         fromPostalCode: selectedLocation?.postalCode?.slice(0, 5) ?? undefined,
         toPostalCode: zip,
-        toCountry: 'US',
+        toCountry: destinationCountry,
         shipFrom,
         weight: { value: totalOz, units: 'ounces' },
         dimensions: {

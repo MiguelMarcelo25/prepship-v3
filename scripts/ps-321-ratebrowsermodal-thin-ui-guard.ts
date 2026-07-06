@@ -102,8 +102,8 @@ check('RateRowItem renders backend-issued display/rate-cost amounts instead of m
   !/rateDisplayTotal|rateBaseTotal|markups:/.test(rowItem));
 
 check('rate-browser money helper reads backend customer/rate-cost fields without markup policy',
-  money.includes('customerRateAmount') &&
-  money.includes('rateCostAmount') &&
+  money.includes('cShippingRateAmount') &&
+  money.includes('selectedRateCost') &&
   money.includes('sortRateRowsByBackendDisplayRank') &&
   !/Markup|markups|rbMarkup|applyMarkup|rateDisplayTotal/.test(money));
 

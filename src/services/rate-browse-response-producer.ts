@@ -51,6 +51,7 @@ import {
   stampHugrabCoverageDisplayFields,
   stampRateBrowserDisplayAliases,
 } from './rate-browser-display-fields';
+import { resolveRateBrowseDestinationCountry } from './rate-browse-destination-country';
 
 type RateBrowseBody = Record<string, any>;
 
@@ -156,7 +157,10 @@ export async function produceRateBrowsePayload({
   const browseRateInput = {
     ...rest,
     toZip: rest.toZip ?? orderForBrowse?.shipToPostalCode ?? readText(orderRawShipTo.postalCode) ?? rest.toZip,
-    toCountry: rest.toCountry ?? readText(orderRawShipTo.country) ?? rest.toCountry,
+    toCountry: resolveRateBrowseDestinationCountry({
+      requestedCountry: rest.toCountry,
+      canonicalCountry: readText(orderRawShipTo.country),
+    }),
     toState: rest.toState ?? orderForBrowse?.shipToState ?? readText(orderRawShipTo.state) ?? rest.toState,
     toCity: rest.toCity ?? orderForBrowse?.shipToCity ?? readText(orderRawShipTo.city) ?? rest.toCity,
     confirmation: confirmation ?? signature ?? null,

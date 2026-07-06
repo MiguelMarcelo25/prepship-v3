@@ -111,15 +111,15 @@ check('rates service: cached-only lookups return uncached coverage WITHOUT quoti
   /options\.cachedOnly\)\s*\{[\s\S]{0,700}?status: 'uncached' as CarrierRateDiagnosticStatus/.test(ratesService));
 check('rates service: direct quoting is wrapped in the bounded per-carrier timeout',
   /withCarrierQuoteTimeout\(quoteCarrierRates\(/.test(ratesService));
-const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 // PS-perf 2026-06-23: the direct call body grew (forwards the resolved insurance from
 // resolvedForBrowse and now lives in a Promise.all IIFE) — widen the span; the invariant (the
 // SAME cachedOnly is threaded through to the direct universe) is unchanged.
 check('/rates/browse passes cachedOnly through to the direct universe',
-  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,1200}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(ratesRoute));
+  /getDirectCarrierRatesForRateInput\(\{[\s\S]{0,1600}?\}, \{ cachedOnly: isCachedOnlyLookup \}\)/.test(rateBrowseProducer));
 check('the misleading source ternary is gone (cache+live-direct reports mixed)',
-  !/source: result\.cached \? 'cache' : filtered\.length \? 'live' : 'live'/.test(ratesRoute) &&
-  /'mixed' : 'cache'/.test(ratesRoute));
+  !/source: result\.cached \? 'cache' : filtered\.length \? 'live' : 'live'/.test(rateBrowseProducer) &&
+  /'mixed' : 'cache'/.test(rateBrowseProducer));
 const combinedSrc = readFileSync('src/services/rates-combined.ts', 'utf8');
 check('combined owner: cached-only missing carriers are terminal uncached, never resting loading',
   /isCachedOnlyLookup \? 'uncached' : 'unavailable'/.test(combinedSrc));
@@ -128,11 +128,12 @@ check('combined owner: completeness rejects uncached coverage',
 
 // ── (5) Rate Browser pins: coverage identity drives the follow-up ─────────────
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
+const openWorkflow = readFileSync('web/src/components/rate-browser-open-workflow.ts', 'utf8');
 check('the carrier-COUNT live-fanout heuristic is deleted',
   !/cachedCarrierCount/.test(modal) && !/carriersWithRates\s*<=\s*\d/.test(modal));
 check('the open flow live-fetches when ANY scoped account is uncovered',
-  /probe\.uncoveredPids\.length > 0/.test(modal) &&
-  /await browseRates\(undefined, \{ forceLive: true \}\)/.test(modal));
+  modal.includes('void browseRates(undefined, rateBrowserOpenBrowseOptions())') &&
+  openWorkflow.includes('forceLive: true'));
 check('cached-only paint marks unc covered accounts terminal uncached (not loading)'.replace('unc covered', 'uncovered'),
   /options\.cachedOnly\)\s*\{[\s\S]{0,500}?\?\?= 'uncached'/.test(modal));
 check('header in-flight count derives ONLY from genuinely pending requests',
@@ -141,7 +142,7 @@ check('header in-flight count derives ONLY from genuinely pending requests',
 check('a failed browse leaves every scoped account terminal error (no blank/loading rest state)',
   /setCarrierStatusByPid\(\s*\n\s*Object\.fromEntries\(rateShippingAccounts\.map\(\(acct\) => \[String\(acct\.shippingProviderId\), 'error'/.test(modal));
 check('backend quote proof fields still flow on browse rows (rateQuoteId + selectedRateKey untouched)',
-  /rateQuoteId/.test(ratesRoute) && /withSelectedRateKeys|selectedRateKey/.test(ratesRoute));
+  /rateQuoteId/.test(rateBrowseProducer) && /withSelectedRateKeys|selectedRateKey/.test(rateBrowseProducer));
 const sidebar = readFileSync('web/src/components/RateBrowserCarrierSidebar.tsx', 'utf8');
 check('sidebar renders uncached as its own terminal state (distinct from the in-flight spinner)',
   /carrierStatus === 'uncached'/.test(sidebar));
