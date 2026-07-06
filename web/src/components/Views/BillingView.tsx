@@ -9,6 +9,7 @@ import { ToastContext } from '../../contexts/ToastContext'
 import type { PackageDto } from '../../types/api'
 import {
   BILLING_DETAIL_COLUMNS,
+  billingDetailQtySortValue,
   buildBackfillRefRatesToast,
   buildBillingConfigInput,
   buildBillingPackagePriceRows,
@@ -183,7 +184,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
-    case 'totalQty': return row.totalQty || row.qty
+    case 'totalQty': return billingDetailQtySortValue(row)
     case 'pickpack': return metrics.pickPack
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
@@ -524,7 +525,7 @@ export default function BillingView() {
         case 'itemSkus':
           return row.itemSkus
         case 'totalQty':
-          return row.totalQty || row.qty
+          return billingDetailQtySortValue(row)
         case 'pickpack':
           return metrics.pickPack
         case 'additional':

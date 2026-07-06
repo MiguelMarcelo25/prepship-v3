@@ -235,6 +235,25 @@ function parseNumber(value: string) {
   return Number.isNaN(parsed) ? 0 : parsed
 }
 
+export function formatBillingQuantity(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '0'
+  const text = String(value).trim()
+  if (!text) return '0'
+  const parsed = Number(text)
+  if (!Number.isFinite(parsed)) return text
+  if (Number.isInteger(parsed)) return String(parsed)
+  return text.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+}
+
+export function billingDetailQtyDisplay(row: BillingDetailDto): string {
+  return formatBillingQuantity(row.displayQty ?? row.totalQty ?? row.qty ?? 0)
+}
+
+export function billingDetailQtySortValue(row: BillingDetailDto): number | string {
+  const parsed = Number(row.totalQty ?? row.qty ?? row.displayQty)
+  return Number.isFinite(parsed) ? parsed : billingDetailQtyDisplay(row)
+}
+
 function moneyNumber(value: number) {
   return Number((Number.isFinite(value) ? value : 0).toFixed(2))
 }

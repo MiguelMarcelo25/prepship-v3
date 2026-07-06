@@ -16,6 +16,8 @@ import { BillingZeroShippingBadge, hasBillingZeroShippingReview } from './Billin
 import type { BillingDetailColumnId, BillingDetailDto, BillingDetailPanelState } from './billing-parity'
 import {
   billingShipDateSortValue,
+  billingDetailQtyDisplay,
+  billingDetailQtySortValue,
   BILLING_DETAIL_COLUMNS,
   computeBillingDetailMetrics,
   formatBillingShipDate,
@@ -69,7 +71,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
-    case 'totalQty': return row.totalQty || row.qty
+    case 'totalQty': return billingDetailQtySortValue(row)
     case 'pickpack': return metrics.pickPack
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
@@ -455,7 +457,7 @@ export function BillingDetailTable({
                 )
               }
               case 'totalQty':
-                return <span>{row.totalQty || row.qty || 0}</span>
+                return <span>{billingDetailQtyDisplay(row)}</span>
               case 'pickpack':
                 // PS — flat first-unit Pick & Pack fee only; extra units
                 // are shown in the Addl Units column (not folded in here).

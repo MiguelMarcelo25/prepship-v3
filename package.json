@@ -326,6 +326,7 @@
     "test:ps-389-manual-prep-fee-waiver": "tsx scripts/ps-389-manual-prep-fee-waiver-guard.ts",
     "test:ps-392-manual-billing-overrides": "tsx scripts/ps-392-manual-billing-overrides-guard.ts",
     "test:ps-393-billing-status-column": "tsx scripts/ps-393-billing-status-column-guard.ts",
+    "test:ps-394-billing-qty-shipping-display": "tsx scripts/ps-394-billing-qty-shipping-display-guard.ts",
     "test:hugrab-cancelled-billing-guard": "tsx scripts/hugrab-cancelled-billing-guard.ts",
     "test:ps-370-selected-rate-cost-backfill": "tsx scripts/ps-370-selected-rate-cost-backfill-guard.ts",
     "test:ps-381-selected-rate-cost-sot": "tsx scripts/ps-381-selected-rate-cost-sot-guard.ts",

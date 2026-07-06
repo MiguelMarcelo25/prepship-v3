@@ -3,6 +3,7 @@ import type { PackageDto } from '../../types/api'
 import type { BillingEditDraft } from './billing-edit-draft-cache'
 import {
   formatBillingMoney,
+  billingDetailQtyDisplay,
   formatBillingShipDate,
   type BillingDetailDto,
 } from './billing-parity'
@@ -111,7 +112,7 @@ export function BillingEditDetailModal({
           <div><span>Order #</span><strong>{fallbackText(row.orderNumber)}</strong></div>
           <div><span>Ship Date</span><strong>{formatBillingShipDate(row.shipDate)}</strong></div>
           <div><span>Carrier</span><strong>{fallbackText(row.carrierNickname || row.providerAccountNickname || row.carrierCode)}</strong></div>
-          <div><span>Qty</span><strong>{row.totalQty || row.qty || 0}</strong></div>
+          <div><span>Qty</span><strong>{billingDetailQtyDisplay(row)}</strong></div>
           <div><span>Item Name</span><strong>{fallbackText(row.itemNames || row.description)}</strong></div>
           <div><span>SKU</span><strong>{fallbackText(row.itemSkus)}</strong></div>
           <div>

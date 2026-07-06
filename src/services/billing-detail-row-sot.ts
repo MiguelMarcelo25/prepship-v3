@@ -48,6 +48,7 @@ export interface BillingDetailRowDto {
   billingStatusTone?: string;
   billingZeroReason?: string | null;
   billingStatusBadge?: string | null;
+  displayQty?: string;
   relatedOrderId?: number | string | null;
   returnId?: number | string | null;
   manualBillingOverrideLineTypes?: string[];
@@ -68,6 +69,71 @@ function textValue(value: unknown): string | null {
 
 function nonEmpty(value: unknown): boolean {
   return value !== null && value !== undefined && value !== '';
+}
+
+function orderKeyFromId(orderId: unknown): string {
+  return `order:${String(orderId)}`;
+}
+
+function orderNumberValue(row: BillingDetailReadModelRow): string | null {
+  return textValue(row.orderNumber);
+}
+
+function formatBillingDisplayQty(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '0';
+  const text = String(value).trim();
+  if (!text) return '0';
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) return text;
+  if (Number.isInteger(parsed)) return String(parsed);
+  return text.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+}
+
+function uniqueOrderKeyByOrderNumber(rows: BillingDetailReadModelRow[]): Map<string, string> {
+  const orderKeysByNumber = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (isBillingReturnLineType(row.lineType)) continue;
+    if (!nonEmpty(row.orderId)) continue;
+    const orderNumber = orderNumberValue(row);
+    if (!orderNumber) continue;
+    let keys = orderKeysByNumber.get(orderNumber);
+    if (!keys) {
+      keys = new Set<string>();
+      orderKeysByNumber.set(orderNumber, keys);
+    }
+    keys.add(orderKeyFromId(row.orderId));
+  }
+
+  const result = new Map<string, string>();
+  for (const [orderNumber, orderKeys] of orderKeysByNumber) {
+    if (orderKeys.size === 1) {
+      const [onlyKey] = orderKeys;
+      if (onlyKey) result.set(orderNumber, onlyKey);
+    }
+  }
+  return result;
+}
+
+function duplicateOrderNumbers(rows: BillingDetailReadModelRow[]): Set<string> {
+  const orderKeysByNumber = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (isBillingReturnLineType(row.lineType)) continue;
+    if (!nonEmpty(row.orderId)) continue;
+    const orderNumber = orderNumberValue(row);
+    if (!orderNumber) continue;
+    let keys = orderKeysByNumber.get(orderNumber);
+    if (!keys) {
+      keys = new Set<string>();
+      orderKeysByNumber.set(orderNumber, keys);
+    }
+    keys.add(orderKeyFromId(row.orderId));
+  }
+
+  const result = new Set<string>();
+  for (const [orderNumber, orderKeys] of orderKeysByNumber) {
+    if (orderKeys.size > 1) result.add(orderNumber);
+  }
+  return result;
 }
 
 // The single SQL-row→DTO ingest edge. The billingDetails query selects
@@ -99,7 +165,7 @@ function billingLineMetrics(row: BillingDetailReadModelRow) {
   return { pickPack, additional, packageCost, shipping, storage, total };
 }
 
-function rowKey(row: BillingDetailReadModelRow): string {
+function rowKey(row: BillingDetailReadModelRow, orderNumberKey: Map<string, string>): string {
   if (isBillingReturnLineType(row.lineType)) {
     if (nonEmpty(row.returnId)) return `return:${String(row.returnId)}`;
     if (nonEmpty(row.id)) return `return-line:${String(row.orderId ?? 'none')}:${String(row.id)}`;
@@ -111,7 +177,9 @@ function rowKey(row: BillingDetailReadModelRow): string {
     ].join(':');
   }
   const orderId = row.orderId;
-  if (nonEmpty(orderId)) return `order:${String(orderId)}`;
+  if (nonEmpty(orderId)) return orderKeyFromId(orderId);
+  const orderNumber = orderNumberValue(row);
+  if (orderNumber) return orderNumberKey.get(orderNumber) ?? `order-number:${orderNumber}`;
   return [
     'storage',
     String(row.description ?? ''),
@@ -153,6 +221,7 @@ const TEXT_CARRY_FIELDS = [
   'zeroShippingReviewSeverity',
   // PS-377: the backend-owned cancelled-order status marker ('CANCELLED').
   'billingStatusBadge',
+  'orderNumber',
   // PS-393: explicit backend-owned Billing Status column fields. The FE and
   // exports render these verbatim instead of inferring status from dollars.
   'billingLifecycleStatus',
@@ -162,6 +231,7 @@ const TEXT_CARRY_FIELDS = [
 ] as const;
 
 const VALUE_CARRY_FIELDS = [
+  'orderId',
   'shipmentId',
   'packageId',
   'providerAccountId',
@@ -208,12 +278,28 @@ function applyBoxCostAlert(row: BillingDetailRowDto): void {
   row.billingBadges = result.billingBadges;
 }
 
+function appendBillingBadge(row: BillingDetailRowDto, badge: string): void {
+  const badges = Array.isArray(row.billingBadges) ? row.billingBadges : [];
+  row.billingBadges = badges.includes(badge) ? badges : [...badges, badge];
+}
+
+function applyDisplayFields(row: BillingDetailRowDto, duplicatedOrderNumbers: Set<string>): BillingDetailRowDto {
+  row.displayQty = formatBillingDisplayQty(nonEmpty(row.totalQty) ? row.totalQty : row.qty);
+  const orderNumber = orderNumberValue(row);
+  if (orderNumber && duplicatedOrderNumbers.has(orderNumber)) {
+    appendBillingBadge(row, 'Duplicate order #');
+  }
+  return row;
+}
+
 export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): BillingDetailRowDto[] {
   const byKey = new Map<string, BillingDetailRowDto>();
   const order: string[] = [];
+  const orderNumberKey = uniqueOrderKeyByOrderNumber(rows);
+  const duplicatedOrderNumbers = duplicateOrderNumbers(rows);
 
   for (const row of rows) {
-    const key = rowKey(row);
+    const key = rowKey(row, orderNumberKey);
     const metrics = billingLineMetrics(row);
     const lineType = row.lineType;
     const hasPackageCostLine =
@@ -268,5 +354,5 @@ export function toBillingDetailOrderRows(rows: BillingDetailReadModelRow[]): Bil
     applyBoxCostAlert(existing);
   }
 
-  return order.map((key) => byKey.get(key)!);
+  return order.map((key) => applyDisplayFields(byKey.get(key)!, duplicatedOrderNumbers));
 }
