@@ -158,30 +158,26 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
     const providerId = String(r.carrier_id ?? '').match(/^se-(\d+)$/i)?.[1];
     const m = markups.get(String(r.carrier_id ?? '')) ?? (providerId ? markups.get(providerId) : undefined);
     if (!m) return r;
-    const orig = r.shipping_amount.amount;
+    const shippingComponent = r.shipping_amount.amount;
+    const providerAllIn = normalizeShippingRateMoney(r).selectedRateCost ?? shippingComponent;
     // PS-177: same math, one owner (rate-money.applyMarkupToAmount).
-    const marked = applyMarkupToAmount(orig, m);
+    const markedShippingComponent = applyMarkupToAmount(shippingComponent, m);
+    const marked = applyMarkupToAmount(providerAllIn, m);
     return {
       ...r,
       shipping_amount: {
         ...r.shipping_amount,
-        amount: marked,
+        amount: markedShippingComponent,
       },
       original_amount: { ...r.shipping_amount },
       markup: m,
-      // PS-307: stamp the explicit marked CUSTOMER charge so the comparison owner
+      // PS-307/PS-391: stamp the explicit marked CUSTOMER charge so the comparison owner
       // (rates-combined.rateTotal, which pickBestRate/priced.sort delegate to) and
       // downstream consumers read an authoritative customer amount instead of inferring
-      // it from shipping_amount.
-      //   • ShipStation rates: ranking-neutral — they carry no explicit customerShippingAmount,
-      //     so rateTotal already fell back to shipping_amount.amount (= this marked value).
-      //   • Direct-carrier rates (toDirectRate): NOT a no-op. toDirectRate stamps the UN-marked
-      //     provider amount into customer_shipping_amount BEFORE markup runs, and rateTotal
-      //     prefers customerShippingAmount over shipping_amount.amount — so a marked-up direct
-      //     rate was previously ranked at its RAW cost. Overwriting it here puts direct rates on
-      //     the same marked-CHARGE basis as ShipStation (PS-203's uniform-charge intent). This is
-      //     a CORRECT ranking fix, not byte-identical. (QA audit 2026-06-23;
-      //     ps-307-direct-rate-markup-behavior-test covers the toDirectRate+applyMarkups path.)
+      // it from shipping_amount. ShipStation add-ons (other/confirmation/insurance) are part
+      // of providerAllIn before markup; shipping_amount remains a marked component for legacy
+      // component display, while cShippingRateAmount is the all-in customer/ranking total.
+      // Direct-carrier rates stay on the same marked-charge basis as ShipStation.
       cShippingRateAmount: marked,
       markedShippingAmount: marked,
       marked_shipping_amount: marked,
@@ -192,13 +188,17 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
       customer_shipping_amount: marked,
       customerRateAmount: marked,
       customer_rate_amount: marked,
+      customerRateSource: 'projected_customer_shipping_rate',
+      customer_rate_source: 'projected_customer_shipping_rate',
       // PS-343: preserve the raw/internal provider cost as backend-owned aliases so Rate Browser
       // consumers do not need to recover it from provider component money fields.
-      selectedRateCost: orig,
-      rawShippingAmount: orig,
-      raw_shipping_amount: orig,
-      internalShippingAmount: orig,
-      internal_shipping_amount: orig,
+      selectedRateCost: providerAllIn,
+      rateCostSource: 'best_rate_internal_cost',
+      rate_cost_source: 'best_rate_internal_cost',
+      rawShippingAmount: providerAllIn,
+      raw_shipping_amount: providerAllIn,
+      internalShippingAmount: providerAllIn,
+      internal_shipping_amount: providerAllIn,
     } as Rate;
   });
 }
