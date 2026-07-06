@@ -64,30 +64,27 @@ const rateCostTotalOwner = sliceBetween(
 );
 
 check('backend markup owner stamps customer amount after markup',
-  applyMarkupsOwner.includes('const orig = r.shipping_amount.amount;') &&
-  applyMarkupsOwner.includes('const marked = applyMarkupToAmount(orig, m);') &&
+  applyMarkupsOwner.includes('const providerAllIn = normalizeShippingRateMoney(r).selectedRateCost ?? shippingComponent;') &&
+  applyMarkupsOwner.includes('const markedShippingComponent = applyMarkupToAmount(shippingComponent, m);') &&
+  applyMarkupsOwner.includes('const marked = applyMarkupToAmount(providerAllIn, m);') &&
   applyMarkupsOwner.includes('shipping_amount:') &&
-  applyMarkupsOwner.includes('amount: marked') &&
-  applyMarkupsOwner.includes('customerShippingAmount: marked') &&
-  applyMarkupsOwner.includes('customer_shipping_amount: marked') &&
-  applyMarkupsOwner.includes('customerRateAmount: marked') &&
-  applyMarkupsOwner.includes('customer_rate_amount: marked') &&
-  applyMarkupsOwner.includes('markedShippingAmount: marked') &&
-  applyMarkupsOwner.includes('marked_shipping_amount: marked'));
+  applyMarkupsOwner.includes('amount: markedShippingComponent') &&
+  applyMarkupsOwner.includes('cShippingRateAmount: marked') &&
+  applyMarkupsOwner.includes('rateAdjustmentKind') &&
+  applyMarkupsOwner.includes('customerRateSource'));
 
 check('backend markup owner preserves raw provider cost as explicit rate-cost aliases',
-  applyMarkupsOwner.includes('rateCostAmount: orig') &&
-  applyMarkupsOwner.includes('rate_cost_amount: orig') &&
-  applyMarkupsOwner.includes('rawShippingAmount: orig') &&
-  applyMarkupsOwner.includes('raw_shipping_amount: orig') &&
-  applyMarkupsOwner.includes('internalShippingAmount: orig') &&
-  applyMarkupsOwner.includes('internal_shipping_amount: orig'));
+  applyMarkupsOwner.includes('const selectedRateCost = isTrueCostUpliftMarkup(m) ? marked : providerAllIn;') &&
+  applyMarkupsOwner.includes('selectedRateCost') &&
+  applyMarkupsOwner.includes('rawShippingAmount: selectedRateCost') &&
+  applyMarkupsOwner.includes('raw_shipping_amount: selectedRateCost') &&
+  applyMarkupsOwner.includes('internalShippingAmount: selectedRateCost') &&
+  applyMarkupsOwner.includes('internal_shipping_amount: selectedRateCost'));
 
 check('combined backend money helpers separate customer charge from internal rate cost',
-  rateTotalOwner.includes('customerShippingAmount(rate) ?? rate.shipping_amount?.amount') &&
-  rateCostTotalOwner.includes('internalShippingCost(rate) ?? rate.shipping_amount?.amount') &&
-  combinedRateOwner.includes('function customerShippingAmount(rate: CombinableRate): number | null') &&
-  combinedRateOwner.includes('function internalShippingCost(rate: CombinableRate): number | null') &&
+  rateTotalOwner.includes('normalizeShippingRateMoney(rate).cShippingRateAmount ?? 0') &&
+  rateCostTotalOwner.includes('normalizeShippingRateMoney(rate).selectedRateCost ?? 0') &&
+  combinedRateOwner.includes("import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';") &&
   combinedRateOwner.indexOf('export function rateTotal(') < combinedRateOwner.indexOf('export function rateCostTotal('));
 
 check('rates route delegates backend purchase/customer display aliases to shared owner',
@@ -95,8 +92,9 @@ check('rates route delegates backend purchase/customer display aliases to shared
   ratesRoute.includes('rates: stampRateBrowserDisplayAliases(row.rates)') &&
   ratesRoute.includes('bestRate: stampRateBrowserDisplayAliases(row.bestRate)') &&
   displayFields.includes('stampPurchaseCustomerRateAliases') &&
-  purchaseCustomerAliases.includes('rateCostTotal(rate as CombinableRate)') &&
-  purchaseCustomerAliases.includes('rateTotal(rate as CombinableRate)'));
+  purchaseCustomerAliases.includes("import { normalizeShippingRateMoney } from './shipping-rate-money-normalizer.js';") &&
+  purchaseCustomerAliases.includes('const purchaseTotal = money.selectedRateCost ?? 0;') &&
+  purchaseCustomerAliases.includes('const customerTotal = money.cShippingRateAmount ?? purchaseTotal;'));
 
 check('saved best-rate seed does not read provider money components',
   !/shipping_amount|original_amount|other_amount|confirmation_amount|insurance_amount/.test(bestRateSeed));
@@ -124,10 +122,9 @@ check('rate-browser money helper no longer reconstructs provider component money
   !/shipping_amount|original_amount|other_amount|confirmation_amount|insurance_amount|moneyAmount|legacyCustomerTotal|legacyRateCostTotal|componentOtherTotal/.test(moneyHelper));
 
 check('rate-browser money helper prefers backend-stamped customer/rate-cost aliases',
-  moneyHelper.includes('record?.customerRateAmount') &&
-  moneyHelper.includes('record?.rateCostAmount') &&
-  moneyHelper.includes('record?.amount') &&
-  moneyHelper.includes('record?.totalCost'));
+  moneyHelper.includes('record?.cShippingRateAmount') &&
+  moneyHelper.includes('record?.selectedRateCost') &&
+  moneyHelper.indexOf('record?.cShippingRateAmount') < moneyHelper.indexOf('record?.selectedRateCost'));
 
 check('package wires PS-343 guard',
   packageJson.includes('"test:ps-343-ratebrowsermodal-money-normalization-cleanup"'));

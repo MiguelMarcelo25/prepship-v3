@@ -69,7 +69,9 @@ function sourceSaysTotal(value: unknown): boolean {
     value === 'best_rate_internal_cost' ||
     value === 'selected_rate_internal_cost' ||
     value === 'label_final_cost' ||
-    value === 'shipp_house_internal_cost'
+    value === 'shipp_house_internal_cost' ||
+    value === 'carrier_true_cost_uplift' ||
+    value === 'true_cost_uplift'
   );
 }
 

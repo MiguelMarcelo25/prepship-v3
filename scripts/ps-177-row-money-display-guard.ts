@@ -156,11 +156,11 @@ check('DTO: redacted viewer → money null (never leaks amounts)',
 // ── wiring pins ───────────────────────────────────────────────────────────────
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 check('rates.ts applyMarkups delegates the math to the canonical owner',
-  // PS-307 moved the result into a `marked` const (then stamped on shipping_amount.amount
-  // AND the explicit customerShippingAmount); the markup math still delegates to the
-  // canonical applyMarkupToAmount owner, and the marked value flows to shipping_amount.
-  /const marked = applyMarkupToAmount\(orig, m\)/.test(ratesService) &&
-  /amount: marked/.test(ratesService));
+  // PS-391/PS-385: applyMarkups computes providerAllIn first, then delegates
+  // component and all-in markup math to the canonical applyMarkupToAmount owner.
+  /const providerAllIn = normalizeShippingRateMoney\(r\)\.selectedRateCost \?\? shippingComponent/.test(ratesService) &&
+  /const markedShippingComponent = applyMarkupToAmount\(shippingComponent, m\)/.test(ratesService) &&
+  /const marked = applyMarkupToAmount\(providerAllIn, m\)/.test(ratesService));
 check('rates.ts loadCarrierMarkups is exported and parses via the canonical owner',
   /export async function loadCarrierMarkups/.test(ratesService) &&
   /parseMarkupSettingValue\(row\.value\)/.test(ratesService));
@@ -181,7 +181,8 @@ check('FE Best Rate cell prefers the backend tuple',
   /const backendMoney = getBackendRowMoney\(displayOrder\)/.test(orderCells) &&
   // PS-290 appended an optional 4th `coverage` arg (getBestRateInsuranceCoverage) — still the
   // backend tuple's marked/insurance, with the house-account base shown only in House Rate.
-  /renderRateAmountWithMarkup\(backendMoney\.markupSource === 'house_account' \? null : backendMoney\.baseAmount,\s*backendMoney\.markedAmount,\s*backendMoney\.insuranceAddOn[,)]/.test(orderCells));
+  /resolveAwaitingBestRatePriceDisplay\(\{[\s\S]*selectedRateCost: backendMoney\.selectedRateCost[\s\S]*cShippingRateAmount: backendMoney\.cShippingRateAmount[\s\S]*markedAmount: backendMoney\.markedAmount/.test(orderCells) &&
+  /renderRateAmountWithMarkup\(\s*bestRatePriceDisplay\.baseAmount,\s*bestRatePriceDisplay\.primaryAmount,\s*bestRatePriceDisplay\.insuranceAddOn/.test(orderCells));
 check('FE Margin cell prefers the backend tuple',
   /backendMoney\?\.markupAmount/.test(orderCells) && /backendMoney!?\.marginPercent/.test(orderCells));
 // Shipped-row DTO phase: shipped rows now carry the workflow DTO (money priced

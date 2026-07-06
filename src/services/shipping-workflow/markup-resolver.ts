@@ -15,9 +15,9 @@
 // {pct,flat} math is a faithful SUPERSET of both current formulas (proven against applyMarkupToAmount
 // in the guard), so wiring it in does not change any amount until a markup is actually configured.
 
-import type { MarkupRule } from './rate-money';
+import type { MarkupRule, RateAdjustmentKind } from './rate-money';
 
-export type CanonicalMarkup = { pct: number; flat: number };
+export type CanonicalMarkup = { pct: number; flat: number; adjustmentKind?: RateAdjustmentKind };
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -31,7 +31,12 @@ function finiteOrZero(value: number | null | undefined): number {
 // canonical {pct,flat} form. Zero/absent -> null (no override).
 export function markupRuleToCanonical(rule: MarkupRule | null | undefined): CanonicalMarkup | null {
   if (!rule || !rule.value) return null;
-  return rule.type === 'percent' ? { pct: rule.value, flat: 0 } : { pct: 0, flat: rule.value };
+  const canonical = rule.type === 'percent' ? { pct: rule.value, flat: 0 } : { pct: 0, flat: rule.value };
+  return rule.adjustmentKind ? { ...canonical, adjustmentKind: rule.adjustmentKind } : canonical;
+}
+
+export function canonicalMarkupAdjustmentKind(markup: CanonicalMarkup | null | undefined): RateAdjustmentKind {
+  return markup?.adjustmentKind ?? 'customer_profit_markup';
 }
 
 // Resolve the markup for a shipment context. Precedence: per-account override wins, else per-client

@@ -76,6 +76,8 @@ import {
 } from './shipping-workflow/insurance-cost';
 import {
   applyMarkupToAmount,
+  isTrueCostUpliftMarkup,
+  markupRuleAdjustmentKind,
   parseMarkupSettingValue,
   type MarkupRule,
 } from './shipping-workflow/rate-money';
@@ -163,6 +165,13 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
     // PS-177: same math, one owner (rate-money.applyMarkupToAmount).
     const markedShippingComponent = applyMarkupToAmount(shippingComponent, m);
     const marked = applyMarkupToAmount(providerAllIn, m);
+    const rateAdjustmentKind = markupRuleAdjustmentKind(m);
+    const selectedRateCost = isTrueCostUpliftMarkup(m) ? marked : providerAllIn;
+    const shippingMarginAmount = Math.round((marked - selectedRateCost) * 100) / 100;
+    const shippingMarginPct =
+      Math.abs(shippingMarginAmount) >= 0.005 && marked > 0
+        ? Math.round((shippingMarginAmount / marked) * 1000) / 10
+        : null;
     return {
       ...r,
       shipping_amount: {
@@ -188,17 +197,23 @@ export function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[
       customer_shipping_amount: marked,
       customerRateAmount: marked,
       customer_rate_amount: marked,
-      customerRateSource: 'projected_customer_shipping_rate',
-      customer_rate_source: 'projected_customer_shipping_rate',
+      customerRateSource: rateAdjustmentKind === 'true_cost_uplift' ? 'true_cost_uplift' : 'projected_customer_shipping_rate',
+      customer_rate_source: rateAdjustmentKind === 'true_cost_uplift' ? 'true_cost_uplift' : 'projected_customer_shipping_rate',
+      rateAdjustmentKind,
+      rate_adjustment_kind: rateAdjustmentKind,
+      shippingMarginAmount,
+      shipping_margin_amount: shippingMarginAmount,
+      shippingMarginPct,
+      shipping_margin_pct: shippingMarginPct,
       // PS-343: preserve the raw/internal provider cost as backend-owned aliases so Rate Browser
       // consumers do not need to recover it from provider component money fields.
-      selectedRateCost: providerAllIn,
-      rateCostSource: 'best_rate_internal_cost',
-      rate_cost_source: 'best_rate_internal_cost',
-      rawShippingAmount: providerAllIn,
-      raw_shipping_amount: providerAllIn,
-      internalShippingAmount: providerAllIn,
-      internal_shipping_amount: providerAllIn,
+      selectedRateCost,
+      rateCostSource: rateAdjustmentKind === 'true_cost_uplift' ? 'carrier_true_cost_uplift' : 'best_rate_internal_cost',
+      rate_cost_source: rateAdjustmentKind === 'true_cost_uplift' ? 'carrier_true_cost_uplift' : 'best_rate_internal_cost',
+      rawShippingAmount: selectedRateCost,
+      raw_shipping_amount: selectedRateCost,
+      internalShippingAmount: selectedRateCost,
+      internal_shipping_amount: selectedRateCost,
     } as Rate;
   });
 }

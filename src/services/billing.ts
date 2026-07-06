@@ -1192,6 +1192,7 @@ export async function generateLineItems(input: GenerateInput) {
         refUpsRate: toNum(s.refUpsRate),
         shippingMarkupPct: resolvedShippingMarkup?.pct ?? 0,
         shippingMarkupFlat: resolvedShippingMarkup?.flat ?? 0,
+        shippingMarkupKind: resolvedShippingMarkup?.adjustmentKind ?? 'customer_profit_markup',
         hugrabShippingRateOverride: {
           clientName: cfg.clientName,
           selectedRateCost: labelCost,

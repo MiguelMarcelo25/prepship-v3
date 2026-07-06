@@ -3,6 +3,7 @@ import {
   type HugrabShippingRateOverrideConfig,
 } from './billing-hugrab-shipping-rate-override';
 import { canonicalMarkupAmount } from './shipping-workflow/markup-resolver';
+import type { RateAdjustmentKind } from './shipping-workflow/rate-money';
 
 // PS-220 — pure decision for a shipment's billed SHIPPING line amount. Extracted from
 // billing.ts so the money-committing choice (the worst-case failure is billing the WRONG
@@ -30,6 +31,7 @@ export type ShippingLineBillingInput = {
   refUpsRate: number;
   shippingMarkupPct: number;
   shippingMarkupFlat: number;
+  shippingMarkupKind?: RateAdjustmentKind | null | undefined;
   hugrabShippingRateOverride?: {
     clientName: string | null | undefined;
     selectedRateCost?: number | null | undefined;
@@ -95,10 +97,11 @@ export function decideShippingLineBilling(input: ShippingLineBillingInput): Ship
 
   const pct = input.shippingMarkupPct;
   const flat = input.shippingMarkupFlat;
+  const isTrueCostUplift = input.shippingMarkupKind === 'true_cost_uplift';
   // PS-371: the formula lives in ONE owner (markup-resolver.canonicalMarkupAmount); this site
   // stays unrounded — the caller applies .toFixed(2), matching prior behavior exactly.
-  const billedAmount = canonicalMarkupAmount(billedCost, { pct, flat });
-  const markupApplied = pct > 0 || flat > 0;
+  const billedAmount = isTrueCostUplift ? billedCost : canonicalMarkupAmount(billedCost, { pct, flat });
+  const markupApplied = !isTrueCostUplift && (pct > 0 || flat > 0);
   return withHugrabShippingRateOverride(input, {
     billedAmount,
     source,

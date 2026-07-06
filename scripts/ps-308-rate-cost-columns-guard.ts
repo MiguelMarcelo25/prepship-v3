@@ -40,13 +40,14 @@ check(
   'house awaiting model keeps customer charge separate from internal rate cost',
   houseAwaiting?.markedAmount === 8.05 &&
     houseAwaiting.baseAmount === 7.75 &&
-    (houseAwaiting as any).customerRateAmount === 8.05 &&
-    (houseAwaiting as any).rateCostAmount === 7.75 &&
+    (houseAwaiting as any).cShippingRateAmount === 8.05 &&
+    (houseAwaiting as any).selectedRateCost === 7.75 &&
     closeTo((houseAwaiting as any).shippingMarginAmount, 0.3) &&
     closeTo((houseAwaiting as any).shippingMarginPct, 3.7) &&
     (houseAwaiting as any).houseApplied === true &&
     (houseAwaiting as any).houseBadgeVisible === true &&
-    (houseAwaiting as any).customerRateSource === 'projected_house_customer_rate' &&
+    (houseAwaiting as any).rateAdjustmentKind === 'customer_profit_markup' &&
+    (houseAwaiting as any).customerRateSource === 'projected_house_c_shipping_rate' &&
     (houseAwaiting as any).rateCostSource === 'shipp_house_internal_cost',
   houseAwaiting,
 );
@@ -64,11 +65,12 @@ const houseShipped = buildOrderRowMoneyDisplay({
 check(
   'house shipped model uses realized customer rate against SHIPP actual cost',
   houseShipped?.source === 'selected_rate' &&
-    (houseShipped as any).customerRateAmount === 10.79 &&
-    (houseShipped as any).rateCostAmount === 10.14 &&
+    (houseShipped as any).cShippingRateAmount === 10.79 &&
+    (houseShipped as any).selectedRateCost === 10.14 &&
     closeTo((houseShipped as any).shippingMarginAmount, 0.65) &&
     closeTo((houseShipped as any).shippingMarginPct, 6) &&
-    (houseShipped as any).customerRateSource === 'realized_house_customer_rate' &&
+    (houseShipped as any).rateAdjustmentKind === 'customer_profit_markup' &&
+    (houseShipped as any).customerRateSource === 'realized_house_c_shipping_rate' &&
     (houseShipped as any).rateCostSource === 'shipp_house_internal_cost',
   houseShipped,
 );
@@ -86,12 +88,13 @@ check(
   'normal awaiting model separates marked customer rate from carrier cost',
   normalAwaiting?.markedAmount === 12 &&
     normalAwaiting.baseAmount === 10 &&
-    (normalAwaiting as any).customerRateAmount === 12 &&
-    (normalAwaiting as any).rateCostAmount === 10 &&
+    (normalAwaiting as any).cShippingRateAmount === 12 &&
+    (normalAwaiting as any).selectedRateCost === 10 &&
     (normalAwaiting as any).shippingMarginAmount === 2 &&
     closeTo((normalAwaiting as any).shippingMarginPct, 16.7) &&
     (normalAwaiting as any).houseApplied === false &&
     (normalAwaiting as any).houseBadgeVisible === false &&
+    (normalAwaiting as any).rateAdjustmentKind === 'customer_profit_markup' &&
     (normalAwaiting as any).customerRateSource === 'best_rate_marked_amount' &&
     (normalAwaiting as any).rateCostSource === 'best_rate_internal_cost',
   normalAwaiting,
@@ -107,7 +110,7 @@ const orderRedacted = redactOrderFinancials(
         shippingMarginPct: 16.7,
         houseApplied: true,
         houseBadgeVisible: true,
-        customerRateSource: 'projected_house_customer_rate',
+        customerRateSource: 'projected_house_c_shipping_rate',
         rateCostSource: 'shipp_house_internal_cost',
       },
     },
@@ -154,7 +157,7 @@ const rateBrowserRedacted = redactRateBrowserMoney({
     shippingMarginPct: 3.7,
     houseApplied: true,
     houseBadgeVisible: true,
-    customerRateSource: 'projected_house_customer_rate',
+    customerRateSource: 'projected_house_c_shipping_rate',
     rateCostSource: 'shipp_house_internal_cost',
   },
 }) as any;
@@ -176,8 +179,8 @@ check(
 const splitRate = {
   shipping_amount: { amount: 8.5 },
   other_amount: { amount: 0 },
-  customerRateAmount: 12,
-  rateCostAmount: 8.5,
+  cShippingRateAmount: 12,
+  selectedRateCost: 8.5,
 };
 
 check(
@@ -200,25 +203,25 @@ const normalizedHouseBest = normalizeOrderBestRateDto({
     totalCost: 9.64,
   },
   houseMargin: 1.14,
-  customerRateAmount: 9.64,
-  rateCostAmount: 8.5,
+  cShippingRateAmount: 9.64,
+  selectedRateCost: 8.5,
   shippingMarginAmount: 1.14,
   shippingMarginPct: 11.8,
   houseApplied: true,
   houseBadgeVisible: true,
-  customerRateSource: 'projected_house_customer_rate',
+  customerRateSource: 'projected_house_c_shipping_rate',
   rateCostSource: 'shipp_house_internal_cost',
 });
 
 check(
   'OrderBestRateDto whitelist preserves separated PS-308 house fields',
-  normalizedHouseBest?.customerRateAmount === 9.64 &&
-    normalizedHouseBest.rateCostAmount === 8.5 &&
+  normalizedHouseBest?.cShippingRateAmount === 9.64 &&
+    normalizedHouseBest.selectedRateCost === 8.5 &&
     normalizedHouseBest.shippingMarginAmount === 1.14 &&
     normalizedHouseBest.shippingMarginPct === 11.8 &&
     normalizedHouseBest.houseApplied === true &&
     normalizedHouseBest.houseBadgeVisible === true &&
-    normalizedHouseBest.customerRateSource === 'projected_house_customer_rate' &&
+    normalizedHouseBest.customerRateSource === 'projected_house_c_shipping_rate' &&
     normalizedHouseBest.rateCostSource === 'shipp_house_internal_cost',
   normalizedHouseBest,
 );
@@ -238,8 +241,8 @@ const legacyHouseBest = normalizeOrderBestRateDto({
 
 check(
   'OrderBestRateDto derives separated PS-308 fields for older house rows',
-  legacyHouseBest?.customerRateAmount === 9.64 &&
-    legacyHouseBest.rateCostAmount === 8.5 &&
+  legacyHouseBest?.cShippingRateAmount === 9.64 &&
+    legacyHouseBest.selectedRateCost === 8.5 &&
     legacyHouseBest.shippingMarginAmount === 1.14 &&
     closeTo(legacyHouseBest.shippingMarginPct, 11.8) &&
     legacyHouseBest.houseApplied === true,
@@ -249,10 +252,11 @@ check(
 const rateMoneyTs = readFileSync('src/services/shipping-workflow/rate-money.ts', 'utf8');
 check(
   'backend money owner declares explicit PS-308 separated fields',
-  /customerRateAmount/.test(rateMoneyTs) &&
-    /rateCostAmount/.test(rateMoneyTs) &&
+  /cShippingRateAmount/.test(rateMoneyTs) &&
+    /selectedRateCost/.test(rateMoneyTs) &&
     /shippingMarginAmount/.test(rateMoneyTs) &&
     /shippingMarginPct/.test(rateMoneyTs) &&
+    /rateAdjustmentKind/.test(rateMoneyTs) &&
     /customerRateSource/.test(rateMoneyTs) &&
     /rateCostSource/.test(rateMoneyTs),
 );
@@ -261,8 +265,8 @@ const houseStampTs = readFileSync('src/services/shipping-workflow/house-tuple-st
 check(
   'house stamp writes separated customer billing and DJR purchase cost fields from internal cost owner',
   /rateCostTotal/.test(houseStampTs) &&
-    /customerRateAmount/.test(houseStampTs) &&
-    /rateCostAmount/.test(houseStampTs) &&
+    /cShippingRateAmount/.test(houseStampTs) &&
+    /selectedRateCost/.test(houseStampTs) &&
     /shippingMarginAmount/.test(houseStampTs) &&
     /houseApplied/.test(houseStampTs),
 );
@@ -270,10 +274,9 @@ check(
 const ratesServiceTs = readFileSync('src/services/rates.ts', 'utf8');
 check(
   'direct-carrier adapter emits explicit customer billing and DJR purchase cost amounts',
-  /customerRateAmount: amount/.test(ratesServiceTs) &&
-    /rateCostAmount: rawShippingCost/.test(ratesServiceTs) &&
-    /rateCostAmount/.test(ratesServiceTs) &&
-    /rate_cost_amount/.test(ratesServiceTs),
+  /cShippingRateAmount: amount/.test(ratesServiceTs) &&
+    /selectedRateCost: rawShippingCost/.test(ratesServiceTs) &&
+    /selectedRateCost/.test(ratesServiceTs),
 );
 
 const rateRowItemTs = readFileSync('web/src/components/RateRowItem.tsx', 'utf8');

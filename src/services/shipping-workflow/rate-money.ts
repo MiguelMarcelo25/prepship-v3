@@ -30,9 +30,45 @@ import {
 // PS-371: the markup FORMULA lives in exactly one owner (markup-resolver). This module keeps its
 // public API (applyMarkupToAmount / the canonical row markup) but delegates the math. The import is
 // value-safe: markup-resolver only imports a TYPE from this file, so no runtime cycle exists.
-import { applyCanonicalMarkup, markupRuleToCanonical } from './markup-resolver';
+import {
+  applyCanonicalMarkup,
+  canonicalMarkupAdjustmentKind,
+  markupRuleToCanonical,
+} from './markup-resolver';
 
-export type MarkupRule = { type: 'amount' | 'percent'; value: number };
+export type RateAdjustmentKind = 'customer_profit_markup' | 'true_cost_uplift';
+export type MarkupRule = { type: 'amount' | 'percent'; value: number; adjustmentKind?: RateAdjustmentKind };
+
+function parseRateAdjustmentKind(value: unknown): RateAdjustmentKind | null {
+  const text = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!text) return null;
+  if (
+    text === 'true_cost_uplift' ||
+    text === 'true_cost' ||
+    text === 'carrier_true_cost' ||
+    text === 'carrier_cost_uplift' ||
+    text === 'account_true_cost_uplift'
+  ) {
+    return 'true_cost_uplift';
+  }
+  if (
+    text === 'customer_profit_markup' ||
+    text === 'profit_markup' ||
+    text === 'customer_markup' ||
+    text === 'billable_markup'
+  ) {
+    return 'customer_profit_markup';
+  }
+  return null;
+}
+
+export function markupRuleAdjustmentKind(rule: MarkupRule | null | undefined): RateAdjustmentKind {
+  return rule?.adjustmentKind ?? 'customer_profit_markup';
+}
+
+export function isTrueCostUpliftMarkup(rule: MarkupRule | null | undefined): boolean {
+  return markupRuleAdjustmentKind(rule) === 'true_cost_uplift';
+}
 
 /**
  * Parse one `markup.<pidOrCarrier>` settings VALUE (JSON string) into a rule.
@@ -42,11 +78,24 @@ export type MarkupRule = { type: 'amount' | 'percent'; value: number };
 export function parseMarkupSettingValue(raw: unknown): MarkupRule | null {
   if (typeof raw !== 'string' || !raw) return null;
   try {
-    const parsed = JSON.parse(raw) as { type?: unknown; value?: unknown };
+    const parsed = JSON.parse(raw) as {
+      type?: unknown;
+      value?: unknown;
+      adjustmentKind?: unknown;
+      adjustment_kind?: unknown;
+      basis?: unknown;
+      kind?: unknown;
+      purpose?: unknown;
+    };
     const value = Number(parsed?.value);
     if (!Number.isFinite(value) || value === 0) return null;
-    if (parsed.type === 'amount' || parsed.type === 'flat') return { type: 'amount', value };
-    if (parsed.type === 'percent' || parsed.type === 'pct') return { type: 'percent', value };
+    const adjustmentKind = parseRateAdjustmentKind(
+      parsed.adjustmentKind ?? parsed.adjustment_kind ?? parsed.basis ?? parsed.kind ?? parsed.purpose,
+    );
+    const withKind = <T extends { type: 'amount' | 'percent'; value: number }>(rule: T): MarkupRule =>
+      adjustmentKind ? { ...rule, adjustmentKind } : rule;
+    if (parsed.type === 'amount' || parsed.type === 'flat') return withKind({ type: 'amount', value });
+    if (parsed.type === 'percent' || parsed.type === 'pct') return withKind({ type: 'percent', value });
     return null;
   } catch {
     return null;
@@ -148,6 +197,7 @@ export type OrderRowMoneyDisplay = {
   // margin so display + guards never double-apply. 'house_account' => marked is the customer_rate
   // (next-best non-SHIPP), base is the SHIPP drp_cost, and NO carrier markupRule was applied.
   markupSource: 'carrier_markup' | 'house_account';
+  rateAdjustmentKind: RateAdjustmentKind;
   // PS-356/PS-367: explicit separated money model. C. Shipping Rate is the customer-billed
   // amount; selectedRateCost is the selected/purchased label cost; shippingMarginAmount is
   // cShippingRateAmount - selectedRateCost.
@@ -162,12 +212,16 @@ export type OrderRowMoneyDisplay = {
     | 'selected_rate_marked_amount'
     | 'projected_customer_shipping_rate'
     | 'realized_customer_shipping_rate'
+    | 'projected_house_c_shipping_rate'
+    | 'realized_house_c_shipping_rate'
+    | 'true_cost_uplift'
     | 'hugrab_shipping_rate_override';
   rateCostSource:
     | 'best_rate_internal_cost'
     | 'selected_rate_internal_cost'
     | 'label_final_cost'
-    | 'shipp_house_internal_cost';
+    | 'shipp_house_internal_cost'
+    | 'carrier_true_cost_uplift';
 };
 
 export type OrderRowMoneyFacts = {
@@ -204,6 +258,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     cShippingRateAmount: number | null;
     selectedRateCost: number | null;
     houseApplied: boolean;
+    rateAdjustmentKind: RateAdjustmentKind;
     customerRateSource: OrderRowMoneyDisplay['customerRateSource'];
     rateCostSource: OrderRowMoneyDisplay['rateCostSource'];
   }): Pick<
@@ -213,6 +268,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     | 'shippingMarginAmount'
     | 'shippingMarginPct'
     | 'houseApplied'
+    | 'rateAdjustmentKind'
     | 'houseBadgeVisible'
     | 'customerRateSource'
     | 'rateCostSource'
@@ -247,6 +303,7 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
           ? Math.round((shippingMarginAmount / cShippingRateAmount) * 1000) / 10
           : null,
       houseApplied: input.houseApplied,
+      rateAdjustmentKind: input.rateAdjustmentKind,
       houseBadgeVisible: input.houseApplied,
       customerRateSource: overrideDecision?.overrideApplied === true
         ? 'hugrab_shipping_rate_override'
@@ -276,7 +333,8 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
         cShippingRateAmount: houseMarked,
         selectedRateCost: base,
         houseApplied: true,
-        customerRateSource: facts.isAwaiting ? 'projected_customer_shipping_rate' : 'realized_customer_shipping_rate',
+        rateAdjustmentKind: 'customer_profit_markup',
+        customerRateSource: facts.isAwaiting ? 'projected_house_c_shipping_rate' : 'realized_house_c_shipping_rate',
         rateCostSource: 'shipp_house_internal_cost',
       }),
     };
@@ -289,6 +347,10 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     const marked = facts.markupRuleCanonical !== undefined
       ? applyCanonicalRowMarkup(base, facts.markupRuleCanonical)
       : applyMarkupToAmount(base, facts.markupRule);
+    const rateAdjustmentKind = facts.markupRuleCanonical !== undefined
+      ? canonicalMarkupAdjustmentKind(facts.markupRuleCanonical)
+      : markupRuleAdjustmentKind(facts.markupRule);
+    const selectedRateCost = rateAdjustmentKind === 'true_cost_uplift' ? marked : base;
     const markupAmount = Math.max(0, round2(marked - base));
     return {
       baseAmount: round2(base),
@@ -300,10 +362,11 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
       markupSource: 'carrier_markup',
       ...separatedFields({
         cShippingRateAmount: marked,
-        selectedRateCost: base,
+        selectedRateCost,
         houseApplied: false,
-        customerRateSource: 'best_rate_marked_amount',
-        rateCostSource: 'best_rate_internal_cost',
+        rateAdjustmentKind,
+        customerRateSource: rateAdjustmentKind === 'true_cost_uplift' ? 'true_cost_uplift' : 'best_rate_marked_amount',
+        rateCostSource: rateAdjustmentKind === 'true_cost_uplift' ? 'carrier_true_cost_uplift' : 'best_rate_internal_cost',
       }),
     };
   }
@@ -314,6 +377,10 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
   const marked = facts.markupRuleCanonical !== undefined
     ? applyCanonicalRowMarkup(markupBasis, facts.markupRuleCanonical)
     : applyMarkupToAmount(markupBasis, facts.markupRule);
+  const rateAdjustmentKind = facts.markupRuleCanonical !== undefined
+    ? canonicalMarkupAdjustmentKind(facts.markupRuleCanonical)
+    : markupRuleAdjustmentKind(facts.markupRule);
+  const selectedRateCost = rateAdjustmentKind === 'true_cost_uplift' ? marked : markupBasis;
   const markupAmount = base != null ? Math.max(0, round2(marked - base)) : null;
   return {
     baseAmount: base != null ? round2(base) : null,
@@ -328,10 +395,14 @@ export function buildOrderRowMoneyDisplay(facts: OrderRowMoneyFacts): OrderRowMo
     markupSource: 'carrier_markup',
     ...separatedFields({
       cShippingRateAmount: marked,
-      selectedRateCost: markupBasis,
+      selectedRateCost,
       houseApplied: false,
-      customerRateSource: 'selected_rate_marked_amount',
-      rateCostSource: base != null ? 'selected_rate_internal_cost' : 'label_final_cost',
+      rateAdjustmentKind,
+      customerRateSource: rateAdjustmentKind === 'true_cost_uplift' ? 'true_cost_uplift' : 'selected_rate_marked_amount',
+      rateCostSource:
+        rateAdjustmentKind === 'true_cost_uplift'
+          ? 'carrier_true_cost_uplift'
+          : base != null ? 'selected_rate_internal_cost' : 'label_final_cost',
     }),
   };
 }
