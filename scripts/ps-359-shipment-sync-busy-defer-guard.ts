@@ -45,8 +45,10 @@ check('busy-defer set excludes fulfillment outbox side effects', !/JOBS\.fulfill
 check('busy-defer set excludes external shipped classifier mutations', !/JOBS\.externalShippedClassifier/.test(deferSet));
 check('busy-defer set excludes walmart fees sync', !/JOBS\.walmartFees/.test(deferSet));
 check('busy-defer uses pg-boss sendAfter for durable retry', /await boss\.sendAfter\(/.test(queue));
-check('busy-defer uses its own singleton key to prevent pileups', /singletonKey:\s*'busy-defer'/.test(queue));
-check('blocked queue jobs call deferBusySyncJob before returning skipped', /deferBusySyncJob\(name, blockedBy, lane\)/.test(skipBlock));
+check('busy-defer uses singleton keys to prevent pileups',
+  /const singletonKey = orderStarvation \? 'busy-defer-priority-orders' : 'busy-defer';/.test(queue));
+check('blocked queue jobs call deferBusySyncJob before returning skipped',
+  /deferBusySyncJob\(name, blockedBy, lane, busyDeferCount\(job\?\.data\)\)/.test(skipBlock));
 check('blocked queue return exposes deferred status', /deferred:\s*Boolean\(deferredJobId\)/.test(skipBlock));
 check(
   'cross-process ShipStation lane lock module exists',
@@ -79,7 +81,7 @@ check(
 );
 check(
   'cross-process lane lock miss defers order\/shipment sync instead of running concurrently',
-  /lane_lock_held/.test(queue) && /deferBusySyncJob\(name, blockedBy, lane\)/.test(queue),
+  /lane_lock_held/.test(queue) && /deferBusySyncJob\(name, blockedBy, lane, busyDeferCount\(job\?\.data\)\)/.test(queue),
 );
 check('busy-defer comment records the shipped-data override and safety boundary', /unlock shipped data on 2026-07-01/.test(queue));
 check(

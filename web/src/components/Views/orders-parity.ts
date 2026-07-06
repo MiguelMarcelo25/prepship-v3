@@ -704,7 +704,7 @@ export function formatSyncPill(sync: {
       ? watchdogVerdict.recommendedAction.trim().replace(/_/g, ' ')
       : null
     const syncTitle = [
-      labelSyncAlert ? 'Warning: shipment/label sync needs attention.' : 'Sync healthy.',
+      labelSyncAlert ? 'Warning: sync needs attention.' : 'Sync healthy.',
       `Orders last synced: ${orderSyncTime}.`,
       labelSyncTime ? `Labels last synced: ${labelSyncTime}.` : 'Labels have not synced yet.',
       labelSyncAlert && watchdogReason ? `Reason: ${watchdogReason}.` : null,

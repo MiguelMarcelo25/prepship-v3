@@ -75,6 +75,8 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
 const timers: Timer[] = [];
 const BUSY_DEFER_SECONDS = 60;
+const ORDER_STARVATION_DEFER_THRESHOLD = 3;
+const ORDER_STARVATION_DEFER_SECONDS = 10;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
 
 export type ManualOrderSyncEnqueueResult = {
@@ -330,9 +332,15 @@ async function deferBusySyncJob(
   name: JobName,
   blockedBy: string,
   lane: SyncJobLane,
+  priorDeferCount = 0,
 ): Promise<string | null> {
   if (!boss || !BUSY_DEFER_JOB_NAMES.has(name)) return null;
   try {
+    const deferCount = Math.max(0, Math.trunc(priorDeferCount)) + 1;
+    const orderStarvation =
+      name === JOBS.orders && deferCount >= ORDER_STARVATION_DEFER_THRESHOLD;
+    const delaySeconds = orderStarvation ? ORDER_STARVATION_DEFER_SECONDS : BUSY_DEFER_SECONDS;
+    const singletonKey = orderStarvation ? 'busy-defer-priority-orders' : 'busy-defer';
     // Per user override unlock shipped data on 2026-07-01: this only creates a
     // replacement pg-boss sync tick for order/shipment import when the shared
     // ShipStation lane is busy. It does not touch orders, shipments, labels,
@@ -343,22 +351,25 @@ async function deferBusySyncJob(
         requestedAt: new Date().toISOString(),
         deferredBecause: blockedBy,
         deferredLane: lane,
+        deferCount,
+        orderStarvation,
       },
       {
-        singletonKey: 'busy-defer',
-        singletonSeconds: BUSY_DEFER_SECONDS,
+        singletonKey,
+        singletonSeconds: delaySeconds,
         retryLimit: 2,
         retryDelay: 30,
         retryBackoff: true,
         expireInMinutes: 30,
         retentionDays: 7,
+        priority: orderStarvation ? 100 : 0,
       },
-      BUSY_DEFER_SECONDS,
+      delaySeconds,
     );
 
     if (id) {
       console.log(
-        `[job-queue] deferred ${name} for ${BUSY_DEFER_SECONDS}s because ${blockedBy} is running in ${lane} lane (${id})`
+        `[job-queue] deferred ${name} for ${delaySeconds}s because ${blockedBy} is running in ${lane} lane (${id})`
       );
     } else {
       console.log(`[job-queue] ${name} already has a busy-defer job queued`);
@@ -399,6 +410,12 @@ const JOB_HANDLER_TIMEOUT_MS = Math.max(
   Math.min(25 * 60_000, Number(process.env.JOB_HANDLER_TIMEOUT_MS) || 10 * 60_000),
 );
 
+function busyDeferCount(jobData: unknown): number {
+  if (!jobData || typeof jobData !== 'object') return 0;
+  const count = Number((jobData as { deferCount?: unknown }).deferCount);
+  return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+}
+
 async function registerWorker(
   name: JobName,
   handler: (jobData: unknown) => Promise<unknown> | unknown
@@ -415,7 +432,7 @@ async function registerWorker(
           `[job-queue] ${name} skipped because ${blockedBy} is already running in ${lane} lane`
         );
         await recordWorkerJobSkipped(name, `${blockedBy} already running in ${lane} lane`);
-        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane);
+        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane, busyDeferCount(job?.data));
         return {
           ok: true,
           skipped: true,
@@ -460,7 +477,7 @@ async function registerWorker(
         const blockedBy = `cross-process ${lane} lane lock`;
         console.log(`[job-queue] ${name} skipped because ${blockedBy} is held`);
         await recordWorkerJobSkipped(name, `${blockedBy} held`);
-        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane);
+        const deferredJobId = await deferBusySyncJob(name, blockedBy, lane, busyDeferCount(job?.data));
         return {
           ok: true,
           skipped: true,
@@ -684,6 +701,7 @@ export async function getSyncJobQueueStatus(): Promise<{
   started: boolean;
   schema: string;
   queues: Array<{ name: string; size: number | null }>;
+  activeLanes: Array<{ lane: SyncJobLane; jobName: string }>;
 }> {
   if (!boss || !started) {
     return {
@@ -691,6 +709,7 @@ export async function getSyncJobQueueStatus(): Promise<{
       started: false,
       schema: env.PG_BOSS_SCHEMA,
       queues: Object.values(JOBS).map((name) => ({ name, size: null })),
+      activeLanes: [],
     };
   }
 
@@ -709,5 +728,6 @@ export async function getSyncJobQueueStatus(): Promise<{
     started,
     schema: env.PG_BOSS_SCHEMA,
     queues,
+    activeLanes: Array.from(activeJobsByLane, ([lane, jobName]) => ({ lane, jobName })),
   };
 }
