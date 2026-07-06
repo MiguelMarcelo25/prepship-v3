@@ -31,6 +31,10 @@ import { enrichLabelUrls } from './shipment-label-url-enrich';
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
 const WATERMARK_OVERLAP_MS = 1000 * 60 * 60 * 48; // re-read recent labels so missed rows self-heal
+// Per user override unlock shipped data on 2026-07-07: shipment sync shares
+// the ShipStation lane with order sync, so it must return quickly enough that
+// awaiting split-child imports are not starved.
+const DEFAULT_SHIPMENT_SYNC_PAGE_SIZE = 100;
 // Per user override unlock shipped data on 2026-07-02: background shipment sync
 // owns the shipped shipment read model, so it must be bounded. A slow provider
 // page should fail this tick and retry shortly, not hold the shared lane for 10m.
@@ -476,8 +480,9 @@ function shipWatermarkKey(label: string): string {
 export async function syncShipments(
   opts: { sinceMs?: number; pageSize?: number } = {}
 ): Promise<ShipmentSyncResult> {
-  // v2-parity: pageSize=500 matches v2's v1Pages helper default.
-  const pageSize = opts.pageSize ?? 500;
+  // Smaller default pages keep the background worker below its 10-minute guard
+  // while still letting explicit backfills request a larger page size.
+  const pageSize = opts.pageSize ?? DEFAULT_SHIPMENT_SYNC_PAGE_SIZE;
   const runStartMs = Date.now();
   // PS-265: bound the per-run work so the handler finishes UNDER its ~10-min deadline and
   // advances its watermark incrementally (instead of being killed mid-walk and re-pulling the
@@ -494,6 +499,7 @@ export async function syncShipments(
 
   const accounts = await loadShipmentSyncAccounts();
   for (const acct of accounts) {
+    if (syncRunBudgetTimeExhausted(budget)) break;
     try {
       const key = shipWatermarkKey(acct.label);
       const storedLastSync = await getSettingNumber(key);
@@ -512,7 +518,7 @@ export async function syncShipments(
       let pagesThisAccount = 0;
       let cursorCreateMs: number | null = null;
       let drained = false;
-      while (true) {
+      while (!syncRunBudgetTimeExhausted(budget)) {
         const q = new URLSearchParams({
           createDateStart: sinceParam,
           pageSize: String(pageSize),

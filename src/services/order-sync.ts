@@ -32,6 +32,10 @@ const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
 const STATUS_CATCHUP_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const AWAITING_CATCHUP_LOOKBACK_MS = STATUS_CATCHUP_LOOKBACK_MS;
+// Per user override unlock shipped data on 2026-07-07: keep the order/status
+// sync lane fresh enough to import ShipStation split children without
+// reopening existing shipped/cancelled rows.
+const DEFAULT_ORDER_SYNC_PAGE_SIZE = 100;
 // Per user override unlock shipped data on 2026-07-02: background order sync
 // must finish and release the shared ShipStation lane. Slow provider calls are
 // retried on the next 3-minute tick instead of burning the 10-minute job guard.
@@ -368,7 +372,7 @@ export type SyncResult = {
 // one "main" account (env-level SHIPSTATION_API_KEY/SECRET) plus one per
 // client that has its own ss_api_key stored on the clients table (e.g.
 // KF Goods has its own ShipStation org).
-type SyncAccount = {
+export type SyncAccount = {
   label: string;               // for the per-account watermark + logs
   apiKey: string | undefined;  // undefined → use env default
   apiSecret: string | undefined;
@@ -379,20 +383,27 @@ type SyncAccount = {
   ownerClientId: number | null;
 };
 
-async function loadSyncAccounts(): Promise<SyncAccount[]> {
-  const clientRows = await db
-    .select({
-      id: clients.id,
-      name: clients.name,
-      storeIds: clients.storeIds,
-      ssApiKey: clients.ssApiKey,
-      ssApiSecret: clients.ssApiSecret,
-    })
-    .from(clients)
-    .where(eq(clients.active, true));
-  const allStoreIds = [
+type SyncClientRow = {
+  id: number;
+  name: string;
+  storeIds: number[] | null;
+  ssApiKey: string | null;
+  ssApiSecret: string | null;
+};
+
+export function buildSyncAccountsFromClientRows(
+  clientRows: SyncClientRow[],
+): SyncAccount[] {
+  // Per user override unlock shipped data on 2026-07-07: per-client
+  // ShipStation credential stores must be pulled only through their owning
+  // account, otherwise main sync repeats work and can starve awaiting imports.
+  const mainStoreIds = [
     ...new Set(
-      clientRows.flatMap((row) => row.storeIds ?? []).filter((sid) => !isExcludedStoreId(sid))
+      clientRows.flatMap((row) =>
+        row.ssApiKey && row.ssApiSecret
+          ? []
+          : (row.storeIds ?? []).filter((sid) => !isExcludedStoreId(sid))
+      )
     ),
   ];
   const accounts: SyncAccount[] = [
@@ -400,7 +411,7 @@ async function loadSyncAccounts(): Promise<SyncAccount[]> {
       label: 'main',
       apiKey: undefined,
       apiSecret: undefined,
-      storeIds: allStoreIds,
+      storeIds: mainStoreIds,
       ownerClientId: null,
     },
   ];
@@ -416,6 +427,20 @@ async function loadSyncAccounts(): Promise<SyncAccount[]> {
     }
   }
   return accounts;
+}
+
+async function loadSyncAccounts(): Promise<SyncAccount[]> {
+  const clientRows = await db
+    .select({
+      id: clients.id,
+      name: clients.name,
+      storeIds: clients.storeIds,
+      ssApiKey: clients.ssApiKey,
+      ssApiSecret: clients.ssApiSecret,
+    })
+    .from(clients)
+    .where(eq(clients.active, true));
+  return buildSyncAccountsFromClientRows(clientRows);
 }
 
 function watermarkKey(accountLabel: string): string {
@@ -445,7 +470,7 @@ async function fetchOrdersPage(
   let total = 0;
   let pagesThisPass = 0;
 
-  while (true) {
+  while (!syncRunBudgetTimeExhausted(budget)) {
     const res = await importStoreOrders('shipstation', {
       companyId: 0,
       accountId: account.label,
@@ -518,8 +543,9 @@ async function syncOrdersForAccount(
     (await getSettingNumber(key)) ??
     Date.now() - DEFAULT_LOOKBACK_MS;
 
-  // v2-parity: pageSize=500. Matches v1Pages.
-  const pageSize = opts.pageSize ?? 500;
+  // Smaller default pages keep the background worker below its 10-minute guard
+  // while still letting explicit backfills request a larger page size.
+  const pageSize = opts.pageSize ?? DEFAULT_ORDER_SYNC_PAGE_SIZE;
   const runStartMs = Date.now();
   const sinceIso = new Date(lastSync).toISOString();
 
@@ -542,6 +568,7 @@ async function syncOrdersForAccount(
       : [{ storeId: undefined as number | undefined }];
 
   for (const target of awaitingTargets) {
+    if (syncRunBudgetTimeExhausted(budget)) break;
     try {
       const result = await fetchOrdersPage(account, storeToClient, {
         orderStatus: 'awaiting_shipment',
