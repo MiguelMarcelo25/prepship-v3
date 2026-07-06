@@ -43,6 +43,25 @@ function compatibilityExternalOrderId(order: NormalizedStoreOrder): string {
   return legacyExternalOrderIdForSource(identity);
 }
 
+export function dedupeNormalizedStoreOrdersForImport(
+  ordersIn: NormalizedStoreOrder[],
+): NormalizedStoreOrder[] {
+  const passthrough: NormalizedStoreOrder[] = [];
+  const bySourceIdentity = new Map<string, NormalizedStoreOrder>();
+
+  for (const order of ordersIn) {
+    const identity = buildOrderSourceIdentity(order.source);
+    if (!identity) {
+      passthrough.push(order);
+      continue;
+    }
+
+    bySourceIdentity.set(orderSourceIdentityKey(identity), order);
+  }
+
+  return [...passthrough, ...bySourceIdentity.values()];
+}
+
 async function claimLegacyOrderSourceIdentities(rows: Array<typeof orders.$inferInsert>): Promise<void> {
   const seen = new Set<string>();
   for (const row of rows) {
@@ -92,8 +111,14 @@ export async function upsertNormalizedStoreOrders(
 ): Promise<number> {
   if (!ordersIn.length) return 0;
 
+  // Per user override unlock shipped data on 2026-07-06: source imports can
+  // include the same provider order twice in one page; de-dupe before the
+  // authoritative bulk upsert so one repeated source identity cannot reject the
+  // whole batch. The terminal-status preservation below remains unchanged.
+  const importOrders = dedupeNormalizedStoreOrdersForImport(ordersIn);
+
   type Row = typeof orders.$inferInsert;
-  const rows: Row[] = ordersIn.map((order) => ({
+  const rows: Row[] = importOrders.map((order) => ({
     externalOrderId: compatibilityExternalOrderId(order),
     sourceProvider: order.source.sourceProvider,
     sourceAccountId: order.source.sourceAccountId,
