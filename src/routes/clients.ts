@@ -18,6 +18,7 @@ import {
 // internal-admin action — block portal roles + scope-check each target client.
 import { requireInternalPermission } from '../middleware/auth';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
+import { orderLifecycleEffectiveStatusAliasSql } from '../services/order-lifecycle-status';
 
 const app = new Hono();
 
@@ -317,19 +318,22 @@ app.get(
       ${q.dateFrom ? sql`and o.order_date >= ${q.dateFrom}::timestamptz` : sql``}
       ${q.dateTo ? sql`and o.order_date <= ${q.dateTo}::timestamptz` : sql``}
     `;
+    // Per user override unlock shipped data on 2026-07-06: PS-387 makes this
+    // read-only client count surface group by the backend lifecycle SOT.
+    const effectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
     const rows = await db.execute<{
       client_id: number;
       order_status: string;
       count: number;
     }>(sql`
-      select o.client_id, o.order_status, count(*)::int as count
+      select o.client_id, ${effectiveStatusSql} as order_status, count(*)::int as count
       from orders o
       where o.client_id is not null
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${activeClientFilter}
         ${dateFilter}
         and not (
-          o.order_status = 'awaiting_shipment'
+          ${effectiveStatusSql} = 'awaiting_shipment'
           and (
             coalesce(o.externally_shipped, false) = true
             or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
@@ -339,7 +343,7 @@ app.get(
             )
           )
         )
-      group by o.client_id, o.order_status
+      group by o.client_id, ${effectiveStatusSql}
     `);
 
     const byClient = new Map<

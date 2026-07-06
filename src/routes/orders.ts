@@ -117,6 +117,11 @@ import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-r
 import { buildOrderShippingWorkflowState } from '../services/shipping-workflow/order-shipping-state';
 import { resolveShippedLabelDisplayState } from '../services/shipping-workflow/shipped-label-display-state';
 import {
+  orderLifecycleEffectiveStatusAliasSql,
+  orderLifecycleEffectiveStatusSql,
+  resolveOrderLifecycleStatus,
+} from '../services/order-lifecycle-status';
+import {
   applyRateQuoteRef,
   buildApplyBestRatePatch,
   finalizeAppliedBestRateFromSnapshot,
@@ -1026,6 +1031,10 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
 
   // Group by day (UTC) then pivot statuses into named columns. FILTER
   // clauses are the cleanest pivot in Postgres — one pass over the rows.
+  // Per user override unlock shipped data on 2026-07-06: PS-387 changes this
+  // read-only count to use the backend lifecycle SOT. It does not mutate
+  // shipped/cancelled orders or weaken assertOrderEditable.
+  const dailyEffectiveStatusSql = orderLifecycleEffectiveStatusSql();
   const rows = await db.execute<{
     day: string;
     awaiting: number;
@@ -1035,9 +1044,9 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
   }>(sql`
     select
       to_char(date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
-      count(*) filter (where ${orders.orderStatus} = 'awaiting_shipment')::int as awaiting,
-      count(*) filter (where ${orders.orderStatus} = 'shipped')::int as shipped,
-      count(*) filter (where ${orders.orderStatus} = 'cancelled')::int as cancelled,
+      count(*) filter (where ${dailyEffectiveStatusSql} = 'awaiting_shipment')::int as awaiting,
+      count(*) filter (where ${dailyEffectiveStatusSql} = 'shipped')::int as shipped,
+      count(*) filter (where ${dailyEffectiveStatusSql} = 'cancelled')::int as cancelled,
       count(*)::int as total
     from ${orders}
     where ${where}
@@ -1068,6 +1077,10 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
   const toDate = californiaDayEnd(q.to);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const sevenFrom = q.sevenFrom ?? q.from;
+  // Per user override unlock shipped data on 2026-07-06: dashboard sales reads
+  // the backend lifecycle SOT so upstream-cancelled rows do not count as sales.
+  // This is read-only and leaves shipped/cancelled write locks intact.
+  const dashboardEffectiveStatusSql = orderLifecycleEffectiveStatusSql();
 
   const where = and(
     ...[
@@ -1081,7 +1094,7 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
         : undefined,
       gte(orders.orderDate, fromDate),
       lte(orders.orderDate, toDate),
-      sql`lower(coalesce(${orders.orderStatus}, '')) <> 'cancelled'`,
+      sql`${dashboardEffectiveStatusSql} <> 'cancelled'`,
     ].filter((p): p is NonNullable<typeof p> => p !== undefined)
   );
 
@@ -1382,13 +1395,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     search,
     searchScope: q.searchScope,
   });
+  // Per user override unlock shipped data on 2026-07-06: PS-387 changes
+  // read-only filtering only; mutation endpoints remain protected by
+  // assertOrderEditable and no source rows are modified here.
+  const listEffectiveStatusSql = orderLifecycleEffectiveStatusSql();
   let statusPredicate: ReturnType<typeof sql> | undefined;
   if (statusScope.mode === 'single_status') {
-    statusPredicate = sql`${orders.orderStatus} = ${statusScope.status}`;
+    statusPredicate = sql`${listEffectiveStatusSql} = ${statusScope.status}`;
   } else if (statusScope.mode === 'global_lifecycle') {
     statusPredicate = sql`(
-      (${orders.orderStatus} = 'awaiting_shipment' and ${visibleAwaitingOrdersPredicate('orders')})
-      or ${orders.orderStatus} in ('shipped', 'cancelled')
+      (${listEffectiveStatusSql} = 'awaiting_shipment' and ${visibleAwaitingOrdersPredicate('orders')})
+      or ${listEffectiveStatusSql} in ('shipped', 'cancelled')
     )`;
   }
   const where = and(
@@ -1913,8 +1930,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
     const legacyClientId = resolveLegacyClientId(r.order.clientId, r.order.storeId);
-    const isShippedBucket = q.status === 'shipped' || r.order.orderStatus === 'shipped';
-    const effectiveOrderStatus = isShippedBucket ? 'shipped' : r.order.orderStatus;
+    const baseOrderLifecycle = resolveOrderLifecycleStatus({
+      orderStatus: r.order.orderStatus,
+      canonicalStatus: r.order.canonicalStatus,
+      externallyShipped: r.order.externallyShipped === true,
+    });
+    const effectiveOrderStatus = baseOrderLifecycle.effectiveOrderStatus;
+    const isShippedBucket = effectiveOrderStatus === 'shipped';
     const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
     const selectedRateJsonRecord = recordOrNull(ship?.selected_rate_json);
     const selectedRateJsonProviderId = providerIdOrNull(
@@ -2519,9 +2541,37 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           : sourceOf('local', 'null', isShippedBucket ? 'Shipped rows intentionally do not expose awaiting best-rate data' : 'No v2 best-rate JSON present'),
       },
     };
+    const rawForExpedited = recordOrNull(r.order.raw);
+    // PS-309 (Per user override unlock shipped data on 2026-06-23): the canonical
+    // shipped-label display state, owned HERE so the Shipped list + the detail drawer agree
+    // (the FE must not re-derive it). Only meaningful on shipped rows; null otherwise.
+    const lifecycleShippedLabelDisplayState =
+      effectiveOrderStatus === 'shipped'
+        ? resolveShippedLabelDisplayState({
+            externallyShipped: r.order.externallyShipped === true,
+            externallyFulfilled: booleanOrNull(rawForExpedited?.externallyFulfilled),
+            hasActiveShipment: Boolean(ship) && ship?.voided !== true,
+            hasVoidedShipment: Boolean(ship) && ship?.voided === true,
+          })
+        : null;
+    // Per user override unlock shipped data on 2026-07-06: PS-387 centralizes
+    // read-only lifecycle classification after shipped-label display state is
+    // known. This does not modify source orders or shipments.
+    const orderLifecycle = resolveOrderLifecycleStatus({
+      orderStatus: r.order.orderStatus,
+      canonicalStatus: r.order.canonicalStatus,
+      externallyShipped: r.order.externallyShipped === true,
+      shippedLabelDisplayState: lifecycleShippedLabelDisplayState,
+    });
     const orderForCanonical = {
       ...(r.order as Record<string, unknown>),
-      orderStatus: effectiveOrderStatus,
+      orderStatus: orderLifecycle.effectiveOrderStatus,
+      effectiveOrderStatus: orderLifecycle.effectiveOrderStatus,
+      orderLifecycleStatus: orderLifecycle.orderLifecycleStatus,
+      orderLifecycleLabel: orderLifecycle.orderLifecycleLabel,
+      orderLifecycleReason: orderLifecycle.orderLifecycleReason,
+      isTerminalOrderLifecycle: orderLifecycle.isTerminal,
+      isShippingBlockedByLifecycle: orderLifecycle.isShippingBlocked,
     };
     const canonicalOrder = buildCanonicalOrderModel(
       orderForCanonical,
@@ -2537,7 +2587,6 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     // never the purchased label: raw.requestedShippingService → raw.serviceCode
     // → orders.serviceCode, with carrierCode as a final hint. This is a
     // display/normalization-only derived field — no shipped/cancelled mutation.
-    const rawForExpedited = recordOrNull(r.order.raw);
     const expedited = detectExpeditedShipping(
       stringOrNull(rawForExpedited?.requestedShippingService),
       stringOrNull(rawForExpedited?.serviceCode),
@@ -2550,18 +2599,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     // active-preferred shipment query above means `ship` is the voided row ONLY when no
     // active label exists — so a voided-only order classifies as 'voided_label' and that
     // beats the externally_shipped flag (the #1298 fix). Read-only; no mutation.
-    const shippedLabelDisplayState =
-      effectiveOrderStatus === 'shipped'
-        ? resolveShippedLabelDisplayState({
-            externallyShipped: r.order.externallyShipped === true,
-            externallyFulfilled: booleanOrNull(rawForExpedited?.externallyFulfilled),
-            hasActiveShipment: Boolean(ship) && ship?.voided !== true,
-            hasVoidedShipment: Boolean(ship) && ship?.voided === true,
-          })
-        : null;
+    const shippedLabelDisplayState = lifecycleShippedLabelDisplayState;
     return {
       ...r.order,
-      orderStatus: effectiveOrderStatus,
+      orderStatus: orderLifecycle.effectiveOrderStatus,
+      effectiveOrderStatus: orderLifecycle.effectiveOrderStatus,
+      orderLifecycleStatus: orderLifecycle.orderLifecycleStatus,
+      orderLifecycleLabel: orderLifecycle.orderLifecycleLabel,
+      orderLifecycleReason: orderLifecycle.orderLifecycleReason,
+      isTerminalOrderLifecycle: orderLifecycle.isTerminal,
+      isShippingBlockedByLifecycle: orderLifecycle.isShippingBlocked,
+      billingStatus: orderLifecycle.billingStatus,
       expedited,
       legacyClientId,
       // PS-186: backend-owned test-order fact (clients.isTest) — the FE must read this,
@@ -2586,7 +2634,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       // projected from the PS-301 axes + lifecycle/label already in scope — no extra
       // query. immutableReason reinforces the shipped/cancelled lock.
       packageFacts: buildOrderRowPackageFacts({
-        orderStatus: effectiveOrderStatus,
+        orderStatus: orderLifecycle.effectiveOrderStatus,
         externallyShipped: r.order.externallyShipped === true,
         canonicalStatus: r.order.canonicalStatus ?? null,
         hasActiveLabel: rowHasQueueableLabel || Boolean(ship),
@@ -2693,8 +2741,23 @@ function buildOrderDetailPayload(
     finiteNumberOrNull(order.clientId),
     finiteNumberOrNull(order.storeId),
   );
+  const detailBaseLifecycle = resolveOrderLifecycleStatus({
+    orderStatus: stringOrNull(order.orderStatus),
+    canonicalStatus: stringOrNull(order.canonicalStatus),
+    externallyShipped: order.externallyShipped === true,
+  });
+  const detailOrderForCanonical = {
+    ...order,
+    orderStatus: detailBaseLifecycle.effectiveOrderStatus,
+    effectiveOrderStatus: detailBaseLifecycle.effectiveOrderStatus,
+    orderLifecycleStatus: detailBaseLifecycle.orderLifecycleStatus,
+    orderLifecycleLabel: detailBaseLifecycle.orderLifecycleLabel,
+    orderLifecycleReason: detailBaseLifecycle.orderLifecycleReason,
+    isTerminalOrderLifecycle: detailBaseLifecycle.isTerminal,
+    isShippingBlockedByLifecycle: detailBaseLifecycle.isShippingBlocked,
+  };
   const canonicalOrder = buildCanonicalOrderModel(
-    order,
+    detailOrderForCanonical,
     safeOverrides,
     legacyClientId,
     {},
@@ -2705,7 +2768,7 @@ function buildOrderDetailPayload(
   // verdict instead of guessing from shipments[0]. Only for shipped orders; read-only.
   const detailShipments = shipmentRows as Array<Record<string, unknown> | null>;
   const shippedLabelDisplayState =
-    stringOrNull(order.orderStatus) === 'shipped'
+    detailBaseLifecycle.effectiveOrderStatus === 'shipped'
       ? resolveShippedLabelDisplayState({
           externallyShipped: order.externallyShipped === true,
           externallyFulfilled: booleanOrNull(recordOrNull(order.raw)?.externallyFulfilled),
@@ -2713,9 +2776,26 @@ function buildOrderDetailPayload(
           hasVoidedShipment: detailShipments.some((s) => s != null && s.voided === true),
         })
       : null;
+  // Per user override unlock shipped data on 2026-07-06: PS-387 detail payload
+  // reads the same lifecycle SOT as the Orders list. Source orders/shipments are
+  // not changed here.
+  const detailLifecycle = resolveOrderLifecycleStatus({
+    orderStatus: stringOrNull(order.orderStatus),
+    canonicalStatus: stringOrNull(order.canonicalStatus),
+    externallyShipped: order.externallyShipped === true,
+    shippedLabelDisplayState,
+  });
 
   return {
     ...order,
+    orderStatus: detailLifecycle.effectiveOrderStatus,
+    effectiveOrderStatus: detailLifecycle.effectiveOrderStatus,
+    orderLifecycleStatus: detailLifecycle.orderLifecycleStatus,
+    orderLifecycleLabel: detailLifecycle.orderLifecycleLabel,
+    orderLifecycleReason: detailLifecycle.orderLifecycleReason,
+    isTerminalOrderLifecycle: detailLifecycle.isTerminal,
+    isShippingBlockedByLifecycle: detailLifecycle.isShippingBlocked,
+    billingStatus: detailLifecycle.billingStatus,
     legacyClientId,
     client: canonicalOrder.client,
     canonicalOrder,
@@ -2754,6 +2834,7 @@ app.get(
   async (c) => {
     const { sku, qty, orderStatus, storeId } = c.req.valid('query');
     const idsScope = ordersScopeFromContext(c);
+    const idsEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
     const rows = await db.execute<{ id: number; order_number: string }>(sql`
       select distinct o.id, o.order_number
       from order_items oi
@@ -2762,7 +2843,7 @@ app.get(
         and ${orderAliasScopePredicate('o', idsScope)}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${qty !== undefined ? sql`and oi.quantity >= ${qty}` : sql``}
-        ${orderStatus ? sql`and o.order_status = ${orderStatus}` : sql``}
+        ${orderStatus ? sql`and ${idsEffectiveStatusSql} = ${orderStatus}` : sql``}
         ${storeId !== undefined ? sql`and o.store_id = ${storeId}` : sql``}
       order by o.id desc
       limit 500
@@ -2788,6 +2869,7 @@ app.get(
     const fromIso = (q.dateFrom ? new Date(q.dateFrom) : new Date(0)).toISOString();
     const toIso = (q.dateTo ? new Date(q.dateTo) : new Date(Date.now() + 86400000)).toISOString();
     const status = q.status ?? null;
+    const storeCountsEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('orders');
     const rows = await db.execute<{
       store_id: number | null;
       count: number;
@@ -2798,7 +2880,7 @@ app.get(
         and order_date <= ${toIso}::timestamptz
         and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and ${orderAliasScopePredicate('orders', storeCountsScope)}
-        and (${status}::text is null or order_status = ${status}::text)
+        and (${status}::text is null or ${storeCountsEffectiveStatusSql} = ${status}::text)
         and (${status}::text is distinct from 'awaiting_shipment' or ${visibleAwaitingOrdersPredicate('orders')})
       group by store_id
       order by count desc
@@ -2869,6 +2951,9 @@ app.get(
       where hidden_client.id = o.client_id
         and lower(hidden_client.name) = 'api shipments'
     )`;
+    // Per user override unlock shipped data on 2026-07-06: daily stats use
+    // the backend lifecycle SOT for read-only counts.
+    const dailyStatsEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
 
     // totalOrders: all non-cancelled orders received inside the current
     // fulfillment intake window. The strip derives shipped as
@@ -2885,7 +2970,7 @@ app.get(
       select count(*)::int as total_orders
       from orders o
       left join clients c on c.id = o.client_id
-      where o.order_status <> 'cancelled'
+      where ${dailyStatsEffectiveStatusSql} <> 'cancelled'
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and ${visibleOrderPredicate}
@@ -2895,7 +2980,7 @@ app.get(
       select count(*)::int as need_to_ship
       from orders o
       left join clients c on c.id = o.client_id
-      where o.order_status = 'awaiting_shipment'
+      where ${dailyStatsEffectiveStatusSql} = 'awaiting_shipment'
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and ${visibleOrderPredicate}
@@ -2907,7 +2992,7 @@ app.get(
       from orders o
       left join clients c on c.id = o.client_id
       where o.order_date > ${toIso}::timestamptz
-        and o.order_status <> 'cancelled'
+        and ${dailyStatsEffectiveStatusSql} <> 'cancelled'
         and ${visibleOrderPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
     `),
@@ -2941,6 +3026,7 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
   const cid: number | null = q.clientId ?? null;
   const sid: number | null = q.storeId ?? null;
   const status = q.status;
+  const picklistEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
 
   const rows = await db.execute<{
     client_id: number | null;
@@ -2962,7 +3048,7 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
     from order_items oi
     join orders o on o.id = oi.order_id
     left join clients c on c.id = o.client_id
-    where (${status}::text is null or o.order_status = ${status}::text)
+    where (${status}::text is null or ${picklistEffectiveStatusSql} = ${status}::text)
       and (
         (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
         or c.is_test = true
@@ -4280,9 +4366,13 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     }
   }
 
+  // Per user override unlock shipped data on 2026-07-06: PS-387 makes CSV
+  // status filtering read the backend lifecycle SOT. No source rows are
+  // mutated and shipped/cancelled write locks are unchanged.
+  const exportEffectiveStatusSql = orderLifecycleEffectiveStatusSql();
   const where = and(
     ...[
-      q.status ? eq(orders.orderStatus, q.status) : undefined,
+      q.status ? sql`${exportEffectiveStatusSql} = ${q.status}` : undefined,
       orderScopePredicate(exportScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
@@ -4428,7 +4518,12 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     ]);
 
     const ship = shipmentsByOrder.get(order.id) ?? shipmentsByOrderNumber.get(order.orderNumber) ?? null;
-    const isShippedExport = q.status === 'shipped' || order.orderStatus === 'shipped';
+    const exportLifecycle = resolveOrderLifecycleStatus({
+      orderStatus: order.orderStatus,
+      canonicalStatus: order.canonicalStatus,
+      externallyShipped: order.externallyShipped === true,
+    });
+    const isShippedExport = exportLifecycle.effectiveOrderStatus === 'shipped';
     const selectedRateObj =
       ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
         ? (ship.selected_rate_json as Record<string, unknown>)
@@ -4487,7 +4582,7 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
         order.orderDate,
         order.storeId,
         order.clientId,
-        order.orderStatus,
+        exportLifecycle.effectiveOrderStatus,
         order.shipToName,
         rawShipTo.company,
         rawShipTo.phone,

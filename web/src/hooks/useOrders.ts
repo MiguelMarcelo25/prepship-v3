@@ -177,6 +177,14 @@ function transformOrderRowV4toV2(
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
   const shippingModel = toRecordValue(canonicalOrder?.shipping) ?? toRecordValue(row.shipping);
   const orderStatus = (canonicalOrder?.orderStatus as string | undefined) ?? (row.orderStatus as string | undefined) ?? null;
+  const effectiveOrderStatus =
+    (row.effectiveOrderStatus as string | undefined) ??
+    (canonicalOrder?.effectiveOrderStatus as string | undefined) ??
+    orderStatus;
+  const orderLifecycleStatus =
+    (row.orderLifecycleStatus as string | undefined) ??
+    (canonicalOrder?.orderLifecycleStatus as string | undefined) ??
+    null;
   const weightOz =
     toFiniteNumber(overrides?.rateWeightOz) ??
     toFiniteNumber(canonicalOrder?.weightOz) ??
@@ -212,7 +220,7 @@ function transformOrderRowV4toV2(
     }
     const rawTotal = toFiniteNumber(rawAny.orderTotal ?? rawAny.order_total);
     if (rawTotal != null && rawTotal > 0) return rawTotal;
-    if (orderStatus === 'cancelled') {
+    if (effectiveOrderStatus === 'cancelled') {
       const itemsTotal =
         getItemsTotalForDisplay(canonicalOrder?.items) ??
         getItemsTotalForDisplay(row.items) ??
@@ -263,7 +271,17 @@ function transformOrderRowV4toV2(
     ...row,
     orderId: toNumericValue(canonicalOrder?.orderId) ?? toNumericValue(canonicalOrder?.id) ?? row.id,
     orderNumber: canonicalOrder?.orderNumber ?? row.orderNumber,
-    orderStatus,
+    orderStatus: effectiveOrderStatus,
+    effectiveOrderStatus,
+    orderLifecycleStatus,
+    orderLifecycleLabel:
+      (row.orderLifecycleLabel as string | undefined) ??
+      (canonicalOrder?.orderLifecycleLabel as string | undefined) ??
+      null,
+    orderLifecycleReason:
+      (row.orderLifecycleReason as string | undefined) ??
+      (canonicalOrder?.orderLifecycleReason as string | undefined) ??
+      null,
     orderDate: canonicalOrder?.orderDate ?? row.orderDate,
     externalOrderId: canonicalOrder?.externalOrderId ?? row.externalOrderId,
     orderTotal: orderTotalNum,

@@ -26,12 +26,13 @@ check(
 check(
   'billing source query admits shipped and cancelled candidates',
   /orderStatus:\s*orders\.orderStatus/.test(billing) &&
-    /inArray\(orders\.orderStatus,\s*\['shipped',\s*'cancelled'\]\)/.test(billing),
+    /orderLifecycleBillingSourcePredicate\(\)/.test(billing),
 );
 
 check(
   'PS-377: cancelled orders are billing source rows for EVERY client (no longer HUGRAB-only)',
-  /return status === 'shipped' \|\| status === 'cancelled'/.test(billing) &&
+  /resolveOrderLifecycleStatus\(\{[\s\S]*?canonicalStatus/.test(billing) &&
+    /isBillingLifecycleSourceStatus\(lifecycle\)/.test(billing) &&
     !/if \(status === 'cancelled'\) return normalizeBillingClientName\(input\.clientName\)/.test(billing),
 );
 
@@ -43,7 +44,7 @@ check(
 
 check(
   'billing freshness query includes cancelled source rows for every client (not HUGRAB-only)',
-  /and o\.order_status in \('shipped', 'cancelled'\)/.test(billing) &&
+  /orderLifecycleBillingSourcePredicateAlias\('o'\)/.test(billing) &&
     !/o\.order_status = 'cancelled' and upper\(trim\(sc\.name\)\) = \$\{HUGRAB_CANCELLED_BILLING_CLIENT_NAME\}/.test(billing),
 );
 

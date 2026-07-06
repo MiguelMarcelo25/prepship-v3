@@ -77,6 +77,14 @@ export function getCanonicalOrderModel(order: OrderSummaryDto) {
   return toRecord(order.canonicalOrder)
 }
 
+export function getOrderEffectiveStatus(order: OrderSummaryDto) {
+  return (
+    toStringValue(order.effectiveOrderStatus) ??
+    toStringValue(getCanonicalOrderModel(order)?.effectiveOrderStatus) ??
+    toStringValue(order.orderStatus)
+  )
+}
+
 export function getCanonicalRecord(order: OrderSummaryDto, key: string) {
   return toRecord(getCanonicalOrderModel(order)?.[key])
 }
@@ -228,7 +236,7 @@ export function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
   // already prefers bestRate for the awaiting COST; this aligns the account.
   // Shipped/cancelled keep the selected-first precedence (the bought label is the
   // truth there) — no shipped path is changed.
-  const isAwaiting = order.orderStatus === 'awaiting_shipment'
+  const isAwaiting = getOrderEffectiveStatus(order) === 'awaiting_shipment'
   const bestRateProviderId = toProviderAccountId((order.bestRate as LooseBestRate | undefined)?.shippingProviderId)
   const selectedProviderId =
     getShippingProviderAccountId(order) ??
@@ -287,7 +295,7 @@ function getCachedSecondBestRate(order: OrderSummaryDto) {
 
 export function getBestRateBaseCost(order: OrderSummaryDto) {
   const money = getBackendRowMoney(order)
-  if (order.orderStatus === 'awaiting_shipment') {
+  if (getOrderEffectiveStatus(order) === 'awaiting_shipment') {
     return money?.selectedRateCost ?? money?.baseAmount ?? money?.cShippingRateAmount ?? money?.markedAmount ?? null
   }
 
@@ -303,7 +311,7 @@ export function getBestRateShippingProviderId(order: OrderSummaryDto) {
     toRecord(getBestRateWorkflowModel(order)?.display)?.providerAccountId,
   )
   const rateProviderId = getRateProviderAccountId(toRecord(order.bestRate))
-  if (order.orderStatus === 'awaiting_shipment') {
+  if (getOrderEffectiveStatus(order) === 'awaiting_shipment') {
     return backendDisplayProviderAccountId ?? rateProviderId ?? getShippingProviderAccountId(order) ?? undefined
   }
   return getShippingProviderAccountId(order) ?? rateProviderId ?? undefined
@@ -313,7 +321,7 @@ export function getBestRateServiceCode(order: OrderSummaryDto) {
   // PS-165: service precedence (awaiting best-rate-first → canonical → best-rate) owned VERBATIM by
   // resolveDisplayServiceCode (./order-shipping-display); fields read here.
   return resolveDisplayServiceCode({
-    isAwaiting: order.orderStatus === 'awaiting_shipment',
+    isAwaiting: getOrderEffectiveStatus(order) === 'awaiting_shipment',
     // PS-173: backend-owned display tuple — preferred when the row carried it.
     backendDisplayServiceCode: toStringValue(toRecord(order.bestRateWorkflow?.display)?.serviceCode),
     hasBestRate: Boolean(order.bestRate),
@@ -338,7 +346,7 @@ export function getBestRateCarrierNickname(order: OrderSummaryDto) {
     (order.bestRate ? toStringValue((order.bestRate as LooseBestRate).carrierNickname) : null) ??
     toStringValue(bestRateRecord?.providerAccountNickname) ??
     toStringValue(bestRateRecord?.accountNickname)
-  if (order.orderStatus === 'awaiting_shipment') return backendDisplayAccountNickname ?? rateNickname
+  if (getOrderEffectiveStatus(order) === 'awaiting_shipment') return backendDisplayAccountNickname ?? rateNickname
   return getShippingString(order, 'accountNickname') ?? backendDisplayAccountNickname ?? rateNickname
 }
 
@@ -373,7 +381,7 @@ export function getSelectedRateCarrierCode(order: OrderSummaryDto) {
   const selectedCarrierCode =
     getShippingString(order, 'carrierCode') ??
     toStringValue(order.selectedRate?.carrierCode)
-  if (order.orderStatus === 'awaiting_shipment') {
+  if (getOrderEffectiveStatus(order) === 'awaiting_shipment') {
     return selectedCarrierCode
   }
   return (
@@ -386,7 +394,7 @@ export function getSelectedRateServiceCode(order: OrderSummaryDto) {
   const selectedServiceCode =
     getShippingString(order, 'serviceCode') ??
     toStringValue(order.selectedRate?.serviceCode)
-  if (order.orderStatus === 'awaiting_shipment') {
+  if (getOrderEffectiveStatus(order) === 'awaiting_shipment') {
     return selectedServiceCode
   }
   return (

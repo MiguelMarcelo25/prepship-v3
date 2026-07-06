@@ -35,6 +35,16 @@ check('shipped order is billable (any client)', () => {
 check('PS-377: cancelled order is billable for a NON-HUGRAB client (was excluded)', () => {
   assert.equal(isBillingSourceOrderBillable({ orderStatus: 'cancelled', clientName: 'eBay - DJC' }), true);
 });
+check('upstream-cancelled awaiting order is billable through the lifecycle SOT', () => {
+  assert.equal(
+    isBillingSourceOrderBillable({
+      orderStatus: 'awaiting_shipment',
+      canonicalStatus: 'cancelled',
+      clientName: 'eBay - DJC',
+    }),
+    true,
+  );
+});
 check('cancelled order is billable for HUGRAB too', () => {
   assert.equal(isBillingSourceOrderBillable({ orderStatus: 'cancelled', clientName: 'HUGRAB' }), true);
 });
@@ -68,7 +78,9 @@ check('grouped DTO: a shipped order keeps its fees and is NOT badged cancelled',
 const billing = read('src/services/billing.ts');
 
 check('policy: cancelled orders are billing source rows for every client (no HUGRAB-only branch)', () => {
-  assert.ok(/return status === 'shipped' \|\| status === 'cancelled'/.test(billing));
+  assert.ok(/resolveOrderLifecycleStatus\(\{[\s\S]*?canonicalStatus/.test(billing));
+  assert.ok(/isBillingLifecycleSourceStatus\(lifecycle\)/.test(billing));
+  assert.ok(/orderLifecycleBillingSourcePredicate\(\)/.test(billing));
   assert.ok(!/if \(status === 'cancelled'\) return normalizeBillingClientName\(input\.clientName\)/.test(billing));
 });
 
@@ -78,8 +90,8 @@ check('generator: a non-HUGRAB cancelled order is a SINGLE $0 "Cancelled" line; 
     'cancelled no-charge must swap to a single $0 cancelled line; else apply the normal rows');
 });
 
-check('billingDetails emits the backend-owned CANCELLED status badge from order_status', () => {
-  assert.ok(/resolveBillingRowStatus\([\s\S]*?orderStatus: row\.orderStatus/.test(billing));
+check('billingDetails emits the backend-owned CANCELLED status badge from lifecycle status', () => {
+  assert.ok(/resolveBillingRowStatus\([\s\S]*?orderStatus: detailOrderStatus[\s\S]*?orderLifecycleStatus: rowLifecycle\.orderLifecycleStatus/.test(billing));
   assert.ok(/billingStatusBadge/.test(read('src/services/billing-row-status.ts')));
 });
 

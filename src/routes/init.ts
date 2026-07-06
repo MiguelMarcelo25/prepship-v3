@@ -11,6 +11,7 @@ import { listCarrierAccounts } from '../services/carrier-connector-orchestrator'
 import { publicClient } from '../lib/public-client';
 import { filterClientsForScope, getClientStoreScope } from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { orderLifecycleEffectiveStatusAliasSql } from '../services/order-lifecycle-status';
 
 const app = new Hono();
 
@@ -139,6 +140,10 @@ app.get('/counts', async (c) => {
   const visibleAwaitingOrdersPredicate = sql`not (
     coalesce(o.external_order_id, '') ilike 'ebay-%'
   )`;
+  // Per user override unlock shipped data on 2026-07-06: PS-387 makes these
+  // read-only shell counts use the backend lifecycle status SOT. No orders or
+  // shipments are mutated.
+  const countsEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
   const loadCounts = (async (): Promise<CountsPayload> => {
     const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
@@ -153,7 +158,7 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           left join clients c on c.id = o.client_id
-          where o.order_status = 'awaiting_shipment'
+          where ${countsEffectiveStatusSql} = 'awaiting_shipment'
             and ${visibleOrderPredicate}
             and ${visibleAwaitingOrdersPredicate}
             ${orderDateFilter()}
@@ -166,7 +171,7 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           left join clients c on c.id = o.client_id
-          where o.order_status = 'shipped'
+          where ${countsEffectiveStatusSql} = 'shipped'
             and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and not exists (
@@ -178,7 +183,7 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           left join clients c on c.id = o.client_id
-          where o.order_status = 'cancelled'
+          where ${countsEffectiveStatusSql} = 'cancelled'
             and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and not exists (
@@ -190,7 +195,7 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           left join clients c on c.id = o.client_id
-          where o.order_status = 'on_hold'
+          where ${countsEffectiveStatusSql} = 'on_hold'
             and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and not exists (
@@ -215,13 +220,13 @@ app.get('/counts', async (c) => {
         ) as inventory
     `),
     db.execute<{ orderStatus: string; cnt: number }>(sql`
-      select o.order_status as "orderStatus", count(*)::int as cnt
+      select ${countsEffectiveStatusSql} as "orderStatus", count(*)::int as cnt
       from orders o
       left join clients c on c.id = o.client_id
         where ${visibleOrderPredicate}
         ${orderDateFilter()}
         and (
-          o.order_status is distinct from 'awaiting_shipment'
+          ${countsEffectiveStatusSql} is distinct from 'awaiting_shipment'
           or ${visibleAwaitingOrdersPredicate}
         )
         and not exists (
@@ -229,11 +234,11 @@ app.get('/counts', async (c) => {
           where hidden_client.id = o.client_id
             and lower(hidden_client.name) = 'api shipments'
         )
-      group by o.order_status
+      group by ${countsEffectiveStatusSql}
     `),
     db.execute<{ orderStatus: string; storeId: number; cnt: number }>(sql`
       select
-        o.order_status as "orderStatus",
+        ${countsEffectiveStatusSql} as "orderStatus",
         case
           when coalesce(c.is_test, false) = true and o.client_id is not null then -o.client_id
           else o.store_id
@@ -244,7 +249,7 @@ app.get('/counts', async (c) => {
         where ${visibleOrderPredicate}
         ${orderDateFilter()}
         and (
-          o.order_status is distinct from 'awaiting_shipment'
+          ${countsEffectiveStatusSql} is distinct from 'awaiting_shipment'
           or ${visibleAwaitingOrdersPredicate}
         )
         and not exists (
@@ -253,7 +258,7 @@ app.get('/counts', async (c) => {
             and lower(hidden_client.name) = 'api shipments'
         )
         group by
-          o.order_status,
+          ${countsEffectiveStatusSql},
           case
             when coalesce(c.is_test, false) = true and o.client_id is not null then -o.client_id
             else o.store_id

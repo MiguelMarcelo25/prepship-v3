@@ -16,6 +16,8 @@ export type BillingRowStatusInput = {
   lineType?: string | null;
   lineTypes?: readonly unknown[] | null;
   orderStatus?: string | null;
+  orderLifecycleStatus?: string | null;
+  effectiveOrderStatus?: string | null;
   totalCost?: unknown;
   feeWaived?: boolean | null;
   packageCostNeedsReview?: boolean | null;
@@ -95,13 +97,18 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
     return result('return', 'Return', 'purple', null, null, input);
   }
 
-  const orderStatus = normalizedText(input.orderStatus)?.toLowerCase();
+  const orderStatus =
+    normalizedText(input.orderStatus)?.toLowerCase() ??
+    normalizedText(input.effectiveOrderStatus)?.toLowerCase();
+  const orderLifecycleStatus = normalizedText(input.orderLifecycleStatus)?.toLowerCase();
   const totalCost = numericValue(input.totalCost);
   const cancelledLine = hasLine('cancelled');
-  if (cancelledLine || (orderStatus === 'cancelled' && (totalCost == null || totalCost <= 0))) {
+  const cancelledLifecycle =
+    orderLifecycleStatus === 'cancelled' || orderLifecycleStatus === 'upstream_cancelled';
+  if (cancelledLine || ((orderStatus === 'cancelled' || cancelledLifecycle) && (totalCost == null || totalCost <= 0))) {
     return result('cancelled_no_charge', 'Cancelled \u00b7 No charge', 'red', 'cancelled', 'CANCELLED', input);
   }
-  if (orderStatus === 'cancelled') {
+  if (orderStatus === 'cancelled' || cancelledLifecycle) {
     return result('cancelled_billable', 'Cancelled', 'red', null, 'CANCELLED', input);
   }
 

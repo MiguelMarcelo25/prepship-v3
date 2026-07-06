@@ -17,6 +17,10 @@ export type OrderSummaryDto = AnyRecord & {
   orderId: number
   orderNumber: string | null
   orderStatus?: string | null
+  effectiveOrderStatus?: string | null
+  orderLifecycleStatus?: string | null
+  orderLifecycleLabel?: string | null
+  orderLifecycleReason?: string | null
   clientId: number
   items?: unknown
   raw?: unknown

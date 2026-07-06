@@ -74,6 +74,12 @@ import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
 import {
+  isBillingLifecycleSourceStatus,
+  orderLifecycleBillingSourcePredicateAlias,
+  orderLifecycleBillingSourcePredicate,
+  resolveOrderLifecycleStatus,
+} from './order-lifecycle-status';
+import {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
   ensureHugrabShippingRateOverrideColumns,
@@ -91,8 +97,17 @@ function normalizeBillingClientName(value: string | null | undefined) {
   return String(value ?? '').trim().toUpperCase();
 }
 
-export function isBillingSourceOrderBillable(input: { orderStatus: string | null; clientName: string | null }) {
-  const status = String(input.orderStatus ?? '').trim().toLowerCase();
+export function isBillingSourceOrderBillable(input: {
+  orderStatus: string | null;
+  clientName: string | null;
+  canonicalStatus?: string | null;
+  externallyShipped?: boolean | null;
+}) {
+  const lifecycle = resolveOrderLifecycleStatus({
+    orderStatus: input.orderStatus,
+    canonicalStatus: input.canonicalStatus,
+    externallyShipped: input.externallyShipped,
+  });
   // Per user override unlock shipped data on 2026-07-04 (PS-377): shipped AND
   // cancelled orders are billing SOURCE rows for EVERY client (was shipped +
   // HUGRAB-only cancelled), so cancelled orders are VISIBLE in Billing instead of
@@ -101,7 +116,7 @@ export function isBillingSourceOrderBillable(input: { orderStatus: string | null
   // existing cancelled billing). This is read-only classification — no orders /
   // shipments source rows are mutated. clientName is retained for the caller
   // shape + the generator's per-client cancelled-policy check.
-  return status === 'shipped' || status === 'cancelled';
+  return isBillingLifecycleSourceStatus(lifecycle);
 }
 
 export type GenerateInput = {
@@ -407,6 +422,9 @@ export async function billingGenerationStatus(
   }
 
   const sourceLowerBound = latestBilling?.toISOString() ?? fromIso;
+  // Per user override unlock shipped data on 2026-07-06: PS-387 makes Billing
+  // freshness use the same read-only lifecycle source predicate as generation.
+  const sourceLifecyclePredicate = orderLifecycleBillingSourcePredicateAlias('o');
   const [sourceRow] = await db.execute<{
     latest_source_ship_date: string | null;
   }>(sql`
@@ -439,7 +457,7 @@ export async function billingGenerationStatus(
     ))::text as latest_source_ship_date
     from orders o
     left join shipments s on s.order_id = o.id and s.voided = false
-    where o.order_status in ('shipped', 'cancelled')
+    where ${sourceLifecyclePredicate}
       and coalesce(
         s.ship_date,
         case
@@ -525,7 +543,7 @@ export async function billingGenerationStatus(
         -- freshness/source query includes cancelled orders for EVERY client (was
         -- shipped + HUGRAB-only cancelled), matching the billable-rows query, so a
         -- new cancelled order marks Billing out-of-date. Read-only.
-        and o.order_status in ('shipped', 'cancelled')
+        and ${sourceLifecyclePredicate}
       )
   `);
 
@@ -751,6 +769,7 @@ export async function generateLineItems(input: GenerateInput) {
       refUpsRate: orderOverrides.refUpsRate,
       orderId: orders.id,
       orderStatus: orders.orderStatus,
+      canonicalStatus: orders.canonicalStatus,
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
       orderDate: orders.orderDate,
@@ -769,7 +788,10 @@ export async function generateLineItems(input: GenerateInput) {
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
       and(
-        inArray(orders.orderStatus, ['shipped', 'cancelled']),
+        // Per user override unlock shipped data on 2026-07-06: PS-387 uses
+        // read-only lifecycle classification for Billing source inclusion.
+        // It does not mutate orders/shipments or weaken shipped locks.
+        orderLifecycleBillingSourcePredicate(),
         sql`${billingShipDateSql} >= ${fromIso}::timestamptz`,
         sql`${billingShipDateSql} < ${toIso}::timestamptz`
       )
@@ -815,6 +837,8 @@ export async function generateLineItems(input: GenerateInput) {
     // PS-377: source order status ('shipped' | 'cancelled'), so the generator can
     // emit a $0 no-charge line for cancelled orders. Read-only.
     orderStatus: string | null;
+    effectiveOrderStatus: string | null;
+    orderLifecycleStatus: string | null;
   };
 
   const billableRows: BillableRow[] = orderShipmentRows
@@ -825,8 +849,15 @@ export async function generateLineItems(input: GenerateInput) {
         row.orderClientId ??
         row.shipmentClientId ??
         null;
+      const lifecycle = resolveOrderLifecycleStatus({
+        orderStatus: row.orderStatus,
+        canonicalStatus: row.canonicalStatus,
+        externallyShipped: row.externallyShipped === true,
+      });
       if (!isBillingSourceOrderBillable({
         orderStatus: row.orderStatus,
+        canonicalStatus: row.canonicalStatus,
+        externallyShipped: row.externallyShipped === true,
         clientName: clientId == null ? null : clientNameById.get(clientId) ?? null,
       })) {
         return null;
@@ -860,7 +891,9 @@ export async function generateLineItems(input: GenerateInput) {
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
         externallyShipped: row.externallyShipped === true,
         externallyFulfilled: row.externallyFulfilled === true,
-        orderStatus: row.orderStatus, // PS-377
+        orderStatus: lifecycle.billingStatus ?? lifecycle.effectiveOrderStatus, // PS-377/PS-387
+        effectiveOrderStatus: lifecycle.effectiveOrderStatus,
+        orderLifecycleStatus: lifecycle.orderLifecycleStatus,
       };
     })
     .filter(
@@ -1942,6 +1975,8 @@ export async function billingDetails(input: GenerateInput) {
       // PS-376: order status feeds the $0-shipping review reason (cancelled →
       // prep fee may be unwarranted vs a real recorded $0 label).
       orderStatus: orders.orderStatus,
+      canonicalStatus: orders.canonicalStatus,
+      externallyShipped: orders.externallyShipped,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
     })
@@ -2166,6 +2201,12 @@ export async function billingDetails(input: GenerateInput) {
 
       const items = itemSummary(row.orderItems);
       const lineType = row.lineType ?? '';
+      const rowLifecycle = resolveOrderLifecycleStatus({
+        orderStatus: row.orderStatus,
+        canonicalStatus: row.canonicalStatus,
+        externallyShipped: row.externallyShipped === true,
+      });
+      const detailOrderStatus = rowLifecycle.billingStatus ?? rowLifecycle.effectiveOrderStatus;
       const manualBillingOverrideLineTypes = row.orderId != null
         ? [
             ...(manualBillingOverrideByOrderId.get(row.orderId)?.map((override) => override.lineType) ?? []),
@@ -2193,7 +2234,7 @@ export async function billingDetails(input: GenerateInput) {
         ? decideZeroShippingReview({
             shippingAmount: toFiniteNumber(row.totalCost),
             hasShipmentRow: row.shipmentId != null,
-            orderStatus: row.orderStatus,
+            orderStatus: detailOrderStatus,
             isBundledChild: isBundleIncludedShippingLine,
           })
         : { needsReview: false, reason: null, label: '', severity: 'info' as const };
@@ -2260,7 +2301,8 @@ export async function billingDetails(input: GenerateInput) {
       const feeWaived = feeWaiver?.decision === 'waived';
       const billingStatus = resolveBillingRowStatus({
         lineType,
-        orderStatus: row.orderStatus,
+        orderStatus: detailOrderStatus,
+        orderLifecycleStatus: rowLifecycle.orderLifecycleStatus,
         totalCost: row.totalCost,
         feeWaived,
         packageCostNeedsReview: isBoxReviewLine,
@@ -2287,6 +2329,11 @@ export async function billingDetails(input: GenerateInput) {
       } = row;
       return {
         ...rest,
+        orderStatus: detailOrderStatus,
+        effectiveOrderStatus: rowLifecycle.effectiveOrderStatus,
+        orderLifecycleStatus: rowLifecycle.orderLifecycleStatus,
+        orderLifecycleLabel: rowLifecycle.orderLifecycleLabel,
+        orderLifecycleReason: rowLifecycle.orderLifecycleReason,
         shipmentId: row.shipmentId ?? fallbackShipment?.id ?? null,
         // PS — the package backing this row's box (override if set, else the
         // shipment-derived package). Lets the Edit modal preselect the box.
