@@ -72,8 +72,11 @@ check('package keeps PS-248 label-purchase lock guard wired',
 check('package keeps PS-248 atomic persist guard wired',
   /"test:ps-248-persist-mark-shipped-atomic"\s*:\s*"tsx scripts\/ps-248-persist-mark-shipped-atomic-guard\.ts"/.test(packageJson));
 
-check('lock helper uses non-blocking advisory lock and explicit in-progress error',
-  /pg_try_advisory_lock/.test(lockHelper) &&
+check('lock helper uses non-blocking durable lease and explicit in-progress error',
+  /CREATE TABLE IF NOT EXISTS label_purchase_locks/.test(lockHelper) &&
+    /ON CONFLICT \(order_id\) DO UPDATE SET/.test(lockHelper) &&
+    /WHERE label_purchase_locks\.expires_at <= now\(\)/.test(lockHelper) &&
+    /DELETE FROM label_purchase_locks/.test(lockHelper) &&
     /LabelPurchaseInProgressError/.test(lockHelper) &&
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockHelper));
 check('createLabelV2 acquires and releases the purchase lock around impl',
@@ -85,7 +88,7 @@ check('label persist and mark-shipped run in one transaction with tx plumbing',
     /persistCreatedLabel\(\{[\s\S]*tx,/.test(labels) &&
     /markOrderShipped\(order\.id, created\.trackingNumber, \{ cleanupQueue: false, tx \}\)/.test(labels));
 check('PS-248 lock guard pins purchase lock mechanism',
-  /pg_try_advisory_lock/.test(lockGuard) &&
+  /durable label_purchase_locks table/.test(lockGuard) &&
     /LABEL_PURCHASE_IN_PROGRESS/.test(lockGuard) &&
     /createLabelV2 acquires the per-order purchase lock/.test(lockGuard));
 check('PS-248 atomic guard pins transaction mechanism',

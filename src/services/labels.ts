@@ -10,7 +10,7 @@ import { clients } from '../db/schema/clients';
 // surface (routes pass them only an id/body); they now require the caller's scope.
 import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
-// PS-248: per-order advisory lock so concurrent buys can't double-purchase postage for one order.
+// PS-248: per-order purchase lease so concurrent buys can't double-purchase postage for one order.
 import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
 import { linkBundleShipment } from './shipment-bundles/create-bundle';
@@ -1141,11 +1141,12 @@ async function recordFulfillmentDeductions(args: {
  */
 // PS-248 (Per user override unlock shipped data on 2026-06-16): serialize concurrent label PURCHASES
 // per order so a double-click / double-request can't buy two labels (double postage) for the same
-// order. The per-order advisory lock is NON-BLOCKING — a second in-flight buy for the same order is
-// rejected immediately with LABEL_PURCHASE_IN_PROGRESS, not queued. Every existing guard (PS-233
-// scope, editable, PS-128/129 safe-to-ship) + the buy + persist run UNCHANGED inside the impl; this
-// is pure serialization with no shipped/cancelled mutation. The concurrent behavior is verified by a
-// live canary — offline cert cannot simulate two simultaneous buys.
+// order. The per-order DB lease is NON-BLOCKING — a second in-flight buy for the same order is
+// rejected immediately with LABEL_PURCHASE_IN_PROGRESS, not queued. The lease expires after an
+// interrupted worker/deploy so pooled DB sessions cannot strand an order. Every existing guard
+// (PS-233 scope, editable, PS-128/129 safe-to-ship) + the buy + persist run UNCHANGED inside the impl;
+// this is pure serialization with no shipped/cancelled mutation. The concurrent behavior is verified
+// by a live canary — offline cert cannot simulate two simultaneous buys.
 export async function createLabelV2(
   body: CreateLabelInputDto,
   scope: ClientStoreScope,
