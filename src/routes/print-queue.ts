@@ -13,6 +13,7 @@ import {
   getLatestQueueSendJobSnapshot,
   getQueueSendJobSnapshot,
   getQueueSendJobStatus,
+  isPrintQueueAlreadyFinalizedError,
   isPrintQueueAccessError,
   isPrintQueueDurableStatusError,
   isPrintQueueLabelUrlError,
@@ -275,6 +276,9 @@ function printQueueSafeClientErrorResponse(
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   if (isPrintQueueDurableStatusError(err)) {
+    return c.json({ error: err.message, code: err.code }, err.status);
+  }
+  if (isPrintQueueAlreadyFinalizedError(err)) {
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   throw err;

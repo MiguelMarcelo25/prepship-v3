@@ -276,6 +276,23 @@ export function isPrintQueueDurableStatusError(err: unknown): err is PrintQueueD
   return err instanceof PrintQueueDurableStatusError;
 }
 
+export class PrintQueueAlreadyFinalizedError extends Error {
+  status = 409 as const;
+  code = 'PRINT_QUEUE_ALREADY_FINALIZED' as const;
+
+  constructor(orderRef: string | number, status: string) {
+    super(
+      `Order ${orderRef} already has a ${status} print-queue history row; ` +
+      'it was not re-queued automatically. Confirm an intentional reprint before queueing again.',
+    );
+    this.name = 'PrintQueueAlreadyFinalizedError';
+  }
+}
+
+export function isPrintQueueAlreadyFinalizedError(err: unknown): err is PrintQueueAlreadyFinalizedError {
+  return err instanceof PrintQueueAlreadyFinalizedError;
+}
+
 class QueueSendStaleLabelAttemptError extends Error {
   readonly code = 'QUEUE_SEND_STALE_LABEL_ATTEMPT' as const;
   readonly retryReason = 'stale_label_purchase_attempt' as const;
@@ -1120,6 +1137,13 @@ export async function addToQueue(
     .limit(1);
 
   const alreadyQueued = !!existing && existing.status === 'queued';
+  if (existing && (existing.status === 'printed' || existing.status === 'delivered')) {
+    // Per user override unlock shipped data on 2026-07-07 (PS-400): a retry may
+    // recover an already-purchased label, but it must not silently revive a
+    // confirmed/retired print-history row into the active queue and risk a
+    // second physical print.
+    throw new PrintQueueAlreadyFinalizedError(input.orderNumber ?? input.orderId, existing.status);
+  }
   const id = existing?.id ?? randomUUID();
 
   const [entry] = await db

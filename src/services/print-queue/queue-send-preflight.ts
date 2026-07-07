@@ -1,6 +1,7 @@
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { orderOverrides, orders as ordersTable } from '../../db/schema/orders';
+import { shipments } from '../../db/schema/shipments';
 import { assertLabelPurchaseRateSelection } from '../shipping-workflow/rate-quote-snapshot-store';
 import type { QueueSendJobItemInput } from './queue-send-item-state';
 import type { QueueSendJobResult, QueueSendOrderInput } from '../print-queue';
@@ -153,6 +154,30 @@ async function loadOrderFacts(orderIds: number[]): Promise<Map<number, QueueSend
   return new Map(rows.map((row) => [row.orderId, row]));
 }
 
+async function loadOrderIdsWithActiveLabels(orderIds: number[]): Promise<Set<number>> {
+  const unique = Array.from(new Set(orderIds.filter((id) => Number.isInteger(id) && id > 0)));
+  if (unique.length === 0) return new Set();
+  // Per user override unlock shipped data on 2026-07-07 (PS-400): preflight may
+  // READ non-voided shipment labels so a shipped order can recover its existing
+  // purchased label into Print Queue. This does not create labels, buy postage,
+  // void labels, or mutate shipped/cancelled order data.
+  const rows = await db
+    .select({ orderId: shipments.orderId })
+    .from(shipments)
+    .where(
+      and(
+        inArray(shipments.orderId, unique),
+        eq(shipments.voided, false),
+        eq(shipments.isReturn, false),
+      ),
+    );
+  return new Set(
+    rows
+      .map((row) => Number(row.orderId))
+      .filter((orderId) => Number.isInteger(orderId) && orderId > 0),
+  );
+}
+
 async function classifyRateProof(order: QueueSendOrderInput): Promise<QueueSendPreflightBlockReason | null> {
   const label = order.label;
   if (!label || label.testLabel === true) return null;
@@ -176,10 +201,14 @@ async function classifyRateProof(order: QueueSendOrderInput): Promise<QueueSendP
 async function classifyOrder(
   order: QueueSendOrderInput,
   fact: QueueSendPreflightOrderFact | null,
+  hasActiveLabel: boolean,
 ): Promise<QueueSendPreflightBlockReason | null> {
   if (!fact) return 'order_not_found';
-  if (LOCKED_ORDER_STATUSES.has(String(fact.orderStatus ?? '').toLowerCase())) return 'order_not_editable';
+  const status = String(fact.orderStatus ?? '').toLowerCase();
+  if (status === 'cancelled') return 'order_not_editable';
   if (order.labelUrl) return null;
+  if (status === 'shipped') return hasActiveLabel ? null : 'order_not_editable';
+  if (LOCKED_ORDER_STATUSES.has(status)) return 'order_not_editable';
   if (!order.label) return 'missing_label_payload';
   if (!order.label.serviceCode) return 'carrier_provider_unavailable';
   if (!labelHasWeight(order, fact)) return 'missing_weight';
@@ -191,13 +220,21 @@ async function classifyOrder(
 export async function preflightQueueSendOrders(
   inputOrders: QueueSendOrderInput[],
 ): Promise<QueueSendPreflightResult> {
-  const facts = await loadOrderFacts(inputOrders.map((order) => order.orderId));
+  const orderIds = inputOrders.map((order) => order.orderId);
+  const [facts, activeLabelOrderIds] = await Promise.all([
+    loadOrderFacts(orderIds),
+    loadOrderIdsWithActiveLabels(orderIds),
+  ]);
   const readyOrders: QueueSendOrderInput[] = [];
   const blockedResults: QueueSendJobResult[] = [];
   const itemStates: QueueSendJobItemInput[] = [];
 
   for (const order of inputOrders) {
-    const reason = await classifyOrder(order, facts.get(order.orderId) ?? null);
+    const reason = await classifyOrder(
+      order,
+      facts.get(order.orderId) ?? null,
+      activeLabelOrderIds.has(order.orderId),
+    );
     if (reason) {
       blockedResults.push(blockedResult(order, reason));
       itemStates.push(blockedItem(order, reason));
