@@ -20,7 +20,7 @@ import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 // Per user override unlock shipped data on 2026-07-07: batch-print pipeline — the merge job's
 // label fetches now go through a bounded prefetch pool (default concurrency 1 = serial, byte-
 // identical on the wire). Fetch mechanics only; ordering/grouping/error branches stay below.
-import { env } from '../lib/env';
+// (env is already imported above for the existing flags.)
 import { startLabelPrefetch, type PrefetchResult } from './print-queue-label-prefetch';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
