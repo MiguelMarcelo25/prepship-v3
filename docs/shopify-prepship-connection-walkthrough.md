@@ -38,11 +38,12 @@ write_merchant_managed_fulfillment_orders
 
 4. Release the app version.
 5. Install the app on the Shopify store.
-6. Copy the Admin API access token. It usually starts with `shpat_`.
+6. Copy the Client ID and Secret from the Dev Dashboard Settings page.
 
-Keep the token private. If Shopify does not show a manual Admin API token and
-only provides OAuth client credentials, PrepShip needs a separate OAuth install
-flow as a follow-up.
+Keep the secret private. PrepShip exchanges the Client ID and Secret on the
+backend for a short-lived Shopify Admin API token before each Shopify API call.
+If you previously pasted the Secret into the legacy Admin API Access Token
+field, reconnect the store and put it in Client Secret instead.
 
 ## PrepShip Setup
 
@@ -53,15 +54,17 @@ flow as a follow-up.
 
 ```text
 Shop Domain: kf-goodies-2.myshopify.com
-Admin API Access Token: <Shopify Admin API token>
+Client ID: <Shopify Dev Dashboard Client ID>
+Client Secret: <Shopify Dev Dashboard Secret>
 API Version: 2026-07
 ```
 
 5. Click `Test Connection`.
 6. Click `Pull Orders`.
 
-The Test Connection button reads Shopify `/shop.json`. It should show the shop
-identity when the token and scopes are valid.
+The Test Connection button exchanges the Client ID and Secret for a Shopify
+Admin API token, then reads Shopify `/shop.json`. It should show the shop
+identity when the credentials and scopes are valid.
 
 ## What PrepShip Now Does
 

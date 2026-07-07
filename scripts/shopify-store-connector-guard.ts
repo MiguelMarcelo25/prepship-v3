@@ -92,6 +92,30 @@ await check('Shopify credentials verifier reads shop metadata without mutating o
   assert.equal(result.accountLabel, 'KF GOODIES');
 });
 
+await check('Shopify Dev Dashboard client credentials are exchanged before verification', async () => {
+  __setCarrierReplay([
+    {
+      name: 'shopify.token',
+      body: { access_token: 'dev_dashboard_access_token', scope: 'read_orders,write_fulfillments', expires_in: 86_399 },
+    },
+    {
+      name: 'shopify.shop',
+      body: { shop: { id: 12345, name: 'KF GOODIES', myshopify_domain: 'kf-goodies-2.myshopify.com' } },
+    },
+  ]);
+
+  const result = await verifyProviderCredentials('shopify', {
+    shopDomain: 'kf-goodies-2.myshopify.com',
+    clientId: 'shopify_client_id_for_test',
+    clientSecret: 'shpss_test_secret',
+    apiVersion: '2026-07',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.accountIdentifier, 'kf-goodies-2.myshopify.com');
+  assert.equal(result.meta?.authMode, 'client_credentials');
+});
+
 await check('Shopify import normalizes paid unfulfilled orders for canonical store persistence', async () => {
   __setCarrierReplay([
     {
@@ -133,6 +157,39 @@ await check('Shopify import normalizes paid unfulfilled orders for canonical sto
   assert.equal(order.weightOz, 35);
   assert.equal(Array.isArray(order.items), true);
   assert.equal((order.items as Array<Record<string, unknown>>)[0]?.sku, 'Booster-gel-001');
+});
+
+await check('Shopify import auto-refreshes a Dev Dashboard access token', async () => {
+  __setCarrierReplay([
+    {
+      name: 'shopify.token',
+      body: { access_token: 'fresh_access_token', scope: 'read_orders,write_fulfillments', expires_in: 86_399 },
+    },
+    {
+      name: 'shopify.orders-import',
+      body: {
+        orders: [shopifyOrder],
+      },
+    },
+  ]);
+
+  const connector = createShopifyStoreConnector();
+  assert.ok(connector.importOrders, 'Shopify connector must expose importOrders');
+  const result = await connector.importOrders({
+    companyId: 0,
+    accountId: 'store-account-42',
+    credentials: {
+      shopDomain: 'kf-goodies-2.myshopify.com',
+      clientId: 'shopify_client_id_for_test',
+      clientSecret: 'shpss_test_secret',
+      accessTokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+      apiVersion: '2026-07',
+    },
+    limit: 25,
+  });
+
+  assert.equal(result.orders.length, 1);
+  assert.equal(result.orders[0]?.sourceOrderNumber, '#1007');
 });
 
 await check('Shopify shipment confirmation creates fulfillment from fulfillment orders', async () => {
@@ -191,7 +248,10 @@ await check('Shopify is marked live and wired into Settings Pull Orders', () => 
   assert.equal(connectorImplementationStatus.shopify.status, 'live');
   assert.match(read('src/routes/carriers.ts'), /shopifyOrdersHandler/);
   assert.match(read('src/routes/carriers.ts'), /\/shopify\/orders/);
+  assert.match(read('src/connectors/store/shopify.ts'), /grant_type:\s*'client_credentials'/);
   assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /shopify:\s*pullShopifyOrders/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientId'/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientSecret'/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /importStoreOrders\('shopify'/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /upsertNormalizedStoreOrders/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /INSERT INTO store_orders/);

@@ -14,6 +14,7 @@ type ShopifyCredentials = {
   shopDomain: string;
   accessToken: string;
   apiVersion: string;
+  authMode: 'access_token' | 'client_credentials';
 };
 
 function firstString(...values: unknown[]): string {
@@ -75,17 +76,95 @@ export function normalizeShopifyShopDomain(value: unknown): string {
   return raw;
 }
 
-function shopifyCredentials(creds: Record<string, unknown>): ShopifyCredentials {
+function tokenExpiresAtMs(value: unknown): number | null {
+  const raw = firstString(value);
+  if (!raw) return null;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function accessTokenIsFresh(creds: Record<string, unknown>): boolean {
+  const expiresAt = tokenExpiresAtMs(creds.accessTokenExpiresAt ?? creds.access_token_expires_at);
+  return expiresAt == null || expiresAt > Date.now() + 60_000;
+}
+
+function baseShopifyCredentials(creds: Record<string, unknown>): Omit<ShopifyCredentials, 'accessToken' | 'authMode'> {
   const shopDomain = normalizeShopifyShopDomain(
     creds.shopDomain ?? creds.shop_domain ?? creds.storeDomain ?? creds.store_domain,
   );
-  const accessToken = firstString(creds.accessToken, creds.access_token, creds.adminAccessToken, creds.admin_api_access_token);
   if (!shopDomain) throw new Error('Shopify credentials missing shopDomain');
-  if (!accessToken) throw new Error('Shopify credentials missing accessToken');
   return {
     shopDomain,
-    accessToken,
     apiVersion: normalizeApiVersion(creds.apiVersion ?? creds.api_version),
+  };
+}
+
+async function exchangeClientCredentialsToken(
+  shopDomain: string,
+  rawCredentials: Record<string, unknown>,
+): Promise<string> {
+  const clientId = firstString(rawCredentials.clientId, rawCredentials.client_id, rawCredentials.apiKey, rawCredentials.api_key);
+  const clientSecret = firstString(
+    rawCredentials.clientSecret,
+    rawCredentials.client_secret,
+    rawCredentials.secret,
+    rawCredentials.appSecret,
+    rawCredentials.app_secret,
+  );
+  if (!clientId || !clientSecret) {
+    throw new Error('Shopify credentials missing accessToken or clientId/clientSecret');
+  }
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+  const res = await timedFetch(
+    'shopify.token',
+    `https://${shopDomain}/admin/oauth/access_token`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Shopify token ${res.status}: ${await readShopifyError(res)}`);
+  }
+  const data = await res.json() as { access_token?: unknown };
+  const token = firstString(data.access_token);
+  if (!token) throw new Error('Shopify token response missing access_token');
+  return token;
+}
+
+async function shopifyCredentials(creds: Record<string, unknown>): Promise<ShopifyCredentials> {
+  const base = baseShopifyCredentials(creds);
+  const clientId = firstString(creds.clientId, creds.client_id, creds.apiKey, creds.api_key);
+  const clientSecret = firstString(creds.clientSecret, creds.client_secret, creds.secret, creds.appSecret, creds.app_secret);
+  const accessToken = firstString(creds.accessToken, creds.access_token, creds.adminAccessToken, creds.admin_api_access_token);
+
+  // Dev Dashboard apps should use client credentials. Prefer that path when
+  // present so a stale/wrong manually-entered accessToken cannot shadow it.
+  if (clientId && clientSecret) {
+    return {
+      ...base,
+      accessToken: await exchangeClientCredentialsToken(base.shopDomain, creds),
+      authMode: 'client_credentials',
+    };
+  }
+
+  if (!accessToken) throw new Error('Shopify credentials missing accessToken');
+  if (!accessTokenIsFresh(creds)) {
+    throw new Error('Shopify accessToken is expired; reconnect with Client ID and Client Secret');
+  }
+  return {
+    ...base,
+    accessToken,
+    authMode: 'access_token',
   };
 }
 
@@ -96,6 +175,7 @@ function shopifyUrl(creds: ShopifyCredentials, path: string): string {
 function redactShopifyError(value: string): string {
   return value
     .replace(/shpat_[A-Za-z0-9_]+/gi, 'shpat_[redacted]')
+    .replace(/shpss_[A-Za-z0-9_]+/gi, 'shpss_[redacted]')
     .replace(/X-Shopify-Access-Token["'=:\s]+[A-Za-z0-9._~+/=-]+/gi, 'X-Shopify-Access-Token=[redacted]')
     .slice(0, 700);
 }
@@ -140,7 +220,7 @@ export async function verifyShopifyCredentials(
   error?: string;
 }> {
   try {
-    const creds = shopifyCredentials(rawCredentials);
+    const creds = await shopifyCredentials(rawCredentials);
     const res = await shopifyFetch('shopify.shop', creds, '/shop.json');
     if (!res.ok) {
       return { ok: false, error: `Shopify shop ${res.status}: ${await readShopifyError(res)}` };
@@ -155,6 +235,7 @@ export async function verifyShopifyCredentials(
       meta: {
         shopId: firstString(shop.id) || null,
         apiVersion: creds.apiVersion,
+        authMode: creds.authMode,
       },
     };
   } catch (err) {
@@ -285,7 +366,7 @@ function cursorFromLinkHeader(link: string | null): string | null {
 }
 
 async function importShopifyOrders(input: StoreOrderImportInput): Promise<NormalizedStoreOrderImportResult> {
-  const creds = shopifyCredentials(input.credentials ?? {});
+  const creds = await shopifyCredentials(input.credentials ?? {});
   const limit = Math.min(Math.max(Number(input.limit ?? input.pageSize ?? 50), 1), 250);
   const params = new URLSearchParams({
     status: 'open',
@@ -365,7 +446,7 @@ async function confirmShopifyShipment(input: ShipmentConfirmationInput): Promise
 
   let creds: ShopifyCredentials;
   try {
-    creds = shopifyCredentials(input.credentials ?? {});
+    creds = await shopifyCredentials(input.credentials ?? {});
   } catch (err) {
     return {
       ok: false,
