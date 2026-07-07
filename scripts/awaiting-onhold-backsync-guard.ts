@@ -24,7 +24,8 @@ function check(name: string, cond: boolean, detail?: string) {
 // ── (1) catch-up passes include the non-terminal SS states ──
 for (const status of ['shipped', 'cancelled', 'on_hold', 'awaiting_payment', 'pending_fulfillment']) {
   check(`catch-up passes include orderStatus '${status}'`,
-    new RegExp(`orderStatus: '${status}',\\s*sinceMs`).test(src));
+    new RegExp(`const STATUS_CATCHUP_STATUSES[\\s\\S]*'${status}'`).test(src) &&
+      /STATUS_CATCHUP_STATUSES\.flatMap/.test(src));
 }
 
 // ── (2) the status-catch-up UPDATE never overwrites terminal rows, and is no longer awaiting-only ──

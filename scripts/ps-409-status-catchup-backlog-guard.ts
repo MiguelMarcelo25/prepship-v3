@@ -78,6 +78,41 @@ assert.match(
   /statusCatchup: OrderStatusCatchupSnapshot/,
   'getSyncStatus must expose backend-owned status catch-up state',
 );
+assert.match(
+  orderSync,
+  /startPage: number/,
+  'status catch-up snapshot must persist the page a pass started from',
+);
+assert.match(
+  orderSync,
+  /nextPage: number \| null/,
+  'status catch-up snapshot must persist the next resumable page',
+);
+assert.match(
+  orderSync,
+  /function statusCatchupResumePage/,
+  'order sync must compute a durable resume page from the previous catch-up snapshot',
+);
+assert.match(
+  orderSync,
+  /previousStatusCatchup = opts\.skipStatusPasses[\s\S]*getOrderStatusCatchupSnapshot\(\)/,
+  'syncOrders must read the previous status catch-up snapshot before starting provider passes',
+);
+assert.match(
+  orderSync,
+  /startPage: statusCatchupResumePage\(/,
+  'status catch-up provider calls must resume from the stored page cursor',
+);
+assert.match(
+  orderSync,
+  /if \(startPage > 1[\s\S]*processPage\(1\)/,
+  'resumed status catch-up must still probe newest-first page 1 for recent transitions',
+);
+assert.match(
+  orderSync,
+  /resumes from the stored page cursor so a large history does not restart\s+\/\/ page 1 forever/,
+  'order sync must document why the resume cursor exists',
+);
 
 const watchdog = readFileSync('src/services/shipment-sync-watchdog.ts', 'utf8');
 assert.match(

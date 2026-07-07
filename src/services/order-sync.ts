@@ -321,9 +321,11 @@ export type OrderStatusCatchupEntry = {
   sinceIso: string;
   sortDir: 'DESC';
   pageSize: number;
+  startPage: number;
   totalPages: number | null;
   pagesProcessed: number;
   lastPageProcessed: number;
+  nextPage: number | null;
   updatedRows: number;
   hasBacklog: boolean;
   backlogPages: number | null;
@@ -550,18 +552,21 @@ async function fetchOrdersPage(
     storeId?: number;
     statusOnly?: boolean;
     sortDir?: 'ASC' | 'DESC';
+    startPage?: number;
   },
   budget: SyncRunBudget = createSyncRunBudget(),
 ): Promise<{
   synced: number;
   pages: number;
+  startPage: number;
   pagesProcessed: number;
   lastPageProcessed: number;
   complete: boolean;
   stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'>;
 }> {
   const sinceParam = formatShipStationV1DateParam(args.sinceMs);
-  let page = 1;
+  const startPage = Math.max(1, Math.floor(Number(args.startPage ?? 1) || 1));
+  let page = startPage;
   let pages = 1;
   let total = 0;
   let pagesThisPass = 0;
@@ -569,7 +574,7 @@ async function fetchOrdersPage(
   let stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'> =
     'complete';
 
-  while (!syncRunBudgetTimeExhausted(budget)) {
+  const processPage = async (pageToFetch: number): Promise<{ ordersLength: number }> => {
     const res = await importStoreOrders('shipstation', {
       companyId: 0,
       accountId: account.label,
@@ -580,10 +585,10 @@ async function fetchOrdersPage(
       orderStatus: args.orderStatus,
       sinceMs: args.sinceMs,
       pageSize: args.pageSize,
-      page,
+      page: pageToFetch,
       storeId: args.storeId,
       sortDir: args.sortDir,
-      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${page}:${args.pageSize}:${args.sortDir ?? 'ASC'}`,
+      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${pageToFetch}:${args.pageSize}:${args.sortDir ?? 'ASC'}`,
       timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
     });
 
@@ -612,15 +617,51 @@ async function fetchOrdersPage(
     }
 
     pagesThisPass += 1;
-    lastPageProcessed = page;
-    if (!res.orders.length || page >= pages) {
+    lastPageProcessed = Math.max(lastPageProcessed, pageToFetch);
+    return { ordersLength: res.orders.length };
+  };
+
+  // Per user override unlock shipped data on 2026-07-07: resumable status
+  // catch-up still probes page 1 first because ShipStation's DESC modified
+  // ordering means today's terminal changes live there. Older backlog then
+  // resumes from the stored page cursor so a large history does not restart
+  // page 1 forever.
+  if (startPage > 1 && !syncRunBudgetTimeExhausted(budget)) {
+    const firstPage = await processPage(1);
+    if (!firstPage.ordersLength || pages < startPage) {
+      return {
+        synced: total,
+        pages,
+        startPage,
+        pagesProcessed: pagesThisPass,
+        lastPageProcessed,
+        complete: true,
+        stoppedBy: 'complete',
+      };
+    }
+    if (syncRunBudgetExhausted(budget, pagesThisPass)) {
+      return {
+        synced: total,
+        pages,
+        startPage,
+        pagesProcessed: pagesThisPass,
+        lastPageProcessed,
+        complete: false,
+        stoppedBy: syncRunBudgetTimeExhausted(budget) ? 'time_budget' : 'page_budget',
+      };
+    }
+  }
+
+  while (!syncRunBudgetTimeExhausted(budget)) {
+    const res = await processPage(page);
+    if (!res.ordersLength || page >= pages) {
       stoppedBy = 'complete';
       break;
     }
     // PS-265: bound the per-pass pages + run wall-clock so the orders handler finishes UNDER
     // its ~10-min deadline (stops the kill-mid-walk / no-progress / re-pull-same-backlog loop).
-    // The window is a fixed lookback re-scanned every run, so a partial pass is re-attempted
-    // next run — nothing is permanently skipped.
+    // A partial pass persists nextPage and resumes older backlog next run, while page 1 is still
+    // probed first for recent DESC-modified terminal changes.
     if (syncRunBudgetExhausted(budget, pagesThisPass)) {
       stoppedBy = syncRunBudgetTimeExhausted(budget) ? 'time_budget' : 'page_budget';
       break;
@@ -637,11 +678,48 @@ async function fetchOrdersPage(
   return {
     synced: total,
     pages,
+    startPage,
     pagesProcessed: pagesThisPass,
     lastPageProcessed,
     complete: stoppedBy === 'complete',
     stoppedBy,
   };
+}
+
+function statusCatchupEntryKey(args: {
+  accountLabel: string;
+  storeId: number | null | undefined;
+  orderStatus: CatchUpOrderStatus;
+}): string {
+  return `${args.accountLabel}:${args.storeId ?? 'all'}:${args.orderStatus}`;
+}
+
+function statusCatchupResumePage(
+  snapshot: OrderStatusCatchupSnapshot,
+  args: {
+    account: SyncAccount;
+    storeId?: number;
+    orderStatus: CatchUpOrderStatus;
+  },
+): number {
+  const key = statusCatchupEntryKey({
+    accountLabel: args.account.label,
+    storeId: args.storeId ?? null,
+    orderStatus: args.orderStatus,
+  });
+  const previous = snapshot.entries.find(
+    (entry) =>
+      statusCatchupEntryKey({
+        accountLabel: entry.accountLabel,
+        storeId: entry.storeId,
+        orderStatus: entry.orderStatus,
+      }) === key,
+  );
+  if (!previous?.hasBacklog) return 1;
+  const nextPage = Math.floor(Number(previous.nextPage ?? previous.lastPageProcessed + 1) || 1);
+  const totalPages = previous.totalPages == null ? null : Math.max(1, Math.floor(previous.totalPages));
+  if (totalPages !== null && nextPage > totalPages) return 1;
+  return Math.max(2, nextPage);
 }
 
 function statusCatchupStoreTargets(account: SyncAccount): Array<{ storeId?: number }> {
@@ -663,11 +741,24 @@ function statusCatchupEntry(args: {
 }): OrderStatusCatchupEntry {
   const totalPages = args.result?.pages ?? null;
   const pagesProcessed = args.result?.pagesProcessed ?? 0;
+  const startPage = args.result?.startPage ?? 1;
   const lastPageProcessed = args.result?.lastPageProcessed ?? 0;
   const stoppedBy = args.stoppedBy ?? args.result?.stoppedBy ?? 'complete';
   const hasBacklog =
     stoppedBy !== 'complete' ||
     (totalPages !== null && lastPageProcessed > 0 && lastPageProcessed < totalPages);
+  const nextPage =
+    hasBacklog && startPage > 1 && lastPageProcessed === 1
+      ? startPage
+      : hasBacklog && lastPageProcessed > 0
+        ? lastPageProcessed + 1
+        : hasBacklog
+          ? startPage
+          : null;
+  const processedThroughPage =
+    nextPage !== null
+      ? Math.max(0, nextPage - 1)
+      : Math.max(lastPageProcessed, pagesProcessed);
   return {
     accountLabel: args.account.label,
     storeId: args.storeId ?? null,
@@ -675,15 +766,17 @@ function statusCatchupEntry(args: {
     sinceIso: new Date(args.sinceMs).toISOString(),
     sortDir: 'DESC',
     pageSize: args.pageSize,
+    startPage,
     totalPages,
     pagesProcessed,
     lastPageProcessed,
+    nextPage,
     updatedRows: args.result?.synced ?? 0,
     hasBacklog,
     backlogPages:
       totalPages === null
         ? null
-        : Math.max(0, totalPages - Math.max(lastPageProcessed, pagesProcessed)),
+        : Math.max(0, totalPages - processedThroughPage),
     stoppedBy,
     checkedAt: new Date(args.checkedAtMs).toISOString(),
   };
@@ -696,6 +789,7 @@ async function syncOrdersForAccount(
     awaitingSinceMs?: number;
     pageSize?: number;
     skipStatusPasses?: boolean;
+    previousStatusCatchup?: OrderStatusCatchupSnapshot;
   },
   storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
   budget: SyncRunBudget = createSyncRunBudget(),
@@ -756,9 +850,9 @@ async function syncOrdersForAccount(
     }
   }
 
-  // Status catch-up passes run AFTER awaiting and only while run-budget time remains. The
-  // window is a fixed 30-day lookback re-scanned every run (idempotent), so a partial pass
-  // is re-attempted next run — this just stops the orders handler from overrunning its deadline.
+  // Status catch-up passes run AFTER awaiting and only while run-budget time remains. Partial
+  // passes persist a page cursor and resume old backlog on the next run, while every resumed
+  // pass still probes page 1 for today's DESC-modified status changes.
   const catchupSinceMs = Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS);
   // Per user override unlock shipped data on 2026-05-23, reconfirmed on
   // 2026-07-07: scope shipped/cancelled/hold catch-up by known ShipStation
@@ -776,8 +870,8 @@ async function syncOrdersForAccount(
         );
 
   for (const pass of passes) {
-    // PS-265: stop starting status catch-up passes once the run is out of time budget; the
-    // fixed 30-day window is re-scanned next run, so nothing is permanently skipped.
+    // PS-265/PS-409: stop starting status catch-up passes once the run is out of time budget;
+    // the previous snapshot keeps the resume cursor for the next run.
     if (syncRunBudgetTimeExhausted(budget)) {
       statusCatchupEntries.push(
         statusCatchupEntry({
@@ -799,6 +893,14 @@ async function syncOrdersForAccount(
         pageSize,
         storeId: pass.storeId,
         statusOnly: true,
+        startPage: statusCatchupResumePage(
+          opts.previousStatusCatchup ?? emptyStatusCatchupSnapshot(),
+          {
+            account,
+            storeId: pass.storeId,
+            orderStatus: pass.orderStatus,
+          },
+        ),
         // Per user override unlock shipped data on 2026-05-23, reconfirmed on
         // 2026-07-07: status catch-up removes today's rows from Awaiting after
         // ShipStation moves them to shipped/cancelled/hold. Pull newest modified
@@ -862,6 +964,9 @@ export async function syncOrders(opts: {
   const budget = createSyncRunBudget();
   const storeToClient = await buildStoreToClientMap();
   const accounts = await loadSyncAccounts();
+  const previousStatusCatchup = opts.skipStatusPasses
+    ? emptyStatusCatchupSnapshot()
+    : await getOrderStatusCatchupSnapshot();
 
   let grandTotal = 0;
   let maxPages = 1;
@@ -870,7 +975,12 @@ export async function syncOrders(opts: {
 
   for (const acct of accounts) {
     try {
-      const result = await syncOrdersForAccount(acct, opts, storeToClient, budget);
+      const result = await syncOrdersForAccount(
+        acct,
+        { ...opts, previousStatusCatchup },
+        storeToClient,
+        budget,
+      );
       grandTotal += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
       if (result.sinceIso < earliestSinceIso) earliestSinceIso = result.sinceIso;
