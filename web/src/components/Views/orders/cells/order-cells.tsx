@@ -19,10 +19,11 @@
 // OrderCellsDeps second arg (the DI pattern used by orders-filtered-sort /
 // orders-rate-cells), so this stays a leaf with no React state of its own.
 import type { ReactNode } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Flag, Loader2 } from 'lucide-react'
 import CarrierBadge from '../../../CarrierBadge'
 import type { CarrierAccountDto, OrderSummaryDto } from '../../../../types/api'
 import {
+  getCanonicalRecord,
   toRecord,
   toStringValue,
   toNumberValue,
@@ -82,6 +83,62 @@ export interface OrderCellsDeps {
   // PS-312/PS-317 (S4): combined-shipment bundle state per order id (from the backend read-model).
   // Optional so callers/tests that don't pass it keep the prior behavior exactly.
   bundleByOrderId?: Map<number, OrderBundleDto>
+}
+
+function normalizeDestinationCountry(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  return raw.toUpperCase() || 'US'
+}
+
+function isDomesticDestination(country: string): boolean {
+  const normalized = normalizeDestinationCountry(country)
+  return normalized === 'US' || normalized === 'USA' || normalized === 'UNITED STATES' || normalized === 'UNITED STATES OF AMERICA'
+}
+
+function getDestinationCountry(order: OrderSummaryDto): string {
+  const recipient = getCanonicalRecord(order, 'recipient')
+  const shipTo = toRecord(order.shipTo)
+  const raw = toRecord(order.raw)
+  const rawShipTo = toRecord(raw?.shipTo)
+  return normalizeDestinationCountry(
+    recipient?.country ??
+    shipTo?.country ??
+    rawShipTo?.country ??
+    rawShipTo?.countryCode ??
+    rawShipTo?.country_code,
+  )
+}
+
+function renderInternationalDestinationMarker(order: OrderSummaryDto): ReactNode {
+  const country = getDestinationCountry(order)
+  if (isDomesticDestination(country)) return null
+  const displayCountry = country.length <= 3 ? country : 'INTL'
+  return (
+    <div
+      title={`International destination: ${country}`}
+      aria-label={`International destination ${country}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, marginTop: 1, color: 'var(--ss-blue)', fontSize: 9, fontWeight: 800, lineHeight: 1 }}
+    >
+      <span
+        aria-hidden
+        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 13, height: 11, border: '1px solid var(--ss-blue-border)', borderRadius: 2, background: 'var(--surface)', color: 'var(--ss-blue)' }}
+      >
+        <Flag size={9} strokeWidth={2.7} />
+      </span>
+      <span>{displayCountry}</span>
+    </div>
+  )
+}
+
+function renderServiceLabelWithDestination(order: OrderSummaryDto, serviceLabel: string): ReactNode {
+  return (
+    <>
+      <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
+        {serviceLabel}
+      </div>
+      {renderInternationalDestinationMarker(order)}
+    </>
+  )
 }
 
 export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps): ReactNode {
@@ -414,9 +471,7 @@ export function renderShippingAccountCell(order: OrderSummaryDto, deps: OrderCel
     return (
       <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{accountDisplay}</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-          {truncate(formatServiceCode(getShippedDisplayServiceCode(displayOrder)), 22)}
-        </div>
+        {renderServiceLabelWithDestination(displayOrder, truncate(formatServiceCode(getShippedDisplayServiceCode(displayOrder)), 22))}
       </div>
     )
   }
@@ -431,9 +486,7 @@ export function renderShippingAccountCell(order: OrderSummaryDto, deps: OrderCel
       style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}
     >
       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
-      <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-        {truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22)}
-      </div>
+      {renderServiceLabelWithDestination(displayOrder, truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22))}
     </div>
   )
 }
