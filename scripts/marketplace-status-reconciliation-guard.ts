@@ -18,6 +18,12 @@ assert.equal(normalizeMarketplaceOrderStatus('ebay', 'NOT_STARTED'), 'awaiting_s
 assert.equal(normalizeMarketplaceOrderStatus('ebay', 'IN_PROGRESS'), 'awaiting_shipment');
 assert.equal(normalizeMarketplaceOrderStatus('ebay', 'CANCELED'), 'cancelled');
 
+assert.equal(normalizeMarketplaceOrderStatus('shopify', 'fulfilled'), 'shipped');
+assert.equal(normalizeMarketplaceOrderStatus('shopify', 'unfulfilled'), 'awaiting_shipment');
+assert.equal(normalizeMarketplaceOrderStatus('shopify', 'partial'), 'awaiting_shipment');
+assert.equal(normalizeMarketplaceOrderStatus('shopify', 'cancelled'), 'cancelled');
+assert.equal(normalizeMarketplaceOrderStatus('shopify', 'voided'), 'cancelled');
+
 assert.equal(
   aggregateMarketplaceOrderStatus(['Shipped', 'Acknowledged'], 'walmart'),
   'awaiting_shipment',
@@ -32,6 +38,11 @@ assert.equal(
   aggregateMarketplaceOrderStatus(['FULFILLED', 'FULFILLED'], 'ebay'),
   'shipped',
   'all fulfilled eBay rows should reconcile to shipped',
+);
+assert.equal(
+  aggregateMarketplaceOrderStatus(['fulfilled', 'fulfilled'], 'shopify'),
+  'shipped',
+  'all fulfilled Shopify rows should reconcile to shipped',
 );
 
 assert.equal(shouldUpdateMarketplaceOrderStatus('awaiting_shipment', 'shipped'), true);
@@ -76,6 +87,7 @@ for (const file of [
   // reconciliation wiring as the legacy functions they replace.
   'src/lib/imported-handlers/walmart-orders.ts',
   'src/lib/imported-handlers/ebay-orders.ts',
+  'src/lib/imported-handlers/shopify-orders.ts',
 ]) {
   const source = readFileSync(file, 'utf8');
   assert.match(source, /hasExistingMarketplaceOrderRow/);

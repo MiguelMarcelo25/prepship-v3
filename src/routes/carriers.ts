@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import verifyCarrierHandler from '../lib/imported-handlers/carriers-verify';
 import walmartOrdersHandler from '../lib/imported-handlers/walmart-orders';
 import ebayOrdersHandler from '../lib/imported-handlers/ebay-orders';
+import shopifyOrdersHandler from '../lib/imported-handlers/shopify-orders';
 import { runNodeHandler } from '../lib/node-handler';
 import { requirePermission } from '../middleware/auth';
 import { fullServiceCatalog } from '../lib/carrier-service-catalog';
@@ -47,6 +48,7 @@ app.post('/rates', requirePermission('credentials:read'), async (c) => {
 // PS-199 resolver's CACHE — these refresh it; the live lookup stays the owner.
 app.all('/walmart/orders', requirePermission('settings:write'), runNodeHandler(walmartOrdersHandler));
 app.all('/ebay/orders', requirePermission('settings:write'), runNodeHandler(ebayOrdersHandler));
+app.all('/shopify/orders', requirePermission('settings:write'), runNodeHandler(shopifyOrdersHandler));
 
 // Walmart selling-fee pull. The provider logic already lives in
 // src/connectors/store/walmart-fees.ts (the legacy function was a thin

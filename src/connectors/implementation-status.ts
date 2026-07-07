@@ -57,8 +57,8 @@ export const connectorImplementationStatus: Record<ConnectorProvider, ConnectorI
     notes: 'Live order import and shipment confirmation paths exist; production execution requires valid eBay OAuth store credentials.',
   },
   shopify: {
-    status: 'registered_stub',
-    notes: 'Connector slot is registered; live import/confirmation requires Shopify OAuth/app contract.',
+    status: 'live',
+    notes: 'Live Shopify Admin API token verification, order import, and fulfillment tracking confirmation paths exist.',
   },
   amazon: {
     status: 'registered_stub',

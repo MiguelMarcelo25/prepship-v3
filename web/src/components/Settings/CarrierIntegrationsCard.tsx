@@ -949,11 +949,16 @@ async function pullEbayOrders(storeAccountId: number): Promise<WalmartOrdersResu
   return api.post<WalmartOrdersResult>('/carriers/ebay/orders', { storeAccountId })
 }
 
+async function pullShopifyOrders(storeAccountId: number): Promise<WalmartOrdersResult> {
+  return api.post<WalmartOrdersResult>('/carriers/shopify/orders', { storeAccountId })
+}
+
 // Maps a store provider key to the matching Pull Orders endpoint helper.
 // Adding a new store puller (Amazon, Shopify, Etsy, etc.) is one entry.
 const STORE_PULLERS: Record<string, (storeAccountId: number) => Promise<WalmartOrdersResult>> = {
   walmart: pullWalmartOrders,
   ebay: pullEbayOrders,
+  shopify: pullShopifyOrders,
 }
 
 // 2026-05-13: per-provider seller-fee fetcher. Hits the marketplace's

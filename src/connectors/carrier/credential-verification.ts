@@ -50,6 +50,7 @@ import { sendInternalServerError } from '../../lib/safe-error.js';
 import { assertPublicHttpUrl } from '../../lib/ssrf-guard.js';
 // PS-251 (Card 6): every credential-verify fetch gets an AbortController timeout (no hung upstream).
 import { fetchWithTimeout } from '../../lib/fetch-timeout.js';
+import { verifyShopifyCredentials } from '../store/shopify.js';
 
 type ProviderType =
   | 'simulator'
@@ -65,6 +66,7 @@ type ProviderType =
   | 'walmart_shipping'
   | 'ebay'
   | 'ebay_shipping'
+  | 'shopify'
   | 'seko'
   | 'epost_global'
   | 'intelliquick'
@@ -843,6 +845,8 @@ const verifyEbayShipping: Verifier = (creds) =>
     'eBay Shipping',
   );
 
+const verifyShopify: Verifier = (creds) => verifyShopifyCredentials(creds);
+
 const STUBBED_NOTES: Record<string, string> = {
   shipstation: 'Already integrated via /api/rates/multi.ts.',
   ehub: 'eHub credential capture is available in Settings, but live verification needs the eHub API base URL and verification endpoint from the private eHub docs/API Explorer.',
@@ -856,6 +860,7 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   // entry so it appears under the carrier umbrella.
   walmart_shipping: verifyWalmart,
   ebay: verifyEbay,
+  shopify: verifyShopify,
   // eBay Shipping uses the same OAuth user-token refresh flow as the
   // eBay store integration. Separate key only so it appears under the
   // Carriers section in Settings (paired with the future tracking-push

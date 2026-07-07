@@ -799,14 +799,16 @@ async function loadStoreCredentials(provider: string, payload: Record<string, un
     };
   }
 
-  if (provider !== 'walmart' && provider !== 'ebay') return {};
+  if (provider !== 'walmart' && provider !== 'ebay' && provider !== 'shopify') return {};
 
   const explicitId = Number(payload.storeAccountId ?? payload.sourceAccountId ?? payload.marketplaceAccountId ?? payload.carrierAccountId);
   let accountId = Number.isFinite(explicitId) && explicitId > 0 ? Math.trunc(explicitId) : null;
   const marketplaceOrderId = String(
     provider === 'walmart'
       ? payload.purchaseOrderId ?? ''
-      : payload.ebayOrderId ?? sourceOrderId(String(payload.externalOrderId ?? '')) ?? '',
+      : provider === 'shopify'
+        ? payload.shopifyOrderId ?? payload.sourceOrderId ?? sourceOrderId(String(payload.externalOrderId ?? '')) ?? ''
+        : payload.ebayOrderId ?? sourceOrderId(String(payload.externalOrderId ?? '')) ?? '',
   ).trim();
   if (!accountId && marketplaceOrderId) {
     const rows = await pg`

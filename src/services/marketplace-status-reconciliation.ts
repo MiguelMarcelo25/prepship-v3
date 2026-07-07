@@ -1,4 +1,4 @@
-export type MarketplaceProvider = 'walmart' | 'ebay';
+export type MarketplaceProvider = 'walmart' | 'ebay' | 'shopify';
 export type PrepShipOrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled';
 
 type SqlRow = Record<string, unknown>;
@@ -45,6 +45,13 @@ export function normalizeMarketplaceOrderStatus(
     if (status === 'shipped' || status === 'delivered') return 'shipped';
     if (status === 'cancelled' || status === 'canceled') return 'cancelled';
     if (status === 'acknowledged' || status === 'created') return 'awaiting_shipment';
+    return null;
+  }
+
+  if (provider === 'shopify') {
+    if (status === 'fulfilled') return 'shipped';
+    if (status === 'cancelled' || status === 'canceled' || status === 'voided') return 'cancelled';
+    if (status === 'unfulfilled' || status === 'partial' || status === 'restocked') return 'awaiting_shipment';
     return null;
   }
 
