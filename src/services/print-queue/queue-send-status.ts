@@ -10,6 +10,7 @@ type QueueSendSnapshotLike = {
   current: number;
   total: number;
   queued: number;
+  skipped?: number;
   failed: number;
   message?: string | null;
   errorMessage?: string | null;
@@ -22,6 +23,7 @@ export type DerivedQueueSendStatus = {
   current: number;
   total: number;
   queued: number;
+  skipped: number;
   failed: number;
   message: string;
   errorMessage: string | null;
@@ -57,8 +59,8 @@ function normalizeStatus(status: string): QueueSendStatusName {
     : 'error';
 }
 
-function doneMessage(queued: number, total: number, failed: number): string {
-  return `Queued ${queued}/${total}${failed ? `, ${failed} failed` : ''}`;
+function doneMessage(queued: number, total: number, skipped: number, failed: number): string {
+  return `Queued ${queued}/${total}${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`;
 }
 
 export function deriveQueueSendSnapshotStatus(
@@ -75,6 +77,7 @@ export function deriveQueueSendSnapshotStatus(
   const rawCurrent = finiteCount(snapshot.current);
   const current = total > 0 ? Math.min(total, rawCurrent) : rawCurrent;
   const queued = finiteCount(snapshot.queued);
+  const skipped = finiteCount(snapshot.skipped);
   const failed = finiteCount(snapshot.failed);
   const status = normalizeStatus(snapshot.status);
 
@@ -85,8 +88,9 @@ export function deriveQueueSendSnapshotStatus(
       current,
       total,
       queued,
+      skipped,
       failed,
-      message: doneMessage(queued, total, failed),
+      message: doneMessage(queued, total, skipped, failed),
       errorMessage: snapshot.errorMessage ?? null,
       staleReason: null,
     };
@@ -101,6 +105,7 @@ export function deriveQueueSendSnapshotStatus(
       current,
       total,
       queued,
+      skipped,
       failed,
       message:
         'Queue job interrupted/stale - check the print queue before retrying; no additional per-order failures were reported.',
@@ -117,8 +122,9 @@ export function deriveQueueSendSnapshotStatus(
     current,
     total,
     queued,
+    skipped,
     failed,
-    message: snapshot.message ?? (status === 'done' ? doneMessage(queued, total, failed) : `Sending to queue ${current}/${total}`),
+    message: snapshot.message ?? (status === 'done' ? doneMessage(queued, total, skipped, failed) : `Sending to queue ${current}/${total}`),
     errorMessage: snapshot.errorMessage ?? null,
     staleReason: null,
   };

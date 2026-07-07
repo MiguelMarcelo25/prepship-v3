@@ -195,9 +195,19 @@ interface QueueActionProgress {
   label: string
   completed: number
   total: number
+  skipped: number
   failed: number
   startedAt: number
   tick: number
+}
+
+function formatQueueActionProgressDetail(progress: QueueActionProgress, elapsedSeconds: number): string {
+  const issues = [
+    progress.skipped > 0 ? `${progress.skipped} skipped` : null,
+    progress.failed > 0 ? `${progress.failed} failed` : null,
+  ].filter((issue): issue is string => Boolean(issue))
+
+  return `${progress.completed}/${progress.total}${progress.completed < progress.total ? ` - working ${elapsedSeconds}s` : ''}${issues.length > 0 ? ` - ${issues.join(' - ')}` : ''}`
 }
 
 interface AllMatchingSelectionState {
@@ -914,13 +924,14 @@ export default function OrdersView({
     }, 1000)
   }
 
-  const startQueueActionProgress = (total: number, label = 'Sending to queue', completed = 0, failed = 0) => {
+  const startQueueActionProgress = (total: number, label = 'Sending to queue', completed = 0, failed = 0, skipped = 0) => {
     clearQueueActionProgressTimer()
     startQueueActionHeartbeat()
     setQueueActionProgress({
       label,
       completed: Math.min(Math.max(total, 1), Math.max(completed, 0)),
       total: Math.max(total, 1),
+      skipped: Math.max(skipped, 0),
       failed: Math.max(failed, 0),
       startedAt: Date.now(),
       tick: 0,
@@ -937,6 +948,7 @@ export default function OrdersView({
         ...current,
         completed: Math.min(current.total, current.completed + completedDelta),
         failed: current.failed + failedDelta,
+        skipped: current.skipped,
         tick: current.tick + 1,
       }
       : current
@@ -2105,6 +2117,30 @@ export default function OrdersView({
     toastContext?.addToast(message, type)
   }
 
+  type QueueSendUiResult = {
+    queued: number
+    skipped: number
+    failed: number
+    queuedItems: Parameters<typeof formatQueuedOrdersToast>[1]
+    skippedErrors: string[]
+    failedErrors: string[]
+  }
+
+  function queueSendToastType(result: QueueSendUiResult): 'success' | 'error' | 'info' {
+    if (result.failed > 0) return 'error'
+    if (result.skipped > 0) return 'info'
+    return 'success'
+  }
+
+  function formatQueueSendResultToast(result: QueueSendUiResult): string {
+    return formatQueuedOrdersToast(result.queued, result.queuedItems, {
+      skippedCount: result.skipped,
+      failedCount: result.failed,
+      skippedReasons: result.skippedErrors,
+      failedReasons: result.failedErrors,
+    })
+  }
+
   // PS-178 (Phase 6, part 4): the toolbar JSX moved VERBATIM to the render-only
   // ./OrdersSelectionToolbar component; selection state + every batch handler
   // stay here and flow down as props. The thin wrapper keeps this call site.
@@ -2775,22 +2811,21 @@ export default function OrdersView({
   async function pollBackendQueueSendJob(
     backendJobId: string,
     progressTotal: number,
-    offsets: { completed?: number; failed?: number } = {},
   ) {
     let status: any = null
     while (true) {
       status = await apiClient.fetchQueueSendJobStatus(backendJobId)
       const current = toNumberValue(status.current) ?? 0
+      const skipped = toNumberValue(status.skipped) ?? 0
       const failed = toNumberValue(status.failed) ?? 0
-      const completedOffset = offsets.completed ?? 0
-      const failedOffset = offsets.failed ?? 0
       setQueueActionProgress((active) => active
         ? {
           ...active,
           label: status.status === 'done' ? 'Refreshing queue' : 'Sending to queue',
           total: progressTotal,
-          completed: Math.min(progressTotal, completedOffset + current),
-          failed: failedOffset + failed,
+          completed: Math.min(progressTotal, current),
+          skipped,
+          failed,
         }
         : active
       )
@@ -2802,8 +2837,9 @@ export default function OrdersView({
             ...active,
             label: 'Queue interrupted',
             total: progressTotal,
-            completed: Math.min(progressTotal, completedOffset + current),
-            failed: failedOffset + failed,
+            completed: Math.min(progressTotal, current),
+            skipped,
+            failed,
           }
           : active
         )
@@ -2860,32 +2896,42 @@ export default function OrdersView({
     const prepared = backendJobOrders.map((order) => buildQueueSendOrderPayload(order, options))
     const skipped = prepared.filter((entry) => !entry.payload)
     const skippedErrors = skipped
-      .map((entry) => toStringValue(entry.error))
+      .map((entry) => {
+        const reason = toStringValue(entry.error)
+        if (!reason) return null
+        const orderNumber = entry.order.orderNumber ?? entry.order.orderId
+        return orderNumber ? `Order ${orderNumber}: ${reason}` : reason
+      })
       .filter((message): message is string => Boolean(message))
+    const preflightSkips: Array<Record<string, unknown>> = skipped
+      .flatMap((entry) => {
+        const reason = toStringValue(entry.error)
+        if (!reason) return []
+        return [{
+          order_id: entry.order.orderId,
+          client_id: entry.order.clientId,
+          order_number: entry.order.orderNumber ?? String(entry.order.orderId),
+          reason,
+          retry_eligible: /saved rate not current|recalculate/i.test(reason),
+          retry_reason: /saved rate not current|recalculate/i.test(reason)
+            ? 'stale_or_mismatched_rate_proof'
+            : 'frontend_preflight',
+        }]
+      })
     const queueOrders = prepared.filter((entry) => entry.payload).map((entry) => entry.payload as Record<string, unknown>)
-    const skippedFailed = skipped.length
     const fallbackClientId = toNumberValue(queueOrders[0]?.client_id) ?? null
     let finalStatus: any = null
     let queueInterrupted = false
 
     for (const entry of skipped) {
-      markPersistentQueueJobOrder(queueJobId, entry.order.orderId, true)
-    }
-    if (skippedFailed > 0) {
-      setQueueActionProgress((active) => active
-        ? {
-          ...active,
-          completed: Math.min(active.total, skippedFailed),
-          failed: active.failed + skippedFailed,
-        }
-        : active
-      )
+      markPersistentQueueJobOrder(queueJobId, entry.order.orderId, false)
     }
 
     try {
-      if (queueOrders.length > 0) {
+      if (queueOrders.length > 0 || preflightSkips.length > 0) {
         const started = await apiClient.startQueueSendJob({
           orders: queueOrders,
+          preflight_skips: preflightSkips,
           // PS-perf (DJ 2026-06-23): auto-size to the batch so a typical small send runs in ONE wave
           // instead of ceil(N/5). The backend clamps to [1,8] (print-queue.ts), which stays the hard
           // ceiling; distinct orders + the per-order purchase lock keep this safe from double-buys.
@@ -2895,10 +2941,10 @@ export default function OrdersView({
         })
         attachPersistentQueueBackendJob(queueJobId, started.job_id)
         try {
-          finalStatus = await pollBackendQueueSendJob(started.job_id, Math.max(jobOrders.length, 1), {
-            completed: skippedFailed,
-            failed: skippedFailed,
-          })
+          finalStatus = await pollBackendQueueSendJob(
+            started.job_id,
+            toNumberValue(started.total) ?? Math.max(jobOrders.length, 1),
+          )
         } catch (error) {
           queueInterrupted = (error as { code?: unknown } | null)?.code === 'QUEUE_SEND_INTERRUPTED'
           throw error
@@ -2939,16 +2985,27 @@ export default function OrdersView({
     // non-queueable label URL) collapsed into a generic "Label was not added to
     // the print queue" toast and the operator had no way to see why. Read-only:
     // this only reads results[].error already returned by the queue-send job.
-    const backendErrors = backendResults
-      .filter((result) => result.success === false)
-      .map((result) => {
-        const orderId = toNumberValue(result.orderId ?? result.order_id)
-        const reason = toStringValue(result.error)
-        if (!reason) return null
-        const orderNumber = prepared.find((entry) => entry.order.orderId === orderId)?.order.orderNumber
-        return orderNumber ? `Order ${orderNumber}: ${reason}` : reason
-      })
+    const formatBackendResultReason = (result: Record<string, unknown>) => {
+      const orderId = toNumberValue(result.orderId ?? result.order_id)
+      const reason = toStringValue(result.skipReason ?? result.skip_reason ?? result.error)
+      if (!reason) return null
+      const resultOrderNumber = toStringValue(result.orderNumber ?? result.order_number)
+      const preparedOrderNumber = prepared.find((entry) => entry.order.orderId === orderId)?.order.orderNumber
+      const orderNumber = resultOrderNumber ?? preparedOrderNumber
+      return orderNumber ? `Order ${orderNumber}: ${reason}` : reason
+    }
+
+    const backendSkippedErrors = backendResults
+      .filter((result) => result.success === false && result.skipped === true)
+      .map(formatBackendResultReason)
       .filter((message): message is string => Boolean(message))
+
+    const backendErrors = backendResults
+      .filter((result) => result.success === false && result.skipped !== true)
+      .map(formatBackendResultReason)
+      .filter((message): message is string => Boolean(message))
+
+    const skippedResultErrors = backendSkippedErrors.length > 0 ? backendSkippedErrors : skippedErrors
 
     // PS-191: backend-owned retry eligibility per failed order. Callers use
     // this to PROMPT a re-rate (operator reviews + clicks again) — never to
@@ -2962,11 +3019,11 @@ export default function OrdersView({
 
     return {
       queued: toNumberValue(finalStatus?.queued) ?? 0,
-      failed: skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
+      skipped: toNumberValue(finalStatus?.skipped) ?? skipped.length,
+      failed: toNumberValue(finalStatus?.failed) ?? 0,
       queuedItems,
-      // Client-side skips first, then the backend's per-order reasons.
-      // The toasts show skippedErrors[0].
-      skippedErrors: [...skippedErrors, ...backendErrors],
+      skippedErrors: skippedResultErrors,
+      failedErrors: backendErrors,
       retryEligibleOrderIds,
     }
   }
@@ -2997,12 +3054,10 @@ export default function OrdersView({
         label: 'Sending to queue',
         existingLabelOnly: true,
       })
-      if (result.queued > 0) {
-        showToast(formatQueuedOrdersToast(result.queued, result.queuedItems, result.failed), 'success')
-      } else if (result.failed > 0) {
-        showToast(result.skippedErrors[0] ?? 'Label URL is not queueable - nothing was added to the print queue', 'error')
+      if (result.queued > 0 || result.skipped > 0 || result.failed > 0) {
+        showToast(formatQueueSendResultToast(result), queueSendToastType(result))
       } else {
-        showToast('No orders added - create labels first')
+        showToast(result.skippedErrors[0] ?? result.failedErrors[0] ?? 'Label URL is not queueable - nothing was added to the print queue', 'error')
       }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')
@@ -3337,7 +3392,7 @@ export default function OrdersView({
           label: 'Sending to queue',
           labelPayloadOverrides: new Map([[order.orderId, payload as unknown as Record<string, unknown>]]),
         })
-        if (result.queued > 0) {
+        if (result.queued > 0 && result.skipped === 0 && result.failed === 0) {
           showToast(
             formatQueuedOrderToast(
               order.orderNumber ?? order.orderId,
@@ -3346,7 +3401,7 @@ export default function OrdersView({
             'success',
           )
         } else {
-          const queueErrorMessage = result.skippedErrors[0]
+          const queueErrorMessage = result.skippedErrors[0] ?? result.failedErrors[0]
           // PS-191: NEVER auto-repurchase. The old path re-rated and re-fired
           // the queue purchase with promptForRetry:false — the operator could
           // be charged a higher refreshed rate with zero awareness. Now a
@@ -3356,6 +3411,8 @@ export default function OrdersView({
           if (result.retryEligibleOrderIds.has(order.orderId)) {
             showToast(RATE_EXPIRED_RERATE_MESSAGE, 'error')
             void refreshStaleRateForOrder(order, 'Print to Queue')
+          } else if (result.queued > 0 || result.skipped > 0 || result.failed > 0) {
+            showToast(formatQueueSendResultToast(result), queueSendToastType(result))
           } else {
             showToast(queueErrorMessage ?? 'Label was not added to the print queue', 'error')
           }
@@ -4639,10 +4696,10 @@ export default function OrdersView({
           label: 'Sending to queue',
           batchTestMode,
         })
-        if (result.queued > 0) {
-          showToast(formatQueuedOrdersToast(result.queued, result.queuedItems, result.failed), 'success')
+        if (result.queued > 0 || result.skipped > 0 || result.failed > 0) {
+          showToast(formatQueueSendResultToast(result), queueSendToastType(result))
         } else {
-          showToast(result.skippedErrors[0] ?? 'No orders added to queue', 'error')
+          showToast(result.skippedErrors[0] ?? result.failedErrors[0] ?? 'No orders added to queue', 'error')
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')
@@ -4975,8 +5032,14 @@ export default function OrdersView({
         await refreshQueueAfterBackendStatus(status, null)
         await refetchOrders()
         const queued = toNumberValue(status?.queued) ?? 0
+        const skipped = toNumberValue(status?.skipped) ?? 0
         const failed = toNumberValue(status?.failed) ?? 0
-        showToast(queued > 0 ? `Queue updated: ${queued} queued${failed ? `, ${failed} failed` : ''}` : 'Queue checked', queued > 0 ? 'success' : 'info')
+        showToast(
+          queued > 0 || skipped > 0 || failed > 0
+            ? `Queue updated: ${queued} queued${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`
+            : 'Queue checked',
+          failed > 0 ? 'error' : skipped > 0 ? 'info' : queued > 0 ? 'success' : 'info',
+        )
         finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Failed to resume queue send', 'error')
@@ -5254,9 +5317,9 @@ export default function OrdersView({
   const queueToolbarProgress = queueActionProgress
     ? {
       label: queueActionProgress.label,
-      detail: `${queueActionProgress.completed}/${queueActionProgress.total}${queueActionProgress.completed < queueActionProgress.total ? ` - working ${queueActionElapsedSeconds}s` : ''}${queueActionProgress.failed > 0 ? ` - ${queueActionProgress.failed} failed` : ''}`,
+      detail: formatQueueActionProgressDetail(queueActionProgress, queueActionElapsedSeconds),
       pct: queueActionProgressPct,
-      tone: queueActionProgress.failed > 0 ? '#f59e0b' : 'var(--ss-blue)',
+      tone: queueActionProgress.failed > 0 || queueActionProgress.skipped > 0 ? '#f59e0b' : 'var(--ss-blue)',
     }
     : queuePrintInFlight && queuePrintMessage
       ? {

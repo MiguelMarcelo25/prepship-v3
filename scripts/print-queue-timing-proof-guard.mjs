@@ -11,7 +11,7 @@ const checks = [
     pass:
       service.includes('export type QueueSendTimingBreakdown') &&
       service.includes('timings?: QueueSendTimingBreakdown') &&
-      service.includes("labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'failed'"),
+      service.includes("labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'skipped_preflight' | 'failed'"),
   },
   {
     name: 'processQueueSendOrder records existing label, purchase, recovery, and queue write timings',

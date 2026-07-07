@@ -438,21 +438,51 @@ const queueSendBody = z.object({
           .optional(),
       })
     )
-    .min(1)
-    .max(200),
-});
+    .max(200)
+    .default([]),
+  preflight_skips: z
+    .array(
+      z.object({
+        order_id: z.number().int().positive(),
+        client_id: z.number().int(),
+        order_number: z.union([z.string(), z.number()]).nullable().optional(),
+        reason: z.string().min(1),
+        retry_eligible: z.boolean().optional(),
+        retry_reason: z.string().nullable().optional(),
+      })
+    )
+    .max(200)
+    .default([]),
+})
+  .refine((body) => body.orders.length + body.preflight_skips.length > 0, {
+    message: 'orders or preflight_skips must be non-empty',
+  })
+  .refine((body) => body.orders.length + body.preflight_skips.length <= 200, {
+    message: 'orders plus preflight_skips must be <= 200',
+  });
 
 app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
   const b = c.req.valid('json');
   const scope = printQueueScopeFromContext(c);
   try {
     await assertPrintQueueClientsVisible(
-      b.orders.map((order) => order.client_id),
+      [
+        ...b.orders.map((order) => order.client_id),
+        ...b.preflight_skips.map((skip) => skip.client_id),
+      ],
       scope
     );
     const result = await startQueueSendJob({
       concurrency: b.concurrency,
       scope,
+      preflightSkips: b.preflight_skips.map((skip) => ({
+        orderId: skip.order_id,
+        clientId: skip.client_id,
+        orderNumber: skip.order_number ?? null,
+        reason: skip.reason,
+        retryEligible: skip.retry_eligible === true,
+        retryReason: skip.retry_reason ?? null,
+      })),
       orders: b.orders.map((order) => ({
         orderId: order.order_id,
         clientId: order.client_id,
@@ -495,12 +525,18 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
         scope,
       })),
     });
-    return c.json({ job_id: result.jobId, total: result.total });
+    return c.json({ job_id: result.jobId, total: result.total, skipped: result.skipped });
   } catch (err) {
     return printQueueSafeClientErrorResponse(c, err, {
       action: 'batch-send',
-      requestedOrderIds: b.orders.map((order) => order.order_id),
-      requestedClientIds: b.orders.map((order) => order.client_id),
+      requestedOrderIds: [
+        ...b.orders.map((order) => order.order_id),
+        ...b.preflight_skips.map((skip) => skip.order_id),
+      ],
+      requestedClientIds: [
+        ...b.orders.map((order) => order.client_id),
+        ...b.preflight_skips.map((skip) => skip.client_id),
+      ],
     });
   }
 });
@@ -530,6 +566,7 @@ app.get('/batch-send/status/:jobId', async (c) => {
         total: durableJob.total,
         current: durableStatus.current,
         queued: durableStatus.queued,
+        skipped: durableStatus.skipped,
         failed: durableStatus.failed,
         message: durableStatus.message,
         client_id: durableJob.clientId,
@@ -555,6 +592,7 @@ app.get('/batch-send/status/:jobId', async (c) => {
     total: job.total,
     current: job.current,
     queued: job.queued,
+    skipped: job.skipped,
     failed: job.failed,
     message: job.message,
     client_id: job.clientId ?? null,

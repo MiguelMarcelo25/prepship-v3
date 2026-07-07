@@ -83,11 +83,14 @@ function blockedResult(
   const retryable = reason === 'missing_rate_proof' || reason === 'stale_or_mismatched_rate_proof';
   return {
     orderId: order.orderId,
+    orderNumber: order.orderNumber ?? null,
     success: false,
+    skipped: true,
+    skipReason: blockMessage(reason, order),
     error: blockMessage(reason, order),
     retryEligible: retryable,
     retryReason: reason,
-    timings: { totalMs: 0, labelSource: 'failed' },
+    timings: { totalMs: 0, labelSource: 'skipped_preflight' },
   };
 }
 
@@ -98,7 +101,7 @@ function blockedItem(
   return {
     orderId: order.orderId,
     clientId: order.clientId,
-    state: 'preflight_blocked',
+    state: 'skipped_preflight',
     blockedReason: reason,
     errorMessage: blockMessage(reason, order),
   };

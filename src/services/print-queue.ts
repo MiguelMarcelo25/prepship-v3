@@ -156,7 +156,7 @@ export type QueueSendOrderInput = {
 
 export type QueueSendTimingBreakdown = {
   totalMs: number;
-  labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'failed';
+  labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'skipped_preflight' | 'failed';
   existingLabelLookupMs?: number;
   labelPurchaseMs?: number;
   inProgressRecoveryMs?: number;
@@ -166,7 +166,10 @@ export type QueueSendTimingBreakdown = {
 
 export type QueueSendJobResult = {
   orderId: number;
+  orderNumber?: string | number | null;
   success: boolean;
+  skipped?: boolean;
+  skipReason?: string | null;
   queueEntryId?: string;
   alreadyQueued?: boolean;
   labelUrl?: string | null;
@@ -180,6 +183,15 @@ export type QueueSendJobResult = {
   timings?: QueueSendTimingBreakdown;
 };
 
+export type QueueSendPreflightSkipInput = {
+  orderId: number;
+  clientId: number | null;
+  orderNumber?: string | number | null;
+  reason?: string | null;
+  retryEligible?: boolean;
+  retryReason?: string | null;
+};
+
 export type QueueSendJob = {
   jobId: string;
   status: QueueSendStatusName;
@@ -188,6 +200,7 @@ export type QueueSendJob = {
   total: number;
   current: number;
   queued: number;
+  skipped: number;
   failed: number;
   message: string;
   clientId?: number | null;
@@ -539,7 +552,7 @@ function updateQueueSendProgress(job: QueueSendJob) {
   job.updatedAt = Date.now();
   job.message =
     job.status === 'done'
-      ? `Queued ${job.queued}/${job.total}${job.failed ? `, ${job.failed} failed` : ''}`
+      ? `Queued ${job.queued}/${job.total}${job.skipped ? `, ${job.skipped} skipped` : ''}${job.failed ? `, ${job.failed} failed` : ''}`
       : `Sending to queue ${job.current}/${job.total}`;
 }
 
@@ -557,6 +570,7 @@ function queueSendJobFromSnapshot(snapshot: QueueSendJobSnapshot): QueueSendJob 
     total: snapshot.total,
     current: snapshot.current,
     queued: snapshot.queued,
+    skipped: Number.isFinite(snapshot.skipped) ? snapshot.skipped : 0,
     failed: snapshot.failed,
     message: snapshot.message,
     clientId: snapshot.clientId,
@@ -701,7 +715,7 @@ function printQueueClientScopePredicate(scope: PrintQueueListScope): SQL {
   return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
-function normalizeClientIds(values: number[]): number[] {
+function normalizeClientIds(values: Array<number | null | undefined>): number[] {
   return Array.from(
     new Set(
       values
@@ -772,6 +786,41 @@ function toQueueSendItemSnapshot(input: QueueSendJobItemInput): QueueSendItemSna
     errorMessage: input.errorMessage ?? null,
     queueEntryId: input.queueEntryId ?? null,
     trackingNumber: input.trackingNumber ?? null,
+  };
+}
+
+function preflightSkipReason(skip: QueueSendPreflightSkipInput): string {
+  const reason = typeof skip.reason === 'string' ? skip.reason.trim() : '';
+  return reason || 'Preflight blocked before queue send';
+}
+
+function preflightSkipBlockedReason(skip: QueueSendPreflightSkipInput): string {
+  const retryReason = typeof skip.retryReason === 'string' ? skip.retryReason.trim() : '';
+  return retryReason || 'frontend_preflight';
+}
+
+function toQueueSendPreflightSkipResult(skip: QueueSendPreflightSkipInput): QueueSendJobResult {
+  const reason = preflightSkipReason(skip);
+  return {
+    orderId: skip.orderId,
+    orderNumber: skip.orderNumber ?? null,
+    success: false,
+    skipped: true,
+    skipReason: reason,
+    error: reason,
+    retryEligible: skip.retryEligible === true,
+    retryReason: preflightSkipBlockedReason(skip),
+    timings: { totalMs: 0, labelSource: 'skipped_preflight' },
+  };
+}
+
+function toQueueSendPreflightSkipItem(skip: QueueSendPreflightSkipInput): QueueSendJobItemInput {
+  return {
+    orderId: skip.orderId,
+    clientId: skip.clientId ?? null,
+    state: 'skipped_preflight',
+    blockedReason: preflightSkipBlockedReason(skip),
+    errorMessage: preflightSkipReason(skip),
   };
 }
 
@@ -1019,6 +1068,7 @@ async function processQueueSendOrder(
 
   return {
     orderId: order.orderId,
+    orderNumber: order.orderNumber ?? null,
     success: true,
     queueEntryId: entry.id,
     alreadyQueued,
@@ -1185,41 +1235,56 @@ export async function addToQueue(
 
 export async function startQueueSendJob(input: {
   orders: QueueSendOrderInput[];
+  preflightSkips?: QueueSendPreflightSkipInput[];
   concurrency?: number;
   scope?: PrintQueueListScope;
-}): Promise<{ jobId: string; total: number }> {
-  if (!input.orders.length) throw new Error('orders must be non-empty');
+}): Promise<{ jobId: string; total: number; skipped: number }> {
+  const orders = input.orders;
+  const frontendPreflightSkips = input.preflightSkips ?? [];
+  const requestedTotal = orders.length + frontendPreflightSkips.length;
+  if (requestedTotal <= 0) throw new Error('orders or preflightSkips must be non-empty');
 
   cleanOldJobs();
-  const preflight = await preflightQueueSendOrders(input.orders);
+  const preflight = orders.length > 0
+    ? await preflightQueueSendOrders(orders)
+    : { readyOrders: [], blockedResults: [], itemStates: [] };
+  const frontendSkippedResults = frontendPreflightSkips.map(toQueueSendPreflightSkipResult);
+  const frontendSkippedItems = frontendPreflightSkips.map(toQueueSendPreflightSkipItem);
   const jobId = randomUUID();
-  const clientIds = normalizeClientIds(input.orders.map((order) => order.clientId));
-  const firstClientId = input.orders.find((order) => Number.isFinite(order.clientId))?.clientId ?? null;
-  const blockedResults = preflight.blockedResults;
+  const clientIds = normalizeClientIds([
+    ...orders.map((order) => order.clientId),
+    ...frontendPreflightSkips.map((skip) => skip.clientId),
+  ]);
+  const firstClientId = orders.find((order) => Number.isFinite(order.clientId))?.clientId ??
+    frontendPreflightSkips.find((skip) => Number.isFinite(skip.clientId))?.clientId ??
+    null;
+  const skippedResults = [...frontendSkippedResults, ...preflight.blockedResults];
+  const itemStates = [...frontendSkippedItems, ...preflight.itemStates];
   const job: QueueSendJob = {
     jobId,
     status: preflight.readyOrders.length > 0 ? 'pending' : 'done',
     clientIds,
     progress: 0,
-    total: input.orders.length,
-    current: blockedResults.length,
+    total: requestedTotal,
+    current: skippedResults.length,
     queued: 0,
-    failed: blockedResults.length,
+    skipped: skippedResults.length,
+    failed: 0,
     message: preflight.readyOrders.length > 0
-      ? `Starting queue send of ${input.orders.length} order${input.orders.length === 1 ? '' : 's'}...`
-      : `Queued 0/${input.orders.length}${blockedResults.length ? `, ${blockedResults.length} failed` : ''}`,
+      ? `Starting queue send of ${requestedTotal} order${requestedTotal === 1 ? '' : 's'}...`
+      : `Queued 0/${requestedTotal}${skippedResults.length ? `, ${skippedResults.length} skipped` : ''}`,
     clientId: firstClientId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    results: [...blockedResults],
+    results: [...skippedResults],
     queuedEntryIds: [],
-    itemStates: preflight.itemStates.map(toQueueSendItemSnapshot),
+    itemStates: itemStates.map(toQueueSendItemSnapshot),
   };
   updateQueueSendProgress(job);
   queueSendJobs.set(jobId, job);
 
   await persistQueueSendJobSnapshot(job, { required: true });
-  await persistQueueSendJobItems(jobId, preflight.itemStates);
+  await persistQueueSendJobItems(jobId, itemStates);
   if (preflight.readyOrders.length > 0) {
     if (env.PRINT_QUEUE_WORKER_ENABLED) {
       const enqueueResult = await enqueueQueueSendWorkerJob({
@@ -1230,7 +1295,7 @@ export async function startQueueSendJob(input: {
         requestedAt: new Date(job.createdAt).toISOString(),
       });
       if (enqueueResult.queued) {
-        return { jobId, total: input.orders.length };
+        return { jobId, total: requestedTotal, skipped: skippedResults.length };
       }
       console.warn(
         '[print-queue] worker enqueue failed; falling back to in-process queue send:',
@@ -1239,7 +1304,7 @@ export async function startQueueSendJob(input: {
     }
     void runQueueSendJob(jobId, preflight.readyOrders, input.concurrency, input.scope);
   }
-  return { jobId, total: input.orders.length };
+  return { jobId, total: requestedTotal, skipped: skippedResults.length };
 }
 
 export function getQueueSendJobStatus(jobId: string): QueueSendJob | null {
@@ -1328,6 +1393,7 @@ async function runQueueSendJob(
           const message = err instanceof Error ? err.message : 'Unknown error';
           job.results.push({
             orderId: order.orderId,
+            orderNumber: order.orderNumber ?? null,
             success: false,
             error: message,
             retryEligible,
@@ -1357,6 +1423,7 @@ async function runQueueSendJob(
       job.current += 1;
       job.results.push({
         orderId: order.orderId,
+        orderNumber: order.orderNumber ?? null,
         success: false,
         error: 'Queue send did not report a result',
       });

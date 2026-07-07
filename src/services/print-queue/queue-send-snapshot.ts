@@ -8,7 +8,7 @@ export type QueueSendSnapshotStatus = QueueSendStatusName;
 
 export type QueueSendTimingBreakdown = {
   totalMs: number;
-  labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'failed';
+  labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'skipped_preflight' | 'failed';
   existingLabelLookupMs?: number;
   labelPurchaseMs?: number;
   inProgressRecoveryMs?: number;
@@ -18,7 +18,10 @@ export type QueueSendTimingBreakdown = {
 
 export type QueueSendSnapshotResult = {
   orderId: number;
+  orderNumber?: string | number | null;
   success: boolean;
+  skipped?: boolean;
+  skipReason?: string | null;
   queueEntryId?: string;
   alreadyQueued?: boolean;
   trackingNumber?: string | null;
@@ -36,6 +39,7 @@ export type QueueSendSnapshotJob = {
   total: number;
   current: number;
   queued: number;
+  skipped: number;
   failed: number;
   message: string;
   clientId?: number | null;
@@ -70,6 +74,7 @@ export type QueueSendJobSnapshot = {
   total: number;
   current: number;
   queued: number;
+  skipped: number;
   failed: number;
   message: string;
   clientId: number | null;
@@ -90,7 +95,10 @@ export function queueSendJobStatusKey(jobId: string): string {
 function toQueueSendResultSnapshot(result: QueueSendSnapshotResult): QueueSendResultSnapshot {
   return {
     orderId: result.orderId,
+    orderNumber: result.orderNumber ?? null,
     success: result.success,
+    skipped: result.skipped === true,
+    skipReason: result.skipReason ?? null,
     queueEntryId: result.queueEntryId,
     alreadyQueued: result.alreadyQueued,
     trackingNumber: result.trackingNumber ?? null,
@@ -138,6 +146,7 @@ export function toQueueSendSnapshot(
     total: job.total,
     current: job.current,
     queued: job.queued,
+    skipped: job.skipped,
     failed: job.failed,
     message: job.message,
     clientId: job.clientId ?? null,

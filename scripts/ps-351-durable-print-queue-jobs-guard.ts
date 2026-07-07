@@ -99,7 +99,7 @@ check('print queue service imports the dedicated job store owner',
 check('print queue service runs backend preflight before starting purchases',
   /from '\.\/print-queue\/queue-send-preflight'/.test(printQueue) &&
     /preflightQueueSendOrders/.test(printQueue) &&
-    /const preflight = await preflightQueueSendOrders/.test(printQueue) &&
+    /const preflight = orders\.length > 0[\s\S]{0,120}await preflightQueueSendOrders\(orders\)/.test(printQueue) &&
     /readyOrders/.test(printQueue) &&
     /blockedResults/.test(printQueue) &&
     /persistQueueSendJobItems/.test(printQueue));

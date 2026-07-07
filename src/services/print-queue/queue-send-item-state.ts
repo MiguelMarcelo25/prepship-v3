@@ -1,6 +1,7 @@
 export type QueueSendJobItemState =
   | 'ready'
   | 'preflight_blocked'
+  | 'skipped_preflight'
   | 'validating_rate'
   | 'acquiring_lock'
   | 'provider_pending'

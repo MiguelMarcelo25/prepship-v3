@@ -1460,6 +1460,7 @@ export const apiClient = {
 
   startQueueSendJob(payload: {
     orders: Array<Record<string, unknown>>;
+    preflight_skips?: Array<Record<string, unknown>>;
     concurrency?: number;
   }): Promise<any> {
     return api.post<any>('/print-queue/batch-send', payload);
