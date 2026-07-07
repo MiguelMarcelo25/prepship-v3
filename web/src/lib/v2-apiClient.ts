@@ -1051,6 +1051,8 @@ export const apiClient = {
   // currentRequestFingerprint is intentionally NOT sent here: the optional backend proof
   // check is omitted so this is behavior-equivalent to the legacy 3-call save (same fields
   // persisted, same eligibility gate) — just atomic. Backend owns the validation/persist.
+  // Do not wrap in safe(): manual Rate Browser selection must surface backend
+  // refusals like expired quote proof or ineligible service to the operator.
   applyBestRate(
     orderId: number,
     payload: {
@@ -1060,17 +1062,12 @@ export const apiClient = {
       weightOz?: number | null
     }
   ): Promise<any> {
-    return safe(
-      'applyBestRate',
-      () =>
-        api.post<any>(`/orders/${orderId}/apply-best-rate`, {
-          bestRateJson: payload.bestRateJson,
-          bestRateDims: payload.bestRateDims ?? null,
-          selectedPid: payload.selectedPid ?? null,
-          weightOz: payload.weightOz ?? null,
-        }),
-      {}
-    );
+    return api.post<any>(`/orders/${orderId}/apply-best-rate`, {
+      bestRateJson: payload.bestRateJson,
+      bestRateDims: payload.bestRateDims ?? null,
+      selectedPid: payload.selectedPid ?? null,
+      weightOz: payload.weightOz ?? null,
+    });
   },
 
   // PS-179: updateOrderBestRateSelectionStrict removed — the backend persists
