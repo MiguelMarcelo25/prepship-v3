@@ -66,6 +66,12 @@ The Test Connection button exchanges the Client ID and Secret for a Shopify
 Admin API token, then reads Shopify `/shop.json`. It should show the shop
 identity when the credentials and scopes are valid.
 
+If Shopify returns `app_not_installed`, the Client ID and Secret reached
+Shopify, but that app is not installed on the exact shop domain you entered.
+Install or reinstall the app on `kf-goodies-2.myshopify.com`, or create a
+store-admin custom app and paste its real `shpat_` Admin API Access Token into
+the legacy token field.
+
 ## What PrepShip Now Does
 
 ```text

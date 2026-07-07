@@ -528,8 +528,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     simpleIconsSlug: 'shopify',
     fields: [
       { name: 'shopDomain', label: 'Shop Domain', placeholder: 'yourstore.myshopify.com', hint: 'The .myshopify.com domain (not your custom domain).' },
-      { name: 'clientId', label: 'Client ID', hint: 'Dev Dashboard -> App -> Settings -> Client ID.' },
-      { name: 'clientSecret', label: 'Client Secret', type: 'password', hint: 'Dev Dashboard -> App -> Settings -> Secret (shpss_...). PrepShip exchanges it server-side for a short-lived Admin API token.' },
+      { name: 'clientId', label: 'Client ID', required: false, hint: 'Dev Dashboard -> App -> Settings -> Client ID. Use with Client Secret below.' },
+      { name: 'clientSecret', label: 'Client Secret', type: 'password', required: false, hint: 'Dev Dashboard -> App -> Settings -> Secret (shpss_...). PrepShip exchanges it server-side for a short-lived Admin API token.' },
       { name: 'accessToken', label: 'Admin API Access Token (legacy optional)', type: 'password', required: false, hint: 'Only use this if you already have a real shpat_ Admin API token. Dev Dashboard apps should use Client ID and Secret above.' },
       { name: 'apiVersion', label: 'API Version (optional)', required: false, placeholder: '2026-07', hint: 'Defaults to latest stable. Pin to a date string like 2026-07 if you need a specific version.' },
     ],

@@ -133,7 +133,7 @@ async function exchangeClientCredentialsToken(
     },
   );
   if (!res.ok) {
-    throw new Error(`Shopify token ${res.status}: ${await readShopifyError(res)}`);
+    throw new Error(shopifyTokenError(res.status, await readShopifyError(res), shopDomain));
   }
   const data = await res.json() as { access_token?: unknown };
   const token = firstString(data.access_token);
@@ -180,12 +180,28 @@ function redactShopifyError(value: string): string {
     .slice(0, 700);
 }
 
+function shopifyTokenError(status: number, detail: string, shopDomain: string): string {
+  const lower = detail.toLowerCase();
+  if (lower.includes('app_not_installed')) {
+    return `Shopify token ${status}: the Shopify app is not installed on ${shopDomain}. Install/reinstall the app on this exact .myshopify.com shop, or connect with a real shpat_ Admin API Access Token from a Shopify-admin custom app.`;
+  }
+  if (lower.includes('shop_not_permitted')) {
+    return `Shopify token ${status}: this Shopify shop is not permitted to use Dev Dashboard client credentials. Use a store-owned installed app, or connect with a real shpat_ Admin API Access Token from a Shopify-admin custom app.`;
+  }
+  return `Shopify token ${status}: ${detail}`;
+}
+
 async function readShopifyError(res: Response): Promise<string> {
   const text = await res.text().catch(() => '');
   if (!text) return res.statusText;
   try {
     const data = JSON.parse(text);
     const errors = data?.errors;
+    const oauthCode = firstString(data?.error);
+    const oauthDescription = firstString(data?.error_description);
+    if (oauthCode || oauthDescription) {
+      return redactShopifyError([oauthCode, oauthDescription].filter(Boolean).join(': '));
+    }
     if (typeof errors === 'string') return redactShopifyError(errors);
     if (Array.isArray(errors)) return redactShopifyError(errors.map(String).join('; '));
     return redactShopifyError(firstString(data?.message, JSON.stringify(errors), text));

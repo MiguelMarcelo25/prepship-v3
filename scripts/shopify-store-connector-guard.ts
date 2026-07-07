@@ -116,6 +116,32 @@ await check('Shopify Dev Dashboard client credentials are exchanged before verif
   assert.equal(result.meta?.authMode, 'client_credentials');
 });
 
+await check('Shopify Dev Dashboard app-not-installed errors are actionable', async () => {
+  __setCarrierReplay([
+    {
+      name: 'shopify.token',
+      status: 400,
+      body: {
+        error: 'app_not_installed',
+        error_description: 'The application is not installed on this shop.',
+      },
+    },
+  ]);
+
+  const result = await verifyProviderCredentials('shopify', {
+    shopDomain: 'kf-goodies-2.myshopify.com',
+    clientId: 'shopify_client_id_for_test',
+    clientSecret: 'shpss_test_secret',
+    apiVersion: '2026-07',
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /app is not installed/i);
+  assert.match(result.error ?? '', /kf-goodies-2\.myshopify\.com/);
+  assert.match(result.error ?? '', /Admin API Access Token/i);
+  assert.doesNotMatch(result.error ?? '', /shpss_test_secret/);
+});
+
 await check('Shopify import normalizes paid unfulfilled orders for canonical store persistence', async () => {
   __setCarrierReplay([
     {
@@ -250,8 +276,8 @@ await check('Shopify is marked live and wired into Settings Pull Orders', () => 
   assert.match(read('src/routes/carriers.ts'), /\/shopify\/orders/);
   assert.match(read('src/connectors/store/shopify.ts'), /grant_type:\s*'client_credentials'/);
   assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /shopify:\s*pullShopifyOrders/);
-  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientId'/);
-  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientSecret'/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientId'[^}]*required: false/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientSecret'[^}]*required: false/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /importStoreOrders\('shopify'/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /upsertNormalizedStoreOrders/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /INSERT INTO store_orders/);
