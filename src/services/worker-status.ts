@@ -4,6 +4,14 @@ import { getSetting, setSetting } from './settings';
 import { recordWorkerStatusEvent } from './worker-status-events';
 
 const WORKER_STATUS_KEY = 'worker.status.snapshot';
+const WORKER_STATUS_STALE_SECONDS = 120;
+const WORKER_STATUS_MODES = [
+  'api-scheduler',
+  'worker-scheduler',
+  'print-worker',
+  'placeholder',
+  'disabled',
+] as const;
 const WORKER_STATUS_PERSIST_TIMEOUT_MS = Math.max(
   250,
   Math.min(5_000, Number(process.env.WORKER_STATUS_PERSIST_TIMEOUT_MS) || 3_000),
@@ -16,7 +24,7 @@ const WORKER_STATUS_PERSIST_ABANDON_MS = Math.max(
   ),
 );
 
-type WorkerMode = 'api-scheduler' | 'worker-scheduler' | 'print-worker' | 'placeholder' | 'disabled';
+type WorkerMode = (typeof WORKER_STATUS_MODES)[number];
 type WorkerJobStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
 
 export type WorkerJobSnapshot = {
@@ -46,6 +54,10 @@ const processStartedAt = new Date().toISOString();
 let snapshot: WorkerStatusSnapshot = createSnapshot('disabled');
 let persistSnapshotInFlight: Promise<void> | null = null;
 let persistSnapshotStartedAtMs = 0;
+
+function workerStatusSnapshotKey(mode: WorkerMode): string {
+  return `${WORKER_STATUS_KEY}:${mode}`;
+}
 
 function createSnapshot(mode: WorkerMode): WorkerStatusSnapshot {
   const now = new Date().toISOString();
@@ -109,7 +121,15 @@ async function persistSnapshot(): Promise<void> {
   // Worker status is observability. A slow settings write must not hold sync lanes.
   let tracked: Promise<void>;
   persistSnapshotStartedAtMs = Date.now();
-  tracked = setSetting(WORKER_STATUS_KEY, JSON.stringify(snapshot))
+  tracked = (async () => {
+    const serialized = JSON.stringify(snapshot);
+    await setSetting(workerStatusSnapshotKey(snapshot.mode), serialized);
+    // Keep the legacy key as the sync-scheduler view. The dedicated print
+    // worker must not overwrite it or /sync/status will report scheduler=false.
+    if (snapshot.schedulerEnabled) {
+      await setSetting(WORKER_STATUS_KEY, serialized);
+    }
+  })()
     .catch((err) => {
       console.warn(
         '[worker-status] failed to persist status:',
@@ -261,25 +281,68 @@ export async function getPersistedWorkerStatus(): Promise<{
   status: WorkerStatusSnapshot | null;
   stale: boolean;
   heartbeatAgeSeconds: number | null;
+  snapshots: Record<
+    string,
+    {
+      status: WorkerStatusSnapshot;
+      stale: boolean;
+      heartbeatAgeSeconds: number | null;
+    }
+  >;
 }> {
-  const raw = await getSetting(WORKER_STATUS_KEY);
-  if (!raw) {
-    return { status: null, stale: true, heartbeatAgeSeconds: null };
-  }
-  try {
-    const status = JSON.parse(raw) as WorkerStatusSnapshot;
+  function parse(raw: string | null): {
+    status: WorkerStatusSnapshot;
+    stale: boolean;
+    heartbeatAgeSeconds: number | null;
+  } | null {
+    if (!raw) return null;
+    let status: WorkerStatusSnapshot;
+    try {
+      status = JSON.parse(raw) as WorkerStatusSnapshot;
+    } catch {
+      return null;
+    }
     const heartbeatMs = Date.parse(status.heartbeatAt);
     const heartbeatAgeSeconds = Number.isFinite(heartbeatMs)
       ? Math.max(0, Math.round((Date.now() - heartbeatMs) / 1000))
       : null;
     return {
       status,
-      stale: heartbeatAgeSeconds === null || heartbeatAgeSeconds > 120,
+      stale: heartbeatAgeSeconds === null || heartbeatAgeSeconds > WORKER_STATUS_STALE_SECONDS,
       heartbeatAgeSeconds,
     };
-  } catch {
-    return { status: null, stale: true, heartbeatAgeSeconds: null };
   }
+
+  const roleEntries = await Promise.all(
+    WORKER_STATUS_MODES.map(
+      async (mode) =>
+        [mode, parse(await getSetting(workerStatusSnapshotKey(mode)))] as const,
+    ),
+  );
+  const snapshots: Record<
+    string,
+    {
+      status: WorkerStatusSnapshot;
+      stale: boolean;
+      heartbeatAgeSeconds: number | null;
+    }
+  > = {};
+  for (const [mode, parsed] of roleEntries) {
+    if (parsed) snapshots[mode] = parsed;
+  }
+
+  const schedulerSnapshots = Object.values(snapshots)
+    .filter((entry) => entry.status.schedulerEnabled)
+    .sort((a, b) => Date.parse(b.status.heartbeatAt) - Date.parse(a.status.heartbeatAt));
+  const selectedScheduler =
+    schedulerSnapshots.find((entry) => !entry.stale) ?? schedulerSnapshots[0] ?? null;
+  const legacy = parse(await getSetting(WORKER_STATUS_KEY));
+  const selected = selectedScheduler ?? legacy ?? null;
+
+  if (!selected) {
+    return { status: null, stale: true, heartbeatAgeSeconds: null, snapshots };
+  }
+  return { ...selected, snapshots };
 }
 
 export function getApiRuntimeStatus() {

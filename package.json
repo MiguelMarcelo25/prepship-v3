@@ -571,6 +571,7 @@
     "test:ps-397-order-sync-freshness": "tsx scripts/ps-397-order-sync-freshness-guard.ts",
     "test:ps-400-sync-freshness": "tsx scripts/ps-400-sync-freshness-split-child-guard.ts",
     "test:ps-409-status-catchup-backlog": "tsx scripts/ps-409-status-catchup-backlog-guard.ts",
+    "test:worker-status-role-snapshot": "tsx scripts/worker-status-role-snapshot-guard.ts",
     "test:ps-365-shipment-sync-cron-safety-net": "tsx scripts/ps-365-shipment-sync-cron-safety-net-guard.ts",
     "test:ps-357-rate-language-breadcrumb-guard": "tsx scripts/ps-357-rate-language-breadcrumb-guard.ts",
     "test:ps-306-ordersview-parity-cutover": "tsx scripts/ps-306-ordersview-parity-cutover-guard.ts",
