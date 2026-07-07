@@ -24,6 +24,9 @@ type MoneyAmount = { amount?: number };
 
 export type CombinableRate = Record<string, any> & {
   carrier_id?: string;
+  service_code?: string | null;
+  serviceCode?: string | null;
+  service?: string | null;
   shipping_amount?: MoneyAmount;
   other_amount?: MoneyAmount;
   confirmation_amount?: MoneyAmount;
@@ -93,20 +96,94 @@ export function rateCostTotal(rate: CombinableRate): number {
   return normalizeShippingRateMoney(rate).selectedRateCost ?? 0;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const amount = finiteNumber(value);
+    if (amount != null) return amount;
+  }
+  return null;
+}
+
+function moneyAmount(value: unknown): number | null {
+  return finiteNumber(asRecord(value).amount);
+}
+
+function textPresent(value: unknown): boolean {
+  return String(value ?? '').trim().length > 0;
+}
+
+function hasProviderError(rate: CombinableRate): boolean {
+  const raw = asRecord(rate.raw);
+  const candidates = [
+    rate.error_messages,
+    rate.errorMessages,
+    raw.error_messages,
+    raw.errorMessages,
+  ];
+  return candidates.some((value) =>
+    Array.isArray(value)
+      ? value.some(textPresent)
+      : textPresent(value),
+  );
+}
+
+function hasServiceCode(rate: CombinableRate): boolean {
+  const raw = asRecord(rate.raw);
+  return [
+    rate.service_code,
+    rate.serviceCode,
+    rate.service,
+    raw.service_code,
+    raw.serviceCode,
+    raw.service,
+  ].some(textPresent);
+}
+
+function rateShippingComponent(rate: CombinableRate): number {
+  const raw = asRecord(rate.raw);
+  return firstFiniteNumber(
+    rate.shipmentCost,
+    raw.shipmentCost,
+    rate.shipment_cost,
+    raw.shipment_cost,
+    moneyAmount(rate.shipping_amount),
+    moneyAmount(raw.shipping_amount),
+    rate.cost,
+    raw.cost,
+    rate.amount,
+    raw.amount,
+  ) ?? 0;
+}
+
 /**
- * The single definition of "a rate that can actually be charged." A missing/null
- * amount is coerced to 0 by rateTotal's `?? 0`, which makes "no price" look like
- * "free" — and free always wins a cheapest-first sort. That is the root cause of
- * the unpriced-ShipStation-UPS rate becoming the "Recommended"/best winner (it
- * rendered "N/A" in the Rate Browser and "Rate unavailable" in the Orders list).
- * Selection, the source lift, and the list DTO all gate on THIS predicate so a
- * non-finite or non-positive total can never be selected or persisted as best.
- * The direct-carrier path already enforced this (toDirectRate drops amount<=0);
- * this makes it uniform across families.
+ * The single definition of "a rate that can actually be charged." A candidate
+ * must have a service code, no provider error, a positive postage/shipping
+ * component, and a positive all-in total. This blocks ShipStation rows where
+ * postage is $0 but insurance/other add-ons make the total look nonzero.
  */
 export function isPricedRate(rate: CombinableRate): boolean {
   const total = rateTotal(rate);
-  return Number.isFinite(total) && total > 0;
+  const shippingComponent = rateShippingComponent(rate);
+  return (
+    Number.isFinite(total) &&
+    total > 0 &&
+    Number.isFinite(shippingComponent) &&
+    shippingComponent > 0 &&
+    hasServiceCode(rate) &&
+    !hasProviderError(rate)
+  );
 }
 
 export function dedupeBrowseRates<T extends Record<string, any>>(rates: T[]): T[] {
@@ -175,7 +252,7 @@ export function withCarrierQuoteTimeout<T>(
 }
 
 export function combineCarrierUniverses(input: CombineCarrierUniversesInput): CombinedRateSelection {
-  const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates]);
+  const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates].filter(isPricedRate));
   const directCarrierIds = [
     ...new Set(input.directDiagnostics.map((diagnostic) => diagnostic.carrierId).filter(Boolean)),
   ];
@@ -189,7 +266,6 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
   // eligible — an unpriced/$0 rate (a ShipStation account that returned no amount)
   // must never be selected as best just because `?? 0` makes it look cheapest.
   const rankedEligibleRates = [...combinedRates]
-    .filter(isPricedRate)
     .sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)));
   const cheapest = rankedEligibleRates[0] ?? null;
   const secondCheapest = rankedEligibleRates[1] ?? null;

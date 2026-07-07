@@ -807,10 +807,12 @@ export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; 
   automationRules?: ShippingAutomationRule[] | null,
 ): T {
   const rawRates = Array.isArray(row.rates) ? row.rates : [];
-  const rates = filterRatesForShippingServiceEligibility(rawRates, context, shippingOptions, automationRules);
+  const rates = filterRatesForShippingServiceEligibility(rawRates, context, shippingOptions, automationRules)
+    .filter((rate) => isPricedRate(rate as Parameters<typeof isPricedRate>[0]));
   const bestRateAllowed =
     row.bestRate != null &&
-    evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate), shippingOptions, automationRules).allowed;
+    evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate), shippingOptions, automationRules).allowed &&
+    isPricedRate(row.bestRate as Parameters<typeof isPricedRate>[0]);
   const selectable = rates.filter((rate) => isRateInsuranceResolved(rate));
   const bestRate = bestRateAllowed && isRateInsuranceResolved(row.bestRate)
     ? row.bestRate
@@ -1695,6 +1697,7 @@ export async function getRates(
           insuredValue: input.insuredValue,
         }),
       ).resolved;
+      cachedRaw = cachedRaw.filter(isPricedRate);
       const cacheAgeMs = Date.now() - cached.fetchedAt.getTime();
       const cacheTtlMs = cachedRaw.length ? CACHE_TTL_MS : RATE_NEGATIVE_CACHE_TTL_MS;
       if (cacheAgeMs >= cacheTtlMs) {

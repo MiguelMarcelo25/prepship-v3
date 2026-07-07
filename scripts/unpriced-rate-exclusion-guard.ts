@@ -34,7 +34,7 @@ function check(name: string, cond: boolean, detail?: string) {
 // ── pure helper: what counts as a chargeable (priced) rate ────────────────────
 {
   check('isPricedRate: a real $8.45 rate is priced',
-    isPricedRate({ shipping_amount: { amount: 8.45 } }) === true);
+    isPricedRate({ service_code: 'ups_ground', shipping_amount: { amount: 8.45 } }) === true);
   check('isPricedRate: a $0 rate is NOT priced',
     isPricedRate({ shipping_amount: { amount: 0 } }) === false);
   check('isPricedRate: an absent-amount rate is NOT priced',
@@ -61,6 +61,16 @@ const SS_UPS_ABSENT = {
   service_code: 'ups_ground',
   requestFingerprint: 'fp-ss',
 };
+const SS_UPS_INSURANCE_ONLY_ERROR = {
+  carrier_id: 'se-7439', // UPS by SS - Chase x7439, order 2345 regression
+  carrier_code: 'ups',
+  service_code: '',
+  service_type: '',
+  shipping_amount: { amount: 0 },
+  insurance_amount: { amount: 0.99 },
+  error_messages: ['Missing/Illegal ShipTo/Address/StateProvinceCode'],
+  requestFingerprint: 'fp-ss-insurance-only-error',
+};
 const DIRECT_SUREPOST_845 = {
   carrier_id: 'se-10000031', // Shipp Carrier (direct)
   service_code: 'ups_surepost',
@@ -85,6 +95,11 @@ const BASE_COMBINE = {
 };
 
 {
+  check('isPricedRate: a $0 postage + insurance-only provider error is NOT priced',
+    isPricedRate(SS_UPS_INSURANCE_ONLY_ERROR) === false);
+}
+
+{
   const combined = combineCarrierUniverses({
     ...BASE_COMBINE,
     ssRates: [SS_UPS_UNPRICED, SS_UPS_ABSENT, SS_USPS_935],
@@ -101,6 +116,25 @@ const BASE_COMBINE = {
     `got ${combined.cheapest?.carrier_id} @ ${combined.cheapest ? rateTotal(combined.cheapest) : 'n/a'}`);
   check('the cheapest pick is a priced rate',
     combined.cheapest != null && isPricedRate(combined.cheapest));
+}
+
+{
+  const combined = combineCarrierUniverses({
+    ...BASE_COMBINE,
+    ssRates: [SS_UPS_INSURANCE_ONLY_ERROR, SS_USPS_935],
+    ssDiagnostics: [
+      { carrierId: 'se-7439', status: 'ok', rateCount: 1 },
+      { carrierId: 'se-442007', status: 'ok', rateCount: 1 },
+    ],
+    directRates: [],
+    directDiagnostics: [],
+  });
+  check('insurance-only provider error does not outrank the real USPS rate',
+    combined.cheapest?.carrier_id === 'se-442007' && rateTotal(combined.cheapest!) === 9.35,
+    `got ${combined.cheapest?.carrier_id} @ ${combined.cheapest ? rateTotal(combined.cheapest) : 'n/a'}`);
+  check('insurance-only provider error is not displayed as an all-rates row',
+    !combined.combinedRates.some((rate) => rate.carrier_id === 'se-7439'),
+    `combined rates: ${combined.combinedRates.map((rate) => rate.carrier_id).join(',')}`);
 }
 
 {
@@ -146,6 +180,18 @@ const BASE_COMBINE = {
   check('normalizeListBestRate rejects a $0 rate even WITH carrier+service',
     zeroWithCarrier === null,
     `got ${JSON.stringify(zeroWithCarrier)}`);
+
+  const insuranceOnly = normalizeListBestRate({
+    carrier_code: 'ups',
+    service_code: '',
+    service_type: '',
+    shipping_amount: { amount: 0 },
+    insurance_amount: { amount: 0.99 },
+    error_messages: ['Missing/Illegal ShipTo/Address/StateProvinceCode'],
+  });
+  check('normalizeListBestRate rejects a $0 postage + insurance-only provider error',
+    insuranceOnly === null,
+    `got ${JSON.stringify(insuranceOnly)}`);
 
   const priced = normalizeListBestRate({
     shipmentCost: 8.45,

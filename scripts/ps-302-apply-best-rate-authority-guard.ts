@@ -75,16 +75,18 @@ check('single backend finalizer stamps rateQuoteId and backend completeness onto
   /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(rateStore));
 
 const ratesRoute = read('src/routes/rates.ts');
+const rateBrowseProducer = read('src/services/rate-browse-response-producer.ts');
 check('/rates/browse delegates best-rate proof minting to finalizeBestRateWithQuote',
-  /const finalized = await finalizeBestRateWithQuote\(\{/.test(ratesRoute) &&
-  /rateQuoteId = finalized\.rateQuoteId/.test(ratesRoute) &&
-  /responseRates = finalized\.rates/.test(ratesRoute));
+  /produceRateBrowsePayload/.test(ratesRoute) &&
+  /const finalized = await finalizeBestRateWithQuote\(\{/.test(rateBrowseProducer) &&
+  /rateQuoteId = finalized\.rateQuoteId/.test(rateBrowseProducer) &&
+  /responseRates = finalized\.rates/.test(rateBrowseProducer));
 check('/rates/browse does not reimplement snapshot storage inline',
   !/const ratesWithKeys = withSelectedRateKeys\(combinedRates\)[\s\S]{0,160}storeRateQuoteSnapshot\(\{/.test(ratesRoute));
 check('/rates/browse attaches backend-issued proofSource only from backend constants',
-  ratesRoute.includes("import {") &&
-  ratesRoute.includes('BACKEND_RATE_PROOF_SOURCE') &&
-  ratesRoute.includes('proofSource: BACKEND_RATE_PROOF_SOURCE'));
+  rateBrowseProducer.includes("import {") &&
+  rateBrowseProducer.includes('BACKEND_RATE_PROOF_SOURCE') &&
+  rateBrowseProducer.includes('proofSource: BACKEND_RATE_PROOF_SOURCE'));
 
 const backfill = read('src/services/rates-backfill.ts');
 check('rates backfill also delegates best-rate proof minting to the same backend finalizer',

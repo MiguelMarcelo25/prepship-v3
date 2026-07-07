@@ -683,7 +683,11 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   // weightOz + toZip are required by the schema, so the non-null
   // assertion is safe.
   const rows = await selectRateCachePublicRowsByWeightZip(q.weightOz!, q.toZip!);
-  return c.json({ data: rows.map((row) => publicRateCacheRow(row, canViewFinancials)) });
+  const sanitizedRows = rows.map((row) => sanitizeRateCacheRowForEligibility(row, {
+    clientId: null,
+    storeId: q.storeId ?? null,
+  }));
+  return c.json({ data: sanitizedRows.map((row) => publicRateCacheRow(row, canViewFinancials)) });
 });
 
 app.get('/carriers', async (c) => {

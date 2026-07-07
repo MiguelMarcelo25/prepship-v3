@@ -34,6 +34,7 @@ import { resolveHugrabLabelPurchaseGate } from './shipping-workflow/hugrab-label
 import { resolveRateEligibilityStamp } from './shipping-workflow/rate-eligibility-stamp';
 import type { ShippingServiceEligibilityContext } from '../lib/shipping-service-eligibility';
 import { normalizeShippingRateMoney } from './shipping-workflow/shipping-rate-money-normalizer';
+import { isPricedRate } from './rates-combined';
 // PS-292 (item 2): the backend-owned SHIPP house-tuple freshness verdict. Computed + stamped at SAVE
 // (the route has client opt-in + the raw provider); persisted into best_rate_json and round-tripped
 // here so the awaiting row renders 'House rate needs refresh' verbatim instead of a plain SHIPP amount.
@@ -772,6 +773,7 @@ export function normalizeListBestRate(value: unknown) {
   try {
     const bestRate = normalizeOrderBestRateDto(value);
     if (!bestRate) return null;
+    if (!isPricedRate(value as Parameters<typeof isPricedRate>[0])) return null;
     const amount = bestRate.shipmentCost + bestRate.otherCost;
     if (!(amount > 0)) return null;
     return {

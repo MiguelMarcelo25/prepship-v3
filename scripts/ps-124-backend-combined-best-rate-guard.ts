@@ -82,7 +82,7 @@ check(
     /produceRateBrowsePayload/.test(ratesRoute) &&
     /getDirectCarrierRatesForRateInput/.test(rateBrowseProducer) &&
     /const combined = combineCarrierUniverses\(\{/.test(rateBrowseProducer) &&
-    /dedupeBrowseRates\(\[\.\.\.input\.ssRates, \.\.\.input\.directRates\]\)/.test(ratesCombined) &&
+    /dedupeBrowseRates\(\[\.\.\.input\.ssRates, \.\.\.input\.directRates\]\.filter\(isPricedRate\)\)/.test(ratesCombined) &&
     /\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)/.test(ratesCombined) &&
     /bestRate:\s*bestRateOut/.test(rateBrowseProducer),
 );
