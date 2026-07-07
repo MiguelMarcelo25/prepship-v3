@@ -88,7 +88,11 @@ import type {
 } from '../../types/api'
 // PS-178 (Phase 6, part 3): the Print Queue drawer JSX lives in its own
 // render-only component; OrdersView keeps all queue state + handlers.
-import { OrdersPrintQueueDrawer } from './OrdersPrintQueueDrawer'
+// Lazy like the sibling drawers/modals above — the drawer chunk stays out of
+// the initial bundle and loads on first queue open.
+const OrdersPrintQueueDrawer = lazy(() =>
+  import('./OrdersPrintQueueDrawer').then((module) => ({ default: module.OrdersPrintQueueDrawer })),
+)
 import { OrdersRecipientEditorModal } from './OrdersRecipientEditorModal'
 // PS-178 (Phase 6, part 4): same pattern for the selected-rows toolbar.
 import { OrdersSelectionToolbar } from './OrdersSelectionToolbar'
@@ -467,6 +471,10 @@ import { ResidentialTag, residentialTagFacts } from '../ui/ResidentialTag'
 // (still here) calls renderOrderCell with an explicit context object.
 import { renderDiagnosticColumnCell, renderOrderCell } from './OrdersTableCells'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+
+// Module-scope so the queue-scope-mismatch branch keeps a stable identity
+// across renders (a fresh [] would bust every queue-derivation memo below).
+const EMPTY_QUEUE_ENTRIES: PrintQueueEntryDto[] = []
 
 export default function OrdersView({
   currentStatus,
@@ -3947,6 +3955,7 @@ export default function OrdersView({
           toNumberValue(bestRate.effectiveInsuredValue) ??
           toNumberValue(bestRate.insuredValue) ??
           shippingOptions.insuredValue
+        const responseFingerprint = getBackendRateResponseFingerprint(response, bestRate)
         const bestRateWithMetadata = autoRequest ? withRateRequestMetadata(bestRate, autoRequest, {
           // PS-135: derive completeness from the backend (its bestRate.isComplete stamp, else
           // carrierStatuses) instead of hardcoding true — a carrier that errors/loads during a
@@ -3954,8 +3963,8 @@ export default function OrdersView({
           isComplete: deriveBackendBestRateComplete(response, bestRate),
           rateCount: rates.length,
           matchType: 'panel-live',
-          requestFingerprint: getBackendRateResponseFingerprint(response, bestRate),
-          cacheKey: getBackendRateResponseFingerprint(response, bestRate),
+          requestFingerprint: responseFingerprint,
+          cacheKey: responseFingerprint,
           cacheCreatedAt: response?.fetchedAt,
         }) : bestRate
         setPanelRatePreview([bestRateWithMetadata])
@@ -5162,9 +5171,9 @@ export default function OrdersView({
     window.open(`https://ship.shipstation.com/orders/${orderId}`, '_blank', 'noopener,noreferrer')
   }
 
-  const allActiveQueueEntries = queueEntriesClientId === queueClientId ? queueEntries : []
+  const allActiveQueueEntries = queueEntriesClientId === queueClientId ? queueEntries : EMPTY_QUEUE_ENTRIES
   // The distinct clients present in the (all-scope) queue — drives the Print Queue client dropdown.
-  const queueClients = (() => {
+  const queueClients = useMemo(() => {
     const byId = new Map<number, string>()
     for (const entry of allActiveQueueEntries) {
       const id = Number((entry as { client_id?: unknown }).client_id)
@@ -5174,12 +5183,14 @@ export default function OrdersView({
       byId.set(id, matchingOrder?.clientName || matchingStore?.storeName || matchingStore?.name || `Client ${id}`)
     }
     return [...byId.entries()].map(([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label))
-  })()
+  }, [allActiveQueueEntries, orders, panelOrder, stores])
   // Display set: when a client is selected, show only that client's entries. null ref-stable
   // pass-through keeps the downstream useMemos from recomputing when no filter is active.
-  const activeQueueEntries = pqClientFilter == null
-    ? allActiveQueueEntries
-    : allActiveQueueEntries.filter((entry) => Number((entry as { client_id?: unknown }).client_id) === pqClientFilter)
+  const activeQueueEntries = useMemo(() => (
+    pqClientFilter == null
+      ? allActiveQueueEntries
+      : allActiveQueueEntries.filter((entry) => Number((entry as { client_id?: unknown }).client_id) === pqClientFilter)
+  ), [allActiveQueueEntries, pqClientFilter])
   const queuedEntries = useMemo(
     () => activeQueueEntries.filter((entry) => entry.status === 'queued'),
     [activeQueueEntries],
@@ -5727,7 +5738,12 @@ export default function OrdersView({
   const renderCarrierCell = (order: OrderSummaryDto) => renderCarrierCellLeaf(order, orderCellsDeps)
   const renderShippingAccountCell = (order: OrderSummaryDto) => renderShippingAccountCellLeaf(order, orderCellsDeps)
 
-  const renderTableCell = (order: OrderSummaryDto, column: TableColumn) => {
+  // Row-invariant work shared by every cell of one row. renderTableCell used to
+  // recompute this block once per CELL (~once per visible column); the per-render
+  // cache below computes it once per ROW. The cache Map is recreated on every
+  // render pass, so an entry can never outlive the state it was derived from
+  // (orderDetailsById / skuFilter / the closures captured this render).
+  const buildOrderRowCellContext = (order: OrderSummaryDto) => {
     const detail = orderDetailsById.get(order.orderId) ?? null
     const items = getActiveItems(order, detail)
     const mergedItems = getMergedItems(order, detail)
@@ -5768,6 +5784,45 @@ export default function OrdersView({
     const shipTo = getShipTo(order, detail)
     const clientName = order.clientName ?? 'Untagged'
     const clientPalette = getClientPalette(clientName)
+    return {
+      detail,
+      items,
+      mergedItems,
+      primaryItem,
+      multiSku,
+      skuDisplayByItemKey,
+      primarySkuDisplay,
+      renderSkuQuantityBadge,
+      expedited,
+      shipTo,
+      clientName,
+      clientPalette,
+    }
+  }
+  const orderRowCellContextCache = new Map<number, ReturnType<typeof buildOrderRowCellContext>>()
+  const getOrderRowCellContext = (order: OrderSummaryDto) => {
+    const cached = orderRowCellContextCache.get(order.orderId)
+    if (cached) return cached
+    const context = buildOrderRowCellContext(order)
+    orderRowCellContextCache.set(order.orderId, context)
+    return context
+  }
+
+  const renderTableCell = (order: OrderSummaryDto, column: TableColumn) => {
+    const {
+      detail,
+      items,
+      mergedItems,
+      primaryItem,
+      multiSku,
+      skuDisplayByItemKey,
+      primarySkuDisplay,
+      renderSkuQuantityBadge,
+      expedited,
+      shipTo,
+      clientName,
+      clientPalette,
+    } = getOrderRowCellContext(order)
 
     switch (column.key) {
       case 'select':
@@ -6542,38 +6597,40 @@ export default function OrdersView({
       />
 
       {queueOpen ? (
-        <OrdersPrintQueueDrawer
-          queueClients={queueClients}
-          pqClientFilter={pqClientFilter}
-          setPqClientFilter={setPqClientFilter}
-          queueClientLabel={queueClientLabel}
-          queueClientId={queueClientId}
-          queueHistoryVisible={queueHistoryVisible}
-          setQueueHistoryVisible={setQueueHistoryVisible}
-          setQueueOpen={setQueueOpen}
-          pqSearch={pqSearch}
-          setPqSearch={setPqSearch}
-          pqHistoryAsc={pqHistoryAsc}
-          setPqHistoryAsc={setPqHistoryAsc}
-          queueCount={queueCount}
-          queuedEntries={queuedEntries}
-          visibleQueueGroups={visibleQueueGroups}
-          queueHasVisibleEntries={queueHasVisibleEntries}
-          queueLoading={queueLoading}
-          pqSearchLower={pqSearchLower}
-          printedEntries={printedEntries}
-          visiblePrintedEntries={visiblePrintedEntries}
-          unprintedQueueCount={unprintedQueueCount}
-          queueConfirmPrintedReady={queueConfirmPrintedReady}
-          queuePrintMessage={queuePrintMessage}
-          queuePrintProgress={queuePrintProgress}
-          queuePrintInFlight={queuePrintInFlight}
-          hydrateQueue={hydrateQueue}
-          showToast={showToast as (message: string, type?: string) => void}
-          printQueueEntries={printQueueEntries}
-          confirmQueueEntriesPrinted={confirmQueueEntriesPrinted}
-          openDetailDrawer={openDetailDrawer}
-        />
+        <Suspense fallback={null}>
+          <OrdersPrintQueueDrawer
+            queueClients={queueClients}
+            pqClientFilter={pqClientFilter}
+            setPqClientFilter={setPqClientFilter}
+            queueClientLabel={queueClientLabel}
+            queueClientId={queueClientId}
+            queueHistoryVisible={queueHistoryVisible}
+            setQueueHistoryVisible={setQueueHistoryVisible}
+            setQueueOpen={setQueueOpen}
+            pqSearch={pqSearch}
+            setPqSearch={setPqSearch}
+            pqHistoryAsc={pqHistoryAsc}
+            setPqHistoryAsc={setPqHistoryAsc}
+            queueCount={queueCount}
+            queuedEntries={queuedEntries}
+            visibleQueueGroups={visibleQueueGroups}
+            queueHasVisibleEntries={queueHasVisibleEntries}
+            queueLoading={queueLoading}
+            pqSearchLower={pqSearchLower}
+            printedEntries={printedEntries}
+            visiblePrintedEntries={visiblePrintedEntries}
+            unprintedQueueCount={unprintedQueueCount}
+            queueConfirmPrintedReady={queueConfirmPrintedReady}
+            queuePrintMessage={queuePrintMessage}
+            queuePrintProgress={queuePrintProgress}
+            queuePrintInFlight={queuePrintInFlight}
+            hydrateQueue={hydrateQueue}
+            showToast={showToast as (message: string, type?: string) => void}
+            printQueueEntries={printQueueEntries}
+            confirmQueueEntriesPrinted={confirmQueueEntriesPrinted}
+            openDetailDrawer={openDetailDrawer}
+          />
+        </Suspense>
       ) : null}
 
       {detailDrawerOrderId != null ? (
