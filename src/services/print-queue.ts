@@ -13,7 +13,7 @@ import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstati
 import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
 import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } from './fulfillment/outbox';
-import { createLabelV2, type CreateLabelInputDto } from './labels';
+import { createLabelV2, type CreateLabelInputDto, type LabelCreateTimingBreakdown } from './labels';
 import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 // PS-191: structural retry-eligibility classification for purchase failures.
@@ -159,6 +159,7 @@ export type QueueSendTimingBreakdown = {
   labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'skipped_preflight' | 'failed';
   existingLabelLookupMs?: number;
   labelPurchaseMs?: number;
+  labelCreateTimings?: LabelCreateTimingBreakdown;
   inProgressRecoveryMs?: number;
   recoveryLookupMs?: number;
   queueWriteMs?: number;
@@ -876,7 +877,7 @@ async function setQueueSendItemState(
 
 async function timeQueueStep<T>(
   timings: QueueSendTimingBreakdown,
-  key: Exclude<keyof QueueSendTimingBreakdown, 'totalMs' | 'labelSource'>,
+  key: Exclude<keyof QueueSendTimingBreakdown, 'totalMs' | 'labelSource' | 'labelCreateTimings'>,
   task: () => Promise<T>,
 ): Promise<T> {
   const startedAt = Date.now();
@@ -1022,6 +1023,7 @@ async function processQueueSendOrder(
         );
         labelUrl = created.labelUrl;
         trackingNumber = created.trackingNumber;
+        if (created.timings) timings.labelCreateTimings = created.timings;
         timings.labelSource = 'created';
         await lifecycle?.setState('shipment_persisted', {
           trackingNumber,

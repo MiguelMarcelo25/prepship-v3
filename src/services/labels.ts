@@ -162,11 +162,24 @@ export class LabelRateLimitError extends Error {
 
 type LabelTimer = ReturnType<typeof createLabelTimer>;
 
+export type LabelCreateTimingProvider = 'mock' | 'direct' | 'shipstation';
+
+export type LabelCreateTimingBreakdown = {
+  totalMs: number;
+  provider?: LabelCreateTimingProvider;
+  steps: Record<string, number>;
+};
+
 function createLabelTimer(orderId: number | string) {
   const started = performance.now();
   const prefix = `[label-create] orderId=${orderId}`;
+  const steps: Record<string, number> = {};
 
   const elapsed = () => Math.round(performance.now() - started);
+  const recordStep = (step: string, durationMs: number) => {
+    const key = step.trim() || 'unknown';
+    steps[key] = (steps[key] ?? 0) + Math.round(durationMs);
+  };
 
   return {
     async task<T>(step: string, fn: () => Promise<T>): Promise<T> {
@@ -174,7 +187,9 @@ function createLabelTimer(orderId: number | string) {
       try {
         return await fn();
       } finally {
-        console.info(`${prefix} ${step} ${Math.round(performance.now() - stepStarted)}ms total=${elapsed()}ms`);
+        const durationMs = performance.now() - stepStarted;
+        recordStep(step, durationMs);
+        console.info(`${prefix} ${step} ${Math.round(durationMs)}ms total=${elapsed()}ms`);
       }
     },
     background(step: string, fn: () => Promise<void>): void {
@@ -193,6 +208,13 @@ function createLabelTimer(orderId: number | string) {
     },
     done(step: string): void {
       console.info(`${prefix} ${step} total=${elapsed()}ms`);
+    },
+    snapshot(extra: { provider?: LabelCreateTimingProvider } = {}): LabelCreateTimingBreakdown {
+      return {
+        totalMs: elapsed(),
+        ...(extra.provider ? { provider: extra.provider } : {}),
+        steps: { ...steps },
+      };
     },
   };
 }
@@ -369,6 +391,9 @@ export type CreateLabelResponseDto = {
   voided: boolean;
   orderStatus: string;
   apiVersion: 'v2';
+  // Per user override unlock shipped data on 2026-07-07: timing-only diagnostics
+  // for print-queue performance; no label/order mutation behavior changes.
+  timings?: LabelCreateTimingBreakdown;
 };
 
 // PS-211: void outcomes are structured statuses, not throw-strings. 'voided'
@@ -1438,6 +1463,7 @@ async function createLabelV2Impl(
       voided: false,
       orderStatus: 'shipped',
       apiVersion: 'v2',
+      timings: timer.snapshot({ provider: 'mock' }),
     };
   }
 
@@ -1793,6 +1819,7 @@ async function createLabelV2Impl(
     voided: created.voided,
     orderStatus: 'shipped',
     apiVersion: 'v2',
+    timings: timer.snapshot({ provider: directRef ? 'direct' : 'shipstation' }),
   };
 }
 

@@ -1,6 +1,7 @@
 import { isQueueSendActiveStatus, type QueueSendStatusName } from './queue-send-status';
 import type { QueueSendJobItemInput, QueueSendJobItemState } from './queue-send-item-state';
 import type { PrintQueueListScope, QueueSendOrderInput } from '../print-queue';
+import type { LabelCreateTimingBreakdown } from '../labels';
 
 export const PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run';
 export const PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.';
@@ -12,6 +13,7 @@ export type QueueSendTimingBreakdown = {
   labelSource?: 'provided' | 'existing' | 'created' | 'recovered' | 'in_progress_recovered' | 'skipped_preflight' | 'failed';
   existingLabelLookupMs?: number;
   labelPurchaseMs?: number;
+  labelCreateTimings?: LabelCreateTimingBreakdown;
   inProgressRecoveryMs?: number;
   recoveryLookupMs?: number;
   queueWriteMs?: number;
