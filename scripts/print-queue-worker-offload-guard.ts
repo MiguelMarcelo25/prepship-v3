@@ -30,6 +30,7 @@ const printQueue = read('src/services/print-queue.ts');
 const printWorkerPath = 'src/services/print-queue-worker.ts';
 const printWorker = read(printWorkerPath);
 const worker = read('src/worker.ts');
+const ordersView = read('web/src/components/Views/OrdersView.tsx');
 
 check('package wires the print queue worker offload guard',
   packageJson.includes('"test:print-queue-worker-offload": "tsx scripts/print-queue-worker-offload-guard.ts"'));
@@ -69,6 +70,12 @@ check('print queue service exports a durable rehydrating worker runner',
   /export async function runQueueSendJobFromWorker/.test(printQueue) &&
     /getQueueSendJobRecord\(payload\.jobId\)/.test(printQueue) &&
     /queueSendJobFromSnapshot/.test(printQueue));
+
+check('backend remains the print queue worker concurrency owner',
+  /function normalizeQueueSendWorkerConcurrency\([\s\S]*readyOrderCount/.test(printQueue) &&
+    /preflight\.readyOrders\.length \|\| 1/.test(printQueue) &&
+    !/BACKEND_QUEUE_SEND_CONCURRENCY/.test(ordersView) &&
+    !/BACKEND_TEST_QUEUE_SEND_CONCURRENCY/.test(ordersView));
 
 check('worker startup re-enqueues stale active durable jobs with stored payloads',
   /getRecoverableQueueSendJobRecords/.test(printWorker) &&

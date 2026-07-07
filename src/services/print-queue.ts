@@ -561,10 +561,21 @@ function updateQueueSendProgress(job: QueueSendJob) {
       : `Sending to queue ${job.current}/${job.total}`;
 }
 
-function normalizeQueueSendWorkerConcurrency(value: unknown): number {
+function normalizeQueueSendWorkerConcurrency(
+  value: unknown,
+  readyOrderCount = QUEUE_SEND_WORKER_MAX_CONCURRENCY
+): number {
   const parsed = Number(value);
   const requested = Number.isFinite(parsed) ? Math.floor(parsed) : QUEUE_SEND_WORKER_MAX_CONCURRENCY;
-  return Math.max(1, Math.min(QUEUE_SEND_WORKER_MAX_CONCURRENCY, requested || QUEUE_SEND_WORKER_MAX_CONCURRENCY));
+  const boundedReadyOrderCount = Math.max(1, Math.floor(readyOrderCount));
+  return Math.max(
+    1,
+    Math.min(
+      QUEUE_SEND_WORKER_MAX_CONCURRENCY,
+      boundedReadyOrderCount,
+      requested || QUEUE_SEND_WORKER_MAX_CONCURRENCY
+    )
+  );
 }
 
 async function markQueueSendWorkerUnavailable(job: QueueSendJob, reason: string): Promise<void> {
@@ -1284,7 +1295,7 @@ export async function startQueueSendJob(input: {
     null;
   const skippedResults = [...frontendSkippedResults, ...preflight.blockedResults];
   const itemStates = [...frontendSkippedItems, ...preflight.itemStates];
-  const workerConcurrency = normalizeQueueSendWorkerConcurrency(input.concurrency);
+  const workerConcurrency = normalizeQueueSendWorkerConcurrency(input.concurrency, preflight.readyOrders.length || 1);
   const job: QueueSendJob = {
     jobId,
     status: preflight.readyOrders.length > 0 ? 'pending' : 'done',
@@ -1389,7 +1400,7 @@ async function runQueueSendJob(
   const job = queueSendJobs.get(jobId);
   if (!job) return;
 
-  const concurrency = normalizeQueueSendWorkerConcurrency(requestedConcurrency);
+  const concurrency = normalizeQueueSendWorkerConcurrency(requestedConcurrency, orders.length || 1);
   job.status = 'running';
   updateQueueSendProgress(job);
   void persistQueueSendJobSnapshot(job);

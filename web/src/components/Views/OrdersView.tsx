@@ -345,11 +345,6 @@ const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order be
 // used only where we immediately kick off the one-click re-rate (never auto-repurchases — PS-191).
 const RATE_EXPIRED_RERATE_MESSAGE = 'Rate expired — re-rate this order before printing.'
 const BATCH_QUEUE_CONCURRENCY = 2
-// PS-perf (DJ 2026-06-23): the MAX queue-send concurrency. Auto-sized DOWN to the batch size at the
-// call site so a typical small send runs in ONE wave instead of ceil(N/5); the backend clamps to
-// [1,8] (print-queue.ts) regardless, so this is just the FE-side ceiling.
-const BACKEND_QUEUE_SEND_CONCURRENCY = 8
-const BACKEND_TEST_QUEUE_SEND_CONCURRENCY = 8
 const BACKEND_QUEUE_SEND_POLL_MS = 750
 
 // PS-258 (slice): getQueueableLabelUrl + getQueuePayloadEntries (the two pure
@@ -2932,12 +2927,6 @@ export default function OrdersView({
         const started = await apiClient.startQueueSendJob({
           orders: queueOrders,
           preflight_skips: preflightSkips,
-          // PS-perf (DJ 2026-06-23): auto-size to the batch so a typical small send runs in ONE wave
-          // instead of ceil(N/5). The backend clamps to [1,8] (print-queue.ts), which stays the hard
-          // ceiling; distinct orders + the per-order purchase lock keep this safe from double-buys.
-          concurrency: options.batchTestMode
-            ? BACKEND_TEST_QUEUE_SEND_CONCURRENCY
-            : Math.min(BACKEND_QUEUE_SEND_CONCURRENCY, Math.max(1, queueOrders.length)),
         })
         attachPersistentQueueBackendJob(queueJobId, started.job_id)
         try {
