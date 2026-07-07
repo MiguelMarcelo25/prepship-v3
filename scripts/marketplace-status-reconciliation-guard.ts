@@ -87,12 +87,39 @@ for (const file of [
   // reconciliation wiring as the legacy functions they replace.
   'src/lib/imported-handlers/walmart-orders.ts',
   'src/lib/imported-handlers/ebay-orders.ts',
-  'src/lib/imported-handlers/shopify-orders.ts',
 ]) {
   const source = readFileSync(file, 'utf8');
   assert.match(source, /hasExistingMarketplaceOrderRow/);
   assert.match(source, /reconcileMarketplaceOrderStatuses/);
   assert.match(source, /skippedSyntheticMirrors/);
 }
+
+// 10ae36cf: the Shopify puller intentionally dropped the global
+// order-number gate — shop-local numbers like "#1001" collide across
+// stores, so mirrors dedupe on the normalized source identity instead.
+// Pin the replacement protection (and keep the gate from creeping back);
+// Shopify status mapping stays covered by the normalize/aggregate
+// assertions at the top of this guard.
+const shopifySource = readFileSync('src/lib/imported-handlers/shopify-orders.ts', 'utf8');
+assert.doesNotMatch(
+  shopifySource,
+  /hasExistingMarketplaceOrderRow/,
+  'Shopify imports must not gate mirrors on global order_number matches (10ae36cf)',
+);
+assert.match(
+  shopifySource,
+  /source identity below is the canonical key/,
+  'Shopify mirror must keep the source-identity canonical-key rationale',
+);
+assert.match(
+  shopifySource,
+  /buildNormalizedOrderSource\(\{\s*sourceProvider: 'shopify',[\s\S]+?sourceOrderId: order\.sourceOrderId/,
+  'Shopify mirror must build its source identity from provider + account + source order id',
+);
+assert.match(
+  shopifySource,
+  /upsertNormalizedStoreOrders/,
+  'Shopify mirror must persist through the canonical normalized store-order upsert',
+);
 
 console.log('marketplace status reconciliation guard passed');
