@@ -108,6 +108,9 @@ import {
   type PersistentQueueJobKind,
   type PersistentQueueOrderRef,
 } from './orders-persistent-queue-job'
+// Batch-print pipeline: pure chain orchestration for the flag-ON "Create + Print Label"
+// path (proof pre-pass → backend queue-send job → fade → merged-PDF print tail).
+import { runCreatePrintChain } from './batch-create-print-chain'
 import type { OrdersDateFilter } from './orders-view-filters'
 import { resolveOrdersDateRangeForFilter } from './orders-date-query-contract'
 // PS-258/PS-166: the Awaiting orders ORDER/sort computation lifted to a pure, testable owner.
@@ -2874,6 +2877,56 @@ export default function OrdersView({
     }
   }
 
+  // Batch-print pipeline: resolve the provider id the order would ship on (best
+  // rate → selected rate → any existing label). Re-added as a live helper for the
+  // chain's needsOverride proof binding (PS-204) — pure DTO read, no route policy.
+  function resolveOrderShippingProviderId(order: OrderSummaryDto): number | null {
+    return (
+      toNumberValue((order.bestRate as any)?.shippingProviderId) ??
+      order.selectedRate?.shippingProviderId ??
+      order.label?.shippingProviderId ??
+      null
+    )
+  }
+
+  // Batch-print pipeline: build the label-payload override for an order whose saved
+  // rate could not serve as proof, from the FRESH strict-recalc rate. Mirrors the
+  // legacy print loop's payload (PS-204: proof and provider id derive from the SAME
+  // fresh rate, so account binding is coherent by construction). Returns null when
+  // the fresh rate still cannot prove a purchase — the order is skipped, no postage.
+  function buildBatchPrintOverridePayload(order: OrderSummaryDto, freshRate: unknown): Record<string, unknown> | null {
+    const rate = freshRate as Record<string, unknown> | null
+    if (!rate) return null
+    const shippingProviderId = toNumberValue((rate as any)?.shippingProviderId)
+      ?? order.selectedRate?.shippingProviderId
+      ?? order.label?.shippingProviderId
+      ?? null
+    const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((rate as any)?.serviceCode) ?? order.selectedRate?.serviceCode
+    const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((rate as any)?.carrierCode) ?? order.selectedRate?.carrierCode
+    const orderDetail = orderDetailsById.get(order.orderId) ?? null
+    const dims = getDimensions(order, orderDetail)
+    const weightOz = getOrderWeightOz(order, orderDetail)
+    const shippingOptions = buildOrderShippingOptionsPayload(order)
+    const selectedRateProof = buildSelectedRateProofPayload(order, rate)
+    if (!selectedRateProof || !serviceCode || !carrierCode || shippingProviderId == null) return null
+    return {
+      serviceCode,
+      carrierCode,
+      packageCode: 'package',
+      shippingProviderId,
+      weightOz: weightOz > 0 ? weightOz : undefined,
+      length: dims?.length,
+      width: dims?.width,
+      height: dims?.height,
+      confirmation: shippingOptions.confirmation,
+      insuranceProvider: shippingOptions.insuranceProvider,
+      insuredValue: shippingOptions.insuredValue,
+      selectedRateProof,
+      ...buildRateQuoteRefForOrder(order, rate, shippingProviderId),
+      testLabel: batchTestMode || isBackendTestOrder(order),
+    }
+  }
+
   async function sendOrdersToQueueBackend(
     jobOrders: OrderSummaryDto[],
     options: {
@@ -4689,6 +4742,31 @@ export default function OrdersView({
     void combineShipments(selectedOrderIds)
   }
 
+  // Batch-print pipeline: the same 30s fade + refetch the legacy print loop runs
+  // per bought row (boss directive 2026-05-07 — the operator must SEE the order
+  // fading). The legacy block below stays byte-identical this ship; this helper is
+  // consumed only by the flag-ON chain and by the follow-up that deletes the loop.
+  function beginShippedFadeTransition(orderId: number) {
+    const TRANSITION_MS = 30_000
+    setTransitionalShippedIds((prev) => {
+      const next = new Set(prev)
+      next.add(orderId)
+      return next
+    })
+    const existing = transitionalTimeoutsRef.current.get(orderId)
+    if (existing) window.clearTimeout(existing)
+    const timer = window.setTimeout(() => {
+      setTransitionalShippedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(orderId)
+        return next
+      })
+      transitionalTimeoutsRef.current.delete(orderId)
+      scheduleOrdersRefetch(250)
+    }, TRANSITION_MS)
+    transitionalTimeoutsRef.current.set(orderId, timer)
+  }
+
   async function handleBatchAction(mode: 'print' | 'queue') {
     let batchOrders: OrderSummaryDto[] = []
     try {
@@ -4717,6 +4795,69 @@ export default function OrdersView({
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')
+      } finally {
+        setBatchBusy(false)
+        clearSelection()
+      }
+      return
+    }
+
+    if (mode === 'print' && batchPrintViaQueue) {
+      // Batch-print pipeline (BATCH_PRINT_VIA_QUEUE, default OFF): Create + Print
+      // chains the two existing backend jobs — /print-queue/batch-send buys
+      // (≤8 concurrent, durable, createLabelV2 gate ladder, LABEL_EXISTS recovery)
+      // and /print-queue/print merges ONE 4×6-normalized PDF. The FE buys nothing
+      // here. Flag OFF ⇒ the legacy sequential loop below runs byte-identical.
+      const printWindow = openQueuePrintWindow()
+      setBatchBusy(true)
+      try {
+        const outcome = await runCreatePrintChain(batchOrders, {
+          needsOverride: (order) =>
+            !isBackendTestOrder(order) &&
+            !buildSelectedRateProofPayload(
+              order,
+              order.bestRate ?? order.selectedRate,
+              resolveOrderShippingProviderId(order),
+            ),
+          recalculate: async (order) => {
+            const request = getAutoBestRateRequest(order)
+            if (!request) return { ok: false as const, message: 'Recalculate current best rate before label purchase' }
+            const result = await runStrictBestRateRecalculation(order, request, {
+              timeoutMs: BATCH_RECALCULATE_TIMEOUT_MS,
+            })
+            if (result.status !== 'updated' || !result.rate) {
+              return { ok: false as const, message: result.message || 'Current best rate could not be proven before label purchase' }
+            }
+            return { ok: true as const, rate: result.rate }
+          },
+          buildOverride: (order, freshRate) => buildBatchPrintOverridePayload(order, freshRate),
+          runPool: (poolOrders, worker) => runWithConcurrency(poolOrders, BATCH_QUEUE_CONCURRENCY, worker),
+          sendToQueue: (sendableOrders, overrides) =>
+            sendOrdersToQueueBackend(sendableOrders, {
+              kind: 'create-print',
+              label: 'Creating labels',
+              batchTestMode,
+              labelPayloadOverrides: overrides,
+              deferOrdersRefetch: true,
+            }),
+          printEntries: (entryIds) => printQueueEntries(entryIds, { printWindow }),
+          markShipped: (orderId) => beginShippedFadeTransition(orderId),
+        })
+        if (!outcome.printAttempted) printWindow?.close()
+        if (outcome.queued > 0) {
+          const failSuffix = outcome.failed > 0
+            ? ` — ${outcome.errors.slice(0, 3).join('; ')}${outcome.errors.length > 3 ? ` (+${outcome.errors.length - 3} more)` : ''}`
+            : ''
+          showToast(
+            `✅ Created ${outcome.queued} label${outcome.queued === 1 ? '' : 's'} — ${outcome.printed ? 'merged PDF opened' : 'PDF ready in the Print Queue drawer'}${failSuffix}`,
+            outcome.failed > 0 ? undefined : 'success',
+          )
+        } else {
+          showToast(outcome.errors[0] ?? 'No labels were created', 'error')
+        }
+      } catch (error) {
+        printWindow?.close()
+        showToast(error instanceof Error ? error.message : 'Create + Print failed', 'error')
       } finally {
         setBatchBusy(false)
         clearSelection()
