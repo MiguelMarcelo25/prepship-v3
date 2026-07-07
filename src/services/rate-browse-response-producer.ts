@@ -23,7 +23,10 @@ import {
   type ResidentialEvidence,
 } from './shipping-workflow/residential-evidence';
 import { resolveAddressClassification } from './shipping-workflow/resolve-address-classification';
-import { planStrictRecalculateDecision } from './rates-recalculate';
+import {
+  finalizeStrictRecalculationForResponse,
+  planStrictRecalculateDecision,
+} from './rates-recalculate';
 import { persistStrictRecalculateOutcome } from './rates-recalculate-persist';
 import {
   getCarrierEligibilityMode,
@@ -474,9 +477,8 @@ export async function produceRateBrowsePayload({
       }
     }
     strictRecalculation = {
-      ...strictDecision,
+      ...finalizeStrictRecalculationForResponse(strictDecision, persist),
       requestKey: combinedRequestKey,
-      ...persist,
     };
   } else if (
     browseSotWritebackEnabled() &&

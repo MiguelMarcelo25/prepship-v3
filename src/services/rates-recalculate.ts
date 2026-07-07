@@ -28,6 +28,16 @@ export type StrictRecalculateDecision =
   | { action: 'clear'; message: string }
   | { action: 'apply'; message: string; selectedPid: number; serviceCode: string };
 
+export type StrictRecalculatePersistResult = {
+  persisted: boolean;
+  reason?: string;
+};
+
+export type StrictRecalculationResponse =
+  | ({ action: 'blocked'; message: string } & StrictRecalculatePersistResult)
+  | ({ action: 'clear'; message: string } & StrictRecalculatePersistResult)
+  | ({ action: 'apply'; message: string; selectedPid: number; serviceCode: string } & StrictRecalculatePersistResult);
+
 function carrierLabel(status: StrictRecalculateCarrierStatus): string {
   const label =
     (typeof status.nickname === 'string' && status.nickname.trim()) ||
@@ -83,3 +93,24 @@ export function planStrictRecalculateDecision(input: {
   };
 }
 
+export function finalizeStrictRecalculationForResponse(
+  decision: StrictRecalculateDecision,
+  persist: StrictRecalculatePersistResult,
+): StrictRecalculationResponse {
+  if (decision.action !== 'blocked' && persist.persisted !== true) {
+    const reason = persist.reason?.trim();
+    return {
+      action: 'blocked',
+      persisted: false,
+      ...(persist.reason ? { reason: persist.reason } : {}),
+      message: reason
+        ? `Live rate recalculated, but the saved best rate was not updated: ${reason}.`
+        : 'Live rate recalculated, but the saved best rate was not updated.',
+    };
+  }
+
+  return {
+    ...decision,
+    ...persist,
+  };
+}

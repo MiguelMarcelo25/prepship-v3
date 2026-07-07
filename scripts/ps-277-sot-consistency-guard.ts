@@ -55,13 +55,13 @@ check('residential r= round-trips through the fingerprint',
     residentialFromRequestFingerprint(buildShippingRateRequestFingerprint({ ...base, residential: false })) === false);
 
 // ── 3. SOT-writer invariants: one funnel (PS-244), no independent number ──────
-const browse = readFileSync('src/routes/rates.ts', 'utf8');
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 check('browse + backfill BOTH produce the best via the single funnel finalizeBestRateWithQuote (PS-244)',
-  /finalizeBestRateWithQuote\(\{/.test(browse) && /finalizeBestRateWithQuote\(\{/.test(backfill));
+  /finalizeBestRateWithQuote\(\{/.test(browseProducer) && /finalizeBestRateWithQuote\(\{/.test(backfill));
 check('browse RECONCILES the SOT (plain browse, gated) via the awaiting-only persist owner (277.1)',
-  /persistStrictRecalculateOutcome\(\{[\s\S]{0,200}decision: reconcileDecision/.test(browse) &&
-    /browseSotWritebackEnabled\(\)/.test(browse));
+  /persistStrictRecalculateOutcome\(\{[\s\S]{0,200}decision: reconcileDecision/.test(browseProducer) &&
+    /browseSotWritebackEnabled\(\)/.test(browseProducer));
 
 // ── 4. The column reads the persisted SOT; the FE key reads the backend verdict (PS-276 #3) ──
 // PS-317: residentialForRate moved to ./orders/best-rate/rate-request — include it so the delegation pin resolves.

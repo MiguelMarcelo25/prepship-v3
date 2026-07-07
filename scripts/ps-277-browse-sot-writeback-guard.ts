@@ -18,26 +18,26 @@ function check(name: string, cond: boolean): void {
   else console.log(`ok   ${name}`);
 }
 
-const rates = readFileSync('src/routes/rates.ts', 'utf8');
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const persist = readFileSync('src/services/rates-recalculate-persist.ts', 'utf8');
 
 // ── 1. Env gate default OFF ───────────────────────────────────────────────────
 check('browse SOT writeback is env-gated, default OFF (BROWSE_SOT_WRITEBACK === on)',
-  /function browseSotWritebackEnabled\(\)[\s\S]{0,120}process\.env\.BROWSE_SOT_WRITEBACK === 'on'/.test(rates));
+  /function browseSotWritebackEnabled\(\)[\s\S]{0,120}process\.env\.BROWSE_SOT_WRITEBACK === 'on'/.test(browseProducer));
 
 // ── 2. Reconcile fires only on a fresh LIVE complete best, not on strict-recalc ──
 check('reconcile is the ELSE of the strict-recalculate block (no double persist)',
-  /strictRecalculation = \{[\s\S]{0,120}\.\.\.persist,\s*\};\s*\}\s*else if \(/.test(rates));
+  /strictRecalculation = \{[\s\S]{0,160}finalizeStrictRecalculationForResponse\(strictDecision, persist\)[\s\S]{0,80}\};\s*\}\s*else if \(/.test(browseProducer));
 check('reconcile is gated + requires orderId + complete + a LIVE (not cached) result',
-  /browseSotWritebackEnabled\(\) &&[\s\S]{0,200}body\.orderId === 'number' && body\.orderId > 0 &&[\s\S]{0,80}bestRateOut != null && bestRateComplete && !result\.cached/.test(rates));
+  /browseSotWritebackEnabled\(\) &&[\s\S]{0,200}body\.orderId === 'number' && body\.orderId > 0 &&[\s\S]{0,80}bestRateOut != null && bestRateComplete && !result\.cached/.test(browseProducer));
 
 // ── 3. Persists only an 'apply' decision via the existing owner, best-effort ───
 check("reconcile persists only on decision 'apply'",
-  /if \(reconcileDecision\.action === 'apply'\) \{/.test(rates));
+  /if \(reconcileDecision\.action === 'apply'\) \{/.test(browseProducer));
 check('reconcile reuses persistStrictRecalculateOutcome (the awaiting-only owner)',
-  /await persistStrictRecalculateOutcome\(\{[\s\S]{0,200}decision: reconcileDecision/.test(rates));
+  /await persistStrictRecalculateOutcome\(\{[\s\S]{0,200}decision: reconcileDecision/.test(browseProducer));
 check('reconcile write is best-effort (browse never fails on a reconcile error)',
-  /catch \(err\) \{[\s\S]{0,160}SOT reconcile write failed \(best-effort\)/.test(rates));
+  /catch \(err\) \{[\s\S]{0,160}SOT reconcile write failed \(best-effort\)/.test(browseProducer));
 
 // ── 4. The owner still refuses shipped/cancelled (lock intact) ────────────────
 check('persist owner refuses non-awaiting rows (shipped/cancelled lock intact)',

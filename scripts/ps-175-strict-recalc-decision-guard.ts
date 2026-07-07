@@ -23,7 +23,10 @@
  *   npx tsx scripts/ps-175-strict-recalc-decision-guard.ts
  */
 import { readFileSync } from 'node:fs';
-import { planStrictRecalculateDecision } from '../src/services/rates-recalculate';
+import {
+  finalizeStrictRecalculationForResponse,
+  planStrictRecalculateDecision,
+} from '../src/services/rates-recalculate';
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -76,13 +79,35 @@ check('blocked messages name the carrier + status (operator-actionable)',
     });
     return d.action === 'blocked' && /ROCEL C81F70/.test(d.message) && /loading/.test(d.message);
   })());
+check('failed apply persist becomes blocked instead of a false apply',
+  (() => {
+    const d = finalizeStrictRecalculationForResponse(
+      { action: 'apply', message: 'Live best rate applied.', selectedPid: 10000025, serviceCode: 'shipp_ups_ground' },
+      { persisted: false, reason: 'no-downgrade: kept the cheaper fresh best for the same shipment inputs' },
+    );
+    return d.action === 'blocked' &&
+      d.persisted === false &&
+      /no-downgrade/.test(d.message);
+  })());
+check('failed clear persist becomes blocked instead of a false clear',
+  finalizeStrictRecalculationForResponse(
+    { action: 'clear', message: 'No live rates were returned for this shipment.' },
+    { persisted: false, reason: 'persist failed' },
+  ).action === 'blocked');
+check('successful apply persist remains apply',
+  finalizeStrictRecalculationForResponse(
+    { action: 'apply', message: 'Live best rate applied.', selectedPid: 433542, serviceCode: 'usps_ground_advantage' },
+    { persisted: true },
+  ).action === 'apply');
 
 // ── 2. /browse wiring ─────────────────────────────────────────────────────────
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 check('zod accepts strictRecalculate', /strictRecalculate: z\.boolean\(\)\.optional\(\)/.test(ratesRoute));
 check('decision computed from combined statuses + cheapest and attached to the payload',
-  /planStrictRecalculateDecision\(\{[\s\S]{0,400}carrierStatuses: combinedCarrierStatuses/.test(ratesRoute) &&
-  /\.\.\.\(strictRecalculation \? \{ strictRecalculation \} : \{\}\)/.test(ratesRoute));
+  /planStrictRecalculateDecision\(\{[\s\S]{0,400}carrierStatuses: combinedCarrierStatuses/.test(browseProducer) &&
+  /finalizeStrictRecalculationForResponse\(strictDecision, persist\)/.test(browseProducer) &&
+  /\.\.\.\(strictRecalculation \? \{ strictRecalculation \} : \{\}\)/.test(browseProducer));
 
 // ── 3. FE wiring ──────────────────────────────────────────────────────────────
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
@@ -115,8 +140,8 @@ check('persist touches order_overrides only (never orders/shipments writes)',
 check('persist carries the shipped-data override citation',
   /Per user override unlock shipped data on 2026-06-12/.test(persistService));
 check('/browse persists the outcome only when the request carries an orderId',
-  /typeof body\.orderId === 'number' && body\.orderId > 0/.test(ratesRoute) &&
-  /persistStrictRecalculateOutcome\(\{/.test(ratesRoute));
+  /typeof body\.orderId === 'number' && body\.orderId > 0/.test(browseProducer) &&
+  /persistStrictRecalculateOutcome\(\{/.test(browseProducer));
 // PS-178 final part: the FE strict persist calls are DELETED — the backend
 // persists inside /browse; the FE only updates display state.
 check('FE never persists strict outcomes (backend-only writes)',
