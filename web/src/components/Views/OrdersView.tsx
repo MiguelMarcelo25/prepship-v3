@@ -25,7 +25,11 @@ import {
   getBestRateServiceCode,
 } from './orders-row-display'
 // PS-166/PS-306 (decomposition): pure money/rate cell renderers extracted to OrdersRateCells.
+<<<<<<< HEAD
 import { renderOrderTotalCell, renderBestRateFinalCell, renderCShippingRateCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
+=======
+import { renderOrderTotalCell, renderBestRateFinalCell, renderRateCostCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
+>>>>>>> 4f83eef6 (Add create-print job kind and batchPrintViaQueue FE flag state)
 // PS-166/PS-306/PS-258 (Wave 2): the four leaf cell renderers (Best Rate / Ship
 // Margin / Carrier / Shipping Account) extracted VERBATIM to ./orders/cells/order-cells.
 // renderTableCell stays here as a thin dispatcher; the component-scoped closures
@@ -607,12 +611,18 @@ export default function OrdersView({
   // defaults to non-admin until the backend answers (the server still enforces every
   // admin-only route regardless of this display flag).
   const [callerIsAdmin, setCallerIsAdmin] = useState(false)
+  // Batch-print pipeline: backend-owned gate (BATCH_PRINT_VIA_QUEUE) for chaining
+  // "Create + Print Label" through the backend queue jobs. Default OFF. NOT a
+  // money-path route switch (PS-359 removed those): both orchestrations buy only
+  // through createLabelV2's backend gate ladder.
+  const [batchPrintViaQueue, setBatchPrintViaQueue] = useState(false)
   useEffect(() => {
     let cancelled = false
-    void api.get<{ id: string | null; email: string | null; isAdmin: boolean }>('/users/me')
+    void api.get<{ id: string | null; email: string | null; isAdmin: boolean; batchPrintViaQueue?: boolean }>('/users/me')
       .then((res) => {
         if (cancelled) return
         setCallerIsAdmin(res.isAdmin === true)
+        setBatchPrintViaQueue(res.batchPrintViaQueue === true)
       })
       .catch((err) => console.warn('[orders] failed to load caller identity:', err))
     return () => { cancelled = true }
@@ -6007,7 +6017,11 @@ export default function OrdersView({
       case 'bestRateFinal':
         return renderBestRateFinalCell(order)
       case 'ratecost':
+<<<<<<< HEAD
         return renderCShippingRateCell(order)
+=======
+        return renderRateCostCell(order)
+>>>>>>> 4f83eef6 (Add create-print job kind and batchPrintViaQueue FE flag state)
       case 'margin':
         return renderMargin(order)
       case 'marketplacefee':

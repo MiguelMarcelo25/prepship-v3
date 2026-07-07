@@ -9,7 +9,7 @@
 // identifiers-only shape HERE.
 import type { OrderSummaryDto } from '../../types/api'
 
-export type PersistentQueueJobKind = 'existing-labels' | 'batch-queue'
+export type PersistentQueueJobKind = 'existing-labels' | 'batch-queue' | 'create-print'
 
 export interface PersistentQueueOrderRef {
   orderId: number
