@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import {
+
+process.env.DATABASE_URL ??= 'postgres://invalid:invalid@127.0.0.1:1/ps403_pdf_chunks_guard';
+process.env.SUPABASE_URL ??= 'http://127.0.0.1';
+process.env.SUPABASE_ANON_KEY ??= 'dummy';
+process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'dummy';
+process.env.SUPABASE_JWT_SECRET ??= 'dummy';
+
+const {
   PRINT_QUEUE_PDF_CHUNK_SIZE,
   planPrintQueuePdfChunks,
-} from '../src/services/print-queue';
+} = await import('../src/services/print-queue');
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');

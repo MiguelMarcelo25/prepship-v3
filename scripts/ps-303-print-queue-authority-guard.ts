@@ -148,8 +148,9 @@ check('startQueueSendJob persists a durable worker job before worker dispatch',
 check('worker calls the backend process and classifies retry eligibility structurally',
   runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
   runJobBlock.includes('classifyLabelPurchaseRetry(err)') &&
-  runJobBlock.includes('const retryEligible = staleLabelAttempt || retry.retryEligible') &&
-  runJobBlock.includes('const retryReason = staleLabelAttempt ? err.retryReason : retry.retryReason'));
+  runJobBlock.includes('const labelPurchaseInProgress = isLabelPurchaseInProgressError(err)') &&
+  runJobBlock.includes('const retryEligible = staleLabelAttempt || labelPurchaseInProgress || retry.retryEligible') &&
+  runJobBlock.includes("? 'label_purchase_in_progress'"));
 
 const printQueueRoute = read('src/routes/print-queue.ts');
 const batchSendBlock = blockBetween(
