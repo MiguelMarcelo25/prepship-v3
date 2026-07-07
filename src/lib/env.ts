@@ -200,6 +200,12 @@ const schema = z.object({
   // unchanged — createLabelV2 owns every buy on both paths; this flag only moves FE
   // orchestration. OFF is byte-identical. DJ flips on Render after a test-client canary.
   BATCH_PRINT_VIA_QUEUE: booleanFlag(false),
+  // Per user override unlock shipped data on 2026-07-07: merge-job label fetch concurrency
+  // (batch-print pipeline design). Default 1 = at most one fetch in flight, walked in merge
+  // order — today's serial behavior on the wire. DJ raises to ~4 on Render after a canary
+  // Print All. Read-only label fetch mechanics — never postage, never a shipped/cancelled
+  // mutation.
+  PRINT_QUEUE_MERGE_FETCH_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(1),
   // PS-312 (combined-shipment keystone, shipped-data path): default-OFF canary. When ON, after the
   // operator's existing flow buys the ONE label for a bundle PRIMARY, createLabelV2 stamps the shared
   // label facts (tracking/carrier/service/url/shipment ids/package) onto the bundle's additive

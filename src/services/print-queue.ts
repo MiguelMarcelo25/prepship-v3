@@ -17,6 +17,11 @@ import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } fro
 import { createLabelV2, type CreateLabelInputDto, type LabelCreateTimingBreakdown } from './labels';
 import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
+// Per user override unlock shipped data on 2026-07-07: batch-print pipeline — the merge job's
+// label fetches now go through a bounded prefetch pool (default concurrency 1 = serial, byte-
+// identical on the wire). Fetch mechanics only; ordering/grouping/error branches stay below.
+import { env } from '../lib/env';
+import { startLabelPrefetch, type PrefetchResult } from './print-queue-label-prefetch';
 // PS-191: structural retry-eligibility classification for purchase failures.
 import { classifyLabelPurchaseRetry } from './shipping-workflow/rate-fingerprint';
 import { decideShippingSafety } from './fulfillment/shipping-safety';
@@ -2057,6 +2062,23 @@ async function runMergeJob(
     const recipientsByGroup = await loadBatchRecipientsByGroup(entriesByGroup);
     const packageDimsByOrderId = await loadPackageDimsByOrderId(entriesByGroup);
     const shippingHoldsByOrderId = await loadShippingHoldsByOrderId(entriesByGroup);
+    // Per user override unlock shipped data on 2026-07-07 (batch-print pipeline): prefetch the
+    // label PDFs through a bounded pool instead of fetching inline one-at-a-time. Held entries
+    // and unresolvable URLs are excluded here — the loop below still reports them through its
+    // existing branches. Read-only label fetches — no postage, no shipped/cancelled mutation.
+    const prefetchItems: Array<{ id: string; url: string }> = [];
+    for (const entry of sorted) {
+      if (shippingHoldsByOrderId.get(Number(entry.orderId))) continue;
+      try {
+        prefetchItems.push({ id: entry.id, url: resolveLabelFetchUrl(entry.labelUrl, requestOrigin) });
+      } catch {
+        // Unresolvable URL — the loop below reports it via formatLabelUrlError.
+      }
+    }
+    const prefetch = startLabelPrefetch(prefetchItems, {
+      concurrency: env.PRINT_QUEUE_MERGE_FETCH_CONCURRENCY,
+      timeoutMs: 15_000,
+    });
     const successfulEntryIds: string[] = [];
     job.successfulEntryIds = successfulEntryIds;
     job.chunks = [];
@@ -2208,45 +2230,44 @@ async function runMergeJob(
           context.chunk.successfulEntryIds.push(e.id);
         };
 
-        try {
-          const res = await fetch(labelFetchUrl, {
-            headers: { Accept: 'application/pdf' },
-            signal: AbortSignal.timeout(15_000),
-          });
-          if (res.status === 404 || res.status === 410) {
-            if (isMockLabel) {
-              addMockFallback(`Mock label not found (HTTP ${res.status})`);
-              continue;
-            }
-            job.labelErrors!.push(
-              `Label expired for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
-            );
-            failedEntryIds.add(e.id);
-            continue;
-          }
-          if (!res.ok) {
-            if (isMockLabel) {
-              addMockFallback(`Mock label fetch failed (HTTP ${res.status})`);
-              continue;
-            }
-            job.labelErrors!.push(
-              `Failed to fetch label for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
-            );
-            failedEntryIds.add(e.id);
-            continue;
-          }
-          pdfBytes = new Uint8Array(await res.arrayBuffer());
-        } catch (err) {
+        // Per user override unlock shipped data on 2026-07-07 (batch-print pipeline): consume the
+        // prefetched result. Every branch below maps 1:1 onto the previous inline-fetch branches —
+        // same messages, same mock fallbacks, same failedEntryIds bookkeeping.
+        const fetched: PrefetchResult = await prefetch(e.id);
+        if (!fetched.ok && fetched.kind === 'http' && (fetched.status === 404 || fetched.status === 410)) {
           if (isMockLabel) {
-            addMockFallback((err as Error).message || 'Mock label fetch failed');
+            addMockFallback(`Mock label not found (HTTP ${fetched.status})`);
             continue;
           }
           job.labelErrors!.push(
-            `Network error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
+            `Label expired for order ${e.orderNumber ?? e.orderId} (HTTP ${fetched.status}).`
           );
           failedEntryIds.add(e.id);
           continue;
         }
+        if (!fetched.ok && fetched.kind === 'http') {
+          if (isMockLabel) {
+            addMockFallback(`Mock label fetch failed (HTTP ${fetched.status})`);
+            continue;
+          }
+          job.labelErrors!.push(
+            `Failed to fetch label for order ${e.orderNumber ?? e.orderId} (HTTP ${fetched.status}).`
+          );
+          failedEntryIds.add(e.id);
+          continue;
+        }
+        if (!fetched.ok) {
+          if (isMockLabel) {
+            addMockFallback(fetched.message || 'Mock label fetch failed');
+            continue;
+          }
+          job.labelErrors!.push(
+            `Network error for order ${e.orderNumber ?? e.orderId}: ${fetched.message}`
+          );
+          failedEntryIds.add(e.id);
+          continue;
+        }
+        pdfBytes = fetched.bytes;
 
         try {
           const labelDoc = await PDFDocument.load(pdfBytes!);
