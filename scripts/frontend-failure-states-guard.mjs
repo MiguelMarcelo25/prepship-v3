@@ -116,8 +116,11 @@ assert(
   /const labelUrl = getQueueableLabelUrl\(order\.label\?\.labelUrl\)/.test(ordersViewSource) &&
     /const queueableLabelUrl = getQueueableLabelUrl\(response\.labelUrl\)/.test(ordersViewSource) &&
     /await apiClient\.addToQueue\(buildQueueAddPayload\(order, queueableLabelUrl\)\)/.test(ordersViewSource) &&
-    /await apiClient\.openLabelPdf\(queueableLabelUrl\)/.test(ordersViewSource),
-  'OrdersView validates existing-label queue URLs before addToQueue and created-label URLs before Create+Print opens PDFs',
+    // 2026-07-07 cleanup re-anchor: the legacy batch loop's per-label apiClient.openLabelPdf is
+    // deleted (batch print opens ONE merged PDF via the backend signed URL). The created-label
+    // validated open survives on the single-order path via openLabelPdfUrl(queueableLabelUrl, ...).
+    /openLabelPdfUrl\(queueableLabelUrl/.test(ordersViewSource),
+  'OrdersView validates existing-label queue URLs before addToQueue and created-label URLs before opening PDFs',
 );
 
 assert(
