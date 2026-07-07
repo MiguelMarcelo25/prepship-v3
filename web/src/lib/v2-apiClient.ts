@@ -1543,6 +1543,18 @@ export const apiClient = {
     filename: string;
     expires_at: string;
     disposition: 'inline' | 'attachment';
+    chunk_count?: number;
+    chunks?: Array<{
+      chunk_number: number;
+      status: string;
+      label_count: number;
+      file_name: string;
+      file_size: number | null;
+      error: string | null;
+      url: string | null;
+      expires_at: string | null;
+      disposition: 'inline' | 'attachment';
+    }>;
   }> {
     return api.get<any>(
       `/print-queue/print/signed-url/${encodeURIComponent(jobId)}${qs({ disposition })}`

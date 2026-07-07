@@ -24,6 +24,19 @@
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
 
+export type MergedPdfChunkMetadata = {
+  jobId: string;
+  chunkNumber: number;
+  fileName: string | null;
+  labelCount: number;
+  fileSize: number;
+  entryIds: string[];
+  successfulEntryIds: string[];
+  status: string;
+  errorMessage: string | null;
+  createdAt: string | null;
+};
+
 /** True only when DJ has flipped the canary on Render. Default OFF. */
 export function durablePrintQueuePdfEnabled(): boolean {
   return env.DURABLE_PRINT_QUEUE_PDF;
@@ -42,7 +55,24 @@ export async function ensurePrintQueuePdfSchema(): Promise<void> {
         created_at timestamptz NOT NULL DEFAULT now()
       )
     `;
+    await pg`
+      CREATE TABLE IF NOT EXISTS print_queue_pdf_chunks (
+        job_id text NOT NULL,
+        chunk_number integer NOT NULL,
+        file_name text,
+        label_count integer NOT NULL DEFAULT 0,
+        file_size integer NOT NULL DEFAULT 0,
+        entry_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+        successful_entry_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+        status text NOT NULL DEFAULT 'done',
+        error_message text,
+        pdf_bytes bytea,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (job_id, chunk_number)
+      )
+    `;
     await pg`ALTER TABLE print_queue_merged_pdfs ENABLE ROW LEVEL SECURITY`;
+    await pg`ALTER TABLE print_queue_pdf_chunks ENABLE ROW LEVEL SECURITY`;
   })().catch((err) => {
     schemaEnsured = null;
     throw err;
@@ -81,6 +111,83 @@ export async function persistMergedPdf(
   }
 }
 
+export async function persistMergedPdfChunk(input: {
+  jobId: string;
+  chunkNumber: number;
+  fileName: string | null;
+  labelCount: number;
+  entryIds: string[];
+  successfulEntryIds: string[];
+  base64: string;
+  status?: string;
+  errorMessage?: string | null;
+}): Promise<MergedPdfChunkMetadata | null> {
+  if (!durablePrintQueuePdfEnabled()) return null;
+  if (!input.jobId || !input.base64 || input.chunkNumber <= 0) return null;
+  try {
+    await ensurePrintQueuePdfSchema();
+    const bytes = Buffer.from(input.base64, 'base64');
+    const entryIdsJson = JSON.stringify(input.entryIds);
+    const successfulEntryIdsJson = JSON.stringify(input.successfulEntryIds);
+    const rows = await pg<MergedPdfChunkMetadata[]>`
+      INSERT INTO print_queue_pdf_chunks (
+        job_id,
+        chunk_number,
+        file_name,
+        label_count,
+        file_size,
+        entry_ids,
+        successful_entry_ids,
+        status,
+        error_message,
+        pdf_bytes,
+        created_at
+      )
+      VALUES (
+        ${input.jobId},
+        ${input.chunkNumber},
+        ${input.fileName ?? null},
+        ${Math.max(0, Math.trunc(input.labelCount))},
+        ${bytes.byteLength},
+        ${entryIdsJson}::jsonb,
+        ${successfulEntryIdsJson}::jsonb,
+        ${input.status ?? 'done'},
+        ${input.errorMessage ?? null},
+        ${bytes},
+        now()
+      )
+      ON CONFLICT (job_id, chunk_number) DO UPDATE
+        SET file_name = ${input.fileName ?? null},
+            label_count = ${Math.max(0, Math.trunc(input.labelCount))},
+            file_size = ${bytes.byteLength},
+            entry_ids = ${entryIdsJson}::jsonb,
+            successful_entry_ids = ${successfulEntryIdsJson}::jsonb,
+            status = ${input.status ?? 'done'},
+            error_message = ${input.errorMessage ?? null},
+            pdf_bytes = ${bytes},
+            created_at = now()
+      RETURNING
+        job_id AS "jobId",
+        chunk_number AS "chunkNumber",
+        file_name AS "fileName",
+        label_count AS "labelCount",
+        file_size AS "fileSize",
+        entry_ids AS "entryIds",
+        successful_entry_ids AS "successfulEntryIds",
+        status,
+        error_message AS "errorMessage",
+        created_at::text AS "createdAt"
+    `;
+    return rows[0] ?? null;
+  } catch (err) {
+    console.warn(
+      '[print-queue-pdf-store] failed to persist merged PDF chunk:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
 /**
  * Read the merged PDF bytes for a job and return them as a base64 string (the in-memory
  * MergeJob.mergedPdfBase64 shape). Returns null when the flag is OFF (no DB touched) or when no
@@ -110,6 +217,63 @@ export async function getMergedPdfBase64(jobId: string): Promise<string | null> 
   }
 }
 
+export async function getMergedPdfChunkBase64(
+  jobId: string,
+  chunkNumber: number,
+): Promise<string | null> {
+  if (!durablePrintQueuePdfEnabled()) return null;
+  if (!jobId || chunkNumber <= 0) return null;
+  try {
+    await ensurePrintQueuePdfSchema();
+    const rows = await pg<{ pdfBytes: Buffer | null }[]>`
+      SELECT pdf_bytes AS "pdfBytes"
+      FROM print_queue_pdf_chunks
+      WHERE job_id = ${jobId}
+        AND chunk_number = ${Math.trunc(chunkNumber)}
+      LIMIT 1
+    `;
+    const bytes = rows[0]?.pdfBytes;
+    if (!bytes) return null;
+    return Buffer.from(bytes).toString('base64');
+  } catch (err) {
+    console.warn(
+      '[print-queue-pdf-store] failed to read merged PDF chunk:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+export async function getMergedPdfChunks(jobId: string): Promise<MergedPdfChunkMetadata[]> {
+  if (!durablePrintQueuePdfEnabled()) return [];
+  if (!jobId) return [];
+  try {
+    await ensurePrintQueuePdfSchema();
+    return await pg<MergedPdfChunkMetadata[]>`
+      SELECT
+        job_id AS "jobId",
+        chunk_number AS "chunkNumber",
+        file_name AS "fileName",
+        label_count AS "labelCount",
+        file_size AS "fileSize",
+        entry_ids AS "entryIds",
+        successful_entry_ids AS "successfulEntryIds",
+        status,
+        error_message AS "errorMessage",
+        created_at::text AS "createdAt"
+      FROM print_queue_pdf_chunks
+      WHERE job_id = ${jobId}
+      ORDER BY chunk_number ASC
+    `;
+  } catch (err) {
+    console.warn(
+      '[print-queue-pdf-store] failed to read merged PDF chunks:',
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
+}
+
 /**
  * Delete merged-PDF rows older than maxAgeMs. NO-OP when the flag is OFF. Best-effort; never
  * throws. Retention is intentionally longer than the 30-min in-memory job retention so a download
@@ -122,6 +286,7 @@ export async function cleanupOldMergedPdfs(maxAgeMs: number): Promise<void> {
     await ensurePrintQueuePdfSchema();
     const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
     await pg`DELETE FROM print_queue_merged_pdfs WHERE created_at < ${cutoff}`;
+    await pg`DELETE FROM print_queue_pdf_chunks WHERE created_at < ${cutoff}`;
   } catch (err) {
     console.warn(
       '[print-queue-pdf-store] failed to clean up old merged PDFs:',

@@ -33,7 +33,11 @@ import {
 import {
   persistMergedPdf,
   getMergedPdfBase64,
+  getMergedPdfChunkBase64,
+  getMergedPdfChunks,
+  persistMergedPdfChunk,
   cleanupOldMergedPdfs,
+  type MergedPdfChunkMetadata,
 } from './print-queue-pdf-store';
 import { type QueueSendStatusName } from './print-queue/queue-send-status';
 import { setJsonSettings } from './settings-json';
@@ -113,6 +117,20 @@ export type AddToQueueInput = {
   scope?: PrintQueueListScope;
 };
 
+export type MergeJobChunk = {
+  chunkNumber: number;
+  status: 'pending' | 'running' | 'done' | 'error';
+  labelCount: number;
+  fileName?: string;
+  fileSize?: number;
+  pdfUrl?: string | null;
+  errorMessage?: string | null;
+  entryIds: string[];
+  successfulEntryIds: string[];
+  mergedPdfBase64?: string;
+  createdAt: number;
+};
+
 export type MergeJob = {
   jobId: string;
   status: 'pending' | 'running' | 'done' | 'error';
@@ -123,6 +141,7 @@ export type MergeJob = {
   message: string;
   mergedPdfBase64?: string;
   fileName?: string;
+  chunks: MergeJobChunk[];
   errorMessage?: string;
   labelErrors?: string[];
   // PS-194: the entries that ACTUALLY merged into the batch PDF. Previously
@@ -232,11 +251,25 @@ export type MergeJobSnapshot = {
   fileName: string | null;
   errorMessage: string | null;
   labelErrors: string[];
+  chunks: MergeJobChunkSnapshot[];
   // PS-194: optional for back-compat with snapshots persisted before the
   // field existed â€” readers default to [].
   successfulEntryIds?: string[];
   createdAt: string;
   persistedAt: string;
+};
+
+export type MergeJobChunkSnapshot = {
+  chunkNumber: number;
+  status: MergeJobChunk['status'];
+  labelCount: number;
+  fileName: string | null;
+  fileSize: number | null;
+  pdfUrl: string | null;
+  errorMessage: string | null;
+  entryIds: string[];
+  successfulEntryIds: string[];
+  createdAt: string;
 };
 
 export type PrintQueueListScope = {
@@ -247,10 +280,31 @@ export type PrintQueueListScope = {
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
+export const PRINT_QUEUE_PDF_CHUNK_SIZE = 50;
 const QUEUE_SEND_WORKER_MAX_CONCURRENCY = 4;
 const QUEUE_SEND_PROVIDER_PENDING_AFTER_MS = 90_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_MS = 60_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS = 1_500;
+
+export type PrintQueuePdfChunkPlan<T> = {
+  chunkNumber: number;
+  items: T[];
+};
+
+export function planPrintQueuePdfChunks<T>(
+  items: T[],
+  chunkSize = PRINT_QUEUE_PDF_CHUNK_SIZE,
+): Array<PrintQueuePdfChunkPlan<T>> {
+  const safeSize = Math.max(1, Math.trunc(chunkSize));
+  const chunks: Array<PrintQueuePdfChunkPlan<T>> = [];
+  for (let start = 0; start < items.length; start += safeSize) {
+    chunks.push({
+      chunkNumber: chunks.length + 1,
+      items: items.slice(start, start + safeSize),
+    });
+  }
+  return chunks;
+}
 
 export class PrintQueueLabelUrlError extends Error {
   status = 400 as const;
@@ -369,6 +423,57 @@ function collectInvalidLabelErrors(entries: PrintQueueEntry[]): string[] {
   return errors;
 }
 
+function toMergeChunkSnapshot(chunk: MergeJobChunk): MergeJobChunkSnapshot {
+  return {
+    chunkNumber: chunk.chunkNumber,
+    status: chunk.status,
+    labelCount: chunk.labelCount,
+    fileName: chunk.fileName ?? null,
+    fileSize: chunk.fileSize ?? null,
+    pdfUrl: chunk.pdfUrl ?? null,
+    errorMessage: chunk.errorMessage ?? null,
+    entryIds: (chunk.entryIds ?? []).slice(0, 5000),
+    successfulEntryIds: (chunk.successfulEntryIds ?? []).slice(0, 5000),
+    createdAt: new Date(chunk.createdAt).toISOString(),
+  };
+}
+
+function mergeChunkFromSnapshot(chunk: MergeJobChunkSnapshot): MergeJobChunk {
+  return {
+    chunkNumber: chunk.chunkNumber,
+    status: chunk.status,
+    labelCount: chunk.labelCount,
+    fileName: chunk.fileName ?? undefined,
+    fileSize: chunk.fileSize ?? undefined,
+    pdfUrl: chunk.pdfUrl,
+    errorMessage: chunk.errorMessage,
+    entryIds: chunk.entryIds ?? [],
+    successfulEntryIds: chunk.successfulEntryIds ?? [],
+    createdAt: Date.parse(chunk.createdAt) || Date.now(),
+  };
+}
+
+function normalizeMergeChunkStatus(status: string): MergeJobChunk['status'] {
+  return status === 'pending' || status === 'running' || status === 'done' || status === 'error'
+    ? status
+    : 'done';
+}
+
+function mergeChunkFromMetadata(chunk: MergedPdfChunkMetadata): MergeJobChunk {
+  return {
+    chunkNumber: chunk.chunkNumber,
+    status: normalizeMergeChunkStatus(chunk.status),
+    labelCount: chunk.labelCount,
+    fileName: chunk.fileName ?? undefined,
+    fileSize: chunk.fileSize,
+    pdfUrl: null,
+    errorMessage: chunk.errorMessage,
+    entryIds: chunk.entryIds ?? [],
+    successfulEntryIds: chunk.successfulEntryIds ?? [],
+    createdAt: chunk.createdAt ? Date.parse(chunk.createdAt) || Date.now() : Date.now(),
+  };
+}
+
 function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
   return {
     version: 1,
@@ -384,9 +489,10 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
     fileName: job.fileName ?? null,
     errorMessage: job.errorMessage ?? null,
     labelErrors: (job.labelErrors ?? []).slice(-10),
+    chunks: (job.chunks ?? []).map(toMergeChunkSnapshot),
     // PS-194: capped well above the 200-entry batch limit; the durable
     // snapshot is what lets Confirm-Printed survive a page refresh.
-    successfulEntryIds: (job.successfulEntryIds ?? []).slice(0, 500),
+    successfulEntryIds: (job.successfulEntryIds ?? []).slice(0, 5000),
     createdAt: new Date(job.createdAt).toISOString(),
     persistedAt: new Date().toISOString(),
   };
@@ -1666,6 +1772,7 @@ export async function startPrintJob(input: {
     message: `Starting merge of ${entries.length} label${entries.length === 1 ? '' : 's'}â€¦`,
     createdAt: Date.now(),
     labelErrors: [],
+    chunks: [],
     successfulEntryIds: [],
     entryIds: entries.map((entry) => entry.id),
   };
@@ -1691,8 +1798,13 @@ export function getMergeJobStatus(jobId: string): MergeJob | null {
 // notifies a marketplace, or mutates any shipped/cancelled order or shipment.
 export async function getMergeJobForServe(jobId: string): Promise<MergeJob | null> {
   const inMemory = mergeJobs.get(jobId) ?? null;
-  if (inMemory && inMemory.status === 'done' && inMemory.mergedPdfBase64) {
-    return inMemory; // fast path â€” bytes already in process memory
+  if (
+    inMemory &&
+    inMemory.status === 'done' &&
+    (inMemory.mergedPdfBase64 ||
+      (inMemory.chunks ?? []).some((chunk) => chunk.status === 'done' && chunk.mergedPdfBase64))
+  ) {
+    return inMemory; // fast path - bytes already in process memory
   }
 
   // In-memory miss (or done-without-bytes). Only attempt a durable rehydrate when the durable
@@ -1702,8 +1814,52 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
     return inMemory;
   }
 
+  const storedChunks = await getMergedPdfChunks(jobId);
+  if (storedChunks.length > 0) {
+    const chunkByNumber = new Map<number, MergeJobChunk>();
+    for (const chunk of snapshot.chunks ?? []) {
+      chunkByNumber.set(chunk.chunkNumber, mergeChunkFromSnapshot(chunk));
+    }
+    for (const storedChunk of storedChunks) {
+      const durableChunk = mergeChunkFromMetadata(storedChunk);
+      const snapshotChunk = chunkByNumber.get(durableChunk.chunkNumber);
+      chunkByNumber.set(durableChunk.chunkNumber, {
+        ...snapshotChunk,
+        ...durableChunk,
+        entryIds: durableChunk.entryIds.length > 0 ? durableChunk.entryIds : snapshotChunk?.entryIds ?? [],
+        successfulEntryIds:
+          durableChunk.successfulEntryIds.length > 0
+            ? durableChunk.successfulEntryIds
+            : snapshotChunk?.successfulEntryIds ?? [],
+      });
+    }
+    const chunks = [...chunkByNumber.values()].sort((a, b) => a.chunkNumber - b.chunkNumber);
+    const doneChunks = chunks.filter((chunk) => chunk.status === 'done');
+    if (doneChunks.length === 1) {
+      const base64 = await getMergedPdfChunkBase64(jobId, doneChunks[0]!.chunkNumber);
+      if (base64) doneChunks[0]!.mergedPdfBase64 = base64;
+    }
+    return {
+      jobId: snapshot.jobId,
+      status: 'done',
+      clientIds: [...snapshot.clientIds],
+      progress: snapshot.progress,
+      total: snapshot.total,
+      current: snapshot.current,
+      message: snapshot.message,
+      mergedPdfBase64: doneChunks.length === 1 ? doneChunks[0]?.mergedPdfBase64 : undefined,
+      fileName: snapshot.fileName ?? undefined,
+      chunks,
+      errorMessage: snapshot.errorMessage ?? undefined,
+      labelErrors: snapshot.labelErrors,
+      successfulEntryIds: snapshot.successfulEntryIds ?? doneChunks.flatMap((chunk) => chunk.successfulEntryIds),
+      entryIds: chunks.flatMap((chunk) => chunk.entryIds),
+      createdAt: Date.parse(snapshot.createdAt) || Date.now(),
+    };
+  }
+
   const base64 = await getMergedPdfBase64(jobId);
-  if (!base64) return inMemory; // flag OFF or no durable bytes â€” unchanged behavior
+  if (!base64) return inMemory; // flag OFF or no durable bytes - unchanged behavior
 
   return {
     jobId: snapshot.jobId,
@@ -1715,11 +1871,34 @@ export async function getMergeJobForServe(jobId: string): Promise<MergeJob | nul
     message: snapshot.message,
     mergedPdfBase64: base64,
     fileName: snapshot.fileName ?? undefined,
+    chunks: (snapshot.chunks ?? []).map(mergeChunkFromSnapshot),
     errorMessage: snapshot.errorMessage ?? undefined,
     labelErrors: snapshot.labelErrors,
     successfulEntryIds: snapshot.successfulEntryIds ?? [],
     entryIds: [],
     createdAt: Date.parse(snapshot.createdAt) || Date.now(),
+  };
+}
+
+export async function getMergeJobChunkForServe(
+  jobId: string,
+  chunkNumber: number,
+): Promise<{ job: MergeJob; chunk: MergeJobChunk } | null> {
+  if (!Number.isInteger(chunkNumber) || chunkNumber <= 0) return null;
+  const job = await getMergeJobForServe(jobId);
+  if (!job || job.status !== 'done') return null;
+  const chunk = (job.chunks ?? []).find((candidate) => candidate.chunkNumber === chunkNumber);
+  if (!chunk || chunk.status !== 'done') return null;
+  if (chunk.mergedPdfBase64) return { job, chunk };
+
+  const base64 = await getMergedPdfChunkBase64(jobId, chunkNumber);
+  if (!base64) return null;
+  return {
+    job,
+    chunk: {
+      ...chunk,
+      mergedPdfBase64: base64,
+    },
   };
 }
 
@@ -1798,14 +1977,10 @@ async function runMergeJob(
   const job = mergeJobs.get(jobId)!;
   job.status = 'running';
   void persistMergeJobSnapshot(job);
-  job.message = 'Initializing PDF mergeâ€¦';
+  job.message = 'Initializing PDF merge...';
 
   try {
     const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
-    const merged = await PDFDocument.create();
-    const font = await merged.embedFont(StandardFonts.HelveticaBold);
-    const fontReg = await merged.embedFont(StandardFonts.Helvetica);
-
     const sorted = [...entries].sort((a, b) =>
       (a.skuGroupId ?? '').localeCompare(b.skuGroupId ?? '')
     );
@@ -1818,206 +1993,258 @@ async function runMergeJob(
       if (bucket) bucket.push(e);
       else entriesByGroup.set(g, [e]);
     }
-    // PS-073 (per user override unlock shipped data on 2026-06-02):
-    // resolve privacy-safe recipient names for each batch group via a
-    // single render-time join to orders.shipToName (client-scoped). Used
-    // only for the names reference / Batch Manifest; never mutates orders.
+
     const recipientsByGroup = await loadBatchRecipientsByGroup(entriesByGroup);
     const packageDimsByOrderId = await loadPackageDimsByOrderId(entriesByGroup);
-    // PS-129: orders that became held (cancelled upstream / externally shipped) AFTER being
-    // queued must not be merged into the print batch.
     const shippingHoldsByOrderId = await loadShippingHoldsByOrderId(entriesByGroup);
-    let lastGroup: string | null = null;
-    // PS-194: the job carries the live array â€” progress snapshots and the
-    // final done-persist serialize whatever has merged so far, and the status
-    // DTO exposes it for the FE Confirm-Printed gate.
     const successfulEntryIds: string[] = [];
     job.successfulEntryIds = successfulEntryIds;
+    job.chunks = [];
     const failedEntryIds = new Set<string>();
+    const chunkPlans = planPrintQueuePdfChunks(sorted);
+    const totalChunks = Math.max(1, chunkPlans.length);
+    const now = new Date();
+    const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    const chunkFileName = (chunkNumber: number) =>
+      totalChunks === 1
+        ? `batch_print_${ts}.pdf`
+        : `batch_print_${ts}_part_${String(chunkNumber).padStart(2, '0')}_of_${String(totalChunks).padStart(2, '0')}.pdf`;
 
-    for (let i = 0; i < sorted.length; i += 1) {
-      const e = sorted[i]!;
-      job.current = i;
-      job.progress = Math.round((i / sorted.length) * 90);
-      if (shouldPersistProgress(i, sorted.length)) {
-        void persistMergeJobSnapshot(job);
-      }
-      job.message = `Merging label ${i + 1} of ${sorted.length}â€¦`;
+    const createChunkContext = async (plan: PrintQueuePdfChunkPlan<PrintQueueEntry>) => {
+      const document = await PDFDocument.create();
+      const font = await document.embedFont(StandardFonts.HelveticaBold);
+      const fontReg = await document.embedFont(StandardFonts.Helvetica);
+      const chunk: MergeJobChunk = {
+        chunkNumber: plan.chunkNumber,
+        status: 'running',
+        labelCount: plan.items.length,
+        fileName: chunkFileName(plan.chunkNumber),
+        fileSize: 0,
+        pdfUrl: null,
+        errorMessage: null,
+        entryIds: plan.items.map((entry) => entry.id),
+        successfulEntryIds: [],
+        createdAt: Date.now(),
+      };
+      job.chunks.push(chunk);
+      await persistMergeJobSnapshot(job);
+      return {
+        document,
+        font,
+        fontReg,
+        lastGroup: null as string | null,
+        chunk,
+      };
+    };
 
-      // PS-129: skip + clearly fail any entry whose order is now on a shipping hold
-      // (cancelled upstream / externally shipped). Mirrors the existing per-entry failure
-      // handling so one held order never blocks the rest of the batch.
-      const holdReason = shippingHoldsByOrderId.get(Number(e.orderId));
-      if (holdReason) {
-        job.labelErrors!.push(`Order ${e.orderNumber ?? e.orderId}: ${holdReason} â€” excluded from print batch`);
-        failedEntryIds.add(e.id);
-        continue;
+    const finalizeChunk = async (
+      context: Awaited<ReturnType<typeof createChunkContext>>,
+    ): Promise<boolean> => {
+      if (context.document.getPageCount() === 0 || context.chunk.successfulEntryIds.length === 0) {
+        context.chunk.status = 'error';
+        context.chunk.errorMessage = 'No labels merged in this PDF chunk.';
+        await persistMergeJobSnapshot(job);
+        return false;
       }
 
-      let pdfBytes: Uint8Array | null = null;
-      let labelFetchUrl: string;
-      let isMockLabel = false;
-      try {
-        labelFetchUrl = resolveLabelFetchUrl(e.labelUrl, requestOrigin);
-        isMockLabel = isMockLabelUrl(e.labelUrl) || isMockLabelUrl(labelFetchUrl);
-      } catch (err) {
-        job.labelErrors!.push(formatLabelUrlError(e, err));
-        failedEntryIds.add(e.id);
-        continue;
-      }
-      const addGroupHeaderIfNeeded = () => {
-        const groupId = e.skuGroupId ?? '__ungrouped__';
-        if (mergeHeaders && groupId !== lastGroup) {
-          const groupRecipients = recipientsByGroup.get(groupId) ?? [];
-          const headerPage = merged.addPage([288, 432]);
-          const { manifestNeeded } = drawHeader(
-            headerPage,
-            e,
-            groupSizes.get(groupId) ?? 1,
-            font,
-            fontReg,
-            rgb,
-            isMockLabel,
-            groupRecipients,
-            BATCH_NAMES_HEADER_THRESHOLD,
-            packageDimsByOrderId.get(Number(e.orderId)) ?? null
-          );
-          // PS-073: large/overflow batches get a dedicated Batch Manifest
-          // page inserted immediately after the header (before this group's
-          // labels) instead of cramming names onto the 4x6 header.
-          if (manifestNeeded && groupRecipients.length > 0) {
-            const { comboLine, totalUnits } = buildComboSummaryLine(e);
-            addBatchManifestPages(
-              () => merged.addPage([288, 432]),
-              {
-                recipients: groupRecipients,
-                totalOrders: groupSizes.get(groupId) ?? groupRecipients.length,
-                totalUnits,
-                comboLine,
-                isTest: isMockLabel,
-              },
-              font,
-              fontReg,
-              rgb
+      context.chunk.labelCount = context.chunk.successfulEntryIds.length;
+      const bytes = await context.document.save();
+      const base64 = Buffer.from(bytes).toString('base64');
+      context.chunk.mergedPdfBase64 = base64;
+      context.chunk.fileSize = bytes.byteLength;
+      context.chunk.status = 'done';
+      await persistMergeJobSnapshot(job);
+      void persistMergedPdfChunk({
+        jobId,
+        chunkNumber: context.chunk.chunkNumber,
+        fileName: context.chunk.fileName ?? null,
+        labelCount: context.chunk.labelCount,
+        entryIds: context.chunk.entryIds,
+        successfulEntryIds: context.chunk.successfulEntryIds,
+        base64,
+      });
+      return true;
+    };
+
+    let processed = 0;
+    let producedChunkCount = 0;
+
+    for (const plan of chunkPlans) {
+      const context = await createChunkContext(plan);
+
+      for (const e of plan.items) {
+        processed += 1;
+        job.current = processed - 1;
+        job.progress = Math.round(((processed - 1) / sorted.length) * 90);
+        job.message =
+          totalChunks === 1
+            ? `Merging label ${processed} of ${sorted.length}...`
+            : `Merging label ${processed} of ${sorted.length} (PDF chunk ${plan.chunkNumber}/${totalChunks})...`;
+        if (shouldPersistProgress(processed, sorted.length)) {
+          void persistMergeJobSnapshot(job);
+        }
+
+        const holdReason = shippingHoldsByOrderId.get(Number(e.orderId));
+        if (holdReason) {
+          job.labelErrors!.push(`Order ${e.orderNumber ?? e.orderId}: ${holdReason} - excluded from print batch`);
+          failedEntryIds.add(e.id);
+          continue;
+        }
+
+        let pdfBytes: Uint8Array | null = null;
+        let labelFetchUrl: string;
+        let isMockLabel = false;
+        try {
+          labelFetchUrl = resolveLabelFetchUrl(e.labelUrl, requestOrigin);
+          isMockLabel = isMockLabelUrl(e.labelUrl) || isMockLabelUrl(labelFetchUrl);
+        } catch (err) {
+          job.labelErrors!.push(formatLabelUrlError(e, err));
+          failedEntryIds.add(e.id);
+          continue;
+        }
+
+        const addGroupHeaderIfNeeded = () => {
+          const groupId = e.skuGroupId ?? '__ungrouped__';
+          if (mergeHeaders && groupId !== context.lastGroup) {
+            const groupRecipients = recipientsByGroup.get(groupId) ?? [];
+            const headerPage = context.document.addPage([288, 432]);
+            const { manifestNeeded } = drawHeader(
+              headerPage,
+              e,
+              groupSizes.get(groupId) ?? 1,
+              context.font,
+              context.fontReg,
+              rgb,
+              isMockLabel,
+              groupRecipients,
+              BATCH_NAMES_HEADER_THRESHOLD,
+              packageDimsByOrderId.get(Number(e.orderId)) ?? null
             );
+            if (manifestNeeded && groupRecipients.length > 0) {
+              const { comboLine, totalUnits } = buildComboSummaryLine(e);
+              addBatchManifestPages(
+                () => context.document.addPage([288, 432]),
+                {
+                  recipients: groupRecipients,
+                  totalOrders: groupSizes.get(groupId) ?? groupRecipients.length,
+                  totalUnits,
+                  comboLine,
+                  isTest: isMockLabel,
+                },
+                context.font,
+                context.fontReg,
+                rgb
+              );
+            }
+            context.lastGroup = groupId;
           }
-          lastGroup = groupId;
-        }
-      };
-      const addMockFallback = (reason: string) => {
-        addGroupHeaderIfNeeded();
-        const page = merged.addPage([288, 432]);
-        drawMockFallbackLabel(page, e, font, fontReg, rgb, reason);
-        successfulEntryIds.push(e.id);
-      };
-      try {
-        const res = await fetch(labelFetchUrl, {
-          headers: { Accept: 'application/pdf' },
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (res.status === 404 || res.status === 410) {
+        };
+
+        const addMockFallback = (reason: string) => {
+          addGroupHeaderIfNeeded();
+          const page = context.document.addPage([288, 432]);
+          drawMockFallbackLabel(page, e, context.font, context.fontReg, rgb, reason);
+          successfulEntryIds.push(e.id);
+          context.chunk.successfulEntryIds.push(e.id);
+        };
+
+        try {
+          const res = await fetch(labelFetchUrl, {
+            headers: { Accept: 'application/pdf' },
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (res.status === 404 || res.status === 410) {
+            if (isMockLabel) {
+              addMockFallback(`Mock label not found (HTTP ${res.status})`);
+              continue;
+            }
+            job.labelErrors!.push(
+              `Label expired for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
+            );
+            failedEntryIds.add(e.id);
+            continue;
+          }
+          if (!res.ok) {
+            if (isMockLabel) {
+              addMockFallback(`Mock label fetch failed (HTTP ${res.status})`);
+              continue;
+            }
+            job.labelErrors!.push(
+              `Failed to fetch label for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
+            );
+            failedEntryIds.add(e.id);
+            continue;
+          }
+          pdfBytes = new Uint8Array(await res.arrayBuffer());
+        } catch (err) {
           if (isMockLabel) {
-            addMockFallback(`Mock label not found (HTTP ${res.status})`);
+            addMockFallback((err as Error).message || 'Mock label fetch failed');
             continue;
           }
           job.labelErrors!.push(
-            `Label expired for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
+            `Network error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
           );
           failedEntryIds.add(e.id);
           continue;
         }
-        if (!res.ok) {
+
+        try {
+          const labelDoc = await PDFDocument.load(pdfBytes!);
+          if (labelDoc.getPageCount() === 0) {
+            throw new Error('PDF contained no pages');
+          }
+          addGroupHeaderIfNeeded();
+          await appendNormalizedLabelPages(context.document, labelDoc);
+          successfulEntryIds.push(e.id);
+          context.chunk.successfulEntryIds.push(e.id);
+        } catch (err) {
           if (isMockLabel) {
-            addMockFallback(`Mock label fetch failed (HTTP ${res.status})`);
+            addMockFallback(`Mock label PDF fallback: ${(err as Error).message}`);
             continue;
           }
           job.labelErrors!.push(
-            `Failed to fetch label for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
+            `PDF parse error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
           );
           failedEntryIds.add(e.id);
-          continue;
         }
-        pdfBytes = new Uint8Array(await res.arrayBuffer());
-      } catch (err) {
-        if (isMockLabel) {
-          addMockFallback((err as Error).message || 'Mock label fetch failed');
-          continue;
-        }
-        job.labelErrors!.push(
-          `Network error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
-        );
-        failedEntryIds.add(e.id);
-        continue;
       }
 
-      try {
-        const labelDoc = await PDFDocument.load(pdfBytes!);
-        if (labelDoc.getPageCount() === 0) {
-          throw new Error('PDF contained no pages');
-        }
-        addGroupHeaderIfNeeded();
-        // Per user override unlock shipped data on 2026-06-02: display-only â€”
-        // normalize each label onto the standard 4x6 print page (see
-        // appendNormalizedLabelPages) so an oversized carrier label (e.g. FedEx
-        // Home Delivery) prints the same size as USPS/UPS instead of dwarfing
-        // them. No label bytes, postage, or shipped/cancelled data are mutated.
-        await appendNormalizedLabelPages(merged, labelDoc);
-        successfulEntryIds.push(e.id);
-      } catch (err) {
-        if (isMockLabel) {
-          addMockFallback(`Mock label PDF fallback: ${(err as Error).message}`);
-          continue;
-        }
-        job.labelErrors!.push(
-          `PDF parse error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
-        );
-        failedEntryIds.add(e.id);
-      }
+      job.message =
+        totalChunks === 1
+          ? 'Finalizing PDF...'
+          : `Finalizing PDF chunk ${plan.chunkNumber}/${totalChunks}...`;
+      if (await finalizeChunk(context)) producedChunkCount += 1;
     }
 
-    if (merged.getPageCount() === 0) {
+    if (producedChunkCount === 0) {
       throw new Error(
-        `All labels failed to load â€” no PDF produced.\n${job.labelErrors!.slice(0, 3).join('\n')}`
+        `All labels failed to load - no PDF produced.\n${job.labelErrors!.slice(0, 3).join('\n')}`
       );
     }
 
     job.progress = 95;
     void persistMergeJobSnapshot(job);
-    job.message = 'Finalizing PDFâ€¦';
-    const bytes = await merged.save();
-    job.mergedPdfBase64 = Buffer.from(bytes).toString('base64');
-
-    const now = new Date();
-    const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-    job.fileName = `batch_print_${ts}.pdf`;
-
-    // PDF generation/open/download is not proof of physical printing. Entries
-    // remain active until the operator explicitly confirms they printed.
+    const doneChunks = job.chunks.filter((chunk) => chunk.status === 'done');
+    job.mergedPdfBase64 = doneChunks.length === 1 ? doneChunks[0]?.mergedPdfBase64 : undefined;
+    job.fileName =
+      doneChunks.length === 1
+        ? doneChunks[0]?.fileName
+        : `batch_print_${ts}_${doneChunks.length}_chunks`;
 
     const failed = failedEntryIds.size;
     const success = successfulEntryIds.length;
-    const doneMessage =
-      failed > 0
-        ? `Done - ${success} merged (${failed} failed - re-create those labels and re-queue).`
-        : `Done - ${success} label${success === 1 ? '' : 's'} merged.`;
     job.status = 'done';
     job.progress = 100;
     job.current = success;
-    job.message = doneMessage;
-    await persistMergeJobSnapshot(job);
-    // Per user override unlock shipped data on 2026-06-16: PS-256 â€” persist the
-    // already-generated merged batch PDF to a durable side-store so the
-    // view/download/signed-url routes can still serve it after a server restart
-    // (today the bytes live only in process memory and a restart 404s them). This
-    // only STORES the immutable PDF artifact + re-reads it; it never re-generates
-    // labels, buys postage, notifies a marketplace, or mutates any shipped/cancelled
-    // order or shipment row. Best-effort + env-gated default OFF â€” never blocks the
-    // merge hot path.
-    void persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
     job.message =
       failed > 0
-        ? `Done â€” ${success} merged (${failed} failed â€” re-create those labels and re-queue).`
-        : `Done â€” ${success} label${success === 1 ? '' : 's'} merged.`;
+        ? `Done - ${success} merged in ${doneChunks.length} PDF chunk${doneChunks.length === 1 ? '' : 's'} (${failed} failed - re-create those labels and re-queue).`
+        : `Done - ${success} label${success === 1 ? '' : 's'} merged in ${doneChunks.length} PDF chunk${doneChunks.length === 1 ? '' : 's'}.`;
+    await persistMergeJobSnapshot(job);
+
+    if (job.mergedPdfBase64) {
+      void persistMergedPdf(jobId, job.fileName ?? null, job.mergedPdfBase64);
+    }
   } catch (err) {
     job.status = 'error';
     job.errorMessage = (err as Error).message;

@@ -22,10 +22,13 @@ import {
   // PS-256: durable-aware accessor — falls back to the persisted merged-PDF side-store on an
   // in-memory miss so the view/download/signed-url routes serve the batch after a server restart.
   getMergeJobForServe,
+  getMergeJobChunkForServe,
   listQueue,
   removeFromQueue,
   startQueueSendJob,
   startPrintJob,
+  type MergeJob,
+  type MergeJobChunk,
   type MergeJobSnapshot,
   type PrintQueueListScope,
   type QueueSendJobSnapshot,
@@ -142,15 +145,136 @@ function pdfDispositionHeader(disposition: 'inline' | 'attachment', filename: st
 // miss rehydrates the bytes from the persisted merged-PDF side-store (when the flag is ON and the
 // durable snapshot confirms the merge completed) so the batch survives a server restart. With the
 // flag OFF this is exactly the previous in-memory-only behavior.
+type MergeChunkLike = {
+  chunkNumber: number;
+  status: MergeJobChunk['status'];
+  labelCount: number;
+  fileName?: string | null;
+  fileSize?: number | null;
+  errorMessage?: string | null;
+};
+
+type SignedMergeChunkDto = {
+  chunk_number: number;
+  status: MergeJobChunk['status'];
+  label_count: number;
+  file_name: string;
+  file_size: number | null;
+  error: string | null;
+  url: string | null;
+  expires_at: string | null;
+  disposition: 'inline' | 'attachment';
+};
+
+function hasDoneMergeChunks(job: MergeJob): boolean {
+  return (job.chunks ?? []).some((chunk) => chunk.status === 'done');
+}
+
+function buildSignedMergeChunkDtos(
+  c: Context,
+  jobId: string,
+  chunks: readonly MergeChunkLike[] | undefined,
+  disposition: 'inline' | 'attachment',
+): SignedMergeChunkDto[] {
+  return [...(chunks ?? [])]
+    .sort((a, b) => a.chunkNumber - b.chunkNumber)
+    .map((chunk) => {
+      let url: string | null = null;
+      let expiresAt: string | null = null;
+      const fileName = sanitizePdfFilename(
+        chunk.fileName,
+        `prepship-batch-print-${jobId}-part-${chunk.chunkNumber}.pdf`,
+      );
+      if (chunk.status === 'done') {
+        const signed = signPrintQueuePdfToken(jobId);
+        const signedUrl = new URL(c.req.url);
+        signedUrl.pathname = `/print-queue/print/view/${encodeURIComponent(jobId)}/chunks/${chunk.chunkNumber}`;
+        signedUrl.search = new URLSearchParams({
+          token: signed.token,
+          disposition,
+        }).toString();
+        url = signedUrl.toString();
+        expiresAt = new Date(signed.expiresAt).toISOString();
+      }
+      return {
+        chunk_number: chunk.chunkNumber,
+        status: chunk.status,
+        label_count: chunk.labelCount,
+        file_name: fileName,
+        file_size: chunk.fileSize ?? null,
+        error: chunk.errorMessage ?? null,
+        url,
+        expires_at: expiresAt,
+        disposition,
+      };
+    });
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function serveMergeChunkIndexHtml(
+  c: Context,
+  jobId: string,
+  job: MergeJob,
+  disposition: 'inline' | 'attachment',
+): Response {
+  const chunks = buildSignedMergeChunkDtos(c, jobId, job.chunks, disposition);
+  const rows = chunks
+    .map((chunk) => {
+      const fileSize = chunk.file_size ? `${Math.ceil(chunk.file_size / 1024)} KB` : 'pending';
+      const labelCount = `${chunk.label_count} label${chunk.label_count === 1 ? '' : 's'}`;
+      const href = chunk.url ? escapeHtml(chunk.url) : '#';
+      const linkText = `${escapeHtml(chunk.file_name)} (${labelCount}, ${fileSize})`;
+      const disabled = chunk.url ? '' : ' aria-disabled="true"';
+      return `<li><a href="${href}" target="_blank" rel="noopener"${disabled}>${linkText}</a></li>`;
+    })
+    .join('');
+  const title = `PrepShip print batch ${escapeHtml(jobId)}`;
+  return new Response(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>${title}</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 32px; color: #172033; }
+      h1 { font-size: 18px; margin: 0 0 8px; }
+      p { color: #5b667a; font-size: 13px; margin: 0 0 18px; }
+      li { margin: 10px 0; }
+      a { color: #0b84d8; font-weight: 700; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <h1>${escapeHtml(job.fileName ?? 'PrepShip print batch')}</h1>
+    <p>This batch is split into ${chunks.length} restart-safe PDF chunks.</p>
+    <ol>${rows}</ol>
+  </body>
+</html>`, {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': `private, max-age=${SIGNED_PDF_CACHE_SECONDS}`,
+      'x-content-type-options': 'nosniff',
+    },
+  });
+}
+
 async function serveMergedPdf(c: Context, jobId: string, disposition: 'inline' | 'attachment') {
   const job = await getMergeJobForServe(jobId);
-  if (
-    !job ||
-    job.status !== 'done' ||
-    !job.mergedPdfBase64
-  ) {
+  if (!job || job.status !== 'done') {
     return c.json({ error: 'PDF not found or not ready' }, 404);
   }
+  if (!job.mergedPdfBase64 && hasDoneMergeChunks(job)) {
+    return serveMergeChunkIndexHtml(c, jobId, job, disposition);
+  }
+  if (!job.mergedPdfBase64) return c.json({ error: 'PDF not found or not ready' }, 404);
 
   const bytes = Buffer.from(job.mergedPdfBase64, 'base64');
   const fileName = sanitizePdfFilename(job.fileName, `prepship-batch-print-${jobId}.pdf`);
@@ -165,6 +289,40 @@ async function serveMergedPdf(c: Context, jobId: string, disposition: 'inline' |
     },
   });
 }
+
+app.get('/print/view/:jobId/chunks/:chunkNumber', async (c) => {
+  const jobId = c.req.param('jobId');
+  const chunkNumber = Number(c.req.param('chunkNumber'));
+  if (!Number.isInteger(chunkNumber) || chunkNumber <= 0) {
+    return c.json({ error: 'Invalid PDF chunk' }, 400);
+  }
+  const verification = verifyPrintQueuePdfToken(c.req.query('token'), jobId);
+  if (!verification.ok) {
+    return c.json({ error: verification.code, code: verification.code }, verification.status);
+  }
+  const disposition =
+    c.req.query('disposition') === 'attachment' ? 'attachment' : 'inline';
+  const result = await getMergeJobChunkForServe(jobId, chunkNumber);
+  if (!result?.chunk.mergedPdfBase64) {
+    return c.json({ error: 'PDF chunk not found or not ready' }, 404);
+  }
+
+  const bytes = Buffer.from(result.chunk.mergedPdfBase64, 'base64');
+  const fileName = sanitizePdfFilename(
+    result.chunk.fileName,
+    `prepship-batch-print-${jobId}-part-${chunkNumber}.pdf`,
+  );
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      'content-type': 'application/pdf',
+      'content-disposition': pdfDispositionHeader(disposition, fileName),
+      'content-length': String(bytes.byteLength),
+      'cache-control': `private, max-age=${SIGNED_PDF_CACHE_SECONDS}`,
+      'x-content-type-options': 'nosniff',
+    },
+  });
+});
 
 app.get('/print/view/:jobId', async (c) => {
   const jobId = c.req.param('jobId');
@@ -764,6 +922,8 @@ app.get('/print/status/:jobId', async (c) => {
         current: durableJob.current,
         message: durableJob.message,
         file_name: durableJob.fileName,
+        chunk_count: durableJob.chunks?.length ?? 0,
+        chunks: buildSignedMergeChunkDtos(c, durableJob.jobId, durableJob.chunks ?? [], 'inline'),
         error: durableJob.errorMessage,
         label_errors: durableJob.labelErrors,
         // PS-194: the entries that actually merged — the FE Confirm-Printed
@@ -785,6 +945,8 @@ app.get('/print/status/:jobId', async (c) => {
     current: job.current,
     message: job.message,
     file_name: job.fileName ?? null,
+    chunk_count: job.chunks?.length ?? 0,
+    chunks: buildSignedMergeChunkDtos(c, job.jobId, job.chunks, 'inline'),
     error: job.errorMessage ?? null,
     label_errors: job.labelErrors ?? [],
     // PS-194: see above — backend-owned Confirm-Printed evidence.
@@ -809,6 +971,8 @@ app.get('/print/last', async (c) => {
       job_id: durableJob.jobId,
       status: durableJob.status,
       file_name: durableJob.fileName,
+      chunk_count: durableJob.chunks?.length ?? 0,
+      chunks: buildSignedMergeChunkDtos(c, durableJob.jobId, durableJob.chunks ?? [], 'inline'),
       successful_entry_ids: durableJob.successfulEntryIds ?? [],
       created_at: durableJob.createdAt,
       persisted_at: durableJob.persistedAt,
@@ -831,7 +995,7 @@ app.get('/print/signed-url/:jobId', zValidator('query', signedPdfQuery), async (
     !job ||
     !(await canViewMergeJob(job, scope)) ||
     job.status !== 'done' ||
-    !job.mergedPdfBase64
+    (!job.mergedPdfBase64 && !hasDoneMergeChunks(job))
   ) {
     return c.json({ error: 'PDF not found or not ready' }, 404);
   }
@@ -842,6 +1006,7 @@ app.get('/print/signed-url/:jobId', zValidator('query', signedPdfQuery), async (
   url.pathname = `/print-queue/print/view/${encodeURIComponent(jobId)}`;
   url.search = new URLSearchParams({ token, disposition }).toString();
   const fileName = sanitizePdfFilename(job.fileName, `prepship-batch-print-${jobId}.pdf`);
+  const chunks = buildSignedMergeChunkDtos(c, jobId, job.chunks, disposition);
 
   return c.json({
     url: url.toString(),
@@ -849,6 +1014,8 @@ app.get('/print/signed-url/:jobId', zValidator('query', signedPdfQuery), async (
     expires_in_seconds: Math.floor(SIGNED_PDF_TTL_MS / 1000),
     filename: fileName,
     disposition,
+    chunk_count: chunks.length,
+    chunks,
   });
 });
 

@@ -4544,9 +4544,12 @@ export default function OrdersView({
             pdfOpened = opened
             if (!opened) {
               const signed = await apiClient.fetchQueuePrintJobSignedUrl(job.job_id, 'attachment')
+              const firstChunk = Array.isArray(signed.chunks)
+                ? signed.chunks.find((chunk) => chunk.status === 'done' && typeof chunk.url === 'string' && chunk.url)
+                : null
               const link = document.createElement('a')
-              link.href = signed.url
-              link.download = signed.filename || `prepship-labels-${job.job_id}.pdf`
+              link.href = firstChunk?.url || signed.url
+              link.download = firstChunk?.file_name || signed.filename || `prepship-labels-${job.job_id}.pdf`
               document.body.appendChild(link)
               link.click()
               document.body.removeChild(link)
