@@ -56,6 +56,9 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
   const { orderDetailsById, transitionalShippedIds, isGlobalSearchActive, currentStatus, openDetailDrawer } = ctx
   const testOrder = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
   const isShipping = transitionalShippedIds.has(order.orderId)
+  const fulfillmentConflict = toRecord(order.fulfillmentConflict)
+  const fulfillmentConflictLabel = toStringValue(fulfillmentConflict?.label)
+  const fulfillmentConflictReason = toStringValue(fulfillmentConflict?.reason)
   // PS-210: global search mixes lifecycle statuses into one table. A row
   // whose REAL status differs from the active tab gets an explicit status
   // pill so a Shipped/Cancelled match on the Awaiting tab can never be
@@ -120,6 +123,26 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
         <span className="ps-shipping-pill" title="Order is being shipped — will move to Shipped in 30 seconds">
           <Truck size={9} strokeWidth={2.5} />
           Shipping…
+        </span>
+      )}
+      {fulfillmentConflictLabel && (
+        <span
+          title={fulfillmentConflictReason ?? fulfillmentConflictLabel}
+          style={{
+            display: 'inline-block',
+            padding: '1px 6px',
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: 0,
+            color: 'var(--yellow)',
+            background: 'var(--yellow-bg)',
+            border: '1px solid var(--yellow)',
+            borderRadius: 3,
+            flexShrink: 0,
+            textTransform: 'uppercase',
+          }}
+        >
+          Conflict
         </span>
       )}
       <span

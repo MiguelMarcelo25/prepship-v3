@@ -27,8 +27,10 @@ export function isCancelledNoChargeBillingRow(input: {
   billingLifecycleStatus?: unknown;
   billingZeroReason?: unknown;
   billingStatusBadge?: unknown;
+  fulfillmentConflictCode?: unknown;
 }): boolean {
   if (isCancelledNoChargeExcludedLineType(input.lineType)) return false;
+  if (normalizedText(input.fulfillmentConflictCode)) return false;
   if (normalizedText(input.billingLifecycleStatus) === 'cancelled_no_charge') return true;
   if (normalizedText(input.billingZeroReason) === 'cancelled') return true;
   if (normalizedText(input.billingStatusBadge) === 'cancelled') return true;

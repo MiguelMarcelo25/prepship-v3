@@ -49,6 +49,9 @@ export interface BillingDetailRowDto {
   billingStatusTone?: string;
   billingZeroReason?: string | null;
   billingStatusBadge?: string | null;
+  fulfillmentConflictCode?: string | null;
+  fulfillmentConflictLabel?: string | null;
+  fulfillmentConflictReason?: string | null;
   displayQty?: string;
   relatedOrderId?: number | string | null;
   returnId?: number | string | null;
@@ -233,6 +236,9 @@ const TEXT_CARRY_FIELDS = [
   'billingStatusLabel',
   'billingStatusTone',
   'billingZeroReason',
+  'fulfillmentConflictCode',
+  'fulfillmentConflictLabel',
+  'fulfillmentConflictReason',
 ] as const;
 
 const VALUE_CARRY_FIELDS = [
@@ -290,6 +296,7 @@ function appendBillingBadge(row: BillingDetailRowDto, badge: string): void {
 
 function applyCancelledNoCharge(row: BillingDetailRowDto): void {
   if (!isCancelledNoChargeBillingRow(row)) return;
+  if (textValue(row.fulfillmentConflictCode)) return;
 
   // Per user override unlock shipped data on 2026-07-06: cancelled Billing rows
   // remain visible for audit, but stale prep/box/shipping generated lines and

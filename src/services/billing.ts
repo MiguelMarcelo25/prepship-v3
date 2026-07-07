@@ -84,6 +84,7 @@ import {
   orderLifecycleBillingSourcePredicate,
   resolveOrderLifecycleStatus,
 } from './order-lifecycle-status';
+import { resolveFulfillmentConflict } from './fulfillment-conflict';
 import {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_AMOUNT,
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
@@ -767,6 +768,8 @@ export async function generateLineItems(input: GenerateInput) {
       dimsH: shipments.dimsH,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
+      overrideTrackingNumber: orderOverrides.trackingNumber,
+      externallyShippedSource: orderOverrides.externallyShippedSource,
       orderId: orders.id,
       orderStatus: orders.orderStatus,
       canonicalStatus: orders.canonicalStatus,
@@ -777,8 +780,10 @@ export async function generateLineItems(input: GenerateInput) {
       orderStoreId: orders.storeId,
       orderItems: orders.items,
       orderRaw: orders.raw,
+      sourceProvider: orders.sourceProvider,
       externallyShipped: orders.externallyShipped,
       externallyFulfilled: sql<boolean>`coalesce(${orders.raw}->>'externallyFulfilled', 'false') = 'true'`,
+      externallyFulfilledVerified: orders.externallyFulfilledVerified,
     })
     .from(orders)
     .leftJoin(
@@ -831,9 +836,13 @@ export async function generateLineItems(input: GenerateInput) {
     dimsH: number | null;
     refUspsRate: string | null;
     refUpsRate: string | null;
+    overrideTrackingNumber: string | null;
+    externallyShippedSource: string | null;
     items: unknown[];
+    sourceProvider: string | null;
     externallyShipped: boolean;
     externallyFulfilled: boolean;
+    externallyFulfilledVerified: boolean;
     // PS-377: source order status ('shipped' | 'cancelled'), so the generator can
     // emit a $0 no-charge line for cancelled orders. Read-only.
     orderStatus: string | null;
@@ -888,9 +897,13 @@ export async function generateLineItems(input: GenerateInput) {
         dimsH: row.dimsH,
         refUspsRate: row.refUspsRate,
         refUpsRate: row.refUpsRate,
+        overrideTrackingNumber: row.overrideTrackingNumber,
+        externallyShippedSource: row.externallyShippedSource,
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
+        sourceProvider: row.sourceProvider,
         externallyShipped: row.externallyShipped === true,
         externallyFulfilled: row.externallyFulfilled === true,
+        externallyFulfilledVerified: row.externallyFulfilledVerified === true,
         orderStatus: lifecycle.billingStatus ?? lifecycle.effectiveOrderStatus, // PS-377/PS-387
         effectiveOrderStatus: lifecycle.effectiveOrderStatus,
         orderLifecycleStatus: lifecycle.orderLifecycleStatus,
@@ -1089,13 +1102,29 @@ export async function generateLineItems(input: GenerateInput) {
       continue;
     }
 
-    // Per user override unlock shipped data on 2026-07-06: PS-396 makes every
-    // cancelled/canceled lifecycle row a single visible $0.00 "Cancelled" audit
-    // row. Source order/shipment rows are never mutated.
+    // Per user override unlock shipped data on 2026-07-07: PS-402 keeps
+    // marketplace-fulfilled/cancelled conflicts out of the generic cancelled
+    // no-charge collapse. Billing must show a reconciliation row until verified
+    // outbound shipment proof exists. Read-only; no source rows are mutated.
+    const fulfillmentConflict = resolveFulfillmentConflict({
+      orderId: s.orderId,
+      orderNumber: s.orderNumber,
+      orderStatus: s.orderStatus,
+      effectiveOrderStatus: s.effectiveOrderStatus,
+      orderLifecycleStatus: s.orderLifecycleStatus,
+      sourceProvider: s.sourceProvider,
+      externallyShipped: s.externallyShipped,
+      externallyFulfilled: s.externallyFulfilled,
+      externallyFulfilledVerified: s.externallyFulfilledVerified,
+      externallyShippedSource: s.externallyShippedSource,
+      marketplaceTrackingNumber: s.overrideTrackingNumber,
+      hasLocalShipment: s.id != null,
+    });
     const cancelledNoCharge =
-      isCancelledBillingStatus(s.orderStatus) ||
-      isCancelledBillingStatus(s.effectiveOrderStatus) ||
-      isCancelledBillingStatus(s.orderLifecycleStatus);
+      !fulfillmentConflict &&
+      (isCancelledBillingStatus(s.orderStatus) ||
+        isCancelledBillingStatus(s.effectiveOrderStatus) ||
+        isCancelledBillingStatus(s.orderLifecycleStatus));
 
     const rows: LineRow[] = [];
 
@@ -1250,6 +1279,20 @@ export async function generateLineItems(input: GenerateInput) {
         qty: '1',
         unitCost: billedShippingAmount.toFixed(2),
         totalCost: billedShippingAmount.toFixed(2),
+        packageId: billedPackageId,
+      });
+    } else if (fulfillmentConflict?.billingAction === 'shipping_missing_review') {
+      rows.push({
+        clientId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber,
+        shipmentId: s.id,
+        shipDate: s.shipDate,
+        lineType: 'shipping_missing',
+        description: `Fulfillment conflict - reconcile verified outbound shipment for order ${s.orderNumber ?? s.orderId}`,
+        qty: '1',
+        unitCost: '0.00',
+        totalCost: '0.00',
         packageId: billedPackageId,
       });
     } else if (s.externallyShipped || s.externallyFulfilled || s.id === null) {
@@ -1991,7 +2034,12 @@ export async function billingDetails(input: GenerateInput) {
       // prep fee may be unwarranted vs a real recorded $0 label).
       orderStatus: orders.orderStatus,
       canonicalStatus: orders.canonicalStatus,
+      sourceProvider: orders.sourceProvider,
       externallyShipped: orders.externallyShipped,
+      externallyFulfilled: sql<boolean>`coalesce(${orders.raw}->>'externallyFulfilled', 'false') = 'true'`,
+      externallyFulfilledVerified: orders.externallyFulfilledVerified,
+      overrideTrackingNumber: orderOverrides.trackingNumber,
+      externallyShippedSource: orderOverrides.externallyShippedSource,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
     })
@@ -2221,10 +2269,26 @@ export async function billingDetails(input: GenerateInput) {
         canonicalStatus: row.canonicalStatus,
         externallyShipped: row.externallyShipped === true,
       });
+      const fulfillmentConflict = resolveFulfillmentConflict({
+        orderId: row.orderId,
+        orderNumber: row.orderNumber,
+        orderStatus: row.orderStatus,
+        canonicalStatus: row.canonicalStatus,
+        effectiveOrderStatus: rowLifecycle.effectiveOrderStatus,
+        orderLifecycleStatus: rowLifecycle.orderLifecycleStatus,
+        sourceProvider: row.sourceProvider,
+        externallyShipped: row.externallyShipped === true,
+        externallyFulfilled: row.externallyFulfilled === true,
+        externallyFulfilledVerified: row.externallyFulfilledVerified === true,
+        externallyShippedSource: row.externallyShippedSource,
+        marketplaceTrackingNumber: row.overrideTrackingNumber ?? row.trackingNumber ?? fallbackShipment?.trackingNumber ?? null,
+        hasLocalShipment: (row.shipmentId ?? fallbackShipment?.id) != null,
+      });
       const detailOrderStatus = rowLifecycle.billingStatus ?? rowLifecycle.effectiveOrderStatus;
       const isCancelledNoChargeDetailRow =
-        isCancelledBillingStatus(detailOrderStatus) ||
-        isCancelledBillingStatus(rowLifecycle.orderLifecycleStatus);
+        !fulfillmentConflict &&
+        (isCancelledBillingStatus(detailOrderStatus) ||
+          isCancelledBillingStatus(rowLifecycle.orderLifecycleStatus));
       const manualBillingOverrideLineTypes = row.orderId != null
         ? [
             ...(manualBillingOverrideByOrderId.get(row.orderId)?.map((override) => override.lineType) ?? []),
@@ -2323,9 +2387,10 @@ export async function billingDetails(input: GenerateInput) {
         orderStatus: detailOrderStatus,
         orderLifecycleStatus: rowLifecycle.orderLifecycleStatus,
         totalCost: row.totalCost,
+        fulfillmentConflictCode: fulfillmentConflict?.code ?? null,
         feeWaived,
         packageCostNeedsReview: isBoxReviewLine,
-        shippingZeroNeedsReview: isZeroShippingReviewLine,
+        shippingZeroNeedsReview: isZeroShippingReviewLine || fulfillmentConflict?.billingAction === 'shipping_missing_review',
         manualBillingOverrideLabels,
       });
 
@@ -2333,6 +2398,11 @@ export async function billingDetails(input: GenerateInput) {
         selectedRateJson: _selectedRateJson,
         labelProvider: _labelProvider,
         orderItems: _orderItems,
+        sourceProvider: _sourceProvider,
+        externallyFulfilled: _externallyFulfilled,
+        externallyFulfilledVerified: _externallyFulfilledVerified,
+        externallyShippedSource: _externallyShippedSource,
+        overrideTrackingNumber: _overrideTrackingNumber,
         labelCost: _labelCost,
         cost: _cost,
         otherCost: _otherCost,
@@ -2371,7 +2441,12 @@ export async function billingDetails(input: GenerateInput) {
         // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto);
         // the snake_case mirrors this block used to write are deleted.
         selectedRateCost: isShippingLine && !isCancelledNoChargeDetailRow ? selectedRateCost : null,
-        shippingCostMissing: isMissingShippingLine && !isCancelledNoChargeDetailRow,
+        shippingCostMissing:
+          (isMissingShippingLine || fulfillmentConflict?.billingAction === 'shipping_missing_review') &&
+          !isCancelledNoChargeDetailRow,
+        fulfillmentConflictCode: fulfillmentConflict?.code ?? null,
+        fulfillmentConflictLabel: fulfillmentConflict?.label ?? null,
+        fulfillmentConflictReason: fulfillmentConflict?.reason ?? null,
         // PS-207: box-review flag + the generator's reason text (the review
         // line's description, e.g. "Box mismatch — selected box (12x10x3)
         // disagrees with shipment dims (12x10x1)").

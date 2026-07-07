@@ -282,6 +282,10 @@ function transformOrderRowV4toV2(
       (row.orderLifecycleReason as string | undefined) ??
       (canonicalOrder?.orderLifecycleReason as string | undefined) ??
       null,
+    fulfillmentConflict:
+      toRecordValue(row.fulfillmentConflict) ??
+      toRecordValue(canonicalOrder?.fulfillmentConflict) ??
+      null,
     orderDate: canonicalOrder?.orderDate ?? row.orderDate,
     externalOrderId: canonicalOrder?.externalOrderId ?? row.externalOrderId,
     orderTotal: orderTotalNum,

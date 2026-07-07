@@ -2,6 +2,7 @@ import { isCancelledBillingStatus } from './billing-cancelled-no-charge';
 
 export type BillingLifecycleStatus =
   | 'fulfilled'
+  | 'fulfillment_conflict'
   | 'cancelled_no_charge'
   | 'cancelled_billable'
   | 'return'
@@ -12,7 +13,14 @@ export type BillingLifecycleStatus =
   | 'waived';
 
 export type BillingStatusTone = 'neutral' | 'red' | 'purple' | 'amber' | 'blue';
-export type BillingZeroReason = 'cancelled' | 'waived' | 'bundled' | 'missing_cost' | 'manual_override' | null;
+export type BillingZeroReason =
+  | 'cancelled'
+  | 'waived'
+  | 'bundled'
+  | 'missing_cost'
+  | 'manual_override'
+  | 'fulfillment_conflict'
+  | null;
 
 export type BillingRowStatusInput = {
   lineType?: string | null;
@@ -24,6 +32,7 @@ export type BillingRowStatusInput = {
   feeWaived?: boolean | null;
   packageCostNeedsReview?: boolean | null;
   shippingZeroNeedsReview?: boolean | null;
+  fulfillmentConflictCode?: string | null;
   manualBillingOverrideLabels?: readonly unknown[] | null;
   relatedOrderId?: number | string | null;
   returnId?: number | string | null;
@@ -97,6 +106,9 @@ export function resolveBillingRowStatus(input: BillingRowStatusInput): BillingRo
     normalizedText(input.orderStatus)?.toLowerCase() ??
     normalizedText(input.effectiveOrderStatus)?.toLowerCase();
   const orderLifecycleStatus = normalizedText(input.orderLifecycleStatus)?.toLowerCase();
+  if (normalizedText(input.fulfillmentConflictCode)) {
+    return result('fulfillment_conflict', 'Fulfillment conflict', 'amber', 'fulfillment_conflict', 'REVIEW', input);
+  }
   const cancelledLine = hasLine('cancelled');
   const cancelledLifecycle = isCancelledBillingStatus(orderLifecycleStatus);
   // Per user override unlock shipped data on 2026-07-06: PS-396 makes every

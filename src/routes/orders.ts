@@ -123,6 +123,10 @@ import {
   resolveOrderLifecycleStatus,
 } from '../services/order-lifecycle-status';
 import {
+  normalizeFulfillmentTrackingNumber,
+  resolveFulfillmentConflict,
+} from '../services/fulfillment-conflict';
+import {
   applyRateQuoteRef,
   buildApplyBestRatePatch,
   finalizeAppliedBestRateFromSnapshot,
@@ -1727,6 +1731,37 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     }
   }
 
+  const overrideTrackingByOrderId = new Map<number, string>();
+  const overrideTrackingKeys = [
+    ...new Set(
+      joined
+        .map((r) => {
+          const key = normalizeFulfillmentTrackingNumber(r.overrides?.trackingNumber);
+          if (key && r.order.id != null) overrideTrackingByOrderId.set(r.order.id, key);
+          return key;
+        })
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ];
+  const shipmentRowsByTracking = new Map<string, Array<{ order_id: number | null; order_number: string | null }>>();
+  if (overrideTrackingKeys.length) {
+    const trackingRows = await timedOrdersStep(timings, 'shipmentTrackingCollisions', () =>
+      db.execute<{ order_id: number | null; order_number: string | null; tracking_number: string | null }>(sql`
+        select order_id, order_number, tracking_number
+        from shipments
+        where coalesce(voided, false) = false
+          and upper(coalesce(tracking_number, '')) in (${sql.join(overrideTrackingKeys.map((tracking) => sql`${tracking}`), sql`, `)})
+      `),
+    );
+    for (const row of trackingRows) {
+      const key = normalizeFulfillmentTrackingNumber(row.tracking_number);
+      if (!key) continue;
+      const list = shipmentRowsByTracking.get(key) ?? [];
+      list.push({ order_id: row.order_id, order_number: row.order_number });
+      shipmentRowsByTracking.set(key, list);
+    }
+  }
+
   // PS-120 (reader): batch-load the per-order backend rate-job rows (pending/rating) in ONE
   // query (no N+1). Only the Awaiting view ever shows these in-progress states, and the
   // producer only writes awaiting orders, so a single store/lookup gated to awaiting keeps
@@ -2581,13 +2616,46 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       externallyShipped: r.order.externallyShipped === true,
       shippedLabelDisplayState: lifecycleShippedLabelDisplayState,
     });
+    const overrideTrackingKey = overrideTrackingByOrderId.get(r.order.id) ?? null;
+    const trackingCollision = overrideTrackingKey
+      ? (shipmentRowsByTracking.get(overrideTrackingKey) ?? []).find(
+          (candidate) =>
+            (candidate.order_id != null && candidate.order_id !== r.order.id) ||
+            (candidate.order_id == null &&
+              candidate.order_number != null &&
+              candidate.order_number !== r.order.orderNumber),
+        ) ?? null
+      : null;
+    // Per user override unlock shipped data on 2026-07-07: PS-402 adds a
+    // read-only reconciliation exception DTO for cancelled rows that still have
+    // marketplace fulfillment proof. It does not mutate orders/shipments or
+    // weaken shipped/cancelled edit locks.
+    const fulfillmentConflict = resolveFulfillmentConflict({
+      orderId: r.order.id,
+      orderNumber: r.order.orderNumber,
+      orderStatus: r.order.orderStatus,
+      canonicalStatus: r.order.canonicalStatus,
+      effectiveOrderStatus: orderLifecycle.effectiveOrderStatus,
+      orderLifecycleStatus: orderLifecycle.orderLifecycleStatus,
+      sourceProvider: r.order.sourceProvider,
+      externallyShipped: r.order.externallyShipped === true,
+      externallyFulfilled: booleanOrNull(rawForExpedited?.externallyFulfilled),
+      externallyFulfilledVerified: r.order.externallyFulfilledVerified === true,
+      externallyShippedSource: stringOrNull(safeOverrides?.externallyShippedSource),
+      marketplaceTrackingNumber: stringOrNull(safeOverrides?.trackingNumber) ?? canonicalTrackingNumber,
+      hasLocalShipment: Boolean(ship) && ship?.voided !== true,
+      trackingAttachedOrderId: trackingCollision?.order_id ?? null,
+      trackingAttachedOrderNumber: trackingCollision?.order_number ?? null,
+    });
+    const orderLifecycleLabel = fulfillmentConflict?.label ?? orderLifecycle.orderLifecycleLabel;
+    const orderLifecycleReason = fulfillmentConflict?.reason ?? orderLifecycle.orderLifecycleReason;
     const orderForCanonical = {
       ...(r.order as Record<string, unknown>),
       orderStatus: orderLifecycle.effectiveOrderStatus,
       effectiveOrderStatus: orderLifecycle.effectiveOrderStatus,
       orderLifecycleStatus: orderLifecycle.orderLifecycleStatus,
-      orderLifecycleLabel: orderLifecycle.orderLifecycleLabel,
-      orderLifecycleReason: orderLifecycle.orderLifecycleReason,
+      orderLifecycleLabel,
+      orderLifecycleReason,
       isTerminalOrderLifecycle: orderLifecycle.isTerminal,
       isShippingBlockedByLifecycle: orderLifecycle.isShippingBlocked,
     };
@@ -2623,11 +2691,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       orderStatus: orderLifecycle.effectiveOrderStatus,
       effectiveOrderStatus: orderLifecycle.effectiveOrderStatus,
       orderLifecycleStatus: orderLifecycle.orderLifecycleStatus,
-      orderLifecycleLabel: orderLifecycle.orderLifecycleLabel,
-      orderLifecycleReason: orderLifecycle.orderLifecycleReason,
+      orderLifecycleLabel,
+      orderLifecycleReason,
       isTerminalOrderLifecycle: orderLifecycle.isTerminal,
       isShippingBlockedByLifecycle: orderLifecycle.isShippingBlocked,
       billingStatus: orderLifecycle.billingStatus,
+      fulfillmentConflict,
       expedited,
       legacyClientId,
       // PS-186: backend-owned test-order fact (clients.isTest) — the FE must read this,

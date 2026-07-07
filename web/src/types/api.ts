@@ -21,6 +21,7 @@ export type OrderSummaryDto = AnyRecord & {
   orderLifecycleStatus?: string | null
   orderLifecycleLabel?: string | null
   orderLifecycleReason?: string | null
+  fulfillmentConflict?: AnyRecord | null
   clientId: number
   items?: unknown
   raw?: unknown
