@@ -1,5 +1,6 @@
 import { isQueueSendActiveStatus, type QueueSendStatusName } from './queue-send-status';
 import type { QueueSendJobItemInput, QueueSendJobItemState } from './queue-send-item-state';
+import type { PrintQueueListScope, QueueSendOrderInput } from '../print-queue';
 
 export const PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run';
 export const PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.';
@@ -49,6 +50,9 @@ export type QueueSendSnapshotJob = {
   queuedEntryIds: string[];
   errorMessage?: string;
   itemStates?: QueueSendJobItemInput[];
+  workerOrders?: QueueSendOrderInput[];
+  workerConcurrency?: number | null;
+  workerScope?: PrintQueueListScope | null;
 };
 
 export type QueueSendResultSnapshot = QueueSendSnapshotResult;
@@ -83,6 +87,9 @@ export type QueueSendJobSnapshot = {
   results: QueueSendResultSnapshot[];
   resultSamples: QueueSendResultSnapshot[];
   itemStates: QueueSendItemSnapshot[];
+  workerOrders: QueueSendOrderInput[];
+  workerConcurrency: number | null;
+  workerScope: PrintQueueListScope | null;
   createdAt: string;
   updatedAt: string;
   persistedAt: string;
@@ -155,6 +162,9 @@ export function toQueueSendSnapshot(
     results,
     resultSamples: results.slice(-10),
     itemStates,
+    workerOrders: [...(job.workerOrders ?? [])],
+    workerConcurrency: job.workerConcurrency ?? null,
+    workerScope: job.workerScope ?? null,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt).toISOString(),
     persistedAt: persistedAt.toISOString(),

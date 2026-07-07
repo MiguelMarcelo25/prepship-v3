@@ -210,6 +210,9 @@ export type QueueSendJob = {
   queuedEntryIds: string[];
   itemStates: QueueSendItemSnapshot[];
   errorMessage?: string;
+  workerOrders?: QueueSendOrderInput[];
+  workerConcurrency?: number | null;
+  workerScope?: PrintQueueListScope | null;
 };
 
 export const PRINT_QUEUE_MERGE_STATUS_KEY = 'print_queue.pdf_merge.last_run';
@@ -243,6 +246,7 @@ export type PrintQueueListScope = {
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
+const QUEUE_SEND_WORKER_MAX_CONCURRENCY = 4;
 const QUEUE_SEND_PROVIDER_PENDING_AFTER_MS = 90_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_MS = 60_000;
 const QUEUE_SEND_IN_PROGRESS_RECOVERY_POLL_MS = 1_500;
@@ -556,6 +560,21 @@ function updateQueueSendProgress(job: QueueSendJob) {
       : `Sending to queue ${job.current}/${job.total}`;
 }
 
+function normalizeQueueSendWorkerConcurrency(value: unknown): number {
+  const parsed = Number(value);
+  const requested = Number.isFinite(parsed) ? Math.floor(parsed) : QUEUE_SEND_WORKER_MAX_CONCURRENCY;
+  return Math.max(1, Math.min(QUEUE_SEND_WORKER_MAX_CONCURRENCY, requested || QUEUE_SEND_WORKER_MAX_CONCURRENCY));
+}
+
+async function markQueueSendWorkerUnavailable(job: QueueSendJob, reason: string): Promise<void> {
+  job.status = 'error';
+  job.errorMessage = reason;
+  job.message = reason;
+  updateQueueSendProgress(job);
+  await persistQueueSendJobSnapshot(job);
+  queueSendJobs.delete(job.jobId);
+}
+
 function timestampFromSnapshot(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : Date.now();
@@ -580,6 +599,9 @@ function queueSendJobFromSnapshot(snapshot: QueueSendJobSnapshot): QueueSendJob 
     queuedEntryIds: [...snapshot.queuedEntryIds],
     itemStates: snapshot.itemStates ?? [],
     errorMessage: snapshot.errorMessage ?? undefined,
+    workerOrders: snapshot.workerOrders ?? [],
+    workerConcurrency: snapshot.workerConcurrency ?? null,
+    workerScope: snapshot.workerScope ?? null,
   };
 }
 
@@ -1260,6 +1282,7 @@ export async function startQueueSendJob(input: {
     null;
   const skippedResults = [...frontendSkippedResults, ...preflight.blockedResults];
   const itemStates = [...frontendSkippedItems, ...preflight.itemStates];
+  const workerConcurrency = normalizeQueueSendWorkerConcurrency(input.concurrency);
   const job: QueueSendJob = {
     jobId,
     status: preflight.readyOrders.length > 0 ? 'pending' : 'done',
@@ -1279,6 +1302,9 @@ export async function startQueueSendJob(input: {
     results: [...skippedResults],
     queuedEntryIds: [],
     itemStates: itemStates.map(toQueueSendItemSnapshot),
+    workerOrders: preflight.readyOrders,
+    workerConcurrency,
+    workerScope: input.scope ?? {},
   };
   updateQueueSendProgress(job);
   queueSendJobs.set(jobId, job);
@@ -1286,23 +1312,27 @@ export async function startQueueSendJob(input: {
   await persistQueueSendJobSnapshot(job, { required: true });
   await persistQueueSendJobItems(jobId, itemStates);
   if (preflight.readyOrders.length > 0) {
-    if (env.PRINT_QUEUE_WORKER_ENABLED) {
-      const enqueueResult = await enqueueQueueSendWorkerJob({
-        jobId,
-        orders: preflight.readyOrders,
-        concurrency: input.concurrency,
-        scope: input.scope,
-        requestedAt: new Date(job.createdAt).toISOString(),
-      });
-      if (enqueueResult.queued) {
-        return { jobId, total: requestedTotal, skipped: skippedResults.length };
-      }
-      console.warn(
-        '[print-queue] worker enqueue failed; falling back to in-process queue send:',
-        enqueueResult.error ?? 'pg-boss did not accept the job',
+    if (!env.PRINT_QUEUE_WORKER_ENABLED) {
+      await markQueueSendWorkerUnavailable(
+        job,
+        'Print queue worker dispatch is disabled; enable PRINT_QUEUE_WORKER_ENABLED on the API service.',
       );
+      return { jobId, total: requestedTotal, skipped: skippedResults.length };
     }
-    void runQueueSendJob(jobId, preflight.readyOrders, input.concurrency, input.scope);
+    const enqueueResult = await enqueueQueueSendWorkerJob({
+      jobId,
+      orders: preflight.readyOrders,
+      concurrency: workerConcurrency,
+      scope: input.scope ?? {},
+      requestedAt: new Date(job.createdAt).toISOString(),
+    });
+    if (enqueueResult.queued) {
+      queueSendJobs.delete(jobId);
+      return { jobId, total: requestedTotal, skipped: skippedResults.length };
+    }
+    const enqueueError = enqueueResult.error ?? 'pg-boss did not accept the job';
+    console.warn('[print-queue] worker enqueue failed; job will not run in the API process:', enqueueError);
+    await markQueueSendWorkerUnavailable(job, `Print queue worker unavailable: ${enqueueError}`);
   }
   return { jobId, total: requestedTotal, skipped: skippedResults.length };
 }
@@ -1351,13 +1381,13 @@ export async function runQueueSendJobFromWorker(payload: {
 async function runQueueSendJob(
   jobId: string,
   orders: QueueSendOrderInput[],
-  requestedConcurrency = 5,
+  requestedConcurrency = QUEUE_SEND_WORKER_MAX_CONCURRENCY,
   scope: PrintQueueListScope = {}
 ) {
   const job = queueSendJobs.get(jobId);
   if (!job) return;
 
-  const concurrency = Math.max(1, Math.min(8, Math.floor(requestedConcurrency || 5)));
+  const concurrency = normalizeQueueSendWorkerConcurrency(requestedConcurrency);
   job.status = 'running';
   updateQueueSendProgress(job);
   void persistQueueSendJobSnapshot(job);

@@ -126,8 +126,8 @@ check(
   'OrdersView polls each backend queue-send job with the selected run total, not a cumulative queue count',
   /pollBackendQueueSendJob\(\s*backendJobId: string,\s*progressTotal: number/.test(ordersView) &&
     /total: progressTotal/.test(ordersView) &&
-    /completed: Math\.min\(progressTotal, completedOffset \+ current\)/.test(ordersView) &&
-    /pollBackendQueueSendJob\(started\.job_id, Math\.max\(jobOrders\.length, 1\)/.test(ordersView),
+    /completed: Math\.min\(progressTotal, current\)/.test(ordersView) &&
+    /toNumberValue\(started\.total\) \?\? Math\.max\(jobOrders\.length, 1\)/.test(ordersView),
 );
 
 check(

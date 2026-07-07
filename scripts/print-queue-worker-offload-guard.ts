@@ -34,8 +34,8 @@ const worker = read('src/worker.ts');
 check('package wires the print queue worker offload guard',
   packageJson.includes('"test:print-queue-worker-offload": "tsx scripts/print-queue-worker-offload-guard.ts"'));
 
-check('env exposes default-off API enqueue and worker consume flags',
-  /PRINT_QUEUE_WORKER_ENABLED:\s*booleanFlag\(false\)/.test(env) &&
+check('env enables API enqueue by default and keeps worker consume flag explicit',
+  /PRINT_QUEUE_WORKER_ENABLED:\s*booleanFlag\(true\)/.test(env) &&
     /RUN_PRINT_QUEUE_WORKER:\s*booleanFlag\(false\)/.test(env));
 
 check('dedicated print queue worker module exists',
@@ -52,16 +52,23 @@ check('worker module creates and consumes only the print queue job',
     /boss\.work\(\s*PRINT_QUEUE_SEND_JOB_NAME/.test(printWorker) &&
     /runQueueSendJobFromWorker/.test(printWorker));
 
-check('print queue service delegates worker-enabled runs to the enqueue owner',
+check('print queue service delegates queue-send runs to the worker enqueue owner',
   /from '\.\/print-queue-worker'/.test(printQueue) &&
     /env\.PRINT_QUEUE_WORKER_ENABLED/.test(printQueue) &&
     /await enqueueQueueSendWorkerJob/.test(printQueue) &&
-    /void runQueueSendJob/.test(printQueue));
+    /job will not run in the API process/.test(printQueue) &&
+    !/void runQueueSendJob/.test(printQueue));
 
 check('print queue service exports a durable rehydrating worker runner',
   /export async function runQueueSendJobFromWorker/.test(printQueue) &&
     /getQueueSendJobRecord\(payload\.jobId\)/.test(printQueue) &&
     /queueSendJobFromSnapshot/.test(printQueue));
+
+check('worker startup re-enqueues stale active durable jobs with stored payloads',
+  /getRecoverableQueueSendJobRecords/.test(printWorker) &&
+    /recoverStaleQueueSendJobs/.test(printWorker) &&
+    /snapshot\.workerOrders/.test(printWorker) &&
+    /Queue job interrupted before a durable worker payload was available/.test(printWorker));
 
 check('unsafe per-order timeout race stays out of label purchase path',
   !/Promise\.race\(\[\s*processQueueSendOrder/.test(printQueue) &&

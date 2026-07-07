@@ -139,9 +139,12 @@ check('backend addToQueue owns queue URL normalization and SKU identity derivati
   printQueueService.includes('export async function addToQueue') &&
   printQueueService.includes('const labelUrl = normalizePrintQueueLabelUrl(input.labelUrl)') &&
   printQueueService.includes('buildQueueSkuIdentityFromItems('));
-check('startQueueSendJob persists a durable worker job before async processing',
+check('startQueueSendJob persists a durable worker job before worker dispatch',
   startJobBlock.includes('await persistQueueSendJobSnapshot(job, { required: true })') &&
-  startJobBlock.includes('void runQueueSendJob(jobId, preflight.readyOrders, input.concurrency, input.scope)'));
+  startJobBlock.includes('workerOrders: preflight.readyOrders') &&
+  startJobBlock.includes('const enqueueResult = await enqueueQueueSendWorkerJob({') &&
+  startJobBlock.includes('queueSendJobs.delete(jobId)') &&
+  !startJobBlock.includes('void runQueueSendJob'));
 check('worker calls the backend process and classifies retry eligibility structurally',
   runJobBlock.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
   runJobBlock.includes('classifyLabelPurchaseRetry(err)') &&

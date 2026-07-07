@@ -438,7 +438,7 @@ const queueSendBody = z.object({
           .optional(),
       })
     )
-    .max(200)
+    .max(1000)
     .default([]),
   preflight_skips: z
     .array(
@@ -451,14 +451,14 @@ const queueSendBody = z.object({
         retry_reason: z.string().nullable().optional(),
       })
     )
-    .max(200)
+    .max(1000)
     .default([]),
 })
   .refine((body) => body.orders.length + body.preflight_skips.length > 0, {
     message: 'orders or preflight_skips must be non-empty',
   })
-  .refine((body) => body.orders.length + body.preflight_skips.length <= 200, {
-    message: 'orders plus preflight_skips must be <= 200',
+  .refine((body) => body.orders.length + body.preflight_skips.length <= 1000, {
+    message: 'orders plus preflight_skips must be <= 1000',
   });
 
 app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {

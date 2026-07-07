@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { env } from '../lib/env';
 import { withDeadline } from '../lib/with-deadline';
 import type { PrintQueueListScope, QueueSendOrderInput } from './print-queue';
+import {
+  getRecoverableQueueSendJobRecords,
+  persistQueueSendJobRecord,
+} from './print-queue/queue-send-job-store';
+import { QUEUE_SEND_DURABLE_STALE_AFTER_MS } from './print-queue/queue-send-status';
 
 export const PRINT_QUEUE_SEND_JOB_NAME = 'prepship.print-queue.batch-send';
 
@@ -14,8 +19,8 @@ const scopeSchema = z.object({
 
 const payloadSchema = z.object({
   jobId: z.string().min(1),
-  orders: z.array(z.unknown()).min(1).max(200),
-  concurrency: z.number().int().min(1).max(8).optional(),
+  orders: z.array(z.unknown()).min(1).max(1000),
+  concurrency: z.number().int().min(1).max(4).optional(),
   scope: scopeSchema,
   requestedAt: z.string().optional(),
 });
@@ -32,6 +37,12 @@ export type QueueSendWorkerEnqueueResult = {
   queued: boolean;
   pgBossJobId: string | null;
   error: string | null;
+};
+
+export type QueueSendWorkerRecoveryResult = {
+  scanned: number;
+  requeued: number;
+  interrupted: number;
 };
 
 let boss: PgBoss | null = null;
@@ -63,6 +74,10 @@ async function ensurePrintQueueSendQueue(targetBoss: PgBoss): Promise<void> {
     expireInSeconds: 30 * 60,
     retentionDays: 7,
   });
+}
+
+function recoverableOrders(value: unknown): QueueSendOrderInput[] {
+  return Array.isArray(value) ? (value as QueueSendOrderInput[]) : [];
 }
 
 function parseQueueSendWorkerPayload(value: unknown): QueueSendWorkerPayload {
@@ -115,6 +130,72 @@ export async function enqueueQueueSendWorkerJob(
   }
 }
 
+async function markRecoverableJobInterrupted(
+  snapshot: Awaited<ReturnType<typeof getRecoverableQueueSendJobRecords>>[number],
+): Promise<void> {
+  await persistQueueSendJobRecord({
+    ...snapshot,
+    status: 'interrupted',
+    active: false,
+    message:
+      'Queue job interrupted before a durable worker payload was available; verify the queue and retry.',
+    errorMessage:
+      snapshot.errorMessage ??
+      'Queue job cannot be safely resumed because its durable worker payload is missing.',
+    updatedAt: new Date().toISOString(),
+    persistedAt: new Date().toISOString(),
+  });
+}
+
+async function recoverStaleQueueSendJobs(targetBoss: PgBoss): Promise<QueueSendWorkerRecoveryResult> {
+  const snapshots = await getRecoverableQueueSendJobRecords({
+    staleAfterMs: QUEUE_SEND_DURABLE_STALE_AFTER_MS,
+    limit: 25,
+  });
+  let requeued = 0;
+  let interrupted = 0;
+
+  for (const snapshot of snapshots) {
+    const orders = recoverableOrders(snapshot.workerOrders);
+    if (!orders.length) {
+      await markRecoverableJobInterrupted(snapshot);
+      interrupted += 1;
+      continue;
+    }
+
+    const pgBossJobId = await targetBoss.send(
+      PRINT_QUEUE_SEND_JOB_NAME,
+      {
+        jobId: snapshot.jobId,
+        orders,
+        concurrency: snapshot.workerConcurrency ?? undefined,
+        scope: snapshot.workerScope ?? {},
+        requestedAt: new Date().toISOString(),
+      },
+      {
+        singletonKey: snapshot.jobId,
+        singletonSeconds: 24 * 60 * 60,
+        retryLimit: 1,
+        retryDelay: 30,
+        retryBackoff: true,
+        expireInMinutes: 30,
+        retentionDays: 7,
+      },
+    );
+    if (pgBossJobId) {
+      await persistQueueSendJobRecord({
+        ...snapshot,
+        message: `Recovering stale queue job ${snapshot.current}/${snapshot.total}`,
+        updatedAt: new Date().toISOString(),
+        persistedAt: new Date().toISOString(),
+      });
+      requeued += 1;
+    }
+  }
+
+  return { scanned: snapshots.length, requeued, interrupted };
+}
+
 export async function startPrintQueueWorker(): Promise<void> {
   if (started) {
     console.warn('[print-queue-worker] already started, ignoring duplicate start');
@@ -130,6 +211,12 @@ export async function startPrintQueueWorker(): Promise<void> {
   try {
     await boss.start();
     await ensurePrintQueueSendQueue(boss);
+    const recovery = await recoverStaleQueueSendJobs(boss);
+    if (recovery.scanned > 0) {
+      console.log(
+        `[print-queue-worker] recovery scanned=${recovery.scanned} requeued=${recovery.requeued} interrupted=${recovery.interrupted}`,
+      );
+    }
     await boss.work(
       PRINT_QUEUE_SEND_JOB_NAME,
       { batchSize: 1, pollingIntervalSeconds: 1 },

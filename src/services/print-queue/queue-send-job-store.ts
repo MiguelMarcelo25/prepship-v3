@@ -295,3 +295,31 @@ export async function getLatestQueueSendJobRecord(): Promise<QueueSendJobSnapsho
     return null;
   }
 }
+
+export async function getRecoverableQueueSendJobRecords(options: {
+  staleAfterMs: number;
+  limit?: number;
+}): Promise<QueueSendJobSnapshot[]> {
+  const staleAfterSeconds = Math.max(1, Math.ceil(options.staleAfterMs / 1000));
+  const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 25)));
+  try {
+    await ensureQueueSendJobStoreSchema();
+    const rows = await pg<{ snapshot: unknown }[]>`
+      SELECT snapshot
+      FROM print_queue_send_jobs
+      WHERE status IN ('pending', 'running')
+        AND updated_at < now() - (${staleAfterSeconds} * interval '1 second')
+      ORDER BY updated_at ASC
+      LIMIT ${limit}
+    `;
+    return rows
+      .map((row) => parseQueueSendJobSnapshot(row.snapshot))
+      .filter((snapshot): snapshot is QueueSendJobSnapshot => Boolean(snapshot));
+  } catch (err) {
+    console.warn(
+      '[print-queue-job-store] failed to read recoverable queue-send jobs:',
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
+}

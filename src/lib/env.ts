@@ -184,7 +184,7 @@ const schema = z.object({
   // Dedicated Print Queue worker rollout. API enqueue is separate from worker
   // consumption so the service can be deployed dark, then canaried without
   // changing the operator's Print to Queue workflow.
-  PRINT_QUEUE_WORKER_ENABLED: booleanFlag(false),
+  PRINT_QUEUE_WORKER_ENABLED: booleanFlag(true),
   RUN_PRINT_QUEUE_WORKER: booleanFlag(false),
   PRINT_QUEUE_WORKER_JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(10 * 60_000),
   // PS-306 (A1, money path): default-OFF. When ON with backend orchestration, a
