@@ -43,9 +43,15 @@ check('dedicated print queue worker module exists',
 
 check('worker module owns a pg-boss print queue name and enqueue API',
   /PRINT_QUEUE_SEND_JOB_NAME\s*=\s*'prepship\.print-queue\.batch-send'/.test(printWorker) &&
+    /PRINT_QUEUE_SEND_SINGLETON_SECONDS\s*=\s*jobSingletonSeconds/.test(printWorker) &&
     /export async function enqueueQueueSendWorkerJob/.test(printWorker) &&
     /export async function startPrintQueueWorker/.test(printWorker) &&
     /export async function stopPrintQueueWorker/.test(printWorker));
+
+check('print queue worker caps singleton throttle below pg-boss archive interval',
+  /from '\.\.\/lib\/job-singleton-seconds'/.test(printWorker) &&
+    /singletonSeconds:\s*PRINT_QUEUE_SEND_SINGLETON_SECONDS/.test(printWorker) &&
+    !/singletonSeconds:\s*24 \* 60 \* 60/.test(printWorker));
 
 check('worker module creates and consumes only the print queue job',
   /createQueue\(PRINT_QUEUE_SEND_JOB_NAME/.test(printWorker) &&

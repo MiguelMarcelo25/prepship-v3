@@ -1,6 +1,7 @@
 import PgBoss from 'pg-boss';
 import { z } from 'zod';
 import { env } from '../lib/env';
+import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import { withDeadline } from '../lib/with-deadline';
 import type { PrintQueueListScope, QueueSendOrderInput } from './print-queue';
 import {
@@ -10,6 +11,7 @@ import {
 import { QUEUE_SEND_DURABLE_STALE_AFTER_MS } from './print-queue/queue-send-status';
 
 export const PRINT_QUEUE_SEND_JOB_NAME = 'prepship.print-queue.batch-send';
+const PRINT_QUEUE_SEND_SINGLETON_SECONDS = jobSingletonSeconds(24 * 60 * 60 * 1000);
 
 const scopeSchema = z.object({
   scopeClientIds: z.array(z.number().int().positive()).optional(),
@@ -106,7 +108,7 @@ export async function enqueueQueueSendWorkerJob(
       },
       {
         singletonKey: payload.jobId,
-        singletonSeconds: 24 * 60 * 60,
+        singletonSeconds: PRINT_QUEUE_SEND_SINGLETON_SECONDS,
         retryLimit: 1,
         retryDelay: 30,
         retryBackoff: true,
@@ -174,7 +176,7 @@ async function recoverStaleQueueSendJobs(targetBoss: PgBoss): Promise<QueueSendW
       },
       {
         singletonKey: snapshot.jobId,
-        singletonSeconds: 24 * 60 * 60,
+        singletonSeconds: PRINT_QUEUE_SEND_SINGLETON_SECONDS,
         retryLimit: 1,
         retryDelay: 30,
         retryBackoff: true,
