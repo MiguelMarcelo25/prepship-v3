@@ -276,11 +276,16 @@ await check('Shopify is marked live and wired into Settings Pull Orders', () => 
   assert.match(read('src/routes/carriers.ts'), /\/shopify\/orders/);
   assert.match(read('src/connectors/store/shopify.ts'), /grant_type:\s*'client_credentials'/);
   assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /shopify:\s*pullShopifyOrders/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /pullResultSampleOrderIds/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /row\.orderNumber/);
+  assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /mirrored to Awaiting/);
+  assert.doesNotMatch(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /sample PO IDs/);
   assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientId'[^}]*required: false/);
   assert.match(read('web/src/components/Settings/CarrierIntegrationsCard.tsx'), /name: 'clientSecret'[^}]*required: false/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /importStoreOrders\('shopify'/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /upsertNormalizedStoreOrders/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /INSERT INTO store_orders/);
+  assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /mirroredOrders/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /hasExistingMarketplaceOrderRow\(sql, 'shopify'/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /reconcileMarketplaceOrderStatuses\(sql/);
   assert.match(read('src/services/marketplace-status-reconciliation.ts'), /MarketplaceProvider = 'walmart' \| 'ebay' \| 'shopify'/);

@@ -207,6 +207,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     let updated = 0;
     let reconciledOrders = 0;
     let skippedSyntheticMirrors = 0;
+    let mirroredOrders = 0;
 
     for (const order of imported.orders as any[]) {
       const orderNumber = sourceOrderNumber(order);
@@ -257,7 +258,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       try {
-        await upsertNormalizedStoreOrders([{
+        mirroredOrders += await upsertNormalizedStoreOrders([{
           source: buildNormalizedOrderSource({
             sourceProvider: 'shopify',
             sourceAccountId: String(accountId),
@@ -299,6 +300,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       fetched: imported.orders.length,
       inserted,
       updated,
+      mirroredOrders,
       reconciledOrders,
       skippedSyntheticMirrors,
       sample: (imported.orders as any[]).slice(0, 5).map((order) => ({

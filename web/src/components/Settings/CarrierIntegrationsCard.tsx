@@ -934,11 +934,22 @@ interface WalmartOrdersResult {
   fetched?: number
   inserted?: number
   updated?: number
+  mirroredOrders?: number
   count?: number // legacy field — kept for backward compat with older deploys
   sample?: Array<Record<string, unknown>>
   windowStart?: string
   fetchedAt?: string
   error?: string
+}
+
+function pullResultSampleOrderIds(sample: Array<Record<string, unknown>> | undefined): string {
+  if (!sample?.length) return ''
+  return sample
+    .slice(0, 3)
+    .map((row) => row.purchaseOrderId ?? row.customerOrderId ?? row.legacyOrderId ?? row.orderNumber ?? row.orderId)
+    .map((value) => (typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''))
+    .filter(Boolean)
+    .join(', ')
 }
 
 async function pullWalmartOrders(storeAccountId: number): Promise<WalmartOrdersResult> {
@@ -2837,11 +2848,13 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               const fetched = r.fetched ?? r.count ?? 0
               const inserted = r.inserted ?? 0
               const updated = r.updated ?? 0
-              const sampleStr = r.sample && r.sample.length > 0
-                ? ` — sample PO IDs: ${r.sample.slice(0, 3).map((s: any) => s.purchaseOrderId).filter(Boolean).join(', ')}`
+              const mirrored = typeof r.mirroredOrders === 'number' ? ` · ${r.mirroredOrders} mirrored to Awaiting` : ''
+              const sampleOrderIds = pullResultSampleOrderIds(r.sample)
+              const sampleStr = sampleOrderIds
+                ? ` — sample order IDs: ${sampleOrderIds}`
                 : ''
               if (r.fetched != null) {
-                return `📦 ${fetched} fetched · ${inserted} new · ${updated} updated (saved to store_orders)${sampleStr}`
+                return `📦 ${fetched} fetched · ${inserted} new · ${updated} updated (saved to store_orders)${mirrored}${sampleStr}`
               }
               return `📦 ${fetched} orders found in last 7 days${sampleStr}`
             })()}
