@@ -5,10 +5,6 @@
 
 import postgres from 'postgres';
 import { assertStoreOrdersSchemaReady } from '../../services/store-orders-schema';
-import {
-  hasExistingMarketplaceOrderRow,
-  reconcileMarketplaceOrderStatuses,
-} from '../../services/marketplace-status-reconciliation';
 import { sendInternalServerError } from '../safe-error';
 import {
   extractBearerToken,
@@ -111,16 +107,6 @@ async function clientContextForStore(sql: any, account: {
     LIMIT 1
   `;
   return { clientId: rows[0]?.id ?? null, syntheticStoreId };
-}
-
-async function hasExistingShopifyOrderRow(sql: any, orderNumber: string): Promise<boolean> {
-  const trimmed = orderNumber.trim();
-  if (!trimmed) return false;
-  const candidates = Array.from(new Set([trimmed, trimmed.replace(/^#/, '')].filter(Boolean)));
-  for (const candidate of candidates) {
-    if (await hasExistingMarketplaceOrderRow(sql, 'shopify', candidate)) return true;
-  }
-  return false;
 }
 
 export default async function handler(req: any, res: any): Promise<void> {
@@ -245,19 +231,10 @@ export default async function handler(req: any, res: any): Promise<void> {
       `;
       if (result[0]?.inserted) inserted += 1; else updated += 1;
 
-      if (await hasExistingShopifyOrderRow(sql, orderNumber)) {
-        const reconciliation = await reconcileMarketplaceOrderStatuses(sql, {
-          provider: 'shopify',
-          storeAccountId: accountId,
-          orderNumbers: [orderNumber, orderNumber.replace(/^#/, '')].filter(Boolean),
-          dryRun: false,
-        });
-        reconciledOrders += reconciliation.updated;
-        skippedSyntheticMirrors += 1;
-        continue;
-      }
-
       try {
+        // Shopify order numbers such as "#1001" are shop-local and collide
+        // easily. Do not let a global order_number match block a direct
+        // Shopify import; the source identity below is the canonical key.
         mirroredOrders += await upsertNormalizedStoreOrders([{
           source: buildNormalizedOrderSource({
             sourceProvider: 'shopify',

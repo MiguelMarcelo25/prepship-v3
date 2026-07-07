@@ -286,8 +286,8 @@ await check('Shopify is marked live and wired into Settings Pull Orders', () => 
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /upsertNormalizedStoreOrders/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /INSERT INTO store_orders/);
   assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /mirroredOrders/);
-  assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /hasExistingMarketplaceOrderRow\(sql, 'shopify'/);
-  assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /reconcileMarketplaceOrderStatuses\(sql/);
+  assert.match(read('src/lib/imported-handlers/shopify-orders.ts'), /source identity below is the canonical key/);
+  assert.doesNotMatch(read('src/lib/imported-handlers/shopify-orders.ts'), /hasExistingMarketplaceOrderRow\(sql, 'shopify'/);
   assert.match(read('src/services/marketplace-status-reconciliation.ts'), /MarketplaceProvider = 'walmart' \| 'ebay' \| 'shopify'/);
   assert.match(read('src/services/fulfillment/outbox.ts'), /provider !== 'shopify'/);
 });
