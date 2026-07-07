@@ -20,17 +20,21 @@
 //   column) was called before. Likewise every parent closure used in the
 //   thead/tbody — the header click/drag/drop/keydown handlers, finishHeaderDrag,
 //   startColumnResize, toggleSkuGroupSelection, openOrderDetails,
-//   openShipStationOrder, setKbRowId — is passed in as a prop; their bodies stay
-//   in OrdersView. The pure presentational helpers (getActiveItems /
-//   getClientPalette / getExpeditedBadge / getIsException) are imported directly
-//   from their strict modules (same pure functions OrdersView calls), not
-//   re-derived.
+//   openShipStationOrder — is passed in as a prop; their bodies stay in
+//   OrdersView. The ONE piece of UI state owned here is the row hover/keyboard
+//   focus (kbRowId + the Arrow/Enter/Ctrl-C row-nav listener, moved DOWN from
+//   OrdersView 2026-07-08): table-local focus means a hover crossing re-renders
+//   this table only — and via the memoized ./OrderRow only the two rows whose
+//   focus flag flipped — instead of the whole OrdersView shell. Escape
+//   (rate-browser close / clear selection) stays in OrdersView with its owners.
+//   The per-row <tr> markup moved VERBATIM to ./OrderRow.
 //
 // LOCKDOWN: this is the awaiting/shipped/cancelled results table render only —
 //   it reads no shipped/cancelled data and contains no mutation gate. The
 //   isReadOnly flag (which hides the SKU-group select-all checkbox, mirroring
 //   the per-row checkbox gate) is passed in from the OrdersView shell and its
 //   meaning is UNCHANGED.
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
 import type { GroupedOrdersBySku } from './orders-grouping'
@@ -40,9 +44,7 @@ import type { SortKey, TableColumn, TableColumnKey } from './orders-table-column
 // OrdersView, not exported); kept identical so the sortState prop's `dir` type
 // matches the parent's useState exactly.
 type SortDirection = 'asc' | 'desc'
-import { getActiveItems } from './orders-items'
-import { getClientPalette } from './orders-formatting'
-import { getExpeditedBadge, getIsException } from './orders-display-state'
+import { OrderRow } from './OrderRow'
 
 export type OrdersTableProps = {
   // ── table shell + columns ──
@@ -74,14 +76,17 @@ export type OrdersTableProps = {
   // number | null | undefined. Mirror it exactly (the === row-highlight
   // comparison below behaves identically for undefined).
   panelOrderId: number | null | undefined
-  kbRowId: number | null
   transitionalShippedIds: Set<number>
   isReadOnly: boolean
   // ── row + group handlers (bodies stay in OrdersView) ──
   toggleSkuGroupSelection: (orderIds: number[], checked?: boolean) => void
   openOrderDetails: (orderId: number) => void
   openShipStationOrder: (orderId: number) => void
-  setKbRowId: (orderId: number | null) => void
+  // ── row-nav collaborators (bodies stay in OrdersView; called by the
+  //    table-local Arrow/Enter/Ctrl-C keyboard listener) ──
+  updateSelection: (orderIds: number[]) => void
+  copyText: (text: string) => void
+  showToast: (message: string) => void
   // ── per-cell dispatcher (closes over OrdersView state) ──
   renderCell: (order: OrderSummaryDto, column: TableColumn) => ReactNode
 }
@@ -107,15 +112,58 @@ export function OrdersTable({
   orderDetailsById,
   selectedIdSet,
   panelOrderId,
-  kbRowId,
   transitionalShippedIds,
   isReadOnly,
   toggleSkuGroupSelection,
   openOrderDetails,
   openShipStationOrder,
-  setKbRowId,
+  updateSelection,
+  copyText,
+  showToast,
   renderCell,
 }: OrdersTableProps) {
+  // Row hover/keyboard focus is table-local (moved down from OrdersView): a
+  // hover crossing re-renders only this table, and the memoized <OrderRow>
+  // bails out every row whose isKbFocus flag did not flip.
+  const [kbRowId, setKbRowId] = useState<number | null>(null)
+
+  // Arrow/Enter/Ctrl-C row navigation (moved VERBATIM from the OrdersView
+  // keydown listener; the Escape branch — rate-browser close / clear selection
+  // — stays in OrdersView with the state it operates on).
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return
+
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const currentIndex = kbRowId != null ? orderedFilteredOrders.findIndex((order) => order.orderId === kbRowId) : -1
+        const nextIndex = Math.max(0, Math.min(orderedFilteredOrders.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)))
+        const nextOrder = orderedFilteredOrders[nextIndex]
+        if (!nextOrder) return
+        setKbRowId(nextOrder.orderId)
+        document.getElementById(`row-${nextOrder.orderId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        return
+      }
+
+      if (event.key === 'Enter' && kbRowId != null) {
+        updateSelection([kbRowId])
+        return
+      }
+
+      if (event.key.toLowerCase() === 'c' && (event.ctrlKey || event.metaKey) && !event.shiftKey && kbRowId != null) {
+        const order = orderedFilteredOrders.find((candidate) => candidate.orderId === kbRowId)
+        if (order?.orderNumber) {
+          copyText(order.orderNumber)
+          showToast(`📋 Copied: ${order.orderNumber}`)
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [kbRowId, orderedFilteredOrders])
+
   return (
     <table
       className={`orders-table density-${tableDensity}`}
@@ -232,111 +280,42 @@ export function OrdersTable({
             </tr>
           )
 
-          const rows = group.orders.map((order) => {
-            const detail = orderDetailsById.get(order.orderId) ?? null
-            const items = getActiveItems(order, detail)
-            const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
-            const multiSku = uniqueSkus.size > 1
-            const isTransitioningShipped = transitionalShippedIds.has(order.orderId)
-            const rowClasses = [
-              'order-row',
-              selectedIdSet.has(order.orderId) ? 'row-selected' : '',
-              panelOrderId === order.orderId ? 'row-panel-open' : '',
-              kbRowId === order.orderId ? 'row-kb-focus' : '',
-              multiSku ? 'multi-sku-row' : '',
-              getIsException(order) ? 'row-exception' : '',
-              // 30-second continuous fade animation triggered
-              // by Print Label success. CSS keyframe is
-              // `ps-shipping-fade` in app-shell.css (visible
-              // throughout the 30s — opacity goes 1 → 0 with
-              // a 4-stop curve so the change is perceivable
-              // every few seconds, plus a slight rightward
-              // slide so the row looks like it's "leaving"
-              // toward the Shipped tab).
-              isTransitioningShipped ? 'ps-shipping-row' : '',
-            ].filter(Boolean).join(' ')
-            const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
-            const expedited = getExpeditedBadge(order, detail)
-
-            return (
-              <tr
-                key={order.orderId}
-                id={`row-${order.orderId}`}
-                className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
-                data-expedited={expedited ? expedited.tier : undefined}
-                style={{ borderLeft: `3px solid ${clientColor}` }}
-                onClick={() => openOrderDetails(order.orderId)}
-                onDoubleClick={() => openShipStationOrder(order.orderId)}
-                onMouseEnter={() => setKbRowId(order.orderId)}
-              >
-                {visibleColumns.map((column) => (
-                  <td
-                    key={column.key}
-                    data-col={column.key}
-                    // See twin <td> below — explicit width
-                    // mirrors colgroup + thead so browsers can't
-                    // drift body content out of column alignment.
-                    style={{ width: column.width, maxWidth: column.width }}
-                    title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
-                  >
-                    {renderCell(order, column)}
-                  </td>
-                ))}
-              </tr>
-            )
-          })
+          const rows = group.orders.map((order) => (
+            <OrderRow
+              key={order.orderId}
+              order={order}
+              detail={orderDetailsById.get(order.orderId) ?? null}
+              visibleColumns={visibleColumns}
+              isSelected={selectedIdSet.has(order.orderId)}
+              isPanelOpen={panelOrderId === order.orderId}
+              isKbFocus={kbRowId === order.orderId}
+              isTransitioningShipped={transitionalShippedIds.has(order.orderId)}
+              openOrderDetails={openOrderDetails}
+              openShipStationOrder={openShipStationOrder}
+              setKbRowId={setKbRowId}
+              renderCell={renderCell}
+            />
+          ))
 
           return [header, ...rows]
-        }) : orderedFilteredOrders.map((order) => {
-          const detail = orderDetailsById.get(order.orderId) ?? null
-          const items = getActiveItems(order, detail)
-          const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
-          const multiSku = uniqueSkus.size > 1
-          const rowClasses = [
-            'order-row',
-            selectedIdSet.has(order.orderId) ? 'row-selected' : '',
-            panelOrderId === order.orderId ? 'row-panel-open' : '',
-            kbRowId === order.orderId ? 'row-kb-focus' : '',
-            multiSku ? 'multi-sku-row' : '',
-            getIsException(order) ? 'row-exception' : '',
-          ].filter(Boolean).join(' ')
-          const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
-          const expedited = getExpeditedBadge(order, detail)
-
-          return (
-            <tr
-              key={order.orderId}
-              id={`row-${order.orderId}`}
-              className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
-              data-expedited={expedited ? expedited.tier : undefined}
-              style={{ borderLeft: `3px solid ${clientColor}` }}
-              onClick={() => openOrderDetails(order.orderId)}
-              onDoubleClick={() => openShipStationOrder(order.orderId)}
-              onMouseEnter={() => setKbRowId(order.orderId)}
-            >
-              {visibleColumns.map((column) => (
-                <td
-                  key={column.key}
-                  data-col={column.key}
-                  // Explicit width on the body cell mirrors the
-                  // colgroup + thead width so browsers never
-                  // misalign header vs body — even when an inner
-                  // cell renderer (e.g. cell-itemname's
-                  // maxWidth: column.width + 90 hover-preview
-                  // trick) tries to grow content past the
-                  // declared cell width. With table-layout:
-                  // fixed the colgroup wins anyway, but the
-                  // explicit td width is a belt-and-braces
-                  // guard for subpixel rendering edge cases.
-                  style={{ width: column.width, maxWidth: column.width }}
-                  title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
-                >
-                  {renderCell(order, column)}
-                </td>
-              ))}
-            </tr>
-          )
-        }))}
+        }) : orderedFilteredOrders.map((order) => (
+          <OrderRow
+            key={order.orderId}
+            order={order}
+            detail={orderDetailsById.get(order.orderId) ?? null}
+            visibleColumns={visibleColumns}
+            isSelected={selectedIdSet.has(order.orderId)}
+            isPanelOpen={panelOrderId === order.orderId}
+            isKbFocus={kbRowId === order.orderId}
+            // Only the sku-grouped rows carried the ps-shipping-row fade class
+            // before the OrderRow extraction — the flat branch stays without it.
+            isTransitioningShipped={false}
+            openOrderDetails={openOrderDetails}
+            openShipStationOrder={openShipStationOrder}
+            setKbRowId={setKbRowId}
+            renderCell={renderCell}
+          />
+        )))}
       </tbody>
     </table>
   )

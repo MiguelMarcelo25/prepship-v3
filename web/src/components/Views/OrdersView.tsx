@@ -695,7 +695,6 @@ export default function OrdersView({
   const [sortState, setSortState] = useState<{ key: SortKey; dir: SortDirection }>({ key: 'date', dir: 'desc' })
   const [skuSortActive, setSkuSortActive] = useState(false)
   const [preSkuSortSnapshot, setPreSkuSortSnapshot] = useState<number[] | null>(null)
-  const [kbRowId, setKbRowId] = useState<number | null>(null)
   // PS-166/PS-258 (Hook wave 3): collapsedSections + toggleSection now live in
   // usePanelState (pure panel-UI state). Destructured here at the same location;
   // the panel pass-through (collapsedSections / onToggleSection) is unchanged.
@@ -1917,6 +1916,10 @@ export default function OrdersView({
     packages,
   ])
 
+  // Escape only: the rate-browser close gate + clear-selection live here with
+  // their owners. The Arrow/Enter/Ctrl-C ROW-NAV branches (and the kbRowId
+  // state they drive) moved DOWN into OrdersTable (2026-07-08) so hover /
+  // keyboard row focus re-renders the table, not this whole shell.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
@@ -1930,37 +1933,12 @@ export default function OrdersView({
           return
         }
         clearSelection()
-        return
-      }
-
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault()
-        const currentIndex = kbRowId != null ? orderedFilteredOrders.findIndex((order) => order.orderId === kbRowId) : -1
-        const nextIndex = Math.max(0, Math.min(orderedFilteredOrders.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)))
-        const nextOrder = orderedFilteredOrders[nextIndex]
-        if (!nextOrder) return
-        setKbRowId(nextOrder.orderId)
-        document.getElementById(`row-${nextOrder.orderId}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-        return
-      }
-
-      if (event.key === 'Enter' && kbRowId != null) {
-        updateSelection([kbRowId])
-        return
-      }
-
-      if (event.key.toLowerCase() === 'c' && (event.ctrlKey || event.metaKey) && !event.shiftKey && kbRowId != null) {
-        const order = orderedFilteredOrders.find((candidate) => candidate.orderId === kbRowId)
-        if (order?.orderNumber) {
-          copyText(order.orderNumber)
-          showToast(`📋 Copied: ${order.orderNumber}`)
-        }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [rateBrowserOpen, kbRowId, orderedFilteredOrders])
+  }, [rateBrowserOpen])
 
 
   // PS-166/PS-306/PS-258 (Hook wave): updateSelection now comes from
@@ -6431,13 +6409,14 @@ export default function OrdersView({
                   orderDetailsById={orderDetailsById}
                   selectedIdSet={selectedIdSet}
                   panelOrderId={panelOrderId}
-                  kbRowId={kbRowId}
                   transitionalShippedIds={transitionalShippedIds}
                   isReadOnly={isReadOnly}
                   toggleSkuGroupSelection={toggleSkuGroupSelection}
                   openOrderDetails={openOrderDetails}
                   openShipStationOrder={openShipStationOrder}
-                  setKbRowId={setKbRowId}
+                  updateSelection={updateSelection}
+                  copyText={copyText}
+                  showToast={showToast}
                   renderCell={renderTableCell}
                 />
               ) : null}
