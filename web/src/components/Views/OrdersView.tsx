@@ -25,11 +25,7 @@ import {
   getBestRateServiceCode,
 } from './orders-row-display'
 // PS-166/PS-306 (decomposition): pure money/rate cell renderers extracted to OrdersRateCells.
-<<<<<<< HEAD
 import { renderOrderTotalCell, renderBestRateFinalCell, renderCShippingRateCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
-=======
-import { renderOrderTotalCell, renderBestRateFinalCell, renderRateCostCell, renderMarketplaceFeeCell, renderProfitCell } from './orders-rate-cells'
->>>>>>> 4f83eef6 (Add create-print job kind and batchPrintViaQueue FE flag state)
 // PS-166/PS-306/PS-258 (Wave 2): the four leaf cell renderers (Best Rate / Ship
 // Margin / Carrier / Shipping Account) extracted VERBATIM to ./orders/cells/order-cells.
 // renderTableCell stays here as a thin dispatcher; the component-scoped closures
@@ -2886,6 +2882,9 @@ export default function OrdersView({
       batchTestMode?: boolean
       existingLabelOnly?: boolean
       labelPayloadOverrides?: Map<number, Record<string, unknown>>
+      // Batch-print pipeline: the create-print chain owns refetch timing (fade
+      // first, refetch per-row after the 30s transition) — it passes true here.
+      deferOrdersRefetch?: boolean
     },
   ) {
     const queueJobId = beginPersistentQueueJob(options.kind, jobOrders, {
@@ -2951,11 +2950,15 @@ export default function OrdersView({
         await refreshQueueAfterBackendStatus(finalStatus, fallbackClientId)
       }
 
-      try {
-        await refetchOrders()
-      } catch (error) {
-        console.warn('[print-queue] post-queue orders refresh failed', error instanceof Error ? error.message : error)
-        showToast('Queue result saved, but the Orders table refresh timed out. Use Retry if the table does not reload.', 'error')
+      // Batch-print pipeline: the create-print chain owns refetch timing (fade first,
+      // per-row refetch after the 30s transition) — it passes deferOrdersRefetch.
+      if (!options.deferOrdersRefetch) {
+        try {
+          await refetchOrders()
+        } catch (error) {
+          console.warn('[print-queue] post-queue orders refresh failed', error instanceof Error ? error.message : error)
+          showToast('Queue result saved, but the Orders table refresh timed out. Use Retry if the table does not reload.', 'error')
+        }
       }
     } finally {
       setQueueLoading(false)
@@ -3023,6 +3026,12 @@ export default function OrdersView({
       queuedItems,
       skippedErrors: skippedResultErrors,
       failedErrors: backendErrors,
+      // Batch-print pipeline: the create-print chain prints exactly the entries
+      // THIS job queued, and fades exactly the orders the backend reported bought.
+      queuedEntryIds: Array.isArray(finalStatus?.queued_entry_ids)
+        ? (finalStatus.queued_entry_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+        : [],
+      successOrderIds,
       retryEligibleOrderIds,
     }
   }
@@ -4509,10 +4518,12 @@ export default function OrdersView({
     printWindow.document.close()
   }
 
-  async function printQueueEntries(entryIds: string[]) {
-    if (entryIds.length === 0) return
+  async function printQueueEntries(entryIds: string[], options: { printWindow?: Window | null } = {}) {
+    if (entryIds.length === 0) return false
 
-    const printWindow = openQueuePrintWindow()
+    // Batch-print pipeline: the create-print chain opens its window at click time
+    // (popup-blocker safety) and hands it in; drawer callers keep the old behavior.
+    const printWindow = options.printWindow ?? openQueuePrintWindow()
     let pdfOpened = false
     // PS-194: which entries ACTUALLY merged is backend truth
     // (successful_entry_ids on the job DTO) — a held/failed label must not be
@@ -4599,6 +4610,7 @@ export default function OrdersView({
       setQueuePrintMessage(null)
       setQueuePrintProgress(null)
     }
+    return pdfOpened
   }
 
   async function confirmQueueEntriesPrinted(entryIds: string[]) {
@@ -6017,11 +6029,7 @@ export default function OrdersView({
       case 'bestRateFinal':
         return renderBestRateFinalCell(order)
       case 'ratecost':
-<<<<<<< HEAD
         return renderCShippingRateCell(order)
-=======
-        return renderRateCostCell(order)
->>>>>>> 4f83eef6 (Add create-print job kind and batchPrintViaQueue FE flag state)
       case 'margin':
         return renderMargin(order)
       case 'marketplacefee':
