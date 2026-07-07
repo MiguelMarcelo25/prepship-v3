@@ -35,15 +35,17 @@ report.check({
   // PS-176 part 2 re-anchor (count 3 → 2): the resumed-batch-queue path no
   // longer BUYS labels at all — resume hands interrupted batch jobs back to the
   // operator (pinned by test:ps-176-queue-route-authority "resume NEVER buys").
-  // A path that cannot purchase cannot have the missing-weight bug, so the
-  // fallback is required only on the two remaining buying paths (batch queue +
-  // batch print).
+  // 2026-07-07 cleanup re-anchor (count 2 → 1): the legacy batch Create+Print FE
+  // buying loop is DELETED — batch print now chains through the SAME queue-send
+  // intent payload (buildQueueSendOrderPayload), so both flows share the ONE
+  // fallback site. Test orders always take that site (the chain's needsOverride
+  // short-circuits on isBackendTestOrder, so no override payload replaces it).
   name: 'All label-BUYING queue/print paths apply test weight fallback',
-  condition: testWeightFallbackCount >= 2,
-  why: 'The same missing-weight bug can appear in batch queue and batch print if either path skips the fallback.',
-  evidence: `Found ${testWeightFallbackCount} effectiveWeightOz fallback occurrences; expected at least 2 (resume no longer purchases).`,
-  failure: 'At least one label-buying path may still reject test orders for missing weight.',
-  fix: 'Apply the same effectiveWeightOz fallback to the batch queue and batch print paths.',
+  condition: testWeightFallbackCount >= 1,
+  why: 'The same missing-weight bug can appear in any flow that builds label-buying queue intent if it skips the fallback.',
+  evidence: `Found ${testWeightFallbackCount} effectiveWeightOz fallback occurrences; expected at least 1 (batch queue + batch print share buildQueueSendOrderPayload).`,
+  failure: 'The label-buying queue intent path may reject test orders for missing weight.',
+  fix: 'Apply the effectiveWeightOz fallback in buildQueueSendOrderPayload.',
 });
 
 report.check({
@@ -56,12 +58,18 @@ report.check({
 });
 
 report.check({
+  // 2026-07-07 cleanup re-anchor: the legacy batch print payload (weightOz: effectiveWeightOz,)
+  // is deleted with the FE buying loop. Batch Create + Print now sends queue intent through the
+  // SAME buildQueueSendOrderPayload as queue mode, so it inherits the validated effective
+  // weight from the one shared site (pinned by the checks above).
   name: 'Batch Create + Print sends effective weight',
-  condition: ordersView.includes('weightOz: effectiveWeightOz,'),
+  condition: ordersView.includes("kind: 'create-print'") &&
+    ordersView.includes('sendToQueue: (sendableOrders, overrides) =>') &&
+    ordersView.includes('weightOz: effectiveWeightOz > 0 ? effectiveWeightOz : undefined'),
   why: 'Create + Print should use the same validated effective weight as queue mode.',
-  evidence: 'The batch print payload includes weightOz: effectiveWeightOz.',
+  evidence: 'Batch print chains through sendOrdersToQueueBackend (create-print kind), whose shared payload builder applies the effective-weight fallback.',
   failure: 'Batch print may bypass the test-order fallback and fail with missing weight.',
-  fix: 'Send effectiveWeightOz in the batch Create + Print payload.',
+  fix: 'Route batch Create + Print through the queue-send intent payload with the effectiveWeightOz fallback.',
 });
 
 report.check({

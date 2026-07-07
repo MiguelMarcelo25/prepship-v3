@@ -94,31 +94,26 @@ assert(singleCreateOrQueue.includes('sendOrdersToQueueBackend([order]'), 'single
 assert(singleCreateOrQueue.includes('openLabelPdfUrl(queueableLabelUrl, labelPopup)'), 'single-order Create+Print must open the created label');
 
 const batchAction = sliceBetween(ordersView, "async function handleBatchAction(mode: 'print' | 'queue')", '// Batch Mark-as-Shipped');
-// PS-360: batch queue delegates to the backend queue/recovery owner and returns before
-// the legacy label-create tail; the remaining tail is Create+Print only.
+// PS-360 + 2026-07-07 cleanup: batch queue delegates to the backend queue/recovery owner and
+// returns; the batch print branch chains the backend jobs (runCreatePrintChain) — the legacy
+// FE label-create tail is DELETED and must never come back.
 const queueEarlyReturnStart = batchAction.indexOf("if (mode === 'queue')");
-const queueEarlyReturnBoundary = queueEarlyReturnStart >= 0
-  ? /return\r?\n    }\r?\n\r?\n    setBatchBusy\(true\)/.exec(batchAction.slice(queueEarlyReturnStart))
-  : null;
-const printOnlyBatchTailStart = queueEarlyReturnBoundary
-  ? queueEarlyReturnStart + queueEarlyReturnBoundary.index + queueEarlyReturnBoundary[0].lastIndexOf('setBatchBusy(true)')
-  : -1;
-const queueEarlyReturnBlock = printOnlyBatchTailStart >= 0
-  ? batchAction.slice(queueEarlyReturnStart, printOnlyBatchTailStart)
+const printBranchStart = batchAction.indexOf("if (mode === 'print')");
+const queueEarlyReturnBlock = queueEarlyReturnStart >= 0 && printBranchStart > queueEarlyReturnStart
+  ? batchAction.slice(queueEarlyReturnStart, printBranchStart)
   : '';
-const printOnlyBatchTail = printOnlyBatchTailStart >= 0 ? batchAction.slice(printOnlyBatchTailStart) : '';
+const printBranch = printBranchStart >= 0 ? batchAction.slice(printBranchStart) : '';
 assert(
   queueEarlyReturnBlock.includes('sendOrdersToQueueBackend(batchOrders') && /\breturn\b/.test(queueEarlyReturnBlock),
-  'batch Print to Queue must delegate to the backend queue/recovery owner and return before label-create tail',
+  'batch Print to Queue must delegate to the backend queue/recovery owner and return before the print branch',
 );
 assert(
-  !printOnlyBatchTail.includes('apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))'),
-  'batch Print to Queue must not keep the unreachable createLabel-then-addToQueue tail',
+  !printBranch.includes('apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))'),
+  'batch print branch must not keep the legacy createLabel-then-addToQueue tail',
 );
 assert(
-  printOnlyBatchTail.includes('await apiClient.createLabel(payload)') &&
-    printOnlyBatchTail.includes('await apiClient.openLabelPdf(queueableLabelUrl)'),
-  'batch Create+Print must create labels and open PDFs from the print-only tail',
+  printBranch.includes('runCreatePrintChain(') && !printBranch.includes('apiClient.createLabel('),
+  'batch Create+Print must chain the backend queue jobs and never buy from the FE (legacy tail deleted 2026-07-07)',
 );
 
 assert(!singleCreateOrQueue.includes("mode === 'print' &&") || !singleCreateOrQueue.includes('addToQueue'), 'single-order Create+Print must not add to print queue');

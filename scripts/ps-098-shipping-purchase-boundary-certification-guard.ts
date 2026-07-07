@@ -127,7 +127,12 @@ check(
     // with the PS-204 account-binding 3rd arg. (The deleted direct-buy override-wrapper
     // shape is asserted GONE below, not here.)
     ((ordersView + bestRateProof).match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
+    // 2026-07-07 cleanup: the legacy batch loop's `let selectedRateProof = ...(order, proofRate,
+    // orderIsTest ? null : shippingProviderId)` is deleted with the loop. The chain carries the
+    // same account-bound proof: needsOverride probes with the PS-204 third arg, and the
+    // override payload re-derives proof from the SAME fresh rate.
+    ordersView.includes('resolveOrderShippingProviderId(order),') &&
+    ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
     ordersView.includes('selectedRateProof,'),
 );
 

@@ -212,7 +212,10 @@ check('frontend ref is additive (proof still passed at every site)',
   // queue INTENT payload (order.label), bound to the same shippingProviderId.
   /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,900}?selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\),/.test(ordersView) &&
   /payload\.label = options\.labelPayloadOverrides\?\.get\(order\.orderId\) \?\?[\s\S]{0,600}?shippingProviderId: shippingProviderId \?\? undefined,/.test(ordersView) &&
-  ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)'));
+  // 2026-07-07 cleanup: the legacy batch loop's proof line is deleted; the chain's override
+  // payload carries the fresh-rate proof + rate-quote ref instead.
+  ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
+  ordersView.includes('...buildRateQuoteRefForOrder(order, rate, shippingProviderId),'));
 // Backend now owns the (former-FE) direct-carrier buy: createLabelV2 detects the
 // direct carrier and runs the SAME strict purchase proof gate before spending.
 const labelsServiceForRelocation = readFileSync('src/services/labels.ts', 'utf8');

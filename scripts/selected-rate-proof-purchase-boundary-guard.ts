@@ -103,9 +103,11 @@ check(
     // PS-317: census summed across OrdersView + best-rate/rate-proof.ts so the count
     // never undershoots if a call site relocates.
     ((ordersView + bestRateProof).match(/selectedRateProof:[\s\S]{0,160}?buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
-    // The batch-create flow (ShipStation, still a real FE createLabel call — NOT the
-    // deleted direct-carrier buy) keeps its proof variable and account filter.
-    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
+    // 2026-07-07 cleanup: the batch-create FE label call is DELETED (the chain sends queue
+    // intent instead). Its account-bound proof survives as the chain's needsOverride probe
+    // (PS-204 third arg) + the fresh-rate override payload proof.
+    ordersView.includes('resolveOrderShippingProviderId(order),') &&
+    ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
     /buildSelectedRateProofPayload\(order, panelRatePreview\[0\] \?\? order\.bestRate \?\? order\.selectedRate, isTest \? null : shippingProviderId\)/.test(ordersView),
 );
 

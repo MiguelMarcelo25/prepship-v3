@@ -28,28 +28,28 @@ const handleBatchAction = sliceBetween(
 );
 
 const queueEarlyReturnStart = handleBatchAction.indexOf("if (mode === 'queue')");
-const afterQueueStart = queueEarlyReturnStart >= 0 ? handleBatchAction.slice(queueEarlyReturnStart) : '';
-const printOnlyTailBoundary = /return\r?\n    }\r?\n\r?\n    setBatchBusy\(true\)/.exec(afterQueueStart);
-const printOnlyTailStart = printOnlyTailBoundary
-  ? queueEarlyReturnStart + printOnlyTailBoundary.index + printOnlyTailBoundary[0].lastIndexOf('setBatchBusy(true)')
-  : -1;
+// 2026-07-07 cleanup slice: the legacy print-only label-create tail is DELETED — the print
+// branch now chains the backend queue jobs (runCreatePrintChain) unconditionally. The guard's
+// intent is unchanged (queue mode delegates + returns; no FE buying remnants), repointed to
+// the chain-only structure.
+const printBranchStart = handleBatchAction.indexOf("if (mode === 'print')");
 
 check(
   'handleBatchAction has an explicit queue early-return block',
-  queueEarlyReturnStart >= 0 && printOnlyTailStart > queueEarlyReturnStart,
+  queueEarlyReturnStart >= 0 && printBranchStart > queueEarlyReturnStart,
 );
 
-const queueEarlyReturnBlock = handleBatchAction.slice(queueEarlyReturnStart, printOnlyTailStart);
+const queueEarlyReturnBlock = handleBatchAction.slice(queueEarlyReturnStart, printBranchStart);
 check(
-  'queue mode delegates to backend sendOrdersToQueueBackend before the print-only tail',
+  'queue mode delegates to backend sendOrdersToQueueBackend before the print branch',
   /await sendOrdersToQueueBackend\(batchOrders,\s*\{[\s\S]*kind:\s*'batch-queue'/.test(queueEarlyReturnBlock),
 );
 check(
-  'queue mode returns before the old batch label-create tail',
+  'queue mode returns before the print branch',
   /\breturn\b/.test(queueEarlyReturnBlock),
 );
 
-const printOnlyTail = handleBatchAction.slice(printOnlyTailStart);
+const printBranch = handleBatchAction.slice(printBranchStart);
 
 const forbiddenQueueTailPatterns: Array<[string, RegExp]> = [
   ['queue-mode casts after the queue early return', /\(mode as string\)\s*===\s*'queue'/],
@@ -57,23 +57,21 @@ const forbiddenQueueTailPatterns: Array<[string, RegExp]> = [
   ['persistent queue job creation after the queue early return', /beginPersistentQueueJob\('batch-queue'/],
   ['persistent queue progress markers after the queue early return', /markPersistentQueueJobOrder\(/],
   ['queue action progress advances after the queue early return', /advanceQueueActionProgress\(/],
-  ['queue-only concurrency branch after the queue early return', /runWithConcurrency\(batchOrders,\s*BATCH_QUEUE_CONCURRENCY/],
   ['queue-only hydrate after the queue early return', /hydrateQueue\(true\)/],
   ['queue completion progress after the queue early return', /finishQueueActionProgress\(/],
   ['queued-item toast assembly after the queue early return', /formatQueuedOrdersToast\(/],
+  // Legacy FE buying remnants — deleted 2026-07-07; must never come back.
+  ['legacy FE label buy (apiClient.createLabel) in the print branch', /apiClient\.createLabel\(/],
+  ['legacy FE label PDF open (apiClient.openLabelPdf) in the print branch', /apiClient\.openLabelPdf\(/],
 ];
 
 for (const [name, pattern] of forbiddenQueueTailPatterns) {
-  check(`no ${name}`, !pattern.test(printOnlyTail));
+  check(`no ${name}`, !pattern.test(printBranch));
 }
 
 check(
-  'print-only tail still creates labels through apiClient.createLabel',
-  /await apiClient\.createLabel\(payload\)/.test(printOnlyTail),
-);
-check(
-  'print-only tail still opens created label PDFs',
-  /await apiClient\.openLabelPdf\(queueableLabelUrl\)/.test(printOnlyTail),
+  'print branch chains the backend queue jobs (runCreatePrintChain)',
+  /runCreatePrintChain\(/.test(printBranch),
 );
 check(
   'single-order queue and existing-label queue helpers remain outside this dead-tail guard',
