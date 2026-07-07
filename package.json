@@ -744,7 +744,8 @@
     "test:order-readiness-preflight": "node scripts/order-readiness-preflight-guard.mjs",
     "test:workflow-suites": "node scripts/run-workflow-certification.mjs",
     "test:full-workflow-certification": "npm run test:full-site-certification && npm run test:workflow-suites",
-    "test:batch-print-via-queue": "tsx scripts/batch-print-via-queue-guard.ts"
+    "test:batch-print-via-queue": "tsx scripts/batch-print-via-queue-guard.ts",
+    "test:batch-print-via-queue:browser": "playwright test web/e2e/batch-create-print-via-queue.spec.js --reporter=line"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
