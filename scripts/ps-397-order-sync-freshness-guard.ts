@@ -85,9 +85,9 @@ assert.ok(
 assert.ok(
   watchdog.includes('orderBlockedBy') &&
     watchdog.includes('orderAgeSeconds') &&
-    watchdog.includes('fresh: verdict.orderFresh') &&
-    watchdog.includes('stale: !verdict.orderFresh'),
-  'watchdog status payload must expose order freshness and blocker details',
+    watchdog.includes('fresh: verdict.orderFresh && !orders.statusCatchup.hasBacklog') &&
+    watchdog.includes('stale: !verdict.orderFresh || orders.statusCatchup.hasBacklog'),
+  'watchdog status payload must expose order freshness, status backlog, and blocker details',
 );
 assert.ok(
   queue.includes('ORDER_STARVATION_DEFER_THRESHOLD') &&

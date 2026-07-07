@@ -1,6 +1,6 @@
 import { sql as pg } from '../db/client.js';
 import { env } from '../lib/env.js';
-import { getSyncStatus } from './order-sync';
+import { getSyncStatus, type OrderStatusCatchupSnapshot } from './order-sync';
 import { getShipmentSyncStatus } from './shipment-sync';
 import { getSetting, setSetting } from './settings';
 import { enqueueManualOrderSyncJob, enqueueShipmentSyncWatchdogJob } from './sync-job-queue';
@@ -67,6 +67,7 @@ export type ShipmentSyncWatchdogState =
   | 'ok'
   | 'worker_stale'
   | 'order_stale'
+  | 'order_status_backlog'
   | 'shipment_job_stuck'
   | 'shipment_backlog'
   | 'shipment_stale'
@@ -95,6 +96,8 @@ export type ShipmentSyncWatchdogVerdict = {
   queueBacklog: number;
   consecutiveBacklogChecks: number;
   missingShipmentRate: number;
+  orderStatusBacklog: boolean;
+  orderStatusBacklogCount: number;
 };
 
 export type ShipmentSyncQueueHealth = ShipmentSyncWatchdogQueueInput & {
@@ -129,6 +132,7 @@ export type ShipmentSyncWatchdogStatus = {
     blockedBy: string | null;
     lastJobStatus: string | null;
     lastJobFinishedAt: string | null;
+    statusCatchup: OrderStatusCatchupSnapshot;
   };
   shipments: { lastSyncedAt: string | null };
   worker: {
@@ -282,6 +286,8 @@ export function evaluateShipmentSyncWatchdog(
     queue: ShipmentSyncWatchdogQueueInput;
     missingShipments: ShipmentSyncWatchdogMissingInput;
     consecutiveBacklogChecks: number;
+    orderStatusCatchupBacklog?: boolean;
+    orderStatusCatchupBacklogCount?: number;
   },
   thresholds: ShipmentSyncWatchdogThresholds = SHIPMENT_SYNC_WATCHDOG_DEFAULT_THRESHOLDS,
 ): ShipmentSyncWatchdogVerdict {
@@ -303,6 +309,8 @@ export function evaluateShipmentSyncWatchdog(
   const missingShipmentsHigh =
     input.missingShipments.missingActiveShipments >= thresholds.missingShipmentCountThreshold &&
     missingShipmentRate >= thresholds.missingShipmentRateThreshold;
+  const orderStatusBacklog = input.orderStatusCatchupBacklog === true;
+  const orderStatusBacklogCount = Math.max(0, Number(input.orderStatusCatchupBacklogCount ?? 0) || 0);
 
   const base = {
     orderAgeSeconds,
@@ -314,6 +322,8 @@ export function evaluateShipmentSyncWatchdog(
     queueBacklog,
     consecutiveBacklogChecks: input.consecutiveBacklogChecks,
     missingShipmentRate,
+    orderStatusBacklog,
+    orderStatusBacklogCount,
   };
 
   if (
@@ -388,6 +398,16 @@ export function evaluateShipmentSyncWatchdog(
       state: 'order_stale',
       alert: true,
       reason: `order sync is stale (${orderAgeSeconds ?? 'none'}s) while shipment sync is fresh`,
+      recommendedAction: 'enqueue_order_sync',
+    };
+  }
+
+  if (orderStatusBacklog) {
+    return {
+      ...base,
+      state: 'order_status_backlog',
+      alert: true,
+      reason: `order status catch-up has ${orderStatusBacklogCount} partial/backlogged pass(es)`,
       recommendedAction: 'enqueue_order_sync',
     };
   }
@@ -576,6 +596,8 @@ async function buildShipmentSyncWatchdogStatus(
       queue,
       missingShipments,
       consecutiveBacklogChecks,
+      orderStatusCatchupBacklog: orders.statusCatchup.hasBacklog,
+      orderStatusCatchupBacklogCount: orders.statusCatchup.backlogCount,
     },
     thresholds,
   );
@@ -588,8 +610,9 @@ async function buildShipmentSyncWatchdogStatus(
     orders: {
       lastSyncedAt: orders.lastSyncedAt,
       ageSeconds: verdict.orderAgeSeconds,
-      fresh: verdict.orderFresh,
-      stale: !verdict.orderFresh,
+      fresh: verdict.orderFresh && !orders.statusCatchup.hasBacklog,
+      stale: !verdict.orderFresh || orders.statusCatchup.hasBacklog,
+      statusCatchup: orders.statusCatchup,
       ...orderBlocker,
     },
     shipments: { lastSyncedAt: shipments.lastSyncedAt },
@@ -883,6 +906,11 @@ async function persistWatchdogSnapshot(status: ShipmentSyncWatchdogStatus): Prom
       orderAgeSeconds: status.orders.ageSeconds,
       orderFresh: status.orders.fresh,
       orderBlockedBy: status.orders.blockedBy,
+      orderStatusCatchup: {
+        updatedAt: status.orders.statusCatchup.updatedAt,
+        hasBacklog: status.orders.statusCatchup.hasBacklog,
+        backlogCount: status.orders.statusCatchup.backlogCount,
+      },
       shipmentLastSyncedAt: status.shipments.lastSyncedAt,
       workerHeartbeatAgeSeconds: status.worker.heartbeatAgeSeconds,
       queue: status.queue,
