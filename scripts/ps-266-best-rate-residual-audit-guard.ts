@@ -149,7 +149,8 @@ checkPatterns('combined rate owner still owns priced ranking and complete/second
   // PS-307/308 added a rateCostTotal() internal-cost tie-breaker to the sort.
   /export function rateTotal\(rate: CombinableRate\): number \{\s*return normalizeShippingRateMoney\(rate\)\.cShippingRateAmount \?\? 0/,
   /export function isPricedRate\(/,
-  /\.filter\(isPricedRate\)\s*\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)/,
+  /const combinedRates = dedupeBrowseRates\(\[\.\.\.input\.ssRates, \.\.\.input\.directRates\]\.filter\(isPricedRate\)\)/,
+  /const rankedEligibleRates = \[\.\.\.combinedRates\]\s*\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)/,
   /const secondCheapest = rankedEligibleRates\[1\] \?\? null/,
   /bestRateComplete/,
 ]);
@@ -189,7 +190,6 @@ checkPatterns('quote snapshot store remains the backend proof/ref finalizer and 
   /export function withSelectedRateKeys/,
   /export async function assertLabelPurchaseRateSelection/,
   /resolveRateQuoteForPurchase\(\{/,
-  /selected_rate_not_best/,
   /snapshot_not_final/,
 ]);
 
@@ -209,7 +209,7 @@ checkPatterns('Print Queue delegates missing-label creation and retry classifica
   // retryEligible OR-s in staleLabelAttempt — the delegation is unchanged.
   /const created = await timeQueueStep\([\s\S]*?await createLabelV2\(\{/,
   /classifyLabelPurchaseRetry\(err\)/,
-  /const retryEligible = staleLabelAttempt \|\| retry\.retryEligible/,
+  /const retryEligible = staleLabelAttempt \|\| labelPurchaseInProgress \|\| retry\.retryEligible/,
 ]);
 
 const modal = read('web/src/components/RateBrowserModal.tsx');

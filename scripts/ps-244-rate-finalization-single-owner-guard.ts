@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 
 const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
-const browse = readFileSync('src/routes/rates.ts', 'utf8');
+const browse = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 
 let failures = 0;
@@ -37,7 +37,7 @@ check('the owner stamps rateQuoteId and backend completeness onto each rate (the
 // ── /rates/browse PRODUCER delegates (no inline re-stamping) ──────────────────
 check('browse calls the finalizer', /const finalized = await finalizeBestRateWithQuote\(\{/.test(browse));
 check('browse takes responseRates + rateQuoteId from the finalizer',
-  /responseRates = finalized\.rates/.test(browse) && /rateQuoteId = finalized\.rateQuoteId/.test(browse));
+  /rateQuoteId = finalized\.rateQuoteId/.test(browse) && /responseRates = finalized\.rates/.test(browse));
 check('browse no longer stamps the snapshot inline (the duplicated trio is gone)',
   !/const ratesWithKeys = withSelectedRateKeys\(combinedRates\)[\s\S]{0,120}storeRateQuoteSnapshot\(\{/.test(browse));
 check('browse keeps its own display-only fields on the best rate (insurance/expiry/completeness)',

@@ -193,11 +193,9 @@ export async function assertLabelPurchaseRateSelection(body: LabelPurchaseRateSe
     // legacy carried proof below, which itself throws if missing/invalid. Either way
     // no purchase proceeds without a valid proof.
     recordRateProofCanary('snapshot_fallback', resolved.reason);
-    if (resolved.reason === 'snapshot_not_final' || resolved.reason === 'selected_rate_not_best') {
+    if (resolved.reason === 'snapshot_not_final') {
       throw new SelectedRateProofError(
-        resolved.reason === 'snapshot_not_final'
-          ? 'Rate shopping is still finalizing. Re-rate this order before creating the label.'
-          : 'Selected rate is not the finalized Best Rate. Re-rate this order before creating the label.',
+        'Rate shopping is still finalizing. Re-rate this order before creating the label.',
         {
           ok: false,
           reason: resolved.reason,

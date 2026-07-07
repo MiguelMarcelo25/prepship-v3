@@ -33,8 +33,9 @@ is explicitly canary-gated.
 - Strict snapshot-only enforcement remains canary-gated. In default canary mode,
   unresolved missing/expired refs may still fall through to the legacy carried
   proof, which is also strict. High-risk convergence failures are already hard
-  blocks: `snapshot_not_final` and `selected_rate_not_best` throw
-  `SelectedRateProofError` before any provider purchase.
+  blocks: `snapshot_not_final` throws `SelectedRateProofError` before any
+  provider purchase. A manual non-best choice remains allowed when it exists in
+  the completed backend quote and passes account/proof validation.
 - PRINT_QUEUE_BACKEND_ORCHESTRATION remains default-off. The backend route
   plan and direct-via-backend queue path are certified, but production cutover
   remains a DJ canary decision.
@@ -54,8 +55,8 @@ The new certification guard is:
 It composes the behavioral source-of-truth checks above with static boundary
 checks that:
 
-- `rate-quote-snapshot-store.ts` blocks `snapshot_not_final` and
-  `selected_rate_not_best` before canary fallback.
+- `rate-quote-snapshot-store.ts` blocks `snapshot_not_final` before canary
+  fallback while allowing explicit non-best selections from a completed quote.
 - `labels.ts#createLabelV2` validates snapshot/proof/account binding before
   direct-carrier and ShipStation purchase branches.
 - `print-queue.ts` delegates label creation to `createLabelV2` and surfaces

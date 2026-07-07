@@ -65,7 +65,6 @@ export type RateQuoteResolveFailure =
   | 'snapshot_expired'
   | 'selected_rate_not_in_snapshot'
   | 'snapshot_not_final'
-  | 'selected_rate_not_best'
   | 'proof_invalid';
 
 /**
@@ -167,14 +166,10 @@ export function resolveRateQuoteForPurchase(input: {
   if (snapshot.bestRateComplete === false) {
     return { ok: false, reason: 'snapshot_not_final' };
   }
-  const bestRateKey = typeof snapshot.bestRateKey === 'string' ? snapshot.bestRateKey.trim() : '';
-  if (snapshot.bestRateComplete === true && bestRateKey && String(selectedRateKey ?? '').trim() !== bestRateKey) {
-    return { ok: false, reason: 'selected_rate_not_best' };
-  }
-
   // Final authority: the reconstructed proof must pass the same strict check the
-  // legacy carried-proof path uses. This guarantees the snapshot path can never
-  // be a weaker boundary than today.
+  // legacy carried-proof path uses. A manual carrier choice may be any eligible
+  // rate in the completed backend quote; it does not have to equal rank-1 Best.
+  // This guarantees the snapshot path can never be a weaker boundary than today.
   const validation: SelectedRateValidationResult = validateExactSelectedRate({
     currentRequestFingerprint: proof.requestFingerprint,
     selectedRate: proof.selectedRate,
@@ -199,11 +194,9 @@ export function assertRateQuoteForLabelPurchase(input: {
 }): SelectedRateProofInput {
   const resolved = resolveRateQuoteForPurchase(input);
   if (!resolved.ok) {
-    if (resolved.reason === 'snapshot_not_final' || resolved.reason === 'selected_rate_not_best') {
+    if (resolved.reason === 'snapshot_not_final') {
       throw new SelectedRateProofError(
-        resolved.reason === 'snapshot_not_final'
-          ? 'Rate shopping is still finalizing. Re-rate this order before creating the label.'
-          : 'Selected rate is not the finalized Best Rate. Re-rate this order before creating the label.',
+        'Rate shopping is still finalizing. Re-rate this order before creating the label.',
         {
           ok: false,
           reason: resolved.reason,

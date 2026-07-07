@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
 import { getApiTimingSnapshot } from '../lib/http/api-metrics';
-import { getLabelOperationLogSnapshot } from '../lib/label-operation-log';
+import {
+  clearLabelOperationLogs,
+  deleteLabelOperationLog,
+  getLabelOperationLogSnapshot,
+} from '../lib/label-operation-log';
 import { env } from '../lib/env';
 import { sql } from '../db/client';
 import { getRateProofCanaryStats } from '../services/shipping-workflow/rate-proof-enforcement';
@@ -13,6 +17,22 @@ app.get('/api-timing', (c) =>
     labelOperationLogs: getLabelOperationLogSnapshot(),
   })
 );
+
+app.delete('/label-operation-logs/:id', (c) => {
+  const removed = deleteLabelOperationLog(c.req.param('id'));
+  return c.json({
+    removed,
+    labelOperationLogs: getLabelOperationLogSnapshot(),
+  }, removed ? 200 : 404);
+});
+
+app.delete('/label-operation-logs', (c) => {
+  const removed = clearLabelOperationLogs();
+  return c.json({
+    removed,
+    labelOperationLogs: getLabelOperationLogSnapshot(),
+  });
+});
 
 // PS-244 Phase 4: read-only canary surface for the label-purchase snapshot
 // enforcement flip. Reports the mode + how often a supplied snapshot ref resolves

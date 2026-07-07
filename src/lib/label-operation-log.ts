@@ -70,3 +70,18 @@ export function recordLabelOperationLog(input: {
 export function getLabelOperationLogSnapshot(): LabelOperationLogEntry[] {
   return labelOperationLogs.map((entry) => ({ ...entry }));
 }
+
+export function deleteLabelOperationLog(id: unknown): boolean {
+  const entryId = cleanText(id);
+  if (!entryId) return false;
+  const index = labelOperationLogs.findIndex((entry) => entry.id === entryId);
+  if (index < 0) return false;
+  labelOperationLogs.splice(index, 1);
+  return true;
+}
+
+export function clearLabelOperationLogs(): number {
+  const removed = labelOperationLogs.length;
+  labelOperationLogs.splice(0, labelOperationLogs.length);
+  return removed;
+}

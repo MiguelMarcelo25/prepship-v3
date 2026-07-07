@@ -189,7 +189,6 @@ checkPatterns('selected-rate proof owner resolves snapshot refs and enforces exa
   /assertSelectedRateProofForLabelPurchase/,
   /assertPurchaseAccountMatchesProof/,
   /snapshot_not_final/,
-  /selected_rate_not_best/,
 ]);
 
 const hugrabPreflight = read('src/services/shipping-workflow/hugrab-label-purchase-preflight.ts');

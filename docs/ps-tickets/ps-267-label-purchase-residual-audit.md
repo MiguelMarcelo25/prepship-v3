@@ -34,7 +34,7 @@ IDs cannot fall through to ShipStation. Guard coverage pins that synthetic IDs c
 
 | Injection point | Current owner response | Classification |
 | --- | --- | --- |
-| Stale, missing, non-final, or non-best selected-rate proof | Snapshot/proof owner rejects `snapshot_not_final`, `selected_rate_not_best`, missing/expired proof, and account mismatch before provider purchase. | already covered; PS-328 impacted for operator warning copy |
+| Stale, missing, non-final, or mismatched selected-rate proof | Snapshot/proof owner rejects `snapshot_not_final`, missing/expired proof, and account mismatch before provider purchase. Manual non-best selections are allowed when they exist in the completed backend quote. | already covered; PS-328 impacted for operator warning copy |
 | HUGRAB insurance proof unresolved, unsupported, or unproven | HUGRAB preflight delegates certainty, coverage status, and purchase gate before direct-carrier or ShipStation provider calls. | already covered |
 | Duplicate active label or upstream/source shipped state | Shipping safety blocks terminal/upstream shipped states before side effects; Print Queue existing-label path queues/reprints instead of rebuying. | already covered |
 | Direct-carrier synthetic IDs | Carrier/account identity proof and direct-carrier route owners keep synthetic direct IDs out of ShipStation label purchase. | already covered |

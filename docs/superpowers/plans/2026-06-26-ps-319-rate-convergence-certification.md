@@ -30,8 +30,8 @@ or non-final purchase proof.
 
 1. Add `scripts/ps-319-rate-convergence-certification-guard.ts`.
    - Behavioral checks: `resolveRateQuoteForPurchase` and
-     `assertRateQuoteForLabelPurchase` block `snapshot_not_final` and
-     `selected_rate_not_best`.
+     `assertRateQuoteForLabelPurchase` block `snapshot_not_final` while
+     allowing manual non-best selections from a completed backend quote.
    - Static checks: `labels.ts` proof gate comes before provider purchase;
      Print Queue forwards and classifies proof errors; frontend helpers pass
      through backend proof and do not mint fingerprints.

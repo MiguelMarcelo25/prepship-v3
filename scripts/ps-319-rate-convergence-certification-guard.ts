@@ -160,15 +160,15 @@ check('snapshot purchase resolver blocks quotes that are still finalizing',
   !notFinal.ok && notFinal.reason === 'snapshot_not_final',
   notFinal);
 
-const staleSelection = resolveRateQuoteForPurchase({
+const manualSelection = resolveRateQuoteForPurchase({
   snapshot: { ...snapshotBase, bestRateComplete: true },
   selectedRateKey: selectedB,
   now: freshNow,
   ttlMs: 60_000,
 });
-check('snapshot purchase resolver blocks non-best selections from complete snapshots',
-  !staleSelection.ok && staleSelection.reason === 'selected_rate_not_best',
-  staleSelection);
+check('snapshot purchase resolver accepts manual non-best selections from complete snapshots',
+  manualSelection.ok === true,
+  manualSelection);
 
 function thrownReasonFor(input: {
   snapshot: RateQuoteSnapshot;
@@ -193,16 +193,19 @@ function thrownReasonFor(input: {
 
 check('label purchase assertion throws retry-eligible snapshot_not_final before provider purchase',
   thrownReasonFor({ snapshot: { ...snapshotBase, bestRateComplete: false }, selectedRateKey: selectedA }) === 'snapshot_not_final');
-check('label purchase assertion throws retry-eligible selected_rate_not_best before provider purchase',
-  thrownReasonFor({ snapshot: { ...snapshotBase, bestRateComplete: true }, selectedRateKey: selectedB }) === 'selected_rate_not_best');
+check('label purchase assertion allows manual non-best selections before provider purchase',
+  thrownReasonFor({ snapshot: { ...snapshotBase, bestRateComplete: true }, selectedRateKey: selectedB }) === null);
 
 const quoteStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
-check('snapshot store blocks non-final/non-best before canary fallback to carried proof',
+check('snapshot store blocks non-final quotes before canary fallback to carried proof',
   (() => {
-    const blockIndex = quoteStore.indexOf("resolved.reason === 'snapshot_not_final' || resolved.reason === 'selected_rate_not_best'");
+    const blockIndex = quoteStore.indexOf("resolved.reason === 'snapshot_not_final'");
     const throwIndex = quoteStore.indexOf('throw new SelectedRateProofError', blockIndex);
     const fallbackIndex = quoteStore.indexOf('FALL BACK to the legacy carried proof', throwIndex);
-    return blockIndex >= 0 && throwIndex > blockIndex && fallbackIndex > throwIndex;
+    return blockIndex >= 0 &&
+      !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
+      throwIndex > blockIndex &&
+      fallbackIndex > throwIndex;
   })());
 checkPatterns('snapshot store validates account binding on both snapshot and legacy proof paths', quoteStore, [
   /assertPurchaseAccountMatchesProof\(\{/,
@@ -236,11 +239,11 @@ check('proof gate runs before every provider purchase branch',
 
 const printQueueService = read('src/services/print-queue.ts');
 checkPatterns('Print Queue worker delegates label creation to createLabelV2 and reports retry eligibility structurally', printQueueService, [
-  /const created = await createLabelV2\(\{/,
-  /\.\.\.order\.label/,
+  /const labelInput = order\.label;/,
+  /createLabelV2\(\{\s*\.\.\.labelInput,/,
   /classifyLabelPurchaseRetry\(err\)/,
-  /retryEligible: retry\.retryEligible/,
-  /retryReason: retry\.retryReason/,
+  /const retryEligible =[\s\S]*?retry\.retryEligible/,
+  /const retryReason =[\s\S]*?retry\.retryReason/,
 ]);
 
 const printQueueRoute = read('src/routes/print-queue.ts');

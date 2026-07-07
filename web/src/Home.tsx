@@ -10,6 +10,7 @@ import {
   Columns3,
   X as XIcon,
   Loader2,
+  Trash2,
   ZoomIn,
   PanelRightClose,
   PanelRightOpen,
@@ -384,6 +385,8 @@ export default function Home() {
   const [apiTimingLoading, setApiTimingLoading] = useState(false)
   const [apiTimingError, setApiTimingError] = useState<string | null>(null)
   const [apiTimingSnapshot, setApiTimingSnapshot] = useState<ApiTimingSnapshot | null>(null)
+  const [apiTimingLogActionId, setApiTimingLogActionId] = useState<string | null>(null)
+  const [apiTimingClearingLogs, setApiTimingClearingLogs] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('prepship_hide_empty_panel', String(hideEmptyPanel))
@@ -629,6 +632,41 @@ export default function Home() {
       setApiTimingError(error instanceof Error ? error.message : 'Failed to load API timing')
     } finally {
       setApiTimingLoading(false)
+    }
+  }
+
+  const replaceLabelOperationLogs = (logs: LabelOperationLogEntry[]) => {
+    setApiTimingSnapshot((current) => current ? { ...current, labelOperationLogs: logs } : current)
+  }
+
+  const handleDeleteLabelOperationLog = async (entryId: string) => {
+    if (!entryId) return
+    setApiTimingError(null)
+    setApiTimingLogActionId(entryId)
+    try {
+      const result = await api.delete<{ labelOperationLogs?: LabelOperationLogEntry[] }>(
+        `/observability/label-operation-logs/${encodeURIComponent(entryId)}`,
+      )
+      replaceLabelOperationLogs(result.labelOperationLogs ?? [])
+    } catch (error) {
+      setApiTimingError(error instanceof Error ? error.message : 'Failed to delete label log')
+    } finally {
+      setApiTimingLogActionId(null)
+    }
+  }
+
+  const handleClearLabelOperationLogs = async () => {
+    setApiTimingError(null)
+    setApiTimingClearingLogs(true)
+    try {
+      const result = await api.delete<{ labelOperationLogs?: LabelOperationLogEntry[] }>(
+        '/observability/label-operation-logs',
+      )
+      replaceLabelOperationLogs(result.labelOperationLogs ?? [])
+    } catch (error) {
+      setApiTimingError(error instanceof Error ? error.message : 'Failed to clear label logs')
+    } finally {
+      setApiTimingClearingLogs(false)
     }
   }
 
@@ -1450,6 +1488,21 @@ export default function Home() {
                           {labelOperationLogs.length} recent operation{labelOperationLogs.length === 1 ? '' : 's'}
                         </div>
                       </div>
+                      {labelOperationLogs.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleClearLabelOperationLogs()}
+                          disabled={apiTimingClearingLogs}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-surface-2 px-3 text-[12px] font-semibold text-ink-2 ring-1 ring-line transition-colors hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {apiTimingClearingLogs ? (
+                            <Loader2 size={13} strokeWidth={2.4} className="animate-spinSlow" />
+                          ) : (
+                            <Trash2 size={13} strokeWidth={2.25} />
+                          )}
+                          Clear all
+                        </button>
+                      ) : null}
                     </div>
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-left text-[12px]">
@@ -1461,12 +1514,13 @@ export default function Home() {
                             <th className="px-3 py-2 font-bold">Status</th>
                             <th className="px-4 py-2 font-bold">Cause</th>
                             <th className="px-4 py-2 text-right font-bold">Timing</th>
+                            <th className="px-3 py-2 text-right font-bold">Action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-line">
                           {labelOperationLogs.length === 0 ? (
                             <tr>
-                              <td colSpan={6} className="px-4 py-6 text-center text-ink-3">
+                              <td colSpan={7} className="px-4 py-6 text-center text-ink-3">
                                 No label or queue operations recorded yet.
                               </td>
                             </tr>
@@ -1502,6 +1556,22 @@ export default function Home() {
                                 </td>
                                 <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-ink-2">
                                   {entry.timingMs != null ? formatTimingMs(entry.timingMs) : '-'}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteLabelOperationLog(entry.id)}
+                                    disabled={apiTimingLogActionId === entry.id || apiTimingClearingLogs}
+                                    aria-label={`Delete log for order ${entry.orderNumber ?? entry.orderId ?? 'unknown'}`}
+                                    title="Delete log"
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 ring-1 ring-transparent transition-colors hover:bg-rose-50 hover:text-rose-700 hover:ring-rose-200 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {apiTimingLogActionId === entry.id ? (
+                                      <Loader2 size={13} strokeWidth={2.4} className="animate-spinSlow" />
+                                    ) : (
+                                      <Trash2 size={13} strokeWidth={2.25} />
+                                    )}
+                                  </button>
                                 </td>
                               </tr>
                             ))

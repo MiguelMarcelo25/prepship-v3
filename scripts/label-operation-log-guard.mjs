@@ -27,6 +27,8 @@ expect(
   operationLog.includes('export type LabelOperationLogEntry') &&
     operationLog.includes('recordLabelOperationLog') &&
     operationLog.includes('getLabelOperationLogSnapshot') &&
+    operationLog.includes('deleteLabelOperationLog') &&
+    operationLog.includes('clearLabelOperationLogs') &&
     operationLog.includes('MAX_LABEL_OPERATION_LOGS') &&
     operationLog.includes('orderNumber') &&
     operationLog.includes('cause') &&
@@ -52,8 +54,12 @@ expect(
 expect(
   'api timing snapshot exposes label operation logs',
   observabilityRoute.includes('getLabelOperationLogSnapshot') &&
+    observabilityRoute.includes('deleteLabelOperationLog') &&
+    observabilityRoute.includes('clearLabelOperationLogs') &&
     observabilityRoute.includes('labelOperationLogs') &&
-    observabilityRoute.includes("app.get('/api-timing'"),
+    observabilityRoute.includes("app.get('/api-timing'") &&
+    observabilityRoute.includes("app.delete('/label-operation-logs/:id'") &&
+    observabilityRoute.includes("app.delete('/label-operation-logs'"),
 );
 
 expect(
@@ -62,7 +68,11 @@ expect(
     home.includes('Label / Queue Logs') &&
     home.includes('Order #') &&
     home.includes('Cause') &&
-    home.includes('formatOperationLogStatusTone'),
+    home.includes('formatOperationLogStatusTone') &&
+    home.includes('handleDeleteLabelOperationLog') &&
+    home.includes('handleClearLabelOperationLogs') &&
+    home.includes('Clear all') &&
+    home.includes('Trash2'),
 );
 
 const failed = checks.filter((check) => !check.condition);

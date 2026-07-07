@@ -179,14 +179,14 @@ check('backend snapshot resolves the finalized best rate for purchase',
     selectedRateKey: selectedRateOpaqueKey(bestRate),
     now: NOW.getTime(),
   }).ok === true);
-check('backend snapshot rejects a selected rate that is not the finalized best',
+check('backend snapshot accepts a manually selected non-best rate from the finalized quote',
   (() => {
     const result = resolveRateQuoteForPurchase({
       snapshot: completeSnapshot,
       selectedRateKey: selectedRateOpaqueKey(secondRate),
       now: NOW.getTime(),
     });
-    return !result.ok && result.reason === 'selected_rate_not_best';
+    return result.ok === true;
   })());
 check('backend snapshot rejects a not-final rate universe',
   (() => {
@@ -219,9 +219,9 @@ const rateStore = read('src/services/shipping-workflow/rate-quote-snapshot-store
 check('label purchase proof owner prefers backend snapshot id and key',
   /if \(body\.rateQuoteId && body\.selectedRateKey\)/.test(rateStore) &&
   /resolveRateQuoteForPurchase\(\{ snapshot, selectedRateKey: body\.selectedRateKey \}\)/.test(rateStore));
-check('label purchase proof owner blocks not-final and not-best snapshots before fallback',
+check('label purchase proof owner blocks not-final snapshots before fallback',
   /resolved\.reason === 'snapshot_not_final'/.test(rateStore) &&
-  /resolved\.reason === 'selected_rate_not_best'/.test(rateStore) &&
+  !/resolved\.reason === 'selected_rate_not_best'/.test(rateStore) &&
   /throw new SelectedRateProofError/.test(rateStore));
 check('strict proof mode can drop legacy fallback while canary mode remains explicit',
   /rateProofEnforcementMode\(\) === 'strict'/.test(rateStore) &&
@@ -239,7 +239,7 @@ check('print queue batch-send forwards proof and snapshot ids to the worker labe
 
 const printQueueService = read('src/services/print-queue.ts');
 check('print queue worker uses createLabelV2 for missing labels, preserving label payload fields',
-  /const created = await createLabelV2\(\{\s*\.\.\.order\.label/.test(printQueueService));
+  /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\.\.\.labelInput,/.test(printQueueService));
 
 const workflowDoc = read('docs/ps-tickets/ps-300-active-lawrence-execution-workflow.md');
 check('workflow doc records PS-300 backend authority guard',

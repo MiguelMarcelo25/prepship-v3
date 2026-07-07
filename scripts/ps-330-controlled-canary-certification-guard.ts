@@ -141,12 +141,15 @@ checkPatterns('backend route-plan remains gated by PRINT_QUEUE_BACKEND_ORCHESTRA
 ]);
 
 const quoteStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
-check('strict snapshot hard blocks remain before carried-proof fallback',
+check('strict not-final snapshot hard block remains before carried-proof fallback',
   (() => {
-    const blockIndex = quoteStore.indexOf("resolved.reason === 'snapshot_not_final' || resolved.reason === 'selected_rate_not_best'");
+    const blockIndex = quoteStore.indexOf("resolved.reason === 'snapshot_not_final'");
     const throwIndex = quoteStore.indexOf('throw new SelectedRateProofError', blockIndex);
     const fallbackIndex = quoteStore.indexOf('FALL BACK to the legacy carried proof', throwIndex);
-    return blockIndex >= 0 && throwIndex > blockIndex && fallbackIndex > throwIndex;
+    return blockIndex >= 0 &&
+      !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
+      throwIndex > blockIndex &&
+      fallbackIndex > throwIndex;
   })());
 
 const outbox = read('src/services/fulfillment/outbox.ts');

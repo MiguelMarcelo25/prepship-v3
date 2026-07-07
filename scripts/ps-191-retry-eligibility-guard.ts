@@ -40,7 +40,6 @@ for (const reason of [
   'fingerprint_mismatch',
   'not_in_current_eligible_rates',
   'snapshot_not_final',
-  'selected_rate_not_best',
 ]) {
   assert.deepEqual(
     classifyLabelPurchaseRetry(proofErr(reason)),

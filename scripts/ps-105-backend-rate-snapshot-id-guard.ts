@@ -70,9 +70,9 @@ const badKey = resolveRateQuoteForPurchase({ snapshot: freshSnapshot, selectedRa
 check('unknown selectedRateKey does not resolve', badKey.ok === false && badKey.reason === 'selected_rate_not_in_snapshot');
 const missing = resolveRateQuoteForPurchase({ snapshot: null, selectedRateKey: keyA });
 check('missing snapshot does not resolve', missing.ok === false && missing.reason === 'snapshot_missing');
-const notBest = resolveRateQuoteForPurchase({ snapshot: freshSnapshot, selectedRateKey: keyB });
-check('fresh finalized snapshot blocks a selected rate that is not rank 1',
-  notBest.ok === false && notBest.reason === 'selected_rate_not_best');
+const manualNonBest = resolveRateQuoteForPurchase({ snapshot: freshSnapshot, selectedRateKey: keyB });
+check('fresh finalized snapshot resolves a manually selected non-best rate from the same quote',
+  manualNonBest.ok === true);
 const notFinal = resolveRateQuoteForPurchase({ snapshot: incompleteSnapshot, selectedRateKey: keyA });
 check('incomplete carrier-universe snapshot blocks purchase even for its provisional rank 1',
   notFinal.ok === false && notFinal.reason === 'snapshot_not_final');
@@ -88,8 +88,8 @@ check('assertRateQuoteForLabelPurchase throws on missing snapshot',
   throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: null, selectedRateKey: keyA })));
 check('assertRateQuoteForLabelPurchase throws on expired snapshot',
   throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: expiredSnapshot, selectedRateKey: keyA })));
-check('assertRateQuoteForLabelPurchase throws when selected snapshot rate is not finalized best',
-  throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: freshSnapshot, selectedRateKey: keyB })));
+check('assertRateQuoteForLabelPurchase returns a proof for a manually selected non-best snapshot rate',
+  !throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: freshSnapshot, selectedRateKey: keyB })));
 check('assertRateQuoteForLabelPurchase throws when the snapshot is not carrier-universe complete',
   throwsProofError(() => assertRateQuoteForLabelPurchase({ snapshot: incompleteSnapshot, selectedRateKey: keyA })));
 check('assertRateQuoteForLabelPurchase returns a proof on the happy path',
@@ -108,10 +108,9 @@ check('snapshot module adds no force/bypass/skip-proof flag code',
   !/(force|bypass|skipProof|skipValidation|allowStale|disableProof)\s*[:=?]/i.test(codeOnly));
 check('snapshot module delegates final authority to validateExactSelectedRate',
   /validateExactSelectedRate/.test(moduleSrc) && /assertSelectedRateProofForLabelPurchase/.test(moduleSrc));
-check('snapshot module stores finalized best identity and completeness',
+check('snapshot module stores finalized best identity and completeness without forcing manual selections to rank 1',
   /bestRateKey\?: string \| null/.test(moduleSrc) &&
   /bestRateComplete\?: boolean \| null/.test(moduleSrc) &&
-  /selected_rate_not_best/.test(moduleSrc) &&
   /snapshot_not_final/.test(moduleSrc));
 
 // ── 8. selectedRateKey is opaque (hashed) — no cost/money digest leaks. ──
@@ -144,7 +143,8 @@ check('labels route schema accepts rateQuoteId + selectedRateKey',
 check('purchase resolver PREFERS snapshot id but FALLS BACK to legacy proof (never weaker)',
   /body\.rateQuoteId && body\.selectedRateKey/.test(store) &&
     /assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof \?\? null\)/.test(store) &&
-    /selected_rate_not_best|snapshot_not_final/.test(store));
+    /snapshot_not_final/.test(store) &&
+    !/selected_rate_not_best/.test(store));
 check('snapshot persistence is backed by analytics_cache (no migration)',
   /from '\.\.\/analytics-cache\.js'/.test(store) && /rate_quote:/.test(store));
 
