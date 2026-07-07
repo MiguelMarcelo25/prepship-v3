@@ -641,6 +641,7 @@
     "test:reconciliation-plan": "node scripts/reconciliation-plan-guard.mjs",
     "test:observability-alerting": "node scripts/observability-alerting-guard.mjs",
     "test:api-observability-metrics": "node scripts/api-observability-metrics-guard.mjs",
+    "test:label-operation-log": "node scripts/label-operation-log-guard.mjs",
     "test:operational-runbooks": "node scripts/operational-runbooks-guard.mjs",
     "test:privacy-compliance": "node scripts/privacy-compliance-guard.mjs",
     "test:production-signoff": "node scripts/production-signoff-guard.mjs",

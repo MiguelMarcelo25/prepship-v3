@@ -9,6 +9,7 @@ import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
 import { env } from '../lib/env';
+import { recordLabelOperationLog } from '../lib/label-operation-log';
 import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstation/labels';
 import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
@@ -685,6 +686,17 @@ function normalizeQueueSendWorkerConcurrency(
 }
 
 async function markQueueSendWorkerUnavailable(job: QueueSendJob, reason: string): Promise<void> {
+  const reportedOrderIds = new Set(job.results.map((result) => result.orderId));
+  const unavailableResults = (job.workerOrders ?? [])
+    .filter((order) => !reportedOrderIds.has(order.orderId))
+    .map((order): QueueSendJobResult => ({
+      orderId: order.orderId,
+      orderNumber: order.orderNumber ?? null,
+      success: false,
+      error: reason,
+      timings: { totalMs: 0, labelSource: 'failed' },
+    }));
+  recordQueueSendResultLogs(job, unavailableResults);
   job.status = 'error';
   job.errorMessage = reason;
   job.message = reason;
@@ -1013,6 +1025,42 @@ function withTotalTiming(result: QueueSendJobResult, startedAt: number): QueueSe
       totalMs: elapsedSince(startedAt),
     },
   };
+}
+
+function queueSendLogCause(result: QueueSendJobResult): string {
+  if (result.success) {
+    if (result.alreadyQueued) return 'Label already in print queue';
+    switch (result.timings?.labelSource) {
+      case 'created':
+        return 'Label created and added to print queue';
+      case 'existing':
+      case 'recovered':
+      case 'in_progress_recovered':
+        return 'Existing label added to print queue';
+      case 'provided':
+        return 'Provided label added to print queue';
+      default:
+        return 'Added to print queue';
+    }
+  }
+  return result.skipReason ?? result.error ?? 'Queue send failed';
+}
+
+function recordQueueSendResultLogs(job: QueueSendJob, results: QueueSendJobResult[]): void {
+  for (const result of results) {
+    recordLabelOperationLog({
+      action: 'print_queue',
+      status: result.success ? 'success' : result.skipped ? 'skipped' : 'error',
+      orderId: result.orderId,
+      orderNumber: result.orderNumber ?? null,
+      cause: queueSendLogCause(result),
+      trackingNumber: result.trackingNumber ?? null,
+      queueEntryId: result.queueEntryId ?? null,
+      jobId: job.jobId,
+      timingMs: result.timings?.totalMs ?? null,
+      source: result.timings?.labelSource ?? null,
+    });
+  }
 }
 
 type QueueSendOrderLifecycle = {
@@ -1430,6 +1478,7 @@ export async function startQueueSendJob(input: {
 
   await persistQueueSendJobSnapshot(job, { required: true });
   await persistQueueSendJobItems(jobId, itemStates);
+  recordQueueSendResultLogs(job, skippedResults);
   if (preflight.readyOrders.length > 0) {
     if (!env.PRINT_QUEUE_WORKER_ENABLED) {
       await markQueueSendWorkerUnavailable(
@@ -1520,10 +1569,12 @@ async function runQueueSendJob(
           const result = await processQueueSendOrder(order, order.scope ?? scope, {
             setState: (state, patch) => setQueueSendItemState(job, order, { state, ...patch }),
           });
+          const loggedResult = withTotalTiming(result, orderStartedAt);
 
           job.queued += 1;
           if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);
-          job.results.push(withTotalTiming(result, orderStartedAt));
+          job.results.push(loggedResult);
+          recordQueueSendResultLogs(job, [loggedResult]);
           await setQueueSendItemState(job, order, {
             state: 'queued',
             queueEntryId: result.queueEntryId ?? null,
@@ -1545,7 +1596,7 @@ async function runQueueSendJob(
               ? 'label_purchase_in_progress'
               : retry.retryReason;
           const message = err instanceof Error ? err.message : 'Unknown error';
-          job.results.push({
+          const failedResult: QueueSendJobResult = {
             orderId: order.orderId,
             orderNumber: order.orderNumber ?? null,
             success: false,
@@ -1553,7 +1604,9 @@ async function runQueueSendJob(
             retryEligible,
             retryReason,
             timings: { totalMs: elapsedSince(orderStartedAt), labelSource: 'failed' },
-          });
+          };
+          job.results.push(failedResult);
+          recordQueueSendResultLogs(job, [failedResult]);
           await setQueueSendItemState(job, order, {
             state: retryEligible ? 'failed_retryable' : 'failed_terminal',
             blockedReason: retryReason ?? null,
@@ -1575,12 +1628,14 @@ async function runQueueSendJob(
       if (seenOrderIds.has(order.orderId)) continue;
       job.failed += 1;
       job.current += 1;
-      job.results.push({
+      const missingResult: QueueSendJobResult = {
         orderId: order.orderId,
         orderNumber: order.orderNumber ?? null,
         success: false,
         error: 'Queue send did not report a result',
-      });
+      };
+      job.results.push(missingResult);
+      recordQueueSendResultLogs(job, [missingResult]);
     }
     if (job.current > job.total) job.current = job.total;
     job.status = 'done';

@@ -80,11 +80,26 @@ type ApiTimingRoute = {
   lastStatus: number
   lastObservedAt: string
 }
+type LabelOperationLogEntry = {
+  id: string
+  observedAt: string
+  action: 'label_create' | 'print_queue' | string
+  status: 'success' | 'error' | 'skipped' | string
+  orderId: number | null
+  orderNumber: string | number | null
+  cause: string
+  timingMs: number | null
+  trackingNumber?: string | null
+  queueEntryId?: string | null
+  jobId?: string | null
+  source?: string | null
+}
 type ApiTimingSnapshot = {
   startedAt: string
   generatedAt: string
   routeCount: number
   routes: ApiTimingRoute[]
+  labelOperationLogs?: LabelOperationLogEntry[]
 }
 
 const ZOOM_OPTIONS = [
@@ -132,6 +147,24 @@ function timingHealthTone(route: ApiTimingRoute | null | undefined) {
   if (route.lastStatus >= 500) return 'text-rose-700'
   if (route.lastStatus >= 400) return 'text-amber-700'
   return timingTone(route.lastDurationMs)
+}
+
+function formatOperationAction(action: LabelOperationLogEntry['action']) {
+  if (action === 'label_create') return 'Buy Label'
+  if (action === 'print_queue') return 'Print Queue'
+  return String(action || 'Operation')
+}
+
+function formatOperationLogStatusTone(status: LabelOperationLogEntry['status']) {
+  if (status === 'success') return 'bg-emerald-100 text-emerald-700'
+  if (status === 'skipped') return 'bg-amber-100 text-amber-700'
+  return 'bg-rose-100 text-rose-700'
+}
+
+function formatOperationLogStatusLabel(status: LabelOperationLogEntry['status']) {
+  if (status === 'success') return 'Success'
+  if (status === 'skipped') return 'Skipped'
+  return 'Error'
 }
 
 // 'locations' is intentionally absent: Ship-From Locations moved into Settings
@@ -575,6 +608,7 @@ export default function Home() {
 
   const syncPill = useMemo(() => formatSyncPill(syncStatus), [syncStatus])
   const apiTimingRoutes = apiTimingSnapshot?.routes ?? []
+  const labelOperationLogs = apiTimingSnapshot?.labelOperationLogs ?? []
   const slowestApiRoute = apiTimingRoutes[0] ?? null
   const ordersApiRoute =
     apiTimingRoutes.find((route) => route.method === 'GET' && route.path === '/orders') ?? null
@@ -1405,6 +1439,75 @@ export default function Home() {
                         {apiTimingErrorCount}
                       </div>
                       <div className="mt-1 text-[11.5px] text-ink-3">5xx samples</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 overflow-hidden rounded-xl bg-surface ring-1 ring-line">
+                    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+                      <div>
+                        <div className="text-[12px] font-extrabold text-ink">Label / Queue Logs</div>
+                        <div className="text-[11.5px] text-ink-3">
+                          {labelOperationLogs.length} recent operation{labelOperationLogs.length === 1 ? '' : 's'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-left text-[12px]">
+                        <thead className="bg-surface-2 text-[10px] uppercase tracking-wider text-ink-3">
+                          <tr>
+                            <th className="px-4 py-2 font-bold">Time</th>
+                            <th className="px-3 py-2 font-bold">Action</th>
+                            <th className="px-3 py-2 font-bold">Order #</th>
+                            <th className="px-3 py-2 font-bold">Status</th>
+                            <th className="px-4 py-2 font-bold">Cause</th>
+                            <th className="px-4 py-2 text-right font-bold">Timing</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-line">
+                          {labelOperationLogs.length === 0 ? (
+                            <tr>
+                              <td colSpan={6} className="px-4 py-6 text-center text-ink-3">
+                                No label or queue operations recorded yet.
+                              </td>
+                            </tr>
+                          ) : (
+                            labelOperationLogs.slice(0, 16).map((entry) => (
+                              <tr key={entry.id} className="hover:bg-brand-bg/30">
+                                <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-ink-2">
+                                  {formatTimingDate(entry.observedAt)} CA
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2.5 font-semibold text-ink">
+                                  {formatOperationAction(entry.action)}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2.5 font-bold tabular-nums text-brand">
+                                  {entry.orderNumber ?? entry.orderId ?? '-'}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-2.5">
+                                  <span className={[
+                                    'inline-flex min-w-[68px] justify-center rounded-full px-2 py-0.5 text-[10.5px] font-bold',
+                                    formatOperationLogStatusTone(entry.status),
+                                  ].join(' ')}>
+                                    {formatOperationLogStatusLabel(entry.status)}
+                                  </span>
+                                </td>
+                                <td className="max-w-[460px] px-4 py-2.5 text-ink-2">
+                                  <span className="block max-h-[2.8em] overflow-hidden break-words leading-snug">{entry.cause || '-'}</span>
+                                  {entry.trackingNumber || entry.jobId ? (
+                                    <div className="mt-0.5 truncate text-[10.5px] text-ink-3">
+                                      {entry.trackingNumber ? `Tracking ${entry.trackingNumber}` : ''}
+                                      {entry.trackingNumber && entry.jobId ? ' - ' : ''}
+                                      {entry.jobId ? `Job ${entry.jobId}` : ''}
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-ink-2">
+                                  {entry.timingMs != null ? formatTimingMs(entry.timingMs) : '-'}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
 

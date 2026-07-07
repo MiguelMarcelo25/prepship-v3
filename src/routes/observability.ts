@@ -1,12 +1,18 @@
 import { Hono } from 'hono';
 import { getApiTimingSnapshot } from '../lib/http/api-metrics';
+import { getLabelOperationLogSnapshot } from '../lib/label-operation-log';
 import { env } from '../lib/env';
 import { sql } from '../db/client';
 import { getRateProofCanaryStats } from '../services/shipping-workflow/rate-proof-enforcement';
 
 const app = new Hono();
 
-app.get('/api-timing', (c) => c.json(getApiTimingSnapshot()));
+app.get('/api-timing', (c) =>
+  c.json({
+    ...getApiTimingSnapshot(),
+    labelOperationLogs: getLabelOperationLogSnapshot(),
+  })
+);
 
 // PS-244 Phase 4: read-only canary surface for the label-purchase snapshot
 // enforcement flip. Reports the mode + how often a supplied snapshot ref resolves

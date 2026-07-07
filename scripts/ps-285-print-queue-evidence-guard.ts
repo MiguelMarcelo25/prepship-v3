@@ -99,7 +99,7 @@ check('PS-256 guard pins durable merged PDF store and default-off no-op',
 check('PS-303 guard pins backend print queue route authority',
   /processQueueSendOrder/.test(ps303) &&
     /createLabelV2/.test(ps303) &&
-    /findExistingQueueableLabelForOrder/.test(ps303) &&
+    /findExistingQueueSendLabel/.test(ps303) &&
     /startQueueSendJob/.test(ps303));
 check('selected-rate proof guard keeps queue retry proof backend-aware',
   /retryEligibleOrderIds/.test(selectedRateProof) &&
@@ -110,8 +110,9 @@ check('test-order queue guard pins existing-label recovery and safe queue scope'
     /Queue defaults to all authorized clients/.test(testOrderQueue));
 
 check('print queue service recovers created labels before throwing queue failures',
-  /findExistingQueueableLabelForOrder\(order\.orderId\)/.test(printQueue) &&
-    /const recoverCreatedLabelUrl = existingLabelUrl \?\? await findExistingQueueableLabelForOrder\(order\.orderId\)/.test(printQueue) &&
+  /findExistingQueueSendLabel\(order\)/.test(printQueue) &&
+    /const recoverCreatedLabelUrl = existingLabelUrl \?\? await timeQueueStep\(/.test(printQueue) &&
+    /\(\) => findExistingQueueSendLabel\(order\)/.test(printQueue) &&
     /if \(!recoverCreatedLabelUrl\) throw err/.test(printQueue));
 check('print queue service upserts queue rows by order and client',
   /\.onConflictDoUpdate/.test(printQueue) &&

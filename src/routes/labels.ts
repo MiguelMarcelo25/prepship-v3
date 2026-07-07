@@ -21,6 +21,7 @@ import { classifyLabelPurchaseRetry } from '../services/shipping-workflow/rate-f
 // scope into every label service + block portal roles from the mutation routes.
 import { requireInternalPermission } from '../middleware/auth';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { recordLabelOperationLog } from '../lib/label-operation-log';
 // PS-234: durable audit trail for label create/void/return.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 
@@ -107,6 +108,7 @@ const returnBody = z
   .default({});
 
 type CreateErr = Error & { code?: string; details?: Record<string, unknown>; rateLimited?: boolean; retryAfterMs?: number };
+type CreateLabelRouteBody = z.infer<typeof createBody>;
 
 function handleCreateError(c: Context, err: unknown): Response {
   const e = err as CreateErr;
@@ -185,45 +187,57 @@ function handleCreateError(c: Context, err: unknown): Response {
   return c.json({ error: message, ...details }, status);
 }
 
+function createErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'Unknown error';
+}
+
+async function createLabelRouteResponse(c: Context, body: CreateLabelRouteBody): Promise<Response> {
+  const startedAt = Date.now();
+  try {
+    const result = await createLabelV2(body, labelsScopeFromContext(c));
+    recordLabelOperationLog({
+      action: 'label_create',
+      status: 'success',
+      orderId: body.orderId,
+      orderNumber: body.orderNumber ?? null,
+      cause: result.trackingNumber ? `Label created: ${result.trackingNumber}` : 'Label created',
+      trackingNumber: result.trackingNumber,
+      timingMs: result.timings?.totalMs ?? Date.now() - startedAt,
+      source: result.apiVersion,
+    });
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'label',
+      resourceType: 'order',
+      resourceId: body.orderId,
+      action: 'label_create',
+      details: { shipmentId: result.shipmentId, tracking: result.trackingNumber, cost: result.cost },
+    });
+    return c.json(result, 201);
+  } catch (err) {
+    recordLabelOperationLog({
+      action: 'label_create',
+      status: 'error',
+      orderId: body.orderId,
+      orderNumber: body.orderNumber ?? null,
+      cause: createErrorMessage(err),
+      timingMs: Date.now() - startedAt,
+    });
+    return handleCreateError(c, err);
+  }
+}
+
 // POST /labels — create single label (v2-parity flat body)
 // PS-233: requireInternalPermission blocks portal roles (client_user /
 // read_only_support) from buying postage at all; the scope passed to the service
 // then refuses any order outside an internal caller's scope.
 app.post('/', requireInternalPermission('print_queue:write'), zValidator('json', createBody), async (c) => {
-  try {
-    const body = c.req.valid('json');
-    const result = await createLabelV2(body, labelsScopeFromContext(c));
-    await recordAuditEvent({
-      ...auditActorFromContext(c),
-      eventType: 'label',
-      resourceType: 'order',
-      resourceId: body.orderId,
-      action: 'label_create',
-      details: { shipmentId: result.shipmentId, tracking: result.trackingNumber, cost: result.cost },
-    });
-    return c.json(result, 201);
-  } catch (err) {
-    return handleCreateError(c, err);
-  }
+  return createLabelRouteResponse(c, c.req.valid('json'));
 });
 
 // POST /labels/create — explicit v2 path alias
 app.post('/create', requireInternalPermission('print_queue:write'), zValidator('json', createBody), async (c) => {
-  try {
-    const body = c.req.valid('json');
-    const result = await createLabelV2(body, labelsScopeFromContext(c));
-    await recordAuditEvent({
-      ...auditActorFromContext(c),
-      eventType: 'label',
-      resourceType: 'order',
-      resourceId: body.orderId,
-      action: 'label_create',
-      details: { shipmentId: result.shipmentId, tracking: result.trackingNumber, cost: result.cost },
-    });
-    return c.json(result, 201);
-  } catch (err) {
-    return handleCreateError(c, err);
-  }
+  return createLabelRouteResponse(c, c.req.valid('json'));
 });
 
 // POST /labels/create-batch — bulk creation
