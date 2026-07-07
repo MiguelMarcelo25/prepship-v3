@@ -110,6 +110,7 @@ import {
 import {
   describeShippingService,
   evaluateShippingServiceEligibility,
+  isHugrabShippingContext,
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
@@ -1930,6 +1931,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
     const legacyClientId = resolveLegacyClientId(r.order.clientId, r.order.storeId);
+    const rowShippingEligibilityContext: ShippingServiceEligibilityContext = {
+      clientId: legacyClientId ?? r.order.clientId ?? null,
+      clientName: r.order.clientName ?? null,
+      storeId: r.order.storeId ?? null,
+    };
+    const rowIsHugrab = isHugrabShippingContext(rowShippingEligibilityContext);
     const baseOrderLifecycle = resolveOrderLifecycleStatus({
       orderStatus: r.order.orderStatus,
       canonicalStatus: r.order.canonicalStatus,
@@ -2012,24 +2019,33 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       : null;
     const selectedRate =
       selectedRateJsonRecord
-        ? {
-            ...selectedRateJsonRecord,
-            providerAccountId:
-              selectedRateJsonRecord.providerAccountId ??
-              selectedRateJsonProviderId ??
-              providerAccountId,
-            shippingProviderId:
-              selectedRateJsonRecord.shippingProviderId ??
-              selectedRateJsonProviderId ??
-              providerAccountId,
-            carrierCode: selectedRateCarrierCode,
-            serviceCode: selectedRateServiceCode,
-            serviceName: selectedRateServiceName,
-            providerAccountNickname:
-              selectedRateCarrierNickname ??
-              providerAccountNickname ??
-              null,
-          }
+        ? normalizeOrderSelectedRateDto(
+            {
+              // Per user override unlock shipped data on 2026-07-07: display-only PS-402 fix.
+              // Persisted selected_rate_json can carry insuranceCost/provenance/total, so route
+              // it through the backend selected-rate DTO owner with HUGRAB context instead of
+              // spreading raw JSON into shipped rows.
+              ...selectedRateJsonRecord,
+              providerAccountId:
+                selectedRateJsonRecord.providerAccountId ??
+                selectedRateJsonProviderId ??
+                providerAccountId,
+              shippingProviderId:
+                selectedRateJsonRecord.shippingProviderId ??
+                selectedRateJsonProviderId ??
+                providerAccountId,
+              carrierCode: selectedRateCarrierCode,
+              serviceCode: selectedRateServiceCode,
+              serviceName: selectedRateServiceName,
+              providerAccountNickname:
+                selectedRateCarrierNickname ??
+                providerAccountNickname ??
+                null,
+            },
+            undefined,
+            `order ${r.order.id} shipment selectedRateJson`,
+            { isHugrab: rowIsHugrab, eligibility: rowShippingEligibilityContext },
+          )
         : ship
           ? normalizeOrderSelectedRateDto(
               {
@@ -2045,15 +2061,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
               },
               undefined,
               `order ${r.order.id} shipment selectedRate`,
+              { isHugrab: rowIsHugrab, eligibility: rowShippingEligibilityContext },
             )
         : null;
+    const selectedRateBestRateCandidateRecord = recordOrNull(selectedRate);
     const selectedRateBestRateCandidate =
-      selectedRate && typeof selectedRate === 'object'
+      selectedRateBestRateCandidateRecord
         ? {
-            ...(selectedRate as Record<string, unknown>),
+            ...selectedRateBestRateCandidateRecord,
             carrierNickname:
-              (selectedRate as Record<string, unknown>).carrierNickname ??
-              (selectedRate as Record<string, unknown>).providerAccountNickname ??
+              selectedRateBestRateCandidateRecord.carrierNickname ??
+              selectedRateBestRateCandidateRecord.providerAccountNickname ??
               providerAccountNickname,
           }
         : null;
