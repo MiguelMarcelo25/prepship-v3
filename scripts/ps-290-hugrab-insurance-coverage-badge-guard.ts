@@ -140,6 +140,10 @@ check('orders-row-display exposes a pure best-rate coverage reader',
   /export function getBestRateInsuranceCoverage\(/.test(rowDisplay));
 check('orders-row-display renders the coverage badge in the money renderer',
   /renderInsuranceCoverageBadge\(/.test(rowDisplay) && /renderRateAmountWithMarkup\(/.test(rowDisplay));
+const orderCells = read('web/src/components/Views/orders/cells/order-cells.tsx');
+check('Awaiting Best Rate cell keeps backend coverage visible on HOUSE/Shipp rows',
+  /renderRateAmountWithMarkup\(\s*bestRatePriceDisplay\.baseAmount,\s*bestRatePriceDisplay\.primaryAmount,\s*bestRatePriceDisplay\.insuranceAddOn,\s*[\s\S]*getBestRateInsuranceCoverage\(displayOrder\)/.test(orderCells) &&
+  !/showHouseBadge\s*\?\s*null\s*:\s*getBestRateInsuranceCoverage/.test(orderCells));
 // No FE heuristic: the row display must NOT re-derive the verdict — it may NAME the canonical
 // owner in a comment, but it must never CALL the resolver or do its own $100 floor math.
 check('orders-row-display does NOT call the resolver (no FE recompute)',

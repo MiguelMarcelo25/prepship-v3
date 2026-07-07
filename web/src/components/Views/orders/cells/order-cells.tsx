@@ -244,7 +244,9 @@ export function renderBestRatePrice(order: OrderSummaryDto, deps: OrderCellsDeps
           bestRatePriceDisplay.baseAmount,
           bestRatePriceDisplay.primaryAmount,
           bestRatePriceDisplay.insuranceAddOn,
-          bestRatePriceDisplay.showHouseBadge ? null : getBestRateInsuranceCoverage(displayOrder),
+          // The HOUSE badge is a pricing marker, not an insurance verdict. Keep
+          // rendering the backend-owned HUGRAB coverage badge on Shipp/house rows.
+          getBestRateInsuranceCoverage(displayOrder),
         )
         : renderRateAmountWithMarkup(bestRateBaseCost, bestRateBaseCost, getBackendInsuranceAddOn(displayOrder.bestRate), getBestRateInsuranceCoverage(displayOrder))}
       {recalculatingSpinner}
