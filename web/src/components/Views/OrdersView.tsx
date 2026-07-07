@@ -610,18 +610,12 @@ export default function OrdersView({
   // defaults to non-admin until the backend answers (the server still enforces every
   // admin-only route regardless of this display flag).
   const [callerIsAdmin, setCallerIsAdmin] = useState(false)
-  // Batch-print pipeline: backend-owned gate (BATCH_PRINT_VIA_QUEUE) for chaining
-  // "Create + Print Label" through the backend queue jobs. Default OFF. NOT a
-  // money-path route switch (PS-359 removed those): both orchestrations buy only
-  // through createLabelV2's backend gate ladder.
-  const [batchPrintViaQueue, setBatchPrintViaQueue] = useState(false)
   useEffect(() => {
     let cancelled = false
-    void api.get<{ id: string | null; email: string | null; isAdmin: boolean; batchPrintViaQueue?: boolean }>('/users/me')
+    void api.get<{ id: string | null; email: string | null; isAdmin: boolean }>('/users/me')
       .then((res) => {
         if (cancelled) return
         setCallerIsAdmin(res.isAdmin === true)
-        setBatchPrintViaQueue(res.batchPrintViaQueue === true)
       })
       .catch((err) => console.warn('[orders] failed to load caller identity:', err))
     return () => { cancelled = true }
@@ -4802,12 +4796,13 @@ export default function OrdersView({
       return
     }
 
-    if (mode === 'print' && batchPrintViaQueue) {
-      // Batch-print pipeline (BATCH_PRINT_VIA_QUEUE, default OFF): Create + Print
-      // chains the two existing backend jobs — /print-queue/batch-send buys
-      // (≤8 concurrent, durable, createLabelV2 gate ladder, LABEL_EXISTS recovery)
-      // and /print-queue/print merges ONE 4×6-normalized PDF. The FE buys nothing
-      // here. Flag OFF ⇒ the legacy sequential loop below runs byte-identical.
+    if (mode === 'print') {
+      // Batch-print pipeline: Create + Print chains the two existing backend jobs —
+      // /print-queue/batch-send buys (≤8 concurrent, durable, createLabelV2 gate
+      // ladder, LABEL_EXISTS recovery) and /print-queue/print merges ONE
+      // 4×6-normalized PDF. The FE buys nothing here. (The legacy sequential
+      // per-order loop was deleted 2026-07-07 after the live canary — the
+      // BATCH_PRINT_VIA_QUEUE rollout flag went with it; rollback = git revert.)
       const printWindow = openQueuePrintWindow()
       setBatchBusy(true)
       try {
@@ -4865,184 +4860,6 @@ export default function OrdersView({
       return
     }
 
-    setBatchBusy(true)
-    let created = 0
-    let failed = 0
-    // Label/print-queue audit (2026-06-11): per-order failure reasons so a failed batch isn't a bare
-    // "N failed" count that invites a blind re-run (and a possible double-charge). Surfaced in the toast.
-    const failureReasons: string[] = []
-
-    const processOrder = async (order: OrderSummaryDto) => {
-      let bestRate = order.bestRate
-      const selectedRate = order.selectedRate
-      let shippingProviderId = toNumberValue((bestRate as any)?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-      let serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((bestRate as any)?.serviceCode) ?? selectedRate?.serviceCode
-      let carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
-      const orderDetail = orderDetailsById.get(order.orderId) ?? null
-      const dims = getDimensions(order, orderDetail)
-      const weightOz = getOrderWeightOz(order, orderDetail)
-
-      // Test-client orders bypass the rate-fetch requirement — the backend
-      // forces a VOID mock label regardless, so we just need to reach the
-      // endpoint with a serviceCode + carrierCode. Use the order's stored
-      // defaults when no rate has been shopped.
-      // PS-186: money path — backend fact only.
-      const orderIsTest = isBackendTestOrder(order)
-      let effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
-      let effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
-      const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
-
-      try {
-        const shippingOptions = buildOrderShippingOptionsPayload(order)
-        let proofRate = bestRate ?? selectedRate
-        // PS-204: account-bound — a saved rate from a different account than the
-        // payload pid can't serve as proof; the strict-recalc fallback below then
-        // re-proves (and re-derives BOTH pid and proof from the same fresh rate).
-        let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)
-        if (!selectedRateProof && !orderIsTest) {
-          const proofRequest = getAutoBestRateRequest(order)
-          if (!proofRequest) {
-            throw new Error('Recalculate current best rate before label purchase')
-          }
-          const proofResult = await runStrictBestRateRecalculation(order, proofRequest, {
-            timeoutMs: BATCH_RECALCULATE_TIMEOUT_MS,
-          })
-          if (proofResult.status !== 'updated' || !proofResult.rate) {
-            throw new Error(proofResult.message || 'Current best rate could not be proven before label purchase')
-          }
-          proofRate = proofResult.rate
-          bestRate = proofResult.rate
-          // PS-204: no account filter here BY DESIGN — the pid is re-derived from
-          // this same fresh rate on the next line, so proof and payload account
-          // are coherent by construction.
-          selectedRateProof = buildSelectedRateProofPayload(order, proofRate)
-          shippingProviderId = toNumberValue((proofRate as any).shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-          serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue((proofRate as any).serviceCode) ?? selectedRate?.serviceCode
-          carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((proofRate as any).carrierCode) ?? selectedRate?.carrierCode
-          effectiveServiceCode = serviceCode
-          effectiveCarrierCode = carrierCode
-        }
-        if (!selectedRateProof && !orderIsTest) {
-          throw new Error('Selected rate proof is missing after live best-rate recalculation')
-        }
-        // Real-postage path still requires shippingProviderId. For test orders
-        // the backend never makes that call, so we omit the field entirely
-        // rather than try to sneak a 0 past Zod's .positive() validator.
-        if (!orderIsTest && shippingProviderId == null) {
-          throw new Error('Select a carrier account')
-        }
-        if (!effectiveServiceCode || !effectiveCarrierCode) {
-          throw new Error('Select a shipping service')
-        }
-        const payload: Record<string, unknown> = {
-          orderId: order.orderId,
-          // v2-parity: pass orderNumber so ShipStation's external_order_id
-          // field is populated (helps reconciliation reports). Server-side
-          // fallback exists but passing it explicitly matches v2.
-          orderNumber: order.orderNumber ?? undefined,
-          serviceCode: effectiveServiceCode,
-          carrierCode: effectiveCarrierCode,
-          packageCode: 'package',
-          weightOz: effectiveWeightOz,
-          length: dims?.length,
-          width: dims?.width,
-          height: dims?.height,
-          // POLICY (DJ, 2026-06-04): batch labels inherit the confirmation from
-          // shippingOptions, which now defaults to 'none' (no confirmation
-          // surcharge — matches ShipStation). The operator opts into
-          // Delivery/Signature per order when they want proof of delivery.
-          confirmation: shippingOptions.confirmation,
-          insuranceProvider: shippingOptions.insuranceProvider,
-          insuredValue: shippingOptions.insuredValue,
-          selectedRateProof,
-          testLabel: batchTestMode || orderIsTest,
-        }
-        if (shippingProviderId != null) {
-          payload.shippingProviderId = shippingProviderId
-        }
-        const response = await apiClient.createLabel(payload)
-        const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
-
-        if (queueableLabelUrl) {
-          // 2026-05-14: routed through apiClient.openLabelPdf so
-          // auth-gated label URLs proxy through a Bearer-authed
-          // fetch + blob: open instead of failing silently with the
-          // misleading "Check internet connection" Chrome error.
-          // Same fix template as the per-order reprint path above.
-          await apiClient.openLabelPdf(queueableLabelUrl)
-        }
-        created += 1
-        // Mark this row for the 5s strikethrough transition. It'll
-        // visually fade + line-through, then refetchOrders below removes
-        // it from the awaiting list once the backend confirms 'shipped'.
-        if (mode === 'print') {
-          // ─── 30-second continuous fade transition ────────────────
-          // Boss directive 2026-05-07: the operator must SEE the
-          // order fading throughout, not just at the end. The fade
-          // is a CSS keyframe animation (ps-shipping-fade in
-          // app-shell.css) that runs for 30 s and ends at opacity-0
-          // / scaled / shifted-right. A "Shipping…" pill renders
-          // inline next to the order number during the transition
-          // for an explicit signal.
-          //
-          // At t=30 s we refetch. Backend already has the order as
-          // 'shipped' (order-sync race fix in 1afe757) so the row
-          // drops naturally from the awaiting list.
-          const TRANSITION_MS = 30_000
-
-          setTransitionalShippedIds((prev) => {
-            const next = new Set(prev)
-            next.add(order.orderId)
-            return next
-          })
-
-          // Cancel any prior timer for this orderId (operator clicked
-          // print again before the previous animation finished — rare
-          // but possible).
-          const existing = transitionalTimeoutsRef.current.get(order.orderId)
-          if (existing) window.clearTimeout(existing)
-
-          const timer = window.setTimeout(() => {
-            setTransitionalShippedIds((prev) => {
-              const next = new Set(prev)
-              next.delete(order.orderId)
-              return next
-            })
-            transitionalTimeoutsRef.current.delete(order.orderId)
-            scheduleOrdersRefetch(250)
-          }, TRANSITION_MS)
-
-          transitionalTimeoutsRef.current.set(order.orderId, timer)
-        }
-      } catch (err) {
-        failed += 1
-        // Capture WHY this order failed. A reason like "Cannot create label for shipped order" /
-        // "Label already exists" tells the operator the postage was likely already spent — do NOT
-        // re-buy; use Reprint / Queue Existing Labels — vs a fixable "select a carrier/service".
-        failureReasons.push(`${order.orderNumber ?? order.orderId}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-
-    for (const order of batchOrders) {
-      await processOrder(order)
-    }
-
-    setBatchBusy(false)
-    // Print mode skips the immediate refetch — the per-row 5s timer
-    // handles refetching AFTER the strikethrough transition completes.
-    // If we refetch here, the awaiting list updates instantly and the
-    // row disappears before the visual cue plays.
-    if (created === 0) {
-      await refetchOrders()
-    }
-    const reasonSuffix = failureReasons.length
-      ? ` — ${failureReasons.slice(0, 3).join('; ')}${failureReasons.length > 3 ? ` (+${failureReasons.length - 3} more)` : ''}`
-      : ''
-    if (failed === 0) {
-      showToast(`✅ Created ${created} orders`, 'success')
-    } else {
-      showToast(`⚠ ${created} created, ${failed} failed${reasonSuffix}`)
-    }
   }
 
   // Batch Mark-as-Shipped — flips externallyShipped=true on every

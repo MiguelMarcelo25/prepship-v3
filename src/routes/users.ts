@@ -86,11 +86,6 @@ app.get('/me', (c) => {
     // PS-359: expose backend route-plan diagnostics only. The frontend no
     // longer receives a switch for the money-path route decision.
     printQueueBackendOrchestration: env.PRINT_QUEUE_BACKEND_ORCHESTRATION === true,
-    // Batch-print pipeline: FE gate for chaining "Create + Print Label" through the backend
-    // queue jobs (BATCH_PRINT_VIA_QUEUE in src/lib/env.ts). Default OFF; DJ flips on Render.
-    // NOT a money-path route switch (PS-359): both orchestrations buy exclusively through
-    // createLabelV2's backend gate ladder — this only selects the FE flow that sends intent.
-    batchPrintViaQueue: env.BATCH_PRINT_VIA_QUEUE === true,
   });
 });
 

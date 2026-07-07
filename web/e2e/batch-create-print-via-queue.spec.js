@@ -104,9 +104,9 @@ function responseFor(url, method) {
     return { status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'FE MUST NOT BUY' }) }
   }
 
-  // ── identity: flag ON ──
+  // ── identity (the chain is the unconditional batch path since the 2026-07-07 cleanup) ──
   if (url.pathname === '/users/me') {
-    return json({ id: 'u1', email: 'operator@example.com', isAdmin: true, printQueueFeDelegation: false, batchPrintViaQueue: true })
+    return json({ id: 'u1', email: 'operator@example.com', isAdmin: true })
   }
 
   // ── supporting reads (mirrors carrier-print-to-queue.spec.js) ──

@@ -157,19 +157,38 @@ async function main() {
     }
   };
 
-  sourceCheck('env flag exists (default OFF)', /BATCH_PRINT_VIA_QUEUE:\s*booleanFlag\(false\)/.test(envSource));
-  sourceCheck('/users/me exposes batchPrintViaQueue', /batchPrintViaQueue:\s*env\.BATCH_PRINT_VIA_QUEUE === true/.test(usersRoute));
+  // 2026-07-07 cleanup slice (post-live-canary): the legacy sequential loop AND the
+  // BATCH_PRINT_VIA_QUEUE rollout flag are DELETED — the chain is the only batch path.
+  // These asserts pin the deletion so neither can silently come back.
+  sourceCheck(
+    'BATCH_PRINT_VIA_QUEUE rollout flag fully retired (env + /users/me + OrdersView)',
+    !envSource.includes('BATCH_PRINT_VIA_QUEUE:') &&
+      !usersRoute.includes('batchPrintViaQueue') &&
+      !ordersView.includes('batchPrintViaQueue'),
+  );
   sourceCheck("job kind union includes 'create-print'", /'create-print'/.test(jobKinds));
 
-  const branchStart = ordersView.indexOf("if (mode === 'print' && batchPrintViaQueue)");
-  const legacyStart = ordersView.indexOf('const processOrder = async (order: OrderSummaryDto)');
-  sourceCheck('flag-ON branch exists', branchStart >= 0);
-  sourceCheck('legacy per-order loop still present (byte-identical this ship)', legacyStart > branchStart && branchStart >= 0);
-  const branchSlice = branchStart >= 0 && legacyStart > branchStart ? ordersView.slice(branchStart, legacyStart) : '';
-  sourceCheck('branch chains runCreatePrintChain', /runCreatePrintChain\(/.test(branchSlice));
-  sourceCheck("branch uses kind 'create-print' + deferred refetch", /kind:\s*'create-print'/.test(branchSlice) && /deferOrdersRefetch:\s*true/.test(branchSlice));
-  sourceCheck('branch NEVER buys from the FE (no apiClient.createLabel)', !/apiClient\.createLabel\(/.test(branchSlice));
-  sourceCheck('legacy loop still buys via apiClient.createLabel (unchanged)', /const response = await apiClient\.createLabel\(payload\)/.test(ordersView));
+  const batchActionStart = ordersView.indexOf('async function handleBatchAction');
+  const batchActionEnd = ordersView.indexOf('async function handleBatchMarkAsShipped');
+  sourceCheck('handleBatchAction slice found', batchActionStart >= 0 && batchActionEnd > batchActionStart);
+  const batchActionSlice =
+    batchActionStart >= 0 && batchActionEnd > batchActionStart
+      ? ordersView.slice(batchActionStart, batchActionEnd)
+      : '';
+  sourceCheck(
+    'print mode chains runCreatePrintChain UNCONDITIONALLY',
+    /if \(mode === 'print'\) \{/.test(batchActionSlice) && /runCreatePrintChain\(/.test(batchActionSlice),
+  );
+  sourceCheck(
+    "chain uses kind 'create-print' + deferred refetch",
+    /kind:\s*'create-print'/.test(batchActionSlice) && /deferOrdersRefetch:\s*true/.test(batchActionSlice),
+  );
+  sourceCheck('batch action NEVER buys from the FE (no apiClient.createLabel)', !/apiClient\.createLabel\(/.test(batchActionSlice));
+  sourceCheck('legacy sequential per-order loop is deleted', !batchActionSlice.includes('const processOrder = async'));
+  sourceCheck(
+    'exactly ONE apiClient.createLabel remains file-wide (the single-order side panel, intentionally kept)',
+    (ordersView.match(/apiClient\.createLabel\(/g) ?? []).length === 1,
+  );
 
   if (failures) {
     console.error(`\n${failures} failure(s)`);

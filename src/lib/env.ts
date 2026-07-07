@@ -194,12 +194,8 @@ const schema = z.object({
   // create a new buy), so OFF is byte-identical and the buy still happens exactly once.
   PRINT_QUEUE_DIRECT_VIA_BACKEND: booleanFlag(false),
   // Batch-print pipeline (docs/superpowers/specs/2026-07-07-batch-print-pipeline-design.md):
-  // default-OFF. When ON, the FE "Create + Print Label" batch action chains the two existing
-  // backend queue jobs (POST /print-queue/batch-send buys/recovers, then POST /print-queue/print
-  // merges one PDF) instead of the legacy sequential per-order FE loop. Purchase authority is
-  // unchanged — createLabelV2 owns every buy on both paths; this flag only moves FE
-  // orchestration. OFF is byte-identical. DJ flips on Render after a test-client canary.
-  BATCH_PRINT_VIA_QUEUE: booleanFlag(false),
+  // the BATCH_PRINT_VIA_QUEUE rollout flag was retired 2026-07-07 after DJ's live canary —
+  // the batch "Create + Print Label" chain is now the unconditional path (legacy loop deleted).
   // Per user override unlock shipped data on 2026-07-07: merge-job label fetch concurrency
   // (batch-print pipeline design). Default 1 = at most one fetch in flight, walked in merge
   // order — today's serial behavior on the wire. DJ raises to ~4 on Render after a canary
