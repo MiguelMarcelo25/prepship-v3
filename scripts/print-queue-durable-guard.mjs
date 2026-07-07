@@ -19,6 +19,7 @@ function assert(condition, message) {
 const serviceSource = read('src/services/print-queue.ts');
 const routeSource = read('src/routes/print-queue.ts');
 const snapshotSource = read('src/services/print-queue/queue-send-snapshot.ts');
+const jobStoreSource = read('src/services/print-queue/queue-send-job-store.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -40,6 +41,10 @@ assert(
 assert(
   serviceSource.includes('persistQueueSendJobSnapshot'),
   'print queue persists batch-send job snapshots',
+);
+assert(
+  jobStoreSource.includes('WHERE print_queue_send_jobs.updated_at <= ${snapshot.updatedAt}'),
+  'durable batch-send job snapshots cannot be overwritten by older progress writes',
 );
 assert(
   snapshotSource.includes("PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.'") &&

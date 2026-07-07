@@ -145,6 +145,7 @@ export async function persistQueueSendJobRecord(snapshot: QueueSendJobSnapshot):
       message = ${snapshot.message},
       snapshot = ${snapshotJson}::jsonb,
       updated_at = ${snapshot.updatedAt}
+    WHERE print_queue_send_jobs.updated_at <= ${snapshot.updatedAt}
   `;
 }
 

@@ -1537,8 +1537,13 @@ async function runQueueSendJob(
           // and must never auto-repurchase.
           const retry = classifyLabelPurchaseRetry(err);
           const staleLabelAttempt = isQueueSendStaleLabelAttemptError(err);
-          const retryEligible = staleLabelAttempt || retry.retryEligible;
-          const retryReason = staleLabelAttempt ? err.retryReason : retry.retryReason;
+          const labelPurchaseInProgress = isLabelPurchaseInProgressError(err);
+          const retryEligible = staleLabelAttempt || labelPurchaseInProgress || retry.retryEligible;
+          const retryReason = staleLabelAttempt
+            ? err.retryReason
+            : labelPurchaseInProgress
+              ? 'label_purchase_in_progress'
+              : retry.retryReason;
           const message = err instanceof Error ? err.message : 'Unknown error';
           job.results.push({
             orderId: order.orderId,

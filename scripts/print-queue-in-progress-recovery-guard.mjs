@@ -26,6 +26,14 @@ const checks = [
       /code === 'LABEL_PURCHASE_IN_PROGRESS'/.test(service),
   },
   {
+    name: 'queue-send reports active label-purchase locks as retryable in-progress failures',
+    pass:
+      /const labelPurchaseInProgress = isLabelPurchaseInProgressError\(err\)/.test(service) &&
+      /const retryEligible = staleLabelAttempt \|\| labelPurchaseInProgress \|\| retry\.retryEligible/.test(service) &&
+      /label_purchase_in_progress/.test(service) &&
+      /state: retryEligible \? 'failed_retryable' : 'failed_terminal'/.test(service),
+  },
+  {
     name: 'queue-send waits for the first purchase to persist a queueable label before failing',
     pass: (() => {
       const purchaseIndex = service.indexOf("'labelPurchaseMs'")
