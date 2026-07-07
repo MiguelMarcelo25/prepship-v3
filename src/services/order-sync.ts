@@ -461,6 +461,7 @@ async function fetchOrdersPage(
     pageSize: number;
     storeId?: number;
     statusOnly?: boolean;
+    sortDir?: 'ASC' | 'DESC';
   },
   budget: SyncRunBudget = createSyncRunBudget(),
 ): Promise<{ synced: number; pages: number }> {
@@ -483,7 +484,8 @@ async function fetchOrdersPage(
       pageSize: args.pageSize,
       page,
       storeId: args.storeId,
-      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${page}:${args.pageSize}`,
+      sortDir: args.sortDir,
+      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${page}:${args.pageSize}:${args.sortDir ?? 'ASC'}`,
       timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
     });
 
@@ -618,6 +620,11 @@ async function syncOrdersForAccount(
         sinceMs: pass.sinceMs,
         pageSize,
         statusOnly: true,
+        // Per user override unlock shipped data on 2026-05-23, reconfirmed on
+        // 2026-07-07: status catch-up removes today's rows from Awaiting after
+        // ShipStation moves them to shipped/cancelled/hold. Pull newest modified
+        // rows first so bounded workers do not spend every tick on old history.
+        sortDir: 'DESC',
       }, budget);
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;

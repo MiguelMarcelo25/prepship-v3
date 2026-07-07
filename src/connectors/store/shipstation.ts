@@ -243,7 +243,7 @@ export function createShipStationStoreConnector(): StoreConnector {
         pageSize: String(input.pageSize),
         page: String(input.page),
         sortBy: 'ModifyDate',
-        sortDir: 'ASC',
+        sortDir: input.sortDir === 'DESC' ? 'DESC' : 'ASC',
       });
       if (input.storeId !== undefined) q.set('storeId', String(input.storeId));
 

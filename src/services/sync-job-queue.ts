@@ -113,6 +113,12 @@ function dateFromUnknown(value: unknown): Date | null {
   return null;
 }
 
+function isDeferredShipStationOrderSync(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const source = data as { deferredLane?: unknown; deferCount?: unknown };
+  return source.deferredLane === 'shipstation-sync' && Number(source.deferCount) > 0;
+}
+
 async function findSupersedingManualOrderSyncJob(
   name: JobName,
   job: PgBossJobLike | undefined,
@@ -639,7 +645,15 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   // ShipStation sync services directly so queued mode does not also take the
   // legacy interval-scheduler advisory lock and starve worker heartbeats.
   await registerWorker(JOBS.orders, async (jobData) => {
-    const result = await syncOrders(orderSyncOptionsFromJobPayload(jobData));
+    const options = orderSyncOptionsFromJobPayload(jobData);
+    if (isDeferredShipStationOrderSync(jobData)) {
+      // Per user override unlock shipped data on 2026-05-23, reconfirmed on
+      // 2026-07-07: a busy-defer row is just a retry wake-up after the
+      // ShipStation lane was blocked. Keep it to awaiting freshness so deferred
+      // wake-ups cannot become another long status catch-up that starves labels.
+      options.skipStatusPasses = true;
+    }
+    const result = await syncOrders(options);
     if (result.synced > 0 && isRateBackfillSchedulerEnabled()) {
       runBackfillTick();
     }

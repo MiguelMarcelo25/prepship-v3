@@ -45,10 +45,22 @@ const orderSync = readFileSync('src/services/order-sync.ts', 'utf8');
 assert.match(orderSync, /const DEFAULT_ORDER_SYNC_PAGE_SIZE = 100;/);
 assert.match(orderSync, /opts\.pageSize \?\? DEFAULT_ORDER_SYNC_PAGE_SIZE/);
 assert.match(orderSync, /while \(!syncRunBudgetTimeExhausted\(budget\)\)/);
+assert.match(orderSync, /sortDir: 'DESC'/, 'status catch-up must pull newest modified statuses first');
+assert.match(
+  orderSync,
+  /args\.sortDir \?\? 'ASC'/,
+  'ShipStation order import dedupe key must include sortDir',
+);
 assert.match(
   orderSync,
   /for \(const target of awaitingTargets\) \{\s*if \(syncRunBudgetTimeExhausted\(budget\)\) break;/,
   'awaiting store passes must check the run budget before starting another provider call',
+);
+const shipstationConnector = readFileSync('src/connectors/store/shipstation.ts', 'utf8');
+assert.match(
+  shipstationConnector,
+  /sortDir: input\.sortDir === 'DESC' \? 'DESC' : 'ASC'/,
+  'ShipStation connector must pass the backend-owned sort direction through to v1 orders',
 );
 
 const shipmentSync = readFileSync('src/services/shipment-sync.ts', 'utf8');

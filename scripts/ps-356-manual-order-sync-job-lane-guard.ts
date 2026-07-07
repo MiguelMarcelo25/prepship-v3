@@ -80,7 +80,14 @@ check(
 check(
   'queued order worker consumes job payload instead of ignoring manual options',
   /await registerWorker\(JOBS\.orders, async \(jobData\) => \{/.test(queue) &&
-    /syncOrders\(orderSyncOptionsFromJobPayload\(jobData\)\)/.test(queue),
+    /const options = orderSyncOptionsFromJobPayload\(jobData\);/.test(queue) &&
+    /syncOrders\(options\)/.test(queue),
+);
+check(
+  'deferred order sync wake-ups use the awaiting-freshness path',
+  /function isDeferredShipStationOrderSync/.test(queue) &&
+    /options\.skipStatusPasses = true;/.test(queue) &&
+    /wake-ups cannot become another long status catch-up/.test(queue),
 );
 check(
   'queued order worker skips stale manual refresh rows when a newer one is queued',

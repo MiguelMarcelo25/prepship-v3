@@ -73,6 +73,7 @@ export type StoreOrderImportInput = {
   pageSize?: number;
   page?: number;
   storeId?: number;
+  sortDir?: 'ASC' | 'DESC';
   credentials?: Record<string, string | null | undefined>;
   dedupeKey?: string;
   createdStartDate?: string;
