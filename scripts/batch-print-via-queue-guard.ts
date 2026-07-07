@@ -12,6 +12,7 @@
  * flag-ON branch chains the two backend jobs and never buys from the FE.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   collectBatchPrintProofOverrides,
   runCreatePrintChain,
@@ -140,6 +141,35 @@ async function main() {
     assert.equal(outcome.printAttempted, false);
     assert.deepEqual(outcome.errors, ['Order B-5: Missing label payload']);
   });
+
+  // ── Wiring half: source asserts on the flag plumbing and the flag-ON branch ──
+  const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  const envSource = readFileSync('src/lib/env.ts', 'utf8');
+  const usersRoute = readFileSync('src/routes/users.ts', 'utf8');
+  const jobKinds = readFileSync('web/src/components/Views/orders-persistent-queue-job.ts', 'utf8');
+
+  const sourceCheck = (name: string, condition: boolean) => {
+    if (!condition) {
+      failures += 1;
+      console.error(`FAIL ${name}`);
+    } else {
+      console.log(`ok   ${name}`);
+    }
+  };
+
+  sourceCheck('env flag exists (default OFF)', /BATCH_PRINT_VIA_QUEUE:\s*booleanFlag\(false\)/.test(envSource));
+  sourceCheck('/users/me exposes batchPrintViaQueue', /batchPrintViaQueue:\s*env\.BATCH_PRINT_VIA_QUEUE === true/.test(usersRoute));
+  sourceCheck("job kind union includes 'create-print'", /'create-print'/.test(jobKinds));
+
+  const branchStart = ordersView.indexOf("if (mode === 'print' && batchPrintViaQueue)");
+  const legacyStart = ordersView.indexOf('const processOrder = async (order: OrderSummaryDto)');
+  sourceCheck('flag-ON branch exists', branchStart >= 0);
+  sourceCheck('legacy per-order loop still present (byte-identical this ship)', legacyStart > branchStart && branchStart >= 0);
+  const branchSlice = branchStart >= 0 && legacyStart > branchStart ? ordersView.slice(branchStart, legacyStart) : '';
+  sourceCheck('branch chains runCreatePrintChain', /runCreatePrintChain\(/.test(branchSlice));
+  sourceCheck("branch uses kind 'create-print' + deferred refetch", /kind:\s*'create-print'/.test(branchSlice) && /deferOrdersRefetch:\s*true/.test(branchSlice));
+  sourceCheck('branch NEVER buys from the FE (no apiClient.createLabel)', !/apiClient\.createLabel\(/.test(branchSlice));
+  sourceCheck('legacy loop still buys via apiClient.createLabel (unchanged)', /const response = await apiClient\.createLabel\(payload\)/.test(ordersView));
 
   if (failures) {
     console.error(`\n${failures} failure(s)`);
