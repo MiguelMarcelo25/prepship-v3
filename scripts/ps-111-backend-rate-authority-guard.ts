@@ -91,13 +91,17 @@ check('any carrier ERROR -> NOT complete',
   check('combine owner derives completeness from the combined statuses (never hardcoded true)',
     /bestRateComplete: statusesComplete\(combinedCarrierStatuses\)/.test(ratesCombined), true);
 
-  const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
-  check('route consumes the owner-computed completeness (destructures bestRateComplete)',
-    /\bbestRateComplete,/.test(ratesRoute), true);
-  check('route stamps the computed completeness onto the best rate (isComplete: bestRateComplete)',
-    /isComplete: bestRateComplete/.test(ratesRoute), true);
-  check('route no longer hardcodes isComplete: true on the best-rate metadata',
-    /requestFingerprint: result\.cacheKey[\s\S]{0,200}isComplete: true/.test(ratesRoute), false);
+  // Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+  // src/services/rate-browse-response-producer.ts (route delegates to produceRateBrowsePayload);
+  // the completeness destructure + isComplete stamping live in the producer now, and the
+  // metadata fingerprint is combinedRequestKey (was result.cacheKey).
+  const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
+  check('browse producer consumes the owner-computed completeness (destructures bestRateComplete)',
+    /\bbestRateComplete,/.test(browseProducer), true);
+  check('browse producer stamps the computed completeness onto the best rate (isComplete: bestRateComplete)',
+    /isComplete: bestRateComplete/.test(browseProducer), true);
+  check('browse producer never hardcodes isComplete: true on the best-rate metadata',
+    /isComplete: true/.test(browseProducer), false);
 }
 
 // ── 4) Frontend consumes backend completeness (no hardcoded true) ────────────
@@ -111,8 +115,10 @@ check('any carrier ERROR -> NOT complete',
   const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
   check('OrdersView imports the backend-owned completeness resolver',
     /import \{ deriveBackendBestRateComplete \} from '\.\/orders-rate-proof'/.test(ordersView), true);
+  // Repointed (guard rot): the passive auto-rating call site now derives completeness from
+  // decision.rate (was a local bestRate binding) — same backend-owned resolver, renamed arg.
   check('passive auto-rating uses backendComplete (not a hardcoded true)',
-    /const backendComplete = deriveBackendBestRateComplete\(response, bestRate\)/.test(ordersView)
+    /const backendComplete = deriveBackendBestRateComplete\(response, decision\.rate\)/.test(ordersView)
     && /isComplete: backendComplete/.test(ordersView), true);
   check('frontend still uses the backend bestRate as the source of truth',
     /const bestRate = toRecord\(response\?\.bestRate\)/.test(ordersView), true);

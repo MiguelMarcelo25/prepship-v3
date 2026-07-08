@@ -127,19 +127,23 @@ async function sliceTwoChecks() {
       /useState<Mode>\('audit_only'\)/.test(card));
 
   // slice 4: /rates/browse read-path wiring — audit/enforce on rating, best-effort + fail-open.
+  // Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+  // src/services/rate-browse-response-producer.ts (route delegates to produceRateBrowsePayload);
+  // the eligibility evaluation moved with it. The Zod request schema stays in the route.
   const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
-  check('rates route imports the non-throwing evaluator + mode reader',
-    /evaluateOrderCarrierEligibility/.test(ratesRoute) && /getCarrierEligibilityMode/.test(ratesRoute));
+  const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
+  check('browse producer imports the non-throwing evaluator + mode reader',
+    /evaluateOrderCarrierEligibility/.test(browseProducer) && /getCarrierEligibilityMode/.test(browseProducer));
   check('browse accepts an optional orderId to resolve the source',
     /orderId:\s*z\.number\(\)\.int\(\)\.positive\(\)\.nullable\(\)\.optional\(\)/.test(ratesRoute));
   check('browse evaluates ShipStation eligibility for the order',
-    /evaluateOrderCarrierEligibility\(\{\s*carrierFamily:\s*'shipstation'/.test(ratesRoute));
+    /evaluateOrderCarrierEligibility\(\{\s*carrierFamily:\s*'shipstation'/.test(browseProducer));
   check('browse drops ShipStation rates only when enforce blocks (shipStationBlocked)',
-    /shipStationBlocked/.test(ratesRoute) && /filtered\s*=\s*shipStationBlocked\s*\?\s*\[\]/.test(ratesRoute));
+    /shipStationBlocked/.test(browseProducer) && /filtered\s*=\s*shipStationBlocked\s*\?\s*\[\]/.test(browseProducer));
   check('browse surfaces carrierEligibility on the response payload',
-    /carrierEligibility,/.test(ratesRoute));
+    /carrierEligibility,/.test(browseProducer));
   check('browse eligibility is best-effort / fail-open (wrapped in try-catch)',
-    /if \(body\.orderId\)[\s\S]{0,400}?try \{[\s\S]{0,800}?\} catch/.test(ratesRoute));
+    /if \(body\.orderId\)[\s\S]{0,400}?try \{[\s\S]{0,800}?\} catch/.test(browseProducer));
 }
 
 await sliceTwoChecks();

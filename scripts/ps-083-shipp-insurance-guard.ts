@@ -243,15 +243,18 @@ expectNoThrow('non-insured order still passes the gate', () =>
   ),
 );
 
-const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+// Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+// src/services/rate-browse-response-producer.ts (the route now delegates to
+// produceRateBrowsePayload); the direct fan-out call moved with it, same needles.
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 {
   // PS-perf 2026-06-23: the direct fan-out now runs concurrently with getRates inside a Promise.all
   // IIFE (was a sequential `const directRates = await …`); the resolved insurance is forwarded from
   // resolvedForBrowse (resolveRateInput, the SAME deterministic resolver getRates uses internally),
   // byte-identical to the prior result.effectiveInsurance*. Match the call itself.
-  const callStart = ratesRoute.indexOf('getDirectCarrierRatesForRateInput({');
-  const callEnd = ratesRoute.indexOf('}, { cachedOnly: isCachedOnlyLookup });', callStart);
-  const directFanoutCall = callStart >= 0 && callEnd > callStart ? ratesRoute.slice(callStart, callEnd) : '';
+  const callStart = browseProducer.indexOf('getDirectCarrierRatesForRateInput({');
+  const callEnd = browseProducer.indexOf('}, { cachedOnly: isCachedOnlyLookup });', callStart);
+  const directFanoutCall = callStart >= 0 && callEnd > callStart ? browseProducer.slice(callStart, callEnd) : '';
   check(
     '/rates/browse direct fanout forwards resolved insurance provider',
     /insuranceProvider:\s*resolvedForBrowse\.effectiveInsuranceProvider/.test(directFanoutCall),

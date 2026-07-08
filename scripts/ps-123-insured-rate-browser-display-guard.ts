@@ -23,7 +23,14 @@ function check(name: string, ok: boolean) {
 const hooks = readFileSync('web/src/hooks/useOrders.ts', 'utf8');
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+// Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+// src/services/rate-browse-response-producer.ts (route delegates to produceRateBrowsePayload),
+// and money canonicalization e9762409 moved the insurance-in-otherCost fold into
+// purchase-customer-rate-aliases.ts. The response/fold pins read those owners now.
+// (CRLF-normalized so the \n slice anchors match on Windows checkouts too.)
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8').replace(/\r\n/g, '\n');
+const purchaseAliases = readFileSync('src/services/shipping-workflow/purchase-customer-rate-aliases.ts', 'utf8').replace(/\r\n/g, '\n');
+const openWorkflow = readFileSync('web/src/components/rate-browser-open-workflow.ts', 'utf8').replace(/\r\n/g, '\n');
 const ratesService = readFileSync('src/services/rates.ts', 'utf8');
 
 const normalizeStart = hooks.indexOf('function normalizeRateForV2(');
@@ -38,22 +45,10 @@ const legacyBlock = legacyStart >= 0 && legacyEnd > legacyStart
   ? hooks.slice(legacyStart, legacyEnd)
   : '';
 
-const seedStart = modal.indexOf('function buildOrderBestRateSeed(');
-const seedEnd = modal.indexOf('\nconst TEST_MOCK_SERVICE_TEMPLATES', seedStart);
-const seedBlock = seedStart >= 0 && seedEnd > seedStart
-  ? modal.slice(seedStart, seedEnd)
-  : '';
-
 const clickStart = modal.indexOf('function handleRateClick(');
 const clickEnd = modal.indexOf('\n  if (!open) return null;', clickStart);
 const clickBlock = clickStart >= 0 && clickEnd > clickStart
   ? modal.slice(clickStart, clickEnd)
-  : '';
-
-const effectStart = modal.indexOf('const autoFetchedRef = useRef');
-const effectEnd = modal.indexOf('\n  // Auto-select a package', effectStart);
-const autoFetchBlock = effectStart >= 0 && effectEnd > effectStart
-  ? modal.slice(effectStart, effectEnd)
   : '';
 
 const insuranceControlsStart = modal.indexOf('<div style={{ fontSize: 11, color: \'var(--text3)\', marginBottom: 3 }}>\n                  Insurance');
@@ -96,10 +91,12 @@ const getRatesResultBlock = getRatesResultStart >= 0 && getRatesResultEnd > getR
   ? ratesService.slice(getRatesResultStart, getRatesResultEnd)
   : '';
 
-const browsePayloadStart = ratesRoute.indexOf('const payload = {');
-const browsePayloadEnd = ratesRoute.indexOf('\n  return c.json(publicRatesResult(payload', browsePayloadStart);
+// Repointed (guard rot): the browse response literal is now the producer's final
+// `return { ...result, ... }` block (was `const payload = {` in routes/rates.ts).
+const browsePayloadStart = browseProducer.indexOf('return {\n    ...result,');
+const browsePayloadEnd = browseProducer.indexOf('\n  };', browsePayloadStart);
 const browsePayloadBlock = browsePayloadStart >= 0 && browsePayloadEnd > browsePayloadStart
-  ? ratesRoute.slice(browsePayloadStart, browsePayloadEnd)
+  ? browseProducer.slice(browsePayloadStart, browsePayloadEnd)
   : '';
 
 check(
@@ -118,11 +115,14 @@ check(
 );
 
 check(
-  'Rate Browser saved-rate seed folds raw insurance_amount into otherCost',
-  /insuranceAmount/.test(seedBlock) &&
-    /insurance_amount/.test(seedBlock) &&
-    /componentOtherCost\s*=\s*otherAmountCost\s*\+\s*confirmationAmountCost\s*\+\s*insuranceAmountCost/.test(seedBlock) &&
-    /Math\.max\(storedOtherCost,\s*componentOtherCost\)/.test(seedBlock),
+  // Repointed (guard rot): money canonicalization e9762409 moved the insurance-in-otherCost
+  // fold backend-side into purchase-customer-rate-aliases.ts (money builder folds
+  // rate.insurance_amount, stamps otherCost); the modal seed now consumes the
+  // backend-stamped otherCost alias verbatim instead of re-deriving component math.
+  'Rate Browser saved-rate seed consumes the backend-stamped otherCost (insurance folded backend-side)',
+  modal.includes('const otherCost = toFiniteNumber(bestRate.otherCost) ?? toFiniteNumber(raw.otherCost) ?? 0;') &&
+    purchaseAliases.includes('otherCost: money.otherCost,') &&
+    purchaseAliases.includes('moneyObjectAmount(rate.insurance_amount'),
 );
 
 check(
@@ -143,19 +143,12 @@ check(
 );
 
 check(
-  // PS-206 + PS-241 + PS-260 (coverage-driven fan-out): the modal open must
-  // PROBE THE CACHE FIRST (cachedOnly:true) for an instant paint, then complete
-  // coverage LIVE only when the cached probe left scoped accounts uncovered. The
-  // follow-up fan-out is gated by the backend's per-carrier COVERAGE identity
-  // (probe.uncoveredPids.length > 0) — NOT a carrier-COUNT heuristic. The old
-  // `cachedCarrierCount <= 1` thin-cache check this assertion used to pin was
-  // deliberately removed by PS-206; a cached probe with full coverage
-  // (uncoveredPids empty) is served with no live fan-out at all. This mirrors the
-  // PS-241 fan-out guard's coverage-identity / no-`<=1`-heuristic invariants.
-  'modal open probes cache first, then gates the live fanout on coverage identity (uncoveredPids), not a carrier-count heuristic',
-  /cachedOnly:\s*true/.test(autoFetchBlock) &&
-    /probe\.uncoveredPids\.length\s*>\s*0/.test(autoFetchBlock) &&
-    !/(carriers?WithRates|ratedCount|withRates|cachedCarrierCount)\s*<=\s*1/.test(autoFetchBlock),
+  // Repointed (guard rot): PS-345/346 replaced the cached-probe escalation with load-all-on-open
+  // — modal open now goes straight live via the shared open-workflow options (forceLive: true);
+  // the cachedOnly probe + uncoveredPids coverage gate no longer exist on the open path.
+  'modal open loads all rates live via the shared open-workflow options (PS-345/346 load-all-on-open)',
+  modal.includes('browseRates(undefined, rateBrowserOpenBrowseOptions())') &&
+    openWorkflow.includes('forceLive: true'),
 );
 
 check(
@@ -195,10 +188,10 @@ check(
   'Browse Rates response stamps effective insurance onto payload, bestRate, and saved workflow metadata',
   /effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(browsePayloadBlock) &&
     /effectiveInsuredValue:\s*result\.effectiveInsuredValue/.test(browsePayloadBlock) &&
-    /bestRateMetadata[\s\S]{0,500}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute) &&
+    /bestRateMetadata[\s\S]{0,500}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(browseProducer) &&
     // Window 300→450 (PS-183 added cacheCreatedAt/cacheExpiresAt lines inside the
     // bestRateOut literal before the insurance stamp; assertion unchanged).
-    /bestRateOut[\s\S]{0,450}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(ratesRoute),
+    /bestRateOut[\s\S]{0,450}effectiveInsuranceProvider:\s*result\.effectiveInsuranceProvider/.test(browseProducer),
 );
 
 if (failures > 0) {

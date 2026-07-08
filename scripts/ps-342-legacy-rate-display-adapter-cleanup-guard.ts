@@ -19,7 +19,14 @@ function sliceBetween(source: string, startNeedle: string, endNeedle: string): s
 }
 
 const shared = read('web/src/lib/v2-apiClient/shared.ts');
-const ratesRoute = read('src/routes/rates.ts');
+// Repointed (guard rot): the display-alias stamper moved out of routes/rates.ts into the
+// shared owner src/services/rate-browser-display-fields.ts, money canonicalization e9762409
+// moved the money-alias math into purchase-customer-rate-aliases.ts, and the /rates/browse
+// producer (rate-browse-response-producer.ts) stamps every outgoing rate via
+// stampRateBrowserDisplayAliases.
+const displayFields = read('src/services/rate-browser-display-fields.ts');
+const purchaseAliases = read('src/services/shipping-workflow/purchase-customer-rate-aliases.ts');
+const browseProducer = read('src/services/rate-browse-response-producer.ts');
 const packageJson = read('package.json');
 
 const mapper = sliceBetween(
@@ -29,11 +36,12 @@ const mapper = sliceBetween(
 );
 
 assert(
-  /function stampRateBrowserDisplayAlias\(rate: Record<string, unknown>\)/.test(ratesRoute) &&
-    /amount: readFiniteRateNumber\(rate\.amount\) \?\? total/.test(ratesRoute) &&
-    /shipmentCost: readFiniteRateNumber\(rate\.shipmentCost\) \?\? shipmentCost/.test(ratesRoute) &&
-    /otherCost: readFiniteRateNumber\(rate\.otherCost\) \?\? otherCost/.test(ratesRoute),
-  'backend /rates/browse must own legacy display money aliases',
+  /function stampRateBrowserDisplayAlias\(rate: Record<string, unknown>\)/.test(displayFields) &&
+    browseProducer.includes('stampRateBrowserDisplayAliases(') &&
+    purchaseAliases.includes('amount: selectedRateCost,') &&
+    purchaseAliases.includes('shipmentCost: money.purchaseShipmentCost,') &&
+    purchaseAliases.includes('otherCost: money.otherCost,'),
+  'backend rate owners must own legacy display money aliases (display-fields stamper + purchase-customer money aliases, stamped by the /rates/browse producer)',
 );
 
 assert(

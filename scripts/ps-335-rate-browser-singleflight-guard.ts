@@ -116,15 +116,28 @@ async function main() {
     DIRECT_CARRIER_QUOTE_TIMEOUT_MS <= 15_000,
     { DIRECT_CARRIER_QUOTE_TIMEOUT_MS });
 
-  const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+  // Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+  // src/services/rate-browse-response-producer.ts (route delegates to produceRateBrowsePayload);
+  // the single-flight wrap moved with it.
+  const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
   const pkg = readFileSync('package.json', 'utf8');
 
-  check('/rates/browse imports the single-flight owner',
-    /rate-browse-singleflight/.test(ratesRoute) &&
-    /runRateBrowseSingleFlight/.test(ratesRoute));
-  check('/rates/browse wraps the provider fan-out, not ranking/proof logic',
-    /await runRateBrowseSingleFlight\([\s\S]{0,900}Promise\.all\(\[/.test(ratesRoute) &&
-    /const \{ result, directRates, shipStationDurationMs, directCarrierDurationMs \} = await runRateBrowseSingleFlight/.test(ratesRoute));
+  check('/rates/browse (producer) imports the single-flight owner',
+    /rate-browse-singleflight/.test(browseProducer) &&
+    /runRateBrowseSingleFlight/.test(browseProducer));
+  check('/rates/browse (producer) wraps the provider fan-out, not ranking/proof logic',
+    /await runRateBrowseSingleFlight\([\s\S]{0,900}Promise\.all\(\[/.test(browseProducer) &&
+    /const \{ result, directRates, shipStationDurationMs, directCarrierDurationMs \} = await runRateBrowseSingleFlight/.test(browseProducer));
+  {
+    // Ranking/proof stay OUTSIDE the single-flight callback: the callback returns the raw
+    // provider fan-out result; combine/finalize/house-tuple all run after it resolves.
+    const callbackClose = browseProducer.indexOf('return { result, directRates, shipStationDurationMs, directCarrierDurationMs };');
+    check('ranking/proof (combine/finalize/house tuple) run AFTER/outside the single-flight callback',
+      callbackClose >= 0 &&
+      browseProducer.indexOf('combineCarrierUniverses({') > callbackClose &&
+      browseProducer.indexOf('finalizeBestRateWithQuote({') > callbackClose &&
+      browseProducer.indexOf('await stampHouseTuple(') > callbackClose);
+  }
   check('package.json exposes test:ps-335-rate-browser-singleflight',
     /test:ps-335-rate-browser-singleflight/.test(pkg));
 

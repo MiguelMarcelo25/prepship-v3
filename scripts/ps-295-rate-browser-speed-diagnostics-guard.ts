@@ -52,15 +52,18 @@ check('timing payload keeps provider source on each carrier',
   timing.carriers.some((carrier) => carrier.source === 'shipstation') &&
   timing.carriers.some((carrier) => carrier.source === 'direct'), timing);
 
-const routesRates = readFileSync('src/routes/rates.ts', 'utf8');
+// Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+// src/services/rate-browse-response-producer.ts; the timing-diagnostics build + return
+// stamp moved with it.
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const svcRates = readFileSync('src/services/rates.ts', 'utf8');
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 const sidebar = readFileSync('web/src/components/RateBrowserCarrierSidebar.tsx', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
-check('/rates/browse builds and returns rateBrowseTiming diagnostics',
-  /buildRateBrowseTimingDiagnostics/.test(routesRates) &&
-  /rateBrowseTiming/.test(routesRates));
+check('/rates/browse (producer) builds and returns rateBrowseTiming diagnostics',
+  /buildRateBrowseTimingDiagnostics/.test(browseProducer) &&
+  /rateBrowseTiming,/.test(browseProducer));
 check('direct-carrier diagnostics record per-account duration',
   /const startedAt = Date\.now\(\)/.test(svcRates) &&
   /durationMs: Date\.now\(\) - startedAt/.test(svcRates));
@@ -69,8 +72,10 @@ check('Rate Browser header uses rates-found/accounts-checking copy',
   /rateLabel/.test(modal) &&
   /found · checking/.test(modal) &&
   !/Checking carriers\.\.\.\$\{/.test(modal));
-check('Rate Browser keeps final best-rate emission guarded by awaitingLiveFanout',
-  /const awaitingLiveFanout = options\.cachedOnly === true && uncoveredPids\.length > 0/.test(modal));
+// Repointed (guard rot): PS-345/346 renamed awaitingLiveFanout -> cachedProbeHasIncompleteCoverage
+// (same cachedOnly + uncovered-coverage emission gate).
+check('Rate Browser keeps final best-rate emission guarded by cachedProbeHasIncompleteCoverage',
+  /const cachedProbeHasIncompleteCoverage = options\.cachedOnly === true && uncoveredPids\.length > 0/.test(modal));
 check('carrier sidebar accepts and displays per-account timing',
   /carrierTimingByPid/.test(sidebar) &&
   /formatRateTimingLabel/.test(sidebar));

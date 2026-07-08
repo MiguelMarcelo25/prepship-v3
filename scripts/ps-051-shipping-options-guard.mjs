@@ -16,6 +16,7 @@ const [
   shippingOptions,
   ratesService,
   ratesCombined,
+  rateMoneyNormalizer,
   labelsService,
   shipstationLabels,
   rateFingerprint,
@@ -40,6 +41,7 @@ const [
   read('src/lib/shipping-options.ts').catch(() => ''),
   read('src/services/rates.ts'),
   read('src/services/rates-combined.ts'),
+  read('src/services/shipping-workflow/shipping-rate-money-normalizer.ts'),
   read('src/services/labels.ts'),
   read('src/lib/shipstation/labels.ts'),
   read('src/services/shipping-workflow/rate-fingerprint.ts'),
@@ -78,10 +80,13 @@ assert(
     rateFingerprint.includes('iv=') &&
     ratesService.includes('body.insurance_provider') &&
     ratesService.includes('body.insured_value') &&
-    // PS-307 (0cf5bbd4) extracted the insurance-in-total math into the canonical shared helper
-    // rates-combined.ts (rateTotal/rateCostTotal); rates.ts now delegates via combinedRateTotal.
-    // Assert the literal at its new authoritative owner. (QA root-cause 2026-06-23.)
-    ratesCombined.includes('Number(rate.insurance_amount?.amount ?? 0)'),
+    // Repointed (guard rot): money canonicalization e9762409 moved the insurance-in-total
+    // math from rates-combined.ts into the shared normalizer
+    // src/services/shipping-workflow/shipping-rate-money-normalizer.ts; rates-combined.ts
+    // now delegates via normalizeShippingRateMoney. Assert both the normalizer's
+    // insurance fold and the delegation at rates-combined.
+    rateMoneyNormalizer.includes('moneyObjectAmount(rate.insurance_amount ?? raw.insurance_amount)') &&
+    ratesCombined.includes('normalizeShippingRateMoney(rate).cShippingRateAmount'),
   'ShipStation rates include normalized insurance in request body, totals, and cache fingerprint',
 )
 

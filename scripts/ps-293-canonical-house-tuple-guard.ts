@@ -46,11 +46,18 @@ async function main() {
     /shippingMarginPolicyForClient\(/.test(owner) &&
     !/isInternalHouseRate\(/.test(owner));
 
+  // Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+  // src/services/rate-browse-response-producer.ts — the producer now owns the browse-side
+  // stampHouseTuple call; the route stays a thin delegate to produceRateBrowsePayload.
+  const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
+  check('rate-browse producer (/rates/browse) delegates to the shared stampHouseTuple owner',
+    /import \{ stampHouseTuple \}/.test(browseProducer) && /await stampHouseTuple\(/.test(browseProducer));
   const rates = readFileSync('src/routes/rates.ts', 'utf8');
-  check('rates.ts (/rates/browse) delegates to the shared stampHouseTuple owner',
-    /import \{ stampHouseTuple \}/.test(rates) && /await stampHouseTuple\(/.test(rates));
-  check('rates.ts no longer inlines the resolver/opt-in (single owner, no duplicate logic)',
+  check('neither producer nor route inlines the resolver/opt-in (single owner, no duplicate logic)',
+    !/resolveNextBestNonHouseRate\(/.test(browseProducer) && !/clientHouseAccountEnabled\(/.test(browseProducer) &&
     !/resolveNextBestNonHouseRate\(/.test(rates) && !/clientHouseAccountEnabled\(/.test(rates));
+  check('routes/rates.ts stays thin (browse delegates to produceRateBrowsePayload)',
+    /produceRateBrowsePayload/.test(rates));
 
   const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
   check('rates-backfill delegates to the SAME stampHouseTuple owner',

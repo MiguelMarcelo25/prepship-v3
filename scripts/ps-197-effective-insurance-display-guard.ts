@@ -135,8 +135,11 @@ check('resolveRateInput wires the single HUGRAB owner (resolveHugrabRequestInsur
   /resolveHugrabRequestInsurance\(/.test(ratesService), true);
 
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
-check('apiClient browse passthrough spreads the backend result (effective fields ride through)',
-  /\.\.\.backendResult,/.test(apiClient), true);
+// Repointed (guard rot): browseRates is now a thin transport wrapper that returns the
+// backend /rates/browse DTO verbatim (was a spread of backendResult) — the effective
+// fields still ride through untouched.
+check('apiClient browse passthrough returns the backend result verbatim (effective fields ride through)',
+  /browseRates\(data: Record<string, unknown>\): Promise<any> \{\s*return postRateBrowseTransport\(data\);/.test(apiClient), true);
 
 const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 check('modal captures the backend effectiveInsuranceProvider per browse',
@@ -169,27 +172,28 @@ import { classifyAccountEffectiveInsurance } from '../web/src/components/Views/o
 // The manual baseline must be structurally NON-PURCHASABLE end to end:
 check('backend: resolveRateInput supports the rawManualEstimate uninsured baseline',
   /rawManualEstimate/.test(ratesService) && /'manual-estimate'/.test(ratesService), true);
-const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+// Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+// src/services/rate-browse-response-producer.ts (route delegates to produceRateBrowsePayload);
+// the manual-baseline block and residential-evidence wiring live there now.
+// (CRLF-normalized so anchors match on Windows checkouts too.)
+const browseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8').replace(/\r\n/g, '\n');
 {
-  // The manual-baseline block sits between its gate and the payload literal (so the payload
-  // anchor other guards slice on stays byte-stable).
-  const manualBlockStart = ratesRoute.indexOf('body.manualEstimate === true');
-  const manualBlockEnd = ratesRoute.indexOf('const payload = {', manualBlockStart);
+  // The manual-baseline block sits between its gate and the strictRecalculation block.
+  // The old apiClient "manual rates translated WITHOUT proof metadata" leg is subsumed
+  // here: browseRates is now a thin transport passthrough (no FE translation at all), so
+  // the no-proof invariant for the manual baseline is enforced backend-side by this block
+  // — it stamps display aliases only and never mints selection keys, snapshots, or a
+  // rateQuoteId.
+  const manualBlockStart = browseProducer.indexOf('if (body.manualEstimate === true) {');
+  const manualBlockEnd = browseProducer.indexOf('let strictRecalculation', manualBlockStart);
   const manualBlock = manualBlockStart >= 0 && manualBlockEnd > manualBlockStart
-    ? ratesRoute.slice(manualBlockStart, manualBlockEnd)
+    ? browseProducer.slice(manualBlockStart, manualBlockEnd)
     : '';
-  check('route: manual baseline is on-demand only (gated on body.manualEstimate)', manualBlockStart >= 0, true);
-  check('route: manual baseline never gets selection keys / a snapshot / a rateQuoteId',
+  check('producer: manual baseline is on-demand only (gated on body.manualEstimate)', manualBlockStart >= 0, true);
+  check('producer: manual baseline gets display aliases only — never selection keys / a snapshot / a rateQuoteId',
     manualBlock.length > 0 &&
+      /stampRateBrowserDisplayAliases\(manualFiltered\)/.test(manualBlock) &&
       !/withSelectedRateKeys|storeRateQuoteSnapshot|rateQuoteId/.test(manualBlock),
-    true);
-}
-{
-  const manualMapStart = apiClient.indexOf('manualEstimate:');
-  const manualMapEnd = apiClient.indexOf('};', manualMapStart);
-  const manualMap = manualMapStart >= 0 ? apiClient.slice(manualMapStart, manualMapEnd) : '';
-  check('apiClient: manual baseline rates are translated WITHOUT proof metadata',
-    manualMap.length > 0 && /translateRateToV2Shape\(rate\)/.test(manualMap) && !/backendProofMetadata/.test(manualMap),
     true);
 }
 check('modal: per-account effective verdict has a stable selector',
@@ -247,17 +251,19 @@ check('modal: the baseline list is labeled not-label-safe',
   // BEST RATE column and the live browser can't diverge on residential (the #1585 fix). The manual
   // override + source mapping + the dropped collapsed boolean now live in that one owner.
   const residentialEvidenceOwner = readFileSync('src/services/shipping-workflow/residential-evidence.ts', 'utf8');
+  // Repointed (guard rot): the browse evidence wiring + manual baseline moved with the
+  // /rates/browse extraction into rate-browse-response-producer.ts (browseProducer above).
   check('browse loads the order residential EVIDENCE via the shared owner (manual override + source)',
-    /buildResidentialEvidenceFromOrder\(\{/.test(ratesRoute) &&
-      /residentialEvidenceRateInput\(residentialEvidence, rest\.toName\)/.test(ratesRoute) &&
+    /buildResidentialEvidenceFromOrder\(\{/.test(browseProducer) &&
+      /residentialEvidenceRateInput\(residentialEvidence, rest\.toName\)/.test(browseProducer) &&
       /manualOverrideResidential:[\s\S]{0,40}typeof input\.manualOverrideResidential === 'boolean'/.test(residentialEvidenceOwner) &&
       /sourceResidential: typeof shipTo\.residential === 'boolean'/.test(residentialEvidenceOwner),
     true);
   check('the FE-collapsed residential boolean is dropped (residential: undefined) by the shared owner',
-    /residential: undefined,/.test(residentialEvidenceOwner) && /residentialEvidenceRateInput/.test(ratesRoute), true);
+    /residential: undefined,/.test(residentialEvidenceOwner) && /residentialEvidenceRateInput/.test(browseProducer), true);
   check('the manual-estimate baseline reuses the SAME evidence-resolved input (apples to apples)',
-    /const manual = await getRates\(\s*\/\/[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n\s*browseRateInput/.test(ratesRoute) ||
-      /await getRates\(\s*(\/\/[^\n]*\n\s*)*browseRateInput/.test(ratesRoute),
+    /const manual = await getRates\(\s*\/\/[^\n]*\n[^\n]*\n[^\n]*\n[^\n]*\n\s*browseRateInput/.test(browseProducer) ||
+      /await getRates\(\s*(\/\/[^\n]*\n\s*)*browseRateInput/.test(browseProducer),
     true);
   check('GetRatesResult declares the residential classification fields',
     /residential: boolean;[\s\S]{0,400}residentialClassification: string \| null;[\s\S]{0,100}residentialSource: string \| null;/.test(ratesService),

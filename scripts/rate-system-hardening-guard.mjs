@@ -82,10 +82,14 @@ assert(
 // PS-203 (stage 3): the source-tagged diagnostic merge moved VERBATIM to the
 // canonical combined-selection owner; the route consumes its output. Same
 // pins, split homes.
+// Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into
+// src/services/rate-browse-response-producer.ts (route delegates to
+// produceRateBrowsePayload); the combined-diagnostics stamp moved with it.
 const ratesCombinedSrc = read('src/services/rates-combined.ts');
+const browseProducer = read('src/services/rate-browse-response-producer.ts');
 assert(
   client.includes('carrierDiagnostics') &&
-    route.includes('combinedCarrierDiagnostics') &&
+    browseProducer.includes('carrierDiagnostics: combinedCarrierDiagnostics,') &&
     ratesCombinedSrc.includes("source: 'direct'") &&
     ratesCombinedSrc.includes("source: 'shipstation'"),
   'Rate Browser preserves backend-normalized ShipStation and direct-carrier diagnostics',
