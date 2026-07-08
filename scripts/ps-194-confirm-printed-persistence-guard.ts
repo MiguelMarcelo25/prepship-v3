@@ -31,7 +31,9 @@ assert.ok(/export type MergeJob = \{[\s\S]{0,900}successfulEntryIds: string\[\];
   'MergeJob must carry successfulEntryIds');
 assert.ok(/job\.successfulEntryIds = successfulEntryIds/.test(svc),
   'runMergeJob must stamp the live array onto the job (progress + done persists serialize it)');
-assert.ok(/successfulEntryIds: \(job\.successfulEntryIds \?\? \[\]\)\.slice\(0, 500\)/.test(svc),
+// PS-403 (9d12ad47) raised the durable-snapshot id cap 500 -> 5000 to cover chunked
+// batches; still the job-level toMergeSnapshot persist (the chunk-level slice uses chunk.).
+assert.ok(/successfulEntryIds: \(job\.successfulEntryIds \?\? \[\]\)\.slice\(0, 5000\)/.test(svc),
   'toMergeSnapshot must persist the ids into the durable snapshot');
 assert.ok(/successfulEntryIds\?: string\[\];/.test(svc),
   'MergeJobSnapshot keeps the field optional for pre-PS-194 snapshots');

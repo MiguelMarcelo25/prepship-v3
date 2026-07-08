@@ -234,15 +234,25 @@ checkPatterns('Print Queue state transitions keep queued, printed, delivered, an
   /export async function confirmPrintedQueueEntries/,
   /eq\(printQueue\.status, 'queued'\)/,
   /status: 'printed'/,
-  /PDF generation\/open\/download is not proof of physical printing/,
   /export async function removeQueueEntriesForOrder\(orderId: number\): Promise<number> \{\s*void orderId;\s*return 0;/,
   /status: 'delivered'/,
 ]);
+// PS-403 (9d12ad47) removed the "PDF is not proof of physical printing" doctrine COMMENT from the
+// runMergeJob finalization during the chunked-PDF rewrite; its canonical home is now the residual
+// matrix doc. Behavioral distinctness stays pinned structurally above (confirm requires
+// queued->printed; merge produces a separate MergeJob). Pin the doctrine where it now lives.
+check('PS-269 doc keeps the PDF-is-not-proof-of-physical-printing doctrine (relocated from print-queue.ts by PS-403 chunking)',
+  /PDF generation\/open\/download is not proof of physical printing; explicit confirm moves only successful queued entry ids to `printed`/.test(doc));
+
+// 1bf6d37a ("Fix print queue interrupted retry status") added a third structural classifier
+// (labelPurchaseInProgress) to the retry ladder — still typed classifiers, never raw
+// proof-message parsing.
 checkPatterns('Print Queue job reports structural retry eligibility instead of raw proof-message ownership', printQueue, [
   /classifyLabelPurchaseRetry\(err\)/,
   /const staleLabelAttempt = isQueueSendStaleLabelAttemptError\(err\)/,
-  /const retryEligible = staleLabelAttempt \|\| retry\.retryEligible/,
-  /const retryReason = staleLabelAttempt \? err\.retryReason : retry\.retryReason/,
+  /const labelPurchaseInProgress = isLabelPurchaseInProgressError\(err\)/,
+  /const retryEligible = staleLabelAttempt \|\| labelPurchaseInProgress \|\| retry\.retryEligible/,
+  /const retryReason = staleLabelAttempt\s*\?\s*err\.retryReason\s*:\s*labelPurchaseInProgress\s*\?\s*'label_purchase_in_progress'\s*:\s*retry\.retryReason/,
   /retryEligible,\s*retryReason,/,
   /state: retryEligible \? 'failed_retryable' : 'failed_terminal'/,
   /blockedReason: retryReason \?\? null/,

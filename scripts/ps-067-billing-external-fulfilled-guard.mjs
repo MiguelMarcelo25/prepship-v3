@@ -39,10 +39,13 @@ assert(
     billingSource.includes('missingShippingCostCount'),
   'billing summary surfaces missing shipping-cost counts',
 );
+// PS-402 (fulfillment-conflict read model) reformatted shippingCostMissing to a
+// multi-line OR, and PS-373/377 (7f34f7bf) added the cancelled-no-charge gate to
+// both emits; the invariants (flagged missing rows, canonical rate, no alias) hold.
 assert(
   billingSource.includes('isMissingShippingLine') &&
-    billingSource.includes('shippingCostMissing: isMissingShippingLine') &&
-    billingSource.includes('selectedRateCost: isShippingLine ? selectedRateCost : null') &&
+    /shippingCostMissing:\s*\(isMissingShippingLine[\s\S]{0,120}!isCancelledNoChargeDetailRow/.test(billingSource) &&
+    billingSource.includes('selectedRateCost: isShippingLine && !isCancelledNoChargeDetailRow ? selectedRateCost : null') &&
     !billingSource.includes('actualLabelCost'),
   'billing details safely identify missing shipping rows without exposing provider payloads',
 );

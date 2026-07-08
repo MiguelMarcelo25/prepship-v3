@@ -102,8 +102,15 @@ check('worker-status abandons stale in-flight persists so heartbeats can recover
   /let persistSnapshotStartedAtMs = 0;/.test(workerStatus) &&
   /ageMs < WORKER_STATUS_PERSIST_ABANDON_MS/.test(workerStatus) &&
   /abandoning stale status persist/.test(workerStatus));
-check('worker-status does not await setSetting directly in the sync hot path',
-  !/await setSetting\(WORKER_STATUS_KEY/.test(workerStatus));
+// cdf066f5 ("Keep print worker status separate") split the snapshot into a per-mode key
+// plus a scheduler-gated legacy WORKER_STATUS_KEY write, both inside the deferred
+// single-flight IIFE where `await` is syntactically required — so the old naive negative
+// substring can no longer distinguish hot-path blocking from the bounded persist lane.
+check('worker-status writes the legacy WORKER_STATUS_KEY exactly once, only inside the bounded scheduler-gated persist lane (never a direct sync-hot-path await)',
+  (workerStatus.match(/await setSetting\(WORKER_STATUS_KEY/g) ?? []).length === 1 &&
+  /tracked = \(async \(\) => \{[\s\S]*?if \(snapshot\.schedulerEnabled\) \{\s*await setSetting\(WORKER_STATUS_KEY, serialized\);\s*\}[\s\S]*?\}\)\(\)/.test(workerStatus) &&
+  /persistSnapshotInFlight = tracked;/.test(workerStatus) &&
+  /await withDeadline\(\s*\(\) => tracked,\s*WORKER_STATUS_PERSIST_TIMEOUT_MS/.test(workerStatus));
 check('worker-status documents observability must not hold sync lanes',
   /Worker status is observability\. A slow settings write must not hold sync lanes\./.test(workerStatus));
 

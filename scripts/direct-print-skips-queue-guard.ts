@@ -81,10 +81,15 @@ const batchQueueAndPrint = sliceAfter(handleBatchAction, "if (mode === 'queue')"
 const batchQueueBlock = sliceBetween(
   batchQueueAndPrint,
   "if (mode === 'queue')",
-  'let created = 0',
+  "if (mode === 'print')",
 );
-const batchPrintStart = batchQueueAndPrint.indexOf('let created = 0');
-if (batchPrintStart < 0) throw new Error('Missing batch direct-print marker: let created = 0');
+// SUPERSEDED 2026-07-07 (58cb23ec "Delete legacy Create+Print loop; retire
+// BATCH_PRINT_VIA_QUEUE flag"; wired at 03e22584): the legacy per-order batch
+// Create+Print loop (`let created = 0`) is GONE. Batch Create+Print now chains
+// the backend queue jobs — runCreatePrintChain -> sendOrdersToQueueBackend
+// (kind:'create-print') -> /print-queue/print merge — and the FE buys nothing.
+const batchPrintStart = batchQueueAndPrint.indexOf("if (mode === 'print')");
+if (batchPrintStart < 0) throw new Error("Missing batch print-branch marker: if (mode === 'print')");
 const batchPrintBlock = batchQueueAndPrint.slice(batchPrintStart);
 
 check(
@@ -96,12 +101,15 @@ check(
   /\breturn\b/.test(batchQueueBlock),
 );
 check(
-  'batch Create + Print buys through labels API',
-  /await apiClient\.createLabel\(payload\)/.test(batchPrintBlock),
+  'batch Create + Print routes the buy through the backend create/print chain (FE buys nothing)',
+  /await runCreatePrintChain\(batchOrders,/.test(batchPrintBlock) &&
+    /sendOrdersToQueueBackend\(sendableOrders,\s*\{[\s\S]*?kind:\s*'create-print'/.test(batchPrintBlock) &&
+    !/apiClient\.createLabel\(/.test(batchPrintBlock),
 );
 check(
-  'batch Create + Print opens the returned label PDF',
-  /await apiClient\.openLabelPdf\(queueableLabelUrl\)/.test(batchPrintBlock),
+  'batch Create + Print prints via the backend print-queue merge, not a FE label open',
+  /printQueueEntries\(entryIds,/.test(batchPrintBlock) &&
+    !/apiClient\.openLabelPdf\(/.test(batchPrintBlock),
 );
 
 const forbiddenDirectQueuePatterns: Array<[string, RegExp]> = [
@@ -115,8 +123,14 @@ const forbiddenDirectQueuePatterns: Array<[string, RegExp]> = [
 ];
 
 for (const [name, pattern] of forbiddenDirectQueuePatterns) {
+  // single-order Create+Print is still a TRUE direct print that SKIPS the queue.
   check(`single-order Create + Print has no ${name}`, !pattern.test(singleDirectPrintBlock));
-  check(`batch Create + Print has no ${name}`, !pattern.test(batchPrintBlock));
+  // SUPERSEDED 2026-07-07 (58cb23ec): batch Create+Print now DELIBERATELY calls
+  // sendOrdersToQueueBackend (kind:'create-print'); every OTHER FE queue-helper is
+  // still forbidden in the batch branch.
+  if (!/sendOrdersToQueueBackend/.test(pattern.source)) {
+    check(`batch Create + Print has no ${name}`, !pattern.test(batchPrintBlock));
+  }
 }
 
 const createLabelApiClientBlock = sliceBetween(apiClient, 'createLabel(payload: unknown)', 'retrieveLabel(orderLookup');
@@ -130,9 +144,12 @@ check(
 );
 
 const labelsCreateRouteBlock = sliceBetween(labelsRoute, "app.post('/',", "// POST /labels/create");
+// fe730dda ("Add label and print queue operation logs") extracted the handler body into
+// createLabelRouteResponse; the route delegates to it and IT owns the createLabelV2 call.
 check(
   'POST /labels route delegates to createLabelV2',
-  /await createLabelV2\(body,\s*labelsScopeFromContext\(c\)\)/.test(labelsCreateRouteBlock),
+  /return createLabelRouteResponse\(c,\s*c\.req\.valid\('json'\)\)/.test(labelsCreateRouteBlock) &&
+    /async function createLabelRouteResponse\(c: Context, body: CreateLabelRouteBody\): Promise<Response> \{[\s\S]{0,200}?await createLabelV2\(body,\s*labelsScopeFromContext\(c\)\)/.test(labelsRoute),
 );
 check(
   'POST /labels route does not call print-queue persistence',

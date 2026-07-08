@@ -82,7 +82,11 @@ check(
 // to createLabelV2 (so the queue path goes through the same backend create/recover boundary).
 check(
   'backend owns the direct-carrier print-queue purchase via createLabelV2 + carrier-safe carrierShipTo',
-  /createLabelV2\(\{[\s\S]*?\.\.\.order\.label/.test(printQueueSvc) &&
+  // ROTTED-PIN repoint (b1ae3352 "Add print queue timing proof"): order.label was
+  // hoisted to `const labelInput = order.label` and spread as ...labelInput into
+  // createLabelV2 — still the same backend-owned buy of the order's label payload.
+  /const labelInput = order\.label\b/.test(printQueueSvc) &&
+    /createLabelV2\(\{[\s\S]*?\.\.\.labelInput\b/.test(printQueueSvc) &&
     printQueueSvc.includes("import { createLabelV2") &&
     /if \(directRef\)[\s\S]*?createDirectCarrierLabelForOrder\(\{[\s\S]*?shipTo: carrierShipTo/.test(labelsSvc),
 );

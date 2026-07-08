@@ -45,8 +45,10 @@ const dataStart = routes.indexOf('async function billingInvoiceData(');
 const dataEnd = routes.indexOf('function renderInvoiceHtml(', dataStart);
 check('billingInvoiceData precedes renderInvoiceHtml', dataStart >= 0 && dataEnd > dataStart);
 const invoiceData = routes.slice(dataStart, dataEnd > dataStart ? dataEnd : undefined);
+// PS-373/377 (7f34f7bf) routes the billed amount through cancelledNoChargeBillingAmountSql
+// (detailAmount), zeroing cancelled/no-charge rows; still b.total_cost on the package_cost line.
 check('box cost aggregates the billed package_cost line',
-  invoiceData.includes("sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_cost_amt"));
+  invoiceData.includes("sum(case when b.line_type = 'package_cost' then ${detailAmount} else 0 end), 0)::text as package_cost_amt"));
 check('invoice box cost does NOT read the current price table (client_package_prices)',
   !invoiceData.includes('client_package_prices'));
 check('invoice path does NOT re-resolve the shipment package (reads the billed outcome)',
@@ -78,9 +80,12 @@ check('XLSX per-row Fulfillment Fee fallback unchanged (no box term)',
   routes.includes('fulfillmentFee: rowTotal > 0 ? rowTotal : pickPackFeeAmt + shippingAmt + storageAmt,'));
 
 // 6. XLSX totals match the current one-sheet Invoice layout.
-check('XLSX Fulfillment Fee SUM targets column M', routes.includes('SUM(M${first}:M${last})'));
-check('XLSX Qty SUM re-lettered to column F', routes.includes('SUM(F${first}:F${last})'));
-check('XLSX totals include a Box Cost SUM (column I)', /boxCost: \{ formula: /.test(routes) && routes.includes('SUM(I${first}:I${last})'));
+// PS-393 (b95126dc) inserted the Status column, shifting every column one letter right
+// (Qty F->G, Box Cost I->J, Fulfillment Fee M->N). Pins are key-bound so they cannot
+// coincidentally match a neighboring column's SUM.
+check('XLSX Fulfillment Fee SUM targets column N', routes.includes('fulfillmentFee: { formula: `SUM(N${first}:N${last})`'));
+check('XLSX Qty SUM re-lettered to column G', routes.includes('qty: { formula: `SUM(G${first}:G${last})`'));
+check('XLSX totals include a Box Cost SUM (column J)', routes.includes('boxCost: { formula: `SUM(J${first}:J${last})`'));
 
 // Self-wiring.
 check('package.json exposes test:ps-217-billing-export-box-fields',

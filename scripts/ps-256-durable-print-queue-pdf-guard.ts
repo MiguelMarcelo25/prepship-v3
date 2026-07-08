@@ -97,8 +97,10 @@ check('persists the merged PDF after the job is marked done',
   /job\.status = 'done'[\s\S]*persistMergedPdf\(jobId, job\.fileName \?\? null, job\.mergedPdfBase64\)/.test(svc));
 check('rehydrates via getMergedPdfBase64 on an in-memory miss (getMergeJobForServe)',
   /export async function getMergeJobForServe[\s\S]*getMergedPdfBase64\(jobId\)/.test(svc));
-check('keeps the in-memory path as the fast default (returns inMemory when bytes present)',
-  /if \(inMemory && inMemory\.status === 'done' && inMemory\.mergedPdfBase64\)[\s\S]*return inMemory/.test(svc));
+// PS-403 (9d12ad47) chunked the merged PDF; the fast path now returns inMemory when
+// the single blob OR any done chunk carries bytes.
+check('keeps the in-memory path as the fast default (returns inMemory when blob OR a done chunk carries bytes)',
+  /if \(\s*inMemory &&\s*inMemory\.status === 'done' &&\s*\(inMemory\.mergedPdfBase64 \|\|[\s\S]*?\(inMemory\.chunks \?\? \[\]\)\.some\(\(chunk\) => chunk\.status === 'done' && chunk\.mergedPdfBase64\)\)[\s\S]{0,40}?return inMemory/.test(svc));
 check('wires cleanup into the existing cleanOldJobs path',
   /function cleanOldJobs\(\)[\s\S]*cleanupOldMergedPdfs\(DURABLE_PDF_RETENTION_MS\)/.test(svc));
 check('durable PDF retention is longer than the 30-min in-memory job retention',

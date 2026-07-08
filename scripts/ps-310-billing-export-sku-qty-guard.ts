@@ -40,8 +40,11 @@ check('empty item_rows -> itemSkus null (export falls back to the bare string_ag
   summarizeBillingItemsForDetail([]).itemSkus === null);
 
 const billingRoute = readFileSync('src/routes/billing.ts', 'utf8');
+// d2abef4e hoisted the summarizer call to a local (itemSummary); export still delegates
+// SKU strings to it with a bare `?? r.skus` fallback.
 check('export builds the SKU string via the canonical summarizer with a bare fallback',
-  /skus:\s*summarizeBillingItemsForDetail\(r\.item_rows\)\.itemSkus\s*\?\?\s*r\.skus/.test(billingRoute));
+  /const itemSummary = summarizeBillingItemsForDetail\(r\.item_rows\)/.test(billingRoute) &&
+  /skus:\s*itemSummary\.itemSkus\s*\?\?\s*r\.skus/.test(billingRoute));
 check('export fetches per-SKU item_rows (sku + name + quantity, ordered by line_index)',
   /json_build_object\(\s*'sku',\s*oi\.sku,\s*'name',\s*oi\.name,\s*'quantity',\s*oi\.quantity\s*\)/.test(billingRoute) &&
   /\)\s*as item_rows/.test(billingRoute));

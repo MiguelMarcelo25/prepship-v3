@@ -80,7 +80,7 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
   const carrierAccountMarkup = resolvePerAccountMarkupRule(perAccountMarkups, providerAccountId);
   const resolved = resolveCanonicalMarkup({ carrierAccountMarkup, clientShippingMarkupPct: 0, clientShippingMarkupFlat: 0 });
   const d = decideShippingLineBilling({
-    labelCost: 12.5, houseCustomerRate: null, billingMode: 'per_shipment', isBaselineCarrier: false,
+    labelCost: 12.5, cShippingRateAmount: null, billingMode: 'per_shipment', isBaselineCarrier: false,
     refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
   });
   check('e2e: providerAccountId 595995 + markup.595995=15% => billed $14.37 (quote == invoice, keyed correctly)',
@@ -94,7 +94,7 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
   const resolved = resolveCanonicalMarkup({ carrierAccountMarkup: null, clientShippingMarkupPct: 0, clientShippingMarkupFlat: 0 });
   check('default-OFF: resolver returns null (=> 0pct/0flat)', resolved === null);
   const d = decideShippingLineBilling({
-    labelCost: 12.5, houseCustomerRate: null, billingMode: 'per_shipment', isBaselineCarrier: false,
+    labelCost: 12.5, cShippingRateAmount: null, billingMode: 'per_shipment', isBaselineCarrier: false,
     refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
   });
   check('default-OFF: a $12.50 shipping line bills $12.50 (byte-identical to slice 2a)',
@@ -108,7 +108,7 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
   check('flag-ON: per-account 15% => resolver {pct:15,flat:0}',
     JSON.stringify(resolved) === JSON.stringify({ pct: 15, flat: 0 }));
   const d = decideShippingLineBilling({
-    labelCost: 12.5, houseCustomerRate: null, billingMode: 'per_shipment', isBaselineCarrier: false,
+    labelCost: 12.5, cShippingRateAmount: null, billingMode: 'per_shipment', isBaselineCarrier: false,
     refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
   });
   // billing formats with .toFixed(2) (billing.ts unitCost/totalCost); 12.50*1.15 = 14.375 -> 14.37 in
@@ -141,11 +141,11 @@ check('billing resolves the per-account override via resolvePerAccountMarkupRule
 {
   const resolved = resolveCanonicalMarkup({ carrierAccountMarkup: { type: 'percent', value: 15 } });
   const d = decideShippingLineBilling({
-    labelCost: 9.0, houseCustomerRate: 12.0, billingMode: 'per_shipment', isBaselineCarrier: false,
+    labelCost: 9.0, cShippingRateAmount: 12.0, billingMode: 'per_shipment', isBaselineCarrier: false,
     refUspsRate: 0, refUpsRate: 0, shippingMarkupPct: resolved?.pct ?? 0, shippingMarkupFlat: resolved?.flat ?? 0,
   });
   check('house rate: per-account markup does NOT apply (customer_rate billed verbatim)',
-    approx(d.billedAmount, 12.0) && d.source === 'house_customer_rate' && d.markupApplied === false);
+    approx(d.billedAmount, 12.0) && d.source === 'c_shipping_rate' && d.markupApplied === false);
 }
 
 if (failures > 0) {

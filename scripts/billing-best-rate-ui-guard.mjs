@@ -14,8 +14,7 @@ function assert(condition, message) {
 }
 
 const css = read('web/src/components/Views/BillingView.css')
-const view = read('web/src/components/Views/BillingView.tsx')
-// PS-155 extracted the detail table JSX (incl. the best-rate cell) into BillingDetailTable.tsx.
+// PS-155 extracted the detail table JSX (incl. the rate cell) into BillingDetailTable.tsx.
 const detailTable = read('web/src/components/Views/BillingDetailTable.tsx')
 const packageJson = JSON.parse(read('package.json'))
 
@@ -23,9 +22,12 @@ const rateHitRule = css.match(/\.billing-detail-rate-hit\s*\{([\s\S]*?)\}/)?.[1]
 
 assert(!/\bborder\s*:/.test(rateHitRule), 'billing detail rate-hit style does not draw a blue border')
 assert(!/\boutline\s*:/.test(rateHitRule), 'billing detail rate-hit style does not draw an outline')
+// PS-364 (fe8896c4) renamed Billing's Best Rate column to Selected Rate; the stable
+// selector the Playwright spec targets is now data-billing-rate="selectedRate".
 assert(
-  view.includes('data-billing-rate="bestRate"') || detailTable.includes('data-billing-rate="bestRate"'),
-  'Billing Detail Best Rate cell has a stable UI selector',
+  detailTable.includes('data-billing-rate="selectedRate"') &&
+    !detailTable.includes('data-billing-rate="bestRate"'),
+  'Billing Detail Selected Rate cell has a stable UI selector',
 )
 assert(
   packageJson.scripts?.['test:billing-best-rate-ui'] === 'playwright test web/e2e/billing-best-rate-ui.spec.js --reporter=line',

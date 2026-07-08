@@ -31,17 +31,29 @@ assert.match(component, /Needs review/, 'Component must render the Needs review 
 assert.doesNotMatch(component, /packageTotal|package_total|computeBillingDetailMetrics/, 'Summary must not infer billing warnings from local money math')
 
 const view = readFileSync('web/src/components/Views/BillingView.tsx', 'utf8')
-assert.match(view, /import \{ BillingLineItemWarningSummary \} from '\.\/BillingLineItemWarningSummary'/, 'BillingView must import the warning summary component')
+// commit 9091793b extracted the Line Items header (and the warning summary it renders)
+// out of BillingView into BillingLineItemsHeader.
+const lineItemsHeader = readFileSync('web/src/components/Views/BillingLineItemsHeader.tsx', 'utf8')
+assert.match(lineItemsHeader, /import \{ BillingLineItemWarningSummary \} from '\.\/BillingLineItemWarningSummary'/, 'BillingLineItemsHeader must import the warning summary component')
+assert.match(
+  lineItemsHeader,
+  /<BillingLineItemWarningSummary rows=\{rows\} onOpenWarningRow=\{onOpenWarningRow\} \/>/,
+  'BillingLineItemsHeader must render the warning summary beside the Line Items header',
+)
+// End-to-end wiring stays pinned in BillingView: the header is fed the sorted detail
+// rows and wired to open the billing edit modal.
 assert.match(
   view,
-  /<BillingLineItemWarningSummary rows=\{sortedDetailRows\} onOpenWarningRow=\{handleOpenBillingEdit\} \/>/,
-  'BillingView must render the warning summary beside the Line Items header',
+  /<BillingLineItemsHeader[\s\S]*?rows=\{sortedDetailRows\}[\s\S]*?onOpenWarningRow=\{handleOpenBillingEdit\}/,
+  'BillingView must feed sortedDetailRows and handleOpenBillingEdit into the line-items header',
 )
 const generateStart = view.indexOf('<h3 className="text-[13px] font-semibold text-ink">Generate &amp; summary</h3>')
 const configStart = view.indexOf('<BillingConfigTable', generateStart)
 const pricingStart = view.indexOf('<BillingPackagePricingTable', configStart)
 const carrierTableStart = view.indexOf('<BillingCarrierMarginTable', pricingStart)
-const perOrderStart = view.indexOf('Per-order reconciliation', pricingStart)
+// "Per-order reconciliation" copy moved into the extracted BillingShippingMarginReconciliation
+// drilldown component; BillingView renders it below the pricing/config tables.
+const perOrderStart = view.indexOf('<BillingShippingMarginReconciliation', pricingStart)
 assert.ok(generateStart > -1, 'BillingView must render the Generate & summary heading')
 assert.ok(configStart > generateStart, 'Client Billing Config must render inside/below Generate & summary')
 assert.ok(pricingStart > configStart, 'Package Pricing by client must render next to/below Client Billing Config')

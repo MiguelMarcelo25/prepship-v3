@@ -65,8 +65,10 @@ check('billingDetails delegates selected-rate cost to the backend owner',
   billingService.includes("from './billing-selected-rate-cost'") &&
   billingService.includes('resolveBillingSelectedRateCost({'));
 
+// PS-373/377 (7f34f7bf) added the cancelled-no-charge gate to the canonical emit;
+// cancelled $0 rows suppress the rate while shipping lines keep selectedRateCost.
 check('billingDetails emits only canonical selectedRateCost',
-  /selectedRateCost:\s*isShippingLine \? selectedRateCost : null/.test(billingService) &&
+  /selectedRateCost:\s*isShippingLine && !isCancelledNoChargeDetailRow \? selectedRateCost : null/.test(billingService) &&
   !/actualLabelCost/.test(billingService));
 
 // PS-368: the detail-row boundary is camelCase-only (BillingDetailRowDto); the

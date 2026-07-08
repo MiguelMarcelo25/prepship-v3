@@ -43,11 +43,13 @@ assert(
     routeSource.includes('scope,'),
   'print-queue batch-send validates requested client ids before work starts',
 );
+// PS-351 (65f6fbfc) appended a lifecycle third arg to the processQueueSendOrder call;
+// scope still flows order.scope ?? scope -> processQueueSendOrder -> addToQueue({ scope }).
+// The addToQueue pin is bound to the insert payload so a dropped scope fails here.
 assert(
   serviceSource.includes('scope?: PrintQueueListScope') &&
-    serviceSource.includes('processQueueSendOrder(order, order.scope ?? scope)') &&
-    serviceSource.includes('scope,') &&
-    serviceSource.includes('addToQueue({'),
+    serviceSource.includes('processQueueSendOrder(order, order.scope ?? scope, {') &&
+    /addToQueue\(\{[\s\S]{0,600}?\bscope,\s*\}\)/.test(serviceSource),
   'print-queue batch-send carries request scope into background queue insert',
 );
 assert(

@@ -100,8 +100,12 @@ check('routes/billing.ts HTML + XLSX renderers BOTH use the SAME Total expressio
 
 // ── 5) Single source: per-order Total = sum(total_cost) over billing_line_items (the frozen dollars),
 //        and all three export routes feed off the one billingInvoiceData read model ──
-check('invoice per-order Total derives from sum(b.total_cost) (generated/frozen line items)',
-  /sum\(b\.total_cost\)::text as row_total/.test(billingRoute));
+// PS-373/377 (7f34f7bf) routes the invoice amount through detailAmount =
+// cancelledNoChargeBillingAmountSql({ ..., totalCost: sql`b.total_cost` }) so
+// cancelled-no-charge rows bill $0; the money source is still the frozen b.total_cost.
+check('invoice per-order Total derives from sum(total_cost) frozen line items (zeroed for cancelled-no-charge rows)',
+  /const detailAmount = cancelledNoChargeBillingAmountSql\(\{[\s\S]{0,160}totalCost: sql`b\.total_cost`/.test(billingRoute) &&
+  /sum\(\$\{detailAmount\}\)::text as row_total/.test(billingRoute));
 check('HTML / XLSX / CSV invoice routes all consume the single billingInvoiceData source',
   (billingRoute.match(/billingInvoiceData\(/g) ?? []).length >= 3 &&
   /invoice\.xlsx[\s\S]{0,400}billingInvoiceData\(/.test(billingRoute) &&

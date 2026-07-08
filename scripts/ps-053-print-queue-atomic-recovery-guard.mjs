@@ -25,7 +25,11 @@ report.check({
 
 report.check({
   name: 'Post-label exceptions recover by re-reading active shipment label',
-  condition: printQueueService.includes('const recoverCreatedLabelUrl = existingLabelUrl ?? await findExistingQueueableLabelForOrder(order.orderId)') &&
+  // ROTTED-PIN repoint (b1ae3352 "Add print queue timing proof"): the recovery lookup
+  // is now wrapped in timeQueueStep(...) and calls findExistingQueueSendLabel(order),
+  // which delegates to findExistingQueuedLabelForOrder ?? findExistingQueueableLabelForOrder
+  // (print-queue.ts) — same "re-read the active shipment label" fallback, broader.
+  condition: /const recoverCreatedLabelUrl = existingLabelUrl \?\? await timeQueueStep\([\s\S]{0,140}?findExistingQueueSendLabel\(order\)/.test(printQueueService) &&
     printQueueService.includes('if (!recoverCreatedLabelUrl) throw err;') &&
     printQueueService.includes('labelUrl = recoverCreatedLabelUrl;'),
   why: 'If createLabelV2 persists a shipment then throws later, recovery must find the active label and queue it without buying duplicate postage.',
