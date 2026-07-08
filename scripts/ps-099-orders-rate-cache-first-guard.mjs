@@ -112,7 +112,13 @@ assert(
 assert(
   // PS-203: cheapest combined ShipStation/direct-carrier selection lives in the
   // canonical rates-combined owner; the route delegates via combineCarrierUniverses.
-  ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates])') &&
+  // Re-anchored 2026-07-08: e90a4401 (insurance-only provider rates) appended
+  // .filter(isPricedRate) to the SAME canonical merge line, so unpriced
+  // ($0-coerced) provider rates are excluded BEFORE the cheapest pick (see
+  // scripts/unpriced-rate-exclusion-guard.ts). Same owner, same intent, stronger
+  // invariant — the sibling ps-124/ps-302 pins were repointed in e90a4401 itself;
+  // this pin follows the code to the same place.
+  ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates].filter(isPricedRate))') &&
     ratesCombined.includes('const cheapest = rankedEligibleRates[0]') &&
     ratesRoute.includes('produceRateBrowsePayload') &&
     rateBrowseProducer.includes('combineCarrierUniverses({') &&

@@ -91,7 +91,15 @@ const checks = [
       if (handlerStart === -1) return false
       const queueBranchStart = normalizedOrdersView.indexOf("if (mode === 'queue')", handlerStart)
       if (queueBranchStart === -1) return false
-      const printBranchStart = normalizedOrdersView.indexOf('const queueJobId', queueBranchStart)
+      // Re-anchored 2026-07-08: the queue-branch END used to be marked by
+      // `const queueJobId` — the first statement of the LEGACY sequential
+      // Create+Print loop, deleted in 58cb23ec (chain-only batch print; the one
+      // surviving `const queueJobId` now lives inside sendOrdersToQueueBackend,
+      // far above this handler, so the forward search returned -1). The stable
+      // end-of-branch marker is the print branch itself. The protected queue
+      // branch is unchanged: it still awaits sendOrdersToQueueBackend and clears
+      // busy + selection in `finally`.
+      const printBranchStart = normalizedOrdersView.indexOf("if (mode === 'print')", queueBranchStart)
       if (printBranchStart === -1) return false
       const queueBranch = normalizedOrdersView.slice(queueBranchStart, printBranchStart)
 
