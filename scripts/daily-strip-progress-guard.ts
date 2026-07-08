@@ -93,9 +93,14 @@ assert.match(
   /apiClient\.fetchDailyStats\(\)/,
   'useDailyStats must load the strip via apiClient.fetchDailyStats()',
 );
+// 2026-07-08 (dead-code sweep): OrdersView's `dailyStatsForStrip` alias of
+// dailyStats was removed — the derivation reads dailyStats directly. Same pin,
+// same intent: strip progress must come from buildDailyStripProgress over the
+// backend daily-stats DTO. (The OrdersDailyStrip component still names its
+// PROP dailyStatsForStrip; the markup pins below are unchanged.)
 assert.match(
   ordersView,
-  /buildDailyStripProgress\(dailyStatsForStrip\)/,
+  /buildDailyStripProgress\(dailyStats\)/,
   'OrdersView must derive progress via buildDailyStripProgress',
 );
 assert.match(

@@ -29,8 +29,12 @@ const batchPanelPath = path.join(root, 'web/src/components/Views/OrdersBatchPane
 // strict <OrdersTable> component (OrdersView threads state/handlers in as
 // props) — the row-click pin reads there; openOrderDetails stays in OrdersView.
 const ordersTablePath = path.join(root, 'web/src/components/Views/OrdersTable.tsx')
+// 2026-07-08 (OrdersView perf): the per-row <tr> markup moved VERBATIM from
+// OrdersTable's row map into the memoized <OrderRow> component — the row-click
+// pin follows it there.
+const orderRowPath = path.join(root, 'web/src/components/Views/OrderRow.tsx')
 
-const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, ordersFilterToolbar, batchPanel, ordersTable] = await Promise.all([
+const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss, ordersFilterToolbar, batchPanel, ordersTable, orderRow] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(queueDrawerPath, 'utf8'),
   readFile(selectionToolbarPath, 'utf8'),
@@ -42,6 +46,7 @@ const [ordersView, queueDrawer, selectionToolbar, orderDetailDrawer, v2Hooks, or
   readFile(ordersFilterToolbarPath, 'utf8'),
   readFile(batchPanelPath, 'utf8'),
   readFile(ordersTablePath, 'utf8'),
+  readFile(orderRowPath, 'utf8'),
 ])
 
 const normalizedOrdersView = ordersView.replace(/\r\n/g, '\n')
@@ -50,9 +55,13 @@ const checks = [
   {
     name: 'row click opens the detail drawer instead of entering bulk selection',
     pass:
-      // PS-166 Wave 6: the per-row onClick lives in the extracted <OrdersTable>;
-      // openOrderDetails stays in OrdersView and is passed in as a prop.
-      ordersTable.includes('onClick={() => openOrderDetails(order.orderId)}') &&
+      // PS-166 Wave 6: the per-row onClick moved to the extracted <OrdersTable>;
+      // 2026-07-08: it moved again, VERBATIM, into the memoized <OrderRow>
+      // (openOrderDetails still lives in OrdersView and is threaded in as a
+      // prop). Same pin, same intent — a row click opens the drawer and must
+      // never enter bulk selection, in ANY of the three files.
+      orderRow.includes('onClick={() => openOrderDetails(order.orderId)}') &&
+      !orderRow.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersTable.includes('onClick={() => updateSelection([order.orderId])}') &&
       !ordersView.includes('onClick={() => updateSelection([order.orderId])}'),
   },

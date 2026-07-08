@@ -719,9 +719,6 @@ export default function OrdersView({
   // plus sort direction for the printed-history list (newest first by default).
   const [pqSearch, setPqSearch] = useState('')
   const [pqHistoryAsc, setPqHistoryAsc] = useState(false)
-  // queueScope stays 'all' (fetch every authorized client's entries); the Print Queue client
-  // dropdown now filters the view client-side via pqClientFilter (below).
-  const [queueScope] = useState<'all' | 'client'>('all')
   // Print Queue per-client view filter. The queue fetch stays 'all' scope (every AUTHORIZED
   // client's entries, each carrying client_id), so this is a pure client-side display filter:
   // null = show all clients, a clientId = show only that client. Backend scope is unchanged.
@@ -1299,21 +1296,20 @@ export default function OrdersView({
   const shouldShowDailyStrip = currentStatus === 'awaiting_shipment' || currentStatus === 'shipped'
   // PS-317: daily-stats fetch/refresh/rollover live in useDailyStats; the strip display is built here.
   const { dailyStats, dailyStatsStatus, dailyStatsError, loadDailyStats } = useDailyStats(currentStatus)
-  const dailyStatsForStrip = dailyStats
-  const dailyStripProgress = dailyStatsForStrip ? buildDailyStripProgress(dailyStatsForStrip) : null
-  const dailyStatsLoadingWithoutData = dailyStatsStatus !== 'error' && !dailyStatsForStrip
-  const dailyStatsErroredWithoutData = dailyStatsStatus === 'error' && !dailyStatsForStrip
-  const dailyStatsRefreshFailedWithData = dailyStatsStatus === 'error' && Boolean(dailyStatsForStrip)
+  const dailyStripProgress = dailyStats ? buildDailyStripProgress(dailyStats) : null
+  const dailyStatsLoadingWithoutData = dailyStatsStatus !== 'error' && !dailyStats
+  const dailyStatsErroredWithoutData = dailyStatsStatus === 'error' && !dailyStats
+  const dailyStatsRefreshFailedWithData = dailyStatsStatus === 'error' && Boolean(dailyStats)
   // Replace any "PT" / "PST" / "PDT" suffix in the server-formatted
   // labels with "CA" so the daily strip's date range matches the rest
   // of the app's labeling convention (boss directive 2026-05-07).
   const normalizeTzLabel = (s: string) =>
     s.replace(/\b(?:PST|PDT|PT)\b/g, 'CA')
   const dailyStatsFromLabel = normalizeTzLabel(
-    dailyStatsForStrip?.window?.fromLabel || dailyStatsForStrip?.window?.from || ''
+    dailyStats?.window?.fromLabel || dailyStats?.window?.from || ''
   )
   const dailyStatsToLabel = normalizeTzLabel(
-    dailyStatsForStrip?.window?.toLabel || dailyStatsForStrip?.window?.to || ''
+    dailyStats?.window?.toLabel || dailyStats?.window?.to || ''
   )
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
 
@@ -1345,7 +1341,12 @@ export default function OrdersView({
     if (activeStoreClientId != null) return activeStoreClientId
     return orders.find((order) => order.clientId != null)?.clientId ?? null
   }, [activeStoreClientId, orders, panelOrder, selectedIdSet])
-  const queueClientId = queueScope === 'client' ? inferredQueueClientId : null
+  // The queue FETCH is always all-authorized-scope — there is no per-client
+  // fetch scope (the Print Queue client dropdown narrows the VIEW client-side
+  // via pqClientFilter). Kept as an explicit typed constant, not deleted, so
+  // every fetchQueue call site still names the scope argument it passes.
+  // (Replaces the vestigial `queueScope` useState that was permanently 'all'.)
+  const queueClientId: number | null = null
   const queueClientLabel = useMemo(() => {
     if (inferredQueueClientId == null) return 'Current client'
     const matchingOrder = [
@@ -1384,19 +1385,13 @@ export default function OrdersView({
     if (lastSelectionScopeKeyRef.current === selectionScopeKey) return
     lastSelectionScopeKeyRef.current = selectionScopeKey
     if (selectedOrderIds.length > 0) {
-      setAllMatchingSelection(null)
-      setSelectedOrderSnapshots(new Map())
-      onSelectedOrderIdsChange?.([])
-      onActiveOrderIdChange?.(null)
+      clearSelection()
     }
   }, [onActiveOrderIdChange, onSelectedOrderIdsChange, selectedOrderIds.length, selectionScopeKey])
 
   useEffect(() => {
     if (allMatchingSelection && allMatchingSelection.scopeKey !== selectionScopeKey) {
-      setAllMatchingSelection(null)
-      setSelectedOrderSnapshots(new Map())
-      onSelectedOrderIdsChange?.([])
-      onActiveOrderIdChange?.(null)
+      clearSelection()
       return
     }
 
@@ -1523,13 +1518,6 @@ export default function OrdersView({
   }, [queueEntries, queueOpen, onQueueStateChange])
 
   useEffect(() => {
-    if (queueScope === 'client' && queueClientId == null) {
-      setQueueEntries([])
-      setQueueEntriesClientId(queueClientId)
-      setQueueLoading(false)
-      return
-    }
-
     let cancelled = false
 
     const hydrateQueue = async () => {
@@ -1564,7 +1552,7 @@ export default function OrdersView({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [queueOpen, queueClientId, queueHistoryVisible, queueScope, toastContext])
+  }, [queueOpen, queueClientId, queueHistoryVisible, toastContext])
 
   useEffect(() => {
     if (!queueOpen) return
@@ -2065,7 +2053,12 @@ export default function OrdersView({
     return hydrated
   }
 
-  const clearSelection = () => {
+  // Hoisted `function` (not a const arrow) so the two scope-reset effects ABOVE
+  // this textual position can call it directly — effects run after the whole
+  // component body, so every setter it closes over is initialized by then.
+  // (Those effects previously inlined this exact body because the const wasn't
+  // hoisted.)
+  function clearSelection() {
     setAllMatchingSelection(null)
     setSelectedOrderSnapshots(new Map())
     onSelectedOrderIdsChange?.([])
@@ -2623,11 +2616,6 @@ export default function OrdersView({
   }
 
   async function hydrateQueue(forceOpen = false) {
-    if (queueScope === 'client' && queueClientId == null) {
-      if (forceOpen) showToast('No client selected for print queue', 'error')
-      return
-    }
-
     setQueueLoading(true)
     try {
       const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
@@ -2838,19 +2826,16 @@ export default function OrdersView({
     }
   }
 
-  async function refreshQueueAfterBackendStatus(status: any, fallbackClientId: number | null) {
+  async function refreshQueueAfterBackendStatus(status: any) {
     const queued = toNumberValue(status?.queued) ?? 0
-    const clientId = queueScope === 'client'
-      ? toNumberValue(status?.client_id) ?? fallbackClientId
-      : null
-    if (queued <= 0 || (queueScope === 'client' && clientId == null)) return
+    if (queued <= 0) return
 
     setQueueActionProgressLabel('Refreshing queue')
     setQueueLoading(true)
     try {
-      const payload = await apiClient.fetchQueue(clientId, queueHistoryVisible)
+      const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
       setQueueEntries(getQueuePayloadEntries(payload))
-      setQueueEntriesClientId(clientId)
+      setQueueEntriesClientId(queueClientId)
       setQueueOpen(true)
     } finally {
       setQueueLoading(false)
@@ -2956,7 +2941,6 @@ export default function OrdersView({
         }]
       })
     const queueOrders = prepared.filter((entry) => entry.payload).map((entry) => entry.payload as Record<string, unknown>)
-    const fallbackClientId = toNumberValue(queueOrders[0]?.client_id) ?? null
     let finalStatus: any = null
     let queueInterrupted = false
 
@@ -2980,7 +2964,7 @@ export default function OrdersView({
           queueInterrupted = (error as { code?: unknown } | null)?.code === 'QUEUE_SEND_INTERRUPTED'
           throw error
         }
-        await refreshQueueAfterBackendStatus(finalStatus, fallbackClientId)
+        await refreshQueueAfterBackendStatus(finalStatus)
       }
 
       // Batch-print pipeline: the create-print chain owns refetch timing (fade first,
@@ -3415,7 +3399,7 @@ export default function OrdersView({
     }
     if (singleActionBusyRef.current) {
       // Label/print-queue audit (2026-06-11): a second click while a buy is in flight is already
-      // blocked here (no double-charge), but the placeholder PDF tab was opened above (line ~5244)
+      // blocked here (no double-charge), but the placeholder PDF tab was opened above (openLabelPdfPlaceholder)
       // before this guard — close it so a double-click doesn't strand an orphan "Creating label
       // PDF..." tab that never resolves.
       labelPopup?.close()
@@ -4988,7 +4972,7 @@ export default function OrdersView({
       showToast(`Resuming queue send (${progress.completed}/${progress.total})`)
       try {
         const status = await pollBackendQueueSendJob(job.backendJobId, progress.total)
-        await refreshQueueAfterBackendStatus(status, null)
+        await refreshQueueAfterBackendStatus(status)
         await refetchOrders()
         const queued = toNumberValue(status?.queued) ?? 0
         const skipped = toNumberValue(status?.skipped) ?? 0
@@ -5036,7 +5020,6 @@ export default function OrdersView({
 
     let sent = 0
     let failed = 0
-    let queueClient: number | null = null
 
     const markAndAdvance = (ref: PersistentQueueOrderRef, orderFailed: boolean) => {
       markPersistentQueueJobOrder(job.id, ref.orderId, orderFailed)
@@ -5069,7 +5052,6 @@ export default function OrdersView({
             }
         await apiClient.addToQueue(payload)
         sent += 1
-        queueClient = queueClient ?? ref.clientId
         markAndAdvance(ref, false)
       } catch {
         failed += 1
@@ -5082,14 +5064,13 @@ export default function OrdersView({
       await runWithConcurrency(pendingOrders, BATCH_QUEUE_CONCURRENCY, processExistingLabelRef)
       setQueueLoading(false)
 
-      if (sent > 0 && (queueScope !== 'client' || queueClient != null)) {
+      if (sent > 0) {
         setQueueActionProgressLabel('Refreshing queue')
         setQueueLoading(true)
         try {
-          const refreshClientId = queueScope === 'client' ? queueClient : null
-          const payload = await apiClient.fetchQueue(refreshClientId, queueHistoryVisible)
+          const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
           setQueueEntries(getQueuePayloadEntries(payload))
-          setQueueEntriesClientId(refreshClientId)
+          setQueueEntriesClientId(queueClientId)
           setQueueOpen(true)
         } finally {
           setQueueLoading(false)
@@ -5323,10 +5304,6 @@ export default function OrdersView({
       })
   }
 
-  // PS-071 — render the bounded/actionable fallback for an awaiting rate cell.
-  // Returns null for 'ready' (the caller then renders the real rate). The
-  // historically-infinite no-rate cases now resolve to a terminal label instead
-  // of an endless <span className="spin-sm" />.
   async function getBatchRecalculateOrders(scope: BatchRecalculateScope) {
     const targetOrders =
       scope === 'selected'
@@ -5484,6 +5461,9 @@ export default function OrdersView({
     }
   }
 
+  // PS-071 — render the bounded/actionable fallback for an awaiting rate cell.
+  // The historically-infinite no-rate cases resolve to a terminal label instead
+  // of an endless <span className="spin-sm" />.
   function renderRateCellFallback(
     state: AwaitingRateCellState,
     order: OrderSummaryDto,
@@ -6352,7 +6332,7 @@ export default function OrdersView({
             enter/exit). All daily-stats state/effects/rollover stay here. */}
         <OrdersDailyStrip
           shouldShowDailyStrip={shouldShowDailyStrip}
-          dailyStatsForStrip={dailyStatsForStrip}
+          dailyStatsForStrip={dailyStats}
           dailyStripProgress={dailyStripProgress}
           dailyStatsFromLabel={dailyStatsFromLabel}
           dailyStatsToLabel={dailyStatsToLabel}

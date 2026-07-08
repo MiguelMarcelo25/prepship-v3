@@ -98,20 +98,22 @@ report.check({
 
 report.check({
   // Re-anchored for the print-queue client-dropdown refactor (commit 6623a944): the fetch still
-  // stays all-authorized-scope (queueScope fixed to 'all' -> queueClientId null -> fetchQueue(null)),
-  // and the dropdown is now a pure client-side VIEW filter (pqClientFilter). A destructive clear
-  // still requires an EXPLICIT single client (the Clear button is disabled until pqClientFilter is set),
-  // preserving the original safety invariant — only the control changed, not the scope/authz.
+  // stays all-authorized-scope, and the dropdown is a pure client-side VIEW filter (pqClientFilter).
+  // Re-anchored again 2026-07-08 (dead-code sweep): the vestigial `queueScope` useState (permanently
+  // 'all', no setter) was DELETED — the all-scope invariant is now the explicit
+  // `queueClientId: number | null = null` constant that every fetchQueue call site passes. A
+  // destructive clear still requires an EXPLICIT single client (the Clear button is disabled until
+  // pqClientFilter is set), preserving the original safety invariant — only the encoding changed,
+  // not the scope/authz.
   name: 'Queue defaults to all authorized clients; clearing requires an explicit per-client scope',
-  condition: ordersView.includes("const [queueScope] = useState<'all' | 'client'>('all')") &&
-    ordersView.includes("const queueClientId = queueScope === 'client' ? inferredQueueClientId : null") &&
+  condition: ordersView.includes('const queueClientId: number | null = null') &&
     ordersView.includes('apiClient.fetchQueue(queueClientId, queueHistoryVisible)') &&
     queueDrawer.includes('Select a client to clear its queue') &&
     queueDrawer.includes('disabled={pqClientFilter == null}'),
   why: 'Operators see queued labels across ALL authorized clients by default (the fetch stays all-scope); the per-client dropdown is a view filter, and a destructive clear still requires an explicit single-client selection.',
-  evidence: 'queueScope is fixed to all so fetchQueue receives null (all-client fetch); the per-client dropdown filters the view via pqClientFilter; the Clear button is disabled until a client is selected.',
+  evidence: 'queueClientId is the explicit null constant so fetchQueue receives null (all-client fetch); the per-client dropdown filters the view via pqClientFilter; the Clear button is disabled until a client is selected.',
   failure: 'The queue panel may appear empty because it is silently scoped to the wrong client, or a blanket clear runs without an explicit client.',
-  fix: 'Keep the all-scope fetch (queueScope all), the pqClientFilter view filter, and require an explicit selected client before clearing.',
+  fix: 'Keep the all-scope fetch (the queueClientId null constant), the pqClientFilter view filter, and require an explicit selected client before clearing.',
 });
 
 report.check({
