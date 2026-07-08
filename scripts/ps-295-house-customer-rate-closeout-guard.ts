@@ -145,9 +145,11 @@ check('closeout behavior displays shipped House customer_rate over SHIPP DRP cos
     shippedMoney.markupAmount === 1.14,
   JSON.stringify(shippedMoney));
 
+// Repointed (guard rot): e9762409 canonicalized houseCustomerRate -> cShippingRateAmount
+// and source 'house_customer_rate' -> 'c_shipping_rate'; the decision semantics are unchanged.
 const billingDecision = decideShippingLineBilling({
   labelCost: 8.5,
-  houseCustomerRate: realized?.customerRate ?? null,
+  cShippingRateAmount: realized?.customerRate ?? null,
   billingMode: 'label_cost',
   isBaselineCarrier: false,
   refUspsRate: 7,
@@ -157,14 +159,14 @@ const billingDecision = decideShippingLineBilling({
 });
 check('closeout behavior bills customer_rate exactly with no carrier markup',
   billingDecision.billedAmount === 9.64 &&
-    billingDecision.source === 'house_customer_rate' &&
+    billingDecision.source === 'c_shipping_rate' &&
     billingDecision.markupApplied === false,
   JSON.stringify(billingDecision));
 
 const detailMetrics = computeBillingDetailMetrics({
   lineType: 'shipping',
   totalCost: '9.64',
-  actualLabelCost: 8.5,
+  selectedRateCost: 8.5,
   orderNumber: 'PS-295-HOUSE-CLOSEOUT',
 });
 check('closeout behavior billing detail margin is customer_rate minus DRP cost',
@@ -197,12 +199,15 @@ check('closeout behavior invoice CSV consumes generated shipping_amt',
 check('realized capture writes sidecar only, not locked shipments',
   /INSERT INTO order_competitive_rate/.test(captureSrc) && !/UPDATE\s+shipments/i.test(captureSrc));
 check('billing generator reads customer_rate by shipment id and persists it as the shipping line',
-  /houseCustomerRateByShipmentId/.test(billingSrc) &&
-    /houseCustomerRate,/.test(billingSrc) &&
-    /unitCost: shippingDecision\.billedAmount\.toFixed\(2\)/.test(billingSrc) &&
-    /totalCost: shippingDecision\.billedAmount\.toFixed\(2\)/.test(billingSrc));
+  /cShippingRateByShipmentId/.test(billingSrc) &&
+    /cShippingRateAmount,/.test(billingSrc) &&
+    /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
+    /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc) &&
+    /totalCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc));
 check('invoice renderers consume generated shipping_amt instead of provider cost',
-  /case when b\.line_type = 'shipping' then b\.total_cost else 0 end\), 0\)::text as shipping_amt/.test(billingRouteSrc) &&
+  // Repointed (guard rot): PS-373/377 routed the sums through detailAmount
+  // (cancelledNoChargeBillingAmountSql) so cancelled orders bill $0.
+  /case when b\.line_type = 'shipping' then \$\{detailAmount\} else 0 end\), 0\)::text as shipping_amt/.test(billingRouteSrc) &&
     /const shippingAmt = Number\(d\.shipping_amt\)/.test(billingRouteSrc) &&
     /shipping: shippingAmt,/.test(billingRouteSrc));
 

@@ -55,13 +55,14 @@ check('full: totalCost = shipmentCost + otherCost', full?.totalCost === 9.75, fu
 check('full: proofSource provenance is manual_preview', full?.proofSource === 'manual_preview', full?.proofSource);
 
 // 5. Delegation — the DTO carries the canonical normalizer's derived fields
-//    (customerRateAmount / rateCostAmount). A hand-rolled object would lack them; their
+//    (cShippingRateAmount / selectedRateCost — renamed from customerRateAmount /
+//    rateCostAmount by e9762409). A hand-rolled object would lack them; their
 //    presence proves the builder delegates to normalizeOrderBestRateDto (ARCHITECTURE.md:
 //    rate truth lives in order-rate-dto.ts; callers must not re-derive).
-check('full: delegates to the canonical normalizer (customerRateAmount derived)',
-  full?.customerRateAmount === 9.75, full?.customerRateAmount);
-check('full: delegates to the canonical normalizer (rateCostAmount derived)',
-  full?.rateCostAmount === 9.75, full?.rateCostAmount);
+check('full: delegates to the canonical normalizer (cShippingRateAmount derived)',
+  full?.cShippingRateAmount === 9.75, full?.cShippingRateAmount);
+check('full: delegates to the canonical normalizer (selectedRateCost derived)',
+  full?.selectedRateCost === 9.75, full?.selectedRateCost);
 
 // 6. Cost fallback — when the modal carried only the summed `cost` (no split shipmentCost),
 //    the postage falls back to that total so the rate is still usable.

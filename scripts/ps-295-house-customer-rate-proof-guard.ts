@@ -105,9 +105,11 @@ check(
   JSON.stringify(shippedMoney),
 );
 
+// Repointed (guard rot): e9762409 canonicalized houseCustomerRate -> cShippingRateAmount
+// and source 'house_customer_rate' -> 'c_shipping_rate'; the decision semantics are unchanged.
 const billingDecision = decideShippingLineBilling({
   labelCost: 8.5,
-  houseCustomerRate: 9.64,
+  cShippingRateAmount: 9.64,
   billingMode: 'label_cost',
   isBaselineCarrier: false,
   refUspsRate: 7,
@@ -118,7 +120,7 @@ const billingDecision = decideShippingLineBilling({
 check(
   'billing decision bills customer_rate exactly and ignores ref-rate + carrier markup',
   billingDecision.billedAmount === 9.64 &&
-    billingDecision.source === 'house_customer_rate' &&
+    billingDecision.source === 'c_shipping_rate' &&
     billingDecision.markupApplied === false &&
     billingDecision.descriptionSuffix === '',
   JSON.stringify(billingDecision),
@@ -127,7 +129,7 @@ check(
 const detailMetrics = computeBillingDetailMetrics({
   lineType: 'shipping',
   totalCost: '9.64',
-  actualLabelCost: 8.5,
+  selectedRateCost: 8.5,
   orderNumber: 'PS-295-HOUSE',
 });
 check(
@@ -203,28 +205,33 @@ check(
 const billingSrc = readFileSync('src/services/billing.ts', 'utf8');
 check(
   'billing generator loads customer_rate from sidecar by shipment id',
-  /houseCustomerRateByShipmentId/.test(billingSrc) &&
+  /cShippingRateByShipmentId/.test(billingSrc) &&
     /\.select\(\{ shipmentId: orderCompetitiveRate\.shipmentId, customerRate: orderCompetitiveRate\.customerRate \}\)/.test(billingSrc) &&
     /inArray\(orderCompetitiveRate\.shipmentId, houseShipmentIds\)/.test(billingSrc),
 );
 check(
   'billing generator persists customer_rate as the shipping line unit/total cost',
-  /const houseCustomerRate = s\.id != null \? houseCustomerRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
-    /houseCustomerRate,/.test(billingSrc) &&
-    /unitCost: shippingDecision\.billedAmount\.toFixed\(2\)/.test(billingSrc) &&
-    /totalCost: shippingDecision\.billedAmount\.toFixed\(2\)/.test(billingSrc),
+  /const cShippingRateAmount = s\.id != null \? cShippingRateByShipmentId\.get\(Number\(s\.id\)\) : undefined/.test(billingSrc) &&
+    /cShippingRateAmount,/.test(billingSrc) &&
+    /const billedShippingAmount = shippingDecision\.billedAmount/.test(billingSrc) &&
+    /unitCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc) &&
+    /totalCost: billedShippingAmount\.toFixed\(2\)/.test(billingSrc),
 );
 check(
   'billing details expose billed customer_rate and actual SHIPP cost for margin review',
   /unitCost: billingLineItems\.unitCost/.test(billingSrc) &&
     /totalCost: billingLineItems\.totalCost/.test(billingSrc) &&
-    /actualLabelCost: isShippingLine \? labelCost : null/.test(billingSrc),
+    /selectedRateCost: shipments\.selectedRateCost/.test(billingSrc),
 );
 
 const billingRouteSrc = readFileSync('src/routes/billing.ts', 'utf8');
 check(
   'invoice data aggregates the generated shipping line items without recomputing provider cost',
-  /case when b\.line_type = 'shipping' then b\.total_cost else 0 end\), 0\)::text as shipping_amt/.test(billingRouteSrc) &&
+  // Repointed (guard rot): PS-373/377 routed the invoice sums through detailAmount
+  // (cancelledNoChargeBillingAmountSql) so cancelled orders bill $0 — same aggregation,
+  // still no provider-cost recompute.
+  /const detailAmount = cancelledNoChargeBillingAmountSql\(/.test(billingRouteSrc) &&
+    /case when b\.line_type = 'shipping' then \$\{detailAmount\} else 0 end\), 0\)::text as shipping_amt/.test(billingRouteSrc) &&
     /const csv = renderInvoiceCsv\(data\.details\)/.test(billingRouteSrc),
 );
 check(
