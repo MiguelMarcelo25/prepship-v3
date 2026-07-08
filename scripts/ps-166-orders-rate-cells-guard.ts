@@ -29,7 +29,9 @@ const ordersView = read('web/src/components/Views/OrdersView.tsx');
 
 check('OrdersRateCells exports the pure cell renderers',
   /export function renderOrderTotalCell/.test(cells) &&
-  /export function renderRateCostCell/.test(cells) &&
+  // Repointed (guard rot): PS-356/PS-357 renamed renderRateCostCell → renderCShippingRateCell
+  // (the 'ratecost' column is now labeled "C. Shipping Rate" and reads backend customer money).
+  /export function renderCShippingRateCell/.test(cells) &&
   /export function renderMarketplaceFeeCell/.test(cells) &&
   /export function renderProfitCell/.test(cells));
 check('OrdersRateCells reads ONLY the backend money DTO helpers (no recompute)',
@@ -45,7 +47,7 @@ check('OrdersView imports the extracted cell module',
   /from '\.\/orders-rate-cells'/.test(ordersView));
 check('OrdersView DELEGATES the pure cells (no inline cell JSX re-introduced)',
   /case 'total':\s*\n\s*return renderOrderTotalCell\(order\)/.test(ordersView) &&
-  /case 'ratecost':\s*\n\s*return renderRateCostCell\(order\)/.test(ordersView) &&
+  /case 'ratecost':\s*\r?\n\s*return renderCShippingRateCell\(order\)/.test(ordersView) &&
   /case 'marketplacefee':\s*\n\s*return renderMarketplaceFeeCell\(order\)/.test(ordersView) &&
   /case 'profit':\s*\n\s*return renderProfitCell\(order\)/.test(ordersView));
 

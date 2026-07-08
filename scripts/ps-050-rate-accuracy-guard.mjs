@@ -34,31 +34,35 @@ assert(
   'Orders UI validates saved best rates with request fingerprint/freshness/completeness, not dims-only',
 )
 
+// RETIRED (was: Awaiting Shipment page load enables account data and uses cached bulk lookup
+// before passive live rating): PS-345 (164b8667) deleted OrdersView passive rating outright —
+// refreshVisibleBestRate, runPassiveAutoRating, PASSIVE_LIVE_BEST_RATE_*, and the
+// fetchCachedRatesBulk consumer are gone. Rate loading is backend-owned (bounded backfill),
+// pinned by scripts/ps-345-rate-loading-sot-guard.ts. The replacement below asserts the PS-345
+// reality: the awaiting support-data gate survives and the deleted machinery stays gone.
 assert(
-  ordersView.includes("currentStatus === 'awaiting_shipment'") &&
-    ordersView.includes('passiveRatingAccountsEnabled') &&
-    ordersView.includes('fetchCachedRatesBulk'),
-  'Awaiting Shipment page load enables account data and uses cached bulk lookup before passive live rating',
+  ordersView.includes('awaitingRateAccountsEnabled') &&
+    !ordersView.includes('refreshVisibleBestRate') &&
+    !ordersView.includes('runPassiveAutoRating') &&
+    !ordersView.includes('fetchCachedRatesBulk'),
+  'Awaiting Shipment support-data gate survives; deleted FE passive rating stays gone (PS-345)',
 )
 
-assert(
-  // The passive first pass is cache-allowed for a NORMAL row (forceRefresh: forceLive, and
-  // refreshVisibleBestRate's forceLive param DEFAULTS false) — only a backend-flagged display-refresh
-  // row (needsDisplayRefresh) force-lives, and that is bounded by PASSIVE_LIVE_BEST_RATE_MAX_ROWS.
-  ordersView.includes('forceRefresh: forceLive') &&
-    /function refreshVisibleBestRate\([^)]*forceLive = false\)/.test(ordersView) &&
-    !ordersView.includes('forceRefresh: true,\n        }) as Array<Record<string, unknown>>\n\n        const bestRate = pickBestPanelRate(rates)'),
-  'Passive auto-rating does not force live rates for every order (only display-refresh rows, budget-capped)',
-)
+// RETIRED (was: Passive auto-rating does not force live rates for every order (only
+// display-refresh rows, budget-capped)): superseded by PS-345 (164b8667) — the FE passive
+// auto-rating path was deleted entirely; live-work bounding now lives in the backend bounded
+// backfill (pinned by the test:recalculate-all-* guards) and scripts/ps-345-rate-loading-sot-guard.ts.
 
+// Repointed (guard rot): PS-345 (164b8667) deleted the OrdersView `result?.matchType === 'exact'`
+// auto-apply consumer; the backend cached-bulk metadata legs (src/routes/rates.ts) remain the
+// canonical protection and are pinned in their current exact forms.
 assert(
-  ratesRoute.includes("matchType: 'miss'") &&
-    ratesRoute.includes("isComplete: false") &&
-    ratesRoute.includes('matchType: matchQuality') &&
-    ratesRoute.includes("'rough' as const") &&
-    ratesRoute.includes('approximate: matchQuality ===') &&
-    ordersView.includes("result?.matchType === 'exact'"),
-  'Bulk cached rates expose exact/fresh/complete metadata and mark rough hits approximate so they are not auto-applied',
+  ratesRoute.includes("matchType: 'miss' as const,") &&
+    ratesRoute.includes('isComplete: false,') &&
+    ratesRoute.includes('matchType: matchQuality,') &&
+    ratesRoute.includes(": 'rough' as const,") &&
+    ratesRoute.includes("approximate: matchQuality === 'rough' ? true : false,"),
+  'Bulk cached rates expose exact/fresh/complete metadata and mark rough hits approximate',
 )
 
 assert(

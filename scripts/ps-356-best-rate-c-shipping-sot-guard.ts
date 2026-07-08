@@ -231,7 +231,11 @@ check(
   'Best Rate cell delegates separated tuple display to focused presentation policy',
   orderCellsSrc.includes('resolveAwaitingBestRatePriceDisplay') &&
     /renderRateAmountWithMarkup\(\s*bestRatePriceDisplay\.baseAmount,\s*bestRatePriceDisplay\.primaryAmount/.test(orderCellsSrc) &&
-    /bestRatePriceDisplay\.showHouseBadge \? null : getBestRateInsuranceCoverage/.test(orderCellsSrc),
+    // Repointed (guard rot): PS-357 DECOUPLED the badges — the HOUSE pricing marker renders
+    // under the rate from the same presentation policy, while the backend HUGRAB insurance
+    // verdict stays passed as the renderRateAmountWithMarkup coverage arg (both legs pinned).
+    /bestRatePriceDisplay\?\.showHouseBadge \? renderHouseBadge\(\) : null/.test(orderCellsSrc) &&
+    orderCellsSrc.includes('getBestRateInsuranceCoverage(displayOrder)'),
 );
 
 if (failures > 0) {

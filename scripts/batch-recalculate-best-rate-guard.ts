@@ -181,7 +181,9 @@ const bestRateProviderBlock = bestRateProviderStart >= 0 && bestRateProviderEnd 
   ? rowDisplay.slice(bestRateProviderStart, bestRateProviderEnd)
   : '';
 check('awaiting backend display provider id wins over best-rate and stale shipping metadata',
-  /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateProviderBlock) &&
+  // Repointed (guard rot): status reads migrated to the getOrderEffectiveStatus(order) owner
+  // (orders-row-display.tsx:80); same awaiting-branch protection, canonical status form.
+  /getOrderEffectiveStatus\(order\)\s*===\s*'awaiting_shipment'/.test(bestRateProviderBlock) &&
   /backendDisplayProviderAccountId/.test(bestRateProviderBlock) &&
   /return\s+backendDisplayProviderAccountId\s*\?\?\s*rateProviderId\s*\?\?\s*getShippingProviderAccountId\(order\)/.test(bestRateProviderBlock));
 
@@ -232,45 +234,29 @@ check('add-dims fallback wins over batch pending state',
   fallbackBlock.indexOf("state === 'add-dims'") >= 0 &&
   fallbackBlock.indexOf("state === 'add-dims'") < fallbackBlock.indexOf('const batchRow = batchRecalculateRows'));
 
-const passiveStart = ordersView.indexOf('async function refreshVisibleBestRate(');
-const passiveEnd = ordersView.indexOf('\n    async function runPassiveAutoRating()', passiveStart);
-const passiveBlock = passiveStart >= 0 && passiveEnd > passiveStart
-  ? ordersView.slice(passiveStart, passiveEnd)
-  : '';
-const passiveRunnerStart = ordersView.indexOf('async function runPassiveAutoRating()');
-const passiveRunnerEnd = ordersView.indexOf('\n    void runPassiveAutoRating()', passiveRunnerStart);
-const passiveRunnerBlock = passiveRunnerStart >= 0 && passiveRunnerEnd > passiveRunnerStart
-  ? ordersView.slice(passiveRunnerStart, passiveRunnerEnd)
-  : '';
-check('passive auto-rating cannot persist from legacy fetchRates fallback',
-  passiveStart >= 0 &&
-  !/apiClient\.fetchRates/.test(passiveBlock) &&
-  !/pickBestPanelRate/.test(passiveBlock) &&
-  /apiClient\.browseRates/.test(passiveBlock) &&
-  /response\?\.bestRate/.test(passiveBlock));
-check('passive auto-rating caps browser live work and hands overflow to backend backfill',
-  /PASSIVE_LIVE_BEST_RATE_CONCURRENCY/.test(ordersView) &&
-  /PASSIVE_LIVE_BEST_RATE_MAX_ROWS/.test(ordersView) &&
-  /const liveBudget = Math\.max\(0, PASSIVE_LIVE_BEST_RATE_MAX_ROWS - passiveLiveBestRateCountRef\.current\)/.test(passiveRunnerBlock) &&
-  /const liveQueue = queue\.splice\(0, liveBudget\)/.test(passiveRunnerBlock) &&
-  /const workerCount = Math\.min\(PASSIVE_LIVE_BEST_RATE_CONCURRENCY, liveQueue\.length\)/.test(passiveRunnerBlock) &&
-  /while \(!cancelled && liveQueue\.length > 0\)/.test(passiveRunnerBlock) &&
-  /const overflow = queue\.splice\(0\)/.test(passiveRunnerBlock) &&
-  // The overflow handoff is cache-friendly by default, force-live (maxAgeHours:0) ONLY when an overflow
-  // row is display-stale (forceLive) so a row past the browser budget still self-corrects. The 5-row
-  // browser cap above is unchanged — this only widens the BACKEND sweep's freshness for display-stale.
-  /startRecalculateAllBestRates\(overflowMaxAgeHours\)/.test(passiveRunnerBlock) &&
-  /overflow\.some\(\(candidate\) => candidate\.forceLive\)[\s\S]{0,24}\?\s*0[\s\S]{0,24}:\s*PASSIVE_BACKFILL_MAX_AGE_HOURS/.test(passiveRunnerBlock));
+// RETIRED (was: passive auto-rating cannot persist from legacy fetchRates fallback): PS-345
+// (164b8667) deleted refreshVisibleBestRate (and the whole OrdersView passive-rating path)
+// outright — there is no FE passive persist path left to mis-source. Rate loading is
+// backend-owned and pinned by scripts/ps-345-rate-loading-sot-guard.ts.
+// RETIRED (was: passive auto-rating caps browser live work and hands overflow to backend
+// backfill): PS-345 deleted runPassiveAutoRating and the PASSIVE_LIVE_BEST_RATE_* budget —
+// backend ownership of the bounded sweep is pinned by the ps-345 guard (OrdersView keeps only
+// the startRecalculateAllBestRates job trigger).
 
+// Repointed (guard rot): e9762409 canonicalized the money DTO (customerRateAmount is GONE;
+// getBackendRowMoney exposes selectedRateCost/baseAmount/cShippingRateAmount/markedAmount) and
+// the stale-canonical getShippingNumber(order, 'bestRateAmount') fallback was DELETED from
+// getBestRateBaseCost — pin backend money + the fallback's ABSENCE over the tightened block
+// (end anchor is now the next function, getBestRateFinalBaseCost).
 const bestRateBaseStart = rowDisplay.indexOf('export function getBestRateBaseCost(');
-const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateShippingProviderId', bestRateBaseStart);
+const bestRateBaseEnd = rowDisplay.indexOf('\nexport function getBestRateFinalBaseCost', bestRateBaseStart);
 const bestRateBaseBlock = bestRateBaseStart >= 0 && bestRateBaseEnd > bestRateBaseStart
   ? rowDisplay.slice(bestRateBaseStart, bestRateBaseEnd)
   : '';
 check('awaiting best-rate amount reads backend money before stale canonical amount',
-  /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateBaseBlock) &&
-  /customerRateAmount/.test(bestRateBaseBlock) &&
-  bestRateBaseBlock.indexOf("order.orderStatus === 'awaiting_shipment'") < bestRateBaseBlock.indexOf("getShippingNumber(order, 'bestRateAmount')"));
+  /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(bestRateBaseBlock) &&
+  /cShippingRateAmount/.test(bestRateBaseBlock) &&
+  !/getShippingNumber\(order, 'bestRateAmount'\)/.test(bestRateBaseBlock));
 
 const bestRateServiceStart = rowDisplay.indexOf('export function getBestRateServiceCode(');
 const bestRateServiceEnd = rowDisplay.indexOf('\nexport function getBestRateCarrierNickname', bestRateServiceStart);
@@ -278,8 +264,11 @@ const bestRateServiceBlock = bestRateServiceStart >= 0 && bestRateServiceEnd > b
   ? rowDisplay.slice(bestRateServiceStart, bestRateServiceEnd)
   : '';
 check('awaiting best-rate service reads saved bestRate before stale canonical service',
-  /order\.orderStatus\s*===\s*'awaiting_shipment'/.test(bestRateServiceBlock) &&
-  bestRateServiceBlock.indexOf("order.orderStatus === 'awaiting_shipment'") < bestRateServiceBlock.indexOf("getShippingString(order, 'serviceCode')"));
+  // Repointed (guard rot): status form migrated to the getOrderEffectiveStatus(order) owner —
+  // getBestRateServiceCode now feeds `isAwaiting: getOrderEffectiveStatus(order) === ...` into
+  // resolveDisplayServiceCode; the awaiting flag still precedes the canonical serviceCode read.
+  /getOrderEffectiveStatus\(order\)\s*===\s*'awaiting_shipment'/.test(bestRateServiceBlock) &&
+  bestRateServiceBlock.indexOf("getOrderEffectiveStatus(order) === 'awaiting_shipment'") < bestRateServiceBlock.indexOf("getShippingString(order, 'serviceCode')"));
 
 if (failures > 0) {
   console.error(`\nFAIL batch recalculate best-rate guard (${failures} failing)`);

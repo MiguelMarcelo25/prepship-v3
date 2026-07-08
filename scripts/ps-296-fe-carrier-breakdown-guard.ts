@@ -46,16 +46,22 @@ check('the table reads backend margin fields (no FE recompute)',
   /row\.marginPct/.test(carrierTable));
 
 // PS-296 req6: per-order reconciliation drilldown (analytics.rows[], also discarded before).
+// Repointed (guard rot): the drilldown table was EXTRACTED from BillingView into
+// BillingShippingMarginReconciliation.tsx. BillingView keeps the row type via the import alias,
+// still stores the backend rows, and now WIRES the component from that stored state; the
+// rendering + backend-field reads live in the extracted component.
 check('BillingView stores the backend analytics.rows[] (per-shipment reconciliation)',
-  /type ShippingMarginRowDto = \{/.test(billing) &&
+  /type BillingShippingMarginReconciliationRow as ShippingMarginRowDto/.test(billing) &&
   /setShippingMarginRows\(\(marginAnalytics\?\.rows \?\? \[\]\)/.test(billing));
-check('BillingView renders the per-order drilldown table from backend fields',
-  /Per-order reconciliation/.test(billing) &&
-  /shippingMarginRows\.slice\(0, SHIPPING_MARGIN_DRILLDOWN_LIMIT\)\.map\(/.test(billing) &&
-  /row\.marginAmount/.test(billing) &&
-  /row\.missingProofReasons/.test(billing));
+const reconciliation = read('web/src/components/Views/BillingShippingMarginReconciliation.tsx');
+check('the extracted drilldown component renders the per-order table from backend fields, wired from BillingView',
+  /Per-order reconciliation/.test(reconciliation) &&
+  /rows\.slice\(0, limit\)\.map\(/.test(reconciliation) &&
+  /row\.marginAmount/.test(reconciliation) &&
+  /row\.missingProofReasons/.test(reconciliation) &&
+  /<BillingShippingMarginReconciliation\s*\r?\n?\s*rows=\{shippingMarginRows\}/.test(billing));
 check('drilldown caps with a VISIBLE "showing X of N" note (no silent truncation)',
-  /Showing first \{SHIPPING_MARGIN_DRILLDOWN_LIMIT\} of \{shippingMarginRows\.length\}/.test(billing));
+  /Showing first \{limit\} of \{rows\.length\}/.test(reconciliation));
 
 // Dashboard consumes the same backend carrier rollup (was also discarded — only .summary kept).
 const dashboard = read('web/src/components/Views/DashboardView.tsx');

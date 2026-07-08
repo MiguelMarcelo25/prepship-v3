@@ -96,6 +96,9 @@ check(
     /const secondCheapest = rankedEligibleRates\[1\] \?\? null/.test(ratesCombined),
 );
 
+// Repointed (guard rot): e9762409 — second-best money is backend-stamped cShippingRateAmount
+// (readRateTotalAmount reads ONLY rate.cShippingRateAmount; shipmentCost+otherCost / raw
+// totalCost arithmetic is gone from the FE reader).
 check(
   'Best Rate Final amount prefers backend cached secondBestRate and does not fall back to cheapest',
   getBestRateFinalBaseCost({
@@ -103,7 +106,7 @@ check(
     orderNumber: 'A',
     clientId: 1,
     orderStatus: 'awaiting_shipment',
-    bestRate: { shipmentCost: 6, otherCost: 0, secondBestRate: { shipmentCost: 9, otherCost: 1 } },
+    bestRate: { shipmentCost: 6, otherCost: 0, secondBestRate: { cShippingRateAmount: 10 } },
     bestRateWorkflow: { money: { markedAmount: 12, rateCostAmount: 7.25, houseRateAmount: 6.9 } },
   } as any) === 10 &&
     getBestRateFinalBaseCost({
@@ -111,7 +114,7 @@ check(
       orderNumber: 'B',
       clientId: 1,
       orderStatus: 'awaiting_shipment',
-      bestRate: { shipmentCost: 6, otherCost: 0, raw: { second_best_rate: { totalCost: 11.25 } } },
+      bestRate: { shipmentCost: 6, otherCost: 0, raw: { second_best_rate: { cShippingRateAmount: 11.25 } } },
       bestRateWorkflow: { money: { markedAmount: 12, rateCostAmount: 7.25, houseRateAmount: null } },
     } as any) === 11.25 &&
     getBestRateFinalBaseCost({

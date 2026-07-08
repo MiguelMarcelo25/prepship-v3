@@ -268,7 +268,9 @@ const bestRateBaseCostBlock = rowDisplaySrc.slice(
 );
 check(
   'Awaiting Best Rate amount reads backend selected/C. Shipping money, not order.bestRate fallback math',
-    /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
+    // Repointed (guard rot): status reads migrated to the getOrderEffectiveStatus(order) owner
+    // (orders-row-display.tsx:80); same awaiting-branch protection, canonical status form.
+    /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
     /selectedRateCost/.test(bestRateBaseCostBlock) &&
     /baseAmount/.test(bestRateBaseCostBlock) &&
     /cShippingRateAmount/.test(bestRateBaseCostBlock) &&

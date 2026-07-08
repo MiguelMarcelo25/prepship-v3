@@ -84,8 +84,11 @@ check(
   // The proof still flows on the THREE surviving payload shapes:
   //   (a) 2 INLINE property sites `selectedRateProof: buildSelectedRateProofPayload(order, ...)`
   //       — the panel-live single-create payload AND the queue-send INTENT payload.
-  //   (b) the BATCH-CREATE `let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, ...)`
-  //       — ShipStation batch, with PS-204 account binding (3rd arg).
+  //   (b) the BATCH-PRINT override payload `const selectedRateProof = buildSelectedRateProofPayload(order, rate)`
+  //       — buildBatchPrintOverridePayload builds proof from the SAME fresh strict-recalc rate;
+  //       the PS-204 account-binding 3rd arg was DROPPED because proof, shippingProviderId, and
+  //       buildRateQuoteRefForOrder all derive from that one fresh rate (binding coherent by
+  //       construction — see the PS-204 note above the builder in OrdersView).
   //
   // (a) census of the two inline account-bound proof property sites (panel + queue intent).
   (ordersView.match(/selectedRateProof: buildSelectedRateProofPayload\(order/g)?.length ?? 0) >= 2 &&
@@ -94,8 +97,12 @@ check(
     // straight into apiClient.createLabel, now sent to the backend owner instead.
     ordersView.includes('function buildQueueSendOrderPayload') &&
     /selectedRateProof: buildSelectedRateProofPayload\(order, bestRate \?\? selectedRate, shippingProviderId\),\s*\n\s*\.\.\.buildRateQuoteRefForOrder\(order, bestRate \?\? selectedRate, shippingProviderId\)/.test(ordersView) &&
-    // (b) the ShipStation batch-create path keeps its proof variable + account filter.
-    ordersView.includes('let selectedRateProof = buildSelectedRateProofPayload(order, proofRate, orderIsTest ? null : shippingProviderId)') &&
+    // (b) the batch-print override payload keeps its proof variable.
+    // Repointed (guard rot): the ShipStation batch-create `let selectedRateProof = ...(order,
+    // proofRate, orderIsTest ? null : shippingProviderId)` form became the batch-print pipeline's
+    // buildBatchPrintOverridePayload, which derives proof from the SAME fresh rate (PS-204
+    // binding by construction — account arg dropped).
+    ordersView.includes('const selectedRateProof = buildSelectedRateProofPayload(order, rate)') &&
     ordersView.includes('selectedRateProof,') &&
     // ANTI-REGRESSION: the deleted FE direct-carrier buy must NOT come back. Neither
     // the function nor its override-wrapper proof variable (the one it assembled before
@@ -105,7 +112,10 @@ check(
     // RELOCATED OWNER 1 — the queue path now buys server-side: print-queue.ts's
     // processQueueSendOrder feeds the FE-built order.label intent into createLabelV2.
     printQueueService.includes('async function processQueueSendOrder') &&
-    /createLabelV2\(\{\s*\n\s*\.\.\.order\.label,/.test(printQueueService) &&
+    // Repointed (guard rot): processQueueSendOrder now narrows the intent once
+    // (`const labelInput = order.label;`) and spreads THAT into createLabelV2 — same
+    // FE-intent-to-backend-buy flow, new local name.
+    /const labelInput = order\.label;[\s\S]*?createLabelV2\(\{\s*\r?\n\s*\.\.\.labelInput,/.test(printQueueService) &&
     // RELOCATED OWNER 2 — createLabelV2 enforces the SAME selected-rate proof + PS-204
     // account binding before BOTH the direct-carrier and ShipStation provider calls,
     // and detects direct carriers via directLabelAccountRefFromProviderId. This is the

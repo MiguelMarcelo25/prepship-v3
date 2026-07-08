@@ -128,7 +128,9 @@ assert(
   // the canonical owner rates-combined.ts (merge via dedupeBrowseRates + the single
   // cheapest pick by rateTotal). The route delegates to the rate browse producer,
   // which delegates via combineCarrierUniverses.
-  ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates])') &&
+  // Repointed (guard rot): rates-combined now drops UNPRICED rates before dedupe/cheapest-pick
+  // (.filter(isPricedRate) — the "$0 coercion wins cheapest" root-cause fix); same canonical owner.
+  ratesCombined.includes('const combinedRates = dedupeBrowseRates([...input.ssRates, ...input.directRates].filter(isPricedRate));') &&
     ratesCombined.includes('const cheapest = rankedEligibleRates[0]') &&
     ratesRoute.includes('produceRateBrowsePayload') &&
     rateBrowseProducer.includes('combineCarrierUniverses({') &&

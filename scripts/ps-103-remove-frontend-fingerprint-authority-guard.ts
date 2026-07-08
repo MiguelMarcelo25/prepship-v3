@@ -8,6 +8,10 @@ import { readFileSync } from 'node:fs';
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+// Repointed (guard rot): the rate-DTO translator moved to web/src/lib/v2-apiClient/shared.ts
+// (translateRateToLegacyDisplayShape; local renamed rate→obj). v2-apiClient.ts's toLegacyRateArray
+// maps EVERY backend rate through it, so the proof-metadata pass-through pins now read shared.ts.
+const v2Shared = readFileSync('web/src/lib/v2-apiClient/shared.ts', 'utf8');
 const directRates = readFileSync('api/carriers/rates.ts', 'utf8');
 // PS-135 re-anchor (2026-06-16): the proof-selection logic moved out of OrdersView's
 // buildSelectedRateProofPayload into web/src/lib/rate-proof.ts (selectProofFromCandidates),
@@ -92,8 +96,10 @@ check(
 );
 check(
   'direct-carrier rates preserve backend proof metadata into frontend rate DTOs',
-  /requestFingerprint:\s*rate\.requestFingerprint/.test(apiClient) &&
-    /proofSource:\s*rate\.proofSource/.test(apiClient),
+  // Repointed (guard rot): translateRateToLegacyDisplayShape lives in v2-apiClient/shared.ts
+  // now (var rate→obj); toLegacyRateArray in v2-apiClient.ts still maps every rate through it.
+  /requestFingerprint:\s*obj\.requestFingerprint/.test(v2Shared) &&
+    /proofSource:\s*obj\.proofSource/.test(v2Shared),
 );
 check(
   'no selected-rate proof bypass or force flag exists',
