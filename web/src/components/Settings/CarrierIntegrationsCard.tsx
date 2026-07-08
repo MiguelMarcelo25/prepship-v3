@@ -973,11 +973,20 @@ interface ShopifyShippingReadinessResult {
   shopDomain?: string
   shopName?: string
   scopes?: string[]
+  requiredScopes?: readonly string[]
   missingScopes?: string[]
   requiredPermission?: string
   orderId?: string
   orderName?: string
   fulfillmentOrderId?: string | null
+  eligibility?: {
+    eligible?: boolean
+    canPurchase?: boolean
+    purchaseEnabled?: boolean
+    fulfillmentOrderId?: string | null
+    missing?: string[]
+    blockers?: string[]
+  }
   mockLabel?: {
     mock: boolean
     trackingNumber?: string
@@ -990,6 +999,56 @@ interface ShopifyShippingReadinessResult {
 
 async function checkShopifyShipping(storeAccountId: number): Promise<ShopifyShippingReadinessResult> {
   return api.post<ShopifyShippingReadinessResult>('/carriers/shopify/shipping-readiness', { storeAccountId })
+}
+
+function formatShopifyReadinessMissing(reason: string): string {
+  if (reason.startsWith('scope:')) return `missing API scope ${reason.slice('scope:'.length)}`
+  if (reason === 'fulfillmentOrderId') return 'no open Shopify fulfillment order found'
+  if (reason === 'source:shopify') return 'sample order is not from Shopify'
+  return reason
+}
+
+function shopifyShippingReadinessColor(result: ShopifyShippingReadinessResult): string {
+  if (!result.ok) return 'var(--red)'
+  if (result.eligibility?.canPurchase === false || result.eligibility?.purchaseEnabled === false) {
+    return 'var(--orange, #e8650a)'
+  }
+  return 'var(--green)'
+}
+
+function formatShopifyShippingReadiness(result: ShopifyShippingReadinessResult): string {
+  if (!result.ok) {
+    const missing = [
+      ...(result.missingScopes ?? []).map((scope) => `missing API scope ${scope}`),
+      ...(result.eligibility?.missing ?? [])
+        .filter((reason) => !reason.startsWith('scope:'))
+        .map(formatShopifyReadinessMissing),
+    ]
+    const fix = missing.length ? ` Fix: ${Array.from(new Set(missing)).join(' · ')}.` : ''
+    return `Shopify Shipping check failed: ${result.error ?? result.message ?? 'Unknown error'}.${fix}`
+  }
+
+  const parts = ['Shopify Shipping connection OK', 'API scopes OK']
+  if (result.orderName) parts.push(`sample ${result.orderName}`)
+  if (result.fulfillmentOrderId) parts.push('fulfillment order ready')
+  if (result.mockLabel?.mock) {
+    parts.push(`mock label path ready (${result.mockLabel.trackingNumber ?? 'no postage'})`)
+  }
+
+  const liveChecks: string[] = []
+  if (result.eligibility?.purchaseEnabled === false) {
+    liveChecks.push('live purchase OFF: enable SHOPIFY_SHIPPING_LABELS_ENABLED on Render only when ready')
+  } else if (result.eligibility?.purchaseEnabled === true) {
+    liveChecks.push('live purchase flag ON')
+  }
+
+  if (result.eligibility?.canPurchase === true) {
+    liveChecks.push('ready for one approved live label test')
+  } else {
+    liveChecks.push(`staff permission must be verified by live test: ${result.requiredPermission ?? 'buy_shipping_labels'}`)
+  }
+
+  return `${parts.join(' · ')}. ${liveChecks.join(' · ')}.`
 }
 
 // Maps a store provider key to the matching Pull Orders endpoint helper.
@@ -2918,21 +2977,11 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         {shopifyShippingResults[d.id] ? (
           <div style={{
             fontSize: 11,
-            color: shopifyShippingResults[d.id]!.ok ? 'var(--green)' : 'var(--red)',
+            color: shopifyShippingReadinessColor(shopifyShippingResults[d.id]!),
             paddingLeft: 4,
             marginTop: 2,
           }}>
-            {(() => {
-              const r = shopifyShippingResults[d.id]!
-              if (!r.ok) {
-                const missing = r.missingScopes?.length ? ` Missing scopes: ${r.missingScopes.join(', ')}.` : ''
-                return `❌ Shopify Shipping check failed: ${r.error ?? r.message ?? 'Unknown error'}.${missing}`
-              }
-              const order = r.orderName ? ` · sample ${r.orderName}` : ''
-              const fulfillment = r.fulfillmentOrderId ? ` · fulfillment order ready` : ''
-              const mock = r.mockLabel?.mock ? ` · mock label path ready (${r.mockLabel.trackingNumber ?? 'no postage'})` : ''
-              return `✅ Shopify Shipping ready${order}${fulfillment}${mock} · permission needed: ${r.requiredPermission ?? 'buy_shipping_labels'}`
-            })()}
+            {formatShopifyShippingReadiness(shopifyShippingResults[d.id]!)}
           </div>
         ) : null}
         {/* Inline feedback for Pull Fees. Reports how many orders'

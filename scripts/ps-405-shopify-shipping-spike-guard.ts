@@ -456,5 +456,10 @@ await check('Shopify Shipping readiness is wired to the backend route and Settin
   const settings = readFileSync('web/src/components/Settings/CarrierIntegrationsCard.tsx', 'utf8');
   assert.match(settings, /checkShopifyShipping/);
   assert.match(settings, /Shipping Check/);
+  assert.match(settings, /formatShopifyShippingReadiness/);
   assert.match(settings, /mock label path ready/);
+  assert.match(settings, /live purchase OFF/);
+  assert.match(settings, /SHOPIFY_SHIPPING_LABELS_ENABLED/);
+  assert.match(settings, /staff permission must be verified by live test/);
+  assert.doesNotMatch(settings, /permission needed:/);
 });
