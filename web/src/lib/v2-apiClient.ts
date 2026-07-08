@@ -1266,6 +1266,14 @@ export const apiClient = {
     return api.post<any>('/labels', payload).then(normalizeLabelResponse);
   },
 
+  createShopifyLabel(payload: unknown): Promise<any> {
+    return api.post<any>('/labels/shopify', payload).then(normalizeLabelResponse);
+  },
+
+  pollShopifyLabelPurchase(purchaseResultId: string): Promise<any> {
+    return api.get<any>(`/labels/shopify/${encodeURIComponent(purchaseResultId)}`).then(normalizeLabelResponse);
+  },
+
   // PS-139: removed dead FE method createLabelBatch (0 callers; the backend /labels/create-batch
   // route + the parity-kept backend createLabelBatch service are untouched).
 
@@ -2925,6 +2933,10 @@ export const apiClient = {
   // DTO without rebuilding fields in the client.
   browseRates(data: Record<string, unknown>): Promise<any> {
     return postRateBrowseTransport(data);
+  },
+
+  browseShopifyRates(data: Record<string, unknown>): Promise<any> {
+    return api.post<any>('/rates/shopify', data);
   },
 
   // Server-aggregated daily order counts split by status. Replaces the

@@ -121,6 +121,8 @@ export type RbOrderSummaryDto = {
   orderNumber?: string | null;
   externalOrderId?: string | null;
   external_order_id?: string | null;
+  sourceProvider?: string | null;
+  source_provider?: string | null;
   storeId?: number | null;
   clientId?: number | null;
   clientName?: string | null;
@@ -266,6 +268,32 @@ export type RateRow = {
   proofSource?: string | null;
   secondBestRate?: unknown;
   raw?: any;
+};
+
+type ShopifyCheckoutShippingLine = {
+  title?: string | null;
+  amount?: number | string | null;
+  currency?: string | null;
+  carrierCode?: string | null;
+  serviceCode?: string | null;
+};
+
+type ShopifyRateRow = {
+  selectedRateKey: string;
+  handle?: string | null;
+  title?: string | null;
+  amount: number;
+  currency?: string | null;
+  carrierCode?: string | null;
+  serviceCode?: string | null;
+};
+
+type ShopifyRatesResult = {
+  provider: 'shopify_shipping';
+  checkoutShipping?: ShopifyCheckoutShippingLine[] | null;
+  fulfillmentOrderId?: string | null;
+  shopifyRateQuoteId?: string | null;
+  rates: ShopifyRateRow[];
 };
 
 type DirectCarrierRateError = {
@@ -999,6 +1027,12 @@ export default function RateBrowserModal({
   const [carrierStatusByPid, setCarrierStatusByPid] = useState<Record<string, CarrierRateStatus>>({});
   const [rateBrowseInfo, setRateBrowseInfo] = useState<RateBrowseInfo>({ source: null });
   const [carrierTimingByPid, setCarrierTimingByPid] = useState<Record<string, number>>({});
+  const [shopifyRatesResult, setShopifyRatesResult] = useState<ShopifyRatesResult | null>(null);
+  const [shopifyRatesLoading, setShopifyRatesLoading] = useState(false);
+  const [shopifyRatesError, setShopifyRatesError] = useState<string | null>(null);
+  const [selectedShopifyRateKey, setSelectedShopifyRateKey] = useState<string | null>(null);
+  const [shopifyLabelBuyingKey, setShopifyLabelBuyingKey] = useState<string | null>(null);
+  const [shopifyLabelMessage, setShopifyLabelMessage] = useState<string | null>(null);
   // PS-279: true when the fan-out finished but the backend returned no canonical best for the
   // eligible set. The modal then emits NOTHING (never a FE-ranked local cheapest) and shows a
   // retry diagnostic so the operator re-runs the browse instead of silently persisting a wrong
@@ -1193,6 +1227,10 @@ export default function RateBrowserModal({
     setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
     setRateMetaByPid({});
     setCarrierTimingByPid({});
+    setShopifyRatesResult(null);
+    setShopifyRatesError(null);
+    setSelectedShopifyRateKey(null);
+    setShopifyLabelMessage(null);
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1235,6 +1273,12 @@ export default function RateBrowserModal({
     insuranceProvider,
     insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
   };
+  const isShopifyOrder = normalizeProviderKey(
+    order?.sourceProvider ??
+    order?.source_provider ??
+    (order as Record<string, unknown> | null)?.source ??
+    (order as Record<string, unknown> | null)?.marketplace
+  ) === 'shopify';
 
   // Escape key
   useEffect(() => {
@@ -1313,6 +1357,90 @@ export default function RateBrowserModal({
     if (typeof pkg.length === 'number' && pkg.length > 0) setLen(String(pkg.length));
     if (typeof pkg.width === 'number' && pkg.width > 0) setWid(String(pkg.width));
     if (typeof pkg.height === 'number' && pkg.height > 0) setHgt(String(pkg.height));
+  }
+
+  function selectedPackageForShopify(): RbPackageDto | null {
+    return packageId ? packages.find((p) => String(p.packageId) === packageId) ?? null : null;
+  }
+
+  function shopifyRatePayload(): Record<string, unknown> | null {
+    if (!order?.orderId || !hasWeight || !hasDims) return null;
+    const totalOz = lbNum * 16 + ozNum;
+    const pkg = selectedPackageForShopify();
+    return {
+      orderId: order.orderId,
+      weightOz: totalOz,
+      dims: { length: lenNum, width: widNum, height: hgtNum },
+      dimsL: lenNum,
+      dimsW: widNum,
+      dimsH: hgtNum,
+      packageName: pkg?.name ?? undefined,
+      customPackageId: packageId ? Number(packageId) : undefined,
+    };
+  }
+
+  async function browseShopifyRates(refresh = true): Promise<void> {
+    if (!isShopifyOrder) return;
+    const payload = shopifyRatePayload();
+    if (!payload) {
+      setShopifyRatesError('Weight and package dimensions are required before browsing Shopify Rates.');
+      return;
+    }
+    setShopifyRatesLoading(true);
+    setShopifyRatesError(null);
+    setShopifyLabelMessage(null);
+    try {
+      const result = await apiClient.browseShopifyRates({ ...payload, refresh }) as ShopifyRatesResult;
+      const rates = Array.isArray(result?.rates) ? result.rates : [];
+      const normalized: ShopifyRatesResult = {
+        provider: 'shopify_shipping',
+        checkoutShipping: Array.isArray(result?.checkoutShipping) ? result.checkoutShipping : [],
+        fulfillmentOrderId: result?.fulfillmentOrderId ?? null,
+        shopifyRateQuoteId: result?.shopifyRateQuoteId ?? null,
+        rates,
+      };
+      setShopifyRatesResult(normalized);
+      setSelectedShopifyRateKey(rates[0]?.selectedRateKey ?? null);
+      if (!rates.length) setShopifyRatesError('Shopify returned no live shipping rates for this order.');
+    } catch (error) {
+      setShopifyRatesResult(null);
+      setSelectedShopifyRateKey(null);
+      setShopifyRatesError(error instanceof Error ? error.message : 'Failed to browse Shopify Rates.');
+    } finally {
+      setShopifyRatesLoading(false);
+    }
+  }
+
+  async function buyShopifyLabel(rate: ShopifyRateRow): Promise<void> {
+    const payload = shopifyRatePayload();
+    const quoteId = shopifyRatesResult?.shopifyRateQuoteId;
+    if (!payload || !quoteId || !rate.selectedRateKey) {
+      setShopifyRatesError('Refresh Shopify Rates before buying a Shopify label.');
+      return;
+    }
+    setShopifyLabelBuyingKey(rate.selectedRateKey);
+    setShopifyRatesError(null);
+    setShopifyLabelMessage(null);
+    try {
+      const result = await apiClient.createShopifyLabel({
+        ...payload,
+        shopifyRateQuoteId: quoteId,
+        selectedRateKey: rate.selectedRateKey,
+        testLabel: testMode === true,
+        notifyCustomer: false,
+      });
+      if (result?.pending) {
+        const resultId = toOptionalString(result?.purchaseResultId);
+        setShopifyLabelMessage(resultId ? `Shopify label purchase pending: ${resultId}` : 'Shopify label purchase pending.');
+        return;
+      }
+      const tracking = toOptionalString(result?.trackingNumber);
+      setShopifyLabelMessage(tracking ? `Shopify label created: ${tracking}` : 'Shopify label created.');
+    } catch (error) {
+      setShopifyRatesError(error instanceof Error ? error.message : 'Failed to buy Shopify label.');
+    } finally {
+      setShopifyLabelBuyingKey(null);
+    }
   }
 
   // Fetch all scoped carrier accounts in one UI request. The backend still calls
@@ -2067,6 +2195,155 @@ export default function RateBrowserModal({
     );
   }
 
+  function formatShopifyMoney(amount: unknown, currency: unknown): string {
+    const value = toFiniteNumber(amount);
+    const code = typeof currency === 'string' && currency.trim() ? currency.trim().toUpperCase() : 'USD';
+    if (value == null) return '—';
+    try {
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(value);
+    } catch {
+      return `${value.toFixed(2)} ${code}`;
+    }
+  }
+
+  function renderShopifyRatesPanel(): ReactNode {
+    if (!isShopifyOrder) return null;
+    const checkoutShipping = shopifyRatesResult?.checkoutShipping ?? [];
+    const shopifyRates = shopifyRatesResult?.rates ?? [];
+    return (
+      <div
+        data-rate-browser="shopifyRatesPanel"
+        style={{
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--surface)',
+          padding: '12px 18px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>Shopify Rates</div>
+            {checkoutShipping.length ? (
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>
+                Buyer-paid checkout shipping:{' '}
+                {checkoutShipping.map((line, index) => (
+                  <span key={`${line.title ?? 'checkout'}-${index}`}>
+                    {index > 0 ? ', ' : ''}
+                    {line.title ?? 'Shipping'} {formatShopifyMoney(line.amount, line.currency)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => void browseShopifyRates(true)}
+            disabled={shopifyRatesLoading || !hasWeight || !hasDims}
+            style={{ fontSize: 12, padding: '7px 10px', whiteSpace: 'nowrap' }}
+          >
+            {shopifyRatesLoading ? 'Fetching...' : shopifyRates.length ? 'Refresh Shopify Rates' : 'Browse Shopify Rates'}
+          </button>
+        </div>
+
+        {shopifyRatesError ? (
+          <div
+            role="status"
+            style={{
+              fontSize: 11.5,
+              color: 'var(--red)',
+              background: 'rgba(185, 28, 28, 0.08)',
+              border: '1px solid rgba(185, 28, 28, 0.18)',
+              borderRadius: 6,
+              padding: '7px 9px',
+            }}
+          >
+            {shopifyRatesError}
+          </div>
+        ) : null}
+
+        {shopifyLabelMessage ? (
+          <div
+            role="status"
+            style={{
+              fontSize: 11.5,
+              color: 'var(--green)',
+              background: 'rgba(22, 163, 74, 0.08)',
+              border: '1px solid rgba(22, 163, 74, 0.18)',
+              borderRadius: 6,
+              padding: '7px 9px',
+            }}
+          >
+            {shopifyLabelMessage}
+          </div>
+        ) : null}
+
+        {shopifyRates.length ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {shopifyRates.map((rate) => {
+              const selected = selectedShopifyRateKey === rate.selectedRateKey;
+              const buying = shopifyLabelBuyingKey === rate.selectedRateKey;
+              return (
+                <div
+                  key={rate.selectedRateKey}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+                    gap: 10,
+                    alignItems: 'center',
+                    border: `1px solid ${selected ? 'var(--brand, #2563eb)' : 'var(--border)'}`,
+                    borderRadius: 7,
+                    padding: '9px 10px',
+                    background: selected ? 'rgba(37, 99, 235, 0.06)' : 'var(--surface2)',
+                  }}
+                >
+                  <label
+                    style={{
+                      minWidth: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 9,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="shopifyRate"
+                      checked={selected}
+                      onChange={() => setSelectedShopifyRateKey(rate.selectedRateKey)}
+                    />
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: 'block', fontSize: 12.5, fontWeight: 800, color: 'var(--text)' }}>
+                        {rate.title ?? rate.serviceCode ?? 'Shopify Shipping'}
+                      </span>
+                      <span style={{ display: 'block', fontSize: 11, color: 'var(--text3)' }}>
+                        {[rate.carrierCode, rate.serviceCode].filter(Boolean).join(' · ') || rate.handle || 'Shopify Shipping'}
+                      </span>
+                    </span>
+                  </label>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+                    {formatShopifyMoney(rate.amount, rate.currency)}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={Boolean(shopifyLabelBuyingKey) || !selected}
+                    onClick={() => void buyShopifyLabel(rate)}
+                    style={{ fontSize: 12, padding: '7px 10px', whiteSpace: 'nowrap' }}
+                  >
+                    {buying ? 'Buying...' : 'Buy Shopify Label'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   // PS-157: the rates body (empty/loading/all/carriers states + the All-Rates and
   // per-carrier views) moved verbatim into <RateRowsView>. The parent still owns
   // combinedAll / filterBySvcClass / isBlockedRate and the row rendering
@@ -2698,7 +2975,7 @@ export default function RateBrowserModal({
               }}
             >
               <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
-                Rates
+                {isShopifyOrder ? 'PrepShip Rates' : 'Rates'}
               </span>
               <span style={{ fontSize: 11.5, color: 'var(--text3)', flex: 1 }}>
                 {rateBrowserHeaderText}
@@ -2770,6 +3047,7 @@ export default function RateBrowserModal({
                 flexDirection: 'column',
               }}
             >
+              {renderShopifyRatesPanel()}
               {/* PS-157: rates body extracted to <RateRowsView>; parent keeps the
                   row rendering + all rate math/filtering and passes them down. */}
               <RateRowsView

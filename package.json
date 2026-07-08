@@ -167,6 +167,7 @@
     "test:ps-402-fulfillment-conflict": "tsx scripts/ps-402-fulfillment-conflict-guard.ts",
     "test:shopify-store-connector": "tsx scripts/shopify-store-connector-guard.ts",
     "test:ps-405-shopify-shipping-spike": "tsx scripts/ps-405-shopify-shipping-spike-guard.ts",
+    "test:ps-406-shopify-rates-labels": "tsx scripts/ps-406-shopify-rates-labels-guard.ts",
     "test:ps-387-effective-order-status-sot": "tsx scripts/ps-387-effective-order-status-sot-guard.ts",
     "test:ps-386-stale-rate-aliases": "tsx scripts/ps-386-stale-rate-aliases-guard.ts",
     "test:ps-383-billing-storage-proof-migration": "tsx scripts/ps-383-billing-storage-proof-migration-guard.ts",

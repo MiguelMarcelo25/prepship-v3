@@ -6,10 +6,12 @@ import {
   LabelRateLimitError,
   createBatchV2,
   createLabelV2,
+  createShopifyShippingLabelForOrder,
   createReturnLabelV2,
   getMockLabel,
   getMockLabelAsync,
   lookupLabel,
+  pollShopifyShippingLabelPurchase,
   retrieveLabelV2,
   voidLabelV2,
 } from '../services/labels';
@@ -24,6 +26,7 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { recordLabelOperationLog } from '../lib/label-operation-log';
 // PS-234: durable audit trail for label create/void/return.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
+import { ShopifyRatesError } from '../services/shopify-rates';
 
 const app = new Hono();
 
@@ -87,6 +90,20 @@ const createBody = z.object({
   selectedRateKey: z.string().min(1).nullable().optional(),
 });
 
+const shopifyCreateBody = z.object({
+  orderId: z.number().int().positive(),
+  shopifyRateQuoteId: z.string().min(1),
+  selectedRateKey: z.string().min(1),
+  weightOz: z.number().positive().optional(),
+  length: z.number().positive().optional(),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional(),
+  packageName: z.string().trim().min(1).nullable().optional(),
+  customPackageId: z.number().int().positive().nullable().optional(),
+  notifyCustomer: z.boolean().optional(),
+  testLabel: z.boolean().optional(),
+});
+
 const batchBody = z.object({
   orderIds: z.array(z.number().int().positive()).min(1).max(100),
   serviceCode: z.string().min(1),
@@ -109,6 +126,7 @@ const returnBody = z
 
 type CreateErr = Error & { code?: string; details?: Record<string, unknown>; rateLimited?: boolean; retryAfterMs?: number };
 type CreateLabelRouteBody = z.infer<typeof createBody>;
+type ShopifyCreateLabelRouteBody = z.infer<typeof shopifyCreateBody>;
 
 function handleCreateError(c: Context, err: unknown): Response {
   const e = err as CreateErr;
@@ -172,6 +190,9 @@ function handleCreateError(c: Context, err: unknown): Response {
   if (e.code === 'LABEL_EXISTS' || e.code === 'ORDER_NOT_EDITABLE') {
     return c.json({ error: message, code: e.code, ...details }, 400);
   }
+  if (e instanceof ShopifyRatesError) {
+    return c.json({ error: message, code: e.code, ...details }, e.status as 400);
+  }
   const invalid = [
     'orderId and serviceCode required',
     'shippingProviderId required for v2 label creation',
@@ -189,6 +210,48 @@ function handleCreateError(c: Context, err: unknown): Response {
 
 function createErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
+}
+
+async function createShopifyLabelRouteResponse(c: Context, body: ShopifyCreateLabelRouteBody): Promise<Response> {
+  const startedAt = Date.now();
+  try {
+    const result = await createShopifyShippingLabelForOrder(body, labelsScopeFromContext(c));
+    recordLabelOperationLog({
+      action: 'label_create',
+      status: 'success',
+      orderId: body.orderId,
+      orderNumber: null,
+      cause: result.trackingNumber ? `Shopify label created: ${result.trackingNumber}` : 'Shopify label created',
+      trackingNumber: result.trackingNumber ?? undefined,
+      timingMs: result.timings?.totalMs ?? Date.now() - startedAt,
+      source: result.provider,
+    });
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'label',
+      resourceType: 'order',
+      resourceId: body.orderId,
+      action: 'shopify_label_create',
+      details: {
+        shipmentId: result.shipmentId,
+        tracking: result.trackingNumber,
+        cost: result.cost,
+        shopifyRateQuoteId: result.shopifyRateQuoteId,
+        selectedRateKey: result.selectedRateKey,
+      },
+    });
+    return c.json(result, 201);
+  } catch (err) {
+    recordLabelOperationLog({
+      action: 'label_create',
+      status: 'error',
+      orderId: body.orderId,
+      orderNumber: null,
+      cause: createErrorMessage(err),
+      timingMs: Date.now() - startedAt,
+    });
+    return handleCreateError(c, err);
+  }
 }
 
 async function createLabelRouteResponse(c: Context, body: CreateLabelRouteBody): Promise<Response> {
@@ -238,6 +301,22 @@ app.post('/', requireInternalPermission('print_queue:write'), zValidator('json',
 // POST /labels/create — explicit v2 path alias
 app.post('/create', requireInternalPermission('print_queue:write'), zValidator('json', createBody), async (c) => {
   return createLabelRouteResponse(c, c.req.valid('json'));
+});
+
+// POST /labels/shopify - buy a Shopify Shipping label from a backend-issued Shopify rate quote.
+// Hidden from portal roles by requireInternalPermission; the service re-checks Shopify source,
+// selected-rate proof, shipped/cancelled editability, and shipping safety before postage.
+app.post('/shopify', requireInternalPermission('print_queue:write'), zValidator('json', shopifyCreateBody), async (c) => {
+  return createShopifyLabelRouteResponse(c, c.req.valid('json'));
+});
+
+app.get('/shopify/:purchaseResultId', requireInternalPermission('print_queue:write'), async (c) => {
+  try {
+    const result = await pollShopifyShippingLabelPurchase(c.req.param('purchaseResultId'), labelsScopeFromContext(c));
+    return c.json(result, result.pending ? 202 : 200);
+  } catch (err) {
+    return handleCreateError(c, err);
+  }
 });
 
 // POST /labels/create-batch — bulk creation

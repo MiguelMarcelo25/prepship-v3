@@ -44,6 +44,7 @@ import { produceRateBrowsePayload } from '../services/rate-browse-response-produ
 import { stampRateBrowserDisplayAliases } from '../services/rate-browser-display-fields';
 import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-ship-from-origin';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { getShopifyRatesForOrder, ShopifyRatesError } from '../services/shopify-rates';
 
 const app = new Hono();
 
@@ -249,6 +250,23 @@ const browseBody = rateBody.extend({
   strictRecalculate: z.boolean().optional(),
 });
 
+const shopifyRatesBody = z.object({
+  orderId: z.number().int().positive(),
+  weightOz: z.number().positive().optional(),
+  dims: z
+    .object({
+      length: z.number().positive().optional(),
+      width: z.number().positive().optional(),
+      height: z.number().positive().optional(),
+    })
+    .optional(),
+  dimsL: z.number().positive().optional(),
+  dimsW: z.number().positive().optional(),
+  dimsH: z.number().positive().optional(),
+  packageName: z.string().trim().min(1).optional(),
+  refresh: z.boolean().optional(),
+});
+
 // PS-203 (stage 3): rateTotal + dedupeBrowseRates moved to the canonical
 // combined-selection owner (src/services/rates-combined.ts) — imported above.
 
@@ -338,6 +356,37 @@ app.get('/browse/workflow/:jobId', async (c) => {
   const snapshot = await getRateBrowseWorkflow(c.req.param('jobId'));
   if (!snapshot) return c.json({ error: 'Rate browse workflow job not found' }, 404);
   return c.json(publicRateBrowseWorkflowSnapshot(snapshot, canViewRateFinancials(c)));
+});
+
+app.post('/shopify', requireInternalPermission('print_queue:write'), zValidator('json', shopifyRatesBody), async (c) => {
+  const body = c.req.valid('json');
+  const browseScope = scopeFromContext(c);
+  const [inScope] = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(eq(orders.id, body.orderId), orderScopePredicate(browseScope)))
+    .limit(1);
+  if (!inScope) return c.json({ error: 'Order not found' }, 404);
+
+  try {
+    const result = await getShopifyRatesForOrder({
+      orderId: body.orderId,
+      weightOz: body.weightOz,
+      dims: {
+        length: body.dims?.length ?? body.dimsL,
+        width: body.dims?.width ?? body.dimsW,
+        height: body.dims?.height ?? body.dimsH,
+      },
+      packageName: body.packageName,
+      refresh: body.refresh,
+    });
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof ShopifyRatesError) {
+      return c.json({ error: err.message, code: err.code, ...(err.details ?? {}) }, err.status as 400);
+    }
+    return c.json({ error: err instanceof Error ? err.message : 'Shopify Rates failed' }, 500);
+  }
 });
 
 // PS-203 (stage 2): does the cached row's diagnostic set cover any DIRECT

@@ -60,6 +60,60 @@ mutation shippingLabelPurchase($shippingLabelPurchase: ShippingLabelPurchaseInpu
 }
 `;
 
+const SHOPIFY_SHIPPING_LABEL_PURCHASE_RESULT_QUERY = `
+query PrepShipShippingLabelPurchaseResult($id: ID!) {
+  node(id: $id) {
+    ... on ShippingLabelPurchaseResult {
+      id
+      done
+      status
+      errors {
+        code
+        field
+        message
+      }
+      shippingLabels {
+        id
+        printed
+        cancellable
+        trackingInfo {
+          number
+          company
+          url
+        }
+        shippingDocuments {
+          documentType
+          format
+          shippingLabelId
+          url
+        }
+      }
+    }
+  }
+}
+`;
+
+const SHOPIFY_DRAFT_ORDER_DELIVERY_OPTIONS_QUERY = `
+query PrepShipDraftOrderDeliveryOptions($input: DraftOrderAvailableDeliveryOptionsInput!) {
+  draftOrderAvailableDeliveryOptions(input: $input) {
+    availableShippingRates {
+      handle
+      title
+      source
+      code
+      price {
+        amount
+        currencyCode
+      }
+    }
+    userErrors {
+      field
+      message
+    }
+  }
+}
+`;
+
 type ShopifyCredentials = {
   shopDomain: string;
   accessToken: string;
@@ -180,9 +234,20 @@ export type ShopifyShippingPurchaseInput = {
   purchaseInput: BuildShopifyShippingLabelPurchaseInput;
 };
 
+export type ShopifyDraftOrderDeliveryOptionsInput = Record<string, unknown>;
+
+export type ShopifyDraftOrderShippingRate = {
+  handle?: unknown;
+  title?: unknown;
+  source?: unknown;
+  code?: unknown;
+  price?: unknown;
+};
+
 export type ShopifyShippingPurchasedLabelResult = {
   provider: typeof SHOPIFY_SHIPPING_PROVIDER;
   mock: false;
+  pending?: false;
   fulfillmentOrderId: string;
   orderId?: string;
   orderName?: string;
@@ -202,6 +267,33 @@ export type ShopifyShippingPurchasedLabelResult = {
   printable: true;
   raw: unknown;
 };
+
+export type ShopifyShippingPendingLabelPurchaseResult = {
+  provider: typeof SHOPIFY_SHIPPING_PROVIDER;
+  mock: false;
+  pending: true;
+  fulfillmentOrderId: string;
+  orderId?: string;
+  orderName?: string;
+  purchaseResultId: string;
+  done: false;
+  status: string;
+  labelId: null;
+  trackingNumber: null;
+  labelUrl: null;
+  labelFormat: null;
+  carrierCode: string;
+  serviceCode: string;
+  cost: null;
+  currency: null;
+  postagePurchased: true;
+  printable: false;
+  raw: unknown;
+};
+
+export type ShopifyShippingLabelPurchaseResult =
+  | ShopifyShippingPurchasedLabelResult
+  | ShopifyShippingPendingLabelPurchaseResult;
 
 export type ShopifyShippingReadinessResult = {
   ok: boolean;
@@ -608,7 +700,7 @@ export async function verifyShopifyCredentials(
 export async function purchaseShopifyShippingLabel(
   rawCredentials: Record<string, unknown>,
   input: ShopifyShippingPurchaseInput,
-): Promise<ShopifyShippingPurchasedLabelResult> {
+): Promise<ShopifyShippingLabelPurchaseResult> {
   if (!isShopifyShippingPurchaseEnabled(input.env)) {
     throw new ShopifyShippingPurchaseDisabledError();
   }
@@ -640,6 +732,119 @@ export async function purchaseShopifyShippingLabel(
     preferredCarrierCode: firstString(input.purchaseInput.preferredRateSelection?.carrierCode),
     preferredServiceCode: firstString(input.purchaseInput.preferredRateSelection?.serviceCode),
   });
+}
+
+export async function fetchShopifyShippingLabelPurchaseResult(
+  rawCredentials: Record<string, unknown>,
+  input: {
+    purchaseResultId: string;
+    fulfillmentOrderId: string;
+    orderId?: unknown;
+    orderName?: unknown;
+    preferredCarrierCode?: unknown;
+    preferredServiceCode?: unknown;
+  },
+): Promise<ShopifyShippingLabelPurchaseResult> {
+  const creds = await shopifyCredentials(rawCredentials);
+  const res = await shopifyFetch(
+    'shopify.shipping-label-purchase-result',
+    creds,
+    '/graphql.json',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        query: SHOPIFY_SHIPPING_LABEL_PURCHASE_RESULT_QUERY,
+        variables: { id: input.purchaseResultId },
+      }),
+    },
+    { purchaseResultId: input.purchaseResultId },
+  );
+  if (!res.ok) {
+    throw new Error(`Shopify shippingLabelPurchaseResult ${res.status}: ${await readShopifyError(res)}`);
+  }
+
+  const body = await res.json().catch(() => ({}));
+  return parseShopifyShippingPurchaseResult(body, {
+    fulfillmentOrderId: input.fulfillmentOrderId,
+    orderId: firstString(input.orderId),
+    orderName: firstString(input.orderName),
+    preferredCarrierCode: firstString(input.preferredCarrierCode),
+    preferredServiceCode: firstString(input.preferredServiceCode),
+  });
+}
+
+export async function fetchShopifyOrderShippingContext(
+  rawCredentials: Record<string, unknown>,
+  orderId: unknown,
+): Promise<Record<string, unknown>> {
+  const creds = await shopifyCredentials(rawCredentials);
+  const restOrderId = shopifyRestOrderIdFrom(orderId);
+  if (!restOrderId) throw new Error('Shopify order id is required to load shipping context');
+
+  const orderRes = await shopifyFetch(
+    'shopify.order-shipping-context',
+    creds,
+    `/orders/${encodeURIComponent(restOrderId)}.json`,
+    {},
+    { orderId: restOrderId },
+  );
+  if (!orderRes.ok) {
+    throw new Error(`Shopify order ${orderRes.status}: ${await readShopifyError(orderRes)}`);
+  }
+  const orderPayload = await orderRes.json().catch(() => ({}));
+  const order = asRecord(asRecord(orderPayload).order);
+
+  const fulfillmentOrdersRes = await shopifyFetch(
+    'shopify.fulfillment-orders',
+    creds,
+    `/orders/${encodeURIComponent(restOrderId)}/fulfillment_orders.json`,
+    {},
+    { orderId: restOrderId },
+  );
+  if (!fulfillmentOrdersRes.ok) {
+    throw new Error(`Shopify fulfillment_orders ${fulfillmentOrdersRes.status}: ${await readShopifyError(fulfillmentOrdersRes)}`);
+  }
+  const fulfillmentOrdersPayload = await fulfillmentOrdersRes.json().catch(() => ({}));
+  return {
+    ...order,
+    source: 'shopify',
+    fulfillment_orders: asArray(asRecord(fulfillmentOrdersPayload).fulfillment_orders),
+  };
+}
+
+export async function fetchShopifyDraftOrderAvailableDeliveryOptions(
+  rawCredentials: Record<string, unknown>,
+  input: ShopifyDraftOrderDeliveryOptionsInput,
+): Promise<ShopifyDraftOrderShippingRate[]> {
+  const creds = await shopifyCredentials(rawCredentials);
+  const res = await shopifyFetch(
+    'shopify.draft-order-delivery-options',
+    creds,
+    '/graphql.json',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        query: SHOPIFY_DRAFT_ORDER_DELIVERY_OPTIONS_QUERY,
+        variables: { input },
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Shopify draftOrderAvailableDeliveryOptions ${res.status}: ${await readShopifyError(res)}`);
+  }
+
+  const body = await res.json().catch(() => ({}));
+  const root = asRecord(body);
+  const graphErrors = asArray(root.errors);
+  if (graphErrors.length) {
+    throw shopifyShippingPurchaseError('Shopify draftOrderAvailableDeliveryOptions GraphQL error', graphErrors);
+  }
+  const payload = asRecord(asRecord(root.data).draftOrderAvailableDeliveryOptions);
+  const userErrors = asArray(payload.userErrors);
+  if (userErrors.length) {
+    throw shopifyShippingPurchaseError('Shopify draftOrderAvailableDeliveryOptions user error', userErrors);
+  }
+  return asArray(payload.availableShippingRates).map(asRecord);
 }
 
 export async function checkShopifyShippingReadiness(
@@ -869,30 +1074,60 @@ function parseShopifyShippingPurchaseResult(
     preferredCarrierCode?: string;
     preferredServiceCode?: string;
   },
-): ShopifyShippingPurchasedLabelResult {
+): ShopifyShippingLabelPurchaseResult {
   const root = asRecord(body);
   const graphErrors = asArray(root.errors);
   if (graphErrors.length) {
     throw shopifyShippingPurchaseError('Shopify shippingLabelPurchase GraphQL error', graphErrors);
   }
 
-  const payload = asRecord(asRecord(asRecord(root.data).shippingLabelPurchase));
+  const data = asRecord(root.data);
+  const payload = asRecord(asRecord(data).shippingLabelPurchase);
   const userErrors = asArray(payload.userErrors);
   if (userErrors.length) {
     throw shopifyShippingPurchaseError('Shopify shippingLabelPurchase user error', userErrors);
   }
 
-  const result = asRecord(payload.shippingLabelPurchaseResult);
+  const result = Object.keys(payload).length
+    ? asRecord(payload.shippingLabelPurchaseResult)
+    : asRecord(data.node);
   const resultErrors = asArray(result.errors);
   if (resultErrors.length) {
     throw shopifyShippingPurchaseError('Shopify shippingLabelPurchase provider error', resultErrors);
   }
+  const status = firstString(result.status) || 'UNKNOWN';
+  const purchaseResultId = firstString(result.id);
 
   const labels = asArray(result.shippingLabels).map(asRecord);
   const label = labels[0];
   if (!label || Object.keys(label).length === 0) {
+    const done = result.done === true;
+    if (!done) {
+      return {
+        provider: SHOPIFY_SHIPPING_PROVIDER,
+        mock: false,
+        pending: true,
+        fulfillmentOrderId: context.fulfillmentOrderId,
+        orderId: context.orderId,
+        orderName: context.orderName,
+        purchaseResultId,
+        done: false,
+        status,
+        labelId: null,
+        trackingNumber: null,
+        labelUrl: null,
+        labelFormat: null,
+        carrierCode: firstString(context.preferredCarrierCode, SHOPIFY_SHIPPING_PROVIDER),
+        serviceCode: firstString(context.preferredServiceCode, 'shopify_shipping'),
+        cost: null,
+        currency: null,
+        postagePurchased: true,
+        printable: false,
+        raw: body,
+      };
+    }
     throw shopifyShippingPurchaseError(
-      `Shopify shippingLabelPurchase returned no shipping label (status ${firstString(result.status) || 'unknown'})`,
+      `Shopify shippingLabelPurchase returned no shipping label (status ${status || 'unknown'})`,
       [],
       'SHOPIFY_SHIPPING_LABEL_MISSING',
     );
@@ -927,9 +1162,9 @@ function parseShopifyShippingPurchaseResult(
     fulfillmentOrderId: context.fulfillmentOrderId,
     orderId: context.orderId,
     orderName: context.orderName,
-    purchaseResultId: firstString(result.id),
+    purchaseResultId,
     done: Boolean(result.done),
-    status: firstString(result.status) || 'UNKNOWN',
+    status,
     labelId: firstString(label.id, document?.shippingLabelId),
     trackingNumber,
     trackingUrl: firstString(tracking.url) || undefined,

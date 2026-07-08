@@ -56,7 +56,31 @@ import {
   createDirectCarrierLabelForOrder,
   directLabelAccountRefFromProviderId,
   loadDirectAccountForLabel,
+  DIRECT_STORE_PROVIDER_ID_OFFSET,
 } from './labels-direct';
+import {
+  fetchShopifyShippingLabelPurchaseResult,
+  purchaseShopifyShippingLabel,
+  type ShopifyShippingLabelPurchaseResult,
+} from '../connectors/store/shopify';
+import {
+  SHOPIFY_SHIPPING_PROVIDER,
+  createShopifyShippingMockLabel,
+} from './shopify-shipping-labels';
+import {
+  assertShopifySelectedRate,
+  buildShopifyShippingPurchaseInputFromRate,
+  loadShopifyLabelPurchasePendingByResultId,
+  loadShopifyLabelPurchasePendingBySelection,
+  loadShopifyRateQuoteSnapshot,
+  markShopifyLabelPurchaseTerminal,
+  storeShopifyLabelPurchasePendingSnapshot,
+  ShopifyRatesError,
+  type ShopifyLabelPurchasePendingSnapshot,
+  type ShopifyNormalizedRate,
+  type ShopifyRateQuoteSnapshot,
+  loadShopifyStoreAccountForOrder,
+} from './shopify-rates';
 import { resolveCarrierRecipientName } from './carrier-recipient-name';
 import { normalizeProviderKey } from '../lib/direct-carrier-scope';
 import {
@@ -394,6 +418,30 @@ export type CreateLabelResponseDto = {
   // Per user override unlock shipped data on 2026-07-07: timing-only diagnostics
   // for print-queue performance; no label/order mutation behavior changes.
   timings?: LabelCreateTimingBreakdown;
+};
+
+export type CreateShopifyShippingLabelInputDto = {
+  orderId: number;
+  shopifyRateQuoteId: string;
+  selectedRateKey: string;
+  weightOz?: number;
+  length?: number;
+  width?: number;
+  height?: number;
+  packageName?: string | null;
+  customPackageId?: number | null;
+  notifyCustomer?: boolean;
+  testLabel?: boolean;
+};
+
+export type CreateShopifyShippingLabelResponseDto = CreateLabelResponseDto & {
+  provider: typeof SHOPIFY_SHIPPING_PROVIDER;
+  shopifyRateQuoteId: string;
+  selectedRateKey: string;
+  purchaseResultId?: string;
+  fulfillmentOrderId: string;
+  pending?: boolean;
+  status?: string;
 };
 
 // PS-211: void outcomes are structured statuses, not throw-strings. 'voided'
@@ -927,6 +975,7 @@ async function persistCreatedLabel(args: {
   source: string;
   insuranceProvider?: string | null;
   insuredValue?: number | null;
+  selectedRateJsonExtra?: Record<string, unknown> | null;
   tx?: DbTx;
 }): Promise<number> {
   const { created } = args;
@@ -1063,6 +1112,12 @@ async function persistCreatedLabel(args: {
         // synthesized number for direct labels and must not be sent to a
         // provider.
         providerLabelId: created.labelId ?? null,
+        // Per user override unlock shipped data on 2026-07-09: Shopify Shipping
+        // labels need to freeze their backend-issued Shopify rate proof and raw
+        // purchase result in the same selected-rate shipment snapshot. This is
+        // additive metadata on newly-created shipment rows only; it does not
+        // weaken shipped/cancelled edit protections or rewrite history.
+        ...(args.selectedRateJsonExtra ?? {}),
       },
       voided: created.voided,
       source: args.source,
@@ -1159,6 +1214,443 @@ export async function createLabelV2(
   } finally {
     await purchaseLock.release();
   }
+}
+
+export async function createShopifyShippingLabelForOrder(
+  body: CreateShopifyShippingLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateShopifyShippingLabelResponseDto> {
+  const purchaseLock = await acquireLabelPurchaseLock(body.orderId);
+  try {
+    return await createShopifyShippingLabelForOrderImpl(body, scope);
+  } finally {
+    await purchaseLock.release();
+  }
+}
+
+type CompletedShopifyPurchase = Exclude<ShopifyShippingLabelPurchaseResult, { pending: true }>;
+
+async function persistShopifyPurchasedLabel(input: {
+  order: any;
+  clientId: number | null;
+  body: Pick<CreateShopifyShippingLabelInputDto, 'shopifyRateQuoteId' | 'selectedRateKey'>;
+  selectedRate: ShopifyNormalizedRate;
+  fulfillmentOrderId: string;
+  providerAccountId: number;
+  providerAccountNickname: string | null;
+  resolvedPackageId: number | null;
+  effectiveWeightOz: number;
+  length: number;
+  width: number;
+  height: number;
+  purchased: CompletedShopifyPurchase | null;
+  mock: ReturnType<typeof createShopifyShippingMockLabel> | null;
+  timer: ReturnType<typeof createLabelTimer>;
+}): Promise<CreateShopifyShippingLabelResponseDto> {
+  const created: CreatedExternalLabel = {
+    labelId: input.purchased?.labelId ?? null,
+    shipmentId: 0,
+    trackingNumber: input.purchased?.trackingNumber ?? input.mock?.trackingNumber ?? null,
+    labelUrl: input.purchased?.labelUrl ?? input.mock?.labelUrl ?? null,
+    labelFormat: input.purchased?.labelFormat ?? (input.mock?.printable === false ? 'mock' : 'pdf'),
+    cost: input.purchased ? input.selectedRate.amount : 0,
+    insuranceCost: 0,
+    voided: false,
+    carrierCode: input.purchased?.carrierCode ?? input.selectedRate.carrierCode,
+    serviceCode: input.purchased?.serviceCode ?? input.selectedRate.serviceCode,
+    shipDate: new Date().toISOString(),
+    providerAccountId: input.providerAccountId,
+    providerAccountNickname: input.providerAccountNickname ?? 'Shopify Shipping',
+  };
+
+  await ensureShipmentsSelectedRateCostColumn();
+  // Per user override unlock shipped data on 2026-07-09: Shopify Shipping label
+  // purchase now uses the existing shipment/order-shipped transaction tail. The
+  // caller still blocks shipped/cancelled orders before postage, and this writes
+  // only the newly-created Shopify label snapshot.
+  const localShipmentId = await db.transaction(async (tx) => {
+    const shipmentId = await input.timer.task('persistCreatedShopifyLabel', () => persistCreatedLabel({
+      created,
+      orderId: input.order.id,
+      orderNumber: input.order.orderNumber ?? null,
+      clientId: input.clientId ?? null,
+      effectiveWeightOz: input.effectiveWeightOz,
+      length: input.length,
+      width: input.width,
+      height: input.height,
+      selectedPackageId: input.resolvedPackageId != null ? String(input.resolvedPackageId) : null,
+      source: SHOPIFY_SHIPPING_PROVIDER,
+      insuranceProvider: 'none',
+      insuredValue: null,
+      selectedRateJsonExtra: {
+        provider: SHOPIFY_SHIPPING_PROVIDER,
+        shopifyRateQuoteId: input.body.shopifyRateQuoteId,
+        selectedRateKey: input.body.selectedRateKey,
+        fulfillmentOrderId: input.fulfillmentOrderId,
+        handle: input.selectedRate.handle,
+        title: input.selectedRate.title,
+        amount: input.selectedRate.amount,
+        currency: input.selectedRate.currency,
+        rawShopifyRate: input.selectedRate.raw,
+        shopifyPurchaseResultId: input.purchased?.purchaseResultId ?? null,
+        rawShopifyPurchaseResult: input.purchased?.raw ?? input.mock ?? null,
+      },
+      tx,
+    }));
+    await input.timer.task('markOrderShipped', () => markOrderShipped(input.order.id, created.trackingNumber, { cleanupQueue: false, tx }));
+    return shipmentId;
+  });
+  input.timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
+    order: input.order,
+    shipmentId: localShipmentId,
+    packageId: input.resolvedPackageId,
+    source: SHOPIFY_SHIPPING_PROVIDER,
+    timer: input.timer,
+  }));
+
+  input.timer.done('response ready');
+  return {
+    provider: SHOPIFY_SHIPPING_PROVIDER,
+    shipmentId: localShipmentId,
+    trackingNumber: created.trackingNumber,
+    labelUrl: created.labelUrl,
+    cost: created.cost,
+    voided: false,
+    orderStatus: 'shipped',
+    apiVersion: 'v2',
+    shopifyRateQuoteId: input.body.shopifyRateQuoteId,
+    selectedRateKey: input.body.selectedRateKey,
+    purchaseResultId: input.purchased?.purchaseResultId,
+    fulfillmentOrderId: input.fulfillmentOrderId,
+    timings: input.timer.snapshot({ provider: 'direct' }),
+  };
+}
+
+export async function pollShopifyShippingLabelPurchase(
+  purchaseResultId: string,
+  scope: ClientStoreScope,
+): Promise<CreateShopifyShippingLabelResponseDto> {
+  const pending = await loadShopifyLabelPurchasePendingByResultId(purchaseResultId);
+  if (!pending) {
+    throw new ShopifyRatesError(
+      'No pending Shopify label purchase was found for this result id.',
+      'SHOPIFY_LABEL_PURCHASE_PENDING_NOT_FOUND',
+      404,
+    );
+  }
+
+  const timer = createLabelTimer(pending.orderId);
+  const order = await timer.task('order load', () => loadOrderRecord(pending.orderId));
+  if (!order) throw new Error('Order not found');
+  assertResourceInScope(scope, { clientId: order.clientId, storeId: order.storeId }, 'Order not found');
+
+  const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
+  if (existing) {
+    await markShopifyLabelPurchaseTerminal(pending, 'resolved', 'Existing active label found for order.');
+    return {
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      shipmentId: existing.id,
+      trackingNumber: existing.trackingNumber,
+      labelUrl: existing.labelUrl,
+      cost: Number(existing.selectedRateCost ?? 0) || 0,
+      voided: false,
+      orderStatus: order.orderStatus,
+      apiVersion: 'v2',
+      shopifyRateQuoteId: pending.shopifyRateQuoteId,
+      selectedRateKey: pending.selectedRateKey,
+      purchaseResultId: pending.purchaseResultId,
+      fulfillmentOrderId: pending.fulfillmentOrderId,
+      timings: timer.snapshot({ provider: 'direct' }),
+    };
+  }
+  if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
+    const err = new Error(`Cannot create label for ${order.orderStatus} order`) as Error & {
+      code?: string;
+      details?: Record<string, unknown>;
+    };
+    err.code = 'ORDER_NOT_EDITABLE';
+    err.details = { orderStatus: order.orderStatus };
+    throw err;
+  }
+  await assertOrderSafeToShip(order, { entryPoint: 'pollShopifyShippingLabelPurchase' });
+
+  const account = await loadShopifyStoreAccountForOrder({
+    sourceAccountId: order.sourceAccountId,
+    storeId: order.storeId,
+  });
+  let result: ShopifyShippingLabelPurchaseResult;
+  try {
+    result = await timer.task('Shopify shippingLabelPurchaseResult connector', () =>
+      fetchShopifyShippingLabelPurchaseResult(account.credentials, {
+        purchaseResultId: pending.purchaseResultId,
+        fulfillmentOrderId: pending.fulfillmentOrderId,
+        orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
+        orderName: order.orderNumber,
+        preferredCarrierCode: pending.selectedRate.carrierCode,
+        preferredServiceCode: pending.selectedRate.serviceCode,
+      }),
+    );
+  } catch (error) {
+    const code = (error as { code?: unknown })?.code;
+    if (typeof code === 'string' && code.startsWith('SHOPIFY_')) {
+      await markShopifyLabelPurchaseTerminal(pending, 'failed', error instanceof Error ? error.message : String(error));
+    }
+    throw error;
+  }
+
+  if (result.pending) {
+    await storeShopifyLabelPurchasePendingSnapshot({
+      ...pending,
+      updatedAt: new Date().toISOString(),
+      rawPurchaseResult: result.raw,
+    });
+    timer.done('Shopify purchase still pending');
+    return {
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      shipmentId: 0,
+      trackingNumber: null,
+      labelUrl: null,
+      cost: pending.selectedRate.amount,
+      voided: false,
+      orderStatus: order.orderStatus,
+      apiVersion: 'v2',
+      shopifyRateQuoteId: pending.shopifyRateQuoteId,
+      selectedRateKey: pending.selectedRateKey,
+      purchaseResultId: pending.purchaseResultId,
+      fulfillmentOrderId: pending.fulfillmentOrderId,
+      pending: true,
+      status: result.status,
+      timings: timer.snapshot({ provider: 'direct' }),
+    };
+  }
+
+  const resolvedPackageId = await resolveLabelPackageId({
+    orderId: order.id,
+    customPackageId: pending.customPackageId,
+    length: pending.dims.length,
+    width: pending.dims.width,
+    height: pending.dims.height,
+  });
+  const response = await persistShopifyPurchasedLabel({
+    order,
+    clientId: order.clientId ?? null,
+    body: {
+      shopifyRateQuoteId: pending.shopifyRateQuoteId,
+      selectedRateKey: pending.selectedRateKey,
+    },
+    selectedRate: pending.selectedRate,
+    fulfillmentOrderId: pending.fulfillmentOrderId,
+    providerAccountId: pending.providerAccountId,
+    providerAccountNickname: pending.providerAccountNickname ?? account.label ?? 'Shopify Shipping',
+    resolvedPackageId,
+    effectiveWeightOz: pending.weightOz,
+    length: pending.dims.length,
+    width: pending.dims.width,
+    height: pending.dims.height,
+    purchased: result,
+    mock: null,
+    timer,
+  });
+  await markShopifyLabelPurchaseTerminal(pending, 'resolved', 'Shopify label purchase persisted.');
+  return response;
+}
+
+async function createShopifyShippingLabelForOrderImpl(
+  body: CreateShopifyShippingLabelInputDto,
+  scope: ClientStoreScope,
+): Promise<CreateShopifyShippingLabelResponseDto> {
+  if (!body.orderId || !body.shopifyRateQuoteId || !body.selectedRateKey) {
+    throw new Error('orderId, shopifyRateQuoteId, and selectedRateKey required');
+  }
+
+  const timer = createLabelTimer(body.orderId);
+  await timer.task('fulfillment schema readiness', () => ensureFulfillmentSchema());
+  const order = await timer.task('order load', () => loadOrderRecord(body.orderId));
+  if (!order) throw new Error('Order not found');
+  assertResourceInScope(scope, { clientId: order.clientId, storeId: order.storeId }, 'Order not found');
+  if (normalizeProviderKey(order.sourceProvider) !== 'shopify') {
+    throw new ShopifyRatesError('Shopify labels are only available for Shopify-sourced orders.', 'SHOPIFY_ORDER_REQUIRED', 400);
+  }
+  if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
+    const err = new Error(`Cannot create label for ${order.orderStatus} order`) as Error & {
+      code?: string;
+      details?: Record<string, unknown>;
+    };
+    err.code = 'ORDER_NOT_EDITABLE';
+    err.details = { orderStatus: order.orderStatus };
+    throw err;
+  }
+  await assertOrderSafeToShip(order, { entryPoint: 'createShopifyShippingLabelForOrder' });
+
+  let clientId = order.clientId;
+  if (!clientId && order.storeId != null) {
+    const [match] = await db
+      .select({ id: clients.id })
+      .from(clients)
+      .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
+      .limit(1);
+    clientId = match?.id ?? null;
+  }
+
+  body = {
+    ...body,
+    testLabel: await resolveEffectiveTestLabel({
+      clientId,
+      requestedTestLabel: body.testLabel === true,
+      orderId: order.id,
+      entryPoint: 'createShopifyShippingLabelForOrder',
+    }),
+  };
+  if (clientId && !body.testLabel) checkLabelRateLimit(clientId);
+
+  const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
+  if (existing) {
+    const err = new Error('Label already exists for this order') as Error & {
+      code?: string;
+      details?: Record<string, unknown>;
+    };
+    err.code = 'LABEL_EXISTS';
+    err.details = {
+      shipmentId: existing.id,
+      trackingNumber: existing.trackingNumber,
+      labelUrl: existing.labelUrl,
+    };
+    throw err;
+  }
+
+  const snapshot = await loadShopifyRateQuoteSnapshot(body.shopifyRateQuoteId);
+  if (!snapshot || snapshot.orderId !== order.id) {
+    throw new ShopifyRatesError(
+      'Shopify rate quote expired. Refresh Shopify Rates before buying the label.',
+      'SHOPIFY_RATE_QUOTE_STALE',
+      409,
+    );
+  }
+  const selectedRate = assertShopifySelectedRate(snapshot, body.selectedRateKey);
+  const existingPending = await loadShopifyLabelPurchasePendingBySelection({
+    orderId: order.id,
+    shopifyRateQuoteId: body.shopifyRateQuoteId,
+    selectedRateKey: body.selectedRateKey,
+  });
+  if (existingPending) {
+    throw new ShopifyRatesError(
+      'Shopify label purchase is already pending for this selected rate. Poll the pending purchase before retrying.',
+      'SHOPIFY_LABEL_PURCHASE_PENDING',
+      409,
+      { purchaseResultId: existingPending.purchaseResultId, status: existingPending.status },
+    );
+  }
+
+  const overrides = await loadOrderDimsOverride(order.id);
+  const effectiveWeightOz = Number(body.weightOz ?? overrides?.rateWeightOz ?? order.weightOz ?? 0);
+  if (!effectiveWeightOz) throw new Error('Order weight required to create label');
+  const length = Number(body.length ?? overrides?.rateDimsL ?? 0) || null;
+  const width = Number(body.width ?? overrides?.rateDimsW ?? 0) || null;
+  const height = Number(body.height ?? overrides?.rateDimsH ?? 0) || null;
+  if (!length || !width || !height) {
+    throw new ShopifyRatesError('Shopify label purchase requires package dimensions.', 'SHOPIFY_DIMS_REQUIRED', 400);
+  }
+
+  const resolvedPackageId = await resolveLabelPackageId({
+    orderId: body.orderId ?? null,
+    customPackageId: body.customPackageId,
+    length,
+    width,
+    height,
+  });
+  const account = await loadShopifyStoreAccountForOrder({
+    sourceAccountId: order.sourceAccountId,
+    storeId: order.storeId,
+  });
+  const providerAccountId = DIRECT_STORE_PROVIDER_ID_OFFSET + account.id;
+  const purchaseInput = buildShopifyShippingPurchaseInputFromRate({
+    fulfillmentOrderId: snapshot.fulfillmentOrderId,
+    rate: selectedRate,
+    weightOz: effectiveWeightOz,
+    dims: { length, width, height },
+    packageName: body.packageName,
+    notifyCustomer: body.notifyCustomer ?? false,
+  });
+
+  const purchased = body.testLabel
+    ? null
+    : await timer.task('Shopify shippingLabelPurchase connector', () =>
+        purchaseShopifyShippingLabel(account.credentials, {
+          env: process.env,
+          orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
+          orderName: order.orderNumber,
+          purchaseInput,
+        }),
+      );
+  const mock = body.testLabel
+    ? createShopifyShippingMockLabel({
+        fulfillmentOrderId: snapshot.fulfillmentOrderId,
+        orderId: order.sourceOrderId ?? order.externalOrderId ?? order.id,
+        orderName: order.orderNumber,
+        shopDomain: account.credentials.shopDomain ?? account.credentials.shop_domain,
+        carrierCode: selectedRate.carrierCode,
+        serviceCode: selectedRate.serviceCode,
+      })
+    : null;
+
+  if (purchased?.pending) {
+    const now = new Date().toISOString();
+    await storeShopifyLabelPurchasePendingSnapshot({
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      status: 'pending',
+      orderId: order.id,
+      shopifyRateQuoteId: body.shopifyRateQuoteId,
+      selectedRateKey: body.selectedRateKey,
+      purchaseResultId: purchased.purchaseResultId,
+      fulfillmentOrderId: snapshot.fulfillmentOrderId,
+      selectedRate,
+      weightOz: effectiveWeightOz,
+      dims: { length, width, height },
+      packageName: body.packageName,
+      customPackageId: body.customPackageId,
+      providerAccountId,
+      providerAccountNickname: account.label ?? 'Shopify Shipping',
+      createdAt: now,
+      updatedAt: now,
+      rawPurchaseResult: purchased.raw,
+    });
+    timer.done('Shopify purchase pending');
+    return {
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      shipmentId: 0,
+      trackingNumber: null,
+      labelUrl: null,
+      cost: selectedRate.amount,
+      voided: false,
+      orderStatus: order.orderStatus,
+      apiVersion: 'v2',
+      shopifyRateQuoteId: body.shopifyRateQuoteId,
+      selectedRateKey: body.selectedRateKey,
+      purchaseResultId: purchased.purchaseResultId,
+      fulfillmentOrderId: snapshot.fulfillmentOrderId,
+      pending: true,
+      status: purchased.status,
+      timings: timer.snapshot({ provider: 'direct' }),
+    };
+  }
+
+  return persistShopifyPurchasedLabel({
+    order,
+    clientId,
+    body,
+    selectedRate,
+    fulfillmentOrderId: snapshot.fulfillmentOrderId,
+    providerAccountId,
+    providerAccountNickname: account.label ?? 'Shopify Shipping',
+    resolvedPackageId,
+    effectiveWeightOz,
+    length,
+    width,
+    height,
+    purchased,
+    mock,
+    timer,
+  });
 }
 
 async function createLabelV2Impl(

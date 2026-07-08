@@ -72,7 +72,7 @@ await check('Shopify Shipping starts disabled unless explicitly enabled', () => 
   assert.equal(isShopifyShippingPurchaseEnabled({ SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' }), true);
 });
 
-await check('Shopify Shipping eligibility requires Shopify source, write_orders, and fulfillment order id', () => {
+await check('Shopify Shipping eligibility requires Shopify source, draft-order read, write_orders, and fulfillment order id', () => {
   const result = evaluateShopifyShippingEligibility({
     sourceProvider: 'shopify',
     rawOrderPayload: rawShopifyOrder,
@@ -82,6 +82,7 @@ await check('Shopify Shipping eligibility requires Shopify source, write_orders,
       'read_merchant_managed_fulfillment_orders',
       'write_merchant_managed_fulfillment_orders',
       'read_orders',
+      'read_draft_orders',
       'write_orders',
       'read_products',
     ],
@@ -101,7 +102,7 @@ await check('Shopify Shipping refuses non-Shopify orders', () => {
   const result = evaluateShopifyShippingEligibility({
     sourceProvider: 'shipstation',
     rawOrderPayload: rawShopifyOrder,
-    grantedScopes: ['read_orders', 'write_orders', 'read_merchant_managed_fulfillment_orders'],
+    grantedScopes: ['read_orders', 'read_draft_orders', 'write_orders', 'read_merchant_managed_fulfillment_orders'],
     env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' },
   });
 
@@ -114,7 +115,7 @@ await check('Shopify Shipping refuses tokens without write_orders', () => {
   const result = evaluateShopifyShippingEligibility({
     sourceProvider: 'shopify',
     rawOrderPayload: rawShopifyOrder,
-    grantedScopes: ['read_orders', 'read_merchant_managed_fulfillment_orders'],
+    grantedScopes: ['read_orders', 'read_draft_orders', 'read_merchant_managed_fulfillment_orders'],
     env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' },
   });
 
@@ -400,6 +401,7 @@ await check('Shopify Shipping readiness uses the connected store account and hyd
       body: {
         access_scopes: [
           { handle: 'read_orders' },
+          { handle: 'read_draft_orders' },
           { handle: 'write_orders' },
           { handle: 'read_merchant_managed_fulfillment_orders' },
           { handle: 'write_merchant_managed_fulfillment_orders' },

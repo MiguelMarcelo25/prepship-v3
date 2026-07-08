@@ -91,6 +91,7 @@ import {
   writeDirectCarrierRates,
   type DirectCarrierCacheRow,
 } from './direct-carrier-rate-cache';
+import { isShopifyShippingDisplayOnlyProvider } from './shopify-rates';
 
 type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
@@ -2014,13 +2015,18 @@ async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<Direc
       .map((ref) => byKey.get(`${ref.sourceTable}:${ref.accountId}`))
       .filter((row): row is DirectCarrierAccountInfo => Boolean(row));
   }
-  return [...directRows, ...storeAccounts].filter((account) =>
-    directCarrierVisibleForScope(account, {
+  return [...directRows, ...storeAccounts].filter((account) => {
+    // Shopify Admin API rates are displayed through the separate Shopify Rates
+    // flow. They are not direct-carrier quote rows and must never enter Best Rate.
+    if (isShopifyShippingDisplayOnlyProvider(account.provider) || normalizeProviderKey(account.provider) === 'shopify') {
+      return false;
+    }
+    return directCarrierVisibleForScope(account, {
       clientId: input.clientId,
       storeId: input.storeId,
       includeAllDirectCarriers: input.includeAllDirectCarriers,
-    })
-  );
+    });
+  });
 }
 
 // PS-271 (Layer 2): the per-carrier union dedup key — carrier_code | service_code | amount(4dp).

@@ -5,6 +5,7 @@ const GRAMS_PER_OUNCE = 28.349523125;
 
 export const SHOPIFY_SHIPPING_REQUIRED_SCOPES = [
   'read_orders',
+  'read_draft_orders',
   'write_orders',
   'read_merchant_managed_fulfillment_orders',
 ] as const;
