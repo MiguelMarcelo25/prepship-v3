@@ -1,8 +1,13 @@
 export const SHOPIFY_SHIPPING_PROVIDER = 'shopify_shipping' as const;
 
 const SHOPIFY_SHIPPING_LABELS_FLAG = 'SHOPIFY_SHIPPING_LABELS_ENABLED';
-const REQUIRED_PURCHASE_SCOPE = 'write_orders';
 const GRAMS_PER_OUNCE = 28.349523125;
+
+export const SHOPIFY_SHIPPING_REQUIRED_SCOPES = [
+  'read_orders',
+  'write_orders',
+  'read_merchant_managed_fulfillment_orders',
+] as const;
 
 export type ShopifyShippingEnv = Record<string, string | undefined>;
 
@@ -99,7 +104,9 @@ export function evaluateShopifyShippingEligibility(input: ShopifyShippingEligibi
   const missing: string[] = [];
 
   if (source !== 'shopify') missing.push('source:shopify');
-  if (!scopes.has(REQUIRED_PURCHASE_SCOPE)) missing.push(`scope:${REQUIRED_PURCHASE_SCOPE}`);
+  for (const scope of SHOPIFY_SHIPPING_REQUIRED_SCOPES) {
+    if (!scopes.has(scope)) missing.push(`scope:${scope}`);
+  }
   if (!fulfillmentOrderId) missing.push('fulfillmentOrderId');
 
   const eligible = missing.length === 0;

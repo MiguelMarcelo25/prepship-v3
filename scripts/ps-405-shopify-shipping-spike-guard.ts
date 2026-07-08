@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { checkShopifyShippingReadiness } from '../src/connectors/store/shopify';
+import { __setCarrierReplay } from '../src/lib/http/timing';
 import {
   SHOPIFY_SHIPPING_PROVIDER,
   buildShopifyShippingLabelPurchaseInput,
@@ -7,6 +9,8 @@ import {
   isShopifyShippingPurchaseEnabled,
   normalizeShopifyFulfillmentOrderId,
 } from '../src/services/shopify-shipping-labels';
+
+process.env.CARRIER_TEST_MODE = '1';
 
 function check(name: string, fn: () => void | Promise<void>): Promise<void> {
   return Promise.resolve()
@@ -95,7 +99,7 @@ await check('Shopify Shipping refuses non-Shopify orders', () => {
   const result = evaluateShopifyShippingEligibility({
     sourceProvider: 'shipstation',
     rawOrderPayload: rawShopifyOrder,
-    grantedScopes: ['write_orders'],
+    grantedScopes: ['read_orders', 'write_orders', 'read_merchant_managed_fulfillment_orders'],
     env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' },
   });
 
@@ -108,7 +112,7 @@ await check('Shopify Shipping refuses tokens without write_orders', () => {
   const result = evaluateShopifyShippingEligibility({
     sourceProvider: 'shopify',
     rawOrderPayload: rawShopifyOrder,
-    grantedScopes: ['read_orders', 'read_products'],
+    grantedScopes: ['read_orders', 'read_merchant_managed_fulfillment_orders'],
     env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' },
   });
 
@@ -164,4 +168,73 @@ await check('Shopify Shipping builds the no-postage GraphQL purchase input shape
     unit: 'INCHES',
   });
   assert.deepEqual(input.packageInfo.customPackage?.weight, { unit: 'GRAMS', value: 0 });
+});
+
+await check('Shopify Shipping readiness uses the connected store account and hydrates fulfillment order id', async () => {
+  __setCarrierReplay([
+    {
+      name: 'shopify.token',
+      body: { access_token: 'test-shopify-token' },
+    },
+    {
+      name: 'shopify.shop',
+      body: { shop: { id: 12345, name: 'KF GOODIES', myshopify_domain: 'kf-goodies-2.myshopify.com' } },
+    },
+    {
+      name: 'shopify.access-scopes',
+      body: {
+        access_scopes: [
+          { handle: 'read_orders' },
+          { handle: 'write_orders' },
+          { handle: 'read_merchant_managed_fulfillment_orders' },
+          { handle: 'write_merchant_managed_fulfillment_orders' },
+          { handle: 'read_fulfillments' },
+          { handle: 'write_fulfillments' },
+        ],
+      },
+    },
+    {
+      name: 'shopify.orders-import',
+      body: { orders: [rawShopifyOrder] },
+    },
+    {
+      name: 'shopify.fulfillment-orders',
+      body: {
+        fulfillment_orders: [
+          {
+            id: 720111,
+            status: 'open',
+            request_status: 'unsubmitted',
+          },
+        ],
+      },
+    },
+  ]);
+
+  const result = await checkShopifyShippingReadiness(
+    {
+      shopDomain: 'kf-goodies-2.myshopify.com',
+      clientId: 'shopify_client_id_for_test',
+      clientSecret: 'shopify_client_secret_for_test',
+      apiVersion: '2026-07',
+    },
+    { env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'false' } },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.provider, SHOPIFY_SHIPPING_PROVIDER);
+  assert.equal(result.shopDomain, 'kf-goodies-2.myshopify.com');
+  assert.equal(result.orderName, '#1001');
+  assert.equal(result.fulfillmentOrderId, 'gid://shopify/FulfillmentOrder/720111');
+  assert.equal(result.eligibility.eligible, true);
+  assert.equal(result.eligibility.canPurchase, false);
+  assert.deepEqual(result.missingScopes, []);
+  assert.match(result.message, /ready/i);
+});
+
+await check('Shopify Shipping readiness is wired to the backend route and Settings action', () => {
+  assert.match(readFileSync('src/routes/carriers.ts', 'utf8'), /\/shopify\/shipping-readiness/);
+  const settings = readFileSync('web/src/components/Settings/CarrierIntegrationsCard.tsx', 'utf8');
+  assert.match(settings, /checkShopifyShipping/);
+  assert.match(settings, /Shipping Check/);
 });

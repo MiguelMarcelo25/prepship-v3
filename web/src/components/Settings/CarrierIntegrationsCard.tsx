@@ -18,6 +18,7 @@ import {
   Loader2,
   AlertCircle,
   KeyRound,
+  ShieldCheck,
 } from 'lucide-react'
 // PS-083: drop the Rate Browser scoped-carrier cache after an assignment change
 // so an unassigned carrier (e.g. SHIPP) cannot resurrect from a stale scope.
@@ -966,6 +967,25 @@ async function pullShopifyOrders(storeAccountId: number): Promise<WalmartOrdersR
   return api.post<WalmartOrdersResult>('/carriers/shopify/orders', { storeAccountId })
 }
 
+interface ShopifyShippingReadinessResult {
+  ok: boolean
+  provider?: string
+  shopDomain?: string
+  shopName?: string
+  scopes?: string[]
+  missingScopes?: string[]
+  requiredPermission?: string
+  orderId?: string
+  orderName?: string
+  fulfillmentOrderId?: string | null
+  message?: string
+  error?: string
+}
+
+async function checkShopifyShipping(storeAccountId: number): Promise<ShopifyShippingReadinessResult> {
+  return api.post<ShopifyShippingReadinessResult>('/carriers/shopify/shipping-readiness', { storeAccountId })
+}
+
 // Maps a store provider key to the matching Pull Orders endpoint helper.
 // Adding a new store puller (Amazon, Shopify, Etsy, etc.) is one entry.
 const STORE_PULLERS: Record<string, (storeAccountId: number) => Promise<WalmartOrdersResult>> = {
@@ -1082,6 +1102,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [deleting, setDeleting] = useState<Record<number, boolean>>({})
   const [pulling, setPulling] = useState<Record<number, boolean>>({})
   const [pullResults, setPullResults] = useState<Record<number, WalmartOrdersResult>>({})
+  const [checkingShopifyShipping, setCheckingShopifyShipping] = useState<Record<number, boolean>>({})
+  const [shopifyShippingResults, setShopifyShippingResults] = useState<Record<number, ShopifyShippingReadinessResult>>({})
   const [rating, setRating] = useState<Record<number, boolean>>({})
   // Tracks per-row "Approve" button in-flight state for portal-source
   // rows. Separate from `deleting` / `testing` so the three actions
@@ -1176,6 +1198,22 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       }))
     } finally {
       setPulling((prev) => ({ ...prev, [d.id]: false }))
+    }
+  }
+
+  const runShopifyShippingCheck = async (d: SavedRow) => {
+    if (d.provider !== 'shopify') return
+    setCheckingShopifyShipping((prev) => ({ ...prev, [d.id]: true }))
+    try {
+      const result = await checkShopifyShipping(d.accountId)
+      setShopifyShippingResults((prev) => ({ ...prev, [d.id]: result }))
+    } catch (err) {
+      setShopifyShippingResults((prev) => ({
+        ...prev,
+        [d.id]: { ok: false, error: err instanceof Error ? err.message : String(err) },
+      }))
+    } finally {
+      setCheckingShopifyShipping((prev) => ({ ...prev, [d.id]: false }))
     }
   }
 
@@ -1402,6 +1440,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       setTestResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       setRateResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       setPullResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
+      setShopifyShippingResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       // Tell the Rate Browser sidebar (useShippingAccounts) that the cached
       // carrier list is stale so the deleted row drops out immediately
       // rather than after the 60s staleTime expires.
@@ -2071,6 +2110,16 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               loading={!!pulling[d.id]}
               onClick={() => runPullOrders(d)}
               title={`Pull recent ${d.provider} orders`}
+            />
+          ) : null}
+          {isStore && d.provider === 'shopify' ? (
+            <ActionButton
+              icon={<ShieldCheck size={11} strokeWidth={2.5} />}
+              label="Shipping Check"
+              loadingLabel="Checking…"
+              loading={!!checkingShopifyShipping[d.id]}
+              onClick={() => runShopifyShippingCheck(d)}
+              title="Check Shopify scopes and fulfillment-order readiness without buying a label"
             />
           ) : null}
           {/* Pull Fees — 2026-05-13. Walmart-first. Calls the
@@ -2857,6 +2906,25 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                 return `📦 ${fetched} fetched · ${inserted} new · ${updated} updated (saved to store_orders)${mirrored}${sampleStr}`
               }
               return `📦 ${fetched} orders found in last 7 days${sampleStr}`
+            })()}
+          </div>
+        ) : null}
+        {shopifyShippingResults[d.id] ? (
+          <div style={{
+            fontSize: 11,
+            color: shopifyShippingResults[d.id]!.ok ? 'var(--green)' : 'var(--red)',
+            paddingLeft: 4,
+            marginTop: 2,
+          }}>
+            {(() => {
+              const r = shopifyShippingResults[d.id]!
+              if (!r.ok) {
+                const missing = r.missingScopes?.length ? ` Missing scopes: ${r.missingScopes.join(', ')}.` : ''
+                return `❌ Shopify Shipping check failed: ${r.error ?? r.message ?? 'Unknown error'}.${missing}`
+              }
+              const order = r.orderName ? ` · sample ${r.orderName}` : ''
+              const fulfillment = r.fulfillmentOrderId ? ` · fulfillment order ready` : ''
+              return `✅ Shopify Shipping ready${order}${fulfillment} · permission needed: ${r.requiredPermission ?? 'buy_shipping_labels'}`
             })()}
           </div>
         ) : null}

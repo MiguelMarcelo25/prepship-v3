@@ -10,6 +10,7 @@ import { fullServiceCatalog } from '../lib/carrier-service-catalog';
 import { probeCarrierAccountRates } from '../services/carrier-rates-probe';
 import { syncWalmartFeesForAccount } from '../connectors/store/walmart-fees';
 import { buildEbayAuthorizeUrl } from '../connectors/store/ebay';
+import { checkShopifyShippingReadiness } from '../connectors/store/shopify';
 import { env } from '../lib/env';
 
 const app = new Hono();
@@ -49,6 +50,34 @@ app.post('/rates', requirePermission('credentials:read'), async (c) => {
 app.all('/walmart/orders', requirePermission('settings:write'), runNodeHandler(walmartOrdersHandler));
 app.all('/ebay/orders', requirePermission('settings:write'), runNodeHandler(ebayOrdersHandler));
 app.all('/shopify/orders', requirePermission('settings:write'), runNodeHandler(shopifyOrdersHandler));
+
+app.post('/shopify/shipping-readiness', requirePermission('settings:write'), async (c) => {
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  const storeAccountId = body?.storeAccountId != null ? Number(body.storeAccountId) : NaN;
+  if (!Number.isFinite(storeAccountId) || storeAccountId <= 0) {
+    return c.json({ error: 'storeAccountId is required' }, 400);
+  }
+
+  const sql = postgres(env.DATABASE_URL, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
+  try {
+    const rows = await sql<Array<{ id: number; provider: string; credentials: Record<string, unknown> }>>`
+      SELECT id, provider, credentials FROM store_accounts WHERE id = ${storeAccountId} LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return c.json({ error: `store_accounts #${storeAccountId} not found` }, 404);
+    if (String(row.provider) !== 'shopify') {
+      return c.json({ error: 'Shopify Shipping readiness is only for Shopify store accounts' }, 400);
+    }
+
+    const result = await checkShopifyShippingReadiness(
+      row.credentials && typeof row.credentials === 'object' ? row.credentials : {},
+      { orderId: body?.orderId, env: process.env },
+    );
+    return c.json(result);
+  } finally {
+    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
+  }
+});
 
 // Walmart selling-fee pull. The provider logic already lives in
 // src/connectors/store/walmart-fees.ts (the legacy function was a thin
