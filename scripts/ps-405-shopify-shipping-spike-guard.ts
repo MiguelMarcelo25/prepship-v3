@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { checkShopifyShippingReadiness } from '../src/connectors/store/shopify';
+import * as ShopifyStore from '../src/connectors/store/shopify';
 import { __setCarrierReplay } from '../src/lib/http/timing';
 import * as ShopifyShippingLabels from '../src/services/shopify-shipping-labels';
 import {
@@ -223,6 +224,165 @@ await check('Shopify Shipping mock label adapter proves the purchase path withou
 
   const serviceSource = readFileSync('src/services/shopify-shipping-labels.ts', 'utf8');
   assert.doesNotMatch(serviceSource, /shippingLabelPurchase\s*\(/);
+});
+
+await check('Shopify Shipping live purchase adapter is hard-gated before any Shopify HTTP', async () => {
+  const purchaseShopifyShippingLabel = (
+    ShopifyStore as typeof ShopifyStore & {
+      purchaseShopifyShippingLabel?: (rawCredentials: Record<string, unknown>, input: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).purchaseShopifyShippingLabel;
+  assert.equal(typeof purchaseShopifyShippingLabel, 'function');
+
+  await assert.rejects(
+    () => purchaseShopifyShippingLabel(
+      {
+        shopDomain: 'kf-goodies-2.myshopify.com',
+        clientId: 'shopify_client_id_for_test',
+        clientSecret: 'shopify_client_secret_for_test',
+        apiVersion: '2026-07',
+      },
+      {
+        env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'false' },
+        purchaseInput: {
+          fulfillmentOrderId: 'gid://shopify/FulfillmentOrder/720111',
+          notifyCustomer: false,
+          shippingDatetime: '2026-07-08T01:25:00Z',
+          totalWeightOz: 18.25,
+          packageInfo: {
+            customPackage: {
+              dimensions: { length: 12, width: 10, height: 3, unit: 'INCHES' },
+              type: 'BOX',
+              weight: { unit: 'GRAMS', value: 0 },
+            },
+          },
+        },
+      },
+    ),
+    (err: unknown) => {
+      assert.equal((err as { code?: string }).code, 'SHOPIFY_SHIPPING_DISABLED');
+      assert.match(err instanceof Error ? err.message : String(err), /SHOPIFY_SHIPPING_LABELS_ENABLED disabled/);
+      return true;
+    },
+  );
+});
+
+await check('Shopify Shipping live purchase adapter parses the official GraphQL label result', async () => {
+  const purchaseShopifyShippingLabel = (
+    ShopifyStore as typeof ShopifyStore & {
+      purchaseShopifyShippingLabel?: (rawCredentials: Record<string, unknown>, input: Record<string, unknown>) => Promise<{
+        provider: string;
+        mock: boolean;
+        fulfillmentOrderId: string;
+        purchaseResultId: string;
+        done: boolean;
+        status: string;
+        labelId: string;
+        trackingNumber: string;
+        trackingUrl?: string;
+        labelUrl: string;
+        labelFormat: string;
+        carrierCode: string;
+        serviceCode: string;
+        cost: number | null;
+        currency: string | null;
+        postagePurchased: boolean;
+        printable: boolean;
+      }>;
+    }
+  ).purchaseShopifyShippingLabel;
+  assert.equal(typeof purchaseShopifyShippingLabel, 'function');
+
+  __setCarrierReplay([
+    {
+      name: 'shopify.token',
+      body: { access_token: 'test-shopify-token' },
+    },
+    {
+      name: 'shopify.shipping-label-purchase',
+      body: {
+        data: {
+          shippingLabelPurchase: {
+            shippingLabelPurchaseResult: {
+              id: 'gid://shopify/ShippingLabelPurchaseResult/9001',
+              done: true,
+              status: 'SUCCESS',
+              errors: [],
+              shippingLabels: [
+                {
+                  id: 'gid://shopify/ShippingLabel/8102392109720',
+                  printed: false,
+                  cancellable: true,
+                  trackingInfo: {
+                    number: '9400111899560000000000',
+                    company: 'USPS',
+                    url: 'https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899560000000000',
+                  },
+                  shippingDocuments: [
+                    {
+                      documentType: 'LABEL',
+                      format: 'PDF',
+                      shippingLabelId: 'gid://shopify/ShippingLabel/8102392109720',
+                      url: 'https://cdn.shopify.com/labels/8102392109720.pdf',
+                    },
+                  ],
+                },
+              ],
+            },
+            userErrors: [],
+          },
+        },
+      },
+    },
+  ]);
+
+  const result = await purchaseShopifyShippingLabel(
+    {
+      shopDomain: 'kf-goodies-2.myshopify.com',
+      clientId: 'shopify_client_id_for_test',
+      clientSecret: 'shopify_client_secret_for_test',
+      apiVersion: '2026-07',
+    },
+    {
+      env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' },
+      orderId: 61019990001,
+      orderName: '#1001',
+      purchaseInput: {
+        fulfillmentOrderId: 'gid://shopify/FulfillmentOrder/720111',
+        notifyCustomer: false,
+        shippingDatetime: '2026-07-08T01:25:00Z',
+        totalWeightOz: 18.25,
+        preferredRateSelection: {
+          carrierCode: 'USPS',
+          serviceCode: 'GROUND_ADVANTAGE',
+        },
+        packageInfo: {
+          customPackage: {
+            dimensions: { length: 12, width: 10, height: 3, unit: 'INCHES' },
+            type: 'BOX',
+            weight: { unit: 'GRAMS', value: 0 },
+          },
+        },
+      },
+    },
+  );
+
+  assert.equal(result.provider, SHOPIFY_SHIPPING_PROVIDER);
+  assert.equal(result.mock, false);
+  assert.equal(result.fulfillmentOrderId, 'gid://shopify/FulfillmentOrder/720111');
+  assert.equal(result.purchaseResultId, 'gid://shopify/ShippingLabelPurchaseResult/9001');
+  assert.equal(result.done, true);
+  assert.equal(result.status, 'SUCCESS');
+  assert.equal(result.labelId, 'gid://shopify/ShippingLabel/8102392109720');
+  assert.equal(result.trackingNumber, '9400111899560000000000');
+  assert.equal(result.labelUrl, 'https://cdn.shopify.com/labels/8102392109720.pdf');
+  assert.equal(result.labelFormat, 'PDF');
+  assert.equal(result.carrierCode, 'USPS');
+  assert.equal(result.serviceCode, 'GROUND_ADVANTAGE');
+  assert.equal(result.cost, null);
+  assert.equal(result.currency, null);
+  assert.equal(result.postagePurchased, true);
+  assert.equal(result.printable, true);
 });
 
 await check('Shopify Shipping readiness uses the connected store account and hydrates fulfillment order id', async () => {
