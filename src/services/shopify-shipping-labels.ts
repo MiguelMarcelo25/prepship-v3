@@ -90,6 +90,36 @@ export type BuildShopifyShippingLabelPurchaseInput = {
   totalWeightOz?: number | null;
 };
 
+export type ShopifyShippingMockLabelInput = {
+  fulfillmentOrderId: unknown;
+  orderId?: unknown;
+  orderName?: unknown;
+  shopDomain?: unknown;
+  serviceCode?: unknown;
+  carrierCode?: unknown;
+  createdAt?: string | Date;
+};
+
+export type ShopifyShippingMockLabelResult = {
+  provider: typeof SHOPIFY_SHIPPING_PROVIDER;
+  mock: true;
+  fulfillmentOrderId: string;
+  orderId?: string;
+  orderName?: string;
+  shopDomain?: string;
+  carrierCode: string;
+  serviceCode: string;
+  trackingNumber: string;
+  labelUrl: string;
+  shipmentId: string;
+  currency: 'USD';
+  cost: 0;
+  postagePurchased: false;
+  printable: false;
+  createdAt: string;
+  message: string;
+};
+
 type UnknownRecord = Record<string, unknown>;
 
 export function isShopifyShippingPurchaseEnabled(env: ShopifyShippingEnv = process.env): boolean {
@@ -154,6 +184,44 @@ export function buildShopifyShippingLabelPurchaseInput(
     preferredRateSelection: input.preferredRateSelection,
     shippingDatetime,
     totalWeight,
+  };
+}
+
+export function createShopifyShippingMockLabel(
+  input: ShopifyShippingMockLabelInput,
+): ShopifyShippingMockLabelResult {
+  const fulfillmentOrderId = normalizeShopifyFulfillmentOrderId(input.fulfillmentOrderId);
+  if (!fulfillmentOrderId) throw new Error('Shopify Shipping mock label requires a fulfillment order id');
+
+  const fulfillmentSegment = fulfillmentOrderId.match(/\/(\d+)$/)?.[1] ?? trackingSafeSegment(fulfillmentOrderId);
+  const orderName = optionalString(input.orderName);
+  const orderId = optionalString(input.orderId);
+  const shopDomain = optionalString(input.shopDomain);
+  const orderSegment = trackingSafeSegment(orderName || orderId || fulfillmentSegment);
+  const carrierCode = optionalString(input.carrierCode) || SHOPIFY_SHIPPING_PROVIDER;
+  const serviceCode = optionalString(input.serviceCode) || 'shopify_mock_ground';
+  const createdAt = input.createdAt instanceof Date
+    ? input.createdAt.toISOString()
+    : optionalString(input.createdAt) || new Date().toISOString();
+
+  return {
+    provider: SHOPIFY_SHIPPING_PROVIDER,
+    mock: true,
+    fulfillmentOrderId,
+    orderId,
+    orderName,
+    shopDomain,
+    carrierCode,
+    serviceCode,
+    trackingNumber: `SHOPIFY-MOCK-${orderSegment}-${fulfillmentSegment}`,
+    labelUrl: `mock://shopify-shipping/${encodeURIComponent(fulfillmentSegment)}`,
+    shipmentId: `mock-shopify-shipping-${fulfillmentSegment}`,
+    currency: 'USD',
+    cost: 0,
+    postagePurchased: false,
+    printable: false,
+    createdAt,
+    message: 'Shopify Shipping mock label path ready; no postage was purchased and no printable label was created.',
   };
 }
 
@@ -224,6 +292,18 @@ function weightFromOunces(value: number | null | undefined): ShopifyWeightInput 
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
+function trackingSafeSegment(value: unknown): string {
+  const raw = optionalString(value) ?? 'UNKNOWN';
+  const normalized = raw.replace(/^#/, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || 'UNKNOWN';
 }
 
 function asRecord(value: unknown): UnknownRecord | null {

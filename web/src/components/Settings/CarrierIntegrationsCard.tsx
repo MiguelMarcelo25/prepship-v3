@@ -978,6 +978,12 @@ interface ShopifyShippingReadinessResult {
   orderId?: string
   orderName?: string
   fulfillmentOrderId?: string | null
+  mockLabel?: {
+    mock: boolean
+    trackingNumber?: string
+    postagePurchased?: boolean
+    printable?: boolean
+  }
   message?: string
   error?: string
 }
@@ -2924,7 +2930,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               }
               const order = r.orderName ? ` · sample ${r.orderName}` : ''
               const fulfillment = r.fulfillmentOrderId ? ` · fulfillment order ready` : ''
-              return `✅ Shopify Shipping ready${order}${fulfillment} · permission needed: ${r.requiredPermission ?? 'buy_shipping_labels'}`
+              const mock = r.mockLabel?.mock ? ` · mock label path ready (${r.mockLabel.trackingNumber ?? 'no postage'})` : ''
+              return `✅ Shopify Shipping ready${order}${fulfillment}${mock} · permission needed: ${r.requiredPermission ?? 'buy_shipping_labels'}`
             })()}
           </div>
         ) : null}

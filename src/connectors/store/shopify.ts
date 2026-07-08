@@ -10,9 +10,11 @@ import { timedFetch, type TimingFields } from '../../lib/http/timing.js';
 import {
   SHOPIFY_SHIPPING_PROVIDER,
   SHOPIFY_SHIPPING_REQUIRED_SCOPES,
+  createShopifyShippingMockLabel,
   evaluateShopifyShippingEligibility,
   type ShopifyShippingEligibilityResult,
   type ShopifyShippingEnv,
+  type ShopifyShippingMockLabelResult,
 } from '../../services/shopify-shipping-labels.js';
 
 const DEFAULT_API_VERSION = '2026-07';
@@ -43,6 +45,7 @@ export type ShopifyShippingReadinessResult = {
   orderName?: string;
   fulfillmentOrderId: string | null;
   eligibility: ShopifyShippingEligibilityResult;
+  mockLabel?: ShopifyShippingMockLabelResult;
   message: string;
   error?: string;
   retryable?: boolean;
@@ -460,6 +463,14 @@ export async function checkShopifyShippingReadiness(
     grantedScopes: scopes,
     env: input.env,
   });
+  const mockLabel = eligibility.eligible && eligibility.fulfillmentOrderId
+    ? createShopifyShippingMockLabel({
+        fulfillmentOrderId: eligibility.fulfillmentOrderId,
+        orderId,
+        orderName: firstString(order.name, order.order_number, order.orderNumber, orderId),
+        shopDomain,
+      })
+    : undefined;
   return {
     ok: eligibility.eligible,
     provider: SHOPIFY_SHIPPING_PROVIDER,
@@ -474,8 +485,9 @@ export async function checkShopifyShippingReadiness(
     orderName: firstString(order.name, order.order_number, order.orderNumber, orderId),
     fulfillmentOrderId: eligibility.fulfillmentOrderId,
     eligibility,
+    ...(mockLabel ? { mockLabel } : {}),
     message: eligibility.eligible
-      ? 'Shopify Shipping is ready for this store/order. Label purchase is still controlled by SHOPIFY_SHIPPING_LABELS_ENABLED and the Shopify user permission buy_shipping_labels.'
+      ? 'Shopify Shipping is ready for this store/order; mock label path ready. Live label purchase is still controlled by SHOPIFY_SHIPPING_LABELS_ENABLED and the Shopify user permission buy_shipping_labels.'
       : `Shopify Shipping is not ready: ${eligibility.missing.join(', ')}`,
     ...(eligibility.eligible ? {} : { error: `Shopify Shipping is not ready: ${eligibility.missing.join(', ')}` }),
   };
