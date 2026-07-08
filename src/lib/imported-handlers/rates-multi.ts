@@ -45,6 +45,35 @@ function publicCarrierFetchError(result: FetchResult): string | null {
   return 'ShipStation carrier request failed';
 }
 
+// Whole-response TTL cache. The payload is identical for every AUTHORIZED
+// caller — it is built only from the env keys + the clients table, nothing
+// user-scoped — so one module-level entry is safe. Auth is still verified on
+// every request; the cache only skips the ShipStation fan-out + DB read.
+// Carrier-account lists change only when an account is (dis)connected, so a
+// short TTL self-heals. Override with RATES_MULTI_CACHE_TTL_MS (0 disables).
+const RATES_MULTI_CACHE_TTL_MS = (() => {
+  const raw = Number.parseInt(process.env.RATES_MULTI_CACHE_TTL_MS ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
+})();
+let cachedResponse: { at: number; payload: unknown } | null = null;
+
+// One long-lived single-connection client instead of a fresh postgres() +
+// TLS handshake per request. idle_timeout closes the socket when unused;
+// postgres.js reconnects transparently on the next query (safe on Render and
+// in a warm serverless instance alike).
+let sqlClient: ReturnType<typeof postgres> | null = null;
+function getSql(dbUrl: string) {
+  if (!sqlClient) {
+    sqlClient = postgres(dbUrl, {
+      max: 1,
+      prepare: false,
+      idle_timeout: 5,
+      connect_timeout: 5,
+    });
+  }
+  return sqlClient;
+}
+
 async function fetchSsCarriers(apiKeyV2: string, keySource: string): Promise<FetchResult> {
   if (!apiKeyV2) return { carriers: [], error: 'no key configured', status: null };
   try {
@@ -92,6 +121,15 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  if (
+    RATES_MULTI_CACHE_TTL_MS > 0 &&
+    cachedResponse &&
+    Date.now() - cachedResponse.at < RATES_MULTI_CACHE_TTL_MS
+  ) {
+    res.status(200).json(cachedResponse.payload);
+    return;
+  }
+
   // Fan out to ShipStation accounts in parallel. Dedupe by literal key value
   // so an env var that matches a DB row's ss_api_key_v2 doesn't get fetched
   // twice and surface the same carriers under two headers.
@@ -130,19 +168,13 @@ export default async function handler(req: any, res: any): Promise<void> {
   const dbUrl = process.env.DATABASE_URL;
   if (dbUrl) {
     try {
-      const sql = postgres(dbUrl, {
-        max: 1,
-        prepare: false,
-        idle_timeout: 5,
-        connect_timeout: 5,
-      });
+      const sql = getSql(dbUrl);
       const rows = await sql<Array<{ id: number; name: string; ss_api_key_v2: string | null }>>`
         SELECT id, name, ss_api_key_v2
         FROM clients
         WHERE ss_api_key_v2 IS NOT NULL
           AND active = true
       `;
-      await sql.end({ timeout: 1 });
       for (const c of rows) {
         if (c.ss_api_key_v2) {
           queueTask({
@@ -182,11 +214,19 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
   }
 
-  res.status(200).json({
+  const payload = {
     carriers: aggregated,
     _diagnostics: {
       dbError: dbError ? 'Client carrier credential lookup failed' : null,
       sources: diagnostics,
+      // Stamped at fan-out time; a repeat call served from cache returns the
+      // SAME cachedAt, which is how a cache hit is observable end-to-end.
+      cachedAt: new Date().toISOString(),
     },
-  });
+  };
+  // Don't pin an outage: only cache when at least one source returned carriers.
+  if (RATES_MULTI_CACHE_TTL_MS > 0 && aggregated.length > 0) {
+    cachedResponse = { at: Date.now(), payload };
+  }
+  res.status(200).json(payload);
 }
