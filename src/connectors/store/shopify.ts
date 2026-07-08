@@ -7,8 +7,57 @@ import type {
   StoreConnector,
 } from '../../domain/fulfillment/types.js';
 import { timedFetch, type TimingFields } from '../../lib/http/timing.js';
+import {
+  SHOPIFY_SHIPPING_PROVIDER,
+  SHOPIFY_SHIPPING_REQUIRED_SCOPES,
+  buildShopifyShippingLabelPurchaseInput,
+  createShopifyShippingMockLabel,
+  evaluateShopifyShippingEligibility,
+  isShopifyShippingPurchaseEnabled,
+  type BuildShopifyShippingLabelPurchaseInput,
+  type ShopifyShippingEligibilityResult,
+  type ShopifyShippingEnv,
+  type ShopifyShippingMockLabelResult,
+} from '../../services/shopify-shipping-labels.js';
 
 const DEFAULT_API_VERSION = '2026-07';
+const SHOPIFY_SHIPPING_LABEL_PURCHASE_MUTATION = `
+mutation shippingLabelPurchase($shippingLabelPurchase: ShippingLabelPurchaseInput!) {
+  shippingLabelPurchase(shippingLabelPurchase: $shippingLabelPurchase) {
+    shippingLabelPurchaseResult {
+      id
+      done
+      status
+      errors {
+        code
+        field
+        message
+      }
+      shippingLabels {
+        id
+        printed
+        cancellable
+        trackingInfo {
+          number
+          company
+          url
+        }
+        shippingDocuments {
+          documentType
+          format
+          shippingLabelId
+          url
+        }
+      }
+    }
+    userErrors {
+      code
+      field
+      message
+    }
+  }
+}
+`;
 
 type ShopifyCredentials = {
   shopDomain: string;
@@ -16,6 +65,70 @@ type ShopifyCredentials = {
   apiVersion: string;
   authMode: 'access_token' | 'client_credentials';
 };
+
+export type ShopifyShippingReadinessInput = {
+  orderId?: unknown;
+  env?: ShopifyShippingEnv;
+};
+
+export type ShopifyShippingPurchaseInput = {
+  env?: ShopifyShippingEnv;
+  orderId?: unknown;
+  orderName?: unknown;
+  purchaseInput: BuildShopifyShippingLabelPurchaseInput;
+};
+
+export type ShopifyShippingPurchasedLabelResult = {
+  provider: typeof SHOPIFY_SHIPPING_PROVIDER;
+  mock: false;
+  fulfillmentOrderId: string;
+  orderId?: string;
+  orderName?: string;
+  purchaseResultId: string;
+  done: boolean;
+  status: string;
+  labelId: string;
+  trackingNumber: string;
+  trackingUrl?: string;
+  labelUrl: string;
+  labelFormat: string;
+  carrierCode: string;
+  serviceCode: string;
+  cost: null;
+  currency: null;
+  postagePurchased: true;
+  printable: true;
+  raw: unknown;
+};
+
+export type ShopifyShippingReadinessResult = {
+  ok: boolean;
+  provider: typeof SHOPIFY_SHIPPING_PROVIDER;
+  shopDomain?: string;
+  shopName?: string;
+  authMode?: ShopifyCredentials['authMode'];
+  scopes: string[];
+  requiredScopes: readonly string[];
+  missingScopes: string[];
+  requiredPermission: 'buy_shipping_labels';
+  orderId?: string;
+  orderName?: string;
+  fulfillmentOrderId: string | null;
+  eligibility: ShopifyShippingEligibilityResult;
+  mockLabel?: ShopifyShippingMockLabelResult;
+  message: string;
+  error?: string;
+  retryable?: boolean;
+};
+
+export class ShopifyShippingPurchaseDisabledError extends Error {
+  code = 'SHOPIFY_SHIPPING_DISABLED';
+
+  constructor() {
+    super('SHOPIFY_SHIPPING_LABELS_ENABLED disabled; Shopify Shipping live label purchase is not enabled.');
+    this.name = 'ShopifyShippingPurchaseDisabledError';
+  }
+}
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {
@@ -172,6 +285,10 @@ function shopifyUrl(creds: ShopifyCredentials, path: string): string {
   return `https://${creds.shopDomain}/admin/api/${creds.apiVersion}${path}`;
 }
 
+function shopifyAdminUrl(creds: ShopifyCredentials, path: string): string {
+  return `https://${creds.shopDomain}${path}`;
+}
+
 function redactShopifyError(value: string): string {
   return value
     .replace(/shpat_[A-Za-z0-9_]+/gi, 'shpat_[redacted]')
@@ -226,6 +343,22 @@ async function shopifyFetch(
   return timedFetch(name, shopifyUrl(creds, path), { ...init, headers }, fields);
 }
 
+async function shopifyAdminFetch(
+  name: string,
+  creds: ShopifyCredentials,
+  path: string,
+  init: RequestInit = {},
+  fields?: TimingFields,
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set('Accept', 'application/json');
+  headers.set('X-Shopify-Access-Token', creds.accessToken);
+  if (init.body != null && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  return timedFetch(name, shopifyAdminUrl(creds, path), { ...init, headers }, fields);
+}
+
 export async function verifyShopifyCredentials(
   rawCredentials: Record<string, unknown>,
 ): Promise<{
@@ -257,6 +390,403 @@ export async function verifyShopifyCredentials(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? redactShopifyError(err.message) : redactShopifyError(String(err)) };
   }
+}
+
+export async function purchaseShopifyShippingLabel(
+  rawCredentials: Record<string, unknown>,
+  input: ShopifyShippingPurchaseInput,
+): Promise<ShopifyShippingPurchasedLabelResult> {
+  if (!isShopifyShippingPurchaseEnabled(input.env)) {
+    throw new ShopifyShippingPurchaseDisabledError();
+  }
+
+  const purchaseInput = buildShopifyShippingLabelPurchaseInput(input.purchaseInput);
+  const creds = await shopifyCredentials(rawCredentials);
+  const res = await shopifyFetch(
+    'shopify.shipping-label-purchase',
+    creds,
+    '/graphql.json',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        query: SHOPIFY_SHIPPING_LABEL_PURCHASE_MUTATION,
+        variables: { shippingLabelPurchase: purchaseInput },
+      }),
+    },
+    { fulfillmentOrderId: purchaseInput.fulfillmentOrderId },
+  );
+  if (!res.ok) {
+    throw new Error(`Shopify shippingLabelPurchase ${res.status}: ${await readShopifyError(res)}`);
+  }
+
+  const body = await res.json().catch(() => ({}));
+  return parseShopifyShippingPurchaseResult(body, {
+    fulfillmentOrderId: purchaseInput.fulfillmentOrderId,
+    orderId: firstString(input.orderId),
+    orderName: firstString(input.orderName),
+    preferredCarrierCode: firstString(input.purchaseInput.preferredRateSelection?.carrierCode),
+    preferredServiceCode: firstString(input.purchaseInput.preferredRateSelection?.serviceCode),
+  });
+}
+
+export async function checkShopifyShippingReadiness(
+  rawCredentials: Record<string, unknown>,
+  input: ShopifyShippingReadinessInput = {},
+): Promise<ShopifyShippingReadinessResult> {
+  let creds: ShopifyCredentials;
+  try {
+    creds = await shopifyCredentials(rawCredentials);
+  } catch (err) {
+    return shopifyShippingReadinessFailure({
+      error: err instanceof Error ? redactShopifyError(err.message) : redactShopifyError(String(err)),
+      env: input.env,
+    });
+  }
+
+  const shopRes = await shopifyFetch('shopify.shop', creds, '/shop.json');
+  if (!shopRes.ok) {
+    return shopifyShippingReadinessFailure({
+      creds,
+      error: `Shopify shop ${shopRes.status}: ${await readShopifyError(shopRes)}`,
+      retryable: shopRes.status === 429 || shopRes.status >= 500,
+      env: input.env,
+    });
+  }
+  const shopData = await shopRes.json().catch(() => ({})) as { shop?: Record<string, unknown> };
+  const shop = asRecord(shopData.shop);
+  const shopDomain = normalizeShopifyShopDomain(firstString(shop.myshopify_domain, shop.domain, creds.shopDomain) || creds.shopDomain);
+  const shopName = firstString(shop.name, shopDomain);
+
+  const scopesRes = await shopifyAdminFetch('shopify.access-scopes', creds, '/admin/oauth/access_scopes.json');
+  if (!scopesRes.ok) {
+    return shopifyShippingReadinessFailure({
+      creds,
+      shopDomain,
+      shopName,
+      error: `Shopify access scopes ${scopesRes.status}: ${await readShopifyError(scopesRes)}`,
+      retryable: scopesRes.status === 429 || scopesRes.status >= 500,
+      env: input.env,
+    });
+  }
+  const scopePayload = await scopesRes.json().catch(() => ({}));
+  const scopes = shopifyScopeHandles(scopePayload);
+  const missingScopes = missingShopifyShippingScopes(scopes);
+  if (missingScopes.length) {
+    const eligibility = evaluateShopifyShippingEligibility({
+      sourceProvider: 'shopify',
+      rawOrderPayload: { source: 'shopify' },
+      grantedScopes: scopes,
+      env: input.env,
+    });
+    return {
+      ok: false,
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      shopDomain,
+      shopName,
+      authMode: creds.authMode,
+      scopes,
+      requiredScopes: SHOPIFY_SHIPPING_REQUIRED_SCOPES,
+      missingScopes,
+      requiredPermission: 'buy_shipping_labels',
+      fulfillmentOrderId: null,
+      eligibility,
+      message: `Shopify Shipping is missing scope(s): ${missingScopes.join(', ')}`,
+      error: `Missing Shopify scope(s): ${missingScopes.join(', ')}`,
+    };
+  }
+
+  const explicitOrderId = shopifyRestOrderIdFrom(input.orderId);
+  const orderResult = explicitOrderId
+    ? { order: { id: explicitOrderId, source: 'shopify' } as Record<string, unknown> }
+    : await fetchShopifyReadinessSampleOrder(creds);
+  if (orderResult.error) {
+    return shopifyShippingReadinessFailure({
+      creds,
+      shopDomain,
+      shopName,
+      scopes,
+      error: orderResult.error,
+      retryable: orderResult.retryable,
+      env: input.env,
+    });
+  }
+  const order = orderResult.order;
+  if (!order) {
+    const eligibility = evaluateShopifyShippingEligibility({
+      sourceProvider: 'shopify',
+      rawOrderPayload: { source: 'shopify' },
+      grantedScopes: scopes,
+      env: input.env,
+    });
+    return {
+      ok: false,
+      provider: SHOPIFY_SHIPPING_PROVIDER,
+      shopDomain,
+      shopName,
+      authMode: creds.authMode,
+      scopes,
+      requiredScopes: SHOPIFY_SHIPPING_REQUIRED_SCOPES,
+      missingScopes: [],
+      requiredPermission: 'buy_shipping_labels',
+      fulfillmentOrderId: null,
+      eligibility,
+      message: 'Shopify connection is valid, but no open unfulfilled Shopify order was available to check fulfillment-order readiness.',
+      error: 'No open unfulfilled Shopify order found',
+    };
+  }
+
+  const orderId = shopifyRestOrderIdFrom(order.id ?? order.admin_graphql_api_id);
+  if (!orderId) {
+    return shopifyShippingReadinessFailure({
+      creds,
+      shopDomain,
+      shopName,
+      scopes,
+      error: 'Shopify Shipping readiness could not resolve a REST order id from the selected order.',
+      env: input.env,
+    });
+  }
+
+  const fulfillmentOrdersRes = await shopifyFetch(
+    'shopify.fulfillment-orders',
+    creds,
+    `/orders/${encodeURIComponent(orderId)}/fulfillment_orders.json`,
+    {},
+    { orderId },
+  );
+  if (!fulfillmentOrdersRes.ok) {
+    return shopifyShippingReadinessFailure({
+      creds,
+      shopDomain,
+      shopName,
+      scopes,
+      order,
+      error: `Shopify fulfillment_orders ${fulfillmentOrdersRes.status}: ${await readShopifyError(fulfillmentOrdersRes)}`,
+      retryable: fulfillmentOrdersRes.status === 429 || fulfillmentOrdersRes.status >= 500,
+      env: input.env,
+    });
+  }
+
+  const fulfillmentOrdersPayload = await fulfillmentOrdersRes.json().catch(() => ({}));
+  const rawOrderPayload = {
+    ...order,
+    source: 'shopify',
+    fulfillment_orders: asArray(asRecord(fulfillmentOrdersPayload).fulfillment_orders),
+  };
+  const eligibility = evaluateShopifyShippingEligibility({
+    sourceProvider: 'shopify',
+    rawOrderPayload,
+    grantedScopes: scopes,
+    env: input.env,
+  });
+  const mockLabel = eligibility.eligible && eligibility.fulfillmentOrderId
+    ? createShopifyShippingMockLabel({
+        fulfillmentOrderId: eligibility.fulfillmentOrderId,
+        orderId,
+        orderName: firstString(order.name, order.order_number, order.orderNumber, orderId),
+        shopDomain,
+      })
+    : undefined;
+  return {
+    ok: eligibility.eligible,
+    provider: SHOPIFY_SHIPPING_PROVIDER,
+    shopDomain,
+    shopName,
+    authMode: creds.authMode,
+    scopes,
+    requiredScopes: SHOPIFY_SHIPPING_REQUIRED_SCOPES,
+    missingScopes: missingShopifyShippingScopes(scopes),
+    requiredPermission: 'buy_shipping_labels',
+    orderId,
+    orderName: firstString(order.name, order.order_number, order.orderNumber, orderId),
+    fulfillmentOrderId: eligibility.fulfillmentOrderId,
+    eligibility,
+    ...(mockLabel ? { mockLabel } : {}),
+    message: eligibility.eligible
+      ? 'Shopify Shipping is ready for this store/order; mock label path ready. Live label purchase is still controlled by SHOPIFY_SHIPPING_LABELS_ENABLED and the Shopify user permission buy_shipping_labels.'
+      : `Shopify Shipping is not ready: ${eligibility.missing.join(', ')}`,
+    ...(eligibility.eligible ? {} : { error: `Shopify Shipping is not ready: ${eligibility.missing.join(', ')}` }),
+  };
+}
+
+function shopifyShippingReadinessFailure(input: {
+  creds?: ShopifyCredentials;
+  shopDomain?: string;
+  shopName?: string;
+  scopes?: string[];
+  order?: Record<string, unknown>;
+  error: string;
+  retryable?: boolean;
+  env?: ShopifyShippingEnv;
+}): ShopifyShippingReadinessResult {
+  const scopes = input.scopes ?? [];
+  const order = input.order ?? { source: 'shopify' };
+  const eligibility = evaluateShopifyShippingEligibility({
+    sourceProvider: 'shopify',
+    rawOrderPayload: { ...order, source: 'shopify' },
+    grantedScopes: scopes,
+    env: input.env,
+  });
+  return {
+    ok: false,
+    provider: SHOPIFY_SHIPPING_PROVIDER,
+    shopDomain: input.shopDomain ?? input.creds?.shopDomain,
+    shopName: input.shopName,
+    authMode: input.creds?.authMode,
+    scopes,
+    requiredScopes: SHOPIFY_SHIPPING_REQUIRED_SCOPES,
+    missingScopes: missingShopifyShippingScopes(scopes),
+    requiredPermission: 'buy_shipping_labels',
+    orderId: shopifyRestOrderIdFrom(input.order?.id ?? input.order?.admin_graphql_api_id) || undefined,
+    orderName: firstString(input.order?.name, input.order?.order_number, input.order?.orderNumber) || undefined,
+    fulfillmentOrderId: eligibility.fulfillmentOrderId,
+    eligibility,
+    message: input.error,
+    error: input.error,
+    retryable: input.retryable,
+  };
+}
+
+function parseShopifyShippingPurchaseResult(
+  body: unknown,
+  context: {
+    fulfillmentOrderId: string;
+    orderId?: string;
+    orderName?: string;
+    preferredCarrierCode?: string;
+    preferredServiceCode?: string;
+  },
+): ShopifyShippingPurchasedLabelResult {
+  const root = asRecord(body);
+  const graphErrors = asArray(root.errors);
+  if (graphErrors.length) {
+    throw shopifyShippingPurchaseError('Shopify shippingLabelPurchase GraphQL error', graphErrors);
+  }
+
+  const payload = asRecord(asRecord(asRecord(root.data).shippingLabelPurchase));
+  const userErrors = asArray(payload.userErrors);
+  if (userErrors.length) {
+    throw shopifyShippingPurchaseError('Shopify shippingLabelPurchase user error', userErrors);
+  }
+
+  const result = asRecord(payload.shippingLabelPurchaseResult);
+  const resultErrors = asArray(result.errors);
+  if (resultErrors.length) {
+    throw shopifyShippingPurchaseError('Shopify shippingLabelPurchase provider error', resultErrors);
+  }
+
+  const labels = asArray(result.shippingLabels).map(asRecord);
+  const label = labels[0];
+  if (!label || Object.keys(label).length === 0) {
+    throw shopifyShippingPurchaseError(
+      `Shopify shippingLabelPurchase returned no shipping label (status ${firstString(result.status) || 'unknown'})`,
+      [],
+      'SHOPIFY_SHIPPING_LABEL_MISSING',
+    );
+  }
+
+  const tracking = asRecord(label.trackingInfo);
+  const trackingNumber = firstString(tracking.number);
+  if (!trackingNumber) {
+    throw shopifyShippingPurchaseError(
+      'Shopify shippingLabelPurchase returned a label without a tracking number',
+      [],
+      'SHOPIFY_SHIPPING_TRACKING_MISSING',
+    );
+  }
+
+  const document = asArray(label.shippingDocuments)
+    .map(asRecord)
+    .find((doc) => firstString(doc.documentType).toUpperCase() === 'LABEL' && firstString(doc.url))
+    ?? asArray(label.shippingDocuments).map(asRecord).find((doc) => firstString(doc.url));
+  const labelUrl = firstString(document?.url);
+  if (!labelUrl) {
+    throw shopifyShippingPurchaseError(
+      'Shopify shippingLabelPurchase returned a label without a printable document URL',
+      [],
+      'SHOPIFY_SHIPPING_DOCUMENT_MISSING',
+    );
+  }
+
+  return {
+    provider: SHOPIFY_SHIPPING_PROVIDER,
+    mock: false,
+    fulfillmentOrderId: context.fulfillmentOrderId,
+    orderId: context.orderId,
+    orderName: context.orderName,
+    purchaseResultId: firstString(result.id),
+    done: Boolean(result.done),
+    status: firstString(result.status) || 'UNKNOWN',
+    labelId: firstString(label.id, document?.shippingLabelId),
+    trackingNumber,
+    trackingUrl: firstString(tracking.url) || undefined,
+    labelUrl,
+    labelFormat: firstString(document?.format) || 'PDF',
+    carrierCode: firstString(context.preferredCarrierCode, tracking.company, SHOPIFY_SHIPPING_PROVIDER),
+    serviceCode: firstString(context.preferredServiceCode, 'shopify_shipping'),
+    cost: null,
+    currency: null,
+    postagePurchased: true,
+    printable: true,
+    raw: body,
+  };
+}
+
+function shopifyShippingPurchaseError(message: string, errors: unknown[], code = 'SHOPIFY_SHIPPING_PURCHASE_FAILED'): Error & { code?: string; details?: Record<string, unknown> } {
+  const detail = errors
+    .map((error) => {
+      const record = asRecord(error);
+      const field = asArray(record.field).map(String).join('.');
+      const parts = [firstString(record.code), field, firstString(record.message, JSON.stringify(error))].filter(Boolean);
+      return parts.join(': ');
+    })
+    .filter(Boolean)
+    .join('; ');
+  const err = new Error(detail ? `${message}: ${detail}` : message) as Error & { code?: string; details?: Record<string, unknown> };
+  err.code = code;
+  err.details = errors.length ? { shopifyErrors: errors } : undefined;
+  return err;
+}
+
+function shopifyScopeHandles(payload: unknown): string[] {
+  return asArray(asRecord(payload).access_scopes)
+    .map((scope) => firstString(asRecord(scope).handle))
+    .filter(Boolean);
+}
+
+function missingShopifyShippingScopes(scopes: string[]): string[] {
+  const granted = new Set(scopes);
+  return SHOPIFY_SHIPPING_REQUIRED_SCOPES.filter((scope) => !granted.has(scope));
+}
+
+async function fetchShopifyReadinessSampleOrder(
+  creds: ShopifyCredentials,
+): Promise<{ order?: Record<string, unknown>; error?: string; retryable?: boolean }> {
+  const params = new URLSearchParams({
+    status: 'open',
+    fulfillment_status: 'unshipped',
+    limit: '1',
+  });
+  const res = await shopifyFetch('shopify.orders-import', creds, `/orders.json?${params.toString()}`);
+  if (!res.ok) {
+    return {
+      error: `Shopify orders ${res.status}: ${await readShopifyError(res)}`,
+      retryable: res.status === 429 || res.status >= 500,
+    };
+  }
+  const data = await res.json().catch(() => ({})) as { orders?: unknown[] };
+  const order = asArray(data.orders).map(asRecord)[0];
+  return order ? { order } : {};
+}
+
+function shopifyRestOrderIdFrom(value: unknown): string {
+  const raw = firstString(value);
+  if (!raw) return '';
+  const normalized = raw
+    .replace(/^gid:\/\/shopify\/Order\//i, '')
+    .replace(/^shopify-/i, '')
+    .trim();
+  return /^\d+$/.test(normalized) ? normalized : '';
 }
 
 function firstMoneyFromPaths(root: Record<string, unknown>, paths: string[][]): string | null {
