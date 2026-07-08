@@ -184,6 +184,7 @@ import {
   type StoredMarketplaceFeeRule,
 } from '../services/marketplace-fee';
 import { getOrderDimsDefaultsForOrder } from '../services/order-dims-defaults';
+import { getTestClientIds } from '../services/test-client-ids';
 // PS-273: synthetic direct-carrier provider-id offset (10_000_000 + carrier_accounts.id).
 // Any provider id at/above this offset is a DIRECT/brokered account that has no entry in the
 // static ShipStation registry — it must NEVER be back-resolved to a carrier-family/1Z guess.
@@ -1302,7 +1303,9 @@ const orderListSelect = {
   id: orders.id,
   externalOrderId: orders.externalOrderId,
   clientId: orders.clientId,
-  clientName: sql<string | null>`(select c.name from clients c where c.id = ${orders.clientId} limit 1)`.as('client_name'),
+  // Joined (not a correlated per-row subquery): the list query LEFT JOINs
+  // clients once — same value, one join instead of one subquery per returned row.
+  clientName: clients.name,
   orderNumber: orders.orderNumber,
   orderStatus: orders.orderStatus,
   // PS-128/PS-129: surfaced so the UI can show the shipping-hold badge (cancelled upstream /
@@ -1564,29 +1567,41 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     });
   }
 
-  const joined = await timedOrdersStep(timings, 'ordersPage', () =>
+  const includeExactTotal = q.includeTotal !== false;
+  const joinedPromise = timedOrdersStep(timings, 'ordersPage', () =>
     db
       .select({ order: orderListSelect, overrides: orderOverrides })
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
+      .leftJoin(clients, eq(clients.id, orders.clientId))
       .where(where)
       .orderBy(...orderByClauses)
       .limit(q.pageSize)
       .offset(offset)
   );
+  // The exact count runs CONCURRENTLY with the page query (it used to run
+  // after it, serially, re-evaluating the same WHERE). It is only CONSULTED
+  // when the returned page is full; on a short page the inferred total wins
+  // and this result is ignored — a cheap speculative count in exchange for
+  // removing a serial round-trip from the hottest route's common case.
+  const countRowsPromise = includeExactTotal
+    ? timedOrdersStep(timings, 'ordersCount', () =>
+        db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(orders)
+          .where(where)
+      )
+    : null;
+  if (countRowsPromise) countRowsPromise.catch(() => {});
 
-  const includeExactTotal = q.includeTotal !== false;
+  const joined = await joinedPromise;
+
   const canInferTotal = joined.length < q.pageSize && (q.page === 1 || joined.length > 0);
   let total = canInferTotal ? offset + joined.length : 0;
   let totalApproximate = false;
   let countWasSkipped = canInferTotal;
-  if (!canInferTotal && includeExactTotal) {
-    const countRows = await timedOrdersStep(timings, 'ordersCount', () =>
-      db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(orders)
-        .where(where)
-    );
+  if (!canInferTotal && includeExactTotal && countRowsPromise) {
+    const countRows = await countRowsPromise;
     total = countRows[0]?.count ?? 0;
     countWasSkipped = false;
   } else if (!canInferTotal) {
@@ -1814,11 +1829,8 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // back to false) — display-only, never breaks /orders.
   const testClientIds = new Set<number>();
   try {
-    const testClientRows = await db
-      .select({ id: clients.id })
-      .from(clients)
-      .where(eq(clients.isTest, true));
-    for (const row of testClientRows) testClientIds.add(row.id);
+    // 60s TTL cache (src/services/test-client-ids.ts) — was a fresh query per request.
+    for (const id of await getTestClientIds()) testClientIds.add(id);
   } catch (err) {
     console.warn('[orders] test-client lookup skipped:', err instanceof Error ? err.message : err);
   }

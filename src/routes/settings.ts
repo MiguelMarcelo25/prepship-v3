@@ -7,6 +7,11 @@ import { settings } from '../db/schema/settings';
 import { requirePermission } from '../middleware/auth';
 // PS-234: durable audit trail for settings writes.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
+// Settings-backed 60s read caches — cleared on every settings write/delete so
+// an edit takes effect immediately in this process (other instances converge
+// within the TTL).
+import { clearCarrierMarkupsCache } from '../services/rates';
+import { clearMarketplaceFeeRulesCache } from '../services/marketplace-fee';
 
 // v2-parity ALLOWED_SETTINGS guard. v2 source:
 //   packages/contracts/src/settings/contracts.ts#ALLOWED_SETTINGS
@@ -70,6 +75,8 @@ app.put('/:key', requirePermission('settings:write'), zValidator('json', putBody
     .values({ key, value })
     .onConflictDoUpdate({ target: settings.key, set: { value } })
     .returning();
+  clearCarrierMarkupsCache();
+  clearMarketplaceFeeRulesCache();
   // PS-234: audit the settings write (key only — value may carry config, never logged raw).
   await recordAuditEvent({
     ...auditActorFromContext(c),
@@ -88,6 +95,8 @@ app.delete('/:key', requirePermission('settings:write'), async (c) => {
     return c.json({ error: `Setting key not allowed: ${key}` }, 400);
   }
   const [row] = await db.delete(settings).where(eq(settings.key, key)).returning();
+  clearCarrierMarkupsCache();
+  clearMarketplaceFeeRulesCache();
   if (!row) return c.json({ error: 'Setting not found' }, 404);
   await recordAuditEvent({
     ...auditActorFromContext(c),

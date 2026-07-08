@@ -99,7 +99,21 @@ const DIRECT_STORE_PROVIDER_ID_OFFSET = 20_000_000;
 // PS-177 (Phase 5): parse normalization moved to the pure canonical owner
 // (shipping-workflow/rate-money.ts) and the loader is exported so the orders
 // route prices row money from the SAME rules browse responses use.
+// 60s TTL cache: the rules were re-read from settings on EVERY /orders and
+// browse request. Writes go through PUT/DELETE /settings/:key, which call
+// clearCarrierMarkupsCache(), so an edit takes effect immediately in this
+// process; other instances converge within the TTL.
+const CARRIER_MARKUPS_TTL_MS = 60_000;
+let carrierMarkupsCache: { at: number; value: Map<string, Markup> } | null = null;
+
+export function clearCarrierMarkupsCache(): void {
+  carrierMarkupsCache = null;
+}
+
 export async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
+  if (carrierMarkupsCache && Date.now() - carrierMarkupsCache.at < CARRIER_MARKUPS_TTL_MS) {
+    return carrierMarkupsCache.value;
+  }
   const rows = await db
     .select()
     .from(settings)
@@ -109,6 +123,7 @@ export async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
     const rule = parseMarkupSettingValue(row.value);
     if (rule) m.set(row.key.slice('markup.'.length), rule);
   }
+  carrierMarkupsCache = { at: Date.now(), value: m };
   return m;
 }
 

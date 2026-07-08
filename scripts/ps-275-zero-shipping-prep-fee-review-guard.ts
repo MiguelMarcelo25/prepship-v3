@@ -243,13 +243,19 @@ function sampleOrderLines(): WaivableLine[] {
 // durable but never applied to billing_line_items/details/exports.
 {
   const gen = readFileSync('src/services/billing.ts', 'utf8');
-  const freshnessBlock = gen.match(/let feeWaiverStale = false[\s\S]+?const sourceLowerBound/)?.[0] ?? '';
+  // Re-anchored 2026-07-08 (API-audit Phase 3): the fee-waiver freshness query
+  // moved into the feeWaiverStalePromise IIFE so the three independent status
+  // queries run in parallel. The guarded invariants are UNCHANGED — the same
+  // billing_fee_waivers/updated_at query still runs inside
+  // billingGenerationStatus, and the catch still FAILS CLOSED (stale=true,
+  // now expressed as `return true`).
+  const freshnessBlock = gen.match(/const feeWaiverStalePromise = \(async \(\) => \{[\s\S]+?\}\)\(\);/)?.[0] ?? '';
   check('status: billingGenerationStatus checks billing_fee_waivers updated after generated billing rows',
     /billing_fee_waivers/.test(freshnessBlock) &&
     /fw\.updated_at/.test(freshnessBlock) &&
     />\s*\(\s*select max\(b\.created_at\)/.test(freshnessBlock));
   check('status: fee-waiver freshness check fails closed so Update Billing does not silently no-op',
-    /catch \(err\)[\s\S]{0,240}feeWaiverStale = true/.test(freshnessBlock));
+    /catch \(err\)[\s\S]{0,300}return true;/.test(freshnessBlock));
   check('status: a stale waiver returns upToDate=false and rebuilds the whole selected range',
     /if \((?:pricingStale \|\| feeWaiverStale|feeWaiverStale \|\| pricingStale)\)/.test(gen) &&
     /missingFrom:\s*isoDayStart\(from\)/.test(gen));

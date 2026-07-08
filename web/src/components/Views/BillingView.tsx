@@ -923,6 +923,19 @@ export default function BillingView() {
       if (targetClientIds.length > 0) {
         const batchPlan: Array<{ clientId: number; clientName: string; batches: Array<{ from: string; to: string }> }> = []
 
+        // One freshness probe per client, fired in PARALLEL — this loop used
+        // to await each probe serially (N clients × the status round-trip
+        // before any generation started). The backend verdict per client is
+        // unchanged; only the wall-clock shape of the fan-out changed.
+        const statusByClientId = new Map<number, Awaited<ReturnType<typeof apiClient.fetchBillingGenerationStatus>>>()
+        if (!forceRegenerate) {
+          setStatus(`Checking billing freshness for ${targetClientIds.length} client${targetClientIds.length === 1 ? '' : 's'}...`)
+          const statuses = await Promise.all(
+            targetClientIds.map((clientId) => apiClient.fetchBillingGenerationStatus(from, to, clientId)),
+          )
+          targetClientIds.forEach((clientId, index) => statusByClientId.set(clientId, statuses[index]))
+        }
+
         for (let index = 0; index < targetClientIds.length; index += 1) {
           const clientId = targetClientIds[index]!
           const clientName = availableBillingClients.find((client) => client.clientId === clientId)?.clientName ?? 'client'
@@ -930,8 +943,7 @@ export default function BillingView() {
           let batchTo = to
 
           if (!forceRegenerate) {
-            setStatus(`Checking ${clientName} (${index + 1}/${targetClientIds.length})...`)
-            const status = await apiClient.fetchBillingGenerationStatus(from, to, clientId)
+            const status = statusByClientId.get(clientId)
             if (status?.upToDate) {
               alreadyCurrent += 1
               continue

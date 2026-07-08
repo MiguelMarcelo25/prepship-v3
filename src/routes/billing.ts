@@ -488,7 +488,11 @@ app.get('/shipping-margin', zValidator('query', generateSchema), async (c) => {
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
   }));
-  return c.json({ data: analytics, ...analytics });
+  // The analytics object (summary + clients + carriers + the full rows array)
+  // used to be serialized TWICE — under `data` AND spread at the top level.
+  // The one consumer (v2-apiClient) reads `res?.data ?? res`, so `data` alone
+  // halves the JSON work and response bytes for the largest billing payload.
+  return c.json({ data: analytics });
 });
 
 app.get('/details', zValidator('query', detailsSchema), async (c) => {

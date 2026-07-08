@@ -330,13 +330,69 @@ export function billingNeedsRepriceForPriceChange(
   return changed > generated;
 }
 
+// /generate/status is an ADVISORY freshness probe the FE polls (and fans out
+// once per client) — but computing it runs four heavy queries including a
+// full lifecycle scan of orders (~1.4s observed in production). Cache the
+// verdict briefly, keyed by range + client + the CALLER'S SCOPE (a restricted
+// caller must never see a global caller's verdict). Freshness contract: the
+// cache is cleared whenever THIS process generates line items (the only
+// in-process write that changes the verdict); other staleness inputs (price
+// edits, fee waivers, another instance generating) are picked up when an
+// entry expires — an acceptable window for an advisory signal. Override with
+// BILLING_STATUS_CACHE_TTL_MS (0 disables).
+const BILLING_STATUS_CACHE_TTL_MS = (() => {
+  const raw = Number.parseInt(process.env.BILLING_STATUS_CACHE_TTL_MS ?? '', 10);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 30_000;
+})();
+const billingStatusCache = new Map<string, { at: number; value: BillingGenerationStatus }>();
+
+export function clearBillingGenerationStatusCache(): void {
+  billingStatusCache.clear();
+}
+
+function billingStatusCacheKey(input: GenerateInput, fromIso: string, toIso: string): string {
+  return [
+    input.clientId ?? 'all',
+    fromIso,
+    toIso,
+    input.scopeIsGlobal ? 'g1' : 'g0',
+    input.scopeRestricted ? 'r1' : 'r0',
+    (input.scopeClientIds ?? []).slice().sort((a, b) => a - b).join(','),
+    (input.scopeStoreIds ?? []).slice().sort((a, b) => a - b).join(','),
+  ].join('|');
+}
+
+function rememberBillingStatus(
+  cacheKey: string,
+  value: BillingGenerationStatus,
+): BillingGenerationStatus {
+  if (BILLING_STATUS_CACHE_TTL_MS > 0) {
+    // Bounded: keys vary by range/scope only; a runaway caller can't grow this
+    // past the cap without the whole map resetting.
+    if (billingStatusCache.size > 200) billingStatusCache.clear();
+    billingStatusCache.set(cacheKey, { at: Date.now(), value });
+  }
+  return value;
+}
+
 export async function billingGenerationStatus(
   input: GenerateInput
 ): Promise<BillingGenerationStatus> {
   const fromIso = new Date(input.dateFrom).toISOString();
   const toIso = new Date(input.dateTo).toISOString();
 
-  const [billingRow] = await db.execute<{
+  const cacheKey = billingStatusCacheKey(input, fromIso, toIso);
+  if (BILLING_STATUS_CACHE_TTL_MS > 0) {
+    const cached = billingStatusCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < BILLING_STATUS_CACHE_TTL_MS) {
+      return cached.value;
+    }
+  }
+
+  // Queries 1-3 (latest billed line, price-change staleness, fee-waiver
+  // staleness) are mutually independent — run them together. Only the
+  // source-freshness query further down needs latestBilling from query 1.
+  const billingRowPromise = db.execute<{
     latest_billing_ship_date: string | null;
   }>(sql`
     select max(b.ship_date)::text as latest_billing_ship_date
@@ -348,10 +404,6 @@ export async function billingGenerationStatus(
       and ${billingLineItemScopePredicate(input)}
   `);
 
-  const latestBilling = billingRow?.latest_billing_ship_date
-    ? new Date(billingRow.latest_billing_ship_date)
-    : null;
-
   // Re-price detection (PER CLIENT): a range is stale when ANY scoped client
   // that already has billing in the range had a package-price or billing-config
   // change AFTER that client's newest billing line was generated — even when no
@@ -360,7 +412,7 @@ export async function billingGenerationStatus(
   // price behind another client's later (re)bill. The underlying rule is
   // billingNeedsRepriceForPriceChange (unit-tested in
   // scripts/ps-billing-reprice-staleness-guard.ts).
-  const [staleRow] = await db.execute<{ pricing_stale: boolean }>(sql`
+  const staleRowPromise = db.execute<{ pricing_stale: boolean }>(sql`
     select exists (
       select 1
       from clients c
@@ -385,12 +437,10 @@ export async function billingGenerationStatus(
         )
     ) as pricing_stale
   `);
-  const pricingStale = staleRow?.pricing_stale === true;
-
-  let feeWaiverStale = false;
-  try {
-    await ensureBillingFeeWaiverSchema();
-    const [feeWaiverRow] = await db.execute<{ fee_waiver_stale: boolean }>(sql`
+  const feeWaiverStalePromise = (async () => {
+    try {
+      await ensureBillingFeeWaiverSchema();
+      const [feeWaiverRow] = await db.execute<{ fee_waiver_stale: boolean }>(sql`
       select exists (
         select 1
         from billing_fee_waivers fw
@@ -413,14 +463,25 @@ export async function billingGenerationStatus(
           )
       ) as fee_waiver_stale
     `);
-    feeWaiverStale = feeWaiverRow?.fee_waiver_stale === true;
-  } catch (err) {
-    console.warn(
-      '[billing] fee-waiver freshness check skipped:',
-      err instanceof Error ? err.message : err,
-    );
-    feeWaiverStale = true;
-  }
+      return feeWaiverRow?.fee_waiver_stale === true;
+    } catch (err) {
+      console.warn(
+        '[billing] fee-waiver freshness check skipped:',
+        err instanceof Error ? err.message : err,
+      );
+      return true;
+    }
+  })();
+
+  const [[billingRow], [staleRow], feeWaiverStale] = await Promise.all([
+    billingRowPromise,
+    staleRowPromise,
+    feeWaiverStalePromise,
+  ]);
+  const latestBilling = billingRow?.latest_billing_ship_date
+    ? new Date(billingRow.latest_billing_ship_date)
+    : null;
+  const pricingStale = staleRow?.pricing_stale === true;
 
   const sourceLowerBound = latestBilling?.toISOString() ?? fromIso;
   // Per user override unlock shipped data on 2026-07-06: PS-387 makes Billing
@@ -558,7 +619,7 @@ export async function billingGenerationStatus(
     // No new shipments to bill. Still rebuild if prices changed after the
     // existing lines were generated, so a box-price edit re-prices them.
     if (pricingStale || feeWaiverStale) {
-      return {
+      return rememberBillingStatus(cacheKey, {
         upToDate: false,
         dateFrom: fromIso,
         dateTo: toIso,
@@ -567,9 +628,9 @@ export async function billingGenerationStatus(
         latestSourceShipDate: billingRow?.latest_billing_ship_date ?? null,
         missingFrom: isoDayStart(from),
         missingTo: isoDayEnd(latestBilling ?? new Date(toIso)),
-      };
+      });
     }
-    return {
+    return rememberBillingStatus(cacheKey, {
       upToDate: true,
       dateFrom: fromIso,
       dateTo: toIso,
@@ -578,7 +639,7 @@ export async function billingGenerationStatus(
       latestSourceShipDate: billingRow?.latest_billing_ship_date ?? null,
       missingFrom: null,
       missingTo: null,
-    };
+    });
   }
 
   const latestBillingDay = latestBilling ? isoDayStart(latestBilling) : null;
@@ -592,7 +653,7 @@ export async function billingGenerationStatus(
         ? latestBillingDay
         : isoDayStart(addUtcDays(latestBilling, 1));
 
-  return {
+  return rememberBillingStatus(cacheKey, {
     upToDate: false,
     dateFrom: fromIso,
     dateTo: toIso,
@@ -601,7 +662,7 @@ export async function billingGenerationStatus(
     latestSourceShipDate: sourceRow?.latest_source_ship_date ?? null,
     missingFrom,
     missingTo: isoDayEnd(latestSource),
-  };
+  });
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -1644,6 +1705,10 @@ export async function generateLineItems(input: GenerateInput) {
       );
     }
   }
+
+  // New lines were just written — any cached freshness verdict in this
+  // process is now stale.
+  clearBillingGenerationStatusCache();
 
   let billingSummaryMetricsRows: number | null = null;
   try {

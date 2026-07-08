@@ -153,14 +153,29 @@ export function computeProductSubtotal(items: unknown): number {
 }
 
 /** Load the configured rules from the settings KV (empty array on miss/parse fail). */
+// 60s TTL cache: re-read from settings on EVERY /orders request before this.
+// Writes go through PUT/DELETE /settings/:key, which call
+// clearMarketplaceFeeRulesCache(); other instances converge within the TTL.
+const MARKETPLACE_FEE_RULES_TTL_MS = 60_000;
+let marketplaceFeeRulesCache: { at: number; value: StoredMarketplaceFeeRule[] } | null = null;
+
+export function clearMarketplaceFeeRulesCache(): void {
+  marketplaceFeeRulesCache = null;
+}
+
 export async function loadMarketplaceFeeRules(): Promise<StoredMarketplaceFeeRule[]> {
+  if (marketplaceFeeRulesCache && Date.now() - marketplaceFeeRulesCache.at < MARKETPLACE_FEE_RULES_TTL_MS) {
+    return marketplaceFeeRulesCache.value;
+  }
   try {
     const [row] = await db
       .select({ value: settings.value })
       .from(settings)
       .where(eq(settings.key, MARKETPLACE_FEE_RULES_KEY))
       .limit(1);
-    return parseMarketplaceFeeRules(row?.value ?? null);
+    const rules = parseMarketplaceFeeRules(row?.value ?? null);
+    marketplaceFeeRulesCache = { at: Date.now(), value: rules };
+    return rules;
   } catch (err) {
     console.warn('[marketplace-fee] rules lookup skipped:', err instanceof Error ? err.message : err);
     return [];
