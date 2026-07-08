@@ -151,7 +151,9 @@ checkPatterns('backend rates owner exports final carrier-universe combiner', rat
   /export function combineCarrierUniverses/,
   /DIRECT_CARRIER_QUOTE_TIMEOUT_MS/,
   /dedupeBrowseRates/,
-  /customerShippingAmount/,
+  // Canonicalized money fields (e9762409): the ranking basis itself must read customer
+  // money through the canonical normalizer — not just anywhere in the file.
+  /export function rateTotal[\s\S]{0,120}?normalizeShippingRateMoney\(rate\)\.cShippingRateAmount/,
   /export function rateTotal/,
 ]);
 check('rates route delegates final combination to backend combiner',

@@ -84,7 +84,9 @@ check(
   // markedAmount (not the old customerRateAmount/rateCostAmount names). Assert
   // backend-money-only + the ABSENCE of the shipping fallback.
   'Awaiting Best Rate amount renders backend money only, with no shipping.bestRateAmount fallback',
-  /order\.orderStatus === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
+  // Repointed (guard rot): row helpers now read status through the effective-status
+  // owner (getOrderEffectiveStatus, PS-387) instead of raw order.orderStatus.
+  /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(bestRateBaseCostBlock) &&
     /money\?\.selectedRateCost \?\? money\?\.baseAmount \?\? money\?\.cShippingRateAmount \?\? money\?\.markedAmount \?\? null/.test(bestRateBaseCostBlock) &&
     !/getShippingNumber\(order, 'bestRateAmount'\)/.test(bestRateBaseCostBlock),
   bestRateBaseCostBlock,
@@ -99,7 +101,7 @@ check(
   'Awaiting Best Rate account display prefers backend bestRateWorkflow.display.accountNickname',
   /backendDisplayAccountNickname/.test(bestRateAccountBlock) &&
     bestRateAccountBlock.indexOf('backendDisplayAccountNickname') < bestRateAccountBlock.indexOf('rateNickname') &&
-    /if \(order\.orderStatus === 'awaiting_shipment'\) return backendDisplayAccountNickname \?\? rateNickname/.test(bestRateAccountBlock),
+    /if \(getOrderEffectiveStatus\(order\) === 'awaiting_shipment'\) return backendDisplayAccountNickname \?\? rateNickname/.test(bestRateAccountBlock),
   bestRateAccountBlock,
 );
 
@@ -112,7 +114,7 @@ check(
   'Awaiting Best Rate provider id prefers backend bestRateWorkflow.display.providerAccountId',
   /backendDisplayProviderAccountId/.test(bestRateProviderBlock) &&
     bestRateProviderBlock.indexOf('backendDisplayProviderAccountId') < bestRateProviderBlock.indexOf('rateProviderId') &&
-    /if \(order\.orderStatus === 'awaiting_shipment'\) \{[\s\S]*?return backendDisplayProviderAccountId \?\? rateProviderId/.test(bestRateProviderBlock),
+    /if \(getOrderEffectiveStatus\(order\) === 'awaiting_shipment'\) \{[\s\S]*?return backendDisplayProviderAccountId \?\? rateProviderId/.test(bestRateProviderBlock),
   bestRateProviderBlock,
 );
 
@@ -123,8 +125,8 @@ const selectedCarrierBlock = sliceBetween(
 );
 check(
   'Awaiting selected-rate carrier display does not fall through to current Best Rate',
-  /order\.orderStatus === 'awaiting_shipment'/.test(selectedCarrierBlock) &&
-    !/order\.bestRate/.test(sliceBetween(selectedCarrierBlock, "order.orderStatus === 'awaiting_shipment'", '\n  return')),
+  /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(selectedCarrierBlock) &&
+    !/order\.bestRate/.test(sliceBetween(selectedCarrierBlock, "getOrderEffectiveStatus(order) === 'awaiting_shipment'", '\n  return')),
   selectedCarrierBlock,
 );
 
@@ -135,8 +137,8 @@ const selectedServiceBlock = sliceBetween(
 );
 check(
   'Awaiting selected-rate service display does not fall through to current Best Rate',
-  /order\.orderStatus === 'awaiting_shipment'/.test(selectedServiceBlock) &&
-    !/order\.bestRate/.test(sliceBetween(selectedServiceBlock, "order.orderStatus === 'awaiting_shipment'", '\n  return')),
+  /getOrderEffectiveStatus\(order\) === 'awaiting_shipment'/.test(selectedServiceBlock) &&
+    !/order\.bestRate/.test(sliceBetween(selectedServiceBlock, "getOrderEffectiveStatus(order) === 'awaiting_shipment'", '\n  return')),
   selectedServiceBlock,
 );
 
