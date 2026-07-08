@@ -91,6 +91,8 @@ async function loadAffectedRows(limit: number): Promise<LocalShipmentAccounting[
       ssShipmentId: shipments.labelShipmentId,
       cost: shipments.cost,
       otherCost: shipments.otherCost,
+      selectedRateCost: shipments.selectedRateCost,
+      selectedRateJson: shipments.selectedRateJson,
       carrierCode: shipments.carrierCode,
       serviceCode: shipments.serviceCode,
       orderStatus: orders.orderStatus,
@@ -118,6 +120,8 @@ async function loadAffectedRows(limit: number): Promise<LocalShipmentAccounting[
       ssShipmentId: row.ssShipmentId,
       cost: row.cost != null ? Number(row.cost) : null,
       otherCost: row.otherCost != null ? Number(row.otherCost) : null,
+      selectedRateCost: row.selectedRateCost,
+      selectedRateJson: row.selectedRateJson,
       carrierCode: row.carrierCode,
       serviceCode: row.serviceCode,
     }));
@@ -128,6 +132,9 @@ async function loadAffectedRows(limit: number): Promise<LocalShipmentAccounting[
 // premium) and merges the insurance breakdown into selectedRateJson. It never touches
 // cost/labelCost (postage), carrier/service/tracking/label URL, order status, dims,
 // weight, package, or any item. Idempotent: already-reconciled rows are `affected:false`.
+// Per user override unlock shipped data on 2026-07-08: PS-404 extends this path to
+// write shipments.selectedRateCost and explicit insurance proof metadata only when
+// read-only ShipStation billing data proves ParcelGuard was charged.
 async function applyShipmentReconciliation(plan: ParcelGuardBackfillPlan): Promise<boolean> {
   if (!plan.affected || !plan.updates) return false;
   const [row] = await db
@@ -141,7 +148,11 @@ async function applyShipmentReconciliation(plan: ParcelGuardBackfillPlan): Promi
   const mergedRate = { ...existing, ...plan.updates.selectedRateJsonPatch };
   await db
     .update(shipments)
-    .set({ otherCost: plan.updates.otherCost, selectedRateJson: mergedRate })
+    .set({
+      otherCost: plan.updates.otherCost,
+      selectedRateCost: plan.updates.selectedRateCost,
+      selectedRateJson: mergedRate,
+    })
     .where(eq(shipments.id, plan.shipmentId));
   return true;
 }
@@ -178,7 +189,9 @@ async function main(): Promise<void> {
   const affected = plans.filter((plan) => plan.affected);
   const summary = summarizeBackfillPlans(plans);
   const willApply = apply && confirmProduction;
-  const modeLabel = willApply ? 'APPLY (writes shipments.otherCost + selectedRateJson)' : 'DRY RUN (no writes)';
+  const modeLabel = willApply
+    ? 'APPLY (writes shipments.otherCost + selectedRateCost + selectedRateJson proof)'
+    : 'DRY RUN (no writes)';
 
   if (asJson) {
     console.log(JSON.stringify({ mode: willApply ? 'apply' : 'dry-run', summary, affected }, null, 2));
@@ -195,7 +208,7 @@ async function main(): Promise<void> {
           `order ${plan.orderNumber ?? '?'} (shipment ${plan.shipmentId}, ss ${plan.ssShipmentId ?? '?'})`,
           `  local: postage $${plan.localPostage.toFixed(2)} + other $${plan.localOtherCost.toFixed(2)} = $${plan.localTotal.toFixed(2)}`,
           `  ShipStation: postage $${plan.billedPostage.toFixed(2)} + premium $${plan.billedPremium.toFixed(2)} = $${plan.billedTotal.toFixed(2)} (${plan.provenance})`,
-          `  ${willApply ? 'updating' : 'would update'}: shipments.otherCost -> ${plan.updates?.otherCost}; selectedRateJson += {insuranceCost:${plan.updates?.selectedRateJsonPatch.insuranceCost}, totalCost:${plan.updates?.selectedRateJsonPatch.totalCost}}`,
+          `  ${willApply ? 'updating' : 'would update'}: shipments.otherCost -> ${plan.updates?.otherCost}; selectedRateCost -> ${plan.updates?.selectedRateCost}; selectedRateJson += {insuranceProvider:${plan.updates?.selectedRateJsonPatch.insuranceProvider}, insuredValue:${plan.updates?.selectedRateJsonPatch.insuredValue}, insuranceCost:${plan.updates?.selectedRateJsonPatch.insuranceCost}, totalCost:${plan.updates?.selectedRateJsonPatch.totalCost}}`,
         ].join('\n'),
       );
     }

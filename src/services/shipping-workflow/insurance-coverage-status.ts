@@ -86,6 +86,12 @@ function finiteValue(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function hasFiniteValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  const n = Number(value);
+  return Number.isFinite(n);
+}
+
 const RESULT: Record<InsuranceCoverageStatus, InsuranceCoverageStatusResult> = {
   included: { status: 'included', badgeLabel: '$100 INS. INCL.', badgeTone: 'green', insuranceCoverageProofSource: null },
   not_included: { status: 'not_included', badgeLabel: 'NO INSURANCE', badgeTone: 'red', insuranceCoverageProofSource: null },
@@ -115,6 +121,7 @@ export function resolveInsuranceCoverageStatus(
   const provenance = norm(input.insuranceProvenance);
   const certainty = norm(input.insuranceCertainty);
   const proofSource = norm(input.insuranceCoverageProofSource);
+  const hasInsuredValue = hasFiniteValue(input.insuredValue);
   const insuredValue = finiteValue(input.insuredValue);
   const premium = finiteValue(input.insuranceCost);
 
@@ -124,8 +131,14 @@ export function resolveInsuranceCoverageStatus(
   }
 
   // (2) Explicit no-insurance — the HUGRAB $100 was NOT applied.
-  if (provider === 'none' || insuredValue <= 0 || certainty === 'not_included') {
+  if (provider === 'none' || certainty === 'not_included' || (hasInsuredValue && insuredValue <= 0)) {
     return RESULT.not_included;
+  }
+
+  // PS-404: legacy shipped HUGRAB rows can have flat selected/label cost while
+  // missing proof fields. Missing proof is not explicit no-insurance.
+  if (!hasInsuredValue) {
+    return RESULT.unknown;
   }
 
   // (3) Requested but UNPROVEN - below the $100 floor is never enough.

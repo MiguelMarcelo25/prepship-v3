@@ -7,6 +7,7 @@
 // source, and the dry-run/apply CLI; this module owns the decision so it is unit-tested
 // offline (Phase-4 guard) without touching production or buying postage.
 
+import { HUGRAB_REQUIRED_INSURED_VALUE } from './insurance-coverage-status';
 import type { BilledInsuranceCost } from './insurance-cost';
 
 export type LocalShipmentAccounting = {
@@ -19,6 +20,10 @@ export type LocalShipmentAccounting = {
   cost: number | null;
   /** Local "other" cost (shipments.otherCost) — where the premium belongs. */
   otherCost: number | null;
+  /** Local selected-rate total (shipments.selectedRateCost). */
+  selectedRateCost?: number | string | null;
+  /** Local selected-rate JSON; used only to detect missing proof metadata. */
+  selectedRateJson?: unknown;
   carrierCode: string | null;
   serviceCode: string | null;
 };
@@ -41,8 +46,11 @@ export type ParcelGuardBackfillPlan = {
   updates:
     | {
         otherCost: string;
+        selectedRateCost: string;
         selectedRateJsonPatch: {
           otherCost: number;
+          insuranceProvider: 'parcelguard';
+          insuredValue: number;
           insuranceCost: number;
           insuranceProvenance: string;
           totalCost: number;
@@ -58,8 +66,45 @@ function num(value: number | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function norm(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function approxEqual(left: unknown, right: number): boolean {
+  const n = finiteNumber(left);
+  return n !== null && Math.abs(n - right) <= EPSILON;
+}
+
 function round2(value: number): number {
   return Number(value.toFixed(2));
+}
+
+function selectedRateJsonHasProof(
+  row: LocalShipmentAccounting,
+  base: Pick<ParcelGuardBackfillPlan, 'billedPremium' | 'billedTotal' | 'provenance'>,
+): boolean {
+  const selectedRate = recordOrNull(row.selectedRateJson);
+  if (!selectedRate) return false;
+
+  const provider = norm(selectedRate.insuranceProvider);
+  const provenance = norm(selectedRate.insuranceProvenance);
+  return provider === 'parcelguard' &&
+    approxEqual(selectedRate.insuredValue, HUGRAB_REQUIRED_INSURED_VALUE) &&
+    approxEqual(selectedRate.insuranceCost, base.billedPremium) &&
+    provenance === norm(base.provenance) &&
+    approxEqual(selectedRate.totalCost, base.billedTotal);
 }
 
 /**
@@ -99,10 +144,14 @@ export function planParcelGuardBackfillRow(
   if (base.billedPremium <= 0) {
     return { ...base, affected: false, reason: 'no_insurance_premium', updates: null };
   }
-  if (Math.abs(localOtherCost - base.billedPremium) <= EPSILON) {
+  const otherCostMatches = Math.abs(localOtherCost - base.billedPremium) <= EPSILON;
+  const selectedRateCostMatches = approxEqual(row.selectedRateCost, base.billedTotal);
+  const selectedRateHasProof = selectedRateJsonHasProof(row, base);
+  if (otherCostMatches && selectedRateCostMatches && selectedRateHasProof) {
     return { ...base, affected: false, reason: 'already_reconciled', updates: null };
   }
-  if (base.billedTotal <= localTotal + EPSILON) {
+  const shouldWriteOtherCost = !otherCostMatches && base.billedTotal > localTotal + EPSILON;
+  if (!shouldWriteOtherCost && selectedRateCostMatches && selectedRateHasProof) {
     // Billed total not higher than what we already recorded — do not lower costs here.
     return { ...base, affected: false, reason: 'local_total_not_lower', updates: null };
   }
@@ -110,11 +159,18 @@ export function planParcelGuardBackfillRow(
   return {
     ...base,
     affected: true,
-    reason: 'postage_only_missing_premium',
+    reason: shouldWriteOtherCost
+      ? 'postage_only_missing_premium'
+      : selectedRateCostMatches
+        ? 'missing_insurance_proof'
+        : 'missing_selected_rate_cost',
     updates: {
-      otherCost: base.billedPremium.toFixed(2),
+      otherCost: (shouldWriteOtherCost ? base.billedPremium : localOtherCost).toFixed(2),
+      selectedRateCost: base.billedTotal.toFixed(2),
       selectedRateJsonPatch: {
         otherCost: base.billedPremium,
+        insuranceProvider: 'parcelguard',
+        insuredValue: HUGRAB_REQUIRED_INSURED_VALUE,
         insuranceCost: base.billedPremium,
         insuranceProvenance: billed.provenance,
         totalCost: base.billedTotal,
