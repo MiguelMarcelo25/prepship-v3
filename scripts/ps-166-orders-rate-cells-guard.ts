@@ -31,7 +31,7 @@ check('OrdersRateCells exports the pure cell renderers',
   /export function renderOrderTotalCell/.test(cells) &&
   // Repointed (guard rot): PS-356/PS-357 renamed renderRateCostCell → renderCShippingRateCell
   // (the 'ratecost' column is now labeled "C. Shipping Rate" and reads backend customer money).
-  /export function renderCShippingRateCell/.test(cells) &&
+  /export function renderCShippingRateCell\(/.test(cells) &&
   /export function renderMarketplaceFeeCell/.test(cells) &&
   /export function renderProfitCell/.test(cells));
 check('OrdersRateCells reads ONLY the backend money DTO helpers (no recompute)',

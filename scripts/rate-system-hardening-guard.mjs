@@ -89,7 +89,8 @@ const ratesCombinedSrc = read('src/services/rates-combined.ts');
 const browseProducer = read('src/services/rate-browse-response-producer.ts');
 assert(
   client.includes('carrierDiagnostics') &&
-    browseProducer.includes('carrierDiagnostics: combinedCarrierDiagnostics,') &&
+    // Both producer return sites (cached-only and full) must stamp the combined diagnostics.
+    (browseProducer.match(/carrierDiagnostics: combinedCarrierDiagnostics,/g) ?? []).length >= 2 &&
     ratesCombinedSrc.includes("source: 'direct'") &&
     ratesCombinedSrc.includes("source: 'shipstation'"),
   'Rate Browser preserves backend-normalized ShipStation and direct-carrier diagnostics',
