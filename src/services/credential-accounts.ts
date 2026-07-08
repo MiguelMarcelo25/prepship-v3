@@ -332,6 +332,22 @@ export async function patchCredentialAccount(
   }
 
   if (patch.hasSource && patch.hasLabel) {
+    if (table === 'store_accounts' && patch.source === 'admin') {
+      const rows = (await sql`
+        UPDATE ${sql(table)}
+        SET source = ${patch.source},
+            label = ${patch.labelGoesNull ? null : patch.label},
+            active = true,
+            sync_anchor_at = COALESCE(sync_anchor_at, NOW()),
+            updated_at = NOW()
+        WHERE id = ${id}
+        RETURNING id, client_id AS "clientId", provider, label,
+                  account_identifier AS "accountIdentifier",
+                  source, active, created_at AS "createdAt"
+      `) as CredentialAccountRow[];
+      return rows[0] ?? row;
+    }
+
     const rows = (await sql`
       UPDATE ${sql(table)}
       SET source = ${patch.source},
@@ -346,6 +362,21 @@ export async function patchCredentialAccount(
   }
 
   if (patch.hasSource) {
+    if (table === 'store_accounts' && patch.source === 'admin') {
+      const rows = (await sql`
+        UPDATE ${sql(table)}
+        SET source = ${patch.source},
+            active = true,
+            sync_anchor_at = COALESCE(sync_anchor_at, NOW()),
+            updated_at = NOW()
+        WHERE id = ${id}
+        RETURNING id, client_id AS "clientId", provider, label,
+                  account_identifier AS "accountIdentifier",
+                  source, active, created_at AS "createdAt"
+      `) as CredentialAccountRow[];
+      return rows[0] ?? row;
+    }
+
     const rows = (await sql`
       UPDATE ${sql(table)}
       SET source = ${patch.source}, updated_at = NOW()

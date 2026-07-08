@@ -38,6 +38,7 @@ import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 import observabilityRoute from './routes/observability';
 import automationRoute from './routes/automation';
+import clientPortalIntegrationsRoute from './routes/client-portal/integrations';
 
 type AppVars = {
   requestId: string;
@@ -154,6 +155,7 @@ const protectedPrefixes = [
   '/worker',
   '/observability',
   '/automation',
+  '/client-portal',
 ];
 
 for (const prefix of protectedPrefixes) {
@@ -192,6 +194,7 @@ app.route('/users', usersRoute);
 app.route('/worker', workerRoute);
 app.route('/observability', observabilityRoute);
 app.route('/automation', automationRoute);
+app.route('/client-portal', clientPortalIntegrationsRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

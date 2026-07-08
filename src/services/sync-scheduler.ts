@@ -2,6 +2,7 @@ import { env } from '../lib/env';
 import { sql as pg } from '../db/client';
 import { syncOrders } from './order-sync';
 import { syncShipments } from './shipment-sync';
+import { syncShopifyOrders } from './shopify-order-sync';
 import { startBackfillBestRates, getActiveBackfillJob } from './rates-backfill';
 import { reapStaleOrderRateJobs } from './shipping-workflow/reap-stale-rate-jobs';
 import {
@@ -67,6 +68,7 @@ const REAP_RATE_JOBS_INTERVAL_MS = 5 * 60 * 1000; // 5 min — durable cleanup o
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
 let orderSyncRunning = false;
+let shopifyOrderSyncRunning = false;
 let shipmentSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
@@ -77,6 +79,7 @@ let shipmentTrackingRunning = false;
 let walmartFeesRunning = false;
 const activeSchedulerJobsByLane = new Map<SyncJobLane, string>();
 let orderTimer: NodeJS.Timeout | null = null;
+let shopifyOrderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
 let backfillTimer: NodeJS.Timeout | null = null;
 let inventoryImportTimer: NodeJS.Timeout | null = null;
@@ -180,6 +183,29 @@ export async function runOrderSync(): Promise<void> {
     );
   } finally {
     orderSyncRunning = false;
+  }
+}
+
+export async function runShopifyOrderSyncTick(): Promise<void> {
+  if (!env.SHOPIFY_SYNC_ENABLED) return;
+  if (shopifyOrderSyncRunning) {
+    console.log('[scheduler] Shopify orders sync already running - skipping tick');
+    return;
+  }
+  shopifyOrderSyncRunning = true;
+  try {
+    const result = await runHeavySchedulerJob('Shopify orders sync', () => syncShopifyOrders());
+    if (!result?.enabled) return;
+    console.log(
+      `[scheduler] Shopify orders synced: accounts=${result.accounts}, rows=${result.synced}, errors=${result.errors}`
+    );
+  } catch (err) {
+    console.error(
+      '[scheduler] Shopify orders sync failed:',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    shopifyOrderSyncRunning = false;
   }
 }
 
@@ -582,6 +608,25 @@ export function startSyncScheduler(
     }
   }
 
+  if (!shopifyOrderTimer) {
+    if (env.SHOPIFY_SYNC_ENABLED) {
+      console.log(
+        `[scheduler] Shopify direct store sync enabled - every ${ORDER_SYNC_INTERVAL_MS / 1000}s`
+      );
+      setTimeout(() => {
+        void runShopifyOrderSyncTick();
+        shopifyOrderTimer = setInterval(
+          () => void runShopifyOrderSyncTick(),
+          ORDER_SYNC_INTERVAL_MS
+        );
+      }, STARTUP_DELAY_MS + 45_000);
+    } else {
+      console.log(
+        '[scheduler] Shopify direct store sync disabled via SHOPIFY_SYNC_ENABLED=false'
+      );
+    }
+  }
+
   // Only run in-process sync when ShipStation credentials are present.
   // Dev environments without creds would just spam errors otherwise.
   if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
@@ -694,6 +739,10 @@ export function stopSyncScheduler(): void {
   if (shipmentTimer) {
     clearInterval(shipmentTimer);
     shipmentTimer = null;
+  }
+  if (shopifyOrderTimer) {
+    clearInterval(shopifyOrderTimer);
+    shopifyOrderTimer = null;
   }
   if (backfillTimer) {
     clearInterval(backfillTimer);

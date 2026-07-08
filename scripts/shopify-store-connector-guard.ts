@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createShopifyStoreConnector } from '../src/connectors/store/shopify';
+import {
+  createShopifyStoreConnector,
+  normalizeShopifyOrder,
+  normalizeShopifyShopDomain,
+  validateShopifyCredentials,
+} from '../src/connectors/store/shopify';
 import { connectorImplementationStatus } from '../src/connectors/implementation-status';
 import { verifyProviderCredentials } from '../src/connectors/carrier/credential-verification';
 import { __setCarrierReplay } from '../src/lib/http/timing';
@@ -140,6 +145,135 @@ await check('Shopify Dev Dashboard app-not-installed errors are actionable', asy
   assert.match(result.error ?? '', /kf-goodies-2\.myshopify\.com/);
   assert.match(result.error ?? '', /Admin API Access Token/i);
   assert.doesNotMatch(result.error ?? '', /shpss_test_secret/);
+});
+
+await check('Shopify portal validation uses GraphQL and never echoes the token', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), init: init ?? {} });
+    return new Response(JSON.stringify({
+      data: {
+        shop: { name: 'KF GOODIES', myshopifyDomain: 'kf-goodies-2.myshopify.com' },
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  assert.equal(
+    normalizeShopifyShopDomain('https://admin.shopify.com/store/kf-goodies-2/orders'),
+    'kf-goodies-2.myshopify.com',
+  );
+  assert.throws(() => normalizeShopifyShopDomain('https://example.com'), /myshopify\.com/);
+
+  const result = await validateShopifyCredentials(
+    { shopDomain: 'kf-goodies-2.myshopify.com', adminAccessToken: 'shpat_secret' },
+    { fetch: fetchImpl, apiVersion: '2026-07', timeoutMs: 5_000 },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.shopName, 'KF GOODIES');
+  assert.equal(result.myshopifyDomain, 'kf-goodies-2.myshopify.com');
+  assert.equal(JSON.stringify(result).includes('shpat_secret'), false);
+  assert.equal(calls[0]?.url, 'https://kf-goodies-2.myshopify.com/admin/api/2026-07/graphql.json');
+});
+
+await check('Shopify GraphQL order normalization supports direct store polling', async () => {
+  const gqlOrder = {
+    id: 'gid://shopify/Order/1234567890',
+    name: '#1001',
+    createdAt: '2026-07-08T12:00:00Z',
+    updatedAt: '2026-07-08T12:10:00Z',
+    cancelledAt: null,
+    displayFulfillmentStatus: 'FULFILLED',
+    email: 'order@example.com',
+    customer: { displayName: 'Jane Buyer', email: 'customer@example.com' },
+    shippingAddress: {
+      name: 'Jane Buyer',
+      city: 'Austin',
+      provinceCode: 'TX',
+      zip: '78701',
+    },
+    currentTotalPriceSet: { shopMoney: { amount: '29.99', currencyCode: 'USD' } },
+    totalShippingPriceSet: { shopMoney: { amount: '6.50', currencyCode: 'USD' } },
+    lineItems: {
+      edges: [
+        {
+          node: {
+            id: 'gid://shopify/LineItem/1',
+            sku: 'SKU-1',
+            title: 'Starter Kit',
+            quantity: 2,
+            variant: { id: 'gid://shopify/ProductVariant/987' },
+            originalUnitPriceSet: { shopMoney: { amount: '11.00', currencyCode: 'USD' } },
+          },
+        },
+      ],
+    },
+    totalWeight: 32,
+  };
+
+  const normalized = normalizeShopifyOrder(gqlOrder, {
+    accountId: '42',
+    clientId: 7,
+    storeId: 9_200_042,
+  });
+  assert.equal(normalized.sourceProvider, 'shopify');
+  assert.equal(normalized.sourceAccountId, '42');
+  assert.equal(normalized.sourceOrderId, '1234567890');
+  assert.equal(normalized.sourceOrderNumber, '#1001');
+  assert.equal(normalized.canonicalStatus, 'shipped');
+  assert.equal(normalized.externallyShipped, true);
+  assert.equal(normalized.customerName, 'Jane Buyer');
+  assert.equal(normalized.customerEmail, 'order@example.com');
+  assert.equal(normalized.shipToCity, 'Austin');
+  assert.equal(normalized.shipToState, 'TX');
+  assert.equal(normalized.shipToPostalCode, '78701');
+  assert.equal(normalized.weightOz, 32);
+  assert.equal(normalized.orderTotal, '29.99');
+  assert.equal(normalized.shippingPaid, 6.5);
+  assert.equal((normalized.items as Array<Record<string, unknown>>)[0]?.sku, 'SKU-1');
+  assert.equal((normalized.items as Array<Record<string, unknown>>)[0]?.variantId, 'gid://shopify/ProductVariant/987');
+
+  const graphqlCalls: Array<{ url: string; init: RequestInit }> = [];
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    graphqlCalls.push({ url: String(url), init: init ?? {} });
+    return new Response(JSON.stringify({
+      data: {
+        orders: {
+          edges: [{ cursor: 'edge-cursor-1', node: gqlOrder }],
+          pageInfo: { hasNextPage: true, endCursor: 'edge-cursor-1' },
+        },
+      },
+      extensions: {
+        cost: { throttleStatus: { currentlyAvailable: 100, restoreRate: 50 } },
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  const connector = createShopifyStoreConnector({
+    fetch: fetchImpl,
+    sleep: async () => undefined,
+    apiVersion: '2026-07',
+  });
+  const result = await connector.importOrders({
+    companyId: 1,
+    accountId: '42',
+    credentials: {
+      shopDomain: 'kf-goodies-2.myshopify.com',
+      adminAccessToken: 'shpat_secret',
+    },
+    sinceDate: '2026-07-08T00:00:00.000Z',
+    cursor: null,
+    limit: 50,
+    storeId: 9_200_042,
+  });
+
+  assert.equal(result.provider, 'shopify');
+  assert.equal(result.accountId, '42');
+  assert.equal(result.orders.length, 1);
+  assert.equal(result.cursor, 'edge-cursor-1');
+  assert.equal(result.diagnostics?.hasNextPage, true);
+  assert.equal(result.diagnostics?.maxUpdatedAt, '2026-07-08T12:10:00.000Z');
+  assert(graphqlCalls.some((call) => call.url === 'https://kf-goodies-2.myshopify.com/admin/api/2026-07/graphql.json'));
 });
 
 await check('Shopify import normalizes paid unfulfilled orders for canonical store persistence', async () => {

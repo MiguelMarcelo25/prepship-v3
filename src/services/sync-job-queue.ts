@@ -18,6 +18,7 @@ import {
   runExternalShippedClassifierJob,
   runInventoryImportFromOrders,
   runReportingRefreshTick,
+  runShopifyOrderSyncTick,
   runShipmentTrackingTick,
   runSyncProductsTick,
   runWalmartFeesTick,
@@ -55,6 +56,7 @@ const STARTUP_DELAY_MS = SYNC_STARTUP_DELAY_MS;
 
 const JOBS = {
   orders: 'prepship.sync.orders',
+  shopifyOrders: 'prepship.sync.shopify-orders',
   shipments: 'prepship.sync.shipments',
   rateBackfill: 'prepship.sync.rate-backfill',
   inventoryImport: 'prepship.sync.inventory-import',
@@ -659,6 +661,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     }
     return result;
   });
+  await registerWorker(JOBS.shopifyOrders, runShopifyOrderSyncTick);
   await registerWorker(JOBS.shipments, () => syncShipments({}));
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
@@ -737,6 +740,12 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     console.log(
       '[job-queue] walmart fees sync disabled via ENABLE_WALMART_FEES_SCHEDULER=false'
     );
+  }
+
+  if (env.SHOPIFY_SYNC_ENABLED) {
+    scheduleEnqueue(JOBS.shopifyOrders, STARTUP_DELAY_MS + 45_000, ORDER_SYNC_INTERVAL_MS);
+  } else {
+    console.log('[job-queue] Shopify direct store sync disabled via SHOPIFY_SYNC_ENABLED=false');
   }
 
   if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {

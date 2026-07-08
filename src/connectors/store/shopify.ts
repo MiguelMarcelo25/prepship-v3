@@ -20,7 +20,8 @@ import {
   type ShopifyShippingMockLabelResult,
 } from '../../services/shopify-shipping-labels.js';
 
-const DEFAULT_API_VERSION = '2026-07';
+export const SHOPIFY_ADMIN_API_VERSION = '2026-07';
+const DEFAULT_API_VERSION = SHOPIFY_ADMIN_API_VERSION;
 const SHOPIFY_SHIPPING_LABEL_PURCHASE_MUTATION = `
 mutation shippingLabelPurchase($shippingLabelPurchase: ShippingLabelPurchaseInput!) {
   shippingLabelPurchase(shippingLabelPurchase: $shippingLabelPurchase) {
@@ -65,6 +66,107 @@ type ShopifyCredentials = {
   apiVersion: string;
   authMode: 'access_token' | 'client_credentials';
 };
+
+type ShopifyConnectorOptions = {
+  fetch?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
+  apiVersion?: string;
+};
+
+type ShopifyValidationCredentials = {
+  shopDomain?: string | null;
+  adminAccessToken?: string | null;
+  accessToken?: string | null;
+};
+
+type ShopifyOrderContext = {
+  accountId: string;
+  clientId?: number | null;
+  storeId?: number | null;
+};
+
+export type ShopifyValidationResult =
+  | { ok: true; shopName: string; myshopifyDomain: string }
+  | { ok: false; error: string };
+
+const SHOPIFY_SHOP_QUERY = `
+  query PrepShipShopValidation {
+    shop {
+      name
+      myshopifyDomain
+    }
+  }
+`;
+
+const SHOPIFY_ORDERS_QUERY = `
+  query PrepShipOrders($first: Int!, $after: String, $query: String!) {
+    shop {
+      name
+      myshopifyDomain
+    }
+    orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
+      edges {
+        cursor
+        node {
+          id
+          name
+          createdAt
+          updatedAt
+          cancelledAt
+          displayFulfillmentStatus
+          email
+          totalWeight
+          customer {
+            displayName
+            email
+          }
+          shippingAddress {
+            name
+            city
+            provinceCode
+            province
+            zip
+          }
+          currentTotalPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+          totalShippingPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+          lineItems(first: 100) {
+            edges {
+              node {
+                id
+                sku
+                title
+                quantity
+                variant {
+                  id
+                }
+                originalUnitPriceSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
 
 export type ShopifyShippingReadinessInput = {
   orderId?: unknown;
@@ -169,7 +271,7 @@ function normalizeApiVersion(value: unknown): string {
 
 export function normalizeShopifyShopDomain(value: unknown): string {
   let raw = firstString(value).toLowerCase();
-  if (!raw) return '';
+  if (!raw) throw new Error('Shopify shop domain is required');
 
   try {
     const parsed = raw.startsWith('http://') || raw.startsWith('https://')
@@ -184,9 +286,10 @@ export function normalizeShopifyShopDomain(value: unknown): string {
     raw = raw.replace(/^https?:\/\//, '').split('/')[0] ?? raw;
   }
 
-  raw = raw.replace(/^admin\./, '').replace(/\/+$/, '');
+  raw = raw.replace(/^www\./, '').replace(/^admin\./, '').replace(/\.+$/, '').replace(/\/+$/, '');
   if (/^[a-z0-9][a-z0-9-]*$/.test(raw)) return `${raw}.myshopify.com`;
-  return raw;
+  if (/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(raw)) return raw;
+  throw new Error('Shopify shop domain must be a .myshopify.com domain');
 }
 
 function tokenExpiresAtMs(value: unknown): number | null {
@@ -258,7 +361,13 @@ async function shopifyCredentials(creds: Record<string, unknown>): Promise<Shopi
   const base = baseShopifyCredentials(creds);
   const clientId = firstString(creds.clientId, creds.client_id, creds.apiKey, creds.api_key);
   const clientSecret = firstString(creds.clientSecret, creds.client_secret, creds.secret, creds.appSecret, creds.app_secret);
-  const accessToken = firstString(creds.accessToken, creds.access_token, creds.adminAccessToken, creds.admin_api_access_token);
+  const accessToken = firstString(
+    creds.accessToken,
+    creds.access_token,
+    creds.adminAccessToken,
+    creds.admin_access_token,
+    creds.admin_api_access_token,
+  );
 
   // Dev Dashboard apps should use client credentials. Prefer that path when
   // present so a stale/wrong manually-entered accessToken cannot shadow it.
@@ -357,6 +466,110 @@ async function shopifyAdminFetch(
     headers.set('Content-Type', 'application/json');
   }
   return timedFetch(name, shopifyAdminUrl(creds, path), { ...init, headers }, fields);
+}
+
+function shopifyGraphqlUrl(shopDomain: string, apiVersion: string): string {
+  return `https://${shopDomain}/admin/api/${apiVersion}/graphql.json`;
+}
+
+function shopifyGraphqlHeaders(accessToken: string): Record<string, string> {
+  return {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'X-Shopify-Access-Token': accessToken,
+  };
+}
+
+function validationCredentialsFrom(credentials: ShopifyValidationCredentials): {
+  shopDomain: string;
+  accessToken: string;
+} {
+  const shopDomain = normalizeShopifyShopDomain(credentials.shopDomain);
+  const accessToken = firstString(
+    credentials.adminAccessToken,
+    credentials.accessToken,
+  );
+  if (!accessToken) throw new Error('Shopify Admin API token is required');
+  return { shopDomain, accessToken };
+}
+
+async function postShopifyGraphql<T>(
+  operationName: string,
+  creds: ShopifyCredentials,
+  body: Record<string, unknown>,
+  options: Required<Pick<ShopifyConnectorOptions, 'fetch' | 'sleep' | 'apiVersion'>>,
+): Promise<T> {
+  const url = shopifyGraphqlUrl(creds.shopDomain, options.apiVersion);
+  const init: RequestInit = {
+    method: 'POST',
+    headers: shopifyGraphqlHeaders(creds.accessToken),
+    body: JSON.stringify(body),
+  };
+  const response = options.fetch === fetch
+    ? await timedFetch(operationName, url, init)
+    : await options.fetch(url, init);
+
+  if (!response.ok) {
+    throw new Error(`Shopify GraphQL ${response.status}: ${await readShopifyError(response)}`);
+  }
+
+  const payload = await response.json() as Record<string, unknown>;
+  if (asArray(payload.errors).length > 0) {
+    throw new Error(`Shopify GraphQL returned errors: ${redactShopifyError(JSON.stringify(payload.errors))}`);
+  }
+
+  const throttle = asRecord(asRecord(asRecord(payload.extensions).cost).throttleStatus);
+  const currentlyAvailable = Number(throttle.currentlyAvailable);
+  const restoreRate = Number(throttle.restoreRate);
+  if (
+    Number.isFinite(currentlyAvailable) &&
+    Number.isFinite(restoreRate) &&
+    restoreRate > 0 &&
+    currentlyAvailable < 20
+  ) {
+    await options.sleep(Math.ceil(((20 - currentlyAvailable) / restoreRate) * 1000));
+  }
+
+  return payload as T;
+}
+
+export async function validateShopifyCredentials(
+  credentials: ShopifyValidationCredentials,
+  options: ShopifyConnectorOptions & { timeoutMs?: number } = {},
+): Promise<ShopifyValidationResult> {
+  const fetchImpl = options.fetch ?? fetch;
+  const apiVersion = options.apiVersion ?? SHOPIFY_ADMIN_API_VERSION;
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const creds = validationCredentialsFrom(credentials);
+    const response = await fetchImpl(shopifyGraphqlUrl(creds.shopDomain, apiVersion), {
+      method: 'POST',
+      headers: shopifyGraphqlHeaders(creds.accessToken),
+      body: JSON.stringify({ query: SHOPIFY_SHOP_QUERY }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Shopify validation ${response.status}`);
+    const payload = await response.json() as Record<string, unknown>;
+    if (asArray(payload.errors).length > 0) {
+      throw new Error('Shopify validation returned GraphQL errors');
+    }
+    const shop = asRecord(asRecord(payload.data).shop);
+    const myshopifyDomain = normalizeShopifyShopDomain(shop.myshopifyDomain);
+    return {
+      ok: true,
+      shopName: firstString(shop.name) || myshopifyDomain,
+      myshopifyDomain,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: "Couldn't connect - check your shop domain and Admin API token.",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function verifyShopifyCredentials(
@@ -789,6 +1002,20 @@ function shopifyRestOrderIdFrom(value: unknown): string {
   return /^\d+$/.test(normalized) ? normalized : '';
 }
 
+function gidTail(value: unknown): string {
+  const raw = firstString(value);
+  if (!raw) return '';
+  const slash = raw.lastIndexOf('/');
+  return slash >= 0 ? raw.slice(slash + 1) : raw;
+}
+
+function parseShopifyDate(value: unknown): Date | null {
+  const raw = firstString(value);
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
 function firstMoneyFromPaths(root: Record<string, unknown>, paths: string[][]): string | null {
   for (const path of paths) {
     let current: unknown = root;
@@ -802,7 +1029,11 @@ function firstMoneyFromPaths(root: Record<string, unknown>, paths: string[][]): 
 }
 
 function normalizeShopifyStatus(order: Record<string, unknown>): NormalizedOrder['canonicalStatus'] {
-  const fulfillment = firstString(order.fulfillment_status, order.fulfillmentStatus).toLowerCase();
+  const fulfillment = firstString(
+    order.fulfillment_status,
+    order.fulfillmentStatus,
+    order.displayFulfillmentStatus,
+  ).toLowerCase();
   const financial = firstString(order.financial_status, order.financialStatus).toLowerCase();
   if (firstString(order.cancelled_at, order.cancelledAt, order.cancel_reason)) return 'cancelled';
   if (financial === 'voided') return 'cancelled';
@@ -820,17 +1051,28 @@ function gramsToOunces(grams: number): number {
 }
 
 function normalizeShopifyItems(order: Record<string, unknown>): Array<Record<string, unknown>> {
-  return asArray(order.line_items ?? order.lineItems)
+  const restLines = asArray(order.line_items);
+  const directLineItems = asArray(order.lineItems);
+  const graphLineItems = asArray(asRecord(order.lineItems).edges)
+    .map((edge) => asRecord(asRecord(edge).node))
+    .filter((line) => Object.keys(line).length > 0);
+  const lines = restLines.length ? restLines : directLineItems.length ? directLineItems : graphLineItems;
+
+  return lines
     .map((rawLine) => {
       const line = asRecord(rawLine);
       const quantity = lineQuantity(line);
       const grams = Number(line.grams ?? 0);
-      const unitPrice = moneyString(line.price) ?? '0.00';
+      const unitPrice = firstMoneyFromPaths(line, [
+        ['originalUnitPriceSet', 'shopMoney', 'amount'],
+      ]) ?? moneyString(line.price) ?? '0.00';
       const image = asRecord(line.image);
+      const variant = asRecord(line.variant);
       return {
         sku: firstString(line.sku) || null,
         name: firstString(line.title, line.name) || null,
         quantity,
+        variantId: firstString(variant.id) || null,
         unitPrice,
         lineTotal: (Number(unitPrice) * quantity).toFixed(2),
         imageUrl: firstString(image.src, image.url) || null,
@@ -843,6 +1085,9 @@ function normalizeShopifyItems(order: Record<string, unknown>): Array<Record<str
 }
 
 function shopifyOrderWeightOz(order: Record<string, unknown>): number | null {
+  const totalWeight = Number(order.totalWeight);
+  if (Number.isFinite(totalWeight) && totalWeight > 0) return totalWeight;
+
   let gramsTotal = 0;
   for (const rawLine of asArray(order.line_items ?? order.lineItems)) {
     const line = asRecord(rawLine);
@@ -853,9 +1098,18 @@ function shopifyOrderWeightOz(order: Record<string, unknown>): number | null {
   return gramsTotal > 0 ? Math.ceil(gramsToOunces(gramsTotal)) : null;
 }
 
-function normalizeShopifyOrder(raw: unknown, accountId = 'shopify'): NormalizedOrder {
+export function normalizeShopifyOrder(
+  raw: unknown,
+  context: string | ShopifyOrderContext = 'shopify',
+): NormalizedOrder {
   const order = asRecord(raw);
-  const id = firstString(order.id, order.admin_graphql_api_id);
+  const accountId = typeof context === 'string' ? context : context.accountId;
+  const storeId = typeof context === 'string'
+    ? accountId
+    : context.storeId != null
+      ? String(context.storeId)
+      : accountId;
+  const id = gidTail(firstString(order.id, order.admin_graphql_api_id));
   const orderNumber = firstString(order.name, order.order_number, order.orderNumber, id);
   const shippingAddress = asRecord(order.shipping_address ?? order.shippingAddress);
   const shippingLine = asRecord(asArray(order.shipping_lines ?? order.shippingLines)[0]);
@@ -873,13 +1127,13 @@ function normalizeShopifyOrder(raw: unknown, accountId = 'shopify'): NormalizedO
     sourceOrderId: id,
     sourceOrderNumber: orderNumber || id,
     marketplace: 'shopify',
-    storeId: accountId,
+    storeId,
     canonicalStatus: normalizeShopifyStatus(order),
-    orderDate: firstString(order.created_at, order.createdAt) ? new Date(firstString(order.created_at, order.createdAt)) : null,
-    customerName: firstString(shippingAddress.name, customer.first_name, customer.last_name) || null,
+    orderDate: parseShopifyDate(firstString(order.created_at, order.createdAt)),
+    customerName: firstString(shippingAddress.name, customer.displayName, customer.first_name, customer.last_name) || null,
     customerEmail: firstString(order.email, order.contact_email, customer.email) || null,
     shipToCity: firstString(shippingAddress.city) || null,
-    shipToState: firstString(shippingAddress.province_code, shippingAddress.province) || null,
+    shipToState: firstString(shippingAddress.province_code, shippingAddress.provinceCode, shippingAddress.province) || null,
     shipToPostalCode: firstString(shippingAddress.zip, shippingAddress.postal_code) || null,
     carrierCode: firstString(shippingLine.carrier_identifier, shippingLine.source) || null,
     serviceCode: firstString(shippingLine.code, shippingLine.title) || null,
@@ -899,45 +1153,83 @@ function normalizeShopifyOrder(raw: unknown, accountId = 'shopify'): NormalizedO
   };
 }
 
-function cursorFromLinkHeader(link: string | null): string | null {
-  if (!link) return null;
-  const nextPart = link.split(',').find((part) => /rel="?next"?/.test(part));
-  const urlMatch = nextPart?.match(/<([^>]+)>/);
-  if (!urlMatch?.[1]) return null;
-  try {
-    return new URL(urlMatch[1]).searchParams.get('page_info');
-  } catch {
-    return null;
-  }
+function buildOrdersSearchQuery(input: StoreOrderImportInput): string {
+  const terms: string[] = [];
+  if (input.sinceDate) terms.push(`updated_at:>=${input.sinceDate}`);
+  if (input.createdStartDate) terms.push(`created_at:>=${input.createdStartDate}`);
+  return terms.join(' ');
 }
 
-async function importShopifyOrders(input: StoreOrderImportInput): Promise<NormalizedStoreOrderImportResult> {
-  const creds = await shopifyCredentials(input.credentials ?? {});
-  const limit = Math.min(Math.max(Number(input.limit ?? input.pageSize ?? 50), 1), 250);
-  const params = new URLSearchParams({
-    status: 'open',
-    fulfillment_status: input.orderStatus ?? 'unshipped',
-    limit: String(limit),
-  });
-  if (input.cursor) {
-    params.set('page_info', input.cursor);
-  } else {
-    const since = firstString(input.sinceDate, input.createdStartDate);
-    if (since) params.set('created_at_min', since);
+function maxUpdatedAt(nodes: unknown[]): string | null {
+  let max = 0;
+  for (const node of nodes) {
+    const parsed = parseShopifyDate(asRecord(node).updatedAt ?? asRecord(node).updated_at);
+    if (parsed && parsed.getTime() > max) max = parsed.getTime();
   }
+  return max > 0 ? new Date(max).toISOString() : null;
+}
 
-  const res = await shopifyFetch('shopify.orders-import', creds, `/orders.json?${params.toString()}`);
-  if (!res.ok) {
-    throw new Error(`Shopify orders ${res.status}: ${await readShopifyError(res)}`);
-  }
-  const data = await res.json() as { orders?: unknown[] };
-  const rawOrders = asArray(data.orders);
+function defaultConnectorOptions(options: ShopifyConnectorOptions = {}): Required<Pick<ShopifyConnectorOptions, 'fetch' | 'sleep' | 'apiVersion'>> {
+  return {
+    fetch: options.fetch ?? fetch,
+    sleep: options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+    apiVersion: options.apiVersion ?? SHOPIFY_ADMIN_API_VERSION,
+  };
+}
+
+async function importShopifyOrders(
+  input: StoreOrderImportInput,
+  options: Required<Pick<ShopifyConnectorOptions, 'fetch' | 'sleep' | 'apiVersion'>>,
+): Promise<NormalizedStoreOrderImportResult> {
+  const creds = await shopifyCredentials(input.credentials ?? {});
+  const pageSize = Math.min(Math.max(Number(input.limit ?? input.pageSize ?? 50), 1), 100);
+  const payload = await postShopifyGraphql<{
+    data?: {
+      orders?: {
+        edges?: Array<{ cursor?: string; node?: unknown }>;
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+      };
+    };
+    orders?: unknown[];
+  }>(
+    'shopify.orders-import',
+    creds,
+    {
+      query: SHOPIFY_ORDERS_QUERY,
+      variables: {
+        first: pageSize,
+        after: input.cursor ?? null,
+        query: buildOrdersSearchQuery(input),
+      },
+    },
+    options,
+  );
+
+  const ordersConnection = payload.data?.orders;
+  const orderEdges = Array.isArray(ordersConnection?.edges) ? ordersConnection.edges : [];
+  const graphNodes = orderEdges
+    .map((edge) => edge.node)
+    .filter((node): node is unknown => node != null);
+  const legacyReplayOrders = asArray(payload.orders);
+  const rawOrders = graphNodes.length > 0 ? graphNodes : legacyReplayOrders;
+  const pageInfo = ordersConnection?.pageInfo ?? {};
+  const storeId = input.storeId ?? null;
+  const clientId = input.companyId || null;
+
   return {
     provider: 'shopify',
     accountId: input.accountId,
-    orders: rawOrders.map((order) => normalizeShopifyOrder(order, input.accountId)),
-    cursor: cursorFromLinkHeader(res.headers.get('link')),
+    orders: rawOrders.map((order) => normalizeShopifyOrder(order, {
+      accountId: input.accountId,
+      clientId,
+      storeId,
+    })),
+    cursor: pageInfo.hasNextPage ? firstString(pageInfo.endCursor) || null : null,
     total: rawOrders.length,
+    diagnostics: {
+      hasNextPage: pageInfo.hasNextPage === true,
+      maxUpdatedAt: maxUpdatedAt(rawOrders),
+    },
   };
 }
 
@@ -1070,14 +1362,20 @@ async function confirmShopifyShipment(input: ShipmentConfirmationInput): Promise
   };
 }
 
-export function createShopifyStoreConnector(): StoreConnector {
+export function createShopifyStoreConnector(options: ShopifyConnectorOptions = {}): StoreConnector {
+  const connectorOptions = defaultConnectorOptions(options);
   return {
     provider: 'shopify',
     capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import'],
-    importOrders: importShopifyOrders,
-    normalizeOrder: (raw) => normalizeShopifyOrder(raw),
+    importOrders: (input) => importShopifyOrders(input, connectorOptions),
+    normalizeOrder: (raw) => normalizeShopifyOrder(raw, { accountId: 'shopify' }),
     confirmShipment: confirmShopifyShipment,
   };
 }
 
 export const shopifyStoreConnector = createShopifyStoreConnector();
+
+export const __shopifyConnectorTestOnly = {
+  SHOPIFY_ORDERS_QUERY,
+  SHOPIFY_SHOP_QUERY,
+};

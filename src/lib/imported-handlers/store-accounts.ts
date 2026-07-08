@@ -227,9 +227,9 @@ export default async function handler(req: any, res: any): Promise<void> {
 
       const body = await readJsonRequestBody(req);
       const patch = normalizeCredentialAccountPatchBody(body);
-      if (!patch.hasSource && !patch.hasLabel) {
+      if (!patch.hasSource && !patch.hasLabel && !patch.hasActive && !patch.hasCredentials) {
         res.status(400).json({
-          error: 'PATCH body must include at least one of: source, label',
+          error: 'PATCH body must include at least one of: source, label, active, credentials',
         });
         return;
       }
