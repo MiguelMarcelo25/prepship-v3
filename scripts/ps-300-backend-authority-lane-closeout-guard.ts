@@ -99,7 +99,9 @@ check('PS-306 remains conservative because UI read-only lockdown is disabled',
 // the PS-303 guard now record the cutover instead of "fallback remains until cutover".
 check('PS-303 scoped note records the route-decision cutover honestly',
   doc.includes('route DECISION cutover done') &&
-    ps303Guard.includes('frontend route DECISION binds to the backend plan when FE delegation is on (cutover done)'));
+    // Repointed (guard rot): PS-359 advanced past the flag-gated cutover — the FE
+    // route-decision bridge (and PRINT_QUEUE_FE_DELEGATION) was deleted outright.
+    ps303Guard.includes('frontend route decision bridge is deleted after PS-359'));
 check('PS-304 guard pins backend account tuple preference despite fallback debt',
   ps304Guard.includes('frontend account resolver prefers backend display tuple when present') &&
     ps304Guard.includes('frontend account display now consumes backend tuple before compatibility fallbacks'));

@@ -53,8 +53,12 @@ check('override still carries the age for the FE watchdog',
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 check('Full Live Recalculate audit forces the LIVE carrier fan-out',
   /const liveRecalculate = opts\.mode === 'full_live_audit' \|\| opts\.maxAgeHours === 0/.test(backfill) &&
-  // PS-perf 2026-06-23: the call now also tags priority:'background'; invariant unchanged.
-  /liveRecalculate \? \{ forceRefresh: true[^}]*\} :/.test(backfill));
+  // Repointed (guard rot): PS-348 replaced the inline ternary with the fetch-decision
+  // owner; liveRecalculate -> forceRefresh:true is pinned at that owner instead.
+  /const rateFetchDecision = buildBackfillRateFetchDecision\(\{\s*liveRecalculate,\s*mode: opts\.mode,\s*preExpiryRefreshReason,\s*\}\)/.test(backfill) &&
+  /getRates\(rateInput, toGetRatesOptions\(rateFetchDecision\)\)/.test(backfill) &&
+  /if \(input\.liveRecalculate\) \{\s*return \{ forceRefresh: true/.test(
+    readFileSync('src/services/rate-preexpiry-refresh-request.ts', 'utf8')));
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 // PS-166/PS-306/PS-258 (Wave 2): the Best Rate leaf cell (with the watchdog-bounded
 // recalculating spinner) moved VERBATIM from OrdersView into ./orders/cells/order-cells.

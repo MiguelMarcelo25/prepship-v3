@@ -83,17 +83,18 @@ async function main() {
   check('live recalc gets a LARGER per-order budget than the 30s passive cap',
     /LIVE_PER_ORDER_TIMEOUT_MS\s*=\s*\d{2,}_?\d{3}/.test(backfill) &&
     /PER_ORDER_TIMEOUT_MS\s*=\s*30_000/.test(backfill));
+  // Repointed (guard rot): PS-348 re-expressed the live-path ternaries through
+  // liveRateBudget (derived from liveRecalculate) and the rateFetchDecision owner.
   check('the per-order timeout is chosen by liveRecalculate',
-    /liveRecalculate\s*\?\s*LIVE_PER_ORDER_TIMEOUT_MS\s*:\s*PER_ORDER_TIMEOUT_MS/.test(backfill));
+    /const liveRateBudget = backfillUsesLiveRateBudget\(\{ liveRecalculate, mode: opts\.mode \}\)/.test(backfill) &&
+    /liveRateBudget \? LIVE_PER_ORDER_TIMEOUT_MS : PER_ORDER_TIMEOUT_MS/.test(backfill));
   check('getRates runs through runWithTimeoutAndRetry with a bounded retry on the live path',
-    /runWithTimeoutAndRetry\(/.test(backfill) && /maxRetries:\s*liveRecalculate\s*\?\s*LIVE_MAX_RETRIES\s*:\s*0/.test(backfill));
+    /runWithTimeoutAndRetry\(/.test(backfill) && /maxRetries: rateFetchDecision\.forceRefresh \? LIVE_MAX_RETRIES : 0/.test(backfill));
   check('the live burst is throttled below the passive concurrency (orders stop starving the limiter)',
-    /liveRecalculate\s*\?\s*LIVE_BACKFILL_CONCURRENCY/.test(backfill));
+    /liveRateBudget \? LIVE_BACKFILL_CONCURRENCY/.test(backfill));
   // Preserve the PS-12x forceRefresh contract (the existing recalculate-all-live guard pins it too).
   check('live recalc still forces the full live carrier fan-out (no cache regression)',
-    // PS-perf 2026-06-23: the call now also tags priority:'background' (limiter lane); the pinned
-    // invariant is unchanged — liveRecalculate still forces forceRefresh:true.
-    /liveRecalculate \? \{ forceRefresh: true[^}]*\} :/.test(backfill));
+    /getRates\(rateInput, toGetRatesOptions\(rateFetchDecision\)\)/.test(backfill));
 
   if (failures > 0) {
     console.error(`\nFAIL recalculate-all timeout-resilience guard (${failures} failing)`);

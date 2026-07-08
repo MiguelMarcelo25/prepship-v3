@@ -73,7 +73,11 @@ check('best-rate TOTAL includes shipping + confirmation + insurance + other amou
   /insurance_amount\?\.amount/.test(rates) &&
   /other_amount\?\.amount/.test(rates));
 check('pickBestRate selects the lowest rateTotal',
-  /function pickBestRate/.test(rates) && /sort\(\(a, b\) => rateTotal\(a\) - rateTotal\(b\)\)\[0\]/.test(rates));
+  // Repointed (guard rot): ranking gained a deterministic internal-cost tiebreaker.
+  // Primary basis is still rateTotal (canonical customer money via the normalizer);
+  // rateCostTotal breaks ties only.
+  /function pickBestRate/.test(rates) &&
+  /\.sort\(\(a, b\) => \(rateTotal\(a\) - rateTotal\(b\)\) \|\| \(rateCostTotal\(a\) - rateCostTotal\(b\)\)\)\[0\]/.test(rates));
 check('getRates returns an explicit bestRate selected via pickBestRate',
   /bestRate: pickBestRate\(/.test(rates));
 check('best rate is selected from ELIGIBILITY-FILTERED rates (filter present before pick)',
@@ -124,11 +128,11 @@ check('Awaiting carrier column prefers the bestRate carrier over canonical/selec
 check('Awaiting shipping-account column prefers the bestRate account nickname',
   // getShipAccountDisplay (orders-display-state.ts) — awaiting prefers the bestRate nickname.
   /order\.orderStatus === 'awaiting_shipment' && order\.bestRate\)\s*\{[\s\S]{0,260}?\(order\.bestRate as LooseBestRate\)\.carrierNickname/.test(displayState));
-// DECISION (DJ, 2026-06-04): keep the BOUNDED SKIP when carrier accounts aren't
-// loaded yet (it re-rates once they load; it is not an infinite spinner). Do NOT
-// switch to "call backend without carrierIds" without DJ's sign-off.
-check('DECISION: passive auto-rating is a bounded skip with no carrier accounts (no infinite spinner)',
-  /carrierIds\.length === 0\) return null/.test(ordersView));
+// RETIRED (was: DECISION (DJ, 2026-06-04) bounded skip with no carrier accounts).
+// PS-345 deleted the OrdersView page-mount passive auto-rating worker entirely, so
+// the bounded-skip site no longer exists; refresh is backend-owned (rates-backfill,
+// bounded concurrency/timeouts). Anti-reintroduction is pinned by the PS-345
+// rate-loading SOT guard and the PS-293 supersession guard.
 
 // ── (4) PS-135: proof helpers are canonical-lib-owned; no FE client-side best-rate selector ─
 const rateProofLib = readFileSync('web/src/lib/rate-proof.ts', 'utf8');

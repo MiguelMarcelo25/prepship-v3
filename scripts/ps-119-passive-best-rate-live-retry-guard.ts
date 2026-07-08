@@ -66,28 +66,17 @@ check('partial_carrier_failure + dims+weight present -> error (unchanged)',
 check('displayable best rate wins even if dims missing (order IS rateable)',
   classifyAwaitingRateCellStateWithWorkflow({ bestRateState: 'fresh' }, { ...base, hasDims: false, hasDisplayableBestRate: true }), 'ready');
 
-// ── 3) Passive path is wired to do the bounded live retry ────────────────────
+// ── 3) FE passive wiring RETIRED; the anti-regression absence pins remain ──────
+// PS-345 deleted the OrdersView passive auto-rating drain (refreshVisibleBestRate,
+// baseRateRequest, and the FE cached-negative retry wiring are gone); staleness/live
+// retry is backend-owned in rates-backfill (bounded budget/timeout/retry, pinned by
+// test:recalculate-all-* and test:ps-348-pre-expiry-rate-refresh). The pure-function
+// contracts above stay as the orders-parity library boundary. Keep only the pin that
+// the reverted "worker-active skip-gate" (the exact PS-119 bug vector) cannot return.
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
-check('passive auto-rating imports the retry decision helper',
-  /cachedNegativeNeedsLiveRetry/.test(ordersView), true);
-// The first pass is cache-allowed for a NORMAL row and force-live ONLY for a backend-flagged
-// display-refresh row (needsDisplayRefresh → forceLive). `forceLive` must DEFAULT false on
-// refreshVisibleBestRate so a normal row never force-lives (the anti-storm invariant); the
-// display-refresh force-live is bounded by the same PASSIVE_LIVE_BEST_RATE_MAX_ROWS budget.
-check('passive first pass is cache-allowed for a normal row, force-live only for a display-refresh row',
-  /\.\.\.baseRateRequest,\s*forceRefresh: forceLive,/.test(ordersView)
-    && /function refreshVisibleBestRate\([^)]*forceLive = false\)/.test(ordersView), true);
-check('passive does a guarded live retry (cachedNegativeNeedsLiveRetry -> forceLive+forceRefresh)',
-  /if \(cachedNegativeNeedsLiveRetry\(response\)\)/.test(ordersView)
-    && /\.\.\.baseRateRequest,\s*forceLive: true,\s*forceRefresh: true/.test(ordersView), true);
-// The retry must be UNCONDITIONAL. A reverted "worker-active speedup" gated it on
-// `&& !workerBackfillActiveRef.current`, which persisted a null best-rate and stranded
-// the row on a terminal "Rate unavailable" (the exact PS-119 bug). Pin that it cannot return.
 check('cached-negative live retry is UNCONDITIONAL (no worker-active / && skip-gate)',
   !/cachedNegativeNeedsLiveRetry\(response\)\s*&&/.test(ordersView)
     && !/workerBackfillActiveRef/.test(ordersView), true);
-check('passive still persists null only AFTER the (possibly retried) response',
-  /apiClient\.saveOrderBestRate\(order\.orderId, null, request\.dimsLabel\)/.test(ordersView), true);
 check('add-dims cell is actionable (opens the order detail panel, not a dead state)',
   /data-rate-state="add-dims"[\s\S]{0,200}onClick=\{\(\) => onActiveOrderIdChange\?\.\(order\.orderId\)\}/.test(ordersView), true);
 

@@ -53,7 +53,9 @@ check('manual Recalculate All remains an explicit backend cache-first backfill e
 
 check('PS-345 guard explicitly protects against reintroducing passive live orchestration',
   ps345Guard.includes('OrdersView no longer runs a page-mount passive auto-rating worker') &&
-    ps345Guard.includes('RateBrowserModal open effect is cache/display only'));
+    // Repointed (guard rot): PS-346 inverted the modal open effect to a live workflow;
+    // the PS-345 guard's anti-passive check title moved with it.
+    ps345Guard.includes('RateBrowserModal open live workflow does not reintroduce Awaiting-table passive rate loading'));
 
 check('PS-345 doc records the superseding manual/backend ownership boundary',
   ps345Doc.includes('Keep explicit manual controls') &&

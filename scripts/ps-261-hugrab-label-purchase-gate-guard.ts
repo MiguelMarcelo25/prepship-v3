@@ -245,7 +245,7 @@ check('labels.ts gates SHIPP customsValue proof behind default-OFF HUGRAB_SHIPP_
 const printQueue = read('src/services/print-queue.ts');
 const printQueueRoute = read('src/routes/print-queue.ts');
 check('print-queue service imports createLabelV2 as the missing-label purchase boundary',
-  /import \{ createLabelV2, type CreateLabelInputDto \} from '\.\/labels'/.test(printQueue));
+  /import \{ createLabelV2, type CreateLabelInputDto, type LabelCreateTimingBreakdown \} from '\.\/labels'/.test(printQueue));
 check('print-queue missing-label path delegates to createLabelV2 (therefore uses the same PS-261 preflight)',
   /const labelInput = order\.label;[\s\S]*?const created = await timeQueueStep\([\s\S]*?'labelPurchaseMs'[\s\S]*?return await createLabelV2\(\{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?\}, GLOBAL_SCOPE\)/.test(printQueue));
 check('print-queue does NOT recompute HUGRAB coverage or call provider purchase APIs directly',
@@ -257,7 +257,8 @@ check('print-queue route forwards selectedRateProof + rateQuoteId + selectedRate
   /rateQuoteId: order\.label\.rateQuoteId/.test(printQueueRoute) &&
   /selectedRateKey: order\.label\.selectedRateKey/.test(printQueueRoute));
 check('print-queue failed label purchases stay failed job results, not queued successes',
-  /const retry = classifyLabelPurchaseRetry\(err\);[\s\S]*?job\.results\.push\(\{[\s\S]*?success: false/.test(printQueue));
+  // Repointed (guard rot): the batch-print rework names the failed result before pushing.
+  /const retry = classifyLabelPurchaseRetry\(err\);[\s\S]*?const failedResult: QueueSendJobResult = \{[\s\S]*?success: false,[\s\S]*?job\.results\.push\(failedResult\)/.test(printQueue));
 
 // ── PS-261 (this slice): the PURCHASE-GATE verdict is DISPLAYED, pre-purchase, on the Rate
 //    Browser HUGRAB rate row. The operator sees whether the mandatory $100 coverage is PROVEN

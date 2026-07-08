@@ -106,8 +106,9 @@ const checks: Check[] = [
     /preExpiryCutoff/.test(ratesBackfill) &&
       /cacheExpiresAt/.test(ratesBackfill) &&
       /bestRateJson[\s\S]*isComplete/.test(ratesBackfill) &&
-      /customerRateAmount|customer_rate_amount/.test(ratesBackfill) &&
-      /rateCostAmount|rate_cost_amount/.test(ratesBackfill),
+      // Repointed (guard rot): e9762409 canonicalized the tuple keys the SQL reads.
+      /cShippingRateAmount/.test(ratesBackfill) &&
+      /selectedRateCost/.test(ratesBackfill),
   ),
   ok(
     'pre-expiry SQL binds cutoff as ISO text, not a JavaScript Date object',
@@ -170,8 +171,8 @@ if (policySource) {
     rateQuoteId: 'rq_1',
     selectedRateKey: 'srk_1',
     isComplete: true,
-    customerRateAmount: 12,
-    rateCostAmount: 10,
+    cShippingRateAmount: 12,
+    selectedRateCost: 10,
     cacheExpiresAt: new Date(now + 30 * 60 * 1000).toISOString(),
   }, { nowMs: now, refreshLeadMs: 60 * 60 * 1000 });
   const fresh = policy.classifyRatePreExpiryRefresh({
@@ -181,8 +182,8 @@ if (policySource) {
     rateQuoteId: 'rq_1',
     selectedRateKey: 'srk_1',
     isComplete: true,
-    customerRateAmount: 12,
-    rateCostAmount: 10,
+    cShippingRateAmount: 12,
+    selectedRateCost: 10,
     cacheExpiresAt: new Date(now + 2 * 60 * 60 * 1000).toISOString(),
   }, { nowMs: now, refreshLeadMs: 60 * 60 * 1000 });
   const incompleteTuple = policy.classifyRatePreExpiryRefresh({
@@ -192,7 +193,7 @@ if (policySource) {
     rateQuoteId: 'rq_1',
     selectedRateKey: 'srk_1',
     isComplete: true,
-    customerRateAmount: 12,
+    cShippingRateAmount: 12,
     cacheExpiresAt: new Date(now + 2 * 60 * 60 * 1000).toISOString(),
   }, { nowMs: now, refreshLeadMs: 60 * 60 * 1000 });
   checks.push(
@@ -211,8 +212,8 @@ if (proofSource) {
     rateQuoteId: 'rq_old',
     selectedRateKey: 'srk_old',
     isComplete: true,
-    customerRateAmount: 12,
-    rateCostAmount: 10,
+    cShippingRateAmount: 12,
+    selectedRateCost: 10,
     cacheExpiresAt: new Date(now + 20 * 60 * 1000).toISOString(),
   };
   const after = {
@@ -222,8 +223,8 @@ if (proofSource) {
     rateQuoteId: 'rq_new',
     selectedRateKey: 'srk_new',
     isComplete: true,
-    customerRateAmount: 12.25,
-    rateCostAmount: 10.25,
+    cShippingRateAmount: 12.25,
+    selectedRateCost: 10.25,
     cacheExpiresAt: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
   };
   recordPreExpirySelection(proof, 'near_expiry');

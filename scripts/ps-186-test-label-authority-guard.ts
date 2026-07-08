@@ -76,11 +76,12 @@ check('no testLabel line calls the heuristic directly',
 // Stale-pin re-anchor (found during PS-166 W1c, pre-existing since PS-176
 // part 2): the old `>= 4` counted only `= isBackendTestOrder(order)` locals,
 // and PS-176's resume rewrite DELETED one such money path outright (strictly
-// safer — that path no longer exists to misclassify). The live money-path
-// consumption today is 3 locals + 1 payload field (`isTest:`); pin BOTH
-// shapes so a payload-field regression is caught too.
+// safer — that path no longer exists to misclassify).
+// Repointed (guard rot): money-path gates now compose (`!isBackendTestOrder(order) &&`,
+// `batchTestMode || isBackendTestOrder(order)`), so the [=:]-anchored count undercounts.
+// Count every read; 5 sites today — replacing one with the heuristic drops below the bar.
 check('money-path locals/payload fields come from isBackendTestOrder',
-  (ordersView.match(/[=:]\s*isBackendTestOrder\(order\)/g) ?? []).length >= 4);
+  (ordersView.match(/isBackendTestOrder\(order\)/g) ?? []).length >= 5);
 
 // ── 5. /orders stamps the backend-owned isTest fact ───────────────────────────
 check('orders list loads the test-client set', /testClientIds = new Set<number>\(\)/.test(ordersRoute));
