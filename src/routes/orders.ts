@@ -1450,46 +1450,49 @@ app.get('/', zValidator('query', listQuery), async (c) => {
               and oi.quantity > 0
           )`
         : undefined,
+      // Search reshape (API-audit Phase 3 slice 2): this predicate was a single
+      // 14-branch OR. Postgres can only index an OR when EVERY branch is
+      // indexable, and the two EXISTS branches never are — so every search
+      // seq-scanned the 415MB orders table (19-51s measured in production).
+      // Rewritten as `orders.id IN (UNION ALL of per-branch probes)`: the
+      // MATCHING ID SET IS IDENTICAL branch-for-branch (the shipments EXISTS
+      // splits into its two link arms, order_id and order_number — the union
+      // of the two equals the original OR inside that EXISTS; IN dedups), but
+      // each probe can now use its own trigram/btree index (migration 0058).
       searchPattern
-        ? or(
-            ilike(orders.orderNumber, searchPattern),
-            ilike(orders.externalOrderId, searchPattern),
-            ilike(orders.shipToName, searchPattern),
-            ilike(orders.customerEmail, searchPattern),
-            ilike(orders.shipToCity, searchPattern),
-            ilike(orders.shipToState, searchPattern),
-            ilike(orders.shipToPostalCode, searchPattern),
-            sql`${orders.id}::text ilike ${searchPattern}`,
-            sql`${orders.raw}->>'customerUsername' ilike ${searchPattern}`,
-            sql`${orders.raw}->'shipTo'->>'company' ilike ${searchPattern}`,
-            sql`${orders.raw}->'shipTo'->>'street1' ilike ${searchPattern}`,
-            sql`${orders.raw}->'shipTo'->>'street2' ilike ${searchPattern}`,
-            sql`exists (
-              select 1
-              from order_items oi
-              where oi.order_id = ${orders.id}
+        ? sql`${orders.id} in (
+            select o.id from orders o where o.order_number ilike ${searchPattern}
+            union all select o.id from orders o where o.external_order_id ilike ${searchPattern}
+            union all select o.id from orders o where o.ship_to_name ilike ${searchPattern}
+            union all select o.id from orders o where o.customer_email ilike ${searchPattern}
+            union all select o.id from orders o where o.ship_to_city ilike ${searchPattern}
+            union all select o.id from orders o where o.ship_to_state ilike ${searchPattern}
+            union all select o.id from orders o where o.ship_to_postal_code ilike ${searchPattern}
+            union all select o.id from orders o where o.id::text ilike ${searchPattern}
+            union all select o.id from orders o where o.raw->>'customerUsername' ilike ${searchPattern}
+            union all select o.id from orders o where o.raw->'shipTo'->>'company' ilike ${searchPattern}
+            union all select o.id from orders o where o.raw->'shipTo'->>'street1' ilike ${searchPattern}
+            union all select o.id from orders o where o.raw->'shipTo'->>'street2' ilike ${searchPattern}
+            union all select oi.order_id from order_items oi
+              where oi.sku ilike ${searchPattern}
+                 or oi.name ilike ${searchPattern}
+            union all select s.order_id from shipments s
+              where s.order_id is not null
+                and coalesce(s.voided, false) = false
                 and (
-                  oi.sku ilike ${searchPattern}
-                  or oi.name ilike ${searchPattern}
+                  s.tracking_number ilike ${searchPattern}
+                  or s.label_tracking ilike ${searchPattern}
                 )
-            )`,
-            sql`exists (
-              select 1
-              from ${shipments} shipment_search
-              where (
-                  shipment_search.order_id = ${orders.id}
-                  or (
-                    shipment_search.order_number is not null
-                    and shipment_search.order_number = ${orders.orderNumber}
-                  )
-                )
-                and coalesce(shipment_search.voided, false) = false
+            union all select o2.id from orders o2
+              inner join shipments s2
+                on s2.order_number is not null
+               and s2.order_number = o2.order_number
+              where coalesce(s2.voided, false) = false
                 and (
-                  shipment_search.tracking_number ilike ${searchPattern}
-                  or shipment_search.label_tracking ilike ${searchPattern}
+                  s2.tracking_number ilike ${searchPattern}
+                  or s2.label_tracking ilike ${searchPattern}
                 )
-            )`
-          )
+          )`
         : undefined,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );

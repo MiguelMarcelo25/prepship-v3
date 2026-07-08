@@ -78,9 +78,15 @@ assert.ok(/resolveOrdersStatusScope\(\{\s*status: q\.status,\s*search,\s*searchS
 // The global predicate is a lifecycle union whose awaiting arm KEEPS the
 // awaiting visibility predicate — search can never surface awaiting rows the
 // tab itself would hide.
-assert.ok(ordersRoute.includes("(${orders.orderStatus} = 'awaiting_shipment' and ${visibleAwaitingOrdersPredicate('orders')})"),
+// Re-anchored 2026-07-08: PS-387 moved the arm from raw orders.orderStatus to
+// the effective-status owner (listEffectiveStatusSql = orderLifecycle-
+// EffectiveStatusSql()); this pin rotted then (the guard crashed here on a
+// clean stable checkout) and was repointed during the API-audit Phase 3 search
+// work. Same invariants: awaiting arm keeps the visibility predicate, global
+// spans shipped + cancelled.
+assert.ok(ordersRoute.includes("(${listEffectiveStatusSql} = 'awaiting_shipment' and ${visibleAwaitingOrdersPredicate('orders')})"),
   'the global awaiting arm must keep visibleAwaitingOrdersPredicate');
-assert.ok(ordersRoute.includes("or ${orders.orderStatus} in ('shipped', 'cancelled')"),
+assert.ok(ordersRoute.includes("or ${listEffectiveStatusSql} in ('shipped', 'cancelled')"),
   'the global predicate must span shipped + cancelled');
 // No-search awaiting keeps its visibility predicate on the single-status path.
 assert.ok(ordersRoute.includes("statusScope.mode === 'single_status' && statusScope.status === 'awaiting_shipment'"),

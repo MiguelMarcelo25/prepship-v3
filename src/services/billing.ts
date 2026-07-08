@@ -729,6 +729,36 @@ export async function generateLineItems(input: GenerateInput) {
   // 0054). Memoized + idempotent; matches the read-side ensure convention above.
   await ensureShipmentsSelectedRateCostColumn();
 
+  // Scope-independent prefetch reads, fired TOGETHER (they used to run
+  // serially — one pooler round-trip after another). Each is awaited exactly
+  // where its result is first consumed below, so evaluation order and every
+  // downstream input are unchanged. The no-configs early return simply
+  // abandons the in-flight reads; the noop catch keeps an abandoned
+  // rejection from surfacing as unhandled (the real await still throws).
+  const clientRowsPromise = db
+    .select({ id: clients.id, storeIds: clients.storeIds })
+    .from(clients);
+  void clientRowsPromise.catch(() => {});
+  const allPackagesPromise = db
+    .select({
+      id: packages.id,
+      name: packages.name,
+      packageCode: packages.packageCode,
+      length: packages.length,
+      width: packages.width,
+      height: packages.height,
+      // PS-222b: source carries the no-charge/factory marker into BoxPackage so
+      // decidePackageCostLine can emit an explicit $0.00 line for those boxes.
+      source: packages.source,
+    })
+    .from(packages);
+  void allPackagesPromise.catch(() => {});
+  const resolutionRowsPromise = (async () => {
+    await ensureBillingBoxResolutionsSchema();
+    return db.select().from(billingBoxResolutions);
+  })();
+  void resolutionRowsPromise.catch(() => {});
+
   // Match /billing/config: active clients without a billing_config row still
   // generate with defaults, otherwise a fresh install has visible clients but
   // "Generate Invoices" finds no configs and produces an empty summary.
@@ -794,9 +824,7 @@ export async function generateLineItems(input: GenerateInput) {
   const configByClient = new Map(configs.map((c) => [c.clientId, c]));
   const clientNameById = new Map(configs.map((c) => [c.clientId, c.clientName]));
 
-  const clientRows = await db
-    .select({ id: clients.id, storeIds: clients.storeIds })
-    .from(clients);
+  const clientRows = await clientRowsPromise;
   const clientByStore = new Map<number, number>();
   for (const c of clientRows) {
     for (const storeId of c.storeIds ?? []) {
@@ -1013,19 +1041,7 @@ export async function generateLineItems(input: GenerateInput) {
   // rate-dims resolution all billed boxes the parcel never shipped in
   // (HKP audit: SP6754 billed a 12x10x3 it never used; SP6755/6759 billed
   // $0.00 off an unpriced SKU-default box).
-  const allPackages = await db
-    .select({
-      id: packages.id,
-      name: packages.name,
-      packageCode: packages.packageCode,
-      length: packages.length,
-      width: packages.width,
-      height: packages.height,
-      // PS-222b: source carries the no-charge/factory marker into BoxPackage so
-      // decidePackageCostLine can emit an explicit $0.00 line for those boxes.
-      source: packages.source,
-    })
-    .from(packages);
+  const allPackages = await allPackagesPromise;
 
   const packagesById = new Map<number, BoxPackage>();
   const packagesByCode = new Map<string, BoxPackage>();
@@ -1061,8 +1077,7 @@ export async function generateLineItems(input: GenerateInput) {
 
   // PS-207: operator review resolutions — explicit directives that persist
   // across regeneration (this DELETE/INSERT cycle never touches the table).
-  await ensureBillingBoxResolutionsSchema();
-  const resolutionRows = await db.select().from(billingBoxResolutions);
+  const resolutionRows = await resolutionRowsPromise;
   const resolutionByOrderId = new Map<number, OperatorBoxResolution>();
   for (const r of resolutionRows) {
     resolutionByOrderId.set(r.orderId, {
@@ -1573,55 +1588,86 @@ export async function generateLineItems(input: GenerateInput) {
   // dateTo): it lands in the correct month and regen cleanly rebuilds it.
   const STORAGE_LINE_DAY_MS = 24 * 60 * 60 * 1000;
   const storageShipDate = new Date(periodEnd.getTime() - STORAGE_LINE_DAY_MS);
-  for (const [clientId, cfg] of configByClient.entries()) {
-    const storageRate = toNum(cfg.storageFeePerCuFt ?? 0);
-    if (storageRate <= 0) continue;
-    if (cfg.active === false) continue;
 
-    // The client's active SKUs with their canonical cuFt inputs.
-    const invRows = await db.execute<{
+  // One inventory read + one ledger read for ALL storage-billed clients — this
+  // loop used to issue both queries PER CLIENT, serially. Same predicates, same
+  // rows; client_id/inventory_id are carried so the in-memory split feeds each
+  // client's computeClientStorageBilling with EXACTLY the rows the per-client
+  // queries returned. The per-client proof+line transaction below is unchanged.
+  const storageClientIds = [...configByClient.entries()]
+    .filter(([, cfg]) => toNum(cfg.storageFeePerCuFt ?? 0) > 0 && cfg.active !== false)
+    .map(([clientId]) => clientId);
+  const storageInvRowsByClient = new Map<
+    number,
+    Array<{
       id: number;
       sku: string;
       cu_ft_override: number | null;
       length: number | null;
       width: number | null;
       height: number | null;
+    }>
+  >();
+  const storageMovesByInv = new Map<number, StorageLedgerMovement[]>();
+  if (storageClientIds.length) {
+    const invRowsAll = await db.execute<{
+      id: number;
+      client_id: number;
+      sku: string;
+      cu_ft_override: number | null;
+      length: number | null;
+      width: number | null;
+      height: number | null;
     }>(sql`
-      select id, sku, cu_ft_override, length, width, height
+      select id, client_id, sku, cu_ft_override, length, width, height
       from inventory
-      where client_id = ${clientId} and active = true
+      where client_id = any(${intArraySql(storageClientIds)}) and active = true
     `);
-    if (!invRows.length) continue;
-    const invIds = invRows.map((r) => Number(r.id));
-
-    // Ledger movements up to the period end — pre-period rows set the starting
-    // balance (storage carries over from prior months); in-period rows move it.
-    const ledgerRows = await db.execute<{
-      inventory_id: number;
-      type: string;
-      qty: number;
-      order_id: number | null;
-      created_at: string;
-    }>(sql`
-      select inventory_id, type, qty, order_id, created_at
-      from inventory_ledger
-      where inventory_id = any(${intArraySql(invIds)})
-        and created_at < ${periodEnd.toISOString()}::timestamptz
-    `);
-    const movesByInv = new Map<number, StorageLedgerMovement[]>();
-    for (const row of ledgerRows) {
-      const id = Number(row.inventory_id);
-      const list = movesByInv.get(id) ?? [];
-      list.push({ type: row.type, qty: row.qty, orderId: row.order_id, createdAt: row.created_at });
-      movesByInv.set(id, list);
+    for (const r of invRowsAll) {
+      const list = storageInvRowsByClient.get(Number(r.client_id)) ?? [];
+      list.push(r);
+      storageInvRowsByClient.set(Number(r.client_id), list);
     }
+    const allInvIds = invRowsAll.map((r) => Number(r.id));
+    if (allInvIds.length) {
+      // Ledger movements up to the period end — pre-period rows set the starting
+      // balance (storage carries over from prior months); in-period rows move it.
+      const ledgerRowsAll = await db.execute<{
+        inventory_id: number;
+        type: string;
+        qty: number;
+        order_id: number | null;
+        created_at: string;
+      }>(sql`
+        select inventory_id, type, qty, order_id, created_at
+        from inventory_ledger
+        where inventory_id = any(${intArraySql(allInvIds)})
+          and created_at < ${periodEnd.toISOString()}::timestamptz
+      `);
+      for (const row of ledgerRowsAll) {
+        const id = Number(row.inventory_id);
+        const list = storageMovesByInv.get(id) ?? [];
+        list.push({ type: row.type, qty: row.qty, orderId: row.order_id, createdAt: row.created_at });
+        storageMovesByInv.set(id, list);
+      }
+    }
+  }
+
+  for (const [clientId, cfg] of configByClient.entries()) {
+    const storageRate = toNum(cfg.storageFeePerCuFt ?? 0);
+    if (storageRate <= 0) continue;
+    if (cfg.active === false) continue;
+
+    // The client's active SKUs with their canonical cuFt inputs.
+    const invRows = storageInvRowsByClient.get(clientId) ?? [];
+    if (!invRows.length) continue;
 
     const storage = computeClientStorageBilling({
       skus: invRows.map((r) => ({
         inventoryId: Number(r.id),
         sku: r.sku,
         cuFtPerUnit: cuFtPerUnit(r.cu_ft_override, r.length, r.width, r.height),
-        movements: movesByInv.get(Number(r.id)) ?? [],
+        movements: storageMovesByInv.get(Number(r.id)) ?? [],
       })),
       storageFeePerCuFtMonth: storageRate,
       periodStart,
