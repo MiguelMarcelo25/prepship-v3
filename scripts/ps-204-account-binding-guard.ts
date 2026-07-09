@@ -180,8 +180,9 @@ check('proof identity readable from raw + shippingProviderId forms',
 
 // ── (7) Wiring pins: the binding is enforced at the real boundaries ───────────
 const store = readFileSync('src/services/shipping-workflow/rate-quote-snapshot-store.ts', 'utf8');
-check('assertLabelPurchaseRateSelection binds the account on BOTH proof paths (snapshot + legacy)',
-  (store.match(/assertPurchaseAccountMatchesProof\(\{/g) ?? []).length >= 2 &&
+check('assertLabelPurchaseRateSelection binds the purchase account to the strict snapshot proof',
+  (store.match(/assertPurchaseAccountMatchesProof\(\{/g) ?? []).length >= 1 &&
+  !/selectedRate: body\.selectedRateProof\?\.selectedRate/.test(store) &&
   /purchaseShippingProviderId\?: unknown/.test(store));
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
 check('createLabelV2 passes the payload account into the purchase boundary',

@@ -7,9 +7,8 @@
  * single finalizer, which returns { bestRate (with proofSource), rates (key+quote stamped),
  * rateQuoteId }. selectedRateKey/rateQuoteId stay byte-identical (shared pure fns).
  *
- * DEFERRED (locked, gated): the purchase-ENFORCEMENT flip (snapshot-only) — the label-purchase
- * boundary stays dual-path (snapshot preferred, legacy selectedRateProof fallback). This guard
- * pins that the flip did NOT happen.
+ * PS-419 completed the purchase-enforcement flip: the label-purchase boundary now requires
+ * the backend snapshot reference and never authorizes postage from carried proof.
  *
  *   npx tsx scripts/ps-244-rate-finalization-single-owner-guard.ts
  */
@@ -27,12 +26,12 @@ function check(name: string, cond: boolean) {
 
 // ── The single owner returns the full producer output ────────────────────────
 check('finalizeBestRateWithQuote returns { bestRate, rates, rateQuoteId } (single owner shape)',
-  /bestRate: T & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}/.test(store)
-  && /rates: Array<Record<string, unknown> & \{ selectedRateKey: string; rateQuoteId\?: string; proofSource: string; isComplete: boolean \}>/.test(store));
+  /bestRate: T & \{[\s\S]{0,240}selectedRateKey: string;[\s\S]{0,160}rateQuoteId\?: string;[\s\S]{0,160}proofSource: string;[\s\S]{0,160}isComplete: boolean;/.test(store)
+  && /rates: Array<Record<string, unknown> & \{[\s\S]{0,240}selectedRateKey: string;[\s\S]{0,160}rateQuoteId\?: string;[\s\S]{0,160}proofSource: string;[\s\S]{0,160}isComplete: boolean;/.test(store));
 check('the owner stamps proofSource = the backend constant (backend owns it)',
   /proofSource: BACKEND_RATE_PROOF_SOURCE/.test(store) && /BACKEND_RATE_PROOF_SOURCE = 'backend_rate_response'/.test(store));
 check('the owner stamps rateQuoteId and backend completeness onto each rate (the shape browse returns)',
-  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(store));
+  /const rates = rateQuoteId[\s\S]{0,700}rateQuoteId,[\s\S]{0,160}proofSource: BACKEND_RATE_PROOF_SOURCE,[\s\S]{0,160}isComplete,[\s\S]{0,320}proofSource: BACKEND_RATE_PROOF_SOURCE,[\s\S]{0,160}isComplete,/.test(store));
 
 // ── /rates/browse PRODUCER delegates (no inline re-stamping) ──────────────────
 check('browse calls the finalizer', /const finalized = await finalizeBestRateWithQuote\(\{/.test(browse));
@@ -48,15 +47,12 @@ check('backfill delegates to the finalizer (destructured bestRate)',
   /const \{ bestRate: finalizedBest \} = await finalizeBestRateWithQuote\(\{/.test(backfill));
 
 // ── PS-244 Phase 4 (Per user override unlock shipped data on 2026-06-15) ──────
-// The purchase-enforcement flip is now BUILT but ships in 'canary' by DEFAULT: the
-// legacy carried-proof fallback is RETAINED until the canary proves the snapshot
-// resolves ~always; 'strict' (env RATE_PROOF_ENFORCEMENT=strict) drops it. Pin BOTH —
-// the default still keeps the fallback (not weakened) AND the strict gate now exists.
-// (The flip's own behavior is covered deeply by ps-244-purchase-enforcement-canary.)
-check('purchase boundary keeps the legacy carried-proof fallback as the DEFAULT (canary)',
-  /FALL BACK to the legacy carried proof/i.test(store));
-check('the env-gated strict enforcement flip now exists (default canary)',
-  /rateProofEnforcementMode\(\) === 'strict'/.test(store));
+// PS-419 made backend snapshot enforcement unconditional. The compatibility
+// selectedRateProof field may still be transported, but it cannot authorize postage.
+check('purchase boundary requires backend snapshot refs',
+  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(store));
+check('purchase boundary has no carried-proof fallback',
+  !/snapshot_fallback|legacy_only|assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(store));
 
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json wires test:ps-244-rate-finalization-single-owner', /test:ps-244-rate-finalization-single-owner/.test(pkg));

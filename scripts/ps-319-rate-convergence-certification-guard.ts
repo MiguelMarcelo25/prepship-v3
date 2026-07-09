@@ -197,21 +197,15 @@ check('label purchase assertion allows manual non-best selections before provide
   thrownReasonFor({ snapshot: { ...snapshotBase, bestRateComplete: true }, selectedRateKey: selectedB }) === null);
 
 const quoteStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
-check('snapshot store blocks non-final quotes before canary fallback to carried proof',
-  (() => {
-    const blockIndex = quoteStore.indexOf("resolved.reason === 'snapshot_not_final'");
-    const throwIndex = quoteStore.indexOf('throw new SelectedRateProofError', blockIndex);
-    const fallbackIndex = quoteStore.indexOf('FALL BACK to the legacy carried proof', throwIndex);
-    return blockIndex >= 0 &&
-      !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
-      throwIndex > blockIndex &&
-      fallbackIndex > throwIndex;
-  })());
-checkPatterns('snapshot store validates account binding on both snapshot and legacy proof paths', quoteStore, [
+check('snapshot store blocks non-final quotes with no carried-proof fallback',
+  quoteStore.includes("reason === 'snapshot_not_final'") &&
+  quoteStore.includes('if (!resolved.ok) throwStrictRateQuoteError(resolved.reason)') &&
+  !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
+  !quoteStore.includes('assertSelectedRateProofForLabelPurchase(body.selectedRateProof'));
+checkPatterns('snapshot store validates account binding on the strict snapshot path', quoteStore, [
   /assertPurchaseAccountMatchesProof\(\{/,
-  /purchaseShippingProviderId: body\.purchaseShippingProviderId/,
+  /purchaseShippingProviderId: input\.purchaseShippingProviderId/,
   /selectedRate: resolved\.proof\.selectedRate/,
-  /selectedRate: body\.selectedRateProof\?\.selectedRate/,
 ]);
 
 const labelsService = read('src/services/labels.ts');

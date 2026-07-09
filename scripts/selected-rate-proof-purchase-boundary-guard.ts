@@ -36,9 +36,9 @@ check(
 
 // PS-105 (Per user override unlock shipped data on 2026-06-06): the ShipStation
 // boundary now enforces the selected-rate proof via the unified resolver
-// assertLabelPurchaseRateSelection (prefers the backend-owned rateQuoteId snapshot,
-// falls back to the carried selectedRateProof). The resolver delegates to the SAME
-// strict validator (assertSelectedRateProofForLabelPurchase), so this is a refactor,
+// assertLabelPurchaseRateSelection. PS-419 requires the backend-owned rateQuoteId
+// snapshot; carried selectedRateProof remains transport-only and cannot authorize
+// postage. The resolver still delegates to the same strict proof validator, so this is a refactor,
 // not a weakening — the proof is still required before any real postage.
 const proofResolver = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
 check(

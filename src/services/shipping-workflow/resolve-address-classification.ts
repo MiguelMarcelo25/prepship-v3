@@ -4,7 +4,7 @@
 // call the resolver best-effort and cache the result.
 //
 // ENV-GATED: addressResolverMode() defaults to 'off' (env ADDRESS_RESOLVER !== 'on'), so this is
-// INERT until DJ flips it on — the live-call canary, exactly like PS-244's RATE_PROOF_ENFORCEMENT.
+// INERT until DJ flips it on; this address-classification canary is independent of rate proof.
 // Shipping it wired (slice 2b-2) changes nothing in prod until the flag is set.
 //
 // MONEY-SAFE: an ambiguous / no-confident answer sets NO commercial marker — the classifier then

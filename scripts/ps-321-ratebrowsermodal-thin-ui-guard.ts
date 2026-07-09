@@ -120,10 +120,18 @@ check('Hide Unavailable uses display-only hide helper, not purchase proof blocki
   !/filter\(\(r\) => !isBlockedRate/.test(rowsView) &&
   !/filter\(\(r\) => !isBlockedRate/.test(carrierSidebar));
 
+const proofLifterStart = modal.indexOf('function rateBackendProof(r: RateRow)');
+const proofLifterEnd = modal.indexOf('\n  function rateIsBackendComplete', proofLifterStart);
+const proofLifter = modal.slice(proofLifterStart, proofLifterEnd);
 check('RateBrowserModal still passes backend proof via rateBackendProof only',
   modal.includes('...rateBackendProof(r)') &&
-  !/requestFingerprint:\s*[^,\n]+/.test(modal) &&
-  !/selectedRateKey:\s*[^,\n]+/.test(modal));
+  proofLifterStart >= 0 && proofLifterEnd > proofLifterStart &&
+  proofLifter.includes("'rateQuoteId'") &&
+  proofLifter.includes("'selectedRateKey'") &&
+  proofLifter.includes("'requestFingerprint'") &&
+  proofLifter.includes('return out;') &&
+  !/requestFingerprint:\s*[^,\n]+/.test(proofLifter) &&
+  !/selectedRateKey:\s*[^,\n]+/.test(proofLifter));
 
 check('RateBrowserModal still delegates canonical best emission',
   modal.includes('decideBestRateEmission(canonicalBest)') &&
@@ -136,8 +144,7 @@ check('availability helper does not mint selected-rate proof fields',
   !/rateQuoteId|selectedRateKey|requestFingerprint|proofSource/.test(availability));
 
 check('backend quote finalizer stamps row-level proof/completeness for Rate Browser rows',
-  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, rateQuoteId, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(quoteSnapshotStore) &&
-  /ratesWithKeys\.map\(\(rate\) => \(\{ \.\.\.rate, proofSource: BACKEND_RATE_PROOF_SOURCE, isComplete: input\.bestRateComplete === true \}\)\)/.test(quoteSnapshotStore));
+  /const rates = rateQuoteId[\s\S]{0,700}rateQuoteId,[\s\S]{0,160}proofSource: BACKEND_RATE_PROOF_SOURCE,[\s\S]{0,160}isComplete,[\s\S]{0,320}proofSource: BACKEND_RATE_PROOF_SOURCE,[\s\S]{0,160}isComplete,/.test(quoteSnapshotStore));
 
 check('site-actions browser proof covers valid, blocked, stale, partial-failure, and selected-proof paths',
   siteActionsSpec.includes('Backend blocked by PS-321 fixture') &&

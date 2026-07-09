@@ -14,10 +14,9 @@
  *      + selectedRateOpaqueKey) and the single backend proof-source constant.
  *   2. rates-backfill persists THROUGH the finalizer (bestWithMetadata spreads
  *      finalizedBest), keeping its existing metadata fields.
- *   3. The legacy selectedRateProof fallback at the purchase boundary is intact
- *      (Phase 2 adds NO enforcement — that is Phase 4).
- *   4. /rates/browse's own stamping is untouched (ps-105 pins remain the deep
- *      authority; this just cross-checks the anchors still exist).
+ *   3. The purchase boundary requires the backend snapshot reference after PS-419.
+ *   4. The /rates/browse producer delegates to the finalizer (ps-105 pins remain
+ *      the deep authority; this cross-checks the anchors still exist).
  *
  *   npx tsx scripts/ps-174-quote-key-consolidation-guard.ts
  */
@@ -59,18 +58,18 @@ check('backfill keeps its existing metadata stamps (expiry/eligibility/completen
   /cacheExpiresAt: new Date\(new Date\(result\.fetchedAt\)\.getTime\(\) \+ CACHE_TTL_MS\)/.test(backfill) &&
   /eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION/.test(backfill));
 
-check('purchase boundary keeps the legacy selectedRateProof fallback (no new enforcement)',
-  /falls back to the legacy carried selectedRateProof/i.test(store) ||
-  /FALL BACK to the legacy carried proof/.test(store));
-const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
+check('purchase boundary is strict backend-snapshot authority after PS-419',
+  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(store) &&
+  !/assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(store));
+const ratesProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 // PS-244: /rates/browse now routes through the SINGLE finalizer (finalizeBestRateWithQuote)
 // instead of stamping the selection key + quote snapshot inline — browse and backfill can no
 // longer diverge. selectedRateKey/rateQuoteId are byte-identical (shared pure fns); the best
 // rate now also carries the backend-owned proofSource. The inline trio is GONE.
 check('/rates/browse routes through the single finalizer (PS-244 — no inline re-stamping)',
-  /const finalized = await finalizeBestRateWithQuote\(\{/.test(ratesRoute) &&
-  /responseRates = finalized\.rates/.test(ratesRoute) &&
-  !/const ratesWithKeys = withSelectedRateKeys\(combinedRates\)[\s\S]{0,80}storeRateQuoteSnapshot/.test(ratesRoute));
+  /const finalized = await finalizeBestRateWithQuote\(\{/.test(ratesProducer) &&
+  /responseRates = finalized\.rates/.test(ratesProducer) &&
+  !/const ratesWithKeys = withSelectedRateKeys\(combinedRates\)[\s\S]{0,80}storeRateQuoteSnapshot/.test(ratesProducer));
 
 if (failures > 0) {
   console.error(`\nFAIL PS-174 quote-key consolidation guard (${failures} failing)`);

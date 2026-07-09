@@ -7,7 +7,7 @@ import {
 } from '../lib/label-operation-log';
 import { env } from '../lib/env';
 import { sql } from '../db/client';
-import { getRateProofCanaryStats } from '../services/shipping-workflow/rate-proof-enforcement';
+import { getRateProofEnforcementStats } from '../services/shipping-workflow/rate-proof-enforcement';
 
 const app = new Hono();
 
@@ -34,11 +34,11 @@ app.delete('/label-operation-logs', (c) => {
   });
 });
 
-// PS-244 Phase 4: read-only canary surface for the label-purchase snapshot
-// enforcement flip. Reports the mode + how often a supplied snapshot ref resolves
-// (snapshot_enforced) vs. falls back to the FE proof (snapshot_fallback, by reason).
-// DJ flips RATE_PROOF_ENFORCEMENT=strict once snapshot_fallback stays ~0.
-app.get('/rate-proof-canary', (c) => c.json(getRateProofCanaryStats()));
+// Read-only strict-enforcement diagnostics. Rejected or missing backend snapshot
+// references are counted, but never fall back to frontend-carried proof.
+app.get('/rate-proof-enforcement', (c) => c.json(getRateProofEnforcementStats()));
+// Compatibility alias for existing monitoring. The payload is strict-only.
+app.get('/rate-proof-canary', (c) => c.json(getRateProofEnforcementStats()));
 
 async function getDatabaseStatus() {
   const startedAt = performance.now();

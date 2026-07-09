@@ -117,7 +117,7 @@ check('snapshot module stores finalized best identity and completeness without f
 check('selectedRateKey is opaque (srk_ prefix)', keyA.startsWith('srk_') && keyA !== keyB);
 check('selectedRateKey leaks no cost', !/6\.89|9\.21|6890|9210/.test(keyA) && !/6\.89|9\.21/.test(keyB));
 
-// ── 9. Slice-2 wiring: emit on the rate path, accept (prefer + fallback) at purchase. ──
+// ── 9. Slice-2 wiring: emit on the rate path, require the snapshot at purchase. ──
 const ratesRoute = readFileSync('src/routes/rates.ts', 'utf8');
 const rateBrowseProducer = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
@@ -140,10 +140,11 @@ check('createLabelV2 input accepts rateQuoteId + selectedRateKey',
   /rateQuoteId\?: string \| null;/.test(labelsService) && /selectedRateKey\?: string \| null;/.test(labelsService));
 check('labels route schema accepts rateQuoteId + selectedRateKey',
   /rateQuoteId: z\.string\(\)/.test(labelsRoute) && /selectedRateKey: z\.string\(\)/.test(labelsRoute));
-check('purchase resolver PREFERS snapshot id but FALLS BACK to legacy proof (never weaker)',
-  /body\.rateQuoteId && body\.selectedRateKey/.test(store) &&
-    /assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof \?\? null\)/.test(store) &&
+check('purchase resolver REQUIRES snapshot id and never falls back to carried proof',
+  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(store) &&
+    /if \(!resolved\.ok\) throwStrictRateQuoteError\(resolved\.reason\)/.test(store) &&
     /snapshot_not_final/.test(store) &&
+    !/assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(store) &&
     !/selected_rate_not_best/.test(store));
 check('snapshot persistence is backed by analytics_cache (no migration)',
   /from '\.\.\/analytics-cache\.js'/.test(store) && /rate_quote:/.test(store));

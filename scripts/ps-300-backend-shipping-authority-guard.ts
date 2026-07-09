@@ -216,16 +216,17 @@ check('createLabelV2 passes rateQuoteId, selectedRateKey, selectedRateProof, and
   /purchaseShippingProviderId:\s*body\.shippingProviderId/.test(labels));
 
 const rateStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
-check('label purchase proof owner prefers backend snapshot id and key',
-  /if \(body\.rateQuoteId && body\.selectedRateKey\)/.test(rateStore) &&
-  /resolveRateQuoteForPurchase\(\{ snapshot, selectedRateKey: body\.selectedRateKey \}\)/.test(rateStore));
-check('label purchase proof owner blocks not-final snapshots before fallback',
-  /resolved\.reason === 'snapshot_not_final'/.test(rateStore) &&
+check('label purchase proof owner requires backend snapshot id and key',
+  /if \(!\(body\.rateQuoteId && body\.selectedRateKey\)\)/.test(rateStore) &&
+  /resolveRateQuoteForPurchase\(\{[\s\S]{0,120}snapshot: input\.snapshot,[\s\S]{0,120}selectedRateKey,[\s\S]{0,120}\}\)/.test(rateStore));
+check('label purchase proof owner blocks not-final snapshots',
+  /reason === 'snapshot_not_final'/.test(rateStore) &&
+  /if \(!resolved\.ok\) throwStrictRateQuoteError\(resolved\.reason\)/.test(rateStore) &&
   !/resolved\.reason === 'selected_rate_not_best'/.test(rateStore) &&
   /throw new SelectedRateProofError/.test(rateStore));
-check('strict proof mode can drop legacy fallback while canary mode remains explicit',
-  /rateProofEnforcementMode\(\) === 'strict'/.test(rateStore) &&
-  /FALL BACK to the legacy carried proof/.test(rateStore));
+check('strict proof owner has no legacy carried-proof fallback',
+  /recordRateProofEnforcement\('snapshot_reference_missing'/.test(rateStore) &&
+  !/snapshot_fallback|legacy_only|assertSelectedRateProofForLabelPurchase\(body\.selectedRateProof/.test(rateStore));
 
 const printQueueRoute = read('src/routes/print-queue.ts');
 check('print queue batch-send schema preserves selected-rate proof and backend snapshot ids',

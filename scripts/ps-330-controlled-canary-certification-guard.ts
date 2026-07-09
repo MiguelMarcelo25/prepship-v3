@@ -141,16 +141,11 @@ checkPatterns('backend route-plan remains gated by PRINT_QUEUE_BACKEND_ORCHESTRA
 ]);
 
 const quoteStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
-check('strict not-final snapshot hard block remains before carried-proof fallback',
-  (() => {
-    const blockIndex = quoteStore.indexOf("resolved.reason === 'snapshot_not_final'");
-    const throwIndex = quoteStore.indexOf('throw new SelectedRateProofError', blockIndex);
-    const fallbackIndex = quoteStore.indexOf('FALL BACK to the legacy carried proof', throwIndex);
-    return blockIndex >= 0 &&
-      !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
-      throwIndex > blockIndex &&
-      fallbackIndex > throwIndex;
-  })());
+check('strict not-final snapshot hard block remains with no carried-proof fallback',
+  quoteStore.includes("reason === 'snapshot_not_final'") &&
+  quoteStore.includes('if (!resolved.ok) throwStrictRateQuoteError(resolved.reason)') &&
+  !quoteStore.includes("resolved.reason === 'selected_rate_not_best'") &&
+  !quoteStore.includes('assertSelectedRateProofForLabelPurchase(body.selectedRateProof'));
 
 const outbox = read('src/services/fulfillment/outbox.ts');
 checkIncludesAll('fulfillment outbox owner exposes explicit marketplace/source lifecycle states', outbox, [
