@@ -19,6 +19,7 @@ import {
 import { requireInternalPermission } from '../middleware/auth';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { orderLifecycleEffectiveStatusAliasSql } from '../services/order-lifecycle-status';
+import { manualOrdersOrderPredicateSql } from '../lib/manual-orders-visibility';
 
 const app = new Hono();
 
@@ -321,6 +322,10 @@ app.get(
     // Per user override unlock shipped data on 2026-07-06: PS-387 makes this
     // read-only client count surface group by the backend lifecycle SOT.
     const effectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
+    const manualOrdersAwaitingPredicate = sql`(
+      ${effectiveStatusSql} = 'awaiting_shipment'
+      and ${sql.raw(manualOrdersOrderPredicateSql('o', 'manual_orders_client'))}
+    )`;
     const rows = await db.execute<{
       client_id: number;
       order_status: string;
@@ -329,7 +334,10 @@ app.get(
       select o.client_id, ${effectiveStatusSql} as order_status, count(*)::int as count
       from orders o
       where o.client_id is not null
-        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and (
+          o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+          or ${manualOrdersAwaitingPredicate}
+        )
         ${activeClientFilter}
         ${dateFilter}
         and not (

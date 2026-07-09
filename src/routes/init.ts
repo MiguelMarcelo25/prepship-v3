@@ -12,6 +12,10 @@ import { publicClient } from '../lib/public-client';
 import { filterClientsForScope, getClientStoreScope } from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { orderLifecycleEffectiveStatusAliasSql } from '../services/order-lifecycle-status';
+import {
+  isManualOrdersClientName,
+  manualOrdersOrderPredicateSql,
+} from '../lib/manual-orders-visibility';
 
 const app = new Hono();
 
@@ -144,6 +148,10 @@ app.get('/counts', async (c) => {
   // read-only shell counts use the backend lifecycle status SOT. No orders or
   // shipments are mutated.
   const countsEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
+  const manualOrdersAwaitingPredicate = sql`(
+    ${countsEffectiveStatusSql} = 'awaiting_shipment'
+    and ${sql.raw(manualOrdersOrderPredicateSql('o', 'manual_orders_client'))}
+  )`;
   const loadCounts = (async (): Promise<CountsPayload> => {
     const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
@@ -159,7 +167,7 @@ app.get('/counts', async (c) => {
           select count(*)::int from orders o
           left join clients c on c.id = o.client_id
           where ${countsEffectiveStatusSql} = 'awaiting_shipment'
-            and ${visibleOrderPredicate}
+            and (${visibleOrderPredicate} or ${manualOrdersAwaitingPredicate})
             and ${visibleAwaitingOrdersPredicate}
             ${orderDateFilter()}
             and not exists (
@@ -223,7 +231,7 @@ app.get('/counts', async (c) => {
       select ${countsEffectiveStatusSql} as "orderStatus", count(*)::int as cnt
       from orders o
       left join clients c on c.id = o.client_id
-        where ${visibleOrderPredicate}
+        where (${visibleOrderPredicate} or ${manualOrdersAwaitingPredicate})
         ${orderDateFilter()}
         and (
           ${countsEffectiveStatusSql} is distinct from 'awaiting_shipment'
@@ -241,12 +249,13 @@ app.get('/counts', async (c) => {
         ${countsEffectiveStatusSql} as "orderStatus",
         case
           when coalesce(c.is_test, false) = true and o.client_id is not null then -o.client_id
+          when ${manualOrdersAwaitingPredicate} and o.client_id is not null then -o.client_id
           else o.store_id
         end::int as "storeId",
         count(*)::int as cnt
       from orders o
       left join clients c on c.id = o.client_id
-        where ${visibleOrderPredicate}
+        where (${visibleOrderPredicate} or ${manualOrdersAwaitingPredicate})
         ${orderDateFilter()}
         and (
           ${countsEffectiveStatusSql} is distinct from 'awaiting_shipment'
@@ -261,6 +270,7 @@ app.get('/counts', async (c) => {
           ${countsEffectiveStatusSql},
           case
             when coalesce(c.is_test, false) = true and o.client_id is not null then -o.client_id
+            when ${manualOrdersAwaitingPredicate} and o.client_id is not null then -o.client_id
             else o.store_id
           end
       order by cnt desc
@@ -326,8 +336,16 @@ app.get('/stores', async (c) => {
       continue;
     }
     const ids = Array.isArray(cli.storeIds) ? (cli.storeIds as number[]) : [];
-    for (const sid of ids) {
-      if (EXCLUDED_STORE_IDS.includes(sid as (typeof EXCLUDED_STORE_IDS)[number])) continue;
+    const visibleIds = ids.filter(
+      (sid) => !EXCLUDED_STORE_IDS.includes(sid as (typeof EXCLUDED_STORE_IDS)[number]),
+    );
+    const visibleManualOrdersSidebarStore =
+      isManualOrdersClientName(cli.name) && visibleIds.length === 0;
+    if (visibleManualOrdersSidebarStore) {
+      stores.push({ storeId: -cli.id, clientId: cli.id, clientName: cli.name, active: true });
+      continue;
+    }
+    for (const sid of visibleIds) {
       stores.push({ storeId: sid, clientId: cli.id, clientName: cli.name, active: true });
     }
   }

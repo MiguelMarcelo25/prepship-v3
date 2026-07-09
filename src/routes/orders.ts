@@ -95,6 +95,7 @@ import { resolveScopedBundles, createScopedBundle, BundleScopeError } from '../s
 import { checkForceOverrideRateLimit } from '../lib/force-override-rate-limit';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
+import { manualOrdersOrderPredicateSql } from '../lib/manual-orders-visibility';
 import { detectExpeditedShipping } from '../lib/shipping/expedited';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import {
@@ -1407,6 +1408,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // read-only filtering only; mutation endpoints remain protected by
   // assertOrderEditable and no source rows are modified here.
   const listEffectiveStatusSql = orderLifecycleEffectiveStatusSql();
+  const baseVisibilityPredicate = includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate;
+  const manualOrdersAwaitingVisibilityPredicate = sql`(
+    ${listEffectiveStatusSql} = 'awaiting_shipment'
+    and ${sql.raw(manualOrdersOrderPredicateSql('orders', 'manual_orders_client'))}
+  )`;
+  const listVisibilityPredicate = sql`(${baseVisibilityPredicate} or ${manualOrdersAwaitingVisibilityPredicate})`;
   let statusPredicate: ReturnType<typeof sql> | undefined;
   if (statusScope.mode === 'single_status') {
     statusPredicate = sql`${listEffectiveStatusSql} = ${statusScope.status}`;
@@ -1426,7 +1433,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
-      includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
+      listVisibilityPredicate,
       excludeIds.length > 0 && q.clientId === undefined
         ? notInArray(orders.clientId, excludeIds)
         : undefined,
@@ -3056,6 +3063,11 @@ app.get(
     // Per user override unlock shipped data on 2026-07-06: daily stats use
     // the backend lifecycle SOT for read-only counts.
     const dailyStatsEffectiveStatusSql = orderLifecycleEffectiveStatusAliasSql('o');
+    const manualOrdersDailyStatsAwaitingPredicate = sql`(
+      ${dailyStatsEffectiveStatusSql} = 'awaiting_shipment'
+      and ${sql.raw(manualOrdersOrderPredicateSql('o', 'manual_orders_client'))}
+    )`;
+    const dailyStatsVisibilityPredicate = sql`(${visibleOrderPredicate} or ${manualOrdersDailyStatsAwaitingPredicate})`;
 
     // totalOrders: all non-cancelled orders received inside the current
     // fulfillment intake window. The strip derives shipped as
@@ -3075,7 +3087,7 @@ app.get(
       where ${dailyStatsEffectiveStatusSql} <> 'cancelled'
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
-        and ${visibleOrderPredicate}
+        and ${dailyStatsVisibilityPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
     `),
       db.execute<{ need_to_ship: number }>(sql`
@@ -3085,7 +3097,7 @@ app.get(
       where ${dailyStatsEffectiveStatusSql} = 'awaiting_shipment'
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
-        and ${visibleOrderPredicate}
+        and ${dailyStatsVisibilityPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
         and ${visibleAwaitingOrdersPredicate('o')}
     `),
@@ -3095,7 +3107,7 @@ app.get(
       left join clients c on c.id = o.client_id
       where o.order_date > ${toIso}::timestamptz
         and ${dailyStatsEffectiveStatusSql} <> 'cancelled'
-        and ${visibleOrderPredicate}
+        and ${dailyStatsVisibilityPredicate}
         and ${orderAliasScopePredicate('o', dailyStatsScope)}
     `),
     ]);
