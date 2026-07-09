@@ -130,6 +130,24 @@ await check('Shopify Shipping does not confuse order GIDs with fulfillment order
   assert.equal(normalizeShopifyFulfillmentOrderId('gid://shopify/Order/61019990001'), null);
 });
 
+await check('Shopify Shipping explains an empty fulfillment-orders response from Shopify', () => {
+  const result = evaluateShopifyShippingEligibility({
+    sourceProvider: 'shopify',
+    rawOrderPayload: {
+      ...rawShopifyOrder,
+      fulfillment_orders: [],
+    },
+    grantedScopes: ['read_orders', 'read_draft_orders', 'write_orders', 'read_merchant_managed_fulfillment_orders'],
+    env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'true' },
+  });
+
+  assert.equal(result.eligible, false);
+  assert.equal(result.canPurchase, false);
+  assert.deepEqual(result.missing, ['fulfillmentOrderId']);
+  assert.match(result.fulfillmentOrderBlocker ?? '', /returned no fulfillment orders/i);
+  assert.match(result.blockers.join(' '), /returned no fulfillment orders/i);
+});
+
 await check('Shopify Shipping builds the no-postage GraphQL purchase input shape', () => {
   const input = buildShopifyShippingLabelPurchaseInput({
     fulfillmentOrderId: 'gid://shopify/FulfillmentOrder/720111',
@@ -453,12 +471,63 @@ await check('Shopify Shipping readiness uses the connected store account and hyd
   assert.match(result.message, /mock label path ready/i);
 });
 
+await check('Shopify Shipping readiness includes the backend fulfillment-order blocker in failures', async () => {
+  __setCarrierReplay([
+    {
+      name: 'shopify.token',
+      body: { access_token: 'test-shopify-token' },
+    },
+    {
+      name: 'shopify.shop',
+      body: { shop: { id: 12345, name: 'KF GOODIES', myshopify_domain: 'kf-goodies-2.myshopify.com' } },
+    },
+    {
+      name: 'shopify.access-scopes',
+      body: {
+        access_scopes: [
+          { handle: 'read_orders' },
+          { handle: 'read_draft_orders' },
+          { handle: 'write_orders' },
+          { handle: 'read_merchant_managed_fulfillment_orders' },
+          { handle: 'write_merchant_managed_fulfillment_orders' },
+          { handle: 'read_fulfillments' },
+          { handle: 'write_fulfillments' },
+        ],
+      },
+    },
+    {
+      name: 'shopify.orders-import',
+      body: { orders: [rawShopifyOrder] },
+    },
+    {
+      name: 'shopify.fulfillment-orders',
+      body: { fulfillment_orders: [] },
+    },
+  ]);
+
+  const result = await checkShopifyShippingReadiness(
+    {
+      shopDomain: 'kf-goodies-2.myshopify.com',
+      clientId: 'shopify_client_id_for_test',
+      clientSecret: 'shopify_client_secret_for_test',
+      apiVersion: '2026-07',
+    },
+    { env: { SHOPIFY_SHIPPING_LABELS_ENABLED: 'false' } },
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /returned no fulfillment orders/i);
+  assert.match(result.message, /returned no fulfillment orders/i);
+  assert.match(result.eligibility.blockers.join(' '), /returned no fulfillment orders/i);
+});
+
 await check('Shopify Shipping readiness is wired to the backend route and Settings action', () => {
   assert.match(readFileSync('src/routes/carriers.ts', 'utf8'), /\/shopify\/shipping-readiness/);
   const settings = readFileSync('web/src/components/Settings/CarrierIntegrationsCard.tsx', 'utf8');
   assert.match(settings, /checkShopifyShipping/);
   assert.match(settings, /Shipping Check/);
   assert.match(settings, /formatShopifyShippingReadiness/);
+  assert.match(settings, /eligibility\?\.blockers/);
   assert.match(settings, /mock label path ready/);
   assert.match(settings, /live purchase OFF/);
   assert.match(settings, /SHOPIFY_SHIPPING_LABELS_ENABLED/);

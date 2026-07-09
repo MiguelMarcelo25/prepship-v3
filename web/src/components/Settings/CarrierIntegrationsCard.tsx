@@ -984,6 +984,7 @@ interface ShopifyShippingReadinessResult {
     canPurchase?: boolean
     purchaseEnabled?: boolean
     fulfillmentOrderId?: string | null
+    fulfillmentOrderBlocker?: string | null
     missing?: string[]
     blockers?: string[]
   }
@@ -1023,9 +1024,11 @@ function formatShopifyShippingReadiness(result: ShopifyShippingReadinessResult):
       ...(result.eligibility?.missing ?? [])
         .filter((reason) => !reason.startsWith('scope:'))
         .map(formatShopifyReadinessMissing),
+      ...(result.eligibility?.blockers ?? []),
     ]
     const fix = missing.length ? ` Fix: ${Array.from(new Set(missing)).join(' · ')}.` : ''
-    return `Shopify Shipping check failed: ${result.error ?? result.message ?? 'Unknown error'}.${fix}`
+    const detail = String(result.error ?? result.message ?? 'Unknown error').replace(/[.\s]+$/, '')
+    return `Shopify Shipping check failed: ${detail}.${fix}`
   }
 
   const parts = ['Shopify Shipping connection OK', 'API scopes OK']

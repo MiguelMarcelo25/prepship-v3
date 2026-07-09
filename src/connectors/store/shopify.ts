@@ -1046,9 +1046,17 @@ export async function checkShopifyShippingReadiness(
     ...(mockLabel ? { mockLabel } : {}),
     message: eligibility.eligible
       ? 'Shopify Shipping is ready for this store/order; mock label path ready. Live label purchase is still controlled by SHOPIFY_SHIPPING_LABELS_ENABLED and the Shopify user permission buy_shipping_labels.'
-      : `Shopify Shipping is not ready: ${eligibility.missing.join(', ')}`,
-    ...(eligibility.eligible ? {} : { error: `Shopify Shipping is not ready: ${eligibility.missing.join(', ')}` }),
+      : shopifyShippingNotReadyMessage(eligibility),
+    ...(eligibility.eligible ? {} : { error: shopifyShippingNotReadyMessage(eligibility) }),
   };
+}
+
+function shopifyShippingNotReadyMessage(eligibility: ShopifyShippingEligibilityResult): string {
+  const reasons = Array.from(new Set([
+    ...eligibility.missing,
+    ...eligibility.blockers,
+  ].map((reason) => String(reason ?? '').trim()).filter(Boolean)));
+  return `Shopify Shipping is not ready: ${reasons.length ? reasons.join('; ') : 'not eligible'}`;
 }
 
 function shopifyShippingReadinessFailure(input: {

@@ -309,11 +309,24 @@ export function fulfillmentOrderPurchaseBlocker(orderPayload: unknown): string |
 }
 
 function firstFulfillmentOrderBlocker(raw: UnknownRecord): string | null {
-  for (const order of fulfillmentOrderCandidates(raw)) {
+  const candidates = fulfillmentOrderCandidates(raw);
+  if (!candidates.length && hasExplicitFulfillmentOrderPayload(raw)) {
+    return 'Shopify returned no fulfillment orders for this order.';
+  }
+  for (const order of candidates) {
     const blocker = fulfillmentOrderPurchaseBlocker(order);
     if (blocker) return blocker;
   }
   return null;
+}
+
+function hasExplicitFulfillmentOrderPayload(raw: UnknownRecord): boolean {
+  return [
+    'fulfillment_orders',
+    'fulfillmentOrders',
+    'fulfillmentOrder',
+    'fulfillment_order',
+  ].some((key) => Object.prototype.hasOwnProperty.call(raw, key));
 }
 
 function fulfillmentOrderCandidates(raw: UnknownRecord): UnknownRecord[] {
