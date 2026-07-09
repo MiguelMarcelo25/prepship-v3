@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/prepship_test';
+process.env.SUPABASE_URL ??= 'http://localhost:54321';
+process.env.SUPABASE_ANON_KEY ??= 'test-anon-key';
+process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
+process.env.SUPABASE_JWT_SECRET ??= 'test-jwt-secret';
+
 async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
   return Promise.resolve()
     .then(fn)
@@ -204,7 +210,7 @@ await check('Shopify draft-order delivery options stay separate from label rates
   );
 });
 
-await check('Shopify purchase input always carries preferredRateSelection', () => {
+await check('Shopify cheapest-auto purchase input omits preferredRateSelection', () => {
   const rate = ShopifyRates.normalizeShopifyDraftShippingRates([
     {
       handle: 'rate-a',
@@ -223,10 +229,11 @@ await check('Shopify purchase input always carries preferredRateSelection', () =
     shippingDatetime: '2026-07-09T00:00:00.000Z',
   });
 
-  assert.deepEqual(purchaseInput.preferredRateSelection, {
-    carrierCode: 'USPS',
-    serviceCode: 'GROUND_ADVANTAGE',
-  });
+  assert.equal(
+    'preferredRateSelection' in purchaseInput,
+    false,
+    'V1 must omit preferredRateSelection so Shopify chooses the cheapest available label at purchase time',
+  );
   assert.equal(purchaseInput.fulfillmentOrderId, 'gid://shopify/FulfillmentOrder/720111');
   assert.equal(purchaseInput.packageInfo.customPackage?.dimensions.length, 12);
 });
@@ -248,10 +255,11 @@ await check('Shopify routes are mounted and admin UI keeps Shopify in a separate
   const labelsRoute = readFileSync('src/routes/labels.ts', 'utf8');
   assert.match(labelsRoute, /\/shopify/);
   assert.match(labelsRoute, /createShopifyShippingLabelForOrder/);
+  assert.doesNotMatch(labelsRoute, /const shopifyCreateBody[\s\S]*?shopifyRateQuoteId:\s*z\.string\(\)\.min\(1\)[\s\S]*?\}\);/);
+  assert.doesNotMatch(labelsRoute, /const shopifyCreateBody[\s\S]*?selectedRateKey:\s*z\.string\(\)\.min\(1\)[\s\S]*?\}\);/);
 
   const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
   assert.match(modal, /Shopify Shipping/);
   assert.match(modal, /not Shopify label rates/);
-  assert.doesNotMatch(modal, /Buy Shopify Label/);
   assert.doesNotMatch(modal, /bestRate\s*=\s*shopify/i);
 });

@@ -39,6 +39,7 @@ const labelsRoute = read('src/routes/labels.ts');
 const labelsService = read('src/services/labels.ts');
 const printQueueService = read('src/services/print-queue.ts');
 const ordersView = read('web/src/components/Views/OrdersView.tsx');
+const apiClient = read('web/src/lib/v2-apiClient.ts');
 // PS-317: buildSelectedRateProofPayload moved to ./orders/best-rate/rate-proof.ts.
 // The DEFINE check reads the new owner; the call-site census still scans OrdersView
 // (call sites stayed) and is summed across both files so the count never undershoots.
@@ -178,6 +179,29 @@ check(
       'createDirectCarrierLabelForOrder({',
       indexAfter(labelsService, 'const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);'),
     ) > 0,
+);
+
+check(
+  'Shopify Shipping label route accepts order intent only; no Shopify selected-rate proof is required',
+  labelsRoute.includes("app.post('/shopify'") &&
+    labelsRoute.includes('createShopifyShippingLabelForOrder') &&
+    !/const shopifyCreateBody[\s\S]*?shopifyRateQuoteId:\s*z\.string\(\)\.min\(1\)[\s\S]*?\}\);/.test(labelsRoute) &&
+    !/const shopifyCreateBody[\s\S]*?selectedRateKey:\s*z\.string\(\)\.min\(1\)[\s\S]*?\}\);/.test(labelsRoute),
+);
+
+check(
+  'Shopify Shipping purchase owner omits preferredRateSelection so Shopify chooses cheapest',
+  labelsService.includes('createShopifyShippingLabelForOrder') &&
+    !/preferredRateSelection:\s*\{[\s\S]*carrierCode[\s\S]*serviceCode/.test(labelsService) &&
+    !/assertShopifySelectedRate\(/.test(labelsService),
+);
+
+check(
+  'Print Queue delegates Shopify batch labels to the Shopify purchase service, not frontend code',
+  printQueueService.includes('createShopifyShippingLabelForOrder') &&
+    printQueueService.includes("provider === 'shopify_shipping'") &&
+    apiClient.includes("createShopifyLabel(payload: unknown)") &&
+    !/apiClient\.createShopifyLabel\([\s\S]*selectedRateKey/.test(ordersView),
 );
 
 // PS-209 re-anchor (2026-06-16): direct-carrier print-to-queue local ship-to recovery is owned by its

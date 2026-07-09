@@ -539,12 +539,14 @@ app.post('/add', zValidator('json', addBody), async (c) => {
 });
 
 const queueSendLabelBody = z.object({
+  provider: z.string().optional(),
   serviceCode: z.string().optional(),
   carrierCode: z.string().optional(),
   carrierName: z.string().optional(),
   serviceName: z.string().optional(),
   serviceType: z.string().optional(),
   packageCode: z.string().optional(),
+  packageName: z.string().nullable().optional(),
   customPackageId: z.number().int().positive().nullable().optional(),
   shippingProviderId: z.number().int().positive().nullable().optional(),
   weightOz: z.number().positive().optional(),
@@ -554,6 +556,7 @@ const queueSendLabelBody = z.object({
   confirmation: z.string().optional(),
   insuranceProvider: z.string().nullable().optional(),
   insuredValue: z.number().nullable().optional(),
+  notifyCustomer: z.boolean().optional(),
   testLabel: z.boolean().optional(),
   // The backend-issued selected-rate proof the frontend captured for this order.
   // Without this field zValidator strips it from the body, the durable queue
@@ -648,12 +651,14 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
         labelUrl: order.label_url ?? null,
         label: order.label
           ? {
+              provider: order.label.provider,
               serviceCode: order.label.serviceCode ?? '',
               carrierCode: order.label.carrierCode,
               carrierName: order.label.carrierName,
               serviceName: order.label.serviceName,
               serviceType: order.label.serviceType,
               packageCode: order.label.packageCode,
+              packageName: order.label.packageName,
               customPackageId: order.label.customPackageId,
               shippingProviderId: order.label.shippingProviderId,
               weightOz: order.label.weightOz,
@@ -663,6 +668,7 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
               confirmation: order.label.confirmation,
               insuranceProvider: order.label.insuranceProvider ?? undefined,
               insuredValue: order.label.insuredValue ?? undefined,
+              notifyCustomer: order.label.notifyCustomer,
               testLabel: order.label.testLabel,
               // Forward the selected-rate proof so the durable queue worker can
               // satisfy assertSelectedRateProofForLabelPurchase. Omitting it here

@@ -14,7 +14,14 @@ import { extractShipstationLabelUrl, ssListRecentLabels } from '../lib/shipstati
 import { matchRecoverableLabel } from './print-queue-label-recovery';
 import { resolveSecondaryShipstationLabelKey } from './print-queue-secondary-ss-account';
 import { ensureShipmentConfirmationLifecycle, processFulfillmentOutboxOnce } from './fulfillment/outbox';
-import { createLabelV2, type CreateLabelInputDto, type LabelCreateTimingBreakdown } from './labels';
+import {
+  createLabelV2,
+  createShopifyShippingLabelForOrder,
+  type CreateLabelInputDto,
+  type CreateShopifyShippingLabelInputDto,
+  type LabelCreateTimingBreakdown,
+} from './labels';
+import { SHOPIFY_SHIPPING_PROVIDER } from './shopify-shipping-labels';
 import { isLabelPurchaseLockActive } from '../lib/label-purchase-lock';
 import { GLOBAL_SCOPE } from '../lib/client-store-scope';
 // Per user override unlock shipped data on 2026-07-07: batch-print pipeline — the merge job's
@@ -162,15 +169,23 @@ export type MergeJob = {
   createdAt: number;
 };
 
+type QueueSendCarrierLabelInput = Omit<CreateLabelInputDto, 'orderId' | 'orderNumber'> & {
+  orderId?: number;
+  orderNumber?: string;
+};
+
+type QueueSendShopifyLabelInput = Omit<CreateShopifyShippingLabelInputDto, 'orderId'> & {
+  provider?: typeof SHOPIFY_SHIPPING_PROVIDER | 'shopify';
+  orderId?: number;
+  orderNumber?: string;
+};
+
 export type QueueSendOrderInput = {
   orderId: number;
   clientId: number;
   orderNumber?: string | null;
   labelUrl?: unknown | null;
-  label?: Omit<CreateLabelInputDto, 'orderId' | 'orderNumber'> & {
-    orderId?: number;
-    orderNumber?: string;
-  };
+  label?: QueueSendCarrierLabelInput | QueueSendShopifyLabelInput;
   skuGroupId: string;
   primarySku?: string | null;
   itemDescription?: string | null;
@@ -1032,6 +1047,11 @@ function withTotalTiming(result: QueueSendJobResult, startedAt: number): QueueSe
   };
 }
 
+function isShopifyQueueLabelInput(label: QueueSendOrderInput['label']): label is QueueSendShopifyLabelInput {
+  const provider = String((label as { provider?: unknown } | undefined)?.provider ?? '').trim().toLowerCase();
+  return provider === 'shopify_shipping' || provider === SHOPIFY_SHIPPING_PROVIDER || provider === 'shopify';
+}
+
 function queueSendLogCause(result: QueueSendJobResult): string {
   if (result.success) {
     if (result.alreadyQueued) return 'Label already in print queue';
@@ -1178,6 +1198,19 @@ async function processQueueSendOrder(
           'labelPurchaseMs',
           async () => {
             try {
+              if (isShopifyQueueLabelInput(labelInput)) {
+                return await createShopifyShippingLabelForOrder({
+                  orderId: order.orderId,
+                  weightOz: labelInput.weightOz,
+                  length: labelInput.length,
+                  width: labelInput.width,
+                  height: labelInput.height,
+                  packageName: labelInput.packageName,
+                  customPackageId: labelInput.customPackageId,
+                  notifyCustomer: labelInput.notifyCustomer ?? false,
+                  testLabel: labelInput.testLabel,
+                }, GLOBAL_SCOPE);
+              }
               return await createLabelV2({
                 ...labelInput,
                 orderId: order.orderId,

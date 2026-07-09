@@ -92,8 +92,6 @@ const createBody = z.object({
 
 const shopifyCreateBody = z.object({
   orderId: z.number().int().positive(),
-  shopifyRateQuoteId: z.string().min(1),
-  selectedRateKey: z.string().min(1),
   weightOz: z.number().positive().optional(),
   length: z.number().positive().optional(),
   width: z.number().positive().optional(),
@@ -236,8 +234,9 @@ async function createShopifyLabelRouteResponse(c: Context, body: ShopifyCreateLa
         shipmentId: result.shipmentId,
         tracking: result.trackingNumber,
         cost: result.cost,
-        shopifyRateQuoteId: result.shopifyRateQuoteId,
-        selectedRateKey: result.selectedRateKey,
+        provider: result.provider,
+        purchaseResultId: result.purchaseResultId,
+        fulfillmentOrderId: result.fulfillmentOrderId,
       },
     });
     return c.json(result, 201);

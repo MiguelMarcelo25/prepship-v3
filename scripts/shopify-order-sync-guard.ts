@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
-import {
+import type { NormalizedOrder } from '../src/connectors/types';
+
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/prepship_test';
+process.env.SUPABASE_URL ??= 'http://localhost:54321';
+process.env.SUPABASE_ANON_KEY ??= 'test-anon-key';
+process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'test-service-role-key';
+process.env.SUPABASE_JWT_SECRET ??= 'test-jwt-secret';
+
+const {
   isShopifySyncableAccount,
   shopifySyncSince,
   syncShopifyAccount,
-} from '../src/services/shopify-order-sync';
-import type { NormalizedOrder } from '../src/connectors/types';
+} = await import('../src/services/shopify-order-sync');
 
 const account = {
   id: 42,

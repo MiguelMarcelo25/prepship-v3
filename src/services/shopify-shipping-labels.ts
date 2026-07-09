@@ -25,8 +25,18 @@ export type ShopifyShippingEligibilityResult = {
   canPurchase: boolean;
   purchaseEnabled: boolean;
   fulfillmentOrderId: string | null;
+  fulfillmentOrderBlocker?: string | null;
   missing: string[];
   blockers: string[];
+};
+
+export type ShopifyFulfillmentOrderForPurchase = {
+  id: string;
+  status: string | null;
+  requestStatus: string | null;
+  assignedLocation: unknown | null;
+  remainingLineItems: unknown[];
+  raw: UnknownRecord;
 };
 
 export type ShopifyMailingAddressInput = {
@@ -130,7 +140,9 @@ export function isShopifyShippingPurchaseEnabled(env: ShopifyShippingEnv = proce
 export function evaluateShopifyShippingEligibility(input: ShopifyShippingEligibilityInput): ShopifyShippingEligibilityResult {
   const raw = asRecord(input.rawOrderPayload);
   const source = firstLowerString(input.sourceProvider, raw?.sourceProvider, raw?.source, raw?.provider, raw?.marketplace);
-  const fulfillmentOrderId = raw ? extractShopifyFulfillmentOrderId(raw) : null;
+  const fulfillmentOrder = raw ? extractShopifyFulfillmentOrderForPurchase(raw) : null;
+  const fulfillmentOrderId = fulfillmentOrder?.id ?? null;
+  const fulfillmentOrderBlocker = raw && !fulfillmentOrder ? firstFulfillmentOrderBlocker(raw) : null;
   const scopes = normalizeScopeSet(input.grantedScopes);
   const missing: string[] = [];
 
@@ -150,8 +162,9 @@ export function evaluateShopifyShippingEligibility(input: ShopifyShippingEligibi
     canPurchase: eligible && purchaseEnabled,
     purchaseEnabled,
     fulfillmentOrderId,
+    fulfillmentOrderBlocker,
     missing,
-    blockers,
+    blockers: fulfillmentOrderBlocker ? [...blockers, fulfillmentOrderBlocker] : blockers,
   };
 }
 
@@ -177,15 +190,16 @@ export function buildShopifyShippingLabelPurchaseInput(
   const totalWeight = input.totalWeight ?? weightFromOunces(input.totalWeightOz);
   const shippingDatetime = input.shippingDatetime instanceof Date ? input.shippingDatetime.toISOString() : input.shippingDatetime;
 
-  return {
+  const purchaseInput: ShopifyShippingLabelPurchaseInput = {
     fulfillmentOrderId,
-    notifyCustomer: input.notifyCustomer,
-    originAddress: input.originAddress,
     packageInfo: input.packageInfo,
-    preferredRateSelection: input.preferredRateSelection,
     shippingDatetime,
-    totalWeight,
   };
+  if (input.notifyCustomer != null) purchaseInput.notifyCustomer = input.notifyCustomer;
+  if (input.originAddress) purchaseInput.originAddress = input.originAddress;
+  if (input.preferredRateSelection) purchaseInput.preferredRateSelection = input.preferredRateSelection;
+  if (totalWeight) purchaseInput.totalWeight = totalWeight;
+  return purchaseInput;
 }
 
 export function createShopifyShippingMockLabel(
@@ -226,7 +240,13 @@ export function createShopifyShippingMockLabel(
   };
 }
 
-function extractShopifyFulfillmentOrderId(raw: UnknownRecord): string | null {
+export function extractShopifyFulfillmentOrderId(rawPayload: unknown): string | null {
+  return extractShopifyFulfillmentOrderForPurchase(rawPayload)?.id ?? null;
+}
+
+export function extractShopifyFulfillmentOrderForPurchase(rawPayload: unknown): ShopifyFulfillmentOrderForPurchase | null {
+  const raw = asRecord(rawPayload);
+  if (!raw) return null;
   const direct = firstNormalizedFulfillmentOrderId(
     raw.fulfillmentOrderId,
     raw.fulfillment_order_id,
@@ -235,20 +255,110 @@ function extractShopifyFulfillmentOrderId(raw: UnknownRecord): string | null {
     nestedId(raw.fulfillmentOrder),
     nestedId(raw.fulfillment_order),
   );
-  if (direct) return direct;
+  if (direct) {
+    return {
+      id: direct,
+      status: null,
+      requestStatus: null,
+      assignedLocation: null,
+      remainingLineItems: [],
+      raw,
+    };
+  }
 
-  for (const key of ['fulfillment_orders', 'fulfillmentOrders']) {
-    const list = raw[key];
-    if (!Array.isArray(list)) continue;
-    for (const item of list) {
-      const order = asRecord(item);
-      if (!order || !isActiveFulfillmentOrder(order)) continue;
-      const id = firstNormalizedFulfillmentOrderId(order.admin_graphql_api_id, order.id, order.legacyResourceId);
-      if (id) return id;
-    }
+  for (const order of fulfillmentOrderCandidates(raw)) {
+    const blocker = fulfillmentOrderPurchaseBlocker(order);
+    if (blocker) continue;
+    const id = firstNormalizedFulfillmentOrderId(order.admin_graphql_api_id, order.adminGraphqlApiId, order.id, order.legacyResourceId);
+    if (!id) continue;
+    return {
+      id,
+      status: firstLowerString(order.status),
+      requestStatus: firstLowerString(order.request_status, order.requestStatus),
+      assignedLocation: order.assigned_location ?? order.assignedLocation ?? null,
+      remainingLineItems: remainingLineItemsFrom(order),
+      raw: order,
+    };
   }
 
   return null;
+}
+
+export function fulfillmentOrderPurchaseBlocker(orderPayload: unknown): string | null {
+  const order = asRecord(orderPayload);
+  if (!order) return 'Shopify fulfillment order is missing.';
+  const status = firstLowerString(order.status);
+  const requestStatus = firstLowerString(order.request_status, order.requestStatus);
+  if (status && ['closed', 'cancelled', 'canceled', 'incomplete'].includes(status)) {
+    return `Shopify fulfillment order is ${status}.`;
+  }
+  if (requestStatus && ['cancellation_requested', 'cancellation_accepted', 'rejected', 'cancellation_rejected'].includes(requestStatus)) {
+    return `Shopify fulfillment order request status is ${requestStatus}.`;
+  }
+  const supportedActions = asArray(order.supported_actions ?? order.supportedActions)
+    .map((value) => String(value ?? '').trim().toUpperCase())
+    .filter(Boolean);
+  if (supportedActions.length && !supportedActions.some((action) => action.includes('CREATE_SHIPPING_LABEL') || action.includes('PURCHASE_LABEL'))) {
+    return 'Shopify fulfillment order does not support shipping-label purchase.';
+  }
+  const remainingLineItems = remainingLineItemsFrom(order);
+  if (hasKnownRemainingLineItems(order) && !remainingLineItems.some(hasRemainingQuantity)) {
+    return 'Shopify fulfillment order has no remaining shippable line items.';
+  }
+  return null;
+}
+
+function firstFulfillmentOrderBlocker(raw: UnknownRecord): string | null {
+  for (const order of fulfillmentOrderCandidates(raw)) {
+    const blocker = fulfillmentOrderPurchaseBlocker(order);
+    if (blocker) return blocker;
+  }
+  return null;
+}
+
+function fulfillmentOrderCandidates(raw: UnknownRecord): UnknownRecord[] {
+  const candidates: UnknownRecord[] = [];
+  for (const key of ['fulfillment_orders', 'fulfillmentOrders']) {
+    for (const item of connectionNodes(raw[key])) {
+      const row = asRecord(item);
+      if (row) candidates.push(row);
+    }
+  }
+  for (const key of ['fulfillmentOrder', 'fulfillment_order']) {
+    const row = asRecord(raw[key]);
+    if (row) candidates.push(row);
+  }
+  return candidates;
+}
+
+function connectionNodes(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const record = asRecord(value);
+  if (!record) return [];
+  if (Array.isArray(record.nodes)) return record.nodes;
+  if (Array.isArray(record.edges)) {
+    return record.edges.map((edge) => asRecord(edge)?.node ?? edge);
+  }
+  return [];
+}
+
+function remainingLineItemsFrom(order: UnknownRecord): unknown[] {
+  const direct = asArray(order.remaining_line_items ?? order.remainingLineItems);
+  if (direct.length && !asRecord(order.remainingLineItems)?.edges) return direct;
+  const connection = connectionNodes(order.remainingLineItems);
+  return connection.length ? connection : direct;
+}
+
+function hasKnownRemainingLineItems(order: UnknownRecord): boolean {
+  if (Array.isArray(order.remaining_line_items)) return true;
+  const remaining = asRecord(order.remainingLineItems);
+  return Array.isArray(order.remainingLineItems) || Array.isArray(remaining?.edges) || Array.isArray(remaining?.nodes);
+}
+
+function hasRemainingQuantity(value: unknown): boolean {
+  const row = asRecord(value);
+  const quantity = Number(row?.remaining_quantity ?? row?.remainingQuantity ?? row?.quantity ?? 0);
+  return Number.isFinite(quantity) && quantity > 0;
 }
 
 function firstNormalizedFulfillmentOrderId(...values: unknown[]): string | null {
@@ -261,14 +371,6 @@ function firstNormalizedFulfillmentOrderId(...values: unknown[]): string | null 
 
 function nestedId(value: unknown): unknown {
   return asRecord(value)?.id;
-}
-
-function isActiveFulfillmentOrder(order: UnknownRecord): boolean {
-  const status = firstLowerString(order.status);
-  const requestStatus = firstLowerString(order.request_status, order.requestStatus);
-  if (status && ['closed', 'cancelled', 'canceled'].includes(status)) return false;
-  if (requestStatus && ['cancellation_requested', 'cancellation_accepted', 'rejected'].includes(requestStatus)) return false;
-  return true;
 }
 
 function normalizeScopeSet(value: unknown): Set<string> {
@@ -309,6 +411,10 @@ function trackingSafeSegment(value: unknown): string {
 
 function asRecord(value: unknown): UnknownRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function firstLowerString(...values: unknown[]): string | null {
