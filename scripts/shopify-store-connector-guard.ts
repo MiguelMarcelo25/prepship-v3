@@ -237,6 +237,16 @@ await check('Shopify GraphQL order normalization supports direct store polling',
     /fulfillmentOrders\s*\(\s*first:/,
     'Shopify GraphQL order import must request fulfillmentOrders so label purchase eligibility survives sync',
   );
+  assert.doesNotMatch(
+    read('src/connectors/store/shopify.ts'),
+    /remainingLineItems\s*\(/,
+    'Shopify GraphQL order import must not request the removed FulfillmentOrder.remainingLineItems field',
+  );
+  assert.match(
+    read('src/connectors/store/shopify.ts'),
+    /fulfillmentOrders[\s\S]*lineItems\s*\(\s*first:\s*100\s*\)/,
+    'Shopify GraphQL order import must request FulfillmentOrder.lineItems for remaining quantities',
+  );
 
   const graphqlCalls: Array<{ url: string; init: RequestInit }> = [];
   const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
@@ -301,7 +311,7 @@ await check('Shopify order normalization preserves fulfillment-order facts for l
                 name: 'GWH Fulfillment Center',
               },
             },
-            remainingLineItems: {
+            lineItems: {
               edges: [
                 {
                   node: {

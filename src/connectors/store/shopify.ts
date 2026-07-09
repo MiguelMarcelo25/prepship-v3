@@ -201,11 +201,13 @@ const SHOPIFY_ORDERS_QUERY = `
                     name
                   }
                 }
-                remainingLineItems(first: 100) {
+                lineItems(first: 100) {
                   edges {
                     node {
                       id
                       remainingQuantity
+                      totalQuantity
+                      requiresShipping
                       lineItem {
                         id
                       }

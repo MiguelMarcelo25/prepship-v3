@@ -346,13 +346,24 @@ function remainingLineItemsFrom(order: UnknownRecord): unknown[] {
   const direct = asArray(order.remaining_line_items ?? order.remainingLineItems);
   if (direct.length && !asRecord(order.remainingLineItems)?.edges) return direct;
   const connection = connectionNodes(order.remainingLineItems);
-  return connection.length ? connection : direct;
+  if (connection.length) return connection;
+  const fulfillmentLineItems = connectionNodes(order.line_items ?? order.lineItems);
+  return fulfillmentLineItems.length ? fulfillmentLineItems : direct;
 }
 
 function hasKnownRemainingLineItems(order: UnknownRecord): boolean {
   if (Array.isArray(order.remaining_line_items)) return true;
   const remaining = asRecord(order.remainingLineItems);
-  return Array.isArray(order.remainingLineItems) || Array.isArray(remaining?.edges) || Array.isArray(remaining?.nodes);
+  const lineItems = asRecord(order.line_items ?? order.lineItems);
+  return (
+    Array.isArray(order.remainingLineItems) ||
+    Array.isArray(remaining?.edges) ||
+    Array.isArray(remaining?.nodes) ||
+    Array.isArray(order.line_items) ||
+    Array.isArray(order.lineItems) ||
+    Array.isArray(lineItems?.edges) ||
+    Array.isArray(lineItems?.nodes)
+  );
 }
 
 function hasRemainingQuantity(value: unknown): boolean {
