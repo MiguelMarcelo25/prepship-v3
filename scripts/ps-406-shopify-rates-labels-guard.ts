@@ -175,6 +175,35 @@ await check('Shopify selected-rate proof refuses stale or missing selected keys'
   );
 });
 
+await check('Shopify draft-order delivery options stay separate from label rates', () => {
+  const checkoutDeliveryOptions = ShopifyRates.normalizeShopifyDraftShippingRates([
+    {
+      handle: 'standard',
+      title: 'Standard',
+      source: 'shopify',
+      code: 'Standard',
+      price: { amount: '8.00', currencyCode: 'USD' },
+    },
+  ]);
+  const snapshot = ShopifyRates.createShopifyRateQuoteSnapshot({
+    orderId: 101,
+    fulfillmentOrderId: 'gid://shopify/FulfillmentOrder/720111',
+    rates: [],
+    checkoutShipping: [],
+    checkoutDeliveryOptions,
+    fetchedAt: '2026-07-09T00:00:00.000Z',
+  });
+
+  assert.deepEqual(snapshot.rates, [], 'checkout delivery options must not be treated as Shopify label rates');
+  assert.equal(snapshot.checkoutDeliveryOptions?.[0]?.title, 'Standard');
+  assert.equal(snapshot.labelRatesAvailable, false);
+  assert.match(snapshot.labelRatesMessage ?? '', /does not expose.*label rates/i);
+  assert.throws(
+    () => ShopifyRates.assertShopifySelectedRate(snapshot, checkoutDeliveryOptions[0]?.selectedRateKey),
+    /does not expose.*label rates/i,
+  );
+});
+
 await check('Shopify purchase input always carries preferredRateSelection', () => {
   const rate = ShopifyRates.normalizeShopifyDraftShippingRates([
     {
@@ -221,7 +250,8 @@ await check('Shopify routes are mounted and admin UI keeps Shopify in a separate
   assert.match(labelsRoute, /createShopifyShippingLabelForOrder/);
 
   const modal = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
-  assert.match(modal, /Shopify Rates/);
-  assert.match(modal, /Buy Shopify Label/);
+  assert.match(modal, /Shopify Shipping/);
+  assert.match(modal, /not Shopify label rates/);
+  assert.doesNotMatch(modal, /Buy Shopify Label/);
   assert.doesNotMatch(modal, /bestRate\s*=\s*shopify/i);
 });

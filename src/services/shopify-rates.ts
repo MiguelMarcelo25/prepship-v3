@@ -21,6 +21,8 @@ const SHOPIFY_RATE_QUOTE_PREFIX = 'shopify_rate_quote';
 const SHOPIFY_LABEL_PURCHASE_PENDING_TTL_SECONDS = 30 * 60;
 const SHOPIFY_LABEL_PURCHASE_TERMINAL_TTL_SECONDS = 60;
 const SHOPIFY_LABEL_PURCHASE_PENDING_PREFIX = 'shopify_label_purchase';
+export const SHOPIFY_LABEL_RATES_UNAVAILABLE_MESSAGE =
+  'Shopify does not expose carrier-priced Shopify Shipping label rates through the public Admin API before purchase. Use Shopify Admin to compare USPS/UPS/FedEx label prices, or use PrepShip carrier accounts for browsable carrier rates.';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -67,7 +69,11 @@ export type ShopifyRateQuoteSnapshot = {
   orderId: number;
   fulfillmentOrderId: string;
   checkoutShipping: ShopifyCheckoutShippingLine[];
+  checkoutDeliveryOptions: ShopifyNormalizedRate[];
   rates: ShopifyNormalizedRate[];
+  labelRatesAvailable: boolean;
+  labelRatesMessage: string | null;
+  rateSource: 'shopify_label_rates' | 'checkout_delivery_options';
   fetchedAt: string;
 };
 
@@ -235,14 +241,24 @@ export function createShopifyRateQuoteSnapshot(input: {
   fulfillmentOrderId: string;
   rates: ShopifyNormalizedRate[];
   checkoutShipping: ShopifyCheckoutShippingLine[];
+  checkoutDeliveryOptions?: ShopifyNormalizedRate[];
+  labelRatesAvailable?: boolean;
+  labelRatesMessage?: string | null;
+  rateSource?: 'shopify_label_rates' | 'checkout_delivery_options';
   fetchedAt?: string;
 }): ShopifyRateQuoteSnapshot {
+  const rates = Array.isArray(input.rates) ? input.rates : [];
+  const labelRatesAvailable = input.labelRatesAvailable ?? rates.length > 0;
   return {
     provider: SHOPIFY_SHIPPING_PROVIDER,
     orderId: input.orderId,
     fulfillmentOrderId: input.fulfillmentOrderId,
     checkoutShipping: Array.isArray(input.checkoutShipping) ? input.checkoutShipping : [],
-    rates: Array.isArray(input.rates) ? input.rates : [],
+    checkoutDeliveryOptions: Array.isArray(input.checkoutDeliveryOptions) ? input.checkoutDeliveryOptions : [],
+    rates,
+    labelRatesAvailable,
+    labelRatesMessage: input.labelRatesMessage ?? (labelRatesAvailable ? null : SHOPIFY_LABEL_RATES_UNAVAILABLE_MESSAGE),
+    rateSource: input.rateSource ?? (labelRatesAvailable ? 'shopify_label_rates' : 'checkout_delivery_options'),
     fetchedAt: input.fetchedAt ?? new Date().toISOString(),
   };
 }
@@ -334,6 +350,13 @@ export function assertShopifySelectedRate(
   if (!key) throw new ShopifyRatesError('selectedRateKey is required for Shopify label purchase', 'SHOPIFY_SELECTED_RATE_REQUIRED', 400);
   const selected = snapshot?.rates?.find((rate) => rate.selectedRateKey === key) ?? null;
   if (!selected) {
+    if (snapshot?.labelRatesAvailable === false) {
+      throw new ShopifyRatesError(
+        snapshot.labelRatesMessage ?? SHOPIFY_LABEL_RATES_UNAVAILABLE_MESSAGE,
+        'SHOPIFY_LABEL_RATES_UNAVAILABLE',
+        409,
+      );
+    }
     throw new ShopifyRatesError(
       'Selected Shopify rate is no longer available. Refresh Shopify Rates before buying the label.',
       'SHOPIFY_SELECTED_RATE_STALE',
@@ -762,12 +785,18 @@ export async function getShopifyRatesForOrder(
 
   const draftInput = buildDraftOrderDeliveryOptionsInput(rawOrder);
   const rawRates = await fetchShopifyDraftOrderAvailableDeliveryOptions(account.credentials, draftInput);
-  const rates = normalizeShopifyDraftShippingRates(rawRates);
+  const checkoutDeliveryOptions = normalizeShopifyDraftShippingRates(rawRates);
   const snapshot = createShopifyRateQuoteSnapshot({
     orderId: order.id,
     fulfillmentOrderId: ids[0]!,
     checkoutShipping: extractShopifyCheckoutShipping(rawOrder),
-    rates,
+    checkoutDeliveryOptions,
+    // Shopify's public Admin API exposes draft-order checkout delivery options here,
+    // not the carrier-priced Shopify Admin label quote list shown before purchase.
+    rates: [],
+    labelRatesAvailable: false,
+    labelRatesMessage: SHOPIFY_LABEL_RATES_UNAVAILABLE_MESSAGE,
+    rateSource: 'checkout_delivery_options',
   });
   const shopifyRateQuoteId = await storeShopifyRateQuoteSnapshot(snapshot);
   return {
