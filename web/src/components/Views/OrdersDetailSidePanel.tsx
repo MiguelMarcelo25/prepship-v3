@@ -8,7 +8,7 @@
 //
 // PRESENTATIONAL only — this component owns NO state and owns NO backend truth.
 // The dims -> rate -> label interactive core, selected-rate proof, label
-// purchase, package precedence, and persistence ALL stay in the OrdersView
+  // purchase, package precedence, and persistence ALL stay in the OrdersView
 // shell. Every event-handler closure that touched backend truth was LIFTED to a
 // NAMED handler in OrdersView (PS-306-tagged) and is passed DOWN here as an
 // `on*` callback prop; this leaf only FIRES them. In particular this file owns
@@ -169,6 +169,8 @@ export type OrdersDetailSidePanelProps = {
   // the result is irrelevant here. onReprintLabel/onQueueExistingLabels stay
   // Promise<void>-compatible because they also feed OrdersPanelShippedLabelActions.
   onCreateOrQueueLabel: (mode: 'print' | 'queue' | 'test') => void | Promise<unknown>
+  onCreateOrQueueShopifyLabel?: (mode: 'print' | 'queue') => void | Promise<unknown>
+  shopifyLabelPurchase?: { visible: boolean; disabledReason?: string | null }
   onRecalculateBestRate: () => void | Promise<unknown>
   onSaveShipmentDetails: () => void | Promise<unknown>
   onReprintLabel: () => void | Promise<void>
@@ -229,6 +231,8 @@ export function OrdersDetailSidePanel({
   onInsuranceChange,
   onInsuranceValueChange,
   onCreateOrQueueLabel,
+  onCreateOrQueueShopifyLabel,
+  shopifyLabelPurchase,
   onRecalculateBestRate,
   onSaveShipmentDetails,
   onReprintLabel,
@@ -296,6 +300,8 @@ export function OrdersDetailSidePanel({
     })
     : null
   const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
+  const shopifyLabelVisible = shopifyLabelPurchase?.visible === true && !shipped
+  const shopifyLabelDisabledReason = shopifyLabelPurchase?.disabledReason ?? (panelHold?.blocked ? panelHold.reason : null)
   const trackingNumber = toStringValue(panelOrder.label?.trackingNumber)
   const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder) && !getIsMissingShipmentSync(panelOrder)
   // Per user override unlock shipped data on 2026-05-23: keep shipped queue recovery non-destructive, but disable corrupt saved label URLs.
@@ -788,6 +794,41 @@ export function OrdersDetailSidePanel({
                   >
                     {shipmentDetailsSaving ? 'Saving...' : 'Save'}
                   </button>
+                  {shopifyLabelVisible ? (
+                    <div className="basis-full rounded-md border border-sky-200 bg-sky-50 px-2 py-2">
+                      <div className="text-[11px] font-semibold text-sky-950">
+                        Cheapest available Shopify label
+                      </div>
+                      <div className="mt-0.5 text-[10.5px] font-semibold text-sky-800">
+                        Price: shown after Shopify purchase
+                      </div>
+                      <div className="mt-1 text-[10.5px] leading-snug text-sky-700">
+                        Shopify chooses the cheapest available label at purchase time.
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <button
+                          className="btn btn-primary btn-sm"
+                          type="button"
+                          style={{ fontSize: 11.5, gap: 4 }}
+                          onClick={() => void onCreateOrQueueShopifyLabel?.('print')}
+                          disabled={singleActionBusy || Boolean(shopifyLabelDisabledReason)}
+                          title={shopifyLabelDisabledReason ? `Blocked: ${shopifyLabelDisabledReason}` : 'Buy cheapest Shopify label'}
+                        >
+                          {singleActionBusy ? 'Working...' : 'Buy Cheapest Shopify Label'}
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          type="button"
+                          style={{ fontSize: 11.5, gap: 4 }}
+                          onClick={() => void onCreateOrQueueShopifyLabel?.('queue')}
+                          disabled={singleActionBusy || Boolean(shopifyLabelDisabledReason)}
+                          title={shopifyLabelDisabledReason ? `Blocked: ${shopifyLabelDisabledReason}` : 'Buy Shopify label and add it to the print queue'}
+                        >
+                          Queue Shopify Label
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )}
 

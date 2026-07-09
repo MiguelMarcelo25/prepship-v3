@@ -189,6 +189,32 @@ const SHOPIFY_ORDERS_QUERY = `
               currencyCode
             }
           }
+          fulfillmentOrders(first: 10) {
+            edges {
+              node {
+                id
+                status
+                requestStatus
+                assignedLocation {
+                  location {
+                    id
+                    name
+                  }
+                }
+                remainingLineItems(first: 100) {
+                  edges {
+                    node {
+                      id
+                      remainingQuantity
+                      lineItem {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
           lineItems(first: 100) {
             edges {
               node {

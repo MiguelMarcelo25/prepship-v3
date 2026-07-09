@@ -10,6 +10,7 @@ import {
 import {
   SHOPIFY_SHIPPING_PROVIDER,
   buildShopifyShippingLabelPurchaseInput,
+  extractShopifyFulfillmentOrderId,
   normalizeShopifyFulfillmentOrderId,
   type ShopifyShippingLabelPurchaseInput,
 } from './shopify-shipping-labels';
@@ -85,11 +86,11 @@ export type ShopifyLabelPurchasePendingSnapshot = {
   provider: typeof SHOPIFY_SHIPPING_PROVIDER;
   status: 'pending' | 'resolved' | 'failed';
   orderId: number;
-  shopifyRateQuoteId: string;
-  selectedRateKey: string;
+  shopifyRateQuoteId?: string | null;
+  selectedRateKey?: string | null;
   purchaseResultId: string;
   fulfillmentOrderId: string;
-  selectedRate: ShopifyNormalizedRate;
+  selectedRate?: ShopifyNormalizedRate | null;
   weightOz: number;
   dims: {
     length: number;
@@ -120,7 +121,7 @@ export type ShopifyRatesForOrderInput = {
 
 export type ShopifyPurchaseInputFromRate = {
   fulfillmentOrderId: string;
-  rate: ShopifyNormalizedRate;
+  rate?: ShopifyNormalizedRate;
   weightOz: number;
   dims: {
     length: number;
@@ -299,14 +300,17 @@ export async function storeShopifyLabelPurchasePendingSnapshot(
   const ttl = snapshot.status === 'pending'
     ? SHOPIFY_LABEL_PURCHASE_PENDING_TTL_SECONDS
     : SHOPIFY_LABEL_PURCHASE_TERMINAL_TTL_SECONDS;
-  await Promise.all([
-    setAnalyticsCache(
+  const writes = [
+    setAnalyticsCache(pendingResultCacheKey(snapshot.purchaseResultId), snapshot, ttl),
+  ];
+  if (snapshot.shopifyRateQuoteId && snapshot.selectedRateKey) {
+    writes.push(setAnalyticsCache(
       pendingSelectionCacheKey(snapshot.orderId, snapshot.shopifyRateQuoteId, snapshot.selectedRateKey),
       snapshot,
       ttl,
-    ),
-    setAnalyticsCache(pendingResultCacheKey(snapshot.purchaseResultId), snapshot, ttl),
-  ]);
+    ));
+  }
+  await Promise.all(writes);
 }
 
 export async function loadShopifyLabelPurchasePendingBySelection(input: {
@@ -369,13 +373,6 @@ export function assertShopifySelectedRate(
 export function buildShopifyShippingPurchaseInputFromRate(
   input: ShopifyPurchaseInputFromRate,
 ): ShopifyShippingLabelPurchaseInput {
-  if (!input.rate.carrierCode || !input.rate.serviceCode) {
-    throw new ShopifyRatesError(
-      'Shopify selected rate is missing carrier/service code; no label was purchased.',
-      'SHOPIFY_SELECTED_RATE_INCOMPLETE',
-      400,
-    );
-  }
   const shippingDatetime = input.shippingDatetime instanceof Date
     ? input.shippingDatetime
     : input.shippingDatetime ?? new Date().toISOString();
@@ -395,10 +392,6 @@ export function buildShopifyShippingPurchaseInputFromRate(
         type: firstString(input.packageName, 'BOX'),
         weight: { unit: 'GRAMS', value: 0 },
       },
-    },
-    preferredRateSelection: {
-      carrierCode: input.rate.carrierCode,
-      serviceCode: input.rate.serviceCode,
     },
   });
 }
@@ -510,15 +503,10 @@ export function extractShopifyCheckoutShipping(rawOrder: unknown): ShopifyChecko
 }
 
 function fulfillmentOrderIds(rawOrder: UnknownRecord): string[] {
-  const direct = normalizeShopifyFulfillmentOrderId(
-    rawOrder.fulfillmentOrderId ??
-    rawOrder.fulfillment_order_id ??
-    rawOrder.fulfillmentOrderGid ??
-    rawOrder.fulfillment_order_gid,
-  );
+  const direct = extractShopifyFulfillmentOrderId(rawOrder);
   if (direct) return [direct];
   const ids: string[] = [];
-  for (const item of asArray(rawOrder.fulfillment_orders ?? rawOrder.fulfillmentOrders)) {
+  for (const item of fulfillmentOrderCandidates(rawOrder)) {
     const row = asRecord(item);
     const status = normalizeProviderText(row.status);
     const requestStatus = normalizeProviderText(row.request_status ?? row.requestStatus);
@@ -528,6 +516,22 @@ function fulfillmentOrderIds(rawOrder: UnknownRecord): string[] {
     if (id) ids.push(id);
   }
   return Array.from(new Set(ids));
+}
+
+function fulfillmentOrderCandidates(rawOrder: UnknownRecord): unknown[] {
+  const candidates: unknown[] = [];
+  for (const value of [rawOrder.fulfillment_orders, rawOrder.fulfillmentOrders]) {
+    if (Array.isArray(value)) {
+      candidates.push(...value);
+      continue;
+    }
+    const record = asRecord(value);
+    if (Array.isArray(record.nodes)) candidates.push(...record.nodes);
+    if (Array.isArray(record.edges)) {
+      candidates.push(...record.edges.map((edge) => asRecord(edge).node ?? edge));
+    }
+  }
+  return candidates;
 }
 
 function finitePositiveInteger(value: unknown): number | null {

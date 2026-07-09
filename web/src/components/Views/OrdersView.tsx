@@ -351,6 +351,9 @@ const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order be
 // on the genuine "couldn't re-rate" failure branches inside refreshStaleRateForOrder; this one is
 // used only where we immediately kick off the one-click re-rate (never auto-repurchases — PS-191).
 const RATE_EXPIRED_RERATE_MESSAGE = 'Rate expired — re-rate this order before printing.'
+const SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE =
+  'Shopify does not provide the exact label price before purchase through the Admin API.\n\n' +
+  'Shopify will buy the cheapest available Shopify Shipping label for this order. Continue?'
 const BATCH_QUEUE_CONCURRENCY = 2
 const BACKEND_QUEUE_SEND_POLL_MS = 750
 
@@ -2668,6 +2671,33 @@ export default function OrdersView({
         return { payload: null, items: [], error: 'Label URL is not queueable for this order', order }
       }
 
+      const orderDetail = orderDetailsById.get(order.orderId) ?? null
+      if (isShopifySourcedOrder(order, orderDetail)) {
+        const dims = getDimensions(order, orderDetail)
+        const weightOz = getOrderWeightOz(order, orderDetail)
+        if (!weightOz) {
+          return { payload: null, items: [], error: 'Missing shipment weight for Shopify label purchase', order }
+        }
+        if (!dims?.length || !dims.width || !dims.height) {
+          return { payload: null, items: [], error: 'Missing package dimensions for Shopify label purchase', order }
+        }
+        payload.label = options.labelPayloadOverrides?.get(order.orderId) ?? {
+          provider: 'shopify_shipping',
+          weightOz,
+          length: dims.length,
+          width: dims.width,
+          height: dims.height,
+          notifyCustomer: false,
+          testLabel: Boolean(options.batchTestMode) || isBackendTestOrder(order),
+        }
+        return {
+          payload,
+          items: getActiveItems(order, orderDetail),
+          error: null,
+          order,
+        }
+      }
+
       // PS-286 (slice): an order with no already-bought queueable label would have
       // a label payload built BELOW from order.bestRate and handed to the purchase
       // boundary. Gate that on the SAME backend rate verdict the Awaiting "Best
@@ -2738,7 +2768,6 @@ export default function OrdersView({
       const serviceType = toStringValue((bestRate as any)?.serviceType) ?? toStringValue((bestRate as any)?.service_type) ?? selectedRate?.serviceType ?? selectedRate?.serviceName
       const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue((bestRate as any)?.carrierCode) ?? selectedRate?.carrierCode
       const carrierName = toStringValue((bestRate as any)?.carrierName) ?? toStringValue((bestRate as any)?.carrier_name) ?? selectedRate?.carrierName
-      const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
       // PS-186: money path — backend fact only (heuristics must never shape a label payload).
@@ -3218,6 +3247,40 @@ export default function OrdersView({
     return null
   }
 
+  function isShopifySourcedOrder(order: OrderSummaryDto | null | undefined, detail?: OrderFullDto | null): boolean {
+    const raw = toRecord(order?.raw)
+    const detailRaw = toRecord(detail?.raw)
+    const shipping = toRecord(order?.shipping)
+    const canonical = toRecord(order?.canonicalOrder)
+    const candidates = [
+      order?.sourceProvider,
+      order?.source_provider,
+      order?.marketplace,
+      order?.storeProvider,
+      shipping?.sourceProvider,
+      shipping?.provider,
+      canonical?.sourceProvider,
+      raw?.sourceProvider,
+      raw?.source_provider,
+      raw?.source,
+      raw?.provider,
+      raw?.marketplace,
+      detailRaw?.sourceProvider,
+      detailRaw?.source_provider,
+      detailRaw?.source,
+      detailRaw?.provider,
+      detailRaw?.marketplace,
+    ]
+    return candidates.some((candidate) => String(candidate ?? '').trim().toLowerCase() === 'shopify')
+  }
+
+  function hasShopifyLabelPurchaseIntent(batchOrders: OrderSummaryDto[]): boolean {
+    return batchOrders.some((order) => {
+      if (getQueueableLabelUrl(order.label?.labelUrl)) return false
+      return isShopifySourcedOrder(order, orderDetailsById.get(order.orderId) ?? null)
+    })
+  }
+
   async function createOrQueueLabel(mode: 'print' | 'queue' | 'test', order = panelOrder) {
     if (!order) {
       showToast('No order selected', 'error')
@@ -3489,6 +3552,124 @@ export default function OrdersView({
       }
       showLabelPdfPlaceholderMessage(labelPopup, 'Label creation failed', error instanceof Error ? error.message : 'Label creation failed')
       showToast(error instanceof Error ? error.message : 'Label creation failed', 'error')
+      return null
+    } finally {
+      singleActionBusyRef.current = false
+      setSingleActionBusy(false)
+    }
+  }
+
+  async function createOrQueueShopifyLabel(mode: 'print' | 'queue', order = panelOrder) {
+    if (!order) {
+      showToast('No order selected', 'error')
+      return null
+    }
+    const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
+    if (!isShopifySourcedOrder(order, orderDetail)) {
+      showToast('Shopify labels are only available for Shopify orders', 'error')
+      return null
+    }
+    const hold = orderShippingHold(orderDetail ?? order)
+    if (hold?.blocked) {
+      showToast(hold.reason || 'Buying a label is blocked for this order', 'error')
+      return null
+    }
+
+    const weightOz = getPanelWeightOz() || getOrderWeightOz(order, orderDetail)
+    const panelDims = getPanelDims()
+    const savedDims = getDimensions(order, orderDetail)
+    const length = panelDims.length || savedDims?.length || 0
+    const width = panelDims.width || savedDims?.width || 0
+    const height = panelDims.height || savedDims?.height || 0
+    if (!weightOz) {
+      showToast('Enter shipment weight', 'error')
+      return null
+    }
+    if (!length || !width || !height) {
+      showToast('Enter package dimensions', 'error')
+      return null
+    }
+    if (!window.confirm(SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE)) {
+      showToast('Shopify label purchase cancelled', 'info')
+      return null
+    }
+
+    const selectedPackage = packages.find((candidate) => String(candidate.packageId) === panelForm.packageId)
+    const payload = {
+      provider: 'shopify_shipping',
+      orderId: order.orderId,
+      weightOz,
+      length,
+      width,
+      height,
+      packageName: toStringValue(selectedPackage?.name) ?? null,
+      customPackageId: selectedPackage && selectedPackage.source !== 'ss_carrier' ? selectedPackage.packageId : null,
+      notifyCustomer: false,
+      testLabel: isBackendTestOrder(order),
+    }
+
+    if (singleActionBusyRef.current) return null
+    singleActionBusyRef.current = true
+    setSingleActionBusy(true)
+    const labelPopup = mode === 'print' ? openLabelPdfPlaceholder() : null
+    const schedulePostLabelFollowups = (response: any) => {
+      void (async () => {
+        try {
+          await autoSavePanelSkuDefaults(panelForm.packageId || null, {
+            order,
+            detail: orderDetail,
+            weightOz,
+            dims: { length, width, height },
+          })
+        } catch (error) {
+          console.warn('[shopify-label] frontend SKU default save failed:', error instanceof Error ? error.message : error)
+        }
+        try {
+          await refetchOrders()
+        } catch (error) {
+          console.warn('[shopify-label] frontend refetchOrders failed:', error instanceof Error ? error.message : error)
+        }
+      })()
+      return response
+    }
+
+    try {
+      if (mode === 'queue') {
+        const result = await sendOrdersToQueueBackend([order], {
+          kind: 'existing-labels',
+          label: 'Queue Shopify Label',
+          labelPayloadOverrides: new Map([[order.orderId, payload as Record<string, unknown>]]),
+        })
+        if (result.queued > 0 && result.skipped === 0 && result.failed === 0) {
+          showToast(formatQueuedOrderToast(order.orderNumber ?? order.orderId, getActiveItems(order, orderDetail)), 'success')
+        } else if (result.queued > 0 || result.skipped > 0 || result.failed > 0) {
+          showToast(formatQueueSendResultToast(result), queueSendToastType(result))
+        } else {
+          showToast(result.failedErrors[0] ?? result.skippedErrors[0] ?? 'Shopify label was not added to the print queue', 'error')
+        }
+        return schedulePostLabelFollowups({ orderStatus: 'shipped' })
+      }
+
+      const response = await apiClient.createShopifyLabel(payload)
+      const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
+      if (queueableLabelUrl) {
+        openLabelPdfUrl(queueableLabelUrl, labelPopup)
+        showToast(`Shopify label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}`, 'success')
+      } else if (response.pending) {
+        showLabelPdfPlaceholderMessage(
+          labelPopup,
+          'Shopify label purchase is processing',
+          'Shopify has not finished the label purchase yet. Wait a moment, then refresh the order.',
+        )
+        showToast('Shopify label purchase is still processing', 'info')
+      } else {
+        showLabelPdfPlaceholderMessage(labelPopup, 'Shopify label created, but no PDF URL returned', 'Try the queue or refresh the order before buying again.')
+        showToast(response.labelUrl ? 'Shopify label URL is not queueable' : 'Shopify label created but no PDF returned', response.labelUrl ? 'error' : 'info')
+      }
+      return schedulePostLabelFollowups(response)
+    } catch (error) {
+      showLabelPdfPlaceholderMessage(labelPopup, 'Shopify label creation failed', error instanceof Error ? error.message : 'Shopify label creation failed')
+      showToast(error instanceof Error ? error.message : 'Shopify label creation failed', 'error')
       return null
     } finally {
       singleActionBusyRef.current = false
@@ -4742,6 +4923,10 @@ export default function OrdersView({
     }
     if (batchOrders.length === 0) {
       showToast('No orders selected', 'error')
+      return
+    }
+    if (hasShopifyLabelPurchaseIntent(batchOrders) && !window.confirm(SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE)) {
+      showToast('Shopify label purchase cancelled', 'info')
       return
     }
 
@@ -6234,6 +6419,11 @@ export default function OrdersView({
         onInsuranceChange={handlePanelInsuranceChange}
         onInsuranceValueChange={handlePanelInsuranceValueChange}
         onCreateOrQueueLabel={createOrQueueLabel}
+        onCreateOrQueueShopifyLabel={createOrQueueShopifyLabel}
+        shopifyLabelPurchase={{
+          visible: isShopifySourcedOrder(panelOrder, panelDetail),
+          disabledReason: panelHold?.blocked ? panelHold.reason : null,
+        }}
         onRecalculateBestRate={recalculateBestRate}
         onSaveShipmentDetails={saveShipmentDetails}
         onReprintLabel={reprintLabel}

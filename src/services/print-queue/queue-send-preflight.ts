@@ -3,6 +3,7 @@ import { db } from '../../db/client';
 import { orderOverrides, orders as ordersTable } from '../../db/schema/orders';
 import { shipments } from '../../db/schema/shipments';
 import { assertLabelPurchaseRateSelection } from '../shipping-workflow/rate-quote-snapshot-store';
+import type { SelectedRateProofInput } from '../shipping-workflow/rate-fingerprint';
 import type { QueueSendJobItemInput } from './queue-send-item-state';
 import type { QueueSendJobResult, QueueSendOrderInput } from '../print-queue';
 
@@ -125,9 +126,15 @@ function labelHasWeight(order: QueueSendOrderInput, fact: QueueSendPreflightOrde
 function labelHasPackage(order: QueueSendOrderInput, fact: QueueSendPreflightOrderFact | null): boolean {
   const label = order.label;
   if (!label) return Boolean(order.labelUrl);
-  if (label.customPackageId != null || (typeof label.packageCode === 'string' && label.packageCode.trim())) return true;
+  const packageCode = (label as { packageCode?: unknown }).packageCode;
+  if (label.customPackageId != null || (typeof packageCode === 'string' && packageCode.trim())) return true;
   if (hasPositiveDims([label.length, label.width, label.height])) return true;
   return hasPositiveDims([fact?.overrideDimsL, fact?.overrideDimsW, fact?.overrideDimsH]);
+}
+
+function isShopifyQueueLabel(order: QueueSendOrderInput): boolean {
+  const provider = String((order.label as { provider?: unknown } | undefined)?.provider ?? '').trim().toLowerCase();
+  return provider === 'shopify_shipping' || provider === 'shopify';
 }
 
 function orderHasAddress(fact: QueueSendPreflightOrderFact | null): boolean {
@@ -185,15 +192,22 @@ async function classifyRateProof(order: QueueSendOrderInput): Promise<QueueSendP
   const label = order.label;
   if (!label || label.testLabel === true) return null;
   if (order.labelUrl) return null;
-  if (!(label.rateQuoteId && label.selectedRateKey) && !label.selectedRateProof) {
+  if (isShopifyQueueLabel(order)) return null;
+  const carrierLabel = label as {
+    rateQuoteId?: string | null;
+    selectedRateKey?: string | null;
+    selectedRateProof?: SelectedRateProofInput | null;
+    shippingProviderId?: number | null;
+  };
+  if (!(carrierLabel.rateQuoteId && carrierLabel.selectedRateKey) && !carrierLabel.selectedRateProof) {
     return 'missing_rate_proof';
   }
   try {
     await assertLabelPurchaseRateSelection({
-      rateQuoteId: label.rateQuoteId,
-      selectedRateKey: label.selectedRateKey,
-      selectedRateProof: label.selectedRateProof,
-      purchaseShippingProviderId: label.shippingProviderId,
+      rateQuoteId: carrierLabel.rateQuoteId,
+      selectedRateKey: carrierLabel.selectedRateKey,
+      selectedRateProof: carrierLabel.selectedRateProof,
+      purchaseShippingProviderId: carrierLabel.shippingProviderId,
     });
     return null;
   } catch {
@@ -213,7 +227,12 @@ async function classifyOrder(
   if (status === 'shipped') return hasActiveLabel ? null : 'order_not_editable';
   if (LOCKED_ORDER_STATUSES.has(status)) return 'order_not_editable';
   if (!order.label) return 'missing_label_payload';
-  if (!order.label.serviceCode) return 'carrier_provider_unavailable';
+  if (isShopifyQueueLabel(order)) {
+    if (!labelHasWeight(order, fact)) return 'missing_weight';
+    if (!labelHasPackage(order, fact)) return 'missing_package';
+    return null;
+  }
+  if (!(order.label as { serviceCode?: unknown }).serviceCode) return 'carrier_provider_unavailable';
   if (!labelHasWeight(order, fact)) return 'missing_weight';
   if (!labelHasPackage(order, fact)) return 'missing_package';
   if (!orderHasAddress(fact)) return 'missing_address';

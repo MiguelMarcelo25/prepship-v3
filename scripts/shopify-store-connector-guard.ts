@@ -232,6 +232,11 @@ await check('Shopify GraphQL order normalization supports direct store polling',
   assert.equal(normalized.shippingPaid, 6.5);
   assert.equal((normalized.items as Array<Record<string, unknown>>)[0]?.sku, 'SKU-1');
   assert.equal((normalized.items as Array<Record<string, unknown>>)[0]?.variantId, 'gid://shopify/ProductVariant/987');
+  assert.match(
+    read('src/connectors/store/shopify.ts'),
+    /fulfillmentOrders\s*\(\s*first:/,
+    'Shopify GraphQL order import must request fulfillmentOrders so label purchase eligibility survives sync',
+  );
 
   const graphqlCalls: Array<{ url: string; init: RequestInit }> = [];
   const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
@@ -274,6 +279,67 @@ await check('Shopify GraphQL order normalization supports direct store polling',
   assert.equal(result.diagnostics?.hasNextPage, true);
   assert.equal(result.diagnostics?.maxUpdatedAt, '2026-07-08T12:10:00.000Z');
   assert(graphqlCalls.some((call) => call.url === 'https://kf-goodies-2.myshopify.com/admin/api/2026-07/graphql.json'));
+});
+
+await check('Shopify order normalization preserves fulfillment-order facts for label purchase', () => {
+  const gqlOrder = {
+    id: 'gid://shopify/Order/1234567890',
+    name: '#1001',
+    createdAt: '2026-07-08T12:00:00Z',
+    updatedAt: '2026-07-08T12:10:00Z',
+    displayFulfillmentStatus: 'UNFULFILLED',
+    fulfillmentOrders: {
+      edges: [
+        {
+          node: {
+            id: 'gid://shopify/FulfillmentOrder/720111',
+            status: 'OPEN',
+            requestStatus: 'UNSUBMITTED',
+            assignedLocation: {
+              location: {
+                id: 'gid://shopify/Location/333',
+                name: 'GWH Fulfillment Center',
+              },
+            },
+            remainingLineItems: {
+              edges: [
+                {
+                  node: {
+                    id: 'gid://shopify/FulfillmentOrderLineItem/501',
+                    remainingQuantity: 2,
+                    lineItem: { id: 'gid://shopify/LineItem/1' },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+    },
+    shippingAddress: {
+      name: 'Jane Buyer',
+      city: 'Austin',
+      provinceCode: 'TX',
+      zip: '78701',
+    },
+    currentTotalPriceSet: { shopMoney: { amount: '29.99', currencyCode: 'USD' } },
+    lineItems: { edges: [] },
+    totalWeight: 32,
+  };
+
+  const normalized = normalizeShopifyOrder(gqlOrder, {
+    accountId: '42',
+    clientId: 7,
+    storeId: 9_200_042,
+  });
+  const raw = normalized.rawPayload as Record<string, unknown>;
+  const fulfillmentOrders = raw.fulfillmentOrders as Record<string, unknown>;
+  const firstEdge = (fulfillmentOrders.edges as Array<Record<string, unknown>>)[0];
+  const node = firstEdge.node as Record<string, unknown>;
+
+  assert.equal(node.id, 'gid://shopify/FulfillmentOrder/720111');
+  assert.equal(node.status, 'OPEN');
+  assert.equal(node.requestStatus, 'UNSUBMITTED');
 });
 
 await check('Shopify import normalizes paid unfulfilled orders for canonical store persistence', async () => {
