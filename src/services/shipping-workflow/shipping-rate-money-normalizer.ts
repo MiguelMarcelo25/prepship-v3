@@ -52,6 +52,25 @@ function moneyObjectAmount(value: unknown): number {
   return finiteNumber(record?.amount) ?? 0;
 }
 
+function moneyObjectMaxAmount(primary: unknown, fallback: unknown): number {
+  return Math.max(moneyObjectAmount(primary), moneyObjectAmount(fallback));
+}
+
+function otherCostAmount(rate: RateRecord, raw: RateRecord): number {
+  const structuredOtherCost = roundMoney(
+    moneyObjectMaxAmount(rate.other_amount, raw.other_amount) +
+      moneyObjectMaxAmount(rate.confirmation_amount, raw.confirmation_amount) +
+      moneyObjectMaxAmount(rate.insurance_amount, raw.insurance_amount),
+  );
+  const plainOtherCost = firstFiniteNumber(
+    rate.otherCost,
+    raw.otherCost,
+    rate.other_cost,
+    raw.other_cost,
+  );
+  return roundMoney(Math.max(0, structuredOtherCost, plainOtherCost ?? 0));
+}
+
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -93,11 +112,7 @@ function normalizeExplicitTotal(
 export function normalizeShippingRateMoney(value: unknown): ShippingRateMoney {
   const rate = asRecord(value) ?? {};
   const raw = asRecord(rate.raw) ?? {};
-  const otherCost = roundMoney(
-    moneyObjectAmount(rate.other_amount ?? raw.other_amount) +
-      moneyObjectAmount(rate.confirmation_amount ?? raw.confirmation_amount) +
-      moneyObjectAmount(rate.insurance_amount ?? raw.insurance_amount),
-  );
+  const otherCost = otherCostAmount(rate, raw);
   const shippingComponent = firstFiniteNumber(
     rate.shipmentCost,
     raw.shipmentCost,

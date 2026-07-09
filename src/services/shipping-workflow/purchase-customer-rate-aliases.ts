@@ -2,10 +2,24 @@ import { normalizeShippingRateMoney } from './shipping-rate-money-normalizer.js'
 
 type RateRecord = Record<string, unknown>;
 
+function asRecord(value: unknown): RateRecord | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as RateRecord
+    : null;
+}
+
 function finiteNumber(value: unknown): number | null {
   if (value == null || value === '') return null;
   const amount = Number(value);
   return Number.isFinite(amount) ? amount : null;
+}
+
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const amount = finiteNumber(value);
+    if (amount != null) return amount;
+  }
+  return null;
 }
 
 function moneyObjectAmount(value: unknown): number {
@@ -17,8 +31,28 @@ function moneyObjectAmount(value: unknown): number {
     : 0;
 }
 
+function moneyObjectMaxAmount(primary: unknown, fallback: unknown): number {
+  return Math.max(moneyObjectAmount(primary), moneyObjectAmount(fallback));
+}
+
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function rateOtherCostAmount(rate: RateRecord): number {
+  const raw = asRecord(rate.raw) ?? {};
+  const structuredOtherCost = roundMoney(
+    moneyObjectMaxAmount(rate.other_amount, raw.other_amount) +
+      moneyObjectMaxAmount(rate.confirmation_amount, raw.confirmation_amount) +
+      moneyObjectMaxAmount(rate.insurance_amount, raw.insurance_amount),
+  );
+  const plainOtherCost = firstFiniteNumber(
+    rate.otherCost,
+    raw.otherCost,
+    rate.other_cost,
+    raw.other_cost,
+  );
+  return roundMoney(Math.max(0, structuredOtherCost, plainOtherCost ?? 0));
 }
 
 export function buildPurchaseCustomerRateMoney(rate: RateRecord): {
@@ -30,11 +64,7 @@ export function buildPurchaseCustomerRateMoney(rate: RateRecord): {
   shippingMarginPct: number | null;
 } {
   const money = normalizeShippingRateMoney(rate);
-  const otherCost = roundMoney(
-    moneyObjectAmount(rate.other_amount) +
-      moneyObjectAmount(rate.confirmation_amount) +
-      moneyObjectAmount(rate.insurance_amount),
-  );
+  const otherCost = rateOtherCostAmount(rate);
   const purchaseTotal = money.selectedRateCost ?? 0;
   const customerTotal = money.cShippingRateAmount ?? purchaseTotal;
   return {

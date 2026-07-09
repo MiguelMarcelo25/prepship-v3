@@ -151,6 +151,24 @@ check(
   aliasedBest,
 );
 
+const aliasedLegacySelectedRate = stampRateBrowserDisplayAliases({
+  carrier_id: 'se-10000008',
+  carrier_code: 'ups',
+  service_code: 'ups_ground',
+  shipmentCost: 10.23,
+  otherCost: 3.89,
+}) as any;
+
+check(
+  'Rate Browser display aliases preserve legacy shipmentCost + otherCost selected totals',
+  closeTo(aliasedLegacySelectedRate.shipmentCost, 10.23) &&
+    closeTo(aliasedLegacySelectedRate.otherCost, 3.89) &&
+    closeTo(aliasedLegacySelectedRate.selectedRateCost, 14.12) &&
+    closeTo(aliasedLegacySelectedRate.cShippingRateAmount, 14.12) &&
+    closeTo(aliasedLegacySelectedRate.totalCost, 14.12),
+  aliasedLegacySelectedRate,
+);
+
 const normalized = normalizeOrderBestRateDto(aliasedBest);
 check(
   'OrderBestRateDto preserves purchase cost and C. Shipping Rate as separated money fields',

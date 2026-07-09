@@ -250,6 +250,10 @@ export type RateRow = {
   shipmentCost: number;
   otherCost: number;
   amount: number;
+  cShippingRateAmount?: number | null;
+  selectedRateCost?: number | null;
+  shippingMarginAmount?: number | null;
+  shippingMarginPct?: number | null;
   insuranceCost?: unknown;
   insuranceProvenance?: unknown;
   insuranceCostUnresolved?: unknown;
@@ -661,6 +665,18 @@ function buildOrderBestRateSeed(
     toFiniteNumber(bestRate.shipmentCost) ??
     toFiniteNumber(raw.shipmentCost);
   const shipmentCost = shipmentCostAlias ?? (amount != null ? Math.max(0, amount - otherCost) : null);
+  const cShippingRateAmount =
+    toFiniteNumber(bestRate.cShippingRateAmount) ??
+    toFiniteNumber(raw.cShippingRateAmount);
+  const selectedRateCost =
+    toFiniteNumber(bestRate.selectedRateCost) ??
+    toFiniteNumber(raw.selectedRateCost);
+  const shippingMarginAmount =
+    toFiniteNumber(bestRate.shippingMarginAmount) ??
+    toFiniteNumber(raw.shippingMarginAmount);
+  const shippingMarginPct =
+    toFiniteNumber(bestRate.shippingMarginPct) ??
+    toFiniteNumber(raw.shippingMarginPct);
   const shippingProviderId =
     toFiniteNumber(bestRate.shippingProviderId) ??
     toFiniteNumber(raw.shippingProviderId) ??
@@ -699,6 +715,10 @@ function buildOrderBestRateSeed(
     shipmentCost,
     otherCost,
     amount,
+    cShippingRateAmount,
+    selectedRateCost,
+    shippingMarginAmount,
+    shippingMarginPct,
     insuranceCost: bestRate.insuranceCost ?? raw.insuranceCost,
     insuranceProvenance: bestRate.insuranceProvenance ?? raw.insuranceProvenance,
     insuranceCostUnresolved: bestRate.insuranceCostUnresolved ?? raw.insuranceCostUnresolved,

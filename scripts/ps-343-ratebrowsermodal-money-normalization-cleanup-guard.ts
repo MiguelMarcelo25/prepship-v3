@@ -105,6 +105,16 @@ check('saved best-rate seed consumes backend amount aliases',
   bestRateSeed.includes('bestRate.totalCost') &&
   bestRateSeed.includes('raw.totalCost'));
 
+check('saved best-rate seed passes through backend-stamped Rate Browser money aliases',
+  bestRateSeed.includes('cShippingRateAmount,') &&
+  bestRateSeed.includes('selectedRateCost,') &&
+  bestRateSeed.includes('shippingMarginAmount,') &&
+  bestRateSeed.includes('shippingMarginPct,') &&
+  bestRateSeed.includes('bestRate.cShippingRateAmount') &&
+  bestRateSeed.includes('raw.cShippingRateAmount') &&
+  bestRateSeed.includes('bestRate.selectedRateCost') &&
+  bestRateSeed.includes('raw.selectedRateCost'));
+
 check('saved best-rate seed does not rebuild display amount from local component math',
   !/amount:\s*shipmentCost\s*\+\s*otherCost/.test(bestRateSeed) &&
   !/componentOtherCost|confirmationAmountCost|insuranceAmountCost|otherAmountCost/.test(bestRateSeed));
