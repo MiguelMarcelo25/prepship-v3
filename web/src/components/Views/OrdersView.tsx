@@ -351,6 +351,9 @@ const RATE_PROOF_RETRY_MESSAGE = 'Rate changed or expired. Re-rate this order be
 // on the genuine "couldn't re-rate" failure branches inside refreshStaleRateForOrder; this one is
 // used only where we immediately kick off the one-click re-rate (never auto-repurchases — PS-191).
 const RATE_EXPIRED_RERATE_MESSAGE = 'Rate expired — re-rate this order before printing.'
+const SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE =
+  'Shopify does not provide the exact label price before purchase through the Admin API.\n\n' +
+  'Shopify will buy the cheapest available Shopify Shipping label for this order. Continue?'
 const BATCH_QUEUE_CONCURRENCY = 2
 const BACKEND_QUEUE_SEND_POLL_MS = 750
 
@@ -3271,6 +3274,13 @@ export default function OrdersView({
     return candidates.some((candidate) => String(candidate ?? '').trim().toLowerCase() === 'shopify')
   }
 
+  function hasShopifyLabelPurchaseIntent(batchOrders: OrderSummaryDto[]): boolean {
+    return batchOrders.some((order) => {
+      if (getQueueableLabelUrl(order.label?.labelUrl)) return false
+      return isShopifySourcedOrder(order, orderDetailsById.get(order.orderId) ?? null)
+    })
+  }
+
   async function createOrQueueLabel(mode: 'print' | 'queue' | 'test', order = panelOrder) {
     if (!order) {
       showToast('No order selected', 'error')
@@ -3577,6 +3587,10 @@ export default function OrdersView({
     }
     if (!length || !width || !height) {
       showToast('Enter package dimensions', 'error')
+      return null
+    }
+    if (!window.confirm(SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE)) {
+      showToast('Shopify label purchase cancelled', 'info')
       return null
     }
 
@@ -4909,6 +4923,10 @@ export default function OrdersView({
     }
     if (batchOrders.length === 0) {
       showToast('No orders selected', 'error')
+      return
+    }
+    if (hasShopifyLabelPurchaseIntent(batchOrders) && !window.confirm(SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE)) {
+      showToast('Shopify label purchase cancelled', 'info')
       return
     }
 

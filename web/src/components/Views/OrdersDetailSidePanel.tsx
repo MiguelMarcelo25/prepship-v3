@@ -797,6 +797,12 @@ export function OrdersDetailSidePanel({
                   {shopifyLabelVisible ? (
                     <div className="basis-full rounded-md border border-sky-200 bg-sky-50 px-2 py-2">
                       <div className="text-[11px] font-semibold text-sky-950">
+                        Cheapest available Shopify label
+                      </div>
+                      <div className="mt-0.5 text-[10.5px] font-semibold text-sky-800">
+                        Price: shown after Shopify purchase
+                      </div>
+                      <div className="mt-1 text-[10.5px] leading-snug text-sky-700">
                         Shopify chooses the cheapest available label at purchase time.
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -806,9 +812,9 @@ export function OrdersDetailSidePanel({
                           style={{ fontSize: 11.5, gap: 4 }}
                           onClick={() => void onCreateOrQueueShopifyLabel?.('print')}
                           disabled={singleActionBusy || Boolean(shopifyLabelDisabledReason)}
-                          title={shopifyLabelDisabledReason ? `Blocked: ${shopifyLabelDisabledReason}` : 'Buy Shopify label'}
+                          title={shopifyLabelDisabledReason ? `Blocked: ${shopifyLabelDisabledReason}` : 'Buy cheapest Shopify label'}
                         >
-                          {singleActionBusy ? 'Working...' : 'Buy Shopify Label'}
+                          {singleActionBusy ? 'Working...' : 'Buy Cheapest Shopify Label'}
                         </button>
                         <button
                           className="btn btn-ghost btn-sm"

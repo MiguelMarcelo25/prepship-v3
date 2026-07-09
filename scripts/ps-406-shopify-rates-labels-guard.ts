@@ -263,3 +263,18 @@ await check('Shopify routes are mounted and admin UI keeps Shopify in a separate
   assert.match(modal, /not Shopify label rates/);
   assert.doesNotMatch(modal, /bestRate\s*=\s*shopify/i);
 });
+
+await check('Shopify label purchase UI is honest about price visibility before purchase', () => {
+  const panel = readFileSync('web/src/components/Views/OrdersDetailSidePanel.tsx', 'utf8');
+  assert.match(panel, /Cheapest available Shopify label/);
+  assert.match(panel, /Price:\s*shown after Shopify purchase/);
+  assert.match(panel, /Buy Cheapest Shopify Label/);
+
+  const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+  assert.match(ordersView, /SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE/);
+  assert.match(ordersView, /does not provide the exact label price before purchase/);
+  assert.match(ordersView, /buy the cheapest available Shopify Shipping label/);
+  assert.match(ordersView, /window\.confirm\(SHOPIFY_LABEL_PURCHASE_CONFIRM_MESSAGE\)/);
+  assert.match(ordersView, /hasShopifyLabelPurchaseIntent/);
+  assert.match(ordersView, /hasShopifyLabelPurchaseIntent\(batchOrders\)/);
+});
