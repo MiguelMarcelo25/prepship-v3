@@ -24,6 +24,23 @@ const SHOPIFY_LABEL_PURCHASE_PENDING_PREFIX = 'shopify_label_purchase';
 
 type UnknownRecord = Record<string, unknown>;
 
+type ShopifyStoreAccountForShipping = {
+  id: number;
+  label: string | null;
+  credentials: Record<string, unknown>;
+};
+
+type ShopifyStoreAccountRow = {
+  id?: unknown;
+  provider?: unknown;
+  label?: unknown;
+  credentials?: unknown;
+  active?: unknown;
+  source?: unknown;
+  clientId?: unknown;
+  accountIdentifier?: unknown;
+};
+
 export type ShopifyCheckoutShippingLine = {
   title: string | null;
   amount: number | null;
@@ -490,45 +507,176 @@ function fulfillmentOrderIds(rawOrder: UnknownRecord): string[] {
   return Array.from(new Set(ids));
 }
 
+function finitePositiveInteger(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.trunc(n);
+}
+
+export function shopifyStoreAccountIdCandidatesForOrder(order: {
+  sourceAccountId?: string | null;
+  storeId?: number | null;
+}): number[] {
+  const ids = new Set<number>();
+  const rawSourceAccountId = firstString(order.sourceAccountId);
+  const direct = finitePositiveInteger(rawSourceAccountId);
+  if (direct != null) ids.add(direct);
+
+  const prefixed = /^(?:store-account|shopify-account|shopify)[:_-](\d+)$/i.exec(rawSourceAccountId);
+  const prefixedId = finitePositiveInteger(prefixed?.[1]);
+  if (prefixedId != null) ids.add(prefixedId);
+
+  const shopifyOffset = syntheticStoreIdForCredentialAccount('shopify', 0);
+  const syntheticStoreId = finitePositiveInteger(order.storeId);
+  if (syntheticStoreId != null && syntheticStoreId > shopifyOffset) {
+    ids.add(syntheticStoreId - shopifyOffset);
+  }
+
+  return Array.from(ids);
+}
+
+function shopifyStoreAccountFromRow(row: UnknownRecord): ShopifyStoreAccountForShipping | null {
+  const id = finitePositiveInteger(row.id);
+  if (!id || normalizeProviderText(row.provider) !== 'shopify' || row.active === false) return null;
+  return {
+    id,
+    label: firstString(row.label) || null,
+    credentials: asRecord(row.credentials),
+  };
+}
+
+async function queryShopifyStoreAccountRowsByIds(accountIds: number[]): Promise<UnknownRecord[]> {
+  const unique = Array.from(new Set(accountIds.filter((id) => Number.isFinite(id) && id > 0)));
+  if (!unique.length) return [];
+  const rows = await db.execute(sql<ShopifyStoreAccountRow>`
+    SELECT
+      id,
+      provider,
+      label,
+      credentials,
+      active,
+      source,
+      client_id AS "clientId",
+      account_identifier AS "accountIdentifier"
+    FROM store_accounts
+    WHERE id IN (${sql.join(unique.map((id) => sql`${id}`), sql`, `)})
+  `);
+  const list = Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows ?? [];
+  return list.map(asRecord);
+}
+
+async function queryActiveShopifyStoreAccountRows(excludedIds: number[]): Promise<UnknownRecord[]> {
+  const excluded = Array.from(new Set(excludedIds.filter((id) => Number.isFinite(id) && id > 0)));
+  const excludePredicate = excluded.length
+    ? sql`AND id NOT IN (${sql.join(excluded.map((id) => sql`${id}`), sql`, `)})`
+    : sql``;
+  const rows = await db.execute(sql<ShopifyStoreAccountRow>`
+    SELECT
+      id,
+      provider,
+      label,
+      credentials,
+      active,
+      source,
+      client_id AS "clientId",
+      account_identifier AS "accountIdentifier"
+    FROM store_accounts
+    WHERE provider = 'shopify'
+      AND active = true
+      ${excludePredicate}
+    ORDER BY
+      CASE WHEN source = 'admin' THEN 0 ELSE 1 END,
+      updated_at DESC NULLS LAST,
+      id DESC
+    LIMIT 20
+  `);
+  const list = Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows ?? [];
+  return list.map(asRecord);
+}
+
+function normalizeShopifyOrderNumber(value: unknown): string {
+  return firstString(value).trim().toLowerCase();
+}
+
+export function shopifyOrderContextMatchesOrderIdentity(
+  liveOrder: unknown,
+  order: {
+    sourceOrderId?: string | null;
+    sourceOrderNumber?: string | null;
+  },
+): boolean {
+  const live = asRecord(liveOrder);
+  const expectedNumber = normalizeShopifyOrderNumber(order.sourceOrderNumber);
+  if (!expectedNumber) return true;
+  const actualNumber = normalizeShopifyOrderNumber(live.name ?? live.order_number ?? live.orderNumber);
+  return !actualNumber || actualNumber === expectedNumber;
+}
+
+async function fallbackShopifyStoreAccountByLiveOrderProbe(
+  order: {
+    sourceOrderId?: string | null;
+    sourceOrderNumber?: string | null;
+  },
+  excludedIds: number[],
+): Promise<ShopifyStoreAccountForShipping | null> {
+  const sourceOrderId = firstString(order.sourceOrderId).replace(/^shopify-/i, '');
+  if (!sourceOrderId) return null;
+
+  const matches: ShopifyStoreAccountForShipping[] = [];
+  for (const row of await queryActiveShopifyStoreAccountRows(excludedIds)) {
+    const account = shopifyStoreAccountFromRow(row);
+    if (!account) continue;
+    try {
+      const liveOrder = await fetchShopifyOrderShippingContext(account.credentials, sourceOrderId);
+      if (shopifyOrderContextMatchesOrderIdentity(liveOrder, order)) {
+        matches.push(account);
+      }
+    } catch {
+      // Stale reconnect recovery: a candidate account that cannot read this
+      // Shopify order is not the owner. Keep probing active Shopify accounts.
+    }
+  }
+
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1) {
+    throw new ShopifyRatesError(
+      'Multiple active Shopify store accounts can read this order. Select the correct Shopify store account and resync the order before browsing Shopify Rates.',
+      'SHOPIFY_ACCOUNT_AMBIGUOUS',
+      409,
+      { accountIds: matches.map((match) => match.id) },
+    );
+  }
+  return null;
+}
+
 export async function loadShopifyStoreAccountForOrder(order: {
   sourceAccountId: string | null;
   storeId: number | null;
-}): Promise<{ id: number; label: string | null; credentials: Record<string, unknown> }> {
-  const sourceAccountId = Number(order.sourceAccountId);
-  const shopifyOffset = syntheticStoreIdForCredentialAccount('shopify', 0);
-  const accountId = Number.isFinite(sourceAccountId) && sourceAccountId > 0
-    ? Math.trunc(sourceAccountId)
-    : order.storeId != null && order.storeId > shopifyOffset
-      ? Math.trunc(order.storeId - shopifyOffset)
-      : NaN;
-  if (!Number.isFinite(accountId) || accountId <= 0) {
+  sourceOrderId?: string | null;
+  sourceOrderNumber?: string | null;
+}): Promise<ShopifyStoreAccountForShipping> {
+  const accountIds = shopifyStoreAccountIdCandidatesForOrder(order);
+  for (const row of await queryShopifyStoreAccountRowsByIds(accountIds)) {
+    const account = shopifyStoreAccountFromRow(row);
+    if (account) return account;
+  }
+
+  const fallback = await fallbackShopifyStoreAccountByLiveOrderProbe(order, accountIds);
+  if (fallback) return fallback;
+
+  if (!accountIds.length) {
     throw new ShopifyRatesError(
       'Shopify store account could not be resolved for this order. Resync the order before browsing Shopify Rates.',
       'SHOPIFY_ACCOUNT_REQUIRED',
       400,
     );
   }
-  const rows = await db.execute(sql<{
-    id: number;
-    provider: string;
-    label: string | null;
-    credentials: Record<string, unknown> | null;
-    active: boolean | null;
-  }>`SELECT id, provider, label, credentials, active FROM store_accounts WHERE id = ${accountId} LIMIT 1`);
-  const list = Array.isArray(rows) ? rows : (rows as { rows?: unknown[] }).rows ?? [];
-  const row = asRecord(list[0]);
-  if (!row.id || normalizeProviderText(row.provider) !== 'shopify' || row.active === false) {
-    throw new ShopifyRatesError(
-      'Active Shopify store account not found for this order.',
-      'SHOPIFY_ACCOUNT_NOT_FOUND',
-      404,
-    );
-  }
-  return {
-    id: Number(row.id),
-    label: firstString(row.label) || null,
-    credentials: asRecord(row.credentials),
-  };
+  throw new ShopifyRatesError(
+    'Active Shopify store account not found for this order. Reconnect the Shopify store, then pull or resync Shopify orders so PrepShip can refresh this order source.',
+    'SHOPIFY_ACCOUNT_NOT_FOUND',
+    404,
+    { accountIds },
+  );
 }
 
 function mergeOrderRaw(base: unknown, live: unknown): UnknownRecord {
@@ -586,7 +734,12 @@ export async function getShopifyRatesForOrder(
     throw new ShopifyRatesError('Shopify Rates requires package dimensions.', 'SHOPIFY_DIMS_REQUIRED', 400);
   }
 
-  const account = await loadShopifyStoreAccountForOrder(order);
+  const account = await loadShopifyStoreAccountForOrder({
+    sourceAccountId: order.sourceAccountId,
+    storeId: order.storeId,
+    sourceOrderId: order.sourceOrderId ?? order.externalOrderId,
+    sourceOrderNumber: order.sourceOrderNumber,
+  });
   const sourceOrderId = firstString(order.sourceOrderId, order.externalOrderId?.replace(/^shopify-/i, ''));
   const liveRaw = await fetchShopifyOrderShippingContext(account.credentials, sourceOrderId);
   const rawOrder = mergeOrderRaw(order.rawSourcePayload ?? order.raw, liveRaw);

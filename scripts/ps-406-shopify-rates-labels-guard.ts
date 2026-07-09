@@ -25,6 +25,7 @@ await check('Shopify Rates backend owner exists separately from normal Best Rate
 
 const ShopifyRates = await import('../src/services/shopify-rates');
 const ShopifyConnector = await import('../src/connectors/store/shopify');
+const CredentialAccounts = await import('../src/lib/credential-accounts');
 
 await check('Shopify draft-order delivery-options query matches Shopify schema', () => {
   const query = ShopifyConnector.__shopifyConnectorTestOnly.SHOPIFY_DRAFT_ORDER_DELIVERY_OPTIONS_QUERY;
@@ -93,6 +94,55 @@ await check('Shopify draft-order rates normalize source/code into carrier/servic
   assert.equal(normalized[0]?.amount, 7.84);
   assert.equal(normalized[0]?.currency, 'USD');
   assert.match(normalized[0]?.selectedRateKey ?? '', /^shopify:/);
+});
+
+await check('Shopify account resolver accepts stale connector ids and synthetic store ids', () => {
+  assert.deepEqual(
+    ShopifyRates.shopifyStoreAccountIdCandidatesForOrder({
+      sourceAccountId: 'store-account-42',
+      storeId: null,
+    }),
+    [42],
+  );
+  assert.deepEqual(
+    ShopifyRates.shopifyStoreAccountIdCandidatesForOrder({
+      sourceAccountId: '42',
+      storeId: 9_200_077,
+    }),
+    [42, 77],
+  );
+});
+
+await check('Shopify live-order fallback verifies the Shopify order identity', () => {
+  assert.equal(
+    ShopifyRates.shopifyOrderContextMatchesOrderIdentity(
+      { id: 61019990001, name: '#1007' },
+      { sourceOrderId: '61019990001', sourceOrderNumber: '#1007' },
+    ),
+    true,
+  );
+  assert.equal(
+    ShopifyRates.shopifyOrderContextMatchesOrderIdentity(
+      { id: 61019990001, name: '#1008' },
+      { sourceOrderId: '61019990001', sourceOrderNumber: '#1007' },
+    ),
+    false,
+  );
+});
+
+await check('Shopify reconnect uses shop domain as store-account identity', () => {
+  const normalized = CredentialAccounts.normalizeCredentialAccountBody({
+    provider: 'shopify',
+    label: 'KF Goodies',
+    accountIdentifier: 'dev-app-client-id-that-can-change',
+    credentials: {
+      shopDomain: 'https://kf-goodies-2.myshopify.com/admin',
+      clientId: 'dev-app-client-id-that-can-change',
+      clientSecret: 'shpss_secret',
+    },
+    source: 'admin',
+  });
+  assert.equal(normalized.accountIdentifier, 'kf-goodies-2.myshopify.com');
 });
 
 await check('Shopify selected-rate proof refuses stale or missing selected keys', () => {

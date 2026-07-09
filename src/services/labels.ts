@@ -1374,9 +1374,13 @@ export async function pollShopifyShippingLabelPurchase(
   }
   await assertOrderSafeToShip(order, { entryPoint: 'pollShopifyShippingLabelPurchase' });
 
+  // Per user override unlock shipped data on 2026-07-09: reuse the Shopify
+  // stale-account resolver here while preserving the shipped/cancelled guards above.
   const account = await loadShopifyStoreAccountForOrder({
     sourceAccountId: order.sourceAccountId,
     storeId: order.storeId,
+    sourceOrderId: order.sourceOrderId ?? order.externalOrderId,
+    sourceOrderNumber: order.orderNumber,
   });
   let result: ShopifyShippingLabelPurchaseResult;
   try {
@@ -1558,9 +1562,13 @@ async function createShopifyShippingLabelForOrderImpl(
     width,
     height,
   });
+  // Per user override unlock shipped data on 2026-07-09: label purchase uses
+  // the same proved Shopify account as rate browsing; shipped/cancelled guards remain above.
   const account = await loadShopifyStoreAccountForOrder({
     sourceAccountId: order.sourceAccountId,
     storeId: order.storeId,
+    sourceOrderId: order.sourceOrderId ?? order.externalOrderId,
+    sourceOrderNumber: order.orderNumber,
   });
   const providerAccountId = DIRECT_STORE_PROVIDER_ID_OFFSET + account.id;
   const purchaseInput = buildShopifyShippingPurchaseInputFromRate({

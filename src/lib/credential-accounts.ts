@@ -1,3 +1,5 @@
+import { normalizeShopifyShopDomain } from '../connectors/store/shopify';
+
 export type CredentialAccountSource = 'admin' | 'portal';
 
 export const CREDENTIAL_ACCOUNT_SOURCES = ['admin', 'portal'] as const;
@@ -73,12 +75,16 @@ export function normalizeCredentialAccountBody(
     body?.credentials && typeof body.credentials === 'object' && !Array.isArray(body.credentials)
       ? (body.credentials as Record<string, unknown>)
       : {};
+  const provider = String(body?.provider ?? '').toLowerCase();
+  const rawAccountIdentifier =
+    body?.accountIdentifier != null ? String(body.accountIdentifier).slice(0, 200) : null;
+  const shopifyAccountIdentifier =
+    provider === 'shopify' ? normalizeShopifyShopDomain(credentials.shopDomain) : '';
 
   return {
-    provider: String(body?.provider ?? '').toLowerCase(),
+    provider,
     label: body?.label != null ? String(body.label).slice(0, 200) : null,
-    accountIdentifier:
-      body?.accountIdentifier != null ? String(body.accountIdentifier).slice(0, 200) : null,
+    accountIdentifier: shopifyAccountIdentifier || rawAccountIdentifier,
     credentials,
     source: ALLOWED_ACCOUNT_SOURCES.has(rawSource)
       ? (rawSource as CredentialAccountSource)
