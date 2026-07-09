@@ -24,6 +24,7 @@ function assert(condition, message) {
 const helper = read('src/lib/credential-accounts.ts');
 const service = read('src/services/credential-accounts.ts');
 const schemaFallback = read('src/services/credential-account-schema.ts');
+const settings = read('web/src/components/Settings/CarrierIntegrationsCard.tsx');
 const carrierMigration = read('drizzle/0015_amusing_namorita.sql');
 const credentialMigration = read('drizzle/0027_credential_accounts_source_of_truth.sql');
 const credentialRlsMigration = read('drizzle/0031_credential_accounts_rls.sql');
@@ -134,6 +135,24 @@ assert(
     handlers[1][1].includes("if (req.method === 'PATCH')") &&
     handlers[2][1].includes("if (req.method === 'PATCH')"),
   'carrier/store handlers share PATCH source/label update support',
+);
+
+for (const [file, source] of handlers) {
+  assert(
+    source.includes('patch.hasCredentials') &&
+      source.includes('patchCredentialAccount(sql, TABLE, id, patch)') &&
+      source.includes('credentials'),
+    `${file} supports shared credential PATCH/reconnect updates`,
+  );
+}
+
+assert(
+  settings.includes('function endpointForProvider(provider: string): string') &&
+    settings.includes('async function reconnectIntegrationCredentials') &&
+    settings.includes('const endpoint = endpointForProvider(provider)') &&
+    settings.includes('`${endpoint}?id=${rowId}`') &&
+    settings.includes('await reconnectIntegrationCredentials(d.accountId, d.provider, credentials)'),
+  'Settings reconnect chooses store-accounts for stores and carrier-accounts for carriers',
 );
 
 assert(

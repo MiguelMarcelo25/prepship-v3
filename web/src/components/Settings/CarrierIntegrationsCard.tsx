@@ -905,17 +905,17 @@ async function renameCarrierIntegration(
   }
 }
 
-// PATCH /carrier-accounts?id=N { credentials: {...} } — re-enter auth
-// credentials (e.g. after a carrier password change) and JSONB-merge them into
-// the stored credentials. Only non-empty fields are sent, so unchanged secrets
-// (apiKey/email) are preserved when, say, only the password changed. Carriers
-// only — store_accounts uses a separate table/handler.
-async function reconnectCarrierCredentials(
+// PATCH /{store,carrier}-accounts?id=N { credentials: {...} } — re-enter auth
+// credentials and JSONB-merge them into the stored account row. The backend
+// credential-account service owns the merge; the UI only chooses the table route.
+async function reconnectIntegrationCredentials(
   rowId: number,
+  provider: string,
   credentials: Record<string, string>,
 ): Promise<void> {
+  const endpoint = endpointForProvider(provider)
   await api.patch<{ data: Record<string, unknown> | null }>(
-    `/carrier-accounts?id=${rowId}`,
+    `${endpoint}?id=${rowId}`,
     { credentials },
   )
 }
@@ -1583,7 +1583,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setReconnectSaving(true)
     setReconnectError(null)
     try {
-      await reconnectCarrierCredentials(d.accountId, credentials)
+      await reconnectIntegrationCredentials(d.accountId, d.provider, credentials)
       // Auto-verify with the freshly-saved credentials.
       setTesting((prev) => ({ ...prev, [d.id]: true }))
       const result = await verifyConnection(d.accountId, d.provider)
