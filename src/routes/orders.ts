@@ -308,6 +308,8 @@ async function assertOrderEditable(
     .select({
       id: orders.id,
       status: orders.orderStatus,
+      canonicalStatus: orders.canonicalStatus,
+      externallyShipped: orders.externallyShipped,
       clientId: orders.clientId,
       storeId: orders.storeId,
     })
@@ -328,8 +330,18 @@ async function assertOrderEditable(
   if (!isResourceInScope(editScope, { clientId: row.clientId, storeId: row.storeId })) {
     return { ok: false, response: c.json({ error: 'Order not found' }, 404) };
   }
-  const status = String(row.status ?? '').toLowerCase();
-  if (!LOCKED_STATUSES.has(status)) {
+  // Per user override unlock shipped data on 2026-07-09: PS-411 moves the edit lock
+  // from raw order_status-only checks to the canonical effective lifecycle owner, so
+  // upstream-cancelled and externally-shipped awaiting rows stay immutable too.
+  const rawStatus = String(row.status ?? '').toLowerCase();
+  const lifecycle = resolveOrderLifecycleStatus({
+    orderStatus: row.status,
+    canonicalStatus: row.canonicalStatus,
+    externallyShipped: row.externallyShipped === true,
+  });
+  const status = lifecycle.orderLifecycleStatus;
+  const rawStatusLocked = LOCKED_STATUSES.has(rawStatus);
+  if (!lifecycle.isTerminal) {
     return { ok: true };
   }
   // Optional admin override: ?force=1 + admin email lets the operation
@@ -351,7 +363,14 @@ async function assertOrderEditable(
         resourceType: 'order',
         resourceId: orderId,
         action: 'force_override_throttled',
-        details: { priorStatus: status, route: c.req.path, retryAfterMs: rl.retryAfterMs },
+        details: {
+          priorStatus: rawStatus,
+          lifecycleStatus: status,
+          effectiveOrderStatus: lifecycle.effectiveOrderStatus,
+          rawStatusLocked,
+          route: c.req.path,
+          retryAfterMs: rl.retryAfterMs,
+        },
       });
       return {
         ok: false,
@@ -359,6 +378,8 @@ async function assertOrderEditable(
           {
             error: 'Force-override rate limit exceeded — too many shipped/cancelled overrides this hour.',
             status,
+            effectiveOrderStatus: lifecycle.effectiveOrderStatus,
+            lifecycleStatus: status,
             orderId,
             locked: true,
             retryAfterMs: rl.retryAfterMs,
@@ -380,7 +401,10 @@ async function assertOrderEditable(
       resourceId: orderId,
       action: 'force_override',
       details: {
-        priorStatus: status,
+        priorStatus: rawStatus,
+        lifecycleStatus: status,
+        effectiveOrderStatus: lifecycle.effectiveOrderStatus,
+        rawStatusLocked,
         route: c.req.path,
         reason: c.req.query('reason') ?? null,
         remaining: rl.remaining,
@@ -394,9 +418,12 @@ async function assertOrderEditable(
       {
         error: `Cannot modify a ${status} order — historical records are locked.`,
         status,
+        effectiveOrderStatus: lifecycle.effectiveOrderStatus,
+        lifecycleStatus: status,
+        lifecycleReason: lifecycle.orderLifecycleReason,
         orderId,
         locked: true,
-        hint: 'Shipped and cancelled orders are immutable. Admins can pass ?force=1 to override (logged).',
+        hint: `Shipped and cancelled orders are immutable. ${lifecycle.orderLifecycleLabel} effective-terminal orders are locked too. Admins can pass ?force=1 to override (logged).`,
       },
       403,
     ),
@@ -4775,6 +4802,41 @@ app.post(
     // returns undefined (no-op); for any restricted caller it prevents cross-tenant
     // assignment by bare orderIds. Mirrors the inventory bulk-update-dims scope pattern.
     const bulkAssignScope = ordersScopeFromContext(c);
+    const scopedRows = await db
+      .select({
+        id: orders.id,
+        status: orders.orderStatus,
+        canonicalStatus: orders.canonicalStatus,
+        externallyShipped: orders.externallyShipped,
+      })
+      .from(orders)
+      .where(and(orderScopePredicate(bulkAssignScope), inArray(orders.id, orderIds)));
+    const terminalRows = scopedRows
+      .map((row) => ({
+        id: row.id,
+        lifecycle: resolveOrderLifecycleStatus({
+          orderStatus: row.status,
+          canonicalStatus: row.canonicalStatus,
+          externallyShipped: row.externallyShipped === true,
+        }),
+      }))
+      .filter((row) => row.lifecycle.isTerminal);
+    if (terminalRows.length) {
+      return c.json(
+        {
+          error: 'Cannot assign orders whose order lifecycle is terminal.',
+          requested: orderIds.length,
+          blocked: terminalRows.map((row) => ({
+            id: row.id,
+            lifecycleStatus: row.lifecycle.orderLifecycleStatus,
+            effectiveOrderStatus: row.lifecycle.effectiveOrderStatus,
+            reason: row.lifecycle.orderLifecycleReason,
+          })),
+        },
+        409,
+      );
+    }
+
     const updated = await db
       .update(orders)
       .set({
@@ -4783,7 +4845,13 @@ app.post(
         assignedAt: userId ? new Date() : null,
         updatedAt: new Date(),
       })
-      .where(and(orderScopePredicate(bulkAssignScope), inArray(orders.id, orderIds)))
+      .where(
+        and(
+          orderScopePredicate(bulkAssignScope),
+          inArray(orders.id, orderIds),
+          sql`${orderLifecycleEffectiveStatusSql()} not in ('shipped', 'cancelled')`,
+        ),
+      )
       .returning({ id: orders.id });
 
     return c.json({

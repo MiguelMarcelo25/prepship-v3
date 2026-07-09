@@ -19,6 +19,7 @@ import {
   type PackageFactsRung,
 } from './package-facts-policy';
 import { getOrderDimsDefaultsForOrder } from './order-dims-defaults';
+import { orderLifecycleEffectiveStatusSql } from './order-lifecycle-status';
 
 // PS-037 — Service for per-client SKU+qty-combination package defaults.
 //
@@ -92,6 +93,10 @@ function selectedPackageIdFromComboInput(input: SaveComboDefaultInput): string |
   return packageCode || null;
 }
 
+function mutableAwaitingOrderLifecyclePredicate(): SQL {
+  return sql`${orderLifecycleEffectiveStatusSql()} = 'awaiting_shipment'`;
+}
+
 // PS-121 — numeric equality tolerant of null + real-column string/number drift.
 function numEq(a: unknown, b: unknown): boolean {
   const na = a == null ? null : Number(a);
@@ -109,7 +114,8 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
 ): Promise<{ appliedMutableOrderCount: number; affectedOrderIds: number[] }> {
   // Pull each candidate's ship-to + base weight + raw (for the PS-120 rate-job fingerprint) and
   // its CURRENT override dims/weight/package + whether it has a saved best rate (to detect change).
-  // The orderStatus='awaiting_shipment' filter is the lockdown gate — shipped/cancelled excluded.
+  // Per user override unlock shipped data on 2026-07-09: PS-411 gates these writes
+  // by effective lifecycle awaiting state, so upstream-cancelled/external-shipped rows stay locked.
   const candidates = await db
     .select({
       id: orders.id,
@@ -131,7 +137,7 @@ async function applyComboPackageDefaultToMatchingMutableOrders(
     .where(
       and(
         eq(orders.clientId, clientId),
-        eq(orders.orderStatus, 'awaiting_shipment'),
+        mutableAwaitingOrderLifecyclePredicate(),
       ),
     );
 
@@ -399,8 +405,8 @@ async function materializePackageFactsForImportedOrdersWhere(
     .where(
       and(
         importedOrdersPredicate,
-        // Lockdown gate: mutable awaiting rows only.
-        eq(orders.orderStatus, 'awaiting_shipment'),
+        // Lockdown gate: mutable effective-awaiting rows only.
+        mutableAwaitingOrderLifecyclePredicate(),
       ),
     );
 
