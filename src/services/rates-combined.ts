@@ -37,11 +37,15 @@ export type CombinableRate = Record<string, any> & {
 
 export type CombinableSsDiagnostic = {
   carrierId: string;
+  accountId?: string | null;
   carrierCode?: string | null;
   nickname?: string | null;
   status: string;
   rateCount?: number;
   durationMs?: number;
+  limiterWaitMs?: number;
+  attempts?: number;
+  retryable?: boolean;
   error?: string;
   // PS-271 (Layer 4): a direct-carrier diagnostic for an accepted-thin partial (Shipp Layer 1).
   // Additive; absent today and for ShipStation / non-thin direct passes.
@@ -297,17 +301,24 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
             : missingStatus;
     return {
       carrierId: id,
+      accountId: diagnostic?.accountId ?? id,
+      source: 'shipstation',
       carrierName: input.accountNamesByCarrierId.get(id) ?? diagnostic?.nickname ?? id,
       carrierCode: diagnostic?.carrierCode,
       nickname: diagnostic?.nickname,
       status,
       rateCount: hasRates ? combinedRates.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
       durationMs: diagnostic?.durationMs,
+      limiterWaitMs: diagnostic?.limiterWaitMs,
+      attempts: diagnostic?.attempts,
+      retryable: diagnostic?.retryable,
       error: diagnostic?.error,
     };
   });
   const directCarrierStatuses: BestRateWorkflowCarrierStatus[] = input.directDiagnostics.map((diagnostic) => ({
     carrierId: diagnostic.carrierId,
+    accountId: diagnostic.accountId,
+    source: 'direct',
     carrierName: diagnostic.nickname ?? diagnostic.carrierId,
     carrierCode: diagnostic.carrierCode,
     nickname: diagnostic.nickname,
@@ -316,6 +327,8 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
         ? 'live'
         : diagnostic.status === 'failed'
           ? 'error'
+          : diagnostic.status === 'skipped'
+            ? 'blocked'
           : diagnostic.status === 'empty'
             ? 'unavailable'
             : diagnostic.status === 'cached'
@@ -328,6 +341,9 @@ export function combineCarrierUniverses(input: CombineCarrierUniversesInput): Co
                 : 'loading',
     rateCount: diagnostic.rateCount ?? 0,
     durationMs: diagnostic.durationMs,
+    limiterWaitMs: diagnostic.limiterWaitMs,
+    attempts: diagnostic.attempts,
+    retryable: diagnostic.retryable,
     error: diagnostic.error,
     // PS-271 (Layer 4): carry the accepted-thin signal onto the carrier status so completeness
     // (statusesComplete / isBestRateComplete) and the FE can render thin/unproven. Additive.

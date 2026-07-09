@@ -764,7 +764,7 @@ async function runBackfill(
             includeVisibleDirectCarriers: true,
             orderId: row.id,
             orderNumber: row.orderNumber ?? undefined,
-          }),
+          }, { priority: 'background' }),
           perOrderTimeoutMs,
           `getDirectCarrierRates(order=${row.id})`
         ).catch((err) => ({

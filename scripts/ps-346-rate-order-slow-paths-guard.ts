@@ -207,7 +207,7 @@ check(
     /phase: 'partial'/.test(workflowService) &&
     /phase: 'complete'/.test(workflowService) &&
     /phase: 'error'/.test(workflowService) &&
-    /void runRateBrowseWorkflowJob/.test(workflowService),
+    /scheduleDetachedRateBrowseJob/.test(workflowService),
 );
 
 check(

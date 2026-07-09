@@ -153,24 +153,26 @@ export function extractRateBrowseProviderStatuses(snapshot: RateBrowseWorkflowSn
       const carrierId = text(status.carrierId);
       if (!carrierId) return null;
       const timing = timingByCarrier.get(carrierId) ?? {};
-      const source = text(timing.source) ?? 'unknown';
-      const providerKey = `${source}:${carrierId}`;
+      const source = text(status.source) ?? text(timing.source) ?? 'unknown';
+      const accountId = text(status.accountId) ?? text(timing.accountId);
+      const providerKey = `${source}:${accountId ?? carrierId}`;
       const durationMs = num(status.durationMs) ?? num(timing.durationMs);
       const limiterWaitMs = num(status.limiterWaitMs) ?? num(timing.limiterWaitMs);
       return {
         providerKey,
         carrierId,
-        accountId: text(status.accountId) ?? text(timing.accountId),
+        accountId,
         carrierCode: text(status.carrierCode) ?? text(timing.carrierCode),
         carrierName: text(status.carrierName) ?? text(status.nickname) ?? text(timing.carrierName),
         source,
-        status: text(status.status) ?? 'unknown',
+        status: text(timing.outcome) ?? text(timing.status) ?? text(status.status) ?? 'unknown',
         rateCount: Math.max(0, Math.round(num(status.rateCount) ?? num(timing.rateCount) ?? 0)),
         durationMs: durationMs == null ? null : Math.max(0, Math.round(durationMs)),
         limiterWaitMs: limiterWaitMs == null ? null : Math.max(0, Math.round(limiterWaitMs)),
         diagnostics: {
           ...timing,
           ...status,
+          displayStatus: text(status.status),
         },
       };
     })

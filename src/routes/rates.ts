@@ -223,7 +223,7 @@ app.post('/', zValidator('json', rateBody), async (c) => {
   const { forceRefresh, signature, confirmation, ...input } = body;
   const result = await getRates(
     { ...input, confirmation: confirmation ?? signature ?? null },
-    { forceRefresh }
+    { forceRefresh, priority: 'interactive' }
   );
   return c.json(publicRatesResult(result, canViewFinancials));
 });

@@ -14,7 +14,10 @@ import {
   type RateInput,
 } from './rates';
 import { combineCarrierUniverses, rateTotal } from './rates-combined';
-import { buildRateBrowseTimingDiagnostics } from './rate-browser-timing-diagnostics';
+import {
+  buildRateBrowseFailureDiagnostic,
+  buildRateBrowseTimingDiagnostics,
+} from './rate-browser-timing-diagnostics';
 import { stampHouseTuple } from './shipping-workflow/house-tuple-stamp';
 import { redactRateBrowserMoney } from './rate-browser-money-redaction';
 import {
@@ -182,6 +185,33 @@ export async function produceRateBrowsePayload({
   } as RateInput & Record<string, any>;
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const resolvedForBrowse = await resolveRateInput(browseRateInput);
+  let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
+  let shipStationBlocked = false;
+  if (body.orderId && orderForBrowse) {
+    try {
+      const mode = await getCarrierEligibilityMode();
+      const eligibility = evaluateOrderCarrierEligibility({
+        carrierFamily: 'shipstation',
+        order: orderForBrowse,
+        mode,
+      });
+      carrierEligibility = {
+        mode,
+        wouldBlock: eligibility.wouldBlock,
+        ...(eligibility.ruleId ? { ruleId: eligibility.ruleId } : {}),
+      };
+      if (eligibility.wouldBlock) {
+        if (!eligibility.allowed) shipStationBlocked = true;
+        else {
+          console.warn(
+            `[carrier-eligibility] AUDIT would-block browse: order=${body.orderId} source=${eligibility.orderSource} mode=${mode} rule=${eligibility.ruleId}`,
+          );
+        }
+      }
+    } catch {
+      // Best-effort read path: the purchase boundary remains authoritative.
+    }
+  }
   const browseSingleFlightKey = buildRateBrowseSingleFlightKey({
     rateCacheKey: rateCacheKey(resolvedForBrowse),
     forceRefresh: Boolean(forceRefresh || forceLive),
@@ -213,10 +243,26 @@ export async function produceRateBrowsePayload({
       const [result, directRates] = await Promise.all([
         (async () => {
           const startedAt = Date.now();
-          const r = await getRates(browseRateInput, {
-            forceRefresh: forceRefresh || forceLive,
-            cachedOnly: isCachedOnlyLookup,
-          });
+          const r = shipStationBlocked
+            ? {
+                rates: [],
+                bestRate: null,
+                cached: false,
+                cacheKey: rateCacheKey(resolvedForBrowse),
+                fetchedAt: new Date().toISOString(),
+                carrierDiagnostics: [],
+                effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
+                effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
+                effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
+                residential: resolvedForBrowse.residential === true,
+                residentialClassification: resolvedForBrowse.residentialClassification ?? null,
+                residentialSource: resolvedForBrowse.residentialSource ?? null,
+              }
+            : await getRates(browseRateInput, {
+                forceRefresh: forceRefresh || forceLive,
+                cachedOnly: isCachedOnlyLookup,
+                priority: 'interactive',
+              });
           shipStationDurationMs = Date.now() - startedAt;
           return r;
         })(),
@@ -231,7 +277,7 @@ export async function produceRateBrowsePayload({
             effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
             effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
             effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
-          }, { cachedOnly: isCachedOnlyLookup });
+          }, { cachedOnly: isCachedOnlyLookup, priority: 'interactive' });
           directCarrierDurationMs = Date.now() - startedAt;
           return r;
         })(),
@@ -240,24 +286,6 @@ export async function produceRateBrowsePayload({
     },
   );
   const limiterAfter = getRateEngineLimiterSnapshot();
-  let carrierEligibility: { mode: string; wouldBlock: boolean; ruleId?: string } | null = null;
-  let shipStationBlocked = false;
-  if (body.orderId) {
-    try {
-      const ord = orderForBrowse;
-      if (ord) {
-        const mode = await getCarrierEligibilityMode();
-        const elig = evaluateOrderCarrierEligibility({ carrierFamily: 'shipstation', order: ord, mode });
-        carrierEligibility = { mode, wouldBlock: elig.wouldBlock, ...(elig.ruleId ? { ruleId: elig.ruleId } : {}) };
-        if (elig.wouldBlock) {
-          if (!elig.allowed) shipStationBlocked = true;
-          else console.warn(`[carrier-eligibility] AUDIT would-block browse: order=${body.orderId} source=${elig.orderSource} mode=${mode} rule=${elig.ruleId}`);
-        }
-      }
-    } catch {
-      // Best-effort: allow. The purchase boundary remains authoritative.
-    }
-  }
   const requestedSet = requestedCarrierIds?.length ? new Set(requestedCarrierIds) : null;
   const filtered = shipStationBlocked
     ? []
@@ -430,6 +458,7 @@ export async function produceRateBrowsePayload({
           rawManualEstimate: true,
           forceRefresh: forceRefresh || forceLive,
           cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
+          priority: 'interactive',
         },
       );
       const manualFiltered = requestedSet
@@ -524,6 +553,10 @@ export async function produceRateBrowsePayload({
       limiterAfter,
     },
   });
+  const rateBrowseFailure = buildRateBrowseFailureDiagnostic({
+    ratesCount: responseRates.length,
+    carriers: rateBrowseTiming.carriers,
+  });
   return {
     ...result,
     ...(strictRecalculation ? { strictRecalculation } : {}),
@@ -546,6 +579,7 @@ export async function produceRateBrowsePayload({
     carrierStatuses: combinedCarrierStatuses,
     carrierDiagnostics: combinedCarrierDiagnostics,
     rateBrowseTiming,
+    rateBrowseFailure,
     bestRateWorkflow: buildBestRateWorkflowDto({
       currentRequestFingerprint: combinedRequestKey,
       backendRequestKey: combinedRequestKey,

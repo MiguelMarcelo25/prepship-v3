@@ -137,7 +137,7 @@ check(
   /buildRateBrowseWorkflowRequestKey/.test(workflowService) &&
     /priority\?: 'manual' \| 'preflight' \| 'backfill'/.test(workflowService) &&
     /reserveRateBrowseWorkflowSnapshot/.test(workflowService) &&
-    /if \(reservation\.created\) \{[\s\S]{0,180}void runRateBrowseWorkflowJob/.test(workflowService) &&
+    /if \(reservation\.created\) \{[\s\S]{0,300}scheduleDetachedRateBrowseJob/.test(workflowService) &&
     /return reservation\.snapshot/.test(workflowService),
 );
 

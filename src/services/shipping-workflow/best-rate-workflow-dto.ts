@@ -37,12 +37,17 @@ export type BestRateWorkflowCarrierStatusValue =
 
 export type BestRateWorkflowCarrierStatus = {
   carrierId: string;
+  accountId?: string | null;
+  source?: 'shipstation' | 'direct' | 'unknown';
   carrierName?: string | null;
   carrierCode?: string | null;
   nickname?: string | null;
   status: BestRateWorkflowCarrierStatusValue;
   rateCount: number;
   durationMs?: number;
+  limiterWaitMs?: number;
+  attempts?: number;
+  retryable?: boolean;
   error?: string;
   // PS-271 (Layer 4): this carrier answered, but with a KNOWN-THIN set — Shipp's observed-set retry
   // (Layer 1) accepted a partial at the cap (a non-empty 200 still missing an observed-expected

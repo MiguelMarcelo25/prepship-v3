@@ -270,6 +270,7 @@
     "test:ps-404-international-order-indicator": "tsx scripts/ps-404-international-order-indicator-guard.ts",
     "test:ps-403-print-queue-worker-recovery": "tsx scripts/ps-403-print-queue-worker-recovery-guard.ts",
     "test:ps-403-print-queue-pdf-chunks": "tsx scripts/ps-403-print-queue-pdf-chunks-guard.ts",
+    "test:ps-403-rate-browser-provider-timeouts": "tsx scripts/ps-403-rate-browser-provider-timeouts-guard.ts",
     "test:ps-213-top-combos": "tsx scripts/ps-213-top-combos-guard.ts",
     "test:ps-210-global-orders-search": "tsx scripts/ps-210-global-orders-search-guard.ts",
     "test:ps-192-shipped-external-provider": "tsx scripts/ps-192-shipped-external-provider-guard.ts",

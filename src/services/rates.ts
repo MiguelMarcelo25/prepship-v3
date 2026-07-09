@@ -52,6 +52,7 @@ import {
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
 import { expectedCarrierAbsentFromThin } from '../connectors/carrier/observed-missing-carrier-names';
 import {
+  DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
   withCarrierQuoteTimeout,
   isPricedRate,
   rateCostTotal as combinedRateCostTotal,
@@ -64,6 +65,8 @@ import {
   RATE_ESTIMATE_MAX_RETRIES,
   RATE_ESTIMATE_RETRY_BASE_MS,
 } from './carrier-estimate-retry';
+import { resolveRateBrowseProviderExecutionPolicy } from './rate-browse-execution-policy';
+import { sanitizeRateProviderError } from './rate-browser-timing-diagnostics';
 import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
@@ -900,15 +903,26 @@ type EstimateRate = {
 // PS-206: 'uncached' = the carrier was deliberately NOT quoted in a
 // cached-only lookup and has no cached coverage — terminal for the lookup,
 // live check required. Never 'loading' (nothing is in flight).
-export type CarrierRateDiagnosticStatus = 'ok' | 'empty' | 'failed' | 'cached' | 'loading' | 'uncached';
+export type CarrierRateDiagnosticStatus =
+  | 'ok'
+  | 'empty'
+  | 'failed'
+  | 'cached'
+  | 'loading'
+  | 'uncached'
+  | 'skipped';
 
 export type CarrierRateDiagnostic = {
   carrierId: string;
+  accountId?: string;
   carrierCode?: string;
   nickname?: string;
   status: CarrierRateDiagnosticStatus;
   rateCount: number;
   durationMs?: number;
+  limiterWaitMs?: number;
+  attempts?: number;
+  retryable?: boolean;
   error?: string;
   // PS-271 (Layer 4): true when this direct-carrier pass was an accepted-thin partial (Shipp Layer 1
   // returned a non-empty-but-thin set). Additive + display-only; absent today and for every non-thin
@@ -1122,8 +1136,7 @@ type CarrierEstimateResult = {
 };
 
 function publicCarrierRateError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err ?? 'Carrier rate request failed');
-  return raw.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]').slice(0, 240);
+  return sanitizeRateProviderError(err);
 }
 
 // v2-parity: one /v2/rates/estimate call per carrier with v2's flat body.
@@ -1133,6 +1146,7 @@ async function fetchEstimateForCarrier(
   carrier: CarrierInfo,
   input: RateInput,
   shipFrom: Address,
+  timeoutMs: number,
 ): Promise<CarrierEstimateResult> {
   const startedAt = Date.now();
   const needsCity = carrier.carrier_code === 'stamps_com';
@@ -1175,7 +1189,7 @@ async function fetchEstimateForCarrier(
         dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
       }),
       `shipstation:${carrier.carrier_code}`,
-      SHIPSTATION_RATE_ESTIMATE_TIMEOUT_MS,
+      timeoutMs,
     );
     const rates = payload.rates as EstimateRate[];
     // Ensure carrier metadata is on every row (ShipStation sometimes omits)
@@ -1190,6 +1204,7 @@ async function fetchEstimateForCarrier(
       rates,
       diagnostic: {
         carrierId: carrier.carrier_id,
+        accountId: carrier.carrier_id,
         carrierCode: override?.carrier_code ?? carrier.carrier_code,
         nickname: override?.nickname ?? carrier.nickname,
         status: rates.length ? 'ok' : 'empty',
@@ -1208,6 +1223,7 @@ async function fetchEstimateForCarrier(
       rates: [],
       diagnostic: {
         carrierId: carrier.carrier_id,
+        accountId: carrier.carrier_id,
         carrierCode: carrier.carrier_code,
         nickname: carrier.nickname,
         status: 'failed',
@@ -1215,6 +1231,7 @@ async function fetchEstimateForCarrier(
         durationMs: Date.now() - startedAt,
         error: message,
         transient: isTransientCarrierRateError(err),
+        retryable: isTransientCarrierRateError(err),
       },
     };
   }
@@ -1231,11 +1248,35 @@ async function fetchEstimateForCarrierWithRetry(
   shipFrom: Address,
   priority: RateFetchPriority,
 ): Promise<CarrierEstimateResult> {
-  return runWithTransientRetry(
-    () => runWithGlobalRateLimiter(() => fetchEstimateForCarrier(carrier, input, shipFrom), priority),
+  const policy = resolveRateBrowseProviderExecutionPolicy({
+    priority,
+    defaultTimeoutMs: SHIPSTATION_RATE_ESTIMATE_TIMEOUT_MS,
+    defaultMaxRetries: RATE_ESTIMATE_MAX_RETRIES,
+  });
+  const startedAt = Date.now();
+  let attempts = 0;
+  let limiterWaitMs = 0;
+  const result = await runWithTransientRetry(
+    () => {
+      const waitStartedAt = Date.now();
+      return runWithGlobalRateLimiter(() => {
+        limiterWaitMs += Date.now() - waitStartedAt;
+        attempts += 1;
+        return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs);
+      }, priority);
+    },
     (result) => result.diagnostic.status === 'failed' && result.diagnostic.transient === true,
-    { maxRetries: RATE_ESTIMATE_MAX_RETRIES, baseDelayMs: RATE_ESTIMATE_RETRY_BASE_MS },
+    { maxRetries: policy.maxRetries, baseDelayMs: RATE_ESTIMATE_RETRY_BASE_MS },
   );
+  return {
+    ...result,
+    diagnostic: {
+      ...result.diagnostic,
+      durationMs: Date.now() - startedAt,
+      limiterWaitMs,
+      attempts,
+    },
+  };
 }
 
 // Lift the EstimateRate shape (flat from ShipStation) into v4's Rate shape
@@ -1427,8 +1468,8 @@ type GetRatesOptions = {
   cachedOnly?: boolean;
   // PS-197b: quote the uninsured manual baseline (see resolveRateInput) — reference only.
   rawManualEstimate?: boolean;
-  // PS-perf: 'background' lets the server-side best-rate backfill yield ShipStation budget +
-  // fan-out permits to an interactive Browse Rates click. Defaults to interactive.
+  // Operator-driven routes pass 'interactive' explicitly. Unmarked server jobs keep the exhaustive
+  // background timeout/retry policy and yield ShipStation budget to interactive Browse Rates clicks.
   priority?: RateFetchPriority;
 };
 
@@ -1467,7 +1508,8 @@ function cachedDiagnosticsFromCache(value: unknown, rates: Rate[]): CarrierRateD
         status === 'empty' ||
         status === 'failed' ||
         status === 'cached' ||
-        status === 'loading'
+        status === 'loading' ||
+        status === 'skipped'
           ? status
           : 'cached';
       const rateCount = Number(row.rateCount ?? 0);
@@ -1771,7 +1813,7 @@ export async function getRates(
     };
   }
 
-  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput, automationRules, opts.priority ?? 'interactive');
+  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput, automationRules, opts.priority ?? 'background');
   const rawRates = liveResult.rates;
   const now = new Date();
 
@@ -2109,7 +2151,7 @@ function writeDirectRatesToCache(
 
 export async function getDirectCarrierRatesForRateInput(
   input: RateInput,
-  options: { cachedOnly?: boolean } = {},
+  options: { cachedOnly?: boolean; priority?: RateFetchPriority } = {},
 ): Promise<DirectCarrierRatesResult> {
   const accounts = (await loadVisibleDirectCarrierAccounts(input)).filter((account) => {
     // eBay Logistics ONLY prices a specific eBay order (its shipping_quote API takes an eBay orderId),
@@ -2140,8 +2182,9 @@ export async function getDirectCarrierRatesForRateInput(
         const shippingProviderId = directProviderIdFromAccount(account);
         return {
           carrierId: `se-${shippingProviderId}`,
+          accountId: String(account.id),
           carrierCode: normalizeProviderKey(account.provider),
-          nickname: account.label || account.accountIdentifier || account.provider,
+          nickname: account.label || normalizeProviderKey(account.provider),
           status: 'uncached' as CarrierRateDiagnosticStatus,
           rateCount: 0,
           durationMs: 0,
@@ -2150,6 +2193,11 @@ export async function getDirectCarrierRatesForRateInput(
     };
   }
   const shippingOptions = normalizeShippingOptions(input);
+  const executionPolicy = resolveRateBrowseProviderExecutionPolicy({
+    priority: options.priority ?? 'interactive',
+    defaultTimeoutMs: DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
+    defaultMaxRetries: 0,
+  });
   // PS-203 (stage 3): direct rates pass the SAME markup rules ShipStation rates
   // already get at read time (applyMarkups keys by `se-<pid>` carrier_id —
   // direct synthetic ids included), so the combined best-rate pick compares a
@@ -2175,7 +2223,7 @@ export async function getDirectCarrierRatesForRateInput(
     DIRECT_CARRIER_RATE_FETCH_CONCURRENCY,
     async (account) => {
     const shippingProviderId = directProviderIdFromAccount(account);
-    const label = account.label || account.accountIdentifier || account.provider;
+    const label = account.label || normalizeProviderKey(account.provider);
     const startedAt = Date.now();
     const scope = evaluateDirectCarrierScope(account, input);
     if (!scope.allowed) {
@@ -2193,9 +2241,10 @@ export async function getDirectCarrierRatesForRateInput(
         metas: [] as DirectCarrierRateMeta[],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
+          accountId: String(account.id),
           carrierCode: normalizeProviderKey(account.provider),
           nickname: label,
-          status: 'failed' as CarrierRateDiagnosticStatus,
+          status: 'skipped' as CarrierRateDiagnosticStatus,
           rateCount: 0,
           durationMs: Date.now() - startedAt,
           error: scope.reason,
@@ -2266,7 +2315,7 @@ export async function getDirectCarrierRatesForRateInput(
         directCarrierSourceTable: account.sourceTable,
         requestKey: requestFingerprint,
         shippingOptions,
-      }), label);
+      }), label, executionPolicy.timeoutMs);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
       const eligible = filterRatesForShippingServiceEligibility(
         rawRates,
@@ -2350,11 +2399,14 @@ export async function getDirectCarrierRatesForRateInput(
         metas: [{ accountId: account.id, shippingProviderId, sourceTable: account.sourceTable, provider: meta.provider, meta }],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
+          accountId: String(account.id),
           carrierCode: meta.provider,
           nickname: label,
           status: rates.length ? 'ok' as CarrierRateDiagnosticStatus : 'empty' as CarrierRateDiagnosticStatus,
           rateCount: rates.length,
           durationMs: Date.now() - startedAt,
+          limiterWaitMs: 0,
+          attempts: 1,
           // PS-271 (Layer 4): the thin signal flows to combineCarrierUniverses via this diagnostic.
           ...(thin ? { thin: true } : {}),
           // PS-271 (Layer 4): surface the NAMED observed-missing carriers (the connector's
@@ -2366,7 +2418,8 @@ export async function getDirectCarrierRatesForRateInput(
         },
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = publicCarrierRateError(err);
+      const retryable = isTransientCarrierRateError(err);
       return {
         rates: [] as Rate[],
         errors: [{
@@ -2381,12 +2434,17 @@ export async function getDirectCarrierRatesForRateInput(
         metas: [] as DirectCarrierRateMeta[],
         diagnostic: {
           carrierId: `se-${shippingProviderId}`,
+          accountId: String(account.id),
           carrierCode: normalizeProviderKey(account.provider),
           nickname: label,
           status: 'failed' as CarrierRateDiagnosticStatus,
           rateCount: 0,
           durationMs: Date.now() - startedAt,
+          limiterWaitMs: 0,
+          attempts: 1,
           error: message,
+          transient: retryable,
+          retryable,
         },
       };
     }

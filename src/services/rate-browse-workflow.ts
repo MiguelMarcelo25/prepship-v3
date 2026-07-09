@@ -7,6 +7,8 @@ import {
 import { buildRateBrowseResultSnapshot } from './rate-browse-workflow-snapshots';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 import { buildRateBrowseWorkflowRequestKey } from './rate-browse-workflow-key';
+import { sanitizeRateProviderError } from './rate-browser-timing-diagnostics';
+import { scheduleDetachedRateBrowseJob } from './rate-browse-job-scheduler';
 
 export type StartRateBrowseWorkflowInput = {
   body: Record<string, unknown>;
@@ -86,7 +88,7 @@ async function runRateBrowseWorkflowJob(
           message: 'Rate browse workflow running; cached partial unavailable',
           diagnostics: {
             ...running.diagnostics,
-            partialError: err instanceof Error ? err.message : String(err),
+            partialError: sanitizeRateProviderError(err),
           },
         }, { priority });
       }
@@ -100,7 +102,10 @@ async function runRateBrowseWorkflowJob(
       phase: 'complete',
       message: 'Rate browse workflow complete',
       finishedAt,
-      diagnostics: { rateBrowseTiming: result.rateBrowseTiming ?? null },
+      diagnostics: {
+        rateBrowseTiming: result.rateBrowseTiming ?? null,
+        rateBrowseFailure: result.rateBrowseFailure ?? null,
+      },
     }), { priority });
   } catch (err) {
     const finishedAt = nowIso();
@@ -110,7 +115,7 @@ async function runRateBrowseWorkflowJob(
       updatedAt: finishedAt,
       finishedAt,
       message: 'Rate browse workflow failed',
-      error: err instanceof Error ? err.message : String(err),
+      error: sanitizeRateProviderError(err),
     }, { priority });
   }
 }
@@ -123,7 +128,10 @@ export async function startRateBrowseWorkflow(
     priority: input.priority ?? 'manual',
   });
   if (reservation.created) {
-    void runRateBrowseWorkflowJob(reservation.snapshot, input);
+    scheduleDetachedRateBrowseJob(
+      () => runRateBrowseWorkflowJob(reservation.snapshot, input),
+      (err) => console.error('[rate-browse-workflow] detached job failed:', sanitizeRateProviderError(err)),
+    );
   }
   return reservation.snapshot;
 }

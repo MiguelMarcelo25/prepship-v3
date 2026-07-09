@@ -69,6 +69,11 @@ import {
 import RateRowItem from './RateRowItem';
 import RateRowsView from './RateRowsView';
 import RateBrowserCarrierSidebar from './RateBrowserCarrierSidebar';
+import RateBrowserDiagnosticsPanel, {
+  type RateBrowserFailureDiagnostic,
+  type RateBrowserProviderDiagnostic,
+  type RateBrowserTimingDiagnostics,
+} from './RateBrowserDiagnosticsPanel';
 import { buildPartialRateBrowseDisplayState } from './rate-browser-partial-result';
 import { nextRateBrowserPendingPidsAfterPartial } from './rate-browser-pending-state';
 import { rateBrowserOpenBrowseOptions } from './rate-browser-open-workflow';
@@ -314,11 +319,6 @@ type DirectCarrierRateError = {
   provider?: string | null;
   label?: string | null;
   message?: string | null;
-};
-
-type RateBrowseTimingCarrier = {
-  carrierId?: string | null;
-  durationMs?: number | string | null;
 };
 
 // PS-206: 'uncached' = TERMINAL "no cached coverage; this account was not
@@ -1056,6 +1056,8 @@ export default function RateBrowserModal({
   const [carrierStatusByPid, setCarrierStatusByPid] = useState<Record<string, CarrierRateStatus>>({});
   const [rateBrowseInfo, setRateBrowseInfo] = useState<RateBrowseInfo>({ source: null });
   const [carrierTimingByPid, setCarrierTimingByPid] = useState<Record<string, number>>({});
+  const [rateBrowserTiming, setRateBrowserTiming] = useState<RateBrowserTimingDiagnostics | null>(null);
+  const [rateBrowserFailure, setRateBrowserFailure] = useState<RateBrowserFailureDiagnostic | null>(null);
   const [shopifyRatesResult, setShopifyRatesResult] = useState<ShopifyRatesResult | null>(null);
   const [shopifyRatesLoading, setShopifyRatesLoading] = useState(false);
   const [shopifyRatesError, setShopifyRatesError] = useState<string | null>(null);
@@ -1254,6 +1256,8 @@ export default function RateBrowserModal({
     setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
     setRateMetaByPid({});
     setCarrierTimingByPid({});
+    setRateBrowserTiming(null);
+    setRateBrowserFailure(null);
     setShopifyRatesResult(null);
     setShopifyRatesError(null);
     setShopifyRatesNotice(null);
@@ -1496,6 +1500,8 @@ export default function RateBrowserModal({
     setRateErrorsByPid({});
     setRateMetaByPid({});
     setCarrierTimingByPid({});
+    setRateBrowserTiming(null);
+    setRateBrowserFailure(null);
     // PS-279: a fresh browse clears any prior unresolved-best diagnostic.
     setBestRateUnresolved(false);
     if (seededPid != null) {
@@ -1608,6 +1614,16 @@ export default function RateBrowserModal({
       };
       const applyPartialBrowseResult = (partialResult: Record<string, unknown>) => {
         if (browseSequenceRef.current !== requestSeq) return;
+        setRateBrowserTiming(
+          partialResult.rateBrowseTiming && typeof partialResult.rateBrowseTiming === 'object'
+            ? partialResult.rateBrowseTiming as RateBrowserTimingDiagnostics
+            : null,
+        );
+        setRateBrowserFailure(
+          partialResult.rateBrowseFailure && typeof partialResult.rateBrowseFailure === 'object'
+            ? partialResult.rateBrowseFailure as RateBrowserFailureDiagnostic
+            : null,
+        );
         const partialDisplay = buildPartialRateBrowseDisplayState({
           partialResult,
           accounts: rateShippingAccounts,
@@ -1665,6 +1681,16 @@ export default function RateBrowserModal({
                 : null,
         cacheAgeMs: typeof browseResult?.cacheAgeMs === 'number' ? browseResult.cacheAgeMs : undefined,
       });
+      setRateBrowserTiming(
+        browseResult?.rateBrowseTiming && typeof browseResult.rateBrowseTiming === 'object'
+          ? browseResult.rateBrowseTiming as RateBrowserTimingDiagnostics
+          : null,
+      );
+      setRateBrowserFailure(
+        browseResult?.rateBrowseFailure && typeof browseResult.rateBrowseFailure === 'object'
+          ? browseResult.rateBrowseFailure as RateBrowserFailureDiagnostic
+          : null,
+      );
       // PS-197: capture the backend-EFFECTIVE insurance for this quote + a redacted request
       // snapshot (no PII/secrets — just the quote facts) so the operator can see why the total
       // differs from a manual no-insurance ShipStation estimate (effective_policy_diff).
@@ -1720,7 +1746,7 @@ export default function RateBrowserModal({
       const nextStatusByPid: Record<string, CarrierRateStatus> = {};
       const nextTimingByPid: Record<string, number> = {};
       const timingCarriers = Array.isArray((browseResult as any)?.rateBrowseTiming?.carriers)
-        ? (browseResult as any).rateBrowseTiming.carriers as RateBrowseTimingCarrier[]
+        ? (browseResult as any).rateBrowseTiming.carriers as RateBrowserProviderDiagnostic[]
         : [];
       for (const timing of timingCarriers) {
         const carrierId = toOptionalString(timing.carrierId);
@@ -1822,6 +1848,8 @@ export default function RateBrowserModal({
       setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
       setRateMetaByPid({});
       setCarrierTimingByPid({});
+      setRateBrowserTiming(null);
+      setRateBrowserFailure(null);
       setRatesByPid(
         seededBestRate && seededPid != null
           ? { [String(seededPid)]: [seededBestRate] }
@@ -2870,6 +2898,11 @@ export default function RateBrowserModal({
                 <option value="all">All Rates</option>
               </select>
             </div>
+
+            <RateBrowserDiagnosticsPanel
+              timing={rateBrowserTiming}
+              failure={rateBrowserFailure}
+            />
 
             {/* Rates content */}
             <div
