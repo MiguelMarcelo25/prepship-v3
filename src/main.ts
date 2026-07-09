@@ -38,6 +38,7 @@ import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 import observabilityRoute from './routes/observability';
 import automationRoute from './routes/automation';
+import storeSourceCutoversRoute from './routes/store-source-cutovers';
 import clientPortalIntegrationsRoute from './routes/client-portal/integrations';
 
 type AppVars = {
@@ -155,6 +156,7 @@ const protectedPrefixes = [
   '/worker',
   '/observability',
   '/automation',
+  '/store-source-cutovers',
   '/client-portal',
 ];
 
@@ -194,6 +196,7 @@ app.route('/users', usersRoute);
 app.route('/worker', workerRoute);
 app.route('/observability', observabilityRoute);
 app.route('/automation', automationRoute);
+app.route('/store-source-cutovers', storeSourceCutoversRoute);
 app.route('/client-portal', clientPortalIntegrationsRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));

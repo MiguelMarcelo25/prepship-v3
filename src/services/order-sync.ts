@@ -28,6 +28,12 @@ import {
   syncRunBudgetExhausted,
   syncRunBudgetTimeExhausted,
 } from '../lib/sync-run-budget';
+import {
+  filterShipStationStoreIdsForCutover,
+} from './store-source-cutover-policy';
+import {
+  loadActiveShipStationCutoverStoreIds,
+} from './store-source-cutover';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const STATUS_CATCHUP_SNAPSHOT_KEY = 'order_sync.status_catchup.snapshot';
@@ -790,6 +796,7 @@ async function syncOrdersForAccount(
     pageSize?: number;
     skipStatusPasses?: boolean;
     previousStatusCatchup?: OrderStatusCatchupSnapshot;
+    activeShipStationCutoverStoreIds?: ReadonlySet<number>;
   },
   storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
   budget: SyncRunBudget = createSyncRunBudget(),
@@ -824,7 +831,10 @@ async function syncOrdersForAccount(
   // large historical status catch-up can never starve it under the run budget.
   const awaitingSinceMs =
     opts.awaitingSinceMs ?? Math.min(lastSync, runStartMs - AWAITING_CATCHUP_LOOKBACK_MS);
-  const awaitingStoreIds = account.storeIds.filter((sid) => !isExcludedStoreId(sid));
+  const awaitingStoreIds = filterShipStationStoreIdsForCutover(
+    account.storeIds.filter((sid) => !isExcludedStoreId(sid)),
+    opts.activeShipStationCutoverStoreIds ?? new Set(),
+  );
   const awaitingTargets =
     awaitingStoreIds.length > 0
       ? awaitingStoreIds.map((storeId) => ({ storeId }))
@@ -964,6 +974,13 @@ export async function syncOrders(opts: {
   const budget = createSyncRunBudget();
   const storeToClient = await buildStoreToClientMap();
   const accounts = await loadSyncAccounts();
+  const activeShipStationCutoverStoreIds = await loadActiveShipStationCutoverStoreIds().catch((err) => {
+    console.warn(
+      '[order-sync] store-source cutover lookup failed; continuing with all ShipStation awaiting stores:',
+      err instanceof Error ? err.message : err,
+    );
+    return new Set<number>();
+  });
   const previousStatusCatchup = opts.skipStatusPasses
     ? emptyStatusCatchupSnapshot()
     : await getOrderStatusCatchupSnapshot();
@@ -977,7 +994,7 @@ export async function syncOrders(opts: {
     try {
       const result = await syncOrdersForAccount(
         acct,
-        { ...opts, previousStatusCatchup },
+        { ...opts, previousStatusCatchup, activeShipStationCutoverStoreIds },
         storeToClient,
         budget,
       );
