@@ -15,6 +15,11 @@ import type { DashboardProvenance } from '../../../src/lib/analytics-provenance'
 import { getCachedAuthToken } from './auth-session-cache';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
 import { directCarrierVisibleForScope } from '../../../src/lib/direct-carrier-scope';
+import {
+  requiredReportingNumber,
+  reportingSkuDtoFromBackend,
+  reportingTotalsFromBackend,
+} from './reporting-dto';
 
 import {
   authHeaders,
@@ -476,6 +481,12 @@ export const apiClient = {
 
   listClients(): Promise<any[]> {
     return apiClient.fetchClients();
+  },
+
+  async listReportingClients(): Promise<any[]> {
+    const res = await api.get<any>(`/clients${qs({ activeOnly: true })}`, { timeoutMs: 25_000 });
+    if (!Array.isArray(res)) throw new Error('Reporting client scope is unavailable');
+    return normalizeClientDtoRows(res);
   },
 
 
@@ -2946,24 +2957,17 @@ export const apiClient = {
   // src/routes/orders.ts /daily-counts.
 
 
-  fetchDashboardDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
+  async fetchDashboardDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
     data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
     meta?: DashboardProvenance | null;
   }> {
-    return safe(
-      'fetchDashboardDailyCounts',
-      async () => {
-        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        const res: any = await api.get<any>(`/dashboard/daily-counts${qs(q)}`);
-        const data = Array.isArray(res?.data) ? res.data : [];
-        // PS-325 (slice 4): pass the backend provenance envelope through verbatim (additive).
-        return { data, meta: (res?.meta as DashboardProvenance | undefined) ?? null };
-      },
-      { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>, meta: null }
-    );
+    const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+    if (query.clientId !== undefined) q.clientId = query.clientId;
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    if (query.hideTestOrders) q.hideTestOrders = true;
+    const res: any = await api.get<any>(`/dashboard/daily-counts${qs(q)}`);
+    if (!Array.isArray(res?.data)) throw new Error('Dashboard daily counts response is unavailable');
+    return { data: res.data, meta: (res?.meta as DashboardProvenance | undefined) ?? null };
   },
 
   startRateBrowseWorkflow(data: Record<string, unknown>): Promise<any> {
@@ -2991,59 +2995,48 @@ export const apiClient = {
   // multi-line ("All Clients") view. Returns long rows; the caller pivots to
   // one line per client. The chart plots `count` (order count) — `revenue` is
   // returned too for tooltips/future use.
-  fetchDashboardDailyRevenueByClient(query: { from: string; to: string; storeId?: number; hideTestOrders?: boolean }): Promise<{
+  async fetchDashboardDailyRevenueByClient(query: { from: string; to: string; storeId?: number; hideTestOrders?: boolean }): Promise<{
     data: Array<{ day: string; clientId: number | null; revenue: number; count: number }>;
   }> {
-    return safe(
-      'fetchDashboardDailyRevenueByClient',
-      async () => {
-        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        const res: any = await api.get<any>(`/dashboard/daily-revenue-by-client${qs(q)}`);
-        const data = Array.isArray(res?.data) ? res.data : [];
-        return { data };
-      },
-      { data: [] as Array<{ day: string; clientId: number | null; revenue: number; count: number }> }
-    );
+    const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    if (query.hideTestOrders) q.hideTestOrders = true;
+    const res: any = await api.get<any>(`/dashboard/daily-revenue-by-client${qs(q)}`);
+    if (!Array.isArray(res?.data)) throw new Error('Dashboard client trend response is unavailable');
+    return { data: res.data };
   },
 
-  fetchDashboardSummary(query: { from: string; to: string; sevenFrom?: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
+  async fetchDashboardSummary(query: { from: string; to: string; sevenFrom?: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
     revenue: number;
     units: number;
     bySku: Array<{ sku: string; revenue: number; units30: number; units7: number }>;
     dailyRevenue: Array<{ day: string; revenue: number }>;
     meta?: DashboardProvenance | null;
   }> {
-    return safe(
-      'fetchDashboardSummary',
-      async () => {
-        const q: Record<string, string | number | boolean> = {
-          from: query.from,
-          to: query.to,
-        };
-        if (query.sevenFrom) q.sevenFrom = query.sevenFrom;
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        const res: any = await api.get<any>(`/dashboard/summary${qs(q)}`);
-        return {
-          revenue: Number(res?.revenue) || 0,
-          units: Number(res?.units) || 0,
-          bySku: Array.isArray(res?.bySku) ? res.bySku : [],
-          dailyRevenue: Array.isArray(res?.dailyRevenue) ? res.dailyRevenue : [],
-          // PS-325 (slice 4): pass the backend provenance envelope through verbatim (additive).
-          meta: (res?.meta as DashboardProvenance | undefined) ?? null,
-        };
-      },
-      {
-        revenue: 0,
-        units: 0,
-        bySku: [] as Array<{ sku: string; revenue: number; units30: number; units7: number }>,
-        dailyRevenue: [] as Array<{ day: string; revenue: number }>,
-        meta: null,
-      }
-    );
+    const q: Record<string, string | number | boolean> = {
+      from: query.from,
+      to: query.to,
+    };
+    if (query.sevenFrom) q.sevenFrom = query.sevenFrom;
+    if (query.clientId !== undefined) q.clientId = query.clientId;
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    if (query.hideTestOrders) q.hideTestOrders = true;
+    const res: any = await api.get<any>(`/dashboard/summary${qs(q)}`);
+    if (!Array.isArray(res?.bySku) || !Array.isArray(res?.dailyRevenue)) {
+      throw new Error('Dashboard summary response is unavailable');
+    }
+    const revenue = Number(res?.revenue);
+    const units = Number(res?.units);
+    if (!Number.isFinite(revenue) || !Number.isFinite(units)) {
+      throw new Error('Dashboard summary metrics are invalid');
+    }
+    return {
+      revenue,
+      units,
+      bySku: res.bySku,
+      dailyRevenue: res.dailyRevenue,
+      meta: (res?.meta as DashboardProvenance | undefined) ?? null,
+    };
   },
 
   fetchDashboardShippingMarginAnalytics(query: {
@@ -3068,7 +3061,7 @@ export const apiClient = {
       });
   },
 
-  fetchDashboardSkuTrends(query: {
+  async fetchDashboardSkuTrends(query: {
     from: string;
     to: string;
     top?: number;
@@ -3078,47 +3071,43 @@ export const apiClient = {
     hideTestOrders?: boolean;
     includeCancelled?: boolean;
   }): Promise<any> {
-    return safe(
-      'fetchDashboardSkuTrends',
-      async () => {
-        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
-        if (query.top !== undefined) q.top = query.top;
-        if (query.topN !== undefined) q.topN = query.topN;
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
+    const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+    if (query.top !== undefined) q.top = query.top;
+    if (query.topN !== undefined) q.topN = query.topN;
+    if (query.clientId !== undefined) q.clientId = query.clientId;
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    if (query.hideTestOrders) q.hideTestOrders = true;
+    if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
 
-        const res: any = await api.get<any>(`/dashboard/sku-trends${qs(q)}`);
-        const topSkusRaw = Array.isArray(res?.topSkus) ? res.topSkus : [];
-        const daysArr = Array.isArray(res?.days) ? res.days : [];
-        const dates = daysArr.map((d: any) => d?.day).filter(Boolean);
-        const series: Record<string, number[]> = {};
-        for (const t of topSkusRaw) {
-          if (!t?.sku) continue;
-          series[t.sku] = daysArr.map((d: any) => Number(d?.[t.sku]) || 0);
-        }
-        const topSkus = topSkusRaw
-          .map((t: any) => ({
-            sku: t.sku,
-            name: t.name ?? '',
-            total: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
-            totalQty: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
-          }))
-          .sort((left: any, right: any) => right.totalQty - left.totalQty);
-        // PS-325 (slice 3b): surface the backend-emitted per-SKU units (additive; series/dates/topSkus
-        // above are byte-identical). DashboardView prefers this over re-summing the series.
-        const unitsBySku: Record<string, { units30: number; units7: number }> = {};
-        for (const u of Array.isArray(res?.unitsBySku) ? res.unitsBySku : []) {
-          if (u?.sku) unitsBySku[u.sku] = { units30: Number(u.units30) || 0, units7: Number(u.units7) || 0 };
-        }
-        return { dates, topSkus, series, unitsBySku };
-      },
-      { dates: [], topSkus: [], series: {}, unitsBySku: {} }
-    );
+    const res: any = await api.get<any>(`/dashboard/sku-trends${qs(q)}`);
+    if (!Array.isArray(res?.topSkus) || !Array.isArray(res?.days) || !Array.isArray(res?.unitsBySku)) {
+      throw new Error('Dashboard SKU trend response is unavailable');
+    }
+    const dates = res.days.map((day: any) => day?.day).filter(Boolean);
+    const series: Record<string, number[]> = {};
+    for (const sku of res.topSkus) {
+      if (!sku?.sku) continue;
+      series[sku.sku] = res.days.map((day: any, index: number) =>
+        requiredReportingNumber(day?.[sku.sku], `days[${index}].${sku.sku}`));
+    }
+    const topSkus = res.topSkus.map((sku: any) => ({
+      sku: sku.sku,
+      name: sku.name ?? '',
+      total: requiredReportingNumber(sku.total_qty, `topSkus.${sku.sku}.totalQty`),
+      totalQty: requiredReportingNumber(sku.total_qty, `topSkus.${sku.sku}.totalQty`),
+    }));
+    const unitsBySku: Record<string, { units30: number; units7: number }> = {};
+    for (const units of res.unitsBySku) {
+      if (!units?.sku) continue;
+      unitsBySku[units.sku] = {
+        units30: requiredReportingNumber(units.units30, `unitsBySku.${units.sku}.units30`),
+        units7: requiredReportingNumber(units.units7, `unitsBySku.${units.sku}.units7`),
+      };
+    }
+    return { dates, topSkus, series, unitsBySku };
   },
 
-  fetchDashboardTopSkus(query: {
+  async fetchDashboardTopSkus(query: {
     from: string;
     to: string;
     limit?: number;
@@ -3127,136 +3116,28 @@ export const apiClient = {
     hideTestOrders?: boolean;
     includeCancelled?: boolean;
   }): Promise<any> {
-    return safe(
-      'fetchDashboardTopSkus',
-      async () => {
-        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
-        if (query.limit !== undefined) q.limit = query.limit;
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
+    const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+    if (query.limit !== undefined) q.limit = query.limit;
+    if (query.clientId !== undefined) q.clientId = query.clientId;
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    if (query.hideTestOrders) q.hideTestOrders = true;
+    if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
 
-        const [breakdown, clientsRes] = await Promise.all([
-          api.get<any>(`/dashboard/top-skus${qs(q)}`),
-          apiClient.fetchClients().catch(() => []),
-        ]);
-        const clients = Array.isArray(clientsRes) ? clientsRes : [];
-        const nameById = new Map<number, string>();
-        for (const c of clients) {
-          if (c?.id != null) nameById.set(c.id, c?.name ?? '');
-        }
-        const parseNum = (v: unknown): number => {
-          if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-          if (typeof v === 'string') {
-            const n = Number.parseFloat(v);
-            return Number.isFinite(n) ? n : 0;
-          }
-          return 0;
-        };
-        const rows = Array.isArray(breakdown?.data) ? breakdown.data : [];
-        const skus = rows.map((r: any) => {
-          const rawInvSkuId =
-            r.inv_sku_id ?? r.invSkuId ?? r.inventory_id ?? r.inventoryId ?? null;
-          const invSkuId =
-            rawInvSkuId == null || rawInvSkuId === '' ? null : Number(rawInvSkuId);
-
-          const standardShipCount = parseNum(
-            r.std_ship_count ?? r.standardShipCount ?? r.std_orders ?? 0
-          );
-          const standardTotalShipping = parseNum(
-            r.std_total ?? r.standardTotalShipping ?? r.standardShipTotal
-          );
-          const standardShipQtyTotal = parseNum(
-            r.std_qty_total ?? r.standardShipQtyTotal ?? standardShipCount
-          );
-          const expeditedShipCount = parseNum(
-            r.exp_ship_count ?? r.expeditedShipCount ?? r.exp_orders ?? 0
-          );
-          const expeditedTotalShipping = parseNum(
-            r.exp_total ?? r.expeditedTotalShipping ?? r.expeditedShipTotal
-          );
-          const expeditedShipQtyTotal = parseNum(
-            r.exp_qty_total ?? r.expeditedShipQtyTotal ?? expeditedShipCount
-          );
-          const shipCountWithCost = parseNum(
-            r.ship_count_with_cost ?? r.shipCountWithCost ?? standardShipCount + expeditedShipCount
-          );
-          const totalShipping = parseNum(r.total_shipping ?? r.totalShipping);
-          const totalRevenue = parseNum(r.total_revenue ?? r.totalRevenue);
-          const totalQty = parseNum(r.total_qty ?? r.qty);
-          const avgSellingPrice =
-            totalQty > 0 && totalRevenue > 0
-              ? Number((totalRevenue / totalQty).toFixed(2))
-              : 0;
-          const dailyQtyRaw = r.daily_qty ?? r.dailyQty ?? [];
-          const dailyQty: number[] = Array.isArray(dailyQtyRaw)
-            ? dailyQtyRaw.map((value: unknown) => {
-                if (typeof value === 'number' && Number.isFinite(value)) return value;
-                const parsed = Number(value);
-                return Number.isFinite(parsed) ? parsed : 0;
-              })
-            : [];
-
-          return {
-            sku: r.sku,
-            name: r.name ?? '',
-            imageUrl: r.image_url ?? r.imageUrl ?? null,
-            invSkuId: Number.isFinite(invSkuId) ? invSkuId : null,
-            clientId: r.client_id ?? r.clientId ?? null,
-            clientName:
-              r.client_name ??
-              r.clientName ??
-              (r.client_id != null ? nameById.get(r.client_id) ?? '' : ''),
-            dailyQty,
-            orders: parseNum(r.orders),
-            pendingOrders: parseNum(r.pending ?? r.pendingOrders),
-            externalOrders: parseNum(r.ext_shipped ?? r.externalOrders),
-            qty: parseNum(r.total_qty ?? r.qty),
-            standardOrders: parseNum(r.std_orders ?? r.standardOrders),
-            standardShipCount,
-            standardShipQtyTotal,
-            standardAvgShipping:
-              standardShipQtyTotal > 0
-                ? Number((standardTotalShipping / standardShipQtyTotal).toFixed(2))
-                : 0,
-            standardTotalShipping,
-            standardShipTotal: standardTotalShipping,
-            expeditedOrders: parseNum(r.exp_orders ?? r.expeditedOrders),
-            expeditedShipCount,
-            expeditedShipQtyTotal,
-            expeditedAvgShipping:
-              expeditedShipQtyTotal > 0
-                ? Number((expeditedTotalShipping / expeditedShipQtyTotal).toFixed(2))
-                : 0,
-            expeditedTotalShipping,
-            expeditedShipTotal: expeditedTotalShipping,
-            shipCountWithCost,
-            blendedAvgShipping:
-              shipCountWithCost > 0 ? Number((totalShipping / shipCountWithCost).toFixed(2)) : 0,
-            totalShipping,
-            totalRevenue,
-            avgSellingPrice,
-            totalSellingFee: parseNum(
-              r.total_selling_fee
-              ?? r.totalSellingFee
-              ?? r.sellingFee
-              ?? r.sellingFeeTotal
-            ),
-          };
-        });
-        return {
-          skus,
-          orderCount: breakdown?.totalOrders ?? 0,
-        };
-      },
-      { skus: [], orderCount: 0 }
-    );
+    const breakdown: any = await api.get<any>(`/dashboard/top-skus${qs(q)}`);
+    if (!Array.isArray(breakdown?.data)) {
+      throw new Error('Dashboard SKU report is unavailable');
+    }
+    return {
+      skus: breakdown.data.map(reportingSkuDtoFromBackend),
+      orderCount: Number(breakdown.totalOrders),
+      totals: reportingTotalsFromBackend(breakdown.totals),
+      window: breakdown.window,
+    };
   },
 
   // PS-213 — multi-SKU combination sales (Dashboard Combos tab). Backend owns
   // normalization (PS-037 combo key) + scoping; this is a thin pass-through.
-  fetchDashboardTopCombos(query: {
+  async fetchDashboardTopCombos(query: {
     from: string;
     to: string;
     limit?: number;
@@ -3276,27 +3157,22 @@ export const apiClient = {
     totalCombos: number;
     multiSkuOrders: number;
   }> {
-    return safe(
-      'fetchDashboardTopCombos',
-      async () => {
-        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
-        if (query.limit !== undefined) q.limit = query.limit;
-        if (query.clientId !== undefined) q.clientId = query.clientId;
-        if (query.storeId !== undefined) q.storeId = query.storeId;
-        if (query.hideTestOrders) q.hideTestOrders = true;
-        if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
-        const res: any = await api.get<any>(`/dashboard/top-combos${qs(q)}`);
-        return {
-          combos: Array.isArray(res?.combos) ? res.combos : [],
-          totalCombos: Number(res?.totalCombos ?? 0) || 0,
-          multiSkuOrders: Number(res?.multiSkuOrders ?? 0) || 0,
-        };
-      },
-      { combos: [], totalCombos: 0, multiSkuOrders: 0 }
-    );
+    const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+    if (query.limit !== undefined) q.limit = query.limit;
+    if (query.clientId !== undefined) q.clientId = query.clientId;
+    if (query.storeId !== undefined) q.storeId = query.storeId;
+    if (query.hideTestOrders) q.hideTestOrders = true;
+    if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
+    const res: any = await api.get<any>(`/dashboard/top-combos${qs(q)}`);
+    if (!Array.isArray(res?.combos)) throw new Error('Dashboard combinations report is unavailable');
+    return {
+      combos: res.combos,
+      totalCombos: Number(res.totalCombos),
+      multiSkuOrders: Number(res.multiSkuOrders),
+    };
   },
 
-  fetchDashboardInventoryRisk(query?: { clientId?: number; active?: boolean; pageSize?: number }): Promise<{
+  async fetchDashboardInventoryRisk(query?: { clientId?: number; active?: boolean; pageSize?: number }): Promise<{
     items: any[];
     total: number;
     // PS-325 (slice 4): the backend In/Low/Out snapshot (slice 1) was being DROPPED here — restore it
@@ -3307,201 +3183,55 @@ export const apiClient = {
     if (query?.clientId !== undefined) q.clientId = query.clientId;
     if (query?.active !== undefined) q.active = query.active;
     if (query?.pageSize !== undefined) q.pageSize = query.pageSize;
-    return cachedSafe(
-      'fetchDashboardInventoryRisk',
-      `fetchDashboardInventoryRisk:${JSON.stringify(q)}`,
-      60_000,
-      10 * 60_000,
-      async () => {
-        const res: any = await api.get<any>(`/dashboard/inventory-risk${qs(q)}`);
-        return {
-          items: Array.isArray(res?.items) ? res.items : [],
-          total: Number(res?.total) || 0,
-          snapshot: res?.snapshot ?? null,
-        };
-      },
-      { items: [], total: 0, snapshot: null },
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
-    );
+    const res: any = await api.get<any>(`/dashboard/inventory-risk${qs(q)}`);
+    if (!Array.isArray(res?.items) || !Number.isFinite(Number(res?.total))) {
+      throw new Error('Dashboard inventory report is unavailable');
+    }
+    return {
+      items: res.items,
+      total: Number(res.total),
+      snapshot: res?.snapshot ?? null,
+    };
   },
 
-  fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
+  async fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
     // v2 AnalysisView expects `{dates, topSkus, series: {[sku]: number[]}}`.
     // v4's `/analysis/sku-daily` returns `{topSkus:[{sku,name,total_qty}], days:[{day, [sku]:qty, ...}]}`.
     // Reshape `days[]` → parallel `dates[]` + per-sku `series` arrays.
-    return safe(
-      'fetchAnalysisDailySales',
-      async () => {
-        const q = normalizeAnalysisRange(query);
-        const res: any = await api.get<any>(`/analysis/sku-daily${qs(q)}`);
-        const topSkusRaw = Array.isArray(res?.topSkus) ? res.topSkus : [];
-        const daysArr = Array.isArray(res?.days) ? res.days : [];
-        const dates = daysArr.map((d: any) => d?.day).filter(Boolean);
-        const series: Record<string, number[]> = {};
-        for (const t of topSkusRaw) {
-          if (!t?.sku) continue;
-          series[t.sku] = daysArr.map((d: any) => Number(d?.[t.sku]) || 0);
-        }
-        const topSkus = topSkusRaw
-          .map((t: any) => ({
-            sku: t.sku,
-            name: t.name ?? '',
-            total: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
-            totalQty: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
-          }))
-          .sort((left: any, right: any) => right.totalQty - left.totalQty);
-        return { dates, topSkus, series };
-      },
-      { dates: [], topSkus: [], series: {} }
-    );
+    const q = normalizeAnalysisRange(query);
+    const res: any = await api.get<any>(`/analysis/sku-daily${qs(q)}`);
+    if (!Array.isArray(res?.topSkus) || !Array.isArray(res?.days)) {
+      throw new Error('Analysis sales trend is unavailable');
+    }
+    const dates = res.days.map((day: any) => day?.day).filter(Boolean);
+    const series: Record<string, number[]> = {};
+    for (const sku of res.topSkus) {
+      if (!sku?.sku) continue;
+      series[sku.sku] = res.days.map((day: any, index: number) =>
+        requiredReportingNumber(day?.[sku.sku], `days[${index}].${sku.sku}`));
+    }
+    const topSkus = res.topSkus.map((sku: any) => ({
+      sku: sku.sku,
+      name: sku.name ?? '',
+      total: requiredReportingNumber(sku.total_qty, `topSkus.${sku.sku}.totalQty`),
+      totalQty: requiredReportingNumber(sku.total_qty, `topSkus.${sku.sku}.totalQty`),
+    }));
+    return { dates, topSkus, series };
   },
 
-  fetchAnalysisSkus(query: Record<string, unknown>): Promise<any> {
+  async fetchAnalysisSkus(query: Record<string, unknown>): Promise<any> {
     // AnalysisView expects `{skus: AnalysisSkuDto[], orderCount}`. The rich
     // per-SKU breakdown (pending/ext/std/exp counts + totals) lives in v4's
     // `/analysis/sku-breakdown`, not `/top-skus`. Also resolve clientName.
-    return safe(
-      'fetchAnalysisSkus',
-      async () => {
-        const q = normalizeAnalysisRange(query);
-        const [breakdown, clientsRes] = await Promise.all([
-          api.get<any>(`/analysis/sku-breakdown${qs(q)}`),
-          apiClient.fetchClients().catch(() => []),
-        ]);
-        const clients = Array.isArray(clientsRes) ? clientsRes : [];
-        const nameById = new Map<number, string>();
-        for (const c of clients) {
-          if (c?.id != null) nameById.set(c.id, c?.name ?? '');
-        }
-        const parseNum = (v: unknown): number => {
-          if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-          if (typeof v === 'string') {
-            const n = Number.parseFloat(v);
-            return Number.isFinite(n) ? n : 0;
-          }
-          return 0;
-        };
-        const rows = Array.isArray(breakdown?.data) ? breakdown.data : [];
-        const skus = rows.map((r: any) => {
-          const rawInvSkuId =
-            r.inv_sku_id ?? r.invSkuId ?? r.inventory_id ?? r.inventoryId ?? null;
-          const invSkuId =
-            rawInvSkuId == null || rawInvSkuId === '' ? null : Number(rawInvSkuId);
-
-          const standardShipCount = parseNum(
-            r.std_ship_count ?? r.standardShipCount ?? r.std_orders ?? 0
-          );
-          const standardTotalShipping = parseNum(
-            r.std_total ?? r.standardTotalShipping ?? r.standardShipTotal
-          );
-          // Per-UNIT shipping (boss directive 2026-05-07): qty totals
-          // for std/exp orders so the FE can compute avg-per-unit
-          // instead of avg-per-order. Falls back to ship-count when
-          // the new fields aren't present (older API responses).
-          const standardShipQtyTotal = parseNum(
-            r.std_qty_total ?? r.standardShipQtyTotal ?? standardShipCount
-          );
-          const expeditedShipCount = parseNum(
-            r.exp_ship_count ?? r.expeditedShipCount ?? r.exp_orders ?? 0
-          );
-          const expeditedTotalShipping = parseNum(
-            r.exp_total ?? r.expeditedTotalShipping ?? r.expeditedShipTotal
-          );
-          const expeditedShipQtyTotal = parseNum(
-            r.exp_qty_total ?? r.expeditedShipQtyTotal ?? expeditedShipCount
-          );
-          const shipCountWithCost = parseNum(
-            r.ship_count_with_cost ?? r.shipCountWithCost ?? standardShipCount + expeditedShipCount
-          );
-          const totalShipping = parseNum(r.total_shipping ?? r.totalShipping);
-          // 2026-05-12 new columns: revenue + avg selling price.
-          // total_revenue is the server-side SUM(unit_price × qty);
-          // avg selling price = revenue / units (computed FE-side so
-          // we don't ship two numbers when one suffices). Falls back
-          // to 0 when the SKU has no unit_price set on its line items.
-          const totalRevenue = parseNum(r.total_revenue ?? r.totalRevenue);
-          const totalQty = parseNum(r.total_qty ?? r.qty);
-          const avgSellingPrice =
-            totalQty > 0 && totalRevenue > 0
-              ? Number((totalRevenue / totalQty).toFixed(2))
-              : 0;
-
-          // Units-trend sparkline source: aligned [units/day] array,
-          // one slot per date bucket in the selected range. Empty/missing
-          // → empty array so AnalysisDataTable just renders a flat baseline.
-          const dailyQtyRaw = r.daily_qty ?? r.dailyQty ?? [];
-          const dailyQty: number[] = Array.isArray(dailyQtyRaw)
-            ? dailyQtyRaw.map((value: unknown) => {
-                if (typeof value === 'number' && Number.isFinite(value)) return value;
-                const parsed = Number(value);
-                return Number.isFinite(parsed) ? parsed : 0;
-              })
-            : [];
-
-          return {
-            sku: r.sku,
-            name: r.name ?? '',
-            imageUrl: r.image_url ?? r.imageUrl ?? null,
-            invSkuId: Number.isFinite(invSkuId) ? invSkuId : null,
-            clientId: r.client_id ?? r.clientId ?? null,
-            clientName:
-              r.client_name ??
-              r.clientName ??
-              (r.client_id != null ? nameById.get(r.client_id) ?? '' : ''),
-            dailyQty,
-            orders: parseNum(r.orders),
-            pendingOrders: parseNum(r.pending ?? r.pendingOrders),
-            externalOrders: parseNum(r.ext_shipped ?? r.externalOrders),
-            qty: parseNum(r.total_qty ?? r.qty),
-            standardOrders: parseNum(r.std_orders ?? r.standardOrders),
-            standardShipCount,
-            standardShipQtyTotal,
-            // Per-UNIT avg: divide total cost by total UNITS shipped via
-            // std (not by order count). For an order with 2 units at
-            // $23 label cost, this yields $11.50/unit instead of $23.
-            standardAvgShipping:
-              standardShipQtyTotal > 0
-                ? Number((standardTotalShipping / standardShipQtyTotal).toFixed(2))
-                : 0,
-            standardTotalShipping,
-            standardShipTotal: standardTotalShipping,
-            expeditedOrders: parseNum(r.exp_orders ?? r.expeditedOrders),
-            expeditedShipCount,
-            expeditedShipQtyTotal,
-            expeditedAvgShipping:
-              expeditedShipQtyTotal > 0
-                ? Number((expeditedTotalShipping / expeditedShipQtyTotal).toFixed(2))
-                : 0,
-            expeditedTotalShipping,
-            expeditedShipTotal: expeditedTotalShipping,
-            shipCountWithCost,
-            blendedAvgShipping:
-              shipCountWithCost > 0 ? Number((totalShipping / shipCountWithCost).toFixed(2)) : 0,
-            totalShipping,
-            totalRevenue,
-            avgSellingPrice,
-            // 2026-05-13: per-SKU seller-fee total (Walmart first;
-            // future marketplaces add in via similar fetcher endpoints).
-            // Backend returns total_selling_fee; legacy aliases (camel
-            // / sellingFee / sellingFeeTotal) are coalesced to be
-            // resilient against shape drift. Profit is derived FE-side
-            // as revenue - shipping - sellingFee for the new Profit
-            // column on the Analysis page.
-            totalSellingFee: parseNum(
-              r.total_selling_fee
-              ?? r.totalSellingFee
-              ?? r.sellingFee
-              ?? r.sellingFeeTotal
-            ),
-          };
-        });
-        return {
-          skus,
-          orderCount: breakdown?.totalOrders ?? 0,
-        };
-      },
-      { skus: [], orderCount: 0 }
-    );
+    const q = normalizeAnalysisRange(query);
+    const breakdown: any = await api.get<any>(`/analysis/sku-breakdown${qs(q)}`);
+    if (!Array.isArray(breakdown?.data)) throw new Error('Analysis SKU report is unavailable');
+    return {
+      skus: breakdown.data.map(reportingSkuDtoFromBackend),
+      orderCount: Number(breakdown.totalOrders),
+      totals: reportingTotalsFromBackend(breakdown.totals),
+      window: breakdown.window,
+    };
   },
 
   // ─── Manifests ─────────────────────────────────────────────────────────────

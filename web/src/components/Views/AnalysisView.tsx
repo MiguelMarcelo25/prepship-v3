@@ -31,9 +31,9 @@ import {
   getAnalysisSummaryText,
   getInitialAnalysisFilters,
   sortAnalysisRows,
-  buildAnalysisTotals,
   type AnalysisSortDir,
   type AnalysisSortKey,
+  type AnalysisTotals,
   DEFAULT_COLUMN_ORDER,
   REQUIRED_COLUMNS,
   readStoredColumnLayout,
@@ -214,7 +214,9 @@ interface AnalysisDataState {
   error: string | null
   rows: AnalysisSkuDto[]
   orderCount: number
+  totals: AnalysisTotals | null
   chartData: AnalysisDailySalesResponse | null
+  chartError: string | null
 }
 
 // CA-time delegation per boss directive 2026-05-07. AnalysisView
@@ -675,7 +677,9 @@ export default function AnalysisView({
     error: null,
     rows: [],
     orderCount: 0,
+    totals: null,
     chartData: null,
+    chartError: null,
   })
   const [skuDrawer, setSkuDrawer] = useState<InventorySkuOrdersDto | null>(null)
   const [skuDrawerTitle, setSkuDrawerTitle] = useState('Loading…')
@@ -708,7 +712,7 @@ export default function AnalysisView({
     () => sortAnalysisRows(filteredRows, sortKey, sortDir),
     [filteredRows, sortKey, sortDir],
   )
-  const totals = useMemo(() => buildAnalysisTotals(sortedRows), [sortedRows])
+  const totals = search.trim() ? null : dataState.totals
   const pagedRows = useMemo(() => {
     const start = (page - 1) * pageSize
     return sortedRows.slice(start, start + pageSize)
@@ -1009,7 +1013,13 @@ export default function AnalysisView({
   useEffect(() => {
     let active = true
     const loadAnalysis = async () => {
-      setDataState((current) => ({ ...current, loading: true, error: null, chartData: null }))
+      setDataState((current) => ({
+        ...current,
+        loading: true,
+        error: null,
+        chartData: null,
+        chartError: null,
+      }))
       try {
         const query = {
           from: from || undefined,
@@ -1023,7 +1033,9 @@ export default function AnalysisView({
           error: null,
           rows: skuData.skus || [],
           orderCount: skuData.orderCount || 0,
+          totals: skuData.totals || null,
           chartData: null,
+          chartError: null,
         })
         void apiClient.fetchAnalysisDailySales(query)
           .then((chartData) => {
@@ -1033,11 +1045,14 @@ export default function AnalysisView({
               chartData,
             }))
           })
-          .catch(() => {
+          .catch((chartError) => {
             if (!active) return
             setDataState((current) => ({
               ...current,
               chartData: null,
+              chartError: chartError instanceof Error
+                ? chartError.message
+                : 'Failed to load sales trend',
             }))
           })
       } catch (error) {
@@ -1046,6 +1061,7 @@ export default function AnalysisView({
           ...current,
           loading: false,
           error: error instanceof Error ? error.message : 'Failed to load analysis',
+          totals: null,
         }))
       }
     }
@@ -1520,7 +1536,14 @@ export default function AnalysisView({
           </div>
         </div>
 
-        {hasChart ? (
+        {dataState.chartError ? (
+          <div
+            role="alert"
+            className="border-t border-line px-4 py-3 text-sm text-danger"
+          >
+            Sales trend unavailable: {dataState.chartError}
+          </div>
+        ) : hasChart ? (
           <AnalysisTopSkusChart data={dataState.chartData!} />
         ) : null}
       </div>

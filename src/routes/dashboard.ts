@@ -19,7 +19,7 @@ import { buildProvenance, markCached, type DashboardProvenance } from '../lib/an
 import { sumSkuUnits, sumLastNSkuUnits } from '../lib/sku-units';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
-import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
+import { buildReportingWindow } from '../services/reporting-projection';
 import { hasAppPermission } from '../middleware/auth';
 import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
@@ -205,21 +205,14 @@ function orderVisibilityWhere(
   );
 }
 
-function isoDayStart(day: string): string {
-  return californiaDayStart(day).toISOString();
-}
-
-function isoDayEnd(day: string): string {
-  return californiaDayEnd(day).toISOString();
-}
-
 async function loadDashboardSummary(
   c: Context,
   q: z.infer<typeof dashboardSummaryQuery>,
 ) {
   const startedAt = performance.now();
-  const fromDate = californiaDayStart(q.from);
-  const toDate = californiaDayEnd(q.to);
+  const reportingWindow = buildReportingWindow({ from: q.from, to: q.to });
+  const fromDate = new Date(reportingWindow.dateFrom);
+  const toDate = new Date(reportingWindow.dateToInclusive);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const sevenFrom = q.sevenFrom ?? q.from;
   const scope = dashboardScopeFromContext(c);
@@ -376,8 +369,9 @@ async function loadDashboardSummary(
 
 app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => {
   const q = c.req.valid('query');
-  const fromDate = californiaDayStart(q.from);
-  const toDate = californiaDayEnd(q.to);
+  const reportingWindow = buildReportingWindow({ from: q.from, to: q.to });
+  const fromDate = new Date(reportingWindow.dateFrom);
+  const toDate = new Date(reportingWindow.dateToInclusive);
   const scope = dashboardScopeFromContext(c);
   const where = orderVisibilityWhere(c, q, fromDate, toDate, scope);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
@@ -432,8 +426,9 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
 // line. Returns long rows; the frontend pivots to one line per client.
 app.get('/daily-revenue-by-client', zValidator('query', dashboardRangeQuery), async (c) => {
   const q = c.req.valid('query');
-  const fromDate = californiaDayStart(q.from);
-  const toDate = californiaDayEnd(q.to);
+  const reportingWindow = buildReportingWindow({ from: q.from, to: q.to });
+  const fromDate = new Date(reportingWindow.dateFrom);
+  const toDate = new Date(reportingWindow.dateToInclusive);
   const scope = dashboardScopeFromContext(c);
   const where = orderVisibilityWhere(c, q, fromDate, toDate, scope, { excludeCancelled: true });
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
@@ -482,8 +477,9 @@ app.get('/shipping-margin', zValidator('query', dashboardRangeQuery), async (c) 
   const q = c.req.valid('query');
   const scope = dashboardScopeFromContext(c);
   const canViewFinancials = canViewDashboardFinancials(c);
-  const dateFrom = isoDayStart(q.from);
-  const dateTo = isoDayEnd(q.to);
+  const reportingWindow = buildReportingWindow({ from: q.from, to: q.to });
+  const dateFrom = reportingWindow.dateFrom;
+  const dateTo = reportingWindow.dateToExclusive;
   const cacheKey = analyticsCacheKey('dashboard.shipping-margin.v1', {
     from: q.from,
     to: q.to,
@@ -559,8 +555,8 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
   if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
   const result = await getSkuDailyFromOrderItems({
-    dateFrom: isoDayStart(q.from),
-    dateTo: isoDayEnd(q.to),
+    dateFrom: q.from,
+    dateTo: q.to,
     clientId: q.clientId,
     storeId: q.storeId,
     clientIds: scope.clientIds,
@@ -614,8 +610,8 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
   if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
   const result = await getSkuBreakdownFromOrderItems({
-    dateFrom: isoDayStart(q.from),
-    dateTo: isoDayEnd(q.to),
+    dateFrom: q.from,
+    dateTo: q.to,
     clientId: q.clientId,
     storeId: q.storeId,
     clientIds: scope.clientIds,
@@ -631,6 +627,8 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
+    totals: result.totals,
+    window: result.window,
     meta: buildProvenance({ from: q.from, to: q.to, computedAt }),
   };
   void setAnalyticsCache(cacheKey, payload, 120);
@@ -664,8 +662,8 @@ app.get('/top-combos', zValidator('query', dashboardTopCombosQuery), async (c) =
   if (cached) return c.json(cached.meta ? { ...cached, meta: markCached(cached.meta) } : cached);
 
   const result = await getComboBreakdownFromOrderItems({
-    dateFrom: isoDayStart(q.from),
-    dateTo: isoDayEnd(q.to),
+    dateFrom: q.from,
+    dateTo: q.to,
     clientId: q.clientId,
     storeId: q.storeId,
     clientIds: scope.clientIds,

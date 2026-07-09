@@ -9,23 +9,15 @@ import { activeClientPredicateSql, testOrInactiveClientPredicateSql } from '../l
 import { aggregateOrderComboSales } from '../services/combo-sales';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
-
-// v2-parity: exact list from apps/api/src/common/prepship-config.ts.
-// v4 previously used a broad regex `(priority|express|overnight|expedited|...)`
-// which over-matched `usps_priority_mail` as expedited. v2 treats USPS priority
-// as standard; only priority_mail_express is expedited. The regex was inflating
-// AnalysisView "expedited" counts for every USPS priority shipment.
-const EXPEDITED_SERVICES = [
-  'ups_2nd_day_air', 'ups_2nd_day_air_am',
-  'ups_next_day_air', 'ups_next_day_air_saver', 'ups_next_day_air_early_am',
-  'ups_3_day_select',
-  'usps_priority_mail_express',
-  'fedex_2day', 'fedex_2day_am',
-  'fedex_express_saver',
-  'fedex_priority_overnight', 'fedex_standard_overnight', 'fedex_first_overnight',
-] as const;
-
-const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`;
+import {
+  buildReportingDateBuckets,
+  buildReportingWindow,
+  projectAnalysisSkuFinancials,
+  projectAnalysisSkuTotals,
+  REPORTING_EXPEDITED_SERVICES_SQL,
+  reportingOrderShipmentProjectionJoinSql,
+  reportingShipmentCostJoinSql,
+} from '../services/reporting-projection';
 
 const app = new Hono();
 
@@ -75,30 +67,12 @@ app.get('/overview', async (c) => {
          where s.voided = false and s.ship_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})) as shipped_month,
-      (select coalesce(sum(marked_cost),0)::text
+      (select coalesce(sum(selected_cost),0)::text
          from (
            select
-             case
-               when lower(cost_model.markup->>'type') in ('pct', 'percent')
-                 then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
-               when lower(cost_model.markup->>'type') in ('amount', 'flat')
-                 then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
-               else cost_model.base_cost
-             end as marked_cost
+             reporting_cost.selected_cost as selected_cost
            from shipments s
-           left join settings pid_markup
-             on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
-           left join settings carrier_markup
-             on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
-           cross join lateral (
-             select
-               (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
-               case
-                 when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
-                   then coalesce(pid_markup.value, carrier_markup.value)::jsonb
-                 else null::jsonb
-               end as markup
-           ) cost_model
+           ${reportingShipmentCostJoinSql('s')}
            where s.voided = false and s.ship_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
              and ${analysisShipmentScopePredicate(scope)}
              and not exists (select 1 from clients c where c.id = s.client_id and ${sql.raw(testOrInactiveClientPredicateSql('c'))})
@@ -124,15 +98,17 @@ app.get('/overview', async (c) => {
   });
 });
 
+const reportingDateValue = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T.*)?$/);
 const rangeQuery = z.object({
-  dateFrom: z.string().datetime(),
-  dateTo: z.string().datetime(),
+  dateFrom: reportingDateValue,
+  dateTo: reportingDateValue,
 });
 
 app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
   const q = c.req.valid('query');
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
+  const window = buildReportingWindow({ from: q.dateFrom, to: q.dateTo });
+  const fromIso = window.dateFrom;
+  const toIso = window.dateToInclusive;
   const dailyShipmentsScope = analysisScopeFromContext(c);
   const canViewFinancials = canViewAnalysisFinancials(c);
   const rows = await db.execute<{
@@ -143,29 +119,9 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     select
       to_char(date_trunc('day', s.ship_date at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
       count(*)::int as count,
-      coalesce(sum(
-        case
-          when lower(cost_model.markup->>'type') in ('pct', 'percent')
-            then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
-          when lower(cost_model.markup->>'type') in ('amount', 'flat')
-            then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
-          else cost_model.base_cost
-        end
-      ), 0)::text as total_cost
+      coalesce(sum(reporting_cost.selected_cost), 0)::text as total_cost
     from shipments s
-    left join settings pid_markup
-      on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
-    left join settings carrier_markup
-      on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
-    cross join lateral (
-      select
-        (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
-        case
-          when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
-            then coalesce(pid_markup.value, carrier_markup.value)::jsonb
-          else null::jsonb
-        end as markup
-    ) cost_model
+    ${reportingShipmentCostJoinSql('s')}
     where s.voided = false
       and s.ship_date >= ${fromIso}::timestamptz
       and s.ship_date <= ${toIso}::timestamptz
@@ -219,15 +175,6 @@ type AnalysisScopeInput = ClientStoreScopeQuery & { storeId?: number; isRestrict
 
 export type SkuDailyQuery = z.infer<typeof skuDailyQuery> & ClientStoreScopeQuery;
 
-function buildDateBuckets(fromIso: string, toIso: string) {
-  const startMs = Date.parse(`${fromIso.slice(0, 10)}T00:00:00.000Z`);
-  const endMs = Date.parse(`${toIso.slice(0, 10)}T00:00:00.000Z`);
-  const days = Math.max(1, Math.round((endMs - startMs) / 86_400_000) + 1);
-  return Array.from({ length: days }, (_, index) =>
-    new Date(startMs + index * 86_400_000).toISOString().slice(0, 10)
-  );
-}
-
 function analysisScopeFromContext(c: Context): ClientStoreScope {
   return getClientStoreScope({
     email: c.get('email' as never) as string | undefined,
@@ -263,10 +210,7 @@ function withAnalysisScope<T extends object>(c: Context, q: T): T & ClientStoreS
 function analysisOrderScopePredicate(q: AnalysisScopeInput): SQL {
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(q.clientIds);
-  const storeIds = normalizeScopeIds([
-    ...(q.storeIds ?? []),
-    ...(q.storeId !== undefined ? [q.storeId] : []),
-  ]);
+  const storeIds = normalizeScopeIds(q.storeIds);
 
   if (clientIds.length) {
     predicates.push(sql`o.client_id = any(${intArraySql(clientIds)})`);
@@ -279,6 +223,15 @@ function analysisOrderScopePredicate(q: AnalysisScopeInput): SQL {
   }
   if (predicates.length === 1) return predicates[0]!;
   return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function analysisSelectedOrderPredicate(q: AnalysisScopeInput & { clientId?: number }): SQL {
+  const predicates: SQL[] = [];
+  if (q.clientId !== undefined) predicates.push(sql`o.client_id = ${q.clientId}`);
+  if (q.storeId !== undefined) predicates.push(sql`o.store_id = ${q.storeId}`);
+  if (!predicates.length) return sql`true`;
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` and `)})`;
 }
 
 function analysisShipmentScopePredicate(q: AnalysisScopeInput): SQL {
@@ -304,9 +257,9 @@ function analysisShipmentScopePredicate(q: AnalysisScopeInput): SQL {
 }
 
 export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
-  const cid: number | null = q.clientId ?? null;
+  const window = buildReportingWindow({ from: q.dateFrom, to: q.dateTo });
+  const fromIso = window.dateFrom;
+  const toIso = window.dateToInclusive;
   const topLimit = q.top ?? q.topN ?? 5;
   const cancelledFilter = q.includeCancelled
     ? sql`true`
@@ -337,8 +290,8 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
         and o.order_date <= ${toIso}::timestamptz
         ${testOrderFilter}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-        and (${cid}::int is null or o.client_id = ${cid}::int)
         and ${analysisOrderScopePredicate(q)}
+        and ${analysisSelectedOrderPredicate(q)}
         and oi.quantity > 0
         and oi.sku <> ''
         and (
@@ -359,7 +312,7 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
     limit ${topLimit}
   `);
 
-  const dateBuckets = buildDateBuckets(fromIso, toIso);
+  const dateBuckets = buildReportingDateBuckets(window);
   const skus = top.map((t) => t.sku);
   if (!skus.length) {
     return { topSkus: [], days: dateBuckets.map((day) => ({ day })) };
@@ -382,8 +335,8 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
       and o.order_date <= ${toIso}::timestamptz
       ${testOrderFilter}
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-      and (${cid}::int is null or o.client_id = ${cid}::int)
       and ${analysisOrderScopePredicate(q)}
+      and ${analysisSelectedOrderPredicate(q)}
       and oi.quantity > 0
       and oi.sku <> ''
       and (
@@ -455,24 +408,16 @@ type SkuBreakdownRow = {
   ship_count_with_cost: number;
   total_qty: number;
   total_shipping: string;
-  // 2026-05-12: revenue + avg-selling-price feed the Analysis page's
-  // new "Total Revenue" and "Avg Selling Price" columns. total_revenue
-  // is summed server-side as SUM(unit_price × qty) across every non-
-  // cancelled order containing this SKU. avg_selling_price is derived
-  // on the FE as total_revenue / total_qty (units, not orders) so we
-  // don't ship two numbers when one suffices. unit_price comes from
-  // orders.items.unitPrice (camel) or orders.items.unit_price (snake)
-  // — both shapes appear depending on the marketplace integration that
-  // ingested the order.
+  // Revenue feeds the backend financial projection, which also owns
+  // weighted average selling price and contribution profit.
   total_revenue: string;
   // 2026-05-13: per-SKU selling-fee total (commission + shipping
   // commission + processing fees from Walmart Marketplace; future
   // marketplaces add in). Allocated per-unit just like
-  // total_shipping above. FE renders this in the new "Selling Fees"
-  // column and derives `profit = revenue - shipping - selling_fee`
-  // for the "Profit" column. Returns "0" (not null) for SKUs whose
-  // orders haven't been synced via api/carriers/walmart/fees.ts yet.
+  // total_shipping above. selling_fee_complete distinguishes a real
+  // zero fee from an order whose fee data has not been synced.
   total_selling_fee: string;
+  selling_fee_complete: boolean;
   // Per-day unit map: { 'YYYY-MM-DD': units } for each day this SKU had
   // activity in the selected range. The route pads this to a dense
   // aligned array (one slot per day in the range, zeros for quiet days)
@@ -514,9 +459,9 @@ async function ensureSellingFeeColumns(): Promise<void> {
 export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
   await ensureSellingFeeColumns();
 
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
-  const cid: number | null = q.clientId ?? null;
+  const window = buildReportingWindow({ from: q.dateFrom, to: q.dateTo });
+  const fromIso = window.dateFrom;
+  const toIso = window.dateToInclusive;
   const cancelledFilter = q.includeCancelled
     ? sql`true`
     : sql`coalesce(o.order_status, '') <> 'cancelled'`;
@@ -539,53 +484,27 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
         o.order_status                                                      as order_status,
         coalesce(ls.service_code, o.service_code)                           as service_code,
         ls.order_id                                                         as shipment_order_id,
-        coalesce(ls.label_cost, 0)                                          as label_cost,
+        coalesce(ls.selected_cost, 0)                                      as label_cost,
+        coalesce(ls.standard_cost, 0)                                      as standard_label_cost,
+        coalesce(ls.expedited_cost, 0)                                     as expedited_label_cost,
         oi.sku                                                              as sku,
         oi.sku                                                              as sku_key,
         coalesce(nullif(oi.name, ''), '-')                                  as name,
         nullif(oi.image_url, '')                                            as image_url,
         greatest(0, coalesce(oi.quantity, 0))::int                          as qty,
         coalesce(oi.unit_price, 0)::numeric                                 as unit_price,
-        coalesce(o.selling_fee, 0)::numeric                                 as order_selling_fee
+        coalesce(o.selling_fee, 0)::numeric                                 as order_selling_fee,
+        o.selling_fee_synced_at is not null                                 as selling_fee_complete
       from order_items oi
       join orders o on o.id = oi.order_id
       left join clients c on c.id = o.client_id
-      left join lateral (
-        select
-          s.order_id,
-          s.service_code,
-          case
-            when lower(cost_model.markup->>'type') in ('pct', 'percent')
-              then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
-            when lower(cost_model.markup->>'type') in ('amount', 'flat')
-              then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
-            else cost_model.base_cost
-          end as label_cost
-        from shipments s
-        left join settings pid_markup
-          on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
-        left join settings carrier_markup
-          on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
-        cross join lateral (
-          select
-            (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
-            case
-              when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
-                then coalesce(pid_markup.value, carrier_markup.value)::jsonb
-              else null::jsonb
-            end as markup
-        ) cost_model
-        where s.order_id = o.id
-          and coalesce(s.voided, false) = false
-        order by s.id desc
-        limit 1
-      ) ls on true
+      ${reportingOrderShipmentProjectionJoinSql(sql`o.id`, 'ls')}
       where ${cancelledFilter}
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         ${testOrderFilter}
-        and (${cid}::int is null or o.client_id = ${cid}::int)
         and ${analysisOrderScopePredicate(q)}
+        and ${analysisSelectedOrderPredicate(q)}
         and oi.quantity > 0
         and oi.sku <> ''
         and (o.client_id is null or ${sql.raw(activeClientPredicateSql('c'))})
@@ -600,6 +519,8 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
         max(service_code)                                                    as service_code,
         max(shipment_order_id)                                               as shipment_order_id,
         max(label_cost)                                                      as label_cost,
+        max(standard_label_cost)                                             as standard_label_cost,
+        max(expedited_label_cost)                                            as expedited_label_cost,
         sku_key,
         max(sku)                                                             as sku,
         (array_agg(name order by length(name) desc))[1]                      as name,
@@ -607,7 +528,8 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
         sum(qty)::int                                                        as qty,
         max(unit_price)::numeric                                             as unit_price,
         sum(unit_price * qty)::numeric                                       as line_revenue,
-        max(order_selling_fee)::numeric                                      as order_selling_fee
+        max(order_selling_fee)::numeric                                      as order_selling_fee,
+        bool_or(selling_fee_complete)                                        as selling_fee_complete
       from item_rows
       group by order_id, sku_key
     ),
@@ -620,67 +542,73 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
           else false
         end                                                                 as is_external,
         case
-          when lower(coalesce(r.service_code, '')) = ANY(${EXPEDITED_SERVICES_SQL})
+          when lower(coalesce(r.service_code, '')) = ANY(${REPORTING_EXPEDITED_SERVICES_SQL})
             then 'exp'
           else 'std'
         end                                                                 as ship_class
       from order_sku_rows r
     ),
     sku_inventory as (
-      select distinct on (lower(inv.sku))
+      select distinct on (inv.client_id, lower(inv.sku))
+        inv.client_id,
         lower(inv.sku) as sku_lc,
         inv.id
       from inventory inv
       where inv.sku is not null and inv.sku <> ''
-      order by lower(inv.sku), inv.id
+      order by inv.client_id, lower(inv.sku), inv.id
     ),
     sku_day_agg as (
       select
+        a.client_id,
         a.sku_key,
         to_char(a.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD') as day,
         sum(a.qty)::int as qty
       from allocated a
-      group by a.sku_key, to_char(a.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD')
+      group by a.client_id, a.sku_key, to_char(a.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD')
     ),
     sku_daily_json as (
-      select sku_key, jsonb_object_agg(day, qty) as daily_qty_map
+      select client_id, sku_key, jsonb_object_agg(day, qty) as daily_qty_map
       from sku_day_agg
-      group by sku_key
+      group by client_id, sku_key
     )
     select
       max(sku)                                                                 as sku,
       (array_agg(name order by length(name) desc))[1]                           as name,
       max(image_url)                                                            as image_url,
       min(inv.id)::int                                                          as inv_sku_id,
-      (array_agg(client_id order by order_date asc nulls last))[1]::int          as client_id,
-      (array_agg(client_name order by order_date asc nulls last))[1]             as client_name,
+      a.client_id::int                                                           as client_id,
+      max(client_name)                                                           as client_name,
       count(*)::int                                                             as orders,
       greatest(
         count(*)::int
           - count(*) filter (where is_external)::int
-          - count(*) filter (where not is_external and label_cost > 0 and ship_class = 'std')::int
-          - count(*) filter (where not is_external and label_cost > 0 and ship_class = 'exp')::int,
+          - count(*) filter (where not is_external and label_cost > 0)::int,
         0
       )::int                                                                    as pending,
       count(*) filter (where is_external)::int                                   as ext_shipped,
       count(*) filter (where not is_external and ship_class = 'std')::int         as std_orders,
-      count(*) filter (where not is_external and label_cost > 0 and ship_class = 'std')::int as std_ship_count,
-      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::text as std_total,
-      coalesce(sum(qty) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::int as std_qty_total,
+      count(*) filter (where not is_external and standard_label_cost > 0)::int as std_ship_count,
+      coalesce(sum(standard_label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and standard_label_cost > 0), 0)::text as std_total,
+      coalesce(sum(qty) filter (where not is_external and standard_label_cost > 0), 0)::int as std_qty_total,
       count(*) filter (where not is_external and ship_class = 'exp')::int         as exp_orders,
-      count(*) filter (where not is_external and label_cost > 0 and ship_class = 'exp')::int as exp_ship_count,
-      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::text as exp_total,
-      coalesce(sum(qty) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::int as exp_qty_total,
+      count(*) filter (where not is_external and expedited_label_cost > 0)::int as exp_ship_count,
+      coalesce(sum(expedited_label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and expedited_label_cost > 0), 0)::text as exp_total,
+      coalesce(sum(qty) filter (where not is_external and expedited_label_cost > 0), 0)::int as exp_qty_total,
       count(*) filter (where not is_external and label_cost > 0)::int             as ship_count_with_cost,
       sum(qty)::int                                                              as total_qty,
       coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping,
       coalesce(sum(line_revenue), 0)::text                                       as total_revenue,
-      coalesce(sum(order_selling_fee * qty / nullif(order_qty_total, 0)) filter (where not is_external and order_selling_fee > 0), 0)::text as total_selling_fee,
+      coalesce(sum(order_selling_fee * qty / nullif(order_qty_total, 0)) filter (where order_selling_fee > 0), 0)::text as total_selling_fee,
+      bool_and(selling_fee_complete)                                          as selling_fee_complete,
       (array_agg(sdj.daily_qty_map))[1]                                          as daily_qty_map
     from allocated a
-    left join sku_inventory inv on inv.sku_lc = lower(a.sku)
-    left join sku_daily_json sdj on sdj.sku_key = a.sku_key
-    group by a.sku_key
+    left join sku_inventory inv
+      on inv.sku_lc = lower(a.sku)
+     and inv.client_id is not distinct from a.client_id
+    left join sku_daily_json sdj
+      on sdj.sku_key = a.sku_key
+     and sdj.client_id is not distinct from a.client_id
+    group by a.client_id, a.sku_key
     order by total_qty desc
     limit ${q.limit}
   `);
@@ -690,8 +618,8 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
     where ${cancelledFilter}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
-      and (${cid}::int is null or o.client_id = ${cid}::int)
       and ${analysisOrderScopePredicate(q)}
+      and ${analysisSelectedOrderPredicate(q)}
       and (
         o.client_id is null
         or exists (
@@ -701,7 +629,7 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
       )
   `);
 
-  const dateBuckets = buildDateBuckets(fromIso, toIso);
+  const dateBuckets = buildReportingDateBuckets(window);
   const canViewFinancials = q.canViewFinancials !== false;
   const enrichedRows = rows.map((r) => {
     const map = (r.daily_qty_map ?? {}) as Record<string, number>;
@@ -712,21 +640,30 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
     const { daily_qty_map: _omit, ...rest } = r as SkuBreakdownRow & {
       daily_qty_map?: unknown;
     };
+    const financials = projectAnalysisSkuFinancials(
+      rest as unknown as Record<string, unknown>,
+      canViewFinancials,
+    );
     return {
       ...rest,
       std_total: canViewFinancials ? rest.std_total : '0',
       exp_total: canViewFinancials ? rest.exp_total : '0',
       total_shipping: canViewFinancials ? rest.total_shipping : '0',
+      total_revenue: canViewFinancials ? rest.total_revenue : '0',
       total_selling_fee: canViewFinancials ? rest.total_selling_fee : '0',
+      ...financials,
       daily_qty: dailyQty,
     };
   });
+  const totals = projectAnalysisSkuTotals(enrichedRows, canViewFinancials);
 
   return {
     rows: enrichedRows,
     dateBuckets,
     totalSkus: enrichedRows.length,
     totalOrders: totalOrders[0]?.count ?? 0,
+    totals: { ...totals, totalOrders: totalOrders[0]?.count ?? 0 },
+    window,
   };
 }
 
@@ -741,9 +678,9 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
 export async function getComboBreakdownFromOrderItems(
   q: SkuBreakdownQuery & { limit?: number },
 ) {
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
-  const cid: number | null = q.clientId ?? null;
+  const window = buildReportingWindow({ from: q.dateFrom, to: q.dateTo });
+  const fromIso = window.dateFrom;
+  const toIso = window.dateToInclusive;
   const cancelledFilter = q.includeCancelled
     ? sql`true`
     : sql`coalesce(o.order_status, '') <> 'cancelled'`;
@@ -776,8 +713,8 @@ export async function getComboBreakdownFromOrderItems(
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       ${testOrderFilter}
-      and (${cid}::int is null or o.client_id = ${cid}::int)
       and ${analysisOrderScopePredicate(q)}
+      and ${analysisSelectedOrderPredicate(q)}
       and oi.quantity > 0
       and oi.sku <> ''
       and (o.client_id is null or ${sql.raw(activeClientPredicateSql('c'))})
@@ -813,15 +750,17 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
     dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
+    totals: result.totals,
+    window: result.window,
   });
 });
 
 app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
   const q = c.req.valid('query');
   const topSkusScope = withAnalysisScope(c, q);
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
-  const cid: number | null = q.clientId ?? null;
+  const window = buildReportingWindow({ from: q.dateFrom, to: q.dateTo });
+  const fromIso = window.dateFrom;
+  const toIso = window.dateToInclusive;
   const rows = await db.execute<{
     sku: string;
     total_qty: number;
@@ -835,8 +774,8 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
     join orders o on o.id = oi.order_id
     where o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
-      and (${cid}::int is null or o.client_id = ${cid}::int)
       and ${analysisOrderScopePredicate(topSkusScope)}
+      and ${analysisSelectedOrderPredicate(topSkusScope)}
       and oi.sku is not null
       and oi.sku <> ''
       and oi.quantity > 0
@@ -870,6 +809,8 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
     dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
+    totals: result.totals,
+    window: result.window,
   });
 });
 

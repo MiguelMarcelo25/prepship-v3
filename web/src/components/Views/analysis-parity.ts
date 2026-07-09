@@ -20,10 +20,8 @@ export type AnalysisSortKey =
   | 'revenue'
   | 'avgPrice'
   // 2026-05-13: two new columns powered by per-order seller fees
-  // fetched from Walmart Marketplace (eventually eBay too). `fees`
-  // shows the per-SKU sum of selling fees; `profit` is the derived
-  // bottom line = revenue - shipping - fees. COGS layered in later
-  // when inventory carries per-unit cost reliably across the catalog.
+  // fetched from Walmart Marketplace (eventually eBay too). Both are
+  // backend reporting projections; this module only sorts their values.
   | 'fees'
   | 'profit'
 
@@ -53,24 +51,19 @@ export interface AnalysisTotals {
   // 2026-05-12 (v2): the Std / Exp cells now show ONLY the dollar
   // subtotal per class (the order/unit breakdown moved to a tooltip),
   // so the footer needs running sums of the per-class dollar subtotals.
-  // Source: row.standardShipTotal / row.expeditedShipTotal — the raw
-  // SUM(label_cost × qty / order_qty_total) FILTER (...) values from
-  // the backend.
+  // Values are returned by the backend reporting projection.
   totalStdShipping: number
   totalExpShipping: number
-  // 2026-05-12: footer accumulators for the new revenue / avg-price
-  // columns. totalRevenue sums the per-SKU revenue across visible
-  // rows; avgPrice is computed FE-side from totalRevenue / totalQty
-  // (we don't sum avg prices — that's mathematically meaningless).
-  totalRevenue: number
-  totalShipping: number
-  // 2026-05-13: footer accumulators for the new Selling Fees + Profit
-  // columns. totalSellingFee sums the per-SKU fee values; totalProfit
-  // is computed FE-side as totalRevenue - totalShipping - totalSellingFee
-  // so the footer summary always equals the per-row math operators
-  // see above it.
-  totalSellingFee: number
-  totalProfit: number
+  standardAvgShipping: number | null
+  expeditedAvgShipping: number | null
+  // Financial totals and weighted averages come from the backend.
+  totalRevenue: number | null
+  avgSellingPrice: number | null
+  totalShipping: number | null
+  // Null preserves incomplete or forbidden financial data.
+  totalSellingFee: number | null
+  totalProfit: number | null
+  financialsState: 'available' | 'incomplete' | 'forbidden'
 }
 
 export const ANALYSIS_CHART_COLORS = ['#2a5bd7', '#16a34a', '#e07a00', '#c62828', '#7c3aed', '#0891b2', '#be185d', '#92400e']
@@ -426,14 +419,7 @@ function getSortValue(row: AnalysisSkuDto, key: AnalysisSortKey) {
     case 'fees':
       return (row as { totalSellingFee?: number }).totalSellingFee ?? 0
     case 'profit': {
-      // Derived = revenue - shipping - selling fees. Computed inline
-      // here so sorting matches the cell's displayed value exactly.
-      // No COGS for now — when inventory carries reliable per-unit
-      // cost we'll subtract `cost × qty` too.
-      const revenue = (row as { totalRevenue?: number }).totalRevenue ?? 0
-      const shipping = row.totalShipping ?? 0
-      const fees = (row as { totalSellingFee?: number }).totalSellingFee ?? 0
-      return revenue - shipping - fees
+      return (row as { profit?: number | null }).profit ?? 0
     }
   }
 }
@@ -456,70 +442,6 @@ export function sortAnalysisRows(rows: AnalysisSkuDto[], sortKey: AnalysisSortKe
     if (leftValue < rightValue) return -direction
     if (leftValue > rightValue) return direction
     return 0
-  })
-}
-
-export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
-  return rows.reduce<AnalysisTotals>((totals, row) => ({
-    skuCount: totals.skuCount + 1,
-    totalOrders: totals.totalOrders + toAnalysisNumber(row.orders),
-    totalPending: totals.totalPending + toAnalysisNumber(row.pendingOrders),
-    totalExternal: totals.totalExternal + toAnalysisNumber(row.externalOrders),
-    totalQty: totals.totalQty + toAnalysisNumber(row.qty),
-    totalStdCount: totals.totalStdCount + toAnalysisNumber(row.standardShipCount),
-    totalExpCount: totals.totalExpCount + toAnalysisNumber(row.expeditedShipCount),
-    // Per-class UNIT totals. The API ships these as standardShipQtyTotal
-    // / expeditedShipQtyTotal (see v2-apiClient.ts) — populated by the
-    // backend's std_qty_total / exp_qty_total SUM(qty) FILTER queries.
-    totalStdQty:
-      totals.totalStdQty
-      + toAnalysisNumber((row as { standardShipQtyTotal?: number }).standardShipQtyTotal),
-    totalExpQty:
-      totals.totalExpQty
-      + toAnalysisNumber((row as { expeditedShipQtyTotal?: number }).expeditedShipQtyTotal),
-    totalStdShipping:
-      totals.totalStdShipping
-      + toAnalysisNumber((row as { standardShipTotal?: number }).standardShipTotal),
-    totalExpShipping:
-      totals.totalExpShipping
-      + toAnalysisNumber((row as { expeditedShipTotal?: number }).expeditedShipTotal),
-    totalShipping: totals.totalShipping + toAnalysisNumber(row.totalShipping),
-    totalRevenue:
-      totals.totalRevenue
-      + toAnalysisNumber((row as { totalRevenue?: number }).totalRevenue),
-    // 2026-05-13: footer rollups for the new fees + profit columns.
-    // totalSellingFee is the raw running sum; totalProfit accumulates
-    // the per-row profit so the footer matches what an operator would
-    // get by hand-summing the column. Note this is NOT
-    // totalRevenue - totalShipping - totalSellingFee at the footer
-    // level — each row's profit can be negative (a SKU with high fees
-    // and low revenue) and we want that signed reality in the total.
-    totalSellingFee:
-      totals.totalSellingFee
-      + toAnalysisNumber((row as { totalSellingFee?: number }).totalSellingFee),
-    totalProfit:
-      totals.totalProfit
-      + (
-        toAnalysisNumber((row as { totalRevenue?: number }).totalRevenue)
-        - toAnalysisNumber(row.totalShipping)
-        - toAnalysisNumber((row as { totalSellingFee?: number }).totalSellingFee)
-      ),
-  }), {
-    skuCount: 0,
-    totalOrders: 0,
-    totalPending: 0,
-    totalExternal: 0,
-    totalQty: 0,
-    totalStdCount: 0,
-    totalExpCount: 0,
-    totalStdQty: 0,
-    totalExpQty: 0,
-    totalStdShipping: 0,
-    totalExpShipping: 0,
-    totalShipping: 0,
-    totalRevenue: 0,
-    totalSellingFee: 0,
-    totalProfit: 0,
   })
 }
 
@@ -562,6 +484,6 @@ export function getAnalysisChartMaxValue(data: AnalysisDailySalesResponse) {
 }
 
 export function formatAnalysisMoney(amount: number | null | undefined) {
-  if (!amount) return '—'
+  if (amount === null || amount === undefined) return '—'
   return `$${amount.toFixed(2)}`
 }

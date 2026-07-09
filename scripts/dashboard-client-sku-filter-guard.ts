@@ -38,10 +38,16 @@ assert.ok(/getSkuBreakdownFromOrderItems\(\{[\s\S]{0,200}clientId: q\.clientId/.
 const clientKeyedCaches = dashboardRoute.split('clientId: q.clientId ?? null').length - 1;
 assert.ok(clientKeyedCaches >= 4,
   `dashboard analytics cache keys must include clientId (found ${clientKeyedCaches}, need >= 4)`);
-// The SQL actually applies it (both helpers, all their queries).
-const cidPredicates = analysis.split('::int is null or o.client_id = ').length - 1;
-assert.ok(cidPredicates >= 5,
-  `analysis SKU queries must filter by clientId (found ${cidPredicates} predicates, need >= 5)`);
+// PS-418 centralizes the requested client/store narrowing. Both SKU helpers
+// and every supporting query delegate to this predicate instead of repeating
+// nullable SQL clauses that can drift apart.
+const selectedScopeUses = analysis.split('analysisSelectedOrderPredicate(q)').length - 1;
+assert.ok(
+  analysis.includes('if (q.clientId !== undefined) predicates.push(sql`o.client_id = ${q.clientId}`)')
+    && analysis.includes('sql.join(predicates, sql` and `)')
+    && selectedScopeUses >= 5,
+  `analysis SKU queries must delegate to the AND-narrowing client/store predicate (found ${selectedScopeUses} uses, need >= 5)`,
+);
 
 // ── FE: ONE canonical filter; the chart dropdown drives it ─────────────────
 assert.ok(!dashboardView.includes('const [trendClientId'),

@@ -30,6 +30,10 @@ import {
   syncShipStationProducts,
 } from '../services/inventory-enrichment';
 import { getFreshInventoryRiskMetricMap } from '../services/reporting-metrics';
+import {
+  buildReportingWindow,
+  reportingOrderShipmentProjectionJoinSql,
+} from '../services/reporting-projection';
 
 const app = new Hono();
 
@@ -41,21 +45,6 @@ const booleanQuery = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
-// PS-133: route timing/logging helpers (InventoryRouteTimings / msSince / timedInventoryStep /
-// logSlowInventoryRoute) moved to ../lib/route-timing (imported below). The only guard-safe +
-// byte-identity-safe slice of the inventory analytics decomposition; the analytics query/DTO logic
-// stays here (guard-pinned + InventoryView-DTO critical).
-const EXPEDITED_SERVICES = [
-  'ups_2nd_day_air', 'ups_2nd_day_air_am',
-  'ups_next_day_air', 'ups_next_day_air_saver', 'ups_next_day_air_early_am',
-  'ups_3_day_select',
-  'usps_priority_mail_express',
-  'fedex_2day', 'fedex_2day_am',
-  'fedex_express_saver',
-  'fedex_priority_overnight', 'fedex_standard_overnight', 'fedex_first_overnight',
-] as const;
-
-const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`;
 const activeInventoryClientPredicate = sql`(
   ${inventory.clientId} is null
   or exists (
@@ -731,11 +720,13 @@ app.get(
     if (!row) return c.json({ error: 'Inventory item not found' }, 404);
 
     const since = dateFrom
-      ? new Date(dateFrom).toISOString()
+      ? buildReportingWindow({ from: dateFrom, to: dateFrom }).dateFrom
       : days
         ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
         : null;
-    const until = dateTo ? new Date(dateTo).toISOString() : null;
+    const until = dateTo
+      ? buildReportingWindow({ from: dateTo, to: dateTo }).dateToInclusive
+      : null;
     const dateFilterSql = sql`
       ${since ? sql`and o.order_date >= ${since}::timestamptz` : sql``}
       ${until ? sql`and o.order_date <= ${until}::timestamptz` : sql``}
@@ -760,6 +751,7 @@ app.get(
         )
       )
       and ${inventoryOrderScopePredicate(skuOrdersScope)}
+      and o.client_id is not distinct from ${row.clientId}::int
     `;
     const walmartCanonicalOrderFilter = walmartDirectDuplicateSuppressionPredicate('o');
 
@@ -835,7 +827,8 @@ app.get(
           o.order_status                                                     as order_status,
           coalesce(ls.service_code, o.service_code)                          as service_code,
           ls.order_id                                                        as shipment_order_id,
-          coalesce(ls.marked_cost, 0)                                        as label_cost,
+          coalesce(ls.selected_cost, 0)                                      as label_cost,
+          coalesce(ls.standard_cost, 0)                                      as standard_label_cost,
           oi.sku                                                            as sku,
           oi.sku                                                            as sku_key,
           coalesce(nullif(oi.name, ''), '-')                                 as name,
@@ -843,36 +836,7 @@ app.get(
         from matching_order_ids moi
         join orders o on o.id = moi.id
         join order_items oi on oi.order_id = o.id
-        left join lateral (
-          select
-            s.order_id,
-            s.service_code,
-            case
-              when lower(cost_model.markup->>'type') in ('pct', 'percent')
-                then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
-              when lower(cost_model.markup->>'type') in ('amount', 'flat')
-                then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
-              else cost_model.base_cost
-            end as marked_cost
-          from shipments s
-          left join settings pid_markup
-            on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
-          left join settings carrier_markup
-            on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
-          cross join lateral (
-            select
-              (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
-              case
-                when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
-                  then coalesce(pid_markup.value, carrier_markup.value)::jsonb
-              else null::jsonb
-            end as markup
-          ) cost_model
-          where s.order_id = o.id
-            and coalesce(s.voided, false) = false
-          order by s.id desc
-          limit 1
-        ) ls on true
+        ${reportingOrderShipmentProjectionJoinSql(sql`o.id`, 'ls')}
         where oi.quantity > 0
       ),
       order_sku_rows as (
@@ -882,6 +846,7 @@ app.get(
           max(service_code)                                                    as service_code,
           max(shipment_order_id)                                               as shipment_order_id,
           max(label_cost)                                                      as label_cost,
+          max(standard_label_cost)                                             as standard_label_cost,
           sku_key,
           max(sku)                                                             as sku,
           sum(qty)::int                                                        as qty
@@ -895,39 +860,30 @@ app.get(
           case
             when r.order_status = 'shipped' and r.shipment_order_id is null then true
             else false
-          end                                                                 as is_external,
-          case
-            when lower(coalesce(r.service_code, '')) = ANY(${EXPEDITED_SERVICES_SQL})
-              then 'exp'
-            else 'std'
-          end                                                                 as ship_class
+          end                                                                 as is_external
         from order_sku_rows r
       )
       select
         count(*) filter (
           where lower(sku) = lower(${row.sku})
             and not is_external
-            and label_cost > 0
-            and ship_class = 'std'
+            and standard_label_cost > 0
         )::int as standard_ship_count,
-        coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (
+        coalesce(sum(standard_label_cost * qty / nullif(order_qty_total, 0)) filter (
           where lower(sku) = lower(${row.sku})
             and not is_external
-            and label_cost > 0
-            and ship_class = 'std'
+            and standard_label_cost > 0
         ), 0)::text as standard_shipping_total,
         coalesce(
-          sum(label_cost * qty / nullif(order_qty_total, 0)) filter (
+          sum(standard_label_cost * qty / nullif(order_qty_total, 0)) filter (
             where lower(sku) = lower(${row.sku})
               and not is_external
-              and label_cost > 0
-              and ship_class = 'std'
+              and standard_label_cost > 0
           )
           / nullif(sum(qty) filter (
             where lower(sku) = lower(${row.sku})
               and not is_external
-              and label_cost > 0
-              and ship_class = 'std'
+              and standard_label_cost > 0
           ), 0),
           0
         )::text as avg_standard_shipping_cost
@@ -973,7 +929,8 @@ app.get(
           o.carrier_code                                                     as carrier_code,
           coalesce(ls.service_code, o.service_code)                          as service_code,
           ls.order_id                                                        as shipment_order_id,
-          coalesce(ls.marked_cost, 0)                                        as label_cost,
+          coalesce(ls.selected_cost, 0)                                      as label_cost,
+          coalesce(ls.standard_cost, 0)                                      as standard_label_cost,
           coalesce(o.externally_shipped, false)                              as externally_shipped_flag,
           oi.sku                                                            as sku,
           oi.sku                                                            as sku_key,
@@ -983,36 +940,7 @@ app.get(
         from matching_order_ids moi
         join orders o on o.id = moi.id
         join order_items oi on oi.order_id = o.id
-        left join lateral (
-          select
-            s.order_id,
-            s.service_code,
-            case
-              when lower(cost_model.markup->>'type') in ('pct', 'percent')
-                then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
-              when lower(cost_model.markup->>'type') in ('amount', 'flat')
-                then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
-              else cost_model.base_cost
-            end as marked_cost
-          from shipments s
-          left join settings pid_markup
-            on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
-          left join settings carrier_markup
-            on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
-          cross join lateral (
-            select
-              (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
-              case
-                when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
-                  then coalesce(pid_markup.value, carrier_markup.value)::jsonb
-                else null::jsonb
-              end as markup
-          ) cost_model
-          where s.order_id = o.id
-            and coalesce(s.voided, false) = false
-          order by s.id desc
-          limit 1
-        ) ls on true
+        ${reportingOrderShipmentProjectionJoinSql(sql`o.id`, 'ls')}
         where oi.quantity > 0
       ),
       order_sku_rows as (
@@ -1026,6 +954,7 @@ app.get(
           max(service_code)                                                    as service_code,
           max(shipment_order_id)                                               as shipment_order_id,
           max(label_cost)                                                      as label_cost,
+          max(standard_label_cost)                                             as standard_label_cost,
           bool_or(externally_shipped_flag)                                     as externally_shipped_flag,
           sku_key,
           max(sku)                                                             as sku,
@@ -1042,12 +971,7 @@ app.get(
           case
             when r.order_status = 'shipped' and r.shipment_order_id is null then true
             else false
-          end                                                                 as is_external,
-          case
-            when lower(coalesce(r.service_code, '')) = ANY(${EXPEDITED_SERVICES_SQL})
-              then 'exp'
-            else 'std'
-          end                                                                 as ship_class
+          end                                                                 as is_external
         from order_sku_rows r
       )
       select
@@ -1070,11 +994,11 @@ app.get(
           else null
         end as shipping_total,
         case
-          when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost / nullif(order_qty_total, 0))::text
+          when not is_external and standard_label_cost > 0 then (standard_label_cost / nullif(order_qty_total, 0))::text
           else null
         end as standard_shipping_cost,
         case
-          when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost * qty / nullif(order_qty_total, 0))::text
+          when not is_external and standard_label_cost > 0 then (standard_label_cost * qty / nullif(order_qty_total, 0))::text
           else null
         end as standard_shipping_total,
         (is_external or externally_shipped_flag)                               as is_external_shipped

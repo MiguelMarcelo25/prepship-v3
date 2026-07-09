@@ -62,7 +62,7 @@ interface AnalysisDataTableProps {
   onResetColumn: (key: AnalysisSortKey) => void
   columnSize: AnalysisColumnSize
   rows: AnalysisSkuDto[]
-  totals: AnalysisTotals
+  totals: AnalysisTotals | null
   maxQty: number
   loading: boolean
   error: string | null
@@ -303,27 +303,8 @@ export function AnalysisDataTable({
           ) : showRows ? (
             rows.map((row) => {
               const isClickable = Boolean(row.invSkuId)
-              // Per-UNIT shipping average (boss directive 2026-05-07):
-              // divide by total UNITS shipped via this class, not by
-              // order count. So a 2-unit / $23 order shows $11.50/unit
-              // instead of $23/order. The API allocates mixed-SKU label
-              // costs by item units before returning the class totals.
-              // Falls back to ship-count divisor if qty total is missing
-              // (older API response).
-              const stdQtyDivisor =
-                (row as { standardShipQtyTotal?: number }).standardShipQtyTotal ??
-                row.standardShipCount
-              const expQtyDivisor =
-                (row as { expeditedShipQtyTotal?: number }).expeditedShipQtyTotal ??
-                row.expeditedShipCount
-              const stdAvg =
-                stdQtyDivisor > 0
-                  ? (row.standardShipTotal ?? 0) / stdQtyDivisor
-                  : 0
-              const expAvg =
-                expQtyDivisor > 0
-                  ? (row.expeditedShipTotal ?? 0) / expQtyDivisor
-                  : 0
+              const stdAvg = (row as { standardAvgShipping?: number | null }).standardAvgShipping ?? null
+              const expAvg = (row as { expeditedAvgShipping?: number | null }).expeditedAvgShipping ?? null
 
               const rowClasses = [
                 'transition-[background,box-shadow] duration-150',
@@ -478,7 +459,7 @@ export function AnalysisDataTable({
                             className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}
                             title={
                               row.standardShipCount > 0
-                                ? `Standard shipping subtotal: ${formatAnalysisMoney(row.standardShipTotal)}\n${row.standardShipCount} orders · ${row.standardShipQtyTotal ?? 0} units · ${stdAvg ? formatAnalysisMoney(stdAvg) : '$0.00'}/unit`
+                                ? `Standard shipping subtotal: ${formatAnalysisMoney(row.standardShipTotal)}\n${row.standardShipCount} orders · ${row.standardShipQtyTotal ?? 0} units · ${formatAnalysisMoney(stdAvg)}/unit`
                                 : 'No std-class shipments'
                             }
                           >
@@ -486,7 +467,7 @@ export function AnalysisDataTable({
                               <>
                                 <span className="font-bold">{row.standardShipQtyTotal ?? 0}</span>
                                 <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ok">
-                                  {formatAnalysisMoney(stdAvg)}
+                                  {stdAvg === null ? '—' : formatAnalysisMoney(stdAvg)}
                                 </span>
                               </>
                             ) : (
@@ -501,7 +482,7 @@ export function AnalysisDataTable({
                             className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}
                             title={
                               row.expeditedShipCount > 0
-                                ? `Expedited shipping subtotal: ${formatAnalysisMoney(row.expeditedShipTotal)}\n${row.expeditedShipCount} orders · ${row.expeditedShipQtyTotal ?? 0} units · ${expAvg ? formatAnalysisMoney(expAvg) : '$0.00'}/unit`
+                                ? `Expedited shipping subtotal: ${formatAnalysisMoney(row.expeditedShipTotal)}\n${row.expeditedShipCount} orders · ${row.expeditedShipQtyTotal ?? 0} units · ${formatAnalysisMoney(expAvg)}/unit`
                                 : 'No exp-class shipments'
                             }
                           >
@@ -513,7 +494,7 @@ export function AnalysisDataTable({
                                   {row.expeditedShipQtyTotal ?? 0}
                                 </span>
                                 <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
-                                  {formatAnalysisMoney(expAvg)}
+                                  {expAvg === null ? '—' : formatAnalysisMoney(expAvg)}
                                 </span>
                               </>
                             ) : (
@@ -524,7 +505,7 @@ export function AnalysisDataTable({
                       case 'total':
                         return (
                           <td key="total" className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-extrabold text-[14px] text-ink ${TD_BASE}`}>
-                            {row.totalShipping > 0 ? (
+                            {row.totalShipping !== null && row.totalShipping !== undefined ? (
                               formatAnalysisMoney(row.totalShipping)
                             ) : (
                               <span className="text-ink-3">—</span>
@@ -538,42 +519,39 @@ export function AnalysisDataTable({
                         // operators reconciling against Walmart / eBay
                         // payout reports can sanity-check the math without
                         // opening the SKU drawer.
-                        const revenue = (row as { totalRevenue?: number }).totalRevenue ?? 0
-                        const avg = (row as { avgSellingPrice?: number }).avgSellingPrice ?? 0
+                        const revenue = (row as { totalRevenue?: number | null }).totalRevenue ?? null
+                        const avg = (row as { avgSellingPrice?: number | null }).avgSellingPrice ?? null
                         return (
                           <td
                             key="revenue"
                             className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-bold text-[14px] text-ink ${TD_BASE}`}
                             title={
-                              revenue > 0
+                              revenue !== null
                                 ? `Total revenue: ${formatAnalysisMoney(revenue)}\n${row.qty.toLocaleString()} units · ${formatAnalysisMoney(avg)}/unit avg`
                                 : 'No revenue recorded for this SKU'
                             }
                           >
-                            {revenue > 0
+                            {revenue !== null
                               ? formatAnalysisMoney(revenue)
                               : <span className="text-line-2">—</span>}
                           </td>
                         )
                       }
                       case 'avgPrice': {
-                        // Per-unit average selling price. Computed FE-side
-                        // as revenue / units so the value always matches
-                        // the revenue cell's tooltip. Italic to signal
-                        // "derived" (not a server aggregate the operator
-                        // can cross-check against an invoice line item).
-                        const avg = (row as { avgSellingPrice?: number }).avgSellingPrice ?? 0
+                        // Per-unit average selling price from the backend
+                        // reporting projection.
+                        const avg = (row as { avgSellingPrice?: number | null }).avgSellingPrice ?? null
                         return (
                           <td
                             key="avgPrice"
                             className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-semibold text-[13px] italic text-ink-2 ${TD_BASE}`}
                             title={
-                              avg > 0
+                              avg !== null
                                 ? `${formatAnalysisMoney(avg)} avg per unit (revenue ÷ units)`
                                 : 'No unit price data on this SKU'
                             }
                           >
-                            {avg > 0
+                            {avg !== null
                               ? formatAnalysisMoney(avg)
                               : <span className="text-line-2">—</span>}
                           </td>
@@ -588,36 +566,28 @@ export function AnalysisDataTable({
                         // 3-7 days, so the cell shows '—' for the most
                         // recent orders even after sync). Tooltip
                         // explains the lag so it isn't read as a bug.
-                        const fees = (row as { totalSellingFee?: number }).totalSellingFee ?? 0
+                        const fees = (row as { totalSellingFee?: number | null }).totalSellingFee ?? null
                         return (
                           <td
                             key="fees"
                             className={`${cellPadding} text-left whitespace-nowrap tabular-nums font-semibold text-[13px] text-ink-2 ${TD_BASE}`}
                             title={
-                              fees > 0
+                              fees !== null
                                 ? `Marketplace fees: ${formatAnalysisMoney(fees)}\nPull latest from Settings → Stores → "Pull Fees" on the Walmart row. Settlement lags delivery by ~3-7 days.`
                                 : 'No fee data yet — run Pull Fees from Settings → Stores → Walmart row, or wait for nightly sync.'
                             }
                           >
-                            {fees > 0
+                            {fees !== null
                               ? formatAnalysisMoney(fees)
                               : <span className="text-line-2">—</span>}
                           </td>
                         )
                       }
                       case 'profit': {
-                        // Derived bottom line per SKU = revenue -
-                        // shipping - selling fees. COGS will subtract
-                        // here too once inventory carries reliable
-                        // per-unit cost. Green when positive, red when
-                        // negative, gray when the inputs are
-                        // incomplete (no revenue OR no fees yet) so
-                        // operators don't mistake "$0" for "broke even".
-                        const revenue = (row as { totalRevenue?: number }).totalRevenue ?? 0
-                        const shipping = row.totalShipping ?? 0
-                        const fees = (row as { totalSellingFee?: number }).totalSellingFee ?? 0
-                        const profit = revenue - shipping - fees
-                        const hasInputs = revenue > 0
+                        // Contribution profit from the backend reporting
+                        // projection. Null preserves incomplete inputs.
+                        const profit = (row as { profit?: number | null }).profit ?? null
+                        const hasInputs = profit !== null
                         const tone = !hasInputs
                           ? 'text-ink-3'
                           : profit > 0
@@ -631,14 +601,14 @@ export function AnalysisDataTable({
                             className={`${cellPadding} text-left whitespace-nowrap tabular-nums font-extrabold text-[14px] ${tone} ${TD_BASE}`}
                             title={
                               hasInputs
-                                ? `Profit = revenue − shipping − fees\n${formatAnalysisMoney(revenue)} − ${formatAnalysisMoney(shipping)} − ${formatAnalysisMoney(fees)} = ${formatAnalysisMoney(profit)}\n(COGS not yet subtracted; layered in once inventory carries reliable per-unit cost)`
-                                : 'Needs revenue data — set unit prices on order line items.'
+                                ? `Backend-projected contribution profit: ${formatAnalysisMoney(profit)}\nCOGS is not yet subtracted.`
+                                : 'Profit unavailable until revenue and marketplace fee data are complete.'
                             }
                           >
                             {hasInputs ? (
                               <>
-                                {profit < 0 ? '−' : ''}
-                                {formatAnalysisMoney(Math.abs(profit))}
+                                {profit! < 0 ? '−' : ''}
+                                {formatAnalysisMoney(Math.abs(profit!))}
                               </>
                             ) : (
                               <span className="text-line-2">—</span>
@@ -656,7 +626,7 @@ export function AnalysisDataTable({
           ) : null}
         </tbody>
         <tfoot id="analysis-tfoot">
-          {showRows ? (
+          {showRows && totals ? (
             <tr className="bg-gradient-to-b from-[#f8fafc] to-[#eef3f8] border-t-2 border-line font-bold">
               {/* Footer cells render in the same dynamic order as the
                   body. The previous version used colSpan={3} to merge
@@ -731,10 +701,7 @@ export function AnalysisDataTable({
                     // per unit as the green inline price. Tooltip
                     // still spells out orders + units + subtotal for
                     // anyone reconciling against ShipStation invoices.
-                    const stdFooterAvg =
-                      totals.totalStdQty > 0 && totals.totalStdShipping > 0
-                        ? totals.totalStdShipping / totals.totalStdQty
-                        : 0
+                    const stdFooterAvg = totals.standardAvgShipping
                     return (
                       <td
                         key="stdOrders"
@@ -750,7 +717,7 @@ export function AnalysisDataTable({
                           <>
                             <span className="font-bold">{totals.totalStdQty.toLocaleString()}</span>
                             <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ok">
-                              {formatAnalysisMoney(stdFooterAvg)}
+                              {stdFooterAvg === null ? '—' : formatAnalysisMoney(stdFooterAvg)}
                             </span>
                           </>
                         ) : '—'}
@@ -758,10 +725,7 @@ export function AnalysisDataTable({
                     )
                   }
                   case 'expOrders': {
-                    const expFooterAvg =
-                      totals.totalExpQty > 0 && totals.totalExpShipping > 0
-                        ? totals.totalExpShipping / totals.totalExpQty
-                        : 0
+                    const expFooterAvg = totals.expeditedAvgShipping
                     return (
                       <td
                         key="expOrders"
@@ -777,7 +741,7 @@ export function AnalysisDataTable({
                           <>
                             <span className="font-bold">{totals.totalExpQty.toLocaleString()}</span>
                             <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
-                              {formatAnalysisMoney(expFooterAvg)}
+                              {expFooterAvg === null ? '—' : formatAnalysisMoney(expFooterAvg)}
                             </span>
                           </>
                         ) : '—'}
@@ -788,7 +752,7 @@ export function AnalysisDataTable({
                     return (
                       <td key="total" className={`${ftBase} text-center text-[13px] text-ink font-extrabold`}>
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalShipping > 0 ? formatAnalysisMoney(totals.totalShipping) : '—'}
+                        {totals.totalShipping === null ? '—' : formatAnalysisMoney(totals.totalShipping)}
                       </td>
                     )
                   case 'revenue':
@@ -797,37 +761,29 @@ export function AnalysisDataTable({
                         key="revenue"
                         className={`${ftBase} text-center text-[13px] text-ink font-extrabold`}
                         title={
-                          totals.totalRevenue > 0
+                          totals.totalRevenue !== null
                             ? `Total revenue across all SKUs: ${formatAnalysisMoney(totals.totalRevenue)}\n${totals.totalQty.toLocaleString()} units`
                             : 'No revenue recorded'
                         }
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalRevenue > 0 ? formatAnalysisMoney(totals.totalRevenue) : '—'}
+                        {totals.totalRevenue === null ? '—' : formatAnalysisMoney(totals.totalRevenue)}
                       </td>
                     )
                   case 'avgPrice': {
-                    // Footer avgPrice = totalRevenue / totalQty across ALL
-                    // visible SKUs. This is the weighted-by-units average
-                    // selling price for the entire visible set, NOT the
-                    // arithmetic mean of per-row averages (which would
-                    // double-count low-volume SKUs).
-                    const footerAvg =
-                      totals.totalQty > 0 && totals.totalRevenue > 0
-                        ? totals.totalRevenue / totals.totalQty
-                        : 0
+                    const footerAvg = totals.avgSellingPrice
                     return (
                       <td
                         key="avgPrice"
                         className={`${ftBase} text-center text-[13px] italic font-bold text-ink-2`}
                         title={
-                          footerAvg > 0
+                          footerAvg !== null
                             ? `Weighted avg across all SKUs: ${formatAnalysisMoney(footerAvg)}/unit\n${formatAnalysisMoney(totals.totalRevenue)} ÷ ${totals.totalQty.toLocaleString()} units`
                             : 'No unit price data'
                         }
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {footerAvg > 0 ? formatAnalysisMoney(footerAvg) : '—'}
+                        {footerAvg === null ? '—' : formatAnalysisMoney(footerAvg)}
                       </td>
                     )
                   }
@@ -837,13 +793,13 @@ export function AnalysisDataTable({
                         key="fees"
                         className={`${ftBase} text-left text-[13px] text-ink-2 font-bold`}
                         title={
-                          totals.totalSellingFee > 0
+                          totals.totalSellingFee !== null
                             ? `Total marketplace fees across all SKUs: ${formatAnalysisMoney(totals.totalSellingFee)}`
                             : 'No fee data yet — run Pull Fees from Settings → Stores → Walmart.'
                         }
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalSellingFee > 0
+                        {totals.totalSellingFee !== null
                           ? formatAnalysisMoney(totals.totalSellingFee)
                           : '—'}
                       </td>
@@ -855,19 +811,21 @@ export function AnalysisDataTable({
                     // 0 strictly because "$0.00 even" is its own neutral
                     // tone (gray) rather than green.
                     const profitTone =
-                      totals.totalProfit > 0
+                      totals.totalProfit !== null && totals.totalProfit > 0
                         ? 'text-ok'
-                        : totals.totalProfit < 0
+                        : totals.totalProfit !== null && totals.totalProfit < 0
                           ? 'text-danger'
                           : 'text-ink-2'
                     return (
                       <td
                         key="profit"
                         className={`${ftBase} text-left text-[13px] font-extrabold ${profitTone}`}
-                        title={`Total profit across all SKUs = ${formatAnalysisMoney(totals.totalRevenue)} revenue − ${formatAnalysisMoney(totals.totalShipping)} shipping − ${formatAnalysisMoney(totals.totalSellingFee)} fees = ${formatAnalysisMoney(totals.totalProfit)}`}
+                        title={totals.totalProfit === null
+                          ? 'Profit unavailable until revenue and marketplace fee data are complete.'
+                          : `Backend-projected contribution profit: ${formatAnalysisMoney(totals.totalProfit)}`}
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalRevenue > 0 ? (
+                        {totals.totalProfit !== null ? (
                           <>
                             {totals.totalProfit < 0 ? '−' : ''}
                             {formatAnalysisMoney(Math.abs(totals.totalProfit))}

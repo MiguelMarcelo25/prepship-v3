@@ -66,8 +66,11 @@ check('the /sku-trends route emits per-SKU units from result.days via the owner 
 
 // 3. FE surfaces + prefers the backend units (delegating the fallback) --------------------------
 const api = read('web/src/lib/v2-apiClient.ts');
-check('FE sku-trends mapper surfaces unitsBySku (additive)', () =>
-  assert.ok(/unitsBySku\[u\.sku\] = \{ units30: Number\(u\.units30\) \|\| 0/.test(api)));
+check('FE sku-trends mapper surfaces backend unitsBySku without recomputing it', () => {
+  assert.ok(/unitsBySku\[units\.sku\] = \{/.test(api));
+  assert.ok(/units30: requiredReportingNumber\(units\.units30/.test(api));
+  assert.ok(/units7: requiredReportingNumber\(units\.units7/.test(api));
+});
 const dash = read('web/src/components/Views/DashboardView.tsx');
 check('DashboardView imports the shared owner', () =>
   assert.ok(/from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/sku-units'/.test(dash)));

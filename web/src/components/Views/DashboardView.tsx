@@ -1707,7 +1707,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       const cid = selectedClientId ?? undefined
 
       const clientsPromise = apiClient
-        .listClients()
+        .listReportingClients()
         .then((clientsRes: any[]) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           const nextClients = safeArray<any>(clientsRes)
@@ -1723,8 +1723,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             setSelectedClientId(null)
           }
         })
-        .catch(() => {
-          if (loadSeq === dashboardLoadSeqRef.current) setClients([])
+        .catch((loadError) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setError(loadError instanceof Error ? loadError.message : 'Failed to load client scope')
         })
 
       const criticalMetricsPromise = Promise.all([

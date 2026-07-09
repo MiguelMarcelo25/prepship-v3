@@ -444,28 +444,27 @@ export function normalizeAnalysisRange(query: Record<string, unknown>): Record<s
     if (v == null) continue;
     out[k] = v as string | number | boolean;
   }
-  const toIso = (d: unknown, endOfDay: boolean): string | undefined => {
+  const toDay = (d: unknown): string | undefined => {
     if (typeof d !== 'string' || !d) return undefined;
-    if (d.includes('T')) return d;
-    return new Date(`${d}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`).toISOString();
+    return /^(\d{4}-\d{2}-\d{2})/.exec(d)?.[1];
   };
   if (out.from != null && out.dateFrom == null) {
-    const iso = toIso(out.from, false);
-    if (iso) out.dateFrom = iso;
+    const day = toDay(out.from);
+    if (day) out.dateFrom = day;
     delete out.from;
   }
   if (out.to != null && out.dateTo == null) {
-    const iso = toIso(out.to, true);
-    if (iso) out.dateTo = iso;
+    const day = toDay(out.to);
+    if (day) out.dateTo = day;
     delete out.to;
   }
   if (typeof out.dateFrom === 'string') {
-    const iso = toIso(out.dateFrom, false);
-    if (iso) out.dateFrom = iso;
+    const day = toDay(out.dateFrom);
+    if (day) out.dateFrom = day;
   }
   if (typeof out.dateTo === 'string') {
-    const iso = toIso(out.dateTo, true);
-    if (iso) out.dateTo = iso;
+    const day = toDay(out.dateTo);
+    if (day) out.dateTo = day;
   }
   return out;
 }
