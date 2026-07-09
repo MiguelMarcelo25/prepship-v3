@@ -3,7 +3,7 @@
 // same column widths, same badge behavior. Data plumbing uses v4's adapter
 // (apiClient.fetchRates translates v2 payload shape to v4 server-side).
 //
-// Layout: Configure (220px) | Carriers (190px) | Rates (flex).
+// Layout: Configure (280px) | Carriers (190px) | Rates (flex).
 // Rate fetching: asks the v4 adapter for all scoped carrier IDs in one request.
 // The server still performs ShipStation's one-carrier estimate calls behind the
 // adapter, but does them in parallel so the modal is not blocked account by
@@ -73,6 +73,11 @@ import { buildPartialRateBrowseDisplayState } from './rate-browser-partial-resul
 import { nextRateBrowserPendingPidsAfterPartial } from './rate-browser-pending-state';
 import { rateBrowserOpenBrowseOptions } from './rate-browser-open-workflow';
 import { useRateBrowseWorkflow } from '../hooks/useRateBrowseWorkflow';
+
+const RATE_BROWSER_FIELD_LABEL = 'mb-1.5 text-xs font-bold text-ink';
+const RATE_BROWSER_HINT_LABEL = 'mb-[3px] text-[11px] text-ink-3';
+const RATE_BROWSER_UNIT_LABEL = 'text-[10px] text-ink-3';
+const RATE_BROWSER_SAVED_MARK = 'text-[10px] font-bold text-ok';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
 export type RbLocationDto = {
@@ -2355,48 +2360,22 @@ export default function RateBrowserModal({
       role="dialog"
       aria-modal="true"
       aria-label="Rate Browser"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9000,
-        background: 'rgba(0,0,0,.45)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+      className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/[0.45]"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--surface)',
-          borderRadius: 10,
-          boxShadow: '0 8px 40px rgba(0,0,0,.3)',
-          width: 1280,
-          maxWidth: '97vw',
-          height: 730,
-          maxHeight: '93vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
+        className="flex h-[calc(100vh-32px)] max-h-[820px] w-[1280px] max-w-[97vw] flex-col overflow-hidden rounded-modal bg-surface shadow-[0_8px_40px_rgba(0,0,0,0.3)]"
       >
         {/* Header */}
         <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            padding: '13px 18px',
-            borderBottom: '1px solid var(--border)',
-            flexShrink: 0,
-            background: 'var(--surface2)',
-          }}
+          className="flex shrink-0 items-center border-b border-line bg-surface-2 px-[18px] py-[13px]"
         >
-          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', flex: 1 }}>
+          <span className="flex-1 text-[15px] font-bold text-ink">
             Rate Browser
           </span>
           {/* PS-276 (slice 4-UI): the order's backend resi/comm verdict (one per browse, not per rate). */}
-          <span style={{ marginRight: 12 }} className="text-[11px]">
+          <span className="mr-3 text-[11px]">
             <ResidentialTag facts={residentialTagFacts(order)} />
           </span>
           <button
@@ -2404,15 +2383,7 @@ export default function RateBrowserModal({
             onClick={onClose}
             title="Close"
             aria-label="Close"
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: 22,
-              cursor: 'pointer',
-              color: 'var(--text3)',
-              padding: '0 4px',
-              lineHeight: 1,
-            }}
+            className="cursor-pointer border-0 bg-transparent px-1 text-[22px] leading-none text-ink-3"
           >
             ×
           </button>
@@ -2420,74 +2391,36 @@ export default function RateBrowserModal({
 
         {hugrabGroundSaverBlocked ? (
           <div
-            style={{
-              padding: '8px 18px',
-              borderBottom: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--red)',
-              fontSize: 11.5,
-              fontWeight: 700,
-              lineHeight: 1.4,
-            }}
+            className="border-b border-line bg-surface px-[18px] py-2 text-[11.5px] font-bold leading-[1.4] text-danger"
           >
             {HUGRAB_GROUND_SAVER_BLOCK_REASON}
           </div>
         ) : null}
 
         {/* Body: 3 columns */}
-        <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* LEFT: Configure */}
           <div
-            style={{
-              width: 280,
-              flexShrink: 0,
-              borderRight: '1px solid var(--border)',
-              overflowY: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-              background: 'var(--surface)',
-            }}
+            className="flex w-[280px] shrink-0 flex-col overflow-y-hidden border-r border-line bg-surface"
           >
             <div
-              style={{
-                padding: '14px 14px 0',
-                fontSize: 11,
-                fontWeight: 700,
-                color: 'var(--text3)',
-                textTransform: 'uppercase',
-                letterSpacing: '.5px',
-                marginBottom: 6,
-              }}
+              className="mb-1.5 px-3.5 pt-3.5 text-[11px] font-bold uppercase tracking-[0.5px] text-ink-3"
             >
               Configure Rates
             </div>
 
             <div
-              style={{
-                padding: '0 14px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10,
-                flex: 1,
-              }}
+              className="flex min-h-0 flex-1 flex-col gap-2.5 px-3.5"
             >
               {/* Ship From */}
               <div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: 'var(--text)',
-                    marginBottom: 6,
-                  }}
-                >
+                <div className={RATE_BROWSER_FIELD_LABEL}>
                   Ship From
                 </div>
                 <select
                   value={locationId}
                   onChange={(e) => setLocationId(e.target.value)}
                   className="ship-select"
-                  style={{ width: '100%' }}
                 >
                   {locations.length === 0 && <option value="">No locations loaded</option>}
                   {locations.map((l) => (
@@ -2500,17 +2433,10 @@ export default function RateBrowserModal({
 
               {/* Ship To */}
               <div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: 'var(--text)',
-                    marginBottom: 6,
-                  }}
-                >
+                <div className={RATE_BROWSER_FIELD_LABEL}>
                   Ship To
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Postal Code
                 </div>
                 <input
@@ -2520,17 +2446,9 @@ export default function RateBrowserModal({
                   value={zip}
                   onChange={(e) => setZip(sanitizePostalInput(e.target.value))}
                   className="ship-input"
-                  style={{ width: '100%' }}
                 />
                 <div
-                  style={{
-                    marginTop: 6,
-                    fontSize: 12,
-                    color: 'var(--text2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                  }}
+                  className="mt-1.5 flex items-center gap-[5px] text-xs text-ink-2"
                 >
                   {/* PS-280: show the BACKEND residential/commercial verdict (never "always
                       residential"). Reuses the shared ResidentialTag; on deploy-skew with no
@@ -2539,33 +2457,22 @@ export default function RateBrowserModal({
                     const facts = residentialTagFacts(order)
                     return facts
                       ? <ResidentialTag facts={facts} />
-                      : <span style={{ color: 'var(--text3)', fontSize: 11 }}>Residential · fallback</span>
+                      : <span className="text-[11px] text-ink-3">Residential · fallback</span>
                   })()}
                 </div>
               </div>
 
               {/* Shipment Info */}
               <div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: 'var(--text)',
-                    marginBottom: 8,
-                  }}
-                >
+                <div className="mb-2 text-xs font-bold text-ink">
                   Shipment Information
                 </div>
 
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Weight{' '}
                   {hasWeight && (
                     <span
-                      style={{
-                        color: 'var(--green)',
-                        fontWeight: 700,
-                        fontSize: 10,
-                      }}
+                      className={RATE_BROWSER_SAVED_MARK}
                       title="Weight saved for this SKU"
                     >
                       ✓
@@ -2573,12 +2480,7 @@ export default function RateBrowserModal({
                   )}
                 </div>
                 <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    marginBottom: 10,
-                  }}
+                  className="mb-2.5 flex items-center gap-1"
                 >
                   <input
                     type="number"
@@ -2586,10 +2488,9 @@ export default function RateBrowserModal({
                     step={1}
                     value={wtLb}
                     onChange={(e) => setWtLb(e.target.value)}
-                    className="ship-input"
-                    style={{ width: 54 }}
+                    className="ship-input !w-[54px]"
                   />
-                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>(lb)</span>
+                  <span className="text-[11px] text-ink-3">(lb)</span>
                   <input
                     type="number"
                     min={0}
@@ -2597,20 +2498,18 @@ export default function RateBrowserModal({
                     step={1}
                     value={wtOz}
                     onChange={(e) => setWtOz(e.target.value)}
-                    className="ship-input"
-                    style={{ width: 54 }}
+                    className="ship-input !w-[54px]"
                   />
-                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>(oz)</span>
+                  <span className="text-[11px] text-ink-3">(oz)</span>
                 </div>
 
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Package
                 </div>
                 <select
                   value={packageId}
                   onChange={(e) => onPackageChange(e.target.value)}
-                  className="ship-select"
-                  style={{ width: '100%', marginBottom: 10 }}
+                  className="ship-select mb-2.5"
                 >
                   <option value="">Select Package</option>
                   {packageGroups.custom.length > 0 && (
@@ -2647,15 +2546,11 @@ export default function RateBrowserModal({
                   })}
                 </select>
 
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Size (L × W × H in){' '}
                   {hasDims && (
                     <span
-                      style={{
-                        color: 'var(--green)',
-                        fontWeight: 700,
-                        fontSize: 10,
-                      }}
+                      className={RATE_BROWSER_SAVED_MARK}
                       title="Dims saved for this SKU"
                     >
                       ✓
@@ -2663,13 +2558,7 @@ export default function RateBrowserModal({
                   )}
                 </div>
                 <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 3,
-                    marginBottom: 10,
-                    flexWrap: 'wrap',
-                  }}
+                  className="mb-2.5 flex flex-wrap items-center gap-[3px]"
                 >
                   <input
                     type="number"
@@ -2677,42 +2566,33 @@ export default function RateBrowserModal({
                     step={0.1}
                     value={lenStr}
                     onChange={(e) => setLen(e.target.value)}
-                    className="ship-input"
-                    style={{ width: 48 }}
+                    className="ship-input !w-12"
                   />
-                  <span style={{ fontSize: 10, color: 'var(--text3)' }}>L</span>
+                  <span className={RATE_BROWSER_UNIT_LABEL}>L</span>
                   <input
                     type="number"
                     min={0}
                     step={0.1}
                     value={widStr}
                     onChange={(e) => setWid(e.target.value)}
-                    className="ship-input"
-                    style={{ width: 48 }}
+                    className="ship-input !w-12"
                   />
-                  <span style={{ fontSize: 10, color: 'var(--text3)' }}>W</span>
+                  <span className={RATE_BROWSER_UNIT_LABEL}>W</span>
                   <input
                     type="number"
                     min={0}
                     step={0.1}
                     value={hgtStr}
                     onChange={(e) => setHgt(e.target.value)}
-                    className="ship-input"
-                    style={{ width: 48 }}
+                    className="ship-input !w-12"
                   />
-                  <span style={{ fontSize: 10, color: 'var(--text3)' }}>H</span>
+                  <span className={RATE_BROWSER_UNIT_LABEL}>H</span>
                 </div>
 
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Delivery Confirmation
                   <span
-                    style={{
-                      display: 'block',
-                      fontSize: 10,
-                      color: 'var(--text3)',
-                      fontWeight: 600,
-                      marginTop: 2,
-                    }}
+                    className="mt-0.5 block text-[10px] font-semibold text-ink-3"
                   >
                     Defaults to None
                   </span>
@@ -2724,18 +2604,17 @@ export default function RateBrowserModal({
                     setConfirmation(next);
                     if (anyFetched && !browsing) void browseRates(next, { forceLive: true });
                   }}
-                  className="ship-select"
-                  style={{ width: '100%', marginBottom: 10 }}
+                  className="ship-select mb-2.5"
                 >
                   {CONFIRMATION_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
 
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Insurance
                 </div>
-                <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                <div className="mb-2.5 flex gap-1.5">
                   <select
                     value={insuranceProvider}
                     onChange={(e) => {
@@ -2745,8 +2624,7 @@ export default function RateBrowserModal({
                         void browseRates(confirmation, { forceLive: true, insuranceProviderOverride: next });
                       }
                     }}
-                    className="ship-select"
-                    style={{ flex: 1 }}
+                    className="ship-select flex-1"
                   >
                     <option value="none">None</option>
                     <option value="carrier">Carrier</option>
@@ -2765,9 +2643,8 @@ export default function RateBrowserModal({
                         void browseRates(confirmation, { forceLive: true, insuredValueOverride: next });
                       }
                     }}
-                    className="ship-input"
+                    className={`ship-input !w-[70px] ${insuranceProvider !== 'none' ? 'block' : 'hidden'}`}
                     placeholder="$0"
-                    style={{ width: 70, display: insuranceProvider !== 'none' ? 'block' : 'none' }}
                   />
                 </div>
 
@@ -2813,15 +2690,11 @@ export default function RateBrowserModal({
                     ? `Effective insurance (${selectedAccountLabel}): ${accountVerdict.label}`
                     : `Effective insurance: ${display.label}`;
                   return (
-                    <div style={{ marginTop: -4, marginBottom: 10 }}>
+                    <div className="-mt-1 mb-2.5">
                       <div
                         data-rate-browser="effectiveInsurance"
                         title={backendEffectiveInsurance?.diagnostics ?? undefined}
-                        style={{
-                          fontSize: 11,
-                          color: overridden ? 'var(--amber, #b45309)' : 'var(--text3)',
-                          cursor: 'help',
-                        }}
+                        className={`cursor-help text-[11px] ${overridden ? 'text-warn' : 'text-ink-3'}`}
                       >
                         {primaryLabel}
                         {overridden ? ' (backend policy — included in the totals; totals are label-safe)' : ''}
@@ -2829,7 +2702,7 @@ export default function RateBrowserModal({
                       {accountVerdict && selectedAccountLabel ? (
                         <div
                           data-rate-browser="accountEffectiveInsurance"
-                          style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}
+                          className="mt-0.5 text-[11px] text-ink-3"
                         >
                           Request policy: {display.label}
                         </div>
@@ -2843,25 +2716,16 @@ export default function RateBrowserModal({
                           void browseRates(confirmation, { forceLive: true, manualEstimateCompare: true })
                             .finally(() => setManualEstimateLoading(false));
                         }}
-                        style={{
-                          fontSize: 11,
-                          marginTop: 4,
-                          padding: 0,
-                          border: 'none',
-                          background: 'none',
-                          color: 'var(--brand, #2563eb)',
-                          cursor: browsing || manualEstimateLoading ? 'wait' : 'pointer',
-                          textDecoration: 'underline',
-                        }}
+                        className={`mt-1 border-0 bg-transparent p-0 text-[11px] text-brand underline ${browsing || manualEstimateLoading ? 'cursor-wait' : 'cursor-pointer'}`}
                       >
                         {manualEstimateLoading ? 'Comparing…' : 'Compare ShipStation manual estimate'}
                       </button>
                       {manualForAccount.length ? (
                         <div
                           data-rate-browser="manualEstimateList"
-                          style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, lineHeight: 1.5 }}
+                          className="mt-1 text-[11px] leading-[1.5] text-ink-3"
                         >
-                          <div style={{ fontWeight: 600 }}>
+                          <div className="font-semibold">
                             ShipStation manual estimate (uninsured — not label-safe):
                           </div>
                           {manualForAccount.map((rate, index) => {
@@ -2875,7 +2739,7 @@ export default function RateBrowserModal({
                           })}
                         </div>
                       ) : manualEstimateRates && selectedPid != null ? (
-                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>
+                        <div className="mt-1 text-[11px] text-ink-3">
                           No manual-estimate rows for this account.
                         </div>
                       ) : null}
@@ -2883,14 +2747,13 @@ export default function RateBrowserModal({
                   );
                 })()}
 
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                <div className={RATE_BROWSER_HINT_LABEL}>
                   Service Class
                 </div>
                 <select
                   value={svcClass}
                   onChange={(e) => setSvcClass(e.target.value as '' | 'ground' | 'express')}
-                  className="ship-select"
-                  style={{ width: '100%', marginBottom: 10 }}
+                  className="ship-select mb-2.5"
                 >
                   <option value="">Show All</option>
                   <option value="ground">Ground / Economy</option>
@@ -2901,15 +2764,11 @@ export default function RateBrowserModal({
 
             {/* Browse button pinned to bottom */}
             <div
-              style={{
-                padding: '12px 14px',
-                borderTop: '1px solid var(--border)',
-                flexShrink: 0,
-              }}
+              className="shrink-0 border-t border-line px-3.5 py-3"
             >
               <button
                 type="button"
-                className="btn btn-primary"
+                className="btn btn-primary w-full justify-center p-[9px] text-[13px]"
                 onClick={() => void browseRates(undefined, { forceLive: true })}
                 disabled={
                   browsing ||
@@ -2919,12 +2778,6 @@ export default function RateBrowserModal({
                   zip.length < 5 ||
                   (!testMode && !rateShippingAccounts.length)
                 }
-                style={{
-                  width: '100%',
-                  justifyContent: 'center',
-                  fontSize: 13,
-                  padding: 9,
-                }}
               >
                 {browsing ? 'Fetching...' : anyFetched ? 'Refresh Live Rates' : 'Browse Rates'}
               </button>
@@ -2954,30 +2807,16 @@ export default function RateBrowserModal({
 
           {/* RIGHT: Rates */}
           <div
-            style={{
-              flex: 1,
-              minWidth: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              background: 'var(--surface)',
-            }}
+            className="flex min-w-0 flex-1 flex-col bg-surface"
           >
             {/* Rates top bar */}
             <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '10px 18px',
-                borderBottom: '1px solid var(--border)',
-                flexShrink: 0,
-                background: 'var(--surface2)',
-              }}
+              className="flex shrink-0 items-center gap-2.5 border-b border-line bg-surface-2 px-[18px] py-2.5"
             >
-              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
+              <span className="text-sm font-bold text-ink">
                 {isShopifyOrder ? 'PrepShip Rates' : 'Rates'}
               </span>
-              <span style={{ fontSize: 11.5, color: 'var(--text3)', flex: 1 }}>
+              <span className="flex-1 text-[11.5px] text-ink-3">
                 {rateBrowserHeaderText}
                 {rateBrowseInfo.source === 'cache'
                   ? ` | cached ${formatCacheAge(rateBrowseInfo.cacheAgeMs) ?? ''}`.trimEnd()
@@ -2992,7 +2831,7 @@ export default function RateBrowserModal({
               {bestRateUnresolved && !browsing && totalCarriersLoading === 0 ? (
                 <span
                   role="status"
-                  style={{ fontSize: 11.5, color: 'var(--warn, #b45309)', whiteSpace: 'nowrap' }}
+                  className="whitespace-nowrap text-[11.5px] text-warn"
                 >
                   Best rate unresolved — retry
                 </span>
@@ -3001,36 +2840,25 @@ export default function RateBrowserModal({
                 <span
                   role="status"
                   data-rate-browser="workflowProgress"
-                  style={{ fontSize: 11.5, color: 'var(--text3)', whiteSpace: 'nowrap' }}
+                  className="whitespace-nowrap text-[11.5px] text-ink-3"
                 >
                   {rateWorkflowProgressText}
                 </span>
               ) : null}
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: 11.5,
-                  color: 'var(--text3)',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                }}
-              >
+              <label className="flex cursor-pointer select-none items-center gap-[5px] text-[11.5px] text-ink-3">
                 <input
                   type="checkbox"
                   checked={hideUnavail}
                   onChange={(e) => setHideUnavail(e.target.checked)}
-                  style={{ cursor: 'pointer' }}
+                  className="cursor-pointer"
                 />
                 Hide Unavailable
               </label>
-              <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>View By:</span>
+              <span className="text-[11.5px] text-ink-3">View By:</span>
               <select
                 value={viewMode}
                 onChange={(e) => setViewMode(e.target.value as 'all' | 'carriers')}
-                className="ship-select"
-                style={{ width: 110, fontSize: 12 }}
+                className="ship-select !w-[110px] text-xs"
               >
                 <option value="carriers">Carriers</option>
                 <option value="all">All Rates</option>
@@ -3039,13 +2867,7 @@ export default function RateBrowserModal({
 
             {/* Rates content */}
             <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-              }}
+              className="flex min-h-0 flex-1 flex-col overflow-y-auto"
             >
               {renderShopifyRatesPanel()}
               {/* PS-157: rates body extracted to <RateRowsView>; parent keeps the
