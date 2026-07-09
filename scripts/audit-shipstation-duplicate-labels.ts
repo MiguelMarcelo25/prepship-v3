@@ -158,7 +158,8 @@ function renderCsv(report: DuplicateLabelAuditReport): string {
   const headers = [
     'classification', 'group_key', 'action', 'label_id', 'shipment_id', 'tracking_number',
     'created_at', 'carrier_code', 'service_code', 'shipment_cost', 'insurance_cost',
-    'estimated_refund_amount', 'tracking_status', 'scanned', 'voided', 'refund_status',
+    'estimated_refund_amount', 'tracking_status', 'tracking_first_event_at',
+    'tracking_last_event_at', 'scanned', 'voided', 'refund_status',
     'age_days', 'within_usps_28_day_window', 'within_ups_other_30_day_window',
     'refund_assist_possible', 'manual_void_would_disqualify_refund_assist',
     'package_count', 'weight_oz', 'dimensions', 'label_download_present',
@@ -181,6 +182,8 @@ function renderCsv(report: DuplicateLabelAuditReport): string {
       label.insuranceCost,
       label.estimatedRefundAmount,
       label.trackingStatusCode,
+      label.trackingFirstEventAt,
+      label.trackingLastEventAt,
       label.scanned,
       label.voided,
       label.refundStatus,

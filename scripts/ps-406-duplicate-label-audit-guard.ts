@@ -111,13 +111,22 @@ function audit(labels: ShipStationAuditLabel[], evidence = [local()]) {
       postal_code: '90247',
       country_code: 'US',
     },
-  }, { status_code: 'NY', status_description: 'Not Yet In System', events: [] });
+  }, {
+    status_code: 'IT',
+    status_description: 'In Transit',
+    events: [
+      { occurred_at: '2026-07-10T10:00:00.000Z' },
+      { occurred_at: '2026-07-10T09:00:00.000Z' },
+    ],
+  });
   assert.equal(normalized?.shipmentCost, 8.25);
   assert.equal(normalized?.insuranceCost, 1.5);
   assert.equal(normalized?.labelDownloadPresent, true);
   assert.equal(normalized?.totalWeightOz, 32);
   assert.deepEqual(normalized?.dimensions, { length: 12, width: 9, height: 4 });
-  assert.equal(normalized?.tracking?.statusCode, 'NY');
+  assert.equal(normalized?.tracking?.statusCode, 'IT');
+  assert.equal(normalized?.tracking?.firstEventAt, '2026-07-10T09:00:00.000Z');
+  assert.equal(normalized?.tracking?.lastEventAt, '2026-07-10T10:00:00.000Z');
 }
 
 {
@@ -131,6 +140,14 @@ function audit(labels: ShipStationAuditLabel[], evidence = [local()]) {
     report.groups[0]?.labels.find((row) => row.labelId === 'unused')?.action,
     'VOID_CANDIDATE_DJ_REVIEW',
   );
+}
+
+{
+  const report = audit([
+    label('referenced', { externalOrderId: 'order-1001' }),
+    label('not-persisted', { externalOrderId: 'order-1001' }),
+  ], [local({ providerLabelId: 'referenced' })]);
+  assert.equal(report.groups[0]?.classification, 'SHIPSTATION_ONLY_DUPLICATE_CANDIDATE');
 }
 
 {
@@ -187,11 +204,13 @@ function audit(labels: ShipStationAuditLabel[], evidence = [local()]) {
     label('usps-used', {
       carrierCode: 'stamps_com',
       serviceCode: 'usps_ground_advantage',
+      createdAt: '2026-06-15T11:40:00.000Z',
       tracking: { statusCode: 'DE', statusDescription: 'Delivered', eventCount: 4 },
     }),
     label('refund-assist', {
       carrierCode: 'stamps_com',
       serviceCode: 'usps_ground_advantage',
+      createdAt: '2026-06-15T11:45:00.000Z',
       refundStatus: 'request_scheduled',
     }),
   ], [local({ carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage' })]);
@@ -199,6 +218,8 @@ function audit(labels: ShipStationAuditLabel[], evidence = [local()]) {
   assert.equal(candidate?.action, 'WAIT_REFUND_ASSIST');
   assert.equal(candidate?.withinUsps28DayWindow, true);
   assert.equal(candidate?.manualVoidWouldDisqualifyRefundAssist, true);
+  assert.ok((candidate?.ageDays ?? 0) >= 21);
+  assert.equal(candidate?.estimatedRefundAmount, 8.75);
 }
 
 {

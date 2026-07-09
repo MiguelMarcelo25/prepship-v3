@@ -18,6 +18,8 @@ export type ShipStationAuditTracking = {
   statusCode: string | null;
   statusDescription: string | null;
   eventCount: number;
+  firstEventAt?: string | null;
+  lastEventAt?: string | null;
 };
 
 export type ShipStationAuditLabel = {
@@ -112,6 +114,8 @@ export type DuplicateAuditLabelResult = {
   trackingStatusCode: string | null;
   trackingStatusDescription: string | null;
   trackingEventCount: number;
+  trackingFirstEventAt: string | null;
+  trackingLastEventAt: string | null;
   scanned: boolean | null;
   labelDownloadPresent: boolean;
   packageCount: number;
@@ -245,7 +249,24 @@ function trackingFromRaw(raw: unknown): ShipStationAuditTracking | null {
   const statusDescription = text(value.status_description ?? value.statusDescription);
   const events = Array.isArray(value.events) ? value.events : [];
   if (!statusCode && !statusDescription && events.length === 0) return null;
-  return { statusCode, statusDescription, eventCount: events.length };
+  const eventTimes = events
+    .map(record)
+    .map((event) => text(
+      event.occurred_at
+      ?? event.event_datetime
+      ?? event.event_date_time
+      ?? event.datetime
+      ?? event.timestamp,
+    ))
+    .filter((eventTime): eventTime is string => eventTime != null && !Number.isNaN(Date.parse(eventTime)))
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  return {
+    statusCode,
+    statusDescription,
+    eventCount: events.length,
+    firstEventAt: eventTimes[0] ?? null,
+    lastEventAt: eventTimes.at(-1) ?? null,
+  };
 }
 
 export function normalizeShipStationAuditLabel(
@@ -453,11 +474,20 @@ function classify(rows: WorkingLabel[]): { classification: DuplicateClassificati
   const sameLocalOrder = new Set(active.map((row) => row.localMatch?.row.orderId).filter((id) => id != null)).size <= 1;
   const hasLocal = active.some((row) => row.localMatch != null);
   const hasStrongLocalMatch = active.some((row) => row.localMatch?.matchedBy !== 'recipient_fingerprint');
+  const hasProviderReferencedLabel = active.some((row) => [
+    'provider_label_id',
+    'shipment_id',
+    'tracking_number',
+  ].includes(row.localMatch?.matchedBy ?? ''));
+  const hasUnreferencedLabel = active.some((row) =>
+    row.localMatch == null
+    || row.localMatch.matchedBy === 'external_order_id'
+    || row.localMatch.matchedBy === 'recipient_fingerprint');
 
   if (hasStrongLocalMatch && sameLocalOrder && sameService && samePackage && scanned.length > 0 && unscanned.length > 0) {
     return { classification: 'HIGH_CONFIDENCE', reason: 'Same local order, service, and package has a used/scanned label plus an unscanned label.' };
   }
-  if (!hasLocal && sameService && samePackage) {
+  if ((!hasLocal || (hasProviderReferencedLabel && hasUnreferencedLabel)) && sameService && samePackage) {
     return { classification: 'SHIPSTATION_ONLY_DUPLICATE_CANDIDATE', reason: 'ShipStation labels share an order/address/package fingerprint but no PrepShip shipment matched.' };
   }
   return { classification: 'REVIEW_REQUIRED', reason: 'Multiple close labels matched, but usage, package, service, or local-order evidence is not decisive.' };
@@ -466,6 +496,15 @@ function classify(rows: WorkingLabel[]): { classification: DuplicateClassificati
 function isUsps(label: ShipStationAuditLabel): boolean {
   return ['usps', 'stamps', 'endicia'].some((value) => normalized(label.carrierCode).includes(value))
     || normalized(label.serviceCode).startsWith('usps');
+}
+
+function isEndicia(label: ShipStationAuditLabel): boolean {
+  return normalized(label.carrierCode).includes('endicia');
+}
+
+function isRefundAssistCarrier(label: ShipStationAuditLabel): boolean {
+  const carrier = normalized(label.carrierCode);
+  return !isEndicia(label) && (carrier.includes('stamps') || carrier.includes('usps'));
 }
 
 function ageDays(createdAt: string, asOf: Date): number {
@@ -509,16 +548,22 @@ function resultFor(
 ): DuplicateAuditLabelResult {
   const age = ageDays(row.label.createdAt, asOf);
   const usps = isUsps(row.label);
-  const withinUsps28DayWindow = usps && age <= 28;
-  const withinUpsOther30DayWindow = !usps && age <= 30;
+  const endicia = isEndicia(row.label);
+  const withinUsps28DayWindow = usps && !endicia && age <= 28;
+  const withinUpsOther30DayWindow = (!usps || endicia) && age <= 30;
   const refundAssistPossible = !row.label.voided
     && row.scanState === false
+    && age >= 21
     && withinUsps28DayWindow
+    && isRefundAssistCarrier(row.label)
     && REFUND_ASSIST_STATUSES.has(normalized(row.label.refundStatus));
   const action = actionFor(row, rows, classification, refundAssistPossible);
-  const estimatedRefundAmount = REFUND_CANDIDATE_ACTIONS.has(action)
-    ? Number((row.label.shipmentCost + row.label.insuranceCost).toFixed(2))
-    : 0;
+  const candidateAmount = row.label.shipmentCost + row.label.insuranceCost;
+  const estimatedRefundAmount = action === 'WAIT_REFUND_ASSIST'
+    ? Number((candidateAmount * 0.7).toFixed(2))
+    : REFUND_CANDIDATE_ACTIONS.has(action)
+      ? Number(candidateAmount.toFixed(2))
+      : 0;
   const local = row.localMatch?.row;
 
   return {
@@ -539,6 +584,8 @@ function resultFor(
     trackingStatusCode: row.label.tracking?.statusCode ?? null,
     trackingStatusDescription: row.label.tracking?.statusDescription ?? null,
     trackingEventCount: row.label.tracking?.eventCount ?? 0,
+    trackingFirstEventAt: row.label.tracking?.firstEventAt ?? null,
+    trackingLastEventAt: row.label.tracking?.lastEventAt ?? null,
     scanned: row.scanState,
     labelDownloadPresent: row.label.labelDownloadPresent,
     packageCount: row.label.packageCount,
