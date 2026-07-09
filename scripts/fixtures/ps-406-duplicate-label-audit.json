@@ -1,0 +1,93 @@
+{
+  "asOf": "2026-07-10T12:00:00.000Z",
+  "start": "2026-07-10T00:00:00.000Z",
+  "end": "2026-07-10T23:59:59.999Z",
+  "labels": [
+    {
+      "labelId": "se-used-1001",
+      "shipmentId": "se-shipment-used-1001",
+      "externalOrderId": "fixture-order-1001",
+      "trackingNumber": "fixture-used-tracking",
+      "createdAt": "2026-07-10T11:40:00.000Z",
+      "shipDate": "2026-07-10T00:00:00.000Z",
+      "carrierId": "se-fixture-carrier",
+      "carrierCode": "ups",
+      "serviceCode": "ups_ground",
+      "shipmentCost": 12.5,
+      "insuranceCost": 0,
+      "voided": false,
+      "voidedAt": null,
+      "refundStatus": null,
+      "chargeEvent": "label_creation",
+      "labelDownloadPresent": true,
+      "packageCount": 1,
+      "totalWeightOz": 16,
+      "dimensions": { "length": 10, "width": 8, "height": 4 },
+      "isReturnLabel": false,
+      "recipient": {
+        "name": "Fixture Private Customer",
+        "city": "Gardena",
+        "state": "CA",
+        "postalCode": "90247",
+        "countryCode": "US"
+      },
+      "tracking": { "statusCode": "DE", "statusDescription": "Delivered", "eventCount": 4 }
+    },
+    {
+      "labelId": "se-unused-1001",
+      "shipmentId": "se-shipment-unused-1001",
+      "externalOrderId": "fixture-order-1001",
+      "trackingNumber": "fixture-unused-tracking",
+      "createdAt": "2026-07-10T11:45:00.000Z",
+      "shipDate": "2026-07-10T00:00:00.000Z",
+      "carrierId": "se-fixture-carrier",
+      "carrierCode": "ups",
+      "serviceCode": "ups_ground",
+      "shipmentCost": 12.5,
+      "insuranceCost": 0,
+      "voided": false,
+      "voidedAt": null,
+      "refundStatus": null,
+      "chargeEvent": "label_creation",
+      "labelDownloadPresent": true,
+      "packageCount": 1,
+      "totalWeightOz": 16,
+      "dimensions": { "length": 10, "width": 8, "height": 4 },
+      "isReturnLabel": false,
+      "recipient": {
+        "name": "Fixture Private Customer",
+        "city": "Gardena",
+        "state": "CA",
+        "postalCode": "90247",
+        "countryCode": "US"
+      },
+      "tracking": { "statusCode": "NY", "statusDescription": "Not Yet In System", "eventCount": 0 }
+    }
+  ],
+  "localEvidence": [
+    {
+      "localShipmentId": 9001,
+      "orderId": 1001,
+      "orderNumber": "1001",
+      "externalOrderId": "fixture-order-1001",
+      "sourceOrderId": null,
+      "sourceOrderNumber": "1001",
+      "clientId": 4,
+      "clientName": "HUGRAB",
+      "providerLabelId": null,
+      "labelShipmentId": null,
+      "trackingNumber": null,
+      "carrierCode": "ups",
+      "serviceCode": "ups_ground",
+      "weightOz": 16,
+      "dimensions": { "length": 10, "width": 8, "height": 4 },
+      "recipient": {
+        "name": "Fixture Private Customer",
+        "city": "Gardena",
+        "state": "CA",
+        "postalCode": "90247",
+        "countryCode": "US"
+      }
+    }
+  ]
+}
