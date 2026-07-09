@@ -56,6 +56,7 @@ import { type QueueSendStatusName } from './print-queue/queue-send-status';
 import { setJsonSettings } from './settings-json';
 import {
   getLatestQueueSendJobRecord,
+  getQueueSendJobItemRecords,
   getQueueSendJobRecord,
   persistQueueSendJobItems,
   persistQueueSendJobRecord,
@@ -521,12 +522,14 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
 
 export async function persistQueueSendJobSnapshot(
   job: QueueSendJob,
-  options: { required?: boolean } = {},
+  options: { required?: boolean } & { persistItems?: boolean; persistLegacy?: boolean } = {},
 ): Promise<void> {
   const snapshot = toQueueSendSnapshot(job);
   try {
     await persistQueueSendJobRecord(snapshot);
-    await persistQueueSendJobItems(snapshot.jobId, snapshot.itemStates);
+    if (options.persistItems !== false) {
+      await persistQueueSendJobItems(snapshot.jobId, snapshot.itemStates);
+    }
   } catch (err) {
     console.warn(
       '[print-queue] failed to persist durable batch-send job:',
@@ -538,13 +541,15 @@ export async function persistQueueSendJobSnapshot(
     return;
   }
 
-  try {
-    await persistLegacyQueueSendSettingsSnapshot(snapshot);
-  } catch (err) {
-    console.warn(
-      '[print-queue] failed to persist legacy batch-send status:',
-      err instanceof Error ? err.message : err
-    );
+  if (options.persistLegacy !== false) {
+    try {
+      await persistLegacyQueueSendSettingsSnapshot(snapshot);
+    } catch (err) {
+      console.warn(
+        '[print-queue] failed to persist legacy batch-send status:',
+        err instanceof Error ? err.message : err
+      );
+    }
   }
 }
 
@@ -556,9 +561,28 @@ async function persistLegacyQueueSendSettingsSnapshot(snapshot: QueueSendJobSnap
   ]);
 }
 
+async function withFreshQueueSendItemStates(
+  snapshot: QueueSendJobSnapshot,
+): Promise<QueueSendJobSnapshot> {
+  const records = await getQueueSendJobItemRecords(snapshot.jobId);
+  if (records.length === 0) return snapshot;
+  const snapshotUpdatedAt = Date.parse(snapshot.updatedAt);
+  const latestItemUpdatedAt = records.reduce((latest, record) => {
+    const timestamp = record.updatedAt ? Date.parse(record.updatedAt) : Number.NaN;
+    return Number.isFinite(timestamp) ? Math.max(latest, timestamp) : latest;
+  }, Number.isFinite(snapshotUpdatedAt) ? snapshotUpdatedAt : 0);
+  return {
+    ...snapshot,
+    itemStates: records.map(toQueueSendItemSnapshot),
+    updatedAt: Number.isFinite(latestItemUpdatedAt)
+      ? new Date(latestItemUpdatedAt).toISOString()
+      : snapshot.updatedAt,
+  };
+}
+
 export async function getQueueSendJobSnapshot(jobId: string): Promise<QueueSendJobSnapshot | null> {
   const durableJob = await getQueueSendJobRecord(jobId);
-  if (durableJob) return durableJob;
+  if (durableJob) return withFreshQueueSendItemStates(durableJob);
 
   try {
     const [row] = await db
@@ -597,7 +621,7 @@ export async function persistMergeJobSnapshot(job: MergeJob): Promise<void> {
 
 export async function getLatestQueueSendJobSnapshot(): Promise<QueueSendJobSnapshot | null> {
   const durableJob = await getLatestQueueSendJobRecord();
-  if (durableJob) return durableJob;
+  if (durableJob) return withFreshQueueSendItemStates(durableJob);
 
   try {
     const [row] = await db
@@ -634,7 +658,12 @@ export async function getLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | nu
   }
 }
 
-function shouldPersistProgress(current: number, total: number): boolean {
+const QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS = {
+  persistItems: false,
+  persistLegacy: false,
+} as const;
+
+function shouldPersistMergeProgress(current: number, total: number): boolean {
   return current === total || current % 10 === 0;
 }
 
@@ -681,7 +710,7 @@ async function withConcurrency<T>(
 
 function updateQueueSendProgress(job: QueueSendJob) {
   job.progress = job.total > 0 ? Math.round((job.current / job.total) * 100) : 100;
-  job.updatedAt = Date.now();
+  job.updatedAt = Math.max(Date.now(), job.updatedAt + 1);
   job.message =
     job.status === 'done'
       ? `Queued ${job.queued}/${job.total}${job.skipped ? `, ${job.skipped} skipped` : ''}${job.failed ? `, ${job.failed} failed` : ''}`
@@ -721,7 +750,7 @@ async function markQueueSendWorkerUnavailable(job: QueueSendJob, reason: string)
   job.errorMessage = reason;
   job.message = reason;
   updateQueueSendProgress(job);
-  await persistQueueSendJobSnapshot(job);
+  await persistQueueSendJobSnapshot(job, { required: true });
   queueSendJobs.delete(job.jobId);
 }
 
@@ -1576,7 +1605,7 @@ export async function runQueueSendJobFromWorker(payload: {
   if (remainingOrders.length === 0) {
     job.status = 'done';
     updateQueueSendProgress(job);
-    await persistQueueSendJobSnapshot(job);
+    await persistQueueSendJobSnapshot(job, { required: true });
     return { ok: true, jobId: payload.jobId, skipped: 'no_remaining_orders', remaining: 0 };
   }
 
@@ -1596,7 +1625,7 @@ async function runQueueSendJob(
   const concurrency = normalizeQueueSendWorkerConcurrency(requestedConcurrency, orders.length || 1);
   job.status = 'running';
   updateQueueSendProgress(job);
-  void persistQueueSendJobSnapshot(job);
+  void persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
 
   try {
     await withConcurrency(
@@ -1653,9 +1682,7 @@ async function runQueueSendJob(
         } finally {
           job.current += 1;
           updateQueueSendProgress(job);
-          if (shouldPersistProgress(job.current, job.total)) {
-            void persistQueueSendJobSnapshot(job);
-          }
+          await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
         }
       },
       concurrency
@@ -1674,17 +1701,19 @@ async function runQueueSendJob(
       };
       job.results.push(missingResult);
       recordQueueSendResultLogs(job, [missingResult]);
+      updateQueueSendProgress(job);
+      await persistQueueSendJobSnapshot(job, QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS);
     }
     if (job.current > job.total) job.current = job.total;
     job.status = 'done';
     updateQueueSendProgress(job);
-    await persistQueueSendJobSnapshot(job);
+    await persistQueueSendJobSnapshot(job, { required: true });
   } catch (err) {
     job.status = 'error';
     job.errorMessage = err instanceof Error ? err.message : 'Queue send failed';
     job.message = job.errorMessage;
     job.updatedAt = Date.now();
-    await persistQueueSendJobSnapshot(job);
+    await persistQueueSendJobSnapshot(job, { required: true });
   }
 }
 
@@ -2195,7 +2224,7 @@ async function runMergeJob(
           totalChunks === 1
             ? `Merging label ${processed} of ${sorted.length}...`
             : `Merging label ${processed} of ${sorted.length} (PDF chunk ${plan.chunkNumber}/${totalChunks})...`;
-        if (shouldPersistProgress(processed, sorted.length)) {
+        if (shouldPersistMergeProgress(processed, sorted.length)) {
           void persistMergeJobSnapshot(job);
         }
 

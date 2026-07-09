@@ -15,16 +15,25 @@ type QueueSendSnapshotLike = {
   message?: string | null;
   errorMessage?: string | null;
   updatedAt?: string | number | Date | null;
+  itemStates?: Array<{ orderId: number; state: string }>;
 };
 
-export type DerivedQueueSendStatus = {
-  status: QueueSendStatusName;
-  active: boolean;
+export type QueueSendProgressCounters = {
+  totalOrders: number;
+  orderAttemptsTotal: number;
+  completedOrderAttempts: number;
   current: number;
   total: number;
   queued: number;
   skipped: number;
   failed: number;
+  providerPending: number;
+  inProgress: number;
+};
+
+export type DerivedQueueSendStatus = QueueSendProgressCounters & {
+  status: QueueSendStatusName;
+  active: boolean;
   message: string;
   errorMessage: string | null;
   staleReason: 'worker_missing_stale_snapshot' | null;
@@ -63,6 +72,62 @@ function doneMessage(queued: number, total: number, skipped: number, failed: num
   return `Queued ${queued}/${total}${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`;
 }
 
+const QUEUE_SEND_TERMINAL_ITEM_STATES = new Set([
+  'queued',
+  'preflight_blocked',
+  'skipped_preflight',
+  'failed_retryable',
+  'failed_terminal',
+]);
+const QUEUE_SEND_SKIPPED_ITEM_STATES = new Set(['preflight_blocked', 'skipped_preflight']);
+const QUEUE_SEND_FAILED_ITEM_STATES = new Set(['failed_retryable', 'failed_terminal']);
+const QUEUE_SEND_PROVIDER_PENDING_ITEM_STATES = new Set(['provider_pending', 'provider_pending_recovery']);
+const QUEUE_SEND_IN_PROGRESS_ITEM_STATES = new Set([
+  'validating_rate',
+  'acquiring_lock',
+  'provider_pending',
+  'provider_pending_recovery',
+  'purchased',
+  'shipment_persisted',
+]);
+
+export function deriveQueueSendProgressCounters(
+  snapshot: QueueSendSnapshotLike,
+): QueueSendProgressCounters {
+  const total = finiteCount(snapshot.total);
+  const latestStateByOrder = new Map<number, string>();
+  for (const item of snapshot.itemStates ?? []) {
+    if (Number.isInteger(item.orderId) && item.orderId > 0) latestStateByOrder.set(item.orderId, item.state);
+  }
+  const states = [...latestStateByOrder.values()];
+  const count = (accepted: Set<string>) => states.filter((state) => accepted.has(state)).length;
+  const completedFromItems = count(QUEUE_SEND_TERMINAL_ITEM_STATES);
+  const rawCurrent = Math.max(finiteCount(snapshot.current), completedFromItems);
+  const current = total > 0 ? Math.min(total, rawCurrent) : rawCurrent;
+
+  return {
+    totalOrders: total,
+    orderAttemptsTotal: total,
+    completedOrderAttempts: current,
+    current,
+    total,
+    queued: Math.max(finiteCount(snapshot.queued), states.filter((state) => state === 'queued').length),
+    skipped: Math.max(finiteCount(snapshot.skipped), count(QUEUE_SEND_SKIPPED_ITEM_STATES)),
+    failed: Math.max(finiteCount(snapshot.failed), count(QUEUE_SEND_FAILED_ITEM_STATES)),
+    providerPending: count(QUEUE_SEND_PROVIDER_PENDING_ITEM_STATES),
+    inProgress: count(QUEUE_SEND_IN_PROGRESS_ITEM_STATES),
+  };
+}
+
+function activeMessage(snapshot: QueueSendSnapshotLike, counters: QueueSendProgressCounters): string {
+  const base = snapshot.status === 'pending' && counters.current === 0
+    ? snapshot.message ?? `Starting queue send of ${counters.total} orders...`
+    : `Sending to queue ${counters.current}/${counters.total}`;
+  if (counters.providerPending > 0) return `${base} (${counters.providerPending} provider pending)`;
+  if (counters.inProgress > 0) return `${base} (${counters.inProgress} in progress)`;
+  return base;
+}
+
 export function deriveQueueSendSnapshotStatus(
   snapshot: QueueSendSnapshotLike,
   options: {
@@ -73,23 +138,15 @@ export function deriveQueueSendSnapshotStatus(
 ): DerivedQueueSendStatus {
   const now = options.now ?? Date.now();
   const staleAfterMs = options.staleAfterMs ?? QUEUE_SEND_DURABLE_STALE_AFTER_MS;
-  const total = finiteCount(snapshot.total);
-  const rawCurrent = finiteCount(snapshot.current);
-  const current = total > 0 ? Math.min(total, rawCurrent) : rawCurrent;
-  const queued = finiteCount(snapshot.queued);
-  const skipped = finiteCount(snapshot.skipped);
-  const failed = finiteCount(snapshot.failed);
+  const counters = deriveQueueSendProgressCounters(snapshot);
+  const { total, current, queued, skipped, failed } = counters;
   const status = normalizeStatus(snapshot.status);
 
   if (isQueueSendActiveStatus(status) && total > 0 && current >= total) {
     return {
       status: 'done',
       active: false,
-      current,
-      total,
-      queued,
-      skipped,
-      failed,
+      ...counters,
       message: doneMessage(queued, total, skipped, failed),
       errorMessage: snapshot.errorMessage ?? null,
       staleReason: null,
@@ -102,11 +159,7 @@ export function deriveQueueSendSnapshotStatus(
     return {
       status: 'interrupted',
       active: false,
-      current,
-      total,
-      queued,
-      skipped,
-      failed,
+      ...counters,
       message:
         'Queue job interrupted/stale - check the print queue before retrying; no additional per-order failures were reported.',
       errorMessage:
@@ -119,12 +172,12 @@ export function deriveQueueSendSnapshotStatus(
   return {
     status,
     active: isQueueSendActiveStatus(status),
-    current,
-    total,
-    queued,
-    skipped,
-    failed,
-    message: snapshot.message ?? (status === 'done' ? doneMessage(queued, total, skipped, failed) : `Sending to queue ${current}/${total}`),
+    ...counters,
+    message: status === 'done'
+      ? doneMessage(queued, total, skipped, failed)
+      : isQueueSendActiveStatus(status)
+        ? activeMessage(snapshot, counters)
+        : snapshot.message ?? snapshot.errorMessage ?? 'Queue send failed',
     errorMessage: snapshot.errorMessage ?? null,
     staleReason: null,
   };

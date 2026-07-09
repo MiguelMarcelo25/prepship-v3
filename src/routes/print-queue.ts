@@ -724,14 +724,20 @@ app.get('/batch-send/status/:jobId', async (c) => {
       return c.json({
         job_id: durableJob.jobId,
         status: durableStatus.status,
+        progress_semantics: 'order_attempts',
         progress: durableStatus.total > 0
           ? Math.round((durableStatus.current / durableStatus.total) * 100)
           : durableJob.progress,
-        total: durableJob.total,
+        total: durableStatus.total,
         current: durableStatus.current,
+        total_orders: durableStatus.totalOrders,
+        order_attempts_total: durableStatus.orderAttemptsTotal,
+        completed_order_attempts: durableStatus.completedOrderAttempts,
         queued: durableStatus.queued,
         skipped: durableStatus.skipped,
         failed: durableStatus.failed,
+        provider_pending: durableStatus.providerPending,
+        in_progress: durableStatus.inProgress,
         message: durableStatus.message,
         client_id: durableJob.clientId,
         queued_entry_ids: durableJob.queuedEntryIds,
@@ -749,21 +755,32 @@ app.get('/batch-send/status/:jobId', async (c) => {
   if (!(await canViewQueueSendJob(job, scope))) {
     return c.json({ error: 'Job not found' }, 404);
   }
+  const jobStatus = deriveQueueSendSnapshotStatus(job, {
+    inMemoryJobPresent: true,
+  });
   return c.json({
     job_id: job.jobId,
-    status: job.status,
-    progress: job.progress,
-    total: job.total,
-    current: job.current,
-    queued: job.queued,
+    status: jobStatus.status,
+    progress_semantics: 'order_attempts',
+    progress: jobStatus.total > 0
+      ? Math.round((jobStatus.current / jobStatus.total) * 100)
+      : job.progress,
+    total: jobStatus.total,
+    current: jobStatus.current,
+    total_orders: jobStatus.totalOrders,
+    order_attempts_total: jobStatus.orderAttemptsTotal,
+    completed_order_attempts: jobStatus.completedOrderAttempts,
+    queued: jobStatus.queued,
     skipped: job.skipped,
-    failed: job.failed,
-    message: job.message,
+    failed: jobStatus.failed,
+    provider_pending: jobStatus.providerPending,
+    in_progress: jobStatus.inProgress,
+    message: jobStatus.message,
     client_id: job.clientId ?? null,
     queued_entry_ids: job.queuedEntryIds,
     results: job.results,
     item_states: job.itemStates,
-    error: job.errorMessage ?? null,
+    error: jobStatus.errorMessage,
     stale: false,
     stale_reason: null,
     durableJob: durableJob?.jobId === job.jobId ? durableJob : null,

@@ -262,6 +262,7 @@
     "test:ps-211-universal-void": "tsx scripts/ps-211-universal-void-guard.ts",
     "test:ps-399-shipstation-void-label-id": "tsx scripts/ps-399-shipstation-void-label-id-guard.ts",
     "test:ps-406-duplicate-label-audit": "tsx scripts/ps-406-duplicate-label-audit-guard.ts",
+    "test:ps-420-print-queue-progress": "tsx scripts/ps-420-print-queue-progress-guard.ts",
     "test:ps-400-print-queue-retry-recovery": "tsx scripts/ps-400-print-queue-retry-recovery-guard.ts",
     "test:ps-401-print-queue-mixed-success": "tsx scripts/ps-401-print-queue-mixed-success-guard.ts",
     "test:ps-402-hugrab-shipped-insurance-breakdown": "tsx scripts/ps-402-hugrab-shipped-insurance-breakdown-guard.ts",

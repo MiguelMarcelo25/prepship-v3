@@ -112,8 +112,8 @@ check('initial queue-send job requires the durable job store before returning a 
 check('settings status blob is retained only as legacy fallback after the canonical job store write',
   /persistLegacyQueueSendSettingsSnapshot/.test(printQueue) &&
     /await persistQueueSendJobRecord\(snapshot\);[\s\S]{0,900}await persistLegacyQueueSendSettingsSnapshot\(snapshot\);/.test(printQueue) &&
-    /const durableJob = await getQueueSendJobRecord\(jobId\);[\s\S]{0,240}if \(durableJob\) return durableJob;/.test(printQueue) &&
-    /const durableJob = await getLatestQueueSendJobRecord\(\);[\s\S]{0,240}if \(durableJob\) return durableJob;/.test(printQueue));
+    /const durableJob = await getQueueSendJobRecord\(jobId\);[\s\S]{0,240}if \(durableJob\) return (?:durableJob|withFreshQueueSendItemStates\(durableJob\));/.test(printQueue) &&
+    /const durableJob = await getLatestQueueSendJobRecord\(\);[\s\S]{0,240}if \(durableJob\) return (?:durableJob|withFreshQueueSendItemStates\(durableJob\));/.test(printQueue));
 
 check('batch-send status route still reads by requested job id before latest fallback',
   /getQueueSendJobSnapshot\(jobId\)[\s\S]{0,120}getLatestQueueSendJobSnapshot/.test(route) &&
