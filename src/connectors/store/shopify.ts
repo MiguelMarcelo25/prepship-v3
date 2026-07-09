@@ -106,10 +106,6 @@ query PrepShipDraftOrderDeliveryOptions($input: DraftOrderAvailableDeliveryOptio
         currencyCode
       }
     }
-    userErrors {
-      field
-      message
-    }
   }
 }
 `;
@@ -834,16 +830,16 @@ export async function fetchShopifyDraftOrderAvailableDeliveryOptions(
   }
 
   const body = await res.json().catch(() => ({}));
+  return parseShopifyDraftOrderDeliveryOptionsResponse(body);
+}
+
+export function parseShopifyDraftOrderDeliveryOptionsResponse(body: unknown): ShopifyDraftOrderShippingRate[] {
   const root = asRecord(body);
   const graphErrors = asArray(root.errors);
   if (graphErrors.length) {
     throw shopifyShippingPurchaseError('Shopify draftOrderAvailableDeliveryOptions GraphQL error', graphErrors);
   }
   const payload = asRecord(asRecord(root.data).draftOrderAvailableDeliveryOptions);
-  const userErrors = asArray(payload.userErrors);
-  if (userErrors.length) {
-    throw shopifyShippingPurchaseError('Shopify draftOrderAvailableDeliveryOptions user error', userErrors);
-  }
   return asArray(payload.availableShippingRates).map(asRecord);
 }
 
@@ -1613,4 +1609,5 @@ export const shopifyStoreConnector = createShopifyStoreConnector();
 export const __shopifyConnectorTestOnly = {
   SHOPIFY_ORDERS_QUERY,
   SHOPIFY_SHOP_QUERY,
+  SHOPIFY_DRAFT_ORDER_DELIVERY_OPTIONS_QUERY,
 };

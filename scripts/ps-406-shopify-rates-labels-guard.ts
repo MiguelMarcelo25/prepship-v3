@@ -24,6 +24,52 @@ await check('Shopify Rates backend owner exists separately from normal Best Rate
 });
 
 const ShopifyRates = await import('../src/services/shopify-rates');
+const ShopifyConnector = await import('../src/connectors/store/shopify');
+
+await check('Shopify draft-order delivery-options query matches Shopify schema', () => {
+  const query = ShopifyConnector.__shopifyConnectorTestOnly.SHOPIFY_DRAFT_ORDER_DELIVERY_OPTIONS_QUERY;
+  assert.match(query, /draftOrderAvailableDeliveryOptions/);
+  assert.match(query, /availableShippingRates/);
+  assert.match(query, /\bhandle\b/);
+  assert.match(query, /\btitle\b/);
+  assert.match(query, /\bsource\b/);
+  assert.match(query, /\bcode\b/);
+  assert.match(query, /price\s*\{/);
+  assert.match(query, /\bamount\b/);
+  assert.match(query, /\bcurrencyCode\b/);
+  assert.doesNotMatch(
+    query,
+    /draftOrderAvailableDeliveryOptions[\s\S]*userErrors/,
+    'draftOrderAvailableDeliveryOptions returns delivery options directly; userErrors is not a valid field',
+  );
+});
+
+await check('Shopify draft-order delivery-options parser accepts mocked GraphQL rates', () => {
+  const rates = ShopifyConnector.parseShopifyDraftOrderDeliveryOptionsResponse({
+    data: {
+      draftOrderAvailableDeliveryOptions: {
+        availableShippingRates: [
+          {
+            handle: 'shopify-ups-3-day-select',
+            title: 'UPS 3 Day Select',
+            source: 'UPS',
+            code: '3_DAY_SELECT',
+            price: { amount: '13.42', currencyCode: 'USD' },
+          },
+        ],
+      },
+    },
+  });
+
+  assert.equal(rates.length, 1);
+  assert.deepEqual(rates[0], {
+    handle: 'shopify-ups-3-day-select',
+    title: 'UPS 3 Day Select',
+    source: 'UPS',
+    code: '3_DAY_SELECT',
+    price: { amount: '13.42', currencyCode: 'USD' },
+  });
+});
 
 await check('Shopify draft-order rates normalize source/code into carrier/service', () => {
   const normalized = ShopifyRates.normalizeShopifyDraftShippingRates([
