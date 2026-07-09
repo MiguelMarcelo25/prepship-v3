@@ -177,7 +177,8 @@ check(
     /export const RATE_BROWSE_WORKFLOW_LATEST_KEY = 'rate_browse_workflow\.latest'/.test(workflowStore) &&
     /export const RATE_BROWSE_WORKFLOW_JOB_PREFIX = 'rate_browse_workflow\.job\.'/.test(workflowStore) &&
     /export async function persistRateBrowseWorkflowSnapshot\(\s*snapshot: RateBrowseWorkflowSnapshot/.test(workflowStore) &&
-    /setJsonSettings\(\[\s*\{\s*key: RATE_BROWSE_WORKFLOW_LATEST_KEY,\s*value: snapshot\s*\},\s*\{\s*key: rateBrowseWorkflowJobKey\(snapshot\.jobId\),\s*value: snapshot\s*\},\s*\]\)/s.test(workflowStore),
+    /durableFallbackSnapshot/.test(workflowStore) &&
+    /setJsonSettings\(\[\s*\{\s*key: RATE_BROWSE_WORKFLOW_LATEST_KEY,\s*value: durableSnapshot\s*\},\s*\{\s*key: rateBrowseWorkflowJobKey\(durableSnapshot\.jobId\),\s*value: durableSnapshot\s*\},\s*\]\)/s.test(workflowStore),
 );
 
 check(

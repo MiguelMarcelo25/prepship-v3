@@ -17,14 +17,41 @@ export function rateBrowseWorkflowJobKey(jobId: string): string {
   return `${RATE_BROWSE_WORKFLOW_JOB_PREFIX}${normalized}`;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function durableFallbackSnapshot(
+  snapshot: RateBrowseWorkflowSnapshot,
+  error: unknown,
+): RateBrowseWorkflowSnapshot {
+  return {
+    ...snapshot,
+    diagnostics: {
+      ...snapshot.diagnostics,
+      durableStore: 'fallback',
+      durableStoreError: errorMessage(error),
+    },
+  };
+}
+
 export async function persistRateBrowseWorkflowSnapshot(
   snapshot: RateBrowseWorkflowSnapshot,
   options: { priority?: RateBrowseJobPriority } = {},
 ): Promise<void> {
-  await persistRateBrowseJobRecord(snapshot, options);
+  let durableSnapshot = snapshot;
+  try {
+    await persistRateBrowseJobRecord(snapshot, options);
+  } catch (error) {
+    durableSnapshot = durableFallbackSnapshot(snapshot, error);
+    console.warn(
+      '[rate-browse-workflow-store] durable persist failed; falling back to settings snapshot:',
+      errorMessage(error),
+    );
+  }
   await setJsonSettings([
-    { key: RATE_BROWSE_WORKFLOW_LATEST_KEY, value: snapshot },
-    { key: rateBrowseWorkflowJobKey(snapshot.jobId), value: snapshot },
+    { key: RATE_BROWSE_WORKFLOW_LATEST_KEY, value: durableSnapshot },
+    { key: rateBrowseWorkflowJobKey(durableSnapshot.jobId), value: durableSnapshot },
   ]);
 }
 
@@ -32,11 +59,20 @@ export async function reserveRateBrowseWorkflowSnapshot(
   snapshot: RateBrowseWorkflowSnapshot,
   options: { priority?: RateBrowseJobPriority } = {},
 ): Promise<RateBrowseJobReservation> {
-  const reservation = await reserveRateBrowseJobRecord(snapshot, options);
+  let reservation: RateBrowseJobReservation;
+  try {
+    reservation = await reserveRateBrowseJobRecord(snapshot, options);
+  } catch (error) {
+    reservation = { snapshot: durableFallbackSnapshot(snapshot, error), created: true };
+    console.warn(
+      '[rate-browse-workflow-store] durable reservation failed; falling back to settings snapshot:',
+      errorMessage(error),
+    );
+  }
   if (reservation.created) {
     await setJsonSettings([
-      { key: RATE_BROWSE_WORKFLOW_LATEST_KEY, value: snapshot },
-      { key: rateBrowseWorkflowJobKey(snapshot.jobId), value: snapshot },
+      { key: RATE_BROWSE_WORKFLOW_LATEST_KEY, value: reservation.snapshot },
+      { key: rateBrowseWorkflowJobKey(reservation.snapshot.jobId), value: reservation.snapshot },
     ]);
   }
   return reservation;

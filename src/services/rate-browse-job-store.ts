@@ -1,5 +1,5 @@
 import { sql as pg } from '../db/client.js';
-import { withAdvisorySessionLock } from '../lib/advisory-session-lock';
+import { advisoryLockKeyPair } from '../lib/advisory-lock';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 
 export type RateBrowseJobPriority = 'manual' | 'preflight' | 'backfill';
@@ -22,6 +22,9 @@ type ProviderStatusRow = {
   limiterWaitMs: number | null;
   diagnostics: Record<string, unknown>;
 };
+
+const RATE_BROWSE_JOB_DDL_LOCK_TIMEOUT_MS = 1_500;
+const RATE_BROWSE_JOB_DDL_STATEMENT_TIMEOUT_MS = 5_000;
 
 let schemaEnsured: Promise<void> | null = null;
 
@@ -76,59 +79,63 @@ function timingRowsByCarrier(result: Record<string, unknown>): Map<string, Recor
 
 export async function ensureRateBrowseJobStoreSchema(): Promise<void> {
   schemaEnsured ??= (async () => {
-    await pg`
-      CREATE TABLE IF NOT EXISTS rate_browse_jobs (
-        job_id text PRIMARY KEY,
-        request_key text,
-        order_id integer,
-        priority text NOT NULL DEFAULT 'manual',
-        status text NOT NULL,
-        active boolean NOT NULL DEFAULT false,
-        total_carriers integer NOT NULL DEFAULT 0,
-        completed_carriers integer NOT NULL DEFAULT 0,
-        successful_carriers integer NOT NULL DEFAULT 0,
-        failed_carriers integer NOT NULL DEFAULT 0,
-        rates_count integer NOT NULL DEFAULT 0,
-        message text,
-        diagnostics jsonb NOT NULL DEFAULT '{}'::jsonb,
-        snapshot jsonb NOT NULL,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        finished_at timestamptz
-      )
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS rate_browse_jobs_request_active_idx
-        ON rate_browse_jobs (request_key, active, updated_at DESC)
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS rate_browse_jobs_order_updated_idx
-        ON rate_browse_jobs (order_id, updated_at DESC)
-    `;
-    await pg`
-      CREATE TABLE IF NOT EXISTS rate_browse_job_provider_statuses (
-        job_id text NOT NULL,
-        provider_key text NOT NULL,
-        carrier_id text,
-        account_id text,
-        carrier_code text,
-        carrier_name text,
-        source text NOT NULL DEFAULT 'unknown',
-        status text NOT NULL,
-        rate_count integer NOT NULL DEFAULT 0,
-        duration_ms integer,
-        limiter_wait_ms integer,
-        diagnostics jsonb NOT NULL DEFAULT '{}'::jsonb,
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (job_id, provider_key)
-      )
-    `;
-    await pg`
-      CREATE INDEX IF NOT EXISTS rate_browse_job_provider_statuses_status_idx
-        ON rate_browse_job_provider_statuses (job_id, status, updated_at DESC)
-    `;
-    await pg`ALTER TABLE rate_browse_jobs ENABLE ROW LEVEL SECURITY`;
-    await pg`ALTER TABLE rate_browse_job_provider_statuses ENABLE ROW LEVEL SECURITY`;
+    await pg.begin(async (tx) => {
+      await tx.unsafe(`SET LOCAL lock_timeout = '${RATE_BROWSE_JOB_DDL_LOCK_TIMEOUT_MS}ms'`);
+      await tx.unsafe(`SET LOCAL statement_timeout = '${RATE_BROWSE_JOB_DDL_STATEMENT_TIMEOUT_MS}ms'`);
+      await tx`
+        CREATE TABLE IF NOT EXISTS rate_browse_jobs (
+          job_id text PRIMARY KEY,
+          request_key text,
+          order_id integer,
+          priority text NOT NULL DEFAULT 'manual',
+          status text NOT NULL,
+          active boolean NOT NULL DEFAULT false,
+          total_carriers integer NOT NULL DEFAULT 0,
+          completed_carriers integer NOT NULL DEFAULT 0,
+          successful_carriers integer NOT NULL DEFAULT 0,
+          failed_carriers integer NOT NULL DEFAULT 0,
+          rates_count integer NOT NULL DEFAULT 0,
+          message text,
+          diagnostics jsonb NOT NULL DEFAULT '{}'::jsonb,
+          snapshot jsonb NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          finished_at timestamptz
+        )
+      `;
+      await tx`
+        CREATE INDEX IF NOT EXISTS rate_browse_jobs_request_active_idx
+          ON rate_browse_jobs (request_key, active, updated_at DESC)
+      `;
+      await tx`
+        CREATE INDEX IF NOT EXISTS rate_browse_jobs_order_updated_idx
+          ON rate_browse_jobs (order_id, updated_at DESC)
+      `;
+      await tx`
+        CREATE TABLE IF NOT EXISTS rate_browse_job_provider_statuses (
+          job_id text NOT NULL,
+          provider_key text NOT NULL,
+          carrier_id text,
+          account_id text,
+          carrier_code text,
+          carrier_name text,
+          source text NOT NULL DEFAULT 'unknown',
+          status text NOT NULL,
+          rate_count integer NOT NULL DEFAULT 0,
+          duration_ms integer,
+          limiter_wait_ms integer,
+          diagnostics jsonb NOT NULL DEFAULT '{}'::jsonb,
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          PRIMARY KEY (job_id, provider_key)
+        )
+      `;
+      await tx`
+        CREATE INDEX IF NOT EXISTS rate_browse_job_provider_statuses_status_idx
+          ON rate_browse_job_provider_statuses (job_id, status, updated_at DESC)
+      `;
+      await tx`ALTER TABLE rate_browse_jobs ENABLE ROW LEVEL SECURITY`;
+      await tx`ALTER TABLE rate_browse_job_provider_statuses ENABLE ROW LEVEL SECURITY`;
+    });
   })().catch((err) => {
     schemaEnsured = null;
     throw err;
@@ -326,6 +333,47 @@ export async function getActiveRateBrowseJobRecordByRequestKey(
   return parseRateBrowseWorkflowSnapshot(rows[0]?.snapshot);
 }
 
+type RateBrowseReservationLock = {
+  release: () => Promise<void>;
+};
+
+async function tryRateBrowseJobReservationLock(requestKey: string): Promise<RateBrowseReservationLock | null> {
+  const [classid, objid] = advisoryLockKeyPair(`rate-browse-job:${requestKey}`);
+  const reserved = await pg.reserve();
+  try {
+    const rows = await reserved<Array<{ acquired: boolean }>>`
+      SELECT pg_try_advisory_lock(${classid}, ${objid}) AS acquired
+    `;
+    if (rows[0]?.acquired !== true) {
+      reserved.release();
+      return null;
+    }
+    return {
+      release: async () => {
+        try {
+          await reserved`SELECT pg_advisory_unlock(${classid}, ${objid})`;
+        } finally {
+          reserved.release();
+        }
+      },
+    };
+  } catch (err) {
+    reserved.release();
+    throw err;
+  }
+}
+
+function lockBusySnapshot(snapshot: RateBrowseWorkflowSnapshot): RateBrowseWorkflowSnapshot {
+  return {
+    ...snapshot,
+    message: 'Rate browse workflow queued; durable duplicate lock was busy',
+    diagnostics: {
+      ...snapshot.diagnostics,
+      durableReservation: 'lock_busy_starting_independent_job',
+    },
+  };
+}
+
 export async function reserveRateBrowseJobRecord(
   snapshot: RateBrowseWorkflowSnapshot,
   options: { priority?: RateBrowseJobPriority } = {},
@@ -336,10 +384,22 @@ export async function reserveRateBrowseJobRecord(
     return { snapshot, created: true };
   }
 
-  return withAdvisorySessionLock(`rate-browse-job:${requestKey}`, async () => {
+  const existing = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
+  if (existing) return { snapshot: existing, created: false };
+
+  const lock = await tryRateBrowseJobReservationLock(requestKey);
+  if (!lock) {
+    const active = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
+    if (active) return { snapshot: active, created: false };
+    return { snapshot: lockBusySnapshot(snapshot), created: true };
+  }
+
+  try {
     const active = await getActiveRateBrowseJobRecordByRequestKey(requestKey);
     if (active) return { snapshot: active, created: false };
     await persistRateBrowseJobRecord(snapshot, options);
     return { snapshot, created: true };
-  });
+  } finally {
+    await lock.release();
+  }
 }

@@ -81,13 +81,24 @@ check(
 );
 
 check(
-  'job store attaches duplicate live workflows by request key under a shared advisory session lock',
-  /import \{ withAdvisorySessionLock \} from ['"]\.\.\/lib\/advisory-session-lock['"]/.test(jobStore) &&
+  'job store attaches duplicate live workflows by request key without blocking the Rate Browser POST',
+  /import \{ advisoryLockKeyPair \} from ['"]\.\.\/lib\/advisory-lock['"]/.test(jobStore) &&
     /export async function reserveRateBrowseJobRecord/.test(jobStore) &&
-    /withAdvisorySessionLock\(`rate-browse-job:\$\{requestKey\}`/.test(jobStore) &&
+    /tryRateBrowseJobReservationLock/.test(jobStore) &&
+    /pg_try_advisory_lock/.test(jobStore) &&
+    /lockBusySnapshot/.test(jobStore) &&
+    /durableReservation: 'lock_busy_starting_independent_job'/.test(jobStore) &&
     /getActiveRateBrowseJobRecordByRequestKey/.test(jobStore) &&
     /created: false/.test(jobStore) &&
     /created: true/.test(jobStore),
+);
+
+check(
+  'rate browse durable schema checks are bounded so startup DDL cannot consume Render 120s request ceiling',
+  /RATE_BROWSE_JOB_DDL_LOCK_TIMEOUT_MS = 1_500/.test(jobStore) &&
+    /RATE_BROWSE_JOB_DDL_STATEMENT_TIMEOUT_MS = 5_000/.test(jobStore) &&
+    /SET LOCAL lock_timeout/.test(jobStore) &&
+    /SET LOCAL statement_timeout/.test(jobStore),
 );
 
 check(
@@ -111,6 +122,14 @@ check(
     /setJsonSettings/.test(workflowStore) &&
     /const durable = await getRateBrowseJobRecord\(jobId\)/.test(workflowStore) &&
     /if \(durable\) return durable/.test(workflowStore),
+);
+
+check(
+  'workflow store falls back to legacy settings snapshots if the durable job store is temporarily busy',
+  /durableFallbackSnapshot/.test(workflowStore) &&
+    /durableStore: 'fallback'/.test(workflowStore) &&
+    /durable reservation failed; falling back to settings snapshot/.test(workflowStore) &&
+    /durable persist failed; falling back to settings snapshot/.test(workflowStore),
 );
 
 check(
