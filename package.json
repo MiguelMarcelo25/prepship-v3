@@ -262,6 +262,7 @@
     "test:ps-401-print-queue-mixed-success": "tsx scripts/ps-401-print-queue-mixed-success-guard.ts",
     "test:ps-402-hugrab-shipped-insurance-breakdown": "tsx scripts/ps-402-hugrab-shipped-insurance-breakdown-guard.ts",
     "test:ps-404-hugrab-insurance-proof": "tsx scripts/ps-404-hugrab-insurance-proof-guard.ts",
+    "test:ps-404-international-order-indicator": "tsx scripts/ps-404-international-order-indicator-guard.ts",
     "test:ps-403-print-queue-worker-recovery": "tsx scripts/ps-403-print-queue-worker-recovery-guard.ts",
     "test:ps-403-print-queue-pdf-chunks": "tsx scripts/ps-403-print-queue-pdf-chunks-guard.ts",
     "test:ps-213-top-combos": "tsx scripts/ps-213-top-combos-guard.ts",
