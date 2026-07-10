@@ -131,7 +131,7 @@ export function reportingShipmentCostJoinSql(shipmentAlias = 's'): SQL {
           end,
           2
         ) as selected_cost
-    ) reporting_cost on true
+    ) reporting_cost
   `;
 }
 

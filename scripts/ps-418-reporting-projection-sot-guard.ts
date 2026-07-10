@@ -7,6 +7,7 @@ import {
   projectAnalysisSkuFinancials,
   projectAnalysisSkuTotals,
   reportingOrderShipmentProjectionJoinSql,
+  reportingShipmentCostJoinSql,
 } from '../src/services/reporting-projection';
 
 let failures = 0;
@@ -113,6 +114,17 @@ const renderedShipmentProjection = new PgDialect().sqlToQuery(sql`
   select * from orders o
   ${reportingOrderShipmentProjectionJoinSql(sql`o.id`, 'ls')}
 `).sql;
+const renderedShipmentCostJoin = new PgDialect().sqlToQuery(sql`
+  select reporting_cost.selected_cost from shipments s
+  ${reportingShipmentCostJoinSql('s')}
+`).sql;
+check(
+  'purchased-cost projection renders valid CROSS JOIN LATERAL syntax',
+  renderedShipmentCostJoin.includes('cross join lateral')
+    && renderedShipmentCostJoin.includes(') reporting_cost')
+    && !renderedShipmentCostJoin.includes('reporting_cost on true'),
+  renderedShipmentCostJoin,
+);
 check(
   'per-order shipment projection renders one valid lateral join with split service costs',
   renderedShipmentProjection.includes('left join lateral')
