@@ -1,8 +1,9 @@
 import { Hono, type Context } from 'hono';
 import { env } from '../lib/env';
-import { syncOrders } from '../services/order-sync';
-import { syncShipments } from '../services/shipment-sync';
-import { startBackfillBestRates } from '../services/rates-backfill';
+import {
+  enqueueManualOrderSyncJob,
+  enqueueManualShipmentSyncJob,
+} from '../services/sync-job-queue';
 import {
   importSkusFromOrders,
   syncShipStationProducts,
@@ -51,54 +52,41 @@ async function parseSyncBody(c: Context): Promise<{ sinceMs?: number }> {
 
 app.post('/sync-orders', async (c) => {
   const opts = await parseSyncBody(c);
-  const result = await syncOrders(opts);
-  const rateBackfillJob =
-    result.synced > 0
-      ? (() => {
-          const job = startBackfillBestRates({ limit: 1000 });
-          return { jobId: job.jobId, status: job.status };
-        })()
-      : null;
-  return c.json({ ...result, rateBackfillJob });
+  const result = await enqueueManualOrderSyncJob({
+    ...opts,
+    fullResync: opts.sinceMs === 0,
+  });
+  return c.json(result, result.error ? 503 : 202);
 });
 
 app.get('/sync-orders', async (c) => {
-  const result = await syncOrders({});
-  const rateBackfillJob =
-    result.synced > 0
-      ? (() => {
-          const job = startBackfillBestRates({ limit: 1000 });
-          return { jobId: job.jobId, status: job.status };
-        })()
-      : null;
-  return c.json({ ...result, rateBackfillJob });
+  const result = await enqueueManualOrderSyncJob({});
+  return c.json(result, result.error ? 503 : 202);
 });
 
 app.post('/sync-shipments', async (c) => {
   const opts = await parseSyncBody(c);
-  const result = await syncShipments(opts);
-  return c.json(result);
+  const result = await enqueueManualShipmentSyncJob({
+    ...opts,
+    fullResync: opts.sinceMs === 0,
+  });
+  return c.json(result, result.error ? 503 : 202);
 });
 
 app.get('/sync-shipments', async (c) => {
-  const result = await syncShipments({});
-  return c.json(result);
+  const result = await enqueueManualShipmentSyncJob({});
+  return c.json(result, result.error ? 503 : 202);
 });
 
 // Run both orders + shipments in sequence. Shipments depend on orders being
 // present to match by externalOrderId, so always run orders first.
 app.post('/sync-all', async (c) => {
   const opts = await parseSyncBody(c);
-  const ordersResult = await syncOrders(opts);
-  const rateBackfillJob =
-    ordersResult.synced > 0
-      ? (() => {
-          const job = startBackfillBestRates({ limit: 1000 });
-          return { jobId: job.jobId, status: job.status };
-        })()
-      : null;
-  const shipmentsResult = await syncShipments(opts);
-  return c.json({ orders: ordersResult, shipments: shipmentsResult, rateBackfillJob });
+  const request = { ...opts, fullResync: opts.sinceMs === 0 };
+  const ordersResult = await enqueueManualOrderSyncJob(request);
+  const shipmentsResult = await enqueueManualShipmentSyncJob(request);
+  const hasError = Boolean(ordersResult.error || shipmentsResult.error);
+  return c.json({ orders: ordersResult, shipments: shipmentsResult }, hasError ? 503 : 202);
 });
 
 // 2026-05-13: inventory enrichment cron endpoints — external scheduler

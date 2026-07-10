@@ -16,7 +16,8 @@ import { packages } from '../db/schema/packages';
 // resolver so order-side coherence and billing-side resolution can't drift.
 import { boxDimsKey } from '../services/billing-box-policy';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
-import { getSyncStatus, syncOrders } from '../services/order-sync';
+import { getSyncStatus } from '../services/order-sync';
+import { enqueueManualOrderSyncJob } from '../services/sync-job-queue';
 import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates, startBackfillBestRatesForOrderIds } from '../services/rates-backfill';
 // PS-136: the manual mark-shipped-externally transition (status flip + inventory deduction +
 // ShipStation notify) is owned by this canonical service; the route delegates after assertOrderEditable.
@@ -938,10 +939,8 @@ function buildCanonicalOrderModel(
 // v2 parity: the response shape extends v4's native `{lastSyncedAt,
 // orderCount}` with v2's `LegacySyncStatusDto` fields (status, mode, error,
 // page, ratesCached, ratePrefetchRunning) so the ported progress UIs can
-// render without a second round-trip. v4 doesn't track a live sync state
-// machine (the CLI-style `syncOrders()` is synchronous from the caller's POV
-// and returns before responding), so `status`/`mode`/`error`/`page` carry
-// safe defaults while `lastSyncAt` is kept as an alias for back-compat.
+// render without a second round-trip. Backend account/job state supplies the
+// status truth while `lastSyncAt` remains an alias for back-compat.
 app.get('/sync/status', async (c) => {
   const status = await getSyncStatus();
   const activeRateJob = getActiveBackfillJob();
@@ -959,10 +958,21 @@ app.get('/sync/status', async (c) => {
     status.lastSyncedAt && Number.isFinite(Date.parse(status.lastSyncedAt))
       ? Date.parse(status.lastSyncedAt)
       : null;
+  const latestSync =
+    status.latestSyncedAt && Number.isFinite(Date.parse(status.latestSyncedAt))
+      ? Date.parse(status.latestSyncedAt)
+      : null;
   return c.json({
     // v4 native fields
     lastSyncedAt: status.lastSyncedAt,
+    latestSyncedAt: status.latestSyncedAt,
     orderCount: status.orderCount,
+    health: status.health,
+    allAccountsFresh: status.allAccountsFresh,
+    staleAccountCount: status.staleAccountCount,
+    accounts: status.accounts,
+    statusCatchup: status.statusCatchup,
+    laneOwner: status.laneOwner,
     // 2026-05-13: surface the scheduler cadence so the dashboard
     // can show operators / bosses "data refreshes every N minutes."
     // Source-of-truth values come from src/services/sync-scheduler.ts
@@ -977,13 +987,24 @@ app.get('/sync/status', async (c) => {
       productCatalog: 60,
     },
     // v2 LegacySyncStatusDto parity fields
-    status: lastSync ? 'done' : 'idle',
-    mode: lastSync ? 'incremental' : 'idle',
-    error: null as string | null,
+    status:
+      status.health === 'running'
+        ? 'syncing'
+        : status.health === 'error'
+          ? 'error'
+          : latestSync
+            ? 'done'
+            : 'idle',
+    mode: latestSync ? 'incremental' : 'idle',
+    error:
+      status.health === 'error'
+        ? 'One or more ShipStation accounts failed their latest sync.'
+        : null,
     page: 0,
     total: 0,
     count: 0,
     lastSync,
+    latestSync,
     ratesCached: rateCount?.count ?? 0,
     ratePrefetchRunning: rateJob?.status === 'running',
     ratePrefetchJob: rateJob
@@ -1288,15 +1309,17 @@ app.post('/sync', async (c) => {
   } catch {
     // empty / no body — run with defaults
   }
-  const result = await syncOrders({ sinceMs });
-  const shouldBackfillRates = sinceMs === 0 || result.synced > 0;
-  const rateBackfillJob = shouldBackfillRates
-    ? (() => {
-        const job = startBackfillBestRates({ limit: 1000 });
-        return { jobId: job.jobId, status: job.status };
-      })()
-    : null;
-  return c.json({ ...result, rateBackfillJob });
+  const result = await enqueueManualOrderSyncJob({
+    sinceMs,
+    fullResync: sinceMs === 0,
+  });
+  return c.json(
+    {
+      ...result,
+      status: result.queued ? 'queued' : result.error ? 'error' : 'already_queued',
+    },
+    result.error ? 503 : 202,
+  );
 });
 
 const listQuery = paginationSchema.extend({

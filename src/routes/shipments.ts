@@ -12,8 +12,8 @@ import { isResourceInScope } from '../lib/scope-predicates';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import {
   getShipmentSyncStatus,
-  syncShipments,
 } from '../services/shipment-sync';
+import { enqueueManualShipmentSyncJob } from '../services/sync-job-queue';
 
 const app = new Hono();
 
@@ -85,8 +85,17 @@ app.post('/sync', async (c) => {
   } catch {
     // empty body — use defaults
   }
-  const result = await syncShipments({ sinceMs });
-  return c.json(result);
+  const result = await enqueueManualShipmentSyncJob({
+    sinceMs,
+    fullResync: sinceMs === 0,
+  });
+  return c.json(
+    {
+      ...result,
+      status: result.queued ? 'queued' : result.error ? 'error' : 'already_queued',
+    },
+    result.error ? 503 : 202,
+  );
 });
 
 const listQuery = paginationSchema.extend({

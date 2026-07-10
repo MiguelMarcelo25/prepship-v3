@@ -519,7 +519,7 @@ export default function Home() {
         if (!active) return
         setSyncStatus(next)
 
-        const nextLastSync = next.lastSync ?? (next.lastSyncedAt ? Date.parse(next.lastSyncedAt) : null)
+        const nextLastSync = next.latestSync ?? next.lastSync ?? (next.latestSyncedAt ? Date.parse(next.latestSyncedAt) : null)
         if (!hasSeenInitialSyncStatusRef.current) {
           hasSeenInitialSyncStatusRef.current = true
           if (nextLastSync) lastSeenSyncRef.current = nextLastSync

@@ -70,8 +70,13 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /persistOrderStatusCatchupSnapshot\(statusCatchupEntries, runStartMs\)/,
-  'order sync must persist the run-level status catch-up backlog snapshot',
+  /persistOrderStatusCatchupSnapshot\([\s\S]*previousStatusCatchup,[\s\S]*accounts,/,
+  'order sync must merge the run-level status catch-up backlog with prior account cursors',
+);
+assert.match(
+  orderSync,
+  /mergeOrderStatusCatchupEntries/,
+  'bounded runs must retain backlog entries for accounts they did not reach',
 );
 assert.match(
   orderSync,

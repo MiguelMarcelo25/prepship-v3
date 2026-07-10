@@ -31,6 +31,11 @@ import {
   type ManualOrderSyncRequest,
 } from './manual-order-sync-job';
 import {
+  buildManualShipmentSyncJobPayload,
+  shipmentSyncOptionsFromJobPayload,
+  type ManualShipmentSyncRequest,
+} from './manual-shipment-sync-job';
+import {
   recordWorkerHeartbeat,
   recordWorkerJobFailure,
   recordWorkerJobSkipped,
@@ -94,6 +99,15 @@ export type ManualOrderSyncEnqueueResult = {
   queueStarted: boolean;
   jobName: typeof JOBS.orders;
   mode: 'incremental' | 'full';
+  requestedAt: string;
+  error: string | null;
+};
+
+export type ManualShipmentSyncEnqueueResult = {
+  queued: boolean;
+  jobId: string | null;
+  queueStarted: boolean;
+  jobName: typeof JOBS.shipments;
   requestedAt: string;
   error: string | null;
 };
@@ -355,6 +369,102 @@ export async function enqueueManualOrderSyncJob(
       queueStarted: false,
       jobName: JOBS.orders,
       mode: payload.mode,
+      requestedAt: payload.requestedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    await transientBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
+  }
+}
+
+async function sendManualShipmentSyncJob(
+  targetBoss: PgBoss,
+  queueStarted: boolean,
+  request: ManualShipmentSyncRequest,
+): Promise<ManualShipmentSyncEnqueueResult> {
+  const payload = buildManualShipmentSyncJobPayload(request);
+  try {
+    const id = await targetBoss.send(
+      JOBS.shipments,
+      payload,
+      {
+        singletonKey: 'manual-shipment-sync',
+        singletonSeconds: 60,
+        retryLimit: 2,
+        retryDelay: 30,
+        retryBackoff: true,
+        expireInMinutes: 30,
+        retentionDays: 7,
+      },
+    );
+    return {
+      queued: Boolean(id),
+      jobId: id ? String(id) : null,
+      queueStarted,
+      jobName: JOBS.shipments,
+      requestedAt: payload.requestedAt,
+      error: null,
+    };
+  } catch (err) {
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted,
+      jobName: JOBS.shipments,
+      requestedAt: payload.requestedAt,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function enqueueManualShipmentSyncJob(
+  request: ManualShipmentSyncRequest = {},
+): Promise<ManualShipmentSyncEnqueueResult> {
+  const payload = buildManualShipmentSyncJobPayload(request);
+  if (!env.USE_PG_BOSS_SCHEDULER && !started) {
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted: false,
+      jobName: JOBS.shipments,
+      requestedAt: payload.requestedAt,
+      error: 'pg-boss scheduler is disabled; manual shipment sync must run through the backend job lane',
+    };
+  }
+
+  if (boss && started) return sendManualShipmentSyncJob(boss, true, request);
+
+  const transientBoss = new PgBoss({
+    connectionString: env.DATABASE_URL,
+    schema: env.PG_BOSS_SCHEMA,
+    application_name: 'prepship-api-manual-shipment-sync',
+    max: 1,
+    retryLimit: 2,
+    retryDelay: 30,
+    retryBackoff: true,
+    expireInSeconds: 30 * 60,
+    retentionDays: 7,
+    deleteAfterDays: 7,
+    supervise: false,
+  });
+
+  try {
+    await transientBoss.start();
+    await transientBoss.createQueue(JOBS.shipments, {
+      name: JOBS.shipments,
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInSeconds: 30 * 60,
+      retentionDays: 7,
+    });
+    return await sendManualShipmentSyncJob(transientBoss, false, request);
+  } catch (err) {
+    return {
+      queued: false,
+      jobId: null,
+      queueStarted: false,
+      jobName: JOBS.shipments,
       requestedAt: payload.requestedAt,
       error: err instanceof Error ? err.message : String(err),
     };
@@ -662,7 +772,9 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     return result;
   });
   await registerWorker(JOBS.shopifyOrders, runShopifyOrderSyncTick);
-  await registerWorker(JOBS.shipments, () => syncShipments({}));
+  await registerWorker(JOBS.shipments, (jobData) =>
+    syncShipments(shipmentSyncOptionsFromJobPayload(jobData)),
+  );
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
   await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);

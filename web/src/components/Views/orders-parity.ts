@@ -640,6 +640,19 @@ export function formatSyncPill(sync: {
   mode: 'idle' | 'incremental' | 'full'
   page: number
   lastSync: number | null
+  orders?: {
+    health?: 'healthy' | 'stale' | 'error' | 'running'
+    staleAccountCount?: number
+    accounts?: Array<{
+      displayName?: string
+      storeIds?: number[]
+      state?: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running'
+      stale?: boolean
+      backlogPasses?: number
+      backlogPages?: number | null
+      lastError?: string | null
+    }>
+  } | null
   shipments?: { lastSyncedAt?: string | null } | null
   watchdog?: { verdict?: { alert?: boolean; state?: string | null; reason?: string | null; recommendedAction?: string | null } | null } | null
   ratePrefetchRunning?: boolean
@@ -650,6 +663,24 @@ export function formatSyncPill(sync: {
     status?: string
   } | null
 }) {
+  const accountDiagnostics = sync.orders?.accounts ?? []
+  const unhealthyAccounts = accountDiagnostics.filter((account) => account.stale)
+  const staleAccountCount = sync.orders?.staleAccountCount ?? unhealthyAccounts.length
+  const attentionAccountCount = Math.max(1, staleAccountCount)
+  const accountHealthAlert =
+    staleAccountCount > 0 ||
+    sync.orders?.health === 'error' ||
+    sync.orders?.health === 'stale'
+  const accountHealthDetails = unhealthyAccounts.slice(0, 6).map((account) => {
+    const stores = account.storeIds?.length ? `; stores ${account.storeIds.join(', ')}` : ''
+    const backlog = account.backlogPasses
+      ? `; backlog ${account.backlogPasses} pass${account.backlogPasses === 1 ? '' : 'es'}` +
+        (account.backlogPages == null ? '' : ` / ${account.backlogPages} pages`)
+      : ''
+    const error = account.lastError ? `; ${account.lastError}` : ''
+    return `${account.displayName ?? 'ShipStation account'}: ${account.state ?? 'stale'}${stores}${backlog}${error}`
+  })
+
   if (sync.status === 'syncing') {
     return {
       className: 'sync-pill syncing',
@@ -694,6 +725,7 @@ export function formatSyncPill(sync: {
     const labelSyncTime = shipmentSyncMs ? formatCa(shipmentSyncMs) : null
     const watchdogVerdict = sync.watchdog?.verdict ?? null
     const labelSyncAlert = Boolean(watchdogVerdict?.alert)
+    const syncAlert = labelSyncAlert || accountHealthAlert
     const watchdogReason = typeof watchdogVerdict?.reason === 'string' && watchdogVerdict.reason.trim()
       ? watchdogVerdict.reason.trim()
       : null
@@ -704,24 +736,41 @@ export function formatSyncPill(sync: {
       ? watchdogVerdict.recommendedAction.trim().replace(/_/g, ' ')
       : null
     const syncTitle = [
-      labelSyncAlert ? 'Warning: sync needs attention.' : 'Sync healthy.',
+      syncAlert ? 'Warning: sync needs attention.' : 'Sync healthy.',
       `Orders last synced: ${orderSyncTime}.`,
       labelSyncTime ? `Labels last synced: ${labelSyncTime}.` : 'Labels have not synced yet.',
+      accountHealthAlert
+        ? `${attentionAccountCount} ShipStation account${attentionAccountCount === 1 ? '' : 's'} need attention.`
+        : null,
+      ...accountHealthDetails,
       labelSyncAlert && watchdogReason ? `Reason: ${watchdogReason}.` : null,
       labelSyncAlert && !watchdogReason && watchdogState ? `Reason: ${watchdogState}.` : null,
       labelSyncAlert && watchdogAction && watchdogAction !== 'none' ? `Recovery: ${watchdogAction}.` : null,
       'Click to view API timing.',
     ].filter(Boolean).join('\n')
     return {
-      className: labelSyncAlert ? 'sync-pill warning' : 'sync-pill done',
-      text: labelSyncTime
-        ? `Orders ${orderSyncTime} / Labels ${labelSyncTime}`
-        : `Order sync ${orderSyncTime}`,
+      className: syncAlert ? 'sync-pill warning' : 'sync-pill done',
+      text: accountHealthAlert
+        ? `Sync attention: ${attentionAccountCount} account${attentionAccountCount === 1 ? '' : 's'}`
+        : labelSyncTime
+          ? `Orders ${orderSyncTime} / Labels ${labelSyncTime}`
+          : `Order sync ${orderSyncTime}`,
       title: syncTitle,
     }
   }
 
   if (sync.status === 'error') {
+    if (accountDiagnostics.length > 0) {
+      return {
+        className: 'sync-pill warning',
+        text: `Sync attention: ${attentionAccountCount} account${attentionAccountCount === 1 ? '' : 's'}`,
+        title: [
+          'One or more ShipStation accounts failed their latest sync.',
+          ...accountHealthDetails,
+          'Click to view API timing.',
+        ].join('\n'),
+      }
+    }
     return {
       className: 'sync-pill error',
       text: 'Sync error',

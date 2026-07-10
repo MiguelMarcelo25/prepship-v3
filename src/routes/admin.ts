@@ -12,8 +12,10 @@ import { packageLedger } from '../db/schema/package-ledger';
 import { billingLineItems } from '../db/schema/billing';
 import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
-import { syncOrders } from '../services/order-sync';
-import { syncShipments } from '../services/shipment-sync';
+import {
+  enqueueManualOrderSyncJob,
+  enqueueManualShipmentSyncJob,
+} from '../services/sync-job-queue';
 import { backfillMissingOrderItems, getOrderItemsBackfillStatus, syncOrderItemOrderFields } from '../services/order-items';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
@@ -758,25 +760,25 @@ app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
     return c.json({ deleted, synced: null });
   }
 
-  // 3. Trigger the fresh sync immediately. Orders first (so shipments can
-  //    match back by externalOrderId), then shipments.
-  const ordersResult = await syncOrders({ sinceMs });
-  const shipmentsResult = await syncShipments({ sinceMs });
+  // Per user override unlock shipped data on 2026-07-10: reset recovery now
+  // queues the existing import jobs through the sole pg-boss ShipStation lane.
+  // The reset semantics above are unchanged; this only prevents concurrent
+  // inline order/shipment sync after the explicit admin reset.
+  const ordersResult = await enqueueManualOrderSyncJob({ sinceMs });
+  const shipmentsResult = await enqueueManualShipmentSyncJob({ sinceMs });
 
   return c.json({
     deleted,
     synced: {
       orders: {
-        synced: ordersResult.synced,
-        pages: ordersResult.pages,
-        sinceIso: ordersResult.sinceIso,
+        queued: ordersResult.queued,
+        jobId: ordersResult.jobId,
+        error: ordersResult.error,
       },
       shipments: {
-        fetched: shipmentsResult.fetched,
-        inserted: shipmentsResult.inserted,
-        updated: shipmentsResult.updated,
-        matchedOrders: shipmentsResult.matchedOrders,
-        ordersMarkedShipped: shipmentsResult.ordersMarkedShipped,
+        queued: shipmentsResult.queued,
+        jobId: shipmentsResult.jobId,
+        error: shipmentsResult.error,
       },
     },
   });

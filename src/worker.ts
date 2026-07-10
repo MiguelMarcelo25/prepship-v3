@@ -116,7 +116,9 @@ async function main(): Promise<void> {
       console.log('[worker] starting pg-boss sync scheduler');
       await startQueuedSyncScheduler();
     } else {
-      console.log('[worker] starting interval sync scheduler');
+      console.warn(
+        '[worker] USE_PG_BOSS_SCHEDULER=false; ShipStation imports are disabled, starting ancillary scheduler only',
+      );
       startSyncScheduler({ mode: 'worker-scheduler' });
     }
   } else {

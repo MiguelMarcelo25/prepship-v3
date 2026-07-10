@@ -10,7 +10,6 @@ import {
 import { enqueueManualOrderSyncJob, getSyncJobQueueStatus } from '../services/sync-job-queue';
 import { SYNC_CADENCE_MINUTES } from '../lib/sync-cadence';
 import {
-  nudgeShipmentSyncWatchdogRecovery,
   readShipmentSyncWatchdogStatus,
 } from '../services/shipment-sync-watchdog';
 
@@ -52,28 +51,23 @@ app.get('/status', async (c) => {
     getSyncJobQueueStatus(),
   ]);
   const watchdog = await readShipmentSyncWatchdogStatus();
-  if (watchdog.enabled && watchdog.verdict.alert) {
-    void nudgeShipmentSyncWatchdogRecovery(watchdog, { source: 'status' }).catch((err) => {
-      console.warn(
-        '[sync/status] shipment watchdog recovery nudge failed:',
-        err instanceof Error ? err.message : err,
-      );
-    });
-  }
-  const workerSchedulerActive = Boolean(
-    worker.status?.schedulerEnabled && !worker.stale
-  );
-  const queueStatus = {
-    ...queue,
-    enabled: queue.enabled || workerSchedulerActive,
-    started: queue.started || workerSchedulerActive,
-  };
+  const queueStatus = queue;
   return c.json({
     // Legacy top-level fields kept for existing frontend callers.
     ...orders,
-    status: orders.lastSyncedAt ? 'done' : 'idle',
-    mode: orders.lastSyncedAt ? 'incremental' : 'idle',
-    error: null as string | null,
+    status:
+      orders.health === 'running'
+        ? 'syncing'
+        : orders.health === 'error'
+          ? 'error'
+          : orders.latestSyncedAt
+            ? 'done'
+            : 'idle',
+    mode: orders.latestSyncedAt ? 'incremental' : 'idle',
+    error:
+      orders.health === 'error'
+        ? 'One or more ShipStation accounts failed their latest sync.'
+        : null,
     page: 0,
     total: 0,
     count: 0,
@@ -82,6 +76,10 @@ app.get('/status', async (c) => {
         ? Date.parse(orders.lastSyncedAt)
         : null,
     lastSyncAt: orders.lastSyncedAt,
+    latestSync:
+      orders.latestSyncedAt && Number.isFinite(Date.parse(orders.latestSyncedAt))
+        ? Date.parse(orders.latestSyncedAt)
+        : null,
     // PS-132: derived from the shared cadence source (src/lib/sync-cadence.ts) so the
     // reported cadence can never drift from what the job queue actually schedules.
     cadenceMinutes: SYNC_CADENCE_MINUTES,

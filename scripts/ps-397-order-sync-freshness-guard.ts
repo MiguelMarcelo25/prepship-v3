@@ -105,8 +105,8 @@ assert.ok(
 assert.ok(
   route.includes('watchdog') &&
     route.includes('readShipmentSyncWatchdogStatus') &&
-    route.includes('nudgeShipmentSyncWatchdogRecovery'),
-  '/sync/status must expose and safely nudge backend watchdog truth',
+    !route.includes('nudgeShipmentSyncWatchdogRecovery'),
+  '/sync/status must expose backend watchdog truth without triggering recovery side effects',
 );
 assert.ok(
   ui.includes('Warning: sync needs attention.') &&

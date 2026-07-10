@@ -82,10 +82,12 @@ check('the outbox tick auto-recovers at most 25 missing confirmations per run (b
 // This is the crux. If the bound lived at the call site we'd see syncOrders({ ...batch }); the
 // fact these calls pass {} (or nothing) is the PROOF the bound is owned by the service fn — the
 // exact thing the 20% audit mis-read as "unbounded".
-check('runOrderSync delegates to syncOrders with no batch arg (bound owned by the service)',
-  /syncOrders\(\{\}\)/.test(scheduler) && !/syncOrders\(\{[^}]*(?:limit|batch|maxPages|pageSize)/.test(scheduler));
-check('runShipmentSync delegates to syncShipments with no batch arg (bound owned by the service)',
-  /syncShipments\(\{\}\)/.test(scheduler) && !/syncShipments\(\{[^}]*(?:limit|batch|maxPages|pageSize)/.test(scheduler));
+const queue = read('src/services/sync-job-queue.ts');
+check('queued order worker delegates to the bounded syncOrders service',
+  /syncOrders\(options\)/.test(queue) && !/syncOrders\(\{[^}]*(?:limit|batch|maxPages)/.test(queue));
+check('queued shipment worker delegates to the bounded syncShipments service',
+  /syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(queue) &&
+    !/syncShipments\(\{[^}]*(?:limit|batch|maxPages|pageSize)/.test(queue));
 check('runInventoryImportFromOrders delegates to importSkusFromOrders (bound owned by the service)',
   /importSkusFromOrders\(\)/.test(read('src/services/sync-scheduler.ts')));
 

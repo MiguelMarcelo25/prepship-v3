@@ -1,7 +1,5 @@
 import { env } from '../lib/env';
 import { sql as pg } from '../db/client';
-import { syncOrders } from './order-sync';
-import { syncShipments } from './shipment-sync';
 import { syncShopifyOrders } from './shopify-order-sync';
 import { startBackfillBestRates, getActiveBackfillJob } from './rates-backfill';
 import { reapStaleOrderRateJobs } from './shipping-workflow/reap-stale-rate-jobs';
@@ -33,15 +31,11 @@ import {
   type SyncJobLane,
 } from './sync-job-lanes';
 
-// v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
-// Actions cron drifts 30–60 min under load, which means users in v4 see stale
-// data — an order shipped in ShipStation can take 40+ min to flip to Shipped.
-// This scheduler restores v2's 3-minute cadence inside the API process itself.
-// When Render spins the container down (free-tier idle), the scheduler pauses
-// with it — but GitHub Actions' slower cron is still there as a safety net.
+// Legacy interval scheduler for ancillary jobs. PS-417 moved ShipStation
+// order/shipment execution to the pg-boss worker lane; this module no longer
+// starts provider-import timers.
 
-const ORDER_SYNC_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes (v2 parity)
-const SHIPMENT_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+const SHOPIFY_ORDER_SYNC_INTERVAL_MS = 3 * 60 * 1000;
 // Rate backfill is expensive (one ShipStation call per order) so fire it
 // less often. maxAgeHours inside the service keeps it cheap — orders with
 // a fresh rate are skipped automatically.
@@ -67,9 +61,7 @@ const EXTERNAL_SHIPPED_CLASSIFIER_TIME_BUDGET_MS = 4 * 60_000;
 const REAP_RATE_JOBS_INTERVAL_MS = 5 * 60 * 1000; // 5 min — durable cleanup of orphaned rate-job stamps
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
-let orderSyncRunning = false;
 let shopifyOrderSyncRunning = false;
-let shipmentSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
@@ -78,9 +70,7 @@ let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
 let walmartFeesRunning = false;
 const activeSchedulerJobsByLane = new Map<SyncJobLane, string>();
-let orderTimer: NodeJS.Timeout | null = null;
 let shopifyOrderTimer: NodeJS.Timeout | null = null;
-let shipmentTimer: NodeJS.Timeout | null = null;
 let backfillTimer: NodeJS.Timeout | null = null;
 let inventoryImportTimer: NodeJS.Timeout | null = null;
 let syncProductsTimer: NodeJS.Timeout | null = null;
@@ -161,31 +151,6 @@ async function runHeavySchedulerJob<T>(
   }
 }
 
-export async function runOrderSync(): Promise<void> {
-  if (orderSyncRunning) {
-    console.log('[scheduler] orders sync already running — skipping tick');
-    return;
-  }
-  orderSyncRunning = true;
-  try {
-    const result = await runHeavySchedulerJob('orders sync', () => syncOrders({}));
-    if (!result) return;
-    console.log(
-      `[scheduler] orders synced: ${result.synced} rows in ${result.pages} page(s), watermark ${result.lastSyncedAt}`
-    );
-    if (result.synced > 0 && isRateBackfillSchedulerEnabled()) {
-      runBackfillTick();
-    }
-  } catch (err) {
-    console.error(
-      '[scheduler] orders sync failed:',
-      err instanceof Error ? err.message : err
-    );
-  } finally {
-    orderSyncRunning = false;
-  }
-}
-
 export async function runShopifyOrderSyncTick(): Promise<void> {
   if (!env.SHOPIFY_SYNC_ENABLED) return;
   if (shopifyOrderSyncRunning) {
@@ -240,28 +205,6 @@ export async function runReapStaleRateJobsTick(): Promise<void> {
       '[scheduler] reap stale rate jobs failed:',
       err instanceof Error ? err.message : err
     );
-  }
-}
-
-export async function runShipmentSync(): Promise<void> {
-  if (shipmentSyncRunning) {
-    console.log('[scheduler] shipments sync already running — skipping tick');
-    return;
-  }
-  shipmentSyncRunning = true;
-  try {
-    const result = await runHeavySchedulerJob('shipments sync', () => syncShipments({}));
-    if (!result) return;
-    console.log(
-      `[scheduler] shipments synced: ${result.inserted} new + ${result.updated} updated, ${result.ordersMarkedShipped} orders marked shipped`
-    );
-  } catch (err) {
-    console.error(
-      '[scheduler] shipments sync failed:',
-      err instanceof Error ? err.message : err
-    );
-  } finally {
-    shipmentSyncRunning = false;
   }
 }
 
@@ -611,13 +554,13 @@ export function startSyncScheduler(
   if (!shopifyOrderTimer) {
     if (env.SHOPIFY_SYNC_ENABLED) {
       console.log(
-        `[scheduler] Shopify direct store sync enabled - every ${ORDER_SYNC_INTERVAL_MS / 1000}s`
+        `[scheduler] Shopify direct store sync enabled - every ${SHOPIFY_ORDER_SYNC_INTERVAL_MS / 1000}s`
       );
       setTimeout(() => {
         void runShopifyOrderSyncTick();
         shopifyOrderTimer = setInterval(
           () => void runShopifyOrderSyncTick(),
-          ORDER_SYNC_INTERVAL_MS
+          SHOPIFY_ORDER_SYNC_INTERVAL_MS
         );
       }, STARTUP_DELAY_MS + 45_000);
     } else {
@@ -627,48 +570,19 @@ export function startSyncScheduler(
     }
   }
 
-  // Only run in-process sync when ShipStation credentials are present.
-  // Dev environments without creds would just spam errors otherwise.
+  // ShipStation-backed ancillary jobs still need the main credentials. The
+  // pg-boss order/shipment lane is independent and may use per-client creds.
   if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
     console.log(
-      '[scheduler] SHIPSTATION_API_KEY/SECRET not set — in-process sync disabled'
-    );
-    void recordWorkerJobSkipped(
-      'orders sync',
-      'SHIPSTATION_API_KEY/SECRET not set; order sync disabled'
-    );
-    void recordWorkerJobSkipped(
-      'shipments sync',
-      'SHIPSTATION_API_KEY/SECRET not set; shipment sync disabled'
+      '[scheduler] SHIPSTATION_API_KEY/SECRET not set; ShipStation ancillary jobs disabled'
     );
     return;
   }
 
-  if (orderTimer || shipmentTimer) {
-    console.warn('[scheduler] already started, ignoring duplicate start');
-    return;
-  }
-
-  console.log(
-    `[scheduler] starting — orders every ${ORDER_SYNC_INTERVAL_MS / 1000}s, shipments every ${SHIPMENT_SYNC_INTERVAL_MS / 1000}s (delayed ${STARTUP_DELAY_MS / 1000}s)`
-  );
-
-  // Kick off the first run 15s after boot so the process is warm, then
-  // schedule subsequent runs on the interval.
-  setTimeout(() => {
-    void runOrderSync();
-    orderTimer = setInterval(() => void runOrderSync(), ORDER_SYNC_INTERVAL_MS);
-  }, STARTUP_DELAY_MS);
-
-  // Stagger shipment sync by 90s so we don't hammer ShipStation from both
-  // jobs at the exact same moment every 3 minutes.
-  setTimeout(() => {
-    void runShipmentSync();
-    shipmentTimer = setInterval(
-      () => void runShipmentSync(),
-      SHIPMENT_SYNC_INTERVAL_MS
-    );
-  }, STARTUP_DELAY_MS + 90_000);
+  // PS-417: this legacy scheduler owns ancillary jobs only. ShipStation order
+  // and shipment execution is exclusively owned by the pg-boss worker lane;
+  // enqueue cadence must not be confused with a completed provider sync.
+  console.log('[scheduler] ShipStation imports delegated to the pg-boss sync lane');
 
   const rateBackfillEnabled = isRateBackfillSchedulerEnabled();
 
@@ -732,14 +646,6 @@ export function startSyncScheduler(
 }
 
 export function stopSyncScheduler(): void {
-  if (orderTimer) {
-    clearInterval(orderTimer);
-    orderTimer = null;
-  }
-  if (shipmentTimer) {
-    clearInterval(shipmentTimer);
-    shipmentTimer = null;
-  }
   if (shopifyOrderTimer) {
     clearInterval(shopifyOrderTimer);
     shopifyOrderTimer = null;

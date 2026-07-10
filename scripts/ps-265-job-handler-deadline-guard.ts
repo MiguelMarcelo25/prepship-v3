@@ -53,7 +53,7 @@ async function main() {
   const q = read('src/services/sync-job-queue.ts');
   check('sync-job-queue imports withDeadline', /import \{ withDeadline \} from '\.\.\/lib\/with-deadline'/.test(q));
   check('handler is wrapped in withDeadline',
-    /await withDeadline\(handler, JOB_HANDLER_TIMEOUT_MS, name\)/.test(q));
+    /await withDeadline\(\s*\(\) => handler\(job\?\.data\),\s*JOB_HANDLER_TIMEOUT_MS,\s*name,?\s*\)/.test(q));
   check('active lane is cleared in finally (always released on timeout)',
     /finally \{\s*if \(activeJobsByLane\.get\(lane\) === name\) activeJobsByLane\.delete\(lane\);\s*\}/.test(q));
   check('deadline is clamped BELOW the pg-boss expiry (25min < 30min)',

@@ -53,7 +53,7 @@ assert.match(
 );
 assert.match(
   orderSync,
-  /for \(const target of awaitingTargets\) \{\s*if \(syncRunBudgetTimeExhausted\(budget\)\) break;/,
+  /for \(const target of awaitingTargets\) \{\s*if \(syncRunBudgetTimeExhausted\(budget\)\) \{[\s\S]*complete = false;[\s\S]*break;/,
   'awaiting store passes must check the run budget before starting another provider call',
 );
 const shipstationConnector = readFileSync('src/connectors/store/shipstation.ts', 'utf8');

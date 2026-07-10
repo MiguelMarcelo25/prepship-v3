@@ -5,6 +5,7 @@ import { clients } from '../db/schema/clients';
 import { shipments } from '../db/schema/shipments';
 import { getSettingNumber, setSetting } from './settings';
 import { getJsonSetting, setJsonSetting } from './settings-json';
+import { env } from '../lib/env';
 import { isExcludedStoreId } from '../config/prepship';
 import {
   upsertNormalizedStoreOrders,
@@ -34,6 +35,15 @@ import {
 import {
   loadActiveShipStationCutoverStoreIds,
 } from './store-source-cutover';
+import {
+  markShipStationSyncAccountFailed,
+  markShipStationSyncAccountStarted,
+  markShipStationSyncAccountSucceeded,
+  readShipStationSyncAccountStates,
+  shipStationSyncAccountDisplayName,
+  shipStationSyncAccountId,
+  summarizeShipStationAccountWatermarks,
+} from './shipstation-sync-account-state';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const STATUS_CATCHUP_SNAPSHOT_KEY = 'order_sync.status_catchup.snapshot';
@@ -382,15 +392,68 @@ export async function getOrderStatusCatchupSnapshot(): Promise<OrderStatusCatchu
 async function persistOrderStatusCatchupSnapshot(
   entries: OrderStatusCatchupEntry[],
   updatedAtMs: number,
+  previous: OrderStatusCatchupSnapshot,
+  accounts: SyncAccount[],
 ): Promise<void> {
+  const activeKeys = new Set(
+    accounts.flatMap((account) =>
+      STATUS_CATCHUP_STATUSES.flatMap((orderStatus) =>
+        statusCatchupStoreTargets(account).map((target) =>
+          statusCatchupEntryKey({
+            accountLabel: account.label,
+            storeId: target.storeId ?? null,
+            orderStatus,
+          }),
+        ),
+      ),
+    ),
+  );
+  const mergedEntries = mergeOrderStatusCatchupEntries(previous.entries, entries, activeKeys);
   const snapshot: OrderStatusCatchupSnapshot = {
     version: 1,
     updatedAt: new Date(updatedAtMs).toISOString(),
-    hasBacklog: entries.some((entry) => entry.hasBacklog),
-    backlogCount: entries.filter((entry) => entry.hasBacklog).length,
-    entries,
+    hasBacklog: mergedEntries.some((entry) => entry.hasBacklog),
+    backlogCount: mergedEntries.filter((entry) => entry.hasBacklog).length,
+    entries: mergedEntries,
   };
   await setJsonSetting(STATUS_CATCHUP_SNAPSHOT_KEY, snapshot);
+}
+
+export function mergeOrderStatusCatchupEntries(
+  previousEntries: OrderStatusCatchupEntry[],
+  currentEntries: OrderStatusCatchupEntry[],
+  activeKeys: ReadonlySet<string>,
+): OrderStatusCatchupEntry[] {
+  const merged = new Map<string, OrderStatusCatchupEntry>();
+  for (const previous of previousEntries) {
+    const key = statusCatchupEntryKey(previous);
+    if (activeKeys.has(key)) merged.set(key, previous);
+  }
+  for (const current of currentEntries) {
+    const key = statusCatchupEntryKey(current);
+    const previous = merged.get(key);
+    const shouldPreserveCursor =
+      Boolean(previous?.hasBacklog) &&
+      current.pagesProcessed === 0 &&
+      (current.stoppedBy === 'failed' || current.stoppedBy === 'not_started_budget_exhausted');
+    merged.set(
+      key,
+      shouldPreserveCursor && previous
+        ? {
+            ...current,
+            startPage: previous.nextPage ?? previous.startPage,
+            totalPages: previous.totalPages,
+            lastPageProcessed: previous.lastPageProcessed,
+            nextPage: previous.nextPage,
+            hasBacklog: true,
+            backlogPages: previous.backlogPages,
+          }
+        : current,
+    );
+  }
+  return [...merged.values()].sort((left, right) =>
+    statusCatchupEntryKey(left).localeCompare(statusCatchupEntryKey(right)),
+  );
 }
 
 async function updateExistingOrderStatusesBatch(
@@ -460,7 +523,7 @@ async function updateExistingOrderStatusesBatch(
 export type SyncResult = {
   synced: number;
   pages: number;
-  lastSyncedAt: string;
+  lastSyncedAt: string | null;
   sinceIso: string;
 };
 
@@ -805,6 +868,8 @@ async function syncOrdersForAccount(
   pages: number;
   sinceIso: string;
   statusCatchupEntries: OrderStatusCatchupEntry[];
+  succeeded: boolean;
+  error: string | null;
 }> {
   const key = watermarkKey(account.label);
   const lastSync =
@@ -825,6 +890,8 @@ async function syncOrdersForAccount(
   let total = 0;
   let maxPages = 1;
   let failed = false;
+  let complete = true;
+  const errors: string[] = [];
   const statusCatchupEntries: OrderStatusCatchupEntry[] = [];
 
   // PS-265: the awaiting_shipment pass (the new orders operators ship TODAY) runs FIRST so a
@@ -841,7 +908,10 @@ async function syncOrdersForAccount(
       : [{ storeId: undefined as number | undefined }];
 
   for (const target of awaitingTargets) {
-    if (syncRunBudgetTimeExhausted(budget)) break;
+    if (syncRunBudgetTimeExhausted(budget)) {
+      complete = false;
+      break;
+    }
     try {
       const result = await fetchOrdersPage(account, storeToClient, {
         orderStatus: 'awaiting_shipment',
@@ -851,8 +921,10 @@ async function syncOrdersForAccount(
       }, budget);
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
+      if (!result.complete) complete = false;
     } catch (err) {
       failed = true;
+      errors.push(err instanceof Error ? err.message : String(err));
       console.warn(
         `[order-sync] account="${account.label}" orderStatus="awaiting_shipment" storeId="${target.storeId ?? 'all'}" failed:`,
         err instanceof Error ? err.message : err,
@@ -932,6 +1004,7 @@ async function syncOrdersForAccount(
       if (result.pages > maxPages) maxPages = result.pages;
     } catch (err) {
       failed = true;
+      errors.push(err instanceof Error ? err.message : String(err));
       statusCatchupEntries.push(
         statusCatchupEntry({
           account,
@@ -951,14 +1024,21 @@ async function syncOrdersForAccount(
     }
   }
 
-  if (!failed) {
+  if (!failed && complete) {
     await setSetting(key, String(runStartMs));
   } else {
     console.warn(
-      `[order-sync] account="${account.label}" had failed pass(es); watermark not advanced`
+      `[order-sync] account="${account.label}" was incomplete or had failed pass(es); watermark not advanced`
     );
   }
-  return { synced: total, pages: maxPages, sinceIso, statusCatchupEntries };
+  return {
+    synced: total,
+    pages: maxPages,
+    sinceIso,
+    statusCatchupEntries,
+    succeeded: !failed && complete,
+    error: errors.length > 0 ? errors.join('; ') : complete ? null : 'run budget exhausted',
+  };
 }
 
 export async function syncOrders(opts: {
@@ -968,12 +1048,22 @@ export async function syncOrders(opts: {
   skipStatusPasses?: boolean;
 } = {}): Promise<SyncResult> {
   const runStartMs = Date.now();
+  const runId = `orders:${runStartMs}`;
   // PS-265: one run-wide budget bounds the WHOLE orders handler (all accounts + passes) under
   // its ~10-min deadline, so it returns and advances watermarks instead of being killed
   // mid-walk with no progress (the loop that re-pulled the same backlog and drained nothing).
   const budget = createSyncRunBudget();
   const storeToClient = await buildStoreToClientMap();
-  const accounts = await loadSyncAccounts();
+  const loadedAccounts = await loadSyncAccounts();
+  const accountWatermarks = await Promise.all(
+    loadedAccounts.map(async (account) => ({
+      account,
+      watermarkMs: await getSettingNumber(watermarkKey(account.label)),
+    })),
+  );
+  const accounts = accountWatermarks
+    .sort((left, right) => (left.watermarkMs ?? 0) - (right.watermarkMs ?? 0))
+    .map(({ account }) => account);
   const activeShipStationCutoverStoreIds = await loadActiveShipStationCutoverStoreIds().catch((err) => {
     console.warn(
       '[order-sync] store-source cutover lookup failed; continuing with all ShipStation awaiting stores:',
@@ -991,6 +1081,8 @@ export async function syncOrders(opts: {
   const statusCatchupEntries: OrderStatusCatchupEntry[] = [];
 
   for (const acct of accounts) {
+    if (syncRunBudgetTimeExhausted(budget)) break;
+    await markShipStationSyncAccountStarted(acct, runId, Date.now());
     try {
       const result = await syncOrdersForAccount(
         acct,
@@ -1002,7 +1094,13 @@ export async function syncOrders(opts: {
       if (result.pages > maxPages) maxPages = result.pages;
       if (result.sinceIso < earliestSinceIso) earliestSinceIso = result.sinceIso;
       statusCatchupEntries.push(...result.statusCatchupEntries);
+      if (result.succeeded) {
+        await markShipStationSyncAccountSucceeded(acct, Date.now());
+      } else {
+        await markShipStationSyncAccountFailed(acct, Date.now(), result.error ?? 'sync incomplete');
+      }
     } catch (err) {
+      await markShipStationSyncAccountFailed(acct, Date.now(), err);
       console.error(
         `[order-sync] account "${acct.label}" failed:`,
         (err as Error).message
@@ -1023,39 +1121,166 @@ export async function syncOrders(opts: {
 
   if (!opts.skipStatusPasses) {
     try {
-      await persistOrderStatusCatchupSnapshot(statusCatchupEntries, runStartMs);
+      await persistOrderStatusCatchupSnapshot(
+        statusCatchupEntries,
+        runStartMs,
+        previousStatusCatchup,
+        accounts,
+      );
     } catch (err) {
       console.error('[order-sync] persist status catch-up snapshot failed:', (err as Error).message);
     }
   }
 
+  const completedWatermarks = await Promise.all(
+    accounts.map((account) => getSettingNumber(watermarkKey(account.label))),
+  );
+  const { completeThroughMs } = summarizeShipStationAccountWatermarks(completedWatermarks);
   return {
     synced: grandTotal,
     pages: maxPages,
-    lastSyncedAt: new Date(runStartMs).toISOString(),
+    lastSyncedAt: completeThroughMs ? new Date(completeThroughMs).toISOString() : null,
     sinceIso: earliestSinceIso,
   };
 }
 
+export type OrderSyncAccountDiagnostic = {
+  accountId: string;
+  displayName: string;
+  ownerClientId: number | null;
+  storeIds: number[];
+  lastSyncedAt: string | null;
+  ageSeconds: number | null;
+  fresh: boolean;
+  stale: boolean;
+  state: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running';
+  activeJobId: string | null;
+  lastStartedAt: string | null;
+  lastCompletedAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastError: string | null;
+  backlogPasses: number;
+  backlogPages: number | null;
+  cursors: Array<{
+    storeId: number | null;
+    orderStatus: CatchUpOrderStatus;
+    nextPage: number | null;
+    totalPages: number | null;
+    stoppedBy: StatusCatchupStopReason;
+  }>;
+};
+
 export async function getSyncStatus(options: { includeOrderCount?: boolean } = {}): Promise<{
   lastSyncedAt: string | null;
+  latestSyncedAt: string | null;
   orderCount: number;
   statusCatchup: OrderStatusCatchupSnapshot;
+  laneOwner: 'pg_boss_shipstation_sync';
+  health: 'healthy' | 'stale' | 'error' | 'running';
+  allAccountsFresh: boolean;
+  staleAccountCount: number;
+  accounts: OrderSyncAccountDiagnostic[];
 }> {
-  // Latest watermark across accounts — reflects the most-recent successful sync.
+  // Account diagnostics use every active watermark. The aggregate timestamp is
+  // the oldest completed account so one fresh account cannot hide a stale one.
   const accounts = await loadSyncAccounts();
-  let latestMs: number | null = null;
-  for (const acct of accounts) {
-    const ms = await getSettingNumber(watermarkKey(acct.label));
-    if (ms && (latestMs === null || ms > latestMs)) latestMs = ms;
-  }
-  const lastSyncedAt = latestMs ? new Date(latestMs).toISOString() : null;
-  const statusCatchup = await getOrderStatusCatchupSnapshot();
+  const [statusCatchup, runStates, watermarks] = await Promise.all([
+    getOrderStatusCatchupSnapshot(),
+    readShipStationSyncAccountStates(),
+    Promise.all(accounts.map((account) => getSettingNumber(watermarkKey(account.label)))),
+  ]);
+  const nowMs = Date.now();
+  const configuredFreshSeconds = Number(env.SHIPMENT_SYNC_WATCHDOG_ORDER_FRESH_SECONDS);
+  const freshMs =
+    (Number.isFinite(configuredFreshSeconds) && configuredFreshSeconds > 0
+      ? configuredFreshSeconds
+      : 15 * 60) * 1000;
+  const accountDiagnostics = accounts.map((account, index) => {
+    const accountId = shipStationSyncAccountId(account);
+    const runState = runStates[accountId];
+    const watermarkMs = watermarks[index] ?? null;
+    const backlogEntries = statusCatchup.entries.filter(
+      (entry) => entry.accountLabel === account.label && entry.hasBacklog,
+    );
+    const ageMs = watermarkMs === null ? null : Math.max(0, nowMs - watermarkMs);
+    const failed = runState?.status === 'failed';
+    const activeStartedMs = runState?.lastStartedAt ? Date.parse(runState.lastStartedAt) : NaN;
+    const running =
+      runState?.status === 'running' &&
+      Boolean(runState.activeJobId) &&
+      Number.isFinite(activeStartedMs) &&
+      nowMs - activeStartedMs <= freshMs;
+    const stale =
+      failed ||
+      watermarkMs === null ||
+      (ageMs !== null && ageMs > freshMs) ||
+      backlogEntries.length > 0;
+    return {
+      accountId,
+      displayName: shipStationSyncAccountDisplayName(account),
+      ownerClientId: account.ownerClientId,
+      storeIds: account.storeIds,
+      lastSyncedAt: watermarkMs ? new Date(watermarkMs).toISOString() : null,
+      ageSeconds: ageMs === null ? null : Math.floor(ageMs / 1000),
+      fresh: !stale,
+      stale,
+      state: running
+        ? 'running'
+        : failed
+          ? 'failed'
+          : watermarkMs === null
+            ? 'never_synced'
+            : stale
+              ? 'stale'
+              : 'fresh',
+      activeJobId: runState?.status === 'running' ? runState.activeJobId : null,
+      lastStartedAt: runState?.lastStartedAt ?? null,
+      lastCompletedAt: runState?.lastCompletedAt ?? null,
+      lastSuccessAt:
+        runState?.lastSuccessAt ?? (watermarkMs ? new Date(watermarkMs).toISOString() : null),
+      lastFailureAt: runState?.lastFailureAt ?? null,
+      lastError: runState?.lastError ?? null,
+      backlogPasses: backlogEntries.length,
+      backlogPages: backlogEntries.some((entry) => entry.backlogPages === null)
+        ? null
+        : backlogEntries.reduce((sum, entry) => sum + (entry.backlogPages ?? 0), 0),
+      cursors: backlogEntries.map((entry) => ({
+        storeId: entry.storeId,
+        orderStatus: entry.orderStatus,
+        nextPage: entry.nextPage,
+        totalPages: entry.totalPages,
+        stoppedBy: entry.stoppedBy,
+      })),
+    } satisfies OrderSyncAccountDiagnostic;
+  });
+  const { completeThroughMs: oldestMs, latestMs } =
+    summarizeShipStationAccountWatermarks(watermarks);
+  const staleAccountCount = accountDiagnostics.filter((account) => account.stale).length;
+  const anyRunning = accountDiagnostics.some((account) => account.state === 'running');
+  const anyFailed = accountDiagnostics.some((account) => account.state === 'failed');
+  const health: 'healthy' | 'stale' | 'error' | 'running' = anyRunning
+    ? 'running'
+    : anyFailed
+      ? 'error'
+      : accounts.length === 0 || staleAccountCount > 0
+        ? 'stale'
+        : 'healthy';
+  const base = {
+    lastSyncedAt: oldestMs ? new Date(oldestMs).toISOString() : null,
+    latestSyncedAt: latestMs ? new Date(latestMs).toISOString() : null,
+    statusCatchup,
+    laneOwner: 'pg_boss_shipstation_sync' as const,
+    health,
+    allAccountsFresh: staleAccountCount === 0 && accounts.length > 0,
+    staleAccountCount,
+    accounts: accountDiagnostics,
+  };
   if (options.includeOrderCount === false) {
-    return { lastSyncedAt, orderCount: 0, statusCatchup };
+    return { ...base, orderCount: 0 };
   }
   const rows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(orders);
-  return { lastSyncedAt, orderCount: rows[0]?.count ?? 0, statusCatchup };
+  return { ...base, orderCount: rows[0]?.count ?? 0 };
 }
