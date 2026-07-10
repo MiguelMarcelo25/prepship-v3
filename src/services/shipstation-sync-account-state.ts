@@ -1,5 +1,8 @@
-import { getJsonSetting, setJsonSetting } from './settings-json';
-import { withAdvisorySessionLock } from '../lib/advisory-session-lock';
+import { getJsonSetting } from './settings-json';
+import {
+  type AdvisoryLockTransaction,
+  withAdvisoryTransactionLock,
+} from '../lib/advisory-session-lock';
 
 const ACCOUNT_STATE_KEY = 'order_sync.shipstation_accounts.snapshot';
 
@@ -32,6 +35,46 @@ type ShipStationSyncAccountStateSnapshot = {
   updatedAt: string;
   accounts: Record<string, ShipStationSyncAccountRunState>;
 };
+
+function accountStatesFromValue(
+  value: string | null | undefined,
+): Record<string, ShipStationSyncAccountRunState> {
+  if (!value) return {};
+  try {
+    const snapshot = JSON.parse(value) as Partial<ShipStationSyncAccountStateSnapshot>;
+    return snapshot.accounts && typeof snapshot.accounts === 'object'
+      ? snapshot.accounts
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function readAccountStatesInTransaction(
+  transaction: AdvisoryLockTransaction,
+): Promise<Record<string, ShipStationSyncAccountRunState>> {
+  const rows = await transaction<{ value: string | null }[]>`
+    select value from settings where key = ${ACCOUNT_STATE_KEY} limit 1
+  `;
+  return accountStatesFromValue(rows[0]?.value);
+}
+
+async function writeAccountStatesInTransaction(
+  transaction: AdvisoryLockTransaction,
+  updatedAt: string,
+  accounts: Record<string, ShipStationSyncAccountRunState>,
+): Promise<void> {
+  const value = JSON.stringify({
+    version: 1,
+    updatedAt,
+    accounts,
+  } satisfies ShipStationSyncAccountStateSnapshot);
+  await transaction`
+    insert into settings (key, value)
+    values (${ACCOUNT_STATE_KEY}, ${value})
+    on conflict (key) do update set value = excluded.value
+  `;
+}
 
 export function shipStationSyncAccountId(account: ShipStationSyncAccountIdentity): string {
   if (account.label === 'main') return 'main';
@@ -87,17 +130,19 @@ async function updateAccountState(
     previous: ShipStationSyncAccountRunState | undefined,
   ) => ShipStationSyncAccountRunState | undefined,
 ): Promise<void> {
-  await withAdvisorySessionLock(ACCOUNT_STATE_KEY, async () => {
+  // Per user override unlock shipped data on 2026-07-11: serialize sync
+  // lifecycle metadata only; order and shipment rows remain untouched.
+  await withAdvisoryTransactionLock(ACCOUNT_STATE_KEY, async (transaction) => {
     const accountId = shipStationSyncAccountId(account);
-    const accounts = await readShipStationSyncAccountStates();
+    const accounts = await readAccountStatesInTransaction(transaction);
     const next = update(accounts[accountId]);
     if (!next) return;
     accounts[accountId] = next;
-    await setJsonSetting(ACCOUNT_STATE_KEY, {
-      version: 1,
-      updatedAt: new Date().toISOString(),
+    await writeAccountStatesInTransaction(
+      transaction,
+      new Date().toISOString(),
       accounts,
-    } satisfies ShipStationSyncAccountStateSnapshot);
+    );
   });
 }
 
@@ -188,8 +233,8 @@ export async function markShipStationSyncRunFailed(
   completedAtMs: number,
   error: unknown,
 ): Promise<number> {
-  return withAdvisorySessionLock(ACCOUNT_STATE_KEY, async () => {
-    const accounts = await readShipStationSyncAccountStates();
+  return withAdvisoryTransactionLock(ACCOUNT_STATE_KEY, async (transaction) => {
+    const accounts = await readAccountStatesInTransaction(transaction);
     const completedAt = new Date(completedAtMs).toISOString();
     let changed = 0;
 
@@ -207,11 +252,7 @@ export async function markShipStationSyncRunFailed(
     if (changed > 0) {
       // Per user override unlock shipped data on 2026-07-10: serialize account-run
       // metadata closeout only; order/shipment rows remain untouched.
-      await setJsonSetting(ACCOUNT_STATE_KEY, {
-        version: 1,
-        updatedAt: completedAt,
-        accounts,
-      } satisfies ShipStationSyncAccountStateSnapshot);
+      await writeAccountStatesInTransaction(transaction, completedAt, accounts);
     }
     return changed;
   });

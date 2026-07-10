@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
-import { withAdvisorySessionLock } from '../lib/advisory-session-lock';
+import { withAdvisoryTransactionLock } from '../lib/advisory-session-lock';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { orderItems } from '../db/schema/order-items';
 import {
@@ -233,9 +233,9 @@ export async function saveComboPackageDefault(
 
   // PS-253 (Card 8): serialize concurrent saves for the SAME (client, combo). The upsert is atomic on
   // its own, but the sibling-order apply below is a read-modify-write — two concurrent saves (multi-
-  // process worker + API) could interleave the apply and lose updates. A per-(client,combo) session
-  // advisory lock makes the upsert + apply one serialized unit; different combos never contend.
-  return withAdvisorySessionLock(`combo_default:${clientId}:${comboKey}`, async () => {
+  // process worker + API) could interleave the apply and lose updates. A per-(client,combo)
+  // transaction advisory lock makes the upsert + apply one serialized unit.
+  return withAdvisoryTransactionLock(`combo_default:${clientId}:${comboKey}`, async () => {
     const now = new Date();
     await db
       .insert(clientComboPackageDefaults)

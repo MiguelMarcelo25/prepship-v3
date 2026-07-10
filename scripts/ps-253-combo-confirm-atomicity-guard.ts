@@ -2,7 +2,7 @@
  * PS-253 (Card 8, slice 3) — combo-default serialization + idempotent marketplace confirmation.
  *
  * (b) saveComboPackageDefault's upsert is atomic, but the sibling-order APPLY is a read-modify-write
- *     two concurrent saves could interleave. A per-(client,combo) blocking session advisory lock
+ *     two concurrent saves could interleave. A per-(client,combo) blocking transaction advisory lock
  *     serializes them.
  * (c, confirm idempotency) a crash between the connector ack and completeOutboxRow leaves the outbox
  *     row 'processing'; the PS-253 stale-reclaim re-delivers it, so processOutboxRow now re-checks the
@@ -24,16 +24,17 @@ const lock = readFileSync('src/lib/advisory-session-lock.ts', 'utf8');
 const combo = readFileSync('src/services/combo-package-defaults.ts', 'utf8');
 const outbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
 
-// ── the serializing session-lock helper ──
-check('session-lock reserves a dedicated connection (pool-safe)', /sql\.reserve\(\)/.test(lock));
-check('session-lock BLOCKS to serialize (pg_advisory_lock, not the non-blocking try variant)',
-  /pg_advisory_lock\(\$\{classid\}, \$\{objid\}\)/.test(lock) && !/pg_try_advisory_lock/.test(lock));
-check('session-lock always unlocks + releases the connection',
-  /pg_advisory_unlock/.test(lock) && /reserved\.release\(\)/.test(lock));
+// ── the serializing transaction-lock helper ──
+check('transaction-lock uses an explicit transaction for pooler-safe ownership',
+  /advisoryLockSql\.begin/.test(lock));
+check('transaction-lock BLOCKS to serialize and auto-releases at transaction end',
+  /pg_advisory_xact_lock\(\$\{classid\}, \$\{objid\}\)/.test(lock));
+check('transaction-lock never uses session advisory locks through Supavisor',
+  !/pg_advisory_lock\(/.test(lock) && !/pg_advisory_unlock/.test(lock));
 
 // ── (b) combo-default serialization ──
 check('saveComboPackageDefault serializes upsert+apply under a per-(client,combo) lock',
-  /withAdvisorySessionLock\(`combo_default:\$\{clientId\}:\$\{comboKey\}`/.test(combo));
+  /withAdvisoryTransactionLock\(`combo_default:\$\{clientId\}:\$\{comboKey\}`/.test(combo));
 
 // ── (c) idempotent confirmation ──
 const procStart = outbox.indexOf('async function processOutboxRow');
