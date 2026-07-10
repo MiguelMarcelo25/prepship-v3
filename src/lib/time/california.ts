@@ -8,7 +8,9 @@ const CA_PARTS = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit',
   second: '2-digit',
-  hour12: false,
+  // h23 guarantees midnight is 00:00. Node 20's default h24 cycle emits
+  // 24:00, which the wall-clock conversion would interpret as the next day.
+  hourCycle: 'h23',
 });
 
 function partMap(date: Date): Record<string, string> {
