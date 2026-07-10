@@ -15,14 +15,15 @@ name: Render Auto-Deploy (CI-gated)
 on:
   push:
     branches: [prepshipv4-stable]
-    # Only redeploy Render when BACKEND runtime actually changes. Docs (*.md), guard scripts,
-    # FE-only (web/** — Vercel handles that), and workflow edits never need a Render deploy.
+    # Redeploy when BACKEND runtime changes, and let edits to this gate verify themselves.
+    # Docs (*.md), unrelated guard scripts, and FE-only changes remain excluded.
     paths:
       - 'src/**'
       - 'drizzle/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
+      - '.github/workflows/render-auto-deploy.yml'
 
 concurrency:
   # Never run two deploys for this branch at once; let an in-flight one finish.

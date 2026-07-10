@@ -96,6 +96,10 @@ assert(roundtrip.includes('guard:shipping-certification'), 'roundtrip runner mus
 assert(roundtrip.includes('smoke:shipping:test-label') && roundtrip.includes('--fixture'), 'roundtrip runner must include fixture label smoke');
 assert(roundtrip.includes('smoke:marketplace-confirm') && roundtrip.includes('--mock-process-once'), 'roundtrip runner must include mock marketplace confirm');
 assert(roundtrip.includes('test:workflow-suites'), 'roundtrip runner must include offline workflow suites');
+assert(roundtrip.includes("NODE_ENV: process.env.NODE_ENV ?? 'test'"), 'roundtrip runner must default clean CI children to test mode');
+assert(roundtrip.includes("VERCEL: process.env.VERCEL ?? '1'"), 'roundtrip runner must allow clean CI children to omit Render-only secrets');
+assert(roundtrip.includes("DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test'"), 'roundtrip runner must provide an inert clean-CI database URL');
+assert(roundtrip.includes("SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://example.supabase.co'"), 'roundtrip runner must provide an inert clean-CI Supabase URL');
 assert(roundtrip.includes('--notify-dry-run'), 'roundtrip runner must expose notify dry-run mode');
 assert(roundtrip.includes('PREPSHIP_CERTIFICATION_WEBHOOK_URL'), 'roundtrip runner must use only the certification webhook env var for notifications');
 assert(workflow.includes('PREPSHIP_CERTIFICATION_WEBHOOK_URL'), 'workflow must wire the failure notification webhook secret without printing it');

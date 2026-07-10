@@ -85,6 +85,13 @@ function runSuite(suite) {
     encoding: 'utf8',
     env: {
       ...process.env,
+      // Offline children import the normal app config tree. Supply inert values
+      // when CI or a clean checkout has no local .env; real configured values
+      // still win, and SAFE_MODE keeps every suite fixture/mock/read-only.
+      NODE_ENV: process.env.NODE_ENV ?? 'test',
+      VERCEL: process.env.VERCEL ?? '1',
+      DATABASE_URL: process.env.DATABASE_URL ?? 'postgresql://test:test@localhost:5432/test',
+      SUPABASE_URL: process.env.SUPABASE_URL ?? 'https://example.supabase.co',
       PREPSHIP_CERTIFICATION_SAFE_MODE: '1',
     },
   });
