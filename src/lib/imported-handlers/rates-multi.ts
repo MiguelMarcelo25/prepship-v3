@@ -10,19 +10,23 @@
 // Auth: requires a Supabase JWT in Authorization: Bearer <token>. Verified
 // against SUPABASE_JWT_SECRET. Same gate as the Render API uses.
 
-import { and, eq, isNotNull } from 'drizzle-orm';
 import {
   extractBearerToken,
   verifySupabaseJwt,
 } from '../auth/verify-supabase-jwt';
 import { corsHeaders } from '../http/cors';
 import { elapsedMs, nowMs } from '../http/timing';
-import { db } from '../../db/client';
-import { clients } from '../../db/schema/clients';
 import {
   loadShipStationCarrierAccounts,
   type ShipStationCarrierAccountLoadResult,
 } from '../../services/shipstation-carrier-account-cache';
+import {
+  loadShipStationCarrierAccountSources,
+  readShipStationCarrierAccountSnapshots,
+  resolveShipStationCarrierAccountSnapshot,
+  type ShipStationCarrierAccountSource,
+  type ShipStationCarrierSnapshotResolution,
+} from '../../services/shipstation-carrier-account-snapshots';
 
 interface SsCarrier {
   carrier_id: string;
@@ -126,39 +130,12 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  // Fan out to ShipStation accounts in parallel. Dedupe by literal key value
-  // so an env var that matches a DB row's ss_api_key_v2 doesn't get fetched
-  // twice and surface the same carriers under two headers.
-  interface Task {
-    source: string;
-    sourceId: number | null;
-    keySource: string;
-    keyValue: string;
+  interface Task extends ShipStationCarrierAccountSource {
+    snapshotStatus: ShipStationCarrierSnapshotResolution['status'];
+    snapshotAgeMs: number | null;
+    snapshotFetchedAt: string | null;
     p: Promise<ShipStationCarrierAccountLoadResult>;
   }
-  const tasks: Task[] = [];
-  const seenKeys = new Set<string>();
-  const queueTask = (t: Omit<Task, 'p'>) => {
-    if (!t.keyValue) return;
-    if (seenKeys.has(t.keyValue)) return;
-    seenKeys.add(t.keyValue);
-    tasks.push({ ...t, p: loadShipStationCarrierAccounts(t.keyValue) });
-  };
-
-  queueTask({
-    source: 'DR PREPPER',
-    sourceId: null,
-    keySource: 'env.SHIPSTATION_API_KEY_V2',
-    keyValue: process.env.SHIPSTATION_API_KEY_V2 ?? '',
-  });
-  queueTask({
-    source: 'KFG',
-    sourceId: null,
-    keySource: 'env.SHIPSTATION_KFG_API_KEY_V2',
-    keyValue: process.env.SHIPSTATION_KFG_API_KEY_V2 ?? '',
-  });
-
-  // Per-client creds from DB (best-effort — failures don't fail the request).
   const diagnostics: Array<{
     source: string;
     keySource: string;
@@ -169,33 +146,46 @@ export default async function handler(req: any, res: any): Promise<void> {
     cacheAgeMs: number | null;
     durationMs: number;
     providerDurationMs: number;
+    snapshotStatus: ShipStationCarrierSnapshotResolution['status'];
+    snapshotAgeMs: number | null;
+    snapshotFetchedAt: string | null;
   }> = [];
   let dbError: string | null = null;
   const dbStartedAt = nowMs();
+  const sourceResult = await loadShipStationCarrierAccountSources();
+  dbError = sourceResult.dbError;
+  let snapshots = new Map();
   try {
-    const rows = await db
-      .select({
-        id: clients.id,
-        name: clients.name,
-        ssApiKeyV2: clients.ssApiKeyV2,
-      })
-      .from(clients)
-      .where(and(isNotNull(clients.ssApiKeyV2), eq(clients.active, true)));
-    for (const c of rows) {
-      if (c.ssApiKeyV2) {
-        queueTask({
-          source: c.name,
-          sourceId: c.id,
-          keySource: `clients.ss_api_key_v2 (id=${c.id})`,
-          keyValue: c.ssApiKeyV2,
-        });
-      }
-    }
+    snapshots = await readShipStationCarrierAccountSnapshots(sourceResult.sources);
   } catch (err) {
-    dbError = (err as Error)?.message ?? String(err);
-    console.error('[multi-carriers] db fan-out failed:', dbError);
+    dbError ??= err instanceof Error ? err.message : String(err);
+    console.error('[multi-carriers] durable snapshot read failed:', dbError);
   }
   const dbDurationMs = elapsedMs(dbStartedAt);
+
+  const tasks: Task[] = sourceResult.sources.map((source) => {
+    const resolved = resolveShipStationCarrierAccountSnapshot(source, snapshots);
+    const snapshotResult: ShipStationCarrierAccountLoadResult | null = resolved.snapshot
+      ? {
+          carriers: resolved.snapshot.carriers,
+          error: null,
+          status: 200,
+          cacheStatus: 'hit',
+          cacheAgeMs: resolved.ageMs,
+          durationMs: 0,
+          providerDurationMs: 0,
+        }
+      : null;
+    return {
+      ...source,
+      snapshotStatus: resolved.status,
+      snapshotAgeMs: resolved.ageMs,
+      snapshotFetchedAt: resolved.snapshot?.fetchedAt ?? null,
+      p: snapshotResult
+        ? Promise.resolve(snapshotResult)
+        : loadShipStationCarrierAccounts(source.apiKeyV2),
+    };
+  });
 
   const results = await Promise.all(tasks.map((t) => t.p));
   const aggregationStartedAt = nowMs();
@@ -214,6 +204,9 @@ export default async function handler(req: any, res: any): Promise<void> {
       cacheAgeMs: r.cacheAgeMs,
       durationMs: r.durationMs,
       providerDurationMs: r.providerDurationMs,
+      snapshotStatus: t.snapshotStatus,
+      snapshotAgeMs: t.snapshotAgeMs,
+      snapshotFetchedAt: t.snapshotFetchedAt,
     });
     for (const c of r.carriers) {
       const key = `${t.source}:${c.carrier_id}`;
@@ -240,6 +233,13 @@ export default async function handler(req: any, res: any): Promise<void> {
     slowestSourceDurationMs: slowestSource?.durationMs ?? 0,
     cacheHits: diagnostics.filter((row) => row.cacheStatus === 'hit').length,
     cacheMisses: diagnostics.filter((row) => row.cacheStatus === 'miss').length,
+    durableSnapshotHits: diagnostics.filter((row) => (
+      row.snapshotStatus === 'fresh' || row.snapshotStatus === 'stale'
+    )).length,
+    durableStaleSources: diagnostics.filter((row) => row.snapshotStatus === 'stale').length,
+    liveFallbacks: diagnostics.filter((row) => (
+      row.snapshotStatus === 'missing' || row.snapshotStatus === 'credential_mismatch'
+    )).length,
     responseCacheHit: false,
     responseCacheAgeMs: null,
   };

@@ -57,6 +57,10 @@ const importedCarrierVerifyHandler = read('src/lib/imported-handlers/carriers-ve
 const carrierCredentialVerification = read('src/connectors/carrier/credential-verification.ts');
 const importedRatesMultiHandler = read('src/lib/imported-handlers/rates-multi.ts');
 const shipStationCarrierAccountCache = read('src/services/shipstation-carrier-account-cache.ts');
+const shipStationCarrierSnapshots = read('src/services/shipstation-carrier-account-snapshots.ts');
+const shipStationCarrierSnapshotWorker = read('src/services/shipstation-carrier-account-snapshot-worker.ts');
+const workerEntry = read('src/worker.ts');
+const printQueueWorker = read('src/services/print-queue-worker.ts');
 const verifyGroundSaverScript = read('scripts/verify-ground-saver-fix.ts');
 const recoverMarketplaceNotificationsScript = read('scripts/recover-marketplace-notifications.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
@@ -462,10 +466,22 @@ assert(
 );
 assert(
   importedRatesMultiHandler.includes('loadShipStationCarrierAccounts') &&
+    importedRatesMultiHandler.includes('readShipStationCarrierAccountSnapshots') &&
+    importedRatesMultiHandler.includes('resolveShipStationCarrierAccountSnapshot') &&
     shipStationCarrierAccountCache.includes('listCarrierAccounts') &&
+    shipStationCarrierSnapshots.includes("import('../db/schema/analytics-cache.js')") &&
+    shipStationCarrierSnapshots.includes('credentialFingerprint') &&
     !importedRatesMultiHandler.includes('api.shipengine.com') &&
     !importedRatesMultiHandler.includes('fetch(`${SHIPSTATION_BASE}/carriers`'),
-  'imported rates-multi carrier fan-out must delegate through the cached CarrierConnector account listing owner',
+  'imported rates-multi must read the durable snapshot owner and keep CarrierConnector as its live fallback',
+);
+assert(
+  shipStationCarrierSnapshotWorker.includes('pg_try_advisory_lock') &&
+    shipStationCarrierSnapshotWorker.includes('refreshDueShipStationCarrierAccountSnapshots') &&
+    workerEntry.includes('startShipStationCarrierAccountSnapshotWorker') &&
+    workerEntry.includes('stopShipStationCarrierAccountSnapshotWorker') &&
+    !printQueueWorker.includes('ShipStationCarrierAccountSnapshotWorker'),
+  'the general worker alone must refresh durable ShipStation carrier snapshots under an advisory lock',
 );
 assert(
   verifyGroundSaverScript.includes('listCarrierAccounts') &&
@@ -483,6 +499,11 @@ assert.equal(
   packageJson.scripts?.['test:ps-032-connector-orchestrators'],
   'node scripts/ps-032-connector-orchestrator-guard.mjs',
   'package.json missing test:ps-032-connector-orchestrators script',
+);
+assert.equal(
+  packageJson.scripts?.['test:rates-multi-durable-snapshot'],
+  'tsx scripts/rates-multi-durable-snapshot-behavior-test.ts',
+  'package.json missing durable rates-multi snapshot behavior test',
 );
 
 console.log('PS-032 connector orchestrator guard passed.');

@@ -17,6 +17,10 @@ import {
 } from './services/print-queue-worker';
 import { ensureOrdersPerformanceIndexes } from './services/orders-performance-maintenance';
 import { ensureReportingMetricsTables } from './services/reporting-metrics';
+import {
+  startShipStationCarrierAccountSnapshotWorker,
+  stopShipStationCarrierAccountSnapshotWorker,
+} from './services/shipstation-carrier-account-snapshot-worker';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
 
@@ -31,6 +35,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[worker] received ${signal}; shutting down`);
   await stopPrintQueueWorker();
   if (env.RUN_SYNC_SCHEDULER) {
+    await stopShipStationCarrierAccountSnapshotWorker();
     if (env.USE_PG_BOSS_SCHEDULER) {
       await stopQueuedSyncScheduler();
     } else {
@@ -112,6 +117,7 @@ async function main(): Promise<void> {
   }
 
   if (env.RUN_SYNC_SCHEDULER) {
+    startShipStationCarrierAccountSnapshotWorker();
     if (env.USE_PG_BOSS_SCHEDULER) {
       console.log('[worker] starting pg-boss sync scheduler');
       await startQueuedSyncScheduler();
