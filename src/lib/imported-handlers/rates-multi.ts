@@ -1,7 +1,5 @@
 // @ts-nocheck
-// Vercel serverless function: multi-account ShipStation carrier fan-out.
-// Lives alongside the SPA build; Vercel's filesystem matching makes it win
-// over the catch-all /api/* rewrite to Render in vercel.json.
+// Node-style handler mounted by the Render/Hono /rates route.
 //
 // Reads three sources of ShipStation V2 credentials and tags each returned
 // carrier with the account it came from so the Settings UI can group:
@@ -12,13 +10,19 @@
 // Auth: requires a Supabase JWT in Authorization: Bearer <token>. Verified
 // against SUPABASE_JWT_SECRET. Same gate as the Render API uses.
 
-import postgres from 'postgres';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import {
   extractBearerToken,
   verifySupabaseJwt,
 } from '../auth/verify-supabase-jwt';
 import { corsHeaders } from '../http/cors';
-import { listCarrierAccounts } from '../../services/carrier-connector-orchestrator';
+import { elapsedMs, nowMs } from '../http/timing';
+import { db } from '../../db/client';
+import { clients } from '../../db/schema/clients';
+import {
+  loadShipStationCarrierAccounts,
+  type ShipStationCarrierAccountLoadResult,
+} from '../../services/shipstation-carrier-account-cache';
 
 interface SsCarrier {
   carrier_id: string;
@@ -33,13 +37,7 @@ interface TaggedCarrier extends SsCarrier {
   source_client_id: number | null;
 }
 
-interface FetchResult {
-  carriers: SsCarrier[];
-  error: string | null;
-  status: number | null;
-}
-
-function publicCarrierFetchError(result: FetchResult): string | null {
+function publicCarrierFetchError(result: ShipStationCarrierAccountLoadResult): string | null {
   if (!result.error) return null;
   if (result.status) return `ShipStation carrier request failed (${result.status})`;
   return 'ShipStation carrier request failed';
@@ -49,50 +47,17 @@ function publicCarrierFetchError(result: FetchResult): string | null {
 // caller — it is built only from the env keys + the clients table, nothing
 // user-scoped — so one module-level entry is safe. Auth is still verified on
 // every request; the cache only skips the ShipStation fan-out + DB read.
-// Carrier-account lists change only when an account is (dis)connected, so a
-// short TTL self-heals. Override with RATES_MULTI_CACHE_TTL_MS (0 disables).
+// The per-credential cache below remains the provider-facing source, so an L1
+// expiry refreshes the active DB credential inventory without another live
+// ShipStation request for unchanged credentials.
 const RATES_MULTI_CACHE_TTL_MS = (() => {
   const raw = Number.parseInt(process.env.RATES_MULTI_CACHE_TTL_MS ?? '', 10);
   return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
 })();
-let cachedResponse: { at: number; payload: unknown } | null = null;
-
-// One long-lived single-connection client instead of a fresh postgres() +
-// TLS handshake per request. idle_timeout closes the socket when unused;
-// postgres.js reconnects transparently on the next query (safe on Render and
-// in a warm serverless instance alike).
-let sqlClient: ReturnType<typeof postgres> | null = null;
-function getSql(dbUrl: string) {
-  if (!sqlClient) {
-    sqlClient = postgres(dbUrl, {
-      max: 1,
-      prepare: false,
-      idle_timeout: 5,
-      connect_timeout: 5,
-    });
-  }
-  return sqlClient;
-}
-
-async function fetchSsCarriers(apiKeyV2: string, keySource: string): Promise<FetchResult> {
-  if (!apiKeyV2) return { carriers: [], error: 'no key configured', status: null };
-  try {
-    const data = await listCarrierAccounts('shipstation', {
-      apiKeyV2,
-      dedupeKey: `imported-rates-multi:carriers:${keySource}`,
-    });
-    return {
-      carriers: Array.isArray(data?.carriers) ? data.carriers : [],
-      error: null,
-      status: 200,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { carriers: [], error: msg, status: null };
-  }
-}
+let cachedResponse: { at: number; payload: any } | null = null;
 
 export default async function handler(req: any, res: any): Promise<void> {
+  const totalStartedAt = nowMs();
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin, { methods: 'GET, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -114,19 +79,50 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(401).json({ error: 'Missing Authorization' });
     return;
   }
+  const authStartedAt = nowMs();
   const verified = await verifySupabaseJwt(token);
+  const authDurationMs = elapsedMs(authStartedAt);
   if (!verified.ok) {
     console.warn('[imported-rates-multi] Invalid token:', verified.reason);
     res.status(401).json({ error: 'Invalid token' });
     return;
   }
 
+  const responseCacheAgeMs = cachedResponse
+    ? Math.max(0, Date.now() - cachedResponse.at)
+    : null;
   if (
     RATES_MULTI_CACHE_TTL_MS > 0 &&
     cachedResponse &&
-    Date.now() - cachedResponse.at < RATES_MULTI_CACHE_TTL_MS
+    responseCacheAgeMs != null &&
+    responseCacheAgeMs < RATES_MULTI_CACHE_TTL_MS
   ) {
-    res.status(200).json(cachedResponse.payload);
+    const totalDurationMs = elapsedMs(totalStartedAt);
+    const cachedPayload = cachedResponse.payload;
+    const timing = {
+      ...(cachedPayload?._diagnostics?.timing ?? {}),
+      totalDurationMs,
+      authDurationMs,
+      dbDurationMs: 0,
+      aggregationDurationMs: 0,
+      slowestSource: null,
+      slowestSourceDurationMs: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      responseCacheHit: true,
+      responseCacheAgeMs,
+    };
+    res.setHeader(
+      'Server-Timing',
+      `multi_auth;dur=${authDurationMs}, multi_cache;dur=${totalDurationMs}`,
+    );
+    res.status(200).json({
+      ...cachedPayload,
+      _diagnostics: {
+        ...cachedPayload._diagnostics,
+        timing,
+      },
+    });
     return;
   }
 
@@ -138,7 +134,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     sourceId: number | null;
     keySource: string;
     keyValue: string;
-    p: Promise<FetchResult>;
+    p: Promise<ShipStationCarrierAccountLoadResult>;
   }
   const tasks: Task[] = [];
   const seenKeys = new Set<string>();
@@ -146,7 +142,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (!t.keyValue) return;
     if (seenKeys.has(t.keyValue)) return;
     seenKeys.add(t.keyValue);
-    tasks.push({ ...t, p: fetchSsCarriers(t.keyValue, t.keySource) });
+    tasks.push({ ...t, p: loadShipStationCarrierAccounts(t.keyValue) });
   };
 
   queueTask({
@@ -163,37 +159,46 @@ export default async function handler(req: any, res: any): Promise<void> {
   });
 
   // Per-client creds from DB (best-effort — failures don't fail the request).
-  const diagnostics: Array<{ source: string; keySource: string; status: number | null; count: number; error: string | null }> = [];
+  const diagnostics: Array<{
+    source: string;
+    keySource: string;
+    status: number | null;
+    count: number;
+    error: string | null;
+    cacheStatus: 'hit' | 'miss';
+    cacheAgeMs: number | null;
+    durationMs: number;
+    providerDurationMs: number;
+  }> = [];
   let dbError: string | null = null;
-  const dbUrl = process.env.DATABASE_URL;
-  if (dbUrl) {
-    try {
-      const sql = getSql(dbUrl);
-      const rows = await sql<Array<{ id: number; name: string; ss_api_key_v2: string | null }>>`
-        SELECT id, name, ss_api_key_v2
-        FROM clients
-        WHERE ss_api_key_v2 IS NOT NULL
-          AND active = true
-      `;
-      for (const c of rows) {
-        if (c.ss_api_key_v2) {
-          queueTask({
-            source: c.name,
-            sourceId: c.id,
-            keySource: `clients.ss_api_key_v2 (id=${c.id})`,
-            keyValue: c.ss_api_key_v2,
-          });
-        }
+  const dbStartedAt = nowMs();
+  try {
+    const rows = await db
+      .select({
+        id: clients.id,
+        name: clients.name,
+        ssApiKeyV2: clients.ssApiKeyV2,
+      })
+      .from(clients)
+      .where(and(isNotNull(clients.ssApiKeyV2), eq(clients.active, true)));
+    for (const c of rows) {
+      if (c.ssApiKeyV2) {
+        queueTask({
+          source: c.name,
+          sourceId: c.id,
+          keySource: `clients.ss_api_key_v2 (id=${c.id})`,
+          keyValue: c.ssApiKeyV2,
+        });
       }
-    } catch (err) {
-      dbError = (err as Error)?.message ?? String(err);
-      console.error('[multi-carriers] db fan-out failed:', dbError);
     }
-  } else {
-    dbError = 'DATABASE_URL not configured';
+  } catch (err) {
+    dbError = (err as Error)?.message ?? String(err);
+    console.error('[multi-carriers] db fan-out failed:', dbError);
   }
+  const dbDurationMs = elapsedMs(dbStartedAt);
 
   const results = await Promise.all(tasks.map((t) => t.p));
+  const aggregationStartedAt = nowMs();
   const aggregated: TaggedCarrier[] = [];
   const seenByAccount = new Set<string>();
   for (let i = 0; i < tasks.length; i += 1) {
@@ -205,6 +210,10 @@ export default async function handler(req: any, res: any): Promise<void> {
       status: r.status,
       count: r.carriers.length,
       error: publicCarrierFetchError(r),
+      cacheStatus: r.cacheStatus,
+      cacheAgeMs: r.cacheAgeMs,
+      durationMs: r.durationMs,
+      providerDurationMs: r.providerDurationMs,
     });
     for (const c of r.carriers) {
       const key = `${t.source}:${c.carrier_id}`;
@@ -212,6 +221,49 @@ export default async function handler(req: any, res: any): Promise<void> {
       seenByAccount.add(key);
       aggregated.push({ ...c, source_client_name: t.source, source_client_id: t.sourceId });
     }
+  }
+
+  const aggregationDurationMs = elapsedMs(aggregationStartedAt);
+  const slowestSource = diagnostics.reduce<(typeof diagnostics)[number] | null>(
+    (slowest, current) => (
+      !slowest || current.durationMs > slowest.durationMs ? current : slowest
+    ),
+    null,
+  );
+  const totalDurationMs = elapsedMs(totalStartedAt);
+  const timing = {
+    totalDurationMs,
+    authDurationMs,
+    dbDurationMs,
+    aggregationDurationMs,
+    slowestSource: slowestSource?.source ?? null,
+    slowestSourceDurationMs: slowestSource?.durationMs ?? 0,
+    cacheHits: diagnostics.filter((row) => row.cacheStatus === 'hit').length,
+    cacheMisses: diagnostics.filter((row) => row.cacheStatus === 'miss').length,
+    responseCacheHit: false,
+    responseCacheAgeMs: null,
+  };
+  res.setHeader(
+    'Server-Timing',
+    `multi_auth;dur=${authDurationMs}, multi_db;dur=${dbDurationMs}, multi_accounts;dur=${timing.slowestSourceDurationMs}`,
+  );
+
+  const configuredSlowThresholdMs = Number.parseInt(process.env.API_TIMING_LOG_MS ?? '750', 10);
+  const slowThresholdMs = Number.isFinite(configuredSlowThresholdMs) && configuredSlowThresholdMs > 0
+    ? configuredSlowThresholdMs
+    : 750;
+  if (totalDurationMs >= slowThresholdMs) {
+    console.info('[rates/multi:timing]', {
+      ...timing,
+      sources: diagnostics.map((row) => ({
+        source: row.source,
+        status: row.status,
+        count: row.count,
+        cacheStatus: row.cacheStatus,
+        durationMs: row.durationMs,
+        providerDurationMs: row.providerDurationMs,
+      })),
+    });
   }
 
   const payload = {
@@ -222,6 +274,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       // Stamped at fan-out time; a repeat call served from cache returns the
       // SAME cachedAt, which is how a cache hit is observable end-to-end.
       cachedAt: new Date().toISOString(),
+      timing,
     },
   };
   // Don't pin an outage: only cache when at least one source returned carriers.

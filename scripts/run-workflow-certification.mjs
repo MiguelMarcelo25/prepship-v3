@@ -46,6 +46,7 @@ const GROUPS = [
       'test:connector-architecture',
       'test:ps-032-connector-boundary',
       'test:ps-032-connector-orchestrators',
+      'test:rates-multi-cache',
       'test:shipstation-awaiting-parity',
       'test:shipstation-sync-window',
       'test:sync-advisory-lock',

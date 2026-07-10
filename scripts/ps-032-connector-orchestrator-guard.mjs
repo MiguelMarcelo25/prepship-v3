@@ -56,6 +56,7 @@ const carrierVerifyRoute = read('api/carriers/verify.ts');
 const importedCarrierVerifyHandler = read('src/lib/imported-handlers/carriers-verify.ts');
 const carrierCredentialVerification = read('src/connectors/carrier/credential-verification.ts');
 const importedRatesMultiHandler = read('src/lib/imported-handlers/rates-multi.ts');
+const shipStationCarrierAccountCache = read('src/services/shipstation-carrier-account-cache.ts');
 const verifyGroundSaverScript = read('scripts/verify-ground-saver-fix.ts');
 const recoverMarketplaceNotificationsScript = read('scripts/recover-marketplace-notifications.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
@@ -460,10 +461,11 @@ assert(
   'ShipStation CarrierConnector must own legacy ShipStation label purchase API calls',
 );
 assert(
-  importedRatesMultiHandler.includes('listCarrierAccounts') &&
+  importedRatesMultiHandler.includes('loadShipStationCarrierAccounts') &&
+    shipStationCarrierAccountCache.includes('listCarrierAccounts') &&
     !importedRatesMultiHandler.includes('api.shipengine.com') &&
     !importedRatesMultiHandler.includes('fetch(`${SHIPSTATION_BASE}/carriers`'),
-  'imported rates-multi carrier fan-out must use CarrierConnector account listing, not direct ShipEngine calls',
+  'imported rates-multi carrier fan-out must delegate through the cached CarrierConnector account listing owner',
 );
 assert(
   verifyGroundSaverScript.includes('listCarrierAccounts') &&
