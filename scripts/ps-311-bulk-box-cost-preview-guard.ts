@@ -88,7 +88,7 @@ check('apply service NEVER writes client_package_prices (timeless table — card
 check('apply runs in ONE transaction (all editable orders re-price, or none)',
   /conn\.transaction\(/.test(svc));
 check('apply ensures the real schema ONLY on the production singleton (a test conn never touches it)',
-  /if \(conn === db\) await ensureBillingBoxResolutionsSchema\(\)/.test(svc));
+  /if \(conn === db\) \{[\s\S]*ensureBillingFinalizationPolicySchema\(\)[\s\S]*ensureBillingBoxResolutionsSchema\(\)/.test(svc));
 check('apply route exists, regenerates the scope, and AUDITS the bulk money action',
   /\/box-cost\/bulk\/apply/.test(billingRoute) &&
   /applyBulkBoxCostResolutions\(/.test(billingRoute) &&
@@ -148,7 +148,7 @@ check('by-dims: writes ONLY billing_box_resolutions by upsert; NEVER client_pack
 check('by-dims: ONE transaction, finalized orders skipped, schema ensured only on the prod singleton',
   /conn\.transaction\(/.test(byDimsSvc) &&
   /splitBulkBoxCostApplyTargets\(/.test(byDimsSvc) &&
-  /if \(conn === db\) await ensureBillingBoxResolutionsSchema\(\)/.test(byDimsSvc));
+  /if \(conn === db\) \{[\s\S]*ensureBillingFinalizationPolicySchema\(\)[\s\S]*ensureBillingBoxResolutionsSchema\(\)/.test(byDimsSvc));
 check('by-dims routes (preview/apply/revert) exist, are financials:write gated, regenerate, and audit the money action',
   /\/box-cost\/by-dims\/preview/.test(billingRoute) &&
   /\/box-cost\/by-dims\/apply/.test(billingRoute) &&

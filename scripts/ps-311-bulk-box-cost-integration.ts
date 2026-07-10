@@ -17,6 +17,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { sql } from 'drizzle-orm';
+import { readFileSync } from 'node:fs';
 import * as schema from '../src/db/schema/index.js';
 import { billingBoxResolutions } from '../src/db/schema/billing.js';
 import { billingDayRange } from '../src/lib/time/billing-day.js';
@@ -92,6 +93,8 @@ async function main(): Promise<void> {
     (3, 'B3', 200, 7, 'package_cost', 'box', '3.00', '3.00', '2026-06-12', false),
     (6, 'A6', 100, 9, 'package_cost', 'box', '4.00', '4.00', '2026-06-14', false),
     (8, 'A8', 100, 7, 'package_cost', 'box', '8.00', '8.00', '2026-06-30T00:00:00.000Z', false)`);
+
+  await client.exec(readFileSync('drizzle/0059_billing_finalized_lock.sql', 'utf8'));
 
   const scope = {
     clientId: 100,

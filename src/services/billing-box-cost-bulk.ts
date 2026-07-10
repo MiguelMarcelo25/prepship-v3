@@ -14,6 +14,11 @@ import { sql, and, eq, gte, lt } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
+import {
+  assertBillingOrdersEditable,
+  ensureBillingFinalizationPolicySchema,
+  setBillingOrdersDirty,
+} from './billing-finalization-policy.js';
 
 export type BulkBoxCostScope = {
   clientId: number;
@@ -167,7 +172,10 @@ export async function applyBulkBoxCostResolutions(
   // Only the production singleton path ensures the real schema (which FK-references orders/
   // shipments/packages). An injected test conn (pglite) creates its own table and must NEVER be
   // allowed to reach the production singleton — the `conn === db` guard enforces that.
-  if (conn === db) await ensureBillingBoxResolutionsSchema();
+  if (conn === db) {
+    await ensureBillingFinalizationPolicySchema();
+    await ensureBillingBoxResolutionsSchema();
+  }
   const rows = await fetchBulkBoxCostOrderRows(scope, clientScopePredicate, conn);
   const { editable, skippedFinalized } = splitBulkBoxCostApplyTargets(rows);
   const overridePrice = round2(scope.newCost).toFixed(2);
@@ -176,6 +184,23 @@ export async function applyBulkBoxCostResolutions(
     // ONE transaction for the whole batch — all editable orders get the resolution or none do, so
     // a mid-apply failure can never leave the range half-re-priced.
     await conn.transaction(async (tx) => {
+      await assertBillingOrdersEditable(
+        {
+          orderIds: editable.map((row) => row.orderId),
+          clientId: scope.clientId,
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
+      await setBillingOrdersDirty(
+        {
+          orderIds: editable.map((row) => row.orderId),
+          dirty: true,
+          clientId: scope.clientId,
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
       for (const r of editable) {
         await tx
           .insert(billingBoxResolutions)

@@ -74,6 +74,15 @@ import { resolveBillingSelectedRateCost } from './billing-selected-rate-cost';
 import { resolveBillingBoxCostAlert } from './billing-box-cost-alert';
 import { resolveBillingRowStatus } from './billing-row-status';
 import {
+  assertBillingOrdersEditable,
+  billingLineItemIsEditablePredicate,
+  ensureBillingFinalizationPolicySchema,
+  finalizedBillingOrderIdsForRange,
+  isBillingFinalizedLockError,
+  rethrowAsBillingFinalizedLock,
+  setBillingOrdersDirty,
+} from './billing-finalization-policy';
+import {
   cancelledNoChargeBillingLinePredicateSql,
   cancelledNoChargeBillingAmountSql,
   isCancelledBillingStatus,
@@ -728,6 +737,7 @@ export async function generateLineItems(input: GenerateInput) {
   // the additive column exists before reading it (belt-and-suspenders, pre-migration
   // 0054). Memoized + idempotent; matches the read-side ensure convention above.
   await ensureShipmentsSelectedRateCostColumn();
+  await ensureBillingFinalizationPolicySchema();
 
   // Scope-independent prefetch reads, fired TOGETHER (they used to run
   // serially — one pooler round-trip after another). Each is awaited exactly
@@ -939,7 +949,7 @@ export async function generateLineItems(input: GenerateInput) {
     orderLifecycleStatus: string | null;
   };
 
-  const billableRows: BillableRow[] = orderShipmentRows
+  const allBillableRows: BillableRow[] = orderShipmentRows
     .map<BillableRow | null>((row) => {
       const storeId = rawStoreId(row.orderRaw ?? {}, row.orderStoreId ?? null);
       const clientId =
@@ -1005,32 +1015,29 @@ export async function generateLineItems(input: GenerateInput) {
         (input.clientId === undefined || row.clientId === input.clientId)
     );
 
-  if (!billableRows.length) {
-    return {
-      generated: 0,
-      count: 0,
-      total: 0,
-      skipped: 0,
-      message: 'No billable shipped or cancelled orders found for this range.',
-    };
-  }
-
-  // Rebuild the requested billing period only after we know the source query
-  // has billable rows. That protects existing summaries if a transient query
-  // problem happens during generation.
-  await db.delete(billingLineItems).where(
-    and(
-      sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-      // PS-208: STRICT upper bound. dateTo is the EXCLUSIVE day-after
-      // midnight — `<=` here would delete the first day of the NEXT period's
-      // lines on every regenerate.
-      sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
-      input.clientId !== undefined
-        ? eq(billingLineItems.clientId, input.clientId)
-        : undefined,
-      billingLineItemScopePredicate(input)
-    )
+  // PS-412: one invoiced line freezes the whole client/order bill. Resolve
+  // finality for the candidate order ids (not just finalized rows whose own
+  // date happens to be in this range), then exclude the whole order from both
+  // delete and rebuild.
+  const finalizedOrderIds = await finalizedBillingOrderIdsForRange({
+    dateFrom: fromIso,
+    dateTo: toIso,
+    orderIds: [...new Set(
+      allBillableRows
+        .map((row) => row.orderId)
+        .filter((orderId): orderId is number => orderId != null && orderId > 0),
+    )],
+    clientId: input.clientId,
+    scopePredicate: billingLineItemScopePredicate(input),
+  });
+  const billableRows = allBillableRows.filter(
+    (row) => row.orderId == null || !finalizedOrderIds.has(row.orderId),
   );
+  const skippedFinalizedOrderCount = new Set(
+    allBillableRows
+      .map((row) => row.orderId)
+      .filter((orderId): orderId is number => orderId != null && finalizedOrderIds.has(orderId)),
+  ).size;
 
   // ─── B2 pre-fetch: packages + per-client package prices ──────────────────
   // PS-207: the billed box comes from the SHIPMENT'S RECORDED BOX ONLY,
@@ -1092,14 +1099,14 @@ export async function generateLineItems(input: GenerateInput) {
   // map the rate display + orders row-money read) and key it by the shipment's frozen carrierAccountId
   // as the per-account OVERRIDE. OFF => null map => the resolver keeps per-CLIENT-only behavior,
   // byte-identical to slice 2a (carrierAccountMarkup stays null). One load per generate, not per row.
-  // ACTIVATION CAVEAT: the regenerate DELETE above is date-windowed and does NOT honor billing_line_
-  // items.invoiced, so flipping this ON then regenerating an already-invoiced PAST period retroactively
-  // applies the markup — flip ON, then only generate/regenerate go-forward periods.
+  // Regeneration preserves any order group that contains an invoiced line, so activating
+  // this setting only changes editable billing groups.
   const perAccountMarkups =
     process.env.BILLING_PER_ACCOUNT_MARKUP === 'on' ? await loadCarrierMarkups() : null;
 
   let generated = 0;
   let skipped = 0;
+  const skippedFinalizedStorageGroups = new Set<string>();
   let total = 0;
 
   // Collect ALL line-item rows across every billable shipped order first, then run a
@@ -1511,61 +1518,66 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
-  // Batch INSERT in chunks of 500 with ON CONFLICT DO NOTHING. The unique
-  // constraint (order_id, line_type, description) still guards against
-  // duplicates, so re-running the generate is idempotent.
+  // PS-412: lock every candidate bill, then delete and rebuild order lines in
+  // one transaction. A concurrent finalizer either commits first (this rejects
+  // before deleting) or waits until the complete rebuild commits. Any insert
+  // failure rolls the delete back instead of leaving a partially rebuilt bill.
+  const editableOrderIds = [...new Set(
+    billableRows
+      .map((row) => row.orderId)
+      .filter((orderId): orderId is number => orderId != null && orderId > 0),
+  )];
   const CHUNK = 500;
-  for (let i = 0; i < allRows.length; i += CHUNK) {
-    const chunk = allRows.slice(i, i + CHUNK);
-    if (!chunk.length) continue;
-    try {
-      await db
-        .insert(billingLineItems)
-        .values(chunk)
-        .onConflictDoNothing({
-          target: [
-            billingLineItems.orderId,
-            billingLineItems.lineType,
-            billingLineItems.description,
-          ],
-        });
-      generated += chunk.length;
-    } catch (chunkErr) {
-      // Fall back to per-row to isolate which row poisoned the chunk.
-      console.warn(
-        '[billing] chunk insert failed, retrying per-row:',
-        chunkErr instanceof Error ? chunkErr.message : chunkErr
+  try {
+    await db.transaction(async (tx) => {
+      await assertBillingOrdersEditable(
+        {
+          orderIds: editableOrderIds,
+          clientId: input.clientId,
+          scopePredicate: billingLineItemScopePredicate(input),
+        },
+        tx,
       );
-      for (const row of chunk) {
-        try {
-          await db
-            .insert(billingLineItems)
-            .values(row)
-            .onConflictDoNothing({
-              target: [
-                billingLineItems.orderId,
-                billingLineItems.lineType,
-                billingLineItems.description,
-              ],
-            });
-          generated += 1;
-        } catch (rowErr) {
-          // Never swallow billing insert failures silently — a swallowed error
-          // here once wiped a client's billing and rebuilt nothing.
-          console.error(
-            '[billing] line item insert skipped',
-            {
-              clientId: row.clientId,
-              orderId: row.orderId,
-              lineType: row.lineType,
-              description: row.description,
-            },
-            rowErr instanceof Error ? rowErr.message : rowErr
-          );
-          skipped += 1;
-        }
+      await tx.delete(billingLineItems).where(
+        and(
+          sql`${billingLineItems.orderId} is not null`,
+          sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
+          sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+          input.clientId !== undefined
+            ? eq(billingLineItems.clientId, input.clientId)
+            : undefined,
+          billingLineItemScopePredicate(input),
+          billingLineItemIsEditablePredicate(),
+        ),
+      );
+      for (let i = 0; i < allRows.length; i += CHUNK) {
+        const chunk = allRows.slice(i, i + CHUNK);
+        if (!chunk.length) continue;
+        await tx
+          .insert(billingLineItems)
+          .values(chunk)
+          .onConflictDoNothing({
+            target: [
+              billingLineItems.orderId,
+              billingLineItems.lineType,
+              billingLineItems.description,
+            ],
+          });
+        generated += chunk.length;
       }
-    }
+      await setBillingOrdersDirty(
+        {
+          orderIds: editableOrderIds,
+          dirty: false,
+          clientId: input.clientId,
+          scopePredicate: billingLineItemScopePredicate(input),
+        },
+        tx,
+      );
+    });
+  } catch (error) {
+    if (isBillingFinalizedLockError(error)) rethrowAsBillingFinalizedLock(error);
+    throw error;
   }
 
   // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
@@ -1588,6 +1600,55 @@ export async function generateLineItems(input: GenerateInput) {
   // dateTo): it lands in the correct month and regen cleanly rebuilds it.
   const STORAGE_LINE_DAY_MS = 24 * 60 * 60 * 1000;
   const storageShipDate = new Date(periodEnd.getTime() - STORAGE_LINE_DAY_MS);
+
+  const existingStorageRows = await db
+    .select({
+      clientId: billingLineItems.clientId,
+      shipDate: billingLineItems.shipDate,
+      invoiced: billingLineItems.invoiced,
+    })
+    .from(billingLineItems)
+    .where(
+      and(
+        sql`${billingLineItems.orderId} is null`,
+        eq(billingLineItems.lineType, 'storage'),
+        sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
+        sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+        input.clientId !== undefined
+          ? eq(billingLineItems.clientId, input.clientId)
+          : undefined,
+        billingLineItemScopePredicate(input),
+      ),
+    );
+  for (const row of existingStorageRows) {
+    if (row.invoiced === true) {
+      skippedFinalizedStorageGroups.add(
+        `${row.clientId}:${row.shipDate?.toISOString() ?? 'null'}`,
+      );
+    }
+  }
+  const storageClientIdsToProcess = [...new Set([
+    ...configByClient.keys(),
+    ...existingStorageRows.map((row) => row.clientId),
+  ])];
+
+  const cleanupEditableStorage = async (clientId: number): Promise<void> => {
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(billingLineItems)
+        .where(
+          and(
+            eq(billingLineItems.clientId, clientId),
+            sql`${billingLineItems.orderId} is null`,
+            eq(billingLineItems.lineType, 'storage'),
+            sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
+            sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+            billingLineItemScopePredicate(input),
+            billingLineItemIsEditablePredicate(),
+          ),
+        );
+    });
+  };
 
   // One inventory read + one ledger read for ALL storage-billed clients — this
   // loop used to issue both queries PER CLIENT, serially. Same predicates, same
@@ -1653,14 +1714,20 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
-  for (const [clientId, cfg] of configByClient.entries()) {
-    const storageRate = toNum(cfg.storageFeePerCuFt ?? 0);
-    if (storageRate <= 0) continue;
-    if (cfg.active === false) continue;
+  for (const clientId of storageClientIdsToProcess) {
+    const cfg = configByClient.get(clientId);
+    const storageRate = toNum(cfg?.storageFeePerCuFt ?? '0');
+    if (!cfg || storageRate <= 0 || cfg.active === false) {
+      await cleanupEditableStorage(clientId);
+      continue;
+    }
 
     // The client's active SKUs with their canonical cuFt inputs.
     const invRows = storageInvRowsByClient.get(clientId) ?? [];
-    if (!invRows.length) continue;
+    if (!invRows.length) {
+      await cleanupEditableStorage(clientId);
+      continue;
+    }
 
     const storage = computeClientStorageBilling({
       skus: invRows.map((r) => ({
@@ -1673,7 +1740,10 @@ export async function generateLineItems(input: GenerateInput) {
       periodStart,
       periodEnd,
     });
-    if (storage.amount <= 0) continue;
+    if (storage.amount <= 0) {
+      await cleanupEditableStorage(clientId);
+      continue;
+    }
 
     const description =
       `Storage — ${storage.totalCuFtDays.toFixed(2)} cuft-days over ${storage.daysInMonth} days ` +
@@ -1707,6 +1777,22 @@ export async function generateLineItems(input: GenerateInput) {
     try {
       await ensureBillingStorageProofSchema();
       await db.transaction(async (tx) => {
+        // PS-412: replace the editable storage line in the same transaction as
+        // its proof. Finalized storage remains untouched and makes the insert
+        // fail closed, rolling the proof update back as well.
+        await tx
+          .delete(billingLineItems)
+          .where(
+            and(
+              eq(billingLineItems.clientId, clientId),
+              sql`${billingLineItems.orderId} is null`,
+              eq(billingLineItems.lineType, 'storage'),
+              sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
+              sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+              billingLineItemScopePredicate(input),
+              billingLineItemIsEditablePredicate(),
+            ),
+          );
         await tx
           .insert(billingStorageProof)
           .values({ clientId, periodStart, periodEnd, ...proofValues })
@@ -1744,6 +1830,9 @@ export async function generateLineItems(input: GenerateInput) {
       total += storage.amount;
     } catch (storageErr) {
       skipped += 1;
+      if (isBillingFinalizedLockError(storageErr)) {
+        skippedFinalizedStorageGroups.add(`${clientId}:${storageShipDate.toISOString()}`);
+      }
       console.warn(
         '[billing] storage line skipped because proof freeze failed',
         { clientId },
@@ -1774,8 +1863,10 @@ export async function generateLineItems(input: GenerateInput) {
     count: generated,
     total,
     skipped,
+    skippedFinalizedOrderCount,
+    skippedFinalizedStorageCount: skippedFinalizedStorageGroups.size,
     billingSummaryMetricsRows,
-    message: `Generated ${generated} line items from ${billableRows.length} billable shipments/orders.`,
+    message: `Generated ${generated} line items from ${billableRows.length} billable shipments/orders; ${skippedFinalizedOrderCount} finalized order(s) and ${skippedFinalizedStorageGroups.size} finalized storage period(s) left unchanged.`,
   };
 }
 

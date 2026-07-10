@@ -85,6 +85,9 @@ const expectedRuntimeDdlFiles = [
   'src/db/ensure-order-competitive-rate.ts',
   'src/lib/shipstation/durable-rate-limiter.ts',
   'src/services/audit-log.ts',
+  // PS-412: finalized-billing group lock + trigger runtime mirror. Covered by
+  // drizzle/0059_billing_finalized_lock.sql; additive and billing-only.
+  'src/services/billing-finalization-policy.ts',
   'src/services/billing-fee-waiver-store.ts',
   'src/services/billing-manual-overrides.ts',
   'src/services/billing.ts',

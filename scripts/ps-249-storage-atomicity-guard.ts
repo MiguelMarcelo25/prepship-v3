@@ -38,7 +38,7 @@ const billing = readFileSync('src/services/billing.ts', 'utf8');
 // prorated ledger calculator; the unique-index backstop (try/catch) it pins is unchanged.
 const storageBlock = billing.slice(billing.indexOf('Storage fees (PS-373'));
 check('billing storage insert keeps its try/catch (unique violation -> skipped, not a crash)',
-  /lineType: 'storage'/.test(storageBlock) && /catch \{\s*\n\s*skipped \+= 1;/.test(storageBlock));
+  /lineType: 'storage'/.test(storageBlock) && /catch \([^)]*\) \{\s*\n\s*skipped \+= 1;/.test(storageBlock));
 
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json wires migrate:billing-storage-unique (deliberate, NOT test:*)', /"migrate:billing-storage-unique":/.test(pkg));

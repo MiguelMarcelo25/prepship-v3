@@ -918,6 +918,8 @@ export default function BillingView() {
         ? selectedBillingClientIds.filter((clientId) => allBillingClientIds.includes(clientId))
         : []
       let generated = 0
+      let finalizedSkipped = 0
+      let finalizedStorageSkipped = 0
       let alreadyCurrent = 0
 
       if (targetClientIds.length > 0) {
@@ -964,6 +966,8 @@ export default function BillingView() {
             setStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} ${plan.clientName}: ${batch.from} to ${batch.to} (${step}/${totalSteps})...`)
             const result = await apiClient.generateBilling(batch.from, batch.to, plan.clientId)
             generated += Number(result.generated ?? result.count ?? 0)
+            finalizedSkipped += Number(result.skippedFinalizedOrderCount ?? 0)
+            finalizedStorageSkipped += Number(result.skippedFinalizedStorageCount ?? 0)
           }
         }
       } else {
@@ -992,12 +996,26 @@ export default function BillingView() {
           setStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
           const result = await apiClient.generateBilling(batch.from, batch.to)
           generated += Number(result.generated ?? result.count ?? 0)
+          finalizedSkipped += Number(result.skippedFinalizedOrderCount ?? 0)
+          finalizedStorageSkipped += Number(result.skippedFinalizedStorageCount ?? 0)
         }
       }
-      const result = { generated }
+      const result = { generated, finalizedSkipped, finalizedStorageSkipped }
+      const finalizedGroupSkipped = finalizedSkipped + finalizedStorageSkipped
+      const finalizedNote = [
+        finalizedSkipped > 0
+          ? `${finalizedSkipped} finalized order${finalizedSkipped === 1 ? '' : 's'}`
+          : '',
+        finalizedStorageSkipped > 0
+          ? `${finalizedStorageSkipped} finalized storage period${finalizedStorageSkipped === 1 ? '' : 's'}`
+          : '',
+      ].filter(Boolean).join(' and ')
       if (!silent) {
         if (generated > 0) {
-          toastContext?.addToast(`Billing ${forceRegenerate ? 'regenerated' : 'updated'}: ${result.generated} line items`, 'success')
+          const finalizedSuffix = finalizedGroupSkipped > 0 ? `; ${finalizedNote} left unchanged` : ''
+          toastContext?.addToast(`Billing ${forceRegenerate ? 'regenerated' : 'updated'}: ${result.generated} line items${finalizedSuffix}`, 'success')
+        } else if (finalizedGroupSkipped > 0) {
+          toastContext?.addToast(`${finalizedNote} left unchanged`, 'success')
         } else {
           toastContext?.addToast('Billing is already up to date', 'success')
         }
@@ -1011,7 +1029,8 @@ export default function BillingView() {
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
-      setStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`)
+      const finalizedStatus = finalizedGroupSkipped > 0 ? ` · ${finalizedNote} unchanged` : ''
+      setStatus(`${generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`}${finalizedStatus}`)
       setSummaryRows(rows)
       setShippingMarginSummary(marginAnalytics?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY)
       setShippingMarginCarriers(marginAnalytics?.carriers ?? [])

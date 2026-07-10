@@ -19,6 +19,7 @@
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { sql } from 'drizzle-orm';
+import { readFileSync } from 'node:fs';
 import * as schema from '../src/db/schema/index.js';
 import { billingBoxResolutions, billingLineItems } from '../src/db/schema/billing.js';
 import {
@@ -29,6 +30,10 @@ import {
   fetchSweepNoteForOrder,
   revertBulkBoxCostByDimsResolutions,
 } from '../src/services/billing-box-cost-by-dims.js';
+import {
+  isBillingFinalizedLockError,
+  setBillingOrdersDirty,
+} from '../src/services/billing-finalization-policy.js';
 
 const SWEEP_NOTE = `[box-sweep] Unmatched box (Custom 6.5x4x2) — no package matches the shipment box`;
 
@@ -99,6 +104,8 @@ async function main(): Promise<void> {
     (6, 'A6', 100, NULL, 'package_cost_missing', ${SIG_6x4x2}, '0.00', '0.00', '2026-07-15', false),
     (7, 'B7', 200, NULL, 'package_cost_missing', ${SIG_6x4x2}, '0.00', '0.00', '2026-06-16', false)`);
 
+  await client.exec(readFileSync('drizzle/0059_billing_finalized_lock.sql', 'utf8'));
+
   const scope = {
     clientId: 100,
     dateFrom: '2026-06-01T00:00:00.000Z',
@@ -159,10 +166,30 @@ async function main(): Promise<void> {
   const reByOrder = new Map(afterReapply.map((r) => [r.orderId, Number(r.overridePrice)]));
   check('re-apply UPDATED orders 1 + 2 to 0.75 (upsert, not insert)', reByOrder.get(1) === 0.75 && reByOrder.get(2) === 0.75);
   check('still exactly 2 resolution rows after re-apply (idempotent)', afterReapply.length === 2);
+  const pendingRegeneration = await client.query<{ dirty: boolean }>(
+    `SELECT dirty FROM billing_finalization_group_locks
+     WHERE group_key IN ('["order", 100, 1]', '["order", 100, 2]')
+     ORDER BY group_key`,
+  );
+  check(
+    'apply marks both billing groups dirty until regeneration',
+    pendingRegeneration.rows.length === 2 && pendingRegeneration.rows.every((row) => row.dirty === true),
+  );
 
   // ── 7) UNDO INVOICED-GUARD + manual-protection: an order INVOICED after the sweep must NOT be
   // reverted (undo must never strip a box cost off a finalized invoice); a MANUAL (non-sweep)
   // resolution must SURVIVE; only EDITABLE sweep-marked resolutions are removed. ──
+  let dirtyFinalizationRejected = false;
+  try {
+    await pg.execute(sql`UPDATE billing_line_items SET invoiced = true WHERE order_id = 1`);
+  } catch (error) {
+    dirtyFinalizationRejected = isBillingFinalizedLockError(error);
+  }
+  check('finalization is blocked until the route regenerates lines after the sweep', dirtyFinalizationRejected);
+  await setBillingOrdersDirty(
+    { orderIds: [1, 2], clientId: 100, dirty: false },
+    conn as Parameters<typeof setBillingOrdersDirty>[1],
+  );
   await pg.execute(sql`UPDATE billing_line_items SET invoiced = true WHERE order_id = 1`); // invoiced AFTER the sweep
   await pg.execute(sql`INSERT INTO billing_box_resolutions (order_id, package_id, override_price, note, resolved_by)
     VALUES (5, 7, '3.00', 'Manual box edit', 'tester')`);

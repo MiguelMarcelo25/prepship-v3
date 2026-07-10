@@ -48,6 +48,13 @@ import {
 } from '../services/billing-manual-overrides';
 import { PREP_FEE_LINE_TYPES } from '../services/billing-shipping-policy';
 import { summarizeBillingItemsForDetail } from '../services/billing-detail-utils';
+import {
+  assertBillingOrdersEditable,
+  BillingFinalizedLockError,
+  ensureBillingFinalizationPolicySchema,
+  isBillingFinalizedLockError,
+  setBillingOrdersDirty,
+} from '../services/billing-finalization-policy';
 import { previewBulkBoxCost, applyBulkBoxCostResolutions } from '../services/billing-box-cost-bulk';
 import { resolveBillingRowStatus } from '../services/billing-row-status';
 import {
@@ -92,6 +99,22 @@ import { waivedSummaryNote } from './billing-invoice-waiver-indicator';
 const app = new Hono();
 
 app.use('*', requirePermission('financials:read'));
+app.use('*', async (c, next) => {
+  try {
+    await next();
+  } catch (error) {
+    if (!isBillingFinalizedLockError(error)) throw error;
+    const lockError = error instanceof BillingFinalizedLockError
+      ? error
+      : new BillingFinalizedLockError();
+    return c.json({
+      error: lockError.message,
+      code: lockError.code,
+      finalized: true,
+      finalizedOrderIds: lockError.finalizedOrderIds,
+    }, 409);
+  }
+});
 
 function billingScopeFromContext(c: Context): ClientStoreScope {
   return getClientStoreScope({
@@ -679,11 +702,21 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
   // of the money transaction. Edits billing_line_items only — never
   // shipments.selectedPackageId (source of truth) — so this is NOT a shipped-data
   // change and needs no lockdown override.
+  await ensureBillingFinalizationPolicySchema();
   await ensureBillingBoxResolutionsSchema();
   if (prepFeePatchTouched) await ensureBillingFeeWaiverSchema();
   if (manualBillingPatchTouched) await ensureBillingManualOverridesSchema();
 
   await db.transaction(async (tx) => {
+    await assertBillingOrdersEditable(
+      {
+        orderIds: [orderId],
+        clientId: body.clientId,
+        scopePredicate: billingLineItemClientScopePredicate(scope),
+      },
+      tx,
+    );
+
     const [currentPackageCostLineBeforeEdit] = await tx
       .select({ totalCost: billingLineItems.totalCost })
       .from(billingLineItems)
@@ -1343,26 +1376,50 @@ app.post(
 
     if (!base) return c.json({ error: 'Billing line item not found' }, 404);
 
-    // Capture the order's CURRENT prep total so the waiver is reversible
-    // (clearing it restores the original charge on the next regenerate). The
-    // prep line-type list is the pure policy module's canonical set.
-    const [prepSumRow] = await db.execute<{ original_prep_amount: string | null }>(sql`
-      select coalesce(sum(total_cost), 0)::text as original_prep_amount
-      from billing_line_items
-      where client_id = ${body.clientId}
-        and order_id = ${orderId}
-        and line_type in (${sql.join(PREP_FEE_LINE_TYPE_LIST.map((t) => sql`${t}`), sql`, `)})
-    `);
-    const originalPrepAmount = prepSumRow?.original_prep_amount != null
-      ? Number(prepSumRow.original_prep_amount)
-      : null;
+    await ensureBillingFinalizationPolicySchema();
+    await ensureBillingFeeWaiverSchema();
 
-    await upsertBillingFeeWaiver({
-      orderId,
-      decision: body.decision,
-      reviewer: (c.get('email' as never) as string | undefined) ?? null,
-      note: body.note ?? null,
-      originalPrepAmount: Number.isFinite(originalPrepAmount as number) ? originalPrepAmount : null,
+    let originalPrepAmount: number | null = null;
+    await db.transaction(async (tx) => {
+      await assertBillingOrdersEditable(
+        {
+          orderIds: [orderId],
+          clientId: body.clientId,
+          scopePredicate: billingLineItemClientScopePredicate(scope),
+        },
+        tx,
+      );
+
+      // Capture the current prep total under the same group/row locks used for
+      // the waiver write, so direct finalization cannot race this decision.
+      const [prepSumRow] = await tx.execute<{ original_prep_amount: string | null }>(sql`
+        select coalesce(sum(total_cost), 0)::text as original_prep_amount
+        from billing_line_items
+        where client_id = ${body.clientId}
+          and order_id = ${orderId}
+          and line_type in (${sql.join(PREP_FEE_LINE_TYPE_LIST.map((t) => sql`${t}`), sql`, `)})
+      `);
+      const currentPrepAmount = prepSumRow?.original_prep_amount != null
+        ? Number(prepSumRow.original_prep_amount)
+        : null;
+      originalPrepAmount = Number.isFinite(currentPrepAmount as number) ? currentPrepAmount : null;
+
+      await upsertBillingFeeWaiver({
+        orderId,
+        decision: body.decision,
+        reviewer: (c.get('email' as never) as string | undefined) ?? null,
+        note: body.note ?? null,
+        originalPrepAmount,
+      }, tx);
+      await setBillingOrdersDirty(
+        {
+          orderIds: [orderId],
+          dirty: true,
+          clientId: body.clientId,
+          scopePredicate: billingLineItemClientScopePredicate(scope),
+        },
+        tx,
+      );
     });
 
     // PS-234: audit the decision (facts only — no PII/secret values).

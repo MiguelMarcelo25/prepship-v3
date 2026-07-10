@@ -19,6 +19,11 @@ import { db } from '../db/client.js';
 import { billingLineItems, billingBoxResolutions } from '../db/schema/billing.js';
 import { ensureBillingBoxResolutionsSchema } from './billing.js';
 import {
+  assertBillingOrdersEditable,
+  ensureBillingFinalizationPolicySchema,
+  setBillingOrdersDirty,
+} from './billing-finalization-policy.js';
+import {
   computeBulkBoxCostPreview,
   splitBulkBoxCostApplyTargets,
   type BulkBoxCostOrderRow,
@@ -152,7 +157,10 @@ export async function applyBulkBoxCostByDimsResolutions(
 ): Promise<BulkBoxCostApplyResult & { signature: string | null }> {
   // Only the production singleton path ensures the real schema (the injected pglite test conn
   // creates its own table and must never reach the production singleton — the `conn === db` guard).
-  if (conn === db) await ensureBillingBoxResolutionsSchema();
+  if (conn === db) {
+    await ensureBillingFinalizationPolicySchema();
+    await ensureBillingBoxResolutionsSchema();
+  }
   const signature = await fetchBoxReviewSignature(scope.clientId, scope.sourceOrderId, conn);
   if (!signature) {
     return { matchedOrderCount: 0, appliedOrderCount: 0, skippedFinalizedCount: 0, newCost: round2(scope.newCost), signature: null };
@@ -166,6 +174,23 @@ export async function applyBulkBoxCostByDimsResolutions(
 
   if (editable.length > 0) {
     await conn.transaction(async (tx) => {
+      await assertBillingOrdersEditable(
+        {
+          orderIds: editable.map((row) => row.orderId),
+          clientId: scope.clientId,
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
+      await setBillingOrdersDirty(
+        {
+          orderIds: editable.map((row) => row.orderId),
+          dirty: true,
+          clientId: scope.clientId,
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
       for (const r of editable) {
         await tx
           .insert(billingBoxResolutions)
@@ -240,7 +265,10 @@ export async function revertBulkBoxCostByDimsResolutions(
   clientScopePredicate: ReturnType<typeof sql> | undefined,
   conn: typeof db = db,
 ): Promise<ByDimsRevertResult> {
-  if (conn === db) await ensureBillingBoxResolutionsSchema();
+  if (conn === db) {
+    await ensureBillingFinalizationPolicySchema();
+    await ensureBillingBoxResolutionsSchema();
+  }
   const note = await fetchSweepNoteForOrder(scope.clientId, scope.sourceOrderId, conn);
   if (!note) return { revertedOrderCount: 0, skippedFinalizedCount: 0, signature: null };
 
@@ -275,6 +303,23 @@ export async function revertBulkBoxCostByDimsResolutions(
 
   if (editableOrderIds.length > 0) {
     await conn.transaction(async (tx) => {
+      await assertBillingOrdersEditable(
+        {
+          orderIds: editableOrderIds,
+          clientId: scope.clientId,
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
+      await setBillingOrdersDirty(
+        {
+          orderIds: editableOrderIds,
+          dirty: true,
+          clientId: scope.clientId,
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
       // Double-guard on the marker note so we can only ever delete the sweep's own resolutions.
       await tx
         .delete(billingBoxResolutions)

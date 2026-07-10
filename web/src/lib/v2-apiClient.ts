@@ -2629,19 +2629,17 @@ export const apiClient = {
   },
 
   generateBilling(from: string, to: string, clientId?: number): Promise<any> {
-    return safe(
-      'generateBilling',
-      async () => {
-        const res = await api.post<any>('/billing/generate', {
-          from,
-          to,
-          ...(clientId != null ? { clientId } : {}),
-        });
-        clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
-        return res;
-      },
-      {}
-    );
+    // PS-412: finalized-billing conflicts are authoritative backend failures.
+    // Propagate the 409 instead of turning a rejected money mutation into `{}`.
+    return (async () => {
+      const res = await api.post<any>('/billing/generate', {
+        from,
+        to,
+        ...(clientId != null ? { clientId } : {}),
+      });
+      clearCachedReads('fetchBillingSummary', 'fetchShippingMarginAnalytics');
+      return res;
+    })();
   },
 
   fetchBillingGenerationStatus(from: string, to: string, clientId?: number): Promise<any> {

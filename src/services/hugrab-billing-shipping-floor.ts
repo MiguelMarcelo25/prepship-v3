@@ -2,6 +2,11 @@ import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { billingLineItems } from '../db/schema/billing.js';
 import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-selected-rate-cost.js';
+import {
+  assertBillingOrdersEditable,
+  billingOrderHasNoFinalizedLineSql,
+  ensureBillingFinalizationPolicySchema,
+} from './billing-finalization-policy.js';
 
 export const HUGRAB_BILLING_CLIENT_NAME = 'HUGRAB';
 export const DEFAULT_HUGRAB_SELECTED_RATE_BELOW = 7.95;
@@ -164,6 +169,7 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
   // column exists before the read (belt-and-suspenders, pre-migration 0054).
   // Memoized + idempotent (ADD COLUMN IF NOT EXISTS).
   await ensureShipmentsSelectedRateCostColumn();
+  await ensureBillingFinalizationPolicySchema();
   const rows = await db.execute<RawCandidate>(sql`
     with source_rows as (
       select
@@ -196,6 +202,10 @@ async function fetchHugrabBillingShippingFloorCandidates(input: {
       where c.name = ${HUGRAB_BILLING_CLIENT_NAME}
         and billing_line_items.line_type = 'shipping'
         and coalesce(billing_line_items.invoiced, false) = false
+        and ${billingOrderHasNoFinalizedLineSql(
+          billingLineItems.clientId,
+          billingLineItems.orderId,
+        )}
         and billing_line_items.total_cost > 0
         and billing_line_items.description not ilike 'Included%'
         and billing_line_items.ship_date >= ${input.dateFrom}::timestamptz
@@ -306,6 +316,15 @@ export async function applyHugrabBillingShippingFloor(input: {
   const updatedIds: number[] = [];
   if (rows.length > 0) {
     await db.transaction(async (tx) => {
+      await assertBillingOrdersEditable(
+        {
+          orderIds: rows
+            .map((row) => row.orderId)
+            .filter((orderId): orderId is number => orderId != null && orderId > 0),
+          scopePredicate: clientScopePredicate,
+        },
+        tx,
+      );
       for (const row of rows) {
         const amount = money(nextShippingFor(input.action, row, params));
         const currentAmount = money(row.currentShipping);
