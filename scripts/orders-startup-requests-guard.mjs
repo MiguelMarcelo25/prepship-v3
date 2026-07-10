@@ -61,6 +61,13 @@ const hooks = [
   hooksShared,
 ].join('\n');
 
+const normalizedHome = home.replace(/\r\n/g, '\n');
+const backgroundWorkerPollerMarker = '// Poll the background [sync-v2] worker lightly';
+const backgroundWorkerPollerIndex = normalizedHome.indexOf(backgroundWorkerPollerMarker);
+const legacySyncHome = backgroundWorkerPollerIndex >= 0
+  ? normalizedHome.slice(0, backgroundWorkerPollerIndex)
+  : normalizedHome;
+
 const packageJson = JSON.parse(packageJsonRaw);
 
 const checks = [
@@ -152,7 +159,7 @@ const checks = [
       home.includes("next.status === 'syncing' ? 10_000 : 120_000") &&
       home.includes('[displayView, toastContext, syncStatus.status]') &&
       home.includes("document.visibilityState !== 'visible'") &&
-      !home.includes('window.setInterval(() => {\n      if (document.visibilityState !== \'visible\') return\n      void poll()\n    }, 120_000)'),
+      !legacySyncHome.includes('window.setInterval(() => {\n      if (document.visibilityState !== \'visible\') return\n      void poll()\n    }, 120_000)'),
   },
   {
     name: 'Orders sync status bypasses a fresh cache entry without discarding stale fallback',
