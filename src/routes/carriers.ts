@@ -11,6 +11,7 @@ import { probeCarrierAccountRates } from '../services/carrier-rates-probe';
 import { syncWalmartFeesForAccount } from '../connectors/store/walmart-fees';
 import { buildEbayAuthorizeUrl } from '../connectors/store/ebay';
 import { checkShopifyShippingReadiness } from '../connectors/store/shopify';
+import { sql as dbSql } from '../db/client';
 import { env } from '../lib/env';
 
 const app = new Hono();
@@ -58,25 +59,20 @@ app.post('/shopify/shipping-readiness', requirePermission('settings:write'), asy
     return c.json({ error: 'storeAccountId is required' }, 400);
   }
 
-  const sql = postgres(env.DATABASE_URL, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
-  try {
-    const rows = await sql<Array<{ id: number; provider: string; credentials: Record<string, unknown> }>>`
-      SELECT id, provider, credentials FROM store_accounts WHERE id = ${storeAccountId} LIMIT 1
-    `;
-    const row = rows[0];
-    if (!row) return c.json({ error: `store_accounts #${storeAccountId} not found` }, 404);
-    if (String(row.provider) !== 'shopify') {
-      return c.json({ error: 'Shopify Shipping readiness is only for Shopify store accounts' }, 400);
-    }
-
-    const result = await checkShopifyShippingReadiness(
-      row.credentials && typeof row.credentials === 'object' ? row.credentials : {},
-      { orderId: body?.orderId, env: process.env },
-    );
-    return c.json(result);
-  } finally {
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
+  const rows = await dbSql<Array<{ id: number; provider: string; credentials: Record<string, unknown> }>>`
+    SELECT id, provider, credentials FROM store_accounts WHERE id = ${storeAccountId} LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row) return c.json({ error: `store_accounts #${storeAccountId} not found` }, 404);
+  if (String(row.provider) !== 'shopify') {
+    return c.json({ error: 'Shopify Shipping readiness is only for Shopify store accounts' }, 400);
   }
+
+  const result = await checkShopifyShippingReadiness(
+    row.credentials && typeof row.credentials === 'object' ? row.credentials : {},
+    { orderId: body?.orderId, env: process.env },
+  );
+  return c.json(result);
 });
 
 // Walmart selling-fee pull. The provider logic already lives in

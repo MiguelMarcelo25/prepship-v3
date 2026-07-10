@@ -522,7 +522,19 @@ await check('Shopify Shipping readiness includes the backend fulfillment-order b
 });
 
 await check('Shopify Shipping readiness is wired to the backend route and Settings action', () => {
-  assert.match(readFileSync('src/routes/carriers.ts', 'utf8'), /\/shopify\/shipping-readiness/);
+  const carriersRoute = readFileSync('src/routes/carriers.ts', 'utf8');
+  const readinessRoute = carriersRoute.match(
+    /app\.post\('\/shopify\/shipping-readiness'[\s\S]*?\n}\);/,
+  )?.[0] ?? '';
+  assert.match(readinessRoute, /const rows = await dbSql/);
+  assert.doesNotMatch(readinessRoute, /postgres\(env\.DATABASE_URL/);
+  assert.doesNotMatch(readinessRoute, /\.end\(/);
+
+  const shopifyConnector = readFileSync('src/connectors/store/shopify.ts', 'utf8');
+  assert.match(
+    shopifyConnector,
+    /const \[shopRes, scopesRes\] = await Promise\.all\(\[[\s\S]*?shopify\.shop[\s\S]*?shopify\.access-scopes/,
+  );
   const settings = readFileSync('web/src/components/Settings/CarrierIntegrationsCard.tsx', 'utf8');
   assert.match(settings, /checkShopifyShipping/);
   assert.match(settings, /Shipping Check/);

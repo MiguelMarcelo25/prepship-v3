@@ -885,7 +885,10 @@ export async function checkShopifyShippingReadiness(
     });
   }
 
-  const shopRes = await shopifyFetch('shopify.shop', creds, '/shop.json');
+  const [shopRes, scopesRes] = await Promise.all([
+    shopifyFetch('shopify.shop', creds, '/shop.json'),
+    shopifyAdminFetch('shopify.access-scopes', creds, '/admin/oauth/access_scopes.json'),
+  ]);
   if (!shopRes.ok) {
     return shopifyShippingReadinessFailure({
       creds,
@@ -899,7 +902,6 @@ export async function checkShopifyShippingReadiness(
   const shopDomain = normalizeShopifyShopDomain(firstString(shop.myshopify_domain, shop.domain, creds.shopDomain) || creds.shopDomain);
   const shopName = firstString(shop.name, shopDomain);
 
-  const scopesRes = await shopifyAdminFetch('shopify.access-scopes', creds, '/admin/oauth/access_scopes.json');
   if (!scopesRes.ok) {
     return shopifyShippingReadinessFailure({
       creds,
