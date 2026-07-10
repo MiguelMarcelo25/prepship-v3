@@ -16,6 +16,7 @@
 import { readFileSync } from 'node:fs';
 
 const labels = readFileSync('src/services/labels.ts', 'utf8');
+const consumption = readFileSync('src/services/package-consumption.ts', 'utf8');
 const billingBox = readFileSync('src/services/billing-box-policy.ts', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
@@ -38,7 +39,8 @@ check('both persist sites use resolvedPackageId (test + real)',
 
 // 3. The deduction is fed the SAME resolvedPackageId → persisted == deducted.
 check('inventory/package deduction uses resolvedPackageId',
-  count(labels, 'packageId: resolvedPackageId') >= 2);
+  count(labels, 'selectedPackageId: resolvedPackageId') >= 2 &&
+  labels.includes('consumeOutboundPackageInTransaction({'));
 check('resolvedPackageId is produced by the label package resolver',
   /const resolvedPackageId = await resolveLabelPackageId\(/.test(labels));
 
@@ -63,7 +65,7 @@ check('precedence #2: the order canonical selected_package_id is consulted',
   /orderOverrides\.selectedPackageId/.test(resolver) && /resolvePackageRef/.test(resolver));
 check('canonical ref resolves by packages.id OR package_code',
   /eq\(packages\.id/.test(resolver) && /eq\(packages\.packageCode/.test(resolver));
-check('precedence #3: dims ±0.1" fallback', /DIMS_TOLERANCE = 0\.1/.test(resolver) && /findPackageByDims/.test(resolver));
+check('precedence #3: safe exact-dims fallback', /DIMS_TOLERANCE = 0\.001/.test(resolver) && /findPackageByDims/.test(resolver));
 // Slice 3: auto-provision is DARK by default — writes gated behind the flag.
 check('auto-provision flag reads env (off when unset)',
   /export function isPackageAutoProvisionEnabled/.test(resolver) && /PACKAGE_AUTO_PROVISION/.test(resolver));
@@ -72,7 +74,11 @@ check('auto-provision writes are gated behind the flag',
 check('auto-provision find-or-creates the box + saves the combo default',
   /findOrCreatePackageForDims/.test(resolver) && /saveComboPackageDefault\(/.test(resolver));
 check('labels.ts delegates to the unified resolver (no inline dims-guess)',
-  labels.includes('return resolveOrderLabelPackageId(args)') && !/const tol = 0\.1;/.test(labels));
+  labels.includes('resolveOrderLabelPackageSelection(args)') &&
+  resolver.includes('resolveOutboundPackageSelection({') &&
+  resolver.includes("matchedBy: 'auto_provision'") &&
+  consumption.includes('resolveOutboundPackageSelection') &&
+  !/const tol = 0\.1;/.test(labels));
 check('labels.ts threads orderId into the resolver',
   /resolveLabelPackageId\(\{[\s\S]*?orderId: body\.orderId/.test(labels));
 

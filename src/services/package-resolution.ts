@@ -23,8 +23,12 @@ import { packages } from '../db/schema/packages';
 import { orderOverrides } from '../db/schema/orders';
 // PS-221 slice 3: save the auto-provisioned box as the order's combo default.
 import { saveComboPackageDefault } from './combo-package-defaults';
+import {
+  resolveOutboundPackageSelection,
+  type OutboundPackageSelection,
+} from './package-consumption';
 
-const DIMS_TOLERANCE = 0.1;
+const DIMS_TOLERANCE = 0.001;
 
 // PS-221 slice 3 — auto-provision is DARK by default. When OFF (the default), a
 // dims-present order with no catalog match resolves to null exactly as before
@@ -90,7 +94,7 @@ async function findPackageByDims(
   height: number | null,
 ): Promise<number | null> {
   if (!length || !width || !height) return null;
-  const [match] = await db
+  const matches = await db
     .select({ id: packages.id })
     .from(packages)
     .where(
@@ -100,8 +104,8 @@ async function findPackageByDims(
         sql`abs(${packages.height} - ${height}) <= ${DIMS_TOLERANCE}`,
       ),
     )
-    .limit(1);
-  return match?.id ?? null;
+    .limit(2);
+  return matches.length === 1 ? matches[0]!.id : null;
 }
 
 export async function resolveOrderLabelPackageId(args: {
@@ -153,4 +157,50 @@ export async function resolveOrderLabelPackageId(args: {
   }
 
   return null;
+}
+
+/**
+ * Per user override unlock shipped data on 2026-07-11: PS-413 safe detailed
+ * result while preserving PS-221 opt-in auto-provision.
+ */
+export async function resolveOrderLabelPackageSelection(args: {
+  orderId: number | null;
+  customPackageId?: number | string | null;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+}): Promise<OutboundPackageSelection> {
+  const selection = await resolveOutboundPackageSelection({
+    orderId: args.orderId,
+    selectedPackageId: args.customPackageId,
+    dimensions: { length: args.length, width: args.width, height: args.height },
+  });
+  if (
+    selection.status !== 'skip' ||
+    selection.reason !== 'no_package_match' ||
+    !isPackageAutoProvisionEnabled() ||
+    !args.length ||
+    !args.width ||
+    !args.height
+  ) {
+    return selection;
+  }
+
+  const created = await findOrCreatePackageForDims(args.length, args.width, args.height);
+  if (created != null && args.orderId != null) {
+    await saveComboPackageDefault(args.orderId, {
+      packageId: created,
+      length: args.length,
+      width: args.width,
+      height: args.height,
+    }).catch((err) => {
+      console.warn(
+        '[package-resolution] auto-provision save-default failed:',
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
+  return created != null
+    ? { status: 'matched', packageId: created, matchedBy: 'auto_provision' }
+    : selection;
 }

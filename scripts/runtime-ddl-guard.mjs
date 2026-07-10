@@ -99,6 +99,11 @@ const expectedRuntimeDdlFiles = [
   'src/services/house-account-opt-in.ts',
   'src/services/order-recipient-override.ts',
   'src/services/packaging-rules.ts',
+  'src/lib/label-purchase-lock.ts',
+  'src/services/store-source-cutover.ts',
+  // PS-413: migration-owned package ledger identity/review schema. Runtime
+  // readiness runs before provider purchase/void and new shipment consumption.
+  'src/services/package-consumption-schema.ts',
   'src/services/print-queue/queue-send-job-store.ts',
   'src/services/print-queue-pdf-store.ts',
   'src/services/rate-browse-job-store.ts',

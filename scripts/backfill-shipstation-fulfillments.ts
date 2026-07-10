@@ -7,6 +7,8 @@ import { shipments } from '../src/db/schema/shipments';
 import { clients } from '../src/db/schema/clients';
 import { ssV1Request } from '../src/lib/shipstation/v1-client';
 import { parseShipStationV1Date } from '../src/lib/shipstation/v1-date';
+import { consumeOutboundPackageInTransaction } from '../src/services/package-consumption';
+import { ensurePackageConsumptionSchema } from '../src/services/package-consumption-schema';
 
 /**
  * PS-039 — Backfill ShipStation **fulfillments** (manual "Mark as Shipped")
@@ -54,6 +56,7 @@ export interface SSFulfillment {
   shipDate?: string | null;
   createDate?: string | null;
   voided?: boolean | null;
+  sourceAccountId?: string;
 }
 
 export interface FulfillmentBackfillInput {
@@ -115,16 +118,23 @@ function parseOrderNumbers(): string[] | null {
   return list.length ? list : null;
 }
 
-type FulfillmentAccount = { label: string; apiKey?: string; apiSecret?: string };
+type FulfillmentAccount = { label: string; sourceAccountId: string; apiKey?: string; apiSecret?: string };
 
 async function loadAccounts(): Promise<FulfillmentAccount[]> {
   const rows = await db
-    .select({ name: clients.name, ssApiKey: clients.ssApiKey, ssApiSecret: clients.ssApiSecret })
+    .select({ id: clients.id, name: clients.name, ssApiKey: clients.ssApiKey, ssApiSecret: clients.ssApiSecret })
     .from(clients)
     .where(eq(clients.active, true));
-  const accts: FulfillmentAccount[] = [{ label: 'main' }];
+  const accts: FulfillmentAccount[] = [{ label: 'main', sourceAccountId: 'main' }];
   for (const r of rows) {
-    if (r.ssApiKey && r.ssApiSecret) accts.push({ label: `client:${r.name}`, apiKey: r.ssApiKey, apiSecret: r.ssApiSecret });
+    if (r.ssApiKey && r.ssApiSecret) {
+      accts.push({
+        label: `client:${r.name}`,
+        sourceAccountId: `client:${r.id}`,
+        apiKey: r.ssApiKey,
+        apiSecret: r.ssApiSecret,
+      });
+    }
   }
   return accts;
 }
@@ -137,7 +147,7 @@ async function fetchFulfillments(orderNumber: string, accts: FulfillmentAccount[
         `/fulfillments?orderNumber=${encodeURIComponent(orderNumber)}&pageSize=50&page=1`,
         { apiKey: a.apiKey, apiSecret: a.apiSecret, dedupeKey: `ps039:fulfill:${a.label}:${orderNumber}` },
       );
-      for (const f of res.fulfillments ?? []) out.push(f);
+      for (const f of res.fulfillments ?? []) out.push({ ...f, sourceAccountId: a.sourceAccountId });
     } catch {
       /* best-effort per account */
     }
@@ -231,7 +241,27 @@ async function main(): Promise<void> {
     );
 
     if (apply) {
-      await db.insert(shipments).values(values);
+      // Per user override unlock shipped data on 2026-07-11: applied repair
+      // inserts delegate package truth to PS-413. Missing dims create durable
+      // review work; no package is guessed or silently bypassed.
+      await ensurePackageConsumptionSchema();
+      await db.transaction(async (tx) => {
+        const [insertedShipment] = await tx
+          .insert(shipments)
+          .values(values)
+          .returning({ id: shipments.id });
+        if (!insertedShipment) throw new Error('Fulfillment shipment insert failed');
+        await consumeOutboundPackageInTransaction({
+          shipmentId: insertedShipment.id,
+          orderId: localOrder.id,
+          orderNumber: localOrder.orderNumber,
+          source: 'shipstation_fulfillment',
+          sourceAccountId: f.sourceAccountId ?? 'unknown',
+          providerShipmentId: f.fulfillmentId,
+          effectiveAt: values.shipDate ?? values.createDate ?? new Date(),
+          dimensions: null,
+        }, tx);
+      });
       inserted += 1;
       console.log('    -> INSERTED');
     }

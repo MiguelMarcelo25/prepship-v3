@@ -9,6 +9,7 @@ export default defineConfig({
     './src/db/schema/shipments.ts',
     './src/db/schema/packages.ts',
     './src/db/schema/package-ledger.ts',
+    './src/db/schema/package-consumption-reviews.ts',
     './src/db/schema/products.ts',
     './src/db/schema/rates.ts',
     './src/db/schema/settings.ts',

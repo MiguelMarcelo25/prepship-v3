@@ -18,7 +18,12 @@ import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
 import { deductBundleMembersOnce } from './shipment-bundles/deduct-bundle-members';
 import { env } from '../lib/env';
 // PS-221 (slice 2): unified label-time package resolver (canonical-source precedence).
-import { resolveOrderLabelPackageId } from './package-resolution';
+import {
+  consumeOutboundPackageInTransaction,
+  reverseOutboundPackageConsumptionInTransaction,
+} from './package-consumption';
+import { resolveOrderLabelPackageSelection } from './package-resolution';
+import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 // PS-262a: single canonical owner of the per-marketplace confirmation identity.
 import { buildMarketplaceConfirmationIdentity } from './fulfillment/confirmation-payload';
 import {
@@ -39,7 +44,7 @@ import {
   serviceCodeToLabel,
   type MockLabelData,
 } from './mock-label-generator';
-import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
+import { deductInventoryForOrder } from './fulfillment-deductions';
 import { packages } from '../db/schema/packages';
 import {
   carrierConnectorSupportsVoid,
@@ -144,11 +149,9 @@ import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost'
 import { resolveInsuranceCertainty, isShippBrokered } from './shipping-workflow/insurance-certainty';
 import { loadShippingAutomationRules } from './shipping-automation';
 
-// Batch-label callers don't carry a panel-selected package, so customPackageId
-// is often null. When dims are present, fall back to the same ±0.1" tolerance
-// that /packages/auto-create uses to find an existing package — without this,
-// the package's stock_qty never decrements for batch-issued labels and the
-// PACKAGES section count stays flat regardless of how many labels go out.
+// Batch-label callers often omit a panel-selected package. PS-413 accepts
+// dimensions only when they identify exactly one catalog package; ambiguous
+// matches remain review work and never guess/decrement package stock.
 async function resolveLabelPackageId(args: {
   orderId: number | null;
   customPackageId?: number | string | null;
@@ -156,12 +159,14 @@ async function resolveLabelPackageId(args: {
   width: number | null;
   height: number | null;
 }): Promise<number | null> {
-  // PS-221 (slice 2, Per user override unlock shipped data on 2026-06-13): delegate
-  // to the unified resolver so label-time package selection follows the SAME
-  // precedence as billing (PS-207) + import (PS-205): operator pick → the order's
-  // canonical selected_package_id → dims ±0.1" match. Previously this dims-guessed
-  // in isolation, ignoring the order's already-resolved box (e.g. on batch labels).
-  return resolveOrderLabelPackageId(args);
+  // PS-221 precedence remains: operator pick, then saved order package, then dims.
+  // Per user override unlock shipped data on 2026-07-11: selected package
+  // wins; fallback dimensions must identify exactly one catalog package.
+  const result = await resolveOrderLabelPackageSelection(args);
+  if (result.status === 'review') {
+    console.warn('[labels] package selection requires review:', result.reason);
+  }
+  return result.status === 'matched' ? result.packageId : null;
 }
 
 // Optional local throttle. Disabled by default so batch queue jobs are not capped.
@@ -1152,34 +1157,25 @@ async function markOrderShipped(
 async function recordFulfillmentDeductions(args: {
   order: typeof orders.$inferSelect;
   shipmentId: number;
-  packageId?: number | string | null;
   source: string;
   timer?: LabelTimer;
 }) {
   try {
-    const deductPackage = () => deductPackageForShipment({
-      packageId: args.packageId ?? null,
-      shipmentId: args.shipmentId,
-      orderId: args.order.id,
-      orderNumber: args.order.orderNumber,
-    });
     const deductInventory = () => deductInventoryForOrder(args.order, {
       shipmentId: args.shipmentId,
       source: args.source,
     });
 
     if (args.timer) {
-      await args.timer.task('package stock deduction', deductPackage);
       await args.timer.task('inventory ledger writes', deductInventory);
     } else {
-      await deductPackage();
       await deductInventory();
     }
     // NOTE: the bundle MEMBER deduct-once fan-out (PS-312 S6) is NOT here — it is chained AFTER the
     // link keystone in createLabelV2Impl, so it can never race the bundle stamp into a silent
     // under-deduct. This trigger only deducts the primary's own inventory.
   } catch (err) {
-    console.warn('[labels] fulfillment deduction failed:', err);
+    console.warn('[labels] inventory deduction failed:', err);
   }
 }
 
@@ -1289,6 +1285,7 @@ async function persistShopifyPurchasedLabel(input: {
   providerAccountId: number;
   providerAccountNickname: string | null;
   resolvedPackageId: number | null;
+  requestedPackageId?: number | string | null;
   effectiveWeightOz: number;
   length: number;
   width: number;
@@ -1297,6 +1294,7 @@ async function persistShopifyPurchasedLabel(input: {
   mock: ReturnType<typeof createShopifyShippingMockLabel> | null;
   timer: ReturnType<typeof createLabelTimer>;
 }): Promise<CreateShopifyShippingLabelResponseDto> {
+  await ensurePackageConsumptionSchema();
   const labelCost = completedShopifyLabelCost(input.purchased);
   const created: CreatedExternalLabel = {
     labelId: input.purchased?.labelId ?? null,
@@ -1340,13 +1338,26 @@ async function persistShopifyPurchasedLabel(input: {
       },
       tx,
     }));
+    // Per user override unlock shipped data on 2026-07-11: PS-413 consumes
+    // real outbound package stock in the same transaction as shipment creation.
+    await consumeOutboundPackageInTransaction({
+      shipmentId,
+      orderId: input.order.id,
+      orderNumber: input.order.orderNumber ?? null,
+      source: SHOPIFY_SHIPPING_PROVIDER,
+      sourceAccountId: input.providerAccountId,
+      providerShipmentId: input.purchased?.labelId ?? null,
+      effectiveAt: created.shipDate,
+      selectedPackageId: input.resolvedPackageId ?? input.requestedPackageId,
+      dimensions: { length: input.length, width: input.width, height: input.height },
+      isTest: input.mock != null,
+    }, tx);
     await input.timer.task('markOrderShipped', () => markOrderShipped(input.order.id, created.trackingNumber, { cleanupQueue: false, tx }));
     return shipmentId;
   });
-  input.timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
+  input.timer.background('inventory deduction', () => recordFulfillmentDeductions({
     order: input.order,
     shipmentId: localShipmentId,
-    packageId: input.resolvedPackageId,
     source: SHOPIFY_SHIPPING_PROVIDER,
     timer: input.timer,
   }));
@@ -1509,6 +1520,7 @@ export async function pollShopifyShippingLabelPurchase(
     providerAccountId: pending.providerAccountId,
     providerAccountNickname: pending.providerAccountNickname ?? account.label ?? 'Shopify Shipping',
     resolvedPackageId,
+    requestedPackageId: pending.customPackageId,
     effectiveWeightOz: pending.weightOz,
     length: pending.dims.length,
     width: pending.dims.width,
@@ -1641,6 +1653,7 @@ async function createShopifyShippingLabelForOrderImpl(
     },
   });
 
+  if (!body.testLabel) await ensurePackageConsumptionSchema();
   const firstPurchaseResult = body.testLabel
     ? null
     : await timer.task('Shopify shippingLabelPurchase connector', () =>
@@ -1715,6 +1728,7 @@ async function createShopifyShippingLabelForOrderImpl(
     providerAccountId,
     providerAccountNickname: account.label ?? 'Shopify Shipping',
     resolvedPackageId,
+    requestedPackageId: body.customPackageId,
     effectiveWeightOz,
     length,
     width,
@@ -2011,10 +2025,9 @@ async function createLabelV2Impl(
       });
 
     await timer.task('markOrderShipped', () => markOrderShipped(order.id, fakeTracking, { cleanupQueue: false }));
-    timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
+    timer.background('inventory deduction', () => recordFulfillmentDeductions({
       order,
       shipmentId: fakeShipmentId,
-      packageId: resolvedPackageId,
       source: 'test_label',
       timer,
     }));
@@ -2039,6 +2052,7 @@ async function createLabelV2Impl(
   // Per user override unlock shipped data on 2026-06-06 (PS-105): prefer the
   // backend-owned rate quote snapshot id; fall back to the carried proof. Both run
   // the SAME strict validator — identical to legacy when no rateQuoteId is sent.
+  await ensurePackageConsumptionSchema();
   await assertLabelPurchaseRateSelection({
     rateQuoteId: body.rateQuoteId,
     selectedRateKey: body.selectedRateKey,
@@ -2273,13 +2287,28 @@ async function createLabelV2Impl(
       insuredValue: options.insuredValue,
       tx,
     }));
+    // Per user override unlock shipped data on 2026-07-11: PS-413 makes
+    // PrepShip, ShipStation, Shipp, and Walmart package consumption share one
+    // atomic owner. Test labels returned above never consume package stock.
+    await consumeOutboundPackageInTransaction({
+      shipmentId,
+      orderId: order.id,
+      orderNumber: order.orderNumber ?? null,
+      source: directProviderKey ?? 'prepship_v2',
+      sourceAccountId: created.providerAccountId ?? null,
+      providerShipmentId: directProviderKey
+        ? created.labelId ?? (created.shipmentId || null)
+        : created.shipmentId || null,
+      effectiveAt: created.shipDate,
+      selectedPackageId: resolvedPackageId ?? body.customPackageId,
+      dimensions: { length, width, height },
+    }, tx);
     await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false, tx }));
     return shipmentId;
   });
-  timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
+  timer.background('inventory deduction', () => recordFulfillmentDeductions({
     order,
     shipmentId: localShipmentId,
-    packageId: resolvedPackageId,
     source: 'label',
     timer,
   }));
@@ -2755,6 +2784,9 @@ export async function voidLabelV2(
   });
 
   if (dispatch.kind === 'already_voided') {
+    await ensurePackageConsumptionSchema();
+    await db.transaction((tx) =>
+      reverseOutboundPackageConsumptionInTransaction(row.id, new Date(), tx));
     return {
       success: true,
       status: 'already_voided',
@@ -2774,6 +2806,7 @@ export async function voidLabelV2(
     return failureShape('not_voidable', String(row.source ?? 'unknown'), dispatch.reason);
   }
 
+  await ensurePackageConsumptionSchema();
   let provider = 'test_offline';
   if (dispatch.kind === 'provider') {
     provider = dispatch.provider;
@@ -2805,18 +2838,21 @@ export async function voidLabelV2(
   // Provider void succeeded (or this is a test/local row with no provider
   // label) — NOW record the local void state and free the order for a new label.
   const now = new Date();
-  await db
-    .update(shipments)
-    .set({ voided: true, updatedAt: now })
-    .where(eq(shipments.id, row.id));
-
-  // Reset the order back to awaiting_shipment so a new label can be created.
-  if (row.orderId) {
-    await db
-      .update(orders)
-      .set({ orderStatus: 'awaiting_shipment', updatedAt: now })
-      .where(eq(orders.id, row.orderId));
-  }
+  // Per user override unlock shipped data on 2026-07-11: successful void,
+  // order reset, and package-stock reversal commit together. Replays no-op.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(shipments)
+      .set({ voided: true, updatedAt: now })
+      .where(eq(shipments.id, row.id));
+    if (row.orderId) {
+      await tx
+        .update(orders)
+        .set({ orderStatus: 'awaiting_shipment', updatedAt: now })
+        .where(eq(orders.id, row.orderId));
+    }
+    await reverseOutboundPackageConsumptionInTransaction(row.id, now, tx);
+  });
 
   // PS-263 (Per user override unlock shipped data on 2026-06-14): a void must retract the
   // marketplace confirmation. Cancel every not-yet-sent confirmation for this order so it

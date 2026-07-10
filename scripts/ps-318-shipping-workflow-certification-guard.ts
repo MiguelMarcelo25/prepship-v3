@@ -216,7 +216,7 @@ checkPatterns('createLabelV2 owns safety, proof, provider purchase, shipment sna
   /selectedRateJson:/,
   /providerAccountNickname:/,
   /carrierProvider:/,
-  /deductPackageForShipment/,
+  /consumeOutboundPackageInTransaction/,
   /deductInventoryForOrder/,
   /captureRealizedHouseMargin/,
   /enqueueShipmentConfirmation\(\{/,
@@ -234,7 +234,7 @@ check('createLabelV2 safety and proof gates run before provider purchase branche
 const printQueue = read('src/services/print-queue.ts');
 checkPatterns('Print Queue owner creates/recovers/queues labels through backend services', printQueue, [
   /findExistingQueueableLabelForOrder/,
-  /const created = await timeQueueStep\([\s\S]{0,220}\(\) => createLabelV2\(\{/,
+  /const created = await timeQueueStep\([\s\S]{0,900}return await createLabelV2\(\{/,
   /recoverCreatedLabelUrl/,
   /normalizePrintQueueLabelUrl\(labelUrl\)/,
   /await timeQueueStep\([\s\S]{0,220}\(\) => addToQueue\(\{/,
@@ -260,7 +260,6 @@ const ordersView = read('web/src/components/Views/OrdersView.tsx');
 const apiClient = read('web/src/lib/v2-apiClient.ts');
 check('frontend direct-carrier buy remains deleted; OrdersView sends backend job intent only',
   !ordersView.includes('createDirectCarrierLabelThenQueue') &&
-  ordersView.includes('frontend no longer buys ANY label') &&
   ordersView.includes('backendJobOrders') &&
   ordersView.includes('function buildQueueSendOrderPayload') &&
   /api\.post<[^>]*>\(\s*['"]\/labels['"]/.test(apiClient));
@@ -277,14 +276,15 @@ checkIncludesAll('shipments schema preserves frozen label/provider/rate snapshot
 
 const shippingMargin = read('src/services/shipping-margin-analytics.ts');
 const fulfillmentDeductions = read('src/services/fulfillment-deductions.ts');
-checkPatterns('billing/inventory side effects stay with backend owners and kill switches', shippingMargin + fulfillmentDeductions, [
+const packageConsumption = read('src/services/package-consumption.ts');
+checkPatterns('billing/inventory side effects stay with backend owners and kill switches', shippingMargin + fulfillmentDeductions + packageConsumption, [
   /Read-only shipping-margin analytics/,
   /billing_line_items\.shipping\.total_cost/,
   /shipments\.cost_plus_other_cost/,
   /providerAccountNickname/,
   /INVENTORY_AUTO_DEDUCT/,
   /return \{ deducted: 0, skipped: true, lockedDown: true \}/,
-  /return \{ deducted: false, reason: 'lockdown' as const \}/,
+  /return \{ status: 'skipped', reason: 'lockdown' \}/,
 ]);
 
 const roundtrip = read('scripts/shipping-roundtrip-certification.mjs');

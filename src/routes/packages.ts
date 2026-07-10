@@ -7,6 +7,7 @@ import { packages } from '../db/schema/packages';
 import { packageLedger } from '../db/schema/package-ledger';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
+import { ensurePackageConsumptionSchema } from '../services/package-consumption-schema';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import { hasAppPermission, requireInternalPermission } from '../middleware/auth';
 
@@ -28,7 +29,8 @@ const body = z.object({
   packageCode: z.string().nullable().optional(),
   domestic: z.boolean().nullable().optional(),
   international: z.boolean().nullable().optional(),
-  stockQty: z.number().int().nonnegative().optional(),
+  // PS-413: stock changes must use receive/adjust/ship ledger workflows.
+  // Generic create/edit payloads cannot overwrite stock_qty directly.
   reorderLevel: z.number().int().nonnegative().optional(),
   unitCost: z.string().optional(),
   isDefault: z.boolean().optional(),
@@ -187,13 +189,19 @@ app.patch('/:id{[0-9]+}', requireInternalPermission('settings:write'), zValidato
   return c.json(publicPackageRow(row, canViewFinancials));
 });
 
-// PS-252 (Card 7): deleting a package DEFINITION is operator/admin config (never a warehouse
-// stock op), so it's gated. NOTE: POST / and PATCH/PUT /:id are deliberately NOT gated — their
-// body accepts stockQty, so they are dual-purpose (catalog edit + warehouse stock edit). Gating
-// them needs a catalog/stock concern-split first (tracked follow-up); blanket-gating would break
-// warehouse stock edits.
+// PS-252 (Card 7): deleting a package definition is operator/admin config, so it is gated.
+// PS-413 removed stockQty from generic create/edit payloads; warehouse stock now changes only
+// through receive/adjust/ship ledger workflows.
 app.delete('/:id{[0-9]+}', requireInternalPermission('settings:write'), async (c) => {
   const id = Number(c.req.param('id'));
+  const [history] = await db
+    .select({ id: packageLedger.id })
+    .from(packageLedger)
+    .where(eq(packageLedger.packageId, id))
+    .limit(1);
+  if (history) {
+    return c.json({ error: 'Package has ledger history and cannot be deleted' }, 409);
+  }
   const [row] = await db.delete(packages).where(eq(packages.id, id)).returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
@@ -273,21 +281,14 @@ const receiveBody = z.object({
 });
 
 app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
+  await ensurePackageConsumptionSchema();
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const { qty, unitCost, note } = c.req.valid('json');
 
   const result = await db.transaction(async (tx) => {
-    const [pkg] = await tx
-      .select()
-      .from(packages)
-      .where(eq(packages.id, id))
-      .limit(1);
-    if (!pkg) return null;
-
-    const balanceAfter = pkg.stockQty + qty;
     const patch: Record<string, unknown> = {
-      stockQty: balanceAfter,
+      stockQty: sql`${packages.stockQty} + ${qty}`,
       updatedAt: new Date(),
     };
     if (unitCost !== undefined) patch.unitCost = String(unitCost);
@@ -297,6 +298,8 @@ app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
       .set(patch)
       .where(eq(packages.id, id))
       .returning();
+    if (!updated) return null;
+    const balanceAfter = updated.stockQty;
 
     const [entry] = await tx
       .insert(packageLedger)
@@ -310,7 +313,7 @@ app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
       })
       .returning();
 
-    if (!updated || !entry) return null;
+    if (!entry) return null;
     return { package: updated, ledgerEntry: entry };
   });
 
@@ -325,24 +328,19 @@ const adjustBody = z.object({
 });
 
 app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
+  await ensurePackageConsumptionSchema();
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const { qtyDelta, note } = c.req.valid('json');
 
   const result = await db.transaction(async (tx) => {
-    const [pkg] = await tx
-      .select()
-      .from(packages)
-      .where(eq(packages.id, id))
-      .limit(1);
-    if (!pkg) return null;
-
-    const balanceAfter = pkg.stockQty + qtyDelta;
     const [updated] = await tx
       .update(packages)
-      .set({ stockQty: balanceAfter, updatedAt: new Date() })
+      .set({ stockQty: sql`${packages.stockQty} + ${qtyDelta}`, updatedAt: new Date() })
       .where(eq(packages.id, id))
       .returning();
+    if (!updated) return null;
+    const balanceAfter = updated.stockQty;
 
     const [entry] = await tx
       .insert(packageLedger)
@@ -355,7 +353,7 @@ app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
       })
       .returning();
 
-    if (!updated || !entry) return null;
+    if (!entry) return null;
     return { package: updated, ledgerEntry: entry };
   });
 
@@ -365,6 +363,7 @@ app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
 });
 
 app.get('/:id{[0-9]+}/ledger', async (c) => {
+  await ensurePackageConsumptionSchema();
   const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const rawLimit = Number(c.req.query('limit'));
@@ -397,6 +396,7 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
 // (the FE treats missing entries as 0) — keeps the payload small on
 // fresh DBs where most packages haven't shipped anything recently.
 app.get('/usage-summary', async (c) => {
+  await ensurePackageConsumptionSchema();
   const rawDays = Number(c.req.query('days'));
   const days = Number.isFinite(rawDays) && rawDays > 0
     ? Math.min(Math.floor(rawDays), 365)
@@ -405,11 +405,19 @@ app.get('/usage-summary', async (c) => {
   const rows = await db.execute<{ package_id: number; used: string }>(sql`
     select
       package_id,
-      coalesce(sum(case when qty_delta < 0 then -qty_delta else 0 end), 0)::text as used
+      greatest(0, coalesce(sum(case
+        when change_type = 'ship' then -qty_delta
+        when change_type = 'ship_void' then -qty_delta
+        else 0
+      end), 0))::text as used
     from package_ledger
-    where created_at >= now() - (interval '1 day' * ${days})
+    where coalesce(effective_at, created_at) >= now() - (interval '1 day' * ${days})
     group by package_id
-    having coalesce(sum(case when qty_delta < 0 then -qty_delta else 0 end), 0) > 0
+    having coalesce(sum(case
+      when change_type = 'ship' then -qty_delta
+      when change_type = 'ship_void' then -qty_delta
+      else 0
+    end), 0) > 0
   `);
 
   // db.execute() returns slightly different shapes across drivers

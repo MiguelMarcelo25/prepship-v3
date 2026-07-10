@@ -498,6 +498,8 @@
     "test:ps-256-durable-print-queue-pdf": "tsx scripts/ps-256-durable-print-queue-pdf-guard.ts",
     "test:ps-252-catalog-mutation-authz": "tsx scripts/ps-252-catalog-mutation-authz-guard.ts",
     "test:ps-247-inventory-deduct-atomic": "tsx scripts/ps-247-inventory-deduct-atomic-guard.ts",
+    "test:ps-413-package-consumption": "tsx scripts/ps-413-package-consumption-integration.ts && tsx scripts/ps-413-package-consumption-wiring-guard.ts",
+    "dry-run:ps-413-package-consumption": "tsx scripts/ps-413-package-consumption-backfill-dry-run.ts",
     "test:ps-247-inventory-route-scope": "tsx scripts/ps-247-inventory-route-scope-guard.ts",
     "test:ps-248-label-purchase-lock": "tsx scripts/ps-248-label-purchase-lock-guard.ts",
     "test:ps-248-persist-mark-shipped-atomic": "tsx scripts/ps-248-persist-mark-shipped-atomic-guard.ts",
