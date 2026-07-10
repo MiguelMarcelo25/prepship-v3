@@ -106,14 +106,18 @@ for (const command of [
 }
 
 const directScope = read('src/lib/direct-carrier-scope.ts');
+const carrierIdentity = read('src/services/carrier-account-identity.ts');
 checkPatterns('direct-carrier scope owner keeps store/provider/account identity centralized', directScope, [
   /export function normalizeProviderKey/,
   /export function isStoreScopedShippingProvider/,
   /export function directCarrierVisibleForScope/,
   /export function evaluateDirectCarrierScope/,
-  /STORE_SCOPED_SHIPPING_PROVIDERS = new Set<string>\(\[/,
-  /'walmart_shipping'/,
-  /'ebay_shipping'/,
+]);
+checkPatterns('carrier identity owner maps store-scoped shipping providers centrally', carrierIdentity, [
+  /STORE_SCOPED_PROVIDER_MAP/,
+  /\['walmart_shipping', 'walmart'\]/,
+  /\['ebay_shipping', 'ebay'\]/,
+  /export function resolveStoreAccountLink/,
 ]);
 check('direct carrier scope behavior covers assignment and store-scoped providers',
   normalizeProviderKey('Walmart Shipping') === 'walmart_shipping' &&
@@ -127,8 +131,16 @@ check('direct carrier scope behavior covers assignment and store-scoped provider
     { clientId: 45 },
   ) &&
   !directCarrierVisibleForScope(
-    { provider: 'walmart_shipping', assignedClientIds: [44] },
+    { provider: 'walmart_shipping', assignedClientIds: [44], linkedStoreAccountId: 4401 },
     { includeAllDirectCarriers: true },
+  ) &&
+  directCarrierVisibleForScope(
+    { provider: 'walmart_shipping', assignedClientIds: [44], linkedStoreAccountId: 4401 },
+    { clientId: 44, sourceProvider: 'walmart', sourceAccountId: '4401' },
+  ) &&
+  !directCarrierVisibleForScope(
+    { provider: 'walmart_shipping', assignedClientIds: [44], linkedStoreAccountId: 4401 },
+    { clientId: 44, sourceProvider: 'walmart', sourceAccountId: '4402' },
   ) &&
   evaluateDirectCarrierScope({ assignedClientIds: [] }, { clientId: 44 }).allowed === false);
 
@@ -179,8 +191,9 @@ check('selected-rate proof behavior blocks synthetic direct id on ShipStation pr
   })());
 
 const quoteStore = read('src/services/shipping-workflow/rate-quote-snapshot-store.ts');
-check('rate quote snapshot store enforces account binding on snapshot and legacy proof paths',
-  (quoteStore.match(/assertPurchaseAccountMatchesProof\(\{/g) ?? []).length >= 2 &&
+check('rate quote snapshot store enforces account binding on the strict snapshot purchase path',
+  (quoteStore.match(/assertPurchaseAccountMatchesProof\(\{/g) ?? []).length >= 1 &&
+  quoteStore.includes('assertRateQuoteSnapshotForLabelPurchase') &&
   quoteStore.includes('purchaseShippingProviderId?: unknown'));
 
 const ssLabels = read('src/lib/shipstation/labels.ts');

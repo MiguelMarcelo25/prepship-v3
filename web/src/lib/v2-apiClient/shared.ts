@@ -20,10 +20,6 @@ import { buildManifestCsv, manifestRowsFromResponse } from '../../components/Vie
 // remained only under `raw`), so every FE save persisted best_rate_json without the tuple and the
 // Awaiting/Rate-Browser UI had nothing to render. Pass them through via the single FE owner.
 import { houseTuplePassThrough } from '../rate-browser-house-tuple';
-// PS-083: shared "is this direct carrier usable for this scope?" decision —
-// the SAME module the backend `/carriers/rates` + `/carriers/labels` gates use,
-// so Rate Browser hiding and server-side rejection can never drift apart.
-import { directCarrierVisibleForScope } from '../../../../src/lib/direct-carrier-scope';
 // PS-324: the out/low/in stock-status THRESHOLD is owned in one place
 // (src/lib/inventory-stock-status.ts classifyStockStatus) — the same definition the
 // Dashboard (PS-325) and storage billing use. The normalizer's status fallback delegates
@@ -75,38 +71,6 @@ export {
   directAccountRefFromProviderId,
   isDirectCarrierId,
   type DirectAccountRef,
-};
-export const STORE_PROVIDER_KEYS = new Set([
-  'walmart',
-  'amazon',
-  'ebay',
-  'shopify',
-  'etsy',
-  'tiktok_shop',
-  'woocommerce',
-  'bigcommerce',
-]);
-// PS-083: store-scoped provider handling now lives in the shared
-// src/lib/direct-carrier-scope module (isStoreScopedShippingProvider).
-export const SYNTHETIC_STORE_ID_OFFSETS: Record<string, number> = {
-  walmart_shipping: 9_000_000,
-  amazon_shipping: 9_100_000,
-  ebay_shipping: 9_500_000,
-};
-
-export const DIRECT_ACCOUNT_PROVIDER_LABELS: Record<string, string> = {
-  amazon_shipping: 'Amazon Shipping',
-  ebay_shipping: 'eBay Shipping',
-  ehub: 'eHub',
-  easypost: 'EasyPost',
-  shipp: 'Shipp',
-  fedex: 'FedEx Direct',
-  simulator: 'Simulator',
-  stamps_com: 'Stamps.com Direct',
-  ups: 'UPS Direct',
-  usps: 'USPS Direct',
-  walmart: 'Walmart',
-  walmart_shipping: 'Walmart Shipping',
 };
 
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
@@ -747,18 +711,6 @@ export function normalizeCarrierAccountDto(c: any, index = 0): any {
   };
 }
 
-export type DirectCarrierAccountRow = {
-  id: number;
-  clientId?: number | null;
-  provider: string;
-  label?: string | null;
-  accountIdentifier?: string | null;
-  active?: boolean;
-  sourceTable?: 'carrier_accounts' | 'store_accounts';
-  assignedClientIds?: number[];
-};
-
-
 export type DirectCarrierRateError = {
   accountId: number;
   shippingProviderId?: number;
@@ -774,32 +726,6 @@ export type DirectCarrierRateError = {
 };
 
 
-export function normalizeProviderKey(value: unknown): string {
-  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-}
-
-export function isStoreProvider(provider: unknown): boolean {
-  return STORE_PROVIDER_KEYS.has(normalizeProviderKey(provider));
-}
-
-export function normalizeClientIdList(value: unknown): number[] {
-  return Array.isArray(value)
-    ? value
-        .map((item) => parseFiniteNumber(item))
-        .filter((item): item is number => item != null)
-    : [];
-}
-
-// PS-286 (slice): DirectAccountRef, directAccountRefFromProviderId, and isDirectCarrierId
-// moved to the PURE ../direct-carrier-id module and are re-exported near the offset block
-// above. directProviderIdFromAccount stays here (it depends on the local DirectCarrierAccountRow).
-export function directProviderIdFromAccount(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceTable'>): number {
-  const offset = account.sourceTable === 'store_accounts'
-    ? DIRECT_STORE_PROVIDER_ID_OFFSET
-    : DIRECT_CARRIER_PROVIDER_ID_OFFSET;
-  return offset + account.id;
-}
-
 // PS-078 req 7 (routing CLASS, not endpoint — PS-202/PS-209 update): every
 // purchase posts to v4 /labels (createLabelV2 owns both the ShipStation and
 // direct-carrier branches; the legacy Vercel function is a retired 410).
@@ -809,131 +735,6 @@ export function directProviderIdFromAccount(account: Pick<DirectCarrierAccountRo
 // store_accounts rate (20M offset) is a MARKETPLACE store account that cannot
 // create a label at all — it must be BLOCKED before postage rather than
 // silently posting a bogus `se-20000xxx` id to ShipStation.
-export type LabelEndpointRoute = 'carrier-direct' | 'store-account-blocked' | 'shipstation';
-
-export function classifyLabelEndpoint(shippingProviderId: number | null): LabelEndpointRoute {
-  const ref = directAccountRefFromProviderId(shippingProviderId);
-  if (ref?.sourceTable === 'carrier_accounts') return 'carrier-direct';
-  if (ref?.sourceTable === 'store_accounts') return 'store-account-blocked';
-  return 'shipstation';
-}
-
-export function directAccountKey(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceTable'>): string {
-  return `${account.sourceTable ?? 'carrier_accounts'}:${account.id}`;
-}
-
-export function looksLikeOpaqueAccountIdentifier(value: unknown): boolean {
-  const trimmed = typeof value === 'string' ? value.trim() : '';
-  if (!trimmed) return false;
-  if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(trimmed)) return true;
-  return /^(?:cid:)?[a-z0-9_-]{12,}$/i.test(trimmed);
-}
-
-export function storeAccountMatchesOrder(
-  row: DirectCarrierAccountRow,
-  context: { storeId?: unknown; clientId?: unknown }
-): boolean {
-  const provider = normalizeProviderKey(row.provider);
-  const storeId = parseFiniteNumber(context.storeId);
-  const offset = SYNTHETIC_STORE_ID_OFFSETS[provider];
-  if (storeId != null && offset != null && storeId === offset + row.id) return true;
-
-  const rowClientId = parseFiniteNumber(row.clientId);
-  const contextClientId = parseFiniteNumber(context.clientId);
-  return rowClientId != null && contextClientId != null && rowClientId === contextClientId;
-}
-
-export function directCarrierAccountVisibleForOrder(
-  row: DirectCarrierAccountRow,
-  context: { storeId?: unknown; clientId?: unknown; includeAllDirectCarriers?: unknown }
-): boolean {
-  // Marketplace store accounts (eBay/Walmart Shipping) match by store/client
-  // identity, not by carrier assignment — handled separately.
-  if ((row.sourceTable ?? 'carrier_accounts') === 'store_accounts') {
-    return storeAccountMatchesOrder(row, context);
-  }
-
-  // PS-083: direct carrier_accounts rows are governed by the shared assignment
-  // rule. An active carrier with NO client assignment (no junction rows AND no
-  // legacy client_id) is HIDDEN — not treated as globally visible. Previously
-  // this function fell through to `return true`, which leaked unassigned SHIPP
-  // into every Rate Browser scope. "Available to all clients" must now come
-  // from an explicit assignment, never from a blank assignment list.
-  return directCarrierVisibleForScope(
-    {
-      provider: row.provider,
-      clientId: row.clientId,
-      assignedClientIds: row.assignedClientIds,
-    },
-    context,
-  );
-}
-
-export function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
-  const provider = normalizeProviderKey(row.provider);
-  const shippingProviderId = directProviderIdFromAccount(row);
-  const rowLabel = typeof row.label === 'string' ? row.label.trim() : '';
-  const accountIdentifier = typeof row.accountIdentifier === 'string' ? row.accountIdentifier.trim() : '';
-  const label =
-    rowLabel && rowLabel !== accountIdentifier && !looksLikeOpaqueAccountIdentifier(rowLabel)
-      ? rowLabel
-      : DIRECT_ACCOUNT_PROVIDER_LABELS[provider] || rowLabel || accountIdentifier || provider;
-  return {
-    id: row.id,
-    directCarrierAccountId: row.id,
-    carrierId: `se-${shippingProviderId}`,
-    carrierCode: provider,
-    shippingProviderId,
-    nickname: label,
-    accountNumber: row.accountIdentifier ?? null,
-    clientId: row.clientId ?? null,
-    code: provider,
-    _label: label,
-    source: 'carrier_accounts',
-    sourceTable: row.sourceTable ?? 'carrier_accounts',
-    assignedClientIds: normalizeClientIdList(row.assignedClientIds),
-    sourceClientName: 'Direct carrier accounts',
-    // PS-216: human provider label for duplicate-nickname disambiguation —
-    // synthetic direct ids must never surface as display suffixes.
-    displayDisambiguator: DIRECT_ACCOUNT_PROVIDER_LABELS[provider] ?? null,
-  };
-}
-
-export async function fetchDirectCarrierAccountRows(): Promise<DirectCarrierAccountRow[]> {
-  // PS-200 S1: account lists come from the v4 backend (same handler code the
-  // legacy Vercel functions delegated to — single service layer either way).
-  const [carrierRes, storeRes] = await Promise.all([
-    api.get<{ data?: DirectCarrierAccountRow[] }>('/carrier-accounts?source=admin'),
-    api.get<{ data?: DirectCarrierAccountRow[] }>('/store-accounts?source=admin').catch((err) => {
-      console.warn(
-        '[v2-apiClient] store account lookup for carrier rates failed:',
-        err instanceof Error ? err.message : err
-      );
-      return { data: [] as DirectCarrierAccountRow[] };
-    }),
-  ]);
-  const carriers = (carrierRes.data ?? [])
-    .filter((row) => row && row.active !== false && row.provider)
-    .filter((row) => !isStoreProvider(row.provider))
-    .map((row) => ({
-      ...row,
-      provider: normalizeProviderKey(row.provider),
-      sourceTable: 'carrier_accounts' as const,
-      assignedClientIds: normalizeClientIdList(row.assignedClientIds),
-    }));
-  const derivedFromStores = (storeRes.data ?? [])
-    .filter((row) => row && row.active !== false && row.provider)
-    .filter((row) => normalizeProviderKey(row.provider) === 'ebay')
-    .map((row) => ({
-      ...row,
-      provider: 'ebay_shipping',
-      label: row.label ? `eBay Shipping - ${row.label}` : 'eBay Shipping',
-      sourceTable: 'store_accounts' as const,
-      assignedClientIds: normalizeClientIdList(row.assignedClientIds),
-    }));
-  return [...carriers, ...derivedFromStores];
-}
-
 // PS-200 S2: removed the dead FE direct-rate fan-out cluster (fetchDirectCarrierRates +
 // translateDirectRateToV2Shape / slugRateService / inferCarrierCodeForDirectRate /
 // normalizeCarrierCodeForDirectRate / directCarrierErrorMessage) — 0 callers since PS-203

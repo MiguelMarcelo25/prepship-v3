@@ -48,12 +48,13 @@ const familyModule = read('src/lib/carrier-family-label.ts');
 assert.ok(ratesSvc.includes('display_disambiguator: carrierFamilyDisplayLabel(carrier.carrier_code)'),
   'carriers-for-store DTO must stamp the backend-owned display disambiguator');
 
-// FE normalizers carry it (ShipStation + direct, the direct one from the
-// existing human provider-label map).
+// The FE normalizer carries the backend-owned field. Direct-account labels and
+// their family disambiguator are also minted by the backend rate read model.
 assert.ok(shared.includes("displayDisambiguator: c?.display_disambiguator ?? c?.displayDisambiguator ?? null"),
   'normalizeCarrierAccountDto must carry the disambiguator');
-assert.ok(shared.includes('displayDisambiguator: DIRECT_ACCOUNT_PROVIDER_LABELS[provider] ?? null'),
-  'normalizeDirectCarrierAccountDto must use the human provider label');
+assert.ok(ratesSvc.includes('nickname: account.displayIdentity') &&
+  ratesSvc.includes('display_disambiguator: carrierFamilyDisplayLabel(provider)'),
+  'backend direct-account DTO must use safe display identity and human provider label');
 
 // The sidebar formatter: extract the function block and prove it cannot emit
 // an identifier.

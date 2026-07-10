@@ -3,9 +3,8 @@
  *
  * 19 apiClient OBJECT methods with zero callers (verified by member-access `.name` count === 0 across
  * web/src, with typecheck+build as the backstop) were removed. This guard asserts they stay removed and
- * uncalled. It also PINS two module-level functions that look removable but are NOT — clearCachedReads
- * and fetchDirectCarrierAccountRows are called internally as BARE functions (a `.name` member-access
- * scan misses those calls), so they must never be deleted by a future "dead apiClient method" pass.
+ * uncalled. It also pins clearCachedReads, a module-level function called internally as a BARE
+ * function (a `.name` member-access scan misses that call).
  *
  * Offline / pure: readFileSync + readdir only.
  */
@@ -31,7 +30,7 @@ const REMOVED = [
   'saveOrderDimsStrict', 'updateOrderBestRateSelectionStrict',
 ];
 // Live module-level functions (bare-called internally) that must survive.
-const LIVE_MODULE_FNS = ['clearCachedReads', 'fetchDirectCarrierAccountRows'];
+const LIVE_MODULE_FNS = ['clearCachedReads'];
 
 let failures = 0;
 function check(name: string, cond: boolean, detail?: string) {
@@ -59,7 +58,7 @@ for (const n of REMOVED) {
     !redefined && callers === 0, redefined ? 'redefined' : `callers=${callers}`);
 }
 
-// ── (2) the two live module-level helpers survive (bare-called internally; do NOT delete) ──
+// ── (2) live module-level helpers survive (bare-called internally; do NOT delete) ──
 for (const n of LIVE_MODULE_FNS) {
   check(`live module fn ${n}() retained (bare-called internally — not a dead method)`,
     new RegExp(`function ${n}\\b`).test(src) || new RegExp(`function ${n}\\b`).test(sharedSrc));

@@ -51,6 +51,14 @@ import { assertPublicHttpUrl } from '../../lib/ssrf-guard.js';
 // PS-251 (Card 6): every credential-verify fetch gets an AbortController timeout (no hung upstream).
 import { fetchWithTimeout } from '../../lib/fetch-timeout.js';
 import { verifyShopifyCredentials } from '../store/shopify.js';
+import {
+  isStoreScopedCarrierProvider,
+  resolveStoreAccountLink,
+  safeCarrierAccountIdentifier,
+  safeCarrierAccountLabel,
+  type CarrierIdentityAccount,
+  type StoreAccountIdentity,
+} from '../../services/carrier-account-identity.js';
 
 type ProviderType =
   | 'simulator'
@@ -899,7 +907,20 @@ export async function verifyProviderCredentials(
     const note = STUBBED_NOTES[key] ?? 'Provider not implemented yet.';
     return { ok: false, error: `${provider} verification not implemented`, meta: { note } };
   }
-  return verifier(credentials);
+  const result = await verifier(credentials);
+  const identity: CarrierIdentityAccount = {
+    id: 0,
+    provider: key,
+    label: null,
+    accountIdentifier: null,
+    credentials,
+    active: true,
+  };
+  return {
+    ...result,
+    accountIdentifier: safeCarrierAccountIdentifier(identity),
+    accountLabel: safeCarrierAccountLabel(identity, result.accountLabel),
+  };
 }
 
 function readBody(req: any): Promise<unknown> {
@@ -971,6 +992,9 @@ export default async function handler(req: any, res: any): Promise<void> {
   let credentials = (body?.credentials && typeof body.credentials === 'object'
     ? (body.credentials as Record<string, unknown>)
     : null);
+  let accountIdentity: CarrierIdentityAccount | null = null;
+  let exactLinkedStore: StoreAccountIdentity | null = null;
+  let storeLinkError: { code: string; reason: string } | null = null;
 
   if (carrierAccountId !== null || storeAccountId !== null) {
     const dbUrl = process.env.DATABASE_URL;
@@ -984,11 +1008,15 @@ export default async function handler(req: any, res: any): Promise<void> {
       const lookupId = useStoreTable ? storeAccountId : carrierAccountId;
       const tableName = useStoreTable ? 'store_accounts' : 'carrier_accounts';
       const rows = useStoreTable
-        ? await sql<Array<{ provider: string; credentials: unknown }>>`
-            SELECT provider, credentials FROM store_accounts WHERE id = ${lookupId as number} LIMIT 1
+        ? await sql<Array<CarrierIdentityAccount & { credentials: unknown }>>`
+            SELECT id, client_id AS "clientId", provider, label,
+                   account_identifier AS "accountIdentifier", credentials, active
+            FROM store_accounts WHERE id = ${lookupId as number} LIMIT 1
           `
-        : await sql<Array<{ provider: string; credentials: unknown }>>`
-            SELECT provider, credentials FROM carrier_accounts WHERE id = ${lookupId as number} LIMIT 1
+        : await sql<Array<CarrierIdentityAccount & { credentials: unknown }>>`
+            SELECT id, client_id AS "clientId", provider, label,
+                   account_identifier AS "accountIdentifier", credentials, active
+            FROM carrier_accounts WHERE id = ${lookupId as number} LIMIT 1
           `;
       const row = rows[0];
       if (!row) {
@@ -999,6 +1027,22 @@ export default async function handler(req: any, res: any): Promise<void> {
       credentials = (row.credentials && typeof row.credentials === 'object'
         ? (row.credentials as Record<string, unknown>)
         : {});
+      accountIdentity = {
+        ...row,
+        id: Number(row.id),
+        credentials,
+      };
+      if (!useStoreTable && isStoreScopedCarrierProvider(provider)) {
+        const storeRows = await sql<Array<StoreAccountIdentity>>`
+          SELECT id, client_id AS "clientId", provider, label,
+                 account_identifier AS "accountIdentifier", credentials, active
+          FROM store_accounts
+          WHERE active = true
+        `;
+        const link = resolveStoreAccountLink(accountIdentity, storeRows);
+        if (link.ok) exactLinkedStore = link.store;
+        else storeLinkError = { code: link.code, reason: link.reason };
+      }
     } catch (err) {
       sendInternalServerError(res, 'carriers/verify:account-lookup', err);
       return;
@@ -1012,6 +1056,15 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  if (storeLinkError) {
+    res.status(200).json({
+      ok: false,
+      error: storeLinkError.reason,
+      meta: { code: storeLinkError.code },
+    });
+    return;
+  }
+
   const verifier = VERIFIERS[provider];
   if (!verifier) {
     const note = STUBBED_NOTES[provider] ?? 'Provider not implemented yet.';
@@ -1022,30 +1075,16 @@ export default async function handler(req: any, res: any): Promise<void> {
   try {
     let result = await verifier(credentials);
 
-    // Carrier-side auto-recovery for "<store>_shipping" providers: if a
-    // user added the carrier entry but the credentials they pasted got
-    // truncated/mangled, fall back to the matching store_accounts row's
-    // saved credentials (same OAuth, same API). On success, UPSERT the
-    // working creds into the carrier row so future calls skip this
-    // fallback path. Currently covers walmart_shipping ↔ walmart store
-    // and ebay_shipping ↔ ebay store.
-    const shippingMatch = typeof provider === 'string' && provider.endsWith('_shipping')
-      ? provider.replace(/_shipping$/, '')
-      : null;
-    if (!result.ok && shippingMatch && carrierAccountId !== null) {
+    // Store-scoped recovery may use only the exact correlated store account.
+    // Ambiguous or unlinked rows fail above; there is no newest-active fallback.
+    if (!result.ok && exactLinkedStore && carrierAccountId !== null) {
       const dbUrl = process.env.DATABASE_URL;
       if (dbUrl) {
         const sql = postgres(dbUrl, {
           max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5,
         });
         try {
-          const storeRows = await sql<Array<{ credentials: unknown }>>`
-            SELECT credentials FROM store_accounts
-            WHERE provider = ${shippingMatch} AND active = true
-            ORDER BY id DESC
-            LIMIT 1
-          `;
-          const storeCreds = storeRows[0]?.credentials;
+          const storeCreds = exactLinkedStore.credentials;
           if (storeCreds && typeof storeCreds === 'object' && !Array.isArray(storeCreds)) {
             const fallback = storeCreds as Record<string, unknown>;
             // walmart uses {clientId, clientSecret}; ebay uses
@@ -1063,12 +1102,13 @@ export default async function handler(req: any, res: any): Promise<void> {
                   SET credentials = ${fallback}, updated_at = NOW()
                   WHERE id = ${carrierAccountId}
                 `;
+                credentials = fallback;
                 result = {
                   ...fallbackResult,
                   meta: {
                     ...(fallbackResult.meta ?? {}),
-                    _autoSyncedFrom: `store_accounts.${shippingMatch}`,
-                    _note: `Carrier-side credentials were stale; auto-synced from the saved ${shippingMatch} store entry.`,
+                    credentialSource: 'exact_linked_store',
+                    linkedStoreAccountId: exactLinkedStore.id,
                   },
                 };
               }
@@ -1076,7 +1116,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           }
         } catch (fallbackErr) {
           console.warn(
-            `[carriers/verify] ${provider} auto-sync from ${shippingMatch} store failed:`,
+            `[carriers/verify] ${provider} exact linked-store recovery failed:`,
             fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
           );
         } finally {
@@ -1095,6 +1135,20 @@ export default async function handler(req: any, res: any): Promise<void> {
         _credentialsType: typeof credentials,
       };
     }
+    const safeIdentity: CarrierIdentityAccount = accountIdentity ?? {
+      id: carrierAccountId ?? storeAccountId ?? 0,
+      provider,
+      label: null,
+      accountIdentifier: null,
+      credentials,
+      active: true,
+    };
+    result.accountIdentifier = safeCarrierAccountIdentifier({
+      ...safeIdentity,
+      credentials,
+      linkedStore: exactLinkedStore,
+    });
+    result.accountLabel = safeCarrierAccountLabel(safeIdentity, result.accountLabel);
     res.status(200).json(result);
   } catch (err) {
     sendInternalServerError(res, 'carriers/verify', err);

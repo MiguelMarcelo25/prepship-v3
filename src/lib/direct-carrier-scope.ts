@@ -2,8 +2,8 @@
 //
 // "Direct carriers" are rows in `carrier_accounts` (SHIPP, EasyPost, UPS,
 // FedEx, USPS, eHub, simulator, …) that quote rates / buy labels through the
-// Vercel `/api/carriers/*` functions, as opposed to ShipStation carriers
-// (which are scoped by the v2 API key) or marketplace store accounts.
+// backend connector owner, as opposed to ShipStation carriers or marketplace
+// store accounts.
 //
 // THE RULE this module enforces:
 //
@@ -19,38 +19,29 @@
 // `/carriers/rates` and `/carriers/labels` functions did no assignment check
 // at all.
 //
-// This module is intentionally dependency-free so the SAME decision can be
-// imported by:
-//   • the frontend Rate Browser filter   (web/src/lib/v2-apiClient.ts)
-//   • the backend rate gate              (api/carriers/rates.ts)
-//   • the backend label-purchase gate    (api/carriers/labels.ts)
-//   • the PS-083 guard test               (scripts/ps-083-…-guard.ts)
-// Keeping one copy means frontend hiding and backend rejection can never drift.
+// The backend rate read model and label-purchase boundary both delegate here,
+// while the frontend consumes only the resulting DTO.
 
 /** Marketplace-owned shipping APIs are scoped by store, never globally shared.
  *
- * PS-262 (store/account correlation): this set is WHY a Walmart Shipping rate/label
- * can only ever be offered/bought for its own store. A walmart_shipping account lives
- * in store_accounts keyed by client_id; the rate path (rates.ts
- * loadVisibleDirectCarrierAccounts) and the label path (labels-direct.ts
- * loadDirectAccountForLabel) BOTH gate it through directCarrierVisibleForScope, so a
- * cross-store request is hidden (rate) or rejected with DIRECT_CARRIER_NOT_ASSIGNED
- * (label). Proven by scripts/ps-262c-walmart-store-correlation-guard.ts. (The broad
+ * PS-415 (store/account correlation): a Walmart/eBay Shipping account resolves to an
+ * exact base store_accounts id. The rate path and label path both gate it through
+ * directCarrierVisibleForScope, so a cross-store request is hidden (rate) or rejected
+ * before purchase (label). Proven by scripts/ps-415-carrier-store-identity-guard.ts
+ * and scripts/ps-262c-walmart-store-correlation-guard.ts. (The broad
  * "direct never ParcelGuard" invariant for direct FedEx is owned by PS-261.) */
-const STORE_SCOPED_SHIPPING_PROVIDERS = new Set<string>([
-  'walmart_shipping',
-  'ebay_shipping',
-]);
+import {
+  baseStoreProviderForShippingProvider,
+  isStoreScopedCarrierProvider,
+  normalizeCarrierIdentityProvider,
+} from '../services/carrier-account-identity';
 
 export function normalizeProviderKey(value: unknown): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, '_');
+  return normalizeCarrierIdentityProvider(value);
 }
 
 export function isStoreScopedShippingProvider(provider: unknown): boolean {
-  return STORE_SCOPED_SHIPPING_PROVIDERS.has(normalizeProviderKey(provider));
+  return isStoreScopedCarrierProvider(provider);
 }
 
 /** Parse a value to a finite client id, or null when it is not a usable id. */
@@ -73,6 +64,8 @@ export type DirectCarrierAssignment = {
   clientId?: number | null;
   /** Junction-table assignment (carrier_account_clients). */
   assignedClientIds?: ReadonlyArray<number | null | undefined> | null;
+  /** Exact store_accounts row for walmart_shipping / ebay_shipping. */
+  linkedStoreAccountId?: number | null;
 };
 
 /**
@@ -111,6 +104,8 @@ export function directCarrierAssignedToClient(
 export type DirectCarrierVisibilityContext = {
   clientId?: unknown;
   storeId?: unknown;
+  sourceProvider?: unknown;
+  sourceAccountId?: unknown;
   /**
    * Standalone "Browse Rates" rate-shopping view passes this. It is NOT scoped
    * to a client/store, but it must STILL hide carriers with no assignment.
@@ -118,10 +113,31 @@ export type DirectCarrierVisibilityContext = {
   includeAllDirectCarriers?: unknown;
 };
 
+function storeScopedCarrierMatchesContext(
+  account: DirectCarrierAssignment & { provider?: string | null },
+  context: DirectCarrierVisibilityContext,
+): boolean {
+  const linkedStoreAccountId = parseFiniteClientId(account.linkedStoreAccountId);
+  const sourceAccountId = parseFiniteClientId(context.sourceAccountId);
+  const expectedSourceProvider = baseStoreProviderForShippingProvider(account.provider);
+  const sourceProvider = normalizeProviderKey(context.sourceProvider);
+  if (
+    linkedStoreAccountId == null ||
+    sourceAccountId == null ||
+    expectedSourceProvider == null ||
+    sourceProvider !== expectedSourceProvider ||
+    sourceAccountId !== linkedStoreAccountId
+  ) {
+    return false;
+  }
+
+  const contextClientId = parseFiniteClientId(context.clientId);
+  return contextClientId == null || directCarrierAssignedToClient(account, contextClientId);
+}
+
 /**
- * Frontend display rule for a direct `carrier_accounts` row (store_accounts
- * rows are matched separately by the caller). Returns whether the carrier
- * should appear in the given Rate Browser scope.
+ * Shared backend visibility rule for a direct account. Returns whether the
+ * account may appear in the given order/rate context.
  */
 export function directCarrierVisibleForScope(
   account: DirectCarrierAssignment & { provider?: string | null },
@@ -140,6 +156,10 @@ export function directCarrierVisibleForScope(
     return directCarrierHasAnyAssignment(account);
   }
 
+  if (isStoreScopedShippingProvider(provider)) {
+    return storeScopedCarrierMatchesContext(account, context);
+  }
+
   // Order/client-scoped view: only carriers assigned to this client.
   return directCarrierAssignedToClient(account, contextClientId);
 }
@@ -148,6 +168,8 @@ export type DirectCarrierScopeRequest = {
   clientId?: unknown;
   storeId?: unknown;
   orderId?: unknown;
+  sourceProvider?: unknown;
+  sourceAccountId?: unknown;
 };
 
 export type DirectCarrierScopeDecision =
@@ -182,6 +204,16 @@ export function evaluateDirectCarrierScope(
 
   // Scopeless credential test (Settings demo) — allow.
   if (!hasScope) return { allowed: true };
+
+  const providerAccount = account as DirectCarrierAssignment & { provider?: string | null };
+  if (isStoreScopedShippingProvider(providerAccount.provider)) {
+    return storeScopedCarrierMatchesContext(providerAccount, request)
+      ? { allowed: true }
+      : {
+          allowed: false,
+          reason: 'This marketplace carrier is not linked to the exact store account that owns this order.',
+        };
+  }
 
   if (!directCarrierHasAnyAssignment(account)) {
     return {

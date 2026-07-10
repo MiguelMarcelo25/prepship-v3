@@ -31,8 +31,8 @@ export type CredentialAccountPatchBody = {
   credentials: Record<string, unknown> | null;
   credentialKeys: string[];
   // Active toggle: hide/show a carrier in the Rate Browser. active=false is
-  // filtered out client-side (fetchDirectCarrierAccountRows) so the carrier
-  // stops appearing for any order without deleting it.
+  // filtered by the backend account read model so the carrier stops appearing
+  // for any order without deleting it.
   hasActive: boolean;
   active: boolean | null;
 };

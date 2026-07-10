@@ -14,7 +14,6 @@ import { API_BASE } from './api-base';
 import type { DashboardProvenance } from '../../../src/lib/analytics-provenance';
 import { getCachedAuthToken } from './auth-session-cache';
 import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
-import { directCarrierVisibleForScope } from '../../../src/lib/direct-carrier-scope';
 import {
   requiredReportingNumber,
   reportingSkuDtoFromBackend,
@@ -28,9 +27,6 @@ import {
   STALE_MOCK_LABEL_HOSTS,
   DIRECT_CARRIER_PROVIDER_ID_OFFSET,
   DIRECT_STORE_PROVIDER_ID_OFFSET,
-  STORE_PROVIDER_KEYS,
-  SYNTHETIC_STORE_ID_OFFSETS,
-  DIRECT_ACCOUNT_PROVIDER_LABELS,
   HIDDEN_CLIENT_IDS,
   TEST_CLIENT_IDS,
   isHiddenClient,
@@ -68,23 +64,10 @@ import {
   translateRatePayloadToV4,
   toProviderAccountId,
   normalizeCarrierAccountDto,
-  DirectCarrierAccountRow,
   DirectCarrierRateError,
-  normalizeProviderKey,
-  isStoreProvider,
-  normalizeClientIdList,
   DirectAccountRef,
-  directProviderIdFromAccount,
   directAccountRefFromProviderId,
   isDirectCarrierId,
-  LabelEndpointRoute,
-  classifyLabelEndpoint,
-  directAccountKey,
-  looksLikeOpaqueAccountIdentifier,
-  storeAccountMatchesOrder,
-  directCarrierAccountVisibleForOrder,
-  normalizeDirectCarrierAccountDto,
-  fetchDirectCarrierAccountRows,
   rateBrowseInflight,
   translateRateToLegacyDisplayShape,
   fetchBlob,
@@ -561,26 +544,19 @@ export const apiClient = {
   // rate browsing never mixes DRP and KFG ShipStation accounts.
   fetchCarriersForStore(
     storeId?: number | null,
-    clientId?: number | null
+    clientId?: number | null,
+    orderId?: number | null,
   ): Promise<{ carriers: any[] }> {
     return safe(
       'fetchCarriersForStore',
       async () => {
-        const [res, directRows] = await Promise.all([
-          api.get<any>(
-            `/rates/carriers-for-store${qs({
-              storeId: storeId ?? undefined,
-              clientId: clientId ?? undefined,
-            })}`
-          ),
-          fetchDirectCarrierAccountRows().catch((err) => {
-            console.warn(
-              '[v2-apiClient] fetchCarriersForStore direct accounts failed:',
-              err instanceof Error ? err.message : err
-            );
-            return [] as DirectCarrierAccountRow[];
-          }),
-        ]);
+        const res = await api.get<any>(
+          `/rates/carriers-for-store${qs({
+            storeId: storeId ?? undefined,
+            clientId: clientId ?? undefined,
+            orderId: orderId ?? undefined,
+          })}`
+        );
         const raw = Array.isArray(res?.carriers)
           ? res.carriers
           : Array.isArray(res?.data)
@@ -589,12 +565,7 @@ export const apiClient = {
               ? res
               : [];
         return {
-          carriers: [
-            ...raw.map(normalizeCarrierAccountDto),
-            ...directRows
-              .filter((row) => directCarrierAccountVisibleForOrder(row, { storeId, clientId }))
-              .map(normalizeDirectCarrierAccountDto),
-          ],
+          carriers: raw.map(normalizeCarrierAccountDto),
         };
       },
       { carriers: [] }

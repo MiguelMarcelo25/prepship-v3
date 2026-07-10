@@ -102,6 +102,7 @@ export async function produceRateBrowsePayload({
   const orderedIds = orderedCarrierIds(requestedCarrierIds, preferred);
   let orderForBrowse: {
     sourceProvider: string | null;
+    sourceAccountId: string | null;
     raw: unknown;
     shipToPostalCode: string | null;
     shipToState: string | null;
@@ -118,6 +119,7 @@ export async function produceRateBrowsePayload({
       const [ord] = await db
         .select({
           sourceProvider: orders.sourceProvider,
+          sourceAccountId: orders.sourceAccountId,
           raw: orders.raw,
           shipToPostalCode: orders.shipToPostalCode,
           shipToState: orders.shipToState,
@@ -172,6 +174,7 @@ export async function produceRateBrowsePayload({
     confirmation: confirmation ?? signature ?? null,
     carrierIds: orderedIds,
     sourceProvider: orderForBrowse?.sourceProvider ?? null,
+    sourceAccountId: orderForBrowse?.sourceAccountId ?? null,
     rawOrder: orderForBrowse?.raw ?? undefined,
     isEbayMarketplaceOrder: isEbayMarketplaceOrder({
       clientName: orderForBrowse?.clientName ?? null,
@@ -224,6 +227,7 @@ export async function produceRateBrowsePayload({
       orderNumber: browseRateInput.orderNumber ?? null,
       purchaseOrderId: browseRateInput.purchaseOrderId ?? null,
       sourceProvider: browseRateInput.sourceProvider ?? null,
+      sourceAccountId: browseRateInput.sourceAccountId ?? null,
       isEbayMarketplaceOrder: browseRateInput.isEbayMarketplaceOrder ?? null,
       includeVisibleDirectCarriers: browseRateInput.includeVisibleDirectCarriers ?? null,
       includeAllDirectCarriers: browseRateInput.includeAllDirectCarriers ?? null,

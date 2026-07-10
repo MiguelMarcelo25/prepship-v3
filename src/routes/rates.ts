@@ -7,6 +7,7 @@ import { rateCache } from '../db/schema/rates';
 import {
   CACHE_TTL_MS,
   getCarrierAccountsForRateContext,
+  getDirectCarrierAccountsForRateContext,
   getRates,
   loadDirectCarrierVisibilityEvaluator,
   rateCacheKey,
@@ -558,6 +559,32 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   // PS-203 (stage 2): one account-table load per request; each item's order
   // context is checked against the REQUIRED carrier universe below.
   const hasVisibleDirectCarriers = await loadDirectCarrierVisibilityEvaluator();
+  const orderIds = [...new Set(items.map((item) => item.orderId).filter((id): id is number => id != null))];
+  const scopedOrderRows = orderIds.length
+    ? await db
+        .select({
+          id: orders.id,
+          clientId: orders.clientId,
+          storeId: orders.storeId,
+          sourceProvider: orders.sourceProvider,
+          sourceAccountId: orders.sourceAccountId,
+        })
+        .from(orders)
+        .where(and(
+          or(...orderIds.map((id) => eq(orders.id, id))),
+          orderScopePredicate(scopeFromContext(c)),
+        ))
+    : [];
+  const orderContextById = new Map(scopedOrderRows.map((row) => [row.id, row]));
+  const directContextForItem = (item: typeof items[number]) => {
+    const orderContext = item.orderId != null ? orderContextById.get(item.orderId) : null;
+    return {
+      clientId: orderContext?.clientId ?? item.clientId ?? null,
+      storeId: orderContext?.storeId ?? item.storeId ?? null,
+      sourceProvider: orderContext?.sourceProvider ?? null,
+      sourceAccountId: orderContext?.sourceAccountId ?? null,
+    };
+  };
   const itemsWithKeys = await Promise.all(items.map(async (it) => {
     if (it.cacheKey) {
       return {
@@ -661,7 +688,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       }, automationRules);
       const meta = cacheMetadata(eligibleHit, 'exact', {
         requiredDirectCarriersUncovered:
-          hasVisibleDirectCarriers({ clientId: it.clientId ?? null, storeId: it.storeId ?? null }) &&
+          hasVisibleDirectCarriers(directContextForItem(it)) &&
           !rateCacheRowCoversDirectCarriers(eligibleHit),
       });
       return {
@@ -694,7 +721,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       }, automationRules);
       const meta = cacheMetadata(eligibleHit, 'rough', {
         requiredDirectCarriersUncovered:
-          hasVisibleDirectCarriers({ clientId: it.clientId ?? null, storeId: it.storeId ?? null }) &&
+          hasVisibleDirectCarriers(directContextForItem(it)) &&
           !rateCacheRowCoversDirectCarriers(eligibleHit),
       });
       return {
@@ -752,15 +779,28 @@ app.get('/carriers', async (c) => {
 const carriersForStoreQuery = z.object({
   storeId: z.coerce.number().int().optional(),
   clientId: z.coerce.number().int().optional(),
+  orderId: z.coerce.number().int().positive(),
 });
 
 app.get('/carriers-for-store', zValidator('query', carriersForStoreQuery), async (c) => {
-  const { storeId, clientId } = c.req.valid('query');
+  const { orderId } = c.req.valid('query');
   const canViewAccountMetadata = canViewRateAccountMetadata(c);
-  const carriers = await getCarrierAccountsForRateContext({
-    storeId: storeId ?? null,
-    clientId: clientId ?? null,
-  });
+  const [accountContext] = await db
+    .select({
+      storeId: orders.storeId,
+      clientId: orders.clientId,
+      sourceProvider: orders.sourceProvider,
+      sourceAccountId: orders.sourceAccountId,
+    })
+    .from(orders)
+    .where(and(eq(orders.id, orderId), orderScopePredicate(scopeFromContext(c))))
+    .limit(1);
+  if (!accountContext) return c.json({ error: 'Order not found' }, 404);
+  const [shipStationCarriers, directCarriers] = await Promise.all([
+    getCarrierAccountsForRateContext(accountContext),
+    getDirectCarrierAccountsForRateContext(accountContext),
+  ]);
+  const carriers = [...shipStationCarriers, ...directCarriers];
   const publicCarriers = carriers.map((ca) => ({
     ...ca,
     source_client_id: canViewAccountMetadata ? ca.source_client_id : null,
@@ -779,7 +819,13 @@ app.get('/carriers-for-store', zValidator('query', carriersForStoreQuery), async
     source_client_id: canViewAccountMetadata ? ca.source_client_id : null,
     source_client_name: canViewAccountMetadata ? ca.source_client_name : null,
   }));
-  return c.json({ carriers: publicCarriers, data, storeId: storeId ?? null, clientId: clientId ?? null });
+  return c.json({
+    carriers: publicCarriers,
+    data,
+    storeId: accountContext.storeId,
+    clientId: accountContext.clientId,
+    orderId,
+  });
 });
 
 app.post(

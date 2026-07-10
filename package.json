@@ -377,6 +377,7 @@
     "test:ps-330-controlled-canary-certification": "tsx scripts/ps-330-controlled-canary-certification-guard.ts",
     "test:ps-331-dead-code-inventory-safe-deletion-plan": "tsx scripts/ps-331-dead-code-inventory-safe-deletion-plan-guard.ts",
     "test:ps-326-carrier-account-identity-certification": "tsx scripts/ps-326-carrier-account-identity-certification-guard.ts",
+    "test:ps-415-carrier-store-identity": "tsx scripts/ps-415-carrier-store-identity-guard.ts",
     "test:ps-320-v2-api-client-transport": "tsx scripts/ps-320-v2-api-client-transport-guard.ts",
     "test:ps-321-ratebrowsermodal-thin-ui": "tsx scripts/ps-321-ratebrowsermodal-thin-ui-guard.ts",
     "test:ps-314-no-sot-bypass-wrappers": "tsx scripts/ps-314-no-sot-bypass-wrappers-guard.ts",

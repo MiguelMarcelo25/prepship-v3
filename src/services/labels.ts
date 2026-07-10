@@ -2151,6 +2151,8 @@ async function createLabelV2Impl(
     const account = await loadDirectAccountForLabel(directRef, {
       clientId: clientId ?? null,
       storeId: order.storeId ?? null,
+      sourceProvider: order.sourceProvider ?? null,
+      sourceAccountId: order.sourceAccountId ?? null,
     });
     directProviderKey = normalizeProviderKey(account.provider);
     const direct = await timer.task(`direct ${directProviderKey} createLabel connector`, () =>

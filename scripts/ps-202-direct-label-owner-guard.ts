@@ -68,7 +68,7 @@ check('walmart confirmations get the live-verified PO (the PS-201 failure class)
 // ── labels-direct: scope assert, PS-199 labels mode, test-mode seam ───────────
 const labelsDirect = readFileSync('src/services/labels-direct.ts', 'utf8');
 check('account loading enforces the PS-083 assignment scope before postage',
-  /directCarrierVisibleForScope\(account, \{ clientId: scope\.clientId/.test(labelsDirect) &&
+  /directCarrierVisibleForScope\(account, \{\s*clientId: scope\.clientId,\s*storeId: scope\.storeId,\s*sourceProvider: scope\.sourceProvider,\s*sourceAccountId: scope\.sourceAccountId/.test(labelsDirect) &&
   /DIRECT_CARRIER_NOT_ASSIGNED/.test(labelsDirect));
 check('walmart_shipping uses the PS-199 LABELS-mode resolver (live-verify or throw)',
   /resolveWalmartPurchaseOrder\(/.test(labelsDirect) && /'labels',\s*\n\s*\)/.test(labelsDirect));

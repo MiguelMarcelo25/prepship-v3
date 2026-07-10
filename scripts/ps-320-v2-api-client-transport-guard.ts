@@ -122,7 +122,7 @@ for (const command of [
 }
 
 const fetchRatesBlock = sliceBetween(apiClient, 'fetchRates(data: Record<string, unknown>)', '\n  fetchCachedRatesBulk');
-const browseRatesBlock = sliceBetween(apiClient, 'browseRates(data: Record<string, unknown>)', '\n  fetchDashboardDailyCounts');
+const browseRatesBlock = sliceBetween(apiClient, 'browseRates(data: Record<string, unknown>)', '\n  browseShopifyRates');
 const rateBrowseTransportBlock = sliceBetween(apiClient, 'async function postRateBrowseTransport(', '\nexport const apiClient');
 const createLabelBlock = sliceBetween(apiClient, 'createLabel(payload: unknown)', '\n  // PS-139: removed dead FE method createLabelBatch');
 const addToQueueBlock = sliceBetween(apiClient, 'addToQueue(payload: Record<string, unknown>)', '\n  startQueueSendJob');
@@ -182,21 +182,20 @@ check('applyBestRate delegates the atomic persist command to the backend owner',
   /api\.post<any>\(`\/orders\/\$\{orderId\}\/apply-best-rate`/.test(applyBestRateBlock) &&
   !/currentRequestFingerprint|setOrderSelectedPid|saveOrderDims|saveOrderBestRate/.test(applyBestRateBlock));
 
-check('fetchCarriersForStore is a compatibility read shim that starts with backend /rates/carriers-for-store',
+check('fetchCarriersForStore is a backend-only compatibility read shim with exact order context',
   /api\.get<any>\(\s*`\/rates\/carriers-for-store/.test(fetchCarriersForStoreBlock) &&
-  /fetchDirectCarrierAccountRows\(\)/.test(fetchCarriersForStoreBlock) &&
-  /directCarrierAccountVisibleForOrder\(row, \{ storeId, clientId \}\)/.test(fetchCarriersForStoreBlock));
+  /orderId: orderId \?\? undefined/.test(fetchCarriersForStoreBlock) &&
+  !/\/carrier-accounts|\/store-accounts|directCarrierAccountVisibleForOrder|fetchDirectCarrierAccountRows/.test(fetchCarriersForStoreBlock));
 
-check('shared direct-carrier visibility shim delegates carrier-account scope to src/lib/direct-carrier-scope.ts',
-  shared.includes("import { directCarrierVisibleForScope } from '../../../../src/lib/direct-carrier-scope';") &&
-  /export function directCarrierAccountVisibleForOrder\([\s\S]*?return directCarrierVisibleForScope\(/.test(shared));
+check('v2-apiClient contains no frontend direct-carrier account authorization shim',
+  !/directCarrierVisibleForScope|directCarrierAccountVisibleForOrder|fetchDirectCarrierAccountRows/.test(apiClientCode + sharedCode));
 
 check('shared inventory status shim delegates threshold truth to src/lib/inventory-stock-status.ts',
   shared.includes("import { classifyStockStatus } from '../../../../src/lib/inventory-stock-status';") &&
   /export function inventoryStatus\([\s\S]*?const status = classifyStockStatus\(stockQty, reorderLevel\)/.test(shared));
 
-check('legacy classifyLabelEndpoint is only re-exported/imported by v2-apiClient, never used to choose a label route there',
-  (apiClient.match(/\bclassifyLabelEndpoint\b/g) ?? []).length === 1);
+check('legacy classifyLabelEndpoint is absent from v2-apiClient',
+  !/\bclassifyLabelEndpoint\b/.test(apiClientCode));
 
 type ForbiddenPattern = {
   id: string;

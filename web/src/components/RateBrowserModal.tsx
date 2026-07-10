@@ -1168,7 +1168,7 @@ export default function RateBrowserModal({
     setScopedAccountsError(null);
 
     void apiClient
-      .fetchCarriersForStore(order?.storeId ?? null, order?.clientId ?? null)
+      .fetchCarriersForStore(order?.storeId ?? null, order?.clientId ?? null, order?.orderId ?? null)
       .then((res) => {
         if (cancelled) return;
         const carriers = Array.isArray(res?.carriers) ? res.carriers : [];
@@ -1189,7 +1189,7 @@ export default function RateBrowserModal({
     return () => {
       cancelled = true;
     };
-  }, [open, testMode, order?.storeId, order?.clientId]);
+  }, [open, testMode, order?.orderId, order?.storeId, order?.clientId]);
 
   // Populate form from order on open. Priority for dims: panel > saved >
   // nothing. Priority for weight: initialWeight prop > order.weight.value.

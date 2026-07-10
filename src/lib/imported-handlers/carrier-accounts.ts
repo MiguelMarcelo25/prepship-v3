@@ -40,8 +40,32 @@ import {
   replaceCarrierAccountClientAssignments,
   upsertCredentialAccount,
 } from '../../services/credential-accounts';
+import {
+  carrierStoreLinkIdentifier,
+  isStoreScopedCarrierProvider,
+  resolveStoreAccountLink,
+  storedCarrierAccountIdentifier,
+  type StoreAccountIdentity,
+} from '../../services/carrier-account-identity';
 
 const TABLE = 'carrier_accounts';
+
+async function loadActiveStoreAccountIdentities(sql: any): Promise<StoreAccountIdentity[]> {
+  return sql<Array<{
+    id: number;
+    clientId: number | null;
+    provider: string;
+    label: string | null;
+    accountIdentifier: string | null;
+    credentials: Record<string, unknown>;
+    active: boolean;
+  }>>`
+    SELECT id, client_id AS "clientId", provider, label,
+           account_identifier AS "accountIdentifier", credentials, active
+    FROM store_accounts
+    WHERE active = true
+  `;
+}
 
 // Provider validation: lowercase slug pattern instead of an explicit list.
 // This used to be a hardcoded Set that drifted out of sync with verify.ts's
@@ -115,7 +139,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       const {
         provider,
         label,
-        accountIdentifier,
         credentials,
         source,
         clientId,
@@ -123,6 +146,41 @@ export default async function handler(req: any, res: any): Promise<void> {
         bodyKeys,
         bodyType,
       } = normalizeCredentialAccountBody(body);
+
+      const requestedStoreAccountId = Number(body.storeAccountId);
+      let effectiveClientId = clientId;
+      let accountIdentifier = storedCarrierAccountIdentifier({
+        provider,
+        label,
+        credentials,
+        storeAccountId: Number.isInteger(requestedStoreAccountId) ? requestedStoreAccountId : null,
+      });
+
+      if (isStoreScopedCarrierProvider(provider)) {
+        if (!Number.isInteger(requestedStoreAccountId) || requestedStoreAccountId <= 0) {
+          res.status(400).json({
+            error: `${provider} requires the exact storeAccountId it belongs to.`,
+            code: 'STORE_LINK_REQUIRED',
+          });
+          return;
+        }
+        const stores = await loadActiveStoreAccountIdentities(sql);
+        const link = resolveStoreAccountLink({
+          id: 0,
+          clientId,
+          provider,
+          label,
+          accountIdentifier: carrierStoreLinkIdentifier(requestedStoreAccountId),
+          credentials,
+          active: true,
+        }, stores);
+        if (!link.ok) {
+          res.status(409).json({ error: link.reason, code: link.code });
+          return;
+        }
+        effectiveClientId = link.store.clientId ?? clientId;
+        accountIdentifier = carrierStoreLinkIdentifier(link.store.id);
+      }
 
       // PS-200 S1 drift re-sync: the legacy Vercel handler grew this
       // diagnostic after a real incident (a 4/30 Walmart row saved with empty
@@ -142,7 +200,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
       if (!accountIdentifier) {
-        res.status(400).json({ error: 'accountIdentifier is required' });
+        res.status(400).json({ error: 'A display label or non-secret account identifier is required.' });
         return;
       }
       if (credKeys.length === 0) {
@@ -159,7 +217,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         accountIdentifier,
         credentials,
         source,
-        clientId,
+        clientId: effectiveClientId,
         credentialKeys: credKeys,
         bodyKeys,
         bodyType,
@@ -201,6 +259,39 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
       const body = await readJsonRequestBody(req);
       const clientIds = normalizeAssignedClientIds(body);
+      const [account] = await sql<Array<{
+        id: number;
+        clientId: number | null;
+        provider: string;
+        label: string | null;
+        accountIdentifier: string | null;
+        credentials: Record<string, unknown>;
+        active: boolean;
+      }>>`
+        SELECT id, client_id AS "clientId", provider, label,
+               account_identifier AS "accountIdentifier", credentials, active
+        FROM carrier_accounts
+        WHERE id = ${id}
+        LIMIT 1
+      `;
+      if (account && isStoreScopedCarrierProvider(account.provider)) {
+        const link = resolveStoreAccountLink(account, await loadActiveStoreAccountIdentities(sql));
+        if (!link.ok) {
+          res.status(409).json({ error: link.reason, code: link.code });
+          return;
+        }
+        const expectedClientId = link.store.clientId ?? account.clientId;
+        const exactAssignment = expectedClientId == null
+          ? clientIds.length === 0
+          : clientIds.length === 1 && clientIds[0] === expectedClientId;
+        if (!exactAssignment) {
+          res.status(409).json({
+            error: 'Store-scoped carrier assignments must match the linked store account client.',
+            code: 'STORE_CLIENT_MISMATCH',
+          });
+          return;
+        }
+      }
       const assignmentResult = await replaceCarrierAccountClientAssignments(sql, id, clientIds, {
         promotePortal: true,
       });
@@ -256,6 +347,42 @@ export default async function handler(req: any, res: any): Promise<void> {
       if (!before) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
+      }
+
+      if (patch.hasCredentials && patch.credentials) {
+        const [account] = await sql<Array<{
+          id: number;
+          clientId: number | null;
+          provider: string;
+          label: string | null;
+          accountIdentifier: string | null;
+          credentials: Record<string, unknown>;
+          active: boolean;
+        }>>`
+          SELECT id, client_id AS "clientId", provider, label,
+                 account_identifier AS "accountIdentifier", credentials, active
+          FROM carrier_accounts
+          WHERE id = ${id}
+          LIMIT 1
+        `;
+        if (account && isStoreScopedCarrierProvider(account.provider)) {
+          const mergedCredentials = { ...(account.credentials ?? {}), ...patch.credentials };
+          const link = resolveStoreAccountLink(
+            { ...account, credentials: mergedCredentials },
+            await loadActiveStoreAccountIdentities(sql),
+          );
+          if (!link.ok) {
+            res.status(409).json({ error: link.reason, code: link.code });
+            return;
+          }
+          if (link.derived) {
+            await sql`
+              UPDATE carrier_accounts
+              SET account_identifier = ${carrierStoreLinkIdentifier(link.store.id)}, updated_at = NOW()
+              WHERE id = ${id}
+            `;
+          }
+        }
       }
 
       const updated = await patchCredentialAccount(sql, TABLE, id, patch);

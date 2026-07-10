@@ -95,6 +95,13 @@ import {
   type DirectCarrierCacheRow,
 } from './direct-carrier-rate-cache';
 import { isShopifyShippingDisplayOnlyProvider } from './shopify-rates';
+import {
+  isDirectShippingAccount,
+  isStoreScopedCarrierProvider,
+  resolveStoreAccountLink,
+  safeCarrierAccountIdentifier,
+  type StoreAccountIdentity,
+} from './carrier-account-identity';
 
 type Markup = MarkupRule;
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
@@ -539,6 +546,7 @@ export type RateInput = {
   // eBay Logistics only prices eBay orders — and `rawOrder` carries the order's stored JSON for
   // connectors that need the marketplace order itself (the eBay ship-to + order id).
   sourceProvider?: string | null;
+  sourceAccountId?: string | null;
   rawOrder?: unknown;
   // Whether this is an eBay-marketplace order (sync-path-agnostic; see ebay-order-detection.ts).
   // Gates the eBay Logistics carrier so an eBay order synced via ShipStation still gets eBay rates.
@@ -946,6 +954,10 @@ export type RateCarrierAccount = CarrierInfo & {
   friendly_name?: string;
   source_client_id: number | null;
   source_client_name: string;
+  display_disambiguator?: string | null;
+  direct_carrier_account_id?: number;
+  direct_carrier_source_table?: 'carrier_accounts' | 'store_accounts';
+  linked_store_account_id?: number | null;
 };
 const scopedCarrierCache = new Map<string, { carriers: CarrierInfo[]; fetchedAt: number }>();
 
@@ -958,6 +970,9 @@ type DirectCarrierAccountInfo = {
   credentials: Record<string, unknown>;
   sourceTable: 'carrier_accounts' | 'store_accounts';
   assignedClientIds: number[];
+  linkedStoreAccountId: number | null;
+  displayIdentity: string;
+  identityBlockReason: string | null;
 };
 
 export type DirectCarrierRateError = {
@@ -1913,13 +1928,13 @@ function toDirectRate(
   const service = String(rate.serviceCode ?? rate.service ?? rate.serviceName ?? rate.serviceType ?? provider).trim();
   const serviceName = String(rate.serviceName ?? rate.service_type ?? rate.service ?? service).trim();
   const carrierCode = String(rate.carrierCode ?? rate.carrierType ?? provider).trim();
-  const carrierName = String(rate.carrierName ?? account.label ?? provider).trim();
+  const carrierName = String(rate.carrierName ?? account.displayIdentity ?? provider).trim();
   return {
     ...rate,
     rate_id: String(rate.rate_id ?? `${requestFingerprint}:${service}:${amount}`),
     carrier_id: `se-${shippingProviderId}`,
     carrier_code: carrierCode || provider,
-    carrier_nickname: account.label ?? account.accountIdentifier ?? carrierName,
+    carrier_nickname: account.displayIdentity || carrierName,
     service_code: service || provider,
     service_type: serviceName || service || provider,
     rate_type: serviceName || service || provider,
@@ -1955,7 +1970,12 @@ function toDirectRate(
  * returns a per-context evaluator so bulk callers pay one load per request.
  */
 export async function loadDirectCarrierVisibilityEvaluator(): Promise<
-  (context: { clientId?: number | null; storeId?: number | null }) => boolean
+  (context: {
+    clientId?: number | null;
+    storeId?: number | null;
+    sourceProvider?: string | null;
+    sourceAccountId?: string | null;
+  }) => boolean
 > {
   let accounts: DirectCarrierAccountInfo[] = [];
   try {
@@ -1973,6 +1993,8 @@ export async function loadDirectCarrierVisibilityEvaluator(): Promise<
       directCarrierVisibleForScope(account, {
         clientId: context.clientId ?? null,
         storeId: context.storeId ?? null,
+        sourceProvider: context.sourceProvider ?? null,
+        sourceAccountId: context.sourceAccountId ?? null,
         includeAllDirectCarriers: false,
       }),
     );
@@ -2020,6 +2042,13 @@ async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<Direc
       credentials: row.credentials ?? {},
       sourceTable: 'carrier_accounts' as const,
       assignedClientIds: assignedByAccount.get(row.id) ?? [],
+      linkedStoreAccountId: null,
+      displayIdentity: safeCarrierAccountIdentifier({
+        ...row,
+        id: row.id,
+        credentials: row.credentials ?? {},
+      }),
+      identityBlockReason: null,
     }));
 
   const storeRows = await db.execute(sql<{
@@ -2049,25 +2078,95 @@ async function loadVisibleDirectCarrierAccounts(input: RateInput): Promise<Direc
     credentials: row.credentials ?? {},
     sourceTable: 'store_accounts' as const,
     assignedClientIds: row.client_id != null ? [Number(row.client_id)] : [],
+    linkedStoreAccountId: Number(row.id),
+    displayIdentity: safeCarrierAccountIdentifier({
+      id: Number(row.id),
+      clientId: row.client_id ?? null,
+      provider: row.provider,
+      label: row.label ?? null,
+      accountIdentifier: row.account_identifier ?? null,
+      credentials: row.credentials ?? {},
+      active: row.active,
+    }),
+    identityBlockReason: null,
   }));
 
-  const byKey = new Map([...directRows, ...storeAccounts].map((row) => [`${row.sourceTable}:${row.id}`, row]));
+  const identityStores = storeAccounts.map((row) => ({
+    id: row.id,
+    clientId: row.clientId,
+    provider: row.provider,
+    label: row.label,
+    accountIdentifier: row.accountIdentifier,
+    credentials: row.credentials,
+    active: true,
+  })) satisfies StoreAccountIdentity[];
+  const correlatedAccounts = [...directRows, ...storeAccounts].map((row) => {
+    if (!isStoreScopedCarrierProvider(row.provider)) return row;
+    const link = resolveStoreAccountLink(row, identityStores);
+    if (!link.ok) return { ...row, identityBlockReason: link.reason };
+    return {
+      ...row,
+      linkedStoreAccountId: link.store.id,
+      displayIdentity: safeCarrierAccountIdentifier({ ...row, linkedStore: link.store }),
+      identityBlockReason: null,
+    };
+  });
+
+  const byKey = new Map(correlatedAccounts.map((row) => [`${row.sourceTable}:${row.id}`, row]));
   if (requestedRefs.length) {
     return requestedRefs
       .map((ref) => byKey.get(`${ref.sourceTable}:${ref.accountId}`))
-      .filter((row): row is DirectCarrierAccountInfo => Boolean(row));
+      .filter((row): row is DirectCarrierAccountInfo => Boolean(
+        row &&
+        isDirectShippingAccount(row.provider, row.sourceTable) &&
+        directCarrierVisibleForScope(row, {
+          clientId: input.clientId,
+          storeId: input.storeId,
+          sourceProvider: input.sourceProvider,
+          sourceAccountId: input.sourceAccountId,
+          includeAllDirectCarriers: input.includeAllDirectCarriers,
+        }),
+      ));
   }
-  return [...directRows, ...storeAccounts].filter((account) => {
+  return correlatedAccounts.filter((account) => {
     // Shopify Admin API rates are displayed through the separate Shopify Rates
     // flow. They are not direct-carrier quote rows and must never enter Best Rate.
     if (isShopifyShippingDisplayOnlyProvider(account.provider) || normalizeProviderKey(account.provider) === 'shopify') {
       return false;
     }
+    if (!isDirectShippingAccount(account.provider, account.sourceTable)) return false;
     return directCarrierVisibleForScope(account, {
       clientId: input.clientId,
       storeId: input.storeId,
+      sourceProvider: input.sourceProvider,
+      sourceAccountId: input.sourceAccountId,
       includeAllDirectCarriers: input.includeAllDirectCarriers,
     });
+  });
+}
+
+export async function getDirectCarrierAccountsForRateContext(
+  input: Pick<RateInput, 'storeId' | 'clientId' | 'sourceProvider' | 'sourceAccountId'>,
+): Promise<RateCarrierAccount[]> {
+  const accounts = await loadVisibleDirectCarrierAccounts({
+    ...input,
+    includeVisibleDirectCarriers: true,
+  } as RateInput);
+  return accounts.map((account) => {
+    const provider = normalizeProviderKey(account.provider);
+    const shippingProviderId = directProviderIdFromAccount(account);
+    return {
+      carrier_id: `se-${shippingProviderId}`,
+      carrier_code: provider,
+      nickname: account.displayIdentity,
+      friendly_name: account.displayIdentity,
+      source_client_id: account.clientId,
+      source_client_name: 'Direct carrier accounts',
+      display_disambiguator: carrierFamilyDisplayLabel(provider),
+      direct_carrier_account_id: account.id,
+      direct_carrier_source_table: account.sourceTable,
+      linked_store_account_id: account.linkedStoreAccountId,
+    };
   });
 }
 
@@ -2184,7 +2283,7 @@ export async function getDirectCarrierRatesForRateInput(
           carrierId: `se-${shippingProviderId}`,
           accountId: String(account.id),
           carrierCode: normalizeProviderKey(account.provider),
-          nickname: account.label || normalizeProviderKey(account.provider),
+          nickname: account.displayIdentity || normalizeProviderKey(account.provider),
           status: 'uncached' as CarrierRateDiagnosticStatus,
           rateCount: 0,
           durationMs: 0,
@@ -2223,7 +2322,7 @@ export async function getDirectCarrierRatesForRateInput(
     DIRECT_CARRIER_RATE_FETCH_CONCURRENCY,
     async (account) => {
     const shippingProviderId = directProviderIdFromAccount(account);
-    const label = account.label || normalizeProviderKey(account.provider);
+    const label = account.displayIdentity || normalizeProviderKey(account.provider);
     const startedAt = Date.now();
     const scope = evaluateDirectCarrierScope(account, input);
     if (!scope.allowed) {

@@ -1,4 +1,9 @@
 import type { CredentialAccountBody } from '../lib/credential-accounts';
+import {
+  isStoreScopedCarrierProvider,
+  toSafeCarrierAccountReadModel,
+  type StoreAccountIdentity,
+} from './carrier-account-identity';
 
 export type CredentialAccountTable = 'carrier_accounts' | 'store_accounts';
 
@@ -63,6 +68,35 @@ const STORE_PROVIDER_LABELS: Record<string, string> = {
   bigcommerce: 'BigCommerce',
 };
 
+async function safeCredentialAccountRows(
+  sql: SqlLike,
+  table: CredentialAccountTable,
+  rows: CredentialAccountRow[],
+): Promise<CredentialAccountRow[]> {
+  const needsStoreIdentity = rows.some((row) => isStoreScopedCarrierProvider(row.provider));
+  const storeRows = needsStoreIdentity
+    ? (await sql`
+        SELECT id, client_id AS "clientId", provider, label,
+               account_identifier AS "accountIdentifier", credentials, active
+        FROM ${sql('store_accounts')}
+        WHERE active = true
+      `) as Array<StoreAccountIdentity & Record<string, unknown>>
+    : [];
+  return rows.map((row) => toSafeCarrierAccountReadModel(
+    row as StoreAccountIdentity & Record<string, unknown>,
+    storeRows,
+  ));
+}
+
+export async function safeCredentialAccountRow(
+  sql: SqlLike,
+  table: CredentialAccountTable,
+  row: CredentialAccountRow | null,
+): Promise<CredentialAccountRow | null> {
+  if (!row) return null;
+  return (await safeCredentialAccountRows(sql, table, [row]))[0] ?? null;
+}
+
 export function normalizeAssignedClientIds(body: Record<string, unknown>): number[] {
   const rawIds = Array.isArray(body?.clientIds) ? body.clientIds : [];
   return Array.from(
@@ -90,11 +124,11 @@ export async function listCredentialAccounts(
 
   if (options.includeAssignments) {
     if (options.source) {
-      return (await sql`
+      const rows = (await sql`
         SELECT
           ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
           ca.account_identifier AS "accountIdentifier",
-          ca.source, ca.active, ca.created_at AS "createdAt",
+          ca.credentials, ca.source, ca.active, ca.created_at AS "createdAt",
           COALESCE(
             (
               SELECT array_agg(cac.client_id ORDER BY cac.client_id)
@@ -108,13 +142,14 @@ export async function listCredentialAccounts(
         ORDER BY ca.created_at DESC
         LIMIT ${limit}
       `) as CredentialAccountRow[];
+      return safeCredentialAccountRows(sql, table, rows);
     }
 
-    return (await sql`
+    const rows = (await sql`
       SELECT
         ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
         ca.account_identifier AS "accountIdentifier",
-        ca.source, ca.active, ca.created_at AS "createdAt",
+        ca.credentials, ca.source, ca.active, ca.created_at AS "createdAt",
         COALESCE(
           (
             SELECT array_agg(cac.client_id ORDER BY cac.client_id)
@@ -127,28 +162,31 @@ export async function listCredentialAccounts(
       ORDER BY ca.created_at DESC
       LIMIT ${limit}
     `) as CredentialAccountRow[];
+    return safeCredentialAccountRows(sql, table, rows);
   }
 
   if (options.source) {
-    return (await sql`
+    const rows = (await sql`
       SELECT id, client_id AS "clientId", provider, label,
              account_identifier AS "accountIdentifier",
-             source, active, created_at AS "createdAt"
+             credentials, source, active, created_at AS "createdAt"
       FROM ${sql(table)}
       WHERE source = ${options.source}
       ORDER BY created_at DESC
       LIMIT ${limit}
     `) as CredentialAccountRow[];
+    return safeCredentialAccountRows(sql, table, rows);
   }
 
-  return (await sql`
+  const rows = (await sql`
     SELECT id, client_id AS "clientId", provider, label,
            account_identifier AS "accountIdentifier",
-           source, active, created_at AS "createdAt"
+           credentials, source, active, created_at AS "createdAt"
     FROM ${sql(table)}
     ORDER BY created_at DESC
     LIMIT ${limit}
   `) as CredentialAccountRow[];
+  return safeCredentialAccountRows(sql, table, rows);
 }
 
 export async function upsertCredentialAccount(
@@ -173,10 +211,10 @@ export async function upsertCredentialAccount(
       updated_at = NOW()
     RETURNING id, client_id AS "clientId", provider, label,
               account_identifier AS "accountIdentifier",
-              source, active, created_at AS "createdAt"
+              credentials, source, active, created_at AS "createdAt"
   `) as CredentialAccountRow[];
 
-  return rows[0] ?? null;
+  return safeCredentialAccountRow(sql, table, rows[0] ?? null);
 }
 
 export async function getCredentialAccountStoredCredentialKeys(
@@ -312,7 +350,7 @@ export async function patchCredentialAccount(
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",
-                source, active, created_at AS "createdAt"
+                credentials, source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
     row = rows[0] ?? null;
   }
@@ -326,7 +364,7 @@ export async function patchCredentialAccount(
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",
-                source, active, created_at AS "createdAt"
+                credentials, source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
     row = rows[0] ?? row;
   }
@@ -343,9 +381,9 @@ export async function patchCredentialAccount(
         WHERE id = ${id}
         RETURNING id, client_id AS "clientId", provider, label,
                   account_identifier AS "accountIdentifier",
-                  source, active, created_at AS "createdAt"
+                  credentials, source, active, created_at AS "createdAt"
       `) as CredentialAccountRow[];
-      return rows[0] ?? row;
+      return safeCredentialAccountRow(sql, table, rows[0] ?? row);
     }
 
     const rows = (await sql`
@@ -356,9 +394,9 @@ export async function patchCredentialAccount(
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",
-                source, active, created_at AS "createdAt"
+                credentials, source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
-    return rows[0] ?? row;
+    return safeCredentialAccountRow(sql, table, rows[0] ?? row);
   }
 
   if (patch.hasSource) {
@@ -372,9 +410,9 @@ export async function patchCredentialAccount(
         WHERE id = ${id}
         RETURNING id, client_id AS "clientId", provider, label,
                   account_identifier AS "accountIdentifier",
-                  source, active, created_at AS "createdAt"
+                  credentials, source, active, created_at AS "createdAt"
       `) as CredentialAccountRow[];
-      return rows[0] ?? row;
+      return safeCredentialAccountRow(sql, table, rows[0] ?? row);
     }
 
     const rows = (await sql`
@@ -383,9 +421,9 @@ export async function patchCredentialAccount(
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",
-                source, active, created_at AS "createdAt"
+                credentials, source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
-    return rows[0] ?? row;
+    return safeCredentialAccountRow(sql, table, rows[0] ?? row);
   }
 
   if (patch.hasLabel) {
@@ -395,12 +433,12 @@ export async function patchCredentialAccount(
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",
-                source, active, created_at AS "createdAt"
+                credentials, source, active, created_at AS "createdAt"
     `) as CredentialAccountRow[];
-    return rows[0] ?? row;
+    return safeCredentialAccountRow(sql, table, rows[0] ?? row);
   }
 
-  return row;
+  return safeCredentialAccountRow(sql, table, row);
 }
 
 export async function replaceCarrierAccountClientAssignments(

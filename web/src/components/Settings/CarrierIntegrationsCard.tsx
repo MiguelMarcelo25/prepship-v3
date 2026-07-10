@@ -150,6 +150,11 @@ export const STORE_PROVIDERS: Set<string> = new Set([
   'bigcommerce',
 ])
 
+const STORE_SCOPED_CARRIER_PROVIDER: Record<string, string> = {
+  walmart_shipping: 'walmart',
+  ebay_shipping: 'ebay',
+}
+
 // Credential fields below match each carrier's documented authentication
 // requirements as of the 2024–2025 API specs:
 //   ShipEngine    — single API key (Bearer)
@@ -776,6 +781,10 @@ interface SavedRow {
   provider: string
   label: string | null
   accountIdentifier: string | null
+  displayIdentity?: string | null
+  linkedStoreAccountId?: number | null
+  identityStatus?: 'verified' | 'store_link_required'
+  identityBlockReason?: string | null
   source: string
   active: boolean
   createdAt: string
@@ -921,8 +930,8 @@ async function reconnectIntegrationCredentials(
 }
 
 // PATCH /carrier-accounts?id=N { active } — hide/show a carrier in the Rate
-// Browser without deleting it. active=false is filtered out client-side
-// (fetchDirectCarrierAccountRows), so the carrier stops appearing for any order.
+// Browser without deleting it. The backend account read model filters inactive
+// carriers, so the carrier stops appearing for any order.
 async function setCarrierActive(rowId: number, active: boolean): Promise<void> {
   await api.patch<{ data: Record<string, unknown> | null }>(
     `/carrier-accounts?id=${rowId}`,
@@ -1154,6 +1163,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [openProvider, setOpenProvider] = useState<ProviderKey | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [formLabel, setFormLabel] = useState('')
+  const [linkedStoreAccountId, setLinkedStoreAccountId] = useState<number | null>(null)
   const [submitState, setSubmitState] = useState<{ kind: 'idle' | 'saving' | 'success' | 'error'; message?: string }>({ kind: 'idle' })
   const [listError, setListError] = useState<string | null>(null)
   const [testing, setTesting] = useState<Record<number, boolean>>({})
@@ -1695,21 +1705,25 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       setSubmitState({ kind: 'error', message: `${missingField.label} is required` })
       return
     }
+    const baseStoreProvider = STORE_SCOPED_CARRIER_PROVIDER[provider.key]
+    if (baseStoreProvider && linkedStoreAccountId == null) {
+      setSubmitState({ kind: 'error', message: `Select the exact ${baseStoreProvider} store connection.` })
+      return
+    }
     setSubmitState({ kind: 'saving' })
-    const accountIdentifier = String(
-      formValues.accountNumber ?? formValues.apiKey ?? formValues.clientId ?? formLabel,
-    ).trim()
     try {
       await postIntegration({
         provider: provider.key,
         label: formLabel.trim(),
-        accountIdentifier,
+        accountIdentifier: formLabel.trim(),
         credentials: { ...formValues },
+        ...(linkedStoreAccountId != null ? { storeAccountId: linkedStoreAccountId } : {}),
         source: 'admin',
       }, provider.category)
       setSubmitState({ kind: 'success', message: 'Integration saved.' })
       setFormValues({})
       setFormLabel('')
+      setLinkedStoreAccountId(null)
       setOpenProvider(null)
       await refresh()
       // Bump the Rate Browser sidebar cache so a newly-saved carrier
@@ -1732,6 +1746,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setOpenProvider(null)
     setFormValues({})
     setFormLabel('')
+    setLinkedStoreAccountId(null)
     setSubmitState({ kind: 'idle' })
   }
 
@@ -1850,6 +1865,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     const result = testResults[d.id]
     const isTesting = !!testing[d.id]
     const isStore = STORE_PROVIDERS.has(d.provider)
+    const isStoreScopedCarrier = Boolean(STORE_SCOPED_CARRIER_PROVIDER[d.provider])
     // ShipStation rows are synthesized from clients.ssApi* and are
     // read-only here — credentials are managed in the Clients tab,
     // not via /carrier-accounts. All four action buttons (Test, Rates,
@@ -2029,16 +2045,15 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         </div>
 
         {/* ── ZONE 2: ACCOUNT IDENTIFIER ─────────────────────────────
-            Operator-set string that can be ANYTHING — a short
-            nickname, a 60-char EasyPost API key, a Walmart UUID.
-            Promoted to its own line so it can use the full card
+            Backend-approved, credential-safe account identity.
+            Kept on its own line so it can use the full card
             width with ellipsis fallback instead of fighting with
             badges + buttons for horizontal space. Subtle muted
             styling — informational, not interactive — and a slight
             background tint visually groups it with the identity
             zone above. */}
         <div
-          title={d.accountIdentifier ?? undefined}
+          title={d.displayIdentity ?? d.accountIdentifier ?? undefined}
           style={{
             fontFamily: 'monospace',
             fontSize: 11,
@@ -2065,8 +2080,14 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           }}>
             ID
           </span>
-          {d.accountIdentifier ?? '—'}
+          {d.displayIdentity ?? d.accountIdentifier ?? '—'}
         </div>
+
+        {d.identityStatus === 'store_link_required' && d.identityBlockReason ? (
+          <div role="alert" style={{ fontSize: 11, color: 'var(--red)' }}>
+            {d.identityBlockReason}
+          </div>
+        ) : null}
 
         {/* Assigned-client chips — inline summary of which clients
             currently have access to this carrier account. Empty
@@ -2211,7 +2232,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               label="Get Rates"
               loadingLabel="Fetching…"
               loading={!!rating[d.id]}
-              disabled={isShipStation}
+              disabled={isShipStation || isStoreScopedCarrier}
               onClick={() => runFetchRates(d)}
               title={isShipStation ? SHIPSTATION_MANAGE_HINT : 'Fetch a sample shipping rate for this carrier'}
             />
@@ -2273,7 +2294,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               // emphasized action; once approved (source becomes 'admin')
               // Assign goes back to its primary visual treatment.
               variant={d.kind === 'carrier' && d.source === 'portal' ? 'subtle' : 'primary'}
-              disabled={isShipStation}
+              disabled={isShipStation || isStoreScopedCarrier}
               onClick={() => openAssignPopover(d)}
               title={
                 isShipStation
@@ -2284,6 +2305,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                   // The practical workflow is: add the same keys to the
                   // other client's row in Settings → Clients.
                   ? `ShipStation API keys are tied 1:1 to ${d.label?.replace(/^ShipStation /, '') ?? 'this client'} by upstream design. To use ShipStation for another client, add credentials to that client's row in Settings → Clients.`
+                  : isStoreScopedCarrier
+                    ? 'This carrier is bound to its selected store connection; client assignment is controlled by that store.'
                   : d.source === 'portal'
                     // Surface the implicit-approval behavior so the
                     // operator knows clicking Save here ALSO promotes
@@ -3311,6 +3334,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                           setOpenProvider(p.key)
                           setFormValues({})
                           setFormLabel('')
+                          setLinkedStoreAccountId(null)
                           setSubmitState({ kind: 'idle' })
                         }}
                         style={{
@@ -3372,6 +3396,10 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                 </>
               ) : (() => {
                 const def = PROVIDER_DEFS.find((p) => p.key === openProvider)!
+                const baseStoreProvider = STORE_SCOPED_CARRIER_PROVIDER[def.key]
+                const matchingStoreAccounts = baseStoreProvider
+                  ? saved.filter((row) => row.kind === 'store' && row.provider === baseStoreProvider && row.active !== false)
+                  : []
                 return (
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
@@ -3386,6 +3414,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                           setOpenProvider(null)
                           setFormValues({})
                           setFormLabel('')
+                          setLinkedStoreAccountId(null)
                           setSubmitState({ kind: 'idle' })
                         }}
                         style={{
@@ -3478,6 +3507,30 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                           }}
                         />
                       </label>
+                      {baseStoreProvider ? (
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>Store connection</span>
+                          <select
+                            value={linkedStoreAccountId ?? ''}
+                            onChange={(e) => setLinkedStoreAccountId(e.target.value ? Number(e.target.value) : null)}
+                            style={{
+                              border: '1px solid var(--border)',
+                              borderRadius: 3,
+                              padding: '6px 8px',
+                              fontSize: 12,
+                              background: 'var(--surface2)',
+                              color: 'var(--text)',
+                            }}
+                          >
+                            <option value="">Select a store</option>
+                            {matchingStoreAccounts.map((store) => (
+                              <option key={store.accountId} value={store.accountId}>
+                                {store.label ?? store.displayIdentity ?? `${baseStoreProvider} #${store.accountId}`}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
                       {def.fields.map((f) => (
                         <label key={f.name} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <span style={{ fontSize: 11, color: 'var(--text3)' }}>{f.label}</span>

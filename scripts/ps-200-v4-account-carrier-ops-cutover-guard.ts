@@ -55,6 +55,7 @@ const settings = read('web/src/components/Settings/CarrierIntegrationsCard.tsx')
 const pending = read('web/src/components/Settings/PendingClientIntegrationsCard.tsx');
 const useShippingAccounts = read('web/src/hooks/useShippingAccounts.ts');
 const sharedApiClient = read('web/src/lib/v2-apiClient/shared.ts');
+const v2ApiClient = read('web/src/lib/v2-apiClient.ts');
 
 const webFiles = walkTs('web/src');
 const webCode = webFiles
@@ -158,9 +159,9 @@ check('pending integrations UI uses v4 carrier-accounts route through api client
 check('Rate Browser direct-carrier account list uses v4 carrier-accounts route',
   /api\.get<V4DirectCarriersResponse>\('\/carrier-accounts\?source=admin'\)/.test(useShippingAccounts));
 
-check('v2-apiClient direct account row helper uses v4 account routes',
-  /api\.get<\{ data\?: DirectCarrierAccountRow\[\] \}>\('\/carrier-accounts\?source=admin'\)/.test(sharedApiClient) &&
-  /api\.get<\{ data\?: DirectCarrierAccountRow\[\] \}>\('\/store-accounts\?source=admin'\)/.test(sharedApiClient));
+check('v2-apiClient delegates scoped carrier identity to the v4 rates read model',
+  /`\/rates\/carriers-for-store/.test(v2ApiClient) &&
+  !/\/carrier-accounts\?source=admin|\/store-accounts\?source=admin/.test(v2ApiClient + sharedApiClient));
 
 check('S2 zero-caller diagnostic endpoints stay deleted',
   !existsSync('api/carriers/validate-address.ts') &&

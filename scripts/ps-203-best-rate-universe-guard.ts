@@ -124,7 +124,11 @@ const rateBrowseProducer = readFileSync('src/services/rate-browse-response-produ
 check('cached/bulk loads the direct-carrier visibility evaluator ONCE per request',
   /const hasVisibleDirectCarriers = await loadDirectCarrierVisibilityEvaluator\(\)/.test(ratesRoute));
 check('exact AND rough cache hits evaluate the required universe',
-  (ratesRoute.match(/requiredDirectCarriersUncovered:\s*\n?\s*hasVisibleDirectCarriers\(\{ clientId: it\.clientId \?\? null, storeId: it\.storeId \?\? null \}\) &&\s*\n?\s*!rateCacheRowCoversDirectCarriers\(eligibleHit\)/g)?.length ?? 0) === 2);
+  (ratesRoute.match(/requiredDirectCarriersUncovered:\s*\n?\s*hasVisibleDirectCarriers\(directContextForItem\(it\)\) &&\s*\n?\s*!rateCacheRowCoversDirectCarriers\(eligibleHit\)/g)?.length ?? 0) === 2);
+check('cached/bulk resolves exact provider account context from scoped orders',
+  /sourceAccountId: orders\.sourceAccountId/.test(ratesRoute) &&
+  /orderScopePredicate\(scopeFromContext\(c\)\)/.test(ratesRoute) &&
+  /const directContextForItem/.test(ratesRoute));
 check('completeness gates on the required universe (uncovered direct carriers ⇒ incomplete)',
   /coversRequiredUniverse = options\.requiredDirectCarriersUncovered !== true/.test(ratesRoute) &&
   /isComplete = fresh && rates\.length > 0 && coversRequiredUniverse/.test(ratesRoute));

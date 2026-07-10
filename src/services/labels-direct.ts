@@ -30,6 +30,13 @@ import { resolveWalmartPurchaseOrder, type WalmartPoResolution } from './walmart
 import type { CreatedExternalLabel } from '../lib/shipstation/labels';
 import type { NormalizedShippingOptions } from '../lib/shipping-options';
 import { resolveDirectLabelShipmentRef } from './direct-label-shipment-id';
+import {
+  isDirectShippingAccount,
+  isStoreScopedCarrierProvider,
+  resolveStoreAccountLink,
+  safeCarrierAccountIdentifier,
+  type StoreAccountIdentity,
+} from './carrier-account-identity';
 
 // The synthetic provider-id ranges the Rate Browser assigns to direct
 // accounts (same constants as the rate side; values are part of the public
@@ -63,7 +70,37 @@ type DirectLabelAccount = {
   credentials: Record<string, unknown>;
   sourceTable: 'carrier_accounts' | 'store_accounts';
   assignedClientIds: number[];
+  accountIdentifier: string | null;
+  linkedStoreAccountId: number | null;
+  displayIdentity: string;
+  identityBlockReason: string | null;
 };
+
+async function loadActiveStoreIdentitiesForLabel(): Promise<StoreAccountIdentity[]> {
+  const result = await db.execute(sql<{
+    id: number;
+    client_id: number | null;
+    provider: string;
+    label: string | null;
+    account_identifier: string | null;
+    credentials: Record<string, unknown>;
+    active: boolean;
+  }>`
+    SELECT id, client_id, provider, label, account_identifier, credentials, active
+    FROM store_accounts
+    WHERE active = true
+  `);
+  const rows = Array.isArray(result) ? result : (result as any).rows ?? [];
+  return (rows as Array<any>).map((store) => ({
+    id: Number(store.id),
+    clientId: store.client_id ?? null,
+    provider: store.provider,
+    label: store.label ?? null,
+    accountIdentifier: store.account_identifier ?? null,
+    credentials: (store.credentials ?? {}) as Record<string, unknown>,
+    active: store.active,
+  }));
+}
 
 /**
  * Load + authorize the direct account for a label purchase. Enforces the
@@ -72,7 +109,12 @@ type DirectLabelAccount = {
  */
 export async function loadDirectAccountForLabel(
   ref: DirectLabelAccountRef,
-  scope: { clientId: number | null; storeId: number | null },
+  scope: {
+    clientId: number | null;
+    storeId: number | null;
+    sourceProvider: string | null;
+    sourceAccountId: string | null;
+  },
 ): Promise<DirectLabelAccount> {
   let account: DirectLabelAccount | null = null;
   if (ref.sourceTable === 'carrier_accounts') {
@@ -82,6 +124,7 @@ export async function loadDirectAccountForLabel(
         clientId: carrierAccounts.clientId,
         provider: carrierAccounts.provider,
         label: carrierAccounts.label,
+        accountIdentifier: carrierAccounts.accountIdentifier,
         credentials: carrierAccounts.credentials,
         active: carrierAccounts.active,
       })
@@ -93,14 +136,29 @@ export async function loadDirectAccountForLabel(
         SELECT client_id FROM carrier_account_clients WHERE carrier_account_id = ${ref.accountId}
       `);
       const assignedRows = Array.isArray(assignments) ? assignments : (assignments as any).rows ?? [];
-      account = {
+      const baseAccount = {
         id: row.id,
         clientId: row.clientId ?? null,
         provider: row.provider,
         label: row.label ?? null,
+        accountIdentifier: row.accountIdentifier ?? null,
         credentials: (row.credentials ?? {}) as Record<string, unknown>,
         sourceTable: 'carrier_accounts',
         assignedClientIds: (assignedRows as Array<{ client_id: number }>).map((r) => Number(r.client_id)),
+      };
+      let linkedStore: StoreAccountIdentity | null = null;
+      let identityBlockReason: string | null = null;
+      if (isStoreScopedCarrierProvider(baseAccount.provider)) {
+        const link = resolveStoreAccountLink(baseAccount, await loadActiveStoreIdentitiesForLabel());
+        if (link.ok) linkedStore = link.store;
+        else identityBlockReason = link.reason;
+      }
+      account = {
+        ...baseAccount,
+        sourceTable: 'carrier_accounts',
+        linkedStoreAccountId: linkedStore?.id ?? null,
+        displayIdentity: safeCarrierAccountIdentifier({ ...baseAccount, linkedStore }),
+        identityBlockReason,
       };
     }
   } else {
@@ -109,31 +167,63 @@ export async function loadDirectAccountForLabel(
       client_id: number | null;
       provider: string;
       label: string | null;
+      account_identifier: string | null;
       credentials: Record<string, unknown>;
       active: boolean;
-    }>`SELECT id, client_id, provider, label, credentials, active FROM store_accounts WHERE id = ${ref.accountId} LIMIT 1`);
+    }>`SELECT id, client_id, provider, label, account_identifier, credentials, active FROM store_accounts WHERE id = ${ref.accountId} LIMIT 1`);
     const list = Array.isArray(rows) ? rows : (rows as any).rows ?? [];
     const row = (list as Array<any>)[0];
     if (row && row.active !== false) {
-      account = {
+      const baseAccount = {
         id: Number(row.id),
         clientId: row.client_id ?? null,
         provider: row.provider,
         label: row.label ?? null,
+        accountIdentifier: row.account_identifier ?? null,
         credentials: (row.credentials ?? {}) as Record<string, unknown>,
-        sourceTable: 'store_accounts',
+        sourceTable: 'store_accounts' as const,
         assignedClientIds: row.client_id != null ? [Number(row.client_id)] : [],
+      };
+      let linkedStore: StoreAccountIdentity | null = null;
+      let identityBlockReason: string | null = null;
+      if (isStoreScopedCarrierProvider(baseAccount.provider)) {
+        const link = resolveStoreAccountLink(baseAccount, await loadActiveStoreIdentitiesForLabel());
+        if (link.ok) linkedStore = link.store;
+        else identityBlockReason = link.reason;
+      }
+      account = {
+        ...baseAccount,
+        linkedStoreAccountId: linkedStore?.id ?? (isStoreScopedCarrierProvider(baseAccount.provider) ? null : Number(row.id)),
+        displayIdentity: safeCarrierAccountIdentifier({ ...baseAccount, linkedStore }),
+        identityBlockReason,
       };
     }
   }
   if (!account) {
     throw new Error(`Direct carrier account ${ref.sourceTable}:${ref.accountId} not found or inactive`);
   }
-  if (!directCarrierVisibleForScope(account, { clientId: scope.clientId, storeId: scope.storeId, includeAllDirectCarriers: false })) {
+  if (!isDirectShippingAccount(account.provider, account.sourceTable)) {
+    const err = new Error('Marketplace store credentials cannot be used as a shipping carrier account.') as Error & { code?: string };
+    err.code = 'DIRECT_CARRIER_ACCOUNT_NOT_SHIPPING';
+    throw err;
+  }
+  if (
+    account.identityBlockReason ||
+    !directCarrierVisibleForScope(account, {
+      clientId: scope.clientId,
+      storeId: scope.storeId,
+      sourceProvider: scope.sourceProvider,
+      sourceAccountId: scope.sourceAccountId,
+      includeAllDirectCarriers: false,
+    })
+  ) {
     const err = new Error(
-      `Direct carrier "${account.label ?? account.provider}" is not assigned to this order's client — label not purchased.`,
+      account.identityBlockReason ??
+        `Direct carrier "${account.displayIdentity}" is not assigned to the exact account that owns this order - label not purchased.`,
     ) as Error & { code?: string };
-    err.code = 'DIRECT_CARRIER_NOT_ASSIGNED';
+    err.code = isStoreScopedCarrierProvider(account.provider)
+      ? 'DIRECT_CARRIER_STORE_ACCOUNT_MISMATCH'
+      : 'DIRECT_CARRIER_NOT_ASSIGNED';
     throw err;
   }
   return account;
@@ -263,7 +353,7 @@ export async function createDirectCarrierLabelForOrder(
   const providerAccountNickname =
     provider === 'shipp'
       ? 'Shipp'
-      : (args.account.label?.trim() || args.account.provider);
+      : (args.account.displayIdentity || args.account.provider);
   const created: CreatedExternalLabel = {
     shipmentId: directShipmentId,
     labelId: directLabelId,
