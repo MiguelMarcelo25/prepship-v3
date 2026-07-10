@@ -177,7 +177,7 @@ const checks = [
     name: 'Orders route delays global markup settings hydration',
     pass: markupsContext.includes('function getInitialMarkupHydrationDelayMs') &&
       markupsContext.includes("pathname.startsWith('/orders') ? 3500 : 0") &&
-      markupsContext.includes("api.get<any>('/settings')"),
+      markupsContext.includes("api.get<any>('/settings/markups')"),
   },
   {
     name: 'Markup settings hydration is cancellable and hidden-tab gated',

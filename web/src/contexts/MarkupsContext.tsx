@@ -35,7 +35,7 @@ const MarkupsContext = createContext<MarkupsContextValue | null>(null)
 
 // Each markup is stored as a separate row in the `settings` table under a
 // `markup.<pidOrCarrier>` key with a JSON-encoded {type, value} payload.
-// Keeps all markups loadable in one GET /settings call while allowing
+// Keeps all markups loadable in one narrow GET /settings/markups call while allowing
 // individual PUTs for updates.
 const MARKUP_PREFIX = 'markup.'
 
@@ -89,7 +89,7 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     setError(null)
     try {
-      const res = await api.get<any>('/settings')
+      const res = await api.get<any>('/settings/markups')
       const rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
       const next: MarkupsMap = {}
       for (const row of rows) {
@@ -108,8 +108,8 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Hydrate from /settings after auth so markup edits survive reload.
-  // Gate on auth: /settings is Supabase-authed, so fire only once auth has
+  // Hydrate from /settings/markups after auth so markup edits survive reload.
+  // Gate on auth: the endpoint is Supabase-authed, so fire only once auth has
   // resolved AND a session token exists (the MarkupsProvider sits inside
   // AuthProvider but mounts synchronously, before supabase.auth.getSession
   // finishes — firing too early produces a 401 on every page load).

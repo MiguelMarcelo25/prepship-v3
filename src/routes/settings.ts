@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { asc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { settings } from '../db/schema/settings';
 import { requirePermission } from '../middleware/auth';
+import { getSetting, listMarkupSettings, listUserSettings } from '../services/settings';
+import { isAllowedSettingKey } from '../services/user-setting-policy';
 // PS-234: durable audit trail for settings writes.
 import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 // Settings-backed 60s read caches — cleared on every settings write/delete so
@@ -13,53 +15,26 @@ import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { clearCarrierMarkupsCache } from '../services/rates';
 import { clearMarketplaceFeeRulesCache } from '../services/marketplace-fee';
 
-// v2-parity ALLOWED_SETTINGS guard. v2 source:
-//   packages/contracts/src/settings/contracts.ts#ALLOWED_SETTINGS
-// v4 extends the v2 tuple with:
-//   - `orders.columnPrefs` — in active use by web/src/lib/v2-apiClient.ts
-//   - `markup.<carrierId|pid>` dynamic keys — web/src/contexts/MarkupsContext.tsx
-//     persists carrier/package markups here (rates.ts reads them via
-//     LIKE 'markup.%' at read time).
-// Rather than an exact Zod enum, we use a refinement that accepts the v2
-// allowlist PLUS these v4-only runtime patterns. Unknown keys fail with 400.
-export const ALLOWED_SETTINGS = [
-  'rbMarkups',
-  'rbSettings',
-  'colVisibility',
-  'colPrefs',
-  'colWidths',
-  'dateRange',
-  'pageSize',
-  'defaultView',
-  // v4-only exact keys in active use
-  'orders.columnPrefs',
-  // PS-239: per-client/store marketplace-fee rules ({version, rules:[]}).
-  'marketplace_fee_rules',
-] as const;
-
-export type AllowedSettingKey = (typeof ALLOWED_SETTINGS)[number];
-
-const allowedSet = new Set<string>(ALLOWED_SETTINGS);
-
-export function isAllowedSettingKey(key: string): boolean {
-  if (allowedSet.has(key)) return true;
-  // Dynamic prefix: markup.<carrierId|pid> — persisted per-carrier/per-package.
-  if (key.startsWith('markup.') && key.length > 'markup.'.length) return true;
-  return false;
-}
+export { ALLOWED_SETTINGS, isAllowedSettingKey } from '../services/user-setting-policy';
 
 const app = new Hono();
 
 app.get('/', requirePermission('settings:read'), async (c) => {
-  const rows = await db.select().from(settings).orderBy(asc(settings.key));
+  const rows = await listUserSettings();
+  return c.json({ data: rows });
+});
+
+app.get('/markups', requirePermission('settings:read'), async (c) => {
+  const rows = await listMarkupSettings();
   return c.json({ data: rows });
 });
 
 app.get('/:key', requirePermission('settings:read'), async (c) => {
   const key = c.req.param('key');
-  const [row] = await db.select().from(settings).where(eq(settings.key, key)).limit(1);
-  if (!row) return c.json({ key, value: null });
-  return c.json(row);
+  if (!isAllowedSettingKey(key)) {
+    return c.json({ error: `Setting key not allowed: ${key}` }, 400);
+  }
+  return c.json({ key, value: await getSetting(key) });
 });
 
 const putBody = z.object({ value: z.string() });

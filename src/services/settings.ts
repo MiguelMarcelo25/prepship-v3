@@ -1,6 +1,29 @@
-import { eq } from 'drizzle-orm';
+import { asc, eq, inArray, like, or } from 'drizzle-orm';
 import { db } from '../db/client';
 import { settings } from '../db/schema/settings';
+import {
+  ALLOWED_SETTINGS,
+  MARKUP_SETTING_LIKE_PATTERN,
+} from './user-setting-policy';
+
+export async function listUserSettings() {
+  return db
+    .select()
+    .from(settings)
+    .where(or(
+      inArray(settings.key, [...ALLOWED_SETTINGS]),
+      like(settings.key, MARKUP_SETTING_LIKE_PATTERN),
+    ))
+    .orderBy(asc(settings.key));
+}
+
+export async function listMarkupSettings() {
+  return db
+    .select()
+    .from(settings)
+    .where(like(settings.key, MARKUP_SETTING_LIKE_PATTERN))
+    .orderBy(asc(settings.key));
+}
 
 export async function getSetting(key: string): Promise<string | null> {
   const [row] = await db
