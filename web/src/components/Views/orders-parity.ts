@@ -684,7 +684,7 @@ export function formatSyncPill(sync: {
   if (sync.status === 'syncing') {
     return {
       className: 'sync-pill syncing',
-      text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}… (${sync.page || 0})`,
+      text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}…`,
       title: 'Sync is running now. Orders and labels may update after it finishes.\nClick to view API timing.',
     }
   }

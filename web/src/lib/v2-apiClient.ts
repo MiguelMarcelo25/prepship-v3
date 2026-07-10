@@ -656,7 +656,7 @@ export const apiClient = {
   },
 
   // ─── Sync status ────────────────────────────────────────────────────────────
-  fetchLegacySyncStatus(): Promise<any> {
+  fetchLegacySyncStatus(options: { forceRefresh?: boolean } = {}): Promise<any> {
     return cachedSafe(
       'fetchLegacySyncStatus',
       'fetchLegacySyncStatus',
@@ -664,7 +664,13 @@ export const apiClient = {
       10 * 60_000,
       () => api.get<any>('/sync/status', { timeoutMs: 25_000 }),
       {},
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
+      {
+        warn: false,
+        fallbackTtlMs: 2 * 60_000,
+        fallbackStaleMs: 10 * 60_000,
+        throwOnError: true,
+        forceRefresh: options.forceRefresh,
+      }
     );
   },
 

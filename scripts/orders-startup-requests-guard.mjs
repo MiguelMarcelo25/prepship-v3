@@ -13,6 +13,9 @@ const useLocationsPath = path.join(root, 'web/src/hooks/useLocations.ts');
 const useShippingAccountsPath = path.join(root, 'web/src/hooks/useShippingAccounts.ts');
 const hooksSharedPath = path.join(root, 'web/src/hooks/v2Hooks-shared.ts');
 const homePath = path.join(root, 'web/src/Home.tsx');
+const ordersParityPath = path.join(root, 'web/src/components/Views/orders-parity.ts');
+const v2ApiClientPath = path.join(root, 'web/src/lib/v2-apiClient.ts');
+const v2ApiClientSharedPath = path.join(root, 'web/src/lib/v2-apiClient/shared.ts');
 const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
 const markupsContextPath = path.join(root, 'web/src/contexts/MarkupsContext.tsx');
 const packagePath = path.join(root, 'package.json');
@@ -26,6 +29,9 @@ const [
   useShippingAccountsHook,
   hooksShared,
   home,
+  ordersParity,
+  v2ApiClient,
+  v2ApiClientShared,
   sidebarOrders,
   markupsContext,
   packageJsonRaw,
@@ -37,6 +43,9 @@ const [
   readFile(useShippingAccountsPath, 'utf8'),
   readFile(hooksSharedPath, 'utf8'),
   readFile(homePath, 'utf8'),
+  readFile(ordersParityPath, 'utf8'),
+  readFile(v2ApiClientPath, 'utf8'),
+  readFile(v2ApiClientSharedPath, 'utf8'),
   readFile(sidebarOrdersPath, 'utf8'),
   readFile(markupsContextPath, 'utf8'),
   readFile(packagePath, 'utf8'),
@@ -135,12 +144,27 @@ const checks = [
       sidebarOrders.includes('}, 180_000)'),
   },
   {
-    name: 'Orders sync status polling is delayed and hidden-tab gated',
+    name: 'Orders sync status polling is fresh, adaptive, and hidden-tab gated',
     pass: home.includes("if (displayView !== 'orders') return") &&
-      home.includes('}, 5000)') &&
-      home.includes('apiClient.fetchLegacySyncStatus()') &&
+      home.includes('schedulePoll(5000)') &&
+      home.includes('schedulePoll(nextDelayMs)') &&
+      home.includes('apiClient.fetchLegacySyncStatus({ forceRefresh: true })') &&
+      home.includes("next.status === 'syncing' ? 10_000 : 120_000") &&
+      home.includes('[displayView, toastContext, syncStatus.status]') &&
       home.includes("document.visibilityState !== 'visible'") &&
-      home.includes('}, 120_000)'),
+      !home.includes('window.setInterval(() => {\n      if (document.visibilityState !== \'visible\') return\n      void poll()\n    }, 120_000)'),
+  },
+  {
+    name: 'Orders sync status bypasses a fresh cache entry without discarding stale fallback',
+    pass: v2ApiClient.includes('fetchLegacySyncStatus(options: { forceRefresh?: boolean } = {})') &&
+      v2ApiClient.includes('forceRefresh: options.forceRefresh') &&
+      v2ApiClientShared.includes('forceRefresh?: boolean') &&
+      v2ApiClientShared.includes('if (!options.forceRefresh && existing?.hasValue'),
+  },
+  {
+    name: 'Unknown sync progress is not displayed as a zero page',
+    pass: ordersParity.includes("text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}…`") &&
+      !ordersParity.includes("(${sync.page || 0})"),
   },
   {
     name: 'Worker status polling is delayed and hidden-tab gated',

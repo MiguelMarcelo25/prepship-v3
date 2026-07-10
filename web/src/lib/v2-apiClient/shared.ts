@@ -477,6 +477,7 @@ export type CachedSafeOptions = {
   fallbackTtlMs?: number;
   fallbackStaleMs?: number;
   throwOnError?: boolean;
+  forceRefresh?: boolean;
 };
 
 export function clearCachedReads(...keysOrPrefixes: string[]): void {
@@ -501,7 +502,9 @@ export async function cachedSafe<T>(
 ): Promise<T> {
   const now = Date.now();
   const existing = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
-  if (existing?.hasValue && existing.expiresAt > now) return existing.value as T;
+  if (!options.forceRefresh && existing?.hasValue && existing.expiresAt > now) {
+    return existing.value as T;
+  }
   if (existing?.inFlight) return existing.inFlight;
 
   const entry: CachedRead<T> = existing ?? {

@@ -510,14 +510,26 @@ export default function Home() {
     if (displayView !== 'orders') return
 
     let active = true
-    let initialTimerId: number | null = null
+    let timerId: number | null = null
+
+    const schedulePoll = (delayMs: number) => {
+      if (!active) return
+      timerId = window.setTimeout(() => {
+        void poll()
+      }, delayMs)
+    }
 
     const poll = async () => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState !== 'visible') {
+        schedulePoll(120_000)
+        return
+      }
+      let nextDelayMs = 120_000
       try {
-        const next = await apiClient.fetchLegacySyncStatus()
+        const next = await apiClient.fetchLegacySyncStatus({ forceRefresh: true })
         if (!active) return
         setSyncStatus(next)
+        nextDelayMs = next.status === 'syncing' ? 10_000 : 120_000
 
         const nextLastSync = next.latestSync ?? next.lastSync ?? (next.latestSyncedAt ? Date.parse(next.latestSyncedAt) : null)
         if (!hasSeenInitialSyncStatusRef.current) {
@@ -561,22 +573,16 @@ export default function Home() {
         if (!active) return
         setSyncStatus((current) => ({ ...current, status: 'error', error: error instanceof Error ? error.message : 'Sync error' }))
       }
+      schedulePoll(nextDelayMs)
     }
 
-    initialTimerId = window.setTimeout(() => {
-      void poll()
-    }, 5000)
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      void poll()
-    }, 120_000)
+    schedulePoll(5000)
 
     return () => {
       active = false
-      if (initialTimerId !== null) window.clearTimeout(initialTimerId)
-      window.clearInterval(intervalId)
+      if (timerId !== null) window.clearTimeout(timerId)
     }
-  }, [displayView, toastContext])
+  }, [displayView, toastContext, syncStatus.status])
 
   // Poll the background [sync-v2] worker lightly so the topbar can show
   // its heartbeat (last cycle time, counts, errors). Separate from the
