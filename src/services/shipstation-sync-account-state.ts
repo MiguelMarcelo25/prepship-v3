@@ -1,4 +1,5 @@
 import { getJsonSetting, setJsonSetting } from './settings-json';
+import { withAdvisorySessionLock } from '../lib/advisory-session-lock';
 
 const ACCOUNT_STATE_KEY = 'order_sync.shipstation_accounts.snapshot';
 
@@ -13,11 +14,17 @@ export type ShipStationSyncAccountRunState = {
   storeIds: number[];
   status: 'running' | 'succeeded' | 'failed';
   activeJobId: string | null;
+  activeAttemptId?: string | null;
   lastStartedAt: string | null;
   lastCompletedAt: string | null;
   lastSuccessAt: string | null;
   lastFailureAt: string | null;
   lastError: string | null;
+};
+
+export type ShipStationSyncRunIdentity = {
+  queueJobId: string;
+  attemptId: string;
 };
 
 type ShipStationSyncAccountStateSnapshot = {
@@ -76,21 +83,58 @@ export async function readShipStationSyncAccountStates(): Promise<
 
 async function updateAccountState(
   account: ShipStationSyncAccountIdentity,
-  update: (previous: ShipStationSyncAccountRunState | undefined) => ShipStationSyncAccountRunState,
+  update: (
+    previous: ShipStationSyncAccountRunState | undefined,
+  ) => ShipStationSyncAccountRunState | undefined,
 ): Promise<void> {
-  const accountId = shipStationSyncAccountId(account);
-  const accounts = await readShipStationSyncAccountStates();
-  accounts[accountId] = update(accounts[accountId]);
-  await setJsonSetting(ACCOUNT_STATE_KEY, {
-    version: 1,
-    updatedAt: new Date().toISOString(),
-    accounts,
-  } satisfies ShipStationSyncAccountStateSnapshot);
+  await withAdvisorySessionLock(ACCOUNT_STATE_KEY, async () => {
+    const accountId = shipStationSyncAccountId(account);
+    const accounts = await readShipStationSyncAccountStates();
+    const next = update(accounts[accountId]);
+    if (!next) return;
+    accounts[accountId] = next;
+    await setJsonSetting(ACCOUNT_STATE_KEY, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      accounts,
+    } satisfies ShipStationSyncAccountStateSnapshot);
+  });
+}
+
+export function finishShipStationSyncAccountRun(
+  previous: ShipStationSyncAccountRunState | undefined,
+  identity: ShipStationSyncRunIdentity,
+  input: {
+    status: 'succeeded' | 'failed';
+    completedAt: string;
+    error?: unknown;
+  },
+): ShipStationSyncAccountRunState | undefined {
+  if (
+    !previous ||
+    previous.status !== 'running' ||
+    previous.activeJobId !== identity.queueJobId ||
+    previous.activeAttemptId !== identity.attemptId
+  ) {
+    return undefined;
+  }
+
+  const failed = input.status === 'failed';
+  return {
+    ...previous,
+    status: input.status,
+    activeJobId: null,
+    activeAttemptId: null,
+    lastCompletedAt: input.completedAt,
+    lastSuccessAt: failed ? previous.lastSuccessAt : input.completedAt,
+    lastFailureAt: failed ? input.completedAt : previous.lastFailureAt,
+    lastError: failed ? sanitizeShipStationSyncError(input.error ?? 'sync failed') : null,
+  };
 }
 
 export async function markShipStationSyncAccountStarted(
   account: ShipStationSyncAccountIdentity,
-  jobId: string,
+  identity: ShipStationSyncRunIdentity,
   startedAtMs: number,
 ): Promise<void> {
   const accountId = shipStationSyncAccountId(account);
@@ -99,7 +143,8 @@ export async function markShipStationSyncAccountStarted(
     accountId,
     storeIds: [...(account.storeIds ?? [])],
     status: 'running',
-    activeJobId: jobId,
+    activeJobId: identity.queueJobId,
+    activeAttemptId: identity.attemptId,
     lastStartedAt: startedAt,
     lastCompletedAt: previous?.lastCompletedAt ?? null,
     lastSuccessAt: previous?.lastSuccessAt ?? null,
@@ -110,39 +155,64 @@ export async function markShipStationSyncAccountStarted(
 
 export async function markShipStationSyncAccountSucceeded(
   account: ShipStationSyncAccountIdentity,
+  identity: ShipStationSyncRunIdentity,
   completedAtMs: number,
 ): Promise<void> {
-  const accountId = shipStationSyncAccountId(account);
   const completedAt = new Date(completedAtMs).toISOString();
-  await updateAccountState(account, (previous) => ({
-    accountId,
-    storeIds: [...(account.storeIds ?? previous?.storeIds ?? [])],
-    status: 'succeeded',
-    activeJobId: null,
-    lastStartedAt: previous?.lastStartedAt ?? completedAt,
-    lastCompletedAt: completedAt,
-    lastSuccessAt: completedAt,
-    lastFailureAt: previous?.lastFailureAt ?? null,
-    lastError: null,
-  }));
+  await updateAccountState(account, (previous) =>
+    finishShipStationSyncAccountRun(previous, identity, {
+      status: 'succeeded',
+      completedAt,
+    }),
+  );
 }
 
 export async function markShipStationSyncAccountFailed(
   account: ShipStationSyncAccountIdentity,
+  identity: ShipStationSyncRunIdentity,
   completedAtMs: number,
   error: unknown,
 ): Promise<void> {
-  const accountId = shipStationSyncAccountId(account);
   const completedAt = new Date(completedAtMs).toISOString();
-  await updateAccountState(account, (previous) => ({
-    accountId,
-    storeIds: [...(account.storeIds ?? previous?.storeIds ?? [])],
-    status: 'failed',
-    activeJobId: null,
-    lastStartedAt: previous?.lastStartedAt ?? completedAt,
-    lastCompletedAt: completedAt,
-    lastSuccessAt: previous?.lastSuccessAt ?? null,
-    lastFailureAt: completedAt,
-    lastError: sanitizeShipStationSyncError(error),
-  }));
+  await updateAccountState(account, (previous) =>
+    finishShipStationSyncAccountRun(previous, identity, {
+      status: 'failed',
+      completedAt,
+      error,
+    }),
+  );
+}
+
+export async function markShipStationSyncRunFailed(
+  identity: ShipStationSyncRunIdentity,
+  completedAtMs: number,
+  error: unknown,
+): Promise<number> {
+  return withAdvisorySessionLock(ACCOUNT_STATE_KEY, async () => {
+    const accounts = await readShipStationSyncAccountStates();
+    const completedAt = new Date(completedAtMs).toISOString();
+    let changed = 0;
+
+    for (const [accountId, previous] of Object.entries(accounts)) {
+      const next = finishShipStationSyncAccountRun(previous, identity, {
+        status: 'failed',
+        completedAt,
+        error,
+      });
+      if (!next) continue;
+      accounts[accountId] = next;
+      changed += 1;
+    }
+
+    if (changed > 0) {
+      // Per user override unlock shipped data on 2026-07-10: serialize account-run
+      // metadata closeout only; order/shipment rows remain untouched.
+      await setJsonSetting(ACCOUNT_STATE_KEY, {
+        version: 1,
+        updatedAt: completedAt,
+        accounts,
+      } satisfies ShipStationSyncAccountStateSnapshot);
+    }
+    return changed;
+  });
 }

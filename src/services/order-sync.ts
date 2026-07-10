@@ -43,7 +43,13 @@ import {
   shipStationSyncAccountDisplayName,
   shipStationSyncAccountId,
   summarizeShipStationAccountWatermarks,
+  type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
+import {
+  readOrderSyncQueueTruth,
+  type OrderSyncQueueTruth,
+} from './order-sync-queue-state';
+import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const STATUS_CATCHUP_SNAPSHOT_KEY = 'order_sync.status_catchup.snapshot';
@@ -58,6 +64,13 @@ const DEFAULT_ORDER_SYNC_PAGE_SIZE = 100;
 // must finish and release the shared ShipStation lane. Slow provider calls are
 // retried on the next 3-minute tick instead of burning the 10-minute job guard.
 const BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS = 25_000;
+
+function throwIfOrderSyncAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Order sync attempt aborted');
+}
 
 async function buildStoreToClientMap(): Promise<{
   byStore: Map<number, number>;
@@ -622,6 +635,7 @@ async function fetchOrdersPage(
     statusOnly?: boolean;
     sortDir?: 'ASC' | 'DESC';
     startPage?: number;
+    signal?: AbortSignal;
   },
   budget: SyncRunBudget = createSyncRunBudget(),
 ): Promise<{
@@ -644,6 +658,7 @@ async function fetchOrdersPage(
     'complete';
 
   const processPage = async (pageToFetch: number): Promise<{ ordersLength: number }> => {
+    throwIfOrderSyncAborted(args.signal);
     const res = await importStoreOrders('shipstation', {
       companyId: 0,
       accountId: account.label,
@@ -659,7 +674,11 @@ async function fetchOrdersPage(
       sortDir: args.sortDir,
       dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${pageToFetch}:${args.pageSize}:${args.sortDir ?? 'ASC'}`,
       timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
+      signal: args.signal,
     });
+    // Per user override unlock shipped data on 2026-07-10: a timed-out queue
+    // attempt must stop before any later order/status persistence begins.
+    throwIfOrderSyncAborted(args.signal);
 
     pages = res.pages ?? 1;
     // Per user override unlock shipped data on 2026-05-27: this keeps the
@@ -860,6 +879,7 @@ async function syncOrdersForAccount(
     skipStatusPasses?: boolean;
     previousStatusCatchup?: OrderStatusCatchupSnapshot;
     activeShipStationCutoverStoreIds?: ReadonlySet<number>;
+    signal?: AbortSignal;
   },
   storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
   budget: SyncRunBudget = createSyncRunBudget(),
@@ -908,6 +928,7 @@ async function syncOrdersForAccount(
       : [{ storeId: undefined as number | undefined }];
 
   for (const target of awaitingTargets) {
+    throwIfOrderSyncAborted(opts.signal);
     if (syncRunBudgetTimeExhausted(budget)) {
       complete = false;
       break;
@@ -918,11 +939,13 @@ async function syncOrdersForAccount(
         sinceMs: awaitingSinceMs,
         pageSize,
         storeId: target.storeId,
+        signal: opts.signal,
       }, budget);
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
       if (!result.complete) complete = false;
     } catch (err) {
+      throwIfOrderSyncAborted(opts.signal);
       failed = true;
       errors.push(err instanceof Error ? err.message : String(err));
       console.warn(
@@ -952,6 +975,7 @@ async function syncOrdersForAccount(
         );
 
   for (const pass of passes) {
+    throwIfOrderSyncAborted(opts.signal);
     // PS-265/PS-409: stop starting status catch-up passes once the run is out of time budget;
     // the previous snapshot keeps the resume cursor for the next run.
     if (syncRunBudgetTimeExhausted(budget)) {
@@ -988,6 +1012,7 @@ async function syncOrdersForAccount(
         // ShipStation moves them to shipped/cancelled/hold. Pull newest modified
         // rows first so bounded workers do not spend every tick on old history.
         sortDir: 'DESC',
+        signal: opts.signal,
       }, budget);
       statusCatchupEntries.push(
         statusCatchupEntry({
@@ -1003,6 +1028,7 @@ async function syncOrdersForAccount(
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
     } catch (err) {
+      throwIfOrderSyncAborted(opts.signal);
       failed = true;
       errors.push(err instanceof Error ? err.message : String(err));
       statusCatchupEntries.push(
@@ -1025,6 +1051,7 @@ async function syncOrdersForAccount(
   }
 
   if (!failed && complete) {
+    throwIfOrderSyncAborted(opts.signal);
     await setSetting(key, String(runStartMs));
   } else {
     console.warn(
@@ -1046,9 +1073,14 @@ export async function syncOrders(opts: {
   awaitingSinceMs?: number;
   pageSize?: number;
   skipStatusPasses?: boolean;
+  runIdentity?: ShipStationSyncRunIdentity;
+  signal?: AbortSignal;
 } = {}): Promise<SyncResult> {
   const runStartMs = Date.now();
-  const runId = `orders:${runStartMs}`;
+  const runIdentity = opts.runIdentity ?? {
+    queueJobId: `orders:${runStartMs}`,
+    attemptId: `direct:${runStartMs}`,
+  };
   // PS-265: one run-wide budget bounds the WHOLE orders handler (all accounts + passes) under
   // its ~10-min deadline, so it returns and advances watermarks instead of being killed
   // mid-walk with no progress (the loop that re-pulled the same backlog and drained nothing).
@@ -1081,8 +1113,11 @@ export async function syncOrders(opts: {
   const statusCatchupEntries: OrderStatusCatchupEntry[] = [];
 
   for (const acct of accounts) {
+    throwIfOrderSyncAborted(opts.signal);
     if (syncRunBudgetTimeExhausted(budget)) break;
-    await markShipStationSyncAccountStarted(acct, runId, Date.now());
+    // Per user override unlock shipped data on 2026-07-10: lifecycle metadata
+    // follows one queue attempt; shipped/cancelled mapping remains unchanged.
+    await markShipStationSyncAccountStarted(acct, runIdentity, Date.now());
     try {
       const result = await syncOrdersForAccount(
         acct,
@@ -1095,12 +1130,18 @@ export async function syncOrders(opts: {
       if (result.sinceIso < earliestSinceIso) earliestSinceIso = result.sinceIso;
       statusCatchupEntries.push(...result.statusCatchupEntries);
       if (result.succeeded) {
-        await markShipStationSyncAccountSucceeded(acct, Date.now());
+        await markShipStationSyncAccountSucceeded(acct, runIdentity, Date.now());
       } else {
-        await markShipStationSyncAccountFailed(acct, Date.now(), result.error ?? 'sync incomplete');
+        await markShipStationSyncAccountFailed(
+          acct,
+          runIdentity,
+          Date.now(),
+          result.error ?? 'sync incomplete',
+        );
       }
     } catch (err) {
-      await markShipStationSyncAccountFailed(acct, Date.now(), err);
+      await markShipStationSyncAccountFailed(acct, runIdentity, Date.now(), err);
+      throwIfOrderSyncAborted(opts.signal);
       console.error(
         `[order-sync] account "${acct.label}" failed:`,
         (err as Error).message
@@ -1151,6 +1192,7 @@ export type OrderSyncAccountDiagnostic = {
   storeIds: number[];
   lastSyncedAt: string | null;
   ageSeconds: number | null;
+  runAgeSeconds: number | null;
   fresh: boolean;
   stale: boolean;
   state: 'fresh' | 'stale' | 'never_synced' | 'failed' | 'running';
@@ -1171,6 +1213,51 @@ export type OrderSyncAccountDiagnostic = {
   }>;
 };
 
+export function orderSyncRunQueueVerdict(
+  runState: {
+    status: 'running' | 'succeeded' | 'failed';
+    activeJobId: string | null;
+    lastStartedAt: string | null;
+  } | undefined,
+  queueTruth: OrderSyncQueueTruth,
+  nowMs: number,
+): { running: boolean; abandoned: boolean; error: string | null; runAgeSeconds: number | null } {
+  if (runState?.status !== 'running') {
+    return { running: false, abandoned: false, error: null, runAgeSeconds: null };
+  }
+
+  const startedMs = runState.lastStartedAt ? Date.parse(runState.lastStartedAt) : NaN;
+  const runAgeMs = Number.isFinite(startedMs) ? Math.max(0, nowMs - startedMs) : null;
+  const withinLease = runAgeMs !== null && runAgeMs <= SYNC_JOB_RUNNING_LEASE_MS;
+  const activeJobId = runState.activeJobId;
+  const queueOwnsRun =
+    !queueTruth.available ||
+    (Boolean(activeJobId) && queueTruth.activeJobIds.includes(activeJobId as string));
+  const running = Boolean(activeJobId) && withinLease && queueOwnsRun;
+  if (running) {
+    return {
+      running: true,
+      abandoned: false,
+      error: null,
+      runAgeSeconds: runAgeMs === null ? null : Math.floor(runAgeMs / 1000),
+    };
+  }
+
+  const retrying = Boolean(
+    activeJobId && queueTruth.available && queueTruth.retryingJobIds.includes(activeJobId),
+  );
+  return {
+    running: false,
+    abandoned: true,
+    error: retrying
+      ? 'Order sync timed out and is waiting to retry.'
+      : !withinLease
+        ? 'Order sync exceeded its worker deadline.'
+        : 'Order sync worker no longer owns this job.',
+    runAgeSeconds: runAgeMs === null ? null : Math.floor(runAgeMs / 1000),
+  };
+}
+
 export async function getSyncStatus(options: { includeOrderCount?: boolean } = {}): Promise<{
   lastSyncedAt: string | null;
   latestSyncedAt: string | null;
@@ -1185,10 +1272,11 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
   // Account diagnostics use every active watermark. The aggregate timestamp is
   // the oldest completed account so one fresh account cannot hide a stale one.
   const accounts = await loadSyncAccounts();
-  const [statusCatchup, runStates, watermarks] = await Promise.all([
+  const [statusCatchup, runStates, watermarks, queueTruth] = await Promise.all([
     getOrderStatusCatchupSnapshot(),
     readShipStationSyncAccountStates(),
     Promise.all(accounts.map((account) => getSettingNumber(watermarkKey(account.label)))),
+    readOrderSyncQueueTruth(),
   ]);
   const nowMs = Date.now();
   const configuredFreshSeconds = Number(env.SHIPMENT_SYNC_WATCHDOG_ORDER_FRESH_SECONDS);
@@ -1204,13 +1292,9 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
       (entry) => entry.accountLabel === account.label && entry.hasBacklog,
     );
     const ageMs = watermarkMs === null ? null : Math.max(0, nowMs - watermarkMs);
-    const failed = runState?.status === 'failed';
-    const activeStartedMs = runState?.lastStartedAt ? Date.parse(runState.lastStartedAt) : NaN;
-    const running =
-      runState?.status === 'running' &&
-      Boolean(runState.activeJobId) &&
-      Number.isFinite(activeStartedMs) &&
-      nowMs - activeStartedMs <= freshMs;
+    const runVerdict = orderSyncRunQueueVerdict(runState, queueTruth, nowMs);
+    const failed = runState?.status === 'failed' || runVerdict.abandoned;
+    const running = runVerdict.running;
     const stale =
       failed ||
       watermarkMs === null ||
@@ -1223,6 +1307,7 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
       storeIds: account.storeIds,
       lastSyncedAt: watermarkMs ? new Date(watermarkMs).toISOString() : null,
       ageSeconds: ageMs === null ? null : Math.floor(ageMs / 1000),
+      runAgeSeconds: runVerdict.runAgeSeconds,
       fresh: !stale,
       stale,
       state: running
@@ -1234,13 +1319,13 @@ export async function getSyncStatus(options: { includeOrderCount?: boolean } = {
             : stale
               ? 'stale'
               : 'fresh',
-      activeJobId: runState?.status === 'running' ? runState.activeJobId : null,
+      activeJobId: running ? runState?.activeJobId ?? null : null,
       lastStartedAt: runState?.lastStartedAt ?? null,
       lastCompletedAt: runState?.lastCompletedAt ?? null,
       lastSuccessAt:
         runState?.lastSuccessAt ?? (watermarkMs ? new Date(watermarkMs).toISOString() : null),
       lastFailureAt: runState?.lastFailureAt ?? null,
-      lastError: runState?.lastError ?? null,
+      lastError: runVerdict.error ?? runState?.lastError ?? null,
       backlogPasses: backlogEntries.length,
       backlogPages: backlogEntries.some((entry) => entry.backlogPages === null)
         ? null

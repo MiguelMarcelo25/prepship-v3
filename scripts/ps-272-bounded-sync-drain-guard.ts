@@ -84,7 +84,8 @@ check('the outbox tick auto-recovers at most 25 missing confirmations per run (b
 // exact thing the 20% audit mis-read as "unbounded".
 const queue = read('src/services/sync-job-queue.ts');
 check('queued order worker delegates to the bounded syncOrders service',
-  /syncOrders\(options\)/.test(queue) && !/syncOrders\(\{[^}]*(?:limit|batch|maxPages)/.test(queue));
+  /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue) &&
+    !/syncOrders\(\{[^}]*(?:limit|batch|maxPages)/.test(queue));
 check('queued shipment worker delegates to the bounded syncShipments service',
   /syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(queue) &&
     !/syncShipments\(\{[^}]*(?:limit|batch|maxPages|pageSize)/.test(queue));

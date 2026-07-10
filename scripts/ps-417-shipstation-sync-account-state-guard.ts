@@ -7,12 +7,15 @@ process.env.SUPABASE_ANON_KEY ??= 'anon';
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= 'service';
 process.env.SUPABASE_JWT_SECRET ??= 'secret';
 
-const { mergeOrderStatusCatchupEntries } = await import('../src/services/order-sync');
+const { mergeOrderStatusCatchupEntries, orderSyncRunQueueVerdict } = await import('../src/services/order-sync');
 const {
+  finishShipStationSyncAccountRun,
   sanitizeShipStationSyncError,
   shipStationSyncAccountId,
   summarizeShipStationAccountWatermarks,
 } = await import('../src/services/shipstation-sync-account-state');
+const { classifyOrderSyncQueueRows } = await import('../src/services/order-sync-queue-state');
+const { formatSyncPill } = await import('../web/src/components/Views/orders-parity');
 
 const previous = {
   accountLabel: 'main',
@@ -86,6 +89,68 @@ const sanitized = sanitizeShipStationSyncError(
 assert.doesNotMatch(sanitized, /secret-value|another-secret|provider\.example/);
 assert.match(sanitized, /\[redacted\]/);
 
+const attemptOne = { queueJobId: 'queue-1', attemptId: 'attempt-1' };
+const runningState = {
+  accountId: 'main',
+  storeIds: [],
+  status: 'running',
+  activeJobId: attemptOne.queueJobId,
+  activeAttemptId: attemptOne.attemptId,
+  lastStartedAt: '2026-07-10T00:00:00.000Z',
+  lastCompletedAt: null,
+  lastSuccessAt: null,
+  lastFailureAt: null,
+  lastError: null,
+} as const;
+const finished = finishShipStationSyncAccountRun(runningState, attemptOne, {
+  status: 'succeeded',
+  completedAt: '2026-07-10T00:01:00.000Z',
+});
+assert.equal(finished?.status, 'succeeded');
+assert.equal(finished?.activeJobId, null);
+assert.equal(
+  finishShipStationSyncAccountRun(
+    { ...runningState, activeAttemptId: 'attempt-2' },
+    attemptOne,
+    { status: 'failed', completedAt: '2026-07-10T00:02:00.000Z' },
+  ),
+  undefined,
+  'an old timed-out attempt must not close a newer retry',
+);
+
+const queueTruth = classifyOrderSyncQueueRows([
+  { id: 'active-1', state: 'active' },
+  { id: 'retry-1', state: 'retry' },
+  { id: 'queued-1', state: 'created' },
+]);
+const activeVerdict = orderSyncRunQueueVerdict(
+  { status: 'running', activeJobId: 'active-1', lastStartedAt: '2026-07-10T00:00:00.000Z' },
+  queueTruth,
+  Date.parse('2026-07-10T00:01:00.000Z'),
+);
+assert.equal(activeVerdict.running, true);
+const retryVerdict = orderSyncRunQueueVerdict(
+  { status: 'running', activeJobId: 'retry-1', lastStartedAt: '2026-07-10T00:00:00.000Z' },
+  queueTruth,
+  Date.parse('2026-07-10T00:01:00.000Z'),
+);
+assert.equal(retryVerdict.running, false);
+assert.equal(retryVerdict.abandoned, true);
+assert.match(retryVerdict.error ?? '', /waiting to retry/);
+assert.equal(
+  formatSyncPill({
+    status: 'syncing',
+    mode: 'incremental',
+    page: 0,
+    lastSync: null,
+    orders: {
+      health: 'running',
+      accounts: [{ state: 'running', runAgeSeconds: 125 }],
+    },
+  }).text,
+  'Syncing 2m…',
+);
+
 const read = (path: string) => readFileSync(path, 'utf8');
 const orderSync = read('src/services/order-sync.ts');
 const accountState = read('src/services/shipstation-sync-account-state.ts');
@@ -102,17 +167,23 @@ const pkg = read('package.json');
 
 assert.match(accountState, /order_sync\.shipstation_accounts\.snapshot/);
 assert.match(accountState, /activeJobId/);
+assert.match(accountState, /activeAttemptId/);
+assert.match(accountState, /withAdvisorySessionLock\(ACCOUNT_STATE_KEY/);
 assert.match(accountState, /lastSuccessAt/);
 assert.match(accountState, /lastFailureAt/);
 assert.match(orderSync, /summarizeShipStationAccountWatermarks/);
 assert.match(orderSync, /staleAccountCount/);
 assert.match(orderSync, /\.sort\(\(left, right\) => \(left\.watermarkMs \?\? 0\) - \(right\.watermarkMs \?\? 0\)\)/);
 assert.match(orderSync, /mergeOrderStatusCatchupEntries/);
+assert.match(orderSync, /readOrderSyncQueueTruth/);
+assert.match(orderSync, /runAgeSeconds/);
 
 assert.doesNotMatch(scheduler, /from ['"]\.\/order-sync['"]/);
 assert.doesNotMatch(scheduler, /from ['"]\.\/shipment-sync['"]/);
 assert.match(queue, /registerWorker\(JOBS\.orders/);
 assert.match(queue, /registerWorker\(JOBS\.shipments/);
+assert.match(queue, /hasOutstandingCadenceJob/);
+assert.match(queue, /state IN \('active', 'retry', 'created'\)/);
 for (const route of [cronRoute, ordersRoute, shipmentsRoute, adminRoute]) {
   assert.doesNotMatch(route, /await syncOrders\(/);
   assert.doesNotMatch(route, /await syncShipments\(/);
@@ -123,6 +194,7 @@ assert.doesNotMatch(syncRoute, /nudgeShipmentSyncWatchdogRecovery/);
 assert.match(syncRoute, /latestSync:/);
 assert.match(ui, /accountDiagnostics/);
 assert.match(ui, /staleAccountCount/);
+assert.match(ui, /runningAgeSeconds/);
 assert.match(home, /next\.latestSync \?\? next\.lastSync/);
 assert.match(
   pkg,

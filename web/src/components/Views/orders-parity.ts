@@ -651,6 +651,7 @@ export function formatSyncPill(sync: {
       backlogPasses?: number
       backlogPages?: number | null
       lastError?: string | null
+      runAgeSeconds?: number | null
     }>
   } | null
   shipments?: { lastSyncedAt?: string | null } | null
@@ -680,11 +681,20 @@ export function formatSyncPill(sync: {
     const error = account.lastError ? `; ${account.lastError}` : ''
     return `${account.displayName ?? 'ShipStation account'}: ${account.state ?? 'stale'}${stores}${backlog}${error}`
   })
+  const runningAgeSeconds = accountDiagnostics.reduce<number | null>((oldest, account) => {
+    if (account.state !== 'running' || typeof account.runAgeSeconds !== 'number') return oldest
+    return oldest === null ? account.runAgeSeconds : Math.max(oldest, account.runAgeSeconds)
+  }, null)
 
   if (sync.status === 'syncing') {
+    const elapsed = runningAgeSeconds === null
+      ? ''
+      : runningAgeSeconds < 60
+        ? ' <1m'
+        : ` ${Math.floor(runningAgeSeconds / 60)}m`
     return {
       className: 'sync-pill syncing',
-      text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}…`,
+      text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}${elapsed}…`,
       title: 'Sync is running now. Orders and labels may update after it finishes.\nClick to view API timing.',
     }
   }

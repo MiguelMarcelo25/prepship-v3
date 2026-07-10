@@ -49,15 +49,43 @@ async function main() {
   }
   check('a throwing handler propagates its real error', sawRealError);
 
+  let timeoutHookCalled = false;
+  try {
+    await withDeadline(
+      () => new Promise<void>(() => { /* never settles */ }),
+      80,
+      'abortable',
+      { onTimeout: () => { timeoutHookCalled = true; } },
+    );
+  } catch {
+    // Expected deadline.
+  }
+  check('deadline invokes cooperative cancellation hook', timeoutHookCalled);
+
+  let callbackFailureKeptDeadline = false;
+  try {
+    await withDeadline(
+      () => new Promise<void>(() => { /* never settles */ }),
+      80,
+      'abort-hook-failure',
+      { onTimeout: () => { throw new Error('abort hook failed'); } },
+    );
+  } catch (err) {
+    callbackFailureKeptDeadline = err instanceof DeadlineExceededError;
+  }
+  check('cancellation hook failure still rejects with deadline error', callbackFailureKeptDeadline);
+
   // ── Static contract: the worker bounds the handler + always releases the mutex ──
   const q = read('src/services/sync-job-queue.ts');
   check('sync-job-queue imports withDeadline', /import \{ withDeadline \} from '\.\.\/lib\/with-deadline'/.test(q));
   check('handler is wrapped in withDeadline',
-    /await withDeadline\(\s*\(\) => handler\(job\?\.data\),\s*JOB_HANDLER_TIMEOUT_MS,\s*name,?\s*\)/.test(q));
+    /await withDeadline\([\s\S]*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\)[\s\S]*SYNC_JOB_HANDLER_TIMEOUT_MS[\s\S]*abortController\.abort\(error\)/.test(q));
   check('active lane is cleared in finally (always released on timeout)',
     /finally \{\s*if \(activeJobsByLane\.get\(lane\) === name\) activeJobsByLane\.delete\(lane\);\s*\}/.test(q));
   check('deadline is clamped BELOW the pg-boss expiry (25min < 30min)',
-    /25 \* 60_000/.test(q) && /expireInMinutes:\s*30/.test(q));
+    /25 \* 60_000/.test(read('src/lib/sync-job-deadline.ts')) && /expireInMinutes:\s*30/.test(q));
+  check('order timeout closes only matching account attempt metadata',
+    /markShipStationSyncRunFailed\(identity, Date\.now\(\), err\)/.test(q));
 
   const pkg = read('package.json');
   check('package.json wires test:ps-265-job-handler-deadline',

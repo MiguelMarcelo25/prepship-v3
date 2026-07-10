@@ -80,6 +80,7 @@ export type StoreOrderImportInput = {
   sinceDate?: string;
   limit?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export type StoreOrderStatusSyncInput = {

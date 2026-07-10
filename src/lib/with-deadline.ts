@@ -2,12 +2,8 @@
  * PS-265 — bound a unit of async work with a deadline.
  *
  * Races work() against a timer. If work() doesn't settle within `ms`, the returned
- * promise REJECTS with DeadlineExceededError; the timer is always cleared. Note:
- * this does NOT cancel the underlying work (JS can't), it just stops AWAITING it —
- * which is the point: a hung background job handler must not hold an in-process
- * mutex (sync-job-queue's active lane) forever. On rejection the caller's
- * catch/finally runs, the mutex releases, and the next job can proceed. The
- * underlying hang is addressed separately by per-request HTTP timeouts.
+ * promise REJECTS with DeadlineExceededError; the timer is always cleared.
+ * Callers may use onTimeout for cooperative cancellation of underlying work.
  */
 export class DeadlineExceededError extends Error {
   constructor(public readonly label: string, public readonly ms: number) {
@@ -20,10 +16,19 @@ export async function withDeadline<T>(
   work: () => Promise<T> | T,
   ms: number,
   label: string,
+  options: { onTimeout?: (error: DeadlineExceededError) => void } = {},
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new DeadlineExceededError(label, ms)), ms);
+    timer = setTimeout(() => {
+      const error = new DeadlineExceededError(label, ms);
+      try {
+        options.onTimeout?.(error);
+      } catch {
+        // Deadline remains authoritative if cooperative cancellation fails.
+      }
+      reject(error);
+    }, ms);
   });
   try {
     return await Promise.race([Promise.resolve().then(work), deadline]);

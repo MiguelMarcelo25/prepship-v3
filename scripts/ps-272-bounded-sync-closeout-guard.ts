@@ -63,8 +63,8 @@ check(
 );
 check(
   'bounded guard proves scheduler workers stay thin and delegate without re-owning batch size',
-  /runOrderSync delegates to syncOrders with no batch arg/.test(boundedGuard) &&
-    /runShipmentSync delegates to syncShipments with no batch arg/.test(boundedGuard) &&
+  /queued order worker delegates to the bounded syncOrders service/.test(boundedGuard) &&
+    /queued shipment worker delegates to the bounded syncShipments service/.test(boundedGuard) &&
     /runInventoryImportFromOrders delegates to importSkusFromOrders/.test(boundedGuard),
 );
 check(
@@ -94,8 +94,8 @@ check(
 );
 check(
   'queued worker registers the bounded sync workers and schedules the default-off reaper',
-  /registerWorker\(JOBS\.orders, async \(jobData\) => \{[\s\S]*syncOrders\(orderSyncOptionsFromJobPayload\(jobData\)\)/.test(syncJobQueue) &&
-    /registerWorker\(JOBS\.shipments, \(\) => syncShipments\(\{\}\)\)/.test(syncJobQueue) &&
+  /registerWorker\(JOBS\.orders, async \(jobData, \{ identity, signal \}\) => \{[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(syncJobQueue) &&
+    /registerWorker\(JOBS\.shipments, \(jobData\) =>[\s\S]*syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.inventoryImport, runInventoryImportFromOrders\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.externalShippedClassifier, runExternalShippedClassifierJob\)/.test(syncJobQueue) &&
     /setInterval\(\(\) => void reapStuckActiveJobs\(\), 10 \* 60_000\)/.test(syncJobQueue),

@@ -163,7 +163,8 @@ const checks = [
   },
   {
     name: 'Unknown sync progress is not displayed as a zero page',
-    pass: ordersParity.includes("text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}…`") &&
+    pass: ordersParity.includes('const elapsed = runningAgeSeconds === null') &&
+      ordersParity.includes("text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}${elapsed}") &&
       !ordersParity.includes("(${sync.page || 0})"),
   },
   {

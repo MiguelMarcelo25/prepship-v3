@@ -61,6 +61,7 @@ type ShipStationV1RequestOptions = {
   apiSecret?: string;
   dedupeKey?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 type ShipStationStore = {
@@ -174,6 +175,7 @@ export async function listShipStationOrders<TList = SSOrdersList>(
     apiSecret: options.apiSecret,
     dedupeKey: options.dedupeKey,
     timeoutMs: options.timeoutMs,
+    signal: options.signal,
   });
 }
 
@@ -252,6 +254,7 @@ export function createShipStationStoreConnector(): StoreConnector {
         apiSecret: input.credentials?.apiSecret ?? undefined,
         dedupeKey: input.dedupeKey,
         timeoutMs: input.timeoutMs,
+        signal: input.signal,
       });
 
       return {

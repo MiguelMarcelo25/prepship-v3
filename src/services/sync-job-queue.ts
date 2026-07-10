@@ -1,4 +1,5 @@
 // Per user override unlock shipped data on 2026-06-17 (PS-272): queue-maintenance reaper; clears stale pgboss active rows only, never shipped/cancelled order/shipment data.
+import { randomUUID } from 'node:crypto';
 import PgBoss from 'pg-boss';
 import { sql as pg } from '../db/client';
 import { env } from '../lib/env';
@@ -44,6 +45,11 @@ import {
   setWorkerMode,
 } from './worker-status';
 import { SYNC_CADENCE_MS, SYNC_STARTUP_DELAY_MS } from '../lib/sync-cadence';
+import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
+import {
+  markShipStationSyncRunFailed,
+  type ShipStationSyncRunIdentity,
+} from './shipstation-sync-account-state';
 
 // PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
 // endpoint). Local aliases keep the rest of this file unchanged.
@@ -83,6 +89,11 @@ type PgBossJobLike = {
   createdOn?: unknown;
 };
 
+type SyncJobHandlerContext = {
+  identity: ShipStationSyncRunIdentity;
+  signal: AbortSignal;
+};
+
 let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -92,6 +103,7 @@ const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
+const COALESCED_CADENCE_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
 
 export type ManualOrderSyncEnqueueResult = {
   queued: boolean;
@@ -184,11 +196,36 @@ function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
 }
 
+async function hasOutstandingCadenceJob(name: JobName): Promise<boolean> {
+  if (!COALESCED_CADENCE_JOB_NAMES.has(name)) return false;
+  try {
+    const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
+    const [row] = await pg<Array<{ exists: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM ${pg(jobTable)}
+        WHERE name = ${name}
+          AND state IN ('active', 'retry', 'created')
+      ) AS exists
+    `;
+    return row?.exists === true;
+  } catch {
+    return false;
+  }
+}
+
 async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {
   if (!boss) return;
   if (isSyncJobNameActive(activeJobsByLane, name)) {
     console.log(`[job-queue] ${name} already active in worker; skipped enqueue`);
     await recordWorkerJobSkipped(name, 'already active in worker');
+    return;
+  }
+  if (await hasOutstandingCadenceJob(name)) {
+    // Per user override unlock shipped data on 2026-07-10: coalesce queue
+    // wake-ups only; no order, shipment, label, or marketplace row is touched.
+    console.log(`[job-queue] ${name} already outstanding in pg-boss; skipped cadence enqueue`);
+    await recordWorkerJobSkipped(name, 'already outstanding in pg-boss');
     return;
   }
   try {
@@ -587,25 +624,17 @@ function scheduleEnqueue(
   timers.push(timeout);
 }
 
-// PS-265 — bound every job handler so a hung one (e.g. a ShipStation HTTP call
-// that never returns) can't hold the active worker lane forever and deadlock the
-// whole worker. Must be < pg-boss expireInMinutes (30) so the in-process timeout
-// fires first. Default 10 min; override via env. The sync is watermark-based and
-// idempotent, so a timed-out tick loses nothing — the next tick re-pulls the gap.
-const JOB_HANDLER_TIMEOUT_MS = Math.max(
-  60_000,
-  Math.min(25 * 60_000, Number(process.env.JOB_HANDLER_TIMEOUT_MS) || 10 * 60_000),
-);
-
 function busyDeferCount(jobData: unknown): number {
   if (!jobData || typeof jobData !== 'object') return 0;
   const count = Number((jobData as { deferCount?: unknown }).deferCount);
   return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
 }
 
+// Handler deadline is below pg-boss's 30-minute expiry. Timed-out order work
+// also receives an AbortSignal so stale attempts stop before later persistence.
 async function registerWorker(
   name: JobName,
-  handler: (jobData: unknown) => Promise<unknown> | unknown
+  handler: (jobData: unknown, context: SyncJobHandlerContext) => Promise<unknown> | unknown
 ): Promise<void> {
   if (!boss) return;
   await boss.work(
@@ -650,15 +679,21 @@ async function registerWorker(
       const laneLock = await withSyncLaneAdvisoryLock(lane, async () => {
         activeJobsByLane.set(lane, name);
         const startedAt = Date.now();
+        const identity: ShipStationSyncRunIdentity = {
+          queueJobId: String(job?.id ?? `${name}:${startedAt}`),
+          attemptId: randomUUID(),
+        };
+        const abortController = new AbortController();
         console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
-        await recordWorkerJobStart(name);
         try {
+          await recordWorkerJobStart(name);
           // PS-265: deadline-bounded so a hung handler rejects here -> catch records
           // the failure -> finally ALWAYS clears the active lane (deadlock -> self-heal).
           const result = await withDeadline(
-            () => handler(job?.data),
-            JOB_HANDLER_TIMEOUT_MS,
+            () => handler(job?.data, { identity, signal: abortController.signal }),
+            SYNC_JOB_HANDLER_TIMEOUT_MS,
             name,
+            { onTimeout: (error) => abortController.abort(error) },
           );
           const durationMs = Date.now() - startedAt;
           console.log(`[job-queue] completed ${name} in ${durationMs}ms`);
@@ -666,6 +701,16 @@ async function registerWorker(
           return { ok: true, durationMs };
         } catch (err) {
           const durationMs = Date.now() - startedAt;
+          if (name === JOBS.orders) {
+            // Per user override unlock shipped data on 2026-07-10: timeout
+            // closes matching sync metadata only; no order/shipment row mutation.
+            await markShipStationSyncRunFailed(identity, Date.now(), err).catch((closeoutError) => {
+              console.warn(
+                '[job-queue] order sync account closeout failed:',
+                closeoutError instanceof Error ? closeoutError.message : closeoutError,
+              );
+            });
+          }
           console.error(
             `[job-queue] failed ${name} after ${durationMs}ms:`,
             err instanceof Error ? err.message : err
@@ -756,7 +801,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   // queue locking, deadlines, and worker-status writes. Call the canonical
   // ShipStation sync services directly so queued mode does not also take the
   // legacy interval-scheduler advisory lock and starve worker heartbeats.
-  await registerWorker(JOBS.orders, async (jobData) => {
+  await registerWorker(JOBS.orders, async (jobData, { identity, signal }) => {
     const options = orderSyncOptionsFromJobPayload(jobData);
     if (isDeferredShipStationOrderSync(jobData)) {
       // Per user override unlock shipped data on 2026-05-23, reconfirmed on
@@ -765,7 +810,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
       // wake-ups cannot become another long status catch-up that starves labels.
       options.skipStatusPasses = true;
     }
-    const result = await syncOrders(options);
+    const result = await syncOrders({ ...options, runIdentity: identity, signal });
     if (result.synced > 0 && isRateBackfillSchedulerEnabled()) {
       runBackfillTick();
     }
