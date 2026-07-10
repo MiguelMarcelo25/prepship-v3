@@ -182,8 +182,8 @@ const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 check('route enriches with withOrderRowWorkflow from the canonical picks',
   /withOrderRowWorkflow\(bestRateWorkflow, \{/.test(ordersRoute) &&
   /canonicalAccountNickname,\s*\n\s*selectedRateCarrierCode/.test(ordersRoute));
-check('route payloads emit the enriched DTO (both shapes)',
-  (ordersRoute.match(/bestRateWorkflow: bestRateWorkflowRow,/g)?.length ?? 0) === 2);
+check('route payloads emit the enriched DTO in all three order projections',
+  (ordersRoute.match(/bestRateWorkflow: bestRateWorkflowRow,/g)?.length ?? 0) === 3);
 check('row isTest uses the PS-186 backend authority (testClientIds)',
   /isTest: r\.order\.clientId != null && testClientIds\.has\(r\.order\.clientId\),\s*\n\s*hasCompleteDims/.test(ordersRoute));
 const displayLib = readFileSync('web/src/components/Views/order-shipping-display.ts', 'utf8');

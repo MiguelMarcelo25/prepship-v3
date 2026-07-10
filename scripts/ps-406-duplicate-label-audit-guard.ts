@@ -244,11 +244,16 @@ function audit(labels: ShipStationAuditLabel[], evidence = [local()]) {
 }
 
 const source = readFileSync('src/lib/shipstation/duplicate-label-audit-source.ts', 'utf8');
+const carrierConnector = readFileSync('src/connectors/carrier/shipstation.ts', 'utf8');
 const cli = readFileSync('scripts/audit-shipstation-duplicate-labels.ts', 'utf8');
 const pkg = readFileSync('package.json', 'utf8');
 
 assert.ok(source.includes("label_status', status") && source.includes("page_size', '500'"));
-assert.ok(source.includes('/track'));
+assert.ok(source.includes('listShipStationV2Labels'));
+assert.ok(source.includes('getShipStationV2LabelTracking'));
+assert.ok(!source.includes('ssRequest'));
+assert.ok(carrierConnector.includes('/track'));
+assert.ok(carrierConnector.includes('ShipStationError'));
 assert.ok(!/method\s*:\s*['"](?:POST|PUT|PATCH|DELETE)['"]/.test(source));
 assert.ok(!/\/void\b|cancel_refund|request_refund/.test(source));
 assert.ok(!/\.(?:insert|update|delete)\s*\(/.test(cli));

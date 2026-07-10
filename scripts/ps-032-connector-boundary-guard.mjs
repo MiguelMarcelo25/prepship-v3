@@ -67,6 +67,12 @@ const transitionalSafetyRequirements = {
   ],
 };
 
+const sourcePinOnlyFiles = new Set([
+  'scripts/ps-200-walmart-fees-worker-cron-cutover-guard.ts',
+  'scripts/ps-339-ebay-api-testing-certification-guard.ts',
+  'scripts/ps-406-duplicate-label-audit-guard.ts',
+]);
+
 const ignoredFiles = new Set([
   'scripts/api-contracts-guard.mjs',
   'scripts/ebay-confirmation-mocked-guard.ts',
@@ -80,6 +86,9 @@ const ignoredFiles = new Set([
   // directly. They are guard scripts, not provider callers.
   'scripts/ps-289-multi-package-closeout-guard.ts',
   'scripts/ps-289-multi-package-shipstation-adapter-guard.ts',
+  // Static source-pin guards: provider URLs appear only in assertions that
+  // verify their connector remains the owner. These files make no API calls.
+  ...sourcePinOnlyFiles,
 ]);
 
 function normalize(filePath) {
@@ -119,6 +128,14 @@ for (const file of transitionalDebt) {
 }
 for (const file of approvedConnectorOwned) {
   assert(audit.includes(file), `PS-032 audit must document connector-owned provider call file: ${file}`);
+}
+for (const file of sourcePinOnlyFiles) {
+  const source = readFileSync(file, 'utf8');
+  assert(/\breadFileSync\b/.test(source), `PS-032 source-pin guard must remain static: ${file}`);
+  assert(
+    !/\b(?:ssRequest|ssV1Request|timedFetch|fetch)\s*(?:<[^>]+>)?\s*\(/.test(source),
+    `PS-032 source-pin guard contains an executable provider call: ${file}`,
+  );
 }
 
 const scannedFiles = ['src', 'api', 'scripts'].flatMap((root) => walk(root));

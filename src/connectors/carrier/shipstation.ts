@@ -4,7 +4,7 @@ import {
   type CreateExternalLabelInput,
   type CreatedExternalLabel,
 } from '../../lib/shipstation/labels.js';
-import { ssRequest } from '../../lib/shipstation/client.js';
+import { ssRequest, ShipStationError } from '../../lib/shipstation/client.js';
 import type { CarriersResponse, Label } from '../../lib/shipstation/types.js';
 import type { CarrierConnector } from '../../domain/fulfillment/types.js';
 import { shipStationTrackingConnector } from '../tracking/shipstation.js';
@@ -71,6 +71,27 @@ export async function listShipStationV2Labels<TList>(
     dedupeKey: input.dedupeKey,
     timeoutMs: input.timeoutMs,
   });
+}
+
+export async function getShipStationV2LabelTracking<TTracking>(
+  labelId: string,
+  input: ShipStationV2ListInput = {},
+): Promise<TTracking | null> {
+  try {
+    return await ssRequest<TTracking>(
+      `/v2/labels/${encodeURIComponent(labelId)}/track`,
+      {
+        apiKey: input.apiKeyV2 ?? input.apiKey,
+        dedupeKey: input.dedupeKey ?? `labels:track:${labelId}`,
+        timeoutMs: input.timeoutMs,
+      },
+    );
+  } catch (error) {
+    if (error instanceof ShipStationError && (error.status === 400 || error.status === 404)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export function createShipStationCarrierConnector(): CarrierConnector<

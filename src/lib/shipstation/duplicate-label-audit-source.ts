@@ -1,4 +1,7 @@
-import { ssRequest, ShipStationError } from './client.js';
+import {
+  getShipStationV2LabelTracking,
+  listShipStationV2Labels,
+} from '../../connectors/carrier/shipstation.js';
 
 type LabelStatus = 'completed' | 'voided';
 
@@ -32,8 +35,8 @@ export async function listShipStationAuditLabels(
       query.set('page', String(page));
       query.set('sort_dir', 'desc');
       query.set('sort_by', 'created_at');
-      const response = await ssRequest<ShipStationLabelPage>(`/v2/labels?${query.toString()}`, {
-        apiKey: input.apiKeyV2,
+      const response = await listShipStationV2Labels<ShipStationLabelPage>(query, {
+        apiKeyV2: input.apiKeyV2,
         dedupeKey: `ps-406:labels:${status}:${input.start}:${input.end}:${page}`,
       });
       labels.push(...(response.labels ?? []));
@@ -49,13 +52,8 @@ export async function getShipStationAuditTracking(
   labelId: string,
   apiKeyV2?: string,
 ): Promise<Record<string, unknown> | null> {
-  try {
-    return await ssRequest<Record<string, unknown>>(
-      `/v2/labels/${encodeURIComponent(labelId)}/track`,
-      { apiKey: apiKeyV2, dedupeKey: `ps-406:track:${labelId}` },
-    );
-  } catch (error) {
-    if (error instanceof ShipStationError && (error.status === 400 || error.status === 404)) return null;
-    throw error;
-  }
+  return getShipStationV2LabelTracking<Record<string, unknown>>(labelId, {
+    apiKeyV2,
+    dedupeKey: `ps-406:track:${labelId}`,
+  });
 }

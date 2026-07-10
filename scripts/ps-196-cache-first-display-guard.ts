@@ -178,14 +178,12 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 // Stale/non-displayable saved rates are suppressed by the backend workflow verdict and the
 // awaiting-rate classifier, not by a frontend row rewrite.
 const rateHelpers = readFileSync('web/src/components/Views/orders/best-rate/rate-helpers.ts', 'utf8');
-// The passive enqueue still cache-first SKIPS a row with a valid saved display — EXCEPT a row the
-// backend flagged needsDisplayRefresh (forceLive), which is re-quoted LIVE to detect carrier drift.
-// Pin the exact `!forceLive &&` carve-out so removing it (re-freezing display-stale rows) is caught,
-// and pin that forceLive is the backend verdict (the FE never recomputes the freshness threshold).
+// PS-345 retired page-load passive rating. Awaiting Shipment is display-only
+// on mount; live re-quotes require explicit operator intent.
 check(
-  'passive enqueue skips a valid saved display, except a backend-flagged display-refresh (forceLive)',
-  /if \(!forceLive && hasValidSavedBestRateForRequest\(order, request\)\) return null/.test(ordersView) &&
-    /const forceLive = getBestRateWorkflowModel\(order\)\?\.needsDisplayRefresh === true/.test(ordersView),
+  'page load does not passively re-rate saved displays',
+  /Awaiting Shipment is display-only on mount/.test(ordersView) &&
+    !/if \(!forceLive && hasValidSavedBestRateForRequest\(order, request\)\) return null/.test(ordersView),
   true,
 );
 check(
