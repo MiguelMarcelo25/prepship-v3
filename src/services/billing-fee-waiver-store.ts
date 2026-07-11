@@ -13,8 +13,8 @@
  * table and 500 prod before the migration runs.
  *
  * Default-inert: with NO waiver row for an order, billing is byte-identical to
- * today. The read helpers return null/empty on any error and never throw into
- * the billing hot path.
+ * today. Read failures throw: an unavailable money sidecar is not equivalent
+ * to a verified empty sidecar and must block regeneration.
  */
 import { sql as drizzleSql, type SQL } from 'drizzle-orm';
 import { db, sql as pg } from '../db/client';
@@ -74,47 +74,41 @@ function rowDecision(value: unknown): FeeWaiverDecision {
 
 /**
  * Read every fee-waiver row for the given order ids. Returns a Map keyed by
- * order id. Empty Map when there are no ids, or on ANY error (default-inert:
- * billing then behaves exactly as it does today). Never throws.
+ * order id. Empty Map only when there are no ids or no matching rows.
  */
 export async function readBillingFeeWaivers(
   orderIds: number[],
 ): Promise<Map<number, BillingFeeWaiverRow>> {
+  // Per user override unlock shipped data on 2026-07-11: PS-416 must not
+  // reinterpret an unavailable shipped-order billing decision as no waiver.
   const out = new Map<number, BillingFeeWaiverRow>();
   const ids = [...new Set(orderIds.filter((id) => Number.isFinite(id)))];
   if (!ids.length) return out;
-  try {
-    await ensureBillingFeeWaiverSchema();
-    const rows = await pg<Array<{
-      orderId: number;
-      decision: string;
-      reviewer: string | null;
-      reviewedAt: string | null;
-      note: string | null;
-      originalPrepAmount: string | number | null;
-    }>>`
-      SELECT order_id AS "orderId", decision, reviewer,
-             reviewed_at AS "reviewedAt", note,
-             original_prep_amount AS "originalPrepAmount"
-      FROM billing_fee_waivers
-      WHERE order_id = ANY(${ids})
-    `;
-    for (const r of rows) {
-      out.set(Number(r.orderId), {
-        orderId: Number(r.orderId),
-        decision: rowDecision(r.decision),
-        reviewer: r.reviewer ?? null,
-        reviewedAt: r.reviewedAt ?? null,
-        note: r.note ?? null,
-        originalPrepAmount:
-          r.originalPrepAmount == null ? null : Number(r.originalPrepAmount),
-      });
-    }
-  } catch (err) {
-    console.warn(
-      '[billing-fee-waiver-store] read skipped:',
-      err instanceof Error ? err.message : err,
-    );
+  await ensureBillingFeeWaiverSchema();
+  const rows = await pg<Array<{
+    orderId: number;
+    decision: string;
+    reviewer: string | null;
+    reviewedAt: string | null;
+    note: string | null;
+    originalPrepAmount: string | number | null;
+  }>>`
+    SELECT order_id AS "orderId", decision, reviewer,
+           reviewed_at AS "reviewedAt", note,
+           original_prep_amount AS "originalPrepAmount"
+    FROM billing_fee_waivers
+    WHERE order_id = ANY(${ids})
+  `;
+  for (const r of rows) {
+    out.set(Number(r.orderId), {
+      orderId: Number(r.orderId),
+      decision: rowDecision(r.decision),
+      reviewer: r.reviewer ?? null,
+      reviewedAt: r.reviewedAt ?? null,
+      note: r.note ?? null,
+      originalPrepAmount:
+        r.originalPrepAmount == null ? null : Number(r.originalPrepAmount),
+    });
   }
   return out;
 }

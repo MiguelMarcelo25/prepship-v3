@@ -94,6 +94,7 @@ const GROUPS = [
       'test:billing-client-scope',
       'test:billing-detail-ps040',
       'test:billing-best-rate-ui:guard',
+      'test:ps-416-billing-fail-closed',
     ],
   },
   {

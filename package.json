@@ -218,6 +218,7 @@
     "test:settings-read-scope": "tsx scripts/settings-read-scope-guard.ts",
     "test:ps-798-per-account-billing": "tsx scripts/ps-798-per-account-billing-guard.ts",
     "test:ps-412-finalized-billing": "tsx scripts/ps-412-finalized-billing-guard.ts",
+    "test:ps-416-billing-fail-closed": "tsx scripts/ps-416-billing-fail-closed-guard.ts",
     "test:ps-177-dims-defaults": "tsx scripts/ps-177-dims-defaults-guard.ts",
     "test:ps-220-house-margin": "tsx scripts/ps-220-house-margin-guard.ts",
     "test:ps-292-house-tuple-display": "tsx scripts/ps-292-house-tuple-display-guard.ts",
