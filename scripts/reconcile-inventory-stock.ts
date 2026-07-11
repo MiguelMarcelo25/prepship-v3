@@ -336,7 +336,7 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
         coalesce(ledger_summary.ledger_stock, 0)::int as ledger_stock,
         coalesce(sum(l.qty) filter (where l.type = 'receive'), 0)::int as total_received,
         count(*)::int as ledger_entries,
-        max(l.created_at)::text as last_ledger_at
+        max(coalesce(l.effective_at, l.created_at))::text as last_ledger_at
       from inventory_ledger l
       left join ledger_summary on ledger_summary.inventory_id = l.inventory_id
       where l.inventory_id in (select id from scoped_inventory)

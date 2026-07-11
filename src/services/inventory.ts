@@ -1,55 +1,14 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
-import { inventory, inventoryLedger } from '../db/schema/inventory';
+import { applyInventoryMovement, type InventoryMovementInput } from './inventory-movement';
 
-export type StockMovement = {
-  inventoryId: number;
-  qty: number;
-  type: 'receive' | 'adjust' | 'pick' | 'ship' | 'return' | 'damage';
-  orderId?: number;
-  note?: string;
-  createdBy?: string;
-  createdAt?: Date;
-};
+export type StockMovement = InventoryMovementInput;
 
+// Compatibility entry point. Canonical stock/ledger transaction lives in inventory-movement.
 export async function applyMovement(move: StockMovement) {
-  return db.transaction(async (tx) => {
-    const [current] = await tx
-      .select({ id: inventory.id, stockQty: inventory.stockQty })
-      .from(inventory)
-      .where(eq(inventory.id, move.inventoryId))
-      .limit(1);
-    if (!current) throw new Error('Inventory item not found');
-
-    // No negative-balance blocker. Stock can go arbitrarily negative — the
-    // ledger is the source of truth, not the running balance, and the
-    // shipment_sync path already writes through without a check, so manual
-    // adjusts/picks would be the only writer that ever throws otherwise.
-    // Receives, adjusts, picks, ships, returns, and damage moves all proceed
-    // and persist even when the resulting stockQty < 0.
-    const newQty = current.stockQty + move.qty;
-
-    const [updated] = await tx
-      .update(inventory)
-      .set({ stockQty: newQty, updatedAt: new Date() })
-      .where(eq(inventory.id, move.inventoryId))
-      .returning();
-
-    const [ledger] = await tx
-      .insert(inventoryLedger)
-      .values({
-        inventoryId: move.inventoryId,
-        type: move.type,
-        qty: move.qty,
-        orderId: move.orderId ?? null,
-        note: move.note ?? null,
-        createdBy: move.createdBy ?? null,
-        createdAt: move.createdAt ?? new Date(),
-      })
-      .returning();
-
-    return { inventory: updated, ledger };
-  });
+  const result = await applyInventoryMovement(move);
+  if (result.status !== 'applied') throw new Error('Inventory movement already applied');
+  return { inventory: result.inventory, ledger: result.ledger };
 }
 
 export async function inventoryStats(clientId?: number, scopePredicate: SQL = sql`true`) {

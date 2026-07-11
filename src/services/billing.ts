@@ -18,6 +18,7 @@ import { ensureShipmentsSelectedRateCostColumn } from '../db/ensure-shipments-se
 import { ensureBillingStorageProofSchema } from '../db/ensure-billing-storage-proof';
 import { cuFtPerUnit } from '../lib/inventory-cuft';
 import { computeClientStorageBilling, type StorageLedgerMovement } from './billing-storage';
+import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 import { decideShippingLineBilling } from './billing-shipping-line';
 // #798 slice 2: billing resolves its shipping markup through the ONE canonical owner (the same
 // resolver the rate-display path uses), so a per-client markup is identical at quote + invoice time.
@@ -1671,6 +1672,7 @@ export async function generateLineItems(input: GenerateInput) {
   >();
   const storageMovesByInv = new Map<number, StorageLedgerMovement[]>();
   if (storageClientIds.length) {
+    await ensureInventoryLedgerSchema();
     const invRowsAll = await db.execute<{
       id: number;
       client_id: number;
@@ -1698,17 +1700,17 @@ export async function generateLineItems(input: GenerateInput) {
         type: string;
         qty: number;
         order_id: number | null;
-        created_at: string;
+        effective_at: string;
       }>(sql`
-        select inventory_id, type, qty, order_id, created_at
+        select inventory_id, type, qty, order_id, coalesce(effective_at, created_at) as effective_at
         from inventory_ledger
         where inventory_id = any(${intArraySql(allInvIds)})
-          and created_at < ${periodEnd.toISOString()}::timestamptz
+          and coalesce(effective_at, created_at) < ${periodEnd.toISOString()}::timestamptz
       `);
       for (const row of ledgerRowsAll) {
         const id = Number(row.inventory_id);
         const list = storageMovesByInv.get(id) ?? [];
-        list.push({ type: row.type, qty: row.qty, orderId: row.order_id, createdAt: row.created_at });
+        list.push({ type: row.type, qty: row.qty, orderId: row.order_id, effectiveAt: row.effective_at });
         storageMovesByInv.set(id, list);
       }
     }

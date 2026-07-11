@@ -9,6 +9,8 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { consumeOutboundPackage } from './package-consumption';
+import { applyInventoryMovementInTransaction } from './inventory-movement';
+import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 
 type OrderForDeduction = {
   id: number;
@@ -138,7 +140,7 @@ function isInventoryAutoDeductEnabled(): boolean {
 
 export async function deductInventoryForOrder(
   order: OrderForDeduction,
-  input: { shipmentId?: number; source?: string; createdAt?: Date; skus?: string[] } = {},
+  input: { shipmentId?: number; source?: string; effectiveAt?: Date; skus?: string[] } = {},
 ) {
   // Lockdown: short-circuit before touching ANY inventory rows or the
   // ledger. Returns the same shape callers expect (`{deducted, skipped}`)
@@ -154,6 +156,10 @@ export async function deductInventoryForOrder(
     : undefined;
   const lines = buildDeductionLines(order.items, skuFilter);
   if (!lines.length) return { deducted: 0, skipped: true };
+
+  // Per user override unlock shipped data on 2026-07-11: PS-414 prepares
+  // additive effective-date/idempotency schema before any shipped stock write.
+  await ensureInventoryLedgerSchema();
 
   return db.transaction(async (tx) => {
     let deducted = 0;
@@ -218,28 +224,24 @@ export async function deductInventoryForOrder(
       // No floor — negative stock is an intentional backorder signal (PS-224, boss directive). The
       // (orderId, inventoryId) ship-ledger idempotency guard above still blocks double-deducting the
       // SAME order; this only fixes the cross-order concurrency race.
-      const patch: Record<string, unknown> = {
-        stockQty: sql`${inventory.stockQty} - ${line.qty}`,
-        updatedAt: new Date(),
-      };
-      if (line.name) {
-        patch.name = sql`coalesce(${inventory.name}, ${line.name})`;
-      }
-
-      await tx
-        .update(inventory)
-        .set(patch)
-        .where(eq(inventory.id, row.id));
-
-      await tx.insert(inventoryLedger).values({
+      // Per user override unlock shipped data on 2026-07-11: claim the stable
+      // order/inventory identity before the atomic decrement. Concurrent retries
+      // get already_applied; they cannot double-decrement stock.
+      const movement = await applyInventoryMovementInTransaction(tx, {
         inventoryId: row.id,
         type: 'ship',
         qty: -line.qty,
         orderId: order.id,
         note: `Order ${order.orderNumber ?? order.id}${input.shipmentId ? ` / shipment ${input.shipmentId}` : ''}`,
         createdBy: input.source ?? 'label',
-        createdAt: input.createdAt ?? toMovementDate(order.orderDate) ?? new Date(),
+        effectiveAt: input.effectiveAt ?? toMovementDate(order.orderDate) ?? new Date(),
+        idempotencyKey: `inventory:ship:order:${order.id}:inventory:${row.id}`,
+        nameIfMissing: line.name,
       });
+      if (movement.status === 'already_applied') {
+        skipped += line.qty;
+        continue;
+      }
       deducted += line.qty;
     }
 

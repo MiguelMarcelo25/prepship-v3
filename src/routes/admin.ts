@@ -21,6 +21,8 @@ import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/la
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { printQueue } from '../db/schema/print-queue';
 import { setClientHouseAccountEnabled, shippingMarginPolicyModeFromEnabled } from '../services/house-account-opt-in';
+import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
+import { applyInventoryMovementInTransaction } from '../services/inventory-movement';
 
 const app = new Hono();
 
@@ -1196,20 +1198,20 @@ app.post('/reconcile-inventory-stock', async (c) => {
     });
   }
 
-  const reconciliationNote = `Reconciliation backfill ${new Date().toISOString().slice(0, 10)}`;
+  const reconciliationEffectiveAt = new Date();
+  const reconciliationNote = `Reconciliation backfill ${reconciliationEffectiveAt.toISOString().slice(0, 10)}`;
+  await ensureInventoryLedgerSchema();
   await db.transaction(async (tx) => {
     for (const a of adjustments) {
-      await tx
-        .update(inventory)
-        .set({ stockQty: a.effectiveStock, updatedAt: new Date() })
-        .where(eq(inventory.id, a.inventoryId));
-      await tx.insert(inventoryLedger).values({
+      const movement = await applyInventoryMovementInTransaction(tx, {
         inventoryId: a.inventoryId,
         type: 'adjust',
         qty: a.delta,
+        effectiveAt: reconciliationEffectiveAt,
         note: `${reconciliationNote}: stockQty ${a.currentStockQty} → ${a.effectiveStock} (received ${a.totalReceived} − sold-shipped ${a.totalSold})`,
         createdBy: 'admin/reconcile-inventory-stock',
       });
+      if (movement.status !== 'applied') throw new Error('Inventory reconciliation movement was not applied');
     }
   });
 

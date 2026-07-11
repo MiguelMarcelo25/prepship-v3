@@ -20,10 +20,12 @@ function check(name: string, cond: boolean): void {
 }
 
 const ded = readFileSync('src/services/fulfillment-deductions.ts', 'utf8');
+const inventoryMovement = readFileSync('src/services/inventory-movement.ts', 'utf8');
 const packageConsumption = readFileSync('src/services/package-consumption.ts', 'utf8');
 
 check('inventory deduction is an atomic in-DB decrement (race-safe, no read-modify-write)',
-  ded.includes('stockQty: sql`${inventory.stockQty} - ${line.qty}`'));
+  ded.includes('qty: -line.qty') &&
+  inventoryMovement.includes('stockQty: sql`${inventory.stockQty} + ${move.qty}`'));
 check('inventory no longer writes a pre-read balanceAfter to stockQty',
   !ded.includes('stockQty: balanceAfter'));
 check('package deduction is an atomic in-DB decrement',
@@ -36,6 +38,7 @@ check('no negative-stock floor on the decrement — negative = intentional backo
   !/greatest\(/i.test(ded));
 check('deductions stay inside a transaction (atomic with the ledger insert)',
   /return db\.transaction\(async \(tx\) =>/.test(ded) &&
+  inventoryMovement.includes('applyInventoryMovementInTransaction') &&
   packageConsumption.includes('conn.transaction((tx) => consumeWithExecutor(input, tx))'));
 check('the INVENTORY_AUTO_DEDUCT kill switch is intact (lockdown short-circuit preserved)',
   /isInventoryAutoDeductEnabled\(\)/.test(ded));

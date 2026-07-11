@@ -3,6 +3,7 @@ import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
 import { db } from '../db/client';
 import { SYSTEM_CLIENT_NAMES } from '../lib/system-clients';
 import { cancelledNoChargeBillingAmountSql } from './billing-cancelled-no-charge';
+import { ensureInventoryLedgerSchema } from './inventory-ledger-schema';
 
 // PS-132: synthetic/system clients excluded from reporting metrics — single source.
 const systemClientNamesSql = sql.join(
@@ -336,6 +337,7 @@ async function refreshSkuVelocityMetrics(): Promise<number> {
 }
 
 async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
+  await ensureInventoryLedgerSchema();
   return withRefreshRun('inventory-risk', async () => {
     await db.execute(sql`delete from inventory_risk_metrics`);
 
@@ -399,10 +401,10 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         select
           ship_rows.inventory_id,
           abs(coalesce(sum(ship_rows.qty) filter (
-            where ship_rows.created_at >= now() - interval '7 days'
+            where ship_rows.effective_at >= now() - interval '7 days'
           ), 0))::int as sold_7d,
           abs(coalesce(sum(ship_rows.qty) filter (
-            where ship_rows.created_at >= now() - interval '30 days'
+            where ship_rows.effective_at >= now() - interval '30 days'
           ), 0))::int as sold_30d,
           abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold_all_time
         from (
@@ -410,7 +412,7 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
             l.inventory_id,
             l.order_id,
             min(l.qty)::int as qty,
-            min(l.created_at) as created_at
+            min(coalesce(l.effective_at, l.created_at)) as effective_at
           from inventory_ledger l
           join inventory_scope i on i.id = l.inventory_id
           where l.type = 'ship'
