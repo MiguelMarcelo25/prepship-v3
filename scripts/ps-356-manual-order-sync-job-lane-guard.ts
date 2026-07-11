@@ -78,10 +78,10 @@ check(
     /await transientBoss\.createQueue\(JOBS\.orders/.test(queue),
 );
 check(
-  'queued order worker consumes job payload instead of ignoring manual options',
-  /await registerWorker\(JOBS\.orders, async \(jobData\) => \{/.test(queue) &&
+  'queued order worker consumes payload and propagates attempt cancellation context',
+  /await registerWorker\(JOBS\.orders, async \(jobData, \{ identity, signal \}\) => \{/.test(queue) &&
     /const options = orderSyncOptionsFromJobPayload\(jobData\);/.test(queue) &&
-    /syncOrders\(options\)/.test(queue),
+    /syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue),
 );
 check(
   'deferred order sync wake-ups use the awaiting-freshness path',

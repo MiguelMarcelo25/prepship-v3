@@ -74,7 +74,7 @@ check(
   'pg-boss order and shipment workers call canonical sync services directly',
     /import \{ syncOrders \} from '\.\/order-sync';/.test(queue) &&
     /import \{ syncShipments \} from '\.\/shipment-sync';/.test(queue) &&
-    /registerWorker\(JOBS\.orders,\s*async \(jobData\) => \{[\s\S]*orderSyncOptionsFromJobPayload\(jobData\)[\s\S]*syncOrders\(options\)/.test(queue) &&
+    /registerWorker\(JOBS\.orders,\s*async \(jobData, \{ identity, signal \}\) => \{[\s\S]*orderSyncOptionsFromJobPayload\(jobData\)[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(queue) &&
     /registerWorker\(JOBS\.shipments,\s*\(jobData\) =>[\s\S]*syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(queue) &&
     !/runOrderSync/.test(queue) &&
     !/runShipmentSync/.test(queue),
