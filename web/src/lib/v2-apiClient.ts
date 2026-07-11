@@ -1433,6 +1433,9 @@ export const apiClient = {
   },
 
   // ─── Print queue ───────────────────────────────────────────────────────────
+  // Per user override unlock shipped data on 2026-07-11: Print Queue writes may
+  // include existing shipped labels. Write failures must reach callers; an empty
+  // fallback can impersonate a successful queue mutation.
   fetchQueue(clientId?: number | null, historyVisible = false): Promise<any> {
     return safe(
       'fetchQueue',
@@ -1448,7 +1451,7 @@ export const apiClient = {
   },
 
   addToQueue(payload: Record<string, unknown>): Promise<any> {
-    return safe('addToQueue', () => api.post<any>('/print-queue/add', payload), {});
+    return api.post<any>('/print-queue/add', payload);
   },
 
   startQueueSendJob(payload: {
@@ -1466,37 +1469,25 @@ export const apiClient = {
   // PS-195: clears require EXPLICIT entry targeting — the backend rejects
   // blanket clears without ids and refuses entries inside a running merge.
   clearQueue(clientId: number, entryIds: string[]): Promise<any> {
-    return safe(
-      'clearQueue',
-      () => api.post<any>('/print-queue/clear', {
-        client_id: clientId,
-        queue_entry_ids: entryIds,
-        confirmation: 'REMOVE_UNPRINTED_LABELS',
-      }),
-      { cleared_count: 0, blocked_in_flight: 0 }
-    );
+    return api.post<any>('/print-queue/clear', {
+      client_id: clientId,
+      queue_entry_ids: entryIds,
+      confirmation: 'REMOVE_UNPRINTED_LABELS',
+    });
   },
 
   confirmPrintedQueueEntries(clientId: number | null | undefined, entryIds: string[]): Promise<any> {
-    return safe(
-      'confirmPrintedQueueEntries',
-      () => api.post<any>('/print-queue/confirm-printed', {
-        client_id: clientId ?? undefined,
-        queue_entry_ids: entryIds,
-        confirmation: 'PRINTED',
-      }),
-      { confirmed_count: 0, confirmed_entry_ids: [] }
-    );
+    return api.post<any>('/print-queue/confirm-printed', {
+      client_id: clientId ?? undefined,
+      queue_entry_ids: entryIds,
+      confirmation: 'PRINTED',
+    });
   },
 
   removeFromQueue(entryId: string, _clientId?: number | null): Promise<any> {
     // v4's api.delete helper doesn't accept a body; v4 endpoint treats
     // client_id in the body as optional so omitting it is safe.
-    return safe(
-      'removeFromQueue',
-      () => api.delete<any>(`/print-queue/${encodeURIComponent(entryId)}`),
-      { removed_entry: entryId }
-    );
+    return api.delete<any>(`/print-queue/${encodeURIComponent(entryId)}`);
   },
 
   startQueuePrintJob(

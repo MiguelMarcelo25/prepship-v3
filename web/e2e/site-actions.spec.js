@@ -605,14 +605,15 @@ test('invalid label URL failure does not enqueue [object Object]', async ({ page
 })
 
 test('print queue add failure stays readable and recoverable', async ({ page }) => {
-  // No real postage, no live provider calls, mocked only.
+  // Per user override unlock shipped data on 2026-07-11: mocked-only proof that
+  // shipped-label queue failures surface; no real postage or provider calls.
   queueAddShouldFail = true
   await openAwaitingOrderPanel(page)
   const failingQueueAction = page.getByRole('button', { name: /^Print to Queue$/ }).first()
   await expect(failingQueueAction).toBeVisible({ timeout: 15000 })
   await failingQueueAction.click()
   await waitForRequest('/print-queue', { method: 'POST' })
-  await expect(page.getByText(/MOCK-EBAY-101|Print Queue|Awaiting/i).first()).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('Print queue add failure').first()).toBeVisible({ timeout: 15000 })
   expectNoForbiddenExternalRequests()
 })
 

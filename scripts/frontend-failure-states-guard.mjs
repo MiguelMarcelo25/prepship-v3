@@ -63,6 +63,12 @@ const criticalMethods = [
   'fetchBillingSummary',
   'fetchRates',
   'browseRates',
+  // Per user override unlock shipped data on 2026-07-11: existing shipped-label
+  // queue writes must reject on backend failure, never return fake success.
+  'addToQueue',
+  'clearQueue',
+  'confirmPrintedQueueEntries',
+  'removeFromQueue',
 ];
 
 for (const method of criticalMethods) {
