@@ -38,5 +38,6 @@ assert(readinessIndex < labels.indexOf("createCarrierLabel('shipstation'", readi
   'schema readiness must run before ShipStation purchase');
 assert(!/db\.(insert|update|delete)|\.insert\(|\.update\(|\.delete\(/.test(dryRun), 'backfill must remain read-only');
 assert(!dryRun.includes('--apply'), 'backfill must expose no apply mode');
+assert(dryRun.includes('${since.toISOString()}::timestamptz'), 'backfill must bind its date boundary as a PostgreSQL timestamptz');
 
 console.log('PASS PS-413 package consumption wiring guard');
