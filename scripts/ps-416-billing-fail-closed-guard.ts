@@ -10,7 +10,7 @@ import {
 // proof; this guard performs no database, provider, or production writes.
 
 function read(path: string): string {
-  return readFileSync(path, 'utf8');
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 }
 
 function functionSlice(source: string, start: string, end: string): string {
