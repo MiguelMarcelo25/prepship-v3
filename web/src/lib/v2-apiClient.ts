@@ -2651,11 +2651,11 @@ export const apiClient = {
   fetchBillingGenerationStatus(from: string, to: string, clientId?: number): Promise<any> {
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
-    return safe(
-      'fetchBillingGenerationStatus',
-      () => api.get<any>(`/billing/generate/status${qs({ dateFrom, dateTo, clientId })}`),
-      { upToDate: false, missingFrom: from, missingTo: to }
-    );
+    // Per user override unlock shipped data on 2026-07-11: PS-416 keeps the UI
+    // a thin consumer of backend shipped-billing readiness. Never invent a local "stale"
+    // fallback after a failed status request; propagate the backend block so
+    // Update Billing stops before calling the generation endpoint.
+    return api.get<any>(`/billing/generate/status${qs({ dateFrom, dateTo, clientId })}`);
   },
 
   fetchBillingSummary(from: string, to: string, clientFilter?: number | number[]): Promise<any[]> {

@@ -141,52 +141,47 @@ function manualBillingDescription(
 export async function readBillingManualOverrides(
   orderIds: number[],
 ): Promise<Map<number, BillingManualOverrideRow[]>> {
+  // Per user override unlock shipped data on 2026-07-11: PS-416 must preserve
+  // shipped-order billing overrides when their sidecar cannot be verified.
   const out = new Map<number, BillingManualOverrideRow[]>();
   const ids = [...new Set(orderIds.filter((id) => Number.isFinite(id)))];
   if (!ids.length) return out;
-  try {
-    await ensureBillingManualOverridesSchema();
-    const rows = await pg<Array<{
-      orderId: number;
-      clientId: number;
-      lineType: string;
-      amount: string | number;
-      reviewer: string | null;
-      reviewedAt: string | null;
-      note: string | null;
-    }>>`
-      SELECT order_id AS "orderId",
-             client_id AS "clientId",
-             line_type AS "lineType",
-             amount::text AS amount,
-             reviewer,
-             reviewed_at AS "reviewedAt",
-             note
-      FROM billing_manual_overrides
-      WHERE order_id = ANY(${ids})
-    `;
-    for (const row of rows) {
-      const lineType = normalizeLineType(row.lineType);
-      if (!lineType) continue;
-      const orderId = Number(row.orderId);
-      const next: BillingManualOverrideRow = {
-        orderId,
-        clientId: Number(row.clientId),
-        lineType,
-        amount: Number(row.amount),
-        reviewer: row.reviewer ?? null,
-        reviewedAt: row.reviewedAt ?? null,
-        note: row.note ?? null,
-      };
-      const bucket = out.get(orderId) ?? [];
-      bucket.push(next);
-      out.set(orderId, bucket);
-    }
-  } catch (err) {
-    console.warn(
-      '[billing-manual-overrides] read skipped:',
-      err instanceof Error ? err.message : err,
-    );
+  await ensureBillingManualOverridesSchema();
+  const rows = await pg<Array<{
+    orderId: number;
+    clientId: number;
+    lineType: string;
+    amount: string | number;
+    reviewer: string | null;
+    reviewedAt: string | null;
+    note: string | null;
+  }>>`
+    SELECT order_id AS "orderId",
+           client_id AS "clientId",
+           line_type AS "lineType",
+           amount::text AS amount,
+           reviewer,
+           reviewed_at AS "reviewedAt",
+           note
+    FROM billing_manual_overrides
+    WHERE order_id = ANY(${ids})
+  `;
+  for (const row of rows) {
+    const lineType = normalizeLineType(row.lineType);
+    if (!lineType) continue;
+    const orderId = Number(row.orderId);
+    const next: BillingManualOverrideRow = {
+      orderId,
+      clientId: Number(row.clientId),
+      lineType,
+      amount: Number(row.amount),
+      reviewer: row.reviewer ?? null,
+      reviewedAt: row.reviewedAt ?? null,
+      note: row.note ?? null,
+    };
+    const bucket = out.get(orderId) ?? [];
+    bucket.push(next);
+    out.set(orderId, bucket);
   }
   return out;
 }

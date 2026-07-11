@@ -95,6 +95,10 @@ import { invoiceCarrierCell } from './billing-invoice-xlsx-row';
 // PS-275 item 2: the shared owner of the prep-fee WAIVER period note rendered
 // from the fee_waived flag billingInvoiceData stamps from the SOT.
 import { waivedSummaryNote } from './billing-invoice-waiver-indicator';
+import {
+  isBillingRegenerationBlockedError,
+  requireBillingRegenerationRead,
+} from '../services/billing-regeneration-readiness';
 
 const app = new Hono();
 
@@ -103,6 +107,16 @@ app.use('*', async (c, next) => {
   try {
     await next();
   } catch (error) {
+    // Per user override unlock shipped data on 2026-07-11: PS-416 exposes the
+    // backend block without letting callers proceed with shipped billing.
+    if (isBillingRegenerationBlockedError(error)) {
+      return c.json({
+        error: error.message,
+        code: error.code,
+        regenerationAllowed: error.regenerationAllowed,
+        source: error.source,
+      }, 503);
+    }
     if (!isBillingFinalizedLockError(error)) throw error;
     const lockError = error instanceof BillingFinalizedLockError
       ? error
@@ -476,11 +490,14 @@ app.post('/generate', requirePermission('financials:write'), zValidator('json', 
 
 app.get('/generate/status', zValidator('query', generateSchema), async (c) => {
   const q = c.req.valid('query');
-  const result = await billingGenerationStatus(withBillingScope(c, {
-    clientId: q.clientId,
-    dateFrom: q.dateFrom!,
-    dateTo: q.dateTo!,
-  }));
+  const result = await requireBillingRegenerationRead(
+    'billing freshness status',
+    () => billingGenerationStatus(withBillingScope(c, {
+      clientId: q.clientId,
+      dateFrom: q.dateFrom!,
+      dateTo: q.dateTo!,
+    })),
+  );
   return c.json(result);
 });
 

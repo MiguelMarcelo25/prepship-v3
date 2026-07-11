@@ -100,6 +100,7 @@ import {
   DEFAULT_HUGRAB_SHIPPING_RATE_OVERRIDE_THRESHOLD,
   ensureHugrabShippingRateOverrideColumns,
 } from './billing-hugrab-shipping-rate-override';
+import { requireBillingRegenerationRead } from './billing-regeneration-readiness';
 
 // PS-132: synthetic/system clients excluded from billing summaries/details — single source.
 // Parameterized SQL fragment (same semantics as the prior inline literal list).
@@ -448,9 +449,8 @@ export async function billingGenerationStatus(
     ) as pricing_stale
   `);
   const feeWaiverStalePromise = (async () => {
-    try {
-      await ensureBillingFeeWaiverSchema();
-      const [feeWaiverRow] = await db.execute<{ fee_waiver_stale: boolean }>(sql`
+    await ensureBillingFeeWaiverSchema();
+    const [feeWaiverRow] = await db.execute<{ fee_waiver_stale: boolean }>(sql`
       select exists (
         select 1
         from billing_fee_waivers fw
@@ -473,14 +473,7 @@ export async function billingGenerationStatus(
           )
       ) as fee_waiver_stale
     `);
-      return feeWaiverRow?.fee_waiver_stale === true;
-    } catch (err) {
-      console.warn(
-        '[billing] fee-waiver freshness check skipped:',
-        err instanceof Error ? err.message : err,
-      );
-      return true;
-    }
+    return feeWaiverRow?.fee_waiver_stale === true;
   })();
 
   const [[billingRow], [staleRow], feeWaiverStale] = await Promise.all([
@@ -733,6 +726,15 @@ export async function generateLineItems(input: GenerateInput) {
   const to = new Date(input.dateTo);
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
+  // Per user override unlock shipped data on 2026-07-11: PS-416 verifies the
+  // backend-owned freshness source before regenerating shipped-order billing.
+  // Regeneration is a money mutation. Verify the backend-owned
+  // freshness/status source before any delete/insert. Frontend force flags and
+  // direct API callers cannot bypass this boundary.
+  await requireBillingRegenerationRead(
+    'billing freshness status',
+    () => billingGenerationStatus(input),
+  );
   await ensureHugrabShippingRateOverrideColumns();
   // PS-370: the shipment query below SELECTs shipments.selected_rate_cost — ensure
   // the additive column exists before reading it (belt-and-suspenders, pre-migration
@@ -1135,10 +1137,10 @@ export async function generateLineItems(input: GenerateInput) {
 
   // PS-220 (billing branch): for opted-in SHIPP house orders, bill the captured C. Shipping Rate
   // (cheapest eligible non-SHIPP) instead of the SHIPP drp_cost, and suppress the carrier markup —
-  // the margin IS the spread. Best-effort bulk load keyed by shipment id; empty when the sidecar is
-  // absent or no house orders exist (then billing is byte-identical to today). Reads only.
+  // the margin IS the spread. A failed sidecar read blocks regeneration instead
+  // of silently billing a house order through the carrier/default path.
   const cShippingRateByShipmentId = new Map<number, number>();
-  try {
+  await requireBillingRegenerationRead('house shipping-rate sidecar', async () => {
     const houseShipmentIds = [
       ...new Set(billableRows.map((r) => r.id).filter((id): id is number => typeof id === 'number')),
     ];
@@ -1152,21 +1154,28 @@ export async function generateLineItems(input: GenerateInput) {
         if (hr.shipmentId != null) cShippingRateByShipmentId.set(Number(hr.shipmentId), Number(hr.customerRate));
       }
     }
-  } catch {
-    /* best-effort: sidecar absent or unreadable -> no house billing (today's behavior) */
-  }
+  });
 
   // PS-275: prep-fee waivers (operator's $0-shipping review decisions). Durable,
   // reversible, default-inert: with NO waiver row the map is empty and billing is
-  // byte-identical to today. Read once for every order in scope; the per-order
-  // loop zeroes ONLY prep/fulfillment/pick-pack fee lines when an order is waived
-  // (never product/marketplace/box/storage/shipping). Best-effort — the store
-  // already returns an empty Map on any error and never throws.
+  // byte-identical to today. An unavailable sidecar is not a verified empty
+  // sidecar and blocks regeneration. Read once for every order in scope; the
+  // per-order loop zeroes ONLY prep/fulfillment/pick-pack fee lines when an
+  // order is waived (never product/marketplace/box/storage/shipping).
+  // Sidecar failures propagate before the billing-line transaction begins.
   const orderIdsInScope = [
     ...new Set(billableRows.map((r) => r.orderId).filter((id): id is number => typeof id === 'number')),
   ];
-  const feeWaiverByOrderId = await readBillingFeeWaivers(orderIdsInScope);
-  const manualBillingOverrideByOrderId = await readBillingManualOverrides(orderIdsInScope);
+  const [feeWaiverByOrderId, manualBillingOverrideByOrderId] = await Promise.all([
+    requireBillingRegenerationRead(
+      'billing fee-waiver sidecar',
+      () => readBillingFeeWaivers(orderIdsInScope),
+    ),
+    requireBillingRegenerationRead(
+      'manual billing-override sidecar',
+      () => readBillingManualOverrides(orderIdsInScope),
+    ),
+  ]);
   // PS-312 S5 bill-once (Per user override unlock shipped data on 2026-06-24): load the bundle
   // membership for the in-scope orders (mirrors feeWaiverByOrderId). OFF -> the map is never loaded ->
   // every order bills normally -> byte-identical. Reads the additive bundle read-model only.
@@ -2381,8 +2390,7 @@ export async function billingDetails(input: GenerateInput) {
 
   // PS-275: load any prep-fee waiver decisions for the orders on screen so the
   // detail rows can show the current state (waived / decided-not / undecided).
-  // Default-inert: the store returns an empty Map when there are no rows or on
-  // any error, so this leaves today's detail payload unchanged.
+  // Default-inert only after the canonical stores verify there are no rows.
   const detailOrderIds = Array.from(
     new Set(rows.map((row) => row.orderId).filter((id): id is number => id != null))
   );
@@ -2390,26 +2398,19 @@ export async function billingDetails(input: GenerateInput) {
   const manualBillingOverrideByOrderId = await readBillingManualOverrides(detailOrderIds);
   const manuallyResolvedBoxOrderIds = new Set<number>();
   if (detailOrderIds.length) {
-    try {
-      await ensureBillingBoxResolutionsSchema();
-      const boxResolutionRows = await db
-        .select({
-          orderId: billingBoxResolutions.orderId,
-          packageId: billingBoxResolutions.packageId,
-          overridePrice: billingBoxResolutions.overridePrice,
-        })
-        .from(billingBoxResolutions)
-        .where(inArray(billingBoxResolutions.orderId, detailOrderIds));
-      for (const row of boxResolutionRows) {
-        if (row.packageId != null || row.overridePrice != null) {
-          manuallyResolvedBoxOrderIds.add(row.orderId);
-        }
+    await ensureBillingBoxResolutionsSchema();
+    const boxResolutionRows = await db
+      .select({
+        orderId: billingBoxResolutions.orderId,
+        packageId: billingBoxResolutions.packageId,
+        overridePrice: billingBoxResolutions.overridePrice,
+      })
+      .from(billingBoxResolutions)
+      .where(inArray(billingBoxResolutions.orderId, detailOrderIds));
+    for (const row of boxResolutionRows) {
+      if (row.packageId != null || row.overridePrice != null) {
+        manuallyResolvedBoxOrderIds.add(row.orderId);
       }
-    } catch (err) {
-      console.warn(
-        '[billing] manual box override markers skipped:',
-        err instanceof Error ? err.message : err,
-      );
     }
   }
 
