@@ -1521,13 +1521,27 @@ export default function RateBrowserModal({
     // fresh browse before the new canonical best is captured below.
     canonicalBestRef.current = null;
 
-    // Persist dims for this order (fire-and-forget) so re-open sees them.
+    // Per user override unlock shipped data on 2026-07-11: persist dimensions
+    // before browsing; a rejected write stops carrier work and remains retryable.
     if (order?.orderId) {
-      void apiClient.saveOrderDims(order.orderId, {
-        l: lenNum,
-        w: widNum,
-        h: hgtNum,
-      });
+      try {
+        await apiClient.saveOrderDims(order.orderId, {
+          l: lenNum,
+          w: widNum,
+          h: hgtNum,
+        });
+      } catch (error) {
+        if (browseSequenceRef.current !== requestSeq) return { carriersWithRates, uncoveredPids };
+        setCarrierStatusByPid(
+          Object.fromEntries(rateShippingAccounts.map((acct) => [String(acct.shippingProviderId), 'uncached' as CarrierRateStatus])),
+        );
+        setRateBrowserFailure({
+          code: 'ORDER_DIMS_SAVE_FAILED',
+          message: error instanceof Error ? error.message : 'Failed to save order dimensions',
+        });
+        finishBrowseRequest(requestSeq);
+        return { carriersWithRates, uncoveredPids };
+      }
     }
 
     if (testMode) {

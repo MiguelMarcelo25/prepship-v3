@@ -26,6 +26,7 @@ let ratesShouldTimeout = false
 let ordersApiShouldFail = false
 let ordersApiFailedOnce = false
 let orderWriteShouldFail = false
+let orderDimsWriteShouldFail = false
 let rateBrowserPartialFailureMode = false
 let primaryClientIsTest = true
 
@@ -319,7 +320,8 @@ function responseFor(url, request) {
   if (pathname === '/rates/carriers-for-store') {
     return json({ carriers: rateBrowserPartialFailureMode ? shipStationRateAccounts : [] })
   }
-  if (/^\/orders\/\d+\/dims$/.test(pathname)) {
+  if (/^\/orders\/\d+\/(?:dims|save-dims)$/.test(pathname)) {
+    if (orderDimsWriteShouldFail) return json({ error: 'Order dimensions fixture failure' }, 500)
     return json({ data: { l: 11, w: 8, h: 6, weightOz: 16 } })
   }
   if (pathname === '/rates/browse') {
@@ -511,6 +513,7 @@ test.beforeEach(async ({ page }) => {
   ordersApiShouldFail = false
   ordersApiFailedOnce = false
   orderWriteShouldFail = false
+  orderDimsWriteShouldFail = false
   rateBrowserPartialFailureMode = false
   primaryClientIsTest = true
   requestLedger.length = 0
@@ -629,6 +632,22 @@ test('Orders write failure rejects and never shows fake success', async ({ page 
   await waitForRequest('/orders/101', { method: 'PATCH', payloadIncludes: ['residential'] })
   await expect(page.getByText('Order write fixture failure').first()).toBeVisible({ timeout: 15000 })
   await expect(page.getByText('Address type updated')).toHaveCount(0)
+  expectNoForbiddenExternalRequests()
+})
+
+test('Order dimensions failure stops shipment-details success', async ({ page }) => {
+  // Per user override unlock shipped data on 2026-07-11: mocked-only failure
+  // proof; no production order, rate, label, postage, or provider call occurs.
+  orderDimsWriteShouldFail = true
+  await openAwaitingOrderPanel(page)
+  const shipmentInputs = page.getByRole('spinbutton')
+  await shipmentInputs.nth(2).fill('11')
+  await shipmentInputs.nth(3).fill('8')
+  await shipmentInputs.nth(4).fill('6')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await waitForRequest('/orders/101/save-dims', { method: 'POST', payloadIncludes: ['11', '8', '6'] })
+  await expect(page.getByText('Order dimensions fixture failure').first()).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('Shipment details saved')).toHaveCount(0)
   expectNoForbiddenExternalRequests()
 })
 

@@ -76,6 +76,9 @@ const criticalMethods = [
   'setOrderSelectedPackageId',
   'saveOrderBestRate',
   'markOrderShippedExternal',
+  // Per user override unlock shipped data on 2026-07-11: saved dimensions
+  // feed rates and labels, so transport failure must reject.
+  'saveOrderDims',
 ];
 
 for (const method of criticalMethods) {
@@ -161,6 +164,13 @@ assert(
   /try \{[\s\S]{0,500}?await apiClient\.markOrderShippedExternal\(panelOrder\.orderId,[\s\S]{0,500}?catch \(error\)/.test(ordersViewSource) &&
     /try \{[\s\S]{0,500}?await apiClient\.markOrderShippedExternal\(order\.orderId,[\s\S]{0,500}?catch \(error\)/.test(ordersViewSource),
   'single and batch external-shipped writes handle rejected requests explicitly',
+);
+
+assert(
+  /try \{[\s\S]{0,350}?await apiClient\.saveOrderDims\(order\.orderId,[\s\S]{0,350}?catch \(error\)/.test(
+    fs.readFileSync(path.join(root, 'web/src/components/RateBrowserModal.tsx'), 'utf8'),
+  ),
+  'Rate Browser stops and surfaces rejected order-dimension persistence',
 );
 
 if (process.exitCode) {

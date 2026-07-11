@@ -1204,14 +1204,11 @@ export const apiClient = {
     if (rawW != null && w != null) payload.w = w;
     if (rawH != null && h != null) payload.h = h;
     if (weightOz !== undefined && weightOz != null) payload.weightOz = weightOz;
-    return safe(
-      'saveOrderDims',
-      () =>
-        api
-          .post<{ data: any }>(`/orders/${orderId}/save-dims`, payload)
-          .then((r) => r.data),
-      {}
-    );
+    // Per user override unlock shipped data on 2026-07-11: dimension writes
+    // must reject so rate/label workflows cannot continue on fake success.
+    return api
+      .post<{ data: any }>(`/orders/${orderId}/save-dims`, payload)
+      .then((r) => r.data);
   },
 
   // ─── Labels ────────────────────────────────────────────────────────────────
