@@ -25,6 +25,7 @@ let queueMergeShouldFail = false
 let ratesShouldTimeout = false
 let ordersApiShouldFail = false
 let ordersApiFailedOnce = false
+let orderWriteShouldFail = false
 let rateBrowserPartialFailureMode = false
 let primaryClientIsTest = true
 
@@ -466,6 +467,7 @@ function responseFor(url, request) {
   if (/^\/orders\/\d+$/.test(pathname)) {
     const id = Number(pathname.split('/').pop())
     if (id === 202) return json({ error: 'permission denied: scope' }, 403)
+    if (method === 'PATCH' && orderWriteShouldFail) return json({ error: 'Order write fixture failure' }, 500)
     return json(orders.find((order) => order.id === id) ?? orders[0])
   }
   if (pathname === '/print-queue' && method === 'GET') {
@@ -508,6 +510,7 @@ test.beforeEach(async ({ page }) => {
   ratesShouldTimeout = false
   ordersApiShouldFail = false
   ordersApiFailedOnce = false
+  orderWriteShouldFail = false
   rateBrowserPartialFailureMode = false
   primaryClientIsTest = true
   requestLedger.length = 0
@@ -614,6 +617,18 @@ test('print queue add failure stays readable and recoverable', async ({ page }) 
   await failingQueueAction.click()
   await waitForRequest('/print-queue', { method: 'POST' })
   await expect(page.getByText('Print queue add failure').first()).toBeVisible({ timeout: 15000 })
+  expectNoForbiddenExternalRequests()
+})
+
+test('Orders write failure rejects and never shows fake success', async ({ page }) => {
+  // Per user override unlock shipped data on 2026-07-11: mocked-only failure
+  // proof; no production order, label, postage, or marketplace mutation occurs.
+  orderWriteShouldFail = true
+  await openAwaitingOrderPanel(page)
+  await page.getByRole('button', { name: 'change', exact: true }).click()
+  await waitForRequest('/orders/101', { method: 'PATCH', payloadIncludes: ['residential'] })
+  await expect(page.getByText('Order write fixture failure').first()).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('Address type updated')).toHaveCount(0)
   expectNoForbiddenExternalRequests()
 })
 

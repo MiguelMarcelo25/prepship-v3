@@ -69,6 +69,13 @@ const criticalMethods = [
   'clearQueue',
   'confirmPrintedQueueEntries',
   'removeFromQueue',
+  // Per user override unlock shipped data on 2026-07-11: authoritative
+  // Orders mutations must reject; caller recovery is pinned below.
+  'setOrderResidential',
+  'setOrderSelectedPid',
+  'setOrderSelectedPackageId',
+  'saveOrderBestRate',
+  'markOrderShippedExternal',
 ];
 
 for (const method of criticalMethods) {
@@ -135,6 +142,25 @@ assert(
     />\s*Retry\s*</.test(ordersResultsShellSource) &&
     /onRetry=\{refetchOrders\}/.test(ordersViewSource),
   'OrdersResultsShell shows a recoverable Retry action when the Orders API fails; OrdersView delegates via onRetry={refetchOrders}',
+);
+
+assert(
+  !/void apiClient\.setOrderSelectedPid\(order\.orderId, pid\)/.test(
+    fs.readFileSync(path.join(root, 'web/src/components/RateBrowserModal.tsx'), 'utf8'),
+  ),
+  'Rate Browser delegates selected-provider persistence to the atomic backend Apply command',
+);
+
+assert(
+  /setOrderSelectedPid\(panelOrder\.orderId,[\s\S]{0,180}?\.catch\(\(error\)/.test(ordersViewSource) &&
+    /setOrderSelectedPackageId\(panelOrder\.orderId,[\s\S]{0,180}?\.catch\(\(error\)/.test(ordersViewSource),
+  'Orders panel surfaces selected provider/package write failures',
+);
+
+assert(
+  /try \{[\s\S]{0,500}?await apiClient\.markOrderShippedExternal\(panelOrder\.orderId,[\s\S]{0,500}?catch \(error\)/.test(ordersViewSource) &&
+    /try \{[\s\S]{0,500}?await apiClient\.markOrderShippedExternal\(order\.orderId,[\s\S]{0,500}?catch \(error\)/.test(ordersViewSource),
+  'single and batch external-shipped writes handle rejected requests explicitly',
 );
 
 if (process.exitCode) {

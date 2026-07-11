@@ -3682,19 +3682,23 @@ export default function OrdersView({
 
     const target = getSingleSkuDefaultTarget(panelOrder, panelDetail)
     if (!target) {
-      const dims = getPanelDims()
-      const ensuredPackageId = hasCompleteDims(dims)
-        ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
-        : panelForm.packageId
-      // PS-121: explicit operator save → recalcGroup so the backend refreshes the same
-      // SKU+qty group's stale sibling rates. (The inner handler shows the success/refreshing toast.)
-      await savePanelComboDefaults(ensuredPackageId || panelForm.packageId || null, {
-        order: panelOrder,
-        detail: panelDetail,
-        weightOz: getPanelWeightOz(),
-        dims: hasCompleteDims(dims) ? dims : null,
-        recalcGroup: true,
-      })
+      try {
+        const dims = getPanelDims()
+        const ensuredPackageId = hasCompleteDims(dims)
+          ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
+          : panelForm.packageId
+        // PS-121: explicit operator save → recalcGroup so the backend refreshes the same
+        // SKU+qty group's stale sibling rates. (The inner handler shows the success/refreshing toast.)
+        await savePanelComboDefaults(ensuredPackageId || panelForm.packageId || null, {
+          order: panelOrder,
+          detail: panelDetail,
+          weightOz: getPanelWeightOz(),
+          dims: hasCompleteDims(dims) ? dims : null,
+          recalcGroup: true,
+        })
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Save failed', 'error')
+      }
       return
     }
 
@@ -4125,7 +4129,6 @@ export default function OrdersView({
             shipAccountId: String(shippingProviderId),
             serviceCode,
           }))
-          void apiClient.setOrderSelectedPid(order.orderId, shippingProviderId)
         }
         await persistAppliedRateForOrder(order.orderId, bestRateWithMetadata, {
           fallbackDims: dims,
@@ -4262,29 +4265,21 @@ export default function OrdersView({
     if (extShipNotifyCustomer) channels.push('customer')
     if (extShipNotifyMarketplace) channels.push('marketplace')
 
-    // apiClient.markOrderShippedExternal is wrapped by safe() — it
-    // CATCHES errors and returns { ok: false } instead of re-throwing.
-    // So a try/catch here cannot detect failure; we must inspect the
-    // result shape: success → { data, notify }, failure → { ok: false }.
-    // The previous version showed a green '✅ Marked shipped' toast
-    // even when the API call failed because the catch block never fired.
-    const result = (await apiClient.markOrderShippedExternal(panelOrder.orderId, source, {
-      trackingNumber: trimmedTracking || null,
-      carrierCode: null, // future: dropdown for carrier when notify is on
-      notifyCustomer: extShipNotifyCustomer,
-      notifyMarketplace: extShipNotifyMarketplace,
-    })) as
-      | { data: unknown; notify?: { ok: boolean; reason?: string } }
-      | { ok: false }
-
-    setExtShipBusy(false)
-
-    // Detect API-level failure first — if the local DB flip didn't
-    // happen, no point continuing to talk about notify status.
-    const apiCallFailed = (result as { ok?: unknown })?.ok === false
-    if (apiCallFailed) {
-      showToast(`❌ Failed to mark shipped via ${source} — check Render logs`, 'error')
+    // Per user override unlock shipped data on 2026-07-11: the transport now
+    // rejects failed writes; only a resolved backend response may reach success UI.
+    let result: { data: unknown; notify?: { ok: boolean; reason?: string } }
+    try {
+      result = await apiClient.markOrderShippedExternal(panelOrder.orderId, source, {
+        trackingNumber: trimmedTracking || null,
+        carrierCode: null, // future: dropdown for carrier when notify is on
+        notifyCustomer: extShipNotifyCustomer,
+        notifyMarketplace: extShipNotifyMarketplace,
+      })
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : `Failed to mark shipped via ${source}`, 'error')
       return
+    } finally {
+      setExtShipBusy(false)
     }
 
     // Local flip succeeded. Now inspect notify status to compose the
@@ -4297,7 +4292,7 @@ export default function OrdersView({
     let summary = `✅ Marked shipped via ${source}`
     let tone: 'success' | 'error' = 'success'
     if (wantNotify) {
-      const notify = (result as { notify?: { ok: boolean; reason?: string } }).notify
+      const notify = result.notify
       if (notify?.ok === true) {
         summary += ` · notified ${channels.join(' + ')}`
       } else {
@@ -4313,7 +4308,11 @@ export default function OrdersView({
     setExtShipNotifyCustomer(false)
     setExtShipNotifyMarketplace(true)
     clearSelection()
-    await refetchOrders()
+    try {
+      await refetchOrders()
+    } catch (error) {
+      showToast(error instanceof Error ? `Marked shipped, but refresh failed: ${error.message}` : 'Marked shipped, but refresh failed', 'error')
+    }
   }
 
   async function reprintLabel() {
@@ -5032,15 +5031,8 @@ export default function OrdersView({
   //   2. Surfacing partial-failure stats ('5 ok, 2 failed') is much
   //      cleaner with a sequential loop + ok/failed counters.
   //
-  // CRITICAL detail on error detection:
-  //   apiClient.markOrderShippedExternal is wrapped by safe() which
-  //   catches any thrown error and returns the fallback { ok: false }
-  //   instead of re-throwing. That means a try/catch around the call
-  //   would NEVER fire — every iteration would land in the success
-  //   branch even when the backend 500'd. We instead inspect the
-  //   returned shape: success → { data, notify }; failure → { ok: false }.
-  //   Detecting result?.ok === false is the only reliable way to count
-  //   failures correctly.
+  // Per user override unlock shipped data on 2026-07-11: each failed write
+  // rejects and is counted explicitly; only resolved responses count as shipped.
   async function handleBatchMarkAsShipped(source: string) {
     let batchOrders: OrderSummaryDto[] = []
     try {
@@ -5072,24 +5064,18 @@ export default function OrdersView({
       // any (legacy v2-compat type), which would let bugs through
       // without typecheck noticing. Forcing inspection through a
       // narrowed local removes the any-blob.
-      const result = (await apiClient.markOrderShippedExternal(order.orderId, source, {
-        trackingNumber: null,
-        carrierCode: null,
-        notifyCustomer: extShipNotifyCustomer,
-        notifyMarketplace: extShipNotifyMarketplace,
-      })) as
-        | { data: unknown; notify?: { ok: boolean; reason?: string } }
-        | { ok: false }
-
-      // safe() returns { ok: false } on any thrown error. The successful
-      // backend response is shaped { data: row, notify: {...} } and
-      // never has an `ok` field at the top level. So an `ok === false`
-      // means the API call itself failed (network, 5xx, validation).
-      const apiCallFailed = (result as { ok?: unknown })?.ok === false
-      if (apiCallFailed) {
+      let result: { data: unknown; notify?: { ok: boolean; reason?: string } }
+      try {
+        result = await apiClient.markOrderShippedExternal(order.orderId, source, {
+          trackingNumber: null,
+          carrierCode: null,
+          notifyCustomer: extShipNotifyCustomer,
+          notifyMarketplace: extShipNotifyMarketplace,
+        })
+      } catch (error) {
         failed += 1
         failureReasons.push(`#${order.orderNumber ?? order.orderId}`)
-        console.warn(`[batch mark-shipped] order ${order.orderId} api call failed`)
+        console.warn(`[batch mark-shipped] order ${order.orderId} api call failed`, error)
         continue
       }
 
@@ -5101,7 +5087,7 @@ export default function OrdersView({
       // 'marked locally but not notified' partial state surfaces in
       // the toast instead of being silently swallowed.
       if (wantNotify) {
-        const notify = (result as { notify?: { ok: boolean; reason?: string } }).notify
+        const notify = result.notify
         if (notify?.ok === true) {
           notifyOk += 1
         } else {
@@ -5115,7 +5101,11 @@ export default function OrdersView({
 
     setExtShipBusy(false)
     clearSelection()
-    await refetchOrders()
+    try {
+      await refetchOrders()
+    } catch (error) {
+      showToast(error instanceof Error ? `Batch completed, but refresh failed: ${error.message}` : 'Batch completed, but refresh failed', 'error')
+    }
 
     // Compose summary toast — explicit about THREE outcomes:
     //   1. Local DB flip count (ok/total)
@@ -6286,7 +6276,12 @@ export default function OrdersView({
       const belongs = rateBelongsToProviderAccount(current[0], nextValue)
       return belongs === false ? [] : current
     })
+    // Per user override unlock shipped data on 2026-07-11: surface failed
+    // selected-provider persistence instead of leaving an unhandled rejection.
     void apiClient.setOrderSelectedPid(panelOrder.orderId, nextValue ? Number.parseInt(nextValue, 10) : null)
+      .catch((error) => {
+        showToast(error instanceof Error ? error.message : 'Failed to save shipping account', 'error')
+      })
   }
 
   const handlePanelPackageChange = (packageId: string) => {
@@ -6308,6 +6303,9 @@ export default function OrdersView({
         : {}),
     }))
     void apiClient.setOrderSelectedPackageId(panelOrder.orderId, packageId ? Number.parseInt(packageId, 10) : null)
+      .catch((error) => {
+        showToast(error instanceof Error ? error.message : 'Failed to save package', 'error')
+      })
   }
 
   const handlePanelConfirmationChange = (confirmation: string) => {

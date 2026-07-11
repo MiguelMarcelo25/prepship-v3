@@ -910,11 +910,9 @@ export const apiClient = {
 
 
   setOrderResidential(orderId: number, residential: boolean | null): Promise<any> {
-    return safe(
-      'setOrderResidential',
-      () => api.patch<any>(`/orders/${orderId}`, { residential }),
-      {}
-    );
+    // Per user override unlock shipped data on 2026-07-11: Orders writes must
+    // reject on transport/backend failure so callers cannot report fake success.
+    return api.patch<any>(`/orders/${orderId}`, { residential });
   },
 
   // Mark an order as shipped externally (no label was bought through
@@ -938,33 +936,20 @@ export const apiClient = {
     if (extras?.carrierCode != null) body.carrierCode = extras.carrierCode
     if (extras?.notifyCustomer != null) body.notifyCustomer = extras.notifyCustomer
     if (extras?.notifyMarketplace != null) body.notifyMarketplace = extras.notifyMarketplace
-    return safe(
-      'markOrderShippedExternal',
-      () => api.post<any>(`/orders/${orderId}/shipped-external`, body),
-      { ok: false }
-    );
+    return api.post<any>(`/orders/${orderId}/shipped-external`, body);
   },
 
   setOrderSelectedPid(orderId: number, pid: number | null): Promise<any> {
-    return safe(
-      'setOrderSelectedPid',
-      () => api.patch<any>(`/orders/${orderId}`, { selectedPid: pid }),
-      {}
-    );
+    return api.patch<any>(`/orders/${orderId}`, { selectedPid: pid });
   },
 
   setOrderSelectedPackageId(
     orderId: number,
     pid: string | number | null
   ): Promise<any> {
-    return safe(
-      'setOrderSelectedPackageId',
-      () =>
-        api.patch<any>(`/orders/${orderId}`, {
-          selectedPackageId: pid == null ? null : String(pid),
-        }),
-      {}
-    );
+    return api.patch<any>(`/orders/${orderId}`, {
+      selectedPackageId: pid == null ? null : String(pid),
+    });
   },
 
   saveOrderRecipientOverride(
@@ -1022,15 +1007,10 @@ export const apiClient = {
     rate: unknown,
     dimsLabel?: string | null
   ): Promise<any> {
-    return safe(
-      'saveOrderBestRate',
-      () =>
-        api.patch<any>(`/orders/${orderId}`, {
-          bestRateJson: rate,
-          bestRateDims: dimsLabel ?? null,
-        }),
-      {}
-    );
+    return api.patch<any>(`/orders/${orderId}`, {
+      bestRateJson: rate,
+      bestRateDims: dimsLabel ?? null,
+    });
   },
 
   // PS-302: the backend-owned Apply Best Rate COMMAND. Persists dims + weight + selected

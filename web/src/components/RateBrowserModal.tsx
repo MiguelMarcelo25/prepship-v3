@@ -2130,9 +2130,8 @@ export default function RateBrowserModal({
         : Number(r.shippingProviderId);
     if (!Number.isFinite(pid) || !r.serviceCode) return;
     if (isBlockedRate(r, order, currentRateShippingOptions)) return;
-    if (!testMode && order?.orderId) {
-      void apiClient.setOrderSelectedPid(order.orderId, pid);
-    }
+    // Per user override unlock shipped data on 2026-07-11: the parent Apply
+    // command atomically persists the provider; avoid a second racing write.
     onApplyRate({
       carrierCode: r.carrierCode,
       serviceCode: r.serviceCode,
