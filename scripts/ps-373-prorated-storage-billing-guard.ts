@@ -23,7 +23,7 @@ const approx = (a: number, b: number, eps = 0.005) => Math.abs(a - b) < eps;
 
 // Movement helper. qty is a SIGNED delta (receive +, ship −), matching applyMovement.
 const mv = (type: string, qty: number, day: string, orderId: number | null = null): StorageLedgerMovement =>
-  ({ type, qty, orderId, createdAt: `${day}T12:00:00.000Z` });
+  ({ type, qty, orderId, effectiveAt: `${day}T12:00:00.000Z` });
 
 const JAN = { start: '2026-01-01T00:00:00.000Z', end: '2026-02-01T00:00:00.000Z' }; // 31 days
 const FEB = { start: '2026-02-01T00:00:00.000Z', end: '2026-03-01T00:00:00.000Z' }; // 28 days

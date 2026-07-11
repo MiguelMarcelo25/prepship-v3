@@ -22,6 +22,7 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { buildReportingWindow } from '../services/reporting-projection';
 import { hasAppPermission } from '../middleware/auth';
 import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
+import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
 import { shippingMarginAnalytics } from '../services/shipping-margin-analytics';
 import { getComboBreakdownFromOrderItems, getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
@@ -746,6 +747,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
 
   const ids = rows.map((row) => row.id);
   const shouldRunLiveMetrics = q.liveMetrics === true;
+  if (ids.length && shouldRunLiveMetrics) await ensureInventoryLedgerSchema();
   const soldRows = ids.length && shouldRunLiveMetrics
     ? await db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
         with ship_rows as (
@@ -754,7 +756,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
           where l.inventory_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
             and l.type = 'ship'
             and l.order_id is not null
-            and l.created_at >= now() - interval '30 days'
+            and coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
           group by l.inventory_id, l.order_id
         )
         select

@@ -3,6 +3,7 @@ import { db } from '../src/db/client';
 import { inventory, inventoryLedger } from '../src/db/schema/inventory';
 import { orders } from '../src/db/schema/orders';
 import { deductInventoryForOrder } from '../src/services/fulfillment-deductions';
+import { ensureInventoryLedgerSchema } from '../src/services/inventory-ledger-schema';
 
 type Args = {
   sku?: string;
@@ -115,14 +116,14 @@ async function getSummary(sku: string | undefined) {
 async function alignExistingLedgerDates(sku: string | undefined) {
   const rows = await db.execute<{ id: number }>(sql`
     update ${inventoryLedger} ledger
-    set created_at = ${orders.orderDate}
+    set effective_at = ${orders.orderDate}
     from ${orders}, ${inventory}
     where ledger.order_id = ${orders.id}
       and ledger.inventory_id = ${inventory.id}
       and ledger.type = 'ship'
       and ${orders.orderDate} is not null
       ${sku ? sql`and lower(${inventory.sku}) = lower(${sku})` : sql``}
-      and ledger.created_at is distinct from ${orders.orderDate}
+      and ledger.effective_at is distinct from ${orders.orderDate}
     returning ledger.id
   `);
   return rows.length;
@@ -141,6 +142,7 @@ async function main() {
     console.log('Dry run only. No rows changed.');
     return;
   }
+  await ensureInventoryLedgerSchema();
 
   const filters = [
     eq(orders.orderStatus, 'shipped'),
@@ -173,7 +175,7 @@ async function main() {
   for (const order of orderRows) {
     const result = await deductInventoryForOrder(order, {
       source: 'retroactive_order_backfill',
-      createdAt: asDate(order.orderDate) ?? asDate(order.updatedAt) ?? new Date(),
+      effectiveAt: asDate(order.orderDate) ?? asDate(order.updatedAt) ?? new Date(),
       skus: args.sku ? [args.sku] : undefined,
     });
     deductedUnits += result.deducted ?? 0;

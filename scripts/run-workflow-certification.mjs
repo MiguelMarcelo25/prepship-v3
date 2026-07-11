@@ -81,6 +81,7 @@ const GROUPS = [
       'test:inventory-auto-deduct',
       'test:inventory-source-of-truth',
       'test:inventory-ledger-balance',
+      'test:ps-414-inventory-ledger',
       'test:inventory-history-dedupe',
       'test:inventory-reconciliation-dry-run',
       'test:inventory-client-scope',

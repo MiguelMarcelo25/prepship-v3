@@ -2035,10 +2035,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       width: 150,
       minWidth: 120,
       sortable: true,
-      sortValue: (entry) => entry.createdAt ? new Date(entry.createdAt) : null,
+      sortValue: (entry) => entry.effectiveAt || entry.createdAt ? new Date(entry.effectiveAt ?? entry.createdAt) : null,
       render: (entry) => (
-        <span className="block truncate text-ink-3" title={formatDateTime(entry.createdAt)}>
-          {formatDateTime(entry.createdAt)}
+        <span className="block truncate text-ink-3" title={formatDateTime(entry.effectiveAt ?? entry.createdAt)}>
+          {formatDateTime(entry.effectiveAt ?? entry.createdAt)}
         </span>
       ),
     },

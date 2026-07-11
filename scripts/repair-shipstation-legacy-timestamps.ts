@@ -4,6 +4,7 @@ import { db } from '../src/db/client';
 import { orders } from '../src/db/schema/orders';
 import { inventoryLedger } from '../src/db/schema/inventory';
 import { parseShipStationV1Date } from '../src/lib/shipstation/v1-date';
+import { ensureInventoryLedgerSchema } from '../src/services/inventory-ledger-schema';
 
 type Candidate = {
   id: number;
@@ -109,6 +110,7 @@ let updatedOrders = 0;
 let updatedLedgerRows = 0;
 
 if (apply) {
+  await ensureInventoryLedgerSchema();
   for (const candidate of candidates) {
     // Per user override unlock shipped data on 2026-05-29: repair only the
     // timestamp semantics for ShipStation rows that were stored as legacy
@@ -122,7 +124,7 @@ if (apply) {
 
     const ledger = await db
       .update(inventoryLedger)
-      .set({ createdAt: candidate.correctedOrderDate })
+      .set({ effectiveAt: candidate.correctedOrderDate })
       .where(and(eq(inventoryLedger.orderId, candidate.id), eq(inventoryLedger.type, 'ship')))
       .returning({ id: inventoryLedger.id });
     updatedLedgerRows += ledger.length;
@@ -143,4 +145,4 @@ for (const candidate of candidates.slice(0, 50)) {
   );
 }
 if (candidates.length > 50) console.log(`... ${candidates.length - 50} more`);
-console.log('Default dry-run is read-only. Apply mode changes only orders.order_date and order-linked ship inventory_ledger.created_at.');
+console.log('Default dry-run is read-only. Apply mode changes only orders.order_date and order-linked ship inventory_ledger.effective_at.');

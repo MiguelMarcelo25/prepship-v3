@@ -16,6 +16,7 @@ export interface InventoryLedgerDeleteModalEntry {
   type?: string | null
   qty: number
   note?: string | null
+  effectiveAt?: LedgerDateInput
   createdAt?: LedgerDateInput
 }
 
@@ -57,7 +58,7 @@ export function InventoryLedgerDeleteModal({
             <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Note</span>
             <span style={{ color: 'var(--text2)' }}>{ledgerDeleteModal.note || '-'}</span>
             <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Date</span>
-            <span style={{ color: 'var(--text2)' }}>{formatDateTime(ledgerDeleteModal.createdAt)}</span>
+            <span style={{ color: 'var(--text2)' }}>{formatDateTime(ledgerDeleteModal.effectiveAt ?? ledgerDeleteModal.createdAt)}</span>
           </div>
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--red)', marginBottom: 16, fontWeight: 700 }}>

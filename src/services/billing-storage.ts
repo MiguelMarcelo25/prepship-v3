@@ -15,7 +15,7 @@
 // Canonicals (no duplicates — PS-373 guardrail):
 //   - per-unit volume: cuFtPerUnit() (src/lib/inventory-cuft.ts)
 //   - monthly rate:    billing_config.storage_fee_per_cu_ft
-//   - movement truth:  inventory_ledger (createdAt, type, qty[signed], orderId)
+//   - movement truth:  inventory_ledger (effectiveAt, type, qty[signed], orderId)
 //
 // PURE: dates/numbers in, a billing decision + frozen proof out. No db, no io —
 // the SQL that loads the ledger lives in billing.ts; the guard exercises the
@@ -31,7 +31,7 @@ export type StorageLedgerMovement = {
   /** the order a ship belongs to; used to de-dupe idempotent ship writes (min qty per order). */
   orderId: number | string | null | undefined;
   /** when the movement took effect — a retroactive receive carries its entered date here. */
-  createdAt: Date | string | number;
+  effectiveAt: Date | string | number;
 };
 
 export type StorageSegment = {
@@ -94,7 +94,7 @@ export function dedupeShipMovements(
 
   for (const move of movements) {
     const qty = toNum(move.qty);
-    const dayMs = utcDayStartMs(move.createdAt);
+    const dayMs = utcDayStartMs(move.effectiveAt);
     const type = String(move.type ?? '').toLowerCase();
     const orderId = move.orderId == null ? '' : String(move.orderId).trim();
 

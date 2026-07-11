@@ -8,6 +8,7 @@ const devTasks = fs.readFileSync(path.join(root, 'DEV_TASKS_README.md'), 'utf8')
 const sourceAudit = fs.readFileSync(path.join(root, 'SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md'), 'utf8');
 const reconciliationPlan = fs.readFileSync(path.join(root, 'RECONCILIATION_REPORTS_PLAN.md'), 'utf8');
 const inventoryService = fs.readFileSync(path.join(root, 'src/services/inventory.ts'), 'utf8');
+const inventoryMovement = fs.readFileSync(path.join(root, 'src/services/inventory-movement.ts'), 'utf8');
 const inventoryRoute = fs.readFileSync(path.join(root, 'src/routes/inventory.ts'), 'utf8');
 // PS-133: effective-stock SQL now lives in the canonical owner; the route delegates to it.
 const inventoryStockMath = fs.readFileSync(path.join(root, 'src/services/inventory-stock-math.ts'), 'utf8');
@@ -64,10 +65,10 @@ for (const text of requiredPolicyText) {
 }
 
 assert(
-  inventoryService.includes('ledger is the source of truth') &&
-    inventoryService.includes('.insert(inventoryLedger)') &&
-    inventoryService.includes('.set({ stockQty: newQty'),
-  'inventory movement service documents ledger ownership and updates cache with ledger writes',
+  inventoryService.includes('applyInventoryMovement(move)') &&
+    inventoryMovement.includes('.insert(inventoryLedger)') &&
+    inventoryMovement.includes('stockQty: sql`${inventory.stockQty} + ${move.qty}`'),
+  'inventory movement service delegates to canonical atomic ledger/cache owner',
 );
 
 assert(

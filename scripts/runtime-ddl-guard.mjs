@@ -104,6 +104,9 @@ const expectedRuntimeDdlFiles = [
   // PS-413: migration-owned package ledger identity/review schema. Runtime
   // readiness runs before provider purchase/void and new shipment consumption.
   'src/services/package-consumption-schema.ts',
+  // PS-414: migration-owned inventory ledger effective date and idempotency key.
+  // Runtime readiness runs before new movement writes and effective-date reads.
+  'src/services/inventory-ledger-schema.ts',
   'src/services/print-queue/queue-send-job-store.ts',
   'src/services/print-queue-pdf-store.ts',
   'src/services/rate-browse-job-store.ts',

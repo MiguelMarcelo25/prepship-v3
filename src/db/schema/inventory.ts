@@ -8,6 +8,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { clients } from './clients.js';
 import { orders } from './orders.js';
@@ -62,11 +63,15 @@ export const inventoryLedger = pgTable(
     orderId: integer().references(() => orders.id),
     note: text(),
     createdBy: text(),
+    effectiveAt: timestamp('effective_at', { withTimezone: true }),
+    idempotencyKey: text('idempotency_key'),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     index('inventory_ledger_inv_idx').on(t.inventoryId),
     index('inventory_ledger_inv_type_idx').on(t.inventoryId, t.type),
+    index('inventory_ledger_effective_at_idx').on(t.effectiveAt),
+    uniqueIndex('inventory_ledger_idempotency_key_unq').on(t.idempotencyKey),
     index('inventory_ledger_created_idx').on(t.createdAt),
   ]
 );

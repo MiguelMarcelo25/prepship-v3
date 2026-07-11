@@ -25,6 +25,8 @@ import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-
 import { hasAppPermission } from '../middleware/auth';
 import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
 import { applyMovement, inventoryStats } from '../services/inventory';
+import { applyInventoryMovementInTransaction } from '../services/inventory-movement';
+import { ensureInventoryLedgerSchema } from '../services/inventory-ledger-schema';
 import {
   importSkusFromOrders,
   syncShipStationProducts,
@@ -162,6 +164,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
   const scope = inventoryScopeFromContext(c);
   const shouldRunLiveMetrics = q.liveMetrics === true;
+  if (shouldRunLiveMetrics) await ensureInventoryLedgerSchema();
   const where = and(
     ...[
       q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
@@ -218,7 +221,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           where l.inventory_id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
             and l.type = 'ship'
             and l.order_id is not null
-            and l.created_at >= now() - interval '30 days'
+            and coalesce(l.effective_at, l.created_at) >= now() - interval '30 days'
           group by l.inventory_id, l.order_id
         )
         select
@@ -374,6 +377,7 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
   const skuFilter = q.sku?.trim() || null;
   const includeDerivedShipHistory = (!q.type || q.type === 'ship') && Boolean(dateStartIso || dateEndIso);
   const pageOffset = offsetOf(q);
+  await ensureInventoryLedgerSchema();
 
   const pageRows = await timedInventoryStep(timings, 'pageAndCount', () => db.execute<{
     id: number;
@@ -386,6 +390,7 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
     orderId: number | null;
     note: string | null;
     createdBy: string | null;
+    effectiveAt: Date;
     createdAt: Date;
     totalCount: number;
   }>(sql`
@@ -401,14 +406,15 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
         ${inventoryLedger.orderId} as order_id,
         ${inventoryLedger.note} as note,
         ${inventoryLedger.createdBy} as created_by,
+        coalesce(${inventoryLedger.effectiveAt}, ${inventoryLedger.createdAt}) as effective_at,
         ${inventoryLedger.createdAt} as created_at
       from ${inventoryLedger}
       inner join ${inventory} on ${inventory.id} = ${inventoryLedger.inventoryId}
       where (${q.clientId ?? null}::int is null or ${inventory.clientId} = ${q.clientId ?? null}::int)
         and (${skuFilter}::text is null or lower(${inventory.sku}) = lower(${skuFilter}::text))
         and (${q.type ?? null}::text is null or ${inventoryLedger.type} = ${q.type ?? null}::text)
-        and (${dateStartIso}::timestamptz is null or ${inventoryLedger.createdAt} >= ${dateStartIso}::timestamptz)
-        and (${dateEndIso}::timestamptz is null or ${inventoryLedger.createdAt} <= ${dateEndIso}::timestamptz)
+        and (${dateStartIso}::timestamptz is null or coalesce(${inventoryLedger.effectiveAt}, ${inventoryLedger.createdAt}) >= ${dateStartIso}::timestamptz)
+        and (${dateEndIso}::timestamptz is null or coalesce(${inventoryLedger.effectiveAt}, ${inventoryLedger.createdAt}) <= ${dateEndIso}::timestamptz)
         and ${activeInventoryClientPredicate}
         and ${inventoryScopePredicate(ledgerScope)}
     ),
@@ -439,6 +445,7 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
         ) as line_qty,
         ${orders.id} as order_id,
         concat('Order ', coalesce(${orders.orderNumber}, ${orders.id}::text)) as note,
+        ${orders.orderDate} as effective_at,
         ${orders.orderDate} as created_at
       from ${orders}
       cross join lateral jsonb_array_elements(${orders.items}) item
@@ -499,9 +506,10 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
         order_id,
         note,
         'order_history'::text as created_by,
+        effective_at,
         created_at
       from derived_ship_lines
-      group by order_id, inventory_id, sku, name, client_id, note, created_at
+      group by order_id, inventory_id, sku, name, client_id, note, effective_at, created_at
     ),
     combined_rows as (
       select * from ledger_rows
@@ -519,10 +527,11 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
       order_id as "orderId",
       note,
       created_by as "createdBy",
+      effective_at as "effectiveAt",
       created_at as "createdAt",
       count(*) over()::int as "totalCount"
     from combined_rows
-    order by created_at desc, id desc
+    order by effective_at desc, id desc
     limit ${q.pageSize}
     offset ${pageOffset}
   `));
@@ -674,6 +683,7 @@ app.get('/:id{[0-9]+}', async (c) => {
 app.get('/:id{[0-9]+}/ledger', async (c) => {
   const id = Number(c.req.param('id'));
   const ledgerDetailScope = inventoryScopeFromContext(c);
+  await ensureInventoryLedgerSchema();
   const rows = await db
     .select({
       id: inventoryLedger.id,
@@ -683,12 +693,13 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
       orderId: inventoryLedger.orderId,
       note: inventoryLedger.note,
       createdBy: inventoryLedger.createdBy,
+      effectiveAt: inventoryLedger.effectiveAt,
       createdAt: inventoryLedger.createdAt,
     })
     .from(inventoryLedger)
     .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
     .where(and(eq(inventoryLedger.inventoryId, id), inventoryScopePredicate(ledgerDetailScope)))
-    .orderBy(desc(inventoryLedger.createdAt))
+    .orderBy(desc(sql`coalesce(${inventoryLedger.effectiveAt}, ${inventoryLedger.createdAt})`))
     .limit(200);
   return c.json({ data: rows });
 });
@@ -1062,13 +1073,35 @@ app.post('/', zValidator('json', createBody), async (c) => {
   if (!inventoryClientInScope(inventoryScopeFromContext(c), body.clientId)) {
     return c.json({ error: 'Inventory client out of scope' }, 403);
   }
-  const [row] = await db.insert(inventory).values(body).returning();
+  const { stockQty = 0, ...values } = body;
+  const email = c.get('email' as never) as string | undefined;
+  await ensureInventoryLedgerSchema();
+  const row = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(inventory).values({ ...values, stockQty: 0 }).returning();
+    if (!created || stockQty === 0) return created;
+    const movement = await applyInventoryMovementInTransaction(tx, {
+      inventoryId: created.id,
+      type: 'adjust',
+      qty: stockQty,
+      note: 'Opening stock',
+      createdBy: email ?? 'manual',
+    });
+    if (movement.status !== 'applied') throw new Error('Opening stock movement was not applied');
+    return movement.inventory;
+  });
   return c.json(row, 201);
 });
 
 app.patch(
   '/:id{[0-9]+}',
-  zValidator('json', createBody.omit({ sku: true }).partial().extend({ sku: z.string().min(1).optional() })),
+  zValidator(
+    'json',
+    createBody
+      .omit({ sku: true, stockQty: true })
+      .partial()
+      .extend({ sku: z.string().min(1).optional() })
+      .strict(),
+  ),
   async (c) => {
     const id = Number(c.req.param('id'));
     const body = c.req.valid('json');
@@ -1119,7 +1152,7 @@ app.post(
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
-      createdAt: movementDateFrom(body.receivedAt ?? body.adjustedAt),
+      effectiveAt: movementDateFrom(body.receivedAt ?? body.adjustedAt),
     });
     return c.json(result);
   }
@@ -1282,7 +1315,7 @@ app.post(
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
-      createdAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
+      effectiveAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
     });
     return c.json(result);
   }
@@ -1384,6 +1417,7 @@ app.post(
       ok: boolean;
       newStock?: number;
       ledgerId?: number;
+      effectiveAt?: Date | null;
       createdAt?: Date;
       error?: string;
     }> = [];
@@ -1411,7 +1445,7 @@ app.post(
           qty,
           note: item.note?.trim() || body.note?.trim() || undefined,
           createdBy: email ?? 'manual',
-          createdAt: receivedAt,
+          effectiveAt: receivedAt,
         });
         results.push({
           invSkuId: inv.id,
@@ -1421,6 +1455,7 @@ app.post(
           ok: true,
           newStock: res.inventory?.stockQty ?? 0,
           ledgerId: res.ledger?.id,
+          effectiveAt: res.ledger?.effectiveAt,
           createdAt: res.ledger?.createdAt,
         });
       } catch (err) {
@@ -1477,7 +1512,7 @@ app.post(
       qty: body.qty,
       note: body.note,
       createdBy: email ?? 'manual',
-      createdAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
+      effectiveAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
     });
     return c.json(result);
   }
