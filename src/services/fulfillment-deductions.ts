@@ -8,8 +8,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
-import { packageLedger } from '../db/schema/package-ledger';
-import { packages } from '../db/schema/packages';
+import { consumeOutboundPackage } from './package-consumption';
 
 type OrderForDeduction = {
   id: number;
@@ -88,47 +87,21 @@ export async function deductPackageForShipment(input: {
   // Lockdown also covers the package_ledger — same env flag governs both
   // inventory and package auto-deduction so the "shipped orders shouldn't
   // touch ledger tables" rule is consistent across all on-ship side-effects.
-  if (!isInventoryAutoDeductEnabled()) {
-    return { deducted: false, reason: 'lockdown' as const };
-  }
-
-  const packageId = Number.parseInt(String(input.packageId ?? ''), 10);
-  if (!Number.isFinite(packageId) || packageId <= 0) {
-    return { deducted: false, reason: 'no-package' as const };
-  }
-
-  return db.transaction(async (tx) => {
-    const [pkg] = await tx
-      .select({ id: packages.id, stockQty: packages.stockQty })
-      .from(packages)
-      .where(eq(packages.id, packageId))
-      .limit(1);
-
-    if (!pkg) return { deducted: false, reason: 'package-not-found' as const };
-
-    // PS-247 (Per user override unlock shipped data on 2026-06-16): ATOMIC decrement + RETURNING.
-    // Pre-PS-247 this wrote a pre-read balanceAfter, so two concurrent package deductions both read
-    // the same start value and one decrement was LOST (read-modify-write race). `stock_qty - 1`
-    // applies in-DB under the row lock so concurrent deductions compose; balanceAfter is the DB's
-    // post-decrement value (for the ledger + return), not a pre-read guess. No floor — negative stock
-    // is an intentional backorder signal (PS-224, boss directive).
-    const [updatedPkg] = await tx
-      .update(packages)
-      .set({ stockQty: sql`${packages.stockQty} - 1`, updatedAt: new Date() })
-      .where(eq(packages.id, packageId))
-      .returning({ stockQty: packages.stockQty });
-    const balanceAfter = updatedPkg?.stockQty ?? pkg.stockQty - 1;
-
-    await tx.insert(packageLedger).values({
-      packageId,
-      changeType: 'ship',
-      qtyDelta: -1,
-      balanceAfter,
-      note: `Shipment ${input.shipmentId} for order ${input.orderNumber ?? input.orderId}`,
-    });
-
-    return { deducted: true, balanceAfter };
+  // Per user override unlock shipped data on 2026-07-11: legacy callers now
+  // delegate package identity, idempotency, stock mutation, and ledger writes
+  // to the PS-413 canonical package-consumption owner.
+  const result = await consumeOutboundPackage({
+    shipmentId: input.shipmentId,
+    orderId: input.orderId,
+    orderNumber: input.orderNumber,
+    source: 'legacy_label',
+    effectiveAt: new Date(),
+    selectedPackageId: input.packageId,
   });
+  return result.status === 'consumed'
+    ? { deducted: true, balanceAfter: result.balanceAfter }
+    : { deducted: false, reason: result.status };
+
 }
 
 // ════════════════════════════════════════════════════════════════════

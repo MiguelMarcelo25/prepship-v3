@@ -87,15 +87,14 @@ const read = (path: string) => readFileSync(path, 'utf8');
 
 // ── (d) label-vs-billing package-identity boundary (documented + pinned) ─────
 {
-  // Label-time: ±0.1" tolerance (PS-221). Pin the constant so a silent
-  // tolerance change breaks this guard instead of drifting the boundary.
+  // Label/package-consumption time: PS-413 exact-safe match. Pin the constant
+  // so fuzzy matching cannot silently consume the wrong catalog package.
   const labelResolver = read('src/services/package-resolution.ts');
-  check('(d) label-time resolver keeps its documented ±0.1" dims tolerance',
-    /const DIMS_TOLERANCE = 0\.1;/.test(labelResolver));
+  check('(d) label-time resolver keeps its documented exact-safe dims tolerance',
+    /const DIMS_TOLERANCE = 0\.001;/.test(labelResolver));
 
-  // Billing-time: EXACT match, never guess (PS-207). A box the label path
-  // would resolve via tolerance (12x10x3.05 vs catalog 12x10x3) must NOT be
-  // silently priced at billing regen — it surfaces as an explicit review.
+  // Billing-time: exact match, never guess (PS-207). The same near-miss must
+  // remain explicit review at both label consumption and billing boundaries.
   const catalogBox: BoxPackage = { id: 7, name: '12x10x3', packageCode: null, length: 12, width: 10, height: 3 };
   const lookups: BoxLookups = {
     byId: new Map([[7, catalogBox]]),

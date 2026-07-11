@@ -5,6 +5,7 @@ export * from './order-rate-jobs.js';
 export * from './shipments.js';
 export * from './packages.js';
 export * from './package-ledger.js';
+export * from './package-consumption-reviews.js';
 export * from './products.js';
 export * from './rates.js';
 export * from './settings.js';

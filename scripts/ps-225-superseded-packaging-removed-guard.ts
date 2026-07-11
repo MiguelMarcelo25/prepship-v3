@@ -69,7 +69,7 @@ check('architecture guard documents label_provider_key as a dead column',
 //    touch the resolution source of truth.
 const labels = read('src/services/labels.ts');
 check('labels.ts still delegates to the unified resolver (PS-221 intact)',
-  labels.includes('return resolveOrderLabelPackageId(args)'));
+  labels.includes('resolveOrderLabelPackageSelection(args)'));
 
 // Self-wiring.
 const pkg = read('package.json');

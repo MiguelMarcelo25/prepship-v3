@@ -11,6 +11,8 @@ import {
   listShipStationV2Shipments,
 } from '../connectors/carrier/shipstation';
 import { deductInventoryForOrder } from './fulfillment-deductions';
+import { consumeOutboundPackageInTransaction } from './package-consumption';
+import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 import { getSettingNumber, setSetting } from './settings';
 import { formatShipStationV1DateParam, parseShipStationV1Date } from '../lib/shipstation/v1-date';
 import {
@@ -163,7 +165,11 @@ function shipStationShipmentSourceIdentity(s: SSShipment): OrderSourceIdentity |
 //   3. Pre-fetch every existing shipment (by labelShipmentId IN ...)
 //   4. Split into inserts (new) + updates (existing), then run them
 //      in parallel with a small concurrency cap for the updates.
-async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
+async function upsertShipmentsBatch(
+  pageShipments: SSShipment[],
+  sourceAccountId: string,
+  sourceAccountIsTest: boolean,
+): Promise<{
   inserted: number;
   updated: number;
   matched: number;
@@ -383,8 +389,52 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
   for (let i = 0; i < toInsert.length; i += chunkSize) {
     const chunk = toInsert.slice(i, i + chunkSize);
     if (chunk.length) {
-      await db.insert(shipments).values(chunk);
-      inserted += chunk.length;
+      // Per user override unlock shipped data on 2026-07-11: PS-413 records
+      // package consumption only for NEW ShipStation shipment rows. Existing
+      // history is never auto-backfilled; repair remains dry-run and reviewed.
+      await ensurePackageConsumptionSchema();
+      await db.transaction(async (tx) => {
+        const insertedRows = await tx
+          .insert(shipments)
+          .values(chunk)
+          .returning({
+            id: shipments.id,
+            orderId: shipments.orderId,
+            orderNumber: shipments.orderNumber,
+            labelShipmentId: shipments.labelShipmentId,
+            providerAccountId: shipments.providerAccountId,
+            selectedPackageId: shipments.selectedPackageId,
+            shipDate: shipments.shipDate,
+            createDate: shipments.createDate,
+            dimsL: shipments.dimsL,
+            dimsW: shipments.dimsW,
+            dimsH: shipments.dimsH,
+            voided: shipments.voided,
+            isReturn: shipments.isReturn,
+          });
+        for (const row of insertedRows) {
+          const result = await consumeOutboundPackageInTransaction({
+            shipmentId: row.id,
+            orderId: row.orderId,
+            orderNumber: row.orderNumber,
+            source: 'shipstation',
+            sourceAccountId,
+            providerShipmentId: row.labelShipmentId,
+            effectiveAt: row.shipDate ?? row.createDate ?? new Date(),
+            selectedPackageId: row.selectedPackageId,
+            dimensions: { length: row.dimsL, width: row.dimsW, height: row.dimsH },
+            voided: row.voided,
+            isReturn: row.isReturn,
+            isTest: sourceAccountIsTest,
+          }, tx);
+          if (result.status === 'review') {
+            console.warn(
+              `[shipment-sync] package consumption review for shipment ${row.id}: ${result.reason}`,
+            );
+          }
+        }
+        inserted += insertedRows.length;
+      });
     }
   }
 
@@ -421,6 +471,8 @@ export type ShipmentSyncResult = {
 
 type ShipmentSyncAccount = {
   label: string;
+  sourceAccountId: string;
+  isTest: boolean;
   apiKey: string | undefined;
   apiSecret: string | undefined;
   // v2-parity: V2 key is used for the /v2/shipments enrichment pass (which
@@ -437,6 +489,8 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
   const accounts: ShipmentSyncAccount[] = [
     {
       label: 'main',
+      sourceAccountId: 'main',
+      isTest: false,
       apiKey: undefined,
       apiSecret: undefined,
       apiKeyV2: env.SHIPSTATION_API_KEY_V2 ?? null,
@@ -444,10 +498,12 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
   ];
   const rows = await db
     .select({
+      id: clients.id,
       name: clients.name,
       ssApiKey: clients.ssApiKey,
       ssApiSecret: clients.ssApiSecret,
       ssApiKeyV2: clients.ssApiKeyV2,
+      isTest: clients.isTest,
     })
     .from(clients)
     .where(eq(clients.active, true));
@@ -455,6 +511,8 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
     if (r.ssApiKey && r.ssApiSecret) {
       accounts.push({
         label: `client:${r.name}`,
+        sourceAccountId: `client:${r.id}`,
+        isTest: r.isTest,
         apiKey: r.ssApiKey,
         apiSecret: r.ssApiSecret,
         apiKeyV2: r.ssApiKeyV2 ?? null,
@@ -538,7 +596,11 @@ export async function syncShipments(
         // One batched upsert per page (pre-fetches orders + clients + existing
         // shipments, splits into bulk INSERT + parallel UPDATEs). Per-row loop
         // was the bottleneck — this is ~10x faster.
-        const batch = await upsertShipmentsBatch(res.shipments);
+        const batch = await upsertShipmentsBatch(
+          res.shipments,
+          acct.sourceAccountId,
+          acct.isTest,
+        );
         totalFetched += res.shipments.length;
         totalInserted += batch.inserted;
         totalUpdated += batch.updated;
