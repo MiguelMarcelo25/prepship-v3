@@ -79,6 +79,9 @@ const criticalMethods = [
   // Per user override unlock shipped data on 2026-07-11: saved dimensions
   // feed rates and labels, so transport failure must reject.
   'saveOrderDims',
+  'deleteClientRecord',
+  'deleteLocation',
+  'deletePackageMutation',
 ];
 
 for (const method of criticalMethods) {
@@ -172,6 +175,21 @@ assert(
   ),
   'Rate Browser stops and surfaces rejected order-dimension persistence',
 );
+
+const inventoryViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/InventoryView.tsx'), 'utf8');
+const locationsViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/LocationsView.tsx'), 'utf8');
+const packagesViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/PackagesView.tsx'), 'utf8');
+
+assert(
+  /try \{[\s\S]{0,120}?await apiClient\.deleteClientRecord\(client\.clientId\)[\s\S]{0,220}?catch \(error\)/.test(inventoryViewSource) &&
+    /try \{[\s\S]{0,120}?await apiClient\.deleteLocationMutation\(locationId\)[\s\S]{0,220}?catch \(deleteError\)/.test(locationsViewSource) &&
+    /try \{[\s\S]{0,120}?await apiClient\.deletePackageMutation\(packageId\)[\s\S]{0,220}?catch \(deleteError\)/.test(packagesViewSource),
+  'client, location, and package delete callers surface rejected requests',
+);
+
+for (const method of ['deleteClientRecord', 'deleteLocation', 'deletePackageMutation']) {
+  assert(!methodBlock(method).includes('ok: true'), `${method} does not mint a fake ok:true result`);
+}
 
 if (process.exitCode) {
   process.exit(process.exitCode);

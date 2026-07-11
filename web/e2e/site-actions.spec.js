@@ -27,6 +27,7 @@ let ordersApiShouldFail = false
 let ordersApiFailedOnce = false
 let orderWriteShouldFail = false
 let orderDimsWriteShouldFail = false
+let destructiveDeleteShouldFail = false
 let rateBrowserPartialFailureMode = false
 let primaryClientIsTest = true
 
@@ -312,6 +313,10 @@ function responseFor(url, request) {
   if (pathname === '/health') return json({ status: 'ok' })
   if (pathname === '/health/ready') return json({ status: 'ready', components: [{ name: 'db', status: 'ok' }] })
   if (pathname === '/health/deep') return json({ status: 'ready', components: [{ name: 'orders', status: 'ok' }] })
+  if (method === 'DELETE' && /^\/(?:clients|locations|packages)\/\d+$/.test(pathname)) {
+    if (destructiveDeleteShouldFail) return json({ error: `Delete fixture failure: ${pathname}` }, 500)
+    return json({ ok: true })
+  }
   if (pathname === '/clients') return json(visibleClients())
   if (pathname === '/users') return json({ users: [] })
   if (pathname === '/locations') return json([])
@@ -514,6 +519,7 @@ test.beforeEach(async ({ page }) => {
   ordersApiFailedOnce = false
   orderWriteShouldFail = false
   orderDimsWriteShouldFail = false
+  destructiveDeleteShouldFail = false
   rateBrowserPartialFailureMode = false
   primaryClientIsTest = true
   requestLedger.length = 0
@@ -648,6 +654,35 @@ test('Order dimensions failure stops shipment-details success', async ({ page })
   await waitForRequest('/orders/101/save-dims', { method: 'POST', payloadIncludes: ['11', '8', '6'] })
   await expect(page.getByText('Order dimensions fixture failure').first()).toBeVisible({ timeout: 15000 })
   await expect(page.getByText('Shipment details saved')).toHaveCount(0)
+  expectNoForbiddenExternalRequests()
+})
+
+test('client, location, and package delete transports reject backend failures', async ({ page }) => {
+  // Mocked-only destructive failure proof; no production records are deleted.
+  destructiveDeleteShouldFail = true
+  await openAwaitingOrderPanel(page)
+  const failures = await page.evaluate(async () => {
+    const { apiClient } = await import('/src/api/client.ts')
+    const capture = async (operation) => {
+      try {
+        await operation()
+        return 'resolved'
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    return {
+      client: await capture(() => apiClient.deleteClientRecord(1)),
+      location: await capture(() => apiClient.deleteLocationMutation(1)),
+      package: await capture(() => apiClient.deletePackageMutation(1)),
+    }
+  })
+  expect(failures.client).toContain('Delete fixture failure: /clients/1')
+  expect(failures.location).toContain('Delete fixture failure: /locations/1')
+  expect(failures.package).toContain('Delete fixture failure: /packages/1')
+  expectRequest('/clients/1', { method: 'DELETE' })
+  expectRequest('/locations/1', { method: 'DELETE' })
+  expectRequest('/packages/1', { method: 'DELETE' })
   expectNoForbiddenExternalRequests()
 })
 

@@ -496,15 +496,10 @@ export const apiClient = {
   },
 
   deleteClientRecord(clientId: number): Promise<any> {
-    return safe(
-      'deleteClientRecord',
-      async () => {
-        const res = await api.delete<any>(`/clients/${clientId}`);
-        clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
-        return res;
-      },
-      { ok: true }
-    );
+    return api.delete<any>(`/clients/${clientId}`).then((res) => {
+      clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+      return res;
+    });
   },
 
   syncClientsFromStores(): Promise<any> {
@@ -2295,11 +2290,7 @@ export const apiClient = {
   },
 
   deleteLocation(locationId: number): Promise<any> {
-    return safe(
-      'deleteLocation',
-      () => api.delete<any>(`/locations/${locationId}`),
-      { ok: true }
-    );
+    return api.delete<any>(`/locations/${locationId}`);
   },
 
   deleteLocationMutation(locationId: number): Promise<any> {
@@ -2386,15 +2377,10 @@ export const apiClient = {
   },
 
   deletePackageMutation(packageId: number): Promise<any> {
-    return safe(
-      'deletePackageMutation',
-      async () => {
-        const response = { ...(await api.delete<any>(`/packages/${packageId}`)), ok: true };
-        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
-        return response;
-      },
-      { ok: true }
-    );
+    return api.delete<any>(`/packages/${packageId}`).then((result) => {
+      clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+      return result;
+    });
   },
 
   setPackageReorderLevel(packageId: number, reorderLevel: number): Promise<any> {
