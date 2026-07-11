@@ -9,6 +9,7 @@ const packageRoute = readFileSync('src/routes/packages.ts', 'utf8');
 const schemaReadiness = readFileSync('src/services/package-consumption-schema.ts', 'utf8');
 const resolver = readFileSync('src/services/package-resolution.ts', 'utf8');
 const dryRun = readFileSync('scripts/ps-413-package-consumption-backfill-dry-run.ts', 'utf8');
+const repair = readFileSync('scripts/ps-413-package-consumption-repair.ts', 'utf8');
 
 assert(owner.includes('package_ledger_idempotency_key_unq') === false, 'owner must use schema, not inline DDL');
 assert(owner.includes('.onConflictDoNothing()'), 'canonical owner must claim idempotency before decrement');
@@ -39,5 +40,13 @@ assert(readinessIndex < labels.indexOf("createCarrierLabel('shipstation'", readi
 assert(!/db\.(insert|update|delete)|\.insert\(|\.update\(|\.delete\(/.test(dryRun), 'backfill must remain read-only');
 assert(!dryRun.includes('--apply'), 'backfill must expose no apply mode');
 assert(dryRun.includes('${since.toISOString()}::timestamptz'), 'backfill must bind its date boundary as a PostgreSQL timestamptz');
+assert(repair.includes('consumeOutboundPackage(candidate.input)'), 'repair must delegate writes to canonical owner');
+assert(repair.includes("hasFlag('apply')") && repair.includes("hasFlag('confirm-production')"), 'repair apply must be double-gated');
+assert(repair.includes('const MAX_BATCH_SIZE = 25') && repair.includes('batchSize > MAX_BATCH_SIZE'), 'repair must enforce 25-row progress-group cap');
+assert(repair.includes('consumeOutboundPackage(candidate.input)') && repair.includes('mapWithConcurrency(batch, 4'),
+  'repair must use bounded canonical per-shipment transactions');
+assert(repair.includes('Post-apply verification failed'), 'repair must verify ledger rows after apply');
+assert(!/db\.update\(shipments\)|db\.delete\(shipments\)|buyLabel|purchaseLabel|voidLabel|notifyMarketplace/i.test(repair),
+  'repair must not mutate shipment history or trigger provider side effects');
 
 console.log('PASS PS-413 package consumption wiring guard');
