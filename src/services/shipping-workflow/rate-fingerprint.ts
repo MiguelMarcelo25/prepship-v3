@@ -511,9 +511,24 @@ export function classifyLabelPurchaseRetry(err: unknown): {
   retryReason: string | null;
 } {
   const e = err as
-    | { code?: unknown; name?: unknown; details?: { reason?: unknown } }
+    | { code?: unknown; name?: unknown; status?: unknown; details?: { reason?: unknown } }
     | null
     | undefined;
+  // Audit PQ-5 (2026-07-13): PRE-PURCHASE-PROVABLE transport failures are retry
+  // eligible — the provider never processed the request, so a retry cannot
+  // double-buy. Circuit-open: the request never left the process. 429: ShipStation
+  // rejected it before processing. Previously these mapped to failed_terminal, so
+  // a 30-second ShipStation blip cascaded an entire batch into terminal failures
+  // with no retry path. A 5xx/timeout on the purchase POST itself remains
+  // NON-eligible — that is an unknown outcome (the label may exist at the
+  // provider); reconciliation, not blind retry, is the only safe path (audit
+  // C1/1.20). Structural checks only (PS-191).
+  if (!!e && String(e.code) === 'SHIPSTATION_CIRCUIT_OPEN') {
+    return { retryEligible: true, retryReason: 'provider_unavailable' };
+  }
+  if (!!e && e.name === 'ShipStationError' && Number(e.status) === 429) {
+    return { retryEligible: true, retryReason: 'provider_rate_limited' };
+  }
   const isProofError =
     !!e &&
     (PROOF_ERROR_CODES.has(String(e.code)) || e.name === 'SelectedRateProofError');

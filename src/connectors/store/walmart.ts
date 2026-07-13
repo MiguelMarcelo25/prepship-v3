@@ -320,7 +320,34 @@ export function createWalmartStoreConnector(): StoreConnector {
         { purchaseOrderId },
       );
       if (!res.ok) {
-        throw new Error(`Walmart Ship Confirm ${res.status}: ${await readWalmartError(res)}`);
+        const errorText = await readWalmartError(res);
+        // Audit SY-2 (2026-07-13, PS-021 scope): the outbox is at-least-once — a
+        // crash between the connector ack and completeOutboxRow re-delivers this
+        // confirmation. Walmart previously threw on EVERY non-OK, and thrown
+        // errors are classified retryable, so an already-confirmed shipment
+        // burned 6 backoff retries against a permanent 4xx and ended
+        // confirmation_failed even though Walmart WAS notified. Mirror the
+        // eBay-409/Shopify-422 idempotent branches: "already shipped/duplicate"
+        // responses settle as success.
+        if (/already\s+(?:been\s+)?shipped|already in shipped status|duplicate\s+shipment|shipment already exists/i.test(errorText)) {
+          return {
+            ok: true,
+            provider: 'walmart',
+            raw: { status: res.status, alreadyFulfilled: true, message: errorText.slice(0, 500) },
+          };
+        }
+        // Other 4xx (except 408/429) are permanent for this payload — retrying
+        // the identical request cannot succeed; classify terminal instead of
+        // throwing (thrown = retryable in the outbox).
+        if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+          return {
+            ok: false,
+            provider: 'walmart',
+            retryable: false,
+            message: `Walmart Ship Confirm ${res.status}: ${errorText}`,
+          };
+        }
+        throw new Error(`Walmart Ship Confirm ${res.status}: ${errorText}`);
       }
       const text = await res.text().catch(() => '');
       let raw: unknown = { ok: true };

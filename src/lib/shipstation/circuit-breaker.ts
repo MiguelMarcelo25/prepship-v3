@@ -1,5 +1,16 @@
 type State = 'closed' | 'open' | 'half-open';
 
+// Audit PQ-5 (2026-07-13): typed open-circuit error so retry classification can be
+// STRUCTURAL (PS-191 forbids message parsing). Circuit-open means the request never
+// left the process — provably pre-purchase, safe to classify retryable.
+export class CircuitBreakerOpenError extends Error {
+  readonly code = 'SHIPSTATION_CIRCUIT_OPEN' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'CircuitBreakerOpenError';
+  }
+}
+
 export class CircuitBreaker {
   private state: State = 'closed';
   private failures = 0;
@@ -13,7 +24,7 @@ export class CircuitBreaker {
   async execute<T>(fn: () => Promise<T>): Promise<T> {
     if (this.state === 'open') {
       if (Date.now() - this.openedAt < this.recoveryMs) {
-        throw new Error('ShipStation circuit breaker open');
+        throw new CircuitBreakerOpenError('ShipStation circuit breaker open');
       }
       this.state = 'half-open';
     }
