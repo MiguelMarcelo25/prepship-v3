@@ -89,6 +89,13 @@ export type OrdersTableProps = {
   showToast: (message: string) => void
   // ── per-cell dispatcher (closes over OrdersView state) ──
   renderCell: (order: OrderSummaryDto, column: TableColumn) => ReactNode
+  // FE-1 slice (audit 2026-07-13): opaque snapshot of the shared cell-visible
+  // OrdersView state that renderCell reads but that is NOT threaded as a row
+  // prop (selection ids, rate entries, batch rows, bundles, filters…). This
+  // table never reads it — it is forwarded to <OrderRow> so the memo's shallow
+  // compare re-renders rows whenever any shared cell input changes, now that
+  // renderCell itself has a render-stable identity.
+  cellStateEpoch: unknown
 }
 
 export function OrdersTable({
@@ -121,6 +128,7 @@ export function OrdersTable({
   copyText,
   showToast,
   renderCell,
+  cellStateEpoch,
 }: OrdersTableProps) {
   // Row hover/keyboard focus is table-local (moved down from OrdersView): a
   // hover crossing re-renders only this table, and the memoized <OrderRow>
@@ -294,6 +302,7 @@ export function OrdersTable({
               openShipStationOrder={openShipStationOrder}
               setKbRowId={setKbRowId}
               renderCell={renderCell}
+              cellStateEpoch={cellStateEpoch}
             />
           ))
 
@@ -314,6 +323,7 @@ export function OrdersTable({
             openShipStationOrder={openShipStationOrder}
             setKbRowId={setKbRowId}
             renderCell={renderCell}
+            cellStateEpoch={cellStateEpoch}
           />
         )))}
       </tbody>

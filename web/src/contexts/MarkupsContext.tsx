@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from 'react'
 import { api } from '../lib/api'
-import { apiClient } from '../lib/v2-apiClient'
 import { useAuth } from '../lib/auth'
 
 export type MarkupType = 'amount' | 'percent' | 'pct' | 'flat'
@@ -158,6 +157,15 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
   const clearRateCache = useCallback(async () => {
     // Reuse the existing /rates/cache + /orders/sync combo wrapper so Settings
     // "Clear & refetch" button works regardless of which path the caller uses.
+    //
+    // FE-3 (audit 2026-07-13): dynamic import — this provider mounts in the app
+    // shell, and a static `import { apiClient }` here dragged the 3,191-line
+    // v2-apiClient barrel into the eager entry chunk parsed on /login. The
+    // markup reads/writes above already use the lightweight `api` client;
+    // clearAndRefetchAllRates is only ever user-triggered (Settings button), so
+    // the barrel now loads on first use instead of at boot. Same call, same
+    // behavior — only the load timing of the module changes.
+    const { apiClient } = await import('../lib/v2-apiClient')
     await apiClient.clearAndRefetchAllRates()
   }, [])
 

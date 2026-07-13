@@ -2,16 +2,6 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { BarChart3, Loader2 } from 'lucide-react'
-import {
-  CartesianGrid,
-  LabelList,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  BarChart,
-  Bar,
-} from 'recharts'
 // TODO PS-257: @prepshipv2/contracts is erased at runtime and absent in v4, so
 // these DTO shapes are aliased to `any` locally (matching the analysis-parity.ts
 // / AnalysisDataTable.tsx precedent) until v4 grows a real analysis contracts module.
@@ -43,7 +33,6 @@ import {
 } from './analysis-parity'
 import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
-import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
 import { SortableHeader, nextSortState, sortRows, type SortState, type SortValue } from '../SortableTable'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
@@ -51,6 +40,12 @@ import './AnalysisView.css'
 
 const AnalysisDataTable = lazy(() => import('./AnalysisDataTable').then((module) => ({ default: module.AnalysisDataTable })))
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
+// FE-5 (audit 2026-07-13): BOTH chart regions come from the lazy AnalysisCharts
+// module (same split DashboardView-71 uses for DashboardCharts), so recharts —
+// the app's largest vendor chunk (~430 kB) — is downloaded only when a chart
+// actually renders. Table-only Analysis visits never fetch it.
+const AnalysisTopSkusChart = lazy(() => import('./AnalysisCharts').then((module) => ({ default: module.AnalysisTopSkusChart })))
+const AnalysisDrawerUnitsChart = lazy(() => import('./AnalysisCharts').then((module) => ({ default: module.AnalysisDrawerUnitsChart })))
 
 // SKU drawer's "Recent Orders" table — user-resizable columns. Widths persist
 // per-browser via localStorage so the layout sticks across page loads. Defaults
@@ -551,35 +546,9 @@ function buildDrawerYAxisTicks(maxValue: number) {
   )
 }
 
-function DrawerBarValueLabel(props: {
-  x?: number
-  y?: number
-  width?: number
-  height?: number
-  value?: number
-}) {
-  const value = Number(props.value) || 0
-  if (value <= 0) return null
-
-  const x = Number(props.x) || 0
-  const y = Number(props.y) || 0
-  const width = Number(props.width) || 0
-  const height = Number(props.height) || 0
-  const drawInside = height >= 12
-
-  return (
-    <text
-      x={x + width / 2}
-      y={drawInside ? y + 9 : y - 4}
-      textAnchor="middle"
-      fill={drawInside ? '#fff' : '#e07a00'}
-      fontSize={9}
-      fontWeight={700}
-    >
-      {value}
-    </text>
-  )
-}
+// DrawerBarValueLabel moved to ./AnalysisCharts with the drawer chart (FE-5) —
+// it is recharts-coupled (LabelList content renderer), so it rides the lazy
+// chart chunk instead of the eager Analysis chunk.
 
 interface AnalysisViewProps {
   /** Pre-fill the SKU search field. Set by the Dashboard click-to-open flow. */
@@ -1544,7 +1513,26 @@ export default function AnalysisView({
             Sales trend unavailable: {dataState.chartError}
           </div>
         ) : hasChart ? (
-          <AnalysisTopSkusChart data={dataState.chartData!} />
+          <Suspense
+            fallback={
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  padding: 30,
+                  color: 'var(--text3)',
+                  fontSize: 13,
+                }}
+              >
+                <Loader2 size={14} strokeWidth={2.5} className="animate-spin" aria-hidden />
+                Loading…
+              </div>
+            }
+          >
+            <AnalysisTopSkusChart data={dataState.chartData!} />
+          </Suspense>
         ) : null}
       </div>
 
@@ -1776,53 +1764,22 @@ export default function AnalysisView({
                       📊 Units Sold — Last 30 Days
                     </div>
                     <div style={{ width: '100%', height: 160 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={drawerChartRows}
-                          margin={{ top: 10, right: 8, bottom: 6, left: 0 }}
-                        >
-                          <CartesianGrid
-                            stroke="var(--border)"
-                            strokeDasharray="3 3"
-                            vertical={false}
-                          />
-                          <XAxis
-                            dataKey="day"
-                            tick={{ fontSize: 9, fill: 'var(--text3)' }}
-                            tickFormatter={(value: string) =>
-                              typeof value === 'string' ? value.slice(5) : value
-                            }
-                            minTickGap={16}
-                          />
-                          <YAxis
-                            axisLine={false}
-                            tickLine={false}
-                            tick={{ fontSize: 9, fill: 'var(--text3)' }}
-                            ticks={drawerYAxisTicks}
-                            domain={[0, drawerYAxisMax]}
-                            width={28}
-                            allowDecimals={false}
-                            interval={0}
-                          />
-                          <Tooltip
-                            contentStyle={{
-                              background: 'rgba(20,20,30,.92)',
-                              border: 'none',
-                              borderRadius: 6,
-                              color: '#fff',
-                              fontSize: 11,
-                            }}
-                            itemStyle={{ color: '#fff' }}
-                            labelStyle={{ color: '#fff', fontWeight: 700 }}
-                          />
-                          <Bar dataKey="units" fill="#e07a00" isAnimationActive={false}>
-                            <LabelList
-                              dataKey="units"
-                              content={(props) => <DrawerBarValueLabel {...(props as any)} />}
-                            />
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
+                      {/* FE-5: chart markup moved verbatim to AnalysisCharts.
+                          Suspense fallback reuses the drawer's existing
+                          loading style while the lazy chunk fetches. */}
+                      <Suspense
+                        fallback={
+                          <div className="loading">
+                            <div className="spinner" />
+                          </div>
+                        }
+                      >
+                        <AnalysisDrawerUnitsChart
+                          rows={drawerChartRows}
+                          yAxisTicks={drawerYAxisTicks}
+                          yAxisMax={drawerYAxisMax}
+                        />
+                      </Suspense>
                     </div>
                   </div>
 

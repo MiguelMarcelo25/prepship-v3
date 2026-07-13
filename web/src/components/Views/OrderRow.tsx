@@ -2,14 +2,16 @@
 // the sku-grouped branch's member rows — extracted from OrdersTable.tsx with
 // BYTE-IDENTICAL markup and wrapped in React.memo.
 //
-// Why memo is safe here WITHOUT stabilizing renderCell: renderCell is the
-// OrdersView-owned dispatcher, recreated on every OrdersView render. So any
-// OrdersView render (data refresh, selection, rates arriving…) changes this
-// component's renderCell prop and re-renders every row — exactly the
-// pre-extraction behavior, no stale-cell risk. The memo only bails out when
-// OrdersTable re-renders LOCALLY (its own kbRowId hover/keyboard state) while
-// OrdersView did not — then only the rows whose isKbFocus flag flipped
-// re-render instead of every cell on the page.
+// Memo contract (FE-1 slice, audit 2026-07-13): renderCell now has a STABLE
+// identity — OrdersView dispatches through a latest-ref useCallback — so this
+// memo bails on any render where the row's own props did not change (poll ticks
+// with unchanged data, hover crossings, unrelated modal/panel state). Staleness
+// safety: every shared cell input that renderCell reads but that is NOT a row
+// prop (selection ids, auto-rate entries, batch recalc rows, bundles, filters,
+// account state, view status/read-only flag) is folded into the opaque
+// cellStateEpoch prop, whose identity changes whenever any of them change — the
+// shallow compare then misses and the row repaints from current state before
+// any cell could show stale shared state.
 //
 // This component renders markup only; it owns no data state and no business
 // decisions. The select-cell lockdown gate lives inside renderCell (OrdersView)
@@ -39,6 +41,10 @@ export type OrderRowProps = {
   openShipStationOrder: (orderId: number) => void
   setKbRowId: (orderId: number | null) => void
   renderCell: (order: OrderSummaryDto, column: TableColumn) => ReactNode
+  // Opaque shared-cell-state snapshot (see the memo contract above). Never read
+  // by this component — deliberately NOT destructured below — it participates
+  // only in React.memo's default shallow prop compare.
+  cellStateEpoch?: unknown
 }
 
 export const OrderRow = memo(function OrderRow({

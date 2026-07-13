@@ -1,5 +1,5 @@
 import './OrdersView.css'
-import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import HoverImage from '../HoverImage'
 import type { NewOrderPayload } from '../NewOrderModal'
@@ -542,7 +542,12 @@ export default function OrdersView({
     let refreshInflight = false
     let recalcAllPollFailures = 0
     const settleTimers: ReturnType<typeof setTimeout>[] = []
-    const timer = setInterval(async () => {
+    // FE-4 (audit 2026-07-13): the poll body is unchanged — it is extracted into
+    // pollRecalcAllJob so hidden-tab ticks can be SKIPPED (no status fetch, no
+    // orders refetch while nobody is looking) and the visibilitychange listener
+    // can fire one immediate poll on return, so the operator never waits a full
+    // interval for the summary/rows to catch up. Response handling is identical.
+    const pollRecalcAllJob = async () => {
       try {
         const job = await fetchRecalculateAllJob(recalcAllJobId)
         if (cancelled) return
@@ -563,9 +568,13 @@ export default function OrdersView({
           // the job reports done — a slow/retried ShipStation carrier (RC1) can land a rate well after the
           // job's last worker. So keep refetching on a BOUNDED schedule out to ~2.7min so EVERY row fills in
           // on its own and the user never has to reload the page. Bounded + cancellable; it only observes
-          // the existing job and never starts another rate job.
+          // the existing job and never starts another rate job. (FE-4: a settle
+          // refetch is also skipped while the tab is hidden — same gate as the
+          // interval ticks; the remaining scheduled refetches cover the return.)
           for (const delay of [3000, 8000, 16000, 24000, 36000, 50000, 70000, 95000, 125000, 160000]) {
-            settleTimers.push(setTimeout(() => { if (!cancelled) void refetchOrdersRef.current?.() }, delay))
+            settleTimers.push(setTimeout(() => {
+              if (!cancelled && document.visibilityState === 'visible') void refetchOrdersRef.current?.()
+            }, delay))
           }
           return
         }
@@ -588,31 +597,89 @@ export default function OrdersView({
           setTimeout(() => setRecalcAllSummary(null), 8000)
         }
       }
+    }
+    const timer = setInterval(() => {
+      // FE-4: hidden-tab gate — skip the tick entirely; the interval keeps
+      // running so polling resumes on its own once the tab is visible again.
+      if (document.visibilityState !== 'visible') return
+      void pollRecalcAllJob()
     }, 2500)
-    return () => { cancelled = true; clearInterval(timer); settleTimers.forEach(clearTimeout) }
+    const onVisibilityChange = () => {
+      if (cancelled || document.visibilityState !== 'visible') return
+      void pollRecalcAllJob()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      settleTimers.forEach(clearTimeout)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recalcAllJobId])
 
   useEffect(() => {
     if (currentStatus !== 'awaiting_shipment' || recalcAllJobId) return
     let cancelled = false
+    // FE-4 (audit 2026-07-13): this observer existed as an ALWAYS-ON 15s
+    // setInterval. It now (1) skips ticks while the tab is hidden, with an
+    // immediate resume poll on visibilitychange, and (2) backs off to a 60s
+    // cadence once a response shows no active backfill job — backend/sync-started
+    // jobs are rare, so the fast cadence is only worth keeping while one could
+    // plausibly be starting. Response handling is unchanged: an active job
+    // attaches to the row-refresh poller via setRecalcAllJobId (which unmounts
+    // this effect); anything else is a no-op. When the attached job finishes,
+    // recalcAllJobId returns to null and this effect remounts fresh at 15s.
+    let attachPollDelayMs = 15_000
+    let attachPollInFlight = false
+    let attachPollTimerId: number | undefined
     async function attachLatestRateBackfillJob() {
       try {
         const job = await fetchLatestRecalculateAllJob()
-        if (cancelled || !job) return
-        if (job.status === 'pending' || job.status === 'running' || job.status === 'queued') {
+        if (cancelled) return
+        if (job && (job.status === 'pending' || job.status === 'running' || job.status === 'queued')) {
           recalcAllUserInitiatedRef.current = false
           setRecalcAllJobId(job.jobId)
+          return
         }
+        // FE-4: the last response showed no active job — relax the cadence.
+        attachPollDelayMs = 60_000
       } catch {
         // Read-only observer. A transient status miss must not block the orders table.
       }
     }
+    function scheduleNextAttachPoll() {
+      if (cancelled) return
+      attachPollTimerId = window.setTimeout(() => { void runAttachPollTick() }, attachPollDelayMs)
+    }
+    async function runAttachPollTick() {
+      // In-flight guard: a visibilitychange during a running tick must not fork
+      // a second poll chain — the running tick's own scheduleNextAttachPoll()
+      // keeps the single chain alive.
+      if (cancelled || attachPollInFlight) return
+      attachPollInFlight = true
+      try {
+        if (document.visibilityState === 'visible') {
+          await attachLatestRateBackfillJob()
+        }
+      } finally {
+        attachPollInFlight = false
+      }
+      scheduleNextAttachPoll()
+    }
+    const onVisibilityChange = () => {
+      if (cancelled || document.visibilityState !== 'visible') return
+      // Resume promptly: drop the pending (possibly 60s) timer and poll now.
+      if (attachPollTimerId !== undefined) window.clearTimeout(attachPollTimerId)
+      void runAttachPollTick()
+    }
     void attachLatestRateBackfillJob()
-    const timer = setInterval(() => { void attachLatestRateBackfillJob() }, 15_000)
+    scheduleNextAttachPoll()
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       cancelled = true
-      clearInterval(timer)
+      if (attachPollTimerId !== undefined) window.clearTimeout(attachPollTimerId)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [currentStatus, recalcAllJobId])
 
@@ -5856,6 +5923,72 @@ export default function OrdersView({
   // PS-312/PS-317 (S4): combined-shipment bundle state for the visible rows, from the scope-safe
   // backend read-model. The carrier cell renders a child's shared shipment instead of a sync-error.
   const bundleByOrderId = useOrderBundles((orders ?? []).map((order) => order.orderId))
+
+  // FE-1 slice (audit 2026-07-13): stable-identity cell dispatch so OrderRow's
+  // React.memo can actually bail. renderTableCell (and the two row-level
+  // openers passed alongside it) are recreated on every OrdersView render
+  // because they close over live component state — passing them straight down
+  // changed every row's props on every render and defeated the memo. The
+  // latest-ref pattern keeps ONE stable function identity while dispatching to
+  // the closures of the CURRENT render (the refs are re-pointed right after
+  // renderTableCell's definition below), so what a cell renders — and which
+  // handlers it wires — is exactly what the unstable versions produced.
+  //
+  // orderCellsEpoch is the staleness guard that makes the bail-out SAFE: it
+  // changes identity whenever any cell-visible state that is NOT already an
+  // OrderRow prop changes (selection ids for the checkbox handlers, the ordered
+  // list identity for shift-range selection, rate/batch entries, bundles,
+  // account state, filters, view status). It is threaded to <OrderRow
+  // cellStateEpoch=…> purely for the memo's shallow compare — rows re-render
+  // exactly when (a) their own row props change or (b) any shared cell input
+  // changes, and bail on the no-op renders (poll ticks with unchanged data,
+  // hover crossings, unrelated modal/panel state) that FE-1 flags as the Orders
+  // page's biggest render cost.
+  //
+  // LOCKDOWN note: display/identity plumbing only. The select-cell isReadOnly
+  // gate, its checkbox handlers, and the batch-panel suppression are untouched;
+  // isReadOnly participates here only as an epoch INPUT so a read-only flip
+  // still repaints every row.
+  const renderTableCellRef = useRef<((order: OrderSummaryDto, column: TableColumn) => ReactNode) | null>(null)
+  const openOrderDetailsRef = useRef<((orderId: number) => void) | null>(null)
+  const openShipStationOrderRef = useRef<((orderId: number) => void) | null>(null)
+  const stableRenderTableCell = useCallback(
+    (order: OrderSummaryDto, column: TableColumn): ReactNode => renderTableCellRef.current!(order, column),
+    [],
+  )
+  const stableOpenOrderDetails = useCallback((orderId: number) => { openOrderDetailsRef.current!(orderId) }, [])
+  const stableOpenShipStationOrder = useCallback((orderId: number) => { openShipStationOrderRef.current!(orderId) }, [])
+  const orderCellsEpoch = useMemo(
+    () => ({
+      selectedOrderIds,
+      orderedFilteredOrders,
+      transitionalShippedIds,
+      autoBestRateEntries,
+      batchRecalculateRows,
+      accountsLoading,
+      shippingAccounts,
+      bundleByOrderId,
+      skuFilter,
+      isGlobalSearchActive,
+      currentStatus,
+      isReadOnly,
+    }),
+    [
+      selectedOrderIds,
+      orderedFilteredOrders,
+      transitionalShippedIds,
+      autoBestRateEntries,
+      batchRecalculateRows,
+      accountsLoading,
+      shippingAccounts,
+      bundleByOrderId,
+      skuFilter,
+      isGlobalSearchActive,
+      currentStatus,
+      isReadOnly,
+    ],
+  )
+
   const orderCellsDeps: OrderCellsDeps = {
     getOrderWithAutoBestRate,
     orderShippingHold,
@@ -6246,6 +6379,14 @@ export default function OrdersView({
     }
   }
 
+  // FE-1 slice: latest-ref assignment — every render re-points the stable
+  // dispatchers (declared above bundleByOrderId) at THIS render's closures, so
+  // a re-rendered row always paints from current state while unchanged rows
+  // keep one stable renderCell identity and bail in OrderRow's memo.
+  renderTableCellRef.current = renderTableCell
+  openOrderDetailsRef.current = openOrderDetails
+  openShipStationOrderRef.current = openShipStationOrder
+
   // PS-306 (Wave 5): the side-panel backend-truth handlers stay PARENT-OWNED.
   // The extracted <OrdersDetailSidePanel> leaf is presentational and only FIRES
   // these via on* props — it owns no apiClient call, no selected-pid/package
@@ -6580,12 +6721,17 @@ export default function OrdersView({
                   transitionalShippedIds={transitionalShippedIds}
                   isReadOnly={isReadOnly}
                   toggleSkuGroupSelection={toggleSkuGroupSelection}
-                  openOrderDetails={openOrderDetails}
-                  openShipStationOrder={openShipStationOrder}
+                  // FE-1 slice: stable identities + the epoch prop — see the
+                  // stable-dispatch block above bundleByOrderId. Same handlers,
+                  // same cells; only the prop identities are render-stable so
+                  // OrderRow's memo can bail on unchanged rows.
+                  openOrderDetails={stableOpenOrderDetails}
+                  openShipStationOrder={stableOpenShipStationOrder}
                   updateSelection={updateSelection}
                   copyText={copyText}
                   showToast={showToast}
-                  renderCell={renderTableCell}
+                  renderCell={stableRenderTableCell}
+                  cellStateEpoch={orderCellsEpoch}
                 />
               ) : null}
             </OrdersResultsShell>
