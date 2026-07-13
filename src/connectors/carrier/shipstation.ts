@@ -111,6 +111,13 @@ export function createShipStationCarrierConnector(): CarrierConnector<
           body: input.body ?? {},
           apiKey: input.apiKeyV2 ?? input.apiKey,
           dedupeKey: input.dedupeKey,
+          // Audit R-4 (2026-07-13): the estimate budget + abort signal now reach
+          // the HTTP layer. Before this, the 15s cap was a Promise.race at the
+          // caller — the losing request kept running (and retrying inside
+          // ssRequest, re-consuming limiter budget) for up to ~7.5 min as a
+          // zombie. ssRequest composes the signal with its own timeout.
+          timeoutMs: (input as { timeoutMs?: number }).timeoutMs,
+          signal: (input as { signal?: AbortSignal }).signal,
         },
       );
       return Array.isArray(payload) ? payload : (payload.rates ?? []);

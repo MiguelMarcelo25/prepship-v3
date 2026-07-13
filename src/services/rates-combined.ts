@@ -236,6 +236,34 @@ export const DIRECT_CARRIER_QUOTE_TIMEOUT_MS = Math.max(
   Number.parseInt(process.env.DIRECT_CARRIER_QUOTE_TIMEOUT_MS ?? '15000', 10) || 15_000,
 );
 
+// Audit R-4 (2026-07-13): abort-capable variant. withCarrierQuoteTimeout races
+// and ABANDONS the work — the losing provider call kept running (and, for
+// ShipStation, retrying inside ssRequest) as a budget-burning zombie for up to
+// ~7.5 min. This variant hands the caller an AbortSignal and aborts it when the
+// deadline fires, so timeout means STOP THE WORK, not just stop waiting.
+// Note: ssRequest's in-flight dedupe shares one HTTP promise across same-key
+// callers, so an abort can cancel a shared request — the survivor's transient
+// retry re-issues it; rare and preferable to zombie retries.
+export function withAbortableCarrierQuoteTimeout<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  label: string,
+  timeoutMs: number = DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    run(controller.signal),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 export function withCarrierQuoteTimeout<T>(
   promise: Promise<T>,
   label: string,

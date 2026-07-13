@@ -53,6 +53,7 @@ import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orch
 import { expectedCarrierAbsentFromThin } from '../connectors/carrier/observed-missing-carrier-names';
 import {
   DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
+  withAbortableCarrierQuoteTimeout,
   withCarrierQuoteTimeout,
   isPricedRate,
   rateCostTotal as combinedRateCostTotal,
@@ -1284,12 +1285,15 @@ async function fetchEstimateForCarrier(
   const body = buildShipStationEstimateBody([carrier], input, shipFrom);
   const options = normalizeShippingOptions(input);
   try {
-    const payload = await withCarrierQuoteTimeout(
-      quoteCarrierRates('shipstation', {
+    // Audit R-4: abortable — the deadline stops the underlying HTTP work.
+    const payload = await withAbortableCarrierQuoteTimeout(
+      (signal) => quoteCarrierRates('shipstation', {
         body,
         shippingOptions: options,
         apiKeyV2: input.apiKeyV2 ?? undefined,
         dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
+        timeoutMs,
+        signal,
       }),
       `shipstation:${carrier.carrier_code}`,
       timeoutMs,
@@ -1349,12 +1353,16 @@ async function fetchEstimateForCarriers(
     .update(carriers.map((carrier) => carrier.carrier_id).sort().join('\n'))
     .digest('hex')
     .slice(0, 16);
-  const payload = await withCarrierQuoteTimeout(
-    quoteCarrierRates('shipstation', {
+  // Audit R-4: abortable — a hung batch dies at the deadline instead of
+  // shadow-retrying while the per-account fallback also runs.
+  const payload = await withAbortableCarrierQuoteTimeout(
+    (signal) => quoteCarrierRates('shipstation', {
       body,
       shippingOptions: options,
       apiKeyV2: input.apiKeyV2 ?? undefined,
       dedupeKey: `rates-estimate:batch:${carrierSetHash}:${rateCacheKey(input)}`,
+      timeoutMs,
+      signal,
     }),
     'shipstation:batch',
     timeoutMs,

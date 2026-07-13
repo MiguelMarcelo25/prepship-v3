@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { env } from '../env.js';
 import { timedFetch } from '../http/timing.js';
 import { CircuitBreaker } from './circuit-breaker.js';
@@ -19,40 +20,58 @@ export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
   )
 );
 const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
-const shipStationV2RateLimitTimestamps: number[] = [];
+// Audit R-3 (2026-07-13): ShipStation grants the per-minute budget PER API KEY,
+// but this bucket was process-global across ALL keys (DR PREPPER, KFG, per-client)
+// — one tenant's bulk rating starved another key's interactive quotes while the
+// unused keys' capacity sat idle. Buckets are now keyed by a key fingerprint;
+// the env budget applies per key, matching what ShipStation actually enforces.
+// (Cross-PROCESS budget sharing — two workers, one key — remains the durable
+// token-bucket follow-up; this bucket is deliberately conservative per process.)
+const shipStationV2RateLimitTimestampsByKey = new Map<string, number[]>();
 
-function trimShipStationV2RateLimitTimestamps(now = Date.now()) {
+function shipStationV2RateLimitBucket(apiKey: string): number[] {
+  const bucketId = createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
+  let bucket = shipStationV2RateLimitTimestampsByKey.get(bucketId);
+  if (!bucket) {
+    bucket = [];
+    shipStationV2RateLimitTimestampsByKey.set(bucketId, bucket);
+  }
+  return bucket;
+}
+
+function trimShipStationV2RateLimitTimestamps(bucket: number[], now = Date.now()) {
   while (
-    shipStationV2RateLimitTimestamps.length > 0 &&
-    now - shipStationV2RateLimitTimestamps[0]! >= SHIPSTATION_RATE_LIMIT_WINDOW_MS
+    bucket.length > 0 &&
+    now - bucket[0]! >= SHIPSTATION_RATE_LIMIT_WINDOW_MS
   ) {
-    shipStationV2RateLimitTimestamps.shift();
+    bucket.shift();
   }
 }
 
-function nextShipStationV2BudgetDelayMs(now = Date.now()) {
-  trimShipStationV2RateLimitTimestamps(now);
+function nextShipStationV2BudgetDelayMs(bucket: number[], now = Date.now()) {
+  trimShipStationV2RateLimitTimestamps(bucket, now);
   const burstWindowMs = Math.ceil(
     (SHIPSTATION_RATE_LIMIT_WINDOW_MS * SHIPSTATION_RATE_LIMIT_BURST) /
       SHIPSTATION_RATE_LIMIT_PER_MINUTE
   );
-  const recentBurst = shipStationV2RateLimitTimestamps.filter((timestamp) => now - timestamp < burstWindowMs);
+  const recentBurst = bucket.filter((timestamp) => now - timestamp < burstWindowMs);
   const burstDelay =
     recentBurst.length >= SHIPSTATION_RATE_LIMIT_BURST
       ? Math.max(0, burstWindowMs - (now - recentBurst[0]!))
       : 0;
   const minuteDelay =
-    shipStationV2RateLimitTimestamps.length >= SHIPSTATION_RATE_LIMIT_PER_MINUTE
-      ? Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - shipStationV2RateLimitTimestamps[0]!))
+    bucket.length >= SHIPSTATION_RATE_LIMIT_PER_MINUTE
+      ? Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - bucket[0]!))
       : 0;
   return Math.max(burstDelay, minuteDelay);
 }
 
-async function acquireShipStationV2Budget(): Promise<void> {
+async function acquireShipStationV2Budget(apiKey: string): Promise<void> {
+  const bucket = shipStationV2RateLimitBucket(apiKey);
   for (;;) {
-    const delayMs = nextShipStationV2BudgetDelayMs();
+    const delayMs = nextShipStationV2BudgetDelayMs(bucket);
     if (delayMs <= 0) {
-      shipStationV2RateLimitTimestamps.push(Date.now());
+      bucket.push(Date.now());
       return;
     }
     await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -106,7 +125,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
       let attempt = 0;
       while (true) {
         attempt += 1;
-        await acquireShipStationV2Budget();
+        await acquireShipStationV2Budget(key);
         const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const signal = opts.signal
           ? AbortSignal.any([opts.signal, timeoutSignal])
