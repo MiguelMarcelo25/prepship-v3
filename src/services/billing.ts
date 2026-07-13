@@ -1,5 +1,7 @@
 import { and, desc, eq, gte, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { normalizeScopeIds, intArraySql } from '../lib/scope-sql';
+// Audit B-4 (2026-07-13): xact advisory lock serializes concurrent storage-line writers.
+import { advisoryLockKeyPair } from '../lib/advisory-lock';
 import { db } from '../db/client';
 import {
   billingBoxResolutions,
@@ -475,11 +477,48 @@ export async function billingGenerationStatus(
     `);
     return feeWaiverRow?.fee_waiver_stale === true;
   })();
+  // Audit B-3 (2026-07-13): VOID staleness. voidLabelV2 sets shipments.voided=true
+  // (bumping updated_at in the same transaction) but historically emitted no billing
+  // signal — the range kept reporting "up to date" while billing_line_items still
+  // carried the voided label's charges, so clients stayed billed for refunded postage
+  // until some unrelated event forced a regenerate. Derive the signal from the SOURCE
+  // rows instead of trusting the mutator to remember: a range is stale when any billed
+  // order in it has a shipment voided AFTER that order's newest billing line was
+  // generated. Read-only over shipments; also retroactively surfaces historical voids
+  // that never got reversed.
+  const voidStalePromise = (async () => {
+    const [voidRow] = await db.execute<{ void_stale: boolean }>(sql`
+      select exists (
+        select 1
+        from shipments s
+        inner join billing_line_items b on b.order_id = s.order_id
+        inner join clients c on c.id = b.client_id
+        where s.voided = true
+          and b.ship_date >= ${fromIso}::timestamptz
+          and b.ship_date < ${toIso}::timestamptz
+          and b.order_id is not null
+          and c.active = true
+          and c.name not in (${systemClientNamesSql})
+          ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
+          and ${billingClientScopePredicate(input)}
+          and s.updated_at > (
+            select max(b2.created_at)
+            from billing_line_items b2
+            where b2.order_id = s.order_id
+              and b2.ship_date >= ${fromIso}::timestamptz
+              and b2.ship_date < ${toIso}::timestamptz
+              ${input.clientId !== undefined ? sql`and b2.client_id = ${input.clientId}` : sql``}
+          )
+      ) as void_stale
+    `);
+    return voidRow?.void_stale === true;
+  })();
 
-  const [[billingRow], [staleRow], feeWaiverStale] = await Promise.all([
+  const [[billingRow], [staleRow], feeWaiverStale, voidStale] = await Promise.all([
     billingRowPromise,
     staleRowPromise,
     feeWaiverStalePromise,
+    voidStalePromise,
   ]);
   const latestBilling = billingRow?.latest_billing_ship_date
     ? new Date(billingRow.latest_billing_ship_date)
@@ -620,8 +659,9 @@ export async function billingGenerationStatus(
 
   if (!latestSource) {
     // No new shipments to bill. Still rebuild if prices changed after the
-    // existing lines were generated, so a box-price edit re-prices them.
-    if (pricingStale || feeWaiverStale) {
+    // existing lines were generated, so a box-price edit re-prices them —
+    // or if a billed label was voided (audit B-3), so the dead charge drops.
+    if (pricingStale || feeWaiverStale || voidStale) {
       return rememberBillingStatus(cacheKey, {
         upToDate: false,
         dateFrom: fromIso,
@@ -648,9 +688,11 @@ export async function billingGenerationStatus(
   const latestBillingDay = latestBilling ? isoDayStart(latestBilling) : null;
   const latestSourceDay = isoDayStart(latestSource);
   // A price/config change requires rebuilding the WHOLE range (to re-price the
-  // existing lines), not just the missing tail after the last billed day.
+  // existing lines), not just the missing tail after the last billed day. A
+  // void (audit B-3) likewise rebuilds the whole range so the voided label's
+  // lines are deleted, not just appended after.
   const missingFrom =
-    pricingStale || feeWaiverStale || !latestBilling
+    pricingStale || feeWaiverStale || voidStale || !latestBilling
       ? isoDayStart(from)
       : latestBillingDay === latestSourceDay
         ? latestBillingDay
@@ -890,7 +932,18 @@ export async function generateLineItems(input: GenerateInput) {
     .from(orders)
     .leftJoin(
       shipments,
-      and(eq(shipments.orderId, orders.id), eq(shipments.voided, false))
+      and(
+        eq(shipments.orderId, orders.id),
+        eq(shipments.voided, false),
+        // Audit B-1 (2026-07-13): return labels are NOT outbound billing evidence.
+        // createReturnLabelV2 inserts a second non-voided shipment for the same
+        // orderId (isReturn=true, real cost) — without this filter that row joins
+        // here and the order bills shipping twice (or non-deterministically, since
+        // identical-description lines collide on billing_li_unique and
+        // onConflictDoNothing keeps an arbitrary winner). Read-only filter over
+        // shipped data; matches hugrab-billing-shipping-floor.ts:198.
+        sql`coalesce(${shipments.isReturn}, false) = false`
+      )
     )
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
@@ -1788,6 +1841,21 @@ export async function generateLineItems(input: GenerateInput) {
     try {
       await ensureBillingStorageProofSchema();
       await db.transaction(async (tx) => {
+        // Audit B-4 (2026-07-13): serialize concurrent storage writers for this
+        // client+period. Storage rows have orderId=null, and Postgres default
+        // NULLS DISTINCT means billing_li_unique(orderId, lineType, description)
+        // never fires for them — so two concurrent generates (two operators, or
+        // box-cost bulk-apply's embedded regenerate racing a manual Update
+        // Billing) each saw no row to delete under their snapshots and BOTH
+        // inserted, double-billing storage. The xact advisory lock releases on
+        // commit/rollback; the second writer waits (ms — this tx is 3 small
+        // statements), then its delete sees the committed row.
+        const [storageLockClassId, storageLockObjId] = advisoryLockKeyPair(
+          `billing-storage:${clientId}:${fromIso}:${toIso}`,
+        );
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${storageLockClassId}, ${storageLockObjId})`,
+        );
         // PS-412: replace the editable storage line in the same transaction as
         // its proof. Finalized storage remains untouched and makes the insert
         // fail closed, rolling the proof update back as well.
@@ -2322,7 +2390,13 @@ export async function billingDetails(input: GenerateInput) {
           selectedRateCost: shipments.selectedRateCost, // PS-370
         })
         .from(shipments)
-        .where(and(eq(shipments.voided, false), fallbackShipmentWhere))
+        .where(and(
+          eq(shipments.voided, false),
+          // Audit B-1: never surface a return label as the order's purchased
+          // shipping proof in billingDetails (tracking/cost/selected-rate).
+          sql`coalesce(${shipments.isReturn}, false) = false`,
+          fallbackShipmentWhere
+        ))
         .orderBy(desc(shipments.id))
     : [];
   const fallbackShipmentByOrderId = new Map<number, (typeof fallbackShipments)[number]>();

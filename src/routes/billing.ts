@@ -312,6 +312,13 @@ app.put(
   zValidator('json', configBody),
   async (c) => {
     const clientId = Number(c.req.param('clientId'));
+    // Audit B-6 (2026-07-13): financials:write alone is not enough — a
+    // client-scoped operator must not rewrite another tenant's fee schedule.
+    // Same scope gate as PUT /package-prices.
+    const configScope = billingScopeFromContext(c);
+    if (!(await canAccessBillingClient(clientId, configScope))) {
+      return c.json({ error: 'Client not found' }, 404);
+    }
     const body = c.req.valid('json');
     const row = await upsertBillingConfig(clientId, {
       pickPackFee:
@@ -2144,6 +2151,12 @@ app.post(
   ),
   async (c) => {
     const { packageId, price } = c.req.valid('json');
+    // Audit B-6 (2026-07-13): this write touches EVERY client's non-custom
+    // price row — only global-scope operators may run it.
+    const setDefaultScope = billingScopeFromContext(c);
+    if (!setDefaultScope.isGlobal) {
+      return c.json({ error: 'Default package prices require global billing scope' }, 403);
+    }
     // Mark this package's default price across all clients that haven't
     // customized it.
     const result = await db

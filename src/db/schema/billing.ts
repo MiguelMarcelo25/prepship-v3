@@ -9,7 +9,9 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { clients } from './clients.js';
 import { orders } from './orders.js';
 import { shipments } from './shipments.js';
@@ -70,6 +72,16 @@ export const billingLineItems = pgTable(
     index('billing_li_client_idx').on(t.clientId),
     index('billing_li_date_idx').on(t.shipDate),
     unique('billing_li_unique').on(t.orderId, t.lineType, t.description),
+    // Audit B-4 (2026-07-13): storage lines carry orderId NULL, and Postgres
+    // default NULLS DISTINCT means billing_li_unique never fires for them — two
+    // concurrent generates could both insert the same storage line. This partial
+    // unique closes the hole at the DB layer (created on prod via migration
+    // audit_2026_07_13_week1_indexes_and_rls; zero violations existed). The
+    // generator also takes an xact advisory lock, so a collision here is a
+    // loud last-resort failure, not a duplicate charge.
+    uniqueIndex('billing_li_storage_unique_idx')
+      .on(t.clientId, t.lineType, t.shipDate, t.description)
+      .where(sql`${t.orderId} is null`),
   ]
 );
 
