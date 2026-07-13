@@ -11,7 +11,16 @@ import { sql } from '../db/client';
 
 export type LabelPurchaseLock = { release: () => Promise<void> };
 
-const LABEL_PURCHASE_LOCK_TTL_SECONDS = 10 * 60;
+// Per user override unlock shipped data on 2026-07-13 (audit C2 interim): the TTL
+// must outlive every AUTOMATIC retry horizon that can re-enter a purchase for the
+// same order. pg-boss re-delivers a hung print-queue send job after expireInSeconds
+// = 30 min (src/services/print-queue-worker.ts) — with the old 10-min TTL the lease
+// was already expired by then, so a worker killed between the provider buy and the
+// shipment persist was silently REPURCHASED on redelivery. 45 min > 30 min + slack
+// makes that redelivery fail closed (LABEL_PURCHASE_IN_PROGRESS -> failed_retryable,
+// operator-visible) instead of buying postage twice. Overridable for tests via env.
+const LABEL_PURCHASE_LOCK_TTL_SECONDS =
+  Number(process.env.LABEL_PURCHASE_LOCK_TTL_SECONDS ?? '') || 45 * 60;
 let schemaEnsured: Promise<void> | null = null;
 
 /** Thrown when another label purchase for the same order holds the lock (operator-safe 409). */

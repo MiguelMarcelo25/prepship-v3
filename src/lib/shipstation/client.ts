@@ -76,6 +76,14 @@ type RequestOpts = {
   apiKey?: string;
   dedupeKey?: string;
   maxRetries?: number;
+  // Per user override unlock shipped data on 2026-07-13 (audit C1): non-idempotent
+  // money-path POSTs (label purchases) must NOT be re-sent on 5xx — ShipStation may
+  // have created the label even though the gateway returned 502/504, so a blind
+  // re-send buys postage again. Purchase callers set retryOn5xx: false; a 5xx then
+  // throws immediately as an UNKNOWN outcome for the caller to reconcile against
+  // /v2/labels. 429 retries stay enabled (rate-limited requests are never processed,
+  // so retrying them cannot double-purchase).
+  retryOn5xx?: boolean;
   // v2-parity: caller can pass its own AbortSignal (e.g. request lifecycle
   // cancellation). We compose it with a 90s timeout signal so the fetch
   // never hangs indefinitely even when the caller didn't set one.
@@ -127,8 +135,10 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
 
         // v2-parity: retry 5xx with exponential backoff (1s, 2s, 4s) before
         // giving up. Matches apps/api/src/common/shipstation/client.ts:300-346.
+        // Exception (audit C1): retryOn5xx=false callers (label purchases) get
+        // exactly one attempt — the provider may have processed the request.
         if (res.status >= 500 && res.status <= 599) {
-          if (attempt >= maxRetries) {
+          if ((opts.retryOn5xx ?? true) === false || attempt >= maxRetries) {
             let body: unknown = null;
             try { body = await res.json(); } catch { body = await res.text(); }
             throw new ShipStationError(

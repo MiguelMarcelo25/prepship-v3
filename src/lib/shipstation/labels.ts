@@ -250,10 +250,16 @@ export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
 export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {
   const body = buildSsLabelRequestBody(input);
 
+  // Per user override unlock shipped data on 2026-07-13 (audit C1): this POST
+  // buys postage and is NOT idempotent (no idempotency key; external_order_id is
+  // not deduped by ShipStation). A 5xx after the label was actually created must
+  // not be re-sent — it becomes an unknown outcome surfaced to the caller instead
+  // of a silent second purchase. 429s (never processed) still retry inside ssRequest.
   const payload = await ssRequest<Record<string, unknown>>('/v2/labels', {
     method: 'POST',
     body,
     apiKey: input.apiKeyV2,
+    retryOn5xx: false,
   });
 
   const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
@@ -318,6 +324,9 @@ export async function ssCreateReturnLabel(
       method: 'POST',
       body: { reason },
       apiKey: apiKeyV2,
+      // Audit C1 (see ssCreateLabel): return-label creation also buys postage —
+      // never blind-retry a 5xx on it.
+      retryOn5xx: false,
     }
   );
   const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
