@@ -1223,12 +1223,15 @@ export default function Home() {
           </div>
         </header>
 
-        <AnimatePresence mode="wait">
+        {/* Audit FE-9/FE-2 enabler (2026-07-13): mode="wait" serialized exit
+            animation -> mount -> data fetch, taxing EVERY navigation ~220-440ms
+            before the new view could even start loading. The keyed enter fade
+            stays; the exit gate is gone — the next view mounts (and fetches)
+            immediately on click. */}
           <motion.div
             key={displayView}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1 min-h-0 flex flex-col"
           >
@@ -1357,7 +1360,6 @@ export default function Home() {
             )}
             </Suspense>
           </motion.div>
-        </AnimatePresence>
 
         {manifestOpen ? (
           <Suspense fallback={null}>
