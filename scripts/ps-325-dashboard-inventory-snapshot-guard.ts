@@ -55,8 +55,13 @@ check('inventory-risk returns the snapshot in BOTH the reporting-metrics and liv
 const dash = read('web/src/components/Views/DashboardView.tsx');
 check('DashboardView imports the shared stock-status owner',
   /from '\.\.\/\.\.\/\.\.\/\.\.\/src\/lib\/inventory-stock-status'/.test(dash));
+// FE-2 (audit 2.2 slice 1): the snapshot now travels through the
+// inventory-risk React Query cache — queryFn passthrough + derived read —
+// instead of a useState setter. Same invariant: the backend snapshot is
+// kept, not dropped.
 check('DashboardView stores the backend snapshot from /dashboard/inventory-risk',
-  /setInventorySnapshot\((inventoryRes\?\.snapshot|.*as InventorySnapshot)/.test(dash));
+  /snapshot: \(\(inventoryRes\?\.snapshot as InventorySnapshot \| undefined\) \?\? null\)/.test(dash) &&
+  /const inventorySnapshot = inventoryRiskQuery\.data\?\.snapshot \?\? null/.test(dash));
 check('the inventory KPIs PREFER the backend snapshot, falling back to the shared owner only on skew',
   /const snapshot = inventorySnapshot \?\? summarizeInventorySnapshot\(inventoryRows\)/.test(dash) &&
   /const inStock = snapshot\.inStock/.test(dash) &&

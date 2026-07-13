@@ -75,7 +75,12 @@ check('Dashboard header reads BACKEND provenance (formatDataFreshness(summaryMet
 check('the freshness helper formats the backend computedAt and labels the missing case',
   /formatCaDateTime\(new Date\(meta\.computedAt\)\)/.test(dash) &&
   /return 'Data freshness unknown'/.test(dash));
-check('Dashboard stores the summary provenance from the fetch', /setSummaryMeta\(/.test(dash));
+// FE-2 (audit 2.2 slice 1): the provenance now travels through the metrics
+// React Query cache — queryFn passthrough + derived read — instead of a
+// useState setter. Same invariant: the fetched meta is kept, not dropped.
+check('Dashboard stores the summary provenance from the fetch',
+  /summaryMeta: \(\(currentOrderAggRes as \{ meta\?: DashboardProvenance \| null \}\)\?\.meta \?\? null\)/.test(dash) &&
+  /const summaryMeta = metricsQuery\.data\?\.summaryMeta \?\? null/.test(dash));
 
 if (failures > 0) {
   console.error(`\nPS-325 dashboard provenance guard FAILED with ${failures} failure(s).`);

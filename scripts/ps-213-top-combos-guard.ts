@@ -135,8 +135,12 @@ assert.ok(dashboardView.includes('fetchDashboardTopSkus({ from: currentFrom, to:
 assert.ok(dashboardView.includes('topSkuRows.map((row, index)'),
   'the existing Top SKUs list rendering must stay untouched');
 // The combos list re-fetches when the canonical filter or window changes.
-assert.ok(/\}, \[skuPanelTab, selectedClientId, dateRange\.from, dateRange\.to\]\)/.test(dashboardView),
-  'the combos fetch effect must re-run on the canonical client filter + date window');
+// FE-2 (audit 2.2 slice 1): the effect became a React Query — the tab gates
+// `enabled`, and the canonical filters ride the query key so a client/date
+// change re-keys (and re-fetches) the combos exactly like the old deps array.
+assert.ok(dashboardView.includes("enabled: skuPanelTab === 'combos'") &&
+  /queryKey: \['dashboard', 'top-combos', dashboardScope\.currentFrom, dashboardScope\.currentTo, dashboardScope\.cid \?\? null\]/.test(dashboardView),
+  'the combos query must gate on the combos tab and re-key on the canonical client filter + date window');
 // Truncation honesty.
 assert.ok(dashboardView.includes('Showing {topCombos.length} of {topCombosTotal} combos'),
   'the Combos tab must disclose truncation');

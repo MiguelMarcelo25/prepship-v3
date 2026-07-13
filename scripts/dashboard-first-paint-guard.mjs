@@ -37,25 +37,48 @@ assert(
   'DashboardView separates non-critical dashboard work from the critical first paint path',
 );
 
+// FE-2 (audit 2.2 slice 1): the imperative loadDashboard pipeline became
+// React Query queries. The staging invariant is unchanged — the critical
+// metrics aggregate paints first, and the heavy panel queries (sku-trends,
+// inventory-risk pageSize:300, top-skus limit:200) stay parked behind an
+// idle-scheduled gate that opens only after the metrics query settles.
 assert(
-  dashboard.includes("finishPanels(['metrics'])"),
-  'critical summary load finishes the metrics panel before non-critical work',
+  dashboard.includes('const metricsSettled = !metricsQuery.isPending'),
+  'the non-critical gate keys off the critical metrics query settling',
 );
 
 assert(
-  dashboard.includes("finishPanels(['trend', 'topSkus', 'heatmap'])") &&
-    dashboard.includes("finishPanels(['inventory'])") &&
-    dashboard.includes("finishPanels(['table'])"),
-  'trend/topSkus/heatmap, inventory, and table panels finish independently',
+  dashboard.includes('if (nonCriticalReady || !metricsSettled) return') &&
+    dashboard.includes('scheduleDashboardNonCriticalWork(runNonCriticalDashboardWork)'),
+  'non-critical work is scheduled on browser idle only after metrics settle',
 );
 
-const metricsIndex = indexOfOrEnd("finishPanels(['metrics'])");
-const loadingFalseIndex = indexOfOrEnd('setLoading(false)');
-const scheduleIndex = indexOfOrEnd('scheduleDashboardNonCriticalWork(runNonCriticalDashboardWork');
-
+const gateCount = dashboard.split('enabled: nonCriticalReady').length - 1;
 assert(
-  metricsIndex < loadingFalseIndex && loadingFalseIndex < scheduleIndex,
-  'initial load clears global loading after metrics and before scheduling non-critical work',
+  gateCount >= 3,
+  `sku-trends, inventory-risk, and top-skus queries defer behind the idle gate (found ${gateCount}, need >= 3)`,
+);
+
+// The critical metrics query itself must never sit behind a gate.
+const metricsBlock = dashboard.slice(
+  indexOfOrEnd('const metricsQuery = useQuery'),
+  indexOfOrEnd('const shippingMarginQuery = useQuery'),
+);
+assert(
+  metricsBlock.length > 0 && !metricsBlock.includes('enabled:'),
+  'the critical metrics query is ungated (critical first paint)',
+);
+
+// Panels still load/finish independently — per-query status, not one blob
+// (the React Query form of the old finishPanels(['metrics']) /
+// finishPanels(['trend', 'topSkus', 'heatmap']) / (['inventory']) /
+// (['table']) groups).
+assert(
+  dashboard.includes('metrics: metricsQuery.isPending') &&
+    dashboard.includes('trend: skuTrendsQuery.isPending') &&
+    dashboard.includes('inventory: inventoryRiskQuery.isPending') &&
+    dashboard.includes('table: topSkusQuery.isPending'),
+  'metrics, trend/topSkus/heatmap, inventory, and table panels finish independently',
 );
 
 assert(

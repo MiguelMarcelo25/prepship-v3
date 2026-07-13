@@ -1,4 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+// FE-2 (audit 2.2 slice 1): every dashboard GET now flows through React Query
+// (['dashboard', ...] keys) so remounts within staleTime paint from cache with
+// zero refetches. Mutation-free view — useQueryClient exists only for the
+// operator Refresh button's invalidate.
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 // PS-150: reorder policy (velocity model) is owned by the backend layer (src/lib); the Dashboard
 // delegates so the restock/days-supply math can't drift from the dashboard /inventory-risk route.
@@ -144,23 +149,34 @@ type ShippingMarginSummary = {
 
 type DashboardPanelKey = 'metrics' | 'inventory' | 'trend' | 'topSkus' | 'heatmap' | 'table'
 
-const createDashboardPanelLoading = (value: boolean): Record<DashboardPanelKey, boolean> => ({
-  metrics: value,
-  inventory: value,
-  trend: value,
-  topSkus: value,
-  heatmap: value,
-  table: value,
-})
+// FE-2 (audit 2.2 slice 1): dashboard data now lives in the React Query cache
+// (keyed under ['dashboard', ...]) instead of per-mount useState, so navigating
+// away and back re-renders the cached DTOs instantly instead of refiring ~10
+// endpoints. These module-level empty fallbacks keep referential identity
+// stable across renders while a query has no data yet (memo deps depend on it).
+// They are read-only — every consumer treats them as immutable.
+const EMPTY_CLIENTS: Client[] = []
+const EMPTY_SALES_PAYLOAD: SalesPayload = { dates: [], topSkus: [], series: {} }
+const EMPTY_DAILY_COUNTS: DailyOrderCount[] = []
+const EMPTY_INVENTORY_ROWS: InventoryItem[] = []
+const EMPTY_ANALYSIS_ROWS: AnalysisSku[] = []
+const EMPTY_CLIENT_REVENUE_ROWS: Array<{ day: string; clientId: number | null; revenue: number; count: number }> = []
+// emptyDashboardOrderAgg / emptyShippingMarginSummary are hoisted function
+// declarations (defined below), so calling them here at module init is safe.
+const EMPTY_DASHBOARD_ORDER_AGG: DashboardOrderAgg = emptyDashboardOrderAgg()
+const EMPTY_SHIPPING_MARGIN_SUMMARY: ShippingMarginSummary = emptyShippingMarginSummary()
+const EMPTY_SHIPPING_MARGIN_CARRIERS: ShippingMarginCarrierDto[] = []
+const DEFAULT_SYNC_CHIP_DATA: SyncStatusChipData = {
+  lastSync: null,
+  cadenceMinutes: undefined,
+  status: 'idle',
+}
 
-const createDashboardPanelErrors = (value: string | null = null): Record<DashboardPanelKey, string | null> => ({
-  metrics: value,
-  inventory: value,
-  trend: value,
-  topSkus: value,
-  heatmap: value,
-  table: value,
-})
+// Same message rule the old per-panel .catch handlers used: surface the real
+// Error message when there is one, otherwise the panel's stable fallback copy.
+function dashboardErrorMessage(loadError: unknown, fallback: string): string {
+  return loadError instanceof Error ? loadError.message : fallback
+}
 
 function scheduleDashboardNonCriticalWork(callback: () => void) {
   if (typeof window === 'undefined') {
@@ -933,7 +949,9 @@ function useDashboardDesktopLayout(): boolean {
 
 export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const isDesktopLayout = useDashboardDesktopLayout()
-  const [clients, setClients] = useState<Client[]>([])
+  // Only used by the operator Refresh button (invalidate) — this view has no
+  // mutations of its own.
+  const queryClient = useQueryClient()
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
   // Operator-selected date range that drives every API call below.
   // Default is the last 30 days ending today (matches the old
@@ -943,93 +961,304 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // immediately preceding) used by trend / top-SKUs / heatmap.
   const [dateRange, setDateRange] = useState<DateRange>(() => defaultLast30())
   // Sync status feeds the live-data chip in the dashboard header.
-  // Polled every 30s (independent of the main dashboard reload)
-  // so operators see the cron cadence and last-synced time without
-  // having to refresh the whole page.
-  const [syncChipData, setSyncChipData] = useState<SyncStatusChipData>({
-    lastSync: null,
-    cadenceMinutes: undefined,
-    status: 'idle',
-  })
-  useEffect(() => {
-    let cancelled = false
-    const fetchStatus = async () => {
-      try {
-        const status: any = await apiClient.fetchLegacySyncStatus()
-        if (cancelled) return
-        setSyncChipData({
-          lastSync: typeof status?.lastSync === 'number' ? status.lastSync : null,
-          cadenceMinutes: status?.cadenceMinutes ?? undefined,
-          status: (status?.status as SyncStatusChipData['status']) ?? 'idle',
-          workerMode: status?.worker?.status?.mode ?? null,
-          queueStarted: Boolean(
-            status?.queue?.started ||
-              (status?.worker?.status?.schedulerEnabled && !status?.worker?.stale)
-          ),
-          queuedJobs: Array.isArray(status?.queue?.queues)
-            ? status.queue.queues.reduce((sum: number, queue: { size?: number | null }) => sum + Number(queue.size ?? 0), 0)
-            : null,
-        })
-      } catch {
-        // Non-fatal — chip just stays in its previous state.
+  // Polled every 60s via refetchInterval (independent of the main dashboard
+  // queries) so operators see the cron cadence and last-synced time without
+  // having to refresh the whole page. React Query pauses the interval while
+  // the tab is backgrounded — the same effect as the old
+  // document.visibilityState gate on the setInterval it replaces.
+  const syncStatusQuery = useQuery({
+    queryKey: ['dashboard', 'sync-status'],
+    queryFn: async (): Promise<SyncStatusChipData> => {
+      const status: any = await apiClient.fetchLegacySyncStatus()
+      return {
+        lastSync: typeof status?.lastSync === 'number' ? status.lastSync : null,
+        cadenceMinutes: status?.cadenceMinutes ?? undefined,
+        status: (status?.status as SyncStatusChipData['status']) ?? 'idle',
+        workerMode: status?.worker?.status?.mode ?? null,
+        queueStarted: Boolean(
+          status?.queue?.started ||
+            (status?.worker?.status?.schedulerEnabled && !status?.worker?.stale)
+        ),
+        queuedJobs: Array.isArray(status?.queue?.queues)
+          ? status.queue.queues.reduce((sum: number, queue: { size?: number | null }) => sum + Number(queue.size ?? 0), 0)
+          : null,
       }
+    },
+    refetchInterval: 60_000,
+  })
+  // Fetch failures are non-fatal: React Query keeps the last successful data,
+  // so the chip just stays in its previous state (idle before the first load).
+  const syncChipData = syncStatusQuery.data ?? DEFAULT_SYNC_CHIP_DATA
+
+  // Reporting client scope for the canonical dashboard client filter —
+  // transform mirrors the old loadDashboard clients handler verbatim.
+  const reportingClientsQuery = useQuery<Client[]>({
+    queryKey: ['dashboard', 'reporting-clients'],
+    queryFn: async () => {
+      const clientsRes: any[] = await apiClient.listReportingClients()
+      return safeArray<any>(clientsRes)
+        .map((client) => ({
+          clientId: num(client?.clientId ?? client?.id),
+          name: String(client?.name ?? '').trim(),
+        }))
+        .filter((client) => client.clientId > 0 && client.name)
+        .sort((left, right) => left.name.localeCompare(right.name))
+    },
+  })
+  const clients = reportingClientsQuery.data ?? EMPTY_CLIENTS
+  // If the freshly-loaded client list no longer contains the active filter
+  // (client disabled/removed since it was picked), fall back to All Clients —
+  // same recovery the old loadDashboard clients handler performed.
+  useEffect(() => {
+    const nextClients = reportingClientsQuery.data
+    if (!nextClients) return
+    setSelectedClientId((current) =>
+      current != null && !nextClients.some((client) => client.clientId === current) ? null : current,
+    )
+  }, [reportingClientsQuery.data])
+  // ── Dashboard query scope ─────────────────────────────────────────────
+  // Replace hardcoded last-30-days with the operator-chosen range from the
+  // DateRangePicker. priorRange() gives us the "same length, immediately
+  // preceding" window for the comparison metrics (trend dashed line, heatmap
+  // baseline, KPI vs-prior arrows). This one memo feeds every dashboard
+  // query key + queryFn below, so a client/date change re-keys the queries —
+  // the React Query analogue of the old loadDashboard('initial') effect
+  // re-running on the canonical filters.
+  const dashboardScope = useMemo(() => {
+    const currentFrom = dateRange.from
+    const currentTo = dateRange.to
+    const prior = priorRange(dateRange)
+    const priorFrom = prior.from
+    const priorTo = prior.to
+    // Keep the 7-day KPI literal: last seven calendar days inside
+    // the active dashboard window, not a percentage of the range.
+    const rangeLengthDays = inclusiveRangeDays(currentFrom, currentTo)
+    const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))
+    const priorSevenFrom = dateOffsetFrom(priorTo, Math.min(6, rangeLengthDays - 1))
+    const cid = selectedClientId ?? undefined
+    return {
+      currentFrom,
+      currentTo,
+      priorFrom,
+      priorTo,
+      sevenFrom,
+      priorSevenFrom,
+      cid,
+      // Stable string identity for the non-critical first-paint gate below.
+      key: `${currentFrom}|${currentTo}|${cid ?? 'all'}`,
     }
-    void fetchStatus()
-    const id = setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      void fetchStatus()
-    }, 60_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
-  const [currentSales, setCurrentSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
-  const [priorSales, setPriorSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
-  const [currentDailyCounts, setCurrentDailyCounts] = useState<DailyOrderCount[]>([])
-  const [priorDailyCounts, setPriorDailyCounts] = useState<DailyOrderCount[]>([])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- from/to are the only dateRange fields read (priorRange derives from them too)
+  }, [selectedClientId, dateRange.from, dateRange.to])
+
+  // ── Critical first paint — KPI / daily-count aggregates ───────────────
+  // One atomic query preserving the old criticalMetricsPromise semantics:
+  // the four aggregate calls resolve together and the metrics panel
+  // renders (or faults) as a unit.
+  const metricsQuery = useQuery({
+    queryKey: ['dashboard', 'metrics', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    queryFn: async () => {
+      const { currentFrom, currentTo, priorFrom, priorTo, sevenFrom, priorSevenFrom, cid } = dashboardScope
+      const [
+        currentDailyCountsRes,
+        priorDailyCountsRes,
+        currentOrderAggRes,
+        priorOrderAggRes,
+      ] = await Promise.all([
+        // Keep initial dashboard paint on dedicated aggregate endpoints.
+        // The heavier SKU breakdown table loads as its own panel payload.
+        apiClient.fetchDashboardDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSummary({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSummary({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
+      ])
+      return {
+        currentDailyCounts: safeArray<DailyOrderCount>(currentDailyCountsRes?.data),
+        priorDailyCounts: safeArray<DailyOrderCount>(priorDailyCountsRes?.data),
+        currentOrderAgg: normalizeDashboardOrderAgg(currentOrderAggRes),
+        priorOrderAgg: normalizeDashboardOrderAgg(priorOrderAggRes),
+        // PS-325 (slice 4): provenance of the /dashboard/summary payload
+        // (computedAt / live-vs-cache) for the honest "Data as of" header.
+        // Null until loaded or during backend deploy skew -> "freshness unknown".
+        summaryMeta: ((currentOrderAggRes as { meta?: DashboardProvenance | null })?.meta ?? null),
+      }
+    },
+  })
+
+  // Shipping-margin analytics ride alongside the critical load (ungated),
+  // exactly like the old shippingMarginPromise fired with the first batch.
+  const shippingMarginQuery = useQuery({
+    queryKey: ['dashboard', 'shipping-margin', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    queryFn: async () => {
+      const { currentFrom, currentTo, cid } = dashboardScope
+      const shippingMarginRes: any = await apiClient.fetchDashboardShippingMarginAnalytics({ from: currentFrom, to: currentTo, clientId: cid })
+      return {
+        canViewFinancials: shippingMarginRes?.canViewFinancials !== false,
+        summary: normalizeShippingMarginSummary(shippingMarginRes?.summary),
+        // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]).
+        carriers: normalizeShippingMarginCarriers(shippingMarginRes?.carriers),
+      }
+    },
+  })
+
+  // ── First-paint staging (see scripts/dashboard-first-paint-guard.mjs) ──
+  // The KPI/metrics aggregate is the critical path; the heavier panel
+  // queries below (sku-trends ×2, inventory-risk pageSize:300, top-skus
+  // limit:200) stay parked until the metrics query settles AND the browser
+  // reports idle — the same requestIdleCallback deferral the imperative
+  // loader used. `enabled` only defers FETCHES: a remount that already has
+  // cached panel data paints it immediately regardless of the gate, so the
+  // staging never delays cached repaints, only first-time network work. The
+  // gate re-arms per scope key so a client/date change keeps the "metrics
+  // first, heavy panels on idle" order.
+  const metricsSettled = !metricsQuery.isPending
+  const [readyScopeKey, setReadyScopeKey] = useState<string | null>(null)
+  const nonCriticalReady = readyScopeKey === dashboardScope.key
+  useEffect(() => {
+    if (nonCriticalReady || !metricsSettled) return
+    const runNonCriticalDashboardWork = () => setReadyScopeKey(dashboardScope.key)
+    return scheduleDashboardNonCriticalWork(runNonCriticalDashboardWork)
+  }, [dashboardScope.key, metricsSettled, nonCriticalReady])
+
+  // ── Non-critical panels (idle-deferred behind the gate above) ─────────
+  const skuTrendsQuery = useQuery({
+    queryKey: ['dashboard', 'sku-trends', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    enabled: nonCriticalReady,
+    queryFn: async () => {
+      const { currentFrom, currentTo, priorFrom, priorTo, cid } = dashboardScope
+      const [currentSalesRes, priorSalesRes] = await Promise.all([
+        apiClient.fetchDashboardSkuTrends({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSkuTrends({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
+      ])
+      return {
+        currentSales: (currentSalesRes ?? EMPTY_SALES_PAYLOAD) as SalesPayload,
+        priorSales: (priorSalesRes ?? EMPTY_SALES_PAYLOAD) as SalesPayload,
+      }
+    },
+  })
+
+  const inventoryRiskQuery = useQuery({
+    // No date inputs on purpose — /dashboard/inventory-risk is a
+    // point-in-time stock read (clientId/active/pageSize only), so the key
+    // omits the range: a date change reuses the cached snapshot instead of
+    // refiring the pageSize:300 fetch with byte-identical params.
+    queryKey: ['dashboard', 'inventory-risk', dashboardScope.cid ?? null],
+    enabled: nonCriticalReady,
+    queryFn: async () => {
+      const { cid } = dashboardScope
+      const inventoryRes: any = await apiClient.fetchDashboardInventoryRisk({ ...(cid ? { clientId: cid } : {}), active: true, pageSize: 300 })
+      return {
+        items: safeArray<InventoryItem>(inventoryRes?.items),
+        // PS-325: the backend-owned In/Low/Out-of-Stock snapshot from
+        // /dashboard/inventory-risk. Null until loaded (or during backend
+        // deploy skew); the kpis memo falls back to the shared owner so the
+        // counts are never re-defined here.
+        snapshot: ((inventoryRes?.snapshot as InventorySnapshot | undefined) ?? null),
+      }
+    },
+  })
+
+  const topSkusQuery = useQuery({
+    queryKey: ['dashboard', 'top-skus', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    enabled: nonCriticalReady,
+    queryFn: async () => {
+      const { currentFrom, currentTo, cid } = dashboardScope
+      const analysisRes: any = await apiClient.fetchDashboardTopSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
+      return safeArray<AnalysisSku>(analysisRes?.skus)
+    },
+  })
+
   // PS-212: the chart-local `trendClientId` override is GONE. It let the
   // Daily Orders Trend re-scope to a client while Top SKUs / heatmap / KPIs
   // stayed global — DJ's report showed exactly that split (HUGRAB trend, KF
   // Goods SKUs) and his invariant is the opposite: selecting a client must
   // correlate EVERY client-scoped panel. The chart dropdown now drives the
-  // one canonical dashboard filter (`selectedClientId`); the dashboard load
-  // already passes it to every endpoint, so the chart renders the shared
+  // one canonical dashboard filter (`selectedClientId`); that filter rides
+  // every dashboard query key above, so the chart renders the shared
   // (scoped) data with no dedicated fetch.
   // Per-client daily order value for the "All Clients" multi-line view —
   // one line per client. Only fetched when the dashboard filter is on
-  // "All Clients" (selectedClientId == null).
-  const [clientRevenueRows, setClientRevenueRows] = useState<
-    Array<{ day: string; clientId: number | null; revenue: number; count: number }>
-  >([])
-  const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
-  // PS-325: the backend-owned In/Low/Out-of-Stock snapshot from /dashboard/inventory-risk. Null until
-  // loaded (or during backend deploy skew); the kpis memo falls back to the shared owner so the
-  // counts are never re-defined here.
-  const [inventorySnapshot, setInventorySnapshot] = useState<InventorySnapshot | null>(null)
-  const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
-  const [currentOrderAgg, setCurrentOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
-  // PS-325 (slice 4): provenance of the /dashboard/summary payload (computedAt / live-vs-cache) for the
-  // honest "Data as of" header. Null until loaded or during backend deploy skew -> "freshness unknown".
-  const [summaryMeta, setSummaryMeta] = useState<DashboardProvenance | null>(null)
-  const [priorOrderAgg, setPriorOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
-  const [, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [panelLoading, setPanelLoading] = useState<Record<DashboardPanelKey, boolean>>(() =>
-    createDashboardPanelLoading(true),
-  )
-  const [panelErrors, setPanelErrors] = useState<Record<DashboardPanelKey, string | null>>(() =>
-    createDashboardPanelErrors(),
-  )
-  const [shippingMarginSummary, setShippingMarginSummary] = useState<ShippingMarginSummary>(() =>
-    emptyShippingMarginSummary(),
-  )
-  const [shippingMarginLoading, setShippingMarginLoading] = useState(true)
-  const [shippingMarginError, setShippingMarginError] = useState<string | null>(null)
-  const [shippingMarginAvailable, setShippingMarginAvailable] = useState(true)
+  // "All Clients" (selectedClientId == null); ungated (it fired with the
+  // first batch before, too).
+  const dailyRevenueByClientQuery = useQuery({
+    queryKey: ['dashboard', 'daily-revenue-by-client', dashboardScope.currentFrom, dashboardScope.currentTo],
+    enabled: selectedClientId == null,
+    queryFn: async () => {
+      const res = await apiClient.fetchDashboardDailyRevenueByClient({ from: dateRange.from, to: dateRange.to, hideTestOrders: true })
+      return safeArray<{ day: string; clientId: number | null; revenue: number; count: number }>(res?.data)
+    },
+  })
+
+  // ── Backend DTOs rendered verbatim (PS-316: no FE-owned business truth).
+  // Module-level EMPTY_* fallbacks keep referential identity stable for the
+  // memo chains below while a query has no data yet.
+  const currentSales = skuTrendsQuery.data?.currentSales ?? EMPTY_SALES_PAYLOAD
+  const priorSales = skuTrendsQuery.data?.priorSales ?? EMPTY_SALES_PAYLOAD
+  const currentDailyCounts = metricsQuery.data?.currentDailyCounts ?? EMPTY_DAILY_COUNTS
+  const priorDailyCounts = metricsQuery.data?.priorDailyCounts ?? EMPTY_DAILY_COUNTS
+  // Cleared (not just hidden) when a client is selected or the fetch failed —
+  // the same shape the old effect maintained.
+  const clientRevenueRows =
+    selectedClientId == null && !dailyRevenueByClientQuery.isError
+      ? dailyRevenueByClientQuery.data ?? EMPTY_CLIENT_REVENUE_ROWS
+      : EMPTY_CLIENT_REVENUE_ROWS
+  const inventoryRows = inventoryRiskQuery.data?.items ?? EMPTY_INVENTORY_ROWS
+  const inventorySnapshot = inventoryRiskQuery.data?.snapshot ?? null
+  const analysisRows = topSkusQuery.data ?? EMPTY_ANALYSIS_ROWS
+  const currentOrderAgg = metricsQuery.data?.currentOrderAgg ?? EMPTY_DASHBOARD_ORDER_AGG
+  const summaryMeta = metricsQuery.data?.summaryMeta ?? null
+  const priorOrderAgg = metricsQuery.data?.priorOrderAgg ?? EMPTY_DASHBOARD_ORDER_AGG
+  const shippingMarginAvailable = shippingMarginQuery.data?.canViewFinancials ?? true
+  const shippingMarginSummary = shippingMarginQuery.data?.summary ?? EMPTY_SHIPPING_MARGIN_SUMMARY
+  // isFetching keeps the refresh-path parity: the old loader flipped the
+  // margin tiles back to skeletons during a manual refresh as well.
+  const shippingMarginLoading = shippingMarginQuery.isPending || shippingMarginQuery.isFetching
+  const shippingMarginError = shippingMarginQuery.isError
+    ? dashboardErrorMessage(shippingMarginQuery.error, 'Failed to load shipping margin')
+    : null
   // PS-296 (FE): the carrier/account margin breakdown rows (backend analytics.carriers[]).
-  const [shippingMarginCarriers, setShippingMarginCarriers] = useState<ShippingMarginCarrierDto[]>([])
+  const shippingMarginCarriers = shippingMarginQuery.data?.carriers ?? EMPTY_SHIPPING_MARGIN_CARRIERS
+
+  // Per-panel loading/error state derived straight from query status — the
+  // panels still finish independently (metrics | trend+topSkus+heatmap |
+  // inventory | table), matching the old finishPanels()/failPanels() groups.
+  const panelLoading: Record<DashboardPanelKey, boolean> = {
+    metrics: metricsQuery.isPending,
+    inventory: inventoryRiskQuery.isPending,
+    trend: skuTrendsQuery.isPending,
+    topSkus: skuTrendsQuery.isPending,
+    heatmap: skuTrendsQuery.isPending,
+    table: topSkusQuery.isPending,
+  }
+  const panelErrors: Record<DashboardPanelKey, string | null> = {
+    metrics: metricsQuery.isError ? dashboardErrorMessage(metricsQuery.error, 'Failed to load dashboard metrics') : null,
+    inventory: inventoryRiskQuery.isError ? dashboardErrorMessage(inventoryRiskQuery.error, 'Failed to load inventory snapshot') : null,
+    trend: skuTrendsQuery.isError ? dashboardErrorMessage(skuTrendsQuery.error, 'Failed to load dashboard trends') : null,
+    topSkus: skuTrendsQuery.isError ? dashboardErrorMessage(skuTrendsQuery.error, 'Failed to load dashboard trends') : null,
+    heatmap: skuTrendsQuery.isError ? dashboardErrorMessage(skuTrendsQuery.error, 'Failed to load dashboard trends') : null,
+    table: topSkusQuery.isError ? dashboardErrorMessage(topSkusQuery.error, 'Failed to load SKU performance summary') : null,
+  }
+
+  // Whole-dashboard banner: reserved for client-scope failures (the only
+  // global-error writer the old loader had). Panel failures render inside
+  // their own panels above.
+  const error = reportingClientsQuery.isError
+    ? dashboardErrorMessage(reportingClientsQuery.error, 'Failed to load client scope')
+    : null
+
+  // Operator Refresh: invalidate the ['dashboard'] prefix — active queries
+  // refetch in place (rendered data stays up, per-panel skeletons do NOT
+  // reappear, matching the old mode:'refresh'), while disabled queries
+  // (combos on the SKUs tab, per-client revenue with a client selected) are
+  // only marked stale and refetch on their next activation.
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshDashboard = async () => {
+    setRefreshing(true)
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    } finally {
+      setRefreshing(false)
+    }
+  }
   const [sortState, setSortState] = useState<SortState<DashboardSortKey>>({ key: 'units30', direction: 'desc' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE)
@@ -1048,7 +1277,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // container (which also covers Esc-key dismissal for keyboard users).
   const columnsPopoverRef = useRef<HTMLDivElement>(null)
   const filtersPopoverRef = useRef<HTMLDivElement>(null)
-  const dashboardLoadSeqRef = useRef(0)
   useEffect(() => {
     if (!showColumns && !showFilters) return
     const onMouseDown = (event: MouseEvent) => {
@@ -1301,35 +1529,25 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // PS-213 — Combos tab inside the Top SKUs panel: which SKU combinations
   // sell TOGETHER (comboSales = order count; backend owns the PS-037 combo
   // normalization + the same client scoping as Top SKUs). Fetched lazily on
-  // first tab switch, re-fetched when the canonical client filter or the
-  // date window changes — same scope inputs as every other dashboard panel.
-  type ComboRow = {
-    comboKey: string
-    items: Array<{ sku: string; qty: number; name: string | null }>
-    skuCount: number
-    comboSales: number
-    units: number
-    revenue: number | null
-  }
+  // first tab switch (`enabled`), re-keyed when the canonical client filter
+  // or the date window changes — same scope inputs as every other dashboard
+  // panel. Re-opening the tab within staleTime renders the cached combos
+  // instantly with no refetch.
   const [skuPanelTab, setSkuPanelTab] = useState<'skus' | 'combos'>('skus')
-  const [topCombos, setTopCombos] = useState<ComboRow[]>([])
-  const [topCombosTotal, setTopCombosTotal] = useState(0)
-  const [topCombosLoading, setTopCombosLoading] = useState(false)
-  useEffect(() => {
-    if (skuPanelTab !== 'combos') return
-    let cancelled = false
-    setTopCombosLoading(true)
-    const cid = selectedClientId ?? undefined
-    apiClient
-      .fetchDashboardTopCombos({ from: dateRange.from, to: dateRange.to, limit: 50, clientId: cid, hideTestOrders: true })
-      .then((res) => {
-        if (cancelled) return
-        setTopCombos(res.combos)
-        setTopCombosTotal(res.totalCombos)
-      })
-      .finally(() => { if (!cancelled) setTopCombosLoading(false) })
-    return () => { cancelled = true }
-  }, [skuPanelTab, selectedClientId, dateRange.from, dateRange.to])
+  const topCombosQuery = useQuery({
+    queryKey: ['dashboard', 'top-combos', dashboardScope.currentFrom, dashboardScope.currentTo, dashboardScope.cid ?? null],
+    enabled: skuPanelTab === 'combos',
+    queryFn: () => {
+      const cid = selectedClientId ?? undefined
+      return apiClient.fetchDashboardTopCombos({ from: dateRange.from, to: dateRange.to, limit: 50, clientId: cid, hideTestOrders: true })
+    },
+  })
+  const topCombos = topCombosQuery.data?.combos ?? []
+  const topCombosTotal = topCombosQuery.data?.totalCombos ?? 0
+  // isLoading (pending AND fetching) = first load of this scope only —
+  // matches the old effect's loading flag without flashing the skeleton on
+  // cached re-opens.
+  const topCombosLoading = topCombosQuery.isLoading
 
   const HEATMAP_LIMIT_KEY = 'dashboard_heatmap_limit_v1'
   const [heatmapLimit, setHeatmapLimit] = useState<TopNValue>(() => {
@@ -1651,241 +1869,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     [clients, selectedClientId],
   )
 
-  const loadDashboard = async (mode: 'initial' | 'refresh' = 'initial') => {
-    const loadSeq = ++dashboardLoadSeqRef.current
-    if (mode === 'initial') {
-      setLoading(true)
-      setPanelLoading(createDashboardPanelLoading(true))
-      setInventoryRows([])
-      setInventorySnapshot(null)
-      setSummaryMeta(null)
-      setAnalysisRows([])
-    } else {
-      setRefreshing(true)
-    }
-    setError(null)
-    setPanelErrors(createDashboardPanelErrors())
-    setShippingMarginLoading(true)
-    setShippingMarginError(null)
+  // FE-2 (audit 2.2 slice 1): the imperative loadDashboard() pipeline is
+  // gone. Its pieces map 1:1 onto the React Query declarations above:
+  //   clientsPromise            -> reportingClientsQuery
+  //   criticalMetricsPromise    -> metricsQuery (same atomic 4-call batch)
+  //   shippingMarginPromise     -> shippingMarginQuery
+  //   trend/inventory/analysis  -> skuTrendsQuery / inventoryRiskQuery /
+  //                                topSkusQuery (idle-deferred via the
+  //                                nonCriticalReady gate)
+  //   loadDashboard('refresh')  -> refreshDashboard() (prefix invalidate)
 
-    const finishPanels = (keys: DashboardPanelKey[]) => {
-      if (loadSeq !== dashboardLoadSeqRef.current) return
-      setPanelLoading((current) => {
-        const next = { ...current }
-        for (const key of keys) next[key] = false
-        return next
-      })
-    }
-
-    const failPanels = (keys: DashboardPanelKey[], loadError: unknown, fallback: string) => {
-      if (loadSeq !== dashboardLoadSeqRef.current) return
-      const message = loadError instanceof Error ? loadError.message : fallback
-      setPanelErrors((current) => {
-        const next = { ...current }
-        for (const key of keys) next[key] = message
-        return next
-      })
-      finishPanels(keys)
-    }
-
-    try {
-      // Replace hardcoded last-30-days with operator-chosen range
-      // from the DateRangePicker. priorRange() gives us the
-      // "same length, immediately preceding" window for the
-      // comparison metrics (trend dashed line, heatmap baseline,
-      // KPI vs-prior arrows).
-      const currentFrom = dateRange.from
-      const currentTo = dateRange.to
-      const prior = priorRange(dateRange)
-      const priorFrom = prior.from
-      const priorTo = prior.to
-      // Keep the 7-day KPI literal: last seven calendar days inside
-      // the active dashboard window, not a percentage of the range.
-      const rangeLengthDays = inclusiveRangeDays(currentFrom, currentTo)
-      const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))
-      const priorSevenFrom = dateOffsetFrom(priorTo, Math.min(6, rangeLengthDays - 1))
-      const cid = selectedClientId ?? undefined
-
-      const clientsPromise = apiClient
-        .listReportingClients()
-        .then((clientsRes: any[]) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          const nextClients = safeArray<any>(clientsRes)
-            .map((client) => ({
-              clientId: num(client?.clientId ?? client?.id),
-              name: String(client?.name ?? '').trim(),
-            }))
-            .filter((client) => client.clientId > 0 && client.name)
-            .sort((left, right) => left.name.localeCompare(right.name))
-
-          setClients(nextClients)
-          if (cid && !nextClients.some((client) => client.clientId === cid)) {
-            setSelectedClientId(null)
-          }
-        })
-        .catch((loadError) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setError(loadError instanceof Error ? loadError.message : 'Failed to load client scope')
-        })
-
-      const criticalMetricsPromise = Promise.all([
-        // Keep initial dashboard paint on dedicated aggregate endpoints.
-        // The heavier SKU breakdown table loads as its own panel payload.
-        apiClient.fetchDashboardDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchDashboardDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchDashboardSummary({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchDashboardSummary({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
-      ])
-        .then(([
-          currentDailyCountsRes,
-          priorDailyCountsRes,
-          currentOrderAggRes,
-          priorOrderAggRes,
-        ]) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setCurrentDailyCounts(safeArray<DailyOrderCount>(currentDailyCountsRes?.data))
-          setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
-          setCurrentOrderAgg(normalizeDashboardOrderAgg(currentOrderAggRes))
-          setPriorOrderAgg(normalizeDashboardOrderAgg(priorOrderAggRes))
-          setSummaryMeta((currentOrderAggRes as { meta?: DashboardProvenance | null })?.meta ?? null)
-          setPage(1)
-          finishPanels(['metrics'])
-        })
-        .catch((loadError) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setCurrentDailyCounts([])
-          setPriorDailyCounts([])
-          setCurrentOrderAgg(emptyDashboardOrderAgg())
-          setPriorOrderAgg(emptyDashboardOrderAgg())
-          setSummaryMeta(null)
-          failPanels(['metrics'], loadError, 'Failed to load dashboard metrics')
-        })
-
-      const shippingMarginPromise = apiClient
-        .fetchDashboardShippingMarginAnalytics({ from: currentFrom, to: currentTo, clientId: cid })
-        .then((shippingMarginRes: any) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          const canViewFinancials = shippingMarginRes?.canViewFinancials !== false
-          setShippingMarginAvailable(canViewFinancials)
-          setShippingMarginSummary(normalizeShippingMarginSummary(shippingMarginRes?.summary))
-          setShippingMarginCarriers(normalizeShippingMarginCarriers(shippingMarginRes?.carriers))
-          setShippingMarginError(null)
-          setShippingMarginLoading(false)
-        })
-        .catch((loadError: unknown) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setShippingMarginAvailable(true)
-          setShippingMarginSummary(emptyShippingMarginSummary())
-          setShippingMarginCarriers([])
-          setShippingMarginError(loadError instanceof Error ? loadError.message : 'Failed to load shipping margin')
-          setShippingMarginLoading(false)
-        })
-
-      const runNonCriticalDashboardWork = () => {
-        if (loadSeq !== dashboardLoadSeqRef.current) return
-
-        const trendPromise = Promise.all([
-          apiClient.fetchDashboardSkuTrends({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
-          apiClient.fetchDashboardSkuTrends({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
-        ])
-          .then(([currentSalesRes, priorSalesRes]) => {
-            if (loadSeq !== dashboardLoadSeqRef.current) return
-            setCurrentSales(currentSalesRes ?? { dates: [], topSkus: [], series: {} })
-            setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
-            finishPanels(['trend', 'topSkus', 'heatmap'])
-          })
-          .catch((loadError) => {
-            if (loadSeq !== dashboardLoadSeqRef.current) return
-            setCurrentSales({ dates: [], topSkus: [], series: {} })
-            setPriorSales({ dates: [], topSkus: [], series: {} })
-            failPanels(['trend', 'topSkus', 'heatmap'], loadError, 'Failed to load dashboard trends')
-          })
-
-        const inventoryPromise = apiClient
-          .fetchDashboardInventoryRisk({ ...(cid ? { clientId: cid } : {}), active: true, pageSize: 300 })
-          .then((inventoryRes: any) => {
-            if (loadSeq !== dashboardLoadSeqRef.current) return
-            setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
-            setInventorySnapshot((inventoryRes?.snapshot as InventorySnapshot | undefined) ?? null)
-            finishPanels(['inventory'])
-          })
-          .catch((loadError) => {
-            if (loadSeq !== dashboardLoadSeqRef.current) return
-            setInventoryRows([])
-            setInventorySnapshot(null)
-            failPanels(['inventory'], loadError, 'Failed to load inventory snapshot')
-          })
-
-        const analysisPromise = apiClient
-          .fetchDashboardTopSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
-          .then((analysisRes: any) => {
-            if (loadSeq !== dashboardLoadSeqRef.current) return
-            setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
-            finishPanels(['table'])
-          })
-          .catch((loadError) => {
-            if (loadSeq !== dashboardLoadSeqRef.current) return
-            setAnalysisRows([])
-            failPanels(['table'], loadError, 'Failed to load SKU performance summary')
-          })
-
-        void Promise.allSettled([trendPromise, inventoryPromise, analysisPromise])
-      }
-
-      void clientsPromise
-      void shippingMarginPromise
-      await criticalMetricsPromise
-      if (loadSeq === dashboardLoadSeqRef.current) {
-        setLoading(false)
-        setRefreshing(false)
-        scheduleDashboardNonCriticalWork(runNonCriticalDashboardWork)
-      }
-    } catch (loadError) {
-      if (loadSeq === dashboardLoadSeqRef.current) {
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard')
-        setPanelLoading(createDashboardPanelLoading(false))
-        setLoading(false)
-        setRefreshing(false)
-      }
-    }
-  }
-
-  useEffect(() => {
-    void loadDashboard('initial')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClientId, dateRange.from, dateRange.to])
 
   // PS-212: the dedicated trend-override fetch is DELETED. The dashboard
-  // load already passes `selectedClientId` to /dashboard/daily-counts and
+  // queries already pass `selectedClientId` to /dashboard/daily-counts and
   // /dashboard/summary, so when a client is selected the shared
   // currentDailyCounts / currentOrderAgg ARE that client's series — one
   // filter, one fetch pipeline, every panel in agreement.
-
-  // PS — per-client daily order COUNT for the "All Clients" multi-line
-  // view (the panel is "Daily Orders Trend", so each line is order count,
-  // not order value). Skipped entirely when a client is selected (that
-  // uses the dual-axis Orders + Order value view of the scoped data).
-  useEffect(() => {
-    if (selectedClientId != null) {
-      setClientRevenueRows([])
-      return
-    }
-    let cancelled = false
-    apiClient
-      .fetchDashboardDailyRevenueByClient({ from: dateRange.from, to: dateRange.to, hideTestOrders: true })
-      .then((res) => {
-        if (cancelled) return
-        setClientRevenueRows(safeArray<{ day: string; clientId: number | null; revenue: number; count: number }>(res?.data))
-      })
-      .catch(() => {
-        if (cancelled) return
-        setClientRevenueRows([])
-      })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClientId, dateRange.from, dateRange.to])
+  // (FE-2: the per-client "All Clients" revenue fetch lives in
+  // dailyRevenueByClientQuery near the other dashboard queries above.)
 
   // Daily revenue comes from /orders/dashboard-sales so the
   // Daily Orders Trend chart can render a second line for total order
@@ -2203,7 +2204,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   useEffect(() => {
     setPage(1)
-  }, [brandFilter, categoryFilter, pageSize, selectedClientId, sortState!.direction, sortState!.key])
+    // dateRange joins the reset inputs (FE-2): the old loader re-set page 1
+    // after every metrics reload, which covered date changes implicitly.
+  }, [brandFilter, categoryFilter, pageSize, selectedClientId, dateRange.from, dateRange.to, sortState!.direction, sortState!.key])
 
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages))
@@ -2509,7 +2512,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             {/* Group 5 — Refresh icon */}
             <button
               type="button"
-              onClick={() => loadDashboard('refresh')}
+              onClick={() => { void refreshDashboard() }}
               className="grid h-10 w-12 shrink-0 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand sm:w-10"
               aria-label="Refresh dashboard"
               title="Refresh dashboard"

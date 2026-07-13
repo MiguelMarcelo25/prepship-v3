@@ -65,9 +65,14 @@ check('drilldown caps with a VISIBLE "showing X of N" note (no silent truncation
 
 // Dashboard consumes the same backend carrier rollup (was also discarded — only .summary kept).
 const dashboard = read('web/src/components/Views/DashboardView.tsx');
+// FE-2 (audit 2.2 slice 1): the carriers rollup now travels through the
+// shipping-margin React Query cache — normalized in the queryFn, read via a
+// derived const — instead of a useState setter. Same invariant: the backend
+// carriers[] is normalized and kept, not discarded.
 check('DashboardView normalizes + stores the backend analytics.carriers[]',
   /function normalizeShippingMarginCarriers/.test(dashboard) &&
-  /setShippingMarginCarriers\(normalizeShippingMarginCarriers\(shippingMarginRes\?\.carriers\)\)/.test(dashboard));
+  /carriers: normalizeShippingMarginCarriers\(shippingMarginRes\?\.carriers\)/.test(dashboard) &&
+  /const shippingMarginCarriers = shippingMarginQuery\.data\?\.carriers \?\? EMPTY_SHIPPING_MARGIN_CARRIERS/.test(dashboard));
 // PS-296 restyle (dashboard): the dashboard carrier breakdown moved onto the SAME shared
 // <Table>-based component as Billing (BillingCarrierMarginTable) so it pages instead of rendering
 // every carrier inline. DashboardView still owns the normalize+store above and now WIRES the
