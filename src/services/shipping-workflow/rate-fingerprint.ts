@@ -21,6 +21,16 @@ export type ShippingRateRequestFingerprintInput = {
   insuredValue?: number | null;
   carrierIds?: string[] | null;
   automationRulesVersion?: string | null;
+  // Audit C4 (2026-07-13): ship-from ORIGIN. PS-291 made origin operator-selectable
+  // and origin genuinely changes carrier quotes, but the fingerprint never modeled it
+  // — so a custom-origin browse wrote rate_cache rows that default-origin order rating
+  // then read as truth (cross-origin poisoning, reachable all the way to purchasable
+  // proof), and two concurrent requests differing only in origin shared one in-flight
+  // HTTP dedupe slot. Populated ONLY when the request carries an explicit ship-from;
+  // absent means "account default origin", which keeps every default-flow fingerprint
+  // byte-identical to before (no saved-proof churn from this change).
+  shipFromZip?: string | null;
+  shipFromCountry?: string | null;
   // PS-274: OPTIONAL insurance-CERTAINTY state (e.g. 'requested_application_uncertain'
   // vs 'explicitly_included'). When present it binds the certainty verdict into the
   // fingerprint so an uncertain Shipp rate survives save/purchase and can never
@@ -182,6 +192,12 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
   ];
   if (input.toState) parts.push(`st=${input.toState.trim().toUpperCase()}`);
   if (input.toCity) parts.push(`ci=${input.toCity.trim().toLowerCase().replace(/\s+/g, '-')}`);
+  // Audit C4: explicit ship-from origin binds into the identity; absent = default origin.
+  if (input.shipFromZip) {
+    parts.push(`sf=${normalizeZip(input.shipFromZip, input.shipFromCountry)}`);
+    const sfCountry = (input.shipFromCountry ?? 'US').trim().toUpperCase();
+    if (sfCountry && sfCountry !== 'US') parts.push(`sfc=${sfCountry}`);
+  }
   if (input.residential === true) parts.push('r=1');
   else if (input.residential === false) parts.push('r=0');
   if (input.clientId != null) parts.push(`cl=${input.clientId}`);

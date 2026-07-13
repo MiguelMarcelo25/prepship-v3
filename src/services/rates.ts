@@ -323,7 +323,10 @@ const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
 );
 // PS-108: include the insurance-cost config fingerprint so the cache busts when the
 // ParcelGuard schedule/source changes materially (no stale premium can be reused).
-const RATE_CACHE_VERSION = `ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}|ins=${insuranceCostConfigFingerprint()}`;
+// v3 (audit C4, 2026-07-13): origin-aware fingerprints. The bump purges rate_cache
+// rows written BEFORE origin was part of the key — custom-origin browses had been
+// writing default-shaped keys, so pre-v3 rows may carry wrong-origin prices.
+const RATE_CACHE_VERSION = `ground-saver-v3|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}|ins=${insuranceCostConfigFingerprint()}`;
 const RATE_CONFIRMATIONS = new Set([
   'none',
   'delivery',
@@ -714,6 +717,13 @@ export function rateCacheKey(input: RateInput): string {
     storeId: input.storeId,
     sourceClientId: input.sourceClientId,
     apiKeyFingerprint: input.apiKeyV2 ? apiKeyCacheKey(input.apiKeyV2) : null,
+    // Audit C4: bind the EXPLICIT ship-from origin (PS-291 operator-selected) into
+    // cache/dedupe/proof identity. Absent shipFrom = account default origin (part
+    // omitted -> default-flow keys unchanged). shipFromPostalCode's '90248' fallback
+    // is fine here: it is the same value the estimate body sends, so identity still
+    // matches what was actually quoted.
+    shipFromZip: input.shipFrom ? shipFromPostalCode(input.shipFrom) : null,
+    shipFromCountry: input.shipFrom?.country_code ?? null,
     dimsL: input.dimsL,
     dimsW: input.dimsW,
     dimsH: input.dimsH,
