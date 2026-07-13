@@ -6,6 +6,7 @@
 // user explicitly typing `unlock shipped data` in the conversation.
 // Read freely — modify only with explicit human override.
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { env } from '../lib/env';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { consumeOutboundPackage } from './package-consumption';
@@ -132,10 +133,26 @@ export async function deductPackageForShipment(input: {
 // existing deployments aren't surprised. Flip the flag in Vercel/Render
 // env vars + redeploy when you want the lockdown.
 // ════════════════════════════════════════════════════════════════════
+// Per user override unlock shipped data on 2026-07-13 (audit PL-8): the kill
+// switch now reads the zod-validated env layer instead of raw process.env.
+// OLD behavior: only the exact strings false/0/off/no disabled it — a typo
+// ('fasle', 'disabled') silently left auto-deduction ON, so the documented
+// emergency lockdown could appear engaged while inert, with no boot evidence
+// of the effective value. NEW: booleanFlag(true) — unset stays ON (unchanged
+// default); only true/1/yes enable, so a typo fails TOWARD the switch's
+// purpose (deductions stop, loudly visible below) instead of ignoring the
+// operator. The kill-switch CONTRACT and both governed functions are
+// unchanged; this is the value-resolution swap only.
+let inventoryAutoDeductLogged = false;
 function isInventoryAutoDeductEnabled(): boolean {
-  const raw = (process.env.INVENTORY_AUTO_DEDUCT ?? '').trim().toLowerCase();
-  if (raw === 'false' || raw === '0' || raw === 'off' || raw === 'no') return false;
-  return true;
+  const enabled = env.INVENTORY_AUTO_DEDUCT;
+  if (!inventoryAutoDeductLogged) {
+    inventoryAutoDeductLogged = true;
+    console.log(
+      `[fulfillment-deductions] INVENTORY_AUTO_DEDUCT resolved: ${enabled ? 'ON (auto-deduct active)' : 'OFF (kill switch engaged — no inventory/ledger writes from ship paths)'}`,
+    );
+  }
+  return enabled;
 }
 
 export async function deductInventoryForOrder(

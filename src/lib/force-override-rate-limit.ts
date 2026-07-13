@@ -66,6 +66,51 @@ export function checkForceOverrideRateLimit(actor: string | undefined | null): F
   return { allowed: result.allowed, remaining: result.remaining, retryAfterMs: result.retryAfterMs };
 }
 
+/**
+ * Audit PL-6 (2026-07-13): DURABLE variant. The in-memory store resets on every
+ * restart and is per-instance — the PS-231 cap ("a compromised admin token must
+ * not rewrite unlimited locked records in a burst") silently vanished on redeploy.
+ * Every ALLOWED override already writes an append-only audit_log row
+ * (eventType='lockdown_override', action='force_override' — DB-trigger protected),
+ * so the durable window is derived from those rows: zero new state, correct
+ * across instances and restarts. Falls back to the in-memory window if the audit
+ * query fails (an override attempt should not hard-fail on a transient DB read
+ * error; the in-memory floor still applies and the attempt itself is audited).
+ */
+export async function checkForceOverrideRateLimitDurable(
+  actor: string | undefined | null,
+): Promise<ForceOverrideRateResult> {
+  const key = (actor ?? 'unknown').toLowerCase();
+  const max = configuredForceOverrideMax();
+  try {
+    const { sql } = await import('../db/client');
+    const [row] = await sql<Array<{ n: number; oldest: string | null }>>`
+      SELECT count(*)::int AS n, min(ts)::text AS oldest
+      FROM audit_log
+      WHERE event_type = 'lockdown_override'
+        AND action = 'force_override'
+        AND lower(coalesce(actor_email, 'unknown')) = ${key}
+        AND ts > now() - interval '1 hour'
+    `;
+    const n = Number(row?.n ?? 0);
+    if (n >= max) {
+      const oldestMs = row?.oldest ? Date.parse(row.oldest) : Date.now();
+      return {
+        allowed: false,
+        remaining: 0,
+        retryAfterMs: Math.max(0, WINDOW_MS - (Date.now() - oldestMs)),
+      };
+    }
+    // Keep the in-memory window recording too: it is the only intra-request
+    // backstop (the audit row for THIS attempt is written by the caller after
+    // this check), and it preserves the fallback path's accuracy.
+    checkForceOverrideRateLimit(actor);
+    return { allowed: true, remaining: Math.max(0, max - n - 1), retryAfterMs: 0 };
+  } catch {
+    return checkForceOverrideRateLimit(actor);
+  }
+}
+
 /** Test-only: reset the in-memory store. */
 export function __resetForceOverrideRateLimit(): void {
   store.clear();

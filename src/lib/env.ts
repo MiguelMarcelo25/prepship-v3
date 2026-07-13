@@ -76,6 +76,15 @@ const schema = z.object({
   DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().positive().default(900),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(8),
   DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  // Audit PL-8 (2026-07-13): the inventory-deduction kill switch now flows through
+  // validated env. OLD semantics (fulfillment-deductions.ts): only the exact strings
+  // false/0/off/no disabled it — any typo ('fasle', 'disabled') silently left
+  // auto-deduction ON, i.e. the documented emergency lockdown could appear engaged
+  // while inert. booleanFlag semantics: unset -> true (unchanged default); only
+  // true/1/yes enable — so a typo now fails TOWARD the switch's purpose (deductions
+  // off) instead of silently ignoring the operator. Resolved value is logged at
+  // first use by fulfillment-deductions.ts.
+  INVENTORY_AUTO_DEDUCT: booleanFlag(true),
   STRICT_JWT_CLAIMS: booleanFlag(false),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.

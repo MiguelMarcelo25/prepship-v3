@@ -93,7 +93,8 @@ import { recordAuditEvent, auditActorFromContext } from '../services/audit-log';
 import { type BundleRowDto } from '../services/shipment-bundles/bundle-read-model';
 import { resolveScopedBundles, createScopedBundle, BundleScopeError } from '../services/shipment-bundles/resolve-scoped-bundles';
 // PS-231: per-admin rate limit on the ?force=1 lockdown override.
-import { checkForceOverrideRateLimit } from '../lib/force-override-rate-limit';
+// Audit PL-6 (2026-07-13): durable variant backed by lockdown_override audit rows.
+import { checkForceOverrideRateLimitDurable } from '../lib/force-override-rate-limit';
 import { KNOWN_CARRIER_ACCOUNTS } from '../lib/carrier-account-registry';
 import { activeClientPredicateSql } from '../lib/active-client-predicate';
 import { manualOrdersOrderPredicateSql } from '../lib/manual-orders-visibility';
@@ -356,7 +357,11 @@ async function assertOrderEditable(
     // PS-231: cap how many shipped/cancelled overrides one admin can do per hour —
     // a compromised admin token must not rewrite unlimited locked records in a
     // burst. A throttled attempt is itself audited and rejected with 429.
-    const rl = checkForceOverrideRateLimit(callerEmail);
+    // Per user override unlock shipped data on 2026-07-13 (audit PL-6): the cap is
+    // now DURABLE — derived from the append-only lockdown_override audit rows, so
+    // a restart or second instance no longer resets the security throttle.
+    // Call-site swap only; assertOrderEditable itself is not refactored.
+    const rl = await checkForceOverrideRateLimitDurable(callerEmail);
     if (!rl.allowed) {
       await recordAuditEvent({
         ...auditActorFromContext(c),

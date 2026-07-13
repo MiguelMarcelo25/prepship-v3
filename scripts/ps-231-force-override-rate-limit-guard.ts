@@ -47,14 +47,18 @@ const other = checkForceOverrideRateLimit('other@x.com');
 check('rate limit is per-actor (different admin unaffected)', other.allowed);
 
 // 3. Source pins on the route wiring.
+// Audit PL-6 (2026-07-13): the route consults the DURABLE variant (audit-row-backed,
+// restart/instance-safe); the in-memory window remains the offline-testable fallback.
 const orders = readFileSync('src/routes/orders.ts', 'utf8');
-check('assertOrderEditable consults the rate limiter', orders.includes('checkForceOverrideRateLimit(callerEmail)'));
+check('assertOrderEditable consults the durable rate limiter', orders.includes('await checkForceOverrideRateLimitDurable(callerEmail)'));
 check('a throttled override is audited', orders.includes("action: 'force_override_throttled'"));
 check('a throttled override returns 429', /retryAfterMs: rl\.retryAfterMs[\s\S]*?\},\s*429,/.test(orders));
 check('a successful override is still audited (PS-234)', orders.includes("action: 'force_override'"));
 
 const mod = readFileSync('src/lib/force-override-rate-limit.ts', 'utf8');
 check('limit is env-configurable', mod.includes('FORCE_OVERRIDE_MAX_PER_HOUR'));
+check('durable variant counts append-only lockdown_override audit rows', mod.includes("event_type = 'lockdown_override'") && mod.includes("action = 'force_override'"));
+check('durable variant falls back to the in-memory window on query failure', /catch\s*\{\s*return checkForceOverrideRateLimit\(actor\);/.test(mod));
 
 const pkg = readFileSync('package.json', 'utf8');
 check('package.json exposes test:ps-231-force-override-rate-limit', /test:ps-231-force-override-rate-limit/.test(pkg));

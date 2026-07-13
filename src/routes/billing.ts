@@ -320,6 +320,13 @@ app.put(
       return c.json({ error: 'Client not found' }, 404);
     }
     const body = c.req.valid('json');
+    // Audit B-7 (2026-07-13): fee-schedule changes are money-determining and were
+    // unaudited — capture before/after so invoice-total changes are explainable.
+    const [beforeConfig] = await db
+      .select()
+      .from(billingConfig)
+      .where(eq(billingConfig.clientId, clientId))
+      .limit(1);
     const row = await upsertBillingConfig(clientId, {
       pickPackFee:
         body.pickPackFee !== undefined ? body.pickPackFee.toFixed(2) : undefined,
@@ -358,6 +365,19 @@ app.put(
           amount: body.hugrabShippingRateOverrideAmount,
         })
       : (await hugrabShippingRateOverrideConfigsByClientId([clientId])).get(clientId);
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'billing_config',
+      resourceId: clientId,
+      action: 'config_upsert',
+      details: {
+        clientId,
+        before: beforeConfig ?? null,
+        after: row,
+        submitted: body,
+      },
+    });
     return c.json({
       ...row,
       ...(hugrabOverride ? {
@@ -715,6 +735,16 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
     amount: string;
     note: string | null;
   }> = [];
+  // Audit B-7 (2026-07-13): box/price decisions overwrite billing_box_resolutions
+  // in place — without an audit event the prior directive (packageId/overridePrice/
+  // resolvedBy) was destroyed with no history, making "why did this invoice total
+  // change between exports" unanswerable for box-driven changes.
+  const boxResolutionAuditRef: {
+    current: {
+      before: { packageId: number | null; overridePrice: string | null; resolvedBy: string | null } | null;
+      after: { packageId: number | null; overridePrice: string | null; note: string | null; resolvedBy: string | null };
+    } | null;
+  } = { current: null };
 
   // PS-249 (Card 4): a single /details save edits MANY rows for one order — a
   // per-line update/insert loop, a packageId stamp, a box-resolution upsert, and
@@ -998,6 +1028,18 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
               updatedAt: new Date(),
             },
           });
+        // Audit B-7: capture before/after for the post-commit audit event (the
+        // upsert above just destroyed the only stored copy of `before`).
+        boxResolutionAuditRef.current = {
+          before: existing
+            ? {
+                packageId: existing.packageId ?? null,
+                overridePrice: existing.overridePrice ?? null,
+                resolvedBy: existing.resolvedBy ?? null,
+              }
+            : null,
+          after: { packageId: newPackageId, overridePrice, note: body.note ?? null, resolvedBy },
+        };
 
         const [shipmentBoxFacts] = base.shipmentId != null
           ? await tx
@@ -1106,6 +1148,25 @@ app.patch('/details/:orderId{[0-9]+}', requirePermission('financials:write'), zV
         lineType: manualOverrideAudit.lineType,
         amount: manualOverrideAudit.amount,
         note: manualOverrideAudit.note,
+      },
+    });
+  }
+
+  // Audit B-7 (2026-07-13): box-resolution changes now leave a before/after trail.
+  const boxResolutionAudit = boxResolutionAuditRef.current;
+  if (boxResolutionAudit) {
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'billing_box_resolution',
+      resourceId: orderId,
+      action: 'box_resolution_upsert',
+      details: {
+        source: 'billing_details_patch',
+        clientId: body.clientId,
+        orderId,
+        before: boxResolutionAudit.before,
+        after: boxResolutionAudit.after,
       },
     });
   }
@@ -2139,6 +2200,25 @@ app.put('/package-prices', requirePermission('financials:write'), zValidator('js
       });
     updated += 1;
   }
+  // Audit B-7 (2026-07-13): per-client box prices are money-determining.
+  await recordAuditEvent({
+    ...auditActorFromContext(c),
+    eventType: 'billing',
+    resourceType: 'client_package_prices',
+    resourceId: clientId,
+    action: 'package_prices_put',
+    details: {
+      clientId,
+      updated,
+      skipped: prices.length - scopedPrices.length,
+      // Bounded payload: prices are validated <=500 rows; store the applied set.
+      prices: scopedPrices.map((row) => ({
+        packageId: row.packageId,
+        price: row.price.toFixed(2),
+        isCustom: row.isCustom ?? true,
+      })),
+    },
+  });
   return c.json({ updated, skipped: prices.length - scopedPrices.length });
 });
 
@@ -2169,6 +2249,19 @@ app.post(
         )
       )
       .returning({ clientId: clientPackagePrices.clientId });
+    // Audit B-7 (2026-07-13): this touched every non-custom client's price row.
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'client_package_prices',
+      resourceId: packageId,
+      action: 'package_price_set_default',
+      details: {
+        packageId,
+        price: price.toFixed(2),
+        updatedClientIds: result.map((r) => r.clientId),
+      },
+    });
     return c.json({ updated: result.length, packageId, price });
   }
 );
@@ -2252,6 +2345,16 @@ app.post('/backfill-ref-rates', requirePermission('financials:write'), async (c)
         fetchedAt: new Date(),
       }))
     );
+    // Audit B-7 (2026-07-13): manual ref-rate uploads change "could've paid"
+    // comparisons; record who loaded how many rows.
+    await recordAuditEvent({
+      ...auditActorFromContext(c),
+      eventType: 'billing',
+      resourceType: 'billing_ref_rates',
+      resourceId: null,
+      action: 'ref_rates_manual_backfill',
+      details: { inserted: parsed.data.rates.length, shape: 'manual_rows' },
+    });
     return c.json({ ok: true, inserted: parsed.data.rates.length });
   }
 
@@ -2261,6 +2364,14 @@ app.post('/backfill-ref-rates', requirePermission('financials:write'), async (c)
     to: typeof body?.to === 'string' ? body.to : null,
     clientId:
       typeof body?.clientId === 'number' && body.clientId > 0 ? body.clientId : null,
+  });
+  await recordAuditEvent({
+    ...auditActorFromContext(c),
+    eventType: 'billing',
+    resourceType: 'billing_ref_rates',
+    resourceId: typeof body?.clientId === 'number' ? body.clientId : null,
+    action: 'ref_rates_range_backfill',
+    details: { shape: 'range', request: { from: body?.from ?? null, to: body?.to ?? null, clientId: body?.clientId ?? null }, result },
   });
   return c.json(result);
 });
