@@ -75,12 +75,46 @@ async function checkComponent(
   }
 }
 
-async function checkDeepReadiness() {
+const checkDb = () =>
+  checkComponent('db', async () => {
+    await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
+  });
+
+const checkEventLoopDelay = () =>
+  checkComponent('eventLoop', async () => {
+    const startedAt = performance.now();
+    await withTimeout(
+      new Promise<void>((resolve) => setTimeout(resolve, 0)) as CancelableQuery<void>,
+      EVENT_LOOP_HEALTH_TIMEOUT_MS
+    );
+    const delayMs = Math.round(performance.now() - startedAt);
+    if (delayMs > EVENT_LOOP_DELAY_BUDGET_MS) {
+      throw new Error('event loop delay budget exceeded');
+    }
+    return { details: { delayMs, budgetMs: EVENT_LOOP_DELAY_BUDGET_MS } };
+  });
+
+// Audit 2.9 (2026-07-13): /ready and /deep used to be IDENTICAL — every Render
+// readiness poll ran a count(*) over all of print_queue_orders forever, and a
+// degraded-but-serviceable dependency (an orders SELECT timing out under load)
+// could flap the instance out of rotation mid-incident, exactly when capacity
+// matters most. Readiness now checks only what "can this instance serve" needs:
+// DB reachable, DB WRITABLE (the read-only-poisoned-session restart lever), and
+// the event loop responsive. The table aggregates stay on /deep for diagnostics.
+async function checkReadyReadiness() {
   const components = await Promise.all([
-    checkComponent('db', async () => {
-      await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
-    }),
-    checkComponent('dbWrite', async () => {
+    checkDb(),
+    checkDbWrite(),
+    checkEventLoopDelay(),
+  ]);
+  return {
+    ok: components.every((component) => component.status === 'ok'),
+    components,
+  };
+}
+
+const checkDbWrite = () =>
+  checkComponent('dbWrite', async () => {
       // Audit 1.9 (2026-07-13, read-only incident hardening): a session that
       // captured default_transaction_read_only=on during a Supabase disk event
       // passes `select 1` forever — only a WRITE exposes it. A failing write
@@ -95,7 +129,14 @@ async function checkDeepReadiness() {
         `,
         DB_HEALTH_TIMEOUT_MS
       );
-    }),
+  });
+
+// Deep diagnostics: everything readiness checks PLUS the dependency probes and
+// table aggregates (operator/ops surface, not the Render rotation signal).
+async function checkDeepReadiness() {
+  const components = await Promise.all([
+    checkDb(),
+    checkDbWrite(),
     checkComponent('orders', async () => {
       await withTimeout(healthSql`select 1 from orders limit 1`, DB_HEALTH_TIMEOUT_MS);
     }),
@@ -117,18 +158,7 @@ async function checkDeepReadiness() {
         },
       };
     }),
-    checkComponent('eventLoop', async () => {
-      const startedAt = performance.now();
-      await withTimeout(
-        new Promise<void>((resolve) => setTimeout(resolve, 0)) as CancelableQuery<void>,
-        EVENT_LOOP_HEALTH_TIMEOUT_MS
-      );
-      const delayMs = Math.round(performance.now() - startedAt);
-      if (delayMs > EVENT_LOOP_DELAY_BUDGET_MS) {
-        throw new Error('event loop delay budget exceeded');
-      }
-      return { details: { delayMs, budgetMs: EVENT_LOOP_DELAY_BUDGET_MS } };
-    }),
+    checkEventLoopDelay(),
   ]);
 
   return {
@@ -137,7 +167,7 @@ async function checkDeepReadiness() {
   };
 }
 
-function readinessResponseBody(readiness: Awaited<ReturnType<typeof checkDeepReadiness>>) {
+function readinessResponseBody(readiness: { ok: boolean; components: ReadinessComponent[] }) {
   return {
     status: readiness.ok ? 'ready' : 'degraded',
     components: readiness.components,
@@ -166,7 +196,8 @@ app.get('/', (c) =>
 );
 
 app.get('/ready', async (c) => {
-  const readiness = await checkDeepReadiness();
+  // Audit 2.9: cheap liveness-critical probes only (see checkReadyReadiness).
+  const readiness = await checkReadyReadiness();
   return c.json(readinessResponseBody(readiness), readiness.ok ? 200 : 503);
 });
 

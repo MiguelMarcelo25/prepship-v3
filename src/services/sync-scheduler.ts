@@ -208,6 +208,34 @@ export async function runReapStaleRateJobsTick(): Promise<void> {
   }
 }
 
+// Audit R-8 (2026-07-13): rate caches had NO row lifecycle — the identity key
+// embeds the ship-date bucket, so every tuple mints a NEW row each day and
+// yesterday's rows are never read again, growing unbounded (37 MB rate_cache +
+// 103 MB direct_carrier_rate_cache at audit time; the 2026-07-13 DB disk event
+// is the failure mode this feeds). Delete rows older than 3 days (>= 2x the 24h
+// TTL, preserving negative-cache semantics). Cheap DELETEs on small tables;
+// piggybacks the 5-min reap cadence, no new timer state.
+export async function runRateCacheEvictionTick(): Promise<void> {
+  try {
+    const evicted = await pg`
+      DELETE FROM rate_cache WHERE fetched_at < now() - interval '3 days'
+    `;
+    const evictedDirect = await pg`
+      DELETE FROM direct_carrier_rate_cache WHERE updated_at < now() - interval '3 days'
+    `;
+    if ((evicted.count ?? 0) > 0 || (evictedDirect.count ?? 0) > 0) {
+      console.log(
+        `[scheduler] evicted expired rate cache rows: rate_cache=${evicted.count ?? 0} direct_carrier_rate_cache=${evictedDirect.count ?? 0}`
+      );
+    }
+  } catch (err) {
+    console.warn(
+      '[scheduler] rate cache eviction failed:',
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 // 2026-05-13: orders → inventory seed. Cheap (one SQL query plus
 // per-row upserts), bottlenecked on row count not network — fine to
 // run every 30 min. Picks up new SKUs as soon as orders carrying them
@@ -638,8 +666,12 @@ export function startSyncScheduler(
   // unconditionally; it's a cheap DB cleanup independent of whether the rate backfill is enabled.
   setTimeout(() => {
     void runReapStaleRateJobsTick();
+    void runRateCacheEvictionTick(); // audit R-8: cache lifecycle rides the same cadence
     reapRateJobsTimer = setInterval(
-      () => void runReapStaleRateJobsTick(),
+      () => {
+        void runReapStaleRateJobsTick();
+        void runRateCacheEvictionTick();
+      },
       REAP_RATE_JOBS_INTERVAL_MS
     );
   }, STARTUP_DELAY_MS + 60 * 1000); // 1 min after boot

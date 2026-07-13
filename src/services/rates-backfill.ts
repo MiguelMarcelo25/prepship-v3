@@ -808,15 +808,6 @@ async function runBackfill(
           }
         } else {
           const now = new Date();
-          // PS-203 (stage 4): persist the RAW carrier amount, never the marked-up
-          // charge. The display markup is applied at read time by the PS-177 row
-          // money tuple — persisting marked amounts double-marked the display.
-          const rawAmountBest: Record<string, unknown> = {
-            ...best,
-            ...(best.original_amount ? { shipping_amount: best.original_amount } : {}),
-          };
-          delete rawAmountBest.original_amount;
-          delete rawAmountBest.markup;
           const rawAmountSecondBest: Record<string, unknown> | null = secondBest
             ? {
                 ...secondBest,
@@ -834,13 +825,37 @@ async function runBackfill(
           // boundary then requires a re-rate exactly as before PS-174).
           // PS-244: the finalizer now returns { bestRate, rates, rateQuoteId } (single owner shared
           // with /rates/browse); the backfill persists only the best rate.
+          //
+          // Audit R-1 (2026-07-13): finalize from the MARKED best — exactly like
+          // /rates/browse — never from the raw-restored copy. The snapshot store
+          // mints selectedRateKey from the object it is handed, while purchase
+          // resolution recomputes keys from the snapshot's own (marked) rates:
+          // minting from the raw-restored object meant the persisted best's key
+          // resolved in NOBODY's snapshot for any marked-up carrier, so every
+          // purchase of a backfill-persisted best failed
+          // selected_rate_not_in_snapshot -> spurious "Rate changed or expired.
+          // Re-rate this order". The PS-203 raw-amount rule still holds — the
+          // raw restore is applied to the PERSISTED COPY below, after the key
+          // was minted from the marked object.
           const { bestRate: finalizedBest } = await finalizeBestRateWithQuote({
-            bestRate: rawAmountBest,
+            bestRate: best as unknown as Record<string, unknown>,
             rates: combined.combinedRates as Array<Record<string, unknown>>,
             cacheKey: combined.combinedRequestKey,
             bestRateComplete: combined.bestRateComplete,
             fetchedAt: result.fetchedAt,
           });
+          // PS-203 (stage 4): persist the RAW carrier amount, never the marked-up
+          // charge. The display markup is applied at read time by the PS-177 row
+          // money tuple — persisting marked amounts double-marked the display.
+          // (Raw restore AFTER finalization: proof stamps survive the spread.)
+          const persistedFinalizedBest: Record<string, unknown> = {
+            ...finalizedBest,
+            ...((finalizedBest as Record<string, unknown>).original_amount
+              ? { shipping_amount: (finalizedBest as Record<string, unknown>).original_amount }
+              : {}),
+          };
+          delete persistedFinalizedBest.original_amount;
+          delete persistedFinalizedBest.markup;
           const secondBestRate =
             rawAmountSecondBest && combined.bestRateComplete
               ? {
@@ -859,7 +874,7 @@ async function runBackfill(
                 }
               : null;
           const bestWithMetadata = {
-            ...finalizedBest,
+            ...persistedFinalizedBest,
             secondBestRate,
             requestFingerprint: combined.combinedRequestKey,
             cacheKey: combined.combinedRequestKey,

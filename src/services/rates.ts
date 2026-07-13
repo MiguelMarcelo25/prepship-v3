@@ -565,8 +565,21 @@ function normalizeZip(zip: string): string {
   return digits || String(zip ?? '').trim().toUpperCase();
 }
 
+// Audit R-7 (2026-07-13): the identity day-bucket is computed in the SHIP-FROM
+// operating timezone (America/Los_Angeles — Carson, CA warehouse), not UTC.
+// With the UTC bucket, "today" rolled at 4-5pm PT mid-shift: every cache key
+// changed at once (fleet-wide re-rate stampede) and every saved fingerprint
+// mismatched fresh ones while operators were still shipping. Rolling at local
+// midnight moves both to idle hours. Same YYYY-MM-DD format — no version bump.
+const SHIP_DATE_BUCKET_TZ = 'America/Los_Angeles';
+const shipDateBucketFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: SHIP_DATE_BUCKET_TZ,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
 export function shipDateBucket(date: Date = new Date()): string {
-  return date.toISOString().slice(0, 10);
+  return shipDateBucketFormatter.format(date);
 }
 
 function apiKeyCacheKey(apiKeyV2?: string | null): string {
@@ -846,6 +859,11 @@ export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; 
   context: ShippingServiceEligibilityContext,
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
   automationRules?: ShippingAutomationRule[] | null,
+  // Audit R-2 (2026-07-13): when the stored best is filtered out, the fallback
+  // re-pick must rank on the MARKED basis (markup-before-ranking, PS-313) — the
+  // old raw-basis sort could crown a different winner than browse/backfill.
+  // Optional so legacy callers keep byte-identical behavior until they pass it.
+  markups?: Map<string, Markup>,
 ): T {
   const rawRates = Array.isArray(row.rates) ? row.rates : [];
   const rates = filterRatesForShippingServiceEligibility(rawRates, context, shippingOptions, automationRules)
@@ -855,13 +873,47 @@ export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; 
     evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate), shippingOptions, automationRules).allowed &&
     isPricedRate(row.bestRate as Parameters<typeof isPricedRate>[0]);
   const selectable = rates.filter((rate) => isRateInsuranceResolved(rate));
+  let fallbackBest: unknown = null;
+  if (selectable.length) {
+    // Rank on marked totals when markups are supplied; return the RAW row object
+    // either way (applyMarkups maps 1:1, so index identity holds).
+    const ranked = markups?.size
+      ? applyMarkups(selectable as Rate[], markups)
+      : (selectable as Rate[]);
+    let bestIdx = 0;
+    for (let i = 1; i < ranked.length; i += 1) {
+      if (genericRateTotal(ranked[i]!) < genericRateTotal(ranked[bestIdx]!)) bestIdx = i;
+    }
+    fallbackBest = selectable[bestIdx] ?? null;
+  }
   const bestRate = bestRateAllowed && isRateInsuranceResolved(row.bestRate)
     ? row.bestRate
-    : [...selectable].sort((a, b) => genericRateTotal(a) - genericRateTotal(b))[0] ?? null;
+    : fallbackBest;
   return {
     ...row,
     rates,
     bestRate,
+  };
+}
+
+// Audit R-6 (2026-07-13): read-time pricing for the cached fast-paint lane.
+// rate_cache.rates is stored RAW; the stored bestRate carries write-time marked
+// stamps that go stale when markup rules change. Apply the CURRENT markups and
+// recompute the displayed best over the marked, eligibility-sanitized set —
+// same "price at read time in the backend" rule as PS-177 — so the fast paint
+// can never disagree with what a live browse would select. Lives HERE (not in
+// the route) because ranking/marking is backend rate-owner truth (PS-313).
+export function markRateCacheRowForDisplay<T extends { rates?: unknown; bestRate?: unknown }>(
+  row: T,
+  markups: Map<string, Markup>,
+): T {
+  const raw = Array.isArray(row.rates) ? (row.rates as Rate[]) : [];
+  if (!raw.length) return row;
+  const marked = applyMarkups(raw, markups);
+  return {
+    ...row,
+    rates: marked,
+    bestRate: pickBestRate(marked) ?? row.bestRate ?? null,
   };
 }
 
@@ -1931,11 +1983,17 @@ export async function getRates(
         // only briefly so operators are not stuck with stale carrier failures.
       } else {
         if (cachedRaw.length !== (cached.rates as Rate[]).length) {
+          // Audit R-2 (2026-07-13): pick the repaired winner on the MARKED basis,
+          // exactly like the original write at writeRateCache — the raw-basis pick
+          // here could persist a different best than browse/backfill select
+          // (e.g. an $11.50-cost UPS beating a customer-cheaper USPS), violating
+          // markup-before-ranking on a persisted surface until the next full
+          // rewrite.
           void db
             .update(rateCache)
             .set({
               rates: cachedRaw as unknown[],
-              bestRate: pickBestRate(cachedRaw),
+              bestRate: pickBestRate(applyMarkups(cachedRaw, markups)),
             })
             .where(eq(rateCache.cacheKey, key))
             .catch((err) =>

@@ -9,7 +9,9 @@ import {
   getCarrierAccountsForRateContext,
   getDirectCarrierAccountsForRateContext,
   getRates,
+  loadCarrierMarkups,
   loadDirectCarrierVisibilityEvaluator,
+  markRateCacheRowForDisplay,
   rateCacheKey,
   resolveRateInput,
   sanitizeRateCacheRowForEligibility,
@@ -672,10 +674,12 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
     const rows = await selectRateCachePublicRowsByWeightZip(it.weightOz!, it.toZip!);
     roughRowsByWeightZip.set(key, rows[0] ?? null);
   }));
+  // Audit R-6: current markups for read-time pricing of every served row.
+  const displayMarkups = await loadCarrierMarkups();
   const results = itemsWithKeys.map(({ item: it, computedCacheKey, effectiveInsuranceProvider, effectiveInsuredValue, effectiveInsuranceSource }) => {
     const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
     if (exactHit) {
-      const eligibleHit = sanitizeRateCacheRowForEligibility(exactHit, {
+      const eligibleHit = markRateCacheRowForDisplay(sanitizeRateCacheRowForEligibility(exactHit, {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
       }, {
@@ -685,7 +689,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         confirmation: 'none',
         insuranceProvider: effectiveInsuranceProvider ?? (it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none'),
         insuredValue: effectiveInsuredValue ?? (typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null),
-      }, automationRules);
+      }, automationRules, displayMarkups), displayMarkups);
       const meta = cacheMetadata(eligibleHit, 'exact', {
         requiredDirectCarriersUncovered:
           hasVisibleDirectCarriers(directContextForItem(it)) &&
@@ -708,7 +712,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       : null;
     const roughHit = roughKey ? roughRowsByWeightZip.get(roughKey) : null;
     if (roughHit) {
-      const eligibleHit = sanitizeRateCacheRowForEligibility(roughHit, {
+      const eligibleHit = markRateCacheRowForDisplay(sanitizeRateCacheRowForEligibility(roughHit, {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
       }, {
@@ -718,7 +722,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         confirmation: 'none',
         insuranceProvider: effectiveInsuranceProvider ?? (it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none'),
         insuredValue: effectiveInsuredValue ?? (typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null),
-      }, automationRules);
+      }, automationRules, displayMarkups), displayMarkups);
       const meta = cacheMetadata(eligibleHit, 'rough', {
         requiredDirectCarriersUncovered:
           hasVisibleDirectCarriers(directContextForItem(it)) &&
@@ -759,10 +763,12 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   // weightOz + toZip are required by the schema, so the non-null
   // assertion is safe.
   const rows = await selectRateCachePublicRowsByWeightZip(q.weightOz!, q.toZip!);
-  const sanitizedRows = rows.map((row) => sanitizeRateCacheRowForEligibility(row, {
+  // Audit R-6: read-time markups on the cached fast-paint lane (see helper above).
+  const cachedDisplayMarkups = await loadCarrierMarkups();
+  const sanitizedRows = rows.map((row) => markRateCacheRowForDisplay(sanitizeRateCacheRowForEligibility(row, {
     clientId: null,
     storeId: q.storeId ?? null,
-  }));
+  }, undefined, undefined, cachedDisplayMarkups), cachedDisplayMarkups));
   return c.json({ data: sanitizedRows.map((row) => publicRateCacheRow(row, canViewFinancials)) });
 });
 
