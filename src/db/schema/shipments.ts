@@ -9,6 +9,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { clients } from './clients.js';
@@ -96,7 +97,13 @@ export const shipments = pgTable(
     index('shipments_tracking_number_idx')
       .on(t.trackingNumber)
       .where(sql`${t.trackingNumber} is not null`),
-    index('shipments_label_shipment_id_idx')
+    // Audit SY-3 / item 1.21 (2026-07-13, after DJ approved deleting the one
+    // pre-existing duplicate pair): label_shipment_id is now UNIQUE — the
+    // DB-level backstop against the sync double-insert race (deadline-abandoned
+    // zombie walk + fresh run both inserting the same ShipStation shipment).
+    // Prod migration audit_2026_07_13_dedupe_label_shipment_unique; the earlier
+    // plain index was dropped as redundant.
+    uniqueIndex('shipments_label_shipment_id_unique_idx')
       .on(t.labelShipmentId)
       .where(sql`${t.labelShipmentId} is not null`),
   ]

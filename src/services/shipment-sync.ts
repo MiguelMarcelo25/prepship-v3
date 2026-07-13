@@ -429,6 +429,16 @@ async function upsertShipmentsBatch(
         const insertedRows = await tx
           .insert(shipments)
           .values(chunk)
+          // Audit SY-3 / 1.21 (Per user override unlock shipped data on
+          // 2026-07-13): label_shipment_id is UNIQUE now — a racing writer
+          // (deadline-abandoned zombie + fresh run) loses quietly instead of
+          // duplicating the row. Skipped rows also skip package consumption
+          // below (returning() yields inserted rows only), which is exactly
+          // right: the winner already consumed.
+          .onConflictDoNothing({
+            target: [shipments.labelShipmentId],
+            where: sql`${shipments.labelShipmentId} is not null`,
+          })
           .returning({
             id: shipments.id,
             orderId: shipments.orderId,
