@@ -906,7 +906,12 @@ app.post(
     'json',
     z.object({
       client_id: z.number().int().optional(),
-      queue_entry_ids: z.array(z.string().min(1)).min(1),
+      // Audit PQ-8 (2026-07-13, Per user override unlock shipped data on
+      // 2026-07-13): bounded — an unbounded list fetched thousands of label
+      // PDFs and pinned their base64 in API memory for 30 min (OOM lever on
+      // the process that owns merge-job state). 500 matches /clear's cap;
+      // the FE batches at 200.
+      queue_entry_ids: z.array(z.string().min(1)).min(1).max(500),
       merge_headers: z.boolean().optional(),
     })
   ),

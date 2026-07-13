@@ -149,50 +149,103 @@ export async function persistQueueSendJobRecord(snapshot: QueueSendJobSnapshot):
   `;
 }
 
+// Audit PQ-7 (2026-07-13): COUNTERS-ONLY progress update. The per-order progress
+// persist used to rewrite the whole snapshot jsonb (workerOrders + every result —
+// hundreds of KB, O(n^2) WAL churn across a big batch); progress needs only the
+// scalar columns. Same monotonic updated_at guard as the full upsert. A missing
+// row is a no-op (the start/terminal paths write the full record).
+export async function persistQueueSendJobCounters(snapshot: {
+  jobId: string;
+  status: string;
+  active: boolean;
+  progress: number;
+  total: number;
+  current: number;
+  queued: number;
+  failed: number;
+  message: string | null;
+  updatedAt: string;
+}): Promise<void> {
+  if (!snapshot.jobId) return;
+  await ensureQueueSendJobStoreSchema();
+  await pg`
+    UPDATE print_queue_send_jobs SET
+      status = ${snapshot.status},
+      active = ${snapshot.active},
+      progress = ${snapshot.progress},
+      total = ${snapshot.total},
+      current = ${snapshot.current},
+      queued = ${snapshot.queued},
+      failed = ${snapshot.failed},
+      message = ${snapshot.message},
+      updated_at = ${snapshot.updatedAt}
+    WHERE job_id = ${snapshot.jobId}
+      AND updated_at <= ${snapshot.updatedAt}
+  `;
+}
+
 export async function persistQueueSendJobItems(
   jobId: string,
   items: QueueSendJobItemInput[],
 ): Promise<void> {
   if (!jobId || items.length === 0) return;
   await ensureQueueSendJobStoreSchema();
-  for (const item of items) {
-    const resultJson = item.result ? JSON.stringify(item.result) : null;
-    await pg`
-      INSERT INTO print_queue_batch_job_items (
-        job_id,
-        order_id,
-        client_id,
-        state,
-        blocked_reason,
-        error_message,
-        queue_entry_id,
-        tracking_number,
-        result,
-        updated_at
-      )
-      VALUES (
-        ${jobId},
-        ${item.orderId},
-        ${item.clientId ?? null},
-        ${item.state},
-        ${item.blockedReason ?? null},
-        ${item.errorMessage ?? null},
-        ${item.queueEntryId ?? null},
-        ${item.trackingNumber ?? null},
-        ${resultJson}::jsonb,
-        now()
-      )
-      ON CONFLICT (job_id, order_id) DO UPDATE SET
-        client_id = ${item.clientId ?? null},
-        state = ${item.state},
-        blocked_reason = ${item.blockedReason ?? null},
-        error_message = ${item.errorMessage ?? null},
-        queue_entry_id = ${item.queueEntryId ?? null},
-        tracking_number = ${item.trackingNumber ?? null},
-        result = ${resultJson}::jsonb,
-        updated_at = now()
-    `;
-  }
+  // Audit PQ-7 (2026-07-13): one multi-row statement instead of one round-trip
+  // per item (job start used to fire 2x N inserts for an N-order batch).
+  const rowsJson = JSON.stringify(items.map((item) => ({
+    order_id: item.orderId,
+    client_id: item.clientId ?? null,
+    state: item.state,
+    blocked_reason: item.blockedReason ?? null,
+    error_message: item.errorMessage ?? null,
+    queue_entry_id: item.queueEntryId ?? null,
+    tracking_number: item.trackingNumber ?? null,
+    result: item.result ?? null,
+  })));
+  await pg`
+    INSERT INTO print_queue_batch_job_items (
+      job_id,
+      order_id,
+      client_id,
+      state,
+      blocked_reason,
+      error_message,
+      queue_entry_id,
+      tracking_number,
+      result,
+      updated_at
+    )
+    SELECT
+      ${jobId},
+      x.order_id,
+      x.client_id,
+      x.state,
+      x.blocked_reason,
+      x.error_message,
+      x.queue_entry_id,
+      x.tracking_number,
+      x.result,
+      now()
+    FROM jsonb_to_recordset(${rowsJson}::jsonb) AS x(
+      order_id integer,
+      client_id integer,
+      state text,
+      blocked_reason text,
+      error_message text,
+      queue_entry_id text,
+      tracking_number text,
+      result jsonb
+    )
+    ON CONFLICT (job_id, order_id) DO UPDATE SET
+      client_id = EXCLUDED.client_id,
+      state = EXCLUDED.state,
+      blocked_reason = EXCLUDED.blocked_reason,
+      error_message = EXCLUDED.error_message,
+      queue_entry_id = EXCLUDED.queue_entry_id,
+      tracking_number = EXCLUDED.tracking_number,
+      result = EXCLUDED.result,
+      updated_at = now()
+  `;
 }
 
 export async function updateQueueSendJobItemState(

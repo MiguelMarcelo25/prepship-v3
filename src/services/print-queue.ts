@@ -58,6 +58,7 @@ import {
   getLatestQueueSendJobRecord,
   getQueueSendJobItemRecords,
   getQueueSendJobRecord,
+  persistQueueSendJobCounters,
   persistQueueSendJobItems,
   persistQueueSendJobRecord,
   updateQueueSendJobItemState,
@@ -522,10 +523,29 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
 
 export async function persistQueueSendJobSnapshot(
   job: QueueSendJob,
-  options: { required?: boolean } & { persistItems?: boolean; persistLegacy?: boolean } = {},
+  options: { required?: boolean } & { persistItems?: boolean; persistLegacy?: boolean; countersOnly?: boolean } = {},
 ): Promise<void> {
   const snapshot = toQueueSendSnapshot(job);
   try {
+    if (options.countersOnly) {
+      // Audit PQ-7 (2026-07-13): per-order progress writes only the scalar
+      // counters — the full jsonb snapshot (workerOrders + all results) was
+      // being rewritten after EVERY order, an O(n^2) write stream on big
+      // batches and exactly the load that hurts during degraded-DB windows.
+      await persistQueueSendJobCounters({
+        jobId: snapshot.jobId,
+        status: snapshot.status,
+        active: snapshot.active,
+        progress: snapshot.progress,
+        total: snapshot.total,
+        current: snapshot.current,
+        queued: snapshot.queued,
+        failed: snapshot.failed,
+        message: snapshot.message ?? null,
+        updatedAt: snapshot.updatedAt,
+      });
+      return;
+    }
     await persistQueueSendJobRecord(snapshot);
     if (options.persistItems !== false) {
       await persistQueueSendJobItems(snapshot.jobId, snapshot.itemStates);
@@ -661,6 +681,8 @@ export async function getLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | nu
 const QUEUE_SEND_PROGRESS_SNAPSHOT_OPTIONS = {
   persistItems: false,
   persistLegacy: false,
+  // Audit PQ-7: progress ticks persist scalar counters only, never the full jsonb.
+  countersOnly: true,
 } as const;
 
 function shouldPersistMergeProgress(current: number, total: number): boolean {
@@ -1543,8 +1565,10 @@ export async function startQueueSendJob(input: {
   updateQueueSendProgress(job);
   queueSendJobs.set(jobId, job);
 
+  // Audit PQ-7: the snapshot persist above already wrote the item rows
+  // (persistItems defaults true) — the explicit second write was a duplicate
+  // full pass over every item at job start.
   await persistQueueSendJobSnapshot(job, { required: true });
-  await persistQueueSendJobItems(jobId, itemStates);
   recordQueueSendResultLogs(job, skippedResults);
   if (preflight.readyOrders.length > 0) {
     if (!env.PRINT_QUEUE_WORKER_ENABLED) {
@@ -1714,6 +1738,13 @@ async function runQueueSendJob(
     job.message = job.errorMessage;
     job.updatedAt = Date.now();
     await persistQueueSendJobSnapshot(job, { required: true });
+  } finally {
+    // Audit PQ-6 (2026-07-13): the worker process never pruned its job map —
+    // cleanOldJobs only runs from API-process entry points, so every processed
+    // job (with up to 1000 orders of payload + results) stayed resident until
+    // OOM. The durable store owns terminal state; drop the in-memory copy.
+    job.workerOrders = [];
+    queueSendJobs.delete(jobId);
   }
 }
 
