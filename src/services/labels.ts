@@ -12,6 +12,14 @@ import type { ClientStoreScope } from '../lib/client-store-scope';
 import { isResourceInScope, assertResourceInScope, ResourceScopeError } from '../lib/scope-predicates';
 // PS-248: per-order purchase lease so concurrent buys can't double-purchase postage for one order.
 import { acquireLabelPurchaseLock } from '../lib/label-purchase-lock';
+// Audit C2/1.20 (Per user override unlock shipped data on 2026-07-13): durable
+// purchase-intent record — closes the buy->persist crash window for ANY retry horizon.
+import {
+  assertNoUnresolvedLabelPurchaseIntent,
+  classifyBuyErrorForIntent,
+  createLabelPurchaseIntent,
+  resolveLabelPurchaseIntent,
+} from '../lib/label-purchase-intent';
 import { captureRealizedHouseMargin } from './shipping-workflow/house-margin-capture';
 import { linkBundleShipment } from './shipment-bundles/create-bundle';
 import { getBundleForOrder } from './shipment-bundles/bundle-read-model';
@@ -2152,6 +2160,17 @@ async function createLabelV2Impl(
   // Vercel api/carriers/labels path (deleted by PS-200), which skipped
   // inventory/package deduction entirely.
   const directRef = directLabelAccountRefFromProviderId(body.shippingProviderId);
+  // Per user override unlock shipped data on 2026-07-13 (audit C2/1.20): the
+  // purchase lock (held by the createLabelV2 wrapper) serializes LIVE purchases;
+  // the durable intent record survives crashes. Fail closed while any prior
+  // attempt is unresolved — a dead predecessor may have bought a label that was
+  // never recorded, and only reconciliation (never a blind re-buy) is safe.
+  await assertNoUnresolvedLabelPurchaseIntent(order.id);
+  const purchaseIntentId = await createLabelPurchaseIntent({
+    orderId: order.id,
+    provider: directRef ? 'direct' : 'shipstation',
+    requestFingerprint: `pid=${body.shippingProviderId}|svc=${body.serviceCode}`,
+  });
   let created: CreatedExternalLabel;
   let directWalmartContext: Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>['walmartContext'] = null;
   let directProviderKey: string | null = null;
@@ -2169,7 +2188,12 @@ async function createLabelV2Impl(
       sourceAccountId: order.sourceAccountId ?? null,
     });
     directProviderKey = normalizeProviderKey(account.provider);
-    const direct = await timer.task(`direct ${directProviderKey} createLabel connector`, () =>
+    // Audit C2/1.20: a buy error resolves the intent by classification —
+    // provably-pre-purchase -> failed_pre_purchase, anything else ->
+    // reconcile_required (the label may exist at the provider).
+    let direct: Awaited<ReturnType<typeof createDirectCarrierLabelForOrder>>;
+    try {
+    direct = await timer.task(`direct ${directProviderKey} createLabel connector`, () =>
       createDirectCarrierLabelForOrder({
         account,
         providerAccountId: Number(body.shippingProviderId),
@@ -2199,6 +2223,13 @@ async function createLabelV2Impl(
         carrierTestMode: (body as Record<string, unknown>).__carrierTestMode === true,
       }),
     );
+    } catch (buyErr) {
+      await resolveLabelPurchaseIntent(purchaseIntentId, {
+        state: classifyBuyErrorForIntent(buyErr),
+        error: buyErr instanceof Error ? buyErr.message : String(buyErr),
+      });
+      throw buyErr;
+    }
     created = direct.created;
     directWalmartContext = direct.walmartContext;
   } else {
@@ -2214,6 +2245,8 @@ async function createLabelV2Impl(
     });
     const creds = await loadClientCredentials(clientId);
     const apiKeyV2 = creds.apiKeyV2 ?? undefined;
+    // Audit C2/1.20: same buy-error intent resolution as the direct branch.
+    try {
     created = await timer.task('ShipStation createLabel connector', async () => {
       const label = await createCarrierLabel('shipstation', {
         apiKeyV2,
@@ -2238,6 +2271,13 @@ async function createLabelV2Impl(
       });
       return label as CreatedExternalLabel;
     });
+    } catch (buyErr) {
+      await resolveLabelPurchaseIntent(purchaseIntentId, {
+        state: classifyBuyErrorForIntent(buyErr),
+        error: buyErr instanceof Error ? buyErr.message : String(buyErr),
+      });
+      throw buyErr;
+    }
     // Per user override unlock shipped data on 2026-06-17 (PS-273): stamp the
     // ShipStation account's REAL nickname at purchase time so the shipment row
     // records account identity. resolveCarrierNickname resolves the synthetic
@@ -2263,7 +2303,13 @@ async function createLabelV2Impl(
   // order to 'shipped' in ONE transaction, so a crash between them can't orphan a shipment row while
   // the order stays awaiting (torn state / broken invariant). The external label buy already happened
   // above; this txn is DB-only + short. recordFulfillmentDeductions (below) stays its own unit.
-  const localShipmentId = await db.transaction(async (tx) => {
+  // Audit C2/1.20: a persist failure AFTER a successful buy is the exact crash
+  // window — the label exists at the provider and is unrecorded locally. Mark
+  // reconcile_required so every future purchase for this order fails closed
+  // until an operator resolves it; success resolves the intent 'completed'.
+  let localShipmentId: number;
+  try {
+  localShipmentId = await db.transaction(async (tx) => {
     const shipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
       created,
       orderId: order.id,
@@ -2305,6 +2351,17 @@ async function createLabelV2Impl(
     }, tx);
     await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false, tx }));
     return shipmentId;
+  });
+  } catch (persistErr) {
+    await resolveLabelPurchaseIntent(purchaseIntentId, {
+      state: 'reconcile_required',
+      error: `label purchased but shipment persist failed: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`,
+    });
+    throw persistErr;
+  }
+  await resolveLabelPurchaseIntent(purchaseIntentId, {
+    state: 'completed',
+    shipmentId: localShipmentId,
   });
   timer.background('inventory deduction', () => recordFulfillmentDeductions({
     order,
