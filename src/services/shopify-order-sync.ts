@@ -133,10 +133,16 @@ export function shopifySyncSince(account: Pick<ShopifySyncAccount, 'syncAnchorAt
 }
 
 async function updateAccountProgress(id: number, progress: ShopifySyncProgress): Promise<void> {
+  // Audit SY-8 (2026-07-13): the cursor write is now MONOTONIC in SQL. The old
+  // plain COALESCE trusted single-writer ordering — but a deadline-abandoned
+  // zombie walk (with-deadline races, it doesn't cancel) can persist a stale
+  // page's maxUpdatedAt AFTER a fresh run advanced the cursor, silently
+  // rewinding it. GREATEST ignores NULLs in Postgres, so a null progress value
+  // still leaves the column untouched.
   await sql`
     UPDATE store_accounts
     SET
-      sync_cursor_at = COALESCE(${progress.syncCursorAt ?? null}, sync_cursor_at),
+      sync_cursor_at = GREATEST(${progress.syncCursorAt ?? null}::timestamptz, sync_cursor_at),
       last_synced_at = COALESCE(${progress.lastSyncedAt ?? null}, last_synced_at),
       last_sync_error = ${progress.lastSyncError ?? null},
       active = COALESCE(${progress.active ?? null}, active),

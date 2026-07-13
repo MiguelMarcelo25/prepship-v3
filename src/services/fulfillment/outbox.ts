@@ -494,6 +494,17 @@ export async function enqueueMissingShipmentConfirmations(options: {
     WHERE o.order_status = 'shipped'
       AND coalesce(s.voided, false) = false
       AND coalesce(s.is_return, false) = false
+      -- Per user override unlock shipped data on 2026-07-13 (audit C3): only
+      -- PrepShip-created labels may be confirmation-recovered. PS-286 label-URL
+      -- enrichment also fills label_url on ShipStation-SYNCED rows (source
+      -- 'shipstation'), which broke this sweep's founding assumption that
+      -- "label_url means we made it" and re-notified marketplaces for orders
+      -- ShipStation itself shipped (duplicate buyer emails). Allowlist (fail
+      -- closed): ShipStation buys persist source 'prepship_v2' (legacy
+      -- 'prepship'), direct carriers persist their provider key, tests persist
+      -- 'test_offline' (src/services/labels.ts:2285). A NEW direct-carrier
+      -- provider key must be added here to get confirmation recovery.
+      AND s.source IN ('prepship', 'prepship_v2', 'shipp', 'walmart_shipping', 'test_offline')
       AND s.label_url IS NOT NULL
       AND nullif(trim(coalesce(s.tracking_number, '')), '') IS NOT NULL
       AND s.confirmation_status IS NULL

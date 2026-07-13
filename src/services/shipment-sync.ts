@@ -257,13 +257,24 @@ async function upsertShipmentsBatch(
           labelShipmentId: shipments.labelShipmentId,
           providerAccountId: shipments.providerAccountId,
           createDate: shipments.createDate,
+          // Audit SY-5: fetched so updates can preserve the order link + provenance.
+          orderId: shipments.orderId,
+          clientId: shipments.clientId,
+          source: shipments.source,
         })
         .from(shipments)
         .where(inArray(shipments.labelShipmentId, labelIds))
     : [];
   const existingByLabel = new Map<
     number,
-    { id: number; providerAccountId: number | null; createDate: Date | null }
+    {
+      id: number;
+      providerAccountId: number | null;
+      createDate: Date | null;
+      orderId: number | null;
+      clientId: number | null;
+      source: string | null;
+    }
   >();
   for (const r of existingRows) {
     if (r.labelShipmentId !== null) {
@@ -271,6 +282,9 @@ async function upsertShipmentsBatch(
         id: r.id,
         providerAccountId: r.providerAccountId ?? null,
         createDate: r.createDate ?? null,
+        orderId: r.orderId ?? null,
+        clientId: r.clientId ?? null,
+        source: r.source ?? null,
       });
     }
   }
@@ -341,6 +355,24 @@ async function upsertShipmentsBatch(
       }
       if (values.createDate == null && existing.createDate != null) {
         values.createDate = existing.createDate;
+      }
+      // Audit SY-5 (2026-07-13) — Per user override unlock shipped data on
+      // 2026-07-13: field-level preservation on UPDATE. When the order lookup
+      // misses (identity drift, deleted/merged order, manually-linked row),
+      // values.orderId/clientId are null and the whole-row update silently
+      // UNLINKED a previously-linked shipped shipment from its order — the
+      // Shipped view and billing lose the join. shipmentValues also hardcodes
+      // source:'shipstation', which rewrote the provenance of a PrepShip-created
+      // row sharing the labelShipmentId and defeated the duplicate guard on the
+      // next pass. Never null a link, never rewrite provenance, on update.
+      if (values.orderId == null && existing.orderId != null) {
+        values.orderId = existing.orderId;
+      }
+      if (values.clientId == null && existing.clientId != null) {
+        values.clientId = existing.clientId;
+      }
+      if (existing.source) {
+        values.source = existing.source;
       }
       // PS-370: do NOT set selected_rate_cost on UPDATE — the update SET omits
       // otherCost (existing value is preserved), so writing cost-only here would
@@ -677,7 +709,18 @@ export async function syncShipments(
       // before. Budget-bounded (backlog remains) -> resume from the last processed CreateDate
       // next run; the read-side 48h overlap re-checks the boundary, so progress is durable and
       // no un-processed shipment is skipped (CreateDate ASC guarantees this).
-      const nextWatermarkMs = drained ? runStartMs : cursorCreateMs ?? storedLastSync ?? runStartMs;
+      //
+      // Audit SY-1 (2026-07-13): MONOTONIC guard. An explicit backfill (opts.sinceMs, e.g.
+      // fullResync -> 0) walks history oldest-first; when the 10-page budget cut it off, the
+      // old code persisted the oldest walked CreateDate (e.g. 2024) as the account watermark —
+      // every 3-min cadence run then crawled years of history at <=1000 rows/run, starving
+      // CURRENT shipments for days and tripping the watchdog. The watermark may now never move
+      // backwards: a budget-cut backfill still processes its pages, it just doesn't rewind the
+      // cursor. (A deep backfill wider than one run's budget needs its own cursor key — tracked
+      // as Phase-3 work in AUDIT-2026-07-13.md.) A zero-page run stands still (lastSync) instead
+      // of jumping to runStartMs, closing the first-run skip edge.
+      const candidateMs = drained ? runStartMs : cursorCreateMs ?? storedLastSync ?? lastSync;
+      const nextWatermarkMs = Math.max(storedLastSync ?? 0, candidateMs);
       await setSetting(key, String(nextWatermarkMs));
     } catch (err) {
       console.error(
@@ -777,7 +820,13 @@ async function enrichProviderAccountIds(
   };
 
   async function applyProviderRows(rows: V2ProviderRow[]): Promise<number> {
-    let updated = 0;
+    // Audit M2 (2026-07-13): this loop used to issue one UPDATE per tracking number
+    // per page per account per tick, unconditionally — prod pg_stat measured 1.25M
+    // calls that changed 3,508 rows (99.7% no-ops), each seq-scanning shipments
+    // (no tracking_number btree at the time). Gate with ONE indexed SELECT for the
+    // page's still-unbound tracking numbers and update only those; in steady state
+    // that is 1 SELECT and zero UPDATEs per page.
+    const pairs: Array<{ tracking: string; providerId: number }> = [];
     for (const row of rows) {
       const tracking = row.tracking_number ?? null;
       if (!tracking) continue;
@@ -788,13 +837,30 @@ async function enrichProviderAccountIds(
         10,
       );
       if (!Number.isFinite(numericCarrierId)) continue;
+      pairs.push({ tracking, providerId: numericCarrierId });
+    }
+    if (!pairs.length) return 0;
+    const needy = await db
+      .select({ trackingNumber: shipments.trackingNumber })
+      .from(shipments)
+      .where(
+        and(
+          inArray(shipments.trackingNumber, pairs.map((p) => p.tracking)),
+          sql`${shipments.providerAccountId} is null`,
+        ),
+      );
+    const needSet = new Set(needy.map((r) => r.trackingNumber).filter(Boolean));
+    let updated = 0;
+    for (const pair of pairs) {
+      if (!needSet.has(pair.tracking)) continue;
       // Only update rows where providerAccountId is null. Don't clobber
-      // an ID that was set during label creation.
+      // an ID that was set during label creation. (Predicate kept even after
+      // the gate above — it is the race-safety backstop.)
       const result = await db
         .update(shipments)
-        .set({ providerAccountId: numericCarrierId, updatedAt: new Date() })
+        .set({ providerAccountId: pair.providerId, updatedAt: new Date() })
         .where(
-          sql`${shipments.trackingNumber} = ${tracking} and ${shipments.providerAccountId} is null`,
+          sql`${shipments.trackingNumber} = ${pair.tracking} and ${shipments.providerAccountId} is null`,
         )
         .returning({ id: shipments.id });
       updated += result.length;
