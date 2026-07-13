@@ -37,6 +37,11 @@ type ShopifySyncDeps = {
   ) => Promise<NormalizedStoreOrderImportResult>;
   persistOrders?: (orders: NormalizedStoreOrder[]) => Promise<number>;
   updateAccountProgress?: (id: number, progress: ShopifySyncProgress) => Promise<void>;
+  // Audit SY-3/SY-8 (2026-07-13): cooperative cancellation. The pg-boss deadline
+  // races and abandons handlers — without a checkpoint an abandoned walk kept
+  // importing pages (and writing cursors) while its lane lock was already
+  // released and a fresh run started. Checked between pages.
+  signal?: AbortSignal;
 };
 
 type ShopifySyncResult = {
@@ -190,6 +195,12 @@ export async function loadActiveShopifySyncAccounts(): Promise<ShopifySyncAccoun
   }));
 }
 
+// Audit SY-8 (2026-07-13): page budget for one account's walk within one run.
+const SHOPIFY_SYNC_MAX_PAGES_PER_RUN = Math.max(
+  1,
+  Number.parseInt(process.env.SHOPIFY_SYNC_MAX_PAGES_PER_RUN ?? '40', 10) || 40,
+);
+
 export async function syncShopifyAccount(
   account: ShopifySyncAccount,
   deps: ShopifySyncDeps = {},
@@ -202,6 +213,7 @@ export async function syncShopifyAccount(
 
   let synced = 0;
   let cursor: string | null = null;
+  let pagesWalked = 0;
   do {
     const result = await importOrders('shopify', {
       companyId: account.clientId ?? 0,
@@ -237,12 +249,17 @@ export async function syncShopifyAccount(
     }
 
     cursor = result.cursor ?? null;
-  } while (cursor);
+    pagesWalked += 1;
+    // Audit SY-8 (2026-07-13): budget + cancellation checkpoints on what was an
+    // UNBOUNDED do/while — a large backlog walk exceeded the 10-min job deadline
+    // and kept walking as a zombie. 40 pages x 50 orders = 2,000 orders/run; the
+    // per-page cursor persist (GREATEST-guarded) resumes the remainder next tick.
+  } while (cursor && !deps.signal?.aborted && pagesWalked < SHOPIFY_SYNC_MAX_PAGES_PER_RUN);
 
   return { synced };
 }
 
-export async function syncShopifyOrders(): Promise<ShopifySyncResult> {
+export async function syncShopifyOrders(signal?: AbortSignal): Promise<ShopifySyncResult> {
   if (!env.SHOPIFY_SYNC_ENABLED) {
     return { enabled: false, accounts: 0, synced: 0, errors: 0 };
   }
@@ -252,8 +269,9 @@ export async function syncShopifyOrders(): Promise<ShopifySyncResult> {
   let errors = 0;
 
   for (const account of accounts) {
+    if (signal?.aborted) break; // audit SY-3: stop cleanly between accounts
     try {
-      const result = await syncShopifyAccount(account);
+      const result = await syncShopifyAccount(account, { signal });
       synced += result.synced;
     } catch (error) {
       errors += 1;

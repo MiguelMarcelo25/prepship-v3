@@ -151,7 +151,9 @@ async function runHeavySchedulerJob<T>(
   }
 }
 
-export async function runShopifyOrderSyncTick(): Promise<void> {
+// Audit SY-3 (2026-07-13): optional signal threads the pg-boss deadline into the
+// page walk (queued mode passes it; the legacy interval scheduler passes none).
+export async function runShopifyOrderSyncTick(signal?: AbortSignal): Promise<void> {
   if (!env.SHOPIFY_SYNC_ENABLED) return;
   if (shopifyOrderSyncRunning) {
     console.log('[scheduler] Shopify orders sync already running - skipping tick');
@@ -159,7 +161,7 @@ export async function runShopifyOrderSyncTick(): Promise<void> {
   }
   shopifyOrderSyncRunning = true;
   try {
-    const result = await runHeavySchedulerJob('Shopify orders sync', () => syncShopifyOrders());
+    const result = await runHeavySchedulerJob('Shopify orders sync', () => syncShopifyOrders(signal));
     if (!result?.enabled) return;
     console.log(
       `[scheduler] Shopify orders synced: accounts=${result.accounts}, rows=${result.synced}, errors=${result.errors}`

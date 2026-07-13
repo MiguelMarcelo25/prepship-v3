@@ -816,9 +816,17 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     }
     return result;
   });
-  await registerWorker(JOBS.shopifyOrders, runShopifyOrderSyncTick);
-  await registerWorker(JOBS.shipments, (jobData) =>
-    syncShipments(shipmentSyncOptionsFromJobPayload(jobData)),
+  // Audit SY-3 (2026-07-13): thread the deadline signal into the shipments and
+  // Shopify handlers too (orders already had it) — withDeadline races and
+  // ABANDONS the work, so without checkpoints an abandoned walk kept writing
+  // (pages, enrichment, cursors) after its lane lock was released and the
+  // pg-boss retry started a second writer. The label_shipment_id UNIQUE index
+  // is the DB backstop; this stops the zombie at the source.
+  await registerWorker(JOBS.shopifyOrders, (_jobData, { signal }) =>
+    runShopifyOrderSyncTick(signal),
+  );
+  await registerWorker(JOBS.shipments, (jobData, { signal }) =>
+    syncShipments({ ...shipmentSyncOptionsFromJobPayload(jobData), signal }),
   );
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);

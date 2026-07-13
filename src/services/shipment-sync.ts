@@ -578,7 +578,10 @@ function shipWatermarkKey(label: string): string {
  * our local shipments table. Runs ONE pass per account.
  */
 export async function syncShipments(
-  opts: { sinceMs?: number; pageSize?: number } = {}
+  // Audit SY-3 (2026-07-13): signal = cooperative cancellation from the pg-boss
+  // deadline. Checked between accounts and between pages — an abandoned walk
+  // stops instead of writing (watermarks, enrichment) while a fresh run starts.
+  opts: { sinceMs?: number; pageSize?: number; signal?: AbortSignal } = {}
 ): Promise<ShipmentSyncResult> {
   // Smaller default pages keep the background worker below its 10-minute guard
   // while still letting explicit backfills request a larger page size.
@@ -599,7 +602,7 @@ export async function syncShipments(
 
   const accounts = await loadShipmentSyncAccounts();
   for (const acct of accounts) {
-    if (syncRunBudgetTimeExhausted(budget)) break;
+    if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
     try {
       const key = shipWatermarkKey(acct.label);
       const storedLastSync = await getSettingNumber(key);
@@ -618,7 +621,7 @@ export async function syncShipments(
       let pagesThisAccount = 0;
       let cursorCreateMs: number | null = null;
       let drained = false;
-      while (!syncRunBudgetTimeExhausted(budget)) {
+      while (!opts.signal?.aborted && !syncRunBudgetTimeExhausted(budget)) {
         const q = new URLSearchParams({
           createDateStart: sinceParam,
           pageSize: String(pageSize),
@@ -740,7 +743,7 @@ export async function syncShipments(
     }
     // PS-265: stop starting new accounts once the run is out of time budget; their watermarks
     // are unchanged, so they resume on the next run (fair round-robin across runs).
-    if (syncRunBudgetTimeExhausted(budget)) break;
+    if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
   }
 
   let ordersMarkedShipped = 0;
