@@ -14,13 +14,15 @@ const healthSql = postgres(env.DATABASE_URL, {
   prepare: false,
   max: 3,
   idle_timeout: 10,
+  // Audit 1.9: bound read-only-poisoned session lifetime (see db/client.ts).
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
   connect_timeout: DB_HEALTH_CONNECT_TIMEOUT_SECONDS,
   connection: { statement_timeout: DB_HEALTH_STATEMENT_TIMEOUT_MS },
 });
 
 type CancelableQuery<T> = Promise<T> & { cancel?: () => void };
 
-type ReadinessComponentName = 'db' | 'orders' | 'printQueue' | 'eventLoop';
+type ReadinessComponentName = 'db' | 'dbWrite' | 'orders' | 'printQueue' | 'eventLoop';
 
 type ReadinessComponent = {
   name: ReadinessComponentName;
@@ -77,6 +79,22 @@ async function checkDeepReadiness() {
   const components = await Promise.all([
     checkComponent('db', async () => {
       await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
+    }),
+    checkComponent('dbWrite', async () => {
+      // Audit 1.9 (2026-07-13, read-only incident hardening): a session that
+      // captured default_transaction_read_only=on during a Supabase disk event
+      // passes `select 1` forever — only a WRITE exposes it. A failing write
+      // probe marks the service unhealthy so Render restarts it and the pools
+      // reconnect writable. Single-row upsert on the settings PK: HOT-update
+      // cheap, no table growth.
+      await withTimeout(
+        healthSql`
+          insert into settings (key, value)
+          values ('health.write_probe', now()::text)
+          on conflict (key) do update set value = excluded.value
+        `,
+        DB_HEALTH_TIMEOUT_MS
+      );
     }),
     checkComponent('orders', async () => {
       await withTimeout(healthSql`select 1 from orders limit 1`, DB_HEALTH_TIMEOUT_MS);

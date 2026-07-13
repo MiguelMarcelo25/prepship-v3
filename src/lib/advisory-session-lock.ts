@@ -9,6 +9,8 @@ const advisoryLockSql = postgres(env.DATABASE_URL, {
   prepare: false,
   max: 2,
   idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  // Audit 1.9: bound read-only-poisoned session lifetime (see db/client.ts).
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
   connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
   connection: { statement_timeout: env.DB_STATEMENT_TIMEOUT_MS },
 });

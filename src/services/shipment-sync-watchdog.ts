@@ -529,14 +529,24 @@ export async function readRecentShippedMissingShipmentRows(
       SELECT
         count(*)::int AS recent_shipped_orders,
         (count(*) FILTER (
+          -- Audit M3 (2026-07-13): split the OR into two NOT EXISTS arms.
+          -- NOT EXISTS(A OR B) == NOT EXISTS(A) AND NOT EXISTS(B), but the OR
+          -- form forces a per-row subplan scan of shipments (pg_stat measured
+          -- this query family at 2.5-3.4s per call); the split arms each probe
+          -- their own partial index (shipments_order_latest_idx /
+          -- shipments_order_number_latest_idx) in milliseconds.
           WHERE NOT EXISTS (
             SELECT 1
             FROM shipments s
-            WHERE
-              (
-                s.order_id = o.id
-                OR (s.order_id IS NULL AND s.order_number = o.order_number)
-              )
+            WHERE s.order_id = o.id
+              AND coalesce(s.voided, false) = false
+              AND coalesce(s.is_return, false) = false
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM shipments s
+            WHERE s.order_id IS NULL
+              AND s.order_number = o.order_number
               AND coalesce(s.voided, false) = false
               AND coalesce(s.is_return, false) = false
           )

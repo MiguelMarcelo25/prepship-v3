@@ -85,6 +85,20 @@ export const shipments = pgTable(
       .where(sql`${t.orderNumber} is not null and ${t.orderId} is null and coalesce(${t.voided}, false) = false`),
     index('shipments_confirmation_status_idx').on(t.confirmationStatus),
     index('shipments_carrier_provider_idx').on(t.carrierProvider),
+    // Per user override unlock shipped data on 2026-07-13 (AUDIT-2026-07-13.md
+    // M2/SY-3): ADDITIVE index definitions only — created on prod the same day
+    // (migration audit_2026_07_13_week1_indexes_and_rls). tracking_number had no
+    // btree (only a trigram search index), so the sync provider-account enrichment
+    // seq-scanned shipments 2.35M times; label_shipment_id is the sync page's
+    // existing-row match key. A UNIQUE variant of the label index is blocked on
+    // one pre-existing duplicate pair (label_shipment_id 155168257) pending an
+    // operator decision.
+    index('shipments_tracking_number_idx')
+      .on(t.trackingNumber)
+      .where(sql`${t.trackingNumber} is not null`),
+    index('shipments_label_shipment_id_idx')
+      .on(t.labelShipmentId)
+      .where(sql`${t.labelShipmentId} is not null`),
   ]
 );
 

@@ -67,6 +67,13 @@ const schema = z.object({
   DB_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
   DB_POOL_MAX: z.coerce.number().int().positive().max(20).default(4),
   DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
+  // Audit 1.9 (2026-07-13, read-only incident hardening): max lifetime of a
+  // pooled connection before postgres.js recycles it. Role-level GUC defaults
+  // (e.g. Supabase's default_transaction_read_only=on during a disk event) are
+  // captured at CONNECT time — a session opened inside such a window stays
+  // read-only after the window lifts. postgres.js's default recycle is a random
+  // 30-60 min; 15 min bounds how long a poisoned session can linger.
+  DB_MAX_LIFETIME_SECONDS: z.coerce.number().int().positive().default(900),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(8),
   DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
   STRICT_JWT_CLAIMS: booleanFlag(false),

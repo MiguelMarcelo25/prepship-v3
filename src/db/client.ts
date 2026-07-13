@@ -7,6 +7,11 @@ const sql = postgres(env.DATABASE_URL, {
   prepare: false,
   max: env.DB_POOL_MAX,
   idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  // Audit 1.9 (2026-07-13): recycle connections every 15 min so a session that
+  // captured a read-only role GUC during a Supabase disk event (2026-07-13
+  // incident: poisoned sessions kept failing INSERTs for ~2h after the window
+  // lifted) is bounded, not left to postgres.js's default 30-60 min recycle.
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
   connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
   // Per-query timeout sent to Postgres via SET statement_timeout. Kills any
   // query that runs longer than 15s at the DB level, so the connection is
