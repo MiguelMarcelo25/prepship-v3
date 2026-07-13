@@ -66,8 +66,19 @@ assert(
     ratesService.includes('runWithGlobalRateLimiter') &&
     ratesService.includes('return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs);') &&
     ratesService.includes('const batch = await runWithGlobalRateLimiter(() => {') &&
-    ratesService.includes('return fetchEstimateForCarriers(carriers, input, shipFrom, policy.timeoutMs);'),
+    ratesService.includes('return fetchEstimateForCarriers(carriers, input, shipFrom, batchProbeTimeoutMs);'),
   'ShipStation batch and fallback estimate calls use one module-level global limiter across passive/manual/backfill callers',
+)
+
+// 2026-07-14 (batching-review LOW): the independent substrings above cannot catch a
+// refactor that lifts the estimate call OUT of the limiter lambda while both strings
+// still exist somewhere in the file. These SPANNING pins require the call to sit
+// INSIDE runWithGlobalRateLimiter's callback (with the priority hint), for the
+// single-account fallback and the batched path alike.
+assert(
+  /runWithGlobalRateLimiter\(\(\) => \{[\s\S]{0,500}?return fetchEstimateForCarrier\(carrier, input, shipFrom, policy\.timeoutMs\);[\s\S]{0,120}?\}, priority\)/.test(ratesService) &&
+    /runWithGlobalRateLimiter\(\(\) => \{[\s\S]{0,500}?return fetchEstimateForCarriers\(carriers, input, shipFrom, batchProbeTimeoutMs\);[\s\S]{0,120}?\}, priority\)/.test(ratesService),
+  'single and batched estimate calls execute INSIDE the limiter lambda (spanning pin)',
 )
 
 assert(

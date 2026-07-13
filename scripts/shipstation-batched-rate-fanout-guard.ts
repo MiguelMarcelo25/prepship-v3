@@ -68,6 +68,17 @@ assert.match(
   /requestMode:\s*'fallback'/,
   'targeted fallback diagnostics must remain distinguishable',
 );
+// 2026-07-14 (batching-review LOW): per-KEY scoping pins. A batch must carry the
+// SAME credential the carrier discovery used — mixing keys would quote one
+// tenant's accounts with another tenant's credential — and the batch dedupe
+// identity must embed the full request key (rateCacheKey embeds the api-key
+// fingerprint since PS-050, and sf= origin since audit C4), so two different
+// keys/origins can never share one in-flight batched HTTP response.
+assert.match(
+  ratesSource,
+  /fetchEstimateForCarriers\(\s*carriers[\s\S]{0,900}?apiKeyV2:\s*input\.apiKeyV2 \?\? undefined[\s\S]{0,200}?dedupeKey:\s*`rates-estimate:batch:\$\{carrierSetHash\}:\$\{rateCacheKey\(input\)\}`/,
+  'batched estimate must forward the request credential and key the dedupe slot by carrier set + full request identity',
+);
 assert.match(envExample, /^SHIPSTATION_BATCHED_RATE_FANOUT=false$/m, 'rollout flag must default off');
 assert.match(
   packageJson,

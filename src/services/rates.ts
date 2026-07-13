@@ -1467,11 +1467,21 @@ async function fetchBatchedEstimatesWithFallback(
   let batchResults: CarrierEstimateResult[] = [];
   let missingCarriers = carriers;
 
+  // Batching-review LOW (2026-07-14): the batch is a PROBE with a per-account
+  // fallback behind it — giving it the full per-call budget meant a hung batch
+  // burned the whole timeout and THEN ran the full single fan-out (worst-case
+  // ~2x flag-off latency). Cap the probe at the smaller of the policy budget
+  // and an env-tunable probe budget; the abort threading (audit R-4) kills the
+  // HTTP work at that deadline, then the fallback proceeds with full budgets.
+  const batchProbeTimeoutMs = Math.min(
+    policy.timeoutMs,
+    Math.max(3_000, Number.parseInt(process.env.SHIPSTATION_BATCHED_PROBE_TIMEOUT_MS ?? '8000', 10) || 8_000),
+  );
   try {
     const waitStartedAt = Date.now();
     const batch = await runWithGlobalRateLimiter(() => {
       limiterWaitMs += Date.now() - waitStartedAt;
-      return fetchEstimateForCarriers(carriers, input, shipFrom, policy.timeoutMs);
+      return fetchEstimateForCarriers(carriers, input, shipFrom, batchProbeTimeoutMs);
     }, priority);
     const durationMs = Date.now() - startedAt;
     batchResults = batch.results.map((result) => ({
