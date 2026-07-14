@@ -20,7 +20,7 @@ const otherClient = { clientId: 99, clientName: 'Not HUGRAB', storeId: 999999 };
 
 assert.equal(
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
-  'ps-057-hugrab-ground-saver-v1',
+  'ps-057-hugrab-ground-saver-v1|po-box-v1',
   'eligibility version must be stable and explicit for cache invalidation',
 );
 

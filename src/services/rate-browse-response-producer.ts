@@ -171,6 +171,8 @@ export async function produceRateBrowsePayload({
     }),
     toState: rest.toState ?? orderForBrowse?.shipToState ?? readText(orderRawShipTo.state) ?? rest.toState,
     toCity: rest.toCity ?? orderForBrowse?.shipToCity ?? readText(orderRawShipTo.city) ?? rest.toCity,
+    toAddress: rest.toAddress ?? readText(orderRawShipTo.street1) ?? undefined,
+    toAddress2: rest.toAddress2 ?? readText(orderRawShipTo.street2) ?? undefined,
     confirmation: confirmation ?? signature ?? null,
     carrierIds: orderedIds,
     sourceProvider: orderForBrowse?.sourceProvider ?? null,

@@ -21,6 +21,7 @@ import {
   evaluateShippingServiceEligibility,
 } from '../lib/shipping-service-eligibility';
 import type { StrictRecalculateDecision } from './rates-recalculate';
+import { orderShippingEligibilityContext } from './orders-read-model';
 
 export type StrictPersistResult = { persisted: boolean; reason?: string };
 
@@ -55,6 +56,7 @@ export async function persistStrictRecalculateOutcome(input: {
       orderStatus: orders.orderStatus,
       clientId: orders.clientId,
       storeId: orders.storeId,
+      raw: orders.raw,
     })
     .from(orders)
     .where(eq(orders.id, input.orderId))
@@ -109,9 +111,10 @@ export async function persistStrictRecalculateOutcome(input: {
   } catch (err) {
     return { persisted: false, reason: (err as Error).message };
   }
-  // Same eligibility re-check the PATCH route performs before persisting.
+  // Per user override unlock shipped data on 2026-07-15: the awaiting-only
+  // writer delegates PO Box eligibility to the canonical order context before persisting.
   const eligibility = evaluateShippingServiceEligibility(
-    { clientId: order.clientId ?? null, storeId: order.storeId ?? null, clientName: null },
+    orderShippingEligibilityContext(order),
     describeShippingService(canonical),
   );
   if (!eligibility.allowed) {

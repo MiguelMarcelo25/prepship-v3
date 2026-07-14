@@ -1774,6 +1774,7 @@ async function ordersListResponse(
         clientId: r.order.clientId,
         storeId: r.order.storeId,
         orderStatus: r.order.orderStatus,
+        raw: r.order.raw,
       },
       r.overrides,
     );
@@ -1781,11 +1782,14 @@ async function ordersListResponse(
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
     const legacyClientId = resolveLegacyClientId(r.order.clientId, r.order.storeId);
-    const rowShippingEligibilityContext: ShippingServiceEligibilityContext = {
-      clientId: legacyClientId ?? r.order.clientId ?? null,
-      clientName: r.order.clientName ?? null,
-      storeId: r.order.storeId ?? null,
-    };
+    const rowShippingEligibilityContext: ShippingServiceEligibilityContext =
+      orderShippingEligibilityContext({
+        clientId: legacyClientId ?? r.order.clientId ?? null,
+        clientName: r.order.clientName ?? null,
+        storeId: r.order.storeId ?? null,
+        raw: r.order.raw,
+        recipientOverride: safeOverrides?.recipientOverride,
+      });
     const rowIsHugrab = isHugrabShippingContext(rowShippingEligibilityContext);
     const baseOrderLifecycle = resolveOrderLifecycleStatus({
       orderStatus: r.order.orderStatus,
@@ -3486,9 +3490,18 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   const guard = await assertOrderEditable(c, id);
   if (!guard.ok) return guard.response;
 
+  // Per user override unlock shipped data on 2026-07-15: read the effective
+  // destination only to reject an ineligible PO Box rate before the guarded write.
   const [existing] = await db
-    .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+    .select({
+      id: orders.id,
+      clientId: orders.clientId,
+      storeId: orders.storeId,
+      raw: orders.raw,
+      recipientOverride: orderOverrides.recipientOverride,
+    })
     .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(eq(orders.id, id))
     .limit(1);
   if (!existing) return c.json({ error: 'Order not found' }, 404);
@@ -3532,7 +3545,10 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
       return c.json({ error: (err as Error).message }, 400);
     }
     const eligibilityReason = shippingRateEligibilityReason(
-      orderShippingEligibilityContext(existing),
+      orderShippingEligibilityContext({
+        ...existing,
+        recipientOverride: overridesBody.recipientOverride ?? existing.recipientOverride,
+      }),
       overridesBody.bestRateJson,
     );
     if (eligibilityReason) {

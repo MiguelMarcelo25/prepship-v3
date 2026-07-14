@@ -40,6 +40,7 @@ const REQUIRED_GUARDS = [
   'test:audit-print-queue-small-fixes',
   'test:audit-backfill-diagnostics',
   'test:audit-rate-on-ingest',
+  'test:audit-po-box-eligibility',
 ];
 
 const npmCli = process.env.npm_execpath;

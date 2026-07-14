@@ -9,6 +9,7 @@ export type ShippingRateRequestFingerprintInput = {
   toState?: string | null;
   toCity?: string | null;
   residential?: boolean | null;
+  destinationPoBox?: boolean | null;
   clientId?: number | null;
   storeId?: number | null;
   sourceClientId?: number | null;
@@ -203,6 +204,8 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
   }
   if (input.residential === true) parts.push('r=1');
   else if (input.residential === false) parts.push('r=0');
+  if (input.destinationPoBox === true) parts.push('pb=1');
+  else if (input.destinationPoBox === false) parts.push('pb=0');
   if (input.clientId != null) parts.push(`cl=${input.clientId}`);
   // Audit R-10: store identity has its own namespace; st= is destination state.
   else if (input.storeId != null) parts.push(`sid=${input.storeId}`);

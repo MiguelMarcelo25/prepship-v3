@@ -16,6 +16,7 @@ import {
 } from './orders-dto-primitives';
 import {
   classifyShippingAddress,
+  isPoBoxAddress,
   residentialForShipping,
 } from './shipping-workflow/address-classification';
 import {
@@ -93,11 +94,32 @@ export function orderShippingEligibilityContext(row: {
   clientId?: number | string | null;
   storeId?: number | string | null;
   clientName?: string | null;
+  raw?: unknown;
+  recipientOverride?: unknown;
+  shipToStreet1?: string | null;
+  shipToStreet2?: string | null;
+  shipToCountry?: string | null;
 }): ShippingServiceEligibilityContext {
+  const rawShipTo = recordOrNull(recordOrNull(row.raw)?.shipTo) ?? {};
+  const recipientOverride = recordOrNull(row.recipientOverride) ?? {};
   return {
     clientId: row.clientId ?? null,
     storeId: row.storeId ?? null,
     clientName: row.clientName ?? null,
+    destinationPoBox: isPoBoxAddress({
+      street1:
+        stringOrNull(recipientOverride.street1) ??
+        row.shipToStreet1 ??
+        stringOrNull(rawShipTo.street1),
+      street2:
+        stringOrNull(recipientOverride.street2) ??
+        row.shipToStreet2 ??
+        stringOrNull(rawShipTo.street2),
+      country:
+        stringOrNull(recipientOverride.country) ??
+        row.shipToCountry ??
+        stringOrNull(rawShipTo.country),
+    }),
   };
 }
 
@@ -110,14 +132,22 @@ export function shippingRateEligibilityReason(
 }
 
 export function sanitizeAwaitingOverridesForShippingEligibility(
-  order: { clientId?: number | string | null; storeId?: number | string | null; orderStatus?: string | null },
+  order: {
+    clientId?: number | string | null;
+    storeId?: number | string | null;
+    orderStatus?: string | null;
+    raw?: unknown;
+  },
   overrides: typeof orderOverrides.$inferSelect | null,
 ): typeof orderOverrides.$inferSelect | null {
   if (!overrides?.bestRateJson || order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
     return overrides;
   }
   const reason = shippingRateEligibilityReason(
-    orderShippingEligibilityContext(order),
+    orderShippingEligibilityContext({
+      ...order,
+      recipientOverride: overrides.recipientOverride,
+    }),
     overrides.bestRateJson,
   );
   if (!reason) return overrides;
@@ -301,6 +331,8 @@ export function buildCanonicalOrderModel(
     shipTo: {
       name: residentialEvidence.toName,
       company: residentialEvidence.toCompany,
+      street1: recipientAddress.street1,
+      street2: recipientAddress.street2,
       city: recipientAddress.city,
       state: recipientAddress.state,
       postalCode: recipientAddress.postalCode,
@@ -388,6 +420,7 @@ export function buildOrderDetailPayload(
       clientId: finiteNumberOrNull(order.clientId),
       storeId: finiteNumberOrNull(order.storeId),
       orderStatus: stringOrNull(order.orderStatus),
+      raw: recordOrNull(order.raw),
     },
     overrides as typeof orderOverrides.$inferSelect | null,
   ) as Record<string, unknown> | null;

@@ -18,7 +18,7 @@ function check(name: string, cond: boolean): void {
 }
 
 const resolver = readFileSync('src/services/shipping-workflow/resolve-address-classification.ts', 'utf8');
-const browse = readFileSync('src/routes/rates.ts', 'utf8');
+const browse = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
 
 // ── 1. Env-based USPS loader (USPS AV is a GLOBAL service) ─────────────────────

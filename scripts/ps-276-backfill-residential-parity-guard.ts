@@ -80,7 +80,8 @@ check('company-name heuristic alone stays residential (money-safe)', resolveResi
 
 // ── 4. BOTH producers build the rate input via the shared owner ───────────────
 const backfill = readFileSync('src/services/rates-backfill.ts', 'utf8');
-const browse = readFileSync('src/routes/rates.ts', 'utf8');
+// The order-backed producer moved out of the thin route; pin the current owner.
+const browse = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 check('backfill SELECTs the manual residential override (orderOverrides.residential)',
   /residentialOverride: orderOverrides\.residential/.test(backfill));
 check('backfill builds evidence via the shared owner',

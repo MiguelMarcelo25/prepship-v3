@@ -218,9 +218,18 @@ export async function applyBestRateForOrder(
   body: ApplyBestRateCommandInput,
   authorization: OrderEditWriteAuthorization,
 ): Promise<OrderCommandResult> {
+  // Per user override unlock shipped data on 2026-07-15: read destination
+  // evidence so the canonical eligibility owner can reject PO Box carrier mismatches.
   const [existing] = await db
-    .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+    .select({
+      id: orders.id,
+      clientId: orders.clientId,
+      storeId: orders.storeId,
+      raw: orders.raw,
+      recipientOverride: orderOverrides.recipientOverride,
+    })
     .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(eq(orders.id, id))
     .limit(1);
   if (!existing) return { ok: false, status: 404, error: 'Order not found' };
@@ -342,9 +351,18 @@ export async function saveBestRateForOrder(
     return { ok: false, status: 400, error };
   }
 
+  // Per user override unlock shipped data on 2026-07-15: this is read-only
+  // destination evidence for the same pre-persist PO Box eligibility check.
   const [existing] = await db
-    .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+    .select({
+      id: orders.id,
+      clientId: orders.clientId,
+      storeId: orders.storeId,
+      raw: orders.raw,
+      recipientOverride: orderOverrides.recipientOverride,
+    })
     .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(eq(orders.id, id))
     .limit(1);
   if (!existing) return { ok: false, status: 404, error: 'Order not found' };

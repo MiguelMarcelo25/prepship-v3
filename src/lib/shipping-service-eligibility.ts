@@ -1,7 +1,7 @@
 import { normalizeInsurance, type NormalizedInsuranceProvider } from './shipping-options.js';
 import { effectiveInsuranceProviderForAccount, resolveAccountInsuranceCapability } from './carrier-account-registry.js';
 
-export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1';
+export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1|po-box-v1';
 
 // PS-072: HUGRAB default insured value (USD) for supported ground services.
 export const HUGRAB_DEFAULT_INSURED_VALUE = 100;
@@ -14,6 +14,9 @@ export const UPS_GROUND_SAVER_INSURANCE_BLOCK_REASON =
 
 export const HUGRAB_CARRIER_DISABLE_PROTECTED_REASON =
   'PS-057 locks services, not whole UPS carrier accounts. Leave the carrier enabled and keep Ground Saver/SurePost disabled.';
+
+export const PO_BOX_CARRIER_BLOCK_REASON =
+  'UPS and FedEx cannot deliver to a PO Box. Choose USPS or another PO Box-compatible service.';
 
 const HUGRAB_CLIENT_IDS = new Set([4]);
 const HUGRAB_STORE_IDS = new Set([378060]);
@@ -36,6 +39,8 @@ export type ShippingServiceEligibilityContext = {
   storeId?: number | string | null;
   /** Backend-resolved operator setting. Missing preserves the legacy enabled policy. */
   hugrabDefaultInsuranceEnabled?: boolean | null;
+  /** Backend-classified destination fact; never derived by the frontend. */
+  destinationPoBox?: boolean | null;
 };
 
 export type ShippingServiceOptionEligibilityContext = {
@@ -196,6 +201,23 @@ export function isUpsCarrierAccount(service: ShippingServiceDescriptor | null | 
   ].map(normalizeServiceIdentity).some((value) => value === 'ups' || value.includes('upswalleted'));
 }
 
+export function isFedexCarrierAccount(service: ShippingServiceDescriptor | null | undefined): boolean {
+  if (!service) return false;
+  return [
+    service.carrierCode,
+    service.carrierName,
+    service.provider,
+  ].map(normalizeServiceIdentity).some((value) => value === 'fedex' || value.startsWith('fedex'));
+}
+
+function isPoBoxIneligibleCarrier(service: ShippingServiceDescriptor | null | undefined): boolean {
+  if (isUpsCarrierAccount(service) || isFedexCarrierAccount(service)) return true;
+  if (!service) return false;
+  return [service.serviceCode, service.serviceName, service.serviceType]
+    .map(normalizeServiceIdentity)
+    .some((value) => value.startsWith('ups') || value.startsWith('fedex'));
+}
+
 export function isHugrabCarrierDisableProtected(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,
@@ -354,6 +376,17 @@ export function evaluateShippingServiceEligibility(
   shippingOptions?: ShippingServiceOptionEligibilityContext | null,
   automationRules?: ShippingAutomationRule[] | null,
 ): ShippingServiceEligibilityResult {
+  if (
+    context?.destinationPoBox === true &&
+    isPoBoxIneligibleCarrier(service)
+  ) {
+    return {
+      allowed: false,
+      version: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+      ruleId: 'po-box-carrier',
+      reason: PO_BOX_CARRIER_BLOCK_REASON,
+    };
+  }
   if (isHugrabShippingContext(context) && isUpsGroundSaverOrSurePostService(service)) {
     return {
       allowed: false,

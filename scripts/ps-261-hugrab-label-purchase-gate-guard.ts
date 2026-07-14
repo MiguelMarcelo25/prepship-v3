@@ -245,7 +245,7 @@ check('labels.ts gates SHIPP customsValue proof behind default-OFF HUGRAB_SHIPP_
 const printQueue = read('src/services/print-queue.ts');
 const printQueueRoute = read('src/routes/print-queue.ts');
 check('print-queue service imports createLabelV2 as the missing-label purchase boundary',
-  /import \{ createLabelV2, type CreateLabelInputDto, type LabelCreateTimingBreakdown \} from '\.\/labels'/.test(printQueue));
+  /import \{[\s\S]*?createLabelV2,[\s\S]*?type CreateLabelInputDto,[\s\S]*?type LabelCreateTimingBreakdown,[\s\S]*?\} from '\.\/labels'/.test(printQueue));
 check('print-queue missing-label path delegates to createLabelV2 (therefore uses the same PS-261 preflight)',
   /const labelInput = order\.label;[\s\S]*?const created = await timeQueueStep\([\s\S]*?'labelPurchaseMs'[\s\S]*?return await createLabelV2\(\{[\s\S]*?\.\.\.labelInput,[\s\S]*?orderId: order\.orderId,[\s\S]*?orderNumber: order\.orderNumber \?\? labelInput\.orderNumber,[\s\S]*?\}, GLOBAL_SCOPE\)/.test(printQueue));
 check('print-queue does NOT recompute HUGRAB coverage or call provider purchase APIs directly',

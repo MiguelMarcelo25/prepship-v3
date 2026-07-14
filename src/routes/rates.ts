@@ -49,6 +49,7 @@ import { normalizeRateShipFromOrigin } from '../services/shipping-workflow/rate-
 import { orderOverrides, orders } from '../db/schema/orders';
 import { getShopifyRatesForOrder, ShopifyRatesError } from '../services/shopify-rates';
 import { logStructured, reportError, runWithLogContext } from '../lib/structured-log';
+import { isPoBoxAddress } from '../services/shipping-workflow/address-classification';
 
 const app = new Hono();
 
@@ -204,6 +205,7 @@ const rateBody = z.object({
   toState: z.string().optional(),
   toCity: z.string().optional(),
   toAddress: z.string().optional(),
+  toAddress2: z.string().optional(),
   toName: z.string().optional(),
   residential: z.boolean().optional(),
   dimsL: z.number().positive().optional(),
@@ -569,6 +571,8 @@ const bulkItemBody = z
     weightOz: z.number().positive().optional(),
     toZip: z.string().min(3).optional(),
     toCountry: z.string().optional(),
+    toAddress: z.string().optional(),
+    toAddress2: z.string().optional(),
     residential: z.boolean().optional(),
     dimsL: z.number().positive().optional(),
     dimsW: z.number().positive().optional(),
@@ -612,6 +616,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
           storeId: orders.storeId,
           sourceProvider: orders.sourceProvider,
           sourceAccountId: orders.sourceAccountId,
+          raw: orders.raw,
         })
         .from(orders)
         .where(and(
@@ -620,6 +625,15 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         ))
     : [];
   const orderContextById = new Map(scopedOrderRows.map((row) => [row.id, row]));
+  const destinationForItem = (item: typeof items[number]) => {
+    const orderContext = item.orderId != null ? orderContextById.get(item.orderId) : null;
+    const rawShipTo = ((orderContext?.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+    return {
+      street1: item.toAddress ?? (typeof rawShipTo.street1 === 'string' ? rawShipTo.street1 : null),
+      street2: item.toAddress2 ?? (typeof rawShipTo.street2 === 'string' ? rawShipTo.street2 : null),
+      country: item.toCountry ?? (typeof rawShipTo.country === 'string' ? rawShipTo.country : null),
+    };
+  };
   const directContextForItem = (item: typeof items[number]) => {
     const orderContext = item.orderId != null ? orderContextById.get(item.orderId) : null;
     return {
@@ -630,6 +644,8 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
     };
   };
   const itemsWithKeys = await Promise.all(items.map(async (it) => {
+    const destination = destinationForItem(it);
+    const destinationPoBox = isPoBoxAddress(destination);
     if (it.cacheKey) {
       return {
         item: it,
@@ -637,6 +653,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         effectiveInsuranceProvider: null,
         effectiveInsuredValue: null,
         effectiveInsuranceSource: null,
+        destinationPoBox,
       };
     }
     if (it.weightOz === undefined || it.toZip === undefined) {
@@ -646,6 +663,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         effectiveInsuranceProvider: null,
         effectiveInsuredValue: null,
         effectiveInsuranceSource: null,
+        destinationPoBox,
       };
     }
     if (
@@ -662,7 +680,9 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       it.insurance === undefined &&
       it.insuredValue === undefined &&
       it.insuranceValue === undefined &&
-      it.toCountry === undefined
+      it.toCountry === undefined &&
+      it.toAddress === undefined &&
+      it.toAddress2 === undefined
     ) {
       return {
         item: it,
@@ -670,12 +690,15 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         effectiveInsuranceProvider: null,
         effectiveInsuredValue: null,
         effectiveInsuranceSource: null,
+        destinationPoBox,
       };
     }
     const resolved = await resolveRateInput({
       weightOz: it.weightOz,
       toZip: it.toZip,
       toCountry: it.toCountry,
+      toAddress: destination.street1 ?? undefined,
+      toAddress2: destination.street2 ?? undefined,
       residential: it.residential,
       dimsL: it.dimsL,
       dimsW: it.dimsW,
@@ -694,6 +717,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       effectiveInsuranceProvider: resolved.effectiveInsuranceProvider ?? resolved.insuranceProvider ?? null,
       effectiveInsuredValue: resolved.effectiveInsuredValue ?? resolved.insuredValue ?? null,
       effectiveInsuranceSource: resolved.effectiveInsuranceSource ?? null,
+      destinationPoBox: resolved.destinationPoBox ?? destinationPoBox,
     };
   }));
   const exactKeys = [
@@ -718,12 +742,13 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   }));
   // Audit R-6: current markups for read-time pricing of every served row.
   const displayMarkups = await loadCarrierMarkups();
-  const results = itemsWithKeys.map(({ item: it, computedCacheKey, effectiveInsuranceProvider, effectiveInsuredValue, effectiveInsuranceSource }) => {
+  const results = itemsWithKeys.map(({ item: it, computedCacheKey, effectiveInsuranceProvider, effectiveInsuredValue, effectiveInsuranceSource, destinationPoBox }) => {
     const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
     if (exactHit) {
       const eligibleHit = markRateCacheRowForDisplay(sanitizeRateCacheRowForEligibility(exactHit, {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
+        destinationPoBox,
       }, {
         // POLICY (DJ, 2026-06-04): default confirmation is 'none' (matches the
         // awaiting/modal default). Eligibility-only here; cached prices are
@@ -757,6 +782,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       const eligibleHit = markRateCacheRowForDisplay(sanitizeRateCacheRowForEligibility(roughHit, {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
+        destinationPoBox,
       }, {
         // POLICY (DJ, 2026-06-04): default confirmation is 'none' (matches the
         // awaiting/modal default). Eligibility-only here; cached prices are

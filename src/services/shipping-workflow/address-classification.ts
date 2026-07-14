@@ -49,11 +49,13 @@ export type AddressClassificationEvidence = {
   carrierRoute?: string | null;
   companyPresent?: boolean;
   provider?: string | null;
+  poBox: boolean;
 };
 
 export type AddressClassificationResult = {
   residential: boolean;
   classification: AddressClassification;
+  poBox: boolean;
   source: AddressClassificationSource;
   confidence: AddressClassificationConfidence;
   evidence: AddressClassificationEvidence;
@@ -67,6 +69,7 @@ export type AddressClassificationInput = {
     name?: string | null;
     company?: string | null;
     street1?: string | null;
+    street2?: string | null;
     city?: string | null;
     state?: string | null;
     postalCode?: string | null;
@@ -87,6 +90,19 @@ export type AddressClassificationInput = {
   /** Optional explicit provider classification marker ('residential'/'commercial'). */
   providerMarker?: { classification?: AddressClassification | null; provider?: string | null } | null;
 };
+
+const PO_BOX_PATTERN = /(?:^|[\s,;])(?:p\s*\.?\s*o\s*\.?\s*box|post\s+office\s+box)(?=$|[\s#\d])/i;
+
+/** Pure US Post Office Box detector; PMB/rural-route boxes are intentionally excluded. */
+export function isPoBoxAddress(input: {
+  street1?: string | null;
+  street2?: string | null;
+  country?: string | null;
+}): boolean {
+  const country = String(input.country ?? 'US').trim().toUpperCase();
+  if (country !== 'US' && country !== 'USA') return false;
+  return [input.street1, input.street2].some((line) => PO_BOX_PATTERN.test(String(line ?? '').trim()));
+}
 
 function asBool(value: unknown): boolean | null {
   if (value === true || value === false) return value;
@@ -126,6 +142,11 @@ export function classifyShippingAddress(input: AddressClassificationInput): Addr
   const country = input.shipTo?.country ?? 'US';
   const zipPlus4 = normalizeShippingPostalCode(input.shipTo?.postalCode, country).exact ?? null;
   const companyPresent = hasCompany(input.shipTo?.company, input.shipTo?.name);
+  const poBox = isPoBoxAddress({
+    street1: input.shipTo?.street1,
+    street2: input.shipTo?.street2,
+    country,
+  });
   const baseEvidence: AddressClassificationEvidence = {
     sourceResidential: input.sourceResidential ?? null,
     zipPlus4,
@@ -134,6 +155,7 @@ export function classifyShippingAddress(input: AddressClassificationInput): Addr
     carrierRoute: input.addressValidation?.carrierRoute ?? null,
     companyPresent,
     provider: input.providerMarker?.provider ?? null,
+    poBox,
   };
 
   const decide = (
@@ -143,6 +165,7 @@ export function classifyShippingAddress(input: AddressClassificationInput): Addr
   ): AddressClassificationResult => ({
     residential,
     classification: residential ? 'residential' : 'commercial',
+    poBox,
     source,
     confidence,
     evidence: baseEvidence,

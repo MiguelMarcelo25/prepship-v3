@@ -643,12 +643,14 @@ async function assertLabelServiceEligibleForOrder(
   clientId: number | null | undefined,
   service: ShippingServiceDescriptor,
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
+  destinationPoBox = false,
 ): Promise<void> {
   const automationRules = await loadShippingAutomationRules();
   assertShippingServiceEligible(
     {
       clientId: clientId ?? order.clientId ?? null,
       storeId: order.storeId ?? null,
+      destinationPoBox,
     },
     service,
     shippingOptions,
@@ -721,6 +723,13 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
   assertShippingServiceEligible(
     {
       clientId: input.clientId ?? null,
+      destinationPoBox: classifyShippingAddress({
+        shipTo: {
+          street1: input.shipTo.address_line1,
+          street2: input.shipTo.address_line2,
+          country: input.shipTo.country_code,
+        },
+      }).poBox,
     },
     {
       serviceCode: input.serviceCode,
@@ -1861,7 +1870,39 @@ async function createLabelV2Impl(
     err.code = 'HUGRAB_INSURANCE_REQUIRED';
     throw err;
   }
-  await assertLabelServiceEligibleForOrder(order, clientId, serviceDescriptor, options);
+  const overrides = await loadOrderDimsOverride(order.id);
+  const fallbackShipTo = orderShipToFromRaw(order, overrides?.recipientOverride);
+  const shipTo = mergeAddress(body.shipTo, fallbackShipTo);
+  const rawShipTo = ((order.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
+  const labelClassification = classifyShippingAddress({
+    orderId: order.id,
+    clientId,
+    storeId: order.storeId ?? null,
+    shipTo: {
+      name: shipTo.name,
+      company: shipTo.company,
+      street1: shipTo.street1,
+      street2: shipTo.street2,
+      city: shipTo.city,
+      state: shipTo.state,
+      postalCode: shipTo.postalCode,
+      country: shipTo.country,
+    },
+    manualOverrideResidential:
+      typeof overrides?.residential === 'boolean' ? overrides.residential : null,
+    sourceResidential:
+      typeof rawShipTo.residential === 'boolean' ? (rawShipTo.residential as boolean) : null,
+  });
+  // Per user override unlock shipped data on 2026-07-15: this awaiting-only
+  // final guard reads the effective destination and blocks an ineligible PO
+  // Box carrier before any provider or postage side effect.
+  await assertLabelServiceEligibleForOrder(
+    order,
+    clientId,
+    serviceDescriptor,
+    options,
+    labelClassification.poBox,
+  );
   // PS-186 — canonical test-label authority (test-label-policy.ts). isTest clients are
   // FORCED into offline-mock (a test row never spends real postage); a `testLabel: true`
   // request for a REAL client is REJECTED with a structured 409 (TEST_LABEL_REJECTED)
@@ -1894,7 +1935,6 @@ async function createLabelV2Impl(
     throw err;
   }
 
-  const overrides = await loadOrderDimsOverride(order.id);
   const effectiveWeightOz = Number(body.weightOz ?? overrides?.rateWeightOz ?? order.weightOz ?? (body.testLabel ? 1 : 0));
   if (!effectiveWeightOz) throw new Error('Order weight required to create label');
 
@@ -1902,8 +1942,6 @@ async function createLabelV2Impl(
   const width = Number(body.width ?? overrides?.rateDimsW ?? 0) || null;
   const height = Number(body.height ?? overrides?.rateDimsH ?? 0) || null;
 
-  const fallbackShipTo = orderShipToFromRaw(order, overrides?.recipientOverride);
-  const shipTo = mergeAddress(body.shipTo, fallbackShipTo);
   // PS-127: the label is the authoritative rate↔label parity point. Classify
   // residential/commercial from the order's OWN evidence (operator override >
   // ShipStation source flag > weak company heuristic) — never a frontend-sent value —
@@ -1911,24 +1949,6 @@ async function createLabelV2Impl(
   // billed under the SAME classification the rate was quoted under. `overrides` (with the
   // manual residential override) and `order.raw.shipTo` are already loaded above, so this
   // adds no DB round-trip.
-  const rawShipTo = ((order.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
-  const labelClassification = classifyShippingAddress({
-    orderId: order.id,
-    clientId,
-    storeId: order.storeId ?? null,
-    shipTo: {
-      name: shipTo.name,
-      company: shipTo.company,
-      city: shipTo.city,
-      state: shipTo.state,
-      postalCode: shipTo.postalCode,
-      country: shipTo.country,
-    },
-    manualOverrideResidential:
-      typeof overrides?.residential === 'boolean' ? overrides.residential : null,
-    sourceResidential:
-      typeof rawShipTo.residential === 'boolean' ? (rawShipTo.residential as boolean) : null,
-  });
   const labelResidential = residentialForShipping(labelClassification);
   shipTo.residential = labelResidential;
   const carrierRecipient = resolveCarrierRecipientName({
@@ -2774,7 +2794,13 @@ async function createLabelFromOrderId(args: {
   await assertLabelServiceEligibleForOrder(order, effectiveClientId, {
     serviceCode: args.serviceCode,
     serviceName: args.serviceCode,
-  });
+  }, undefined, classifyShippingAddress({
+    shipTo: {
+      street1: shipTo.street1,
+      street2: shipTo.street2,
+      country: shipTo.country,
+    },
+  }).poBox);
   if (await loadClientIsTest(effectiveClientId)) {
     return await createMockShipmentForOrder({
       order,

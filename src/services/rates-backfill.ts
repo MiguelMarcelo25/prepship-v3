@@ -11,6 +11,7 @@ import {
 } from './shipping-workflow/residential-evidence';
 // PS-276 (slice 2b-2b): the live address-classification resolver (cache-or-USPS), env-gated OFF.
 import { resolveAddressClassification } from './shipping-workflow/resolve-address-classification';
+import { isPoBoxAddress } from './shipping-workflow/address-classification';
 import {
   BACKEND_RATE_PROOF_SOURCE,
   finalizeBestRateWithQuote,
@@ -121,10 +122,20 @@ function savedBestRateNeedsEligibilityRefresh(row: {
   clientId: number | null;
   storeId: number | null;
   bestRateJson: unknown;
+  raw: unknown;
 }): boolean {
   if (!row.bestRateJson) return false;
+  const rawShipTo = ((row.raw as { shipTo?: Record<string, unknown> } | null)?.shipTo) ?? {};
   return !evaluateShippingServiceEligibility(
-    { clientId: row.clientId, storeId: row.storeId },
+    {
+      clientId: row.clientId,
+      storeId: row.storeId,
+      destinationPoBox: isPoBoxAddress({
+        street1: typeof rawShipTo.street1 === 'string' ? rawShipTo.street1 : null,
+        street2: typeof rawShipTo.street2 === 'string' ? rawShipTo.street2 : null,
+        country: typeof rawShipTo.country === 'string' ? rawShipTo.country : null,
+      }),
+    },
     describeShippingService(row.bestRateJson),
   ).allowed;
 }
@@ -752,7 +763,7 @@ async function runBackfill(
       };
 
       const raw = (row.raw ?? {}) as Record<string, unknown> & {
-        shipTo?: { country?: string; residential?: boolean };
+        shipTo?: { country?: string; residential?: boolean; street1?: string; street2?: string };
         dimensions?: { length?: number; width?: number; height?: number; units?: string };
       };
       const toCountry = raw.shipTo?.country ?? 'US';
@@ -805,6 +816,8 @@ async function runBackfill(
           toState: row.shipToState ?? undefined,
           toCity: row.shipToCity ?? undefined,
           toCountry,
+          toAddress: typeof backfillRawShipTo.street1 === 'string' ? backfillRawShipTo.street1 : undefined,
+          toAddress2: typeof backfillRawShipTo.street2 === 'string' ? backfillRawShipTo.street2 : undefined,
           ...residentialEvidenceRateInput(residentialEvidence),
           dimsL: dims.length,
           dimsW: dims.width,

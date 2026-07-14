@@ -435,6 +435,7 @@ export type RateInput = {
   toState?: string;
   toCity?: string;
   toAddress?: string;
+  toAddress2?: string;
   toName?: string;
   toCompany?: string | null;
   // PS-127 residential/commercial evidence. `residential` is the legacy resolved flag a
@@ -453,6 +454,8 @@ export type RateInput = {
   // PS-127 resolved classification (output of resolveRateInput, for DTO/diagnostics).
   residentialClassification?: 'residential' | 'commercial';
   residentialSource?: AddressClassificationSource;
+  /** Canonical address-classification axis used by eligibility and cache identity. */
+  destinationPoBox?: boolean;
   dimsL?: number;
   dimsW?: number;
   dimsH?: number;
@@ -546,6 +549,8 @@ function classifyRateInputResidential(input: RateInput) {
     shipTo: {
       name: input.toName,
       company: input.toCompany ?? null,
+      street1: input.toAddress,
+      street2: input.toAddress2,
       city: input.toCity,
       state: input.toState,
       postalCode: input.toZip,
@@ -641,6 +646,7 @@ export async function resolveRateInput(
     residential,
     residentialClassification: residentialClassification.classification,
     residentialSource: residentialClassification.source,
+    destinationPoBox: residentialClassification.poBox,
     storeId: context.storeId,
     clientId: context.clientId,
     apiKeyV2: context.apiKeyV2,
@@ -668,6 +674,7 @@ export function rateCacheKey(input: RateInput): string {
     toState: input.toState,
     toCity: input.toCity,
     residential: input.residential,
+    destinationPoBox: input.destinationPoBox,
     clientId: input.clientId,
     storeId: input.storeId,
     sourceClientId: input.sourceClientId,
@@ -759,12 +766,13 @@ export function pickBestRate(rates: Rate[]): Rate | null {
 }
 
 function rateEligibilityContext(
-  input: Pick<RateInput, 'clientId' | 'storeId' | 'hugrabDefaultInsuranceEnabled'>,
+  input: Pick<RateInput, 'clientId' | 'storeId' | 'hugrabDefaultInsuranceEnabled' | 'destinationPoBox'>,
 ): ShippingServiceEligibilityContext {
   return {
     clientId: input.clientId ?? null,
     storeId: input.storeId ?? null,
     hugrabDefaultInsuranceEnabled: input.hugrabDefaultInsuranceEnabled ?? null,
+    destinationPoBox: input.destinationPoBox ?? null,
   };
 }
 
@@ -2494,7 +2502,12 @@ export async function getDirectCarrierRatesForRateInput(
   // PS-135(a): resolve residential via the SAME canonical classifier the ShipStation path uses
   // (classifyRateInputResidential), NOT the raw FE input.residential, so direct-carrier (UPS/etc.)
   // quotes apply the SAME residential classification as ShipStation and match the label.
-  const resolvedResidential = residentialForShipping(classifyRateInputResidential(input));
+  const directAddressClassification = classifyRateInputResidential(input);
+  const resolvedResidential = residentialForShipping(directAddressClassification);
+  const directEligibilityContext = rateEligibilityContext({
+    ...input,
+    destinationPoBox: directAddressClassification.poBox,
+  });
   const fetchedAt = new Date().toISOString();
   // Resolve the origin ONCE, mirroring the ShipStation path (fetchLiveRatesWithDiagnostics:
   // `input.shipFrom ?? getDefaultShipFrom()`). Direct carriers (incl. Walmart) must quote from
@@ -2603,10 +2616,10 @@ export async function getDirectCarrierRatesForRateInput(
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
       const eligible = filterRatesForShippingServiceEligibility(
         rawRates,
-        { clientId: input.clientId ?? null, storeId: input.storeId ?? null },
+        directEligibilityContext,
         shippingOptions,
       ).filter((rate) => evaluateShippingServiceEligibility(
-        { clientId: input.clientId ?? null, storeId: input.storeId ?? null },
+        directEligibilityContext,
         directRateServiceDescriptor(rate as Record<string, unknown>, account.provider),
         shippingOptions,
       ).allowed);
