@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
@@ -49,7 +50,73 @@ const cheaperCurrentRate = {
   requestFingerprint: 'ps050-cheaper-current-fingerprint',
 }
 
+// Exact backend-owned row workflow shape from withOrderRowWorkflow() in
+// src/services/shipping-workflow/best-rate-workflow-dto.ts. Orders mount is
+// passive; a displayable saved rate arrives through this /orders DTO contract.
+function freshOrderWorkflow(rate) {
+  return {
+    bestRateState: 'fresh',
+    requestFingerprint: rate.requestFingerprint,
+    backendRequestKey: rate.requestFingerprint,
+    sourceConfidence: 'cache_fresh',
+    carrierStatuses: [],
+    allowedActions: {
+      canUseSavedRate: true,
+      requiresRerate: false,
+      canCreateLabel: true,
+      canRate: true,
+      canBrowseRates: true,
+      canRecalculate: true,
+      canQueueLabel: true,
+      canMarkExternalShipped: true,
+      canApplyBestRate: true,
+      canPrintToQueue: true,
+      canEditPackage: true,
+      canSelectRow: true,
+    },
+    savedRateDisplay: 'fresh',
+    canDisplayFinalRate: true,
+    canUseDisplayedRateForPurchase: true,
+    needsDisplayRefresh: false,
+    activeRateCheckState: 'none',
+    rowState: 'final',
+    lifecycleState: 'awaiting',
+    rateState: 'final',
+    labelState: 'none',
+    queueState: 'can_queue',
+    packageState: 'resolved',
+    blockedReasons: {},
+    display: {
+      carrierCode: rate.carrierCode,
+      serviceCode: rate.serviceCode,
+      accountNickname: rate.carrierNickname,
+      providerAccountId: rate.shippingProviderId,
+    },
+    queueRoute: 'backend',
+    money: {
+      baseAmount: rate.shipmentCost,
+      markedAmount: rate.shipmentCost,
+      markupAmount: 0,
+      insuranceAddOn: null,
+      marginPercent: null,
+      source: 'best_rate',
+      markupSource: 'carrier_markup',
+      rateAdjustmentKind: 'customer_profit_markup',
+      cShippingRateAmount: rate.shipmentCost,
+      selectedRateCost: rate.shipmentCost,
+      shippingMarginAmount: 0,
+      shippingMarginPct: null,
+      houseApplied: false,
+      houseBadgeVisible: false,
+      customerRateSource: 'best_rate_marked_amount',
+      rateCostSource: 'best_rate_internal_cost',
+    },
+    marketplace: null,
+  }
+}
+
 function makeOrder(id, bestRate, overrides = {}) {
+  const { bestRateWorkflow = null, ...rateOverrides } = overrides
   return {
     id,
     orderId: id,
@@ -80,17 +147,20 @@ function makeOrder(id, bestRate, overrides = {}) {
       bestRateJson: bestRate,
       bestRateDims: '12x10x3',
       bestRateAt: new Date().toISOString(),
-      ...overrides,
+      ...rateOverrides,
     },
     bestRate,
     selectedRate: null,
     label: null,
     shipping: bestRate ? { bestRate, bestRateAmount: bestRate.shipmentCost, bestRateDims: '12x10x3' } : null,
+    bestRateWorkflow,
   }
 }
 
 const staleOrder = makeOrder(1107, staleDimsOnlyRate)
-const freshOrder = makeOrder(1108, exactFreshRate)
+const freshOrder = makeOrder(1108, exactFreshRate, {
+  bestRateWorkflow: freshOrderWorkflow(exactFreshRate),
+})
 const cheaperOrder = makeOrder(1109, {
   ...staleDimsOnlyRate,
   requestFingerprint: 'ps050-old-more-expensive-fingerprint',
@@ -107,7 +177,7 @@ function json(body) {
   return { status: 200, contentType: 'application/json', body: JSON.stringify(body) }
 }
 
-test('Awaiting Shipment auto-starts safe cache-first rating and rejects dims-only saved rates', async ({ page }) => {
+test('Awaiting Shipment passively consumes backend rate workflow and rejects unproven saved rates', async ({ page }) => {
   const requests = []
 
   await page.addInitScript((projectRef) => {
@@ -160,6 +230,7 @@ test('Awaiting Shipment auto-starts safe cache-first rating and rejects dims-onl
       }))
     }
     if (url.pathname === '/settings/orders.columnPrefs') return route.fulfill(json({ value: null }))
+    if (url.pathname === '/orders/daily-stats') return route.fulfill(json(ORDERS_DAILY_STATS_WIRE))
     if (url.pathname === '/orders/sync/status') return route.fulfill(json({ status: 'idle' }))
     if (url.pathname === '/shipments/status') return route.fulfill(json({ status: 'idle' }))
     if (url.pathname === '/init/stores') return route.fulfill(json({ data: [{ id: 101, storeId: 101, name: 'KF Goods', clientId: 1, active: true, isTest: false }] }))
@@ -214,13 +285,12 @@ test('Awaiting Shipment auto-starts safe cache-first rating and rejects dims-onl
 
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
 
   await expect(page.locator('#row-1108 td[data-col="bestrate"]')).toContainText('10.30')
   await expect(page.locator('#row-1107 td[data-col="bestrate"]')).not.toContainText('8.31')
-  await expect(page.locator('#row-1109 td[data-col="bestrate"]')).toContainText('7.25')
+  await expect(page.locator('#row-1109 td[data-col="bestrate"]')).not.toContainText(/8\.31|7\.25/)
 
-  await expect.poll(() => requests.some((request) => request.path === '/api/carrier-accounts')).toBe(true)
-  await expect.poll(() => requests.some((request) => request.path === '/rates/cached/bulk')).toBe(true)
-  await expect.poll(() => requests.some((request) => request.path === '/rates')).toBe(true)
-  expect(requests.filter((request) => request.path === '/rates').every((request) => request.body?.forceRefresh !== true)).toBe(true)
+  expect(requests.some((request) => request.path === '/rates/cached/bulk')).toBe(false)
+  expect(requests.some((request) => request.path === '/rates')).toBe(false)
 })

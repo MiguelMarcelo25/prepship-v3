@@ -7,6 +7,7 @@
 // NOTE: OrdersBatchPanel replaces the right-side detail panel only when the batch selection
 // grows to ≥ 2 orders (OrdersView drawer comment), so this harness selects TWO orders.
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
@@ -118,6 +119,7 @@ function responseFor(url, method) {
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/rates/multi') return json({ carriers: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-07-07T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') return json({ data: [{ id: TEST_CLIENT.storeId, storeId: TEST_CLIENT.storeId, name: TEST_CLIENT.name, storeName: TEST_CLIENT.name, clientName: TEST_CLIENT.name, clientId: TEST_CLIENT.id, active: true, isTest: true }] })
@@ -182,6 +184,7 @@ test('Create + Print Label with flag ON chains batch-send → print and never bu
   await setup(page)
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
 
   // Select BOTH orders — the batch panel replaces the detail panel at selection ≥ 2.
   const checkboxes = page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]')

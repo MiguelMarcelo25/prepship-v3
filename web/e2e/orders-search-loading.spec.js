@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -98,6 +99,7 @@ function staticResponseFor(url) {
   if (url.pathname === '/rates/multi') return json({ carriers: [] })
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-06-12T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') return json({ data: clients.map((c) => ({ id: c.storeId, storeId: c.storeId, name: c.name, storeName: c.name, clientName: c.name, clientId: c.id, active: c.active, isTest: c.isTest })) })
@@ -164,6 +166,7 @@ test('a slow search shows the Searching… state, never a false No orders match,
   await setup(page)
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
   await expect(page.locator(`#row-${restingRow.orderId}`)).toHaveCount(1)
 
   await searchInput(page).fill('laura')

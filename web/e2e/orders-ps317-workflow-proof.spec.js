@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 // ============================================================================
 // PS-317 — OrdersView WORKFLOW PROOF (the Hermes "browser/workflow proof"
@@ -272,6 +273,7 @@ function makeBackend() {
     if (url.pathname === '/rates/multi') return json({ carriers: [{ carrier_id: 'se-7381', carrier_code: 'ups', nickname: 'ROCEL C81F70', friendly_name: 'ROCEL C81F70' }] })
     if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
     if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+    if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
     if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-15T00:00:00.000Z' })
     if (url.pathname === '/shipments/status') return json({ status: 'idle' })
     if (url.pathname === '/init/stores') {
@@ -339,6 +341,7 @@ async function gotoAwaiting(page, backend) {
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
   await page.waitForLoadState('networkidle')
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
 }
 
 // Real postage / marketplace hosts the FE must NEVER reach directly. If any

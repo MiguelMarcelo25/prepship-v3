@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 const baseUrl = 'http://127.0.0.1:5177'
 const supabaseProjectRef = 'fdkseckgfuvdczzqmnac'
@@ -102,6 +103,10 @@ test('protected app does not show maintenance for health probe network failure w
         })
         return
       }
+      if (url.pathname === '/orders/daily-stats') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(ORDERS_DAILY_STATS_WIRE) })
+        return
+      }
       if (url.pathname === '/orders/sync/status' || url.pathname === '/shipments/status') {
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'idle' }) })
         return
@@ -120,4 +125,5 @@ test('protected app does not show maintenance for health probe network failure w
 
   await expect(page.getByRole('heading', { name: "We'll be back soon" })).toHaveCount(0)
   await expect(page.locator('#view-orders')).toBeVisible()
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
 })

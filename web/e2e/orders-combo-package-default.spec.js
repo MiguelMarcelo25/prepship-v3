@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 // PS-037 — Hugrab-style SKU+qty combination package auto-selection.
 //
@@ -97,6 +98,7 @@ function responseFor(url, state = {}) {
   if (url.pathname === '/rates/multi') return json({ carriers: [] })
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-27T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') {
@@ -173,6 +175,7 @@ function packageSelect(page) {
 async function openOrder(page, orderNumber) {
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
   await page.locator('#ordersTable tbody tr.order-row', { hasText: orderNumber }).first().click()
   await expect(packageSelect(page)).toBeVisible()
 }

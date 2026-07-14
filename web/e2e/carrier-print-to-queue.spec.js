@@ -6,6 +6,7 @@
 // real postage, no marketplace). Asserts the user-facing pipeline runs with no
 // console errors and no failed network — i.e. printing to queue does not bug out.
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
@@ -62,6 +63,7 @@ function responseFor(url, method) {
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/rates/multi') return json({ carriers: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-06-06T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') return json({ data: [{ id: TEST_CLIENT.storeId, storeId: TEST_CLIENT.storeId, name: TEST_CLIENT.name, storeName: TEST_CLIENT.name, clientName: TEST_CLIENT.name, clientId: TEST_CLIENT.id, active: true, isTest: true }] })
@@ -106,6 +108,7 @@ test('Print to Queue on a TEST order runs with no bugs and never hits a real car
   await setup(page)
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
 
   // Select the test order → selection toolbar appears.
   await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()

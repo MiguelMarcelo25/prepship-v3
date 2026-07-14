@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -277,6 +278,7 @@ function responseFor(url) {
   if (url.pathname === '/rates/multi') return json({ carriers: [{ carrier_id: 'se-7381', carrier_code: 'ups', nickname: 'ROCEL C81F70', friendly_name: 'ROCEL C81F70' }] })
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-15T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') {
@@ -393,6 +395,7 @@ for (const tab of [
     await setup(page)
     await page.goto(`${baseUrl}/orders/${tab.status}`)
     await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+    await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
     // Let any in-flight per-row hydration settle so the captured DOM is final.
     await page.waitForLoadState('networkidle')
     // PS-258 (2026-06-23): the per-row passive auto-rating renders a TRANSIENT

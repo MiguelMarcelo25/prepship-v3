@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -142,6 +143,7 @@ function responseFor(url) {
   if (url.pathname === '/rates/multi') return json({ carriers: [] })
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-06-12T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') {
@@ -214,6 +216,9 @@ async function searchAndExpectGlobalMatches(page, tab, screenshotName) {
   await setup(page)
   await page.goto(`${baseUrl}/orders/${tab}`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  if (tab !== 'cancelled') {
+    await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
+  }
 
   await searchInput(page).fill('Riley Globalsearch')
   // Both lifecycle matches surface regardless of the active tab.
@@ -254,6 +259,10 @@ test('From Awaiting: a SHIPPED + CANCELLED customer match surfaces with real-sta
   await expect(page.locator(`#row-${shippedMatch.orderId}`)).toHaveCount(0)
   await expect(page.locator(`#row-${cancelledMatch.orderId}`)).toHaveCount(0)
   // …and the empty-search request drops the global scope (tab-local again).
+  await expect.poll(
+    () => ordersRequests[ordersRequests.length - 1]?.search,
+    { message: 'the debounced table request must observe the cleared search' },
+  ).toBe('')
   const lastRequest = ordersRequests[ordersRequests.length - 1]
   expect(lastRequest.search).toBe('')
   expect(lastRequest.searchScope).toBe(null)

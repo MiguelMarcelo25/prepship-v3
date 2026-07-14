@@ -161,7 +161,38 @@ async function setupMockBackend(page) {
       return route.fulfill(json({ items: [], total: 0, snapshot: { inStock: 0, lowStock: 0, outOfStock: 0, totalSkus: 0, computedAt: COMPUTED_AT } }))
     }
     if (path === '/dashboard/sku-trends') return route.fulfill(json({ topSkus: [], days: [], unitsBySku: [], meta: META }))
-    if (path === '/dashboard/top-skus') return route.fulfill(json({ data: [], dateBuckets: [], totalSkus: 0, totalOrders: 0, meta: META }))
+    if (path === '/dashboard/top-skus') {
+      return route.fulfill(json({
+        data: [{
+          sku: 'PS-332-SKU', name: 'Margin Fixture SKU', image_url: null, inv_sku_id: 332,
+          client_id: 1, client_name: 'Mock Margin Client',
+          orders: 3, pending: 0, ext_shipped: 0,
+          std_orders: 3, std_ship_count: 3, std_total: '25.50', std_qty_total: 3,
+          exp_orders: 0, exp_ship_count: 0, exp_total: '0.00', exp_qty_total: 0,
+          ship_count_with_cost: 3, total_qty: 3,
+          total_shipping: '25.50', total_revenue: '120.00', total_selling_fee: '12.00',
+          selling_fee_complete: true,
+          financialsState: 'complete',
+          standardAvgShipping: 8.5, expeditedAvgShipping: null, blendedAvgShipping: 8.5,
+          totalShipping: 25.5, totalRevenue: 120, avgSellingPrice: 40,
+          totalSellingFee: 12, profit: 82.5,
+          daily_qty: [3],
+        }],
+        dateBuckets: ['2026-06-20'],
+        totalSkus: 1,
+        totalOrders: 3,
+        totals: {
+          skuCount: 1, totalOrders: 3, totalPending: 0, totalExternal: 0, totalQty: 3,
+          totalStdCount: 3, totalExpCount: 0, totalStdQty: 3, totalExpQty: 0,
+          totalStdShipping: 25.5, totalExpShipping: 0,
+          standardAvgShipping: 8.5, expeditedAvgShipping: null,
+          totalShipping: 25.5, totalRevenue: 120, avgSellingPrice: 40,
+          totalSellingFee: 12, totalProfit: 82.5, financialsState: 'complete',
+        },
+        window: { dateFrom: '2026-05-21T00:00:00.000Z', dateToInclusive: '2026-06-20T23:59:59.999Z' },
+        meta: META,
+      }))
+    }
     if (path === '/dashboard/top-combos') return route.fulfill(json({ combos: [], totalCombos: 0, multiSkuOrders: 0, meta: META }))
     if (path === '/dashboard/daily-revenue-by-client') return route.fulfill(json({ data: [], meta: META }))
     if (path === '/dashboard/shipping-margin' || path === '/billing/shipping-margin') return route.fulfill(json(marginAnalytics))
@@ -205,6 +236,7 @@ test.describe('PS-332 shipping-margin account display labels', () => {
     await page.goto(`${baseUrl}/dashboard`)
 
     await expect(page.getByLabel('Dashboard shipping margin')).toBeVisible()
+    await expect(page.locator('table tbody tr').filter({ hasText: 'PS-332-SKU' })).toBeVisible()
     await assertAccountLabels(page)
   })
 

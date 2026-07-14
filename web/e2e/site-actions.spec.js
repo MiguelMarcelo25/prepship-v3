@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://localhost:3000'
@@ -71,7 +72,22 @@ const directRateAccounts = [
   { id: 3, clientId: 1, provider: 'ups', label: 'UPS Carrier', accountIdentifier: 'ups-test', active: true, assignedClientIds: [1] },
 ]
 
+const scopedDirectRateAccounts = directRateAccounts.map((account) => ({
+  carrier_id: `se-${10_000_000 + account.id}`,
+  carrier_code: account.provider,
+  nickname: account.label,
+  friendly_name: account.label,
+  source_client_id: account.clientId,
+  source_client_name: 'Direct carrier accounts',
+  direct_carrier_account_id: account.id,
+  direct_carrier_source_table: 'carrier_accounts',
+}))
+
+const scopedRateAccounts = [...shipStationRateAccounts, ...scopedDirectRateAccounts]
+
 function withBackendRateProof(rate, key, overrides = {}) {
+  const selectedRateCost = Number(rate.selectedRateCost ?? rate.amount ?? rate.cost ?? 0)
+  const cShippingRateAmount = Number(rate.cShippingRateAmount ?? selectedRateCost)
   const proof = {
     isComplete: true,
     eligibilityBlocked: false,
@@ -84,6 +100,17 @@ function withBackendRateProof(rate, key, overrides = {}) {
   const rawOverrides = overrides.raw ?? {}
   return {
     ...rate,
+    amount: selectedRateCost,
+    shipmentCost: Number(rate.shipmentCost ?? selectedRateCost),
+    otherCost: Number(rate.otherCost ?? 0),
+    totalCost: selectedRateCost,
+    total_cost: selectedRateCost,
+    cShippingRateAmount,
+    selectedRateCost,
+    shippingMarginAmount: Number((cShippingRateAmount - selectedRateCost).toFixed(2)),
+    shippingMarginPct: cShippingRateAmount > 0
+      ? Number((((cShippingRateAmount - selectedRateCost) / cShippingRateAmount) * 100).toFixed(1))
+      : null,
     ...proof,
     ...overrides,
     raw: {
@@ -323,48 +350,116 @@ function responseFor(url, request) {
   if (pathname === '/packages') return json(packageRows)
   if (pathname === '/billing') return json({ invoices: [{ id: 'inv_mock_1', clientId: 1, total: 12.34 }] })
   if (pathname === '/rates/carriers-for-store') {
-    return json({ carriers: rateBrowserPartialFailureMode ? shipStationRateAccounts : [] })
+    const carriers = rateBrowserPartialFailureMode ? scopedRateAccounts : []
+    return json({
+      carriers,
+      data: carriers.map((account) => ({
+        carrierId: account.carrier_id,
+        carrierCode: account.carrier_code,
+        nickname: account.nickname ?? null,
+        friendlyName: account.friendly_name ?? account.nickname ?? null,
+        sourceClientId: account.source_client_id ?? null,
+        sourceClientName: account.source_client_name ?? null,
+        ...account,
+      })),
+      storeId: 101,
+      clientId: 1,
+      orderId: 101,
+    })
   }
   if (/^\/orders\/\d+\/(?:dims|save-dims)$/.test(pathname)) {
     if (orderDimsWriteShouldFail) return json({ error: 'Order dimensions fixture failure' }, 500)
     return json({ data: { l: 11, w: 8, h: 6, weightOz: 16 } })
   }
-  if (pathname === '/rates/browse') {
+  if (pathname === '/rates/browse' || pathname === '/rates/browse/workflow') {
     const requested = JSON.parse(request.postData() || '{}')
     const requestedCarrierIds = Array.isArray(requested.carrierIds)
       ? requested.carrierIds.map(String)
       : []
     const scopedRates = shipStationRateRows.filter((rate) => requestedCarrierIds.length === 0 || requestedCarrierIds.includes(rate.raw.carrier_id))
-    return json({
-      rates: scopedRates,
-      bestRate: scopedRates[0] ?? null,
-      cached: false,
-      source: requested.cachedOnly ? 'cache' : 'live',
-      // QA root-cause 2026-06-23: PS-200 removed the FE direct /carriers/rates fan-out; the modern
-      // Rate Browser reads partial direct-carrier failures from this /rates/browse field instead.
-      // The 3 failed direct accounts use the synthetic provider id = 10_000_000 + account.id
-      // (directProviderIdFromAccount): shipp(id 1)->10000001, easypost(id 2)->10000002, ups(id 3)->10000003.
-      directCarrierErrors: rateBrowserPartialFailureMode
-        ? [
-            { shippingProviderId: 10000001, carrierCode: 'shipp', message: 'Shipp reached the quote API but did not return rates. Confirm the package dimensions, ship-from address, and destination address are valid for your Shipp account.' },
-            { shippingProviderId: 10000002, carrierCode: 'easypost', message: 'EasyPost did not return eligible rates for this package and destination.' },
-            { shippingProviderId: 10000003, carrierCode: 'ups', message: 'UPS Carrier did not return eligible services for this package and destination.' },
-          ]
-        : [],
-      carrierStatuses: shipStationRateAccounts.map((account) => ({
+    const directCarrierErrors = rateBrowserPartialFailureMode
+      ? [
+          { shippingProviderId: 10000001, carrierCode: 'shipp', message: 'Shipp reached the quote API but did not return rates. Confirm the package dimensions, ship-from address, and destination address are valid for your Shipp account.' },
+          { shippingProviderId: 10000002, carrierCode: 'easypost', message: 'EasyPost did not return eligible rates for this package and destination.' },
+          { shippingProviderId: 10000003, carrierCode: 'ups', message: 'UPS Carrier did not return eligible services for this package and destination.' },
+        ]
+      : []
+    const carrierStatuses = [
+      ...shipStationRateAccounts.map((account) => ({
         carrierId: account.carrier_id,
+        accountId: account.carrier_id,
+        source: 'shipstation',
         carrierName: account.nickname,
+        carrierCode: account.carrier_code,
+        nickname: account.nickname,
         status: requested.cachedOnly ? 'cached' : 'live',
         rateCount: scopedRates.filter((rate) => rate.raw.carrier_id === account.carrier_id).length,
       })),
-      carrierDiagnostics: shipStationRateAccounts.map((account) => ({
+      ...scopedDirectRateAccounts.map((account, index) => ({
         carrierId: account.carrier_id,
+        accountId: String(account.direct_carrier_account_id),
+        source: 'direct',
+        carrierName: account.nickname,
+        carrierCode: account.carrier_code,
         nickname: account.nickname,
-        source: 'shipstation',
-        status: 'ok',
-        rateCount: scopedRates.filter((rate) => rate.raw.carrier_id === account.carrier_id).length,
+        status: requested.cachedOnly ? 'uncached' : 'error',
+        rateCount: 0,
+        error: directCarrierErrors[index]?.message,
       })),
-    })
+    ]
+    const carrierDiagnostics = carrierStatuses.map((status) => ({
+      carrierId: status.carrierId,
+      accountId: status.accountId,
+      nickname: status.nickname,
+      carrierCode: status.carrierCode,
+      source: status.source,
+      status: status.status === 'live' ? 'ok' : status.status === 'error' ? 'failed' : status.status,
+      rateCount: status.rateCount,
+      ...(status.error ? { error: status.error } : {}),
+    }))
+    const result = {
+      requestKey: 'ps321-workflow-request',
+      cacheKey: 'ps321-workflow-request',
+      cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      rateQuoteId: 'ps321-rate-quote',
+      rates: scopedRates,
+      bestRate: scopedRates[0] ?? null,
+      secondBestRate: scopedRates[1] ?? null,
+      cached: false,
+      source: requested.cachedOnly ? 'cache' : 'live',
+      carrierStatuses,
+      carrierDiagnostics,
+      directCarrierErrors,
+      directCarrierMetas: [],
+      directCarrierDiagnostics: carrierDiagnostics.filter((diagnostic) => diagnostic.source === 'direct'),
+    }
+    if (pathname === '/rates/browse/workflow') {
+      const now = new Date().toISOString()
+      return json({
+        job_id: 'ps321-workflow-job',
+        status: 'complete',
+        progress: {
+          total_carriers: carrierStatuses.length,
+          completed_carriers: carrierStatuses.length,
+          successful_carriers: shipStationRateAccounts.length,
+          failed_carriers: directCarrierErrors.length,
+          rates_count: scopedRates.length,
+        },
+        message: 'Rate browse complete',
+        request_key: result.requestKey,
+        order_id: 101,
+        result,
+        diagnostics: null,
+        error: null,
+        started_at: now,
+        updated_at: now,
+        finished_at: now,
+      })
+    }
+    return json(result)
+  }
+  if (pathname === '/rates/multi' && method === 'GET') {
+    return json({ carriers: shipStationRateAccounts })
   }
   if (pathname === '/rates/multi' || pathname === '/carriers/rates') {
     if (ratesShouldTimeout) return json({ error: 'Carrier rate provider timed out' }, 504)
@@ -456,7 +551,7 @@ function responseFor(url, request) {
       { orderStatus: 'cancelled', cnt: 1 },
     ])
   }
-  if (pathname === '/orders/daily-stats') return json({ summary: { totalOrders: 1, needToShip: 1, upcomingOrders: 0 } })
+  if (pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (pathname === '/orders') {
     if (ordersApiShouldFail && !ordersApiFailedOnce) {
       ordersApiFailedOnce = true
@@ -559,6 +654,7 @@ test.beforeEach(async ({ page }) => {
 async function openAwaitingOrderPanel(page) {
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await expect(page.getByText('MOCK-EBAY-101').first()).toBeVisible({ timeout: 15000 })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
   await expect(page.getByText('DENIED-SCOPE-202')).toHaveCount(0)
   const orderRow = page.getByRole('row', { name: /MOCK-EBAY-101/ }).last()
   await expect(orderRow).toBeVisible({ timeout: 15000 })
@@ -722,11 +818,11 @@ test('Rate Browser partial carrier failures remain readable and keep successful 
   await expect(page.getByText(/\|\s*live/)).toBeVisible({ timeout: 20000 })
   await expect(page.getByLabel('Hide Unavailable')).toBeChecked()
 
-  await expect(page.getByText('USPS Chase x7439').first()).toBeVisible()
-  await expect(page.getByText('ROCEL C81F70').first()).toBeVisible()
-  await expect(page.locator('span[title*="Shipp reached the quote API"]')).toBeVisible()
-  await expect(page.locator('span[title*="EasyPost did not return eligible rates"]')).toBeVisible()
-  await expect(page.locator('span[title*="UPS Carrier did not return eligible services"]')).toBeVisible()
+  await expect(rateDialog.getByText('USPS Chase x7439').first()).toBeVisible()
+  await expect(rateDialog.getByText('ROCEL C81F70').first()).toBeVisible()
+  await expect(rateDialog.locator('span[title*="Shipp reached the quote API"]')).toBeVisible()
+  await expect(rateDialog.locator('span[title*="EasyPost did not return eligible rates"]')).toBeVisible()
+  await expect(rateDialog.locator('span[title*="UPS Carrier did not return eligible services"]')).toBeVisible()
 
   await expect(page.getByText('$5.25').first()).toBeVisible()
   await expect(page.getByText('$6.10').first()).toBeVisible()
@@ -756,7 +852,7 @@ test('Rate Browser partial carrier failures remain readable and keep successful 
 
   expectRequest(/rates\/(browse|multi)/, { method: 'POST', payloadIncludes: ['se-4101', 'se-4107'] })
   // QA root-cause 2026-06-23: PS-200 (8c243859) removed the FE direct /carriers/rates fan-out — the
-  // Rate Browser now reads the failed direct carriers from /rates/browse directCarrierErrors (above),
+  // Rate Browser now reads failed direct carriers from the /rates/browse/workflow result above,
   // so there are no longer any /carriers/rates POSTs to assert. The partial-failure UX (failure
   // tooltips + "10 of 10 carriers checked · 7 with rates") is verified by the assertions above.
   assertNoObjectObjectPayloads()

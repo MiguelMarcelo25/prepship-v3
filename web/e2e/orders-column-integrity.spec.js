@@ -1,4 +1,5 @@
 import { test, expect } from 'playwright/test'
+import { ORDERS_DAILY_STATS_WIRE } from './orders-daily-stats-wire.js'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -124,15 +125,27 @@ function freshBestRateWorkflow(rateLike = rate) {
       markupAmount: shippingMarginAmount,
       insuranceAddOn: rateLike.insuranceCost ?? 0,
       marginPercent: null,
-      customerRateAmount,
-      rateCostAmount,
+      source: 'best_rate',
+      cShippingRateAmount: customerRateAmount,
+      selectedRateCost: rateCostAmount,
       shippingMarginAmount,
+      shippingMarginPct: null,
+      houseApplied: false,
+      houseBadgeVisible: false,
       markupSource: 'carrier_markup',
+      rateAdjustmentKind: 'customer_profit_markup',
+      customerRateSource: 'best_rate_marked_amount',
+      rateCostSource: 'best_rate_internal_cost',
     },
   }
 }
 
-function houseBestRateWorkflow({ carrierCode = 'ups', serviceCode = 'ups_ground', accountNickname = 'HOUSE ACCOUNT' } = {}) {
+function houseBestRateWorkflow({
+  carrierCode = 'ups',
+  serviceCode = 'ups_ground',
+  accountNickname = 'HOUSE ACCOUNT',
+  isAwaiting = true,
+} = {}) {
   return {
     bestRateState: 'fresh',
     savedRateDisplay: 'fresh',
@@ -151,10 +164,19 @@ function houseBestRateWorkflow({ carrierCode = 'ups', serviceCode = 'ups_ground'
       markupAmount: 3.7,
       insuranceAddOn: 1.25,
       marginPercent: 26,
-      customerRateAmount: 14.25,
-      rateCostAmount: 10.55,
+      source: isAwaiting ? 'best_rate' : 'selected_rate',
+      cShippingRateAmount: 14.25,
+      selectedRateCost: 10.55,
       shippingMarginAmount: 3.7,
+      shippingMarginPct: 26,
+      houseApplied: true,
+      houseBadgeVisible: true,
       markupSource: 'house_account',
+      rateAdjustmentKind: 'customer_profit_markup',
+      customerRateSource: isAwaiting
+        ? 'projected_house_c_shipping_rate'
+        : 'realized_house_c_shipping_rate',
+      rateCostSource: 'shipp_house_internal_cost',
     },
   }
 }
@@ -272,8 +294,8 @@ const awaitingBestRateDivergent = baseRow(970005, 'awaiting_shipment', 1, {
   },
 })
 
-// PS-334: house-feature awaiting row. Backend money owns the split:
-// Best Rate is customerRateAmount; Rate Cost is rateCostAmount.
+// PS-334/PS-356/PS-357: house-feature awaiting row. Backend money owns the
+// split: Best Rate shows purchase cost; C. Shipping Rate shows customer billing.
 const houseBestRate = {
   ...rate,
   carrierCode: 'ups',
@@ -381,8 +403,8 @@ const shippedShippBrokered = baseRow(980005, 'shipped', 1, {
   shipping: { carrierCode: 'ups', serviceCode: 'shipp_ups_ground', trackingNumber: '1Z999AA1010980005', providerAccountId: 10000025, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
 })
 
-// PS-334: house-feature shipped row. Selected Rate is the realized
-// customer/billing rate; Rate Cost is the single internal-cost display.
+// PS-334/PS-356: house-feature shipped row. Selected Rate and C. Shipping Rate
+// both consume the backend's realized customer/billing amount.
 const shippedHouseFeature = baseRow(980006, 'shipped', 1, {
   orderNumber: 'SHIPPED-980006-HOUSE',
   bestRate: null,
@@ -402,7 +424,7 @@ const shippedHouseFeature = baseRow(980006, 'shipped', 1, {
   },
   label: { trackingNumber: '1Z999AA1010980006', carrierCode: 'ups', serviceCode: 'ups_ground', shippingProviderId: 10000025, cost: 10.55, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
   shipping: { carrierCode: 'ups', serviceCode: 'ups_ground', trackingNumber: '1Z999AA1010980006', providerAccountId: 10000025, accountNickname: 'HOUSE ACCOUNT', labelCost: 10.55, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
-  bestRateWorkflow: houseBestRateWorkflow(),
+  bestRateWorkflow: houseBestRateWorkflow({ isAwaiting: false }),
 })
 
 const ordersByStatus = {
@@ -437,6 +459,7 @@ function responseFor(url) {
   if (url.pathname === '/rates/multi') return json({ carriers: [{ carrier_id: 'se-7381', carrier_code: 'ups', nickname: 'ROCEL C81F70', friendly_name: 'ROCEL C81F70' }] })
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/daily-stats') return json(ORDERS_DAILY_STATS_WIRE)
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-15T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
   if (url.pathname === '/init/stores') {
@@ -548,6 +571,7 @@ test('Awaiting grid columns render every required field from source of truth', a
   await setup(page)
   await page.goto(`${baseUrl}/orders/awaiting_shipment`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
   await page.screenshot({ path: path.join(screenshotDir, 'awaiting.png'), fullPage: true })
 
   // Valid awaiting row — every required column populated from the fixture.
@@ -578,12 +602,12 @@ test('Awaiting grid columns render every required field from source of truth', a
     custcarrier: { contains: 'BEST ACCT 111', notContains: 'STALE ACCT 999' },
   })
 
-  // PS-334 - Best Rate is the customer amount, while Rate Cost is the
-  // one backend-owned internal amount. There is no separate House Rate column.
+  // PS-356/PS-357 - Best Rate is the purchase amount while C. Shipping Rate is
+  // the backend-owned customer-billed amount. There is no House Rate column.
   await assertColumns(page, awaitingHouseFeature.orderId, {
     orderNum: { contains: 'ORD-970006-HOUSE' },
-    bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
-    ratecost: { contains: '10.55' },
+    bestrate: { contains: ['10.55', 'HOUSE'], notContains: '14.25' },
+    ratecost: { contains: '14.25' },
   })
   await scrollOrdersTableToColumn(page, 'ratecost')
   await page.screenshot({ path: path.join(screenshotDir, 'awaiting-ps334-rate-cost.png'), fullPage: true })
@@ -627,6 +651,7 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
   await setup(page)
   await page.goto(`${baseUrl}/orders/shipped`)
   await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await expect(page.locator('#daily-strip')).toContainText(/63\s*Total Orders/)
   await page.screenshot({ path: path.join(screenshotDir, 'shipped.png'), fullPage: true })
 
   // Persisted shipped row — real carrier / account / selected-rate / tracking.
@@ -690,12 +715,12 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     test_shippingAccount: { contains: 'Shipp', notContains: ['GG6381', 'G19Y32', 'ORION'] },
   })
 
-  // PS-334 - Selected Rate is the realized customer/billing amount, while
-  // Rate Cost remains the only internal-cost display.
+  // PS-334/PS-356 - Selected Rate and C. Shipping Rate both show the realized
+  // backend customer/billing amount; the HOUSE badge stays on Selected Rate.
   await assertColumns(page, shippedHouseFeature.orderId, {
     orderNum: { contains: 'SHIPPED-980006-HOUSE' },
     bestrate: { contains: ['14.25', 'HOUSE'], notContains: '10.55' },
-    ratecost: { contains: '10.55' },
+    ratecost: { contains: '14.25' },
   })
   await scrollOrdersTableToColumn(page, 'ratecost')
   await page.screenshot({ path: path.join(screenshotDir, 'shipped-ps334-rate-cost.png'), fullPage: true })
