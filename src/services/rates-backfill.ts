@@ -65,6 +65,10 @@ import {
   normalizeRateBackfillDiagnosticSamples,
   recordRateBackfillDiagnostic,
 } from './rate-backfill-diagnostics';
+import {
+  addRateOnIngestOrderIds,
+  takeRateOnIngestBatch,
+} from './rate-on-ingest-queue';
 
 async function runBackfillDbWrites<T>(
   items: readonly T[],
@@ -208,6 +212,13 @@ const backfillExecutionPromises = new Map<string, Promise<void>>();
 let activeJobId: string | null = null;
 let latestJobId: string | null = null;
 const queuedBackfillRequests: QueuedBackfillRequest[] = [];
+const queuedRateOnIngestOrderIds = new Set<number>();
+
+export function enqueueBackfillBestRatesForOrderIds(orderIds: readonly number[]): number {
+  const added = addRateOnIngestOrderIds(queuedRateOnIngestOrderIds, orderIds);
+  if (added > 0) startQueuedBackfillIfIdle();
+  return added;
+}
 
 export function backfillJobModeForOptions(opts: BackfillOptions): BackfillJobMode {
   if (opts.mode === 'full_live_audit') return 'manual_force_live';
@@ -398,8 +409,8 @@ export async function waitForBackfillJob(jobId: string): Promise<BackfillJob | n
     const execution = backfillExecutionPromises.get(executionJobId);
     if (execution) await execution;
 
-    // runBackfill may start one queued force-live request in its finally block.
-    // Keep the durable lane until that chained execution settles as well.
+    // runBackfill may start a queued force-live or rate-on-ingest request in its
+    // finally block. Keep the durable lane until that chained execution settles.
     const active = activeJobId ? jobs.get(activeJobId) : null;
     if (!isActiveJob(active) || awaited.has(active.jobId)) break;
     executionJobId = active.jobId;
@@ -412,18 +423,36 @@ function startQueuedBackfillIfIdle(): void {
   if (isActiveJob(active)) return;
 
   const next = queuedBackfillRequests.shift();
-  if (!next) return;
+  if (next) {
+    const job = jobs.get(next.jobId);
+    if (!job) {
+      startQueuedBackfillIfIdle();
+      return;
+    }
 
-  const job = jobs.get(next.jobId);
-  if (!job) {
-    startQueuedBackfillIfIdle();
+    activeJobId = job.jobId;
+    job.message = 'Starting queued force-live backfill…';
+    void persistBackfillJobSnapshot(job, next.opts);
+    void launchBackfillExecution(job.jobId, next.opts);
     return;
   }
 
+  const ingestOrderIds = takeRateOnIngestBatch(queuedRateOnIngestOrderIds);
+  if (!ingestOrderIds.length) return;
+
+  const opts: BackfillOptions = {
+    mode: 'cache_first',
+    orderIds: ingestOrderIds,
+    limit: ingestOrderIds.length,
+  };
+  const job = createBackfillJob(
+    opts,
+    backfillJobModeForOptions(opts),
+    'Starting rate-on-ingest backfill…',
+  );
   activeJobId = job.jobId;
-  job.message = 'Starting queued force-live backfill…';
-  void persistBackfillJobSnapshot(job, next.opts);
-  void launchBackfillExecution(job.jobId, next.opts);
+  void persistBackfillJobSnapshot(job, opts);
+  void launchBackfillExecution(job.jobId, opts);
 }
 
 export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {

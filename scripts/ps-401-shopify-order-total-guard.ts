@@ -15,7 +15,8 @@ assert(
   'store-order-import must own imported order total resolution',
 );
 assert(
-  importer.includes('loadExistingOrderTotalsForImport(rows)'),
+  importer.includes('loadExistingOrderFactsForImport(rows)') &&
+    importer.includes('existingOrderFacts.orderTotalsByIdentity'),
   'store-order-import must load existing totals before provider zero can overwrite them',
 );
 assert(

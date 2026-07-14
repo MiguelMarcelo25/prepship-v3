@@ -4,6 +4,7 @@ import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { replaceOrderItemsForOrders } from './order-items';
 import { materializePackageFactsForImportedOrderIds } from './combo-package-defaults';
+import { enqueueBackfillBestRatesForOrderIds } from './rates-backfill';
 import type { NormalizedOrderSource } from './normalized-order-persistence';
 import {
   legacyExternalOrderIdForSource,
@@ -302,10 +303,19 @@ export function resolveImportedOrderTotal(
   return choose(0, 'zero_unproven');
 }
 
-async function loadExistingOrderTotalsForImport(rows: Array<typeof orders.$inferInsert>): Promise<Map<string, string>> {
+type ExistingImportOrderFacts = {
+  orderTotalsByIdentity: Map<string, string>;
+  sourceIdentityKeys: Set<string>;
+};
+
+async function loadExistingOrderFactsForImport(
+  rows: Array<typeof orders.$inferInsert>,
+): Promise<ExistingImportOrderFacts> {
   const identities = rows.map((row) => buildOrderSourceIdentity(row));
   const predicate = orderSourceIdentitiesPredicate(identities);
-  if (!predicate) return new Map();
+  if (!predicate) {
+    return { orderTotalsByIdentity: new Map(), sourceIdentityKeys: new Set() };
+  }
 
   const existingRows = await db
     .select({
@@ -318,12 +328,15 @@ async function loadExistingOrderTotalsForImport(rows: Array<typeof orders.$infer
     .where(predicate);
 
   const byIdentity = new Map<string, string>();
+  const sourceIdentityKeys = new Set<string>();
   for (const row of existingRows) {
     const identity = buildOrderSourceIdentity(row);
     if (!identity) continue;
-    byIdentity.set(orderSourceIdentityKey(identity), row.orderTotal);
+    const key = orderSourceIdentityKey(identity);
+    byIdentity.set(key, row.orderTotal);
+    sourceIdentityKeys.add(key);
   }
-  return byIdentity;
+  return { orderTotalsByIdentity: byIdentity, sourceIdentityKeys };
 }
 
 async function claimLegacyOrderSourceIdentities(rows: Array<typeof orders.$inferInsert>): Promise<void> {
@@ -411,7 +424,15 @@ export async function upsertNormalizedStoreOrders(
   }));
 
   await claimLegacyOrderSourceIdentities(rows);
-  const existingOrderTotals = await loadExistingOrderTotalsForImport(rows);
+  const existingOrderFacts = await loadExistingOrderFactsForImport(rows);
+  const existingOrderTotals = existingOrderFacts.orderTotalsByIdentity;
+  const newSourceIdentityKeys = new Set(
+    rows
+      .map((row) => buildOrderSourceIdentity(row))
+      .filter((identity) => identity != null)
+      .map((identity) => orderSourceIdentityKey(identity))
+      .filter((key) => !existingOrderFacts.sourceIdentityKeys.has(key)),
+  );
   let suspiciousZeroTotals = 0;
   let preservedPositiveTotals = 0;
 
@@ -514,6 +535,9 @@ export async function upsertNormalizedStoreOrders(
       storeId: orders.storeId,
       orderStatus: orders.orderStatus,
       orderDate: orders.orderDate,
+      sourceProvider: orders.sourceProvider,
+      sourceAccountId: orders.sourceAccountId,
+      sourceOrderId: orders.sourceOrderId,
     });
 
   await replaceOrderItemsForOrders(persistedRows);
@@ -534,6 +558,19 @@ export async function upsertNormalizedStoreOrders(
       err instanceof Error ? err.message : err,
     );
   }
+
+  // Per user override unlock shipped data on 2026-07-15: terminal-preserving
+  // import has already committed above. Admit only genuinely new rows whose
+  // persisted status is still awaiting_shipment; shipped/cancelled rows never
+  // enter rating, and the background owner remains cache-first and label-free.
+  const rateOnIngestOrderIds = persistedRows
+    .filter((row) => {
+      if (row.orderStatus !== 'awaiting_shipment') return false;
+      const identity = buildOrderSourceIdentity(row);
+      return identity ? newSourceIdentityKeys.has(orderSourceIdentityKey(identity)) : false;
+    })
+    .map((row) => row.id);
+  enqueueBackfillBestRatesForOrderIds(rateOnIngestOrderIds);
 
   return rows.length;
 }

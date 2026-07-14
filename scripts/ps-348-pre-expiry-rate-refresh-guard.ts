@@ -122,7 +122,8 @@ const checks: Check[] = [
   ),
   ok(
     'pg-boss scheduler still delegates to runBackfillTick for one backend-owned refresh path',
-    /registerWorker\(JOBS\.rateBackfill,\s*async \(\) => runBackfillTick\(\)\)/.test(syncJobQueue),
+    // Repointed after 0621541f kept this job inside the worker lane without an async wrapper.
+    /registerWorker\(JOBS\.rateBackfill,\s*\(\) => runBackfillTick\(\)\)/.test(syncJobQueue),
   ),
   ok(
     'pre-expiry refresh is scheduler-scoped and forces live only for backend-selected non-fresh rows',

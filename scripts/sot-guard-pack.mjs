@@ -39,6 +39,7 @@ const REQUIRED_GUARDS = [
   'test:audit-api-process-lifecycle',
   'test:audit-print-queue-small-fixes',
   'test:audit-backfill-diagnostics',
+  'test:audit-rate-on-ingest',
 ];
 
 const npmCli = process.env.npm_execpath;
