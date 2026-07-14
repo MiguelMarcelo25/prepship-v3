@@ -20,7 +20,7 @@
 // (carrier/account/best-rate/margin) stay in the OrdersView shell, which is
 // their natural home (an 18-field context blob incl. render-callbacks would be
 // higher-risk + architecturally worse — see the PS-166 plan W2c note).
-import { RotateCcw, Truck } from 'lucide-react'
+import { Truck } from 'lucide-react'
 import type { OrderFullDto, OrderSummaryDto } from '../../types/api'
 import type { TableColumn } from './orders-table-columns'
 import { isTestOrder } from './orders-items'
@@ -71,8 +71,8 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
   const fulfillmentConflictLabel = toStringValue(fulfillmentConflict?.label)
   const fulfillmentConflictReason = toStringValue(fulfillmentConflict?.reason)
   // Per user override unlock shipped data on 2026-05-23: this is a read-only
-  // badge over the backend return summary. Shipped edit/selection locks stay in
-  // OrdersView and all mutations remain protected by assertOrderEditable.
+  // two-line marker under the order number. Shipped edit/selection locks stay
+  // in OrdersView and all mutations remain protected by assertOrderEditable.
   const returnSummary = order.orderStatus === 'shipped' ? order.returnSummary : null
   const returnRate = typeof returnSummary?.returnCustomerShippingRate === 'number'
     && Number.isFinite(returnSummary.returnCustomerShippingRate)
@@ -167,55 +167,50 @@ export function renderOrderCell(order: OrderSummaryDto, ctx: OrderNumberCellCont
           Conflict
         </span>
       )}
-      {returnSummary && (
-        <span
-          title={`${returnStatusLabel}${returnSummary.returnReference ? ` · ${returnSummary.returnReference}` : ''}${returnRate != null ? ` · $${returnRate.toFixed(2)}` : ''}`}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            padding: '1px 6px',
-            fontSize: 9,
-            fontWeight: 800,
-            letterSpacing: 0.25,
-            color: 'var(--ss-blue)',
-            background: 'var(--ss-blue-bg)',
-            border: '1px solid var(--ss-blue-border)',
-            borderRadius: 3,
-            flexShrink: 0,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <RotateCcw size={9} strokeWidth={2.5} />
-          RETURN{returnRate != null ? ` · $${returnRate.toFixed(2)}` : ''}
+      <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, minWidth: 0 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
+          <span
+            className="od-order-link"
+            title="Open order detail"
+            style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
+            onClick={(event) => {
+              event.stopPropagation()
+              openDetailDrawer(order.orderId ?? null)
+            }}
+          >
+            {order.orderNumber ?? `#${order.orderId}`}
+          </span>
+          <span
+            title="Copy"
+            style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6, transition: 'opacity .1s', flexShrink: 0 }}
+            onClick={(event) => {
+              event.stopPropagation()
+              copyText(order.orderNumber ?? String(order.orderId))
+            }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.opacity = '1'
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.opacity = '0.6'
+            }}
+          >
+            ⎘
+          </span>
         </span>
-      )}
-      <span
-        className="od-order-link"
-        title="Open order detail"
-        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
-        onClick={(event) => {
-          event.stopPropagation()
-          openDetailDrawer(order.orderId ?? null)
-        }}
-      >
-        {order.orderNumber ?? `#${order.orderId}`}
-      </span>
-      <span
-        title="Copy"
-        style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6, transition: 'opacity .1s', flexShrink: 0 }}
-        onClick={(event) => {
-          event.stopPropagation()
-          copyText(order.orderNumber ?? String(order.orderId))
-        }}
-        onMouseEnter={(event) => {
-          event.currentTarget.style.opacity = '1'
-        }}
-        onMouseLeave={(event) => {
-          event.currentTarget.style.opacity = '0.6'
-        }}
-      >
-        ⎘
+        {returnSummary && (
+          <span
+            title={`${returnStatusLabel}${returnSummary.returnReference ? ` · ${returnSummary.returnReference}` : ''}${returnRate != null ? ` · $${returnRate.toFixed(2)}` : ''}`}
+            style={{
+              color: 'var(--red)',
+              fontSize: 10,
+              fontWeight: 800,
+              lineHeight: 1.15,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Return{returnRate != null ? ` · $${returnRate.toFixed(2)}` : ''}
+          </span>
+        )}
       </span>
     </div>
   )

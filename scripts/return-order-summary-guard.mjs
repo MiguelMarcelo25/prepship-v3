@@ -37,9 +37,10 @@ check(
   /returnSummary\?:[\s\S]{0,180}returnCustomerShippingRate: number \| null/.test(apiTypes),
 );
 check(
-  'Shipped order cell renders a RETURN badge and the backend rate snapshot',
+  'Shipped order cell renders the order first and a red return-rate line below',
   /order\.orderStatus === 'shipped' \? order\.returnSummary : null/.test(cells) &&
-    /RETURN\{returnRate != null/.test(cells) &&
+    /className="od-order-link"[\s\S]{0,2000}Return\{returnRate != null/.test(cells) &&
+    /color: 'var\(--red\)'/.test(cells) &&
     /RETURN_STATUS_LABELS/.test(cells),
 );
 check(
