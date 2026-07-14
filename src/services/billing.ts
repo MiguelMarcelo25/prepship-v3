@@ -1564,7 +1564,6 @@ export async function generateLineItems(input: GenerateInput) {
     // Collect for batch insert instead of inserting one at a time.
     for (const row of effectiveRows) {
       allRows.push(row);
-      total += toNum(row.totalCost);
     }
   }
 
@@ -1577,7 +1576,25 @@ export async function generateLineItems(input: GenerateInput) {
       .map((row) => row.orderId)
       .filter((orderId): orderId is number => orderId != null && orderId > 0),
   )];
+  const requestedWindowOrderLines = and(
+    sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
+    sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+  );
+  // Per user override unlock shipped data on 2026-07-14 (Audit B-5):
+  // a canonical billing ship-date correction can move an order across periods.
+  // Delete every editable line for current candidate orders, regardless of its
+  // old period, while retaining the requested-window sweep for orders that are
+  // no longer billable. Finalized siblings remain protected by the policy
+  // assertion, editable predicate, and database triggers below.
+  const orderLinesToRebuild = editableOrderIds.length > 0
+    ? or(
+        inArray(billingLineItems.orderId, editableOrderIds),
+        requestedWindowOrderLines,
+      )
+    : requestedWindowOrderLines;
   const CHUNK = 500;
+  let insertedOrderLineCount = 0;
+  let lineItemConflictCount = 0;
   try {
     await db.transaction(async (tx) => {
       await assertBillingOrdersEditable(
@@ -1591,8 +1608,7 @@ export async function generateLineItems(input: GenerateInput) {
       await tx.delete(billingLineItems).where(
         and(
           sql`${billingLineItems.orderId} is not null`,
-          sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
-          sql`${billingLineItems.shipDate} < ${toIso}::timestamptz`,
+          orderLinesToRebuild,
           input.clientId !== undefined
             ? eq(billingLineItems.clientId, input.clientId)
             : undefined,
@@ -1603,7 +1619,7 @@ export async function generateLineItems(input: GenerateInput) {
       for (let i = 0; i < allRows.length; i += CHUNK) {
         const chunk = allRows.slice(i, i + CHUNK);
         if (!chunk.length) continue;
-        await tx
+        const inserted = await tx
           .insert(billingLineItems)
           .values(chunk)
           .onConflictDoNothing({
@@ -1612,8 +1628,12 @@ export async function generateLineItems(input: GenerateInput) {
               billingLineItems.lineType,
               billingLineItems.description,
             ],
-          });
-        generated += chunk.length;
+          })
+          .returning({ totalCost: billingLineItems.totalCost });
+        insertedOrderLineCount += inserted.length;
+        lineItemConflictCount += chunk.length - inserted.length;
+        generated += inserted.length;
+        for (const row of inserted) total += toNum(row.totalCost);
       }
       await setBillingOrdersDirty(
         {
@@ -1628,6 +1648,16 @@ export async function generateLineItems(input: GenerateInput) {
   } catch (error) {
     if (isBillingFinalizedLockError(error)) rethrowAsBillingFinalizedLock(error);
     throw error;
+  }
+  if (lineItemConflictCount > 0) {
+    logStructured('warn', 'billing.line_item_conflict_skipped', {
+      clientId: input.clientId,
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+      attemptedLineCount: allRows.length,
+      insertedLineCount: insertedOrderLineCount,
+      conflictCount: lineItemConflictCount,
+    });
   }
 
   // ─── Storage fees (PS-373: prorated cubic-foot-DAYS from the inventory ledger) ─
