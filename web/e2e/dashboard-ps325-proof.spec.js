@@ -55,6 +55,7 @@ function json(body, status = 200) {
 // allow-list test can assert nothing touched a real host.
 function makeBackend() {
   const captured = []
+  const unmatchedApiPathnames = new Set()
 
   function responseFor(url, request) {
     if (url.hostname.endsWith('supabase.co')) return json({ user: null })
@@ -214,6 +215,7 @@ function makeBackend() {
       })
     }
 
+    unmatchedApiPathnames.add(url.pathname)
     return json({}) // safe default — unmatched API requests never hang the load
   }
 
@@ -226,7 +228,7 @@ function makeBackend() {
     await routeObj.continue()
   }
 
-  return { captured, route }
+  return { captured, unmatchedApiPathnames, route }
 }
 
 async function seedAuth(page) {
@@ -261,6 +263,21 @@ const FORBIDDEN_HOST_PATTERNS = [
   /shipstation\.com$/i, /ssapi\.shipstation\.com$/i, /easypost\.com$/i,
   /goshippo\.com$/i, /onlinetools\.ups\.com$/i, /api\.fedex\.com$/i, /stamps\.com$/i,
 ]
+
+const KNOWN_UNMATCHED_API_PATHS = new Set([
+  '/health/ready',
+  '/settings/markups',
+])
+
+function expectOnlyKnownUnmatchedApiPaths(backend) {
+  const unexpected = [...backend.unmatchedApiPathnames]
+    .filter((pathname) => !KNOWN_UNMATCHED_API_PATHS.has(pathname))
+    .sort()
+  expect(
+    unexpected,
+    `dashboard mock catch-all received unexpected API pathnames: ${JSON.stringify(unexpected)}`,
+  ).toEqual([])
+}
 
 test.describe('PS-325 Dashboard read-model proof', () => {
   test('the Dashboard renders backend-owned metrics + honest provenance', async ({ page }) => {
@@ -308,6 +325,7 @@ test.describe('PS-325 Dashboard read-model proof', () => {
     await expect(alphaRow).toBeVisible()
     await expect(alphaRow).toContainText('KF Goods')
     await expect(page.getByText('Failed to load SKU performance summary')).toHaveCount(0)
+    expectOnlyKnownUnmatchedApiPaths(backend)
   })
 
   test('the Dashboard contacts no real postage/marketplace host', async ({ page }) => {
@@ -316,5 +334,6 @@ test.describe('PS-325 Dashboard read-model proof', () => {
 
     const offenders = backend.captured.filter((r) => FORBIDDEN_HOST_PATTERNS.some((re) => re.test(r.host)))
     expect(offenders, `dashboard must not contact a real provider host: ${JSON.stringify(offenders)}`).toEqual([])
+    expectOnlyKnownUnmatchedApiPaths(backend)
   })
 })
