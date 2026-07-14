@@ -1534,12 +1534,22 @@ export async function addToQueue(
         status: 'queued',
         queuedAt: new Date(),
       },
+      // Per user override unlock shipped data on 2026-07-14 (Audit PQ-9):
+      // enforce finality in the UPSERT statement so a concurrent print/delivery
+      // transition cannot be revived into the active queue.
+      setWhere: eq(printQueue.status, 'queued'),
     })
     .returning();
 
+  if (!entry) {
+    throw new PrintQueueAlreadyFinalizedError(
+      input.orderNumber ?? input.orderId,
+      'finalized',
+    );
+  }
   await repairMissingConfirmationForQueuedLabel(input.orderId);
 
-  return { entry: entry!, alreadyQueued };
+  return { entry, alreadyQueued };
 }
 
 export async function startQueueSendJob(input: {

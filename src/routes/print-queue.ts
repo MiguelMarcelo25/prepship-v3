@@ -36,6 +36,7 @@ import {
 } from '../services/print-queue';
 import { deriveQueueSendSnapshotStatus } from '../services/print-queue/queue-send-status';
 import { deriveMergeJobSnapshotStatus } from '../services/print-queue/merge-job-status';
+import { readDurableStatusWithTimeout } from '../services/print-queue/durable-status-read';
 import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
 import {
   getInternalOpsClientStoreScope,
@@ -444,20 +445,6 @@ function printQueueSafeClientErrorResponse(
   throw err;
 }
 
-async function withDurableStatusTimeout<T>(read: () => Promise<T>): Promise<T | null> {
-  let timeout: NodeJS.Timeout | null = null;
-  try {
-    return await Promise.race([
-      read(),
-      new Promise<null>((resolve) => {
-        timeout = setTimeout(() => resolve(null), DURABLE_STATUS_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 async function canViewQueueSendSnapshot(
   snapshot: QueueSendJobSnapshot,
   scope: PrintQueueListScope,
@@ -711,9 +698,29 @@ app.get('/batch-send/status/:jobId', async (c) => {
   const jobId = c.req.param('jobId');
   const scope = printQueueScopeFromContext(c);
   const job = getQueueSendJobStatus(jobId);
-  const durableJob =
-    await withDurableStatusTimeout(() => getQueueSendJobSnapshot(jobId)) ??
-    await withDurableStatusTimeout(getLatestQueueSendJobSnapshot);
+  const exactDurableRead = await readDurableStatusWithTimeout(
+    () => getQueueSendJobSnapshot(jobId),
+    DURABLE_STATUS_TIMEOUT_MS,
+  );
+  let durableJob = exactDurableRead.value;
+  let durableReadTimedOut = exactDurableRead.timedOut;
+  if (!durableJob && !durableReadTimedOut) {
+    const latestDurableRead = await readDurableStatusWithTimeout(
+      getLatestQueueSendJobSnapshot,
+      DURABLE_STATUS_TIMEOUT_MS,
+    );
+    durableJob = latestDurableRead.value;
+    durableReadTimedOut = latestDurableRead.timedOut;
+  }
+  // Per user override unlock shipped data on 2026-07-14 (Audit PQ-10): a
+  // slow read is temporary infrastructure failure, not proof the job is absent.
+  if (!job && durableReadTimedOut) {
+    return c.json({
+      error: 'Print queue status is temporarily unavailable. Retry shortly.',
+      code: 'PRINT_QUEUE_STATUS_UNAVAILABLE',
+      retryable: true,
+    }, 503);
+  }
   if (!job) {
     if (durableJob?.jobId === jobId && await canViewQueueSendSnapshot(durableJob, scope)) {
       const durableStatus = deriveQueueSendSnapshotStatus(durableJob, {
@@ -944,7 +951,11 @@ app.get('/print/status/:jobId', async (c) => {
   // Per user override unlock shipped data on 2026-07-14: status reads are
   // scoped to this merge job and only derive stale metadata; no queue/order/
   // shipment state is mutated.
-  const durableJob = await withDurableStatusTimeout(() => getMergeJobSnapshot(jobId));
+  const durableRead = await readDurableStatusWithTimeout(
+    () => getMergeJobSnapshot(jobId),
+    DURABLE_STATUS_TIMEOUT_MS,
+  );
+  const durableJob = durableRead.value;
   if (!job) {
     if (durableJob && await canViewMergeSnapshot(durableJob, scope)) {
       const durableStatus = deriveMergeJobSnapshotStatus(durableJob, {
@@ -1002,7 +1013,11 @@ app.get('/print/status/:jobId', async (c) => {
 // session-only useState Set that a refresh wiped.
 app.get('/print/last', async (c) => {
   const scope = printQueueScopeFromContext(c);
-  const durableJob = await withDurableStatusTimeout(getLatestMergeJobSnapshot);
+  const durableRead = await readDurableStatusWithTimeout(
+    getLatestMergeJobSnapshot,
+    DURABLE_STATUS_TIMEOUT_MS,
+  );
+  const durableJob = durableRead.value;
   if (!durableJob || !(await canViewMergeSnapshot(durableJob, scope))) {
     return c.json({ job: null });
   }

@@ -324,6 +324,7 @@
     "test:audit-frontend-cache-bundle-hygiene": "tsx scripts/audit-frontend-cache-bundle-hygiene-guard.ts",
     "test:audit-billing-small-fixes": "tsx scripts/audit-billing-small-fixes-guard.ts",
     "test:audit-api-process-lifecycle": "tsx scripts/audit-api-process-lifecycle-guard.ts",
+    "test:audit-print-queue-small-fixes": "tsx scripts/audit-print-queue-small-fixes-guard.ts",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:ebay-confirmation:mocked": "tsx scripts/ebay-confirmation-mocked-guard.ts",
     "test:walmart-confirmation:payload": "tsx scripts/walmart-confirmation-payload-guard.ts",

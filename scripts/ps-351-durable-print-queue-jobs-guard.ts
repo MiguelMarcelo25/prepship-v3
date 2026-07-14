@@ -36,6 +36,10 @@ const snapshot = read(snapshotPath);
 const runtimeSchemaMigration = read('drizzle/0062_runtime_schema_ownership.sql');
 const doc = read('docs/ps-tickets/ps-351-durable-print-queue-jobs.md');
 const ps352Doc = read('docs/ps-tickets/ps-352-shipping-workflow-sot-map.md');
+const batchStatusRoute = route.slice(
+  route.indexOf("app.get('/batch-send/status/:jobId'"),
+  route.indexOf('// PS-279: backend-owned Send-to-Queue ROUTE PLAN'),
+);
 
 check('PS-351 package guard is wired',
   packageJson.includes('"test:ps-351-durable-print-queue-jobs": "tsx scripts/ps-351-durable-print-queue-jobs-guard.ts"'));
@@ -117,9 +121,11 @@ check('settings status blob is retained only as legacy fallback after the canoni
     /const durableJob = await getLatestQueueSendJobRecord\(\);[\s\S]{0,240}if \(durableJob\) return (?:durableJob|withFreshQueueSendItemStates\(durableJob\));/.test(printQueue));
 
 check('batch-send status route still reads by requested job id before latest fallback',
-  /getQueueSendJobSnapshot\(jobId\)[\s\S]{0,120}getLatestQueueSendJobSnapshot/.test(route) &&
-    /durableJob\?\.jobId === jobId/.test(route) &&
-    /item_states/.test(route));
+  batchStatusRoute.indexOf('getQueueSendJobSnapshot(jobId)') <
+      batchStatusRoute.indexOf('getLatestQueueSendJobSnapshot') &&
+    /if \(!durableJob && !durableReadTimedOut\)/.test(batchStatusRoute) &&
+    /durableJob\?\.jobId === jobId/.test(batchStatusRoute) &&
+    /item_states/.test(batchStatusRoute));
 
 check('snapshots retain durable per-order item states for cheap status polling',
   /itemStates/.test(snapshot) &&

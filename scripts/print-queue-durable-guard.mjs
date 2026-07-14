@@ -21,6 +21,7 @@ const routeSource = read('src/routes/print-queue.ts');
 const snapshotSource = read('src/services/print-queue/queue-send-snapshot.ts');
 const jobStoreSource = read('src/services/print-queue/queue-send-job-store.ts');
 const mergeJobStoreSource = read('src/services/print-queue/merge-job-store.ts');
+const durableStatusReadSource = read('src/services/print-queue/durable-status-read.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -124,8 +125,9 @@ assert(
 
 assert(
   routeSource.includes('DURABLE_STATUS_TIMEOUT_MS') &&
-    routeSource.includes('withDurableStatusTimeout') &&
-    routeSource.includes('Promise.race'),
+    routeSource.includes('readDurableStatusWithTimeout') &&
+    durableStatusReadSource.includes('Promise.race') &&
+    durableStatusReadSource.includes('timedOut: true'),
   'print queue status routes must bound durable snapshot reads so polling cannot hang',
 );
 

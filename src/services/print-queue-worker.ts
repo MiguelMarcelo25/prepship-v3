@@ -64,6 +64,7 @@ export type QueueSendWorkerRecoveryResult = {
 };
 
 let boss: PgBoss | null = null;
+let enqueueBossPromise: Promise<PgBoss> | null = null;
 let started = false;
 let recoveryTimer: ReturnType<typeof setInterval> | null = null;
 let recoveryPass: Promise<QueueSendWorkerRecoveryResult> | null = null;
@@ -94,6 +95,29 @@ async function ensurePrintQueueSendQueue(targetBoss: PgBoss): Promise<void> {
     expireInSeconds: 30 * 60,
     retentionDays: 7,
   });
+}
+
+async function getPrintQueueEnqueueBoss(): Promise<PgBoss> {
+  if (!enqueueBossPromise) {
+    enqueueBossPromise = (async () => {
+      const targetBoss = createPrintQueueBoss('prepship-api-print-queue-enqueue', 1);
+      targetBoss.on('error', (err) => {
+        console.error('[print-queue-enqueue] pg-boss error:', err.message);
+      });
+      try {
+        await targetBoss.start();
+        await ensurePrintQueueSendQueue(targetBoss);
+        return targetBoss;
+      } catch (error) {
+        await targetBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
+        throw error;
+      }
+    })().catch((error) => {
+      enqueueBossPromise = null;
+      throw error;
+    });
+  }
+  return enqueueBossPromise;
 }
 
 function recoverableOrders(value: unknown): QueueSendOrderInput[] {
@@ -149,10 +173,11 @@ async function sendQueueSendChunk(
 export async function enqueueQueueSendWorkerJob(
   payload: QueueSendWorkerPayload,
 ): Promise<QueueSendWorkerEnqueueResult> {
-  const targetBoss = createPrintQueueBoss('prepship-api-print-queue-enqueue', 1);
   try {
-    await targetBoss.start();
-    await ensurePrintQueueSendQueue(targetBoss);
+    // Per user override unlock shipped data on 2026-07-14 (Audit PQ-10):
+    // API enqueues share one supervised pg-boss instance; this schedules only
+    // orchestration metadata and never calls a label provider.
+    const targetBoss = await getPrintQueueEnqueueBoss();
     // Per user override unlock shipped data on 2026-07-14: enqueue only the
     // first bounded chunk. Each successful chunk schedules the next one; label
     // purchase safety remains in createLabelV2 and no provider call happens here.
@@ -176,8 +201,6 @@ export async function enqueueQueueSendWorkerJob(
       pgBossJobId: null,
       error: err instanceof Error ? err.message : String(err),
     };
-  } finally {
-    await targetBoss.stop({ graceful: true, timeout: 5_000 }).catch(() => undefined);
   }
 }
 

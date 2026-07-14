@@ -37,6 +37,7 @@ const REQUIRED_GUARDS = [
   'test:audit-frontend-cache-bundle-hygiene',
   'test:audit-billing-small-fixes',
   'test:audit-api-process-lifecycle',
+  'test:audit-print-queue-small-fixes',
 ];
 
 const npmCli = process.env.npm_execpath;
