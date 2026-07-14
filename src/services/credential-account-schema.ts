@@ -1,7 +1,6 @@
 import type { CredentialAccountTable, SqlLike } from './credential-accounts';
 
 const ensuredTables = new Set<CredentialAccountTable>();
-let legacyStoreRowsMigrated = false;
 
 const CARRIER_ACCOUNT_RELATIONS = [
   'carrier_accounts',
@@ -19,23 +18,6 @@ const STORE_ACCOUNT_RELATIONS = [
 const CARRIER_ACCOUNT_CONSTRAINTS = [
   'carrier_account_clients_account_fk',
 ];
-
-async function runStatements(
-  sql: SqlLike,
-  label: string,
-  statements: string[],
-): Promise<void> {
-  for (const stmt of statements) {
-    try {
-      await sql.unsafe(stmt);
-    } catch (err) {
-      console.warn(
-        `[${label}] runtime schema fallback statement failed:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
-}
 
 export async function ensureCredentialAccountRuntimeSchema(
   sql: SqlLike,
@@ -112,31 +94,4 @@ export async function ensureCredentialAccountRuntimeSchema(
   }
 
   ensuredTables.add(table);
-}
-
-export async function migrateLegacyStoreCredentialRows(sql: SqlLike): Promise<void> {
-  if (legacyStoreRowsMigrated) return;
-  await runStatements(sql, 'store-accounts:migration', [
-    `INSERT INTO store_accounts (id, client_id, provider, label, account_identifier,
-                          credentials, source, active, created_at, updated_at)
-      SELECT id, client_id, provider, label, account_identifier,
-            credentials, source, active, created_at, updated_at
-      FROM carrier_accounts
-      WHERE provider IN (
-        'walmart','amazon','amazon_shipping','ebay','shopify','etsy',
-        'tiktok_shop','woocommerce','bigcommerce'
-      )
-      ON CONFLICT (
-        COALESCE(client_id, -1), provider, COALESCE(account_identifier, '')
-      ) DO NOTHING`,
-    `DELETE FROM carrier_accounts
-      WHERE provider IN (
-        'walmart','amazon','amazon_shipping','ebay','shopify','etsy',
-        'tiktok_shop','woocommerce','bigcommerce'
-      )`,
-    `SELECT setval('store_accounts_id_seq',
-      GREATEST(COALESCE((SELECT MAX(id) FROM store_accounts), 0) + 1, 1),
-      false)`,
-  ]);
-  legacyStoreRowsMigrated = true;
 }

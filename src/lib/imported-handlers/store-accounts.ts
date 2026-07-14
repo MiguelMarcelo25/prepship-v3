@@ -1,4 +1,3 @@
-// @ts-nocheck
 // PS-200 S1: v4 mirror of the legacy Vercel store-accounts function — CRUD
 // for the store_accounts table (marketplace order sources — Walmart, Amazon,
 // eBay, etc.). Mirrors imported-handlers/carrier-accounts.ts but writes to a
@@ -17,7 +16,7 @@
 // Auth: Supabase JWT verified in-handler; the mounting route additionally
 // enforces the credentials:read/write app permission (stricter than legacy).
 
-import postgres from 'postgres';
+import { sql } from '../../db/client.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -32,10 +31,8 @@ import {
   readJsonRequestBody,
 } from '../credential-accounts';
 import { corsHeaders } from '../http/cors';
-import {
-  ensureCredentialAccountRuntimeSchema,
-  migrateLegacyStoreCredentialRows,
-} from '../../services/credential-account-schema';
+import type { NodeStyleRequest, NodeStyleResponse } from '../node-handler.js';
+import { ensureCredentialAccountRuntimeSchema } from '../../services/credential-account-schema';
 import {
   deleteCredentialAccount,
   deleteSyntheticStoreClientForAccount,
@@ -56,7 +53,10 @@ const TABLE = 'store_accounts';
 // edit here. The credential-verification connector is the single source of
 // truth for which providers can actually be tested; unknown providers there
 // fall through to a clean "not yet implemented" response.
-export default async function handler(req: any, res: any): Promise<void> {
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -81,25 +81,8 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    sendInternalServerError(
-      res,
-      'imported-store-accounts:config',
-      new Error('DATABASE_URL not configured'),
-    );
-    return;
-  }
-  const sql = postgres(dbUrl, {
-    max: 1,
-    prepare: false,
-    idle_timeout: 5,
-    connect_timeout: 5,
-  });
-
   try {
     await ensureCredentialAccountRuntimeSchema(sql, TABLE);
-    await migrateLegacyStoreCredentialRows(sql);
 
     if (req.method === 'GET') {
       const url = new URL(req.url ?? '', 'http://x');
@@ -289,11 +272,5 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
     sendInternalServerError(res, 'imported-store-accounts', err);
-  } finally {
-    try {
-      await sql.end({ timeout: 1 });
-    } catch {
-      /* ignore */
-    }
   }
 }

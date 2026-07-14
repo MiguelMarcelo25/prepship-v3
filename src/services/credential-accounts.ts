@@ -1,4 +1,5 @@
 import type { CredentialAccountBody } from '../lib/credential-accounts';
+import type postgres from 'postgres';
 import {
   isStoreScopedCarrierProvider,
   toSafeCarrierAccountReadModel,
@@ -7,12 +8,7 @@ import {
 
 export type CredentialAccountTable = 'carrier_accounts' | 'store_accounts';
 
-export type SqlLike = {
-  (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
-  (identifier: string): unknown;
-  unsafe: (query: string) => Promise<unknown>;
-  begin: (fn: (trx: SqlLike) => Promise<void>) => Promise<void>;
-};
+export type SqlLike = postgres.Sql;
 
 export type CredentialAccountRow = Record<string, unknown>;
 
@@ -201,7 +197,7 @@ export async function upsertCredentialAccount(
       ${account.provider},
       ${account.label},
       ${account.accountIdentifier},
-      ${account.credentials},
+      ${sql.json(account.credentials as postgres.JSONValue)},
       ${account.source}
     )
     ON CONFLICT (COALESCE(client_id, -1), provider, COALESCE(account_identifier, ''))
@@ -346,7 +342,7 @@ export async function patchCredentialAccount(
     const merged: Record<string, unknown> = { ...cleanedExisting, ...patch.credentials };
     const rows = (await sql`
       UPDATE ${sql(table)}
-      SET credentials = ${merged}, updated_at = NOW()
+      SET credentials = ${sql.json(merged as postgres.JSONValue)}, updated_at = NOW()
       WHERE id = ${id}
       RETURNING id, client_id AS "clientId", provider, label,
                 account_identifier AS "accountIdentifier",

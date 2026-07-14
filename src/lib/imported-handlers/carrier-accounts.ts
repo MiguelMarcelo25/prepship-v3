@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Vercel serverless function: CRUD for the carrier_accounts table.
 // Uses the migration-owned credential account schema. The handler verifies
 // readiness on entry instead of creating tables or indexes during requests.
@@ -13,7 +12,7 @@
 //
 // Auth: Supabase JWT in Authorization: Bearer <token>.
 
-import postgres from 'postgres';
+import { sql } from '../../db/client.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -28,6 +27,7 @@ import {
   readJsonRequestBody,
 } from '../credential-accounts';
 import { corsHeaders } from '../http/cors';
+import type { NodeStyleRequest, NodeStyleResponse } from '../node-handler.js';
 import { ensureCredentialAccountRuntimeSchema } from '../../services/credential-account-schema';
 import {
   backfillAwaitingSnapshotNickname,
@@ -39,6 +39,7 @@ import {
   patchCredentialAccount,
   replaceCarrierAccountClientAssignments,
   upsertCredentialAccount,
+  type SqlLike,
 } from '../../services/credential-accounts';
 import {
   carrierStoreLinkIdentifier,
@@ -50,7 +51,7 @@ import {
 
 const TABLE = 'carrier_accounts';
 
-async function loadActiveStoreAccountIdentities(sql: any): Promise<StoreAccountIdentity[]> {
+async function loadActiveStoreAccountIdentities(sql: SqlLike): Promise<StoreAccountIdentity[]> {
   return sql<Array<{
     id: number;
     clientId: number | null;
@@ -74,7 +75,10 @@ async function loadActiveStoreAccountIdentities(sql: any): Promise<StoreAccountI
 // verifier endpoint (api/carriers/verify.ts) is the single source of truth
 // for which providers can actually be tested; unknown providers there fall
 // through to a clean "not yet implemented" response.
-export default async function handler(req: any, res: any): Promise<void> {
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -98,22 +102,6 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(401).json({ error: 'Invalid token' });
     return;
   }
-
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    sendInternalServerError(
-      res,
-      'imported-carrier-accounts:config',
-      new Error('DATABASE_URL not configured'),
-    );
-    return;
-  }
-  const sql = postgres(dbUrl, {
-    max: 1,
-    prepare: false,
-    idle_timeout: 5,
-    connect_timeout: 5,
-  });
 
   try {
     await ensureCredentialAccountRuntimeSchema(sql, TABLE);
@@ -436,11 +424,5 @@ export default async function handler(req: any, res: any): Promise<void> {
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
     sendInternalServerError(res, 'imported-carrier-accounts', err);
-  } finally {
-    try {
-      await sql.end({ timeout: 1 });
-    } catch {
-      /* ignore */
-    }
   }
 }

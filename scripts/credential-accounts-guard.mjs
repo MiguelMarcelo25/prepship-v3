@@ -28,6 +28,7 @@ const settings = read('web/src/components/Settings/CarrierIntegrationsCard.tsx')
 const carrierMigration = read('drizzle/0015_amusing_namorita.sql');
 const credentialMigration = read('drizzle/0027_credential_accounts_source_of_truth.sql');
 const credentialRlsMigration = read('drizzle/0031_credential_accounts_rls.sql');
+const credentialCutoverMigration = read('drizzle/0063_credential_account_cutover.sql');
 const handlers = [
   ['api/carrier-accounts.ts', read('api/carrier-accounts.ts')],
   ['api/store-accounts.ts', read('api/store-accounts.ts')],
@@ -104,9 +105,23 @@ assert(
 
 assert(
   schemaFallback.includes('ensureCredentialAccountRuntimeSchema') &&
-    schemaFallback.includes('migrateLegacyStoreCredentialRows'),
-  'credential account schema readiness and legacy store migration are centralized',
+    !schemaFallback.includes('migrateLegacyStoreCredentialRows'),
+  'credential account runtime helper owns readiness only, not data migration',
 );
+
+assert(
+  credentialCutoverMigration.includes('INSERT INTO store_accounts') &&
+    credentialCutoverMigration.includes('DELETE FROM carrier_accounts') &&
+    credentialCutoverMigration.includes("SELECT setval("),
+  'migration 0063 owns the legacy store credential cutover',
+);
+
+for (const [file, source] of handlers) {
+  assert(
+    !source.includes('migrateLegacyStoreCredentialRows'),
+    `${file} never migrates credential rows during a request`,
+  );
+}
 
 assert(
   !/CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS/i.test(schemaFallback),

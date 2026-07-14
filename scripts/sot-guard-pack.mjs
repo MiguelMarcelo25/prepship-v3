@@ -20,6 +20,7 @@ const REQUIRED_GUARDS = [
   'test:audit-orders-service-boundary',
   'test:audit-pg-boss-inventory-outbox',
   'test:audit-runtime-schema-readiness',
+  'test:audit-imported-handler-boundary',
 ];
 
 const npmCli = process.env.npm_execpath;

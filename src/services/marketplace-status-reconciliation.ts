@@ -1,11 +1,11 @@
+import type postgres from 'postgres';
+
 export type MarketplaceProvider = 'walmart' | 'ebay' | 'shopify';
 export type PrepShipOrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled';
 
-type SqlRow = Record<string, unknown>;
-export type MarketplaceSql = <T extends SqlRow[] = SqlRow[]>(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-) => Promise<T>;
+// Per user override unlock shipped data on 2026-07-14: shared-pool typing only;
+// awaiting-only reconciliation predicates and status authority are unchanged.
+export type MarketplaceSql = postgres.Sql;
 
 export type MarketplaceReconciliationCandidate = {
   id: number;

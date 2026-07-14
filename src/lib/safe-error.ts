@@ -1,3 +1,5 @@
+import type { NodeStyleResponse } from './node-handler.js';
+
 export const INTERNAL_SERVER_ERROR = 'Internal server error';
 
 export function errorMessage(err: unknown): string {
@@ -9,7 +11,7 @@ export function logServerError(scope: string, err: unknown): void {
 }
 
 export function sendInternalServerError(
-  res: any,
+  res: NodeStyleResponse,
   scope: string,
   err: unknown,
   extra: Record<string, unknown> = {},

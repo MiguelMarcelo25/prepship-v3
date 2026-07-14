@@ -1,4 +1,3 @@
-// @ts-nocheck
 // ──────────────────────────────────────────────────────────────────
 // Reusable core for the Walmart selling-fee sync flow. Extracted
 // 2026-05-13 so every entry point shares one implementation. PS-200 S3
@@ -23,9 +22,7 @@
 //   7. Return a structured result the caller can render or log.
 //
 // Caller responsibilities:
-//   - Open + close the postgres connection. Helper does NOT
-//     end() the client (callers may want to run multiple syncs
-//     on the same connection).
+//   - Pass the shared postgres pool from src/db/client.ts.
 //   - Auth gate. Helper trusts the caller has authenticated.
 //   - Iteration over multiple store_accounts when needed.
 // ──────────────────────────────────────────────────────────────────
@@ -232,7 +229,7 @@ function aggregateFeesByOrder(transactions: WalmartTransaction[]): Map<string, {
   for (const v of map.values()) {
     v.total = Math.round(v.total * 100) / 100;
     for (const k of Object.keys(v.breakdown)) {
-      v.breakdown[k] = Math.round(v.breakdown[k] * 100) / 100;
+      v.breakdown[k] = Math.round((v.breakdown[k] ?? 0) * 100) / 100;
     }
   }
   return map;
@@ -257,10 +254,10 @@ export async function syncWalmartFeesForAccount(
       WHERE id = ${storeAccountId}
       LIMIT 1
     `;
-    if (acctRows.length === 0) {
+    const acct = acctRows[0];
+    if (!acct) {
       return { ok: false, error: `store_account #${storeAccountId} not found` };
     }
-    const acct = acctRows[0];
     if (acct.provider !== 'walmart') {
       return {
         ok: false,
@@ -315,7 +312,7 @@ export async function syncWalmartFeesForAccount(
         await trx`
           UPDATE orders
           SET selling_fee = ${entry.total},
-              selling_fee_breakdown = ${entry.breakdown as Record<string, number>}::jsonb,
+              selling_fee_breakdown = ${trx.json(entry.breakdown as postgres.JSONValue)}::jsonb,
               selling_fee_synced_at = NOW(),
               selling_fee_source = 'walmart',
               updated_at = NOW()

@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import postgres from 'postgres';
 import verifyCarrierHandler from '../lib/imported-handlers/carriers-verify';
 import walmartOrdersHandler from '../lib/imported-handlers/walmart-orders';
 import ebayOrdersHandler from '../lib/imported-handlers/ebay-orders';
@@ -12,7 +11,6 @@ import { syncWalmartFeesForAccount } from '../connectors/store/walmart-fees';
 import { buildEbayAuthorizeUrl } from '../connectors/store/ebay';
 import { checkShopifyShippingReadiness } from '../connectors/store/shopify';
 import { sql as dbSql } from '../db/client';
-import { env } from '../lib/env';
 
 const app = new Hono();
 
@@ -88,15 +86,9 @@ app.post('/walmart/fees', requirePermission('settings:write'), async (c) => {
   const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const fromDate = String(body?.fromDate ?? defaultFrom.toISOString().slice(0, 10));
   const toDate = String(body?.toDate ?? now.toISOString().slice(0, 10));
-  // Same short-lived client shape the legacy function used — the fees sync
-  // takes a postgres client argument rather than the drizzle handle.
-  const sql = postgres(env.DATABASE_URL, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
-  try {
-    const result = await syncWalmartFeesForAccount(sql, storeAccountId, fromDate, toDate);
-    return c.json({ ...result, fetchedAt: new Date().toISOString() }, result.ok ? 200 : 400);
-  } finally {
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
-  }
+  // The fee owner accepts postgres.js directly, so it shares the app pool.
+  const result = await syncWalmartFeesForAccount(dbSql, storeAccountId, fromDate, toDate);
+  return c.json({ ...result, fetchedAt: new Date().toISOString() }, result.ok ? 200 : 400);
 });
 
 // eBay OAuth "Connect" — build the consent URL for an eBay Shipping carrier account so the
@@ -108,33 +100,29 @@ app.get('/ebay/connect', requirePermission('credentials:write'), async (c) => {
   if (!Number.isFinite(carrierAccountId) || carrierAccountId <= 0) {
     return c.json({ error: 'carrierAccountId is required' }, 400);
   }
-  const sql = postgres(env.DATABASE_URL, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
-  try {
-    const rows = await sql<Array<{ id: number; provider: string; credentials: Record<string, unknown> }>>`
-      SELECT id, provider, credentials FROM carrier_accounts WHERE id = ${carrierAccountId} LIMIT 1
-    `;
-    const row = rows[0];
-    if (!row) return c.json({ error: `carrier_accounts #${carrierAccountId} not found` }, 404);
-    if (String(row.provider) !== 'ebay_shipping') {
-      return c.json({ error: 'eBay Connect is only for eBay Shipping carrier accounts' }, 400);
-    }
-    const creds = (row.credentials && typeof row.credentials === 'object' ? row.credentials : {}) as Record<string, unknown>;
-    const appId = String(creds.appId ?? creds.app_id ?? '').trim();
-    const ruName = String(creds.ruName ?? creds.runame ?? '').trim();
-    if (!appId) return c.json({ error: 'Save the eBay App ID on this carrier first, then Connect.' }, 400);
-    if (!ruName) return c.json({ error: 'Save the eBay RuName on this carrier first, then Connect.' }, 400);
-    // Provider endpoints + scopes live in the eBay connector (PS-032 boundary); this route just
-    // supplies the account's appId/ruName and the state that ties the callback back here.
-    const url = buildEbayAuthorizeUrl({
-      appId,
-      ruName,
-      state: `carrier-${row.id}`,
-      environment: typeof creds.environment === 'string' ? creds.environment : null,
-    });
-    return c.json({ url });
-  } finally {
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
+  const sql = dbSql;
+  const rows = await sql<Array<{ id: number; provider: string; credentials: Record<string, unknown> }>>`
+    SELECT id, provider, credentials FROM carrier_accounts WHERE id = ${carrierAccountId} LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row) return c.json({ error: `carrier_accounts #${carrierAccountId} not found` }, 404);
+  if (String(row.provider) !== 'ebay_shipping') {
+    return c.json({ error: 'eBay Connect is only for eBay Shipping carrier accounts' }, 400);
   }
+  const creds = (row.credentials && typeof row.credentials === 'object' ? row.credentials : {}) as Record<string, unknown>;
+  const appId = String(creds.appId ?? creds.app_id ?? '').trim();
+  const ruName = String(creds.ruName ?? creds.runame ?? '').trim();
+  if (!appId) return c.json({ error: 'Save the eBay App ID on this carrier first, then Connect.' }, 400);
+  if (!ruName) return c.json({ error: 'Save the eBay RuName on this carrier first, then Connect.' }, 400);
+  // Provider endpoints + scopes live in the eBay connector (PS-032 boundary); this route just
+  // supplies the account's appId/ruName and the state that ties the callback back here.
+  const url = buildEbayAuthorizeUrl({
+    appId,
+    ruName,
+    state: `carrier-${row.id}`,
+    environment: typeof creds.environment === 'string' ? creds.environment : null,
+  });
+  return c.json({ url });
 });
 
 export default app;

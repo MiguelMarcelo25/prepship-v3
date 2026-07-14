@@ -1,6 +1,67 @@
 import type { Context } from 'hono';
 
-type NodeStyleHandler = (req: any, res: any) => Promise<void> | void;
+export type NodeStyleRequest = {
+  method?: string;
+  url?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  body?: unknown;
+  on?: (event: string, listener: (...args: unknown[]) => void) => unknown;
+};
+
+export type NodeStyleResponse = {
+  setHeader(name: string, value: string | number | readonly string[]): void;
+  status(code: number): NodeStyleResponse;
+  json(payload: unknown): NodeStyleResponse;
+  end(payload?: unknown): NodeStyleResponse;
+};
+
+export type NodeStyleHandler = (
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+) => Promise<void> | void;
+
+export async function readNodeJsonBody(
+  req: NodeStyleRequest,
+): Promise<Record<string, unknown>> {
+  if (req.body != null) {
+    if (typeof req.body === 'object' && !Array.isArray(req.body)) {
+      return req.body as Record<string, unknown>;
+    }
+    if (typeof req.body === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(req.body);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {};
+      } catch {
+        return {};
+      }
+    }
+  }
+
+  if (!req.on) return {};
+
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    req.on?.('data', (chunk: unknown) => {
+      raw += String(chunk);
+    });
+    req.on?.('end', () => {
+      if (!raw) return resolve({});
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        resolve(
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {},
+        );
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on?.('error', reject);
+  });
+}
 
 function headersObject(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
@@ -48,7 +109,7 @@ export function runNodeHandler(handler: NodeStyleHandler) {
       body = JSON.stringify(payload);
     }
 
-    const res = {
+    const res: NodeStyleResponse = {
       setHeader(name: string, value: string | number | readonly string[]) {
         responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
       },
@@ -67,7 +128,7 @@ export function runNodeHandler(handler: NodeStyleHandler) {
       },
     };
 
-    const req = {
+    const req: NodeStyleRequest = {
       method: c.req.method,
       url: c.req.url,
       headers: headersObject(c.req.raw.headers),

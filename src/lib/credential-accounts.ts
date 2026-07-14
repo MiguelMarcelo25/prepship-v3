@@ -1,4 +1,5 @@
 import { normalizeShopifyShopDomain } from '../connectors/store/shopify';
+export { readNodeJsonBody as readJsonRequestBody } from './node-handler.js';
 
 export type CredentialAccountSource = 'admin' | 'portal';
 
@@ -36,35 +37,6 @@ export type CredentialAccountPatchBody = {
   hasActive: boolean;
   active: boolean | null;
 };
-
-export async function readJsonRequestBody(req: any): Promise<Record<string, unknown>> {
-  if (req.body) {
-    if (typeof req.body === 'object') return req.body as Record<string, unknown>;
-    if (typeof req.body === 'string') {
-      try {
-        return JSON.parse(req.body) as Record<string, unknown>;
-      } catch {
-        return {};
-      }
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: { toString: () => string }) => {
-      raw += chunk.toString();
-    });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw) as Record<string, unknown>);
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
 
 export function normalizeCredentialAccountBody(
   body: Record<string, unknown>,

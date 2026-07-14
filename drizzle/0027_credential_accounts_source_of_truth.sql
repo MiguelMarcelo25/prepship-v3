@@ -1,6 +1,5 @@
 -- Credential account schema source of truth.
--- Runtime handlers keep a centralized fallback for older deployments, but the
--- production schema belongs in migrations.
+-- Production schema belongs in migrations. Data cutover is owned by migration 0063.
 
 CREATE TABLE IF NOT EXISTS "store_accounts" (
   "id" serial PRIMARY KEY NOT NULL,

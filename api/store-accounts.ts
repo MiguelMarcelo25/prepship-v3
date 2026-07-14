@@ -28,7 +28,6 @@ import {
 import { corsHeaders } from '../src/lib/http/cors.js';
 import {
   ensureCredentialAccountRuntimeSchema,
-  migrateLegacyStoreCredentialRows,
 } from '../src/services/credential-account-schema.js';
 import {
   deleteCredentialAccount,
@@ -97,7 +96,6 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   try {
     await ensureCredentialAccountRuntimeSchema(sql, TABLE);
-    await migrateLegacyStoreCredentialRows(sql);
 
     if (req.method === 'GET') {
       const url = new URL(req.url ?? '', 'http://x');

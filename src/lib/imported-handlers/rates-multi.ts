@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Node-style handler mounted by the Render/Hono /rates route.
 //
 // Reads three sources of ShipStation V2 credentials and tags each returned
@@ -24,9 +23,11 @@ import {
   loadShipStationCarrierAccountSources,
   readShipStationCarrierAccountSnapshots,
   resolveShipStationCarrierAccountSnapshot,
+  type ShipStationCarrierAccountSnapshot,
   type ShipStationCarrierAccountSource,
   type ShipStationCarrierSnapshotResolution,
 } from '../../services/shipstation-carrier-account-snapshots';
+import type { NodeStyleRequest, NodeStyleResponse } from '../node-handler.js';
 
 interface SsCarrier {
   carrier_id: string;
@@ -40,6 +41,47 @@ interface TaggedCarrier extends SsCarrier {
   source_client_name: string;
   source_client_id: number | null;
 }
+
+type MultiCarrierTiming = {
+  totalDurationMs: number;
+  authDurationMs: number;
+  dbDurationMs: number;
+  aggregationDurationMs: number;
+  slowestSource: string | null;
+  slowestSourceDurationMs: number;
+  cacheHits: number;
+  cacheMisses: number;
+  durableSnapshotHits?: number;
+  durableStaleSources?: number;
+  liveFallbacks?: number;
+  responseCacheHit: boolean;
+  responseCacheAgeMs: number | null;
+};
+
+type MultiCarrierSourceDiagnostic = {
+  source: string;
+  keySource: string;
+  status: number | null;
+  count: number;
+  error: string | null;
+  cacheStatus: 'hit' | 'miss';
+  cacheAgeMs: number | null;
+  durationMs: number;
+  providerDurationMs: number;
+  snapshotStatus: ShipStationCarrierSnapshotResolution['status'];
+  snapshotAgeMs: number | null;
+  snapshotFetchedAt: string | null;
+};
+
+type MultiCarrierPayload = {
+  carriers: TaggedCarrier[];
+  _diagnostics: {
+    dbError: string | null;
+    sources: MultiCarrierSourceDiagnostic[];
+    cachedAt: string;
+    timing: MultiCarrierTiming;
+  };
+};
 
 function publicCarrierFetchError(result: ShipStationCarrierAccountLoadResult): string | null {
   if (!result.error) return null;
@@ -58,9 +100,12 @@ const RATES_MULTI_CACHE_TTL_MS = (() => {
   const raw = Number.parseInt(process.env.RATES_MULTI_CACHE_TTL_MS ?? '', 10);
   return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
 })();
-let cachedResponse: { at: number; payload: any } | null = null;
+let cachedResponse: { at: number; payload: MultiCarrierPayload } | null = null;
 
-export default async function handler(req: any, res: any): Promise<void> {
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const totalStartedAt = nowMs();
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin, { methods: 'GET, OPTIONS' });
@@ -136,25 +181,12 @@ export default async function handler(req: any, res: any): Promise<void> {
     snapshotFetchedAt: string | null;
     p: Promise<ShipStationCarrierAccountLoadResult>;
   }
-  const diagnostics: Array<{
-    source: string;
-    keySource: string;
-    status: number | null;
-    count: number;
-    error: string | null;
-    cacheStatus: 'hit' | 'miss';
-    cacheAgeMs: number | null;
-    durationMs: number;
-    providerDurationMs: number;
-    snapshotStatus: ShipStationCarrierSnapshotResolution['status'];
-    snapshotAgeMs: number | null;
-    snapshotFetchedAt: string | null;
-  }> = [];
+  const diagnostics: MultiCarrierSourceDiagnostic[] = [];
   let dbError: string | null = null;
   const dbStartedAt = nowMs();
   const sourceResult = await loadShipStationCarrierAccountSources();
   dbError = sourceResult.dbError;
-  let snapshots = new Map();
+  let snapshots = new Map<string, ShipStationCarrierAccountSnapshot>();
   try {
     snapshots = await readShipStationCarrierAccountSnapshots(sourceResult.sources);
   } catch (err) {
@@ -194,6 +226,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   for (let i = 0; i < tasks.length; i += 1) {
     const t = tasks[i];
     const r = results[i];
+    if (!t || !r) continue;
     diagnostics.push({
       source: t.source,
       keySource: t.keySource,
@@ -224,7 +257,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     null,
   );
   const totalDurationMs = elapsedMs(totalStartedAt);
-  const timing = {
+  const timing: MultiCarrierTiming = {
     totalDurationMs,
     authDurationMs,
     dbDurationMs,
@@ -266,7 +299,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     });
   }
 
-  const payload = {
+  const payload: MultiCarrierPayload = {
     carriers: aggregated,
     _diagnostics: {
       dbError: dbError ? 'Client carrier credential lookup failed' : null,

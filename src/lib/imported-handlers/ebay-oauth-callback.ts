@@ -1,4 +1,3 @@
-// @ts-nocheck
 // PS-200 S4: v4 mirror of the legacy Vercel eBay OAuth callback — body kept
 // verbatim (replacement-first); only the import path differs. eBay's token
 // exchange uses the RuName (an eBay-side indirection), so this code is
@@ -27,8 +26,10 @@
 // and tied to a specific App ID + Cert ID; without those matching values
 // already in our store_accounts table the exchange will fail.
 
-import postgres from 'postgres';
+import type postgres from 'postgres';
+import { sql } from '../../db/client.js';
 import { exchangeEbayAuthorizationCode } from '../../connectors/store/ebay';
+import type { NodeStyleRequest, NodeStyleResponse } from '../node-handler.js';
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c] as string));
@@ -51,7 +52,10 @@ code { background: #eaeaea; padding: 1px 6px; border-radius: 3px; font-size: 12p
 </style></head><body>${body}</body></html>`;
 }
 
-export default async function handler(req: any, res: any): Promise<void> {
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const url = new URL(req.url ?? '/', `https://${req.headers?.host ?? 'localhost'}`);
   const code = url.searchParams.get('code');
   const errorParam = url.searchParams.get('error');
@@ -81,17 +85,6 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    res.status(500).end(htmlPage(
-      'Server misconfigured',
-      `<h1 class="error">DATABASE_URL is not set</h1>
-       <p>The PrepShip backend can't look up the eBay credentials needed to
-          complete the OAuth exchange.</p>`,
-    ));
-    return;
-  }
-
   // The carrier "Connect with eBay" button puts state=carrier-<id> on the authorize URL so this
   // callback exchanges + saves the refresh token back to THAT eBay Shipping carrier account (using
   // its own App ID/Cert ID). Without that state we keep the legacy store-account behavior.
@@ -99,21 +92,21 @@ export default async function handler(req: any, res: any): Promise<void> {
   const carrierMatch = /^carrier-(\d+)$/.exec(state);
   const targetCarrierId = carrierMatch ? Number(carrierMatch[1]) : null;
 
-  const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
   try {
     // The matching eBay row supplies App ID + Cert ID. We trust it because there's no other way
     // for an attacker to pre-populate valid eBay credentials in the seller's PrepShip database.
     const rows = targetCarrierId
-      ? await sql<Array<{ id: number; credentials: any }>>`
+      ? await sql<Array<{ id: number; credentials: unknown }>>`
           SELECT id, credentials FROM carrier_accounts
           WHERE id = ${targetCarrierId} AND provider = 'ebay_shipping'
           LIMIT 1`
-      : await sql<Array<{ id: number; credentials: any }>>`
+      : await sql<Array<{ id: number; credentials: unknown }>>`
           SELECT id, credentials FROM store_accounts
           WHERE provider = 'ebay' AND active = true
           ORDER BY id DESC
           LIMIT 1`;
-    if (rows.length === 0) {
+    const row = rows[0];
+    if (!row) {
       res.status(404).end(htmlPage(
         'No eBay credentials',
         `<h1 class="error">No eBay credentials found in PrepShip</h1>
@@ -123,7 +116,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       ));
       return;
     }
-    const row = rows[0];
     const creds = (row.credentials && typeof row.credentials === 'object'
       ? row.credentials
       : {}) as Record<string, unknown>;
@@ -202,14 +194,14 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (targetCarrierId) {
       await sql`
         UPDATE carrier_accounts
-        SET credentials = ${newCreds},
+        SET credentials = ${sql.json(newCreds as postgres.JSONValue)},
             updated_at = NOW()
         WHERE id = ${row.id}
       `;
     } else {
       await sql`
         UPDATE store_accounts
-        SET credentials = ${newCreds},
+        SET credentials = ${sql.json(newCreds as postgres.JSONValue)},
             updated_at = NOW()
         WHERE id = ${row.id}
       `;
@@ -238,7 +230,5 @@ export default async function handler(req: any, res: any): Promise<void> {
       `<h1 class="error">Something went wrong</h1>
        <p>${escapeHtml(msg)}</p>`,
     ));
-  } finally {
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }
 }

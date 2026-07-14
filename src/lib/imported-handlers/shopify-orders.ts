@@ -1,9 +1,9 @@
-// @ts-nocheck
 // Pull recent Shopify orders and persist them into store_orders + canonical
 // orders. The Shopify connector owns API calls and payload normalization; this
 // handler owns the authenticated Settings action and persistence delegation.
 
-import postgres from 'postgres';
+import type postgres from 'postgres';
+import { sql } from '../../db/client.js';
 import { assertStoreOrdersSchemaReady } from '../../services/store-orders-schema';
 import { sendInternalServerError } from '../safe-error';
 import {
@@ -17,25 +17,13 @@ import { upsertNormalizedStoreOrders } from '../../services/store-order-import';
 import {
   ensureSyntheticStoreClient,
   syntheticStoreIdForCredentialAccount,
+  type SqlLike,
 } from '../../services/credential-accounts';
-
-function readBody(req: any): Promise<unknown> {
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try { return Promise.resolve(JSON.parse(req.body)); } catch { return Promise.resolve({}); }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch (err) { reject(err); }
-    });
-    req.on('error', reject);
-  });
-}
+import {
+  readNodeJsonBody,
+  type NodeStyleRequest,
+  type NodeStyleResponse,
+} from '../node-handler.js';
 
 function toPacificClockfaceZ(d: Date): string {
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -94,7 +82,7 @@ function shipmentStatusFor(order: any): string {
   return 'unshipped';
 }
 
-async function clientContextForStore(sql: any, account: {
+async function clientContextForStore(sql: SqlLike, account: {
   provider: string;
   accountId: number;
   label: string | null;
@@ -109,7 +97,10 @@ async function clientContextForStore(sql: any, account: {
   return { clientId: rows[0]?.id ?? null, syntheticStoreId };
 }
 
-export default async function handler(req: any, res: any): Promise<void> {
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin, { methods: 'POST, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -122,10 +113,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   const verified = await verifySupabaseJwt(token);
   if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) { res.status(500).json({ error: 'DATABASE_URL not configured' }); return; }
-
-  const body = (await readBody(req)) as Record<string, unknown>;
+  const body = await readNodeJsonBody(req);
   const accountId = body?.storeAccountId != null
     ? Number(body.storeAccountId)
     : (body?.carrierAccountId != null ? Number(body.carrierAccountId) : NaN);
@@ -138,8 +126,8 @@ export default async function handler(req: any, res: any): Promise<void> {
   const sinceDate = typeof body?.sinceDate === 'string' && body.sinceDate ? body.sinceDate : defaultStart;
   const limit = Math.min(Math.max(Number(body?.limit ?? 50), 1), 250);
 
-  const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
-
+  // Per user override unlock shipped data on 2026-07-14: marketplace import
+  // semantics are unchanged; this typed adapter now uses the shared DB pool.
   try {
     await assertStoreOrdersSchemaReady(sql, '[carriers/shopify/orders]');
   } catch (err) {
@@ -148,7 +136,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       err instanceof Error ? err.message : err,
     );
     res.status(500).json({ ok: false, error: 'Store orders schema is not ready' });
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
     return;
   }
 
@@ -210,10 +197,11 @@ export default async function handler(req: any, res: any): Promise<void> {
         )
         VALUES (
           ${accountId}, 'shopify', ${String(order.sourceOrderId)}, ${orderNumber || String(order.sourceOrderId)},
-          ${orderDate}, ${String(order.canonicalStatus)}, ${shipToForStoreOrder(order)},
-          ${items as Array<Record<string, unknown>>},
-          ${totalsForStoreOrder(order)},
-          ${rawParam},
+          ${orderDate}, ${String(order.canonicalStatus)},
+          ${sql.json(shipToForStoreOrder(order) as postgres.JSONValue)},
+          ${sql.json(items as postgres.JSONValue)},
+          ${sql.json(totalsForStoreOrder(order) as postgres.JSONValue)},
+          ${sql.json(rawParam as postgres.JSONValue)},
           ${shipmentStatusFor(order)}, NOW(), NOW(), NOW()
         )
         ON CONFLICT (provider, external_order_id) DO UPDATE SET
@@ -292,7 +280,5 @@ export default async function handler(req: any, res: any): Promise<void> {
     });
   } catch (err) {
     sendInternalServerError(res, 'carriers/shopify/orders', err);
-  } finally {
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }
 }

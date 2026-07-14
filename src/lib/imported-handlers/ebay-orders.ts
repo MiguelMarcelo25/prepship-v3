@@ -1,4 +1,3 @@
-// @ts-nocheck
 // PS-200 S2: v4 mirror of the legacy Vercel eBay order-pull function —
 // body kept verbatim (replacement-first); only the import paths differ.
 // Pull recent orders from eBay Sell API and
@@ -18,7 +17,8 @@
 // Response (success):
 //   { ok: true, fetched, inserted, updated, sample, windowStart, fetchedAt }
 
-import postgres from 'postgres';
+import type postgres from 'postgres';
+import { sql } from '../../db/client.js';
 import { assertStoreOrdersSchemaReady } from '../../services/store-orders-schema';
 import {
   hasExistingMarketplaceOrderRow,
@@ -33,24 +33,11 @@ import { corsHeaders } from '../http/cors';
 import { importStoreOrders } from '../../services/store-connector-orchestrator';
 import { buildNormalizedOrderSource } from '../../services/normalized-order-persistence';
 import { upsertNormalizedStoreOrders } from '../../services/store-order-import';
-
-function readBody(req: any): Promise<unknown> {
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try { return Promise.resolve(JSON.parse(req.body)); } catch { return Promise.resolve({}); }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch (err) { reject(err); }
-    });
-    req.on('error', reject);
-  });
-}
+import {
+  readNodeJsonBody,
+  type NodeStyleRequest,
+  type NodeStyleResponse,
+} from '../node-handler.js';
 
 // Convert real UTC Date → Pacific-time wall-clock string stamped with "Z"
 // so the FE's UTC-mode renderer (kept for ShipStation parity — orders
@@ -70,7 +57,14 @@ function toPacificClockfaceZ(d: Date): string {
   return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}:${get('second')}Z`;
 }
 
-export default async function handler(req: any, res: any): Promise<void> {
+function stringOrNull(value: unknown): string | null {
+  return value == null ? null : String(value);
+}
+
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin, { methods: 'POST, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -85,10 +79,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   const verified = await verifySupabaseJwt(tok);
   if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) { res.status(500).json({ error: 'DATABASE_URL not configured' }); return; }
-
-  const body = (await readBody(req)) as Record<string, unknown>;
+  const body = await readNodeJsonBody(req);
   const accountId = body?.storeAccountId != null
     ? Number(body.storeAccountId)
     : (body?.carrierAccountId != null ? Number(body.carrierAccountId) : NaN);
@@ -102,8 +93,8 @@ export default async function handler(req: any, res: any): Promise<void> {
     : defaultStart;
   const limit = Math.min(Math.max(Number(body?.limit ?? 100), 1), 200);
 
-  const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
-
+  // Per user override unlock shipped data on 2026-07-14: marketplace import
+  // semantics are unchanged; this typed adapter now uses the shared DB pool.
   try {
     await assertStoreOrdersSchemaReady(sql, '[carriers/ebay/orders]');
   } catch (err) {
@@ -112,7 +103,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       err instanceof Error ? err.message : err,
     );
     res.status(500).json({ ok: false, error: 'Store orders schema is not ready' });
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
     return;
   }
 
@@ -317,10 +307,10 @@ export default async function handler(req: any, res: any): Promise<void> {
         VALUES (
           ${accountId}, 'ebay', ${externalOrderId}, ${customerOrderId},
           ${orderDate}, ${sourceStatus},
-          ${shipTo as Record<string, unknown> | null},
-          ${items as Array<Record<string, unknown>>},
-          ${totals as Record<string, unknown>},
-          ${o as Record<string, unknown>},
+          ${shipTo === null ? null : sql.json(shipTo as postgres.JSONValue)},
+          ${sql.json(items as postgres.JSONValue)},
+          ${sql.json(totals as postgres.JSONValue)},
+          ${sql.json(o as postgres.JSONValue)},
           NOW(), NOW(), NOW()
         )
         ON CONFLICT (provider, external_order_id) DO UPDATE SET
@@ -379,11 +369,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           orderDate: orderDate ? new Date(orderDate) : null,
           clientId: ebayClientId,
           storeId: syntheticStoreId,
-          customerEmail: shipTo?.email ?? null,
-          shipToName: shipTo?.name ?? null,
-          shipToCity: shipTo?.city ?? null,
-          shipToState: shipTo?.state ?? null,
-          shipToPostalCode: shipTo?.postalCode ?? null,
+          customerEmail: stringOrNull(shipTo?.email),
+          shipToName: stringOrNull(shipTo?.name),
+          shipToCity: stringOrNull(shipTo?.city),
+          shipToState: stringOrNull(shipTo?.state),
+          shipToPostalCode: stringOrNull(shipTo?.postalCode),
           weightOz: weightOzForOrder,
           orderTotal: String((totals as any)?.total ?? 0),
           shippingAmount: String((totals as any)?.shipping ?? 0),
@@ -422,7 +412,5 @@ export default async function handler(req: any, res: any): Promise<void> {
     });
   } catch (err) {
     sendInternalServerError(res, 'carriers/ebay/orders', err);
-  } finally {
-    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }
 }

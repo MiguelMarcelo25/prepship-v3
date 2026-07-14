@@ -1,4 +1,3 @@
-// @ts-nocheck
 // PS-200 S2: v4 mirror of the legacy Vercel Walmart order-pull function —
 // body kept verbatim (replacement-first); only the import paths differ.
 // Pull recent orders from Walmart Marketplace API
@@ -22,7 +21,8 @@
 // Response shape (failure):
 //   { ok: false, error: string, reason?: string }
 
-import postgres from 'postgres';
+import type postgres from 'postgres';
+import { sql } from '../../db/client.js';
 import { assertStoreOrdersSchemaReady } from '../../services/store-orders-schema';
 import {
   hasExistingMarketplaceOrderRow,
@@ -37,34 +37,11 @@ import { corsHeaders } from '../http/cors';
 import { importStoreOrders } from '../../services/store-connector-orchestrator';
 import { buildNormalizedOrderSource } from '../../services/normalized-order-persistence';
 import { upsertNormalizedStoreOrders } from '../../services/store-order-import';
-
-function readBody(req: any): Promise<unknown> {
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try {
-        return Promise.resolve(JSON.parse(req.body));
-      } catch {
-        return Promise.resolve({});
-      }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => {
-      raw += chunk.toString();
-    });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
+import {
+  readNodeJsonBody,
+  type NodeStyleRequest,
+  type NodeStyleResponse,
+} from '../node-handler.js';
 
 // Convert a real UTC Date to a Pacific-time wall-clock string stamped with
 // "Z" — matches the convention ShipStation orders use in our orders table
@@ -86,7 +63,14 @@ function toPacificClockfaceZ(d: Date): string {
   return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}:${get('second')}Z`;
 }
 
-export default async function handler(req: any, res: any): Promise<void> {
+function stringOrNull(value: unknown): string | null {
+  return value == null ? null : String(value);
+}
+
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin, { methods: 'POST, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -114,13 +98,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    res.status(500).json({ error: 'DATABASE_URL not configured' });
-    return;
-  }
-
-  const body = (await readBody(req)) as Record<string, unknown>;
+  const body = await readNodeJsonBody(req);
   // Walmart is a store, so its credentials live in store_accounts now.
   // FE passes storeAccountId; we accept the legacy carrierAccountId name
   // as a fallback for old clients still in flight after a redeploy.
@@ -139,13 +117,8 @@ export default async function handler(req: any, res: any): Promise<void> {
     : defaultStart;
   const limit = Math.min(Math.max(Number(body?.limit ?? 50), 1), 200);
 
-  const sql = postgres(dbUrl, {
-    max: 1,
-    prepare: false,
-    idle_timeout: 5,
-    connect_timeout: 5,
-  });
-
+  // Per user override unlock shipped data on 2026-07-14: marketplace import
+  // semantics are unchanged; this typed adapter now uses the shared DB pool.
   try {
     await assertStoreOrdersSchemaReady(sql, '[carriers/walmart/orders]');
   } catch (err) {
@@ -154,11 +127,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       err instanceof Error ? err.message : err,
     );
     res.status(500).json({ ok: false, error: 'Store orders schema is not ready' });
-    try {
-      await sql.end({ timeout: 1 });
-    } catch {
-      /* ignore */
-    }
     return;
   }
 
@@ -412,10 +380,10 @@ export default async function handler(req: any, res: any): Promise<void> {
         VALUES (
           ${accountId}, 'walmart', ${externalOrderId}, ${customerOrderId},
           ${orderDate}, ${sourceStatus},
-          ${shipTo as Record<string, unknown> | null},
-          ${items as Array<Record<string, unknown>>},
-          ${totals as Record<string, unknown>},
-          ${o as Record<string, unknown>},
+          ${shipTo === null ? null : sql.json(shipTo as postgres.JSONValue)},
+          ${sql.json(items as postgres.JSONValue)},
+          ${sql.json(totals as postgres.JSONValue)},
+          ${sql.json(o as postgres.JSONValue)},
           NOW(), NOW(), NOW()
         )
         ON CONFLICT (provider, external_order_id) DO UPDATE SET
@@ -486,10 +454,10 @@ export default async function handler(req: any, res: any): Promise<void> {
           clientId: walmartClientId,
           storeId: syntheticStoreId,
           customerEmail: null,
-          shipToName: shipTo?.name ?? null,
-          shipToCity: shipTo?.city ?? null,
-          shipToState: shipTo?.state ?? null,
-          shipToPostalCode: shipTo?.postalCode ?? null,
+          shipToName: stringOrNull(shipTo?.name),
+          shipToCity: stringOrNull(shipTo?.city),
+          shipToState: stringOrNull(shipTo?.state),
+          shipToPostalCode: stringOrNull(shipTo?.postalCode),
           weightOz: weightOzForOrder,
           orderTotal: String(orderTotal),
           shippingAmount: String(shippingAmount),
@@ -528,11 +496,5 @@ export default async function handler(req: any, res: any): Promise<void> {
     });
   } catch (err) {
     sendInternalServerError(res, 'carriers/walmart/orders', err);
-  } finally {
-    try {
-      await sql.end({ timeout: 1 });
-    } catch {
-      /* ignore */
-    }
   }
 }

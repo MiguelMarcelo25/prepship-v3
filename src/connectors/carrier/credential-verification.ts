@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Vercel serverless function: verify carrier credentials.
 // All provider implementations are inlined to avoid Vercel's bundler
 // missing nested imports. When the same code lands on the Render backend
@@ -39,13 +38,19 @@
 // After deploy, the new tile shows up in the Add Carrier modal, the verify
 // button works, and there are no other call sites to update.
 
-import postgres from 'postgres';
+import type postgres from 'postgres';
+import { sql as dbSql } from '../../db/client.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
 } from '../../lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../lib/http/cors.js';
 import { sendInternalServerError } from '../../lib/safe-error.js';
+import {
+  readNodeJsonBody,
+  type NodeStyleRequest,
+  type NodeStyleResponse,
+} from '../../lib/node-handler.js';
 // PS-251 (Card 6): block SSRF via caller-supplied carrier apiBase/swsimEndpoint URLs.
 import { assertPublicHttpUrl } from '../../lib/ssrf-guard.js';
 // PS-251 (Card 6): every credential-verify fetch gets an AbortController timeout (no hung upstream).
@@ -923,37 +928,10 @@ export async function verifyProviderCredentials(
   };
 }
 
-function readBody(req: any): Promise<unknown> {
-  // Mirror the body-parsing approach in api/carrier-accounts.ts so behaviour
-  // is consistent across endpoints.
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try {
-        return Promise.resolve(JSON.parse(req.body));
-      } catch {
-        return Promise.resolve({});
-      }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => {
-      raw += chunk.toString();
-    });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
-export default async function handler(req: any, res: any): Promise<void> {
+export default async function handler(
+  req: NodeStyleRequest,
+  res: NodeStyleResponse,
+): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin, { methods: 'POST, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
@@ -981,7 +959,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const body = (await readBody(req)) as Record<string, unknown>;
+  const body = await readNodeJsonBody(req);
   // FE may pass either carrierAccountId (carrier_accounts row) or
   // storeAccountId (store_accounts row). They're separate tables now —
   // see api/store-accounts.ts. We accept both and load from whichever
@@ -997,12 +975,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   let storeLinkError: { code: string; reason: string } | null = null;
 
   if (carrierAccountId !== null || storeAccountId !== null) {
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-      res.status(500).json({ error: 'DATABASE_URL not configured' });
-      return;
-    }
-    const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
+    const sql = dbSql;
     try {
       const useStoreTable = storeAccountId !== null;
       const lookupId = useStoreTable ? storeAccountId : carrierAccountId;
@@ -1046,8 +1019,6 @@ export default async function handler(req: any, res: any): Promise<void> {
     } catch (err) {
       sendInternalServerError(res, 'carriers/verify:account-lookup', err);
       return;
-    } finally {
-      try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
     }
   }
 
@@ -1078,50 +1049,44 @@ export default async function handler(req: any, res: any): Promise<void> {
     // Store-scoped recovery may use only the exact correlated store account.
     // Ambiguous or unlinked rows fail above; there is no newest-active fallback.
     if (!result.ok && exactLinkedStore && carrierAccountId !== null) {
-      const dbUrl = process.env.DATABASE_URL;
-      if (dbUrl) {
-        const sql = postgres(dbUrl, {
-          max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5,
-        });
-        try {
-          const storeCreds = exactLinkedStore.credentials;
-          if (storeCreds && typeof storeCreds === 'object' && !Array.isArray(storeCreds)) {
-            const fallback = storeCreds as Record<string, unknown>;
-            // walmart uses {clientId, clientSecret}; ebay uses
-            // {appId, certId, refreshToken}. Both have at least two
-            // non-empty string fields — that's sufficient signal that
-            // there's something worth retrying with.
-            const credKeys = Object.keys(fallback).filter(
-              (k) => typeof (fallback as any)[k] === 'string' && ((fallback as any)[k] as string).length > 0,
-            );
-            if (credKeys.length >= 2) {
-              const fallbackResult = await verifier(fallback);
-              if (fallbackResult.ok) {
-                await sql`
-                  UPDATE carrier_accounts
-                  SET credentials = ${fallback}, updated_at = NOW()
-                  WHERE id = ${carrierAccountId}
-                `;
-                credentials = fallback;
-                result = {
-                  ...fallbackResult,
-                  meta: {
-                    ...(fallbackResult.meta ?? {}),
-                    credentialSource: 'exact_linked_store',
-                    linkedStoreAccountId: exactLinkedStore.id,
-                  },
-                };
-              }
+      const sql = dbSql;
+      try {
+        const storeCreds = exactLinkedStore.credentials;
+        if (storeCreds && typeof storeCreds === 'object' && !Array.isArray(storeCreds)) {
+          const fallback = storeCreds as Record<string, unknown>;
+          // walmart uses {clientId, clientSecret}; ebay uses
+          // {appId, certId, refreshToken}. Both have at least two
+          // non-empty string fields — that's sufficient signal that
+          // there's something worth retrying with.
+          const credKeys = Object.keys(fallback).filter((key) => {
+            const value = fallback[key];
+            return typeof value === 'string' && value.length > 0;
+          });
+          if (credKeys.length >= 2) {
+            const fallbackResult = await verifier(fallback);
+            if (fallbackResult.ok) {
+              await sql`
+                UPDATE carrier_accounts
+                SET credentials = ${sql.json(fallback as postgres.JSONValue)}, updated_at = NOW()
+                WHERE id = ${carrierAccountId}
+              `;
+              credentials = fallback;
+              result = {
+                ...fallbackResult,
+                meta: {
+                  ...(fallbackResult.meta ?? {}),
+                  credentialSource: 'exact_linked_store',
+                  linkedStoreAccountId: exactLinkedStore.id,
+                },
+              };
             }
           }
-        } catch (fallbackErr) {
-          console.warn(
-            `[carriers/verify] ${provider} exact linked-store recovery failed:`,
-            fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
-          );
-        } finally {
-          try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
         }
+      } catch (fallbackErr) {
+        console.warn(
+          `[carriers/verify] ${provider} exact linked-store recovery failed:`,
+          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
+        );
       }
     }
 
