@@ -10,7 +10,7 @@ import {
   listShipStationV2Labels,
   listShipStationV2Shipments,
 } from '../connectors/carrier/shipstation';
-import { deductInventoryForOrder } from './fulfillment-deductions';
+import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
 import { consumeOutboundPackageInTransaction } from './package-consumption';
 import { ensurePackageConsumptionSchema } from './package-consumption-schema';
 import { getSettingNumber, setSetting } from './settings';
@@ -763,9 +763,11 @@ export async function syncShipments(
       ordersMarkedShipped += rows.length;
       for (const row of rows) {
         try {
-          await deductInventoryForOrder(row, { source: 'shipment_sync' });
+          // Per user override unlock shipped data on 2026-07-14: persist the
+          // retryable event; stock mutation remains in fulfillment-deductions.ts.
+          await enqueueInventoryDeduction(row, { source: 'shipment_sync' });
         } catch (err) {
-          console.warn('[shipment-sync] inventory deduction failed:', err);
+          console.warn('[shipment-sync] inventory deduction enqueue failed:', err);
         }
       }
     }

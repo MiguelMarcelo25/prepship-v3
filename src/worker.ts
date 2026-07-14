@@ -4,10 +4,6 @@ import {
   setWorkerMode,
 } from './services/worker-status';
 import {
-  startSyncScheduler,
-  stopSyncScheduler,
-} from './services/sync-scheduler';
-import {
   startQueuedSyncScheduler,
   stopQueuedSyncScheduler,
 } from './services/sync-job-queue';
@@ -17,12 +13,10 @@ import {
 } from './services/print-queue-worker';
 import { ensureOrdersPerformanceIndexes } from './services/orders-performance-maintenance';
 import { ensureReportingMetricsTables } from './services/reporting-metrics';
-import {
-  startShipStationCarrierAccountSnapshotWorker,
-  stopShipStationCarrierAccountSnapshotWorker,
-} from './services/shipstation-carrier-account-snapshot-worker';
+import { startSyncStalenessWatchdog } from './services/sync-staleness-watchdog';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
+let stopSyncWatchdog: (() => void) | null = null;
 
 function startKeepAliveHeartbeat(): void {
   if (keepAliveTimer) return;
@@ -35,12 +29,9 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[worker] received ${signal}; shutting down`);
   await stopPrintQueueWorker();
   if (env.RUN_SYNC_SCHEDULER) {
-    await stopShipStationCarrierAccountSnapshotWorker();
-    if (env.USE_PG_BOSS_SCHEDULER) {
-      await stopQueuedSyncScheduler();
-    } else {
-      stopSyncScheduler();
-    }
+    await stopQueuedSyncScheduler();
+    stopSyncWatchdog?.();
+    stopSyncWatchdog = null;
   }
   if (keepAliveTimer) {
     clearInterval(keepAliveTimer);
@@ -80,7 +71,7 @@ process.on('uncaughtException', (err) => {
 async function main(): Promise<void> {
   console.log('[worker] PrepShip worker booting');
   console.log(
-    `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; RUN_PRINT_QUEUE_WORKER=${env.RUN_PRINT_QUEUE_WORKER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}; USE_PG_BOSS_SCHEDULER=${env.USE_PG_BOSS_SCHEDULER}`
+    `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; RUN_PRINT_QUEUE_WORKER=${env.RUN_PRINT_QUEUE_WORKER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}`
   );
 
   if (env.WORKER_PLACEHOLDER) {
@@ -117,16 +108,11 @@ async function main(): Promise<void> {
   }
 
   if (env.RUN_SYNC_SCHEDULER) {
-    startShipStationCarrierAccountSnapshotWorker();
-    if (env.USE_PG_BOSS_SCHEDULER) {
-      console.log('[worker] starting pg-boss sync scheduler');
-      await startQueuedSyncScheduler();
-    } else {
-      console.warn(
-        '[worker] USE_PG_BOSS_SCHEDULER=false; ShipStation imports are disabled, starting ancillary scheduler only',
-      );
-      startSyncScheduler({ mode: 'worker-scheduler' });
-    }
+    // Audit 3.2: the worker is the sole scheduler owner. The watchdog stays
+    // process-local by design, while all work cadence is durable in pg-boss.
+    console.log('[worker] starting durable pg-boss sync scheduler');
+    await startQueuedSyncScheduler();
+    stopSyncWatchdog = startSyncStalenessWatchdog();
   } else {
     if (env.RUN_PRINT_QUEUE_WORKER) {
       console.log('[worker] RUN_SYNC_SCHEDULER=false; print queue worker running');

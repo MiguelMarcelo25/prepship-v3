@@ -9,13 +9,12 @@
 //     `WHERE order_status = 'awaiting_shipment'`, so a shipped/cancelled order can NEVER be
 //     re-flipped through this path. This is defense-in-depth (a STRENGTHENING) for any future
 //     non-route caller; the route already guarantees awaiting via assertOrderEditable.
-//   - deductInventoryForOrder is called UNCHANGED, so the INVENTORY_AUTO_DEDUCT kill switch still
-//     governs deduction. Inventory-deduction + ShipStation-notify failures are logged, never
-//     thrown (the local flip already happened; a retry would double-ack).
+//   - Inventory intent is durable in fulfillment_outbox; its processor calls
+//     deductInventoryForOrder unchanged, so INVENTORY_AUTO_DEDUCT still governs execution.
 import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { orders } from '../../db/schema/orders';
-import { deductInventoryForOrder } from '../fulfillment-deductions';
+import { enqueueInventoryDeduction } from './inventory-deduction-outbox';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../../lib/shipstation/labels';
 import { loadClientCredentials } from '../../lib/shipstation/credentials';
 import { confirmShipmentDirectNow, resolveShipmentConfirmationProvider } from './outbox';
@@ -64,11 +63,13 @@ export async function markOrderShippedExternally(
 
   if (flag) {
     try {
-      await deductInventoryForOrder(order, {
+      // Per user override unlock shipped data on 2026-07-14: enqueue only;
+      // outbox retries delegate to the unchanged inventory deduction owner.
+      await enqueueInventoryDeduction(order, {
         source: input.source ? `external:${input.source}` : 'external',
       });
     } catch (err) {
-      console.warn('[mark-shipped-externally] inventory deduction failed:', err);
+      console.warn('[mark-shipped-externally] inventory deduction enqueue failed:', err);
     }
   }
 

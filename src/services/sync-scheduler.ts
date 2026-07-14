@@ -11,56 +11,31 @@ import {
   enqueueMissingShipmentConfirmations,
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
+import { enqueueMissingInventoryDeductions } from './fulfillment/inventory-deduction-outbox';
 import {
-  recordWorkerHeartbeat,
   recordWorkerJobFailure,
   recordWorkerJobSkipped,
   recordWorkerJobStart,
   recordWorkerJobSuccess,
-  setWorkerMode,
 } from './worker-status';
-import { startSyncStalenessWatchdog } from './sync-staleness-watchdog';
 import { refreshReportingMetrics } from './reporting-metrics';
 import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
 import { runShipmentTrackingPollOnce } from './shipment-tracking';
 import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';
-import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
 import {
   getSyncJobLaneBlocker,
   syncJobLaneFor,
   type SyncJobLane,
 } from './sync-job-lanes';
 
-// Legacy interval scheduler for ancillary jobs. PS-417 moved ShipStation
-// order/shipment execution to the pg-boss worker lane; this module no longer
-// starts provider-import timers.
+// Audit 3.2: handler-only module. Durable cadence and cross-process admission
+// live in sync-job-queue.ts/pg-boss; this file must not start process-local work timers.
 
-const SHOPIFY_ORDER_SYNC_INTERVAL_MS = 3 * 60 * 1000;
-// Rate backfill is expensive (one ShipStation call per order) so fire it
-// less often. maxAgeHours inside the service keeps it cheap — orders with
-// a fresh rate are skipped automatically.
-const RATE_BACKFILL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-// Inventory enrichment cadence — cheap SQL-only scan vs heavy ShipStation
-// product-catalog pulls. The user's "no img" pain comes from new SKUs
-// landing in orders before the manual import button gets clicked, so we
-// run the orders → inventory seed often (every 30 min) and the heavier
-// ShipStation /products pull less often (every 60 min). Image columns
-// are coalesce-protected on both paths, so re-running is safe even when
-// upstream returns null.
-const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
-const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
-const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedClassifier; // 3 minutes
-const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking; // 15 minutes
-const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees; // daily (legacy Vercel cron parity)
-const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 const EXTERNAL_SHIPPED_CLASSIFIER_LIMIT = 10;
 const EXTERNAL_SHIPPED_CLASSIFIER_LOOKUP_TIMEOUT_MS = 12_000;
 const EXTERNAL_SHIPPED_CLASSIFIER_TIME_BUDGET_MS = 4 * 60_000;
-const REAP_RATE_JOBS_INTERVAL_MS = 5 * 60 * 1000; // 5 min — durable cleanup of orphaned rate-job stamps
 
-// Serialize runs so overlapping intervals don't pile up ShipStation calls.
+// Serialize handler invocations so manual and queued callers cannot overlap.
 let shopifyOrderSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
@@ -70,17 +45,6 @@ let externalShippedClassifierRunning = false;
 let shipmentTrackingRunning = false;
 let walmartFeesRunning = false;
 const activeSchedulerJobsByLane = new Map<SyncJobLane, string>();
-let shopifyOrderTimer: NodeJS.Timeout | null = null;
-let backfillTimer: NodeJS.Timeout | null = null;
-let inventoryImportTimer: NodeJS.Timeout | null = null;
-let syncProductsTimer: NodeJS.Timeout | null = null;
-let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
-let reportingRefreshTimer: NodeJS.Timeout | null = null;
-let externalShippedClassifierTimer: NodeJS.Timeout | null = null;
-let shipmentTrackingTimer: NodeJS.Timeout | null = null;
-let walmartFeesTimer: NodeJS.Timeout | null = null;
-let heartbeatTimer: NodeJS.Timeout | null = null;
-let reapRateJobsTimer: NodeJS.Timeout | null = null;
 
 async function withSchedulerAdvisoryLock<T>(
   name: string,
@@ -106,11 +70,6 @@ async function withSchedulerAdvisoryLock<T>(
     reserved.release();
   }
 }
-
-function isRateBackfillSchedulerEnabled(): boolean {
-  return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
-}
-
 async function runHeavySchedulerJob<T>(
   name: string,
   fn: () => Promise<T>,
@@ -307,8 +266,11 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
       await recordWorkerJobStart('fulfillment outbox');
       try {
         const recoveryResult = await enqueueMissingShipmentConfirmations({ limit: 25 });
+        // Per user override unlock shipped data on 2026-07-14: repair missing
+        // deduction intent only; execution remains in the kill-switched owner.
+        const inventoryRecovered = await enqueueMissingInventoryDeductions(100);
         const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
-        const combinedResult = { ...outboxResult, autoRecovered: recoveryResult };
+        const combinedResult = { ...outboxResult, autoRecovered: recoveryResult, inventoryRecovered };
         await recordWorkerJobSuccess('fulfillment outbox', startedAt, combinedResult);
         return combinedResult;
       } catch (err) {
@@ -317,10 +279,11 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
       }
     });
     if (!result) return;
-    if (result.autoRecovered.enqueued > 0 || result.processed > 0) {
+    if (result.autoRecovered.enqueued > 0 || result.inventoryRecovered > 0 || result.processed > 0) {
       console.log(
         `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ` +
-        `${result.processed} processed, ${result.autoRecovered.enqueued} auto-recovered`
+        `${result.processed} processed, ${result.autoRecovered.enqueued} confirmations recovered, ` +
+        `${result.inventoryRecovered} inventory events recovered`
       );
     }
   } catch (err) {
@@ -479,247 +442,4 @@ export async function runWalmartFeesTick(): Promise<void> {
   } finally {
     walmartFeesRunning = false;
   }
-}
-
-export function startSyncScheduler(
-  options: { mode?: 'api-scheduler' | 'worker-scheduler' } = {}
-): void {
-  const mode = options.mode ?? 'api-scheduler';
-  void setWorkerMode(mode);
-  if (!heartbeatTimer) {
-    heartbeatTimer = setInterval(() => {
-      void recordWorkerHeartbeat();
-    }, 30_000);
-  }
-  // PS-265 (secondary): active staleness watchdog. Complements PS-265 core's withDeadline
-  // self-heal by NOTICING a stale heartbeat or a job held past its deadline — emits a
-  // structured `[sync-watchdog]` alert so a wedged sync surfaces without a manual restart.
-  startSyncStalenessWatchdog();
-
-  if (!fulfillmentOutboxTimer) {
-    console.log(
-      `[scheduler] fulfillment outbox enabled - every ${FULFILLMENT_OUTBOX_INTERVAL_MS / 1000}s`
-    );
-    setTimeout(() => {
-      void runFulfillmentOutboxTick();
-      fulfillmentOutboxTimer = setInterval(
-        () => void runFulfillmentOutboxTick(),
-        FULFILLMENT_OUTBOX_INTERVAL_MS
-      );
-    }, STARTUP_DELAY_MS + 30_000);
-  }
-
-  if (!reportingRefreshTimer) {
-    console.log(
-      `[scheduler] reporting metrics refresh enabled - every ${REPORTING_REFRESH_INTERVAL_MS / 60000}m`
-    );
-    setTimeout(() => {
-      void runReportingRefreshTick();
-      reportingRefreshTimer = setInterval(
-        () => void runReportingRefreshTick(),
-        REPORTING_REFRESH_INTERVAL_MS
-      );
-    }, STARTUP_DELAY_MS + 4 * 60 * 1000);
-  }
-
-  if (!externalShippedClassifierTimer) {
-    if (env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER) {
-      console.log(
-        `[scheduler] external-shipped classifier enabled - every ${EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS / 60000}m; ` +
-        `autoApply=${env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true}`
-      );
-      setTimeout(() => {
-        void runExternalShippedClassifierTick();
-        externalShippedClassifierTimer = setInterval(
-          () => void runExternalShippedClassifierTick(),
-          EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS
-        );
-      }, STARTUP_DELAY_MS + 6 * 60 * 1000);
-    } else {
-      console.log(
-        '[scheduler] external-shipped classifier disabled; set ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true to automate PS-056 dry-run/apply'
-      );
-    }
-  }
-
-  if (!shipmentTrackingTimer) {
-    if (env.ENABLE_SHIPMENT_TRACKING_SCHEDULER && env.SHIPSTATION_API_KEY_V2) {
-      console.log(
-        `[scheduler] shipment tracking poll enabled - every ${SHIPMENT_TRACKING_INTERVAL_MS / 60000}m; ` +
-        `autoRetire=${env.TRACKING_AUTO_RETIRE_ENABLED === true}`
-      );
-      setTimeout(() => {
-        void runShipmentTrackingTick();
-        shipmentTrackingTimer = setInterval(
-          () => void runShipmentTrackingTick(),
-          SHIPMENT_TRACKING_INTERVAL_MS
-        );
-      }, STARTUP_DELAY_MS + 7 * 60 * 1000);
-    } else {
-      console.log(
-        '[scheduler] shipment tracking poll disabled; set ENABLE_SHIPMENT_TRACKING_SCHEDULER=true (+ SHIPSTATION_API_KEY_V2) to poll delivery status for queued labels'
-      );
-    }
-  }
-
-  if (!walmartFeesTimer) {
-    if (env.ENABLE_WALMART_FEES_SCHEDULER) {
-      console.log(
-        `[scheduler] walmart fees sync enabled - every ${WALMART_FEES_INTERVAL_MS / 3600000}h (legacy Vercel cron replacement)`
-      );
-      walmartFeesTimer = setTimeout(() => {
-        void runWalmartFeesTick();
-        walmartFeesTimer = setInterval(
-          () => void runWalmartFeesTick(),
-          WALMART_FEES_INTERVAL_MS
-        );
-      }, STARTUP_DELAY_MS + 9 * 60 * 1000);
-    } else {
-      console.log(
-        '[scheduler] walmart fees sync disabled via ENABLE_WALMART_FEES_SCHEDULER=false'
-      );
-    }
-  }
-
-  if (!shopifyOrderTimer) {
-    if (env.SHOPIFY_SYNC_ENABLED) {
-      console.log(
-        `[scheduler] Shopify direct store sync enabled - every ${SHOPIFY_ORDER_SYNC_INTERVAL_MS / 1000}s`
-      );
-      setTimeout(() => {
-        void runShopifyOrderSyncTick();
-        shopifyOrderTimer = setInterval(
-          () => void runShopifyOrderSyncTick(),
-          SHOPIFY_ORDER_SYNC_INTERVAL_MS
-        );
-      }, STARTUP_DELAY_MS + 45_000);
-    } else {
-      console.log(
-        '[scheduler] Shopify direct store sync disabled via SHOPIFY_SYNC_ENABLED=false'
-      );
-    }
-  }
-
-  // ShipStation-backed ancillary jobs still need the main credentials. The
-  // pg-boss order/shipment lane is independent and may use per-client creds.
-  if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
-    console.log(
-      '[scheduler] SHIPSTATION_API_KEY/SECRET not set; ShipStation ancillary jobs disabled'
-    );
-    return;
-  }
-
-  // PS-417: this legacy scheduler owns ancillary jobs only. ShipStation order
-  // and shipment execution is exclusively owned by the pg-boss worker lane;
-  // enqueue cadence must not be confused with a completed provider sync.
-  console.log('[scheduler] ShipStation imports delegated to the pg-boss sync lane');
-
-  const rateBackfillEnabled = isRateBackfillSchedulerEnabled();
-
-  if (rateBackfillEnabled) {
-    console.log(
-      `[scheduler] rate backfill enabled — every ${RATE_BACKFILL_INTERVAL_MS / 1000}s`
-    );
-    // Rate backfill — fires every 10 min, fetches rates for any awaiting order
-    // that has no rate yet OR whose saved rate is past the backend cache TTL.
-    // Start 3 min after boot so the first order-sync has time to pull any new
-    // orders in before we try to rate them.
-    setTimeout(() => {
-      runBackfillTick();
-      backfillTimer = setInterval(runBackfillTick, RATE_BACKFILL_INTERVAL_MS);
-    }, STARTUP_DELAY_MS + 3 * 60 * 1000);
-  } else {
-    console.log(
-      '[scheduler] rate backfill disabled; run /rates/backfill-best manually or set ENABLE_RATE_BACKFILL_SCHEDULER=true'
-    );
-  }
-
-  // 2026-05-13: inventory enrichment ticks. Both are gated by
-  // SHIPSTATION_API_KEY/SECRET being set (the broader scheduler
-  // gate above) — without creds the products pull would just fail,
-  // and without orders syncing in the first place the from-orders
-  // seed would have nothing new to scan.
-  //
-  // Staggered start so the import-from-orders tick can run first
-  // (it's the data source: SKUs appear in orders before they appear
-  // in ShipStation /products). Both tick functions are self-
-  // serializing via running-flag guards, so overlap is harmless.
-  console.log(
-    `[scheduler] inventory enrichment enabled — import-from-orders every ${INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS / 60000}m, sync-products every ${INVENTORY_SYNC_PRODUCTS_INTERVAL_MS / 60000}m`
-  );
-  setTimeout(() => {
-    void runInventoryImportFromOrders();
-    inventoryImportTimer = setInterval(
-      () => void runInventoryImportFromOrders(),
-      INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS
-    );
-  }, STARTUP_DELAY_MS + 2 * 60 * 1000); // 2 min after boot — let order sync run first
-
-  setTimeout(() => {
-    void runSyncProductsTick();
-    syncProductsTimer = setInterval(
-      () => void runSyncProductsTick(),
-      INVENTORY_SYNC_PRODUCTS_INTERVAL_MS
-    );
-  }, STARTUP_DELAY_MS + 5 * 60 * 1000); // 5 min after boot — let the from-orders seed run first
-
-  // PS-120 leak fix: reap orphaned rate-job stamps on a steady cadence — and once ~1 min after boot,
-  // which also collects any stamps orphaned by THIS process's previous crash/redeploy. Runs
-  // unconditionally; it's a cheap DB cleanup independent of whether the rate backfill is enabled.
-  setTimeout(() => {
-    void runReapStaleRateJobsTick();
-    void runRateCacheEvictionTick(); // audit R-8: cache lifecycle rides the same cadence
-    reapRateJobsTimer = setInterval(
-      () => {
-        void runReapStaleRateJobsTick();
-        void runRateCacheEvictionTick();
-      },
-      REAP_RATE_JOBS_INTERVAL_MS
-    );
-  }, STARTUP_DELAY_MS + 60 * 1000); // 1 min after boot
-}
-
-export function stopSyncScheduler(): void {
-  if (shopifyOrderTimer) {
-    clearInterval(shopifyOrderTimer);
-    shopifyOrderTimer = null;
-  }
-  if (backfillTimer) {
-    clearInterval(backfillTimer);
-    backfillTimer = null;
-  }
-  if (reapRateJobsTimer) {
-    clearInterval(reapRateJobsTimer);
-    reapRateJobsTimer = null;
-  }
-  if (inventoryImportTimer) {
-    clearInterval(inventoryImportTimer);
-    inventoryImportTimer = null;
-  }
-  if (syncProductsTimer) {
-    clearInterval(syncProductsTimer);
-    syncProductsTimer = null;
-  }
-  if (fulfillmentOutboxTimer) {
-    clearInterval(fulfillmentOutboxTimer);
-    fulfillmentOutboxTimer = null;
-  }
-  if (reportingRefreshTimer) {
-    clearInterval(reportingRefreshTimer);
-    reportingRefreshTimer = null;
-  }
-  if (externalShippedClassifierTimer) {
-    clearInterval(externalShippedClassifierTimer);
-    externalShippedClassifierTimer = null;
-  }
-  if (shipmentTrackingTimer) {
-    clearInterval(shipmentTrackingTimer);
-    shipmentTrackingTimer = null;
-  }
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-  void setWorkerMode('disabled');
-  console.log('[scheduler] stopped');
 }

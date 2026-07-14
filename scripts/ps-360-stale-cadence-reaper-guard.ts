@@ -72,9 +72,10 @@ check('stale queued fulfillment-outbox cadence rows are explicitly collapsible',
   /queued fulfillment-outbox[\s\S]*wake-up ticks/.test(reaper) &&
   /ACTIVE fulfillment jobs remain excluded/.test(reaper));
 check('worker runs stale cadence reaper on boot',
-  /reapStaleQueuedCadenceJobs\(\)\.then/.test(queue));
-check('worker runs stale cadence reaper every 10 minutes',
-  /setInterval\(\(\) => void reapStaleQueuedCadenceJobs\(\), 10 \* 60_000\)/.test(queue));
+  /const queuedReap = await reapStaleQueuedCadenceJobs\(\)/.test(queue));
+check('worker runs stale cadence reaper through durable 10-minute pg-boss maintenance',
+  /registerWorker\(JOBS\.queueMaintenance,[\s\S]*reapStaleQueuedCadenceJobs\(\)/.test(queue) &&
+  /JOBS\.queueMaintenance,[\s\S]*SCHEDULE_CRON\.everyTenMinutes/.test(queue));
 check(
   'package.json wires test:ps-360-stale-cadence-reaper',
   /"test:ps-360-stale-cadence-reaper"\s*:\s*"tsx scripts\/ps-360-stale-cadence-reaper-guard\.ts"/.test(pkg),

@@ -52,7 +52,7 @@ import {
   serviceCodeToLabel,
   type MockLabelData,
 } from './mock-label-generator';
-import { deductInventoryForOrder } from './fulfillment-deductions';
+import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
 import { packages } from '../db/schema/packages';
 import {
   carrierConnectorSupportsVoid,
@@ -1162,28 +1162,30 @@ async function markOrderShipped(
 
 }
 
-async function recordFulfillmentDeductions(args: {
+async function enqueueFulfillmentDeductions(args: {
   order: typeof orders.$inferSelect;
-  shipmentId: number;
+  shipmentId: number | null;
   source: string;
   timer?: LabelTimer;
 }) {
   try {
-    const deductInventory = () => deductInventoryForOrder(args.order, {
+    const enqueueInventory = () => enqueueInventoryDeduction(args.order, {
       shipmentId: args.shipmentId,
       source: args.source,
     });
 
     if (args.timer) {
-      await args.timer.task('inventory ledger writes', deductInventory);
+      await args.timer.task('enqueue inventory deduction', enqueueInventory);
     } else {
-      await deductInventory();
+      await enqueueInventory();
     }
     // NOTE: the bundle MEMBER deduct-once fan-out (PS-312 S6) is NOT here — it is chained AFTER the
     // link keystone in createLabelV2Impl, so it can never race the bundle stamp into a silent
-    // under-deduct. This trigger only deducts the primary's own inventory.
+    // under-deduct. This event covers only the primary's own inventory.
   } catch (err) {
-    console.warn('[labels] inventory deduction failed:', err);
+    // Per user override unlock shipped data on 2026-07-14: execution is never
+    // fire-and-forget. The durable outbox recovery scan repairs this insert gap.
+    console.warn('[labels] inventory deduction enqueue failed; recovery scan will retry:', err);
   }
 }
 
@@ -1363,12 +1365,12 @@ async function persistShopifyPurchasedLabel(input: {
     await input.timer.task('markOrderShipped', () => markOrderShipped(input.order.id, created.trackingNumber, { cleanupQueue: false, tx }));
     return shipmentId;
   });
-  input.timer.background('inventory deduction', () => recordFulfillmentDeductions({
+  await enqueueFulfillmentDeductions({
     order: input.order,
     shipmentId: localShipmentId,
     source: SHOPIFY_SHIPPING_PROVIDER,
     timer: input.timer,
-  }));
+  });
   try {
     await input.timer.task('enqueue Shopify confirmation state', () => enqueueShipmentConfirmation({
       order: {
@@ -1998,7 +2000,7 @@ async function createLabelV2Impl(
 
     const createdAt = new Date();
     await ensureShipmentsSelectedRateCostColumn();
-    await db
+    const [localMockShipment] = await db
       .insert(shipments)
       .values({
         orderId: order.id,
@@ -2030,15 +2032,18 @@ async function createLabelV2Impl(
         source: 'test_offline',
         voided: false,
         isReturn: false,
-      });
+      })
+      .returning({ id: shipments.id });
 
     await timer.task('markOrderShipped', () => markOrderShipped(order.id, fakeTracking, { cleanupQueue: false }));
-    timer.background('inventory deduction', () => recordFulfillmentDeductions({
+    await enqueueFulfillmentDeductions({
       order,
-      shipmentId: fakeShipmentId,
+      // fulfillment_outbox.shipment_id references the local shipment PK, not
+      // the synthetic provider label_shipment_id returned to the test caller.
+      shipmentId: localMockShipment?.id ?? null,
       source: 'test_label',
       timer,
-    }));
+    });
 
     timer.done('response ready');
     return {
@@ -2302,7 +2307,7 @@ async function createLabelV2Impl(
   // PS-248 (Per user override unlock shipped data on 2026-06-16): persist the shipment AND flip the
   // order to 'shipped' in ONE transaction, so a crash between them can't orphan a shipment row while
   // the order stays awaiting (torn state / broken invariant). The external label buy already happened
-  // above; this txn is DB-only + short. recordFulfillmentDeductions (below) stays its own unit.
+  // above; this txn is DB-only + short. enqueueFulfillmentDeductions stays its own unit.
   // Audit C2/1.20: a persist failure AFTER a successful buy is the exact crash
   // window — the label exists at the provider and is unrecorded locally. Mark
   // reconcile_required so every future purchase for this order fails closed
@@ -2363,12 +2368,12 @@ async function createLabelV2Impl(
     state: 'completed',
     shipmentId: localShipmentId,
   });
-  timer.background('inventory deduction', () => recordFulfillmentDeductions({
+  await enqueueFulfillmentDeductions({
     order,
     shipmentId: localShipmentId,
     source: 'label',
     timer,
-  }));
+  });
   // PS-220 (realized house-margin): SHIPP is DRP's house carrier. After the committed ship txn, freeze
   // the captured margin into the order_competitive_rate sidecar — it READS the projected next-best stamp
   // (best_rate_json), never re-fetches. Best-effort + a SEPARATE write OUTSIDE the locked ship txn —
@@ -2406,15 +2411,15 @@ async function createLabelV2Impl(
           // PS-312 S6 deduct-once: now that the bundle is stamped 'labeled' (the await above committed
           // it), deduct every OTHER member exactly once — CHAINED after the stamp in this SAME task so
           // it can never race the link into a silent under-deduct. Co-dependent on this keystone (it
-          // requires BUNDLE_DEDUCT_ONCE too). Reuses the locked deductInventoryForOrder owner unchanged
-          // (still INVENTORY_AUTO_DEDUCT-gated + ship-ledger idempotent). Buys no postage; never marks
-          // orders shipped.
+          // requires BUNDLE_DEDUCT_ONCE too). The durable outbox delegates to the locked
+          // deductInventoryForOrder owner (still INVENTORY_AUTO_DEDUCT-gated + ledger-idempotent).
+          // Buys no postage; never marks orders shipped.
           if (env.BUNDLE_DEDUCT_ONCE) {
             await deductBundleMembersOnce(
               order.id,
               localShipmentId,
               (ids) => db.select().from(orders).where(inArray(orders.id, ids)),
-              deductInventoryForOrder,
+              enqueueInventoryDeduction,
             );
           }
         })

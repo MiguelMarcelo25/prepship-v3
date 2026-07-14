@@ -26,9 +26,6 @@ export const SYNC_CADENCE_MS = {
   walmartFees: 24 * 60 * 60 * 1000,
 } as const;
 
-/** Delay before the first scheduled enqueue after process start. */
-export const SYNC_STARTUP_DELAY_MS = 15 * 1000;
-
 /**
  * Cadence in whole minutes, DERIVED from SYNC_CADENCE_MS — for the status endpoint / UI.
  * Keys mirror the legacy `cadenceMinutes` status payload exactly (orders, shipments,

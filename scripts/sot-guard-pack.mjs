@@ -18,6 +18,7 @@ const REQUIRED_GUARDS = [
   'test:ps-321-ratebrowsermodal-thin-ui',
   'test:ps-329-orders-wrapper-sot-cleanup',
   'test:audit-orders-service-boundary',
+  'test:audit-pg-boss-inventory-outbox',
 ];
 
 const npmCli = process.env.npm_execpath;

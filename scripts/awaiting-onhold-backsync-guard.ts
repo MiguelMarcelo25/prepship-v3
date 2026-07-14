@@ -45,7 +45,7 @@ check('CatchUpOrderStatus type includes on_hold/awaiting_payment/pending_fulfill
 // outside that branch so they never deduct stock.
 check("catch-up inventory deduction stays gated to orderStatus === 'shipped'",
   /if \(orderStatus === 'shipped'\) \{/.test(src) &&
-  /deductInventoryForOrder\(row, \{ source: 'order_sync_status' \}\)/.test(src));
+  /enqueueInventoryDeduction\(row, \{ source: 'order_sync_status' \}\)/.test(src));
 
 if (failures > 0) {
   console.error(`\nFAIL awaiting on-hold back-sync guard (${failures} failing)`);

@@ -8,6 +8,7 @@ function read(path) {
 
 const service = read('src/services/shopify-order-sync.ts');
 const scheduler = read('src/services/sync-scheduler.ts');
+const queue = read('src/services/sync-job-queue.ts');
 const env = read('src/lib/env.ts');
 const migration = read('drizzle/0056_store_account_sync_state.sql');
 
@@ -19,7 +20,8 @@ assert(service.includes('sync_cursor_at'), 'Shopify sync must advance incrementa
 assert(service.includes('last_sync_error'), 'Shopify sync must record per-store sync errors');
 assert(env.includes('SHOPIFY_SYNC_ENABLED'), 'env must expose SHOPIFY_SYNC_ENABLED gate');
 assert(scheduler.includes('syncShopifyOrders'), 'sync scheduler must invoke Shopify order sync');
-assert(scheduler.includes('SHOPIFY_SYNC_ENABLED'), 'sync scheduler must keep Shopify sync behind env gate');
+assert(queue.includes('env.SHOPIFY_SYNC_ENABLED'), 'durable scheduler must keep Shopify sync behind env gate');
+assert(queue.includes('SCHEDULE_CRON.everyThreeMinutes'), 'Shopify sync must use durable three-minute pg-boss cadence');
 for (const column of ['sync_anchor_at', 'sync_cursor_at', 'last_synced_at', 'last_sync_error']) {
   assert(migration.includes(column), `migration must add ${column}`);
 }

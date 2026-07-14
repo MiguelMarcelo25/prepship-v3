@@ -31,7 +31,7 @@ assert.match(
 assert.match(
   syncScheduler,
   /runExternalShippedClassifierTick/,
-  'interval scheduler must include an external-shipped classifier tick.',
+  'handler module must include an external-shipped classifier tick.',
 );
 assert.match(
   syncScheduler,
@@ -75,8 +75,8 @@ assert.match(
 );
 assert.match(
   jobQueue,
-  /externalShippedClassifier/,
-  'pg-boss scheduler must register/enqueue the external-shipped classifier job.',
+  /JOBS\.externalShippedClassifier,[\s\S]*SCHEDULE_CRON\.everyThreeMinutes/,
+  'pg-boss scheduler must durably schedule the external-shipped classifier job.',
 );
 assert.match(
   jobQueue,

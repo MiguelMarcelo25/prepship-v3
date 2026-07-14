@@ -51,10 +51,12 @@ check('job exactly at stuck threshold is NOT stuck',
 check('thresholds are sane (stuck > stale, both positive)',
   SYNC_JOB_STUCK_SECONDS > SYNC_HEARTBEAT_STALE_SECONDS && SYNC_HEARTBEAT_STALE_SECONDS > 0);
 
-// ── wiring: scheduler starts the watchdog; watchdog reads persisted status + alerts ──
-const scheduler = read('src/services/sync-scheduler.ts');
-check('scheduler imports startSyncStalenessWatchdog', scheduler.includes("from './sync-staleness-watchdog'"));
-check('scheduler starts the watchdog in startSyncScheduler', /startSyncStalenessWatchdog\(\)/.test(scheduler));
+// ── wiring: worker starts the watchdog; watchdog reads persisted status + alerts ──
+const worker = read('src/worker.ts');
+check('worker imports startSyncStalenessWatchdog', worker.includes("from './services/sync-staleness-watchdog'"));
+check('worker starts and stops the independent watchdog',
+  /stopSyncWatchdog = startSyncStalenessWatchdog\(\)/.test(worker) &&
+  /stopSyncWatchdog\?\.\(\)/.test(worker));
 
 const watchdog = read('src/services/sync-staleness-watchdog.ts');
 check('watchdog reads the persisted worker snapshot', watchdog.includes('getPersistedWorkerStatus'));

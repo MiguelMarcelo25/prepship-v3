@@ -249,16 +249,9 @@ process.on('uncaughtException', (err) => {
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`API listening on http://localhost:${info.port}`);
-  // Runtime split: the Web API should serve user traffic, while the Render
-  // Worker owns sync/reporting jobs once RUN_SYNC_SCHEDULER is disabled here.
-  if (env.RUN_SYNC_SCHEDULER) {
-    console.log('[runtime] RUN_SYNC_SCHEDULER=true; starting API scheduler');
-    void import('./services/sync-scheduler').then(({ startSyncScheduler }) =>
-      startSyncScheduler({ mode: 'api-scheduler' })
-    );
-  } else {
-    console.log('[runtime] RUN_SYNC_SCHEDULER=false; API scheduler disabled');
-  }
+  // Audit 3.2: the API never owns background cadence. RUN_SYNC_SCHEDULER is
+  // consumed only by worker.ts, where pg-boss provides cross-process admission.
+  console.log('[runtime] API scheduler disabled; durable cadence is worker-owned');
 
   if (env.SHIPMENT_SYNC_WATCHDOG_ENABLED) {
     console.log('[runtime] SHIPMENT_SYNC_WATCHDOG_ENABLED=true; starting API-side shipment watchdog');

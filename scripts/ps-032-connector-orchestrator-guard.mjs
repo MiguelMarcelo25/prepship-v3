@@ -60,6 +60,7 @@ const shipStationCarrierAccountCache = read('src/services/shipstation-carrier-ac
 const shipStationCarrierSnapshots = read('src/services/shipstation-carrier-account-snapshots.ts');
 const shipStationCarrierSnapshotWorker = read('src/services/shipstation-carrier-account-snapshot-worker.ts');
 const workerEntry = read('src/worker.ts');
+const syncJobQueue = read('src/services/sync-job-queue.ts');
 const printQueueWorker = read('src/services/print-queue-worker.ts');
 const verifyGroundSaverScript = read('scripts/verify-ground-saver-fix.ts');
 const recoverMarketplaceNotificationsScript = read('scripts/recover-marketplace-notifications.ts');
@@ -478,10 +479,11 @@ assert(
 assert(
   shipStationCarrierSnapshotWorker.includes('pg_try_advisory_lock') &&
     shipStationCarrierSnapshotWorker.includes('refreshDueShipStationCarrierAccountSnapshots') &&
-    workerEntry.includes('startShipStationCarrierAccountSnapshotWorker') &&
-    workerEntry.includes('stopShipStationCarrierAccountSnapshotWorker') &&
+    syncJobQueue.includes('runShipStationCarrierAccountSnapshotTick') &&
+    syncJobQueue.includes('JOBS.carrierAccountSnapshots') &&
+    !workerEntry.includes('startShipStationCarrierAccountSnapshotWorker') &&
     !printQueueWorker.includes('ShipStationCarrierAccountSnapshotWorker'),
-  'the general worker alone must refresh durable ShipStation carrier snapshots under an advisory lock',
+  'the durable pg-boss worker must refresh ShipStation carrier snapshots under an advisory lock',
 );
 assert(
   verifyGroundSaverScript.includes('listCarrierAccounts') &&

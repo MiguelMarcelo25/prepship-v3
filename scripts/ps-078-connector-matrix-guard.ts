@@ -79,9 +79,14 @@ for (const carrier of ['fedex', 'usps', 'shipengine', 'ebay_shipping', 'amazon_s
     !r.certified && r.labelEndpoint === 'none' && /rates-only/.test(r.reason));
 }
 // Registered-but-stub store source → label OK but confirmation explicit not_supported (never null).
-for (const source of ['shopify', 'amazon'] as const) {
-  const r = certifyCombo(source, 'ups');
-  check(`${source} source (stub): confirmation not_supported, not null`,
+{
+  const r = certifyCombo('shopify', 'ups');
+  check('shopify source: live confirmation remains certified',
+    r.certified && r.confirmationState === 'pending' && r.labelEndpoint === 'carrier_vercel');
+}
+{
+  const r = certifyCombo('amazon', 'ups');
+  check('amazon source (stub): confirmation not_supported, not null',
     !r.certified && r.confirmationState === 'not_supported' && r.labelEndpoint === 'carrier_vercel');
 }
 
@@ -154,9 +159,10 @@ check('legacy label endpoint carries NO confirmation machinery',
 // net (delivers + auto-recovers any missed confirmation without manual action)
 // is the scheduler tick. Lock it so it can't be silently removed.
 const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
-check('scheduler runs the fulfillment outbox on a 1-minute interval',
-  /FULFILLMENT_OUTBOX_INTERVAL_MS\s*=\s*60\s*\*\s*1000/.test(scheduler) &&
-  /setInterval\([\s\S]{0,80}?runFulfillmentOutboxTick[\s\S]{0,40}?FULFILLMENT_OUTBOX_INTERVAL_MS/.test(scheduler));
+const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
+check('pg-boss runs the fulfillment outbox on a durable 1-minute schedule',
+  /const FULFILLMENT_OUTBOX_INTERVAL_MS = SYNC_CADENCE_MS\.fulfillmentOutbox/.test(queue) &&
+  /JOBS\.fulfillmentOutbox,[\s\S]*SCHEDULE_CRON\.everyMinute/.test(queue));
 check('outbox tick both auto-recovers missing confirmations AND processes the outbox',
   /enqueueMissingShipmentConfirmations\(\{ limit: 25 \}\)/.test(scheduler) &&
   /processFulfillmentOutboxOnce\(\{ limit: 25 \}\)/.test(scheduler));

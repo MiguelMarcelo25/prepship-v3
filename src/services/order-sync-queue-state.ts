@@ -34,8 +34,6 @@ export function classifyOrderSyncQueueRows(
 }
 
 export async function readOrderSyncQueueTruth(): Promise<OrderSyncQueueTruth> {
-  if (!env.USE_PG_BOSS_SCHEDULER) return unavailableQueueTruth();
-
   try {
     const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
     const rows = await pg<OrderSyncQueueRow[]>`

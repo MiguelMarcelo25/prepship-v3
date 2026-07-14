@@ -125,7 +125,6 @@ const schema = z.object({
   // above, this is EXISTING production behavior moving homes, so the flag is
   // a kill-switch, not an opt-in. Unset to stop the daily pull.
   ENABLE_WALMART_FEES_SCHEDULER: booleanFlag(true),
-  USE_PG_BOSS_SCHEDULER: booleanFlag(true),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   PG_BOSS_POOL_MAX: z.coerce.number().int().positive().max(5).default(1),
   SHIPSTATION_API_KEY: z.string().optional(),

@@ -185,8 +185,8 @@ assert.doesNotMatch(scheduler, /from ['"]\.\/order-sync['"]/);
 assert.doesNotMatch(scheduler, /from ['"]\.\/shipment-sync['"]/);
 assert.match(queue, /registerWorker\(JOBS\.orders/);
 assert.match(queue, /registerWorker\(JOBS\.shipments/);
-assert.match(queue, /hasOutstandingCadenceJob/);
-assert.match(queue, /state IN \('active', 'retry', 'created'\)/);
+assert.match(queue, /await boss\.schedule\(/);
+assert.match(queue, /singletonKey: 'cadence'/);
 for (const route of [cronRoute, ordersRoute, shipmentsRoute, adminRoute]) {
   assert.doesNotMatch(route, /await syncOrders\(/);
   assert.doesNotMatch(route, /await syncShipments\(/);

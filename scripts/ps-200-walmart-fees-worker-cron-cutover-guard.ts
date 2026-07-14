@@ -68,21 +68,13 @@ check('Render cron route is mounted and protected by CRON_SECRET',
 check('sync-scheduler owns the daily Walmart fees tick',
   missingTokens(syncScheduler, [
     "import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';",
-    'const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees',
     'export async function runWalmartFeesTick()',
     'syncWalmartFeesAllAccounts(pg, fromDate, toDate)',
-    'env.ENABLE_WALMART_FEES_SCHEDULER',
-    'walmartFeesTimer = setTimeout',
-    'walmartFeesTimer = setInterval',
   ]).length === 0,
   missingTokens(syncScheduler, [
     "import { syncWalmartFeesAllAccounts } from '../connectors/store/walmart-fees';",
-    'const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees',
     'export async function runWalmartFeesTick()',
     'syncWalmartFeesAllAccounts(pg, fromDate, toDate)',
-    'env.ENABLE_WALMART_FEES_SCHEDULER',
-    'walmartFeesTimer = setTimeout',
-    'walmartFeesTimer = setInterval',
   ]));
 
 check('sync-job-queue registers and schedules the same Walmart fees tick',
@@ -91,7 +83,8 @@ check('sync-job-queue registers and schedules the same Walmart fees tick',
     "walmartFees: 'prepship.fees.walmart-sync'",
     'const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees',
     'await registerWorker(JOBS.walmartFees, runWalmartFeesTick)',
-    'scheduleEnqueue(',
+    'reconcileDurableSchedule(',
+    'SCHEDULE_CRON.dailyAtNineUtc',
     'JOBS.walmartFees',
     'env.ENABLE_WALMART_FEES_SCHEDULER',
   ]).length === 0,
@@ -100,7 +93,8 @@ check('sync-job-queue registers and schedules the same Walmart fees tick',
     "walmartFees: 'prepship.fees.walmart-sync'",
     'const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees',
     'await registerWorker(JOBS.walmartFees, runWalmartFeesTick)',
-    'scheduleEnqueue(',
+    'reconcileDurableSchedule(',
+    'SCHEDULE_CRON.dailyAtNineUtc',
     'JOBS.walmartFees',
     'env.ENABLE_WALMART_FEES_SCHEDULER',
   ]));
@@ -113,10 +107,10 @@ check('Walmart fees scheduler flag is a default-on kill switch',
   /ENABLE_WALMART_FEES_SCHEDULER:\s*booleanFlag\(true\)/.test(env) &&
   /kill-switch/.test(env));
 
-check('worker entry can start pg-boss or interval scheduler on the worker process',
+check('worker entry starts only the durable pg-boss scheduler',
   workerEntry.includes('startQueuedSyncScheduler') &&
-  workerEntry.includes('startSyncScheduler') &&
-  workerEntry.includes('USE_PG_BOSS_SCHEDULER'));
+  !workerEntry.includes('startSyncScheduler') &&
+  !workerEntry.includes('USE_PG_BOSS_SCHEDULER'));
 
 check('Walmart fees connector remains the provider API owner',
   walmartFeesConnector.includes('marketplace.walmartapis.com') &&

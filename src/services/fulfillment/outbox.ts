@@ -3,6 +3,13 @@ import { hydrateMarketplaceConfirmationPayload } from './confirmation-payload.js
 import { loadClientCredentials } from '../../lib/shipstation/credentials.js';
 import { resolveStoreConnector } from '../../connectors/store-resolution.js';
 import { assertFulfillmentSchemaReady } from './schema-readiness.js';
+// Per user override unlock shipped data on 2026-07-14: inventory events share
+// only the durable retry lifecycle; confirmation/order state remains isolated.
+import {
+  INVENTORY_DEDUCTION_OUTBOX_EVENT,
+  isInventoryDeductionOutboxEvent,
+  processInventoryDeductionOutboxEvent,
+} from './inventory-deduction-outbox.js';
 
 type OrderForConfirmation = {
   id: number;
@@ -29,6 +36,7 @@ type OutboxRow = {
   id: number;
   order_id: number;
   shipment_id: number | null;
+  event_type: string;
   provider: string;
   payload: Record<string, unknown>;
   attempts: number;
@@ -858,7 +866,7 @@ async function claimDueOutboxRows(limit: number, orderId?: number): Promise<Outb
     WHERE id IN (
       SELECT id
       FROM fulfillment_outbox
-      WHERE event_type = 'shipment_confirmation_requested'
+      WHERE event_type IN ('shipment_confirmation_requested', ${INVENTORY_DEDUCTION_OUTBOX_EVENT})
         AND (
           (status IN ('pending', 'failed') AND next_run_at <= NOW())
           OR (status = 'processing'
@@ -869,7 +877,7 @@ async function claimDueOutboxRows(limit: number, orderId?: number): Promise<Outb
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING id, order_id, shipment_id, provider, payload, attempts
+    RETURNING id, order_id, shipment_id, event_type, provider, payload, attempts
   ` as Promise<OutboxRow[]>;
 }
 
@@ -895,7 +903,7 @@ async function claimOutboxRowById(options: {
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
-    RETURNING id, order_id, shipment_id, provider, payload, attempts
+    RETURNING id, order_id, shipment_id, event_type, provider, payload, attempts
   ` as OutboxRow[];
   return rows[0] ?? null;
 }
@@ -910,6 +918,10 @@ async function completeOutboxRow(row: OutboxRow): Promise<void> {
     SET status = 'succeeded', last_error = NULL, updated_at = NOW()
     WHERE id = ${row.id}
   `;
+  // Per user override unlock shipped data on 2026-07-14: inventory events
+  // settle only their outbox lifecycle. Marketplace/order confirmation state
+  // belongs exclusively to shipment_confirmation_requested events below.
+  if (isInventoryDeductionOutboxEvent(row.event_type)) return;
   if (row.shipment_id) {
     await markShipmentConfirmationState({
       shipmentId: row.shipment_id,
@@ -945,6 +957,7 @@ async function failOutboxRow(row: OutboxRow, err: unknown, retryable: boolean): 
       updated_at = NOW()
     WHERE id = ${row.id}
   `;
+  if (isInventoryDeductionOutboxEvent(row.event_type)) return;
   if (row.shipment_id) {
     await markShipmentConfirmationState({
       shipmentId: row.shipment_id,
@@ -1030,6 +1043,23 @@ export async function confirmShipmentDirectNow(args: {
 }
 
 async function processOutboxRow(row: OutboxRow): Promise<boolean> {
+  if (isInventoryDeductionOutboxEvent(row.event_type)) {
+    await processInventoryDeductionOutboxEvent({
+      orderId: row.order_id,
+      payload: row.payload ?? {},
+    });
+    await completeOutboxRow(row);
+    console.info('[fulfillment-outbox] inventory deduction settled', {
+      orderId: row.order_id,
+      shipmentId: row.shipment_id,
+    });
+    return true;
+  }
+  if (row.event_type !== 'shipment_confirmation_requested') {
+    await failOutboxRow(row, new Error(`Unsupported fulfillment event ${row.event_type}`), false);
+    return false;
+  }
+
   const resolvedStoreConnector = resolveStoreConnector(row.provider, 'shipment.confirm');
   if (!resolvedStoreConnector) {
     await failOutboxRow(row, new Error(`No store connector registered for ${row.provider}`), false);
@@ -1134,7 +1164,7 @@ export async function processFulfillmentOutboxOnce(options: {
       await failOutboxRow(row, err, true);
       failed += 1;
       console.warn(
-        `[fulfillment-outbox] confirmation failed orderId=${row.order_id} shipmentId=${row.shipment_id} provider=${row.provider}:`,
+        `[fulfillment-outbox] event failed eventType=${row.event_type} orderId=${row.order_id} shipmentId=${row.shipment_id} provider=${row.provider}:`,
         err instanceof Error ? err.message : err,
       );
     }

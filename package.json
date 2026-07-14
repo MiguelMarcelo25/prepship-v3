@@ -377,6 +377,7 @@
     "test:ps-323-billing-sot-parity": "tsx scripts/ps-323-billing-sot-parity-guard.ts",
     "test:sot-guard-pack": "node scripts/sot-guard-pack.mjs",
     "test:audit-orders-service-boundary": "tsx scripts/audit-orders-service-boundary-guard.ts",
+    "test:audit-pg-boss-inventory-outbox": "tsx scripts/audit-pg-boss-inventory-outbox-guard.ts",
     "test:rate-source-of-truth": "tsx scripts/ps-313-rate-source-of-truth-guard.ts",
     "test:ps-318-shipping-workflow-certification": "tsx scripts/ps-318-shipping-workflow-certification-guard.ts",
     "test:ps-319-rate-convergence-certification": "tsx scripts/ps-319-rate-convergence-certification-guard.ts",

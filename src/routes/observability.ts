@@ -95,7 +95,7 @@ app.get('/status', async (c) => {
     },
     runtime: {
       runSyncScheduler: env.RUN_SYNC_SCHEDULER,
-      usePgBossScheduler: env.USE_PG_BOSS_SCHEDULER,
+      usePgBossScheduler: true,
       runOrdersPerformanceMaintenance:
         env.RUN_ORDERS_PERFORMANCE_MAINTENANCE === true,
       rateBackfillSchedulerEnabled: env.ENABLE_RATE_BACKFILL_SCHEDULER,

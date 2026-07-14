@@ -8,7 +8,6 @@ import { reapStaleQueuedCadenceJobs, reapStuckActiveJobs } from './sync-stuck-jo
 import { jobSingletonSeconds } from '../lib/job-singleton-seconds';
 import {
   getSyncJobLaneBlocker,
-  isSyncJobNameActive,
   syncJobLaneFor,
   type SyncJobLane,
 } from './sync-job-lanes';
@@ -19,6 +18,8 @@ import {
   runExternalShippedClassifierJob,
   runInventoryImportFromOrders,
   runReportingRefreshTick,
+  runRateCacheEvictionTick,
+  runReapStaleRateJobsTick,
   runShopifyOrderSyncTick,
   runShipmentTrackingTick,
   runSyncProductsTick,
@@ -44,12 +45,13 @@ import {
   recordWorkerJobSuccess,
   setWorkerMode,
 } from './worker-status';
-import { SYNC_CADENCE_MS, SYNC_STARTUP_DELAY_MS } from '../lib/sync-cadence';
+import { SYNC_CADENCE_MS } from '../lib/sync-cadence';
 import { SYNC_JOB_HANDLER_TIMEOUT_MS } from '../lib/sync-job-deadline';
 import {
   markShipStationSyncRunFailed,
   type ShipStationSyncRunIdentity,
 } from './shipstation-sync-account-state';
+import { runShipStationCarrierAccountSnapshotTick } from './shipstation-carrier-account-snapshot-worker';
 
 // PS-132: cadence is owned by src/lib/sync-cadence.ts (single source shared with the status
 // endpoint). Local aliases keep the rest of this file unchanged.
@@ -63,8 +65,6 @@ const REPORTING_REFRESH_INTERVAL_MS = SYNC_CADENCE_MS.reportingMetrics;
 const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = SYNC_CADENCE_MS.externalShippedClassifier;
 const SHIPMENT_TRACKING_INTERVAL_MS = SYNC_CADENCE_MS.shipmentTracking;
 const WALMART_FEES_INTERVAL_MS = SYNC_CADENCE_MS.walmartFees;
-const STARTUP_DELAY_MS = SYNC_STARTUP_DELAY_MS;
-
 const JOBS = {
   orders: 'prepship.sync.orders',
   shopifyOrders: 'prepship.sync.shopify-orders',
@@ -77,11 +77,13 @@ const JOBS = {
   externalShippedClassifier: 'prepship.shipping.external-shipped-classifier',
   shipmentTracking: 'prepship.tracking.poll',
   walmartFees: 'prepship.fees.walmart-sync',
+  rateMaintenance: 'prepship.maintenance.rate-cache',
+  queueMaintenance: 'prepship.maintenance.job-queue',
+  carrierAccountSnapshots: 'prepship.maintenance.carrier-account-snapshots',
 } as const;
 
 type JobName = (typeof JOBS)[keyof typeof JOBS];
 
-type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
 type PgBossJobLike = {
   id?: unknown;
   data?: unknown;
@@ -98,12 +100,21 @@ let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 const activeJobsByLane = new Map<SyncJobLane, JobName>();
-const timers: Timer[] = [];
 const BUSY_DEFER_SECONDS = 60;
 const ORDER_STARVATION_DEFER_THRESHOLD = 3;
 const ORDER_STARVATION_DEFER_SECONDS = 10;
 const BUSY_DEFER_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
-const COALESCED_CADENCE_JOB_NAMES = new Set<JobName>([JOBS.orders, JOBS.shipments]);
+
+const SCHEDULE_CRON = {
+  everyMinute: '* * * * *',
+  everyThreeMinutes: '*/3 * * * *',
+  everyFiveMinutes: '*/5 * * * *',
+  everyTenMinutes: '*/10 * * * *',
+  everyFifteenMinutes: '*/15 * * * *',
+  everyThirtyMinutes: '*/30 * * * *',
+  hourly: '0 * * * *',
+  dailyAtNineUtc: '0 9 * * *',
+} as const;
 
 export type ManualOrderSyncEnqueueResult = {
   queued: boolean;
@@ -194,70 +205,6 @@ async function findSupersedingManualOrderSyncJob(
 
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
-}
-
-async function hasOutstandingCadenceJob(name: JobName): Promise<boolean> {
-  if (!COALESCED_CADENCE_JOB_NAMES.has(name)) return false;
-  try {
-    const jobTable = `${env.PG_BOSS_SCHEMA}.job`;
-    const [row] = await pg<Array<{ exists: boolean }>>`
-      SELECT EXISTS (
-        SELECT 1
-        FROM ${pg(jobTable)}
-        WHERE name = ${name}
-          AND state IN ('active', 'retry', 'created')
-      ) AS exists
-    `;
-    return row?.exists === true;
-  } catch {
-    return false;
-  }
-}
-
-async function enqueueJob(name: JobName, intervalMs: number): Promise<void> {
-  if (!boss) return;
-  if (isSyncJobNameActive(activeJobsByLane, name)) {
-    console.log(`[job-queue] ${name} already active in worker; skipped enqueue`);
-    await recordWorkerJobSkipped(name, 'already active in worker');
-    return;
-  }
-  if (await hasOutstandingCadenceJob(name)) {
-    // Per user override unlock shipped data on 2026-07-10: coalesce queue
-    // wake-ups only; no order, shipment, label, or marketplace row is touched.
-    console.log(`[job-queue] ${name} already outstanding in pg-boss; skipped cadence enqueue`);
-    await recordWorkerJobSkipped(name, 'already outstanding in pg-boss');
-    return;
-  }
-  try {
-    const id = await boss.send(
-      name,
-      { requestedAt: new Date().toISOString() },
-      {
-        singletonKey: 'cadence',
-        singletonSeconds: jobSingletonSeconds(intervalMs),
-        retryLimit: 2,
-        retryDelay: 30,
-        retryBackoff: true,
-        // PS-272: explicit per-send expiration so the job row carries an expire deadline pg-boss's own
-        // expire() maintenance loop (now enabled via supervise above) can act on. expireInSeconds is
-        // the canonical unit on SendOptions (ExpirationOptions); 30 min === the queue/constructor value.
-        expireInMinutes: 30,
-        retentionDays: 7,
-      }
-    );
-
-    if (id) {
-      console.log(`[job-queue] enqueued ${name} (${id})`);
-    } else {
-      console.log(`[job-queue] ${name} already queued/running; skipped enqueue`);
-      await recordWorkerJobSkipped(name, 'already queued or running');
-    }
-  } catch (err) {
-    console.error(
-      `[job-queue] failed to enqueue ${name}:`,
-      err instanceof Error ? err.message : err
-    );
-  }
 }
 
 export type ShipmentSyncWatchdogEnqueueResult = {
@@ -356,19 +303,6 @@ async function sendManualOrderSyncJob(
 export async function enqueueManualOrderSyncJob(
   request: ManualOrderSyncRequest = {},
 ): Promise<ManualOrderSyncEnqueueResult> {
-  if (!env.USE_PG_BOSS_SCHEDULER && !started) {
-    const payload = buildManualOrderSyncJobPayload(request);
-    return {
-      queued: false,
-      jobId: null,
-      queueStarted: false,
-      jobName: JOBS.orders,
-      mode: payload.mode,
-      requestedAt: payload.requestedAt,
-      error: 'pg-boss scheduler is disabled; manual order sync must run through the backend job lane',
-    };
-  }
-
   if (boss && started) {
     return sendManualOrderSyncJob(boss, true, request);
   }
@@ -458,17 +392,6 @@ export async function enqueueManualShipmentSyncJob(
   request: ManualShipmentSyncRequest = {},
 ): Promise<ManualShipmentSyncEnqueueResult> {
   const payload = buildManualShipmentSyncJobPayload(request);
-  if (!env.USE_PG_BOSS_SCHEDULER && !started) {
-    return {
-      queued: false,
-      jobId: null,
-      queueStarted: false,
-      jobName: JOBS.shipments,
-      requestedAt: payload.requestedAt,
-      error: 'pg-boss scheduler is disabled; manual shipment sync must run through the backend job lane',
-    };
-  }
-
   if (boss && started) return sendManualShipmentSyncJob(boss, true, request);
 
   const transientBoss = new PgBoss({
@@ -608,20 +531,129 @@ async function deferBusySyncJob(
   }
 }
 
-function scheduleEnqueue(
+async function reconcileDurableSchedule(
   name: JobName,
-  initialDelayMs: number,
-  intervalMs: number
-): void {
-  const timeout = setTimeout(() => {
-    void enqueueJob(name, intervalMs);
-    const interval = setInterval(
-      () => void enqueueJob(name, intervalMs),
-      intervalMs
-    );
-    timers.push(interval);
-  }, initialDelayMs);
-  timers.push(timeout);
+  cron: string,
+  intervalMs: number,
+  enabled: boolean,
+): Promise<void> {
+  if (!boss) return;
+  if (!enabled) {
+    await boss.unschedule(name);
+    console.log(`[job-queue] durable schedule disabled: ${name}`);
+    return;
+  }
+
+  // Per user override unlock shipped data on 2026-07-14: pg-boss persists
+  // cadence in Postgres and admits one singleton wake-up across all workers.
+  // This schedules work only; shipped/cancelled protections remain in the handlers.
+  await boss.schedule(
+    name,
+    cron,
+    { requestedBy: 'pg-boss-cron' },
+    {
+      tz: 'UTC',
+      singletonKey: 'cadence',
+      singletonSeconds: jobSingletonSeconds(intervalMs),
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: true,
+      expireInMinutes: 30,
+      retentionDays: 7,
+    },
+  );
+  console.log(`[job-queue] durable schedule ${name}: ${cron} UTC`);
+}
+
+async function reconcileDurableSchedules(): Promise<void> {
+  const hasShipStationCredentials = Boolean(
+    env.SHIPSTATION_API_KEY && env.SHIPSTATION_API_SECRET,
+  );
+
+  await reconcileDurableSchedule(
+    JOBS.fulfillmentOutbox,
+    SCHEDULE_CRON.everyMinute,
+    FULFILLMENT_OUTBOX_INTERVAL_MS,
+    true,
+  );
+  await reconcileDurableSchedule(
+    JOBS.reportingRefresh,
+    SCHEDULE_CRON.everyThirtyMinutes,
+    REPORTING_REFRESH_INTERVAL_MS,
+    true,
+  );
+  await reconcileDurableSchedule(
+    JOBS.rateMaintenance,
+    SCHEDULE_CRON.everyFiveMinutes,
+    5 * 60_000,
+    true,
+  );
+  await reconcileDurableSchedule(
+    JOBS.queueMaintenance,
+    SCHEDULE_CRON.everyTenMinutes,
+    10 * 60_000,
+    true,
+  );
+  await reconcileDurableSchedule(
+    JOBS.carrierAccountSnapshots,
+    SCHEDULE_CRON.everyMinute,
+    60_000,
+    true,
+  );
+  await reconcileDurableSchedule(
+    JOBS.shopifyOrders,
+    SCHEDULE_CRON.everyThreeMinutes,
+    ORDER_SYNC_INTERVAL_MS,
+    env.SHOPIFY_SYNC_ENABLED,
+  );
+  await reconcileDurableSchedule(
+    JOBS.externalShippedClassifier,
+    SCHEDULE_CRON.everyThreeMinutes,
+    EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS,
+    env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER,
+  );
+  await reconcileDurableSchedule(
+    JOBS.shipmentTracking,
+    SCHEDULE_CRON.everyFifteenMinutes,
+    SHIPMENT_TRACKING_INTERVAL_MS,
+    env.ENABLE_SHIPMENT_TRACKING_SCHEDULER && Boolean(env.SHIPSTATION_API_KEY_V2),
+  );
+  await reconcileDurableSchedule(
+    JOBS.walmartFees,
+    SCHEDULE_CRON.dailyAtNineUtc,
+    WALMART_FEES_INTERVAL_MS,
+    env.ENABLE_WALMART_FEES_SCHEDULER,
+  );
+  await reconcileDurableSchedule(
+    JOBS.orders,
+    SCHEDULE_CRON.everyThreeMinutes,
+    ORDER_SYNC_INTERVAL_MS,
+    hasShipStationCredentials,
+  );
+  await reconcileDurableSchedule(
+    JOBS.shipments,
+    SCHEDULE_CRON.everyThreeMinutes,
+    SHIPMENT_SYNC_INTERVAL_MS,
+    hasShipStationCredentials,
+  );
+  await reconcileDurableSchedule(
+    JOBS.inventoryImport,
+    SCHEDULE_CRON.everyThirtyMinutes,
+    INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS,
+    hasShipStationCredentials,
+  );
+  await reconcileDurableSchedule(
+    JOBS.syncProducts,
+    SCHEDULE_CRON.hourly,
+    INVENTORY_SYNC_PRODUCTS_INTERVAL_MS,
+    hasShipStationCredentials,
+  );
+  await reconcileDurableSchedule(
+    JOBS.rateBackfill,
+    SCHEDULE_CRON.everyTenMinutes,
+    RATE_BACKFILL_INTERVAL_MS,
+    hasShipStationCredentials && isRateBackfillSchedulerEnabled(),
+  );
 }
 
 function busyDeferCount(jobData: unknown): number {
@@ -840,122 +872,38 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.shipmentTracking, runShipmentTrackingTick);
   await registerWorker(JOBS.walmartFees, runWalmartFeesTick);
   await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());
+  await registerWorker(JOBS.rateMaintenance, async () => {
+    await runReapStaleRateJobsTick();
+    await runRateCacheEvictionTick();
+  });
+  await registerWorker(JOBS.queueMaintenance, async () => {
+    const active = await reapStuckActiveJobs();
+    const queued = await reapStaleQueuedCadenceJobs();
+    return { active, queued };
+  });
+  await registerWorker(
+    JOBS.carrierAccountSnapshots,
+    runShipStationCarrierAccountSnapshotTick,
+  );
 
   heartbeatTimer = setInterval(() => {
     void recordWorkerHeartbeat();
   }, 30_000);
 
-  // PS-272: default-OFF stuck-active reaper. When SYNC_STUCK_JOB_REAPER is OFF this is a true no-op
-  // (no DB, no mutation). One boot pass + a 10-min cadence flips orphaned pgboss 'active' rows (from
-  // a worker that died mid-job during a Render redeploy) to 'failed' so the heavy syncs can drain
-  // their 'created' backlog. The interval is pushed into timers[] so stopQueuedSyncScheduler clears it.
-  void reapStuckActiveJobs().then(
-    (r) => r.reaped && console.log(`[job-queue] stuck-active reaper cleared ${r.reaped} orphan(s): ${r.names.join(', ')}`)
-  );
-  void reapStaleQueuedCadenceJobs().then(
-    (r) => r.reaped && console.log(`[job-queue] stale-cadence reaper cleared ${r.reaped} queued tick(s): ${r.names.join(', ')}`)
-  );
-  timers.push(setInterval(() => void reapStuckActiveJobs(), 10 * 60_000));
-  timers.push(setInterval(() => void reapStaleQueuedCadenceJobs(), 10 * 60_000));
-
-  console.log('[job-queue] pg-boss scheduler started');
-  console.log(
-    `[job-queue] orders every ${ORDER_SYNC_INTERVAL_MS / 1000}s, shipments every ${SHIPMENT_SYNC_INTERVAL_MS / 1000}s`
-  );
-
-  scheduleEnqueue(JOBS.fulfillmentOutbox, STARTUP_DELAY_MS + 30_000, FULFILLMENT_OUTBOX_INTERVAL_MS);
-  scheduleEnqueue(
-    JOBS.reportingRefresh,
-    STARTUP_DELAY_MS + 4 * 60 * 1000,
-    REPORTING_REFRESH_INTERVAL_MS
-  );
-
-  if (env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER) {
-    scheduleEnqueue(
-      JOBS.externalShippedClassifier,
-      STARTUP_DELAY_MS + 6 * 60 * 1000,
-      EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS
-    );
-  } else {
-    console.log(
-      '[job-queue] external-shipped classifier disabled; set ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true to automate PS-056 dry-run/apply'
-    );
+  const activeReap = await reapStuckActiveJobs();
+  const queuedReap = await reapStaleQueuedCadenceJobs();
+  if (activeReap.reaped > 0) {
+    console.log(`[job-queue] stuck-active reaper cleared ${activeReap.reaped} orphan(s): ${activeReap.names.join(', ')}`);
+  }
+  if (queuedReap.reaped > 0) {
+    console.log(`[job-queue] stale-cadence reaper cleared ${queuedReap.reaped} queued tick(s): ${queuedReap.names.join(', ')}`);
   }
 
-  if (env.ENABLE_SHIPMENT_TRACKING_SCHEDULER && env.SHIPSTATION_API_KEY_V2) {
-    scheduleEnqueue(
-      JOBS.shipmentTracking,
-      STARTUP_DELAY_MS + 7 * 60 * 1000,
-      SHIPMENT_TRACKING_INTERVAL_MS
-    );
-  } else {
-    console.log(
-      '[job-queue] shipment tracking poll disabled; set ENABLE_SHIPMENT_TRACKING_SCHEDULER=true (+ SHIPSTATION_API_KEY_V2) to poll delivery status for queued labels'
-    );
-  }
-
-  // PS-200 S3: daily Walmart selling-fee sync (legacy Vercel cron replacement).
-  if (env.ENABLE_WALMART_FEES_SCHEDULER) {
-    scheduleEnqueue(
-      JOBS.walmartFees,
-      STARTUP_DELAY_MS + 9 * 60 * 1000,
-      WALMART_FEES_INTERVAL_MS
-    );
-  } else {
-    console.log(
-      '[job-queue] walmart fees sync disabled via ENABLE_WALMART_FEES_SCHEDULER=false'
-    );
-  }
-
-  if (env.SHOPIFY_SYNC_ENABLED) {
-    scheduleEnqueue(JOBS.shopifyOrders, STARTUP_DELAY_MS + 45_000, ORDER_SYNC_INTERVAL_MS);
-  } else {
-    console.log('[job-queue] Shopify direct store sync disabled via SHOPIFY_SYNC_ENABLED=false');
-  }
-
-  if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
-    console.log(
-      '[job-queue] SHIPSTATION_API_KEY/SECRET not set - ShipStation sync jobs disabled'
-    );
-    await recordWorkerJobSkipped(
-      JOBS.orders,
-      'SHIPSTATION_API_KEY/SECRET not set; order sync disabled'
-    );
-    await recordWorkerJobSkipped(
-      JOBS.shipments,
-      'SHIPSTATION_API_KEY/SECRET not set; shipment sync disabled'
-    );
-    return;
-  }
-
-  scheduleEnqueue(JOBS.orders, STARTUP_DELAY_MS, ORDER_SYNC_INTERVAL_MS);
-  scheduleEnqueue(JOBS.shipments, STARTUP_DELAY_MS + 90_000, SHIPMENT_SYNC_INTERVAL_MS);
-  scheduleEnqueue(
-    JOBS.inventoryImport,
-    STARTUP_DELAY_MS + 2 * 60 * 1000,
-    INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS
-  );
-  scheduleEnqueue(
-    JOBS.syncProducts,
-    STARTUP_DELAY_MS + 5 * 60 * 1000,
-    INVENTORY_SYNC_PRODUCTS_INTERVAL_MS
-  );
-
-  if (isRateBackfillSchedulerEnabled()) {
-    scheduleEnqueue(
-      JOBS.rateBackfill,
-      STARTUP_DELAY_MS + 3 * 60 * 1000,
-      RATE_BACKFILL_INTERVAL_MS
-    );
-  } else {
-    console.log(
-      '[job-queue] rate backfill disabled; run /rates/backfill-best manually or set ENABLE_RATE_BACKFILL_SCHEDULER=true'
-    );
-  }
+  await reconcileDurableSchedules();
+  console.log('[job-queue] pg-boss scheduler started with durable Postgres cadence');
 }
 
 export async function stopQueuedSyncScheduler(): Promise<void> {
-  for (const timer of timers.splice(0)) clearInterval(timer);
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -979,7 +927,7 @@ export async function getSyncJobQueueStatus(): Promise<{
 }> {
   if (!boss || !started) {
     return {
-      enabled: env.USE_PG_BOSS_SCHEDULER,
+      enabled: true,
       started: false,
       schema: env.PG_BOSS_SCHEMA,
       queues: Object.values(JOBS).map((name) => ({ name, size: null })),
@@ -998,7 +946,7 @@ export async function getSyncJobQueueStatus(): Promise<{
   );
 
   return {
-    enabled: env.USE_PG_BOSS_SCHEDULER,
+    enabled: true,
     started,
     schema: env.PG_BOSS_SCHEMA,
     queues,

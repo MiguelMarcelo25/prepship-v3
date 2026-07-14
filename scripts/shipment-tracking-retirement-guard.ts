@@ -14,8 +14,8 @@
  *   - The retirement writer never DELETEs and pins status='queued' in its WHERE.
  *   - listQueue's active filter is unchanged (status='queued') — 'delivered'
  *     leaves the list/count/Print-All by construction.
- *   - The job is registered in BOTH schedulers (interval + pg-boss) behind
- *     ENABLE_SHIPMENT_TRACKING_SCHEDULER, with auto-retire behind its own flag.
+ *   - The job is registered once in pg-boss behind ENABLE_SHIPMENT_TRACKING_SCHEDULER,
+ *     with auto-retire behind its own flag.
  *
  *   npx tsx scripts/shipment-tracking-retirement-guard.ts
  */
@@ -127,18 +127,16 @@ check("listQueue active filter unchanged (status='queued')",
 check('listQueue surfaces auto_retired_at to the UI',
   /auto_retired_at: e\.autoRetiredAt\?\.toISOString\(\) \?\? null/.test(printQueueService));
 
-// ── 5. Source pins: both schedulers, both flags ───────────────────────────────
-const intervalScheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
-check('interval scheduler registers the tick behind ENABLE_SHIPMENT_TRACKING_SCHEDULER',
-  /runShipmentTrackingTick/.test(intervalScheduler) &&
-  /env\.ENABLE_SHIPMENT_TRACKING_SCHEDULER && env\.SHIPSTATION_API_KEY_V2/.test(intervalScheduler));
-check('interval tick passes the auto-retire kill-switch through',
-  /autoRetire: env\.TRACKING_AUTO_RETIRE_ENABLED === true/.test(intervalScheduler));
+// ── 5. Source pins: one durable scheduler, both flags ────────────────────────
+const handlerModule = readFileSync('src/services/sync-scheduler.ts', 'utf8');
+check('tracking handler passes the auto-retire kill-switch through',
+  /autoRetire: env\.TRACKING_AUTO_RETIRE_ENABLED === true/.test(handlerModule));
 const bossScheduler = readFileSync('src/services/sync-job-queue.ts', 'utf8');
-check('pg-boss scheduler registers + enqueues the job behind the same flag',
+check('pg-boss scheduler registers + durably schedules the job behind the same flag',
   /shipmentTracking: 'prepship\.tracking\.poll'/.test(bossScheduler) &&
   /registerWorker\(JOBS\.shipmentTracking, runShipmentTrackingTick\)/.test(bossScheduler) &&
-  /env\.ENABLE_SHIPMENT_TRACKING_SCHEDULER && env\.SHIPSTATION_API_KEY_V2/.test(bossScheduler));
+  /env\.ENABLE_SHIPMENT_TRACKING_SCHEDULER && Boolean\(env\.SHIPSTATION_API_KEY_V2\)/.test(bossScheduler) &&
+  /SCHEDULE_CRON\.everyFifteenMinutes/.test(bossScheduler));
 
 // ── 6. Source pins: connector + FE ────────────────────────────────────────────
 const connector = readFileSync('src/connectors/tracking/shipstation.ts', 'utf8');

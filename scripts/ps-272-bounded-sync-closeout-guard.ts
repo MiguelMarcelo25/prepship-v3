@@ -95,10 +95,11 @@ check(
 check(
   'queued worker registers the bounded sync workers and schedules the default-off reaper',
   /registerWorker\(JOBS\.orders, async \(jobData, \{ identity, signal \}\) => \{[\s\S]*syncOrders\(\{ \.\.\.options, runIdentity: identity, signal \}\)/.test(syncJobQueue) &&
-    /registerWorker\(JOBS\.shipments, \(jobData\) =>[\s\S]*syncShipments\(shipmentSyncOptionsFromJobPayload\(jobData\)\)/.test(syncJobQueue) &&
+    /registerWorker\(JOBS\.shipments, \(jobData, \{ signal \}\) =>[\s\S]*syncShipments\(\{ \.\.\.shipmentSyncOptionsFromJobPayload\(jobData\), signal \}\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.inventoryImport, runInventoryImportFromOrders\)/.test(syncJobQueue) &&
     /registerWorker\(JOBS\.externalShippedClassifier, runExternalShippedClassifierJob\)/.test(syncJobQueue) &&
-    /setInterval\(\(\) => void reapStuckActiveJobs\(\), 10 \* 60_000\)/.test(syncJobQueue),
+    /registerWorker\(JOBS\.queueMaintenance,[\s\S]*reapStuckActiveJobs\(\)[\s\S]*reapStaleQueuedCadenceJobs\(\)/.test(syncJobQueue) &&
+    /SCHEDULE_CRON\.everyTenMinutes/.test(syncJobQueue),
 );
 check(
   'effectful reaper is env-gated default-off and mutates only pgboss job rows',

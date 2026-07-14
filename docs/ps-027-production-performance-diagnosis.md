@@ -98,7 +98,7 @@ Confirmed from code:
 - `RUN_SYNC_SCHEDULER` default is true for legacy safety.
 - `.env.example` says Render API should set `RUN_SYNC_SCHEDULER=false`.
 - `.env.example` says Render worker should set `RUN_SYNC_SCHEDULER=true`, `WORKER_PLACEHOLDER=false`.
-- `USE_PG_BOSS_SCHEDULER` default is true.
+- pg-boss is the only supported sync scheduler; the legacy runtime selector was removed in Audit 3.2.
 - `PG_BOSS_POOL_MAX` default is 1, max 5.
 - `/observability/status` would expose runtime flags, memory, DB status, and route timing, but returned 401 without admin token.
 

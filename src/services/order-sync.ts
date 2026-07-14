@@ -19,7 +19,7 @@ import {
   orderSourceIdentityOrLegacyPredicate,
   type OrderSourceIdentity,
 } from './order-source-identity';
-import { deductInventoryForOrder } from './fulfillment-deductions';
+import { enqueueInventoryDeduction } from './fulfillment/inventory-deduction-outbox';
 import { importStoreOrders } from './store-connector-orchestrator';
 import type { NormalizedOrder } from '../connectors/types';
 import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
@@ -298,9 +298,11 @@ async function upsertMissingShippedOrdersBatch(
       .returning({ id: shipments.id });
     shipmentsLinked += linked.length;
     try {
-      await deductInventoryForOrder(row, { source: 'order_sync_status' });
+      // Per user override unlock shipped data on 2026-07-14: persist retryable
+      // deduction intent; the outbox delegates to the unchanged kill-switched owner.
+      await enqueueInventoryDeduction(row, { source: 'order_sync_status' });
     } catch (err) {
-      console.warn('[order-sync] inventory deduction failed for imported shipped order:', err);
+      console.warn('[order-sync] inventory deduction enqueue failed for imported shipped order:', err);
     }
   }
 
@@ -518,9 +520,9 @@ async function updateExistingOrderStatusesBatch(
           // It must mirror label/shipment-sync inventory side effects so
           // orders closed by ShipStation status sync do not skip stock
           // deduction while still respecting INVENTORY_AUTO_DEDUCT.
-          await deductInventoryForOrder(row, { source: 'order_sync_status' });
+          await enqueueInventoryDeduction(row, { source: 'order_sync_status' });
         } catch (err) {
-          console.warn('[order-sync] inventory deduction failed:', err);
+          console.warn('[order-sync] inventory deduction enqueue failed:', err);
         }
       }
     }

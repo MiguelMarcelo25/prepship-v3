@@ -132,8 +132,8 @@ assert.match(
 );
 assert.match(
   script,
-  /deductInventoryForOrder\(row, \{ source: 'order_sync_status' \}\)/,
-  'hydrated shipped orders must reuse the shared AI-locked inventory deduction path, not a bespoke one',
+  /enqueueInventoryDeduction\(row, \{ source: 'order_sync_status' \}\)/,
+  'hydrated shipped orders must reuse the shared durable inventory deduction lane, not a bespoke one',
 );
 
 const pkg = readFileSync('package.json', 'utf8');

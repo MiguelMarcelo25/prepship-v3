@@ -14,7 +14,7 @@ import {
   upsertNormalizedStoreOrders,
   type NormalizedStoreOrder,
 } from '../src/services/store-order-import';
-import { deductInventoryForOrder } from '../src/services/fulfillment-deductions';
+import { enqueueInventoryDeduction } from '../src/services/fulfillment/inventory-deduction-outbox';
 
 /**
  * PS-046 — Orphan ShipStation shipment reconciliation / backfill.
@@ -44,7 +44,7 @@ import { deductInventoryForOrder } from '../src/services/fulfillment-deductions'
  *     marketplaces. NEVER reopens a shipped/cancelled order (the upsert
  *     preserves terminal local statuses).
  *   - Inventory deduction for hydrated SHIPPED orders reuses the AI-locked
- *     `deductInventoryForOrder` (same call order-sync makes) and is gated by
+ *     durable inventory outbox (same lane order-sync uses); its processor is gated by
  *     the INVENTORY_AUTO_DEDUCT kill switch + ledger dedupe — no refactor.
  *   - `main()` only runs when the file is invoked directly, so a guard/test can
  *     import `classifyOrphanShipment` without triggering a network fetch/write.
@@ -533,7 +533,9 @@ async function main(): Promise<void> {
           // protected) so backfilled orders don't skip stock movement.
           if (row.orderStatus === 'shipped') {
             try {
-              await deductInventoryForOrder(row, { source: 'order_sync_status' });
+              // Per user override unlock shipped data on 2026-07-14: enqueue
+              // durable intent; do not execute shipped stock writes inline.
+              await enqueueInventoryDeduction(row, { source: 'order_sync_status' });
               report.inventoryDeducted += 1;
             } catch (err) {
               console.warn('[orphan-reconcile] inventory deduction failed:', err);
