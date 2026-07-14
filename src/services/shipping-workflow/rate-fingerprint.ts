@@ -21,6 +21,8 @@ export type ShippingRateRequestFingerprintInput = {
   insuredValue?: number | null;
   carrierIds?: string[] | null;
   automationRulesVersion?: string | null;
+  /** HUGRAB-only persisted policy state; omitted for every other client/store. */
+  hugrabDefaultInsuranceEnabled?: boolean | null;
   // Audit C4 (2026-07-13): ship-from ORIGIN. PS-291 made origin operator-selectable
   // and origin genuinely changes carrier quotes, but the fingerprint never modeled it
   // — so a custom-origin browse wrote rate_cache rows that default-origin order rating
@@ -48,6 +50,7 @@ export type ShippingRateCurrentFacts = {
   dimsL?: number | string | null;
   dimsW?: number | string | null;
   dimsH?: number | string | null;
+  hugrabDefaultInsuranceEnabled?: boolean | null;
 };
 
 export type SelectedRateValidationReason =
@@ -217,6 +220,9 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
     parts.push(`c=${[...input.carrierIds].sort().join(',')}`);
   }
   if (input.automationRulesVersion) parts.push(`ar=${input.automationRulesVersion}`);
+  if (typeof input.hugrabDefaultInsuranceEnabled === 'boolean') {
+    parts.push(`hi=${input.hugrabDefaultInsuranceEnabled ? '1' : '0'}`);
+  }
   // PS-274: bind the insurance-certainty verdict ONLY when one is supplied — keeps
   // the fingerprint byte-identical for every legacy/non-Shipp caller (additive).
   const certaintyState = textKey(input.insuranceCertainty);
@@ -266,6 +272,10 @@ export function shippingRateFingerprintMatchesCurrentFacts(
   if (city != null && cityPart != null && cityPart !== city) return false;
   if (facts.residential === true && fingerprintPartValue(fp, 'r') !== '1') return false;
   if (facts.residential === false && fingerprintPartValue(fp, 'r') !== '0') return false;
+  if (
+    typeof facts.hugrabDefaultInsuranceEnabled === 'boolean' &&
+    fingerprintPartValue(fp, 'hi') !== (facts.hugrabDefaultInsuranceEnabled ? '1' : '0')
+  ) return false;
 
   return true;
 }
@@ -281,6 +291,18 @@ export function residentialFromRequestFingerprint(fingerprint: string | null | u
     if (part === 'r=1') return true;
     if (part === 'r=0') return false;
   }
+  return null;
+}
+
+/** Read the HUGRAB automatic-insurance policy bound to a backend quote. */
+export function hugrabDefaultInsuranceFromRequestFingerprint(
+  fingerprint: string | null | undefined,
+): boolean | null {
+  const fp = typeof fingerprint === 'string' ? fingerprint.trim() : '';
+  if (!fp) return null;
+  const value = fingerprintPartValue(fp, 'hi');
+  if (value === '1') return true;
+  if (value === '0') return false;
   return null;
 }
 

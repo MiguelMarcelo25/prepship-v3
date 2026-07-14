@@ -41,6 +41,7 @@ import {
   evaluateShippingServiceEligibility,
   filterCarrierAccountsForAutomation,
   filterEligibleShippingServices,
+  isHugrabShippingContext,
   resolveHugrabRequestInsurance,
   type ShippingAutomationRule,
   type ShippingServiceEligibilityContext,
@@ -75,6 +76,7 @@ import {
   loadShippingAutomationRules,
   shippingAutomationRulesFingerprint,
 } from './shipping-automation';
+import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
 import {
   easyPostScheduledPremium,
   enrichRatesWithInsuranceCost,
@@ -472,6 +474,8 @@ export type RateInput = {
   effectiveInsuranceProvider?: string | null;
   effectiveInsuredValue?: number | null;
   effectiveInsuranceSource?: string | null;
+  /** Backend-resolved HUGRAB policy state; null for non-HUGRAB requests. */
+  hugrabDefaultInsuranceEnabled?: boolean | null;
   automationRulesVersion?: string | null;
   // Order-backed marketplace context, populated by /rates/browse from the orders row.
   // `sourceProvider` (the marketplace the order came from) gates marketplace-specific carriers —
@@ -569,6 +573,18 @@ export async function resolveRateInput(
 ): Promise<RateInput> {
   const context = await resolveRateCredentialContext(input);
   const automationRules = await loadShippingAutomationRules();
+  const isHugrab = isHugrabShippingContext({
+    clientId: context.clientId,
+    storeId: context.storeId,
+  });
+  const hugrabDefaultInsuranceEnabled = isHugrab
+    ? await loadHugrabDefaultInsuranceEnabled()
+    : true;
+  const insuranceEligibilityContext: ShippingServiceEligibilityContext = {
+    clientId: context.clientId,
+    storeId: context.storeId,
+    hugrabDefaultInsuranceEnabled,
+  };
   const discoveredCarriers = await getAllCarriers(context.apiKeyV2);
   const candidateCarriers = input.carrierIds?.length
     ? discoveredCarriers.filter((carrier) => input.carrierIds!.includes(carrier.carrier_id))
@@ -593,7 +609,7 @@ export async function resolveRateInput(
       // manual Rate Browser). Reference-only — never label-safe, never purchasable.
       { insuranceProvider: 'none' as const, insuredValue: null, source: 'manual-estimate' as const }
     : resolveHugrabRequestInsurance(
-        { clientId: context.clientId, storeId: context.storeId },
+        insuranceEligibilityContext,
         input,
       );
   const insuranceProvider = requestInsurance.insuranceProvider as string;
@@ -634,6 +650,7 @@ export async function resolveRateInput(
     effectiveInsuranceProvider: insuranceProvider,
     effectiveInsuredValue: insuredValue,
     effectiveInsuranceSource,
+    hugrabDefaultInsuranceEnabled: isHugrab ? hugrabDefaultInsuranceEnabled : null,
     automationRulesVersion: shippingAutomationRulesFingerprint(automationRules),
     carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
   };
@@ -670,6 +687,7 @@ export function rateCacheKey(input: RateInput): string {
     insuredValue: options.insuredValue,
     carrierIds: input.carrierIds,
     automationRulesVersion: input.automationRulesVersion,
+    hugrabDefaultInsuranceEnabled: input.hugrabDefaultInsuranceEnabled,
   });
 }
 
@@ -740,10 +758,13 @@ export function pickBestRate(rates: Rate[]): Rate | null {
   return [...selectable].sort((a, b) => (rateTotal(a) - rateTotal(b)) || (rateCostTotal(a) - rateCostTotal(b)))[0]!;
 }
 
-function rateEligibilityContext(input: Pick<RateInput, 'clientId' | 'storeId'>): ShippingServiceEligibilityContext {
+function rateEligibilityContext(
+  input: Pick<RateInput, 'clientId' | 'storeId' | 'hugrabDefaultInsuranceEnabled'>,
+): ShippingServiceEligibilityContext {
   return {
     clientId: input.clientId ?? null,
     storeId: input.storeId ?? null,
+    hugrabDefaultInsuranceEnabled: input.hugrabDefaultInsuranceEnabled ?? null,
   };
 }
 
@@ -1621,6 +1642,7 @@ export type GetRatesResult = {
   effectiveInsuranceProvider: string | null;
   effectiveInsuredValue: number | null;
   effectiveInsuranceSource: string | null;
+  hugrabDefaultInsuranceEnabled: boolean | null;
   // PS-197 (residential parity): the backend-resolved classification used for the quote + WHICH
   // evidence tier decided it (manual_override / provider_marker / shipstation_source /
   // address_validation / company_heuristic / fallback_residential) — so the Rate Browser can
@@ -1876,6 +1898,7 @@ export async function getRates(
       effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
       effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
       effectiveInsuranceSource: 'test-fixture',
+      hugrabDefaultInsuranceEnabled: resolvedInput.hugrabDefaultInsuranceEnabled ?? null,
       residential: resolvedInput.residential === true,
       residentialClassification: resolvedInput.residentialClassification ?? null,
       residentialSource: resolvedInput.residentialSource ?? null,
@@ -1959,6 +1982,7 @@ export async function getRates(
           effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
           effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
           effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+          hugrabDefaultInsuranceEnabled: resolvedInput.hugrabDefaultInsuranceEnabled ?? null,
           residential: resolvedInput.residential === true,
           residentialClassification: resolvedInput.residentialClassification ?? null,
           residentialSource: resolvedInput.residentialSource ?? null,
@@ -1980,6 +2004,7 @@ export async function getRates(
       effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
       effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
       effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+      hugrabDefaultInsuranceEnabled: resolvedInput.hugrabDefaultInsuranceEnabled ?? null,
       residential: resolvedInput.residential === true,
       residentialClassification: resolvedInput.residentialClassification ?? null,
       residentialSource: resolvedInput.residentialSource ?? null,
@@ -2014,6 +2039,7 @@ export async function getRates(
     effectiveInsuranceProvider: resolvedInput.effectiveInsuranceProvider ?? resolvedInput.insuranceProvider ?? null,
     effectiveInsuredValue: resolvedInput.effectiveInsuredValue ?? resolvedInput.insuredValue ?? null,
     effectiveInsuranceSource: resolvedInput.effectiveInsuranceSource ?? null,
+    hugrabDefaultInsuranceEnabled: resolvedInput.hugrabDefaultInsuranceEnabled ?? null,
     residential: resolvedInput.residential === true,
     residentialClassification: resolvedInput.residentialClassification ?? null,
     residentialSource: resolvedInput.residentialSource ?? null,

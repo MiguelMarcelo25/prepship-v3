@@ -506,6 +506,14 @@ export default function OrdersView({
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
   const queryClient = useQueryClient()
+  // Per user override unlock shipped data on 2026-07-14: this locked view reads
+  // the backend-backed policy only to seed operator UX. Quote and label services
+  // independently enforce the persisted setting as the source of truth.
+  const hugrabInsurancePolicyQuery = useQuery<boolean>({
+    queryKey: ['settings', 'hugrab-default-insurance'],
+    queryFn: () => apiClient.fetchHugrabDefaultInsurancePolicy(),
+  })
+  const hugrabDefaultInsuranceEnabled = hugrabInsurancePolicyQuery.data ?? true
   // Order assignment: only admins can assign orders to other users. Workers
   // see only their own assigned rows (server-side filter; this flag just
   // controls visibility of the admin-only UI).
@@ -1659,7 +1667,11 @@ export default function OrdersView({
       return
     }
 
-    const initKey = `${panelOrder.orderId}:${panelDetail ? 'detail' : 'summary'}`
+    // Do not seed the legacy enabled default before the persisted policy arrives;
+    // otherwise a disabled store could retain a stale ParcelGuard/$100 form value.
+    if (hugrabInsurancePolicyQuery.isPending) return
+
+    const initKey = `${panelOrder.orderId}:${panelDetail ? 'detail' : 'summary'}:${hugrabDefaultInsuranceEnabled ? 'insurance-on' : 'insurance-off'}`
     const dimensions = getDimensions(panelOrder, panelDetail)
     const locationId = getPanelWarehouseId(panelOrder, panelDetail) ?? locations.find((location) => location.isDefault)?.locationId ?? locations[0]?.locationId ?? null
     const matchedPackageId = getMatchedPackageIdByDimensions(dimensions, packages)
@@ -1693,17 +1705,21 @@ export default function OrdersView({
     // PS-123: non-authoritative UX seed only. The backend/shared resolver owns the
     // effective HUGRAB provider/value used for quote fingerprints, proof, and labels.
     // This keeps the panel display aligned without letting the frontend decide rates.
-    // PS-072: default the panel Insurance to the HUGRAB ground policy (Parcel Guard
-    // $100 for UPS Ground and USPS Ground/Ground Advantage) when the
-    // operator has not explicitly chosen insurance — so the UI visibly shows what
-    // the backend will charge. resolveEffectiveInsurance never touches Ground
-    // Saver/SurePost (PS-057) or non-HUGRAB orders.
+    // PS-072/214: when the persisted policy is enabled, seed the panel with the
+    // HUGRAB $100 default when the operator has not explicitly chosen insurance,
+    // so the UI visibly shows what the backend will charge. The canonical resolver
+    // passes operator intent through when the setting is disabled and never touches
+    // Ground Saver/SurePost (PS-057) or non-HUGRAB orders.
     const seededInsurance =
       insurance.type && insurance.type !== 'none'
         ? { type: insurance.type, value: insurance.value }
         : (() => {
           const effective = resolveEffectiveInsurance(
-            { clientId: panelOrder.clientId, storeId: panelOrder.storeId },
+            {
+              clientId: panelOrder.clientId,
+              storeId: panelOrder.storeId,
+              hugrabDefaultInsuranceEnabled,
+            },
             {
               carrierCode: inferCarrierFromServiceCode(initialServiceCode),
               serviceCode: initialServiceCode,
@@ -1812,7 +1828,15 @@ export default function OrdersView({
           }
         })
     }
-  }, [panelOrderId, panelOrder, panelDetail, locations, packages])
+  }, [
+    panelOrderId,
+    panelOrder,
+    panelDetail,
+    locations,
+    packages,
+    hugrabDefaultInsuranceEnabled,
+    hugrabInsurancePolicyQuery.isPending,
+  ])
 
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment' || isTestOrder(panelOrder, panelDetail)) {

@@ -7,6 +7,7 @@
 import {
   resolveEffectiveInsurance,
   resolveHugrabRequestInsurance,
+  isHugrabDefaultInsuranceRequired,
   isUpsGroundService,
   isUspsGroundService,
   isUpsGroundSaverOrSurePostService,
@@ -14,6 +15,11 @@ import {
 import { normalizeInsurance } from '../src/lib/shipping-options';
 import { buildSsLabelRequestBody } from '../src/lib/shipstation/labels';
 import { rateCacheKey } from '../src/services/rates';
+import { parseHugrabDefaultInsuranceEnabled } from '../src/services/shipping-workflow/hugrab-insurance-policy';
+import {
+  hugrabDefaultInsuranceFromRequestFingerprint,
+  shippingRateFingerprintMatchesCurrentFacts,
+} from '../src/services/shipping-workflow/rate-fingerprint';
 import { readFileSync } from 'node:fs';
 
 let failures = 0;
@@ -29,6 +35,7 @@ function check(name: string, got: unknown, want: unknown) {
 }
 
 const HUGRAB = { clientId: 4, storeId: 378060, clientName: 'HUGRAB' };
+const HUGRAB_DISABLED = { ...HUGRAB, hugrabDefaultInsuranceEnabled: false };
 const OTHER = { clientId: 7, storeId: 999, clientName: 'KF Goods' };
 
 const upsGround = { carrierCode: 'ups', serviceCode: 'ups_ground', serviceName: 'UPS Ground' };
@@ -38,6 +45,14 @@ const surePost = { carrierCode: 'ups', serviceCode: 'ups_surepost_1_lb_or_greate
 const ups2day = { carrierCode: 'ups', serviceCode: 'ups_2nd_day_air', serviceName: 'UPS 2nd Day Air' };
 
 const pick = (r: ReturnType<typeof resolveEffectiveInsurance>) => ({ p: r.insuranceProvider, v: r.insuredValue, s: r.source });
+
+// --- persisted policy input fails safe to today's enabled behavior ---
+check('missing HUGRAB insurance setting defaults enabled', parseHugrabDefaultInsuranceEnabled(null), true);
+check('malformed HUGRAB insurance setting defaults enabled', parseHugrabDefaultInsuranceEnabled('maybe'), true);
+check('enabled HUGRAB insurance setting stays enabled', parseHugrabDefaultInsuranceEnabled('enabled'), true);
+check('only explicit disabled turns the policy off', parseHugrabDefaultInsuranceEnabled('disabled'), false);
+check('HUGRAB default insurance required by default', isHugrabDefaultInsuranceRequired(HUGRAB), true);
+check('HUGRAB default insurance not required when disabled', isHugrabDefaultInsuranceRequired(HUGRAB_DISABLED), false);
 
 // --- service detectors ---
 check('detect UPS Ground', isUpsGroundService(upsGround), true);
@@ -54,6 +69,12 @@ check('HUGRAB + USPS Ground (brokered), no operator -> parcelguard/100', pick(re
 check('HUGRAB + UPS Ground (direct), operator none -> carrier/100 (gate ON)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'none', insuredValue: null })), { p: 'carrier', v: 100, s: 'hugrab-default' });
 check('HUGRAB + UPS Ground (direct), operator $250 -> parcelguard/250 (PS-170 >$100 cap: carrier free tier is only $100)', pick(resolveEffectiveInsurance(HUGRAB, upsGround, { insuranceProvider: 'carrier', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
 check('HUGRAB + USPS Ground (brokered), operator $250 -> parcelguard/250 (provider forced, value kept)', pick(resolveEffectiveInsurance(HUGRAB, uspsGround, { insuranceProvider: 'shipsurance', insuredValue: 250 })), { p: 'parcelguard', v: 250, s: 'operator' });
+
+// --- persisted policy OFF: operator intent passes through, including none ---
+check('disabled HUGRAB policy + no operator -> no insurance', pick(resolveEffectiveInsurance(HUGRAB_DISABLED, uspsGround, null)), { p: 'none', v: null, s: 'none' });
+check('disabled HUGRAB policy + operator carrier/250 -> passthrough', pick(resolveEffectiveInsurance(HUGRAB_DISABLED, upsGround, { insuranceProvider: 'carrier', insuredValue: 250 })), { p: 'carrier', v: 250, s: 'operator' });
+const disabledRequest = resolveHugrabRequestInsurance(HUGRAB_DISABLED, { insuranceProvider: 'none', insuredValue: null });
+check('disabled HUGRAB request does not force ParcelGuard', { p: disabledRequest.insuranceProvider, v: disabledRequest.insuredValue, s: disabledRequest.source }, { p: 'none', v: null, s: 'none' });
 
 // --- PS-057: Ground Saver/SurePost never defaulted ---
 check('HUGRAB + Ground Saver, operator none -> passthrough none (PS-057)', pick(resolveEffectiveInsurance(HUGRAB, groundSaver, { insuranceProvider: 'none' })), { p: 'none', v: null, s: 'none' });
@@ -122,11 +143,24 @@ const key250 = rateCacheKey({ ...baseRate, insuranceProvider: 'parcelguard', ins
 check('rate key: none != $100', keyNone !== key100, true);
 check('rate key: $100 != $250', key100 !== key250, true);
 check('rate key: $100 includes ip+iv', key100.includes('ip=parcelguard') && key100.includes('iv=10000'), true);
+const keyPolicyOn = rateCacheKey({ ...baseRate, clientId: 4, hugrabDefaultInsuranceEnabled: true });
+const keyPolicyOff = rateCacheKey({ ...baseRate, clientId: 4, hugrabDefaultInsuranceEnabled: false });
+check('rate key: HUGRAB policy on != off', keyPolicyOn !== keyPolicyOff, true);
+check('rate key: HUGRAB policy on is explicit', hugrabDefaultInsuranceFromRequestFingerprint(keyPolicyOn), true);
+check('rate key: HUGRAB policy off is explicit', hugrabDefaultInsuranceFromRequestFingerprint(keyPolicyOff), false);
+check('saved HUGRAB rate matches current ON policy', shippingRateFingerprintMatchesCurrentFacts(keyPolicyOn, { hugrabDefaultInsuranceEnabled: true }), true);
+check('saved HUGRAB rate is stale after policy changes OFF', shippingRateFingerprintMatchesCurrentFacts(keyPolicyOn, { hugrabDefaultInsuranceEnabled: false }), false);
+check('legacy HUGRAB rate without policy proof is stale', shippingRateFingerprintMatchesCurrentFacts(key100, { hugrabDefaultInsuranceEnabled: true }), false);
 
 // PS-170: the HUGRAB request-level forcing moved from an inline block in rates.ts to its
 // single owner resolveHugrabRequestInsurance (shipping-service-eligibility). Assert the
 // BEHAVIOR at the owner (stronger than the old source-regex) + that rates.ts delegates.
 const ratesServiceSource = readFileSync('src/services/rates.ts', 'utf8');
+const labelsServiceSource = readFileSync('src/services/labels.ts', 'utf8');
+const ordersViewSource = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
+const settingsCardSource = readFileSync('web/src/components/Settings/HugrabInsurancePolicyCard.tsx', 'utf8');
+const userSettingPolicySource = readFileSync('src/services/user-setting-policy.ts', 'utf8');
+const ordersRouteSource = readFileSync('src/routes/orders.ts', 'utf8');
 const reqNone = resolveHugrabRequestInsurance(HUGRAB, { insuranceProvider: 'none', insuredValue: null });
 check(
   'ShipStation rate default uses ParcelGuard when HUGRAB operator insurance is none',
@@ -145,6 +179,35 @@ check(
   'rates.ts delegates HUGRAB request insurance to the single owner (no inline duplicate)',
   /resolveHugrabRequestInsurance\(/.test(ratesServiceSource) &&
     !/insuranceProvider = 'parcelguard'/.test(ratesServiceSource),
+  true,
+);
+check(
+  'label purchase loads the backend policy and rejects a quote from another policy state',
+  /loadHugrabDefaultInsuranceEnabled\(\)/.test(labelsServiceSource) &&
+    /RATE_LABEL_INSURANCE_POLICY_MISMATCH/.test(labelsServiceSource) &&
+    /isHugrab:\s*hugrabDefaultInsuranceRequired/.test(labelsServiceSource),
+  true,
+);
+check(
+  'OrdersView seeds UX from the persisted policy without owning label truth',
+  /fetchHugrabDefaultInsurancePolicy\(\)/.test(ordersViewSource) &&
+    /hugrabDefaultInsuranceEnabled/.test(ordersViewSource),
+  true,
+);
+check(
+  'Settings exposes an explicit HUGRAB enable-disable control',
+  /HUGRAB automatic insurance/.test(settingsCardSource) &&
+    /saveHugrabDefaultInsurancePolicy/.test(settingsCardSource),
+  true,
+);
+check(
+  'generic settings API explicitly allows the HUGRAB policy key',
+  /['"]hugrab_default_insurance['"]/.test(userSettingPolicySource),
+  true,
+);
+check(
+  'orders read model invalidates saved HUGRAB rates after a policy change',
+  /hugrabDefaultInsuranceEnabled:\s*rowIsHugrab\s*\?/.test(ordersRouteSource),
   true,
 );
 

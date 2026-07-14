@@ -104,6 +104,7 @@ import { assertOrderSafeToShip } from './fulfillment/shipping-safety';
 import { loadClientIsTest, resolveEffectiveTestLabel } from './fulfillment/test-label-policy';
 import { addMockLabelSignature } from '../lib/mock-label-access';
 import {
+  hugrabDefaultInsuranceFromRequestFingerprint,
   type SelectedRateProofInput,
   residentialFromRequestFingerprint,
   selectedRateRequestFingerprint,
@@ -142,6 +143,7 @@ function hugrabShippCustomsValueProofEnabled(): boolean {
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
+  isHugrabDefaultInsuranceRequired,
   isHugrabShippingContext,
   isUpsGroundSaverOrSurePostService,
   resolveEffectiveInsurance,
@@ -156,6 +158,9 @@ import { parcelGuardScheduledPremium } from './shipping-workflow/insurance-cost'
 // value), and so the honest certainty state is persisted into selected_rate_json.
 import { resolveInsuranceCertainty, isShippBrokered } from './shipping-workflow/insurance-certainty';
 import { loadShippingAutomationRules } from './shipping-automation';
+// Per user override unlock shipped data on 2026-07-14: read the persisted HUGRAB
+// default-insurance intent before quote-proof validation or any postage side effect.
+import { loadHugrabDefaultInsuranceEnabled } from './shipping-workflow/hugrab-insurance-policy';
 
 // Batch-label callers often omit a panel-selected package. PS-413 accepts
 // dimensions only when they identify exactly one catalog package; ambiguous
@@ -1807,15 +1812,30 @@ async function createLabelV2Impl(
     serviceName: body.serviceName ?? body.serviceCode,
     serviceType: body.serviceType ?? null,
   };
-  // PS-072: backend source of truth for effective insurance. Applies the HUGRAB
-  // default (ParcelGuard/$100 for UPS Ground and USPS Ground),
+  // Per user override unlock shipped data on 2026-07-14: the persisted setting is
+  // operator intent only; this canonical backend boundary still decides effective
+  // quote/label insurance and never mutates an existing shipped/cancelled order.
+  const isHugrab = isHugrabShippingContext({ clientId, storeId: order.storeId ?? null });
+  const hugrabDefaultInsuranceEnabled = isHugrab
+    ? await loadHugrabDefaultInsuranceEnabled()
+    : true;
+  const insuranceEligibilityContext = {
+    clientId,
+    storeId: order.storeId ?? null,
+    hugrabDefaultInsuranceEnabled,
+  };
+  const hugrabDefaultInsuranceRequired = isHugrabDefaultInsuranceRequired(
+    insuranceEligibilityContext,
+  );
+  // PS-072: backend source of truth for effective insurance. When enabled, applies
+  // the HUGRAB default (ParcelGuard/$100 for UPS Ground and USPS Ground),
   // preserves an operator-selected higher value, and NEVER touches Ground
   // Saver/SurePost (PS-057). The UI cannot bypass this — single, batch, and
   // print-queue label creation all funnel through createLabelV2. Run BEFORE the
   // eligibility assert so the assert sees the defaulted values.
   const baseOptions = normalizeShippingOptions(body);
   const effectiveInsurance = resolveEffectiveInsurance(
-    { clientId, storeId: order.storeId ?? null },
+    insuranceEligibilityContext,
     serviceDescriptor,
     baseOptions,
   );
@@ -1830,7 +1850,7 @@ async function createLabelV2Impl(
   // a future resolver edit narrows coverage again this throws BEFORE postage
   // instead of silently shipping bare (the order-#1476 class).
   if (
-    isHugrabShippingContext({ clientId, storeId: order.storeId ?? null }) &&
+    hugrabDefaultInsuranceRequired &&
     options.insuranceProvider === 'none' &&
     body.testLabel !== true &&
     !isUpsGroundSaverOrSurePostService(serviceDescriptor)
@@ -2066,7 +2086,7 @@ async function createLabelV2Impl(
   // backend-owned rate quote snapshot id; fall back to the carried proof. Both run
   // the SAME strict validator — identical to legacy when no rateQuoteId is sent.
   await ensurePackageConsumptionSchema();
-  await assertLabelPurchaseRateSelection({
+  const purchaseRateProof = await assertLabelPurchaseRateSelection({
     rateQuoteId: body.rateQuoteId,
     selectedRateKey: body.selectedRateKey,
     selectedRateProof: body.selectedRateProof,
@@ -2077,6 +2097,25 @@ async function createLabelV2Impl(
     // ShipStation branch.
     purchaseShippingProviderId: body.shippingProviderId,
   });
+  // Per user override unlock shipped data on 2026-07-14: bind the current toggle
+  // to the backend quote. A setting change makes the old quote stale before any
+  // carrier call, preventing an insured/uninsured price or coverage mismatch.
+  if (isHugrab) {
+    const quotedPolicy = hugrabDefaultInsuranceFromRequestFingerprint(
+      selectedRateRequestFingerprint(purchaseRateProof.selectedRate),
+    );
+    if (quotedPolicy !== hugrabDefaultInsuranceEnabled) {
+      const err = new Error(
+        'HUGRAB automatic insurance changed after this rate was quoted. Re-rate the order before buying the label.',
+      ) as Error & { code?: string; details?: Record<string, unknown> };
+      err.code = 'RATE_LABEL_INSURANCE_POLICY_MISMATCH';
+      err.details = {
+        quotedPolicy,
+        currentPolicy: hugrabDefaultInsuranceEnabled,
+      };
+      throw err;
+    }
+  }
   // PS-261 (Per user override unlock shipped data on 2026-06-18): HUGRAB label-purchase
   // coverage preflight — a backend-owned BLOCK that runs BEFORE either provider purchase
   // call (direct or ShipStation). It DELEGATES to the PS-290 coverage owner + PS-274
@@ -2101,7 +2140,7 @@ async function createLabelV2Impl(
   const preflightAccountIdentity = body.carrierName ?? null;
   const preflightServiceCode = body.serviceCode;
   const hugrabCoveragePreflight = resolveHugrabLabelPurchasePreflight({
-    isHugrab: isHugrabShippingContext({ clientId, storeId: order.storeId ?? null }),
+    isHugrab: hugrabDefaultInsuranceRequired,
     insuranceProvider: options.insuranceProvider,
     insuredValue: options.insuredValue,
     insuranceCost: preflightScheduledPremium,

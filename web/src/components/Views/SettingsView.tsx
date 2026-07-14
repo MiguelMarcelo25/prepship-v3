@@ -97,6 +97,7 @@ import {
 } from './settings-parity'
 import { CarrierIntegrationsCard } from '../Settings/CarrierIntegrationsCard'
 import { CarrierEligibilityPolicyCard } from '../Settings/CarrierEligibilityPolicyCard'
+import { HugrabInsurancePolicyCard } from '../Settings/HugrabInsurancePolicyCard'
 import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrationsCard'
 // PS-155: SystemStatus / Cache / Sandbox panels extracted to sibling files (behavior-preserving;
 // all state + async handlers stay in this view and are passed as props).
@@ -1345,7 +1346,10 @@ export default function SettingsView() {
 
               {/* ─── STORES panel ──────────────────────────────── */}
               {activeSection === 'stores' ? (
-                <CarrierIntegrationsCard view="stores" queriesEnabled={settingsQueriesReady} />
+                <div className="flex flex-col gap-4">
+                  <HugrabInsurancePolicyCard queriesEnabled={settingsQueriesReady} />
+                  <CarrierIntegrationsCard view="stores" queriesEnabled={settingsQueriesReady} />
+                </div>
               ) : null}
 
               {/* ─── CARRIERS panel ────────────────────────────── */}

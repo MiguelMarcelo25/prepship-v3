@@ -651,6 +651,22 @@ export const apiClient = {
     );
   },
 
+  // HUGRAB automatic $100 insurance. The backend applies the policy; these
+  // methods only transport the persisted operator setting for display/editing.
+  async fetchHugrabDefaultInsurancePolicy(): Promise<boolean> {
+    const row = await api.get<{ value?: string | null }>(
+      '/settings/hugrab_default_insurance',
+      { timeoutMs: 25_000 },
+    );
+    return String(row?.value ?? '').trim().toLowerCase() !== 'disabled';
+  },
+
+  saveHugrabDefaultInsurancePolicy(enabled: boolean): Promise<any> {
+    return api.put<any>('/settings/hugrab_default_insurance', {
+      value: enabled ? 'enabled' : 'disabled',
+    });
+  },
+
   // ─── Sync status ────────────────────────────────────────────────────────────
   fetchLegacySyncStatus(options: { forceRefresh?: boolean } = {}): Promise<any> {
     return cachedSafe(

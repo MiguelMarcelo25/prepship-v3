@@ -254,10 +254,12 @@ export async function produceRateBrowsePayload({
                 cached: false,
                 cacheKey: rateCacheKey(resolvedForBrowse),
                 fetchedAt: new Date().toISOString(),
+                cacheAgeMs: undefined,
                 carrierDiagnostics: [],
                 effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
                 effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
                 effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
+                hugrabDefaultInsuranceEnabled: resolvedForBrowse.hugrabDefaultInsuranceEnabled ?? null,
                 residential: resolvedForBrowse.residential === true,
                 residentialClassification: resolvedForBrowse.residentialClassification ?? null,
                 residentialSource: resolvedForBrowse.residentialSource ?? null,
@@ -281,6 +283,7 @@ export async function produceRateBrowsePayload({
             effectiveInsuranceProvider: resolvedForBrowse.effectiveInsuranceProvider ?? null,
             effectiveInsuredValue: resolvedForBrowse.effectiveInsuredValue ?? null,
             effectiveInsuranceSource: resolvedForBrowse.effectiveInsuranceSource ?? null,
+            hugrabDefaultInsuranceEnabled: resolvedForBrowse.hugrabDefaultInsuranceEnabled ?? null,
           }, { cachedOnly: isCachedOnlyLookup, priority: 'interactive' });
           directCarrierDurationMs = Date.now() - startedAt;
           return r;
@@ -419,10 +422,12 @@ export async function produceRateBrowsePayload({
     }) as typeof cheapest;
   }
   const hugrabCoverageDisplayContext = {
-    isHugrab: isHugrabShippingContext({
-      clientId: orderForBrowse?.clientId ?? rest.clientId ?? null,
-      storeId: orderForBrowse?.storeId ?? rest.storeId ?? null,
-    }),
+    isHugrab:
+      result.hugrabDefaultInsuranceEnabled === true &&
+      isHugrabShippingContext({
+        clientId: orderForBrowse?.clientId ?? rest.clientId ?? null,
+        storeId: orderForBrowse?.storeId ?? rest.storeId ?? null,
+      }),
     insuranceProvider: result.effectiveInsuranceProvider ?? null,
     insuredValue: result.effectiveInsuredValue ?? null,
     shippCustomsValueProofEnabled: hugrabShippCustomsValueProofEnabled(),

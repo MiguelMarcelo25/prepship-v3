@@ -182,7 +182,7 @@ export function assertRateQuoteSnapshotForLabelPurchase(input: {
  */
 export async function assertLabelPurchaseRateSelection(
   body: LabelPurchaseRateSelection,
-): Promise<void> {
+): Promise<SelectedRateProofInput> {
   if (!(body.rateQuoteId && body.selectedRateKey)) {
     recordRateProofEnforcement('snapshot_reference_missing', 'backend_rate_quote_required');
     throwStrictRateQuoteError('backend_rate_quote_required');
@@ -196,12 +196,13 @@ export async function assertLabelPurchaseRateSelection(
   }
 
   try {
-    assertRateQuoteSnapshotForLabelPurchase({
+    const proof = assertRateQuoteSnapshotForLabelPurchase({
       snapshot,
       selectedRateKey: body.selectedRateKey,
       purchaseShippingProviderId: body.purchaseShippingProviderId,
     });
     recordRateProofEnforcement('snapshot_enforced');
+    return proof;
   } catch (error) {
     const reason = error instanceof SelectedRateProofError
       ? error.details.reason

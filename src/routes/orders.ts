@@ -134,6 +134,9 @@ import {
   type ShippingServiceEligibilityContext,
 } from '../lib/shipping-service-eligibility';
 import { buildBestRateWorkflowDto, withOrderRowWorkflow } from '../services/shipping-workflow/best-rate-workflow-dto';
+// Per user override unlock shipped data on 2026-07-14: the read model compares
+// saved HUGRAB rate proof with the current policy; it does not mutate historical rows.
+import { loadHugrabDefaultInsuranceEnabled } from '../services/shipping-workflow/hugrab-insurance-policy';
 import { buildOrderRowPackageFacts } from '../services/shipping-workflow/order-row-package-facts';
 import { buildOrderShippingWorkflowState } from '../services/shipping-workflow/order-shipping-state';
 import { resolveShippedLabelDisplayState } from '../services/shipping-workflow/shipped-label-display-state';
@@ -1741,6 +1744,14 @@ async function ordersListResponse(
     }
   }
 
+  // Per user override unlock shipped data on 2026-07-14: a changed HUGRAB toggle
+  // makes prior saved Best Rates stale immediately. Fail safe to the legacy ON
+  // policy if the setting read itself is unavailable; this remains read-only.
+  const hugrabDefaultInsuranceEnabled = await loadHugrabDefaultInsuranceEnabled().catch((err) => {
+    console.warn('[orders] HUGRAB insurance policy read failed; defaulting enabled:', err instanceof Error ? err.message : err);
+    return true;
+  });
+
   // PS-137 #8 (deliberate non-extraction): this per-row mapper is intentionally left inline. It is NOT
   // a source-of-truth concern — it only ORCHESTRATES already-canonical helpers (recordOrNull/stringOrNull/
   // normalizeListBestRate/normalizeOrderSelectedRateDto from the #1-7 extractions, plus buildCanonicalOrderModel,
@@ -1966,6 +1977,7 @@ async function ordersListResponse(
             toState: stringOrNull(r.order.shipToState) ?? stringOrNull(rowRawShipTo.state),
             toCity: stringOrNull(r.order.shipToCity) ?? stringOrNull(rowRawShipTo.city),
             residential: rowResidential,
+            hugrabDefaultInsuranceEnabled: rowIsHugrab ? hugrabDefaultInsuranceEnabled : null,
           },
           backendRequestKey: bestRateRequestFingerprint,
           savedBestRate: bestRateRecord,

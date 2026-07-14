@@ -34,6 +34,8 @@ export type ShippingServiceEligibilityContext = {
   clientId?: number | string | null;
   clientName?: string | null;
   storeId?: number | string | null;
+  /** Backend-resolved operator setting. Missing preserves the legacy enabled policy. */
+  hugrabDefaultInsuranceEnabled?: boolean | null;
 };
 
 export type ShippingServiceOptionEligibilityContext = {
@@ -161,6 +163,13 @@ export function isHugrabShippingContext(context: ShippingServiceEligibilityConte
   return HUGRAB_NORMALIZED_NAMES.has(normalizeName(context.clientName));
 }
 
+/** True only when this is HUGRAB and its persisted automatic-insurance policy is active. */
+export function isHugrabDefaultInsuranceRequired(
+  context: ShippingServiceEligibilityContext | null | undefined,
+): boolean {
+  return isHugrabShippingContext(context) && context?.hugrabDefaultInsuranceEnabled !== false;
+}
+
 export function isUpsGroundSaverOrSurePostService(
   service: ShippingServiceDescriptor | null | undefined,
 ): boolean {
@@ -236,8 +245,8 @@ export type EffectiveInsurance = {
  * displayed price and the purchased label agree.
  *
  * Rules:
- *  - Non-HUGRAB context: pass the operator's selection through untouched.
- *  - HUGRAB + ANY service           -> $100 coverage (or higher operator
+ *  - Non-HUGRAB or policy disabled: pass the operator's selection through untouched.
+ *  - HUGRAB + policy enabled + ANY service -> $100 coverage (or higher operator
  *    value). PS-214: the old rule only forced UPS Ground + USPS Ground —
  *    Shipp/FedEx/EasyPost ground-like services fell through to the operator
  *    passthrough and order #1476 shipped a Shipp/FedEx label UNINSURED while
@@ -267,7 +276,7 @@ export function resolveEffectiveInsurance(
     source: operator.insuranceProvider === 'none' ? 'none' : 'operator',
   };
 
-  if (!isHugrabShippingContext(context)) return passthrough;
+  if (!isHugrabDefaultInsuranceRequired(context)) return passthrough;
   // PS-057: Ground Saver / SurePost are disabled for HUGRAB and cannot carry
   // insurance — never apply the default to them.
   if (isUpsGroundSaverOrSurePostService(service)) return passthrough;
@@ -308,6 +317,7 @@ export function resolveEffectiveInsurance(
  * is refined later during rate enrichment via resolveAccountInsuranceCapability.
  *
  * Single owner: services/rates.ts delegates here instead of duplicating the forcing.
+ * A disabled persisted policy passes operator intent through unchanged.
  * Aligns the request-level value with the label's $100 floor (resolveEffectiveInsurance),
  * so a sub-$100 operator selection on a HUGRAB order no longer prices the rate below the
  * $100 the label actually insures.
@@ -320,7 +330,7 @@ export function resolveHugrabRequestInsurance(
     insuranceProvider: operatorSelection?.insuranceProvider ?? operatorSelection?.insurance,
     insuredValue: operatorSelection?.insuredValue ?? operatorSelection?.insuranceValue,
   });
-  if (!isHugrabShippingContext(context)) {
+  if (!isHugrabDefaultInsuranceRequired(context)) {
     return {
       insuranceProvider: operator.insuranceProvider,
       insuredValue: operator.insuredValue,

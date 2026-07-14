@@ -11,6 +11,7 @@ export const ALLOWED_SETTINGS = [
   'orders.columnPrefs',
   'marketplace_fee_rules',
   'block_shipstation_for_direct_store',
+  'hugrab_default_insurance',
 ] as const;
 
 export type AllowedSettingKey = (typeof ALLOWED_SETTINGS)[number];
