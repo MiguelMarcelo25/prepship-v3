@@ -35,19 +35,30 @@ label, postage, order, shipment, or marketplace side effect.
 
 ## Deployment and Canary Gate
 
-This item is code-ready but remains operationally open until the runtime canary
-is completed:
+Completed in production on 2026-07-14 under the user override
+`unlock shipped data`:
 
-1. Apply migrations through `0064` before deploying the API/worker code.
-2. Deploy with `DURABLE_PRINT_QUEUE_PDF=false`.
-3. Verify two concurrent synthetic/mock-label merges retain distinct job
-   snapshots and terminal status.
-4. With DJ's runtime go/no-go, enable `DURABLE_PRINT_QUEUE_PDF` on the canary.
-5. Merge synthetic/mock labels, confirm chunk rows exist, restart the API, and
-   verify the same signed PDF/chunk can be opened without regenerating labels.
-6. Disable the flag immediately if artifact persistence or restart rehydration
-   fails. No live label purchase or marketplace notification belongs in this
-   canary.
+1. Migrations through `0064` were applied before the canary.
+2. The API was deployed with `DURABLE_PRINT_QUEUE_PDF=false`.
+3. Concurrent synthetic/mock-only jobs
+   `81bf573d-340d-4457-879d-0bd264c1de01` and
+   `a0304221-64d4-4bd7-9bd8-6780af5a9c25` both reached `done`, retained
+   distinct two-entry snapshots, and wrote zero durable PDF/chunk rows.
+4. DJ gave the runtime go/no-go in-session. `DURABLE_PRINT_QUEUE_PDF=true`
+   was deployed to the Render API in `dep-d9as4be7r5hc739cadk0`.
+5. Synthetic/mock-only job `284df37c-9292-43fe-ae11-83bc89f2ed65`
+   reached `done` and stored one per-job snapshot, one merged-PDF row, and one
+   PDF-chunk row. Its signed chunk served 3,329 bytes with SHA-256
+   `a5c6c7e244c4402d6c1352ae06336f7402dd87476a801a2e784fc5feede40d07`.
+6. Restart deploy `dep-d9as5peq1p3s73d95fb0` replaced the API process. The
+   durable status still returned `done`, and the rehydrated signed chunk served
+   the same byte length and SHA-256 without regenerating a label.
+7. Synthetic queue fixtures were removed. `/health`, `/health/ready`, and
+   `/health/deep` remained green. Shipment, mock-label, fulfillment-outbox,
+   and shipped/cancelled-order counts were unchanged. No real label/postage,
+   marketplace notification, or production shipped/cancelled mutation occurred.
+
+The canary passed, so the flag remains enabled on the API service.
 
 ## Offline Proof
 
