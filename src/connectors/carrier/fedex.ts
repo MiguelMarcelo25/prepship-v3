@@ -18,7 +18,7 @@ const FEDEX_SERVICE_NAMES: Record<string, string> = {
   SMART_POST: 'FedEx SmartPost',
 };
 
-async function getFedexAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getFedexAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const apiKey = String(creds?.apiKey ?? '').trim();
   const apiSecret = String(creds?.apiSecret ?? '').trim();
   if (!apiKey || !apiSecret) {
@@ -40,6 +40,7 @@ async function getFedexAccessToken(creds: Record<string, unknown>): Promise<stri
       Accept: 'application/json',
     },
     body: body.toString(),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
@@ -51,6 +52,7 @@ async function getFedexAccessToken(creds: Record<string, unknown>): Promise<stri
 }
 
 async function ratesFromFedex(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const signal = input.signal as AbortSignal | undefined;
   assertUnsupportedShippingOptions('FedEx', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
@@ -59,7 +61,7 @@ async function ratesFromFedex(input: Record<string, unknown>): Promise<Array<{ s
   if (!accountNumber) throw new Error('FedEx accountNumber is required');
   if (!input.toZip) throw new Error('toZip is required for FedEx rate quotes');
 
-  const token = await getFedexAccessToken(creds);
+  const token = await getFedexAccessToken(creds, signal);
   const useSandbox = String(creds?.sandbox ?? '').toLowerCase() === 'true';
   const ratesUrl = useSandbox
     ? 'https://apis-sandbox.fedex.com/rate/v1/rates/quotes'
@@ -106,6 +108,7 @@ async function ratesFromFedex(input: Record<string, unknown>): Promise<Array<{ s
       'x-locale': 'en_US',
     },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 600)).catch(() => '');

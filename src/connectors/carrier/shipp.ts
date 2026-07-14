@@ -124,11 +124,24 @@ function shippShouldRetryQuoteStatus(status: number): boolean {
   return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
-function shippSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function shippSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
-async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: string }> {
+async function shippLookupUsZip(zip: unknown, signal?: AbortSignal): Promise<{ city?: string; state?: string }> {
   const five = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
   if (!/^\d{5}$/.test(five)) return {};
   const cached = shippZipCache.get(five);
@@ -137,6 +150,7 @@ async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: 
   try {
     const res = await timedFetch('shipp.zip-lookup', `https://api.zippopotam.us/us/${five}`, {
       headers: { Accept: 'application/json' },
+      signal,
     });
     if (!res.ok) {
       const empty = {};
@@ -152,6 +166,7 @@ async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: 
     shippZipCache.set(five, result);
     return result;
   } catch {
+    signal?.throwIfAborted();
     return {};
   }
 }
@@ -305,7 +320,10 @@ function shippShipFrom(
   };
 }
 
-async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: string; cookieHeader: string; email: string }> {
+async function shippLogin(
+  creds: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<{ apiKey: string; cookieHeader: string; email: string }> {
   const apiKey = String(creds?.apiKey ?? '').trim();
   const email = String(creds?.email ?? '').trim();
   const password = String(creds?.password ?? '').trim();
@@ -321,6 +339,7 @@ async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: str
       'x-api-key': apiKey,
     },
     body: JSON.stringify({ email, password }),
+    signal,
   });
   const text = await res.text().catch(() => '');
   let data: any = null;
@@ -412,6 +431,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   // EMPTY — Layer 1 only fills this when the per-account opt-in ran and accepted a known-thin pass.
   observedMissing: string[];
 }> {
+  const signal = input.signal as AbortSignal | undefined;
   // PS-083 — Shipp now supports declaring an insured value via the
   // PackageLineItem customsValue, so insured orders (e.g. HUGRAB $100) are
   // accepted instead of being dropped. Capture the normalized options the gate
@@ -424,7 +444,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
     throw new Error('Shipp rate quotes require box dimensions (length, width, height).');
   }
 
-  const session = await shippLogin(creds);
+  const session = await shippLogin(creds, signal);
   const from = shippShipFrom(creds, { fromZip: input.fromZip, shipFrom: input.shipFrom });
   const rawOrder = input.rawOrder as any;
   const to = shippShipTo(
@@ -434,14 +454,14 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
     typeof input.residential === 'boolean' ? input.residential : undefined,
   );
   const hasRawShipTo = shippHasRawShipTo(rawOrder);
-  const toZipPlace = await shippLookupUsZip(to.postal_code);
+  const toZipPlace = await shippLookupUsZip(to.postal_code, signal);
   // Was the city/state EXPLICITLY provided (vs defaulted)? Read the canonical Address
   // snake_case (city_locality/state_province) + creds — NOT camelCase shipFrom.city.
   const sfRaw = (input.shipFrom ?? {}) as Record<string, unknown>;
   const fromHasExplicitCity = Boolean(shippFirstString(creds?.shipFromCity, sfRaw.city_locality));
   const fromHasExplicitState = Boolean(shippFirstString(creds?.shipFromState, sfRaw.state_province));
   const fromZipPlace = (!fromHasExplicitCity || !fromHasExplicitState)
-    ? await shippLookupUsZip(from.postal_code)
+    ? await shippLookupUsZip(from.postal_code, signal)
     : {};
   const weightLb = Math.max(0.01, Math.round((Number(input.weightOz || 16) / 16) * 100) / 100);
   const refNumber = shippRefNumber(input);
@@ -510,7 +530,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
     // PS-271 (Layer 1): route /quote through a per-provider token bucket (Shipp /quote bypasses the
     // global limiter today). Only runs when the observed-set feature is opted in, so the OFF path is
     // unchanged. Bounds /quote burst; the login floor is untouched.
-    if (observedRetryOn) await acquireShippQuoteBudget();
+    if (observedRetryOn) await acquireShippQuoteBudget(signal);
     try {
       res = await timedFetch(attempt > 1 ? 'shipp.rates.retry' : 'shipp.rates', 'https://shipp.to/api/shipping/quote', {
         method: 'POST',
@@ -521,11 +541,12 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
           Cookie: session.cookieHeader,
         },
         body: JSON.stringify(body),
+        signal,
       }, { attempt });
     } catch (err) {
       lastQuoteError = err instanceof Error ? err : new Error(String(err));
       if (attempt < SHIPP_QUOTE_MAX_ATTEMPTS) {
-        await shippSleep(500);
+        await shippSleep(500, signal);
         continue;
       }
       throw new Error(`Shipp quote failed after retry: ${lastQuoteError.message}`);
@@ -537,7 +558,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
     if (!res.ok) {
       lastQuoteError = new Error(`Shipp quote ${res.status}: ${text.slice(0, 800) || res.statusText}`);
       if (attempt < SHIPP_QUOTE_MAX_ATTEMPTS && shippShouldRetryQuoteStatus(res.status)) {
-        await shippSleep(500);
+        await shippSleep(500, signal);
         continue;
       }
       if (attempt > 1 && shippShouldRetryQuoteStatus(res.status)) {
@@ -571,7 +592,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
           lastQuoteError = new Error(
             `Shipp returned a thin rate set (missing ${missing.join(',')}); re-asking before the cap.`,
           );
-          if (SHIPP_THIN_RETRY_BACKOFF_MS > 0) await shippSleep(SHIPP_THIN_RETRY_BACKOFF_MS);
+          if (SHIPP_THIN_RETRY_BACKOFF_MS > 0) await shippSleep(SHIPP_THIN_RETRY_BACKOFF_MS, signal);
           continue;
         }
       } else if (missing.length) {

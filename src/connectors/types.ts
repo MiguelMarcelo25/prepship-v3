@@ -112,7 +112,11 @@ export type NormalizedStoreOrderStatusSyncResult = {
   diagnostics?: Record<string, unknown>;
 };
 
-export type CarrierRateInput = Record<string, unknown> & { shippingOptions?: NormalizedShippingOptions };
+export type CarrierRateInput = Record<string, unknown> & {
+  shippingOptions?: NormalizedShippingOptions;
+  signal?: AbortSignal;
+  priority?: 'interactive' | 'background';
+};
 export type CarrierLabelInput = Record<string, unknown> & { shippingOptions?: NormalizedShippingOptions };
 export type CarrierAccountListInput = Record<string, unknown>;
 export type NormalizedCarrierAccountListResult = Record<string, unknown>;

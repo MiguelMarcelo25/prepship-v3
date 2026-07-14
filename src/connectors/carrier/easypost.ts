@@ -49,6 +49,7 @@ function easyPostOptions(input: Record<string, unknown>) {
 }
 
 async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPostRate[]> {
+  const signal = input.signal as AbortSignal | undefined;
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
@@ -118,6 +119,7 @@ async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPo
       Accept: 'application/json',
     },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 800)).catch(() => '');

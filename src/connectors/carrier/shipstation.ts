@@ -14,6 +14,9 @@ type ShipStationRateEstimateInput = {
   apiKeyV2?: string;
   apiKey?: string;
   dedupeKey?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  priority?: 'interactive' | 'background';
 };
 
 type ShipStationCreateLabelFromRateInput = {
@@ -116,8 +119,9 @@ export function createShipStationCarrierConnector(): CarrierConnector<
           // caller — the losing request kept running (and retrying inside
           // ssRequest, re-consuming limiter budget) for up to ~7.5 min as a
           // zombie. ssRequest composes the signal with its own timeout.
-          timeoutMs: (input as { timeoutMs?: number }).timeoutMs,
-          signal: (input as { signal?: AbortSignal }).signal,
+          timeoutMs: input.timeoutMs,
+          signal: input.signal,
+          priority: input.priority,
         },
       );
       return Array.isArray(payload) ? payload : (payload.rates ?? []);

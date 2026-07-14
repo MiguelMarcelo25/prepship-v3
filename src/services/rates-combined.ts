@@ -255,8 +255,13 @@ export function withAbortableCarrierQuoteTimeout<T>(
     run(controller.signal),
     new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        controller.abort();
-        reject(new Error(`${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`));
+        const timeoutError = new Error(`${label} rate request timed out after ${Math.round(timeoutMs / 1000)}s`);
+        // Settle the public result with the stable timeout diagnostic first,
+        // then propagate that same reason into the provider work. Aborting
+        // first lets a synchronous abort listener win Promise.race with a
+        // generic AbortError, which hides which carrier actually timed out.
+        reject(timeoutError);
+        controller.abort(timeoutError);
       }, timeoutMs);
     }),
   ]).finally(() => {

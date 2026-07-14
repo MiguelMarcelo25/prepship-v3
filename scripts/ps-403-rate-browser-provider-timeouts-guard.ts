@@ -11,7 +11,10 @@ import {
   sanitizeRateProviderError,
 } from '../src/services/rate-browser-timing-diagnostics';
 import { rateResultIsCacheable } from '../src/services/carrier-estimate-retry';
-import { combineCarrierUniverses } from '../src/services/rates-combined';
+import {
+  combineCarrierUniverses,
+  withAbortableCarrierQuoteTimeout,
+} from '../src/services/rates-combined';
 
 const interactivePolicy = resolveRateBrowseProviderExecutionPolicy({
   priority: 'interactive',
@@ -35,6 +38,23 @@ assert.deepEqual(
   { timeoutMs: 15_000, maxRetries: 1 },
   'background workflows keep the exhaustive retry policy',
 );
+
+let abortReachedProvider = false;
+await assert.rejects(
+  withAbortableCarrierQuoteTimeout(
+    (signal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        abortReachedProvider = true;
+        reject(signal.reason);
+      }, { once: true });
+    }),
+    'abort-proof',
+    5,
+  ),
+  /timed out/,
+  'provider timeout must reject the caller',
+);
+assert.equal(abortReachedProvider, true, 'provider timeout must abort the underlying work');
 
 let detachedStarted = false;
 scheduleDetachedRateBrowseJob(async () => {
@@ -127,6 +147,7 @@ const workflowSource = readFileSync('src/services/rate-browse-workflow.ts', 'utf
 const producerSource = readFileSync('src/services/rate-browse-response-producer.ts', 'utf8');
 const jobStoreSource = readFileSync('src/services/rate-browse-job-store.ts', 'utf8');
 const ratesRouteSource = readFileSync('src/routes/rates.ts', 'utf8');
+const ratesSource = readFileSync('src/services/rates.ts', 'utf8');
 const modalSource = readFileSync('web/src/components/RateBrowserModal.tsx', 'utf8');
 assert.match(workflowSource, /scheduleDetachedRateBrowseJob/, 'workflow must delegate to detached scheduling');
 assert.match(producerSource, /rateBrowseFailure/, 'workflow result must expose actionable all-failed diagnostics');
@@ -146,5 +167,30 @@ assert.match(jobStoreSource, /rate_browse_job_provider_statuses/, 'provider diag
 assert.match(producerSource, /priority: 'interactive'/, 'Rate Browser provider calls must use interactive policy');
 assert.match(ratesRouteSource, /\{ forceRefresh, priority: 'interactive' \}/, 'direct rate route must use interactive policy');
 assert.match(modalSource, /RateBrowserDiagnosticsPanel/, 'Rate Browser must render provider diagnostics');
+
+const directQuoteBlock = ratesSource.slice(
+  ratesSource.indexOf('const quoted = await withAbortableCarrierQuoteTimeout'),
+  ratesSource.indexOf('const rawRates = Array.isArray(quoted.rates)'),
+);
+assert.ok(
+  directQuoteBlock.includes('(signal) => quoteCarrierRates') && directQuoteBlock.includes('signal,'),
+  'direct-carrier timeout must pass its AbortSignal through the connector orchestrator',
+);
+
+for (const connector of [
+  'easypost',
+  'ups',
+  'fedex',
+  'usps',
+  'shipengine',
+  'ebay-shipping',
+  'amazon-shipping',
+  'walmart-shipping',
+  'shipp',
+]) {
+  const source = readFileSync(`src/connectors/carrier/${connector}.ts`, 'utf8');
+  assert.match(source, /const signal = input\.signal as AbortSignal \| undefined/, `${connector} rates must consume the signal`);
+  assert.match(source, /timedFetch\([\s\S]*?signal,/, `${connector} HTTP work must receive the signal`);
+}
 
 console.log('PASS PS-403 Rate Browser provider timeout guard');

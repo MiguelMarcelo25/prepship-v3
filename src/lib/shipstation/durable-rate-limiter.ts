@@ -4,7 +4,7 @@
 // row in Postgres and refills/decrements it ATOMICALLY, so the combined rate stays within budget
 // and survives restarts.
 //
-// ENV-GATED: selected only when RATE_LIMITER_BACKEND=durable (see v1-client). Default stays the
+// ENV-GATED: selected only when RATE_LIMITER_BACKEND=durable (see v1-client and client). Default stays the
 // fast in-memory bucket, so merging this changes nothing until DJ flips it on + watches a canary.
 //
 // Additive-table 500-safe pattern (like ensureAddressClassificationsSchema): runtime CREATE TABLE
@@ -62,9 +62,10 @@ export class DurableTokenBucket {
     return this.seeded;
   }
 
-  async acquire(): Promise<void> {
+  async acquire(options: { signal?: AbortSignal } = {}): Promise<void> {
     await this.seed();
     while (true) {
+      options.signal?.throwIfAborted();
       // Atomic: time-refill the bucket and grant one token IFF the refilled balance is >= 1.
       // Concurrent acquirers across processes serialize on the row update, so the combined
       // grant rate can never exceed tokens_per_sec.
@@ -79,7 +80,24 @@ export class DurableTokenBucket {
       if (rows.length > 0) return;
       // No token available yet — wait roughly the time to accrue one, then retry.
       const waitMs = Math.max(5, Math.ceil(1000 / this.tokensPerSec));
-      await new Promise((r) => setTimeout(r, waitMs));
+      await abortableDelay(waitMs, options.signal);
     }
   }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }

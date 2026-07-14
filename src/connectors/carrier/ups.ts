@@ -37,7 +37,7 @@ function upsPackageServiceOptions(input: Record<string, unknown>) {
   return Object.keys(serviceOptions).length ? serviceOptions : null;
 }
 
-async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getUpsAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const clientId = String(creds?.clientId ?? '').trim();
   const clientSecret = String(creds?.clientSecret ?? '').trim();
   if (!clientId || !clientSecret) {
@@ -52,6 +52,7 @@ async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string
       Accept: 'application/json',
     },
     body: 'grant_type=client_credentials',
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
@@ -112,6 +113,7 @@ export async function probeUpsCredentials(input: {
 }
 
 async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const signal = input.signal as AbortSignal | undefined;
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
@@ -119,7 +121,7 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
   if (!accountNumber) throw new Error('UPS accountNumber is required');
   if (!input.toZip) throw new Error('toZip is required for UPS rate quotes');
 
-  const token = await getUpsAccessToken(creds);
+  const token = await getUpsAccessToken(creds, signal);
   const weightOz = Number(input.weightOz ?? 16);
   const weightLb = Math.max(0.1, Math.round((weightOz / 16) * 10) / 10);
   const fromZip = String(input.fromZip || '90248').replace(/[^0-9]/g, '').slice(0, 5);
@@ -189,6 +191,7 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
       transactionSrc: 'prepship',
     },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 600)).catch(() => '');

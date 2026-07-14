@@ -3,7 +3,11 @@ import { timedFetch } from '../../lib/http/timing.js';
 import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 import { readShipFrom } from './ship-from-address.js';
 
-async function getEbayLogisticsAccessToken(creds: Record<string, unknown>, scope = 'https://api.ebay.com/oauth/api_scope/sell.logistics'): Promise<string> {
+async function getEbayLogisticsAccessToken(
+  creds: Record<string, unknown>,
+  scope = 'https://api.ebay.com/oauth/api_scope/sell.logistics',
+  signal?: AbortSignal,
+): Promise<string> {
   const appId = String(creds?.appId ?? '').trim();
   const certId = String(creds?.certId ?? '').trim();
   const refreshToken = String(creds?.refreshToken ?? '').trim();
@@ -28,6 +32,7 @@ async function getEbayLogisticsAccessToken(creds: Record<string, unknown>, scope
       Accept: 'application/json',
     },
     body: body.toString(),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 400)).catch(() => '');
@@ -118,6 +123,7 @@ function ebayShipToContact(rawOrder: any) {
 }
 
 async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const signal = input.signal as AbortSignal | undefined;
   assertUnsupportedShippingOptions('eBay Shipping', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
@@ -146,7 +152,7 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     throw new Error('eBay Shipping rates require the eBay order ship-to address. Pull the eBay order first, then open Browse Rates from that order.');
   }
 
-  const token = await getEbayLogisticsAccessToken(creds);
+  const token = await getEbayLogisticsAccessToken(creds, undefined, signal);
   const useSandbox = String(creds?.environment ?? '').toLowerCase() === 'sandbox';
   const apiBase = useSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
   const marketplaceId = String(creds?.marketplaceId ?? 'EBAY_US').trim() || 'EBAY_US';
@@ -209,6 +215,7 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
       'X-EBAY-C-MARKETPLACE-ID': marketplaceId,
     },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const full = await res.text().catch(() => '');
@@ -220,9 +227,10 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
     // token: 200 = order IS in this account (then it's eligibility/state); 404 = NOT in this account
     // (account mismatch). Logs status + orderFulfillmentStatus only (no PII). Remove once eBay quotes work.
     try {
-      const fToken = await getEbayLogisticsAccessToken(creds, 'https://api.ebay.com/oauth/api_scope/sell.fulfillment');
+      const fToken = await getEbayLogisticsAccessToken(creds, 'https://api.ebay.com/oauth/api_scope/sell.fulfillment', signal);
       const oRes = await timedFetch('ebay-shipping.getorder', `${apiBase}/sell/fulfillment/v1/order/${encodeURIComponent(orderId)}`, {
         headers: { Authorization: `Bearer ${fToken}`, Accept: 'application/json' },
+        signal,
       });
       const oBody = await oRes.text().catch(() => '');
       let fStatus = '';
@@ -233,6 +241,7 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
       // order ids + count (no buyer PII). Remove once eBay quotes succeed.
       const lRes = await timedFetch('ebay-shipping.getorders', `${apiBase}/sell/fulfillment/v1/order?limit=5`, {
         headers: { Authorization: `Bearer ${fToken}`, Accept: 'application/json' },
+        signal,
       });
       const lBody = await lRes.text().catch(() => '');
       let total = '?';
@@ -244,6 +253,7 @@ async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Ar
       } catch { /* not json */ }
       console.warn(`[ebay-shipping] account-orders ${lRes.status} total=${total} sampleIds=[${sampleIds}]${lRes.ok ? '' : ' body=' + lBody.slice(0, 300)}`);
     } catch (diagErr) {
+      signal?.throwIfAborted();
       console.warn('[ebay-shipping] getOrder diag failed:', diagErr instanceof Error ? diagErr.message : diagErr);
     }
     const t = full.slice(0, 800);

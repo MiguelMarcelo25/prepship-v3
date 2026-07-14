@@ -12,6 +12,10 @@ import {
 } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
+import {
+  getShipStationV2LimiterSnapshot,
+  type ShipStationRequestPriority,
+} from '../lib/shipstation/client';
 import { getDefaultShipFrom } from '../lib/ship-from';
 import { loadClientIsTest } from './fulfillment/test-label-policy';
 import { buildTestFixtureRates } from './test-rate-fixture';
@@ -54,7 +58,6 @@ import { expectedCarrierAbsentFromThin } from '../connectors/carrier/observed-mi
 import {
   DIRECT_CARRIER_QUOTE_TIMEOUT_MS,
   withAbortableCarrierQuoteTimeout,
-  withCarrierQuoteTimeout,
   isPricedRate,
   rateCostTotal as combinedRateCostTotal,
   rateTotal as combinedRateTotal,
@@ -273,41 +276,12 @@ export const DIRECT_CARRIER_RATE_FETCH_CONCURRENCY = Math.max(
     ) || RATE_FETCH_CONCURRENCY,
   )
 );
-export const SHIPSTATION_RATE_LIMIT_PER_MINUTE = Math.max(
-  1,
-  Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_PER_MINUTE ?? '160', 10) || 160
-);
-export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
-  1,
-  Math.min(
-    SHIPSTATION_RATE_LIMIT_PER_MINUTE,
-    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BURST ?? '20', 10) || 20
-  )
-);
 export function shipStationBatchedRateFanoutEnabled(): boolean {
   return /^(1|true|yes)$/i.test(String(process.env.SHIPSTATION_BATCHED_RATE_FANOUT ?? '').trim());
 }
-const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
-// PS-perf (QA audit 2026-06-23): interactive-priority lane. BACKGROUND rate fetches (the
-// server-side best-rate backfill / Recalculate-All drain) self-throttle to a LOWER budget so
-// they leave burst + per-minute headroom for INTERACTIVE fetches (a user's Browse Rates click).
-// The interactive lane still counts ALL timestamps against the FULL ShipStation limit, so the
-// TOTAL never exceeds the real ShipStation rate ceiling (no 429 risk) — background just yields.
-const SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE = Math.max(
-  0,
-  Math.min(
-    SHIPSTATION_RATE_LIMIT_BURST - 1,
-    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE ?? '8', 10) || 8
-  )
-);
-const SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE = Math.max(
-  0,
-  Math.min(
-    SHIPSTATION_RATE_LIMIT_PER_MINUTE - 1,
-    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE ?? '40', 10) || 40
-  )
-);
-export type RateFetchPriority = 'interactive' | 'background';
+// Admission priority is consumed by the canonical ShipStation v2 HTTP gate. This service owns
+// only quote-fanout concurrency and passes the same priority through to that gate.
+export type RateFetchPriority = ShipStationRequestPriority;
 // PS-perf (QA audit 2026-06-23): a STALLED ShipStation carrier used to hold the whole Browse Rates
 // fan-out for the full 30s fetch timeout (some accounts intermittently take 25-30s — see the live
 // "timed out after 30000ms" reports). Bound the per-carrier rate-estimate call to a tighter budget
@@ -355,7 +329,6 @@ let globalRateFetchActive = 0;
 // FIFO behind them. The active-permit COUNTING is unchanged — only the wake order differs.
 const interactiveRateFetchWaiters: Array<() => void> = [];
 const backgroundRateFetchWaiters: Array<() => void> = [];
-const shipStationRateLimitTimestamps: number[] = [];
 
 export type RateEngineLimiterSnapshot = {
   source: 'backend-rate-engine';
@@ -370,53 +343,6 @@ export type RateEngineLimiterSnapshot = {
   shipStationBurstLimit: number;
   shipStationPerMinuteLimit: number;
 };
-
-function trimShipStationRateLimitTimestamps(now = Date.now()) {
-  while (
-    shipStationRateLimitTimestamps.length > 0 &&
-    now - shipStationRateLimitTimestamps[0]! >= SHIPSTATION_RATE_LIMIT_WINDOW_MS
-  ) {
-    shipStationRateLimitTimestamps.shift();
-  }
-}
-
-function nextShipStationRateBudgetDelayMs(now = Date.now(), priority: RateFetchPriority = 'interactive') {
-  trimShipStationRateLimitTimestamps(now);
-  // Background self-throttles to a LOWER budget, leaving burst + per-minute headroom for
-  // interactive. Interactive uses the FULL ShipStation limit, and it counts ALL timestamps
-  // (interactive + background), so the TOTAL never exceeds the real ceiling — no 429 risk.
-  const burstLimit =
-    priority === 'background'
-      ? Math.max(1, SHIPSTATION_RATE_LIMIT_BURST - SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE)
-      : SHIPSTATION_RATE_LIMIT_BURST;
-  const perMinuteLimit =
-    priority === 'background'
-      ? Math.max(1, SHIPSTATION_RATE_LIMIT_PER_MINUTE - SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE)
-      : SHIPSTATION_RATE_LIMIT_PER_MINUTE;
-  const burstWindowMs = Math.ceil(
-    (SHIPSTATION_RATE_LIMIT_WINDOW_MS * SHIPSTATION_RATE_LIMIT_BURST) /
-      SHIPSTATION_RATE_LIMIT_PER_MINUTE
-  );
-  const recentBurst = shipStationRateLimitTimestamps.filter((timestamp) => now - timestamp < burstWindowMs);
-  if (recentBurst.length >= burstLimit) {
-    return Math.max(0, burstWindowMs - (now - recentBurst[0]!));
-  }
-  if (shipStationRateLimitTimestamps.length < perMinuteLimit) return 0;
-  return Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - shipStationRateLimitTimestamps[0]!));
-}
-
-async function acquireShipStationRateBudget(priority: RateFetchPriority = 'interactive'): Promise<void> {
-  for (;;) {
-    const delayMs = nextShipStationRateBudgetDelayMs(Date.now(), priority);
-    if (delayMs <= 0) {
-      shipStationRateLimitTimestamps.push(Date.now());
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-  }
-}
 
 async function acquireGlobalRateFetchPermit(priority: RateFetchPriority = 'interactive'): Promise<void> {
   if (globalRateFetchActive < RATE_FETCH_CONCURRENCY) {
@@ -439,7 +365,7 @@ function releaseGlobalRateFetchPermit() {
 }
 
 export function getRateEngineLimiterSnapshot(): RateEngineLimiterSnapshot {
-  trimShipStationRateLimitTimestamps();
+  const shipStationLimiter = getShipStationV2LimiterSnapshot();
   return {
     source: 'backend-rate-engine',
     generatedAt: new Date().toISOString(),
@@ -448,10 +374,10 @@ export function getRateEngineLimiterSnapshot(): RateEngineLimiterSnapshot {
     activeRateFetches: globalRateFetchActive,
     interactiveWaiters: interactiveRateFetchWaiters.length,
     backgroundWaiters: backgroundRateFetchWaiters.length,
-    shipStationBudgetWindowMs: SHIPSTATION_RATE_LIMIT_WINDOW_MS,
-    shipStationBudgetUsed: shipStationRateLimitTimestamps.length,
-    shipStationBurstLimit: SHIPSTATION_RATE_LIMIT_BURST,
-    shipStationPerMinuteLimit: SHIPSTATION_RATE_LIMIT_PER_MINUTE,
+    shipStationBudgetWindowMs: shipStationLimiter.windowMs,
+    shipStationBudgetUsed: shipStationLimiter.budgetUsed,
+    shipStationBurstLimit: shipStationLimiter.burstLimit,
+    shipStationPerMinuteLimit: shipStationLimiter.perMinuteLimit,
   };
 }
 
@@ -460,7 +386,6 @@ export async function runWithGlobalRateLimiter<T>(
   operation: () => Promise<T>,
   priority: RateFetchPriority = 'interactive',
 ): Promise<T> {
-  await acquireShipStationRateBudget(priority);
   await acquireGlobalRateFetchPermit(priority);
   try {
     return await operation();
@@ -1280,6 +1205,7 @@ async function fetchEstimateForCarrier(
   input: RateInput,
   shipFrom: Address,
   timeoutMs: number,
+  priority: RateFetchPriority,
 ): Promise<CarrierEstimateResult> {
   const startedAt = Date.now();
   const body = buildShipStationEstimateBody([carrier], input, shipFrom);
@@ -1294,6 +1220,7 @@ async function fetchEstimateForCarrier(
         dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
         timeoutMs,
         signal,
+        priority,
       }),
       `shipstation:${carrier.carrier_code}`,
       timeoutMs,
@@ -1345,6 +1272,7 @@ async function fetchEstimateForCarriers(
   input: RateInput,
   shipFrom: Address,
   timeoutMs: number,
+  priority: RateFetchPriority,
 ): Promise<BatchedCarrierEstimateResult> {
   const startedAt = Date.now();
   const body = buildShipStationEstimateBody(carriers, input, shipFrom);
@@ -1363,6 +1291,7 @@ async function fetchEstimateForCarriers(
       dedupeKey: `rates-estimate:batch:${carrierSetHash}:${rateCacheKey(input)}`,
       timeoutMs,
       signal,
+      priority,
     }),
     'shipstation:batch',
     timeoutMs,
@@ -1410,8 +1339,9 @@ async function fetchEstimateForCarriers(
 }
 
 // RC1: retry a TRANSIENT per-carrier estimate failure (timeout / 429 / 5xx / network) a bounded number
-// of times, re-acquiring the global limiter slot each attempt (so the retry respects the ShipStation
-// rate budget and never holds a slot during backoff). A TERMINAL failure (4xx / no-service) returns on
+// of times, re-acquiring the global concurrency slot each attempt. ssRequest independently admits
+// every HTTP attempt at the single ShipStation budget gate, and backoff holds no concurrency slot.
+// A TERMINAL failure (4xx / no-service) returns on
 // the first attempt — never retried. By the retry the initial concurrency burst has usually drained, so
 // a merely-slow carrier resolves instead of being permanently dropped to "Rate unavailable".
 async function fetchEstimateForCarrierWithRetry(
@@ -1434,7 +1364,7 @@ async function fetchEstimateForCarrierWithRetry(
       return runWithGlobalRateLimiter(() => {
         limiterWaitMs += Date.now() - waitStartedAt;
         attempts += 1;
-        return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs);
+        return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs, priority);
       }, priority);
     },
     (result) => result.diagnostic.status === 'failed' && result.diagnostic.transient === true,
@@ -1481,7 +1411,7 @@ async function fetchBatchedEstimatesWithFallback(
     const waitStartedAt = Date.now();
     const batch = await runWithGlobalRateLimiter(() => {
       limiterWaitMs += Date.now() - waitStartedAt;
-      return fetchEstimateForCarriers(carriers, input, shipFrom, batchProbeTimeoutMs);
+      return fetchEstimateForCarriers(carriers, input, shipFrom, batchProbeTimeoutMs, priority);
     }, priority);
     const durationMs = Date.now() - startedAt;
     batchResults = batch.results.map((result) => ({
@@ -2606,7 +2536,7 @@ export async function getDirectCarrierRatesForRateInput(
       // PS-206: bounded per-carrier quoting — one slow/hung provider becomes a
       // per-account 'failed' diagnostic (caught below) instead of holding the
       // whole combined /browse response open while every other carrier waits.
-      const quoted = await withCarrierQuoteTimeout(quoteCarrierRates(account.provider, {
+      const quoted = await withAbortableCarrierQuoteTimeout((signal) => quoteCarrierRates(account.provider, {
         credentials: account.credentials,
         weightOz: input.weightOz,
         // PS-126: direct carriers (UPS/FedEx/etc.) require 5-digit ZIP — send the zip5
@@ -2643,6 +2573,7 @@ export async function getDirectCarrierRatesForRateInput(
         directCarrierSourceTable: account.sourceTable,
         requestKey: requestFingerprint,
         shippingOptions,
+        signal,
       }), label, executionPolicy.timeoutMs);
       const rawRates = Array.isArray(quoted.rates) ? quoted.rates as Array<Record<string, unknown>> : [];
       const eligible = filterRatesForShippingServiceEligibility(

@@ -11,7 +11,7 @@ function firstString(...values: unknown[]): string {
   return '';
 }
 
-async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getWalmartAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const clientId = firstString(creds.clientId, creds.client_id, creds.consumerId, creds.consumer_id);
   const clientSecret = firstString(creds.clientSecret, creds.client_secret, creds.privateKey, creds.private_key);
   if (!clientId || !clientSecret) {
@@ -31,6 +31,7 @@ async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<st
     method: 'POST',
     headers,
     body: 'grant_type=client_credentials',
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
@@ -712,6 +713,7 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
   carrierName?: string;
   carrierType?: string;
 }>> {
+  const signal = input.signal as AbortSignal | undefined;
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
@@ -730,7 +732,7 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
     );
   }
 
-  const token = await getWalmartAccessToken(creds);
+  const token = await getWalmartAccessToken(creds, signal);
   const channelType = firstString(creds.channelType, creds.channel_type);
   const partnerId = firstString(creds.partnerId, creds.sellerId);
   const headers: Record<string, string> = {
@@ -806,6 +808,7 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 800)).catch(() => '');

@@ -8,7 +8,7 @@ const USPS_MAIL_CLASSES = [
   { class: 'PRIORITY_MAIL_EXPRESS', label: 'USPS Priority Mail Express' },
 ] as const;
 
-async function getUspsAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getUspsAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const consumerKey = String(creds?.consumerKey ?? '').trim();
   const consumerSecret = String(creds?.consumerSecret ?? '').trim();
   if (!consumerKey || !consumerSecret) {
@@ -27,6 +27,7 @@ async function getUspsAccessToken(creds: Record<string, unknown>): Promise<strin
       Accept: 'application/json',
     },
     body: body.toString(),
+    signal,
   });
   if (!res.ok) {
     const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
@@ -117,13 +118,14 @@ export async function validateUspsAddress(
 }
 
 async function ratesFromUsps(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const signal = input.signal as AbortSignal | undefined;
   assertUnsupportedShippingOptions('USPS', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
   if (!input.toZip) throw new Error('toZip is required for USPS rate quotes');
 
-  const token = await getUspsAccessToken(creds);
+  const token = await getUspsAccessToken(creds, signal);
   const weightOz = Number(input.weightOz ?? 16);
   const weightLb = Math.max(0.0625, Math.round((weightOz / 16) * 100) / 100);
   const fromZip = String(input.fromZip || '90248').replace(/[^0-9]/g, '').slice(0, 5);
@@ -156,6 +158,7 @@ async function ratesFromUsps(input: Record<string, unknown>): Promise<Array<{ se
             Accept: 'application/json',
           },
           body: JSON.stringify(body),
+          signal,
         });
         if (!res.ok) return null;
         const data = (await res.json()) as any;
@@ -175,6 +178,7 @@ async function ratesFromUsps(input: Record<string, unknown>): Promise<Array<{ se
         const days = Number(rates[0]?.deliveryDays ?? 0) || 0;
         return { service: label, cost: cheapest, days, currency: 'USD' };
       } catch {
+        signal?.throwIfAborted();
         return null;
       }
     }),

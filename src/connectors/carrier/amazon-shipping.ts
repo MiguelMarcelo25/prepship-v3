@@ -10,7 +10,7 @@ function stringOrDefault(value: unknown, fallback: string): string {
   return text || fallback;
 }
 
-async function getAmazonLwaAccessToken(creds: Record<string, unknown>): Promise<string> {
+async function getAmazonLwaAccessToken(creds: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
   const lwaClientId = String(creds?.lwaClientId ?? '').trim();
   const lwaClientSecret = String(creds?.lwaClientSecret ?? '').trim();
   const refreshToken = String(creds?.refreshToken ?? '').trim();
@@ -28,6 +28,7 @@ async function getAmazonLwaAccessToken(creds: Record<string, unknown>): Promise<
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: lwaBody.toString(),
+    signal,
   });
   if (!lwaRes.ok) {
     const text = await lwaRes.text().then((s) => s.slice(0, 200)).catch(() => '');
@@ -65,6 +66,7 @@ function buildShipTo(input: Record<string, unknown>, rawOrder: Record<string, an
 }
 
 async function ratesFromAmazonBuyShipping(input: Record<string, unknown>): Promise<Rate[]> {
+  const signal = input.signal as AbortSignal | undefined;
   assertUnsupportedShippingOptions('Amazon Shipping', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
@@ -80,7 +82,7 @@ async function ratesFromAmazonBuyShipping(input: Record<string, unknown>): Promi
     throw new Error('Amazon Buy Shipping requires box dimensions (length, width, height). Set them in the Rate Browser before fetching rates.');
   }
 
-  const accessToken = await getAmazonLwaAccessToken(creds);
+  const accessToken = await getAmazonLwaAccessToken(creds, signal);
   // Canonical origin (was FULLY hardcoded to a Carson/"Warehouse" default — never read
   // input.shipFrom, so every Amazon quote shipped from the wrong origin).
   const from = readShipFrom(input.shipFrom as Record<string, unknown>, creds, input.fromZip);
@@ -134,6 +136,7 @@ async function ratesFromAmazonBuyShipping(input: Record<string, unknown>): Promi
       Accept: 'application/json',
     },
     body: JSON.stringify(body),
+    signal,
   });
   if (!apiRes.ok) {
     const text = await apiRes.text().then((s) => s.slice(0, 800)).catch(() => '');

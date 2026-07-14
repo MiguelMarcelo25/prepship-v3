@@ -34,7 +34,7 @@ check('seeds the shared row with ON CONFLICT (no live-balance reset)',
 check('acquire is ONE atomic refill+decrement UPDATE guarded by tokens >= 1',
   /UPDATE rate_limiter_state[\s\S]*LEAST\(capacity, tokens \+ EXTRACT\(EPOCH[\s\S]*\) \* tokens_per_sec\) - 1[\s\S]*>= 1[\s\S]*RETURNING tokens/.test(durable));
 check('DurableTokenBucket exposes the same acquire() interface',
-  /class DurableTokenBucket[\s\S]*async acquire\(\): Promise<void>/.test(durable));
+  /class DurableTokenBucket[\s\S]*async acquire\(options: \{ signal\?: AbortSignal \} = \{\}\): Promise<void>/.test(durable));
 
 // ── static: v1-client selects backend by flag; default stays in-memory ────────────────────────
 const v1 = readFileSync('src/lib/shipstation/v1-client.ts', 'utf8');
@@ -42,6 +42,18 @@ check('v1-client picks DurableTokenBucket only when RATE_LIMITER_BACKEND=durable
   /process\.env\.RATE_LIMITER_BACKEND === 'durable'\s*\n?\s*\? new DurableTokenBucket\('shipstation-v1', 38/.test(v1));
 check('v1-client default is the in-memory TokenBucket',
   /: new TokenBucket\(38, 38 \/ 60_000\)/.test(v1));
+
+// ── static: v2 uses the same durable backend per API-key fingerprint ─────────
+const v2 = readFileSync('src/lib/shipstation/client.ts', 'utf8');
+check('v2-client selects durable admission when RATE_LIMITER_BACKEND=durable',
+  /process\.env\.RATE_LIMITER_BACKEND === 'durable'[\s\S]*shipStationV2DurableBucket\(apiKey\)\.acquire/.test(v2));
+check('v2 durable bucket is isolated by API-key fingerprint',
+  /shipStationV2BucketId\(apiKey\)[\s\S]*`shipstation-v2:\$\{bucketId\}`/.test(v2));
+check('background v2 admission preserves interactive burst and per-minute reserves',
+  /shipStationV2DurableBackgroundBucket[\s\S]*SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE[\s\S]*SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE/.test(v2));
+check('v2 limiter waits and retries honor caller cancellation',
+  /acquireShipStationV2Budget\(key, opts\.priority \?\? 'interactive', opts\.signal\)/.test(v2) &&
+    /abortableDelay\(backoffMs, opts\.signal\)/.test(v2));
 
 check('rate-limiter exports the shared RateBucket interface',
   /export interface RateBucket \{[\s\S]*acquire\(\): Promise<void>/.test(readFileSync('src/lib/shipstation/rate-limiter.ts', 'utf8')));

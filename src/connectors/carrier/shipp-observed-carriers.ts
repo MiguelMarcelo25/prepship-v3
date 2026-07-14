@@ -160,13 +160,25 @@ function nextShippQuoteDelayMs(now = Date.now()): number {
 }
 
 /** Acquire one Shipp /quote token, sleeping until the per-minute budget allows it. */
-export async function acquireShippQuoteBudget(): Promise<void> {
+export async function acquireShippQuoteBudget(signal?: AbortSignal): Promise<void> {
   for (;;) {
+    signal?.throwIfAborted();
     const delayMs = nextShippQuoteDelayMs();
     if (delayMs <= 0) {
       shippQuoteTimestamps.push(Date.now());
       return;
     }
-    await new Promise<void>((resolve) => { setTimeout(resolve, delayMs); });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, delayMs);
+      const onAbort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        reject(signal?.reason ?? new DOMException('The operation was aborted', 'AbortError'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }

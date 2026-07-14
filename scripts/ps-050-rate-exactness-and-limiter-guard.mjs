@@ -64,10 +64,10 @@ assert(
 assert(
   ratesService.includes('globalRateFetchActive') &&
     ratesService.includes('runWithGlobalRateLimiter') &&
-    ratesService.includes('return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs);') &&
+    ratesService.includes('return fetchEstimateForCarrier(carrier, input, shipFrom, policy.timeoutMs, priority);') &&
     ratesService.includes('const batch = await runWithGlobalRateLimiter(() => {') &&
-    ratesService.includes('return fetchEstimateForCarriers(carriers, input, shipFrom, batchProbeTimeoutMs);'),
-  'ShipStation batch and fallback estimate calls use one module-level global limiter across passive/manual/backfill callers',
+    ratesService.includes('return fetchEstimateForCarriers(carriers, input, shipFrom, batchProbeTimeoutMs, priority);'),
+  'ShipStation batch and fallback estimates use the shared priority concurrency scheduler',
 )
 
 // 2026-07-14 (batching-review LOW): the independent substrings above cannot catch a
@@ -76,26 +76,26 @@ assert(
 // INSIDE runWithGlobalRateLimiter's callback (with the priority hint), for the
 // single-account fallback and the batched path alike.
 assert(
-  /runWithGlobalRateLimiter\(\(\) => \{[\s\S]{0,500}?return fetchEstimateForCarrier\(carrier, input, shipFrom, policy\.timeoutMs\);[\s\S]{0,120}?\}, priority\)/.test(ratesService) &&
-    /runWithGlobalRateLimiter\(\(\) => \{[\s\S]{0,500}?return fetchEstimateForCarriers\(carriers, input, shipFrom, batchProbeTimeoutMs\);[\s\S]{0,120}?\}, priority\)/.test(ratesService),
+  /runWithGlobalRateLimiter\(\(\) => \{[\s\S]{0,500}?return fetchEstimateForCarrier\(carrier, input, shipFrom, policy\.timeoutMs, priority\);[\s\S]{0,120}?\}, priority\)/.test(ratesService) &&
+    /runWithGlobalRateLimiter\(\(\) => \{[\s\S]{0,500}?return fetchEstimateForCarriers\(carriers, input, shipFrom, batchProbeTimeoutMs, priority\);[\s\S]{0,120}?\}, priority\)/.test(ratesService),
   'single and batched estimate calls execute INSIDE the limiter lambda (spanning pin)',
 )
 
 assert(
-  ratesService.includes('SHIPSTATION_RATE_LIMIT_PER_MINUTE') &&
-    ratesService.includes('SHIPSTATION_RATE_LIMIT_BURST') &&
-    ratesService.includes('SHIPSTATION_RATE_LIMIT_WINDOW_MS') &&
-    ratesService.includes('shipStationRateLimitTimestamps') &&
-    ratesService.includes('await acquireShipStationRateBudget(') &&
-    !ratesService.includes('40 / 1500'),
-  'ShipStation live rate calls enforce env-driven 160/minute budget with burst control, not the old too-fast limiter',
+  !ratesService.includes('shipStationRateLimitTimestamps') &&
+    !ratesService.includes('acquireShipStationRateBudget') &&
+    ratesService.includes('getShipStationV2LimiterSnapshot') &&
+    ratesService.includes('priority,'),
+  'rate service delegates ShipStation admission and priority to the single v2 client gate',
 )
 
 assert(
   shipStationClient.includes('SHIPSTATION_RATE_LIMIT_PER_MINUTE') &&
     shipStationClient.includes('SHIPSTATION_RATE_LIMIT_BURST') &&
     shipStationClient.includes('acquireShipStationV2Budget') &&
-    shipStationClient.includes('shipStationV2RateLimitTimestamps') &&
+    shipStationClient.includes('shipStationV2RateLimitTimestampsByKey') &&
+    shipStationClient.includes("process.env.RATE_LIMITER_BACKEND === 'durable'") &&
+    shipStationClient.includes('shipStationV2DurableBackgroundBucket') &&
     !shipStationClient.includes('TokenBucket(40, 40 / 1500)') &&
     !shipStationClient.includes("from './rate-limiter.js'"),
   'ShipStation v2 client shares the env-driven limiter for rates, carrier discovery, labels, and other v2 calls',
@@ -132,8 +132,8 @@ assert(
   browserSpec.includes('prior saved best is not assumed best') &&
     browserSpec.includes('8.31') &&
     browserSpec.includes('7.25') &&
-    browserSpec.includes("toContainText('7.25')"),
-  'browser E2E proves a cheaper current eligible rate replaces a prior saved best',
+    browserSpec.includes("not.toContainText('8.31')"),
+  'browser E2E proves Awaiting first paint does not assume a stale prior saved best',
 )
 
 assert(
