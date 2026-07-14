@@ -134,8 +134,8 @@ check('Settings integration UI calls v4 account and carrier ops routes through a
     "api.post<WalmartOrdersResult>('/carriers/ebay/orders'",
     "api.post<FeesPullResult>('/carriers/walmart/fees'",
     "api.post<CarrierRatesResult>('/carriers/rates'",
-    "api.get<{ data: RawRow[] }>('/carrier-accounts')",
-    "api.get<{ data: RawRow[] }>('/store-accounts?source=admin')",
+    "api.get<{ data: RawIntegrationRow[] }>('/carrier-accounts')",
+    "api.get<{ data: RawIntegrationRow[] }>('/store-accounts?source=admin')",
   ]).length === 0,
   includesAll(settings, [
     "api.post<{ data: SavedRow | null }>(endpoint, body)",
@@ -147,8 +147,8 @@ check('Settings integration UI calls v4 account and carrier ops routes through a
     "api.post<WalmartOrdersResult>('/carriers/ebay/orders'",
     "api.post<FeesPullResult>('/carriers/walmart/fees'",
     "api.post<CarrierRatesResult>('/carriers/rates'",
-    "api.get<{ data: RawRow[] }>('/carrier-accounts')",
-    "api.get<{ data: RawRow[] }>('/store-accounts?source=admin')",
+    "api.get<{ data: RawIntegrationRow[] }>('/carrier-accounts')",
+    "api.get<{ data: RawIntegrationRow[] }>('/store-accounts?source=admin')",
   ]));
 
 check('pending integrations UI uses v4 carrier-accounts route through api client',

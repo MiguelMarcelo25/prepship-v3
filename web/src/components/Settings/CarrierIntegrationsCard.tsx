@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
@@ -800,6 +800,9 @@ interface SavedRow {
   assignedClientIds: number[]
 }
 
+type RawIntegrationRow = Omit<SavedRow, 'accountId' | 'kind'>
+const STORE_DISPLAY_OFFSET = 1_000_000_000
+
 // Stores live in /store-accounts, carriers in /carrier-accounts on the v4 API.
 // Picking the right endpoint is the only transport choice the FE needs to know.
 function endpointForCategory(category: ProviderCategory): string {
@@ -1141,11 +1144,17 @@ function carrierRateErrorMessage(provider: string, error?: string): string {
 // two-section layout.
 export type CarrierIntegrationsView = 'all' | 'stores' | 'carriers'
 
-export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegrationsView } = {}) {
+export function CarrierIntegrationsCard({
+  view = 'all',
+  queriesEnabled = true,
+}: {
+  view?: CarrierIntegrationsView
+  queriesEnabled?: boolean
+} = {}) {
   // useShippingAccounts (in v2Hooks.ts) caches /carrier-accounts results
   // under ['v2-hooks:carrier-accounts']. The Rate Browser sidebar reads from
   // that cache. Adding/deleting a carrier here only updates this component's
-  // local `saved` state — without invalidating the React Query cache, the
+  // Settings query cache — without invalidating the shared React Query cache, the
   // sidebar still shows the pre-mutation list (e.g. "Simulator (Demo) is
   // deleted but still appears in Rate Browser"). Same trap for stores via
   // ['v2-hooks:carriers'] indirectly — invalidate both to be safe.
@@ -1159,13 +1168,69 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     clearScopedCarrierAccountsCache()
   }
 
-  const [saved, setSaved] = useState<SavedRow[]>([])
+  const carrierAccountsQuery = useQuery<{ data: RawIntegrationRow[] }>({
+    queryKey: ['settings', 'carrier-accounts'],
+    enabled: queriesEnabled,
+    queryFn: () => api.get<{ data: RawIntegrationRow[] }>('/carrier-accounts'),
+  })
+  const storeAccountsQuery = useQuery<{ data: RawIntegrationRow[] }>({
+    queryKey: ['settings', 'store-accounts'],
+    enabled: queriesEnabled,
+    queryFn: () => api.get<{ data: RawIntegrationRow[] }>('/store-accounts?source=admin'),
+  })
+  const saved = useMemo<SavedRow[]>(() => {
+    const carriers = (carrierAccountsQuery.data?.data ?? []).map((row) => ({
+      ...row,
+      accountId: row.id,
+      kind: 'carrier' as const,
+      assignedClientIds: Array.isArray(row.assignedClientIds) ? row.assignedClientIds : [],
+    }))
+    const stores = (storeAccountsQuery.data?.data ?? []).map((row) => ({
+      ...row,
+      accountId: row.id,
+      id: row.id + STORE_DISPLAY_OFFSET,
+      kind: 'store' as const,
+      assignedClientIds: Array.isArray(row.assignedClientIds) ? row.assignedClientIds : [],
+    }))
+    return [...carriers, ...stores]
+  }, [carrierAccountsQuery.data, storeAccountsQuery.data])
+
+  const patchIntegrationQueryRow = (
+    kind: 'carrier' | 'store',
+    accountId: number,
+    patch: Partial<RawIntegrationRow>,
+  ) => {
+    queryClient.setQueryData<{ data: RawIntegrationRow[] }>(
+      ['settings', kind === 'carrier' ? 'carrier-accounts' : 'store-accounts'],
+      (current) => current
+        ? {
+            ...current,
+            data: current.data.map((row) => row.id === accountId ? { ...row, ...patch } : row),
+          }
+        : current,
+    )
+  }
+  const removeIntegrationQueryRow = (kind: 'carrier' | 'store', accountId: number) => {
+    queryClient.setQueryData<{ data: RawIntegrationRow[] }>(
+      ['settings', kind === 'carrier' ? 'carrier-accounts' : 'store-accounts'],
+      (current) => current
+        ? { ...current, data: current.data.filter((row) => row.id !== accountId) }
+        : current,
+    )
+  }
+
   const [openProvider, setOpenProvider] = useState<ProviderKey | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [formLabel, setFormLabel] = useState('')
   const [linkedStoreAccountId, setLinkedStoreAccountId] = useState<number | null>(null)
   const [submitState, setSubmitState] = useState<{ kind: 'idle' | 'saving' | 'success' | 'error'; message?: string }>({ kind: 'idle' })
-  const [listError, setListError] = useState<string | null>(null)
+  const [listActionError, setListActionError] = useState<string | null>(null)
+  const listQueryError = carrierAccountsQuery.error ?? storeAccountsQuery.error
+  const listError = listActionError ?? (
+    carrierAccountsQuery.isError || storeAccountsQuery.isError
+      ? (listQueryError instanceof Error ? listQueryError.message : 'Failed to load integrations')
+      : null
+  )
   const [testing, setTesting] = useState<Record<number, boolean>>({})
   const [connectingEbay, setConnectingEbay] = useState<Record<number, boolean>>({})
   const [testResults, setTestResults] = useState<Record<number, VerifyResult>>({})
@@ -1385,13 +1450,10 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       }>(`/carrier-accounts?id=${d.accountId}`, { clientIds: ids })
       const fresh = res?.data?.assignedClientIds ?? ids
       const newSource = res?.data?.source ?? d.source
-      setSaved((prev) =>
-        prev.map((row) =>
-          row.id === d.id
-            ? { ...row, assignedClientIds: fresh, source: newSource }
-            : row,
-        ),
-      )
+      patchIntegrationQueryRow('carrier', d.accountId, {
+        assignedClientIds: fresh,
+        source: newSource,
+      })
       // PS-083: ALWAYS refresh after an assignment change — not only when the
       // row was promoted portal→admin. Unassigning an already-admin carrier
       // (removing every client) leaves `promoted` false, and previously skipped
@@ -1438,11 +1500,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       const result = await renameCarrierIntegration(d.accountId, next)
       const persistedLabel = result?.label ?? (next.length > 0 ? next : null)
       const ordersUpdated = result?.ordersUpdated ?? 0
-      setSaved((prev) =>
-        prev.map((row) =>
-          row.id === d.id ? { ...row, label: persistedLabel } : row,
-        ),
-      )
+      patchIntegrationQueryRow('carrier', d.accountId, { label: persistedLabel })
       // The Rate Browser sidebar caches account labels — bust it so
       // the new name shows up everywhere without a 60s wait.
       refreshAccountsCache()
@@ -1494,16 +1552,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setApproving((prev) => ({ ...prev, [d.id]: true }))
     try {
       await approveCarrierIntegration(d.accountId)
-      setSaved((prev) =>
-        prev.map((row) =>
-          row.id === d.id ? { ...row, source: 'admin' } : row,
-        ),
-      )
+      patchIntegrationQueryRow('carrier', d.accountId, { source: 'admin' })
       // Refresh the Rate Browser cache so the newly-admin carrier
       // appears in pickers without waiting for the 60s staleTime.
       refreshAccountsCache()
     } catch (err) {
-      setListError(err instanceof Error ? err.message : 'Failed to approve')
+      setListActionError(err instanceof Error ? err.message : 'Failed to approve')
     } finally {
       setApproving((prev) => ({ ...prev, [d.id]: false }))
     }
@@ -1514,7 +1568,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setDeleting((prev) => ({ ...prev, [d.id]: true }))
     try {
       await deleteIntegration(d.accountId, d.provider)
-      setSaved((prev) => prev.filter((r) => r.id !== d.id))
+      removeIntegrationQueryRow(d.kind === 'store' ? 'store' : 'carrier', d.accountId)
       setTestResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       setRateResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       setPullResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
@@ -1524,7 +1578,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       // rather than after the 60s staleTime expires.
       refreshAccountsCache()
     } catch (err) {
-      setListError(err instanceof Error ? err.message : 'Failed to delete')
+      setListActionError(err instanceof Error ? err.message : 'Failed to delete')
     } finally {
       setDeleting((prev) => ({ ...prev, [d.id]: false }))
     }
@@ -1624,74 +1678,17 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setTogglingActive((prev) => ({ ...prev, [d.id]: true }))
     try {
       await setCarrierActive(d.accountId, nextActive)
-      setSaved((prev) => prev.map((row) => (row.id === d.id ? { ...row, active: nextActive } : row)))
+      patchIntegrationQueryRow(
+        d.kind === 'store' ? 'store' : 'carrier',
+        d.accountId,
+        { active: nextActive },
+      )
     } catch (err) {
-      setListError(err instanceof Error ? err.message : 'Failed to update carrier visibility.')
+      setListActionError(err instanceof Error ? err.message : 'Failed to update carrier visibility.')
     } finally {
       setTogglingActive((prev) => ({ ...prev, [d.id]: false }))
     }
   }
-
-  const refresh = async () => {
-    try {
-      // Fetch from BOTH tables in parallel and merge for the unified list view.
-      // Each row gets:
-      //   - accountId: the real PK in its source table (use this for API calls)
-      //   - kind: 'store' | 'carrier' (drives endpoint + id-param naming)
-      //   - id: offset for stores so two tables can't share a state-dict key
-      // The state dicts (testResults, rateResults, deleting, …) all key on
-      // `id` so the offset guarantees no cross-table collisions.
-      //
-      // Carriers come from BOTH source=admin AND source=portal (audit gap #2,
-      // 2026-05-12). Previously the Settings list filtered to admin-only,
-      // which left portal-submitted carriers stuck — the operator could see
-      // them only in the Pending card (delete-only) and could never multi-
-      // assign them. Including both sources here means the operator manages
-      // all carriers from one place; the row renderer paints a small
-      // "Portal" badge on portal-sourced rows so the origin is obvious.
-      const STORE_DISPLAY_OFFSET = 1_000_000_000
-      type RawRow = Omit<SavedRow, 'accountId' | 'kind'>
-      const [carriersRes, storesRes] = await Promise.all([
-        api.get<{ data: RawRow[] }>('/carrier-accounts').catch((e) => {
-          console.warn('[Settings] /carrier-accounts fetch failed:', e)
-          return { data: [] as RawRow[] }
-        }),
-        api.get<{ data: RawRow[] }>('/store-accounts?source=admin').catch((e) => {
-          console.warn('[Settings] /store-accounts fetch failed:', e)
-          return { data: [] as RawRow[] }
-        }),
-      ])
-      const carriers: SavedRow[] = (carriersRes?.data ?? []).map((r) => ({
-        ...r,
-        accountId: r.id,
-        kind: 'carrier' as const,
-        // Backend may return assignedClientIds as null on legacy rows
-        // before the junction table existed. Normalize to [] so the
-        // FE can always do `.length` / `.map` without null-checks.
-        assignedClientIds: Array.isArray((r as any).assignedClientIds)
-          ? ((r as any).assignedClientIds as number[])
-          : [],
-      }))
-      const stores: SavedRow[] = (storesRes?.data ?? []).map((r) => ({
-        ...r,
-        accountId: r.id,
-        id: r.id + STORE_DISPLAY_OFFSET,
-        kind: 'store' as const,
-        // Stores don't currently support multi-client assignment
-        // (separate table, separate junction needed). Keep the
-        // field present for type uniformity; renderSavedRow checks
-        // `kind` before showing the assign UI so this stays inert.
-        assignedClientIds: Array.isArray((r as any).assignedClientIds)
-          ? ((r as any).assignedClientIds as number[])
-          : [],
-      }))
-      setSaved([...carriers, ...stores])
-      setListError(null)
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : 'Failed to load')
-    }
-  }
-  useEffect(() => { void refresh() }, [])
 
   const handleAdd = async (provider: ProviderDef) => {
     if (!formLabel.trim()) {
@@ -1725,7 +1722,8 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       setFormLabel('')
       setLinkedStoreAccountId(null)
       setOpenProvider(null)
-      await refresh()
+      await Promise.all([carrierAccountsQuery.refetch(), storeAccountsQuery.refetch()])
+      setListActionError(null)
       // Bump the Rate Browser sidebar cache so a newly-saved carrier
       // appears without waiting for the 60s staleTime.
       refreshAccountsCache()
@@ -1808,6 +1806,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   }
   const { data: envShipStationData } = useQuery<{ data: EnvShipStationAccount[] }>({
     queryKey: ['settings:shipstation-env-accounts'],
+    enabled: queriesEnabled,
     queryFn: () => api.get<{ data: EnvShipStationAccount[] }>('/init/shipstation-accounts'),
     staleTime: 5 * 60_000,
   })

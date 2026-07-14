@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 // PS-155: presentational helpers + section accent tokens extracted to ./settings-ui (behavior-preserving).
@@ -112,6 +112,56 @@ import { AutomationAvailabilityPanel } from './AutomationAvailabilityPanel'
 type DrawerSectionId = 'markups' | 'marketplaceFees' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system' | 'automation'
 
 const DRAWER_SECTION_KEY = 'settings:active-drawer-section'
+
+function sectionFromPath(pathname: string): DrawerSectionId | null {
+  const slug = pathname.replace(/^\/settings\/?/, '').split('/')[0]?.toLowerCase().trim()
+  if (!slug) return null
+  const aliases: Record<string, DrawerSectionId> = {
+    markup: 'markups',
+    markups: 'markups',
+    location: 'locations',
+    locations: 'locations',
+    store: 'stores',
+    stores: 'stores',
+    carrier: 'carriers',
+    carriers: 'carriers',
+    pending: 'pending',
+    sandbox: 'sandbox',
+    cache: 'cache',
+    system: 'system',
+    observability: 'system',
+    automation: 'automation',
+  }
+  return aliases[slug] ?? null
+}
+
+const SECTION_PATH: Record<DrawerSectionId, string> = {
+  markups: '/settings/markups',
+  marketplaceFees: '/settings/marketplace-fees',
+  locations: '/settings/locations',
+  stores: '/settings/stores',
+  carriers: '/settings/carriers',
+  pending: '/settings/pending',
+  sandbox: '/settings/sandbox',
+  cache: '/settings/cache',
+  system: '/settings/system',
+  automation: '/settings/automation',
+}
+
+function scheduleSettingsQueries(callback: () => void) {
+  if (typeof window === 'undefined') {
+    const timeoutId = setTimeout(callback, 0)
+    return () => clearTimeout(timeoutId)
+  }
+
+  if ('requestIdleCallback' in window) {
+    const idleId = window.requestIdleCallback(callback, { timeout: 1200 })
+    return () => window.cancelIdleCallback?.(idleId)
+  }
+
+  const timeoutId = (window as Window).setTimeout(callback, 0)
+  return () => (window as Window).clearTimeout(timeoutId)
+}
 
 const COLLAPSE_STORAGE_KEY = 'settings:carrier-groups:collapsed'
 
@@ -218,6 +268,17 @@ type AutomationStoreAvailability = {
   carriers: AutomationCarrierRow[]
 }
 
+interface SettingsAutomationQueryData {
+  rows: AutomationStoreAvailability[]
+  updatedAt: string
+}
+
+type SettingsTestClient = { id: number; name: string; order_count: number }
+
+const EMPTY_AUTOMATION_ROWS: AutomationStoreAvailability[] = []
+const EMPTY_AUTOMATION_SERVICE_CATALOG: Record<string, AutomationCarrierService[]> = {}
+const HIDDEN_TEST_CLIENT_NAMES = new Set(['Manual Orders'])
+
 const AUTOMATION_CARRIER_FETCH_CONCURRENCY = 4
 const AUTOMATION_UPS_FALLBACK_SERVICES: AutomationCarrierService[] = [
   { serviceCode: 'ups_ground', name: 'UPS Ground' },
@@ -284,6 +345,24 @@ function automationServiceCode(service: AutomationServiceEligibilityRow | Automa
 
 export default function SettingsView() {
   const toastContext = useContext(ToastContext)
+  const queryClient = useQueryClient()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [activeSection, setActiveSection] = useState<DrawerSectionId>(() => {
+    if (typeof window === 'undefined') return 'markups'
+    const fromUrl = sectionFromPath(window.location.pathname)
+    if (fromUrl) return fromUrl
+    try {
+      const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
+      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache', 'system', 'automation'].includes(stored)) {
+        return stored
+      }
+    } catch {
+      /* localStorage blocked — use default */
+    }
+    return 'markups'
+  })
+  const [settingsQueriesReady, setSettingsQueriesReady] = useState(false)
   const { accounts, isLoading: accountsLoading, error: accountsError } = useShippingAccounts()
   const { clients } = useClients()
   const { markups, loading: markupsLoading, saveMarkup } = useMarkups()
@@ -299,6 +378,13 @@ export default function SettingsView() {
   const saveToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refetchResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestSaveRequestRef = useRef(0)
+
+  // FE-2 (audit 2.2 slice 4): Settings keeps the shell paint cheap, then
+  // arms the active panel's cached GETs during browser idle time.
+  useEffect(() => {
+    if (settingsQueriesReady) return
+    return scheduleSettingsQueries(() => setSettingsQueriesReady(true))
+  }, [settingsQueriesReady])
 
   const markupRows = useMemo(
     // PS-257: MarkupsContext.MarkupsMap carries a wider MarkupType union
@@ -370,10 +456,6 @@ export default function SettingsView() {
   }
 
   // ─── Sandbox / test orders ────────────────────────────────────────────────
-  // FE-2 (audit 2026-07-14): the test-clients list is useQuery-backed (see
-  // testClientsQuery below the type decls) so a Settings revisit within the
-  // app staleTime paints from cache with zero refetches. `sandboxState`
-  // stays real UI state for the seed/purge op machine.
   const [sandboxState, setSandboxState] = useState<
     | { kind: 'idle' }
     | { kind: 'loading'; op: 'seed' | 'purge' | 'refresh' }
@@ -414,79 +496,115 @@ export default function SettingsView() {
       }>
     }
   }
-  // FE-2: system status + automation availability are useQuery-backed below
-  // (section-lazy via `enabled`). automationRows stays a MUTABLE working
-  // copy — the per-carrier/service toggles patch it optimistically — seeded
-  // from the availability query whenever a fetch lands.
-  const [automationRows, setAutomationRows] = useState<AutomationStoreAvailability[]>([])
-  const [automationServiceCatalog, setAutomationServiceCatalog] = useState<Record<string, AutomationCarrierService[]>>({})
-  const [automationUpdatedAt, setAutomationUpdatedAt] = useState<string | null>(null)
   const [automationSavingKey, setAutomationSavingKey] = useState<string | null>(null)
   const [automationQuery, setAutomationQuery] = useState('')
   const [automationStatusFilter, setAutomationStatusFilter] = useState<'all' | 'disabled' | 'enabled'>('all')
 
-  // Hide noisy bookkeeping clients from the Sandbox display. 'Manual
-  // Orders' is a placeholder bucket the backend creates for legacy
-  // adjustments, not a real seed-able test client — operators don't
-  // want to see it in the Active Test Clients list. Add more names
-  // to this set as needed.
-  const HIDDEN_TEST_CLIENT_NAMES = new Set(['Manual Orders'])
-
-  // ── FE-2 (audit 2026-07-14): settings GET loads live in TanStack Query ──
-  // Home.tsx remounts views on navigation; the old refresh callbacks refired
-  // /admin/test-clients on every Settings visit (and the section loads on
-  // every section re-entry). Each GET is a useQuery — test-clients fetches
-  // on mount, system status + automation availability stay lazy behind
-  // their section via `enabled`. The refresh* names survive as refetch
-  // wrappers because seed/purge/manual-refresh flows call them.
-  const testClientsQuery = useQuery({
+  // Keep every GET literal inline with its stable key: repository guards use
+  // these call sites to pin the backend owner for each Settings panel.
+  const testClientsQuery = useQuery<SettingsTestClient[]>({
     queryKey: ['settings', 'test-clients'],
-    queryFn: () =>
-      api.get<{
-        data: Array<{ id: number; name: string; order_count: number }>
-      }>('/admin/test-clients'),
-  })
-  // Filter at the source so every downstream consumer (render
-  // + Seed/Purge button enabled checks) sees the same clean list.
-  const testClients = useMemo(
-    () =>
-      (testClientsQuery.data?.data ?? []).filter(
-        (c) => !HIDDEN_TEST_CLIENT_NAMES.has(c.name?.trim() ?? ''),
-      ),
-    // HIDDEN_TEST_CLIENT_NAMES is a render-stable literal Set (content never
-    // changes), intentionally not a dep.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [testClientsQuery.data],
-  )
-  const testClientsLoading = testClientsQuery.isPending || testClientsQuery.isFetching
-  useEffect(() => {
-    if (!testClientsQuery.error) return
-    setSandboxState({
-      kind: 'error',
-      message: testClientsQuery.error instanceof Error ? testClientsQuery.error.message : 'Failed to load test clients',
-    })
-  }, [testClientsQuery.error])
-  const { refetch: refetchTestClients } = testClientsQuery
-  const refreshTestClients = useCallback(async () => {
-    await refetchTestClients()
-  }, [refetchTestClients])
-
-  // (FE-2: the section-gated systemStatusQuery + automationAvailabilityQuery
-  // are declared AFTER the activeSection state below — their `enabled` reads
-  // it. Only the mount-time test-clients query lives up here.)
-
-  // Immutably patch carriers for a single store row. Used for optimistic
-  // updates so a single toggle never flips the whole panel into a loading
-  // state (the old code awaited a full refreshAutomationAvailability()).
-  const patchAutomationStore = useCallback(
-    (storeId: number, updateCarriers: (carriers: AutomationCarrierRow[]) => AutomationCarrierRow[]) => {
-      setAutomationRows((rows) =>
-        rows.map((row) =>
-          row.store.storeId === storeId ? { ...row, carriers: updateCarriers(row.carriers) } : row,
-        ),
+    enabled: settingsQueriesReady && activeSection === 'sandbox',
+    queryFn: async () => {
+      const response = await api.get<{ data: SettingsTestClient[] }>('/admin/test-clients')
+      return (response.data ?? []).filter(
+        (client) => !HIDDEN_TEST_CLIENT_NAMES.has(client.name?.trim() ?? ''),
       )
     },
-    [],
+  })
+  const testClients = testClientsQuery.data ?? []
+  const testClientsLoading = (
+    testClientsQuery.data == null && (!settingsQueriesReady || testClientsQuery.isPending)
+  ) || testClientsQuery.isFetching
+  const sandboxPanelState = sandboxState.kind === 'idle' && testClientsQuery.isError
+    ? {
+        kind: 'error' as const,
+        message: testClientsQuery.error instanceof Error
+          ? testClientsQuery.error.message
+          : 'Failed to load test clients',
+      }
+    : sandboxState
+  const refreshTestClients = async () => {
+    const result = await testClientsQuery.refetch()
+    if (result.isError) {
+      setSandboxState({
+        kind: 'error',
+        message: result.error instanceof Error ? result.error.message : 'Failed to load test clients',
+      })
+    }
+  }
+
+  const systemStatusQuery = useQuery<ObservabilityStatus>({
+    queryKey: ['settings', 'observability-status'],
+    enabled: settingsQueriesReady && activeSection === 'system',
+    queryFn: () => api.get<ObservabilityStatus>('/observability/status', {
+      timeoutMs: 6_000,
+    }),
+  })
+  const systemStatus = systemStatusQuery.data ?? null
+  const systemStatusLoading = (
+    systemStatusQuery.data == null && (!settingsQueriesReady || systemStatusQuery.isPending)
+  ) || systemStatusQuery.isFetching
+  const systemStatusError = systemStatusQuery.isError
+    ? (systemStatusQuery.error instanceof Error ? systemStatusQuery.error.message : 'Failed to load system status')
+    : null
+  const refreshSystemStatus = () => systemStatusQuery.refetch()
+
+  const automationAvailabilityQuery = useQuery<SettingsAutomationQueryData>({
+    queryKey: ['settings', 'automation-availability'],
+    enabled: settingsQueriesReady && activeSection === 'automation',
+    queryFn: async () => {
+      const payload = await api.get<{
+        data: Array<{
+          store: AutomationStoreRow
+          carriers: AutomationCarrierRow[]
+        }>
+        updatedAt?: string
+      }>('/automation/availability', { timeoutMs: 20_000 })
+      return {
+        rows: (payload.data ?? []).map((row) => ({
+          store: row.store,
+          loading: false,
+          error: null,
+          carriers: row.carriers ?? [],
+        })),
+        updatedAt: payload.updatedAt ?? new Date().toISOString(),
+      }
+    },
+  })
+  const automationRows = automationAvailabilityQuery.data?.rows ?? EMPTY_AUTOMATION_ROWS
+  const automationServiceCatalog = EMPTY_AUTOMATION_SERVICE_CATALOG
+  const automationUpdatedAt = automationAvailabilityQuery.data?.updatedAt ?? null
+  const automationLoading = (
+    automationAvailabilityQuery.data == null
+    && (!settingsQueriesReady || automationAvailabilityQuery.isPending)
+  ) || automationAvailabilityQuery.isFetching
+  const automationError = automationAvailabilityQuery.isError
+    ? (automationAvailabilityQuery.error instanceof Error
+        ? automationAvailabilityQuery.error.message
+        : 'Failed to load automation carrier map')
+    : null
+  const refreshAutomationAvailability = async () => {
+    await automationAvailabilityQuery.refetch()
+  }
+
+  // Immutably patch carriers for a single store row. Used for optimistic
+  // updates while React Query remains the sole owner of server response data.
+  const patchAutomationStore = useCallback(
+    (storeId: number, updateCarriers: (carriers: AutomationCarrierRow[]) => AutomationCarrierRow[]) => {
+      queryClient.setQueryData<SettingsAutomationQueryData>(
+        ['settings', 'automation-availability'],
+        (current) => current
+          ? {
+              ...current,
+              rows: current.rows.map((row) =>
+                row.store.storeId === storeId ? { ...row, carriers: updateCarriers(row.carriers) } : row,
+              ),
+            }
+          : current,
+      )
+    },
+    [queryClient],
   )
 
   function carrierMatches(carrier: AutomationCarrierRow, carrierId: string | null, carrierCode: string): boolean {
@@ -633,9 +751,6 @@ export default function SettingsView() {
     }
   }
 
-  // FE-2: the mount-time test-clients load is gone — testClientsQuery above
-  // fetches on mount and dedupes across view remounts.
-
   async function handleSeedTestOrders() {
     const count = Number.parseInt(seedCount, 10)
     if (!Number.isFinite(count) || count <= 0) {
@@ -732,132 +847,6 @@ export default function SettingsView() {
   // navigate(..., { replace: true }) so changing sections doesn't
   // pollute history — Back still takes you to wherever you came
   // from before Settings, not through every section you clicked.
-  const location = useLocation()
-  const navigate = useNavigate()
-  const sectionFromPath = (pathname: string): DrawerSectionId | null => {
-    const slug = pathname.replace(/^\/settings\/?/, '').split('/')[0]?.toLowerCase().trim()
-    if (!slug) return null
-    const aliases: Record<string, DrawerSectionId> = {
-      markup: 'markups',
-      markups: 'markups',
-      // 2026-05-13: Locations moved from a top-level sidebar entry
-      // into a Settings tab. Both singular and plural slugs map to
-      // the same section so old bookmarks (/locations → redirected
-      // by Home.tsx to /settings/locations) still resolve.
-      location: 'locations',
-      locations: 'locations',
-      store: 'stores',
-      stores: 'stores',
-      carrier: 'carriers',
-      carriers: 'carriers',
-      pending: 'pending',
-      sandbox: 'sandbox',
-      cache: 'cache',
-      system: 'system',
-      observability: 'system',
-      automation: 'automation',
-    }
-    return aliases[slug] ?? null
-  }
-  // Canonical path slug per section — single source of truth for
-  // outgoing navigation. Distinct from sectionFromPath's alias map
-  // (which is read-only and forgiving on plurals); this map writes
-  // ONE canonical form to the URL so we don't accidentally generate
-  // /settings/markup and /settings/markups on different clicks.
-  const SECTION_PATH: Record<DrawerSectionId, string> = {
-    markups: '/settings/markups',
-    marketplaceFees: '/settings/marketplace-fees',
-    locations: '/settings/locations',
-    stores: '/settings/stores',
-    carriers: '/settings/carriers',
-    pending: '/settings/pending',
-    sandbox: '/settings/sandbox',
-    cache: '/settings/cache',
-    system: '/settings/system',
-    automation: '/settings/automation',
-  }
-
-  // Active drawer section. Resolution order:
-  //   1. URL slug (so /settings/store deep-links into Stores)
-  //   2. localStorage (so an operator that opened Sandbox last time
-  //      returns to Sandbox on revisit)
-  //   3. 'markups' default
-  const [activeSection, setActiveSection] = useState<DrawerSectionId>(() => {
-    if (typeof window === 'undefined') return 'markups'
-    const fromUrl = sectionFromPath(window.location.pathname)
-    if (fromUrl) return fromUrl
-    try {
-      const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
-      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache', 'system', 'automation'].includes(stored)) {
-        return stored
-      }
-    } catch {
-      /* localStorage blocked — use default */
-    }
-    return 'markups'
-  })
-
-  // FE-2 (audit 2026-07-14): the section-lazy loads, gated on activeSection.
-  const systemStatusQuery = useQuery({
-    queryKey: ['settings', 'system-status'],
-    queryFn: () =>
-      api.get<ObservabilityStatus>('/observability/status', {
-        timeoutMs: 6_000,
-      }),
-    enabled: activeSection === 'system',
-  })
-  const systemStatus = systemStatusQuery.data ?? null
-  const systemStatusLoading = systemStatusQuery.isFetching
-  const systemStatusError =
-    !systemStatusQuery.isFetching && systemStatusQuery.error
-      ? systemStatusQuery.error instanceof Error
-        ? systemStatusQuery.error.message
-        : 'Failed to load system status'
-      : null
-  const { refetch: refetchSystemStatus } = systemStatusQuery
-  const refreshSystemStatus = useCallback(async () => {
-    await refetchSystemStatus()
-  }, [refetchSystemStatus])
-
-  const automationAvailabilityQuery = useQuery({
-    queryKey: ['settings', 'automation-availability'],
-    queryFn: () =>
-      api.get<{
-        data: Array<{
-          store: AutomationStoreRow
-          carriers: AutomationCarrierRow[]
-        }>
-        updatedAt?: string
-      }>('/automation/availability', { timeoutMs: 20_000 }),
-    enabled: activeSection === 'automation',
-  })
-  // Seed the mutable working copy whenever a fetch lands — the same wholesale
-  // rebuild the old refreshAutomationAvailability applied. Optimistic toggle
-  // patches (patchAutomationStore) live on the rows between fetches.
-  useEffect(() => {
-    const payload = automationAvailabilityQuery.data
-    if (payload === undefined) return
-    setAutomationServiceCatalog({})
-    setAutomationRows((payload.data ?? []).map((row) => ({
-      store: row.store,
-      loading: false,
-      error: null,
-      carriers: row.carriers ?? [],
-    })))
-    setAutomationUpdatedAt(payload.updatedAt ?? new Date().toISOString())
-  }, [automationAvailabilityQuery.data])
-  const automationLoading = automationAvailabilityQuery.isFetching
-  const automationError =
-    !automationAvailabilityQuery.isFetching && automationAvailabilityQuery.error
-      ? automationAvailabilityQuery.error instanceof Error
-        ? automationAvailabilityQuery.error.message
-        : 'Failed to load automation carrier map'
-      : null
-  const { refetch: refetchAutomationAvailability } = automationAvailabilityQuery
-  const refreshAutomationAvailability = useCallback(async () => {
-    await refetchAutomationAvailability()
-  }, [refetchAutomationAvailability])
-
   // Keep activeSection in sync when the URL changes mid-session
   // (e.g. the operator clicks a link that does
   // `navigate('/settings/store')`). Without this effect the initial
@@ -906,11 +895,6 @@ export default function SettingsView() {
       /* non-fatal */
     }
   }, [activeSection])
-
-  // FE-2: the per-section system/automation load effects are gone — both
-  // queries above are gated on their section via `enabled`, so entering the
-  // section fetches (or serves cache) and re-entering within staleTime is
-  // free. The manual Refresh buttons force a refetch through the wrappers.
 
   const isRefetching = refetchState.kind === 'loading'
 
@@ -1340,7 +1324,9 @@ export default function SettingsView() {
               ) : null}
 
               {/* ─── MARKETPLACE FEES panel (PS-239) ───────────── */}
-              {activeSection === 'marketplaceFees' ? <MarketplaceFeesSection /> : null}
+              {activeSection === 'marketplaceFees' ? (
+                <MarketplaceFeesSection queriesEnabled={settingsQueriesReady} />
+              ) : null}
 
               {/* ─── LOCATIONS panel ───────────────────────────── */}
               {/* 2026-05-13: Ship-From Locations moved here from a
@@ -1353,26 +1339,27 @@ export default function SettingsView() {
                 <LocationsView
                   embedded
                   headerActionAnchor={headerActionEl}
+                  queriesEnabled={settingsQueriesReady}
                 />
               ) : null}
 
               {/* ─── STORES panel ──────────────────────────────── */}
               {activeSection === 'stores' ? (
-                <CarrierIntegrationsCard view="stores" />
+                <CarrierIntegrationsCard view="stores" queriesEnabled={settingsQueriesReady} />
               ) : null}
 
               {/* ─── CARRIERS panel ────────────────────────────── */}
               {activeSection === 'carriers' ? (
                 <div className="flex flex-col gap-4">
                   {/* PS-106: direct-store vs ShipStation carrier policy control. */}
-                  <CarrierEligibilityPolicyCard />
-                  <CarrierIntegrationsCard view="carriers" />
+                  <CarrierEligibilityPolicyCard queriesEnabled={settingsQueriesReady} />
+                  <CarrierIntegrationsCard view="carriers" queriesEnabled={settingsQueriesReady} />
                 </div>
               ) : null}
 
               {/* ─── PENDING panel ─────────────────────────────── */}
               {activeSection === 'pending' ? (
-                <PendingClientIntegrationsCard />
+                <PendingClientIntegrationsCard queriesEnabled={settingsQueriesReady} />
               ) : null}
 
               {/* ─── AUTOMATION panel ──────────────────────────── */}
@@ -1408,7 +1395,7 @@ export default function SettingsView() {
                   testClients={testClients}
                   testClientsLoading={testClientsLoading}
                   seedCount={seedCount}
-                  sandboxState={sandboxState}
+                  sandboxState={sandboxPanelState}
                   onSeedCountChange={setSeedCount}
                   onSeed={handleSeedTestOrders}
                   onPurge={handlePurgeTestOrders}

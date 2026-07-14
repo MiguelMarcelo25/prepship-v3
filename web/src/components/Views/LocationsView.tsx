@@ -1,4 +1,5 @@
-import { useContext, useEffect, useState, type FormEvent } from 'react'
+import { useContext, useState, type FormEvent } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -361,50 +362,34 @@ interface LocationsViewProps {
    *  AND embedded, the "+ Add Location" button portals into this
    *  DOM node (typically a slot in the parent's section header). */
   headerActionAnchor?: HTMLElement | null
+  /** Audit 2.2: Settings delays non-critical section GETs until idle. */
+  queriesEnabled?: boolean
 }
 
 export default function LocationsView({
   embedded = false,
   headerActionAnchor = null,
+  queriesEnabled = true,
 }: LocationsViewProps = {}) {
   const toastContext = useContext(ToastContext)
-  const [locations, setLocations] = useState<LocationDto[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [form, setForm] = useState<LocationFormState>(() => createLocationFormState())
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-
-    const loadLocations = async () => {
-      setLoading(true)
-      setError(null)
-
-      try {
-        const payload = await apiClient.fetchLocations()
-        if (cancelled) return
-        setLocations(payload)
-      } catch (loadError) {
-        if (cancelled) return
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load locations')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    void loadLocations()
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const locationsQuery = useQuery<LocationDto[]>({
+    queryKey: ['settings', 'locations'],
+    enabled: queriesEnabled,
+    queryFn: () => apiClient.fetchLocations(),
+  })
+  const locations = locationsQuery.data ?? []
+  const loading = locationsQuery.data == null && (!queriesEnabled || locationsQuery.isPending)
+  const error = locationsQuery.isError
+    ? (locationsQuery.error instanceof Error ? locationsQuery.error.message : 'Failed to load locations')
+    : null
 
   const refreshLocations = async () => {
-    const payload = await apiClient.fetchLocations()
-    setLocations(payload)
-    setError(null)
+    const result = await locationsQuery.refetch()
+    if (result.isError) throw result.error
   }
 
   const handleFieldChange = <K extends keyof LocationFormState>(field: K, value: LocationFormState[K]) => {

@@ -217,6 +217,7 @@
     "test:ps-177-row-money-display": "tsx scripts/ps-177-row-money-display-guard.ts",
     "test:markup-single-source": "tsx scripts/markup-single-source-guard.ts",
     "test:settings-read-scope": "tsx scripts/settings-read-scope-guard.ts",
+    "test:settings-query-migration": "node scripts/settings-query-migration-guard.mjs",
     "test:ps-798-per-account-billing": "tsx scripts/ps-798-per-account-billing-guard.ts",
     "test:ps-412-finalized-billing": "tsx scripts/ps-412-finalized-billing-guard.ts",
     "test:ps-416-billing-fail-closed": "tsx scripts/ps-416-billing-fail-closed-guard.ts",

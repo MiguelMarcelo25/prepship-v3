@@ -4,7 +4,8 @@
 // the authority and fails safe to audit_only; this control just makes the mode clickable.
 // Default/safe rollout: Audit only (reports would-blocks, never blocks a purchase).
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck, ShieldAlert, ShieldOff } from 'lucide-react'
 import { apiClient } from '../../lib/v2-apiClient'
 
@@ -36,31 +37,30 @@ const OPTIONS: Array<{
   },
 ]
 
-export function CarrierEligibilityPolicyCard() {
-  const [mode, setMode] = useState<Mode>('audit_only')
-  const [loading, setLoading] = useState(true)
+export function CarrierEligibilityPolicyCard({ queriesEnabled = true }: { queriesEnabled?: boolean } = {}) {
+  const queryClient = useQueryClient()
   const [saving, setSaving] = useState<Mode | null>(null)
   const [savedAt, setSavedAt] = useState<Mode | null>(null)
 
-  useEffect(() => {
-    let active = true
-    void apiClient.fetchCarrierEligibilityPolicy().then((m) => {
-      if (active) { setMode(m); setLoading(false) }
-    }).catch(() => { if (active) setLoading(false) })
-    return () => { active = false }
-  }, [])
+  const policyQuery = useQuery<Mode>({
+    queryKey: ['settings', 'carrier-eligibility-policy'],
+    enabled: queriesEnabled,
+    queryFn: () => apiClient.fetchCarrierEligibilityPolicy(),
+  })
+  const mode = policyQuery.data ?? 'audit_only'
+  const loading = policyQuery.data == null && (!queriesEnabled || policyQuery.isPending)
 
   async function choose(next: Mode) {
     if (next === mode || saving) return
     const prev = mode
-    setMode(next)
+    queryClient.setQueryData<Mode>(['settings', 'carrier-eligibility-policy'], next)
     setSaving(next)
     try {
       await apiClient.saveCarrierEligibilityPolicy(next)
       setSavedAt(next)
       setTimeout(() => setSavedAt((s) => (s === next ? null : s)), 2500)
     } catch {
-      setMode(prev) // revert on failure
+      queryClient.setQueryData<Mode>(['settings', 'carrier-eligibility-policy'], prev)
     } finally {
       setSaving(null)
     }

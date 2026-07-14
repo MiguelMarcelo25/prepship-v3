@@ -124,7 +124,7 @@ async function sliceTwoChecks() {
     /CarrierEligibilityPolicyCard/.test(settingsView));
   check('policy card offers enforce / audit_only / disabled with audit_only default',
     /'enforce'/.test(card) && /'audit_only'/.test(card) && /'disabled'/.test(card) &&
-      /useState<Mode>\('audit_only'\)/.test(card));
+      /const mode = policyQuery\.data \?\? 'audit_only'/.test(card));
 
   // slice 4: /rates/browse read-path wiring — audit/enforce on rating, best-effort + fail-open.
   // Repointed (guard rot): /rates/browse was extracted from src/routes/rates.ts into

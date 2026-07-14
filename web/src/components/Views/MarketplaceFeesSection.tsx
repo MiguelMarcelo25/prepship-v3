@@ -3,7 +3,8 @@
 // KV. The FE only stores rules — all fee MATH is backend-owned (rate-money +
 // marketplace-fee services); these rules drive the Marketplace Fee + Profit
 // columns on Awaiting/Shipped. No fee computation happens here.
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, Save } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { SkeletonStack, StatusLine } from './settings-ui'
@@ -27,6 +28,7 @@ interface FeeRule {
 }
 
 type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string }
+type MarketplaceFeeRulesPayload = { version?: number; rules?: FeeRule[] }
 
 const FIELD = 'h-7 px-2 rounded ring-1 ring-line bg-surface text-[12px] text-ink focus:ring-brand/40 focus:ring-2 outline-none transition'
 const NUM_FIELD = `${FIELD} w-[72px] text-center tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`
@@ -41,74 +43,89 @@ function newRule(): FeeRule {
   return { kind: 'tiered', threshold: 15, belowPercent: 8, atOrAbovePercent: 15 }
 }
 
-export function MarketplaceFeesSection() {
-  const [rules, setRules] = useState<FeeRule[] | null>(null)
+export function MarketplaceFeesSection({ queriesEnabled = true }: { queriesEnabled?: boolean } = {}) {
+  const queryClient = useQueryClient()
+  const [rulesDraft, setRulesDraft] = useState<FeeRule[] | null>(null)
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
-  const [clients, setClients] = useState<ClientLite[]>([])
-  const [stores, setStores] = useState<StoreLite[]>([])
-  const [options, setOptions] = useState<OptionsState>({ kind: 'loading' })
 
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      const data = await apiClient.fetchMarketplaceFeeRules()
-      if (cancelled) return
-      const loaded = Array.isArray(data?.rules) ? (data.rules as FeeRule[]) : []
-      setRules(loaded)
-    })()
-    return () => { cancelled = true }
-  }, [])
+  // FE-2 (audit 2.2 slice 4): one stable query per GET. Unsaved rule edits
+  // remain a local form draft; backend response data stays in the query cache.
+  const rulesQuery = useQuery<MarketplaceFeeRulesPayload>({
+    queryKey: ['settings', 'marketplace-fee-rules'],
+    enabled: queriesEnabled,
+    queryFn: () => apiClient.fetchMarketplaceFeeRules(),
+  })
+  const clientsQuery = useQuery<unknown[]>({
+    queryKey: ['settings', 'marketplace-fee-clients'],
+    enabled: queriesEnabled,
+    queryFn: () => apiClient.fetchClients(),
+  })
+  const storesQuery = useQuery<unknown[]>({
+    queryKey: ['settings', 'marketplace-fee-stores'],
+    enabled: queriesEnabled,
+    queryFn: () => apiClient.fetchStores(),
+  })
 
-  // PS-242: load the canonical client + store lists so the scope is picked by name.
-  // Best-effort: on failure the selectors still render (saved IDs preserved as
-  // "Unknown … — ID ####") and we surface a non-destructive warning.
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const [clientRows, storeRows] = await Promise.all([
-          apiClient.fetchClients(),
-          apiClient.fetchStores(),
-        ])
-        if (cancelled) return
-        setClients(toClientLites(clientRows))
-        setStores(toStoreLites(storeRows))
-        setOptions({ kind: 'ready' })
-      } catch (err) {
-        if (cancelled) return
-        setOptions({ kind: 'error', message: err instanceof Error ? err.message : 'lookup failed' })
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
+  const loadedRules = Array.isArray(rulesQuery.data?.rules) ? rulesQuery.data.rules : []
+  const rules = rulesDraft ?? loadedRules
+  const clients: ClientLite[] = toClientLites(clientsQuery.data ?? [])
+  const stores: StoreLite[] = toStoreLites(storesQuery.data ?? [])
+  const optionsError = clientsQuery.error ?? storesQuery.error
+  const options: OptionsState = (
+    (!queriesEnabled && (clientsQuery.data == null || storesQuery.data == null))
+    || clientsQuery.isPending
+    || storesQuery.isPending
+  )
+    ? { kind: 'loading' }
+    : clientsQuery.isError || storesQuery.isError
+      ? {
+          kind: 'error',
+          message: optionsError instanceof Error
+            ? optionsError.message
+            : 'lookup failed',
+        }
+      : { kind: 'ready' }
 
   function update(index: number, patch: Partial<FeeRule>) {
-    setRules((prev) => (prev ? prev.map((r, i) => (i === index ? { ...r, ...patch } : r)) : prev))
+    setRulesDraft((current) => (current ?? rules).map((rule, i) => (i === index ? { ...rule, ...patch } : rule)))
     setSave({ kind: 'idle' })
   }
 
   function addRule() {
-    setRules((prev) => [...(prev ?? []), newRule()])
+    setRulesDraft((current) => [...(current ?? rules), newRule()])
     setSave({ kind: 'idle' })
   }
 
   function removeRule(index: number) {
-    setRules((prev) => (prev ? prev.filter((_, i) => i !== index) : prev))
+    setRulesDraft((current) => (current ?? rules).filter((_, i) => i !== index))
     setSave({ kind: 'idle' })
   }
 
   async function persist() {
-    if (!rules) return
     setSave({ kind: 'saving' })
     try {
       await apiClient.saveMarketplaceFeeRules({ version: 1, rules })
+      queryClient.setQueryData<MarketplaceFeeRulesPayload>(
+        ['settings', 'marketplace-fee-rules'],
+        { version: 1, rules },
+      )
+      setRulesDraft(null)
       setSave({ kind: 'saved', message: `Saved ${rules.length} rule${rules.length === 1 ? '' : 's'}.` })
     } catch (err) {
       setSave({ kind: 'error', message: err instanceof Error ? err.message : 'Save failed' })
     }
   }
 
-  if (rules === null) return <SkeletonStack rows={4} />
+  if (rulesQuery.data == null && (!queriesEnabled || rulesQuery.isPending)) return <SkeletonStack rows={4} />
+
+  if (rulesQuery.isError) {
+    return (
+      <StatusLine
+        kind="error"
+        message={rulesQuery.error instanceof Error ? rulesQuery.error.message : 'Failed to load marketplace fee rules'}
+      />
+    )
+  }
 
   return (
     <div className="space-y-3">

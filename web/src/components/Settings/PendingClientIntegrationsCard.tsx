@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { api } from '../../lib/api'
 import { formatCaDateShort, formatCaTimeOnly } from '../../lib/ca-time'
@@ -72,10 +73,8 @@ function submittedLabel(value: string | null | undefined): string {
   return value
 }
 
-export function PendingClientIntegrationsCard() {
-  const [carrierItems, setCarrierItems] = useState<PendingIntegration[]>([])
-  const [storeItems, setStoreItems] = useState<PendingIntegration[]>([])
-  const [state, setState] = useState<{ kind: 'idle' | 'loading' | 'error'; message?: string }>({ kind: 'idle' })
+export function PendingClientIntegrationsCard({ queriesEnabled = true }: { queriesEnabled?: boolean } = {}) {
+  const queryClient = useQueryClient()
   const [removing, setRemoving] = useState<Record<string, boolean>>({})
   const [approving, setApproving] = useState<Record<string, boolean>>({})
   const [dryRunning, setDryRunning] = useState<Record<number, boolean>>({})
@@ -84,6 +83,32 @@ export function PendingClientIntegrationsCard() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [carrierSortState, setCarrierSortState] = useState<SortState<PendingSortKey>>(null)
   const [storeSortState, setStoreSortState] = useState<SortState<PendingSortKey>>(null)
+
+  const pendingCarriersQuery = useQuery<{ data: PendingIntegration[] }>({
+    queryKey: ['settings', 'pending-carrier-integrations'],
+    enabled: queriesEnabled,
+    queryFn: () => api.get<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1'),
+  })
+  const pendingStoresQuery = useQuery<{ data: PendingIntegration[] }>({
+    queryKey: ['settings', 'pending-store-integrations'],
+    enabled: queriesEnabled,
+    queryFn: () => api.get<{ data: PendingIntegration[] }>('/store-accounts?source=portal&pending=1'),
+  })
+  const carrierItems = Array.isArray(pendingCarriersQuery.data?.data) ? pendingCarriersQuery.data.data : []
+  const storeItems = Array.isArray(pendingStoresQuery.data?.data) ? pendingStoresQuery.data.data : []
+  const loading = (
+    pendingCarriersQuery.data == null && (!queriesEnabled || pendingCarriersQuery.isPending)
+  ) || (
+    pendingStoresQuery.data == null && (!queriesEnabled || pendingStoresQuery.isPending)
+  )
+    || pendingCarriersQuery.isFetching
+    || pendingStoresQuery.isFetching
+  const queryError = pendingCarriersQuery.error ?? pendingStoresQuery.error
+  const state: { kind: 'idle' | 'loading' | 'error'; message?: string } = loading
+    ? { kind: 'loading' }
+    : pendingCarriersQuery.isError || pendingStoresQuery.isError
+      ? { kind: 'error', message: queryError instanceof Error ? queryError.message : 'Unknown error' }
+      : { kind: 'idle' }
 
   const sortPending = (
     items: PendingIntegration[],
@@ -126,43 +151,8 @@ export function PendingClientIntegrationsCard() {
   )
 
   const refresh = async () => {
-    setState({ kind: 'loading' })
-    try {
-      const [carriers, stores] = await Promise.all([
-        api.get<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1'),
-        api.get<{ data: PendingIntegration[] }>('/store-accounts?source=portal&pending=1'),
-      ])
-      setCarrierItems(Array.isArray(carriers?.data) ? carriers.data : [])
-      setStoreItems(Array.isArray(stores?.data) ? stores.data : [])
-      setState({ kind: 'idle' })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error'
-      setState({ kind: 'error', message })
-    }
+    await Promise.all([pendingCarriersQuery.refetch(), pendingStoresQuery.refetch()])
   }
-
-  useEffect(() => {
-    let active = true
-    void (async () => {
-      try {
-        const [carriers, stores] = await Promise.all([
-          api.get<{ data: PendingIntegration[] }>('/carrier-accounts?source=portal&pending=1'),
-          api.get<{ data: PendingIntegration[] }>('/store-accounts?source=portal&pending=1'),
-        ])
-        if (!active) return
-        setCarrierItems(Array.isArray(carriers?.data) ? carriers.data : [])
-        setStoreItems(Array.isArray(stores?.data) ? stores.data : [])
-        setState({ kind: 'idle' })
-      } catch (error) {
-        if (!active) return
-        const message = error instanceof Error ? error.message : 'Unknown error'
-        setState({ kind: 'error', message })
-      }
-    })()
-    return () => {
-      active = false
-    }
-  }, [])
 
   const setCutoverInput = (id: number, patch: Partial<CutoverInputState[number]>) => {
     setCutoverInputs((prev) => ({
@@ -199,7 +189,10 @@ export function PendingClientIntegrationsCard() {
     setRemoving((prev) => ({ ...prev, [key]: true }))
     try {
       await deleteCarrierIntegration(id)
-      setCarrierItems((prev) => prev.filter((it) => it.id !== id))
+      queryClient.setQueryData<{ data: PendingIntegration[] }>(
+        ['settings', 'pending-carrier-integrations'],
+        (current) => current ? { ...current, data: current.data.filter((item) => item.id !== id) } : current,
+      )
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -214,7 +207,10 @@ export function PendingClientIntegrationsCard() {
     setRemoving((prev) => ({ ...prev, [key]: true }))
     try {
       await deleteStoreIntegration(id)
-      setStoreItems((prev) => prev.filter((it) => it.id !== id))
+      queryClient.setQueryData<{ data: PendingIntegration[] }>(
+        ['settings', 'pending-store-integrations'],
+        (current) => current ? { ...current, data: current.data.filter((item) => item.id !== id) } : current,
+      )
       setDryRuns((prev) => {
         const next = { ...prev }
         delete next[id]
@@ -235,7 +231,10 @@ export function PendingClientIntegrationsCard() {
     setApproving((prev) => ({ ...prev, [key]: true }))
     try {
       await approveCarrierIntegration(id)
-      setCarrierItems((prev) => prev.filter((it) => it.id !== id))
+      queryClient.setQueryData<{ data: PendingIntegration[] }>(
+        ['settings', 'pending-carrier-integrations'],
+        (current) => current ? { ...current, data: current.data.filter((item) => item.id !== id) } : current,
+      )
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -275,7 +274,10 @@ export function PendingClientIntegrationsCard() {
     setApproving((prev) => ({ ...prev, [key]: true }))
     try {
       await api.post('/store-source-cutovers/apply', payload)
-      setStoreItems((prev) => prev.filter((it) => it.id !== item.id))
+      queryClient.setQueryData<{ data: PendingIntegration[] }>(
+        ['settings', 'pending-store-integrations'],
+        (current) => current ? { ...current, data: current.data.filter((row) => row.id !== item.id) } : current,
+      )
       setDryRuns((prev) => {
         const next = { ...prev }
         delete next[item.id]
