@@ -50,6 +50,7 @@ import {
   readOrderSyncQueueTruth,
   type OrderSyncQueueTruth,
 } from './order-sync-queue-state';
+import { reconcileDeletedShipStationAwaiting } from './shipstation-deleted-awaiting-reconciliation';
 import { SYNC_JOB_RUNNING_LEASE_MS } from '../lib/sync-job-deadline';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
@@ -655,6 +656,7 @@ async function fetchOrdersPage(
   lastPageProcessed: number;
   complete: boolean;
   stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'>;
+  liveSourceOrderIds: string[];
 }> {
   const sinceParam = formatShipStationV1DateParam(args.sinceMs);
   const startPage = Math.max(1, Math.floor(Number(args.startPage ?? 1) || 1));
@@ -663,6 +665,7 @@ async function fetchOrdersPage(
   let total = 0;
   let pagesThisPass = 0;
   let lastPageProcessed = 0;
+  const liveSourceOrderIds = new Set<string>();
   let stoppedBy: Exclude<StatusCatchupStopReason, 'failed' | 'not_started_budget_exhausted'> =
     'complete';
 
@@ -688,6 +691,10 @@ async function fetchOrdersPage(
     // Per user override unlock shipped data on 2026-07-10: a timed-out queue
     // attempt must stop before any later order/status persistence begins.
     throwIfOrderSyncAborted(args.signal);
+    for (const order of res.orders) {
+      const sourceOrderId = String(order.sourceOrderId ?? '').trim();
+      if (sourceOrderId) liveSourceOrderIds.add(sourceOrderId);
+    }
 
     pages = res.pages ?? 1;
     // Per user override unlock shipped data on 2026-05-27: this keeps the
@@ -734,6 +741,7 @@ async function fetchOrdersPage(
         lastPageProcessed,
         complete: true,
         stoppedBy: 'complete',
+        liveSourceOrderIds: [...liveSourceOrderIds],
       };
     }
     if (syncRunBudgetExhausted(budget, pagesThisPass)) {
@@ -745,6 +753,7 @@ async function fetchOrdersPage(
         lastPageProcessed,
         complete: false,
         stoppedBy: syncRunBudgetTimeExhausted(budget) ? 'time_budget' : 'page_budget',
+        liveSourceOrderIds: [...liveSourceOrderIds],
       };
     }
   }
@@ -780,6 +789,7 @@ async function fetchOrdersPage(
     lastPageProcessed,
     complete: stoppedBy === 'complete',
     stoppedBy,
+    liveSourceOrderIds: [...liveSourceOrderIds],
   };
 }
 
@@ -982,6 +992,30 @@ async function syncOrdersForAccount(
       // resumed pass still probes newest-first page 1 before older backlog.
       await setSetting(cursorKey, String(nextOrderSyncResumePage(result)));
       total += result.synced;
+      if (
+        target.storeId !== undefined &&
+        result.complete &&
+        result.startPage === 1
+      ) {
+        try {
+          const reconciliation = await reconcileDeletedShipStationAwaiting({
+            accountLabel: account.label,
+            apiKey: account.apiKey,
+            apiSecret: account.apiSecret,
+            storeId: target.storeId,
+            sinceMs: awaitingSinceMs,
+            liveSourceOrderIds: new Set(result.liveSourceOrderIds),
+            signal: opts.signal,
+          });
+          total += reconciliation.cancelled;
+        } catch (err) {
+          throwIfOrderSyncAborted(opts.signal);
+          console.warn(
+            `[order-sync] deleted-awaiting reconciliation failed account="${account.label}" storeId=${target.storeId}; awaiting import remains authoritative for this run:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
       if (result.pages > maxPages) maxPages = result.pages;
       if (!result.complete) complete = false;
     } catch (err) {

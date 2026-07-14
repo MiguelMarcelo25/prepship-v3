@@ -2,6 +2,7 @@ import {
   asSSUpstreamOrderId,
   ssMarkOrderShippedV1,
 } from '../../lib/shipstation/labels.js';
+import { ShipStationError } from '../../lib/shipstation/client.js';
 import { ssV1Request } from '../../lib/shipstation/v1-client.js';
 import { formatShipStationV1DateParam, parseShipStationV1Date } from '../../lib/shipstation/v1-date.js';
 import { buildShipStationOrderSource } from '../../services/normalized-order-persistence.js';
@@ -177,6 +178,25 @@ export async function listShipStationOrders<TList = SSOrdersList>(
     timeoutMs: options.timeoutMs,
     signal: options.signal,
   });
+}
+
+export async function getShipStationOrderExistence(
+  orderId: string,
+  options: ShipStationV1RequestOptions = {},
+): Promise<'exists' | 'deleted'> {
+  try {
+    await ssV1Request<SSOrder>(`/orders/${encodeURIComponent(orderId)}`, {
+      apiKey: options.apiKey,
+      apiSecret: options.apiSecret,
+      dedupeKey: options.dedupeKey,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
+    return 'exists';
+  } catch (error) {
+    if (error instanceof ShipStationError && error.status === 404) return 'deleted';
+    throw error;
+  }
 }
 
 export async function listShipStationShipments<TList>(

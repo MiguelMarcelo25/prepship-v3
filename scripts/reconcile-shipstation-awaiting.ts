@@ -13,7 +13,10 @@ import {
   shouldApplyShipStationAwaitingParityCandidate,
   shouldApplyShipStationAwaitingParityOverrideCandidate,
 } from '../src/lib/shipstation-awaiting-parity.ts';
-import { listShipStationOrders } from '../src/connectors/store/shipstation.ts';
+import {
+  getShipStationOrderExistence,
+  listShipStationOrders,
+} from '../src/connectors/store/shipstation.ts';
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -456,19 +459,13 @@ async function shipStationOrderExists(
   account: SyncAccount,
   externalOrderId: string,
 ): Promise<'deleted' | 'exists' | 'error'> {
-  const key = account.apiKey ?? process.env.SHIPSTATION_API_KEY;
-  const secret = account.apiSecret ?? process.env.SHIPSTATION_API_SECRET;
-  if (!key || !secret) return 'error';
   try {
-    const auth = 'Basic ' + Buffer.from(`${key}:${secret}`).toString('base64');
-    const res = await fetch(`https://ssapi.shipstation.com/orders/${encodeURIComponent(externalOrderId)}`, {
-      method: 'GET',
-      headers: { Authorization: auth },
-      signal: AbortSignal.timeout(30_000),
+    return await getShipStationOrderExistence(externalOrderId, {
+      apiKey: account.apiKey,
+      apiSecret: account.apiSecret,
+      dedupeKey: `awaiting-parity:exists:${account.label}:${externalOrderId}`,
+      timeoutMs: 30_000,
     });
-    if (res.status === 404) return 'deleted';
-    if (res.ok) return 'exists';
-    return 'error';
   } catch {
     return 'error';
   }

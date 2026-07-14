@@ -5,6 +5,7 @@ import {
   shouldApplyShipStationAwaitingParityOverrideCandidate,
   shouldApplyShipStationAwaitingParityCandidate,
 } from '../src/lib/shipstation-awaiting-parity.ts';
+import { selectShipStationDeletedAwaitingCandidates } from '../src/services/shipstation-deleted-awaiting-policy.ts';
 
 const liveAwaiting = [
   { externalOrderId: '286991416', orderNumber: '1001', storeId: 378060 },
@@ -105,6 +106,54 @@ assert.equal(
   'ShipStation-only awaiting rows must be reported but never auto-mutated',
 );
 
+const deletedCandidates = selectShipStationDeletedAwaitingCandidates(
+  [
+    {
+      id: 1,
+      externalOrderId: '302521806',
+      orderStatus: 'awaiting_shipment',
+      canonicalStatus: null,
+      externallyShipped: false,
+      sourceProvider: 'shipstation',
+      hasActiveShipment: false,
+    },
+    {
+      id: 2,
+      externalOrderId: 'still-live',
+      orderStatus: 'awaiting_shipment',
+      canonicalStatus: null,
+      externallyShipped: false,
+      sourceProvider: 'shipstation',
+      hasActiveShipment: false,
+    },
+    {
+      id: 3,
+      externalOrderId: '123',
+      orderStatus: 'awaiting_shipment',
+      canonicalStatus: null,
+      externallyShipped: false,
+      sourceProvider: 'shipstation',
+      hasActiveShipment: true,
+    },
+    {
+      id: 4,
+      externalOrderId: '456',
+      orderStatus: 'shipped',
+      canonicalStatus: null,
+      externallyShipped: false,
+      sourceProvider: 'shipstation',
+      hasActiveShipment: false,
+    },
+  ],
+  new Set(['still-live']),
+  5,
+);
+assert.deepEqual(
+  deletedCandidates.map((row) => row.id),
+  [1],
+  'only numeric ShipStation awaiting rows absent from a complete live snapshot and without an active label are eligible for exact-id verification',
+);
+
 const pkg = readFileSync('package.json', 'utf8');
 assert.match(pkg, /shipstation:awaiting:diff/);
 assert.match(pkg, /shipstation:awaiting:reconcile/);
@@ -120,6 +169,43 @@ assert.match(script, /shipstation_awaiting_parity\.last_run/);
 assert.match(script, /persistParityRunStatus/);
 assert.match(script, /updatedSafe/);
 assert.match(script, /updatedOverride/);
+assert.match(script, /getShipStationOrderExistence/);
+assert.doesNotMatch(script, /fetch\(`https:\/\/ssapi\.shipstation\.com\/orders\/\$\{/);
+
+const connector = readFileSync('src/connectors/store/shipstation.ts', 'utf8');
+assert.match(connector, /export async function getShipStationOrderExistence/);
+assert.match(connector, /error instanceof ShipStationError && error\.status === 404/);
+
+const v1Client = readFileSync('src/lib/shipstation/v1-client.ts', 'utf8');
+assert.match(v1Client, /async function readErrorBody/);
+assert.match(v1Client, /const text = await res\.text\(\)/);
+assert.doesNotMatch(
+  v1Client,
+  /await res\.json\(\)[\s\S]{0,120}await res\.text\(\)/,
+  'a non-JSON error body must be consumed once so an empty ShipStation 404 remains classifiable',
+);
+
+const deletedReconciliation = readFileSync(
+  'src/services/shipstation-deleted-awaiting-reconciliation.ts',
+  'utf8',
+);
+assert.match(deletedReconciliation, /MAX_VERIFIED_DELETIONS_PER_TARGET = 1/);
+assert.match(deletedReconciliation, /getShipStationOrderExistence/);
+assert.match(deletedReconciliation, /eq\(orders\.orderStatus, 'awaiting_shipment'\)/);
+assert.match(deletedReconciliation, /noActiveShipment/);
+assert.match(deletedReconciliation, /orderStatus: 'cancelled'/);
+assert.match(
+  deletedReconciliation,
+  /Per user override unlock shipped data on 2026-07-14/,
+);
+
+const orderSync = readFileSync('src/services/order-sync.ts', 'utf8');
+assert.match(orderSync, /reconcileDeletedShipStationAwaiting/);
+assert.match(
+  orderSync,
+  /target\.storeId !== undefined\s*&&\s*result\.complete\s*&&\s*result\.startPage === 1/,
+  'deleted-order verification must run only after a complete page-1-started awaiting snapshot for a known store',
+);
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 assert.match(ordersRoute, /visibleAwaitingOrdersPredicate/);

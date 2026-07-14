@@ -54,6 +54,16 @@ function throwIfRequestAborted(signal?: AbortSignal): void {
     : new Error('ShipStation v1 request aborted');
 }
 
+async function readErrorBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
 export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> {
   const key = opts.apiKey ?? env.SHIPSTATION_API_KEY;
   const secret = opts.apiSecret ?? env.SHIPSTATION_API_SECRET;
@@ -103,8 +113,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
         // v2-parity: retry 5xx with exponential backoff before giving up.
         if (res.status >= 500 && res.status <= 599) {
           if (attempt >= maxRetries) {
-            let body: unknown = null;
-            try { body = await res.json(); } catch { body = await res.text(); }
+            const body = await readErrorBody(res);
             throw new ShipStationError(
               res.status,
               `ShipStation v1 ${res.status} after ${attempt} retries`,
@@ -117,12 +126,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
         }
 
         if (!res.ok) {
-          let body: unknown = null;
-          try {
-            body = await res.json();
-          } catch {
-            body = await res.text();
-          }
+          const body = await readErrorBody(res);
           throw new ShipStationError(
             res.status,
             `ShipStation v1 ${res.status}: ${res.statusText}`,
