@@ -29,8 +29,9 @@ const LABEL_PAGE_SIZE = 200;
 export async function enrichLabelUrls(
   acct: { label: string; apiKeyV2: string | null },
   sinceMs: number,
-  opts: { timeoutMs?: number; shouldContinue?: () => boolean } = {},
+  opts: { timeoutMs?: number; shouldContinue?: () => boolean; signal?: AbortSignal } = {},
 ): Promise<number> {
+  if (opts.signal?.aborted) opts.signal.throwIfAborted();
   if (!acct.apiKeyV2) return 0; // No V2 key → can't resolve labels for this account.
 
   const rows = await db
@@ -48,15 +49,20 @@ export async function enrichLabelUrls(
         gt(shipments.createdAt, new Date(sinceMs)),
       ),
     );
+  if (opts.signal?.aborted) opts.signal.throwIfAborted();
   if (!rows.length) return 0;
 
   const labelRecords: LabelUrlRecord[] = [];
   for (let page = 1; page <= MAX_LABEL_PAGES; page += 1) {
+    if (opts.signal?.aborted) opts.signal.throwIfAborted();
     if (opts.shouldContinue && !opts.shouldContinue()) break;
     const batch = await ssListRecentLabels(acct.apiKeyV2, {
       page,
       pageSize: LABEL_PAGE_SIZE,
       timeoutMs: opts.timeoutMs,
+      // Per user override unlock shipped data on 2026-07-14: enrichment
+      // shares the parent shipment-sync cancellation and performs no late fill.
+      signal: opts.signal,
     });
     if (!batch.length) break;
     for (const rec of batch) labelRecords.push({ trackingNumber: rec.trackingNumber, labelUrl: rec.labelUrl });
@@ -66,6 +72,7 @@ export async function enrichLabelUrls(
   const updates = planShipmentLabelUrlBackfill(rows, labelRecords);
   let filled = 0;
   for (const u of updates) {
+    if (opts.signal?.aborted) opts.signal.throwIfAborted();
     // NULL-guarded fill — Per user override `unlock shipped data` on 2026-06-17.
     await db
       .update(shipments)
@@ -73,5 +80,6 @@ export async function enrichLabelUrls(
       .where(and(eq(shipments.id, u.shipmentId), isNull(shipments.labelUrl)));
     filled += 1;
   }
+  if (opts.signal?.aborted) opts.signal.throwIfAborted();
   return filled;
 }

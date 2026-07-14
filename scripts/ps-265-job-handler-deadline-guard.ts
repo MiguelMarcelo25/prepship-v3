@@ -4,12 +4,12 @@
  * Root cause: registerWorker held a single in-process mutex; if a
  * handler's promise never settled (a hung ShipStation call), the finally that
  * clears the mutex never ran → every later job skipped forever until a restart.
- * Fix: every handler is bounded by withDeadline, so a hang REJECTS → the existing
- * catch/finally runs → the mutex releases → the next tick proceeds (the sync is
- * watermark-based + idempotent, so the missed window is re-pulled, no data loss).
+ * Fix: every handler is bounded by withDeadline, and the queue keeps lane ownership
+ * attached to the original handler promise. A deadline rejects the pg-boss attempt,
+ * but the next tick cannot overlap a still-running abandoned handler in the same lane.
  *
- * This guard unit-tests withDeadline and statically proves the handler is bounded
- * and the mutex is always released.
+ * This guard unit-tests withDeadline and proves the handler is bounded while lane
+ * ownership releases only when the original handler actually settles.
  *
  *   npx tsx scripts/ps-265-job-handler-deadline-guard.ts
  */
@@ -75,13 +75,44 @@ async function main() {
   }
   check('cancellation hook failure still rejects with deadline error', callbackFailureKeptDeadline);
 
-  // ── Static contract: the worker bounds the handler + always releases the mutex ──
+  // 4. Deadline rejection must not make a still-running handler look finished. The
+  // lane remains owned until the original promise settles, preventing zombie overlap.
+  const activeLanes = new Map<string, string>([['shipstation-sync', 'prepship.sync.shipments']]);
+  let settleDeferredHandler!: () => void;
+  const deferredHandler = new Promise<void>((resolve) => {
+    settleDeferredHandler = resolve;
+  });
+  const clearDeferredLane = () => {
+    if (activeLanes.get('shipstation-sync') === 'prepship.sync.shipments') {
+      activeLanes.delete('shipstation-sync');
+    }
+  };
+  void deferredHandler.then(clearDeferredLane, clearDeferredLane);
+  try {
+    await withDeadline(() => deferredHandler, 80, 'deferred-handler');
+  } catch {
+    // Expected deadline; the original handler is deliberately still running.
+  }
+  check(
+    'deadline keeps lane owned while original handler is still running',
+    activeLanes.get('shipstation-sync') === 'prepship.sync.shipments',
+  );
+  settleDeferredHandler();
+  await deferredHandler;
+  await Promise.resolve();
+  check('lane releases when original handler settles', !activeLanes.has('shipstation-sync'));
+
+  // ── Static contract: the worker bounds the handler without releasing a zombie ──
   const q = read('src/services/sync-job-queue.ts');
   check('sync-job-queue imports withDeadline', /import \{ withDeadline \} from '\.\.\/lib\/with-deadline'/.test(q));
   check('handler is wrapped in withDeadline',
-    /await withDeadline\([\s\S]*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\)[\s\S]*SYNC_JOB_HANDLER_TIMEOUT_MS[\s\S]*abortController\.abort\(error\)/.test(q));
-  check('active lane is cleared in finally (always released on timeout)',
-    /finally \{\s*if \(activeJobsByLane\.get\(lane\) === name\) activeJobsByLane\.delete\(lane\);\s*\}/.test(q));
+    /const handlerPromise = Promise\.resolve\(\)\.then\(\(\) =>\s*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\),?\s*\)[\s\S]*await withDeadline\(\s*\(\) => handlerPromise,[\s\S]*SYNC_JOB_HANDLER_TIMEOUT_MS[\s\S]*abortController\.abort\(error\)/.test(q));
+  check('queue tracks the original handler promise outside the deadline race',
+    /const handlerPromise = Promise\.resolve\(\)\.then\(\(\) =>\s*handler\(job\?\.data, \{ identity, signal: abortController\.signal \}\),?\s*\)/.test(q));
+  check('active lane releases only when the original handler promise settles',
+    /void handlerPromise\.then\(clearActiveLane, clearActiveLane\)/.test(q));
+  check('deadline path does not unconditionally clear a still-running lane',
+    !/finally \{\s*if \(activeJobsByLane\.get\(lane\) === name\) activeJobsByLane\.delete\(lane\);\s*\}/.test(q));
   check('deadline is clamped BELOW the pg-boss expiry (25min < 30min)',
     /25 \* 60_000/.test(read('src/lib/sync-job-deadline.ts')) && /expireInMinutes:\s*30/.test(q));
   check('order timeout closes only matching account attempt metadata',

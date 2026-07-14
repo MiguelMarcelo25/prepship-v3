@@ -48,7 +48,7 @@ check('shipment-sync creates a run budget', /const budget = createSyncRunBudget\
 check('V1 page loop breaks on the per-account page/time budget',
   /syncRunBudgetExhausted\(budget, pagesThisAccount\)/.test(ship));
 check('tracks the newest processed CreateDate as a resume cursor',
-  /cursorCreateMs/.test(ship) && /Date\.parse\(s\.createDate/.test(ship));
+  /cursorCreateMs/.test(ship) && /parseShipStationV1Date\(s\.createDate/.test(ship));
 check('watermark resumes from the cursor on a budget-bounded run, advances to now on full drain',
   /drained \? runStartMs : cursorCreateMs/.test(ship));
 check('run-level time budget stops starting new accounts',
@@ -58,6 +58,28 @@ check('V2 enrichment is skipped unless enough time remains to finish cleanly',
   && /BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS/.test(ship));
 check('the deadline is NOT raised (no JOB_HANDLER_TIMEOUT_MS change here)',
   !/JOB_HANDLER_TIMEOUT_MS/.test(ship));
+
+// ── shipment cancellation boundary: the deadline signal reaches every provider walk ──
+const storeConnector = read('src/connectors/store/shipstation.ts');
+const carrierConnector = read('src/connectors/carrier/shipstation.ts');
+const recentLabels = read('src/lib/shipstation/labels.ts');
+const v1ShipmentList =
+  storeConnector.match(/export async function listShipStationShipments[\s\S]*?^\}/m)?.[0] ?? '';
+check('shipment-sync forwards its deadline signal to the V1 shipment request',
+  /listShipStationShipments<SSShipmentsList>\(q,\s*\{[\s\S]{0,800}signal: opts\.signal/.test(ship));
+check('V1 shipment connector forwards the signal to ssV1Request',
+  /signal: options\.signal/.test(v1ShipmentList));
+check('V2 shipment and label list connector inputs accept and forward a signal',
+  /type ShipStationV2ListInput = \{[\s\S]*signal\?: AbortSignal/.test(carrierConnector)
+  && (carrierConnector.match(/signal: input\.signal/g) ?? []).length >= 2);
+check('provider-account enrichment receives and forwards the deadline signal',
+  /enrichProviderAccountIds\(acct, lastSync, budget, opts\.signal\)/.test(ship)
+  && /async function enrichProviderAccountIds\([\s\S]{0,250}signal\?: AbortSignal/.test(ship)
+  && (ship.match(/signal,\s*\n\s*\}/g) ?? []).length >= 2);
+check('label-url enrichment forwards cancellation through the recent-label request',
+  /enrichLabelUrls\(acct, lastSync, \{[\s\S]{0,300}signal: opts\.signal/.test(ship)
+  && /opts: \{[^}]*signal\?: AbortSignal/.test(recentLabels)
+  && /signal: opts\.signal/.test(recentLabels));
 
 // ── order-sync wiring (slice 2): bounded + awaiting-first ────────────────────
 const ord = read('src/services/order-sync.ts');

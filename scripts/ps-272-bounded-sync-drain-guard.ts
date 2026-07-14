@@ -44,7 +44,7 @@ check('syncShipments creates a per-run budget (page + wall-clock cap)',
 check('the per-account page loop breaks on the page/time budget (bounded batch)',
   /syncRunBudgetExhausted\(budget, pagesThisAccount\)/.test(ship));
 check('a CreateDate resume cursor is tracked (durable watermark, not all-or-nothing)',
-  /cursorCreateMs/.test(ship) && /Date\.parse\(s\.createDate/.test(ship));
+  /cursorCreateMs/.test(ship) && /parseShipStationV1Date\(s\.createDate/.test(ship));
 check('watermark resumes from the cursor on a budget-bounded run; advances to now only on full drain',
   /drained \? runStartMs : cursorCreateMs/.test(ship));
 check('the run-level time budget stops starting new accounts',

@@ -44,6 +44,7 @@ type ShipStationV2ListInput = {
   apiKey?: string;
   dedupeKey?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 function isRateLabelInput(input: ShipStationCreateLabelInput): input is ShipStationCreateLabelFromRateInput {
@@ -58,10 +59,13 @@ export async function listShipStationV2Shipments<TList>(
   query: URLSearchParams,
   input: ShipStationV2ListInput = {},
 ): Promise<TList> {
+  // Per user override unlock shipped data on 2026-07-14: V2 enrichment is
+  // best-effort read-side work and must stop with its owning shipment sync.
   return ssRequest<TList>(`/v2/shipments?${query.toString()}`, {
     apiKey: input.apiKeyV2 ?? input.apiKey,
     dedupeKey: input.dedupeKey,
     timeoutMs: input.timeoutMs,
+    signal: input.signal,
   });
 }
 
@@ -73,6 +77,7 @@ export async function listShipStationV2Labels<TList>(
     apiKey: input.apiKeyV2 ?? input.apiKey,
     dedupeKey: input.dedupeKey,
     timeoutMs: input.timeoutMs,
+    signal: input.signal,
   });
 }
 

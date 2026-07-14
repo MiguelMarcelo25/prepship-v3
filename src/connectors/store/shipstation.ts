@@ -183,11 +183,14 @@ export async function listShipStationShipments<TList>(
   query: URLSearchParams,
   options: ShipStationV1RequestOptions = {},
 ): Promise<TList> {
+  // Per user override unlock shipped data on 2026-07-14: forward worker
+  // cancellation at the provider boundary; this changes no shipment fields.
   return ssV1Request<TList>(`/shipments?${query.toString()}`, {
     apiKey: options.apiKey,
     apiSecret: options.apiSecret,
     dedupeKey: options.dedupeKey,
     timeoutMs: options.timeoutMs,
+    signal: options.signal,
   });
 }
 

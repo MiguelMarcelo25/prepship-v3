@@ -745,10 +745,28 @@ async function registerWorker(
         console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
         try {
           await recordWorkerJobStart(name);
-          // PS-265: deadline-bounded so a hung handler rejects here -> catch records
-          // the failure -> finally ALWAYS clears the active lane (deadlock -> self-heal).
+        } catch (err) {
+          if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
+          throw err;
+        }
+
+        // Per user override unlock shipped data on 2026-07-14: a deadline
+        // rejects the queue attempt, but lane ownership follows the original
+        // handler promise. A retry cannot overlap abandoned shipment/order work.
+        const handlerPromise = Promise.resolve().then(() =>
+          handler(job?.data, { identity, signal: abortController.signal }),
+        );
+        const clearActiveLane = () => {
+          if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
+        };
+        void handlerPromise.then(clearActiveLane, clearActiveLane);
+
+        try {
+          // PS-265: the queue attempt remains deadline-bounded. Cooperative
+          // cancellation stops the work; lane ownership prevents zombie overlap
+          // until the original promise actually settles.
           const result = await withDeadline(
-            () => handler(job?.data, { identity, signal: abortController.signal }),
+            () => handlerPromise,
             SYNC_JOB_HANDLER_TIMEOUT_MS,
             name,
             { onTimeout: (error) => abortController.abort(error) },
@@ -775,8 +793,6 @@ async function registerWorker(
           );
           await recordWorkerJobFailure(name, startedAt, err);
           throw err;
-        } finally {
-          if (activeJobsByLane.get(lane) === name) activeJobsByLane.delete(lane);
         }
       });
 

@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { env } from '../env.js';
 import { timedFetch } from '../http/timing.js';
 import { TokenBucket, type RateBucket } from './rate-limiter.js';
@@ -46,6 +47,13 @@ function basicAuth(key: string, secret: string) {
   return 'Basic ' + Buffer.from(`${key}:${secret}`).toString('base64');
 }
 
+function throwIfRequestAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('ShipStation v1 request aborted');
+}
+
 export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> {
   const key = opts.apiKey ?? env.SHIPSTATION_API_KEY;
   const secret = opts.apiSecret ?? env.SHIPSTATION_API_SECRET;
@@ -60,8 +68,12 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
       const maxRetries = opts.maxRetries ?? 5;
       let attempt = 0;
       while (true) {
+        // Per user override unlock shipped data on 2026-07-14: the shipment
+        // worker's deadline owns retries and rate-limit waits at this boundary.
+        throwIfRequestAborted(opts.signal);
         attempt += 1;
         await bucket.acquire();
+        throwIfRequestAborted(opts.signal);
         const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const signal = opts.signal
           ? AbortSignal.any([opts.signal, timeoutSignal])
@@ -84,7 +96,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
           const backoffMs = retryAfter
             ? retryAfter * 1000
             : Math.min(30_000, 2 ** attempt * 1000);
-          await new Promise((r) => setTimeout(r, backoffMs));
+          await sleep(backoffMs, undefined, { signal: opts.signal });
           continue;
         }
 
@@ -100,7 +112,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
             );
           }
           const backoffMs = Math.min(4_000, 2 ** attempt * 1000);
-          await new Promise((r) => setTimeout(r, backoffMs));
+          await sleep(backoffMs, undefined, { signal: opts.signal });
           continue;
         }
 

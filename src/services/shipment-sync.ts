@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
@@ -43,6 +44,13 @@ const DEFAULT_SHIPMENT_SYNC_PAGE_SIZE = 100;
 // page should fail this tick and retry shortly, not hold the shared lane for 10m.
 const BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS = 25_000;
 const SHIPMENT_ENRICHMENT_MIN_REMAINING_MS = 90_000;
+
+function throwIfShipmentSyncAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Shipment sync attempt aborted');
+}
 
 function syncBudgetRemainingMs(
   budget: ReturnType<typeof createSyncRunBudget>,
@@ -170,12 +178,14 @@ async function upsertShipmentsBatch(
   pageShipments: SSShipment[],
   sourceAccountId: string,
   sourceAccountIsTest: boolean,
+  signal?: AbortSignal,
 ): Promise<{
   inserted: number;
   updated: number;
   matched: number;
   shippedOrderIds: number[];
 }> {
+  throwIfShipmentSyncAborted(signal);
   if (!pageShipments.length) {
     return { inserted: 0, updated: 0, matched: 0, shippedOrderIds: [] };
   }
@@ -206,6 +216,7 @@ async function upsertShipmentsBatch(
         .from(orders)
         .where(orderLookupPredicate)
     : [];
+  throwIfShipmentSyncAborted(signal);
   const orderByExt = new Map<
     string,
     { id: number; clientId: number | null; status: string }
@@ -242,6 +253,7 @@ async function upsertShipmentsBatch(
       .select({ id: clients.id, isTest: clients.isTest })
       .from(clients)
       .where(inArray(clients.id, clientIds));
+    throwIfShipmentSyncAborted(signal);
     for (const c of cliRows) if (c.isTest) testClientSet.add(c.id);
   }
 
@@ -266,6 +278,7 @@ async function upsertShipmentsBatch(
         .from(shipments)
         .where(inArray(shipments.labelShipmentId, labelIds))
     : [];
+  throwIfShipmentSyncAborted(signal);
   const existingByLabel = new Map<
     number,
     {
@@ -308,6 +321,7 @@ async function upsertShipmentsBatch(
           inArray(shipments.source, ['prepship', 'prepship_v2', 'test_offline'])
         )
       );
+    throwIfShipmentSyncAborted(signal);
     for (const r of prepshipRows) {
       if (r.orderId !== null) prepshipOrderIds.add(r.orderId);
     }
@@ -417,6 +431,7 @@ async function upsertShipmentsBatch(
   // inserts reference it. Standalone insert (no wrapping tx) so no lock/deadlock risk;
   // memoized (real DDL only on the first sync after a deploy, then a no-op).
   if (toInsert.length) await ensureShipmentsSelectedRateCostColumn();
+  throwIfShipmentSyncAborted(signal);
   let inserted = 0;
   const chunkSize = 500;
   for (let i = 0; i < toInsert.length; i += chunkSize) {
@@ -426,7 +441,9 @@ async function upsertShipmentsBatch(
       // package consumption only for NEW ShipStation shipment rows. Existing
       // history is never auto-backfilled; repair remains dry-run and reviewed.
       await ensurePackageConsumptionSchema();
+      throwIfShipmentSyncAborted(signal);
       await db.transaction(async (tx) => {
+        throwIfShipmentSyncAborted(signal);
         const insertedRows = await tx
           .insert(shipments)
           .values(chunk)
@@ -456,6 +473,7 @@ async function upsertShipmentsBatch(
             isReturn: shipments.isReturn,
           });
         for (const row of insertedRows) {
+          throwIfShipmentSyncAborted(signal);
           const result = await consumeOutboundPackageInTransaction({
             shipmentId: row.id,
             orderId: row.orderId,
@@ -488,6 +506,7 @@ async function upsertShipmentsBatch(
   const updateConcurrency = 3;
   let updated = 0;
   for (let i = 0; i < toUpdate.length; i += updateConcurrency) {
+    throwIfShipmentSyncAborted(signal);
     const batch = toUpdate.slice(i, i + updateConcurrency);
     await Promise.all(
       batch.map((u) =>
@@ -497,6 +516,7 @@ async function upsertShipmentsBatch(
     updated += batch.length;
   }
 
+  throwIfShipmentSyncAborted(signal);
   return { inserted, updated, matched, shippedOrderIds };
 }
 
@@ -615,6 +635,7 @@ export async function syncShipments(
   for (const acct of accounts) {
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
     try {
+      throwIfShipmentSyncAborted(opts.signal);
       const { primaryKey: key, value: storedLastSync } = await readShipmentSyncWatermark(acct);
       const lastSync =
         opts.sinceMs ??
@@ -645,7 +666,11 @@ export async function syncShipments(
           apiSecret: acct.apiSecret,
           dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}`,
           timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
+          // Per user override unlock shipped data on 2026-07-14: the queue
+          // deadline cancels the provider request instead of abandoning it.
+          signal: opts.signal,
         });
+        throwIfShipmentSyncAborted(opts.signal);
         if (res.pages > maxPages) maxPages = res.pages;
 
         // One batched upsert per page (pre-fetches orders + clients + existing
@@ -655,6 +680,7 @@ export async function syncShipments(
           res.shipments,
           acct.sourceAccountId,
           acct.isTest,
+          opts.signal,
         );
         totalFetched += res.shipments.length;
         totalInserted += batch.inserted;
@@ -684,7 +710,7 @@ export async function syncShipments(
         if (syncRunBudgetExhausted(budget, pagesThisAccount)) break;
         page += 1;
         // v2-parity: 500ms inter-page delay.
-        await new Promise((r) => setTimeout(r, 500));
+        await sleep(500, undefined, { signal: opts.signal });
       }
 
       // v2-parity: enrichment pass. v1's /shipments endpoint doesn't expose
@@ -697,7 +723,7 @@ export async function syncShipments(
       // a later run once the V1 window is caught up.
       if (hasSyncBudgetRoom(budget)) {
         try {
-          const enriched = await enrichProviderAccountIds(acct, lastSync, budget);
+          const enriched = await enrichProviderAccountIds(acct, lastSync, budget, opts.signal);
           if (enriched > 0) {
             console.log(
               `[shipment-sync] enriched providerAccountId on ${enriched} shipments for "${acct.label}"`
@@ -705,6 +731,7 @@ export async function syncShipments(
           }
         } catch (err) {
           // Best-effort enrichment — never block the V1 sync on V2 failures.
+          throwIfShipmentSyncAborted(opts.signal);
           console.warn(
             `[shipment-sync] V2 enrichment failed for "${acct.label}":`,
             (err as Error).message
@@ -719,11 +746,13 @@ export async function syncShipments(
               timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
               shouldContinue: () =>
                 hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000),
+              signal: opts.signal,
             });
             if (filled > 0) {
               console.log(`[shipment-sync] filled label_url on ${filled} shipments for "${acct.label}"`);
             }
           } catch (err) {
+            throwIfShipmentSyncAborted(opts.signal);
             console.warn(
               `[shipment-sync] label_url enrichment failed for "${acct.label}":`,
               (err as Error).message
@@ -748,8 +777,10 @@ export async function syncShipments(
       // of jumping to runStartMs, closing the first-run skip edge.
       const candidateMs = drained ? runStartMs : cursorCreateMs ?? storedLastSync ?? lastSync;
       const nextWatermarkMs = Math.max(storedLastSync ?? 0, candidateMs);
+      throwIfShipmentSyncAborted(opts.signal);
       await setSetting(key, String(nextWatermarkMs));
     } catch (err) {
+      throwIfShipmentSyncAborted(opts.signal);
       console.error(
         `[shipment-sync] account "${acct.label}" failed:`,
         (err as Error).message
@@ -760,10 +791,12 @@ export async function syncShipments(
     if (opts.signal?.aborted || syncRunBudgetTimeExhausted(budget)) break;
   }
 
+  throwIfShipmentSyncAborted(opts.signal);
   let ordersMarkedShipped = 0;
   if (shippedOrderIds.length) {
     const uniqueIds = Array.from(new Set(shippedOrderIds));
     for (let i = 0; i < uniqueIds.length; i += 500) {
+      throwIfShipmentSyncAborted(opts.signal);
       const rows = await db
         .update(orders)
         .set({ orderStatus: 'shipped', updatedAt: new Date() })
@@ -776,6 +809,7 @@ export async function syncShipments(
         .returning();
       ordersMarkedShipped += rows.length;
       for (const row of rows) {
+        throwIfShipmentSyncAborted(opts.signal);
         try {
           // Per user override unlock shipped data on 2026-07-14: persist the
           // retryable event; stock mutation remains in fulfillment-deductions.ts.
@@ -794,6 +828,7 @@ export async function syncShipments(
   const pages = maxPages;
   const sinceIso = earliestSinceIso;
 
+  throwIfShipmentSyncAborted(opts.signal);
   return {
     fetched,
     inserted,
@@ -834,7 +869,9 @@ async function enrichProviderAccountIds(
   acct: { label: string; apiKeyV2: string | null },
   sinceMs: number,
   budget: ReturnType<typeof createSyncRunBudget>,
+  signal?: AbortSignal,
 ): Promise<number> {
+  throwIfShipmentSyncAborted(signal);
   if (!acct.apiKeyV2) return 0; // No V2 key → can't enrich this account
   const createdAtStart = new Date(sinceMs).toISOString();
   let page = 1;
@@ -849,6 +886,7 @@ async function enrichProviderAccountIds(
   };
 
   async function applyProviderRows(rows: V2ProviderRow[]): Promise<number> {
+    throwIfShipmentSyncAborted(signal);
     // Audit M2 (2026-07-13): this loop used to issue one UPDATE per tracking number
     // per page per account per tick, unconditionally — prod pg_stat measured 1.25M
     // calls that changed 3,508 rows (99.7% no-ops), each seq-scanning shipments
@@ -878,9 +916,11 @@ async function enrichProviderAccountIds(
           sql`${shipments.providerAccountId} is null`,
         ),
       );
+    throwIfShipmentSyncAborted(signal);
     const needSet = new Set(needy.map((r) => r.trackingNumber).filter(Boolean));
     let updated = 0;
     for (const pair of pairs) {
+      throwIfShipmentSyncAborted(signal);
       if (!needSet.has(pair.tracking)) continue;
       // Only update rows where providerAccountId is null. Don't clobber
       // an ID that was set during label creation. (Predicate kept even after
@@ -897,7 +937,7 @@ async function enrichProviderAccountIds(
     return updated;
   }
 
-  while (page <= maxPages && hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000)) {
+  while (!signal?.aborted && page <= maxPages && hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000)) {
     const qs = new URLSearchParams({
       page_size: '500',
       page: String(page),
@@ -912,9 +952,11 @@ async function enrichProviderAccountIds(
           apiKeyV2: acct.apiKeyV2,
           dedupeKey: `v2-shipments:enrich:${acct.label}:${createdAtStart}:${page}`,
           timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
+          signal,
         },
       );
     } catch (err) {
+      throwIfShipmentSyncAborted(signal);
       console.warn(
         `[shipment-sync] V2 enrichment page ${page} failed for "${acct.label}":`,
         (err as Error).message,
@@ -931,7 +973,7 @@ async function enrichProviderAccountIds(
     if (page >= totalPages || rows.length < 500) break;
     page += 1;
     // v2-parity: gentle inter-page pause
-    await new Promise((r) => setTimeout(r, 500));
+    await sleep(500, undefined, { signal });
   }
 
   // ShipStation's V2 shipment list does not always include tracking_number in
@@ -939,7 +981,7 @@ async function enrichProviderAccountIds(
   // tracking_number + carrier_id pair, so use it as a second best-effort
   // source for older ShipStation-synced shipped rows.
   page = 1;
-  while (page <= maxPages && hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000)) {
+  while (!signal?.aborted && page <= maxPages && hasSyncBudgetRoom(budget, BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS + 5_000)) {
     const qs = new URLSearchParams({
       page_size: '500',
       page: String(page),
@@ -954,6 +996,7 @@ async function enrichProviderAccountIds(
           apiKeyV2: acct.apiKeyV2,
           dedupeKey: `v2-labels:provider-enrich:${acct.label}:${createdAtStart}:${page}`,
           timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
+          signal,
         },
       );
     } catch (err) {
@@ -969,9 +1012,11 @@ async function enrichProviderAccountIds(
             apiKeyV2: acct.apiKeyV2,
             dedupeKey: `v2-labels:provider-enrich:fallback:${acct.label}:${page}`,
             timeoutMs: BACKGROUND_SHIPSTATION_REQUEST_TIMEOUT_MS,
+            signal,
           },
         );
       } catch {
+        throwIfShipmentSyncAborted(signal);
         console.warn(
           `[shipment-sync] V2 label enrichment page ${page} failed for "${acct.label}":`,
           (err as Error).message,
@@ -988,8 +1033,9 @@ async function enrichProviderAccountIds(
     const totalPages = payload.pages ?? 1;
     if (page >= totalPages || rows.length < 500) break;
     page += 1;
-    await new Promise((r) => setTimeout(r, 500));
+    await sleep(500, undefined, { signal });
   }
 
+  throwIfShipmentSyncAborted(signal);
   return totalUpdated;
 }
