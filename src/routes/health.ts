@@ -134,9 +134,17 @@ const checkDbWrite = () =>
 // Deep diagnostics: everything readiness checks PLUS the dependency probes and
 // table aggregates (operator/ops surface, not the Render rotation signal).
 async function checkDeepReadiness() {
-  const components = await Promise.all([
+  // Deploy validation (2026-07-14): keep concurrent DB probes below the
+  // dedicated health pool's max of 3. Adding dbWrite made this four DB queries
+  // at once; on Render the dependency probes stayed client-queued until their
+  // 12s timeout and never reached Postgres. Stage the cheap serving checks
+  // first, then run the two diagnostic table probes together.
+  const [db, dbWrite, eventLoop] = await Promise.all([
     checkDb(),
     checkDbWrite(),
+    checkEventLoopDelay(),
+  ]);
+  const [orders, printQueue] = await Promise.all([
     checkComponent('orders', async () => {
       await withTimeout(healthSql`select 1 from orders limit 1`, DB_HEALTH_TIMEOUT_MS);
     }),
@@ -158,8 +166,8 @@ async function checkDeepReadiness() {
         },
       };
     }),
-    checkEventLoopDelay(),
   ]);
+  const components = [db, dbWrite, orders, printQueue, eventLoop];
 
   return {
     ok: components.every((component) => component.status === 'ok'),

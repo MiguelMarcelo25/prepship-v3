@@ -66,6 +66,12 @@ assert(
   'deep readiness checks run under explicit timeouts'
 );
 assert(
+  /const \[db, dbWrite, eventLoop\] = await Promise\.all\(\[/.test(healthSource) &&
+    /const \[orders, printQueue\] = await Promise\.all\(\[/.test(healthSource) &&
+    /const components = \[db, dbWrite, orders, printQueue, eventLoop\]/.test(healthSource),
+  'deep readiness stages DB probes within the bounded health pool'
+);
+assert(
   healthSource.includes('503'),
   'deep readiness returns HTTP 503 when any required component fails'
 );
