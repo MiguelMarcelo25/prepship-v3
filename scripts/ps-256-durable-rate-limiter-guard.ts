@@ -40,10 +40,14 @@ check('DurableTokenBucket exposes the same acquire() interface',
 
 // ── static: v1-client selects backend by flag; default stays in-memory ────────────────────────
 const v1 = readFileSync('src/lib/shipstation/v1-client.ts', 'utf8');
+const limiterConfig = readFileSync('src/lib/shipstation/rate-limit-config.ts', 'utf8');
+check('shared limiter config owns the V1 headroom budget and window',
+  /export const SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE = 38/.test(limiterConfig) &&
+    /export const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000/.test(limiterConfig));
 check('v1-client picks DurableTokenBucket only when RATE_LIMITER_BACKEND=durable',
-  /process\.env\.RATE_LIMITER_BACKEND === 'durable'\s*\n?\s*\? new DurableTokenBucket\('shipstation-v1', 38/.test(v1));
+  /process\.env\.RATE_LIMITER_BACKEND === 'durable'[\s\S]*\? new DurableTokenBucket\([\s\S]*'shipstation-v1',[\s\S]*SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE/.test(v1));
 check('v1-client default is the in-memory TokenBucket',
-  /: new TokenBucket\(38, 38 \/ 60_000\)/.test(v1));
+  /: new TokenBucket\([\s\S]*SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE,[\s\S]*SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE \/ SHIPSTATION_RATE_LIMIT_WINDOW_MS/.test(v1));
 
 // ── static: v2 uses the same durable backend per API-key fingerprint ─────────
 const v2 = readFileSync('src/lib/shipstation/client.ts', 'utf8');

@@ -41,7 +41,7 @@ function shipStationScheduleWithinBudget({ requestCount, perMinute, burst }) {
   return true
 }
 
-const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient, ratesCombined, rateBrowseProducer] = await Promise.all([
+const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient, shipStationLimiterConfig, ratesCombined, rateBrowseProducer] = await Promise.all([
   read('src/services/rates.ts'),
   read('src/routes/rates.ts'),
   read('src/services/rates-backfill.ts'),
@@ -49,6 +49,7 @@ const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiC
   read('package.json'),
   read('web/src/lib/v2-apiClient.ts'),
   read('src/lib/shipstation/client.ts'),
+  read('src/lib/shipstation/rate-limit-config.ts'),
   // PS-203 (stage 3): the merge + SINGLE cheapest pick moved to the canonical
   // combined-selection owner. The route + backfill both delegate to it.
   read('src/services/rates-combined.ts'),
@@ -90,8 +91,10 @@ assert(
 )
 
 assert(
-  shipStationClient.includes('SHIPSTATION_RATE_LIMIT_PER_MINUTE') &&
-    shipStationClient.includes('SHIPSTATION_RATE_LIMIT_BURST') &&
+  shipStationLimiterConfig.includes('export const SHIPSTATION_RATE_LIMIT_PER_MINUTE') &&
+    shipStationLimiterConfig.includes('process.env.SHIPSTATION_RATE_LIMIT_PER_MINUTE') &&
+    shipStationLimiterConfig.includes('export const SHIPSTATION_RATE_LIMIT_BURST') &&
+    shipStationClient.includes("from './rate-limit-config.js'") &&
     shipStationClient.includes('acquireShipStationV2Budget') &&
     shipStationClient.includes('shipStationV2RateLimitTimestampsByKey') &&
     shipStationClient.includes("process.env.RATE_LIMITER_BACKEND === 'durable'") &&

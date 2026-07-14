@@ -3,38 +3,24 @@ import { env } from '../env.js';
 import { timedFetch } from '../http/timing.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { DurableTokenBucket } from './durable-rate-limiter.js';
+import {
+  SHIPSTATION_RATE_LIMIT_BURST,
+  SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE,
+  SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE,
+  SHIPSTATION_RATE_LIMIT_PER_MINUTE,
+  SHIPSTATION_RATE_LIMIT_WINDOW_MS,
+} from './rate-limit-config.js';
+
+export {
+  SHIPSTATION_RATE_LIMIT_BURST,
+  SHIPSTATION_RATE_LIMIT_PER_MINUTE,
+} from './rate-limit-config.js';
 
 const BASE_URL = 'https://api.shipstation.com';
 
 const breaker = new CircuitBreaker(5, 30_000);
 const inflight = new Map<string, Promise<unknown>>();
 
-export const SHIPSTATION_RATE_LIMIT_PER_MINUTE = Math.max(
-  1,
-  Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_PER_MINUTE ?? '160', 10) || 160
-);
-export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
-  1,
-  Math.min(
-    SHIPSTATION_RATE_LIMIT_PER_MINUTE,
-    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BURST ?? '20', 10) || 20
-  )
-);
-const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
-const SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE = Math.max(
-  0,
-  Math.min(
-    SHIPSTATION_RATE_LIMIT_BURST - 1,
-    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_BURST_RESERVE ?? '8', 10) || 8,
-  ),
-);
-const SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE = Math.max(
-  0,
-  Math.min(
-    SHIPSTATION_RATE_LIMIT_PER_MINUTE - 1,
-    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_INTERACTIVE_PER_MINUTE_RESERVE ?? '40', 10) || 40,
-  ),
-);
 export type ShipStationRequestPriority = 'interactive' | 'background';
 // Audit R-3 (2026-07-13): ShipStation grants the per-minute budget PER API KEY,
 // but this bucket was process-global across ALL keys (DR PREPPER, KFG, per-client)

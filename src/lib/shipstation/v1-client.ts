@@ -4,6 +4,10 @@ import { TokenBucket, type RateBucket } from './rate-limiter.js';
 import { DurableTokenBucket } from './durable-rate-limiter.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { ShipStationError } from './client.js';
+import {
+  SHIPSTATION_RATE_LIMIT_WINDOW_MS,
+  SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE,
+} from './rate-limit-config.js';
 
 const V1_BASE = 'https://ssapi.shipstation.com';
 
@@ -12,8 +16,15 @@ const V1_BASE = 'https://ssapi.shipstation.com';
 // share one DB-backed bucket across all instances (then the 38/min holds fleet-wide). Inert until flipped.
 const bucket: RateBucket =
   process.env.RATE_LIMITER_BACKEND === 'durable'
-    ? new DurableTokenBucket('shipstation-v1', 38, 38 / 60_000)
-    : new TokenBucket(38, 38 / 60_000);
+    ? new DurableTokenBucket(
+        'shipstation-v1',
+        SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE,
+        SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE / SHIPSTATION_RATE_LIMIT_WINDOW_MS,
+      )
+    : new TokenBucket(
+        SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE,
+        SHIPSTATION_V1_RATE_LIMIT_PER_MINUTE / SHIPSTATION_RATE_LIMIT_WINDOW_MS,
+      );
 const breaker = new CircuitBreaker(5, 30_000);
 const inflight = new Map<string, Promise<unknown>>();
 

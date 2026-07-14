@@ -298,10 +298,9 @@ const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
 );
 // PS-108: include the insurance-cost config fingerprint so the cache busts when the
 // ParcelGuard schedule/source changes materially (no stale premium can be reused).
-// v3 (audit C4, 2026-07-13): origin-aware fingerprints. The bump purges rate_cache
-// rows written BEFORE origin was part of the key — custom-origin browses had been
-// writing default-shaped keys, so pre-v3 rows may carry wrong-origin prices.
-const RATE_CACHE_VERSION = `ground-saver-v3|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}|ins=${insuranceCostConfigFingerprint()}`;
+// v4 (audit R-10, 2026-07-14): store IDs use sid= instead of the destination-state
+// st= namespace. The bump prevents pre-hygiene cache/proof identities from mixing.
+const RATE_CACHE_VERSION = `ground-saver-v4|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}|ins=${insuranceCostConfigFingerprint()}`;
 const RATE_CONFIRMATIONS = new Set([
   'none',
   'delivery',

@@ -201,7 +201,8 @@ export function buildShippingRateRequestFingerprint(input: ShippingRateRequestFi
   if (input.residential === true) parts.push('r=1');
   else if (input.residential === false) parts.push('r=0');
   if (input.clientId != null) parts.push(`cl=${input.clientId}`);
-  else if (input.storeId != null) parts.push(`st=${input.storeId}`);
+  // Audit R-10: store identity has its own namespace; st= is destination state.
+  else if (input.storeId != null) parts.push(`sid=${input.storeId}`);
   if (input.sourceClientId != null) parts.push(`src=${input.sourceClientId}`);
   else if (input.apiKeyFingerprint) parts.push(`ak=${input.apiKeyFingerprint}`);
   if (input.dimsL) parts.push(`l=${Math.round(input.dimsL * 10)}`);
