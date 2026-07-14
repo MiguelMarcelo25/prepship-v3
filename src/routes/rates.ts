@@ -915,6 +915,7 @@ app.get('/backfill-best/status/:jobId', async (c) => {
         failed: durableJob.failed,
         message: durableJob.message,
         error: durableJob.error,
+        skipSamples: durableJob.skipSamples,
         failureSamples: durableJob.failureSamples,
         startedAt: Date.parse(durableJob.startedAt),
         finishedAt: durableJob.finishedAt ? Date.parse(durableJob.finishedAt) : null,

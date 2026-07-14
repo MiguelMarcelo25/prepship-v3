@@ -60,6 +60,11 @@ import {
   resolveRateBackfillConcurrency,
   resolveRateBackfillDbWriteConcurrency,
 } from './rate-backfill-execution-policy';
+import {
+  createRateBackfillDiagnosticBuffers,
+  normalizeRateBackfillDiagnosticSamples,
+  recordRateBackfillDiagnostic,
+} from './rate-backfill-diagnostics';
 
 async function runBackfillDbWrites<T>(
   items: readonly T[],
@@ -131,6 +136,7 @@ export type BackfillJob = {
   failed: number;
   message: string;
   error: string | null;
+  skipSamples: string[];
   failureSamples: string[];
   preExpiryRefresh: PreExpiryRefreshProof | null;
   startedAt: number;
@@ -174,6 +180,7 @@ export type BackfillJobSnapshot = {
   failed: number;
   message: string;
   error: string | null;
+  skipSamples: string[];
   failureSamples: string[];
   preExpiryRefresh: PreExpiryRefreshProof | null;
   options: BackfillOptions;
@@ -239,6 +246,7 @@ function toBackfillSnapshot(
     failed: job.failed,
     message: job.message,
     error: job.error,
+    skipSamples: [...job.skipSamples],
     failureSamples: [...job.failureSamples],
     preExpiryRefresh: job.preExpiryRefresh
       ? {
@@ -296,9 +304,14 @@ async function persistBackfillJobSnapshot(
 }
 
 function parseBackfillJobSnapshot(value: string): BackfillJobSnapshot | null {
-  const parsed = JSON.parse(value) as BackfillJobSnapshot & { mode?: BackfillJobMode };
+  const parsed = JSON.parse(value) as BackfillJobSnapshot & {
+    mode?: BackfillJobMode;
+    skipSamples?: unknown;
+    failureSamples?: unknown;
+  };
   return {
     ...parsed,
+    ...normalizeRateBackfillDiagnosticSamples(parsed),
     mode: parsed.mode === 'manual_force_live' ? 'manual_force_live' : 'cache_friendly',
   };
 }
@@ -344,7 +357,7 @@ function createBackfillJob(opts: BackfillOptions, mode: BackfillJobMode, message
     failed: 0,
     message,
     error: null,
-    failureSamples: [],
+    ...createRateBackfillDiagnosticBuffers(),
     preExpiryRefresh: opts.mode === 'preexpiry_refresh' ? createPreExpiryRefreshProof() : null,
     startedAt: Date.now(),
     finishedAt: null,
@@ -720,12 +733,12 @@ async function runBackfill(
         await resolveRateJob();
         job.skipped++;
         recordPreExpiryOutcome(null, false);
-        if (job.failureSamples.length < 5) {
-          job.failureSamples.push(
-            `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
-            + (preExpiryRefreshReason !== 'fresh' ? `; PS-348 refresh reason=${preExpiryRefreshReason}` : '')
-          );
-        }
+        recordRateBackfillDiagnostic(
+          job,
+          'skip',
+          `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
+            + (preExpiryRefreshReason !== 'fresh' ? `; PS-348 refresh reason=${preExpiryRefreshReason}` : ''),
+        );
         job.processed++;
         if (job.processed % 10 === 0 || job.processed === job.total) {
           job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
@@ -838,11 +851,11 @@ async function runBackfill(
             forceRefresh: rateFetchDecision.forceRefresh,
             cached: result.cached,
           });
-          if (job.failureSamples.length < 5) {
-            job.failureSamples.push(
-              `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`
-            );
-          }
+          recordRateBackfillDiagnostic(
+            job,
+            'skip',
+            `order ${row.id} (${row.orderNumber}, w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`,
+          );
         } else {
           const now = new Date();
           const rawAmountSecondBest: Record<string, unknown> | null = secondBest
@@ -945,11 +958,11 @@ async function runBackfill(
               forceRefresh: rateFetchDecision.forceRefresh,
               cached: result.cached,
             });
-            if (job.failureSamples.length < 5) {
-              job.failureSamples.push(
-                `order ${row.id} (${row.orderNumber}): kept cheaper fresh best (PS-271 no-downgrade) — re-quote was more expensive for the same inputs`
-              );
-            }
+            recordRateBackfillDiagnostic(
+              job,
+              'skip',
+              `order ${row.id} (${row.orderNumber}): kept cheaper fresh best (PS-271 no-downgrade) — re-quote was more expensive for the same inputs`,
+            );
           } else {
             await db
               .insert(orderOverrides)
@@ -980,11 +993,11 @@ async function runBackfill(
         job.failed++;
         recordPreExpiryOutcome(null, false);
         const msg = (err as Error).message ?? 'unknown';
-        if (job.failureSamples.length < 5) {
-          job.failureSamples.push(
-            `order ${row.id} (w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): ${msg.slice(0, 1500)}`
-          );
-        }
+        recordRateBackfillDiagnostic(
+          job,
+          'failure',
+          `order ${row.id} (w=${weightLabel}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): ${msg.slice(0, 1500)}`,
+        );
       } finally {
         // PS-120: the rate attempt RESOLVED (saved, empty/no-rate, or errored) — clear the
         // in-progress row so the order shows its terminal state (fresh/missing/blocked) and

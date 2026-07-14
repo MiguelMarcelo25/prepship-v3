@@ -103,11 +103,12 @@ const allowedPoolConstructors = [
   'src/db/client.ts',
   'src/lib/advisory-session-lock.ts',
   'src/routes/health.ts',
+  'src/services/rate-browse-job-store.ts',
   'src/services/shipstation-carrier-account-snapshot-worker.ts',
   'src/services/sync-lane-lock.ts',
 ].sort();
 check(
-  'only the app pool and explicitly isolated health/lock pools construct connections',
+  'only the app pool and explicitly isolated health/worker/session-lock pools construct connections',
   JSON.stringify(poolConstructors) === JSON.stringify(allowedPoolConstructors),
 );
 

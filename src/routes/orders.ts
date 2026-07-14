@@ -738,6 +738,9 @@ app.get('/sync/status', async (c) => {
           skipped: rateJob.skipped,
           failed: rateJob.failed,
           message: rateJob.message,
+          // Per user override unlock shipped data on 2026-07-15: pass through
+          // read-only backend-classified diagnostics; lifecycle guards are unchanged.
+          skipSamples: rateJob.skipSamples,
           failureSamples: rateJob.failureSamples,
         }
       : null,

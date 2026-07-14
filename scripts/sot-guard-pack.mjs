@@ -38,6 +38,7 @@ const REQUIRED_GUARDS = [
   'test:audit-billing-small-fixes',
   'test:audit-api-process-lifecycle',
   'test:audit-print-queue-small-fixes',
+  'test:audit-backfill-diagnostics',
 ];
 
 const npmCli = process.env.npm_execpath;
