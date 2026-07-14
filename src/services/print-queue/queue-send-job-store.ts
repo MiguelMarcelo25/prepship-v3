@@ -381,8 +381,8 @@ export async function markQueueSendJobInterrupted(
       snapshot = snapshot || jsonb_build_object(
         'status', 'interrupted',
         'active', false,
-        'message', ${message},
-        'errorMessage', ${message},
+        'message', ${message}::text,
+        'errorMessage', ${message}::text,
         'updatedAt', now(),
         'persistedAt', now()
       ),
@@ -414,8 +414,8 @@ export async function interruptExhaustedQueueSendJobs(options: {
       snapshot = snapshot || jsonb_build_object(
         'status', 'interrupted',
         'active', false,
-        'message', ${message},
-        'errorMessage', ${message},
+        'message', ${message}::text,
+        'errorMessage', ${message}::text,
         'updatedAt', now(),
         'persistedAt', now()
       ),

@@ -38,6 +38,12 @@
 - **Workflow proof:** PS-403 recovery, worker offload, in-progress purchase
   recovery, durable job, retry recovery, progress, strict typecheck, production
   build, and the full SOT pack are required.
+- **2026-07-14 startup regression:** Recovery messages passed to
+  `jsonb_build_object` without an explicit SQL type caused PostgreSQL to reject
+  parameter `$2` before the print worker registered. The durable job store now
+  casts both recovery message fields to `text`, and the lifecycle guard pins
+  every affected JSONB write. No route, provider, or frontend fallback owns
+  this database boundary.
 
 Per user override `unlock shipped data` on 2026-07-14, these changes control
 orchestration around the protected label path only. Existing duplicate-postage,

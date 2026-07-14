@@ -90,6 +90,10 @@ assert.match(store, /END < \$\{maxAttempts\}/,
   'recovery claims must enforce the attempt cap');
 assert.match(store, /export async function interruptExhaustedQueueSendJobs/,
   'exhausted jobs must become visibly interrupted');
+assert.equal((store.match(/'message', \$\{message\}::text/g) ?? []).length, 2,
+  'both recovery messages embedded in JSONB must have an explicit PostgreSQL text type');
+assert.equal((store.match(/'errorMessage', \$\{message\}::text/g) ?? []).length, 2,
+  'both recovery error messages embedded in JSONB must have an explicit PostgreSQL text type');
 assert.doesNotMatch(store, /export async function getRecoverableQueueSendJobRecords/,
   'the old non-claiming recovery reader must not remain as a second owner');
 
