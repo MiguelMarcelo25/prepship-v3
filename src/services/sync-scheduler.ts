@@ -97,7 +97,7 @@ export async function runBackfillTick(): Promise<void> {
     `[scheduler] rate backfill kicked off (job ${job.jobId}) — stale, missing, or near-expiry rate tuples will be refreshed`
   );
   // Per user override unlock shipped data on 2026-07-14: pg-boss is the
-  // canonical worker owner. Hold its rate-backfill lane until the underlying
+  // canonical worker owner. Hold its shared critical-worker lane until the underlying
   // service settles instead of leaving detached work to starve sync/status IO.
   await waitForBackfillJob(job.jobId);
   console.log(

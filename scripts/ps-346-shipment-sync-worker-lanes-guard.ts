@@ -1,10 +1,10 @@
 /**
  * PS-346 shipped-label sync starvation guard.
  *
- * Root cause: a single backend worker mutex let a long shipments sync block every
- * other scheduled job, including the external-shipped classifier, tracking poll,
- * and reporting refresh. Shipped rows then displayed "Shipment sync error"
- * because the shipment/label read model could not catch up.
+ * Root cause: unrestricted lane overlap saturated the shared Supabase client,
+ * while one global mutex previously starved unrelated tracking/reporting work.
+ * Database-heavy mutation workflows are serialized together; independent
+ * tracking and reporting lanes must continue to run.
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -35,6 +35,7 @@ function read(path: string): string {
 const ordersJob = 'prepship.sync.orders';
 const shipmentsJob = 'prepship.sync.shipments';
 const classifierJob = 'prepship.shipping.external-shipped-classifier';
+const fulfillmentJob = 'prepship.sync.fulfillment-outbox';
 const trackingJob = 'prepship.tracking.poll';
 const reportingJob = 'prepship.reporting.refresh';
 const rateBackfillJob = 'prepship.sync.rate-backfill';
@@ -47,8 +48,12 @@ check(
   syncJobLaneFor(ordersJob) === syncJobLaneFor(shipmentsJob)
 );
 check(
-  'external-shipped classifier is not starved by active shipment sync',
-  getSyncJobLaneBlocker(activeShipmentSync, classifierJob) === null
+  'external-shipped classifier shares the DB-heavy lane with shipment sync',
+  getSyncJobLaneBlocker(activeShipmentSync, classifierJob) === shipmentsJob
+);
+check(
+  'fulfillment outbox shares the DB-heavy lane with shipment sync',
+  getSyncJobLaneBlocker(activeShipmentSync, fulfillmentJob) === shipmentsJob
 );
 check(
   'shipment tracking is not starved by active shipment sync',
@@ -67,14 +72,14 @@ check(
   isSyncJobNameActive(activeShipmentSync, shipmentsJob) === true
 );
 check(
-  'rate backfill has its own lane and is not blocked by shipment sync',
-  getSyncJobLaneBlocker(activeShipmentSync, rateBackfillJob) === null
+  'rate backfill shares the DB-heavy lane with shipment sync',
+  getSyncJobLaneBlocker(activeShipmentSync, rateBackfillJob) === shipmentsJob
 );
 
 const schedulerActive = new Map([[syncJobLaneFor('shipments sync'), 'shipments sync']]);
 check(
-  'scheduler display names use the same non-starving lane policy',
-  getSyncJobLaneBlocker(schedulerActive, 'external-shipped classifier') === null
+  'scheduler display names use the same DB-heavy lane policy',
+  getSyncJobLaneBlocker(schedulerActive, 'external-shipped classifier') === 'shipments sync'
 );
 check(
   'scheduler still serializes orders sync behind shipments sync',

@@ -20,17 +20,22 @@ const SYNC_JOB_LANES = new Map<string, SyncJobLane>([
   ['prepship.sync.products', 'shipstation-sync'],
   ['inventory sync-products', 'shipstation-sync'],
 
-  ['prepship.sync.rate-backfill', 'rate-backfill'],
-  ['rate backfill', 'rate-backfill'],
+  // Per user override unlock shipped data on 2026-07-14: Supabase's
+  // transaction-pool client wedges when the high-write order/shipment,
+  // fulfillment, classifier, and rate workflows overlap. Keep those durable
+  // jobs in one cross-process DB-heavy lane; tracking/reporting remain
+  // independent so carrier polling and operator read models are not starved.
+  ['prepship.sync.rate-backfill', 'shipstation-sync'],
+  ['rate backfill', 'shipstation-sync'],
 
-  ['prepship.sync.fulfillment-outbox', 'fulfillment-outbox'],
-  ['fulfillment outbox', 'fulfillment-outbox'],
+  ['prepship.sync.fulfillment-outbox', 'shipstation-sync'],
+  ['fulfillment outbox', 'shipstation-sync'],
 
   ['prepship.reporting.refresh', 'reporting'],
   ['reporting metrics refresh', 'reporting'],
 
-  ['prepship.shipping.external-shipped-classifier', 'external-shipped-classifier'],
-  ['external-shipped classifier', 'external-shipped-classifier'],
+  ['prepship.shipping.external-shipped-classifier', 'shipstation-sync'],
+  ['external-shipped classifier', 'shipstation-sync'],
 
   ['prepship.tracking.poll', 'shipment-tracking'],
   ['shipment tracking poll', 'shipment-tracking'],
