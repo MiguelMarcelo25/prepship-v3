@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
 const queue = readFileSync('src/services/sync-job-queue.ts', 'utf8');
+const rateJobStore = readFileSync('src/services/rate-browse-job-store.ts', 'utf8');
 
 // The durable queue is the canonical cross-process admission owner. A handler
 // must not reserve the shared application pool for a second advisory lock:
@@ -37,6 +38,25 @@ assert.match(
   scheduler,
   /runFulfillmentOutboxTick[\s\S]*?runSchedulerJob\('fulfillment outbox'/,
   'fulfillment outbox uses the non-locking admitted-work helper',
+);
+
+// The rate refresh started after a successful order sync has the same
+// single-pool constraint. Its session advisory lock must use a dedicated lock
+// client before it rechecks/persists the workflow through the application pool.
+assert.doesNotMatch(
+  rateJobStore,
+  /const reserved = await pg\.reserve\(\)/,
+  'rate workflow reservation never holds the only application DB connection',
+);
+assert.match(
+  rateJobStore,
+  /const rateBrowseJobLockSql = postgres\(env\.DATABASE_URL,[\s\S]*?max: 1/,
+  'rate workflow reservation owns a one-connection dedicated lock client',
+);
+assert.match(
+  rateJobStore,
+  /const reserved = await rateBrowseJobLockSql\.reserve\(\)/,
+  'rate workflow advisory lock uses the dedicated lock client',
 );
 
 console.log('PASS sync scheduler single-pool deadlock guard');

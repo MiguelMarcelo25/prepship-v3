@@ -1,7 +1,21 @@
+import postgres from 'postgres';
 import { sql as pg } from '../db/client.js';
 import { advisoryLockKeyPair } from '../lib/advisory-lock';
+import { env } from '../lib/env';
 import type { RateBrowseWorkflowSnapshot } from './rate-browse-workflow-types';
 import { assertRuntimeSchemaReady } from './runtime-schema-readiness.js';
+
+// Per user override unlock shipped data on 2026-07-14: reservation locking is
+// rate-workflow coordination only. Keep its session lock off the application
+// pool so DB_POOL_MAX=1 can still recheck and persist the canonical rate job.
+const rateBrowseJobLockSql = postgres(env.DATABASE_URL, {
+  prepare: false,
+  max: 1,
+  idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  max_lifetime: env.DB_MAX_LIFETIME_SECONDS,
+  connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+  connection: { statement_timeout: env.DB_STATEMENT_TIMEOUT_MS },
+});
 
 export type RateBrowseJobPriority = 'manual' | 'preflight' | 'backfill';
 
@@ -275,7 +289,7 @@ type RateBrowseReservationLock = {
 
 async function tryRateBrowseJobReservationLock(requestKey: string): Promise<RateBrowseReservationLock | null> {
   const [classid, objid] = advisoryLockKeyPair(`rate-browse-job:${requestKey}`);
-  const reserved = await pg.reserve();
+  const reserved = await rateBrowseJobLockSql.reserve();
   try {
     const rows = await reserved<Array<{ acquired: boolean }>>`
       SELECT pg_try_advisory_lock(${classid}, ${objid}) AS acquired
